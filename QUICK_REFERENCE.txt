@@ -1,0 +1,213 @@
+╔══════════════════════════════════════════════════════════════════════════╗
+║                  HACKIT - QUICK REFERENCE CARD v1.0                      ║
+║            Professional Security Testing CLI Tool Suite                   ║
+╚══════════════════════════════════════════════════════════════════════════╝
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📍 LOCATION & SETUP
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Location:  /home/aniipid/tools/tools2
+Python:    3.13.11
+Venv:      ./.venv/bin/python
+
+Setup:
+  cd /home/aniipid/tools/tools2
+  pip install -r requirements.txt
+  python main.py --help
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🎯 TOOL GROUPS (8 categories, 14 tools)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+PORTS
+  └─ scan          Async TCP port scanning (1-65535)
+
+WEB
+  ├─ headers       HTTP security headers & TLS check
+  ├─ tech          Technology & CMS detection
+  ├─ dirs          Directory brute force (recursive)
+  ├─ fuzz          Parameter fuzzing & reflection
+  └─ js            JavaScript endpoint extraction
+
+VULN
+  ├─ xss           Reflected XSS scanning
+  ├─ sqli          SQL injection testing (boolean)
+  └─ redirect      Open redirect detection
+
+RECON
+  ├─ subdomains    DNS brute force
+  └─ ips           IP range scanning (CIDR)
+
+SSL
+  └─ check         Certificate & TLS analysis
+
+UTIL
+  └─ cve           CVE vulnerability checker
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚡ QUICK COMMANDS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Show Help:
+  python main.py --help              All tools
+  python main.py examples            Usage examples
+  python main.py help-tools          Tool details
+  python main.py <group> --help      Group tools
+
+CVE CHECKING:
+  python main.py util cve --software wordpress --version 5.0.0
+  python main.py util cve --software drupal --version 7.0.0 --severity Critical
+
+PORT SCANNING:
+  python main.py ports scan --host 192.168.1.1 --ports 1-1000 --open-only
+  python main.py ports scan --host target.com --ports 22,80,443 --output scan.json
+
+SUBDOMAIN ENUM:
+  python main.py recon subdomains --domain example.com --wordlist wordlists/subdomains.txt
+
+HTTP HEADERS:
+  python main.py web headers --url https://example.com --all
+  python main.py web headers --url https://example.com --headers
+  python main.py web headers --url https://example.com --tls
+
+SSL/TLS CHECK:
+  python main.py ssl check --host example.com
+  python main.py ssl check --host api.example.com --port 8443
+
+TECH DETECTION:
+  python main.py web tech --url https://example.com --output tech.json
+
+DIRECTORY SCAN:
+  python main.py web dirs --url http://example.com/ --wordlist wordlists/common.txt
+  python main.py web dirs --url http://example.com/ --wordlist wordlists/common.txt --recursive
+
+JS ANALYSIS:
+  python main.py web js --url https://example.com --max-files 50
+
+XSS SCANNING:
+  python main.py vuln xss --url "http://example.com/search.php" --params q
+  python main.py vuln xss --url "http://example.com/search" --params q --encoding-test
+
+SQL INJECTION:
+  python main.py vuln sqli --url "http://example.com/product.php?id=1" --params id
+
+OPEN REDIRECTS:
+  python main.py vuln redirect --url http://example.com/login.php
+
+IP RANGE SCAN:
+  python main.py recon ips --cidr 192.168.1.0/24
+
+PARAMETER FUZZ:
+  python main.py web fuzz --url "http://example.com/search" --params q --method GET
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🔧 COMMON OPTIONS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+--output FILE           Save results to JSON
+--timeout SECONDS       Request/connection timeout
+--threads NUMBER        Concurrent workers (1-200)
+--delay SECONDS         Delay between requests (stealth)
+--help                  Show tool help
+--version               Show version
+
+Port Scanning:
+--open-only             Only show open ports
+--ports RANGE           Port specification (1-1000 or 22,80,443)
+
+Web Tools:
+--recursive             Enable recursive scanning
+--max-depth NUMBER      Recursion depth limit
+--status-codes CODES    Status codes to report (200,301,302,401,403)
+--extensions EXTS       File extensions (.php,.html)
+
+Vulnerability Scanning:
+--encoding-test         Test encoding bypasses
+--params PARAMS         Parameters to test (comma-separated)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📚 INCLUDED WORDLISTS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+wordlists/common.txt          46 entries (directories)
+wordlists/subdomains.txt      45 entries (subdomains)
+wordlists/xss_payloads.txt    18 payloads (XSS)
+wordlists/fuzzing_payloads.txt 26 payloads (fuzzing)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📖 DOCUMENTATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+README.md              Main documentation
+QUICKSTART.md          Quick start guide
+EXAMPLES.md            Comprehensive examples & workflows
+CONFIG.md              Configuration & optimization
+MANIFEST.md            Complete tools reference
+DEPLOYMENT.md          Deployment guide
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚙️ PERFORMANCE TUNING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+FAST SCANNING:
+  --threads 200 --timeout 1 --delay 0
+
+ACCURATE SCANNING:
+  --threads 50 --timeout 5 --delay 0.1
+
+STEALTH MODE:
+  --threads 10 --timeout 30 --delay 0.5
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🔍 COMMON WORKFLOWS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+FULL WEB ASSESSMENT:
+  1. python main.py web tech --url https://target.com
+  2. python main.py web headers --url https://target.com --all
+  3. python main.py ssl check --host target.com
+  4. python main.py web dirs --url https://target.com/ --wordlist wordlists/common.txt
+  5. python main.py vuln xss --url "https://target.com/search" --params q
+  6. python main.py vuln sqli --url "https://target.com/id.php?id=1" --params id
+
+RECONNAISSANCE:
+  1. python main.py recon subdomains --domain target.com --wordlist wordlists/subdomains.txt
+  2. python main.py web tech --url https://target.com
+  3. python main.py util cve --software wordpress --version 5.0.0
+
+VULNERABILITY ASSESSMENT:
+  1. python main.py web dirs --url http://target.com/ --wordlist wordlists/common.txt
+  2. python main.py web js --url http://target.com --max-files 50
+  3. python main.py vuln xss --url "http://target.com/search" --params q --encoding-test
+  4. python main.py vuln sqli --url "http://target.com/product?id=1" --params id
+  5. python main.py vuln redirect --url http://target.com/login
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🚨 IMPORTANT NOTES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+✓ ALWAYS get written authorization before testing
+✓ Define scope clearly
+✓ Report findings responsibly
+✓ Test only on authorized targets
+✓ Use --delay for stealth scanning
+✓ Save results with --output for reporting
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+❓ TROUBLESHOOTING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Timeout:        --timeout 10
+Slow scan:      --threads 200
+Rate limited:   --delay 1.0
+No results:     Check host accessibility, verify wordlist
+Module error:   pip install -r requirements.txt
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Version: 1.0.0
+Status: ✅ PRODUCTION READY
+Date: February 7, 2026
+
+Happy Hacking! 🎯
