@@ -1,0 +1,39 @@
+# Binaries and executables
+*.exe
+*.dll
+*.so
+*.dylib
+*.bin
+*.out
+hackit/port_scanner/go/port_scanner
+hackit/cve/go/cve
+hackit/dir_finder/go/dir_finder
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.env
+
+# Rust
+target/
+**/*.rs.bk
+
+# Go
+go.sum
+
+# Ruby
+.bundle/
+vendor/bundle
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+results.json
+results.xml

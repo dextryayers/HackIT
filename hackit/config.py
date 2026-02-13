@@ -4,6 +4,20 @@ Global configuration helpers for HackIt.
 Reads environment variables set by the CLI group or user.
 """
 import os
+try:
+    from fake_useragent import UserAgent
+    _ua = UserAgent()
+except ImportError:
+    _ua = None
+
+def get_random_user_agent() -> str:
+    """Return a random User-Agent string."""
+    if _ua:
+        try:
+            return _ua.random
+        except Exception:
+            pass
+    return "HackIt/1.0.0 (Security Testing Tool)"
 
 
 def get_proxy() -> str | None:

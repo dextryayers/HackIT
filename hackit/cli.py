@@ -8,24 +8,26 @@ import sys
 import os
 
 # Import all modules
-from hackit.port_scanner import scan_ports
-from hackit.header_checker import check_headers
-from hackit.subdomain_bruteforcer import brute_subdomains
-from hackit.ip_scanner import scan_range
-from hackit.tech_detector import detect_tech
-from hackit.ssl_analyzer import analyze_ssl
-from hackit.dir_bruteforcer import bruteforce_dirs
-from hackit.param_fuzzer import fuzz_params
-from hackit.xss_scanner import scan_xss
-from hackit.sqli_tester import test_sqli
-from hackit.redirect_finder import find_redirects
-from hackit.js_analyzer import analyze_js
-from hackit.cve_checker import check_cve
+from hackit.port_scanner import scan_ports as nmap_scan
+from hackit.dir_finder import dirfinder as expert_dir_finder
+from hackit.header_audit import check as check_headers
+from hackit.subdomain import enumerate as scan_subdomains
+from hackit.network_scanner import scan_range
+from hackit.tech_hunter import detect as detect_tech
+from hackit.ssl_tool import scan_ssl as analyze_ssl
+from hackit.web_fuzzer import fuzz as bruteforce_dirs
+
+from hackit.params import fuzz_params
+from hackit.xss import scan_xss
+from hackit.sqli import test_sqli
+from hackit.redirect import find_redirects
+from hackit.js import analyze_js
+from hackit.cve import check_cve
 from hackit.ui import display_banner
 
 
 @click.group(invoke_without_command=True)
-@click.version_option(version='1.0.0', prog_name='HackIt')
+@click.version_option(version='2.1.0', prog_name='HackIt')
 @click.option('--proxy', default=None, help='Proxy URL for tools (e.g., http://127.0.0.1:8080)')
 @click.option('--no-verify', is_flag=True, help='Disable SSL certificate verification globally')
 @click.option('--no-banner', is_flag=True, help='Disable startup banner')
@@ -33,10 +35,31 @@ from hackit.ui import display_banner
 @click.pass_context
 def cli(ctx, proxy, no_verify, no_banner, verbose):
     """
-    HackIt - Security Testing CLI Tool Suite
-    
-    A comprehensive penetration testing toolkit with multiple vulnerability scanners
-    and reconnaissance tools.
+    🚀 HackIt - Ultimate Hexa-Engine Security & Reconnaissance Suite 🚀
+
+    A professional-grade, high-performance penetration testing framework designed 
+    for elite security researchers and bug bounty hunters. HackIt leverages a 
+    unique Hexa-Engine architecture to deliver unmatched speed and depth.
+
+    🏗️ ARCHITECTURE:
+    - Go & Rust Core: Mass scanning and parallel processing at scale.
+    - C & C++ Engines: Ultra-fast low-level networking and expert service/OS fingerprinting.
+    - Python Intelligence: Advanced logic, WAF bypass, and smart analysis layers.
+    - Ruby Orchestrator: Dynamic CLI interaction and task management.
+    - Lua Scripting: NSE-inspired modular scripting for custom vulnerability checks.
+
+    🔥 KEY CAPABILITIES:
+    - DIR FINDER: Deep discovery with 8 specialized attributes and auto-hidden file detection.
+    - PORT SCANNER: Nmap-aligned scanning (SYN Stealth, UDP, OS Detect) with Timing T0-T5.
+    - WEB INTEL: Real-time technology profiling, WAF detection, and JS endpoint extraction.
+    - VULN ENGINE: Automated testing for XSS, SQLi, Open Redirects, and CVE matching.
+    - STEALTH MODE: Integrated proxy rotation, Tor support, and packet fragmentation.
+
+    ⚡ PERFORMANCE:
+    Engineered for speed, HackIt can handle massive CIDR ranges and large wordlists 
+    using asynchronous I/O and multi-threaded execution across 6 programming languages.
+
+    ⚠️ AUTHORIZED USE ONLY.
     """
     # Export chosen global settings to environment so modules can read them.
     if proxy:
@@ -62,13 +85,17 @@ def cli(ctx, proxy, no_verify, no_banner, verbose):
         return
 
 
+# Top-level commands
+cli.add_command(expert_dir_finder, name='dirfinder')
+
 # Port Scanning
 @cli.group()
 def ports():
-    """Port scanning tools"""
+    """Port scanning tools (Nmap-Inspired Penta-Engine)"""
     pass
 
-ports.add_command(scan_ports, name='scan')
+from hackit.port_scanner import scan_ports as nmap_scan
+ports.add_command(nmap_scan, name='scan')
 
 
 # HTTP/Web Tools
@@ -80,8 +107,8 @@ def web():
 web.add_command(check_headers, name='headers')
 web.add_command(detect_tech, name='tech')
 web.add_command(bruteforce_dirs, name='dirs')
-web.add_command(fuzz_params, name='fuzz')
 web.add_command(analyze_js, name='js')
+web.add_command(fuzz_params, name='fuzz')
 
 
 # Vulnerability Scanners
@@ -101,7 +128,7 @@ def recon():
     """Reconnaissance tools"""
     pass
 
-recon.add_command(brute_subdomains, name='subdomains')
+recon.add_command(scan_subdomains, name='subdomains')
 recon.add_command(scan_range, name='ips')
 
 
@@ -187,6 +214,7 @@ def help_tools():
     • ports scan - Multi-threaded async TCP port scanner
     
     WEB GROUP:
+    • dirfinder - Expert Quad-Engine Directory & File Finder (Ruby+Go+Rust+Python)
     • web headers - Check HTTP security headers and TLS
     • web tech - Detect web technologies (CMS, frameworks)
     • web dirs - Directory and file bruteforcer with recursion
