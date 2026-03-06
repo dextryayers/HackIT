@@ -98,8 +98,9 @@ class GoEngine:
 
         # Capture stdout (JSON result)
         stdout_content = []
-        for line in process.stdout:
-            stdout_content.append(line)
+        if process.stdout:
+            for line in process.stdout:
+                stdout_content.append(line)
         
         process.wait()
         stderr_thread.join()
@@ -118,4 +119,4 @@ class GoEngine:
                     return json.loads(line)
             return [{"error": "No JSON output found in stdout"}]
         except json.JSONDecodeError as e:
-            return [{"error": f"JSON parse error: {str(e)}\nRaw output: {result.stdout}"}]
+            return [{"error": f"JSON parse error: {str(e)}\nRaw output: {''.join(stdout_content)}"}]

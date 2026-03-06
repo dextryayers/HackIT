@@ -122,19 +122,56 @@ class GoEngine:
                     cmd.append(str(val))
 
         try:
-            # Running with shell=True can be helpful for PATH resolution on some systems
-            process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            stdout, stderr = process.communicate()
+            # Using text=False to read as bytes first
+            process = subprocess.Popen(
+                cmd, 
+                stdout=subprocess.PIPE, 
+                stderr=subprocess.PIPE, 
+                text=False,
+                bufsize=0
+            )
+            
+            full_stdout = []
+            
+            # Stream stdout to terminal in real-time
+            while True:
+                line_bytes = process.stdout.readline()
+                if not line_bytes and process.poll() is not None:
+                    break
+                if line_bytes:
+                    line = line_bytes.decode('utf-8', errors='replace')
+                    full_stdout.append(line)
+                    # If it's NOT part of the JSON markers, print it to terminal
+                    if "---JSON_START---" not in line and "---JSON_END---" not in line:
+                        # Only print if we are not in JSON mode (determined by flags)
+                        if '-o' not in cmd and '--format json' not in ' '.join(cmd):
+                            sys.stdout.write(line)
+                            sys.stdout.flush()
+            
+            stdout = "".join(full_stdout)
+            stderr_bytes = process.stderr.read()
+            stderr = stderr_bytes.decode('utf-8', errors='replace')
             
             if process.returncode != 0:
-                return {"error": f"Go engine failed: {stderr}"}
+                # If there's an error, still try to find JSON if possible, otherwise return error
+                if "---JSON_START---" not in stdout:
+                    return {"error": f"Go engine failed: {stderr}"}
+
+            if not stdout.strip():
+                return {"error": "Go engine returned empty output"}
 
             # Extract JSON between markers
             if "---JSON_START---" in stdout:
-                json_part = stdout.split("---JSON_START---")[1].split("---JSON_END---")[0].strip()
-                return json.loads(json_part)
+                try:
+                    json_part = stdout.split("---JSON_START---")[1].split("---JSON_END---")[0].strip()
+                    return json.loads(json_part)
+                except (IndexError, json.JSONDecodeError) as e:
+                    return {"error": f"Failed to parse JSON markers: {str(e)}"}
             else:
                 # Fallback to old behavior if no markers found
-                return json.loads(stdout.strip())
+                try:
+                    return json.loads(stdout.strip())
+                except json.JSONDecodeError:
+                    return {"error": f"Failed to parse raw output as JSON: {stdout[:200]}"}
         except Exception as e:
             return {"error": f"Bridge error: {str(e)}"}

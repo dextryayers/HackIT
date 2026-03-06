@@ -186,8 +186,8 @@ def dirfinder(**kwargs):
     click.echo("\n[+] Starting Expert Scan...\n")
     
     try:
-        # Execute Go binary and stream output
-        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        # Execute Go binary and stream output with UTF-8 encoding
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8', errors='replace')
         for line in process.stdout:
             print(line, end='')
         process.wait()

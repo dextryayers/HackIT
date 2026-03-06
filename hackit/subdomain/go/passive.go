@@ -1,21 +1,20 @@
 package main
 
 import (
-	"sync"
+	"fmt"
+	"strings"
 	"time"
+	"unsafe"
 )
 
-func runPassive(domain string) []string {
-	var subs []string
-
-	// Channels to collect results from multiple sources in parallel
-	ch := make(chan []string)
+// runPassive handles passive subdomain enumeration
+func runPassive(domain string, ch chan<- []string, verbose bool) {
 	sources := []ProviderFunc{
 		queryCrtSh,
 		queryChaos,
 		queryC99,
 		queryHackerTarget,
-		queryAlienVault,
+		queryOTX,
 		queryThreatCrowd,
 		queryAnubis,
 		queryRapiddns,
@@ -41,16 +40,78 @@ func runPassive(domain string) []string {
 		queryShodan,
 		querySecurityTrails,
 		queryAhrefs,
+		queryFullHunt,
+		queryYandex,
+		queryVirusTotal,
+		queryColumbus,
+		queryDNSDumpster,
+		queryBuiltWith,
+		queryCensys,
+		queryFofa,
+		queryZoomeye,
+		queryLeakix,
+		queryIntelx,
+		queryNetcraft,
+		queryPublicWWW,
+		queryCriminalIP,
+		queryQuake,
+		queryDnsHistory,
+		queryViewDNS,
+		queryDNSRepo,
+		queryDnsWatch,
+		queryReverseIP,
+		queryWhoisXMLAPI,
+		queryDomainBigData,
+		queryDnslytics,
+		querySiteAdvisor,
+		queryGoogleCT,
+		queryFacebookCT,
+		querySSLMate,
+		queryHybridAnalysis,
+		queryAsk,
+		queryGitHub,
+		queryGitLab,
+		queryBitbucket,
+		querySourceForge,
+		queryCertDB,
+		querySSLMate,
+		queryBinaryEdge,
+		queryDNSDB,
+		queryPassiveTotal,
+		queryGitea,
 	}
 
-	// Use WaitGroup to close channel when done
-	var wg sync.WaitGroup
+	// 1. Rust OSINT Engine (Super Fast)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if rustOSINTScan != nil && rustOSINTScan.Find() == nil {
+			cDomain := []byte(domain + "\x00")
+			ptr, _, _ := rustOSINTScan.Call(uintptr(unsafe.Pointer(&cDomain[0])))
+			if ptr != 0 {
+				rustRes := string(CStrToGo(ptr))
+				if rustRes != "" {
+					subs := strings.Split(rustRes, ",")
+					if verbose {
+						fmt.Printf("[*] Rust OSINT Engine found %d subdomains\n", len(subs))
+					}
+					ch <- subs
+				}
+			}
+		}
+	}()
+
+	// 2. Parallel sources with concurrency limit
+	concurrency := 30 // Increased concurrency for speed
+	sem := make(chan struct{}, concurrency)
+
 	for _, source := range sources {
 		wg.Add(1)
+		sem <- struct{}{}
 		go func(f ProviderFunc) {
 			defer wg.Done()
+			defer func() { <-sem }()
 
-			// Source-level timeout to prevent one slow source from hanging the whole scan
 			resultChan := make(chan []string, 1)
 			go func() {
 				resultChan <- f(domain)
@@ -58,9 +119,13 @@ func runPassive(domain string) []string {
 
 			select {
 			case res := <-resultChan:
-				ch <- res
-			case <-time.After(90 * time.Second): // Max 90 seconds per source
-				// Source timed out, skip it
+				if len(res) > 0 {
+					if verbose {
+						fmt.Printf("[*] Found %d subdomains from passive source\n", len(res))
+					}
+					ch <- res
+				}
+			case <-time.After(20 * time.Second): // Reduced timeout for speed
 				return
 			}
 		}(source)
@@ -71,11 +136,4 @@ func runPassive(domain string) []string {
 		wg.Wait()
 		close(ch)
 	}()
-
-	// Collect
-	for res := range ch {
-		subs = append(subs, res...)
-	}
-
-	return unique(subs)
 }

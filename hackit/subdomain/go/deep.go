@@ -13,14 +13,14 @@ func runDeep(foundSubs []*Result, config Config) {
 
 	// We'll take the subdomains found so far and use them as base for further active scanning
 	// To avoid infinite loops, we only go 1 level deep by default
-	
+
 	jobs := make(chan string, config.Concurrency)
 	var wgDeep sync.WaitGroup
 
 	// Start workers
 	for i := 0; i < config.Concurrency; i++ {
 		wgDeep.Add(1)
-		go resolveWorker(jobs, &wgDeep, config.Verbose)
+		go resolveWorker(jobs, &wgDeep, config.Verbose, config.Domain, false) // Disable recursive in deep workers to avoid explosion
 	}
 
 	// For each found subdomain, try to find more subdomains under it

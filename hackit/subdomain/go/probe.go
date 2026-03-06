@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"crypto/tls"
 	"fmt"
 	"io/ioutil"
@@ -10,29 +9,32 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unsafe"
 )
 
 var titleRegex = regexp.MustCompile(`(?i)<title>(.*?)</title>`)
 
 func runProbe(results []*Result, config Config) {
 	actualConcurrency := config.Concurrency
-	if len(results) > 500 {
-		actualConcurrency = config.Concurrency / 2 // Reduce slightly for probing to avoid mass blocking
-		if actualConcurrency < 50 {
-			actualConcurrency = 50
+	if len(results) > 1000 {
+		actualConcurrency = config.Concurrency * 2
+		if actualConcurrency > 1000 {
+			actualConcurrency = 1000
 		}
 	}
 	sem := make(chan bool, actualConcurrency)
 	var wg sync.WaitGroup
 
+	transport := &http.Transport{
+		TLSClientConfig:     &tls.Config{InsecureSkipVerify: true},
+		DisableKeepAlives:   true, // Close connections immediately for probing
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 32,
+		IdleConnTimeout:     10 * time.Second,
+	}
 	client := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig:     &tls.Config{InsecureSkipVerify: true},
-			DisableKeepAlives:   false,
-			MaxIdleConns:        100,
-			MaxIdleConnsPerHost: 32,
-			IdleConnTimeout:     30 * time.Second,
-		},
+		Transport: transport,
+		Timeout:   time.Duration(config.Timeout) * time.Second,
 	}
 	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		return http.ErrUseLastResponse
@@ -45,70 +47,89 @@ func runProbe(results []*Result, config Config) {
 			defer wg.Done()
 			defer func() { <-sem }()
 
-			// Probe HTTPS first (modern standard)
-			probeURL(client, res, "https", config)
-			if res.Status == 0 {
-				probeURL(client, res, "http", config)
+			// Parallel HTTP/HTTPS Probing
+			var pWg sync.WaitGroup
+			schemes := []string{"https", "http"}
+
+			for _, scheme := range schemes {
+				pWg.Add(1)
+				go func(s string) {
+					defer pWg.Done()
+					probeURL(client, res, s, config)
+				}(scheme)
 			}
+			pWg.Wait()
 		}(r)
 	}
 	wg.Wait()
 }
 
 func probeURL(client *http.Client, res *Result, scheme string, config Config) {
-	url := fmt.Sprintf("%s://%s", scheme, res.Subdomain)
-
-	// Try with retries and exponential backoff
-	var resp *http.Response
-	var err error
-	for i := 0; i < 3; i++ {
-		method := "HEAD"
-		if config.ShowTitle || config.TechDetect {
-			method = "GET"
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.Timeout+i*5)*time.Second)
-		req, reqErr := http.NewRequestWithContext(ctx, method, url, nil)
-		if reqErr != nil {
-			cancel()
-			err = reqErr
-			time.Sleep(time.Duration(500*(i+1)) * time.Millisecond)
-			continue
-		}
-		req.Header.Set("User-Agent", getRandomUserAgent())
-		req.Header.Set("Accept", "*/*")
-		req.Header.Set("Accept-Language", "en-US,en;q=0.5")
-		req.Header.Set("Accept-Encoding", "gzip, deflate")
-		resp, err = client.Do(req)
-		cancel()
-		if err == nil {
-			break
-		}
-		time.Sleep(time.Duration(500*(i+1)) * time.Millisecond)
+	// If already probed by another scheme successfully, don't overwrite if it's 200
+	if res.Status == 200 && scheme == "http" {
+		return
 	}
 
-	if err != nil || resp == nil {
+	url := fmt.Sprintf("%s://%s", scheme, res.Subdomain)
+
+	method := "HEAD"
+	if config.ShowTitle || config.TechDetect {
+		method = "GET"
+	}
+
+	req, err := http.NewRequest(method, url, nil)
+	if err != nil {
+		return
+	}
+
+	req.Header.Set("User-Agent", getRandomUserAgent())
+	req.Header.Set("Accept", "*/*")
+	req.Header.Set("Connection", "close")
+
+	resp, err := client.Do(req)
+	if err != nil {
 		return
 	}
 	defer resp.Body.Close()
 
-	// Update result
-	res.Status = resp.StatusCode
-	res.Server = resp.Header.Get("Server")
+	// Update result (Locking not strictly necessary if we only update Status/Server/Title)
+	// but let's be careful. Status 200 is preferred.
+	if res.Status == 0 || resp.StatusCode == 200 {
+		res.Status = resp.StatusCode
+		res.Server = resp.Header.Get("Server")
+	} else {
+		// Keep existing if it's already set and new is not 200
+		return
+	}
 
 	// Read body for title
 	if config.ShowTitle || config.TechDetect {
-		bodyBytes, err := ioutil.ReadAll(resp.Body)
-		if err == nil {
-			body := string(bodyBytes)
-			// Extract Title
-			m := titleRegex.FindStringSubmatch(body)
-			if len(m) > 1 {
-				res.Title = strings.TrimSpace(m[1])
+		// Try Rust extraction first (Regex in Rust is much faster)
+		if config.ShowTitle && rustGetTitle != nil && rustGetTitle.Find() == nil {
+			cURL := []byte(url + "\x00")
+			ptr, _, _ := rustGetTitle.Call(uintptr(unsafe.Pointer(&cURL[0])))
+			if ptr != 0 {
+				rustTitle := string(CStrToGo(ptr))
+				if rustTitle != "" {
+					res.Title = rustTitle
+				}
 			}
+		}
 
-			// Tech Detect
-			if config.TechDetect {
-				res.Tech = detectTech(resp.Header, body)
+		// Go Fallback
+		if res.Title == "" || config.TechDetect {
+			bodyBytes, err := ioutil.ReadAll(resp.Body)
+			if err == nil {
+				body := string(bodyBytes)
+				if res.Title == "" && config.ShowTitle {
+					m := titleRegex.FindStringSubmatch(body)
+					if len(m) > 1 {
+						res.Title = strings.TrimSpace(m[1])
+					}
+				}
+				if config.TechDetect {
+					res.Tech = detectTech(resp.Header, body)
+				}
 			}
 		}
 	}

@@ -8,6 +8,9 @@ use serde::Deserialize;
 use once_cell::sync::Lazy;
 use std::time::Duration;
 
+mod providers;
+pub use providers::*;
+
 #[derive(Debug, Deserialize)]
 struct Signature {
     platform: String,
@@ -86,6 +89,86 @@ pub extern "C" fn rust_check_subdomain_takeover(domain: *const c_char) -> *mut c
     
     let c_string = CString::new(result).unwrap();
     c_string.into_raw()
+}
+
+use rayon::prelude::*;
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rust_resolve_dns_batch(domains: *const c_char) -> *mut c_char {
+    if domains.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    let c_str = unsafe { CStr::from_ptr(domains) };
+    let domains_str = match c_str.to_str() {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+
+    let domain_list: Vec<&str> = domains_str.split(',').collect();
+    
+    // Configure a high-performance, accurate resolver with multiple public DNS servers
+    let mut config = ResolverConfig::new();
+    config.add_name_server(NameServerConfig::new("8.8.8.8:53".parse().unwrap(), Protocol::Udp));
+    config.add_name_server(NameServerConfig::new("1.1.1.1:53".parse().unwrap(), Protocol::Udp));
+    config.add_name_server(NameServerConfig::new("9.9.9.9:53".parse().unwrap(), Protocol::Udp));
+    config.add_name_server(NameServerConfig::new("8.8.4.4:53".parse().unwrap(), Protocol::Udp));
+
+    let mut opts = ResolverOpts::default();
+    opts.timeout = Duration::from_secs(2);
+    opts.attempts = 2; // Retry once if failed
+    opts.use_hosts_file = false; // Bypass local hosts for OSINT accuracy
+
+    let resolver = Resolver::new(config, opts).unwrap_or_else(|_| Resolver::from_system_conf().unwrap());
+
+    let results: Vec<String> = domain_list.par_iter().map(|&domain| {
+        // Perform multiple lookups for accuracy (A and AAAA)
+        let mut all_ips = Vec::new();
+        
+        if let Ok(lookup) = resolver.lookup_ip(domain) {
+            for ip in lookup.iter() {
+                all_ips.push(ip.to_string());
+            }
+        }
+
+        if all_ips.is_empty() {
+            format!("{}:NOT_FOUND", domain)
+        } else {
+            all_ips.sort();
+            all_ips.dedup();
+            format!("{}:{}", domain, all_ips.join(";"))
+        }
+    }).collect();
+
+    let final_result = results.join("|");
+    CString::new(final_result).unwrap().into_raw()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rust_resolve_dns(domain: *const c_char) -> *mut c_char {
+    if domain.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    let c_str = unsafe { CStr::from_ptr(domain) };
+    let domain_str = match c_str.to_str() {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+
+    let resolver = match Resolver::new(ResolverConfig::default(), ResolverOpts::default()) {
+        Ok(r) => r,
+        Err(_) => return CString::new("ERROR").unwrap().into_raw(),
+    };
+
+    match resolver.lookup_ip(domain_str) {
+        Ok(lookup) => {
+            let ips: Vec<String> = lookup.iter().map(|ip| ip.to_string()).collect();
+            let result = ips.join(",");
+            CString::new(result).unwrap().into_raw()
+        },
+        Err(_) => CString::new("NOT_FOUND").unwrap().into_raw(),
+    }
 }
 
 fn perform_advanced_subdomain_check(domain: &str) -> String {

@@ -9,7 +9,7 @@ pub async fn crawl_and_extract(
     base_url: &str,
     client: &Client,
     max_depth: usize,
-) -> (HashMap<String, String>, ContactInfo) {
+) -> (HashMap<String, fingerprint::TechInfo>, ContactInfo) {
     let mut visited = HashSet::new();
     let mut to_visit = vec![base_url.to_string()];
     let mut all_techs = HashMap::new();

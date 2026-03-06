@@ -1,11 +1,12 @@
 package main
 
 import (
-	"context"
+	"crypto/tls"
 	"math/rand"
 	"net/http"
 	"strings"
 	"time"
+	"unsafe"
 )
 
 var defaultTransport = &http.Transport{
@@ -13,6 +14,7 @@ var defaultTransport = &http.Transport{
 	MaxIdleConnsPerHost: 20,
 	IdleConnTimeout:     30 * time.Second,
 	TLSHandshakeTimeout: 10 * time.Second,
+	TLSClientConfig:     &tls.Config{InsecureSkipVerify: true},
 }
 
 var defaultClient = &http.Client{
@@ -74,18 +76,41 @@ func getRandomUserAgent() string {
 
 // safeGet performs an HTTP GET with better reliability headers
 func safeGet(url string, timeout time.Duration) (*http.Response, error) {
-	client := defaultClient
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	client := &http.Client{
+		Timeout:   timeout,
+		Transport: defaultTransport,
+	}
+
+	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, err
 	}
 
 	req.Header.Set("User-Agent", getRandomUserAgent())
 	req.Header.Set("Accept", "*/*")
-	req.Header.Set("Accept-Language", "en-US,en;q=0.5")
-	req.Header.Set("Accept-Encoding", "gzip, deflate")
+	req.Header.Set("Connection", "close") // Avoid keeping too many idle conns
 
 	return client.Do(req)
+}
+
+// CStrToGo converts a C-style string pointer (from Rust FFI) to a Go string
+func CStrToGo(ptr uintptr) string {
+	if ptr == 0 {
+		return ""
+	}
+
+	// Assuming UTF-8/ASCII for C strings
+	var length int
+	for {
+		if *(*byte)(unsafe.Pointer(ptr + uintptr(length))) == 0 {
+			break
+		}
+		length++
+	}
+
+	b := make([]byte, length)
+	for i := 0; i < length; i++ {
+		b[i] = *(*byte)(unsafe.Pointer(ptr + uintptr(i)))
+	}
+	return string(b)
 }

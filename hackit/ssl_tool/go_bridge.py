@@ -22,13 +22,16 @@ class GoEngine:
                 print("[+] Compilation successful")
             except subprocess.CalledProcessError as e:
                 print(f"[!] Compilation failed: {e}")
-                sys.exit(1)
+                return False
             except FileNotFoundError:
                 print("[!] Go compiler not found. Please install Go.")
-                sys.exit(1)
+                return False
+        return True
 
     def run(self, host, port=443, timeout=10, output=None):
-        self.ensure_compiled()
+        if not self.ensure_compiled():
+            print("[!] Engine not available.")
+            return False
         
         cmd = [
             self.binary_path,

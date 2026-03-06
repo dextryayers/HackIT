@@ -57,7 +57,7 @@ class GoEngine:
     def run(self, domain, wordlist=None, passive_only=False, active_only=False, permutations=False, 
             takeover=False, recursive=False, stealth=False, fast=False, 
             sc=False, ip=False, title=False, server=False, tech_detect=False, asn=False, probe=False, 
-            filter_codes=None, threads=100, output=None):
+            filter_codes=None, threads=100, output=None, verbose=False):
             
         if not self.ensure_compiled():
             raise RuntimeError("Go worker could not be compiled or Go is not installed.")
@@ -68,6 +68,9 @@ class GoEngine:
         
         if wordlist:
             cmd.extend(['-w', wordlist])
+        
+        if verbose:
+            cmd.append('-v')
         
         # Mode flags
         if passive_only: cmd.append('-passive-only')
@@ -99,17 +102,17 @@ class GoEngine:
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                text=True,
-                bufsize=1,
-                universal_newlines=True
+                text=False # Use bytes to avoid UnicodeDecodeError on Windows
             )
             
             # Real-time output streaming
             while True:
-                line = process.stdout.readline()
-                if not line and process.poll() is not None:
+                line_bytes = process.stdout.readline()
+                if not line_bytes and process.poll() is not None:
                     break
-                if line:
+                if line_bytes:
+                    # Safely decode UTF-8 with errors='replace'
+                    line = line_bytes.decode('utf-8', errors='replace')
                     sys.stdout.write(line)
                     sys.stdout.flush()
             

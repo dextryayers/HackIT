@@ -34,7 +34,7 @@ class PortScanner:
                         banner = s.recv(1024).decode('utf-8', errors='ignore').strip()
                         # Clean up banner
                         banner = "".join(c for c in banner if c.isprintable())
-                    except:
+                    except Exception:
                         pass
                     
                     return {
@@ -43,7 +43,7 @@ class PortScanner:
                         "service": self.common_services.get(port, "unknown"),
                         "banner": banner[:100] # Limit banner length
                     }
-        except:
+        except Exception:
             pass
         return None
 

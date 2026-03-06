@@ -1,5 +1,7 @@
 import json
+import re
 import sys
+from typing import Any, Dict, List
 
 # Simple CVE mapping for demonstration
 # In a real scenario, this would query a local database or API
@@ -36,11 +38,11 @@ CVE_DATABASE = {
     ]
 }
 
-def enrich_results(scan_data):
-    total_risk_score = 0
-    vulnerabilities_found = 0
+def enrich_results(scan_data: Dict[str, Any]) -> Dict[str, Any]:
+    total_risk_score: float = 0
+    vulnerabilities_found: int = 0
     
-    results = scan_data.get("results", [])
+    results: List[Dict[str, Any]] = scan_data.get("results", [])
     if not results:
         scan_data["intelligence"] = {
             "total_risk_score": 0,
@@ -49,7 +51,7 @@ def enrich_results(scan_data):
         }
         return scan_data
 
-    for result in results:
+    for result in results:  # type: Dict[str, Any]
         status = result.get("status", "").lower()
         if status != "open":
             result["cves"] = []
@@ -107,7 +109,7 @@ def enrich_results(scan_data):
         vulnerabilities_found += len(matched_cves)
 
     # Global intelligence
-    avg_risk = total_risk_score / len(results) if results else 0
+    avg_risk: float = total_risk_score / len(results) if results else 0.0
     
     summary = "System looks secure."
     if avg_risk > 70:

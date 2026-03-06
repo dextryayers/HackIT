@@ -12,9 +12,54 @@ import (
 
 func analyze(rustRes RustScanResult) map[string]TechInfo {
 	techs := make(map[string]TechInfo)
-	// Technology Detection Loop
-	// Note: We use the detected technologies directly from RustScanResult
-	// but we can add more logic here if needed.
+
+	for techName, sigs := range Technologies {
+		confidence := 0
+		var matchedSigs []string
+
+		for _, sig := range sigs {
+			match := false
+			switch sig.Type {
+			case "header":
+				if val, ok := rustRes.Headers[sig.Name]; ok {
+					if matched, _ := regexp.MatchString("(?i)"+sig.Pattern, val); matched {
+						match = true
+					}
+				}
+			case "cookie":
+				// Check in Set-Cookie headers
+				for k, v := range rustRes.Headers {
+					if strings.ToLower(k) == "set-cookie" {
+						if matched, _ := regexp.MatchString("(?i)"+sig.Pattern, v); matched {
+							match = true
+						}
+					}
+				}
+			case "html", "meta", "script", "url":
+				// Check in body snippet
+				if matched, _ := regexp.MatchString("(?i)"+sig.Pattern, rustRes.BodySnippet); matched {
+					match = true
+				}
+			}
+
+			if match {
+				confidence += 50
+				matchedSigs = append(matchedSigs, sig.Type+":"+sig.Pattern)
+			}
+		}
+
+		if confidence > 0 {
+			if confidence > 100 {
+				confidence = 100
+			}
+			techs[techName] = TechInfo{
+				Name:       techName,
+				Confidence: confidence,
+				Sources:    matchedSigs,
+			}
+		}
+	}
+
 	return techs
 }
 

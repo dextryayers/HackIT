@@ -8,6 +8,85 @@ import json
 from hackit.ui import display_tool_banner, _colored, GREEN, RED, BLUE, YELLOW
 from .go_bridge import get_engine
 
+import re
+import requests
+from urllib.parse import urlparse
+
+# Suppress insecure request warnings
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+def extract_from_web(domain):
+    """
+    Extract subdomains from the target's main page and JS files.
+    """
+    subs = set()
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    
+    try:
+        # Try both http and https
+        for proto in ["https://", "http://"]:
+            url = f"{proto}{domain}"
+            try:
+                resp = requests.get(url, timeout=15, verify=False, headers=headers)
+                if resp.status_code == 200:
+                    # Find subdomains in page content (more aggressive regex)
+                    pattern = re.compile(rf'([a-zA-Z0-9-]+\.)+{re.escape(domain)}')
+                    matches = pattern.findall(resp.text)
+                    for m in matches:
+                        if isinstance(m, tuple):
+                            subs.add(m[0].lower().strip("."))
+                        else:
+                            subs.add(m.lower().strip("."))
+                    
+                    # Search in comments and script tags
+                    soup_pattern = re.compile(r'([a-z0-9]+(-[a-z0-9]+)*\.)+[a-z]{2,}')
+                    all_matches = soup_pattern.finditer(resp.text)
+                    for match in all_matches:
+                        found = match.group(0).lower()
+                        if found.endswith("." + domain) or found == domain:
+                            subs.add(found)
+
+                    # Find JS files
+                    js_pattern = re.compile(r'src=["\'](.*?\.js)["\']')
+                    js_files = js_pattern.findall(resp.text)
+                    for js in js_files:
+                        if js.startswith("/"):
+                            js_url = f"{proto}{domain}{js}"
+                        elif js.startswith("http"):
+                            js_url = js
+                        else:
+                            js_url = f"{proto}{domain}/{js}"
+                        
+                        try:
+                            js_resp = requests.get(js_url, timeout=10, verify=False, headers=headers)
+                            if js_resp.status_code == 200:
+                                js_matches = pattern.findall(js_resp.text)
+                                for jm in js_matches:
+                                    if isinstance(jm, tuple):
+                                        subs.add(jm[0].lower().strip("."))
+                                    else:
+                                        subs.add(jm.lower().strip("."))
+                        except:
+                            continue
+            except:
+                continue
+    except:
+        pass
+    
+    # Filter out junk
+    valid_subs = set()
+    for s in subs:
+        s = s.lower().strip(".")
+        if s.endswith("." + domain) or s == domain:
+            valid_subs.add(s)
+            
+    return list(valid_subs)
+
 @click.command()
 @click.option('-d', '--domain', required=True, help='Target domain (e.g. example.com)')
 @click.option('-w', '--wordlist', type=click.Path(exists=True), help='Wordlist for active brute force')
@@ -28,7 +107,8 @@ from .go_bridge import get_engine
 @click.option('-fc', '--filter-codes', help='Filter response with specified status code (e.g. 403,401)')
 @click.option('-t', '--threads', default=100, help='Number of threads (Go routines)')
 @click.option('-o', '--output', help='Save output to JSON file')
-def enumerate(domain, wordlist, passive_only, active_only, permutations, takeover, recursive, stealth, fast, sc, ip, title, server, tech_detect, asn, probe, filter_codes, threads, output):
+@click.option('-v', '--verbose', is_flag=True, help='Show verbose output (debug logs)')
+def enumerate(domain, wordlist, passive_only, active_only, permutations, takeover, recursive, stealth, fast, sc, ip, title, server, tech_detect, asn, probe, filter_codes, threads, output, verbose):
     """
     Advanced Subdomain Enumeration & Takeover Scanner (Go-Powered).
     Combines passive sources, active brute forcing, permutations, recursion, zone transfers, and HTTP probing.
@@ -66,6 +146,28 @@ def enumerate(domain, wordlist, passive_only, active_only, permutations, takeove
 
     # Run
     click.echo("-" * 60)
+    
+    # 1. Python Smart Intelligence: Extract subdomains from web
+    temp_wordlist_path = None
+    web_subs = extract_from_web(domain)
+    if web_subs:
+        click.echo(f"[*] Found {len(web_subs)} subdomains in target web and JS files")
+        # Create a temp file for Go to read
+        temp_wordlist = tempfile.NamedTemporaryFile(delete=False, suffix=".txt", mode="w")
+        for s in web_subs:
+            # We only need the part before the domain
+            sub = s.replace(f".{domain}", "")
+            temp_wordlist.write(sub + "\n")
+        temp_wordlist.close()
+        temp_wordlist_path = temp_wordlist.name
+        
+        # Merge with user wordlist if exists
+        if wordlist:
+            with open(wordlist, "r") as f:
+                with open(temp_wordlist_path, "a") as tf:
+                    tf.write(f.read())
+        wordlist = temp_wordlist_path
+
     success = engine.run(
         domain=domain,
         wordlist=wordlist,
@@ -85,8 +187,14 @@ def enumerate(domain, wordlist, passive_only, active_only, permutations, takeove
         probe=probe,
         filter_codes=filter_codes,
         threads=threads,
-        output=output
+        output=output,
+        verbose=verbose
     )
+    
+    # Cleanup temp file
+    if temp_wordlist_path and os.path.exists(temp_wordlist_path):
+        os.remove(temp_wordlist_path)
+
     click.echo("-" * 60)
     
     if success:

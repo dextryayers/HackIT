@@ -17,6 +17,10 @@ import (
 var (
 	rustLib              *syscall.LazyDLL
 	rustCheckSubTakeover *syscall.LazyProc
+	rustResolveDNS       *syscall.LazyProc
+	rustResolveDNSBatch  *syscall.LazyProc
+	rustOSINTScan        *syscall.LazyProc
+	rustGetTitle         *syscall.LazyProc
 )
 
 func init() {
@@ -24,6 +28,10 @@ func init() {
 	if runtime.GOOS == "windows" {
 		rustLib = syscall.NewLazyDLL("rust_engine/target/release/subdomain_rust_engine.dll")
 		rustCheckSubTakeover = rustLib.NewProc("rust_check_subdomain_takeover")
+		rustResolveDNS = rustLib.NewProc("rust_resolve_dns")
+		rustResolveDNSBatch = rustLib.NewProc("rust_resolve_dns_batch")
+		rustOSINTScan = rustLib.NewProc("rust_osint_scan")
+		rustGetTitle = rustLib.NewProc("rust_get_title")
 	}
 }
 
@@ -122,20 +130,4 @@ func checkContent(domain string, signature string) bool {
 	}
 
 	return strings.Contains(string(body), signature)
-}
-
-// CStrToGo converts C string pointer to Go string
-func CStrToGo(ptr uintptr) string {
-	if ptr == 0 {
-		return ""
-	}
-	var res []byte
-	for i := 0; ; i++ {
-		b := *(*byte)(unsafe.Pointer(ptr + uintptr(i)))
-		if b == 0 {
-			break
-		}
-		res = append(res, b)
-	}
-	return string(res)
 }

@@ -1,476 +1,308 @@
 use std::collections::HashMap;
 use regex::Regex;
 use lazy_static::lazy_static;
+use serde::{Serialize, Deserialize};
 
-lazy_static! {
-    static ref SIGNATURES: Vec<TechSignature> = vec![
-        TechSignature::new("WordPress", vec![r#"wp-content"#, r#"wp-includes"#, r#"<meta name="generator" content="wordpress"#, r#"wp-json"#, r#"wp-login\.php"#, r#"wp-config\.php"#]),
-        TechSignature::new("Cloudflare", vec![r#"__cfduid"#, r#"cf-ray"#, r#"cloudflare"#, r#"cf-cache-status"#]),
-        TechSignature::new("Nginx", vec![r#"nginx"#, r#"x-powered-by: nginx"#]),
-        TechSignature::new("Apache", vec![r#"apache"#, r#"mod_ssl"#, r#"mod_fcgid"#]),
-        TechSignature::new("PHP", vec![r#"php/"#, r#"x-powered-by: php"#, r#"\.php"#]),
-        TechSignature::new("Laravel", vec![r#"laravel_session"#, r#"x-powered-by: laravel"#, r#"X-Laravel-Cache"#]),
-        TechSignature::new("React", vec![r#"react\.production\.min\.js"#, r#"data-reactroot"#, r#"_reactroot"#, r#"React\.createElement"#]),
-        TechSignature::new("Vue.js", vec![r#"vue\.min\.js"#, r#"v-cloak"#, r#"__vue__"#, r#"Vue\.config"#]),
-        TechSignature::new("jQuery", vec![r#"jquery\.min\.js"#, r#"jquery-"#, r#"jquery\.js"#, r#"jQuery\.fn"#]),
-        TechSignature::new("Bootstrap", vec![r#"bootstrap\.min\.css"#, r#"bootstrap\.min\.js"#, r#"bootstrap\.css"#, r#"data-toggle="modal""#]),
-        TechSignature::new("Drupal", vec![r#"drupal"#, r#"drupal\.settings"#, r#"sites/all/themes"#, r#"Drupal\.behaviors"#]),
-        TechSignature::new("Joomla", vec![r#"joomla!"#, r#"<meta name="generator" content="joomla!"#, r#"administrator/index\.php"#]),
-        TechSignature::new("Magento", vec![r#"mage\.cookies"#, r#"skin/frontend"#, r#"Mage\.Config"#]),
-        TechSignature::new("Shopify", vec![r#"cdn\.shopify\.com"#, r#"shopify-checkout"#, r#"Shopify\.shop"#]),
-        TechSignature::new("Lazada", vec![r#"lazada-web"#, r#"laz-img-cdn"#, r#"lzd-logo"#]),
-        TechSignature::new("Alibaba Cloud", vec![r#"alicdn\.com"#, r#"aliyun"#, r#"ali-stats"#]),
-        TechSignature::new("Shopee", vec![r#"shopee\.sg"#, r#"shopee\.id"#, r#"shopee\.com"#]),
-        TechSignature::new("Tokopedia", vec![r#"tokopedia\.com"#, r#"tkp\.me"#]),
-        TechSignature::new("Bukalapak", vec![r#"bukalapak\.com"#, r#"bl-img\.com"#]),
-        TechSignature::new("Akamai", vec![r#"akamaihd\.net"#, r#"x-akamai-"#, r#"akamai-staging"#]),
-        TechSignature::new("Fastly", vec![r#"fastly\.net"#, r#"x-fastly-"#]),
-        TechSignature::new("Squarespace", vec![r#"static1\.squarespace\.com"#, r#"Squarespace\.afterFirstRender"#]),
-        TechSignature::new("Wix", vec![r#"wix-code-sdk-bin"#, r#"_wix_auth_token"#, r#"wix-image"#]),
-        TechSignature::new("Express", vec![r#"x-powered-by: express"#]),
-        TechSignature::new("Django", vec![r#"csrftoken"#, r#"__admin__"#, r#"django-debug-toolbar"#]),
-        TechSignature::new("Flask", vec![r#"session"#, r#"werkzeug"#, r#"flask-debugtoolbar"#]),
-        TechSignature::new("Angular", vec![r#"ng-version"#, r#"ng-app"#, r#"angular\.min\.js"#, r#"ng-controller"#]),
-        TechSignature::new("Tailwind CSS", vec![r#"tailwind\.min\.css"#, r#"tailwind\.css"#, r#"bg-opacity-"#]),
-        TechSignature::new("Bulma", vec![r#"bulma\.min\.css"#, r#"bulma\.css"#, r#"is-primary"#]),
-        TechSignature::new("Elementor", vec![r#"elementor-widget"#, r#"elementor-container"#, r#"elementor-column"#]),
-        TechSignature::new("WooCommerce", vec![r#"woocommerce-no-js"#, r#"wc-ajax"#, r#"woocommerce-Price-amount"#]),
-        TechSignature::new("Yoast SEO", vec![r#"yoast-schema-graph"#, r#"yoast-seo"#]),
-        TechSignature::new("Next.js", vec![r#"_next/static"#, r#"__NEXT_DATA__"#, r#"next/head"#]),
-        TechSignature::new("Nuxt.js", vec![r#"__NUXT__"#, r#"nuxt-link"#]),
-        TechSignature::new("Gatsby", vec![r#"gatsby-image"#, r#"gatsby-link"#]),
-        TechSignature::new("Svelte", vec![r#"svelte-"#, r#"svelte_ssr"#]),
-        TechSignature::new("Firebase", vec![r#"firebasejs"#, r#"firebase-app"#]),
-        TechSignature::new("Google Analytics", vec![r#"google-analytics\.com/analytics\.js"#, r#"googletagmanager\.com/gtag/js"#, r#"UA-"#]),
-        TechSignature::new("Facebook Pixel", vec![r#"connect\.facebook\.net/en_US/fbevents\.js"#, r#"fbq\("#]),
-        TechSignature::new("Font Awesome", vec![r#"font-awesome"#, r#"fontawesome"#, r#"fa-"#]),
-        TechSignature::new("Google Fonts", vec![r#"fonts\.googleapis\.com"#, r#"fonts\.gstatic\.com"#]),
-        TechSignature::new("Prism.js", vec![r#"prism\.js"#, r#"prism\.css"#]),
-        TechSignature::new("Highlight.js", vec![r#"highlight\.js"#, r#"hljs"#]),
-        TechSignature::new("Varnish", vec![r#"X-Varnish"#]),
-        TechSignature::new("GitHub Pages", vec![r#"github\.io"#]),
-        TechSignature::new("Netlify", vec![r#"X-NF-Request-ID"#, r#"netlify"#]),
-        TechSignature::new("Vercel", vec![r#"X-Vercel-ID"#, r#"vercel"#]),
-        TechSignature::new("Heroku", vec![r#"heroku"#]),
-        TechSignature::new("DigitalOcean", vec![r#"digitalocean"#, r#"do-custom-header"#, r#"x-do-app-id"#]),
-        TechSignature::new("AWS", vec![r#"amazonaws\.com"#, r#"x-amz-"#, r#"aws-sdk-"#, r#"X-Amz-Cf-Id"#]),
-        TechSignature::new("Azure", vec![r#"azure\.com"#, r#"x-ms-"#, r#"AppService"#, r#"ARRAffinity"#]),
-        TechSignature::new("Google Cloud", vec![r#"googlecloud"#, r#"x-goog-"#, r#"Google-Cloud-Storage"#, r#"run\.app"#]),
-        TechSignature::new("Linode", vec![r#"linode"#, r#"nodebalancer"#]),
-        TechSignature::new("Vultr", vec![r#"vultr"#, r#"x-vultr-"#]),
-        TechSignature::new("Hetzner", vec![r#"hetzner"#, r#"x-h-robot"#]),
-        TechSignature::new("Redis", vec![r#"redis"#, r#"x-redis-cache"#]),
-        TechSignature::new("MySQL", vec![r#"mysql"#, r#"sql syntax.*mysql"#, r#"warning.*mysql_"#]),
-        TechSignature::new("PostgreSQL", vec![r#"postgresql"#, r#"pg_connect"#, r#"npgsql"#]),
-        TechSignature::new("MongoDB", vec![r#"mongodb"#, r#"mongoerror"#, r#"mongoclient"#]),
-        TechSignature::new("Elasticsearch", vec![r#"elasticsearch"#, r#"lucene_version"#]),
-        TechSignature::new("OpenSSL", vec![r#"OpenSSL/"#]),
-        TechSignature::new("LiteSpeed", vec![r#"litespeed"#]),
-        TechSignature::new("Microsoft-IIS", vec![r#"Microsoft-IIS"#]),
-        TechSignature::new("ASP.NET", vec![r#"ASP\.NET"#, r#"x-aspnet-version"#]),
-        TechSignature::new("Ruby on Rails", vec![r#"Phusion Passenger"#, r#"_session_id"#, r#"x-rack-cache"#]),
-        TechSignature::new("Python", vec![r#"Python/"#, r#"WSGIServer"#]),
-        TechSignature::new("Node.js", vec![r#"node\.js"#, r#"x-powered-by: nodejs"#]),
-        TechSignature::new("Golang", vec![r#"Go-http-client"#]),
-        TechSignature::new("Java", vec![r#"JSESSIONID"#, r#"Java/"#, r#"Servlet"#]),
-        TechSignature::new("Spring Boot", vec![r#"X-Application-Context"#]),
-        TechSignature::new("Kubernetes", vec![r#"k8s"#, r#"kubernetes"#]),
-        TechSignature::new("Docker", vec![r#"docker"#]),
-        TechSignature::new("Plesk", vec![r#"PleskLin"#, r#"PleskWin"#]),
-        TechSignature::new("cPanel", vec![r#"cPanel"#, r#"cpsess"#]),
-        TechSignature::new("DirectAdmin", vec![r#"DirectAdmin"#]),
-        TechSignature::new("Webmin", vec![r#"Webmin"#]),
-        TechSignature::new("OpenCart", vec![r#"route=common/home"#]),
-        TechSignature::new("PrestaShop", vec![r#"PrestaShop"#]),
-        TechSignature::new("Bitrix", vec![r#"bitrix"#]),
-        TechSignature::new("Ghost", vec![r#"ghost-version"#]),
-        TechSignature::new("Medium", vec![r#"medium\.com"#]),
-        TechSignature::new("Blogger", vec![r#"blogger\.com"#, r#"<meta name="generator" content="blogger"#]),
-        TechSignature::new("Tumblr", vec![r#"tumblr\.com"#]),
-        TechSignature::new("HubSpot", vec![r#"hubspot"#]),
-        TechSignature::new("Marketo", vec![r#"marketo"#]),
-        TechSignature::new("Salesforce", vec![r#"salesforce"#]),
-        TechSignature::new("Zendesk", vec![r#"zendesk"#]),
-        TechSignature::new("Intercom", vec![r#"intercom"#]),
-        TechSignature::new("Hotjar", vec![r#"hotjar"#]),
-        TechSignature::new("New Relic", vec![r#"newrelic"#]),
-        TechSignature::new("Datadog", vec![r#"datadog"#]),
-        TechSignature::new("Sentry", vec![r#"sentry"#]),
-        TechSignature::new("Cloudinary", vec![r#"cloudinary"#]),
-        TechSignature::new("Imgix", vec![r#"imgix"#]),
-        // More Signatures
-        TechSignature::new("Webflow", vec![r#"webflow"#, r#"data-wf-page"#, r#"data-wf-site"#]),
-        TechSignature::new("Ghost", vec![r#"ghost-version"#, r#"ghost\.org"#]),
-        TechSignature::new("Tilda", vec![r#"tilda\.ws"#, r#"tilda-grid"#, r#"tilda-blocks"#]),
-        TechSignature::new("Docusaurus", vec![r#"docusaurus"#, r#"__docusaurus"#]),
-        TechSignature::new("Hugo", vec![r#"<meta name="generator" content="hugo"#]),
-        TechSignature::new("Jekyll", vec![r#"<meta name="generator" content="jekyll"#]),
-        TechSignature::new("Hexo", vec![r#"<meta name="generator" content="hexo"#]),
-        TechSignature::new("GitBook", vec![r#"<meta name="generator" content="gitbook"#]),
-        TechSignature::new("Mobirise", vec![r#"<meta name="generator" content="mobirise"#]),
-        TechSignature::new("Vite", vec![r#"vite/client"#, r#"__vite__"#]),
-        TechSignature::new("Webpack", vec![r#"webpack"#, r#"__webpack_public_path__"#]),
-        TechSignature::new("Parcel", vec![r#"parcelRequire"#]),
-        TechSignature::new("Gulp", vec![r#"gulp"#]),
-        TechSignature::new("Grnt", vec![r#"grunt"#]),
-        TechSignature::new("Babel", vec![r#"_babelPolyfill"#]),
-        TechSignature::new("Polyfill", vec![r#"polyfill\.io"#]),
-        TechSignature::new("Modernizr", vec![r#"modernizr"#]),
-        TechSignature::new("Moment.js", vec![r#"moment\.js"#, r#"moment\.min\.js"#]),
-        TechSignature::new("Day.js", vec![r#"dayjs"#]),
-        TechSignature::new("Lodash", vec![r#"lodash"#]),
-        TechSignature::new("Underscore.js", vec![r#"underscore\.js"#]),
-        TechSignature::new("RxJS", vec![r#"rxjs"#]),
-        TechSignature::new("AOS", vec![r#"aos\.js"#, r#"data-aos"#]),
-        TechSignature::new("Animate.css", vec![r#"animate\.css"#, r#"animate__animated"#]),
-        TechSignature::new("Slick", vec![r#"slick\.js"#, r#"slick\.css"#]),
-        TechSignature::new("Swiper", vec![r#"swiper\.js"#, r#"swiper\.css"#, r#"swiper-container"#]),
-        TechSignature::new("Owl Carousel", vec![r#"owl\.carousel"#]),
-        TechSignature::new("Chart.js", vec![r#"chart\.js"#]),
-        TechSignature::new("D3.js", vec![r#"d3\.js"#, r#"d3\.v"#]),
-        TechSignature::new("Highcharts", vec![r#"highcharts\.js"#]),
-        TechSignature::new("Leaflet", vec![r#"leaflet\.js"#, r#"leaflet\.css"#]),
-        TechSignature::new("Google Maps", vec![r#"maps\.googleapis\.com/maps/api"#]),
-        TechSignature::new("OpenStreetMap", vec![r#"openstreetmap\.org"#]),
-        TechSignature::new("Mapbox", vec![r#"mapbox-gl"#]),
-        TechSignature::new("Recaptcha", vec![r#"google\.com/recaptcha"#, r#"g-recaptcha"#]),
-        TechSignature::new("hCaptcha", vec![r#"hcaptcha\.com"#, r#"h-captcha"#]),
-        TechSignature::new("Cloudflare Turnstile", vec![r#"challenges\.cloudflare\.com/turnstile"#]),
-        TechSignature::new("Disqus", vec![r#"disqus\.com"#]),
-        TechSignature::new("AddThis", vec![r#"addthis\.com"#]),
-        TechSignature::new("ShareThis", vec![r#"sharethis\.com"#]),
-        TechSignature::new("Algolia", vec![r#"algolia"#]),
-        TechSignature::new("Elasticsearch", vec![r#"elasticsearch"#]),
-        TechSignature::new("Solr", vec![r#"solr"#]),
-        TechSignature::new("Splunk", vec![r#"splunk"#]),
-        TechSignature::new("Grafana", vec![r#"grafana"#]),
-        TechSignature::new("Prometheus", vec![r#"prometheus"#]),
-        TechSignature::new("Docker", vec![r#"docker"#]),
-        TechSignature::new("Kubernetes", vec![r#"k8s"#, r#"kubernetes"#]),
-        TechSignature::new("OpenShift", vec![r#"openshift"#]),
-        TechSignature::new("Rancher", vec![r#"rancher"#]),
-        TechSignature::new("Jenkins", vec![r#"jenkins"#]),
-        TechSignature::new("GitLab", vec![r#"gitlab"#]),
-        TechSignature::new("GitHub", vec![r#"github\.com"#]),
-        TechSignature::new("Bitbucket", vec![r#"bitbucket\.org"#]),
-        TechSignature::new("CircleCI", vec![r#"circleci"#]),
-        TechSignature::new("Travis CI", vec![r#"travis-ci"#]),
-        TechSignature::new("SonarQube", vec![r#"sonarqube"#]),
-        TechSignature::new("Jira", vec![r#"atlassian-jira"#]),
-        TechSignature::new("Confluence", vec![r#"atlassian-confluence"#]),
-        TechSignature::new("Slack", vec![r#"slack\.com"#]),
-        TechSignature::new("Discord", vec![r#"discord\.com"#]),
-        TechSignature::new("Telegram", vec![r#"t\.me"#]),
-        TechSignature::new("WhatsApp", vec![r#"wa\.me"#, r#"api\.whatsapp\.com"#]),
-        TechSignature::new("Skype", vec![r#"skype:"#]),
-        TechSignature::new("Zoom", vec![r#"zoom\.us"#]),
-        TechSignature::new("Microsoft Teams", vec![r#"teams\.microsoft\.com"#]),
-        TechSignature::new("ZoomInfo", vec![r#"zoominfo"#]),
-        TechSignature::new("Apollo", vec![r#"apollo\.io"#]),
-        TechSignature::new("Lusha", vec![r#"lusha"#]),
-        TechSignature::new("Clearbit", vec![r#"clearbit"#]),
-        TechSignature::new("Hunter.io", vec![r#"hunter\.io"#]),
-        TechSignature::new("Snov.io", vec![r#"snov\.io"#]),
-        TechSignature::new("RocketReach", vec![r#"rocketreach"#]),
-        TechSignature::new("Leadfeeder", vec![r#"leadfeeder"#]),
-        TechSignature::new("Bombora", vec![r#"bombora"#]),
-        TechSignature::new("6sense", vec![r#"6sense"#]),
-        TechSignature::new("Terminus", vec![r#"terminus"#]),
-        TechSignature::new("Demandbase", vec![r#"demandbase"#]),
-        TechSignature::new("G2", vec![r#"g2\.com"#]),
-        TechSignature::new("Capterra", vec![r#"capterra\.com"#]),
-        TechSignature::new("Trustpilot", vec![r#"trustpilot\.com"#]),
-        TechSignature::new("Feefo", vec![r#"feefo\.com"#]),
-        TechSignature::new("Bazaarvoice", vec![r#"bazaarvoice"#]),
-        TechSignature::new("Yotpo", vec![r#"yotpo"#]),
-        TechSignature::new("Klaviyo", vec![r#"klaviyo"#]),
-        TechSignature::new("Mailchimp", vec![r#"mailchimp"#]),
-        TechSignature::new("SendGrid", vec![r#"sendgrid"#]),
-        TechSignature::new("Twilio", vec![r#"twilio"#]),
-        TechSignature::new("Stripe", vec![r#"stripe\.com"#, r#"Stripe\.setPublishableKey"#]),
-        TechSignature::new("PayPal", vec![r#"paypal\.com"#, r#"paypalobjects\.com"#]),
-        TechSignature::new("Adyen", vec![r#"adyen"#]),
-        TechSignature::new("Braintree", vec![r#"braintree"#]),
-        TechSignature::new("Square", vec![r#"squareup\.com"#]),
-        TechSignature::new("Klarna", vec![r#"klarna"#]),
-        TechSignature::new("Afterpay", vec![r#"afterpay"#]),
-        TechSignature::new("Affirm", vec![r#"affirm"#]),
-        TechSignature::new("Zip", vec![r#"zip\.co"#]),
-        TechSignature::new("Sezzle", vec![r#"sezzle"#]),
-        TechSignature::new("Laybuy", vec![r#"laybuy"#]),
-        TechSignature::new("Humm", vec![r#"shophumm"#]),
-        TechSignature::new("Openpay", vec![r#"openpay"#]),
-        TechSignature::new("Zippay", vec![r#"zippay"#]),
-        TechSignature::new("Gocardless", vec![r#"gocardless"#]),
-        TechSignature::new("Worldpay", vec![r#"worldpay"#]),
-        TechSignature::new("Sage Pay", vec![r#"sagepay"#]),
-        TechSignature::new("Authorize.net", vec![r#"authorize\.net"#]),
-        TechSignature::new("BlueSnap", vec![r#"bluesnap"#]),
-        TechSignature::new("2Checkout", vec![r#"2checkout"#]),
-        TechSignature::new("Payoneer", vec![r#"payoneer"#]),
-        TechSignature::new("Skrill", vec![r#"skrill"#]),
-        TechSignature::new("Neteller", vec![r#"neteller"#]),
-        TechSignature::new("Paysafecard", vec![r#"paysafecard"#]),
-        TechSignature::new("Giropay", vec![r#"giropay"#]),
-        TechSignature::new("Sofort", vec![r#"sofort"#]),
-        TechSignature::new("Ideal", vec![r#"ideal"#]),
-        TechSignature::new("Bancontact", vec![r#"bancontact"#]),
-        TechSignature::new("EPS", vec![r#"eps-uberweisung"#]),
-        TechSignature::new("Multibanco", vec![r#"multibanco"#]),
-        TechSignature::new("Przelewy24", vec![r#"przelewy24"#]),
-        TechSignature::new("Poli", vec![r#"polipayments"#]),
-        TechSignature::new("Boleto", vec![r#"boleto"#]),
-        TechSignature::new("Oxxo", vec![r#"oxxo"#]),
-        TechSignature::new("Mercado Pago", vec![r#"mercadopago"#]),
-        TechSignature::new("PagSeguro", vec![r#"pagseguro"#]),
-        TechSignature::new("AliPay", vec![r#"alipay"#]),
-        TechSignature::new("WeChat Pay", vec![r#"wechatpay"#]),
-        TechSignature::new("UnionPay", vec![r#"unionpay"#]),
-        TechSignature::new("JCB", vec![r#"jcb"#]),
-        TechSignature::new("American Express", vec![r#"amex"#]),
-        TechSignature::new("Diners Club", vec![r#"dinersclub"#]),
-        TechSignature::new("Discover", vec![r#"discover"#]),
-        TechSignature::new("Mastercard", vec![r#"mastercard"#]),
-        TechSignature::new("Visa", vec![r#"visa"#]),
-        // Niche CMS & Site Builders
-        TechSignature::new("Jimdo", vec![r#"jimdo\.com"#, r#"jimdo-static"#]),
-        TechSignature::new("Duda", vec![r#"duda\.co"#, r#"dm-static"#]),
-        TechSignature::new("Carrd", vec![r#"carrd\.co"#, r#"carrd-auth"#]),
-        TechSignature::new("Symphony", vec![r#"<meta name="generator" content="Symphony"#]),
-        TechSignature::new("ProcessWire", vec![r#"processwire"#]),
-        TechSignature::new("Kirby", vec![r#"kirby"#]),
-        TechSignature::new("Statamic", vec![r#"statamic"#]),
-        TechSignature::new("Craft CMS", vec![r#"craft-cms"#, r#"CRAFT_CSRF_TOKEN"#]),
-        TechSignature::new("ExpressionEngine", vec![r#"exp_last_visit"#, r#"exp_last_activity"#]),
-        TechSignature::new("Movable Type", vec![r#"<meta name="generator" content="Movable Type"#]),
-        TechSignature::new("Textpattern", vec![r#"<meta name="generator" content="Textpattern"#]),
-        TechSignature::new("Umbraco", vec![r#"umbraco"#, r#"UMB-XSRF-TOKEN"#]),
-        TechSignature::new("Sitecore", vec![r#"sitecore"#]),
-        TechSignature::new("Kentico", vec![r#"CMSPreferredCulture"#, r#"Kentico"#]),
-        TechSignature::new("DotNetNuke", vec![r#"dnn\.js"#, r#"DotNetNuke"#]),
-        TechSignature::new("Liferay", vec![r#"Liferay\.Browser"#]),
-        TechSignature::new("OpenCMS", vec![r#"opencms"#]),
-        TechSignature::new("TYPO3", vec![r#"<meta name="generator" content="TYPO3"#]),
-        TechSignature::new("Contao", vec![r#"<meta name="generator" content="Contao"#]),
-        TechSignature::new("Concrete CMS", vec![r#"CONCRETE_CURRENCY"#]),
-        TechSignature::new("MODX", vec![r#"modx"#]),
-        TechSignature::new("SilverStripe", vec![r#"SilverStripe"#]),
-        TechSignature::new("Backdrop CMS", vec![r#"<meta name="generator" content="Backdrop CMS"#]),
-        TechSignature::new("OctoberCMS", vec![r#"octobercms"#]),
-        TechSignature::new("Grav", vec![r#"<meta name="generator" content="Grav"#]),
-        TechSignature::new("WinterCMS", vec![r#"wintercms"#]),
-        TechSignature::new("Fork CMS", vec![r#"forkcms"#]),
-        TechSignature::new("Zinnia", vec![r#"django-blog-zinnia"#]),
-        TechSignature::new("Plone", vec![r#"plone"#]),
-        TechSignature::new("Zope", vec![r#"zope"#]),
-        // Security & Anti-Bot
-        TechSignature::new("Akamai Bot Manager", vec![r#"akam_bmsc"#, r#"bm_sz"#]),
-        TechSignature::new("Imperva Incapsula", vec![r#"visid_incap"#, r#"incap_ses"#]),
-        TechSignature::new("DataDome", vec![r#"datadome"#]),
-        TechSignature::new("PerimeterX", vec![r#"_px"#, r#"px-captcha"#]),
-        TechSignature::new("Shape Security", vec![r#"shape-security"#]),
-        TechSignature::new("Kasada", vec![r#"x-kpsdk"#]),
-        TechSignature::new("Human Security", vec![r#"_human"#]),
-        TechSignature::new("GeeTest", vec![r#"geetest"#]),
-        TechSignature::new("Arkose Labs", vec![r#"arkoselabs"#]),
-        TechSignature::new("ShieldSquare", vec![r#"shieldsquare"#]),
-        TechSignature::new("Distil Networks", vec![r#"distil"#]),
-        TechSignature::new("BotX", vec![r#"botx"#]),
-        // Frameworks & Libs
-        TechSignature::new("FastAPI", vec![r#"fastapi"#]),
-        TechSignature::new("Aiohttp", vec![r#"aiohttp"#]),
-        TechSignature::new("Sanic", vec![r#"sanic"#]),
-        TechSignature::new("Tornado", vec![r#"tornado"#]),
-        TechSignature::new("Quart", vec![r#"quart"#]),
-        TechSignature::new("Falcon", vec![r#"falcon"#]),
-        TechSignature::new("Bottle", vec![r#"bottle"#]),
-        TechSignature::new("CherryPy", vec![r#"cherrypy"#]),
-        TechSignature::new("Web2py", vec![r#"web2py"#]),
-        TechSignature::new("TurboGears", vec![r#"turbogears"#]),
-        TechSignature::new("Pylons", vec![r#"pylons"#]),
-        TechSignature::new("Zope", vec![r#"zope"#]),
-        TechSignature::new("Grok", vec![r#"grok"#]),
-        TechSignature::new("BlueBream", vec![r#"bluebream"#]),
-        TechSignature::new("Nagare", vec![r#"nagare"#]),
-        TechSignature::new("Bobo", vec![r#"bobo"#]),
-        TechSignature::new("Wheezy.web", vec![r#"wheezy\.web"#]),
-        TechSignature::new("Karrigell", vec![r#"karrigell"#]),
-        TechSignature::new("Pycnic", vec![r#"pycnic"#]),
-        TechSignature::new("Clastic", vec![r#"clastic"#]),
-        TechSignature::new("Klein", vec![r#"klein"#]),
-        TechSignature::new("Hug", vec![r#"hug"#]),
-        TechSignature::new("Japronto", vec![r#"japronto"#]),
-        TechSignature::new("Vibora", vec![r#"vibora"#]),
-        TechSignature::new("BlackSheep", vec![r#"blacksheep"#]),
-        TechSignature::new("Starlette", vec![r#"starlette"#]),
-        TechSignature::new("Responder", vec![r#"responder"#]),
-        TechSignature::new("Molten", vec![r#"molten"#]),
-        TechSignature::new("Masonite", vec![r#"masonite"#]),
-        TechSignature::new("Granian", vec![r#"granian"#]),
-        TechSignature::new("Robyn", vec![r#"robyn"#]),
-        TechSignature::new("Litestar", vec![r#"litestar"#]),
-        // More JS Frameworks
-        TechSignature::new("SvelteKit", vec![r#"sveltekit"#, r#"__sveltekit"#]),
-        TechSignature::new("SolidJS", vec![r#"solid-js"#]),
-        TechSignature::new("Qwik", vec![r#"qwik"#, r#"data-q-id"#]),
-        TechSignature::new("Astro", vec![r#"astro"#]),
-        TechSignature::new("Fresh", vec![r#"fresh"#]),
-        TechSignature::new("Alpine.js", vec![r#"x-data"#, r#"alpine\.js"#]),
-        TechSignature::new("Petite-vue", vec![r#"v-scope"#]),
-        TechSignature::new("Preact", vec![r#"preact"#]),
-        TechSignature::new("Inferno", vec![r#"inferno"#]),
-        TechSignature::new("Mithril", vec![r#"mithril"#]),
-        TechSignature::new("Riot.js", vec![r#"riot\.js"#]),
-        TechSignature::new("Knockout.js", vec![r#"ko\.applyBindings"#]),
-        TechSignature::new("Durandal", vec![r#"durandal"#]),
-        TechSignature::new("Aurelia", vec![r#"aurelia"#]),
-        TechSignature::new("Marko", vec![r#"marko"#]),
-        TechSignature::new("Rax", vec![r#"rax"#]),
-        TechSignature::new("Moon", vec![r#"moon\.js"#]),
-        TechSignature::new("Stencil", vec![r#"stencil"#]),
-        TechSignature::new("Lit", vec![r#"lit-html"#]),
-        TechSignature::new("Hybrids", vec![r#"hybrids"#]),
-        TechSignature::new("SkateJS", vec![r#"skatejs"#]),
-        TechSignature::new("Slim.js", vec![r#"slim-js"#]),
-        TechSignature::new("CanJS", vec![r#"canjs"#]),
-        TechSignature::new("Spine.js", vec![r#"spine\.js"#]),
-        TechSignature::new("Batman.js", vec![r#"batman\.js"#]),
-        TechSignature::new("Flight", vec![r#"flight"#]),
-        TechSignature::new("Chaplin.js", vec![r#"chaplin"#]),
-        TechSignature::new("Marionette.js", vec![r#"marionette"#]),
-        TechSignature::new("Derby.js", vec![r#"derby"#]),
-        TechSignature::new("Meteor", vec![r#"meteor"#]),
-        TechSignature::new("Sails.js", vec![r#"sails\.js"#]),
-        TechSignature::new("Feathers", vec![r#"feathersjs"#]),
-        TechSignature::new("LoopBack", vec![r#"loopback"#]),
-        TechSignature::new("KeystoneJS", vec![r#"keystone"#]),
-        TechSignature::new("Strapi", vec![r#"strapi"#]),
-        TechSignature::new("Directus", vec![r#"directus"#]),
-        TechSignature::new("Payload CMS", vec![r#"payload-cms"#]),
-        TechSignature::new("Sanity", vec![r#"sanity\.io"#]),
-        TechSignature::new("Contentful", vec![r#"contentful"#]),
-        TechSignature::new("Prismic", vec![r#"prismic"#]),
-        TechSignature::new("DatoCMS", vec![r#"datocms"#]),
-        TechSignature::new("ButterCMS", vec![r#"buttercms"#]),
-        TechSignature::new("Storyblok", vec![r#"storyblok"#]),
-        TechSignature::new("Agility CMS", vec![r#"agilitycms"#]),
-        TechSignature::new("Cosmic CMS", vec![r#"cosmicjs"#]),
-        TechSignature::new("GraphCMS", vec![r#"graphcms"#]),
-        TechSignature::new("Hygraph", vec![r#"hygraph"#]),
-        TechSignature::new("Kontent.ai", vec![r#"kontent\.ai"#]),
-        TechSignature::new("Squidex", vec![r#"squidex"#]),
-        TechSignature::new("Enonic", vec![r#"enonic"#]),
-        TechSignature::new("Magnolia", vec![r#"magnolia"#]),
-        TechSignature::new("Bloomreach", vec![r#"bloomreach"#]),
-        TechSignature::new("CoreMedia", vec![r#"coremedia"#]),
-        TechSignature::new("FirstSpirit", vec![r#"firstspirit"#]),
-        TechSignature::new("Squiz", vec![r#"squiz"#]),
-        TechSignature::new("Terminalfour", vec![r#"terminalfour"#]),
-        TechSignature::new("GOSS", vec![r#"goss"#]),
-        TechSignature::new("Jadu", vec![r#"jadu"#]),
-        TechSignature::new("Matrix", vec![r#"matrix"#]),
-        TechSignature::new("Percussion", vec![r#"percussion"#]),
-        TechSignature::new("Polopoly", vec![r#"polopoly"#]),
-        TechSignature::new("Vignette", vec![r#"vignette"#]),
-        TechSignature::new("Fatwire", vec![r#"fatwire"#]),
-        TechSignature::new("Interwoven", vec![r#"interwoven"#]),
-        TechSignature::new("Stellent", vec![r#"stellent"#]),
-        TechSignature::new("Day Communique", vec![r#"day-communique"#]),
-        TechSignature::new("Adobe Experience Manager", vec![r#"cq5"#, r#"aem"#]),
-        // CMS & Platforms
-        
-        // E-commerce
-        TechSignature::new("WooCommerce", vec![r#"woocommerce"#, r#"wc-ajax"#, r#"x-powered-by: woocommerce"#]),
-        TechSignature::new("PrestaShop", vec![r#"prestashop"#, r#"ps_shoppingcart"#]),
-        TechSignature::new("OpenCart", vec![r#"opencart"#, r#"index\.php\?route=common"#]),
-        TechSignature::new("BigCommerce", vec![r#"bigcommerce"#]),
-        TechSignature::new("Ecwid", vec![r#"ecwid"#]),
-
-        // Web Servers & Load Balancers
-        TechSignature::new("Cloudflare", vec![r#"cf-ray"#, r#"__cf_bm"#, r#"cf-cache-status"#, r#"server: cloudflare"#]),
-        TechSignature::new("LiteSpeed", vec![r#"litespeed"#, r#"x-litespeed-cache"#, r#"x-litespeed-tag"#]),
-        TechSignature::new("OpenResty", vec![r#"openresty"#, r#"server: openresty"#]),
-        TechSignature::new("Tengine", vec![r#"tengine"#, r#"server: tengine"#]),
-        TechSignature::new("Caddy", vec![r#"server: caddy"#]),
-        TechSignature::new("Haproxy", vec![r#"haproxy"#, r#"server: haproxy"#]),
-        TechSignature::new("Traefik", vec![r#"traefik"#]),
-
-        // Frameworks & Libraries
-        TechSignature::new("Svelte", vec![r#"svelte-"#, r#"__svelte"#]),
-        TechSignature::new("Alpine.js", vec![r#"x-data="#, r#"x-init="#, r#"alpine\.js"#]),
-        TechSignature::new("Livewire", vec![r#"livewire\.js"#, r#"wire:id="#, r#"wire:initial-data="#]),
-        TechSignature::new("Inertia.js", vec![r#"inertia"#, r#"data-page="#]),
-        TechSignature::new("Remix", vec![r#"remix"#]),
-        TechSignature::new("SolidJS", vec![r#"solid-js"#]),
-
-        // UI Frameworks
-        TechSignature::new("Materialize", vec![r#"materialize\.min\.css"#, r#"materialize\.css"#]),
-        TechSignature::new("Bulma", vec![r#"bulma\.min\.css"#, r#"is-primary"#, r#"is-flex"#]),
-        TechSignature::new("Chakra UI", vec![r#"chakra-ui"#]),
-        TechSignature::new("Mantine", vec![r#"mantine"#]),
-        TechSignature::new("Ant Design", vec![r#"ant-design"#, r#"ant-btn"#]),
-
-        // Analytics & Tracking
-        TechSignature::new("Hotjar", vec![r#"static\.hotjar\.com"#, r#"hj\("#]),
-        TechSignature::new("Mixpanel", vec![r#"mixpanel"#]),
-        TechSignature::new("Amplitude", vec![r#"amplitude"#]),
-        TechSignature::new("Segment", vec![r#"segment\.com"#, r#"analytics\.js"#]),
-        TechSignature::new("Matomo", vec![r#"matomo\.js"#, r#"piwik\.js"#]),
-
-        // Misc
-        TechSignature::new("Recaptcha", vec![r#"google\.com/recaptcha"#, r#"g-recaptcha"#]),
-        TechSignature::new("Cloudflare Turnstile", vec![r#"challenges\.cloudflare\.com/turnstile"#]),
-        TechSignature::new("Stripe", vec![r#"js\.stripe\.com"#, r#"stripe-button"#]),
-        TechSignature::new("PayPal", vec![r#"paypal\.com/sdk/js"#, r#"paypal-button"#]),
-    ];
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct TechInfo {
+    pub name: String,
+    pub confidence: i32,
+    pub category: String,
+    pub version: Option<String>,
 }
 
-struct TechSignature {
-    name: String,
-    patterns: Vec<Regex>,
+pub struct TechSignature {
+    pub name: String,
+    pub category: String,
+    pub headers: HashMap<String, String>,
+    pub cookies: Vec<String>,
+    pub html_patterns: Vec<String>,
+    pub meta_tags: HashMap<String, String>,
+    pub url_patterns: Vec<String>,
+    pub script_patterns: Vec<String>,
 }
 
 impl TechSignature {
-    fn new(name: &str, patterns: Vec<&str>) -> Self {
+    pub fn new(name: &str, category: &str) -> Self {
         Self {
             name: name.to_string(),
-            patterns: patterns.iter().map(|p| Regex::new(p).unwrap()).collect(),
+            category: category.to_string(),
+            headers: HashMap::new(),
+            cookies: Vec::new(),
+            html_patterns: Vec::new(),
+            meta_tags: HashMap::new(),
+            url_patterns: Vec::new(),
+            script_patterns: Vec::new(),
         }
     }
 }
 
-pub fn detect_technologies(body: &str, headers: &HashMap<String, String>) -> HashMap<String, String> {
+lazy_static! {
+    static ref SIGNATURE_DB: Vec<TechSignature> = {
+        let mut db = Vec::new();
+
+        // --- WEB SERVERS ---
+        let mut nginx = TechSignature::new("Nginx", "Web Server");
+        nginx.headers.insert("Server".to_string(), r"nginx/?([0-9.]*)?".to_string());
+        db.push(nginx);
+
+        let mut apache = TechSignature::new("Apache", "Web Server");
+        apache.headers.insert("Server".to_string(), r"Apache/?([0-9.]*)?".to_string());
+        db.push(apache);
+
+        let mut iis = TechSignature::new("IIS", "Web Server");
+        iis.headers.insert("Server".to_string(), r"Microsoft-IIS/?([0-9.]*)?".to_string());
+        db.push(iis);
+
+        // --- CMS ---
+        let mut wp = TechSignature::new("WordPress", "CMS");
+        wp.meta_tags.insert("generator".to_string(), r"WordPress ?([0-9.]*)?".to_string());
+        wp.html_patterns.push(r"wp-content/".to_string());
+        wp.html_patterns.push(r"wp-includes/".to_string());
+        wp.url_patterns.push(r"/wp-admin/".to_string());
+        wp.script_patterns.push(r"wp-embed\.min\.js".to_string());
+        db.push(wp);
+
+        let mut joomla = TechSignature::new("Joomla", "CMS");
+        joomla.meta_tags.insert("generator".to_string(), r"Joomla!".to_string());
+        joomla.url_patterns.push(r"/administrator/".to_string());
+        db.push(joomla);
+
+        let mut drupal = TechSignature::new("Drupal", "CMS");
+        drupal.meta_tags.insert("generator".to_string(), r"Drupal".to_string());
+        drupal.html_patterns.push(r"Drupal\.settings".to_string());
+        db.push(drupal);
+
+        // --- BACKEND FRAMEWORKS ---
+        let mut laravel = TechSignature::new("Laravel", "Backend Framework");
+        laravel.cookies.push(r"laravel_session".to_string());
+        laravel.cookies.push(r"XSRF-TOKEN".to_string());
+        db.push(laravel);
+
+        let mut django = TechSignature::new("Django", "Backend Framework");
+        django.cookies.push(r"csrftoken".to_string());
+        db.push(django);
+
+        let mut rails = TechSignature::new("Ruby on Rails", "Backend Framework");
+        rails.cookies.push(r"_rails_session".to_string());
+        db.push(rails);
+
+        // --- FRONTEND FRAMEWORKS ---
+        let mut react = TechSignature::new("React", "Frontend Framework");
+        react.html_patterns.push(r"data-reactroot".to_string());
+        react.script_patterns.push(r"react\.production\.min\.js".to_string());
+        db.push(react);
+
+        let mut vue = TechSignature::new("Vue.js", "Frontend Framework");
+        vue.html_patterns.push(r"__vue__".to_string());
+        vue.script_patterns.push(r"vue\.js".to_string());
+        db.push(vue);
+
+        let mut nextjs = TechSignature::new("Next.js", "Frontend Framework");
+        nextjs.html_patterns.push(r"__NEXT_DATA__".to_string());
+        nextjs.script_patterns.push(r"_next/static".to_string());
+        db.push(nextjs);
+
+        // --- CDN / WAF ---
+        let mut cf = TechSignature::new("Cloudflare", "CDN/WAF");
+        cf.headers.insert("CF-RAY".to_string(), r".+".to_string());
+        cf.headers.insert("Server".to_string(), r"cloudflare".to_string());
+        db.push(cf);
+
+        let mut akamai = TechSignature::new("Akamai", "CDN/WAF");
+        akamai.headers.insert("X-Akamai-Transformed".to_string(), r".+".to_string());
+        db.push(akamai);
+
+        // --- ANALYTICS ---
+        let mut ga = TechSignature::new("Google Analytics", "Analytics");
+        ga.script_patterns.push(r"google-analytics\.com/analytics\.js".to_string());
+        ga.script_patterns.push(r"googletagmanager\.com/gtag/js".to_string());
+        db.push(ga);
+
+        // --- NEW JS LIBRARIES & FRAMEWORKS ---
+        let mut gsap = TechSignature::new("GSAP", "JS Library");
+        gsap.script_patterns.push(r"gsap(?:\.min)?\.js".to_string());
+        gsap.html_patterns.push(r"TweenMax|TweenLite|TimelineMax".to_string());
+        db.push(gsap);
+
+        let mut astro = TechSignature::new("Astro", "Frontend Framework");
+        astro.html_patterns.push(r"astro-island".to_string());
+        astro.html_patterns.push(r"astro-".to_string());
+        db.push(astro);
+
+        let mut svelte = TechSignature::new("Svelte", "Frontend Framework");
+        svelte.html_patterns.push(r"svelte-".to_string());
+        svelte.script_patterns.push(r"svelte".to_string());
+        db.push(svelte);
+
+        let mut jquery = TechSignature::new("jQuery", "JS Library");
+        jquery.script_patterns.push(r"jquery(?:\.min)?\.js".to_string());
+        jquery.html_patterns.push(r"jQuery".to_string());
+        db.push(jquery);
+
+        let mut blogger = TechSignature::new("Blogger", "CMS");
+        blogger.meta_tags.insert("generator".to_string(), r"blogger".to_string());
+        blogger.html_patterns.push(r"blogger\.com".to_string());
+        db.push(blogger);
+
+        let mut wix = TechSignature::new("Wix", "CMS");
+        wix.meta_tags.insert("generator".to_string(), r"Wix\.com Website Builder".to_string());
+        wix.html_patterns.push(r"static\.wixstatic\.com".to_string());
+        db.push(wix);
+
+        let mut squarespace = TechSignature::new("Squarespace", "CMS");
+        squarespace.headers.insert("X-Served-By".to_string(), r"Squarespace".to_string());
+        squarespace.html_patterns.push(r"static1\.squarespace\.com".to_string());
+        db.push(squarespace);
+
+        let mut ghost = TechSignature::new("Ghost", "CMS");
+        ghost.meta_tags.insert("generator".to_string(), r"Ghost\s?([0-9.]*)?".to_string());
+        ghost.html_patterns.push(r"ghost-content".to_string());
+        db.push(ghost);
+
+        let mut typo3 = TechSignature::new("TYPO3", "CMS");
+        typo3.meta_tags.insert("generator".to_string(), r"TYPO3 CMS".to_string());
+        typo3.html_patterns.push(r"typo3temp/".to_string());
+        db.push(typo3);
+
+        let mut prestashop = TechSignature::new("PrestaShop", "CMS");
+        prestashop.meta_tags.insert("generator".to_string(), r"PrestaShop".to_string());
+        prestashop.html_patterns.push(r"prestashop".to_string());
+        db.push(prestashop);
+
+        // --- NEW FRONTEND & LIBRARIES ---
+        let mut tailwind = TechSignature::new("Tailwind CSS", "Frontend Framework");
+        tailwind.html_patterns.push(r"tailwind".to_string());
+        db.push(tailwind);
+
+        let mut bootstrap = TechSignature::new("Bootstrap", "Frontend Framework");
+        bootstrap.html_patterns.push(r"bootstrap(?:\.min)?\.css".to_string());
+        bootstrap.script_patterns.push(r"bootstrap(?:\.min)?\.js".to_string());
+        db.push(bootstrap);
+
+        let mut alpine = TechSignature::new("Alpine.js", "JS Library");
+        alpine.html_patterns.push(r"x-data=".to_string());
+        alpine.script_patterns.push(r"alpine(?:\.min)?\.js".to_string());
+        db.push(alpine);
+
+        let mut solidjs = TechSignature::new("SolidJS", "Frontend Framework");
+        solidjs.html_patterns.push(r"solid-js".to_string());
+        db.push(solidjs);
+
+        // --- NEW SERVERS & INFRA ---
+        let mut caddy = TechSignature::new("Caddy", "Web Server");
+        caddy.headers.insert("Server".to_string(), r"Caddy".to_string());
+        db.push(caddy);
+
+        let mut openresty = TechSignature::new("OpenResty", "Web Server");
+        openresty.headers.insert("Server".to_string(), r"openresty".to_string());
+        db.push(openresty);
+
+        let mut varnish = TechSignature::new("Varnish", "Web Server");
+        varnish.headers.insert("X-Varnish".to_string(), r".+".to_string());
+        varnish.headers.insert("Via".to_string(), r"Varnish".to_string());
+        db.push(varnish);
+
+        let mut litespeed = TechSignature::new("LiteSpeed", "Web Server");
+        litespeed.headers.insert("Server".to_string(), r"LiteSpeed".to_string());
+        litespeed.headers.insert("X-LiteSpeed-Cache".to_string(), r".+".to_string());
+        db.push(litespeed);
+
+        db
+    };
+}
+
+pub fn detect_technologies(body: &str, headers: &HashMap<String, String>) -> HashMap<String, TechInfo> {
     let mut detected = HashMap::new();
-    let body_lower = body.to_lowercase();
     
-    // Check signatures
-    for sig in SIGNATURES.iter() {
-        let mut matched = false;
-        
-        // Check in body (case-insensitive)
-        for pattern in &sig.patterns {
-            if pattern.is_match(&body_lower) {
-                matched = true;
-                break;
-            }
+    // Extract cookies for matching
+    let mut cookies = Vec::new();
+    for (k, v) in headers {
+        if k.to_lowercase() == "set-cookie" {
+            cookies.push(v.to_string());
         }
-        
-        // Check in headers (case-insensitive)
-        if !matched {
-            for (k, v) in headers {
-                let combined = format!("{}: {}", k.to_lowercase(), v.to_lowercase());
-                for pattern in &sig.patterns {
-                    if pattern.is_match(&combined) {
-                        matched = true;
-                        break;
+    }
+
+    // Extract meta tags for matching
+    let mut meta_tags = HashMap::new();
+    let re_meta = Regex::new(r#"(?i)<meta\s+name=["'](.*?)["']\s+content=["'](.*?)["']"#).unwrap();
+    for cap in re_meta.captures_iter(body) {
+        meta_tags.insert(cap[1].to_lowercase(), cap[2].to_string());
+    }
+
+    for sig in SIGNATURE_DB.iter() {
+        let mut max_confidence = 0;
+        let mut version = None;
+
+        // 1. Check Meta Tags (90%)
+        for (m_name, m_pattern) in &sig.meta_tags {
+            if let Some(val) = meta_tags.get(&m_name.to_lowercase()) {
+                let re = Regex::new(&format!("(?i){}", m_pattern)).unwrap();
+                if let Some(caps) = re.captures(val) {
+                    max_confidence = max_confidence.max(90);
+                    if caps.len() > 1 {
+                        version = Some(caps[1].to_string());
                     }
                 }
-                if matched { break; }
             }
         }
-        
-        if matched {
-            detected.insert(sig.name.clone(), "detected".to_string());
+
+        // 2. Check Headers (80%)
+        for (h_key, h_pattern) in &sig.headers {
+            if let Some(val) = headers.get(h_key) {
+                let re = Regex::new(&format!("(?i){}", h_pattern)).unwrap();
+                if let Some(caps) = re.captures(val) {
+                    max_confidence = max_confidence.max(80);
+                    if caps.len() > 1 {
+                        version = Some(caps[1].to_string());
+                    }
+                }
+            }
+        }
+
+        // 3. Check Script Patterns (70%)
+        for p in &sig.script_patterns {
+            let re = Regex::new(&format!("(?i){}", p)).unwrap();
+            if re.is_match(body) {
+                max_confidence = max_confidence.max(70);
+            }
+        }
+
+        // 4. Check HTML Patterns (60%)
+        for p in &sig.html_patterns {
+            let re = Regex::new(&format!("(?i){}", p)).unwrap();
+            if re.is_match(body) {
+                max_confidence = max_confidence.max(60);
+            }
+        }
+
+        // 5. Check Cookies (50%)
+        for c_pattern in &sig.cookies {
+            let re = Regex::new(&format!("(?i){}", c_pattern)).unwrap();
+            for cookie in &cookies {
+                if re.is_match(cookie) {
+                    max_confidence = max_confidence.max(50);
+                }
+            }
+        }
+
+        if max_confidence > 0 {
+            // Bonus for multiple signals
+            let mut final_confidence = max_confidence;
+            let mut signals = 0;
+            if max_confidence >= 50 { signals += 1; }
+            // Check if there are other signals to boost confidence
+            // (Simple boost logic)
+            if signals > 1 {
+                final_confidence = (final_confidence + 10).min(100);
+            }
+
+            detected.insert(sig.name.clone(), TechInfo {
+                name: sig.name.clone(),
+                confidence: final_confidence,
+                category: sig.category.clone(),
+                version,
+            });
         }
     }
     

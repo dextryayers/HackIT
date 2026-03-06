@@ -51,47 +51,59 @@ func printResults(results []*Result, config Config) {
 		saveJSON(results, config.Output)
 	}
 
+	cGreen := colorGreen
+	cYellow := colorYellow
+	cCyan := colorCyan
+	cBlue := colorBlue
+	cWhite := colorWhite
+	cRed := colorRed
+	cReset := colorReset
+
 	// Console Output
 	for _, r := range results {
 		// Default mode (Silent): Just Subdomain
 		if !config.ShowIP && !config.ShowSC && !config.ShowTitle && !config.ShowServer && !config.ShowASN && !config.TechDetect && !config.Probe {
-			fmt.Println(r.Subdomain)
+			fmt.Printf("%s%s%s\n", cCyan, r.Subdomain, cReset)
 			continue
 		}
 
-		// Detailed Mode
-		parts := []string{r.Subdomain}
+		// Expert UI Style: [+] subdomain.com [1.1.1.1] [200]
+		fmt.Printf("%s[+]%s %s%-30s%s", cGreen, cReset, cWhite, r.Subdomain, cReset)
 
 		if config.ShowIP && len(r.IPs) > 0 {
-			parts = append(parts, fmt.Sprintf("[%s]", strings.Join(r.IPs, ", ")))
+			fmt.Printf(" %s[%s]%s", cBlue, strings.Join(r.IPs, ", "), cReset)
 		}
 
 		if config.ShowSC && r.Status > 0 {
 			color := getStatusColor(r.Status)
-			parts = append(parts, fmt.Sprintf("[%sStatus: %d%s]", color, r.Status, colorReset))
-		}
-
-		if config.ShowTitle && r.Title != "" {
-			parts = append(parts, fmt.Sprintf("[Title: %s]", cleanUTF8(r.Title)))
-		}
-
-		if config.ShowServer && r.Server != "" {
-			parts = append(parts, fmt.Sprintf("[Server: %s]", cleanUTF8(r.Server)))
+			fmt.Printf(" %s[%d]%s", color, r.Status, cReset)
 		}
 
 		if config.ShowASN && r.ASN != "" {
-			parts = append(parts, fmt.Sprintf("[ASN: %s]", r.ASN))
-		}
-
-		if config.TechDetect && len(r.Tech) > 0 {
-			parts = append(parts, fmt.Sprintf("[Tech: %s]", strings.Join(r.Tech, ", ")))
+			fmt.Printf(" %s(%s)%s", cYellow, r.ASN, cReset)
 		}
 
 		if r.TakeoverVuln != "" {
-			parts = append(parts, fmt.Sprintf("[%sVULN: %s%s]", colorRed, r.TakeoverVuln, colorReset))
+			fmt.Printf(" %s[VULN: %s]%s", cRed, r.TakeoverVuln, cReset)
 		}
 
-		fmt.Println(strings.Join(parts, " "))
+		// New line for details if title/tech/server exists
+		details := []string{}
+		if config.ShowTitle && r.Title != "" {
+			details = append(details, fmt.Sprintf("Title: %s", cleanUTF8(r.Title)))
+		}
+		if config.ShowServer && r.Server != "" {
+			details = append(details, fmt.Sprintf("Server: %s", cleanUTF8(r.Server)))
+		}
+		if config.TechDetect && len(r.Tech) > 0 {
+			details = append(details, fmt.Sprintf("Tech: %s", strings.Join(r.Tech, ", ")))
+		}
+
+		if len(details) > 0 {
+			fmt.Printf("\n   %s|--%s %s", cCyan, cReset, strings.Join(details, " | "))
+		}
+
+		fmt.Println()
 	}
 }
 

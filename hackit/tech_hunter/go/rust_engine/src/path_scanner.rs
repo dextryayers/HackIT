@@ -36,6 +36,18 @@ pub async fn scan_sensitive_paths(base_url: &str) -> Vec<PathDiscovery> {
         ("wp-config.php.bak", "High"),
         ("admin/", "Low"),
         ("login/", "Low"),
+        ("dashboard/", "Low"),
+        ("cpanel/", "Low"),
+        ("api/v1/", "Low"),
+        ("api/v2/", "Low"),
+        ("graphql", "Low"),
+        (".git/index", "High"),
+        (".svn/entries", "Medium"),
+        ("phpinfo.php", "Medium"),
+        ("server-status", "Medium"),
+        ("nginx_status", "Medium"),
+        ("backup.zip", "High"),
+        ("config.php", "High"),
         (".well-known/security.txt", "Low"),
     ];
 

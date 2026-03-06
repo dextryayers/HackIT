@@ -96,8 +96,12 @@ def detect(**kwargs):
 
     # Execution Engine (Rust -> Go -> Python)
     results = engine.run(**kwargs)
+    
+    if results is None:
+        click.echo(_colored("\n[!] Scan Error: Engine returned no data", RED))
+        return
 
-    if 'error' in results:
+    if isinstance(results, dict) and 'error' in results:
         click.echo(_colored(f"\n[!] Scan Error: {results['error']}", RED))
         return
 
@@ -109,9 +113,9 @@ def detect(**kwargs):
             click.echo(json.dumps(results))
         return
 
-    # Human-readable display (WhatWeb Style)
-    if not kwargs.get('silent'):
-        display_human_results(results, kwargs)
+    # Human-readable display is now handled by Go Orchestrator in real-time
+    # via the bridge. We only print here if there's no bridge output.
+    pass
 
 def display_human_results(results, opts):
     """Display scan results in a beautiful format."""

@@ -63,14 +63,29 @@ func (r *Reporter) PrintFinalTable() {
 	fmt.Println("--------- -------- --------------- -----------------------")
 
 	for _, res := range r.resultsBuffer {
-		// Skip filtered/closed if not requested (optional logic, but here we show all discovered)
+		// Color coding based on state
 		state := res.State
 		if state == "" {
 			state = "unknown"
 		}
+		
+		var stateCol string
+		switch state {
+		case "open":
+			stateCol = "\033[32mopen\033[0m" // Green
+		case "closed":
+			stateCol = "\033[31mclosed\033[0m" // Red
+		case "filtered":
+			stateCol = "\033[33mfiltered\033[0m" // Yellow
+		default:
+			stateCol = state
+		}
 
 		// Normalize service name to UPPERCASE for consistency
 		serviceName := strings.ToUpper(res.Service)
+		if serviceName == "" {
+			serviceName = "UNKNOWN"
+		}
 
 		info := res.Version
 		if info == "" && res.Banner != "" {
@@ -83,9 +98,9 @@ func (r *Reporter) PrintFinalTable() {
 			}
 		}
 
-		fmt.Printf("%-9s %-8s %-15s %s\n",
+		fmt.Printf("%-9s %-18s %-15s %s\n",
 			fmt.Sprintf("%d/tcp", res.Port),
-			state,
+			stateCol,
 			serviceName,
 			strings.TrimSpace(info),
 		)

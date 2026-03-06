@@ -20,21 +20,27 @@ pub fn analyze_server(headers: &HashMap<String, String>, _body: &str, _host: &st
         details.server_name = server.clone();
     }
     
-    // 2. Detect OS from Headers
+    // 2. Detect OS & Architecture from Headers
     if let Some(powered_by) = headers.get("x-powered-by") {
         if powered_by.contains("Ubuntu") { details.os_info = "Ubuntu".to_string(); }
         else if powered_by.contains("Debian") { details.os_info = "Debian".to_string(); }
         else if powered_by.contains("CentOS") { details.os_info = "CentOS".to_string(); }
         else if powered_by.contains("Win64") || powered_by.contains("Win32") { details.os_info = "Windows".to_string(); }
+        
+        if powered_by.contains("x86_64") || powered_by.contains("amd64") { details.os_info.push_str(" (x64)"); }
+        else if powered_by.contains("arm64") || powered_by.contains("aarch64") { details.os_info.push_str(" (ARM64)"); }
     }
     
     if details.os_info.is_empty() {
-        if let Some(server) = &headers.get("server") {
+        if let Some(server) = headers.get("server") {
             if server.contains("(Ubuntu)") { details.os_info = "Ubuntu".to_string(); }
             else if server.contains("(Debian)") { details.os_info = "Debian".to_string(); }
             else if server.contains("(CentOS)") { details.os_info = "CentOS".to_string(); }
             else if server.contains("Win64") || server.contains("IIS") { details.os_info = "Windows".to_string(); }
             else if server.contains("Unix") { details.os_info = "Unix-like".to_string(); }
+            
+            if server.contains("x86_64") { details.os_info.push_str(" (x64)"); }
+            else if server.contains("aarch64") { details.os_info.push_str(" (ARM64)"); }
         }
     }
 

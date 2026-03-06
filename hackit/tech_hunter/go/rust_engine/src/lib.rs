@@ -3,6 +3,7 @@ use std::os::raw::c_char;
 use serde::{Serialize, Deserialize};
 use std::time::{Duration, Instant};
 use tokio::runtime::Runtime;
+use std::collections::HashMap;
 
 mod fingerprint;
 mod tls_analyzer;
@@ -24,40 +25,40 @@ use crate::tls_analyzer::RustTLSInfo;
 use crate::vulnerability_matcher::Vulnerability;
 use crate::whois_scanner::WhoisInfo;
 use crate::port_analyzer::PortInfo;
-use crate::info_extractor::ContactInfo;
 use crate::dns_analyzer::DNSInfo;
 use crate::header_analyzer::HeaderSecurity;
 use crate::path_scanner::PathDiscovery;
 use crate::subdomain_enum::SubdomainInfo;
 use crate::server_analyzer::ServerDetails;
 use crate::db_detector::DBDetails;
+use crate::fingerprint::TechInfo;
+use crate::info_extractor::{ContactInfo, JSReconInfo};
 
 #[derive(Serialize, Deserialize)]
 pub struct RustScanResult {
     pub url: String,
     pub status: u16,
-    pub headers: std::collections::HashMap<String, String>,
+    pub headers: HashMap<String, String>,
     pub body_snippet: String,
     pub response_time_ms: u128,
     pub error: Option<String>,
     pub favicon_hash: Option<String>,
     pub tls_info: Option<RustTLSInfo>,
-    pub detected_techs: std::collections::HashMap<String, String>,
+    pub detected_techs: HashMap<String, TechInfo>,
     pub waf_info: Vec<String>,
     pub vulnerabilities: Vec<Vulnerability>,
     pub whois: Option<WhoisInfo>,
     pub open_ports: Vec<PortInfo>,
     pub contact_info: ContactInfo,
+    pub js_recon: JSReconInfo,
     pub dns_info: DNSInfo,
     pub header_security: HeaderSecurity,
     pub path_discoveries: Vec<PathDiscovery>,
     pub subdomains: Vec<SubdomainInfo>,
     pub server_details: ServerDetails,
     pub db_details: Option<DBDetails>,
-    pub advanced_analysis: Option<provide::advanced_analyzer::AdvancedAnalysis>,
-    pub expert_vulnerabilities: Vec<provide::expert_exploit_finder::ExpertVulnerability>,
-    pub behavioral_techs: Vec<String>,
-    pub cloud_audit: Option<provide::cloud_metadata_scanner::CloudAudit>,
+    pub redirect_chain: Vec<String>,
+    pub dom_vars: Vec<String>,
 }
 
 #[no_mangle]
@@ -125,6 +126,7 @@ async fn fetch_url_async(
     fetch_favicon: bool,
     deep_scan: bool,
 ) -> RustScanResult {
+    let _ = deep_scan; // Mark as used
     let start = Instant::now();
     
     let redirect_policy = if follow_redirects {
@@ -139,21 +141,8 @@ async fn fetch_url_async(
         .redirect(redirect_policy)
         .cookie_store(true);
 
-    // Apply Stealth Headers if deep_scan is on
     let mut final_headers = reqwest::header::HeaderMap::new();
-    if deep_scan {
-        let stealth_headers = provide::stealth_engine::get_random_stealth_headers();
-        for (k, v) in stealth_headers {
-            if let Ok(name) = reqwest::header::HeaderName::from_bytes(k.as_bytes()) {
-                if let Ok(val) = reqwest::header::HeaderValue::from_str(&v) {
-                    final_headers.insert(name, val);
-                }
-            }
-        }
-    } else {
-        final_headers.insert(reqwest::header::USER_AGENT, reqwest::header::HeaderValue::from_str(&ua).unwrap());
-    }
-    
+    final_headers.insert(reqwest::header::USER_AGENT, reqwest::header::HeaderValue::from_str(&ua).unwrap());
     client_builder = client_builder.default_headers(final_headers);
 
     if http2_only {
@@ -173,8 +162,9 @@ async fn fetch_url_async(
 
     let result = match client.get(url).send().await {
         Ok(resp) => {
+            let final_url = resp.url().to_string();
             let status = resp.status().as_u16();
-            let mut headers = std::collections::HashMap::new();
+            let mut headers = HashMap::new();
             for (name, value) in resp.headers().iter() {
                 headers.insert(
                     name.to_string(),
@@ -183,72 +173,45 @@ async fn fetch_url_async(
             }
 
             let mut tls_info = None;
-            if url.starts_with("https") {
-                 tls_info = tls_analyzer::analyze_tls(url);
+            if final_url.starts_with("https") {
+                 tls_info = tls_analyzer::analyze_tls(&final_url);
              }
 
-            let (full_body, _body_snippet) = match resp.bytes().await {
-                Ok(b) => {
-                    let full_limit = std::cmp::min(b.len(), 102400); // 100KB for detection
-                    let snippet_limit = std::cmp::min(b.len(), 2048); // 2KB for output
-                    (
-                        String::from_utf8_lossy(&b[..full_limit]).into_owned(),
-                        String::from_utf8_lossy(&b[..snippet_limit]).into_owned()
-                    )
-                },
-                Err(_) => ("".to_string(), "".to_string()),
+            let full_body = match resp.text().await {
+                Ok(b) => b,
+                Err(_) => "".to_string(),
             };
 
-            let mut detected_techs = fingerprint::detect_technologies(&full_body, &headers);
+            let detected_techs = fingerprint::detect_technologies(&full_body, &headers);
             let waf_info = waf_detector::detect_waf_cdn(&headers);
-            let vulnerabilities = vulnerability_matcher::match_vulnerabilities(&detected_techs);
+            let vulnerabilities = vulnerability_matcher::match_vulnerabilities_v2(&detected_techs);
             
-            let host = url::Url::parse(url).map(|u| u.host_str().unwrap_or("").to_string()).unwrap_or_default();
+            let host = url::Url::parse(&final_url).map(|u| u.host_str().unwrap_or("").to_string()).unwrap_or_default();
             let whois = whois_scanner::fetch_whois(&host).await;
             let open_ports = port_analyzer::scan_common_ports(&host).await;
             let dns_info = dns_analyzer::analyze_dns(&host).await;
             let header_security = header_analyzer::analyze_headers(&headers);
             
-            let mut contact_info = info_extractor::extract_contacts(&full_body);
+            let contact_info = info_extractor::extract_contacts(&full_body);
+            let js_recon = info_extractor::extract_js_recon(&full_body);
 
-            if deep_scan {
-                let (deep_techs, deep_contacts) = crawler::crawl_and_extract(url, &client, 2).await;
-                // Merge deep techs
-                for (k, v) in deep_techs {
-                    detected_techs.insert(k, v);
+            let path_discoveries = path_scanner::scan_sensitive_paths(&final_url).await;
+
+            let mut dom_vars = Vec::new();
+            let re_dom = regex::Regex::new(r"window\.([a-zA-Z0-9_]+)\s*=").unwrap();
+            for cap in re_dom.captures_iter(&full_body) {
+                if let Some(m) = cap.get(1) {
+                    dom_vars.push(m.as_str().to_string());
                 }
-                // Merge deep contacts
-                contact_info.emails.extend(deep_contacts.emails);
-                contact_info.phones.extend(deep_contacts.phones);
-                contact_info.social_links.extend(deep_contacts.social_links);
-                
-                // Deduplicate
-                contact_info.emails.sort(); contact_info.emails.dedup();
-                contact_info.phones.sort(); contact_info.phones.dedup();
-                contact_info.social_links.sort(); contact_info.social_links.dedup();
             }
-
-            let path_discoveries = if deep_scan {
-                path_scanner::scan_sensitive_paths(url).await
-            } else {
-                Vec::new()
-            };
-
-            let subdomains = if deep_scan {
-                subdomain_enum::enumerate_subdomains(&host).await
-            } else {
-                Vec::new()
-            };
+            dom_vars.sort();
+            dom_vars.dedup();
 
             let server_details = server_analyzer::analyze_server(&headers, &full_body, &host);
             let db_details = db_detector::detect_database(&headers, &full_body);
-            let advanced_analysis = Some(provide::advanced_analyzer::analyze_behaviours(&full_body, &headers));
-            let expert_vulnerabilities = provide::expert_exploit_finder::find_expert_vulns(&full_body, &headers);
-            let behavioral_techs = provide::behavioral_fingerprint::detect_expert_behavior(&full_body, &headers);
-            let cloud_audit = Some(provide::cloud_metadata_scanner::audit_cloud_infra(&headers));
 
             let mut result = RustScanResult {
-                url: url.to_string(),
+                url: final_url,
                 status,
                 headers,
                 body_snippet: full_body.chars().take(2000).collect(),
@@ -262,16 +225,15 @@ async fn fetch_url_async(
                 whois,
                 open_ports,
                 contact_info,
+                js_recon,
                 dns_info,
                 header_security,
                 path_discoveries,
-                subdomains,
+                subdomains: Vec::new(),
                 server_details,
                 db_details,
-                advanced_analysis,
-                expert_vulnerabilities,
-                behavioral_techs,
-                cloud_audit,
+                redirect_chain: Vec::new(), // Populated if needed
+                dom_vars,
             };
 
             if fetch_favicon {
@@ -316,28 +278,27 @@ fn error_result(url: &str, err: String) -> RustScanResult {
     RustScanResult {
         url: url.to_string(),
         status: 0,
-        headers: std::collections::HashMap::new(),
+        headers: HashMap::new(),
         body_snippet: "".to_string(),
         response_time_ms: 0,
         error: Some(err),
         favicon_hash: None,
         tls_info: None,
-        detected_techs: std::collections::HashMap::new(),
+        detected_techs: HashMap::new(),
         waf_info: Vec::new(),
         vulnerabilities: Vec::new(),
         whois: None,
         open_ports: Vec::new(),
         contact_info: ContactInfo::default(),
+        js_recon: JSReconInfo::default(),
         dns_info: DNSInfo::default(),
         header_security: HeaderSecurity::default(),
         path_discoveries: Vec::new(),
         subdomains: Vec::new(),
         server_details: ServerDetails::default(),
         db_details: None,
-        advanced_analysis: None,
-        expert_vulnerabilities: Vec::new(),
-        behavioral_techs: Vec::new(),
-        cloud_audit: None,
+        redirect_chain: Vec::new(),
+        dom_vars: Vec::new(),
     }
 }
 

@@ -4,11 +4,20 @@ use std::time::Duration;
 use futures::future::join_all;
 use std::collections::HashSet;
 use tokio::time::sleep;
+use rand::seq::SliceRandom;
+use colored::*;
+use std::fs;
 
 pub async fn run_scan(config: ScanConfig) -> ScanOutput {
     let mut client_builder = Client::builder()
         .timeout(Duration::from_millis(config.timeout_ms))
         .danger_accept_invalid_certs(true);
+
+    // Load User Agents for Anonymity
+    let ua_list = match fs::read_to_string("db/user-agents.txt") {
+        Ok(content) => content.lines().map(|s| s.to_string()).collect::<Vec<String>>(),
+        Err(_) => vec!["Mozilla/5.0 (Windows NT 10.0; Win64; x64) HackIt/DirFinder".to_string()],
+    };
 
     if !config.follow_redirects {
         client_builder = client_builder.redirect(reqwest::redirect::Policy::none());
@@ -25,9 +34,6 @@ pub async fn run_scan(config: ScanConfig) -> ScanOutput {
             client_builder = client_builder.proxy(p);
         }
     }
-
-    let user_agent = config.user_agent.clone().unwrap_or_else(|| "Mozilla/5.0 (Windows NT 10.0; Win64; x64) TechHunter/DirFinder".to_string());
-    client_builder = client_builder.user_agent(user_agent);
 
     let client = match client_builder.build() {
         Ok(c) => c,
@@ -49,29 +55,9 @@ pub async fn run_scan(config: ScanConfig) -> ScanOutput {
             headers.insert(reqwest::header::COOKIE, val);
         }
     }
-    if let Some(auth) = &config.auth {
-        let auth_val = format!("Basic {}", base64::encode(auth));
-        if let Ok(val) = HeaderValue::from_str(&auth_val) {
-            headers.insert(reqwest::header::AUTHORIZATION, val);
-        }
-    }
 
     let mut scanned_paths = HashSet::new();
     let mut paths_to_scan = config.paths.clone();
-
-    // Extension expansion
-    if !config.extensions.is_empty() {
-        let mut expanded = Vec::new();
-        for p in &paths_to_scan {
-            expanded.push(p.clone());
-            if !p.ends_with('/') {
-                for ext in &config.extensions {
-                    expanded.push(format!("{}.{}", p, ext.trim_start_matches('.')));
-                }
-            }
-        }
-        paths_to_scan = expanded;
-    }
 
     // Main scan loop
     for chunk in paths_to_scan.chunks(config.threads) {
@@ -91,11 +77,17 @@ pub async fn run_scan(config: ScanConfig) -> ScanOutput {
             let m = method.clone();
             let h = headers.clone();
             let cfg = config.clone();
+            let uas = ua_list.clone();
 
             tasks.push(tokio::spawn(async move {
                 let mut last_error = None;
                 for _ in 0..=cfg.retries {
-                    let mut req = cl.request(m.clone(), &full_url).headers(h.clone());
+                    // Strong Anonymity: Rotate User-Agent per request
+                    let ua = uas.choose(&mut rand::thread_rng()).unwrap_or(&uas[0]);
+                    let mut req = cl.request(m.clone(), &full_url)
+                        .headers(h.clone())
+                        .header("User-Agent", ua);
+
                     if let Some(body) = &cfg.data {
                         req = req.body(body.clone());
                     }
@@ -105,14 +97,32 @@ pub async fn run_scan(config: ScanConfig) -> ScanOutput {
                             let status = resp.status().as_u16();
                             let size = resp.content_length().unwrap_or(0);
                             
-                            // Filtering
-                            if !cfg.include_status.is_empty() && !cfg.include_status.contains(&status) { return None; }
-                            if cfg.exclude_status.contains(&status) { return None; }
-                            if !cfg.include_length.is_empty() && !cfg.include_length.contains(&size) { return None; }
-                            if cfg.exclude_length.contains(&size) { return None; }
-                            
-                            // Default 404 ignore
-                            if status == 404 && cfg.include_status.is_empty() { return None; }
+                            let status_str_col = match status {
+                                200..=299 => status.to_string().green().bold(),
+                                300..=399 => status.to_string().yellow(), // Yellow for 3xx
+                                401 | 403 => status.to_string().magenta().bold(),
+                                404 => status.to_string().red(),
+                                400 => status.to_string().truecolor(128, 128, 128), // Gray for 400
+                                500..=599 => status.to_string().blue(),
+                                _ => status.to_string().white(),
+                            };
+
+                            let timestamp = chrono::Local::now().format("%H:%M:%S").to_string();
+                            let size_str = if size < 1024 {
+                                format!("{}B", size)
+                            } else if size < 1024 * 1024 {
+                                format!("{}KB", size / 1024)
+                            } else {
+                                format!("{}MB", size / (1024 * 1024))
+                            };
+
+                            // Format exactly like screenshot: [15:04:05] 200 -    178B - /admin
+                            println!("[{}] {} - {:>7} - {}", 
+                                timestamp.white(), // White timestamp
+                                status_str_col, 
+                                size_str.white(), 
+                                format!("/{}", p.trim_start_matches('/')).cyan()
+                            );
 
                             let content_type = resp.headers()
                                 .get("content-type")
@@ -131,7 +141,7 @@ pub async fn run_scan(config: ScanConfig) -> ScanOutput {
                                 size,
                                 content_type,
                                 redirect,
-                                title: None, // Could extract title later
+                                title: None,
                             });
                         }
                         Err(e) => {

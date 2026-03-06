@@ -5,12 +5,21 @@ Provides a stylized ASCII banner and status boxes for a nicer startup UX.
 """
 import os
 import sys
+import platform
 import random
 import socket
 import json
 import textwrap
 import urllib.request
 from datetime import datetime
+
+# Force UTF-8 output on Windows to support box-drawing chars
+if sys.stdout.encoding and sys.stdout.encoding.lower() not in ('utf-8', 'utf8'):
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')  # type: ignore[attr-defined]
+    except Exception:
+        pass
+
 try:
     import colorama
     colorama.init(autoreset=True)
@@ -34,7 +43,7 @@ GREEN = CSI + "32m"
 YELLOW = CSI + "33m"
 BLUE = CSI + "34m"
 MAGENTA = CSI + "35m"
-PURPLE = MAGENTA # Alias for PURPLE
+PURPLE = MAGENTA
 CYAN = CSI + "36m"
 WHITE = CSI + "37m"
 
@@ -49,16 +58,14 @@ B_WHITE = CSI + "97m"
 
 # Collection of banners (Global)
 BANNERS = [
-    # Banner 1: Standard Block
     r"""
   _    _    _  _____  _   _  _____ __   __ _____
- | |  | |  | ||  __ \| \ | ||  ___|\ \ / /  ___|
+ | |  | |  | ||  __ \| \ | ||  ___|\\ \\ / /  ___|
  | |  | |  | || |  \/|  \| || |__   \ V /\ `--.
  | |/\| |/\| || | __ | . ` ||  __|   \ /  `--. \
  \  /\  /\  / | |_\ \| |\  || |___   | | /\__/ /
   \/  \/  \/   \____/\_| \_/\____/   \_/ \____/ 
 """,
-    # Banner 2: Slant
     r"""
     __  __            __   _ __ 
    / / / /___ _____  / /__(_) /_
@@ -66,13 +73,11 @@ BANNERS = [
  / __  / /_/ / /__/ ,< / / /_   
 /_/ /_/\__,_/\___/_/|_/_/\__/   
 """,
-    # Banner 3: Cyber
     r"""
 [ H A C K I T ]
 >> SYSTEM_OVERRIDE...
 >> ACCESS_GRANTED
 """,
-    # Banner 4: Big
     r"""
   _   _   ___   _____  _   __ _____  _____ 
  | | | | / _ \ /  __ \| | / /|_   _||_   _|
@@ -81,7 +86,6 @@ BANNERS = [
  | | | || | | || \__/\| |\  \ _| |_   | |  
  \_| |_/\_| |_/ \____/\_| \_/ \___/   \_/  
 """,
-    # Banner 5: Dots
     r"""
 :::    :::     :::      ::::::::  :::    ::: ::::::::::: ::::::::::: 
 :+:    :+:   :+: :+:   :+:    :+: :+:   :+:      :+:         :+:     
@@ -91,16 +95,13 @@ BANNERS = [
 #+#    #+# #+#     #+# #+#    #+# #+#   #+#      #+#         #+#     
 ###    ### ###     ###  ########  ###    ### ###########     ###     
 """,
-    # Banner 6: ANSI Shadow
     r"""
-██╗  ██╗ █████╗  ██████╗██╗  ██╗██╗████████╗
-██║  ██║██╔══██╗██╔════╝██║ ██╔╝██║╚══██╔══╝
-███████║███████║██║     █████╔╝ ██║   ██║   
-██╔══██║██╔══██║██║     ██╔═██╗ ██║   ██║   
-██║  ██║██║  ██║╚██████╗██║  ██╗██║   ██║   
-╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝╚═╝   ╚═╝   
+ _    _    _    ____ _  _____ _____ 
+| |  | |  / \  / ___| |/ /_ _|_   _|
+| |  | | / _ \| |   | ' / | |  | |  
+| |__| |/ ___ \ |___| . \ | |  | |  
+|_____/_/   \_\____|_|\_\___| |_|  
 """,
-    # Banner 7: Bloody
     r"""
 db   db  .d8b.   .o88b. db   dD d888888b d888888b 
 88   88 d8' `8b d8P  Y8 88 ,8P'   `88'   `~~88~~' 
@@ -109,40 +110,16 @@ db   db  .d8b.   .o88b. db   dD d888888b d888888b
 88   88 88   88 Y8b  d8 88 `88.   .88.      88    
 YP   YP YP   YP  `Y88P' YP   YD Y888888P    YP    
 """,
-    # Banner 8: 3D
     r"""
   )      )            (     
  /(   ( /(   (        )\ )  
-(()\  )\())  )\ )    (()/(  
- ((_)((_)\  (()/( (   /(_)) 
- _((_)_((_)  /(_)))\ (_))   
-| || | \/ / (_)) ((_)|_ _|  
+(()\\  )\\())  )\\ )    (()/(  
+ ((_)((_)\\  (()/( (   /(_)) 
+ _((_)_((_)  /(_)))\\ (_))   
+| || | \\/ / (_)) ((_)|_ _|  
 | __ |>  <  / -_)(_-< | |   
-|_||_/_/\_\ \___|/__/|___|  
+|_||_/_/\_\\ \\___|/__/|___|  
 """,
-    # Banner 9: Isometric
-    r"""
-      ___           ___           ___           ___           ___           ___     
-     /\__\         /\  \         /\  \         /\__\         /\  \         /\  \    
-    /:/  /        /::\  \       /::\  \       /:/  /         \:\  \        \:\  \   
-   /:/__/        /:/\:\  \     /:/\:\  \     /:/__/           \:\  \        \:\  \  
-  /::\  \ ___   /::\~\:\  \   /:/  \:\  \   /::\__\____       /::\  \       /::\  \ 
- /:/\:\  /\__\ /:/\:\ \:\__\ /:/__/ \:\__\ /:/\:::::\__\     /:/\:\__\      \/\:\__\
- \/__\:\/:/  / \/__\:\/:/  / \:\  \  \/__/ \/_|:|~~|~       /:/  \/__/       ~~/__/ 
-      \::/  /       \::/  /   \:\  \          |:|  |       /:/  /                  
-      /:/  /        /:/  /     \:\  \         |:|  |       \/__/                   
-     /:/  /        /:/  /       \:\__\        |:|  |                               
-     \/__/         \/__/         \/__/         \|__|                               
-""",
-    # Banner 10: Nmap-Inspired (Gacor Edition)
-    r"""
-    N   N  M   M   A   PPPP 
-    NN  N  MM MM  A A  P   P
-    N N N  M M M AAAAA PPPP 
-    N  NN  M   M A   A P    
-    N   N  M   M A   A P    
-    [ H A C K I T - M O D ]
-    """,
 ]
 
 # Specific Art for Tools
@@ -190,7 +167,7 @@ TOOL_ART = {
     | | ___  ___| |__   | |__| |_   _ _ __ | |_ ___ _ __ 
     | |/ _ \/ __| '_ \  |  __  | | | | '_ \| __/ _ \ '__|
     | |  __/ (__| | | | | |  | | |_| | | | | ||  __/ |   
-    |_|\___|\___|_| |_| |_|  |_|\__,_|_| |_|\__\___|_|   
+    |_|\___|\\___|_| |_| |_|  |_|\__,_|_| |_|\__\___|_|   
 """,
     "WEB FUZZER": r"""
   _       __     __    ______                         
@@ -251,22 +228,23 @@ TOOL_ALIASES = {
 THEME_COLORS = [CYAN, MAGENTA, GREEN, BLUE, B_CYAN, B_MAGENTA, B_GREEN, B_BLUE]
 
 QUOTES = [
-    "The quieter you become, the more you are able to hear.",
-    "Security is not a product, but a process.",
-    "There is no patch for human stupidity.",
-    "Data is the new oil.",
-    "Trust, but verify.",
-    "Everything is a file.",
-    "Hacking is an art.",
-    "Knowledge is power.",
-    "We do what we must because we can.",
-    "It's not a bug, it's a feature.",
+    "The quieter you become, the more you are able to hear.  -- Kali Linux",
+    "Security is not a product, but a process.  -- Bruce Schneier",
+    "There is no patch for human stupidity.  -- Kevin Mitnick",
+    "In God we trust. All others we monitor.  -- NSA",
+    "Trust, but verify.  -- Ronald Reagan",
+    "Hacking is not a crime, it's a skill.",
+    "Knowledge is the only weapon that never runs out.",
+    "Think like an attacker, defend like a fortress.",
     "Exploiting the impossible.",
-    "Access Granted.",
-    "Think like a hacker, act like a professional.",
-    "In cybersecurity, the only safe system is a powered-off one.",
-    "Your data is your life. Protect it."
+    "The best defense is a good offense.",
+    "Penetration testing: break it before they do.",
+    "Every system has a vulnerability. Find it first.",
+    "Privacy is not a crime. Surveillance is.",
+    "Root access obtained. The game begins.",
+    "In cybersecurity, curiosity is your greatest tool.",
 ]
+
 
 def _colored(text: str, color: str, bold: bool = False) -> str:
     if bold:
@@ -276,147 +254,238 @@ def _colored(text: str, color: str, bold: bool = False) -> str:
 
 def get_ip_info():
     """Fetch public IP and Geo location with fallback"""
-    # 1. Try ip-api.com (Best for Geo)
     try:
-        # User requested accuracy for ip-api
-        with urllib.request.urlopen("http://ip-api.com/json/?fields=status,message,country,city,query,isp", timeout=5) as url:
+        with urllib.request.urlopen(
+            "http://ip-api.com/json/?fields=status,message,country,city,query,isp",
+            timeout=5
+        ) as url:
             data = json.loads(url.read().decode())
             if data.get('status') == 'success':
                 return {
-                    'ip': data.get('query', 'Unknown'),
-                    'geo': f"{data.get('city', 'Unknown')}, {data.get('country', 'Unknown')}"
+                    'ip':  data.get('query', 'Unknown'),
+                    'geo': f"{data.get('city', '?')}, {data.get('country', '?')}"
                 }
     except Exception:
         pass
 
-    # 2. Try ipinfo.io (Very accurate)
     try:
         with urllib.request.urlopen("https://ipinfo.io/json", timeout=5) as url:
             data = json.loads(url.read().decode())
             return {
-                'ip': data.get('ip', 'Unknown'),
-                'geo': f"{data.get('city', 'Unknown')}, {data.get('country', 'Unknown')}"
+                'ip':  data.get('ip', 'Unknown'),
+                'geo': f"{data.get('city', '?')}, {data.get('country', '?')}"
             }
     except Exception:
         pass
 
-    # 3. Fallback to ipify (IP only)
     try:
         with urllib.request.urlopen("https://api.ipify.org?format=json", timeout=5) as url:
             data = json.loads(url.read().decode())
-            return {
-                'ip': data.get('ip', 'Unknown'),
-                'geo': 'Unknown (Fallback)'
-            }
+            return {'ip': data.get('ip', 'Unknown'), 'geo': 'Unknown'}
     except Exception:
         pass
 
     return {'ip': 'Unavailable', 'geo': 'Unavailable'}
 
 
+# ─────────────────────────────────────────────────────────────────────────────
 def display_banner():
-    """Print a stylized startup banner and status boxes with random elements.
-
-    Banner is suppressed if environment variable `HACKIT_NO_BANNER` is set.
-    """
+    """Print a premium startup banner. Suppressed if HACKIT_NO_BANNER is set."""
     if os.environ.get('HACKIT_NO_BANNER'):
         return
 
-    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    
-    # Random selections
-    banner = random.choice(BANNERS)
-    main_color = random.choice(THEME_COLORS)
-    secondary_color = random.choice([c for c in THEME_COLORS if c != main_color])
-    quote = random.choice(QUOTES)
-    mission_id = os.getpid()
+    import re as _re
+    _strip = _re.compile(r'\x1b\[[0-9;]*m')
 
-    # Print Banner
-    print(_colored(banner, main_color, bold=True))
-    
-    # Subtitle
-    print(_colored('  PENETRATION TESTING FRAMEWORK', secondary_color) + '   ' + _colored(f'[{now}]', DIM))
-    print(_colored('  By: AniippID', main_color))
+    def vlen(s: str) -> int:
+        """Return the VISIBLE character count (strips all ANSI codes)."""
+        return len(_strip.sub('', s))
+
+    def pad_to(s: str, width: int, fill: str = ' ') -> str:
+        """Right-pad string `s` so its VISIBLE length equals `width`."""
+        return s + fill * max(width - vlen(s), 0)
+
+    def trunc_plain(s: str, maxlen: int) -> str:
+        """Truncate a plain (no-ANSI) string to maxlen chars."""
+        return s[:maxlen - 1] + '.' if len(s) > maxlen else s
+
+    # ── Theme ────────────────────────────────────────────────────────────────
+    now     = datetime.now()
+    banner  = random.choice(BANNERS)
+    mc      = random.choice([CYAN, B_CYAN, MAGENTA, B_MAGENTA, GREEN, B_GREEN])
+    ac      = random.choice([YELLOW, B_YELLOW, WHITE, B_WHITE])
+
+    # ── Box geometry ─────────────────────────────────────────────────────────
+    # W  = total VISIBLE chars between the two outer │ chars on every row.
+    # Every row: INDENT + │ + <W visible chars> + │
+    W      = 72
+    INDENT = '  '
+    IN_BAR = INDENT + _colored('│', mc)   # left border piece
+
+    def hline(lc: str, rc: str):
+        print(INDENT + _colored(lc + '=' * W + rc, mc))
+
+    def row(content: str):
+        """Print one box row, always exactly W visible chars wide."""
+        print(IN_BAR + pad_to(content, W) + _colored('│', mc))
+
+    # ── Two-column cell helper ───────────────────────────────────────────────
+    # Layout per cell:  ' KEY          >> VALUE            '
+    #                    1  + KW + 4 + VW                  = CELL_W
+    # Two cells + centre divider: CELL_W + 1 + CELL_W = W
+    CELL_W = W // 2          # = 36
+    KW     = 13              # key width
+    VW     = CELL_W - 1 - KW - 4  # value width = 36-1-13-4 = 18
+
+    def cell(key: str, val: str, vc=B_CYAN) -> str:
+        """
+        Build one fixed-width cell (CELL_W visible chars).
+        Value is truncated to VW chars BEFORE coloring — so vlen() is correct.
+        """
+        val_plain = trunc_plain(val, VW)
+        k   = _colored(f' {key:<{KW}}', DIM)
+        sep = _colored(' >> ', ac)
+        v   = _colored(f'{val_plain:<{VW}}', vc, bold=True)
+        # visible = 1+KW + 4 + VW = CELL_W  (no ANSI escapes counted)
+        return k + sep + v
+
+    def two_col(lk, lv, lc, rk, rv, rc):
+        """Print a two-column info row, perfectly aligned."""
+        left  = cell(lk, lv, lc)          # CELL_W visible
+        right = cell(rk, rv, rc)          # CELL_W visible
+        mid   = _colored('│', DIM)        # 1 visible
+        # Total visible = CELL_W + 1 + CELL_W = W  ✓
+        row(left + mid + right)
+
+    # ── Fetch live data ───────────────────────────────────────────────────────
+    net   = get_ip_info()
+    host  = socket.gethostname()
+    py_v  = platform.python_version()
+    os_n  = platform.system()
+    pid   = os.getpid()
+    dstr  = now.strftime('%Y-%m-%d')
+    tstr  = now.strftime('%H:%M:%S')
+
+    # ── Print banner art ──────────────────────────────────────────────────────
     print()
+    print(_colored(banner, mc, bold=True))
 
-    # Gather System Info
-    hostname = socket.gethostname()
-    net_info = get_ip_info()
+    # ── Box top ───────────────────────────────────────────────────────────────
+    hline('┌', '┐')
 
-    # Dynamic System Status Box (Modern Rounded)
-    box_width = 64
-    border_color = secondary_color
-    
-    # Top Border
-    print(_colored('╭──', border_color) + _colored(' SYSTEM STATUS ', main_color, bold=True) + _colored('─' * (box_width - 15), border_color) + _colored('╮', border_color))
-    
-    status_items = [
-        ("User IP", net_info['ip'], B_CYAN),
-        ("Geo Location", net_info['geo'], B_CYAN),
-        ("Website", "haniipp.space", B_YELLOW),
-        ("Device Name", hostname, B_CYAN),
-        ("Exploit Engine", "ONLINE", B_GREEN)
-    ]
-    
-    for name, status, color in status_items:
-        # Calculate label and value parts
-        label_part = f"  {name:<15}"
-        value_part = f": {color}{status}{RESET}"
-        
-        # Calculate visible length (without ANSI)
-        visible_len = 2 + 15 + 2 + len(status)
-        padding = box_width - visible_len + 2
-        
-        line = _colored('│', border_color) + label_part + value_part + ' ' * padding + _colored('│', border_color)
-        print(line)
+    # ── Title row ─────────────────────────────────────────────────────────────
+    # Build title as one plain string first, then colorize pieces
+    # ' [*] HACKIT FRAMEWORK   |   v2.1.0   |   by AniippID '
+    # Fixed visible structure so pad_to() works perfectly:
+    t1 = ' [*] HACKIT FRAMEWORK'   # 21
+    t2 = '   |   '                 # 7
+    t3 = 'v2.1.0'                  # 6
+    t4 = '   |   '                 # 7
+    t5 = 'by AniippID '            # 12
+    title_vis = len(t1) + len(t2) + len(t3) + len(t4) + len(t5)  # 53
+    title_pad = ' ' * (W - title_vis)  # right padding to reach W
+    title_str = (
+        _colored(t1, mc, bold=True)
+        + _colored(t2, DIM)
+        + _colored(t3, ac, bold=True)
+        + _colored(t4, DIM)
+        + _colored(t5, DIM)
+        + title_pad
+    )
+    row(title_str)
+    hline('├', '┤')
 
-    # Bottom Border
-    print(_colored('╰' + '─' * (box_width + 2) + '╯', border_color))
-    print()
+    # ── Info grid ────────────────────────────────────────────────────────────
+    two_col('Public IP',  net['ip'],                     B_CYAN,
+            'Hostname',   host,                           B_CYAN)
+    two_col('Location',   net['geo'],                    B_CYAN,
+            'OS / Python', f'{os_n} Py{py_v[:4]}',       B_CYAN)
+    two_col('Date',        dstr,                          YELLOW,
+            'Time',        tstr,                          YELLOW)
+    two_col('PID',         str(pid),                     B_GREEN,
+            'Status',      'ENGINES ONLINE [OK]',         B_GREEN)
+    hline('├', '┤')
 
-    # Info Line with style
-    session_info = f"[+] Session: {mission_id} | User: anonim | {now}"
-    print(_colored(session_info, secondary_color))
-    print(_colored(f'[!] "{quote}"', B_WHITE, bold=True))
-    print()
-    
-    # Footer
-    print(_colored('─' * (box_width + 4), DIM))
-    print(_colored('⚠ AUTHORIZED USE ONLY', B_RED, bold=True) + ' ' + _colored('|', DIM) + ' ' + _colored('HackIt v2.0', main_color))
+    # ── Engine status bar ─────────────────────────────────────────────────────
+    engines = [('Go', B_CYAN), ('Rust', B_MAGENTA), ('Python', B_GREEN),
+               ('C/C++', B_YELLOW), ('Ruby', B_RED)]
+    # Build plain-first so we know exact visible length
+    eng_plain = '  '.join(f' {n} [OK] ' for n, _ in engines)   # e.g. ' Go [OK]   Rust [OK] ...'
+    eng_colored = '  '.join(_colored(f' {n} [OK] ', c, bold=True) for n, c in engines)
+    eng_content = ' ' + eng_colored   # 1 leading space
+    eng_vis = 1 + len(eng_plain) + 2 * (len(engines) - 1)  # recount from plain
+    # Actually easier: just measure after strip
+    row(' ' + eng_colored)
+
+    hline('├', '┤')
+
+    # ── Quote row ─────────────────────────────────────────────────────────────
+    quote   = random.choice(QUOTES)
+    q_plain = trunc_plain(quote, W - 5)      # leave room for prefix ' "  '
+    q_str   = _colored(' " ', ac, bold=True) + _colored(' ' + q_plain, DIM)
+    row(q_str)
+
+    hline('├', '┤')
+
+    # ── Footer row ────────────────────────────────────────────────────────────
+    f_left  = '  [!] AUTHORIZED USE ONLY'           # 26 visible
+    f_right = 'Penetration Testing Framework  '     # 31 visible
+    f_pad   = W - len(f_left) - len(f_right)        # spacing in between
+    footer  = (
+        _colored(f_left, B_RED, bold=True)
+        + ' ' * max(f_pad, 1)
+        + _colored(f_right, DIM)
+    )
+    row(footer)
+    hline('└', '┘')
     print()
     sys.stdout.flush()
 
 
+# ─────────────────────────────────────────────────────────────────────────────
 def display_tool_banner(tool_name: str):
-    """Print a specific banner for a tool with random colors"""
+    """Print a premium tool-specific banner."""
     if os.environ.get('HACKIT_NO_BANNER'):
         return
-        
-    color = random.choice(THEME_COLORS)
-    
-    # Resolve aliases
+
+    import re as _re
+    _strip = _re.compile(r'\x1b\[[0-9;]*m')
+
+    color  = random.choice([CYAN, B_CYAN, MAGENTA, B_MAGENTA, GREEN, B_GREEN])
+    accent = random.choice([YELLOW, B_YELLOW, WHITE])
+    W      = 62
+
     key = tool_name.upper()
     if key in TOOL_ALIASES:
         key = TOOL_ALIASES[key]
 
-    # Check if we have specific art for this tool
-    if key in TOOL_ART:
-        print()
-        print(_colored(TOOL_ART[key], color, bold=True))
-        print(_colored('  > AniippID', DIM))
-        print()
-        return
-
-    # Modern Tool Header
-    width = 60
-    title = f" {tool_name.upper()} "
-    padding = (width - len(title)) // 2
-    
     print()
-    print(_colored('╔' + '═' * width + '╗', color))
-    print(_colored('║', color) + ' ' * padding + _colored(title, WHITE, bold=True) + ' ' * (width - len(title) - padding) + _colored('║', color))
-    print(_colored('╚' + '═' * width + '╝', color))
-    print(_colored('  > MODULE LOADED: SUCCESS', DIM))
+    if key in TOOL_ART:
+        print(_colored(TOOL_ART[key], color, bold=True))
+    else:
+        title     = f'  {tool_name.upper()}  '
+        pad_left  = max((W - len(title)) // 2, 0)
+        pad_right = max(W - len(title) - pad_left, 0)
+        print(_colored('  +' + '=' * W + '+', color))
+        print(
+            _colored('  |', color)
+            + ' ' * pad_left
+            + _colored(title, accent, bold=True)
+            + ' ' * pad_right
+            + _colored('|', color)
+        )
+        print(_colored('  +' + '=' * W + '+', color))
+
+    now    = datetime.now().strftime('%H:%M:%S')
+    left_t = '  [+] MODULE ACTIVE'
+    right_t = f'{now}  '
+    pad    = max(W + 4 - len(left_t) - len(right_t), 1)
+    print(
+        _colored(left_t, color, bold=True)
+        + ' ' * pad
+        + _colored(right_t, DIM)
+    )
+    print(_colored('  ' + '-' * (W + 2), DIM))
     print()
     sys.stdout.flush()
 
@@ -426,9 +495,7 @@ class TablePrinter:
     def __init__(self, columns, max_col_width=30):
         self.columns = columns
         self.first_row = True
-        # Ensure sufficient width for readability but avoid terminal overflow (min 20)
         self.target_width = max(max_col_width, 20)
-        # Default widths: use target_width to allow wrapping space
         self.widths = {c: max(len(c) + 4, self.target_width) for c in columns}
 
     def _print_border(self, left, mid, right, fill):
@@ -436,58 +503,43 @@ class TablePrinter:
         print(f"        {left}{mid.join(parts)}{right}")
 
     def _print_row(self, row_data, bold=False):
-        # Prepare wrapped lines for each cell
         row_lines = []
         max_height = 1
-        
+
         for i, col in enumerate(self.columns):
             val = str(row_data[i]) if i < len(row_data) else ""
-            
-            # Aggressive sanitization
-            # 1. Strip ANSI codes from data (if any leaked)
-            # 2. Replace control characters
-            # 3. Replace delimiters if they leaked
             val = ''.join(c if ord(c) >= 32 else ' ' for c in val)
-            val = val.replace(':::', ' ') # Safety
-            
+            val = val.replace(':::', ' ')
+
             width = self.widths[col]
-            # Wrap text to fit column width (minus 2 for padding)
             lines = textwrap.wrap(val, width - 2)
-            if not lines: lines = [""]
-            
+            if not lines:
+                lines = [""]
+
             row_lines.append(lines)
             max_height = max(max_height, len(lines))
-            
-        # Print each physical line of the row
+
         for h in range(max_height):
             parts = []
             for i, col in enumerate(self.columns):
                 lines = row_lines[i]
-                if h < len(lines):
-                    cell_line = lines[h]
-                else:
-                    cell_line = ""
-                
-                # Padding
+                cell_line = lines[h] if h < len(lines) else ""
                 padding = self.widths[col] - len(cell_line)
                 parts.append(cell_line + " " * padding)
-            
+
             content = "│".join(parts)
             color = GREEN if not bold else WHITE
-            
+
             if bold:
                 content = f"{BOLD}{content}{RESET}"
             else:
                 content = f"{color}{content}{RESET}"
-                
+
             print(f"        │{content}│")
 
     def print_header(self):
-        # Top border
         self._print_border("┌", "┬", "┐", "─")
-        # Header row
         self._print_row(self.columns, bold=True)
-        # Separator
         self._print_border("├", "┼", "┤", "─")
 
     def print_row(self, row):
@@ -498,6 +550,7 @@ class TablePrinter:
 
     def print_footer(self):
         self._print_border("└", "┴", "┘", "─")
+
 
 if __name__ == '__main__':
     display_banner()

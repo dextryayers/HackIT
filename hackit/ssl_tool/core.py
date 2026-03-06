@@ -1,7 +1,7 @@
 
 import ssl
 import socket
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any, List
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
@@ -16,8 +16,8 @@ class SSLAnalyzer:
         self.port = port
         self.timeout = timeout
         self.grade = "F"
-        self.issues = []
-        self.vulnerabilities = []
+        self.issues: List[str] = []
+        self.vulnerabilities: List[Dict[str, str]] = []
 
     def analyze(self) -> Dict[str, Any]:
         """Run full analysis"""
@@ -73,9 +73,15 @@ class SSLAnalyzer:
                     issuer = {attr.oid._name: attr.value for attr in cert.issuer}
                     
                     # Dates
-                    not_before = cert.not_valid_before
-                    not_after = cert.not_valid_after
-                    days_left = (not_after - datetime.utcnow()).days
+                    # Use timezone-aware variants when available (cryptography >= 42)
+                    if hasattr(cert, 'not_valid_before_utc'):
+                        not_before = cert.not_valid_before_utc
+                        not_after = cert.not_valid_after_utc
+                        days_left = (not_after - datetime.now(timezone.utc)).days
+                    else:
+                        not_before = cert.not_valid_before
+                        not_after = cert.not_valid_after
+                        days_left = (not_after - datetime.utcnow()).days
                     
                     # SAN
                     san = []
@@ -126,14 +132,25 @@ class SSLAnalyzer:
                         supported[name] = False
                 else:
                     supported[name] = False # Not supported by client, assume safe or unknown
-            except:
+            except Exception:
                 supported[name] = False
 
         # 2. TLS 1.0/1.1 (Deprecated)
-        for name, proto in [("TLSv1.0", ssl.PROTOCOL_TLSv1), ("TLSv1.1", ssl.PROTOCOL_TLSv1_1)]:
-            if self._test_connection(proto):
-                supported[name] = True
-            else:
+        # PROTOCOL_TLSv1 / PROTOCOL_TLSv1_1 removed in Python 3.10+
+        # Use TLSVersion enum with max_version constraint instead
+        for name, tls_ver_attr in [("TLSv1.0", "TLSv1"), ("TLSv1.1", "TLSv1_1")]:
+            try:
+                tls_ver = getattr(ssl.TLSVersion, tls_ver_attr, None)
+                if tls_ver is not None:
+                    supported[name] = self._test_tls_version(tls_ver)
+                else:
+                    # Fallback for older Python: try legacy protocol constants
+                    legacy_proto = f"PROTOCOL_{tls_ver_attr}"
+                    if hasattr(ssl, legacy_proto):
+                        supported[name] = self._test_connection(getattr(ssl, legacy_proto))
+                    else:
+                        supported[name] = False
+            except Exception:
                 supported[name] = False
 
         # 3. TLS 1.2/1.3 (Modern)
@@ -156,7 +173,7 @@ class SSLAnalyzer:
                         # If negotiated lower, it means server prefers lower or doesn't support high
                         supported["TLSv1.2"] = False
                         supported["TLSv1.3"] = False
-        except:
+        except Exception:
             supported["TLSv1.2"] = False
             supported["TLSv1.3"] = False
 
@@ -172,7 +189,21 @@ class SSLAnalyzer:
             with socket.create_connection((self.host, self.port), timeout=self.timeout) as sock:
                 with context.wrap_socket(sock, server_hostname=self.host):
                     return True
-        except:
+        except Exception:
+            return False
+
+    def _test_tls_version(self, tls_version) -> bool:
+        """Test if server supports a specific TLS version using TLSVersion enum."""
+        try:
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            context.check_hostname = False
+            context.verify_mode = ssl.CERT_NONE
+            context.minimum_version = tls_version
+            context.maximum_version = tls_version
+            with socket.create_connection((self.host, self.port), timeout=self.timeout) as sock:
+                with context.wrap_socket(sock, server_hostname=self.host):
+                    return True
+        except Exception:
             return False
 
     def check_ciphers(self) -> Dict[str, List[str]]:
@@ -220,7 +251,7 @@ class SSLAnalyzer:
             with socket.create_connection((self.host, self.port), timeout=self.timeout) as sock:
                 with context.wrap_socket(sock, server_hostname=self.host):
                     return True
-        except:
+        except Exception:
             return False
 
     def check_known_vulns(self, results: Dict[str, Any]):

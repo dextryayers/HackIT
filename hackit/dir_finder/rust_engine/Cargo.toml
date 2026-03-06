@@ -4,7 +4,11 @@ version = "0.1.0"
 edition = "2021"
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "rust_dir_finder"
+path = "src/main.rs"
 
 [dependencies]
 tokio = { version = "1.0", features = ["full"] }
@@ -16,3 +20,7 @@ futures = "0.3"
 base64 = "0.13"
 regex = "1.5"
 async-trait = "0.1"
+rand = "0.8"
+colored = "2.0"
+chrono = "0.4"
+walkdir = "2.3"

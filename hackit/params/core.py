@@ -95,5 +95,5 @@ class ParamFuzzer:
                 return "JavaScript"
             
             return "Unknown"
-        except:
+        except Exception:
             return "Analysis Failed"

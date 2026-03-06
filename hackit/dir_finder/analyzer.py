@@ -73,7 +73,7 @@ class SmartAnalyzer:
                     if 'akamai' in resp.text.lower():
                         return "Akamai"
                     return "Generic WAF (Blocked Payload)"
-            except:
+            except Exception:
                 continue
         return "None Detected"
 
@@ -90,7 +90,7 @@ class SmartAnalyzer:
                 resp = requests.head(urljoin(self.target_url, f), timeout=3, verify=False)
                 if resp.status_code == 200:
                     self.found_endpoints.add(f)
-            except:
+            except Exception:
                 continue
 
     def run(self):

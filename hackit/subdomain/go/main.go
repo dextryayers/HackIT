@@ -93,12 +93,20 @@ func main() {
 		if config.Verbose {
 			fmt.Println("[*] Starting Passive Enumeration...")
 		}
-		subs := runPassive(config.Domain)
-		if config.Verbose {
-			fmt.Printf("[+] Passive Sources found %d subdomains\n", len(subs))
+
+		passiveChan := make(chan []string)
+		go runPassive(config.Domain, passiveChan, config.Verbose)
+
+		count := 0
+		for subs := range passiveChan {
+			for _, s := range subs {
+				addResult(s, nil, "passive")
+				count++
+			}
 		}
-		for _, s := range subs {
-			addResult(s, nil, "passive")
+
+		if config.Verbose {
+			fmt.Printf("[+] Passive Sources found %d subdomains\n", count)
 		}
 	}
 
@@ -110,7 +118,7 @@ func main() {
 		// Start Resolver Workers
 		for i := 0; i < config.Concurrency; i++ {
 			wgResolve.Add(1)
-			go resolveWorker(jobs, &wgResolve, config.Verbose)
+			go resolveWorker(jobs, &wgResolve, config.Verbose, config.Domain, config.Recursive)
 		}
 
 		// Run Active
@@ -128,7 +136,7 @@ func main() {
 
 			for i := 0; i < config.Concurrency; i++ {
 				wgPerm.Add(1)
-				go resolveWorker(jobs, &wgPerm, config.Verbose)
+				go resolveWorker(jobs, &wgPerm, config.Verbose, config.Domain, config.Recursive)
 			}
 
 			runPermutations(finalResultsSoFar, config.Domain, jobs)

@@ -26,6 +26,7 @@ type Config struct {
 	FilterCodes  string
 	Output       string
 	Verbose      bool
+	APIKeys      map[string]string
 }
 
 // Result represents a found subdomain

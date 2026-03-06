@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"math/rand"
 	"net"
+	"strings"
 	"sync"
 	"time"
+	"unsafe"
 )
 
 var (
@@ -86,46 +88,74 @@ var publicResolvers = []string{
 
 // resolveIPs resolves the IPs for a list of subdomains
 func resolveIPs(results []*Result, concurrency int) {
-	// Dynamically adjust concurrency for large scans
-	actualConcurrency := concurrency
-	if len(results) > 1000 {
-		actualConcurrency = concurrency * 2
-		if actualConcurrency > 1000 {
-			actualConcurrency = 1000
+	if len(results) == 0 {
+		return
+	}
+
+	// Use Rust Batch Resolver for high-speed resolution
+	if rustResolveDNSBatch != nil && rustResolveDNSBatch.Find() == nil {
+		// Split results into chunks to avoid passing too large strings to FFI
+		chunkSize := 500
+		for i := 0; i < len(results); i += chunkSize {
+			end := i + chunkSize
+			if end > len(results) {
+				end = len(results)
+			}
+			chunk := results[i:end]
+
+			var subs []string
+			for _, r := range chunk {
+				subs = append(subs, r.Subdomain)
+			}
+
+			input := strings.Join(subs, ",") + "\x00"
+			ptr, _, _ := rustResolveDNSBatch.Call(uintptr(unsafe.Pointer(&([]byte(input))[0])))
+			if ptr != 0 {
+				rustRes := string(CStrToGo(ptr))
+				if rustRes != "" {
+					// Parse result format: domain:ip1;ip2|domain:NOT_FOUND
+					parts := strings.Split(rustRes, "|")
+					resMap := make(map[string][]string)
+					for _, p := range parts {
+						kv := strings.Split(p, ":")
+						if len(kv) == 2 {
+							domain := kv[0]
+							val := kv[1]
+							if val != "NOT_FOUND" && val != "ERROR" {
+								resMap[domain] = strings.Split(val, ";")
+							}
+						}
+					}
+
+					// Update results
+					for _, r := range chunk {
+						if ips, ok := resMap[r.Subdomain]; ok {
+							r.IPs = ips
+						}
+					}
+				}
+			}
 		}
 	}
 
-	sem := make(chan bool, actualConcurrency)
+	// Fallback/Validation for anything still without IPs
+	sem := make(chan bool, concurrency*5) // Increased fallback concurrency
 	var wg sync.WaitGroup
-
 	for _, r := range results {
+		if len(r.IPs) > 0 {
+			continue
+		}
 		wg.Add(1)
 		sem <- true
 		go func(res *Result) {
 			defer wg.Done()
 			defer func() { <-sem }()
 
-			// Try multiple resolvers with retries and increasing timeouts
-			for i := 0; i < 6; i++ {
-				resolverAddr := publicResolvers[rand.Intn(len(publicResolvers))]
-				resolver := &net.Resolver{
-					PreferGo: true,
-					Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
-						d := net.Dialer{Timeout: time.Duration(3+i) * time.Second}
-						return d.DialContext(ctx, "udp", resolverAddr)
-					},
-				}
-
-				ctx, cancel := context.WithTimeout(context.Background(), time.Duration(3+i)*time.Second)
-				ips, err := resolver.LookupHost(ctx, res.Subdomain)
-				cancel()
-
-				if err == nil && len(ips) > 0 {
-					res.IPs = ips
-					break
-				}
-				// If it's a context timeout, maybe the resolver is slow or blocking
-				time.Sleep(time.Duration(200*(i+1)) * time.Millisecond)
+			ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second) // Faster timeout
+			defer cancel()
+			ips, err := net.DefaultResolver.LookupHost(ctx, res.Subdomain)
+			if err == nil && len(ips) > 0 {
+				res.IPs = ips
 			}
 		}(r)
 	}
