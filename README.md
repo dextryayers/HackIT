@@ -12,6 +12,8 @@
 
 Unlike traditional single-language tools, HackIt utilizes a **Hexa-Engine Architecture**. Each module is written in the language best suited for its specific task, ensuring that you never have to compromise between speed and functionality.
 
+![HackIt Framework](image.png)
+
 ---
 
 ## 🏗️ Hexa-Engine Architecture: The Technical Core
