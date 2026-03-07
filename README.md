@@ -72,6 +72,53 @@ An NSE-inspired (Nmap Scripting Engine) layer for rapid modular development.
 
 ---
 
+## 🚀 Recent Updates: Tech Hunter V3 & Advanced OSINT
+
+The HackIt framework has been upgraded to **Version 3.0**, introducing the **Tech Hunter V3** engine and deep **OSINT Intelligence** capabilities. These updates focus on granular technology mapping, secret discovery, and infrastructure analysis.
+
+### 🎯 Tech Hunter V3 (Hybrid Rust/Go Engine)
+A complete overhaul of the fingerprinting module, now featuring a **Refined Confidence Scoring** system and expanded signature database.
+- **Granular Fingerprinting**: Detects 200+ technologies including CMS (Wix, Squarespace, Ghost, TYPO3), Frontend Frameworks (Astro, Svelte, Tailwind CSS), and JS Libraries (GSAP, Alpine.js).
+- **Confidence Scoring Engine**:
+    - **Meta Tags**: 90% confidence weight.
+    - **HTTP Headers**: 80% confidence weight.
+    - **Script Patterns**: 70% confidence weight.
+    - **HTML Keywords**: 60% confidence weight.
+    - **Cookies**: 50% confidence weight.
+    - *Bonus: +10% boost for multiple matching signals.*
+- **Version Extraction**: Real-time extraction of software versions using advanced regex capture groups from headers and meta generators.
+
+### 🔍 Advanced JS Recon & Secret Discovery
+The Python and Rust engines now collaborate to perform deep-dive analysis of client-side code.
+- **API Key Detection**: Automatically identifies leaked secrets in JS files, including:
+    - **Google/Firebase API Keys**
+    - **AWS Access Key IDs**
+    - **Slack Tokens**
+    - **Mapbox/Algolia Keys**
+- **Endpoint Discovery**: Extracts internal API endpoints, hidden routes (SPA), and `fetch/axios` call patterns to map the internal application structure.
+
+### 🌐 Infrastructure & Cloud Intelligence
+Enhanced detection of modern cloud stacks and security layers.
+- **WAF/CDN Identification**: Precision detection for Cloudflare, Akamai, AWS CloudFront, Azure Front Door, Fastly, and Varnish.
+- **Server Forensics**:
+    - **OS Detection**: Identifies target OS (Ubuntu, Debian, CentOS, Windows) and CPU Architecture (x64, ARM64) via side-channel header analysis.
+    - **Backend Mapping**: Detects database types (MySQL, PostgreSQL, MongoDB) through specialized error-based and banner-based probes.
+
+### 📂 Web Structure & Sensitive Path Mapping
+Automated discovery of high-value paths and misconfigurations.
+- **Sensitive Path Scanner**: Monitors for `.env`, `.git/index`, `backup.sql`, `wp-config.php.bak`, and other critical file exposures.
+- **Administrative Interface Detection**: Locates hidden `/admin`, `/dashboard`, `/cpanel`, and `/graphql` interfaces.
+
+### 📊 Hybrid Intelligence Summary
+The CLI output now includes a comprehensive **Target Intelligence Summary**, providing an immediate overview of:
+- Total technologies detected across categories.
+- Infrastructure provider and ISP details.
+- OSINT findings (Emails, Phones, Social Links).
+- Attack Surface metrics (Endpoints, Hidden Routes, Sensitive Paths).
+- **Calculated Risk Score**: A dynamic 1.0 - 10.0 score based on discovered vulnerabilities and exposures.
+
+---
+
 ## 🛰️ Full CLI Reference: Master the Command Line
 
 ### 🛡️ Global Flags
