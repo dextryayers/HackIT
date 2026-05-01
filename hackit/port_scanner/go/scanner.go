@@ -19,19 +19,35 @@ func classifyDialError(err error) string {
 	if strings.Contains(msg, "refused") || strings.Contains(msg, "actively refused") {
 		return "closed"
 	}
-	if strings.Contains(msg, "no route") || strings.Contains(msg, "unreachable") {
+	if strings.Contains(msg, "no route") || strings.Contains(msg, "unreachable") || strings.Contains(msg, "host is down") {
 		return "filtered"
+	}
+	// For UDP, ICMP port unreachable is common
+	if strings.Contains(msg, "icmp") {
+		return "closed"
 	}
 	return "closed"
 }
 
-func QuickCheckPort(host string, port int, timeoutMs int) string {
-	address := fmt.Sprintf("%s:%d", host, port)
-	_, err := net.DialTimeout("tcp", address, time.Duration(timeoutMs)*time.Millisecond)
+func QuickCheckPort(host string, port int, timeoutMs int, network string) string {
+	if network == "" {
+		network = "tcp"
+	}
+	address := net.JoinHostPort(host, fmt.Sprintf("%d", port))
+	conn, err := net.DialTimeout(network, address, time.Duration(timeoutMs)*time.Millisecond)
+	if err == nil {
+		conn.Close()
+		return "open"
+	}
+	
 	state := classifyDialError(err)
 	if state == "filtered" {
 		// Re-check with slightly longer timeout to reduce false filtered
-		_, err2 := net.DialTimeout("tcp", address, time.Duration(timeoutMs+500)*time.Millisecond)
+		conn2, err2 := net.DialTimeout(network, address, time.Duration(timeoutMs+800)*time.Millisecond)
+		if err2 == nil {
+			conn2.Close()
+			return "open"
+		}
 		state = classifyDialError(err2)
 	}
 	return state
@@ -39,7 +55,7 @@ func QuickCheckPort(host string, port int, timeoutMs int) string {
 
 // ScanPort performs a TCP Connect Scan on a single port
 func ScanPort(host string, port int, timeoutMs int) (PortResult, bool) {
-	address := fmt.Sprintf("%s:%d", host, port)
+	address := net.JoinHostPort(host, fmt.Sprintf("%d", port))
 	conn, err := net.DialTimeout("tcp", address, time.Duration(timeoutMs)*time.Millisecond)
 	if err != nil {
 		return PortResult{}, false
@@ -57,14 +73,8 @@ func ScanPort(host string, port int, timeoutMs int) (PortResult, bool) {
 	var service string
 	var version string
 
-	for i := 0; i < 2; i++ { // Retry once if banner is empty to be sure
-		banner = GrabBanner(conn, timeoutMs, port, host)
-		service, version = IdentifyService(port, banner, host)
-		if banner != "" || service != "unknown" {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
+	banner = GrabBanner(conn, timeoutMs, port, host)
+	service, version = IdentifyService(port, banner, host)
 
 	// If IdentifyService didn't find a version, try ExtractVersion (local Go logic)
 	if version == "" && banner != "" {
@@ -83,7 +93,15 @@ func ScanPort(host string, port int, timeoutMs int) (PortResult, bool) {
 
 // GrabBanner attempts to read the first few bytes from the connection
 func GrabBanner(conn net.Conn, timeoutMs int, port int, host string) string {
-	deadline := time.Now().Add(time.Duration(timeoutMs) * time.Millisecond)
+	// Keep banner grabbing fast; do not block the whole port scan on slow banners.
+	readMs := timeoutMs / 3
+	if readMs < 200 {
+		readMs = 200
+	}
+	if readMs > 600 {
+		readMs = 600
+	}
+	deadline := time.Now().Add(time.Duration(readMs) * time.Millisecond)
 	conn.SetReadDeadline(deadline)
 
 	buffer := make([]byte, 2048)
@@ -96,7 +114,9 @@ func GrabBanner(conn net.Conn, timeoutMs int, port int, host string) string {
 	} else if port == 6379 {
 		_, _ = conn.Write([]byte("INFO\r\n"))
 	} else if port == 3306 {
-		// MySQL greeting is passive, but we can send a small packet if needed
+		// MySQL server sends handshake greeting immediately upon connection
+		// DO NOT send anything - just read the server's initial handshake packet
+		// The first byte will be protocol version (0x0a for MySQL 4.1+)
 	} else if port == 5432 {
 		// PostgreSQL SSLRequest
 		_, _ = conn.Write([]byte{0, 0, 0, 8, 4, 210, 22, 47})
@@ -121,8 +141,7 @@ func GrabBanner(conn net.Conn, timeoutMs int, port int, host string) string {
 	}
 
 	// --- PHASE 2: Wait for Response/Greeting ---
-	// We wait a tiny bit to allow the server to send the greeting.
-	time.Sleep(200 * time.Millisecond)
+	// No sleep: rely on deadline-based reads.
 	n, err := conn.Read(buffer)
 	if err == nil && n > 0 {
 		return cleanBanner(string(buffer[:n]))
@@ -154,7 +173,6 @@ func GrabBanner(conn net.Conn, timeoutMs int, port int, host string) string {
 	// --- PHASE 4: Specific Protocol Probes (If still no banner) ---
 	if port == 25 || port == 587 || port == 465 || port == 2525 {
 		_, _ = conn.Write([]byte("EHLO hackit.local\r\n"))
-		time.Sleep(200 * time.Millisecond) // Give SMTP some time
 		n, err = conn.Read(buffer)
 		if err == nil && n > 0 {
 			return cleanBanner(string(buffer[:n]))
@@ -246,4 +264,14 @@ func getRandomUA() string {
 		"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:89.0) Gecko/20100101 Firefox/89.0",
 	}
 	return uas[time.Now().UnixNano()%int64(len(uas))]
+}
+// GrabBannerByHost opens a connection and grabs the banner
+func GrabBannerByHost(host string, port int, timeoutMs int) string {
+	address := net.JoinHostPort(host, fmt.Sprintf("%d", port))
+	conn, err := net.DialTimeout("tcp", address, time.Duration(timeoutMs)*time.Millisecond)
+	if err != nil {
+		return ""
+	}
+	defer conn.Close()
+	return GrabBanner(conn, timeoutMs, port, host)
 }

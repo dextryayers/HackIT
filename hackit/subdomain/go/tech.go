@@ -76,7 +76,7 @@ func detectTech(headers http.Header, body string) []string {
 	if strings.Contains(bodyLower, "cloudflare") {
 		techs = append(techs, "Cloudflare")
 	}
-	if strings.Contains(bodyLower, "firebase") {
+	if strings.Contains(bodyLower, "firebase") || strings.Contains(bodyLower, "firebaseapp.com") {
 		techs = append(techs, "Firebase")
 	}
 	if strings.Contains(bodyLower, "sentry.io") {
@@ -93,6 +93,66 @@ func detectTech(headers http.Header, body string) []string {
 	}
 	if strings.Contains(bodyLower, "heroku") {
 		techs = append(techs, "Heroku")
+	}
+	if strings.Contains(bodyLower, "_next/static") {
+		techs = append(techs, "Next.js")
+	}
+	if strings.Contains(bodyLower, "wix.com") {
+		techs = append(techs, "Wix")
+	}
+	if strings.Contains(bodyLower, "squarespace") {
+		techs = append(techs, "Squarespace")
+	}
+	if strings.Contains(bodyLower, "webflow") {
+		techs = append(techs, "Webflow")
+	}
+	if strings.Contains(bodyLower, "ghost.org") {
+		techs = append(techs, "Ghost CMS")
+	}
+	if strings.Contains(bodyLower, "intercom.io") {
+		techs = append(techs, "Intercom")
+	}
+	if strings.Contains(bodyLower, "segment.com") {
+		techs = append(techs, "Segment")
+	}
+	if strings.Contains(bodyLower, "newrelic.com") {
+		techs = append(techs, "New Relic")
+	}
+	if strings.Contains(bodyLower, "datadoghq.com") {
+		techs = append(techs, "Datadog")
+	}
+	if strings.Contains(bodyLower, "hotjar.com") {
+		techs = append(techs, "Hotjar")
+	}
+	if strings.Contains(bodyLower, "tailwind") {
+		techs = append(techs, "Tailwind CSS")
+	}
+	if strings.Contains(bodyLower, "webpack") {
+		techs = append(techs, "Webpack")
+	}
+	if strings.Contains(bodyLower, "elementor") {
+		techs = append(techs, "Elementor")
+	}
+	if strings.Contains(bodyLower, "wp-json") {
+		techs = append(techs, "WP-API")
+	}
+	if strings.Contains(bodyLower, "bitrix") {
+		techs = append(techs, "Bitrix")
+	}
+	if strings.Contains(bodyLower, "prestashop") {
+		techs = append(techs, "PrestaShop")
+	}
+	if strings.Contains(bodyLower, "opencart") {
+		techs = append(techs, "OpenCart")
+	}
+	if strings.Contains(bodyLower, "firebaseapp.com") {
+		techs = append(techs, "Firebase")
+	}
+	if strings.Contains(bodyLower, "okta.com") {
+		techs = append(techs, "Okta")
+	}
+	if strings.Contains(bodyLower, "auth0.com") {
+		techs = append(techs, "Auth0")
 	}
 
 	return unique(techs)

@@ -1,10 +1,13 @@
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
+mod data_extractor;
+pub use data_extractor::*;
+
 use rand::{thread_rng, Rng};
 use base64::{Engine as _, engine::general_purpose};
 
-#[unsafe(no_mangle)]
-pub extern "C" fn rust_tamper_polymorphic(input: *const c_char) -> *mut c_char {
+#[no_mangle]
+pub unsafe extern "C" fn rust_tamper_polymorphic(input: *const c_char) -> *mut c_char {
     if input.is_null() {
         return std::ptr::null_mut();
     }
@@ -113,8 +116,8 @@ fn apply_polymorphic_rules(payload: &str) -> String {
     result
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn free_rust_string(s: *mut c_char) {
+#[no_mangle]
+pub unsafe extern "C" fn free_rust_string(s: *mut c_char) {
     if s.is_null() {
         return;
     }
@@ -123,8 +126,8 @@ pub extern "C" fn free_rust_string(s: *mut c_char) {
     }
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn rust_detect_db_version(banner: *const c_char) -> *mut c_char {
+#[no_mangle]
+pub unsafe extern "C" fn rust_detect_db_version(banner: *const c_char) -> *mut c_char {
     if banner.is_null() {
         return std::ptr::null_mut();
     }

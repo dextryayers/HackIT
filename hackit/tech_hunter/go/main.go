@@ -293,6 +293,14 @@ var (
 	rustLib        *syscall.LazyDLL
 	rustFetchUrl   *syscall.LazyProc
 	freeRustString *syscall.LazyProc
+
+	// C++/C Components
+	cppLib          *syscall.LazyDLL
+	deepAnalyzeTech *syscall.LazyProc
+	freeCppString   *syscall.LazyProc
+
+	cLib                 *syscall.LazyDLL
+	analyzeHeaderEntropy *syscall.LazyProc
 )
 
 func initRust() {
@@ -304,6 +312,18 @@ func initRust() {
 	rustLib = syscall.NewLazyDLL(libPath)
 	rustFetchUrl = rustLib.NewProc("rust_fetch_url")
 	freeRustString = rustLib.NewProc("free_rust_string")
+}
+
+func initCPPC() {
+	cppPath := filepath.Join("cpp", "deep_analyzer.dll")
+	cPath := filepath.Join("cpp", "header_security.dll")
+
+	cppLib = syscall.NewLazyDLL(cppPath)
+	deepAnalyzeTech = cppLib.NewProc("deep_analyze_tech")
+	freeCppString = cppLib.NewProc("free_string")
+
+	cLib = syscall.NewLazyDLL(cPath)
+	analyzeHeaderEntropy = cLib.NewProc("analyze_header_security")
 }
 
 func main() {
@@ -369,6 +389,7 @@ func main() {
 	}
 
 	initRust()
+	initCPPC()
 
 	var allResults []Result
 	var mu sync.Mutex
@@ -658,10 +679,63 @@ func scanTarget(target string, opts *Options) Result {
 		}
 	}
 
-	// 4. Output
 	if res.Title == "" || res.Title == "Untitled Page" {
 		res.Title = extractTitle(rustRes.BodySnippet)
 	}
+
+	// 5. C++/C Deep Analysis
+	cBody, _ := syscall.BytePtrFromString(rustRes.BodySnippet)
+	headersStr := ""
+	for k, v := range rustRes.Headers {
+		headersStr += fmt.Sprintf("%s: %s\n", k, v)
+	}
+	cHeaders, _ := syscall.BytePtrFromString(headersStr)
+
+	// Call C++ Deep Analyzer
+	cppRet, _, _ := deepAnalyzeTech.Call(
+		uintptr(unsafe.Pointer(cBody)),
+		uintptr(unsafe.Pointer(cHeaders)),
+	)
+	if cppRet != 0 {
+		cppRes := goString(cppRet)
+		defer freeCppString.Call(cppRet)
+		
+		techs := strings.Split(cppRes, "|")
+		for _, t := range techs {
+			t = strings.TrimSpace(t)
+			if t != "" {
+				if _, exists := res.Technologies[t]; !exists {
+					res.Technologies[t] = TechInfo{
+						Name:       t,
+						Confidence: 95,
+						Category:   "Deep Heuristic (C++)",
+						Sources:    []string{"cpp-analyzer"},
+					}
+				} else {
+					// Boost confidence if already found
+					info := res.Technologies[t]
+					info.Confidence = (info.Confidence + 10)
+					if info.Confidence > 100 { info.Confidence = 100 }
+					info.Sources = append(info.Sources, "cpp-analyzer")
+					res.Technologies[t] = info
+				}
+			}
+		}
+	}
+
+	// Call C Header Entropy Analyzer
+	cEntropy, _, _ := analyzeHeaderEntropy.Call(uintptr(unsafe.Pointer(cHeaders)))
+	entropyVal := *(*float32)(unsafe.Pointer(&cEntropy))
+	
+	if res.HeaderSecurity == nil {
+		res.HeaderSecurity = &HeaderSecurity{}
+	}
+	// We use the entropy as a security metric in AdvancedAnalysis
+	if res.AdvancedAnalysis == nil {
+		res.AdvancedAnalysis = &AdvancedAnalysis{}
+	}
+	res.AdvancedAnalysis.SecurityScore = int(entropyVal)
+
 	return res
 }
 
@@ -678,44 +752,79 @@ func outputAllResults(results []Result, opts *Options) {
 	cBlue := color.New(color.FgBlue).Add(color.Bold)
 	cMagenta := color.New(color.FgMagenta).Add(color.Bold)
 
-	fmt.Printf("\n%s Scanning complete. Found %d targets.\n", cGreen.Sprint("[+]"), len(results))
+	if !opts.Silent {
+		fmt.Printf("\n%s Scanning complete. Found %d targets.\n", cGreen.Sprint("[+]"), len(results))
+	}
 
 	for _, res := range results {
-		fmt.Println(cCyan.Sprint("\n┌──────────────────────────────────────────────────────────┐"))
-		fmt.Printf("│ %-15s : %-38s │\n", cWhite.Sprint("TARGET URL"), cGreen.Sprint(res.URL))
-		fmt.Printf("│ %-15s : %-38s │\n", cWhite.Sprint("STATUS CODE"), getStatusColor(res.Status).Sprint(fmt.Sprintf("%d", res.Status)))
+		if !opts.Silent {
+			fmt.Println(cCyan.Sprint("\n┌──────────────────────────────────────────────────────────┐"))
+			fmt.Printf("│ %-15s : %-38s │\n", cWhite.Sprint("TARGET URL"), cGreen.Sprint(res.URL))
+			fmt.Printf("│ %-15s : %-38s │\n", cWhite.Sprint("STATUS CODE"), getStatusColor(res.Status).Sprint(fmt.Sprintf("%d", res.Status)))
 
-		if res.Title != "" {
-			fmt.Printf("│ %-15s : %-38s │\n", cWhite.Sprint("PAGE TITLE"), cYellow.Sprint(res.Title))
-		}
-
-		fmt.Printf("│ %-15s : %-38s │\n", cWhite.Sprint("IP ADDRESS"), cBlue.Sprint(res.IPInfo.IP))
-		fmt.Printf("│ %-15s : %-38s │\n", cWhite.Sprint("LOCATION"), cMagenta.Sprint(fmt.Sprintf("%s, %s", res.IPInfo.Country, res.IPInfo.Org)))
-
-		if res.DNSInfo != nil && len(res.DNSInfo.NSRecords) > 0 {
-			nsStr := strings.Join(res.DNSInfo.NSRecords, ", ")
-			if len(nsStr) > 38 {
-				nsStr = nsStr[:35] + "..."
+			if res.Title != "" {
+				fmt.Printf("│ %-15s : %-38s │\n", cWhite.Sprint("PAGE TITLE"), cYellow.Sprint(res.Title))
 			}
-			fmt.Printf("│ %-15s : %-38s │\n", cWhite.Sprint("NAMESERVERS"), cCyan.Sprint(nsStr))
+
+			fmt.Printf("│ %-15s : %-38s │\n", cWhite.Sprint("IP ADDRESS"), cBlue.Sprint(res.IPInfo.IP))
+			fmt.Printf("│ %-15s : %-38s │\n", cWhite.Sprint("LOCATION"), cMagenta.Sprint(fmt.Sprintf("%s, %s", res.IPInfo.Country, res.IPInfo.Org)))
+			fmt.Println(cCyan.Sprint("└──────────────────────────────────────────────────────────┘"))
 		}
 
-		if res.FaviconHash != "" {
-			fmt.Printf("│ %-15s : %-38s │\n", cWhite.Sprint("FAVICON HASH"), cYellow.Sprint(res.FaviconHash))
-		}
-
-		if res.Whois != nil && res.Whois.Registrar != "" && res.Whois.Registrar != "Unknown" {
-			regStr := res.Whois.Registrar
-			if len(regStr) > 38 {
-				regStr = regStr[:35] + "..."
+		// Intelligent Intelligence Summary
+		if !opts.Silent {
+			fmt.Printf("\n%s %s\n", cBlue.Sprint("[*]"), cWhite.Sprint("Target Intelligence Summary (Hybrid Engine Analysis):"))
+			
+			// Categorize Techs
+			cats := make(map[string][]string)
+			for name, info := range res.Technologies {
+				cat := info.Category
+				if cat == "" { cat = "Other" }
+				cats[cat] = append(cats[cat], name)
 			}
-			fmt.Printf("│ %-15s : %-38s │\n", cWhite.Sprint("REGISTRAR"), cYellow.Sprint(regStr))
+
+			fmt.Printf("  %s Technologies Detected: %d items across %d categories\n", cGreen.Sprint("»"), len(res.Technologies), len(cats))
+			for cat, techs := range cats {
+				fmt.Printf("    - %-12s: %s\n", cCyan.Sprint(cat), strings.Join(techs, ", "))
+			}
+
+			// Infrastructure Details
+			if res.ServerDetails.ServerName != "" || res.ServerDetails.CloudPlatform != "" || res.ServerDetails.HostingProvider != "" {
+				fmt.Printf("\n  %s %s\n", cMagenta.Sprint("::"), cWhite.Sprint("Infrastructure & Security"))
+				if res.ServerDetails.ServerName != "" {
+					fmt.Printf("    %s Server    : %s\n", cGreen.Sprint("»"), cWhite.Sprint(res.ServerDetails.ServerName))
+				}
+				if res.ServerDetails.HostingProvider != "" {
+					fmt.Printf("    %s Hosting   : %s\n", cGreen.Sprint("»"), cCyan.Sprint(res.ServerDetails.HostingProvider))
+				}
+				if res.ServerDetails.CloudPlatform != "" {
+					fmt.Printf("    %s Cloud     : %s\n", cGreen.Sprint("»"), cYellow.Sprint(res.ServerDetails.CloudPlatform))
+				}
+			}
+
+			// OSINT Discovery
+			if len(res.ContactInfo.Emails) > 0 || len(res.ContactInfo.Phones) > 0 || len(res.ContactInfo.SocialLinks) > 0 {
+				fmt.Printf("\n  %s %s\n", cMagenta.Sprint("::"), cWhite.Sprint("OSINT & Contacts"))
+				if len(res.ContactInfo.Emails) > 0 {
+					fmt.Printf("    %s Emails    : %s\n", cGreen.Sprint("»"), cCyan.Sprint(strings.Join(limitList(res.ContactInfo.Emails, 5), ", ")))
+				}
+				if len(res.ContactInfo.SocialLinks) > 0 {
+					fmt.Printf("    %s Social    : %s\n", cGreen.Sprint("»"), cBlue.Sprint(strings.Join(limitList(res.ContactInfo.SocialLinks, 5), ", ")))
+				}
+			}
+
+			// Attack Surface
+			fmt.Printf("\n  %s %s\n", cMagenta.Sprint("::"), cWhite.Sprint("Attack Surface Details"))
+			fmt.Printf("    %s Endpoints : %d found in JS\n", cGreen.Sprint("»"), len(res.JSRecon.Endpoints))
+			fmt.Printf("    %s Sensitive : %d high-risk paths detected\n", cRed.Sprint("»"), len(res.PathDiscoveries))
+			
+			scoreColor := cGreen
+			if res.RiskScore > 7 { scoreColor = cRed } else if res.RiskScore > 4 { scoreColor = cYellow }
+			fmt.Printf("\n  %s Overall Risk   : %s (Score: %.1f/10.0)\n", cGreen.Sprint("»"), scoreColor.Sprint(getRiskLevel(res.RiskScore)), res.RiskScore)
 		}
 
-		fmt.Println(cCyan.Sprint("└──────────────────────────────────────────────────────────┘"))
-
-		if len(res.PathDiscoveries) > 0 {
-			fmt.Printf("\n%s %s\n", cBlue.Sprint("[*]"), cWhite.Sprint("Sensitive Path Discovery:"))
+		if len(res.PathDiscoveries) > 0 && !opts.Silent {
+			fmt.Printf("\n%s %s\n", cBlue.Sprint("[!]"), cWhite.Sprint("High-Risk Paths Found:"))
 			for _, p := range res.PathDiscoveries {
 				riskColor := cGreen
 				if p.Risk == "High" {
@@ -723,182 +832,26 @@ func outputAllResults(results []Result, opts *Options) {
 				} else if p.Risk == "Medium" {
 					riskColor = cYellow
 				}
-				fmt.Printf("  %s %-20s [%d] %s\n", riskColor.Sprint("»"), p.Path, p.Status, cWhite.Sprint(p.Title))
+				fmt.Printf("    %s %-20s [%d] %s\n", riskColor.Sprint("»"), p.Path, p.Status, cWhite.Sprint(p.Title))
 			}
 		}
 
-		if len(res.JSRecon.Endpoints) > 0 || len(res.JSRecon.APICalls) > 0 || len(res.JSRecon.APIKeys) > 0 {
-			fmt.Printf("\n%s %s\n", cBlue.Sprint("[*]"), cWhite.Sprint("JavaScript Recon & API Discovery:"))
-			if len(res.JSRecon.Endpoints) > 0 {
-				fmt.Printf("  %s Endpoints: %s\n", cGreen.Sprint("»"), cCyan.Sprint(strings.Join(limitList(res.JSRecon.Endpoints, 5), ", ")))
-			}
-			if len(res.JSRecon.APICalls) > 0 {
-				fmt.Printf("  %s API Calls: %s\n", cGreen.Sprint("»"), cYellow.Sprint(strings.Join(limitList(res.JSRecon.APICalls, 5), ", ")))
-			}
-			if len(res.JSRecon.HiddenRoutes) > 0 {
-				fmt.Printf("  %s Routes   : %s\n", cGreen.Sprint("»"), cWhite.Sprint(strings.Join(limitList(res.JSRecon.HiddenRoutes, 5), ", ")))
-			}
-			if len(res.JSRecon.APIKeys) > 0 {
-				fmt.Printf("  %s API Keys : %s\n", cRed.Sprint("»"), cYellow.Sprint(strings.Join(limitList(res.JSRecon.APIKeys, 5), ", ")))
+		if res.Error != "" {
+			fmt.Printf("\n%s %s: %s\n", cRed.Sprint("[!]"), cWhite.Sprint("Scan Error"), cYellow.Sprint(res.Error))
+			if strings.Contains(res.Error, "timed out") {
+				fmt.Printf("    %s Tip: Target is slow. Try increasing --timeout (currently %ds).\n", cBlue.Sprint("[*]"), opts.Timeout)
 			}
 		}
-
-		if len(res.WAFInfo) > 0 {
-			fmt.Printf("\n%s %s\n", cRed.Sprint("[!]"), cWhite.Sprint("Security & Infrastructure:"))
-			for _, waf := range res.WAFInfo {
-				fmt.Printf("  %s %s\n", cRed.Sprint("»"), cYellow.Sprint(waf))
-			}
-		}
-
-		if res.TLSInfo != nil {
-			fmt.Printf("\n%s %s\n", cBlue.Sprint("[*]"), cWhite.Sprint("SSL/TLS Encryption:"))
-			fmt.Printf("  %s Version : %s\n", cGreen.Sprint("»"), cYellow.Sprint(res.TLSInfo.Version))
-			fmt.Printf("  %s Issuer  : %s\n", cGreen.Sprint("»"), cCyan.Sprint(res.TLSInfo.Issuer))
-			fmt.Printf("  %s Expiry  : %s\n", cGreen.Sprint("»"), cRed.Sprint(res.TLSInfo.Expiry))
-		}
-
-		if res.DNSInfo != nil {
-			fmt.Printf("\n%s %s\n", cBlue.Sprint("[*]"), cWhite.Sprint("DNS Intelligence:"))
-			if len(res.DNSInfo.ARecords) > 0 {
-				fmt.Printf("  %s A Records   : %s\n", cGreen.Sprint("»"), strings.Join(res.DNSInfo.ARecords, ", "))
-			}
-			if len(res.DNSInfo.MXRecords) > 0 {
-				fmt.Printf("  %s MX Records  : %s\n", cGreen.Sprint("»"), strings.Join(res.DNSInfo.MXRecords, ", "))
-			}
-			if len(res.DNSInfo.NSRecords) > 0 {
-				fmt.Printf("  %s Name Servers: %s\n", cGreen.Sprint("»"), strings.Join(res.DNSInfo.NSRecords, ", "))
-			}
-		}
-
-		if res.Whois != nil {
-			fmt.Printf("\n%s %s\n", cBlue.Sprint("[*]"), cWhite.Sprint("Whois Discovery:"))
-			fmt.Printf("  %s Registrar  : %s\n", cGreen.Sprint("»"), cCyan.Sprint(res.Whois.Registrar))
-			fmt.Printf("  %s Created    : %s\n", cGreen.Sprint("»"), cWhite.Sprint(res.Whois.CreationDate))
-			fmt.Printf("  %s Expiry     : %s\n", cGreen.Sprint("»"), cRed.Sprint(res.Whois.ExpirationDate))
-			if len(res.Whois.NameServers) > 0 {
-				fmt.Printf("  %s Nameservers: %s\n", cGreen.Sprint("»"), cYellow.Sprint(strings.Join(res.Whois.NameServers, ", ")))
-			}
-		}
-
-		if len(res.OpenPorts) > 0 {
-			fmt.Printf("\n%s %s\n", cBlue.Sprint("[*]"), cWhite.Sprint("Exposed Services (Fast-Scan):"))
-			for _, p := range res.OpenPorts {
-				fmt.Printf("  %s %-5d %s\n", cGreen.Sprint("»"), p.Port, cCyan.Sprint(strings.ToUpper(p.Service)))
-			}
-		}
-
-		if len(res.ContactInfo.Emails) > 0 || len(res.ContactInfo.Phones) > 0 || len(res.ContactInfo.SocialLinks) > 0 {
-			fmt.Printf("\n%s %s\n", cMagenta.Sprint("[*]"), cWhite.Sprint("Contact & OSINT Intelligence:"))
-			if len(res.ContactInfo.Emails) > 0 {
-				fmt.Printf("  %s Emails     : %s\n", cGreen.Sprint("»"), cCyan.Sprint(strings.Join(res.ContactInfo.Emails, ", ")))
-			}
-			if len(res.ContactInfo.Phones) > 0 {
-				fmt.Printf("  %s Phones     : %s\n", cGreen.Sprint("»"), cWhite.Sprint(strings.Join(res.ContactInfo.Phones, ", ")))
-			}
-			if len(res.ContactInfo.SocialLinks) > 0 {
-				fmt.Printf("  %s Social     : %s\n", cGreen.Sprint("»"), cBlue.Sprint(strings.Join(res.ContactInfo.SocialLinks, ", ")))
-			}
-		}
-
-		if len(res.Vulnerabilities) > 0 {
-			fmt.Printf("\n%s %s\n", cRed.Sprint("[!]"), cWhite.Sprint("Potential Vulnerabilities Found:"))
-			for _, v := range res.Vulnerabilities {
-				fmt.Printf("  %s %s - %s\n", cRed.Sprint("»"), getSeverityColor(v.Severity).Sprint(v.ID), v.Description)
-			}
-		}
-
-		if res.HeaderSecurity != nil {
-			fmt.Printf("\n%s %s\n", cBlue.Sprint("[*]"), cWhite.Sprint("Header Security Analysis:"))
-			fmt.Printf("  %s HSTS: %v, CSP: %v, NoSniff: %v\n", cGreen.Sprint("»"), res.HeaderSecurity.HSTS, res.HeaderSecurity.CSP, res.HeaderSecurity.XContentTypeOptions)
-			if res.HeaderSecurity.XFrameOptions != "" {
-				fmt.Printf("  %s X-Frame: %s\n", cGreen.Sprint("»"), cYellow.Sprint(res.HeaderSecurity.XFrameOptions))
-			}
-		}
-
-		// --- MOVED TECHNOLOGY FINGERPRINTING HERE ---
-		// Group technologies by category
-		catMap := make(map[string][]TechInfo)
-		for _, info := range res.Technologies {
-			cat := info.Category
-			if cat == "" {
-				cat = "Others"
-			}
-			catMap[cat] = append(catMap[cat], info)
-		}
-
-		// Custom sort order for categories
-		order := []string{"Web Server", "CMS", "Backend Framework", "Frontend Framework", "JS Library", "Programming Language", "Database", "CDN/WAF", "Analytics", "Monitoring", "Others"}
-
-		if len(catMap) > 0 {
-			fmt.Printf("\n%s %s\n", cBlue.Sprint("[*]"), cWhite.Sprint("Web Framework & Server Info:"))
-
-			for _, cat := range order {
-				if techs, ok := catMap[cat]; ok {
-					// Specific header for CMS
-					if cat == "CMS" {
-						fmt.Printf("\n  %s %s\n", cMagenta.Sprint("::"), cWhite.Sprint("CMS Discovery"))
-					} else {
-						fmt.Printf("\n  %s %s\n", cMagenta.Sprint("::"), cWhite.Sprint(cat))
-					}
-
-					for _, t := range techs {
-						version := ""
-						if t.Version != "" {
-							version = fmt.Sprintf(" %s", cCyan.Sprint(t.Version))
-						}
-
-						confColor := cGreen
-						if t.Confidence < 70 {
-							confColor = cYellow
-						} else if t.Confidence < 40 {
-							confColor = cRed
-						}
-
-						fmt.Printf("    %s %-18s %s %s\n",
-							cGreen.Sprint("»"),
-							cWhite.Sprint(t.Name),
-							version,
-							confColor.Sprint(fmt.Sprintf("[%d%% Confidence]", t.Confidence)))
-					}
-				}
-			}
-		}
-		// --- END MOVED SECTION ---
-
-		// Infrastructure Details
-		fmt.Printf("\n%s %s\n", cMagenta.Sprint("[*]"), cWhite.Sprint("Infrastructure Details:"))
-		if res.ServerDetails.ServerName != "" {
-			fmt.Printf("  %s Server    : %s\n", cGreen.Sprint("»"), cWhite.Sprint(res.ServerDetails.ServerName))
-		}
-		if res.ServerDetails.HostingProvider != "" {
-			fmt.Printf("  %s Hosting   : %s\n", cGreen.Sprint("»"), cGreen.Sprint(res.ServerDetails.HostingProvider))
-		}
-		if res.ServerDetails.OSInfo != "" {
-			fmt.Printf("  %s OS        : %s\n", cGreen.Sprint("»"), cCyan.Sprint(res.ServerDetails.OSInfo))
-		}
-
-		if res.DBDetails != nil {
-			fmt.Printf("\n%s %s\n", cRed.Sprint("[!]"), cWhite.Sprint("Database Detection:"))
-			fmt.Printf("  %s Type      : %s (%d%% Confidence)\n", cGreen.Sprint("»"), cWhite.Sprint(res.DBDetails.DBType), res.DBDetails.Confidence)
-		}
-
-		// Summary Section
-		fmt.Printf("\n%s %s\n", cCyan.Sprint("[*]"), cWhite.Sprint("Target Intelligence Summary (Hybrid Engine Analysis):"))
-		fmt.Printf("  %s Technologies Detected: %d items across %d categories\n", cGreen.Sprint("»"), len(res.Technologies), len(catMap))
-		fmt.Printf("  %s Infrastructure: %s (%s)\n", cGreen.Sprint("»"), res.ServerDetails.ServerName, res.IPInfo.ISP)
-		fmt.Printf("  %s OSINT Discovery: %d emails, %d phones, %d social links\n", cGreen.Sprint("»"), len(res.ContactInfo.Emails), len(res.ContactInfo.Phones), len(res.ContactInfo.SocialLinks))
-		fmt.Printf("  %s Attack Surface: %d endpoints, %d hidden routes, %d sensitive paths\n", cGreen.Sprint("»"), len(res.JSRecon.Endpoints), len(res.JSRecon.HiddenRoutes), len(res.PathDiscoveries))
-
-		riskLevel := cGreen.Sprint("Low")
-		if res.RiskScore >= 7.0 {
-			riskLevel = cRed.Sprint("Critical")
-		} else if res.RiskScore >= 4.0 {
-			riskLevel = cYellow.Sprint("Medium")
-		}
-		fmt.Printf("  %s Overall Risk: %s (Score: %.1f/10.0)\n", cGreen.Sprint("»"), riskLevel, res.RiskScore)
-
 		fmt.Println(cCyan.Sprint("\n" + strings.Repeat("─", 60)))
 	}
+}
+
+func getRiskLevel(score float64) string {
+	if score >= 8 { return "Critical" }
+	if score >= 6 { return "High" }
+	if score >= 4 { return "Medium" }
+	if score >= 1 { return "Low" }
+	return "Safe"
 }
 
 func getStatusColor(status int) *color.Color {

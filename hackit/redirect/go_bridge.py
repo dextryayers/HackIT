@@ -17,7 +17,7 @@ class GoEngine:
         try:
             subprocess.run(['go', 'version'], capture_output=True, check=True)
             return True
-        except:
+        except Exception:
             return False
 
     def ensure_compiled(self) -> bool:

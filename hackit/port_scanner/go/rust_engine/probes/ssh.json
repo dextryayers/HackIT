@@ -1,0 +1,35 @@
+[
+  {
+    "id": "ssh-banner",
+    "protocol": "tcp",
+    "ports": [22],
+    "read_limit": 1024,
+    "timeout_ms": 5000,
+    "matchers": [
+      {
+        "kind": "regex",
+        "pattern": "SSH-([0-9\\.]+)-(.+)",
+        "weight": 10.0,
+        "metadata": {"label": "ssh", "service": "SSH"}
+      },
+      {
+        "kind": "contains",
+        "pattern": "OpenSSH",
+        "weight": 8.0,
+        "metadata": {"label": "openssh", "vendor": "OpenSSH"}
+      },
+      {
+        "kind": "contains",
+        "pattern": "Dropbear",
+        "weight": 8.0,
+        "metadata": {"label": "dropbear", "vendor": "Dropbear"}
+      },
+      {
+        "kind": "contains",
+        "pattern": "libssh",
+        "weight": 7.0,
+        "metadata": {"label": "libssh", "vendor": "libssh"}
+      }
+    ]
+  }
+]

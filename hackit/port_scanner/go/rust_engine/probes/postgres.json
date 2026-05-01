@@ -1,0 +1,23 @@
+[
+  {
+    "id": "postgres-banner",
+    "protocol": "tcp",
+    "ports": [5432],
+    "read_limit": 1024,
+    "timeout_ms": 5000,
+    "matchers": [
+      {
+        "kind": "contains",
+        "pattern": "PostgreSQL",
+        "weight": 10.0,
+        "metadata": {"label": "postgres", "service": "PostgreSQL"}
+      },
+      {
+        "kind": "regex",
+        "pattern": "[0-9]+\\.[0-9]+",
+        "weight": 5.0,
+        "metadata": {"label": "postgres-version"}
+      }
+    ]
+  }
+]

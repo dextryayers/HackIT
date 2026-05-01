@@ -35,29 +35,10 @@ from hackit.ui import display_banner
 @click.pass_context
 def cli(ctx, proxy, no_verify, no_banner, verbose):
     """
-    🚀 HackIt - Ultimate Hexa-Engine Security & Reconnaissance Suite 🚀
+    🚀 HackIt - Hexa-Engine Penetration Testing Framework 🚀
 
-    A professional-grade, high-performance penetration testing framework designed 
-    for elite security researchers and bug bounty hunters. HackIt leverages a 
-    unique Hexa-Engine architecture to deliver unmatched speed and depth.
-
-    🏗️ ARCHITECTURE:
-    - Go & Rust Core: Mass scanning and parallel processing at scale.
-    - C & C++ Engines: Ultra-fast low-level networking and expert service/OS fingerprinting.
-    - Python Intelligence: Advanced logic, WAF bypass, and smart analysis layers.
-    - Ruby Orchestrator: Dynamic CLI interaction and task management.
-    - Lua Scripting: NSE-inspired modular scripting for custom vulnerability checks.
-
-    🔥 KEY CAPABILITIES:
-    - DIR FINDER: Deep discovery with 8 specialized attributes and auto-hidden file detection.
-    - PORT SCANNER: Nmap-aligned scanning (SYN Stealth, UDP, OS Detect) with Timing T0-T5.
-    - WEB INTEL: Real-time technology profiling, WAF detection, and JS endpoint extraction.
-    - VULN ENGINE: Automated testing for XSS, SQLi, Open Redirects, and CVE matching.
-    - STEALTH MODE: Integrated proxy rotation, Tor support, and packet fragmentation.
-
-    ⚡ PERFORMANCE:
-    Engineered for speed, HackIt can handle massive CIDR ranges and large wordlists 
-    using asynchronous I/O and multi-threaded execution across 6 programming languages.
+    A professional-grade security suite for research and vulnerability assessment.
+    Combines Go, Rust, C, Python, Ruby, and Lua for unmatched speed and precision.
 
     ⚠️ AUTHORIZED USE ONLY.
     """
@@ -79,9 +60,10 @@ def cli(ctx, proxy, no_verify, no_banner, verbose):
         # don't fail CLI on banner errors
         pass
 
-    # If no subcommand was provided, show help after banner
+    # If no subcommand was provided, enter console automatically
     if ctx.invoked_subcommand is None:
-        click.echo(ctx.get_help())
+        from hackit.console import start_console
+        start_console(cli)
         return
 
 
@@ -155,50 +137,12 @@ util.add_command(check_cve, name='cve')
 def examples():
     """Show usage examples"""
     examples_text = """
-    HackIt - Security Testing CLI Tool Suite
-    =========================================
-    
-    PORT SCANNING (nmap-like):
-    $ hackit ports scan -p 1-1000 --targets scanme.nmap.org --open-only
-    $ hackit ports scan -p 22,80,443 --targets 192.168.1.1 --output results.json
-    $ hackit ports scan -A --targets 10.0.0.0/28 --threads 200 --service-detect --output full_scan.json
-    $ hackit ports scan --targets @hosts.txt -p 1-1024 --service-detect
-    
-    SUBDOMAIN ENUMERATION:
-    $ hackit recon subdomains --domain target.com --wordlist wordlist.txt --check-wildcard
-    
-    HTTP HEADER ANALYSIS:
-    $ hackit web headers --url https://example.com --all
-    
-    SSL/TLS ANALYSIS:
-    $ hackit ssl check --host example.com --timeout 10
-    
-    TECHNOLOGY DETECTION:
-    $ hackit web tech --url https://example.com
-    
-    DIRECTORY BRUTEFORCE:
-    $ hackit web dirs --url http://example.com/ --wordlist words.txt --recursive
-    
-    PARAMETER FUZZING:
-    $ hackit web fuzz --url "http://example.com/search.php" --method GET --params q,search --payloads fuzz.txt
-    
-    XSS SCANNING:
-    $ hackit vuln xss --url "http://example.com/search.php" --params q --encoding-test
-    
-    SQL INJECTION TESTING:
-    $ hackit vuln sqli --url "http://example.com/product.php?id=1" --params id
-    
-    OPEN REDIRECT FINDER:
-    $ hackit vuln redirect --url "http://example.com/login.php"
-    
-    JAVASCRIPT ANALYSIS:
-    $ hackit web js --url https://example.com --max-files 100
-    
-    IP RANGE SCANNING:
-    $ hackit recon ips --cidr 192.168.1.0/24 --timeout 2
-    
-    CVE CHECKING:
-    $ hackit util cve --software wordpress --version 5.0.0 --severity Critical
+    EXAMPLES:
+    • Ports:    $ hackit ports scan -p 80,443 --targets example.com
+    • Recon:    $ hackit recon subdomains -d target.com
+    • Web:      $ hackit web headers --url https://example.com
+    • Vuln:     $ hackit vuln sqli --url "http://site.com?id=1" --params id
+    • CVE:      $ hackit util cve --software apache --version 2.4.49
     """
     click.echo(examples_text)
 
@@ -207,36 +151,31 @@ def examples():
 def help_tools():
     """Show detailed tool information"""
     tools_text = """
-    AVAILABLE TOOLS
-    ===============
-    
-    PORTS GROUP:
-    • ports scan - Multi-threaded async TCP port scanner
-    
-    WEB GROUP:
-    • dirfinder - Expert Quad-Engine Directory & File Finder (Ruby+Go+Rust+Python)
-    • web headers - Check HTTP security headers and TLS
-    • web tech - Detect web technologies (CMS, frameworks)
-    • web dirs - Directory and file bruteforcer with recursion
-    • web fuzz - HTTP parameter fuzzer with reflection detection
-    • web js - JavaScript analyzer for endpoints and secrets
-    
-    VULN GROUP:
-    • vuln xss - Reflected XSS scanner
-    • vuln sqli - SQL injection boolean tester
-    • vuln redirect - Open redirect vulnerability finder
-    
-    RECON GROUP:
-    • recon subdomains - DNS subdomain bruteforcer
-    • recon ips - IP range scanner (CIDR)
-    
-    SSL GROUP:
-    • ssl check - SSL/TLS certificate analyzer
-    
-    UTIL GROUP:
-    • util cve - CVE vulnerability checker
+    QUICK REFERENCE:
+    • ports scan    - Async TCP port scanner
+    • dirfinder     - Expert directory finder
+    • web headers   - Security header audit
+    • web tech      - Tech stack detection
+    • web dirs      - Recursive directory bruteforce
+    • web fuzz      - Parameter reflection fuzzer
+    • web js        - JavaScript endpoint analysis
+    • vuln xss      - Reflected XSS scanner
+    • vuln sqli     - SQLi boolean tester
+    • vuln redirect - Open redirect finder
+    • recon subs    - Subdomain bruteforcer
+    • ssl check     - TLS/SSL certificate audit
+    • util cve      - Vulnerability lookup
     """
     click.echo(tools_text)
+
+
+@cli.command()
+@click.pass_context
+def console(ctx):
+    """Launch interactive HackIt console"""
+    from hackit.console import start_console
+    # We pass the main cli group to the console
+    start_console(cli)
 
 
 if __name__ == '__main__':

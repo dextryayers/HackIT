@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 	"syscall"
 	"unsafe"
@@ -20,6 +21,10 @@ var (
 	rustFreeNetworkIntel       = rustLib.NewProc("rust_free_network_intel")
 	procRustFingerprintService = rustLib.NewProc("rust_fingerprint_service")
 	procRustExtractVersion     = rustLib.NewProc("rust_extract_version")
+	rustDetectOsDetailed       = rustLib.NewProc("rust_os_detect")
+	rustGatherIpInfo           = rustLib.NewProc("rust_gather_ip_info")
+	procRustCheckVulnerabilities = rustLib.NewProc("rust_check_vulnerabilities")
+	rustPerformDeepScan         = rustLib.NewProc("rust_perform_deep_scan")
 )
 
 type RustOSResult struct {
@@ -27,6 +32,9 @@ type RustOSResult struct {
 	Version  *byte
 	Family   *byte
 	Accuracy int32
+	TTL      int32
+	Window   int32
+	Evidence *byte
 }
 
 type RustMassScanReport struct {
@@ -146,12 +154,19 @@ func RustDetectOS(host string) OSInfo {
 	res := (*RustOSResult)(unsafe.Pointer(ret))
 	defer rustFreeOSInfo.Call(ret)
 
-	return OSInfo{
+	os := OSInfo{
 		Name:     goString(res.Name),
 		Version:  goString(res.Version),
 		Family:   goString(res.Family),
 		Accuracy: int(res.Accuracy),
 	}
+	// Extended fields
+	os.TTL = int(res.TTL)
+	os.Window = int(res.Window)
+	if ev := goString(res.Evidence); ev != "" {
+		os.Fingerprint = ev
+	}
+	return os
 }
 
 func RustFirewallBypass(host string, port int) (string, int) {
@@ -232,4 +247,91 @@ func goString(ptr *byte) string {
 		ptr = (*byte)(unsafe.Pointer(uintptr(unsafe.Pointer(ptr)) + 1))
 	}
 	return string(s)
+}
+
+// RustDetectOsDetailed calls the Rust engine for detailed OS detection with IP information
+func RustDetectOsDetailed(host string, openPorts string) string {
+	cHost := []byte(host + "\x00")
+	cPorts := []byte(openPorts + "\x00")
+
+	ret, _, _ := rustDetectOsDetailed.Call(
+		uintptr(unsafe.Pointer(&cHost[0])),
+		uintptr(unsafe.Pointer(&cPorts[0])),
+	)
+
+	if ret == 0 {
+		return ""
+	}
+
+	resultPtr := (*byte)(unsafe.Pointer(ret))
+	result := goString(resultPtr)
+
+	return result
+}
+
+// RustGatherIpInfo calls the Rust engine to gather IP information
+func RustGatherIpInfo(host string) string {
+	cHost := []byte(host + "\x00")
+
+	ret, _, _ := rustGatherIpInfo.Call(
+		uintptr(unsafe.Pointer(&cHost[0])),
+	)
+
+	if ret == 0 {
+		return ""
+	}
+
+	resultPtr := (*byte)(unsafe.Pointer(ret))
+	result := goString(resultPtr)
+
+	return result
+}
+// RustCheckVulnerabilities calls the Rust engine to check for potential vulnerabilities
+func RustCheckVulnerabilities(host string, port int, service string, banner string) []string {
+	var vulns []string
+
+	// 1. Check explicit vulnerability signatures via Rust FFI
+	cBanner := []byte(banner + "\x00")
+	ret, _, _ := procRustCheckVulnerabilities.Call(uintptr(unsafe.Pointer(&cBanner[0])))
+	if ret != 0 {
+		rustVulnsRaw := goString((*byte)(unsafe.Pointer(ret)))
+		if rustVulnsRaw != "" {
+			parts := strings.Split(rustVulnsRaw, "|")
+			vulns = append(vulns, parts...)
+		}
+	}
+
+	// 2. Secondary check via detailed OS detection context
+	openPortsStr := fmt.Sprintf("%d", port)
+	detailedInfo := RustDetectOsDetailed(host, openPortsStr)
+	
+	if detailedInfo != "" {
+		if strings.Contains(strings.ToLower(detailedInfo), "outdated") || 
+		   strings.Contains(strings.ToLower(detailedInfo), "vulnerable") {
+			vulns = append(vulns, "RUST_CONTEXT: Intelligence suggests infrastructure risk")
+		}
+	}
+
+	return vulns
+}
+
+// RustPerformDeepScan calls the Rust engine for extremely deep vulnerability analysis
+func RustPerformDeepScan(host string, port int, banner string) string {
+	cHost := []byte(host + "\x00")
+	cBanner := []byte(banner + "\x00")
+
+	ret, _, _ := rustPerformDeepScan.Call(
+		uintptr(unsafe.Pointer(&cHost[0])),
+		uintptr(port),
+		uintptr(unsafe.Pointer(&cBanner[0])),
+	)
+
+	if ret == 0 {
+		return ""
+	}
+
+	resultPtr := (*byte)(unsafe.Pointer(ret))
+	result := goString(resultPtr)
+
+	return result
 }

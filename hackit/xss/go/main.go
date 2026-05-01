@@ -9,6 +9,7 @@ import (
 func main() {
 	urlFlag := flag.String("url", "", "Target URL")
 	timeoutFlag := flag.Int("timeout", 10, "Request timeout in seconds")
+	payloadsFlag := flag.String("payloads", "", "Path to external payloads file")
 	flag.Parse()
 
 	if *urlFlag == "" {
@@ -17,6 +18,9 @@ func main() {
 	}
 
 	scanner := NewScanner(*timeoutFlag)
+	if *payloadsFlag != "" {
+		_ = scanner.LoadPayloads(*payloadsFlag)
+	}
 	results := scanner.Scan(*urlFlag)
 
 	jsonOut, _ := json.Marshal(results)

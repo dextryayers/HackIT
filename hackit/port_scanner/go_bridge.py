@@ -52,6 +52,10 @@ class GoEngine:
             raise RuntimeError("Go engine compilation failed")
 
         cmd = [self.binary_path, '-target', target]
+
+        cmd.extend(['-format', 'json'])
+        cmd.extend(['-quiet-json', 'true'])
+        
         if ports:
             if isinstance(ports, list):
                 ports_str = ",".join(map(str, ports))
@@ -122,8 +126,51 @@ class GoEngine:
             cmd.extend(['-show-title', 'true'])
         if kwargs.get('auto_vuln'):
             cmd.extend(['-auto-vuln', 'true'])
-        
-        # In Go, boolean flags are set with -flag=true or just -flag
+            
+        # New Advanced Evasion & Timing flags
+        if kwargs.get('detect_honeypot'):
+            cmd.extend(['-detect-honeypot', 'true'])
+        if kwargs.get('smart_bypass'):
+            cmd.extend(['-smart-bypass', 'true'])
+        if kwargs.get('random_order'):
+            cmd.extend(['-random-order', 'true'])
+        if kwargs.get('decoy_ip'):
+            cmd.extend(['-decoy-ip', str(kwargs.get('decoy_ip'))])
+        if kwargs.get('use_proxy'):
+            cmd.extend(['-use-proxy', str(kwargs.get('use_proxy'))])
+        if kwargs.get('use_tor'):
+            cmd.extend(['-use-tor', 'true'])
+        if kwargs.get('version_intensity'):
+            cmd.extend(['-version-intensity', str(kwargs.get('version_intensity'))])
+        if kwargs.get('osscan_limit'):
+            cmd.extend(['-osscan-limit', 'true'])
+        if kwargs.get('osscan_guess'):
+            cmd.extend(['-osscan-guess', 'true'])
+        if kwargs.get('host_timeout'):
+            cmd.extend(['-host-timeout', str(kwargs.get('host_timeout'))])
+        if kwargs.get('scan_delay'):
+            cmd.extend(['-scan-delay', str(kwargs.get('scan_delay'))])
+        if kwargs.get('max_scan_delay'):
+            cmd.extend(['-max-scan-delay', str(kwargs.get('max_scan_delay'))])
+        if kwargs.get('defeat_rst_ratelimit'):
+            cmd.extend(['-defeat-rst-ratelimit', 'true'])
+        if kwargs.get('defeat_icmp_ratelimit'):
+            cmd.extend(['-defeat-icmp-ratelimit', 'true'])
+        if kwargs.get('nsock_engine'):
+            cmd.extend(['-nsock-engine', str(kwargs.get('nsock_engine'))])
+            
+        # Nmap Aliases (sS, sV, O, A, etc.)
+        if kwargs.get('scan_syn') or kwargs.get('sS'):
+            cmd.extend(['-mode', 'syn'])
+        if kwargs.get('scan_version') or kwargs.get('sV'):
+            cmd.extend(['-detect-service', 'true'])
+        if kwargs.get('os_detection_nmap') or kwargs.get('O'):
+            cmd.extend(['-identify-os', 'true'])
+        if kwargs.get('aggressive_scan') or kwargs.get('A'):
+            cmd.extend(['-identify-os', 'true', '-detect-service', 'true', '-traceroute', 'true'])
+        if kwargs.get('ping_only') or kwargs.get('Pn'):
+            # In our scanner, Pn often means skip host discovery (always scan)
+            pass
         if include_closed:
             cmd.extend(['-include-closed', 'true'])
         else:
@@ -145,7 +192,14 @@ class GoEngine:
                 universal_newlines=True
             )
             
-            for line in process.stdout:
+            # Use a more robust reading loop
+            while True:
+                line = process.stdout.readline()
+                if not line:
+                    if process.poll() is not None:
+                        break
+                    continue
+                
                 line = line.strip()
                 if not line: continue
                 
@@ -153,41 +207,37 @@ class GoEngine:
                     try:
                         res = json.loads(line[7:])
                         if callback: callback("result", res)
-                    except: pass
+                    except Exception: pass
+                    continue # Do not print the RESULT: line itself
                 elif line.startswith("STATUS:"):
                     try:
                         status = json.loads(line[7:])
                         if callback: callback("status", status)
-                    except: pass
+                    except Exception: pass
+                    continue # Do not print the STATUS: line itself
                 elif line.startswith("ERROR:"):
                     try:
                         err = json.loads(line[6:])
                         if callback: callback("error", err)
-                    except: pass
+                    except Exception: pass
                 elif line.startswith("FINAL:"):
                     try:
                         final_result = json.loads(line[6:])
                     except Exception as e:
-                        print(f"Error parsing FINAL JSON: {e}")
-                elif line.startswith("[") or line.startswith("{"):
-                    # Attempt to parse JSON if it's not prefixed
-                    try:
-                        potential_res = json.loads(line)
-                        if isinstance(potential_res, (list, dict)):
-                            # Only set if we haven't got a FINAL: yet
-                            if final_result is None:
-                                final_result = potential_res
-                    except:
-                        print(line)
+                        if final_result is None: # Only error if we didn't get results
+                            print(_colored(f"[!] Error parsing FINAL JSON: {e}", RED))
                 else:
-                    # Print raw output from Go engine (banners, tables, etc.)
-                    print(line)
+                    # Silence all unknown output to keep tactical UI clean
+                    pass
             
             process.wait()
             
             if process.returncode != 0 and not final_result:
-                stderr = process.stderr.read()
-                return {'error': stderr.strip()}
+                try:
+                    stderr = process.stderr.read()
+                    return {'error': stderr.strip()}
+                except:
+                    return {'error': 'Process exited with non-zero code'}
             
             # If we got a list of results (multiple targets), return the first one if only one was requested
             # or return the whole thing but handle it in __init__.py

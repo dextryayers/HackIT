@@ -79,6 +79,8 @@ func runPassive(domain string, ch chan<- []string, verbose bool) {
 		queryDNSDB,
 		queryPassiveTotal,
 		queryGitea,
+		queryBeVigil,
+		queryGrepApp,
 	}
 
 	// 1. Rust OSINT Engine (Super Fast)

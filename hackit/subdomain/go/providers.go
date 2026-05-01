@@ -219,7 +219,25 @@ func queryChaos(domain string) []string {
 }
 
 func queryHackerTarget(domain string) []string {
-	return scrape(fmt.Sprintf("https://api.hackertarget.com/hostsearch/?q=%s", domain), domain)
+	url := fmt.Sprintf("https://api.hackertarget.com/hostsearch/?q=%s", domain)
+	resp, err := safeGet(url, 30*time.Second)
+	if err != nil || resp == nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	
+	var found []string
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if parts := strings.Split(line, ","); len(parts) > 0 {
+			sub := cleanSubdomain(parts[0], domain)
+			if sub != "" {
+				found = append(found, sub)
+			}
+		}
+	}
+	return unique(found)
 }
 
 func queryOTX(domain string) []string {
@@ -249,7 +267,32 @@ func queryOTX(domain string) []string {
 
 func queryWayback(domain string) []string {
 	url := fmt.Sprintf("http://web.archive.org/cdx/search/cdx?url=*.%s/*&output=json&fl=original&collapse=urlkey", domain)
-	return scrape(url, domain)
+	resp, err := safeGet(url, 45*time.Second)
+	if err != nil || resp == nil {
+		return nil
+	}
+	defer resp.Body.Close()
+
+	var result [][]string
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil
+	}
+
+	var found []string
+	for i, entry := range result {
+		if i == 0 { continue } // Skip header
+		if len(entry) > 0 {
+			// Extract domain from URL
+			rawURL := entry[0]
+			cleanURL := strings.TrimPrefix(strings.TrimPrefix(rawURL, "http://"), "https://")
+			parts := strings.Split(cleanURL, "/")
+			sub := cleanSubdomain(parts[0], domain)
+			if sub != "" {
+				found = append(found, sub)
+			}
+		}
+	}
+	return unique(found)
 }
 
 func queryUrlScan(domain string) []string {
@@ -825,7 +868,33 @@ func queryRiddler(domain string) []string {
 }
 
 func queryRobtex(domain string) []string {
-	return scrape(fmt.Sprintf("https://www.robtex.com/dns-lookup/%s", domain), domain)
+	// Use Free API for better results than scraping
+	url := fmt.Sprintf("https://freeapi.robtex.com/pdns/forward/%s", domain)
+	resp, err := safeGet(url, 30*time.Second)
+	if err != nil || resp == nil {
+		// Fallback to scrape if API fails
+		return scrape(fmt.Sprintf("https://www.robtex.com/dns-lookup/%s", domain), domain)
+	}
+	defer resp.Body.Close()
+
+	var results []struct {
+		Data string `json:"data"`
+		Type string `json:"type"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&results); err != nil {
+		return scrape(fmt.Sprintf("https://www.robtex.com/dns-lookup/%s", domain), domain)
+	}
+
+	var found []string
+	for _, r := range results {
+		if r.Type == "A" || r.Type == "AAAA" || r.Type == "CNAME" {
+			sub := cleanSubdomain(r.Data, domain)
+			if sub != "" {
+				found = append(found, sub)
+			}
+		}
+	}
+	return unique(found)
 }
 
 func queryBufferOver(domain string) []string {
@@ -1105,4 +1174,14 @@ func querySiteAdvisor(domain string) []string {
 	re := regexp.MustCompile(`([\w\.-]+\.` + regexp.QuoteMeta(domain) + `)`)
 	matches := re.FindAllString(string(body), -1)
 	return unique(matches)
+}
+
+func queryBeVigil(domain string) []string {
+	url := fmt.Sprintf("https://bevigil.com/api/v1/all/subdomains/%s", domain)
+	return scrape(url, domain)
+}
+
+func queryGrepApp(domain string) []string {
+	url := fmt.Sprintf("https://grep.app/api/search?q=%s", domain)
+	return scrape(url, domain)
 }

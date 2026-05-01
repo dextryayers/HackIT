@@ -1,0 +1,24 @@
+[
+  {
+    "id": "redis-banner",
+    "protocol": "tcp",
+    "ports": [6379],
+    "payload_text": "*1\r\n$4\r\nINFO\r\n",
+    "read_limit": 4096,
+    "timeout_ms": 5000,
+    "matchers": [
+      {
+        "kind": "contains",
+        "pattern": "redis_version:",
+        "weight": 10.0,
+        "metadata": {"label": "redis", "service": "Redis"}
+      },
+      {
+        "kind": "contains",
+        "pattern": "redis_mode:",
+        "weight": 8.0,
+        "metadata": {"label": "redis-mode"}
+      }
+    ]
+  }
+]

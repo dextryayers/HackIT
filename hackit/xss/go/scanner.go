@@ -5,20 +5,26 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
 )
 
 type Result struct {
-	URL       string `json:"url"`
-	Parameter string `json:"parameter"`
-	Payload   string `json:"payload"`
-	Type      string `json:"type"` // reflected
+	URL        string `json:"url"`
+	Parameter  string `json:"parameter"`
+	Payload    string `json:"payload"`
+	Type       string `json:"type"` 
+	Details    string `json:"details"`
+	Confidence string `json:"confidence"`
+	Severity   string `json:"severity"`
+	Impact     string `json:"impact"`
 }
 
 type Scanner struct {
-	Client *http.Client
+	Client   *http.Client
+	Payloads []string
 }
 
 func NewScanner(timeout int) *Scanner {
@@ -29,7 +35,24 @@ func NewScanner(timeout int) *Scanner {
 			},
 			Timeout: time.Duration(timeout) * time.Second,
 		},
+		Payloads: Payloads, // Default to hardcoded
 	}
+}
+
+func (s *Scanner) LoadPayloads(filePath string) error {
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		return err
+	}
+	lines := strings.Split(string(content), "\n")
+	s.Payloads = make([]string, 0)
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "" {
+			s.Payloads = append(s.Payloads, trimmed)
+		}
+	}
+	return nil
 }
 
 func (s *Scanner) Scan(targetURL string) []Result {
@@ -51,7 +74,7 @@ func (s *Scanner) Scan(targetURL string) []Result {
 	sem := make(chan struct{}, 10) 
 
 	for param := range params {
-		for _, payload := range Payloads {
+		for _, payload := range s.Payloads {
 			wg.Add(1)
 			sem <- struct{}{} // Acquire semaphore
 
@@ -84,13 +107,61 @@ func (s *Scanner) Scan(targetURL string) []Result {
 				defer resp.Body.Close()
 
 				body, _ := io.ReadAll(resp.Body)
-				if strings.Contains(string(body), pay) {
+				bodyStr := string(body)
+
+				// PRECISION CHECK: Reflection is not enough. Check if it's encoded or filtered.
+				if strings.Contains(bodyStr, pay) {
+					// Detection Logic: 
+					// 1. Is it reflected exactly? (Yes, strings.Contains already checked)
+					// 2. Is it in an executable context?
+					
+					confidence := "Medium"
+					details := "Reflected in HTML body"
+					severity := "Low"
+					impact := "Content Spoofing"
+
+					// Context-Aware Precision Analysis & Risk Scoring
+					if strings.Contains(bodyStr, "<script>"+pay) || strings.Contains(bodyStr, pay+"</script>") {
+						details = "CRITICAL: Executable Script Context"
+						confidence = "High"
+						severity = "High"
+						impact = "Full Account Takeover (Session Theft)"
+					} else if strings.Contains(bodyStr, "=\""+pay) || strings.Contains(bodyStr, "='"+pay) {
+						details = "HIGH: Attribute Breakout Context"
+						confidence = "High"
+						severity = "Medium"
+						impact = "Phishing / Forced Redirection"
+					} else if strings.Contains(bodyStr, "href=\"javascript:"+pay) {
+						details = "CRITICAL: URI Handler Context"
+						confidence = "High"
+						severity = "Critical"
+						impact = "Direct Code Execution"
+					}
+
+					// Check for sensitive cookie access in payload
+					if strings.Contains(pay, "cookie") || strings.Contains(pay, "fetch") {
+						severity = "Critical"
+						impact = "Data Exfiltration (Sensitive Information)"
+					}
+
+					// Verify if it's NOT encoded (Precision check)
+					if strings.Contains(pay, "<") && strings.Contains(bodyStr, "&lt;") && !strings.Contains(bodyStr, "<") {
+						return
+					}
+					if strings.Contains(pay, "\"") && strings.Contains(bodyStr, "&quot;") && !strings.Contains(bodyStr, "\"") {
+						return
+					}
+
 					mutex.Lock()
 					results = append(results, Result{
-						URL:       attackURL,
-						Parameter: p,
-						Payload:   pay,
-						Type:      "Reflected",
+						URL:        attackURL,
+						Parameter:  p,
+						Payload:    pay,
+						Type:       "Reflected XSS",
+						Details:    details,
+						Confidence: confidence,
+						Severity:   severity,
+						Impact:     impact,
 					})
 					mutex.Unlock()
 				}

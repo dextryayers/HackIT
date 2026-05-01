@@ -51,6 +51,19 @@ class GoEngine:
             except subprocess.CalledProcessError as e:
                 print(f"[!] Go compilation error: {e.stderr.decode()}")
                 return False
+
+        # 3. Compile C++/C Components if needed
+        cpp_dir = os.path.join(self.base_dir, 'cpp')
+        cpp_dll = os.path.join(cpp_dir, 'deep_analyzer.dll')
+        c_dll = os.path.join(cpp_dir, 'header_security.dll')
+        
+        if not os.path.exists(cpp_dll) or not os.path.exists(c_dll):
+            try:
+                print("[*] Compiling C++/C Deep Analysis Engines...")
+                subprocess.run('g++ -shared -o deep_analyzer.dll deep_analyzer.cpp; gcc -shared -o header_security.dll header_security.c', 
+                               cwd=cpp_dir, check=True, shell=True, capture_output=True)
+            except subprocess.CalledProcessError as e:
+                print(f"[!] C++/C compilation error: {e.stderr.decode()}")
         return True
 
     def run(self, **kwargs) -> Dict[str, Any]:

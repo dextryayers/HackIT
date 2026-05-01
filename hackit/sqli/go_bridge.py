@@ -18,7 +18,7 @@ class GoEngine:
         try:
             subprocess.run(['go', 'version'], capture_output=True, check=True)
             return True
-        except:
+        except Exception:
             return False
 
     def ensure_compiled(self) -> bool:
@@ -64,6 +64,9 @@ class GoEngine:
             'list_dbs': '-list-dbs',
             'list_tables': '-list-tables',
             'list_columns': '-list-columns',
+            'database': '-db',
+            'table': '-table',
+            'column': '-column',
             'dump_table': '-dump-table',
             'dump_all': '-dump-all',
             'verbose': '-verbose'

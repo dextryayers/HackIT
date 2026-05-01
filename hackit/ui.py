@@ -314,6 +314,7 @@ def display_banner():
     banner  = random.choice(BANNERS)
     mc      = random.choice([CYAN, B_CYAN, MAGENTA, B_MAGENTA, GREEN, B_GREEN])
     ac      = random.choice([YELLOW, B_YELLOW, WHITE, B_WHITE])
+    quote   = random.choice(QUOTES)
 
     # ── Box geometry ─────────────────────────────────────────────────────────
     # W  = total VISIBLE chars between the two outer │ chars on every row.
@@ -373,26 +374,20 @@ def display_banner():
     # ── Box top ───────────────────────────────────────────────────────────────
     hline('┌', '┐')
 
-    # ── Title row ─────────────────────────────────────────────────────────────
-    # Build title as one plain string first, then colorize pieces
-    # ' [*] HACKIT FRAMEWORK   |   v2.1.0   |   by AniippID '
-    # Fixed visible structure so pad_to() works perfectly:
-    t1 = ' [*] HACKIT FRAMEWORK'   # 21
-    t2 = '   |   '                 # 7
-    t3 = 'v2.1.0'                  # 6
-    t4 = '   |   '                 # 7
-    t5 = 'by AniippID '            # 12
-    title_vis = len(t1) + len(t2) + len(t3) + len(t4) + len(t5)  # 53
-    title_pad = ' ' * (W - title_vis)  # right padding to reach W
-    title_str = (
-        _colored(t1, mc, bold=True)
-        + _colored(t2, DIM)
-        + _colored(t3, ac, bold=True)
-        + _colored(t4, DIM)
-        + _colored(t5, DIM)
-        + title_pad
+    # ── Header row ────────────────────────────────────────────────────────────
+    # ' █ HACKIT OS █   V2.1.0   |   SESSION: 14716 '
+    h_t1 = ' █ HACKIT OS █'           # 14
+    h_t2 = f'   V2.1.0   |   SESSION: {pid:<5}' # 25
+    h_t3 = ' [ ANALYST MODE ] '        # 18
+    h_vis = len(h_t1) + len(h_t2) + len(h_t3)
+    h_pad = ' ' * (W - h_vis)
+    header_str = (
+        _colored(h_t1, mc, bold=True)
+        + _colored(h_t2, ac, bold=True)
+        + _colored(h_t3, DIM)
+        + h_pad
     )
-    row(title_str)
+    row(header_str)
     hline('├', '┤')
 
     # ── Info grid ────────────────────────────────────────────────────────────
@@ -402,35 +397,35 @@ def display_banner():
             'OS / Python', f'{os_n} Py{py_v[:4]}',       B_CYAN)
     two_col('Date',        dstr,                          YELLOW,
             'Time',        tstr,                          YELLOW)
-    two_col('PID',         str(pid),                     B_GREEN,
-            'Status',      'ENGINES ONLINE [OK]',         B_GREEN)
     hline('├', '┤')
 
-    # ── Engine status bar ─────────────────────────────────────────────────────
-    engines = [('Go', B_CYAN), ('Rust', B_MAGENTA), ('Python', B_GREEN),
-               ('C/C++', B_YELLOW), ('Ruby', B_RED)]
-    # Build plain-first so we know exact visible length
-    eng_plain = '  '.join(f' {n} [OK] ' for n, _ in engines)   # e.g. ' Go [OK]   Rust [OK] ...'
-    eng_colored = '  '.join(_colored(f' {n} [OK] ', c, bold=True) for n, c in engines)
-    eng_content = ' ' + eng_colored   # 1 leading space
-    eng_vis = 1 + len(eng_plain) + 2 * (len(engines) - 1)  # recount from plain
-    # Actually easier: just measure after strip
-    row(' ' + eng_colored)
-
+    # ── Engine Health / Tech Stack ──────────────────────────────────────────
+    # ' TECH STACK: [■■■■■] 100% | ENGINES: Go, Rust, C++, Py, Ruby '
+    s_t1 = ' TECH STACK '
+    s_bar = _colored('[', DIM) + _colored('■' * 5, B_GREEN) + _colored(']', DIM)
+    s_t2 = ' 100% | ENGINES: Go, Rust, C++, Py, Ruby '
+    s_vis = len(s_t1) + 7 + len(s_t2) # [■■■■■] is 7 visible
+    s_pad = ' ' * (W - s_vis)
+    status_str = (
+        _colored(s_t1, mc, bold=True)
+        + s_bar
+        + _colored(s_t2, DIM)
+        + s_pad
+    )
+    row(status_str)
     hline('├', '┤')
 
     # ── Quote row ─────────────────────────────────────────────────────────────
-    quote   = random.choice(QUOTES)
-    q_plain = trunc_plain(quote, W - 5)      # leave room for prefix ' "  '
-    q_str   = _colored(' " ', ac, bold=True) + _colored(' ' + q_plain, DIM)
+    q_plain = trunc_plain(quote, W - 6)
+    q_str   = _colored('  " ', ac, bold=True) + _colored(q_plain, DIM)
     row(q_str)
 
     hline('├', '┤')
 
     # ── Footer row ────────────────────────────────────────────────────────────
-    f_left  = '  [!] AUTHORIZED USE ONLY'           # 26 visible
-    f_right = 'Penetration Testing Framework  '     # 31 visible
-    f_pad   = W - len(f_left) - len(f_right)        # spacing in between
+    f_left  = '  [!] AUTHORIZED ACCESS ONLY'       # 28 visible
+    f_right = 'HACKIT SEC-SUITE  '                 # 17 visible
+    f_pad   = W - len(f_left) - len(f_right)
     footer  = (
         _colored(f_left, B_RED, bold=True)
         + ' ' * max(f_pad, 1)

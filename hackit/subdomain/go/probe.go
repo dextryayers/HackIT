@@ -86,19 +86,30 @@ func probeURL(client *http.Client, res *Result, scheme string, config Config) {
 	req.Header.Set("Accept", "*/*")
 	req.Header.Set("Connection", "close")
 
-	resp, err := client.Do(req)
-	if err != nil {
+	// Retry logic for better accuracy
+	var resp *http.Response
+	for i := 0; i < 2; i++ {
+		resp, err = client.Do(req)
+		if err == nil {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	if err != nil || resp == nil {
 		return
 	}
 	defer resp.Body.Close()
 
 	// Update result (Locking not strictly necessary if we only update Status/Server/Title)
-	// but let's be careful. Status 200 is preferred.
-	if res.Status == 0 || resp.StatusCode == 200 {
+	// but let's be careful. Status 200/301/302 are preferred.
+	isAlive := resp.StatusCode >= 200 && resp.StatusCode < 400
+	if res.Status == 0 || isAlive {
 		res.Status = resp.StatusCode
 		res.Server = resp.Header.Get("Server")
+	} else if res.Status != 200 {
+		res.Status = resp.StatusCode
 	} else {
-		// Keep existing if it's already set and new is not 200
 		return
 	}
 

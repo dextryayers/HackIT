@@ -1,0 +1,29 @@
+[
+  {
+    "id": "mysql-banner",
+    "protocol": "tcp",
+    "ports": [3306],
+    "read_limit": 1024,
+    "timeout_ms": 5000,
+    "matchers": [
+      {
+        "kind": "contains",
+        "pattern": "mysql",
+        "weight": 10.0,
+        "metadata": {"label": "mysql", "service": "MySQL"}
+      },
+      {
+        "kind": "regex",
+        "pattern": "[0-9]+\\.[0-9]+\\.[0-9]+-MariaDB",
+        "weight": 8.0,
+        "metadata": {"label": "mariadb", "vendor": "MariaDB"}
+      },
+      {
+        "kind": "contains",
+        "pattern": "Aurora",
+        "weight": 7.0,
+        "metadata": {"label": "aurora", "vendor": "AWS Aurora"}
+      }
+    ]
+  }
+]

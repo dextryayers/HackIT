@@ -17,7 +17,7 @@ class GoEngine:
         try:
             subprocess.run(['go', 'version'], capture_output=True, check=True)
             return True
-        except:
+        except Exception:
             return False
 
     def ensure_compiled(self) -> bool:
@@ -34,9 +34,15 @@ class GoEngine:
         if not self.ensure_compiled():
             return [{"error": "Failed to compile Go engine"}]
 
+        # Path to custom payload file
+        payload_file = os.path.join(self.base_dir, 'payload.txt')
+        cmd = [self.binary_path, '-url', url]
+        if os.path.exists(payload_file):
+            cmd.extend(['-payloads', payload_file])
+
         try:
             result = subprocess.run(
-                [self.binary_path, '-url', url],
+                cmd,
                 capture_output=True, text=True, check=True
             )
             return json.loads(result.stdout)

@@ -1,0 +1,29 @@
+[
+  {
+    "id": "pop3-banner",
+    "protocol": "tcp",
+    "ports": [110, 995],
+    "read_limit": 1024,
+    "timeout_ms": 5000,
+    "matchers": [
+      {
+        "kind": "regex",
+        "pattern": "\\+OK[- ]",
+        "weight": 10.0,
+        "metadata": {"label": "pop3", "service": "POP3"}
+      },
+      {
+        "kind": "contains",
+        "pattern": "Dovecot",
+        "weight": 8.0,
+        "metadata": {"label": "dovecot", "vendor": "Dovecot"}
+      },
+      {
+        "kind": "contains",
+        "pattern": "Courier",
+        "weight": 7.0,
+        "metadata": {"label": "courier", "vendor": "Courier"}
+      }
+    ]
+  }
+]

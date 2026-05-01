@@ -1,0 +1,17 @@
+[
+  {
+    "id": "rdp-handshake",
+    "protocol": "tcp",
+    "ports": [3389],
+    "read_limit": 1024,
+    "timeout_ms": 5000,
+    "matchers": [
+      {
+        "kind": "prefix",
+        "pattern": "\u0003\u0000",
+        "weight": 10.0,
+        "metadata": {"label": "rdp", "service": "RDP"}
+      }
+    ]
+  }
+]

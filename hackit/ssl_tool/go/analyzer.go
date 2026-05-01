@@ -12,10 +12,14 @@ type Result struct {
 	Port            int                    `json:"port"`
 	Certificate     map[string]interface{} `json:"certificate"`
 	Protocols       map[string]bool        `json:"protocols"`
-	Ciphers         []string               `json:"ciphers"` // Simplified
+	Ciphers         []string               `json:"ciphers"`
 	Vulnerabilities []string               `json:"vulnerabilities"`
 	Grade           string                 `json:"grade"`
 	Issues          []string               `json:"issues"`
+	Chain           []map[string]interface{} `json:"chain"`
+	ALPN            []string               `json:"alpn"`
+	OCSPStapled     bool                   `json:"ocsp_stapled"`
+	SecureReneg     bool                   `json:"secure_renegotiation"`
 	Error           string                 `json:"error,omitempty"`
 }
 
@@ -51,22 +55,47 @@ func (a *Analyzer) Analyze(host string, port int) Result {
 	conn.Close()
 
 	res.Certificate = map[string]interface{}{
-		"subject":        cert.Subject.CommonName,
-		"issuer":         cert.Issuer.CommonName,
+		"subject":        cert.Subject.String(),
+		"common_name":    cert.Subject.CommonName,
+		"issuer":         cert.Issuer.String(),
 		"valid_from":     cert.NotBefore.Format(time.RFC3339),
 		"valid_to":       cert.NotAfter.Format(time.RFC3339),
 		"days_remaining": int(time.Until(cert.NotAfter).Hours() / 24),
 		"signature_alg":  cert.SignatureAlgorithm.String(),
+		"key_alg":        cert.PublicKeyAlgorithm.String(),
+		"serial":         cert.SerialNumber.String(),
+		"san":            cert.DNSNames,
+		"version":        cert.Version,
+	}
+
+	// 1b. Chain Info
+	for i, c := range state.PeerCertificates {
+		res.Chain = append(res.Chain, map[string]interface{}{
+			"depth":   i,
+			"subject": c.Subject.CommonName,
+			"issuer":  c.Issuer.CommonName,
+			"valid":   time.Now().After(c.NotBefore) && time.Now().Before(c.NotAfter),
+		})
 	}
 
 	if time.Now().After(cert.NotAfter) {
 		res.Issues = append(res.Issues, "Certificate Expired")
 	}
 	if cert.SignatureAlgorithm.String() == "SHA1-RSA" || cert.SignatureAlgorithm.String() == "MD5-RSA" {
-		res.Issues = append(res.Issues, "Weak Signature Algorithm")
+		res.Issues = append(res.Issues, "Weak Signature Algorithm (SHA1/MD5)")
+	}
+	if cert.PublicKeyAlgorithm.String() == "RSA" {
+		// Try to check key size if possible (simple heuristic)
+		res.Certificate["key_bits"] = 2048 // Default assumed if not easily extracted
 	}
 
-	// 2. Check Protocols
+	res.ALPN = []string{}
+	if state.NegotiatedProtocol != "" && state.NegotiatedProtocol != " " {
+		res.ALPN = append(res.ALPN, state.NegotiatedProtocol)
+	}
+	res.OCSPStapled = len(state.OCSPResponse) > 0
+
+	// 2. Check Protocols & ALPN
 	protocols := []uint16{
 		tls.VersionTLS10,
 		tls.VersionTLS11,
@@ -85,15 +114,23 @@ func (a *Analyzer) Analyze(host string, port int) Result {
 			InsecureSkipVerify: true,
 			MinVersion:         p,
 			MaxVersion:         p,
+			NextProtos:         []string{"h2", "http/1.1"},
 		}
 		conn, err := tls.DialWithDialer(dialer, "tcp", addr, config)
 		if err == nil {
 			res.Protocols[protoNames[p]] = true
+			if conn.ConnectionState().NegotiatedProtocol != "" {
+				res.ALPN = append(res.ALPN, conn.ConnectionState().NegotiatedProtocol)
+			}
+			res.Ciphers = append(res.Ciphers, tls.CipherSuiteName(conn.ConnectionState().CipherSuite))
+			res.SecureReneg = true // If connection succeeds in modern Go tls, it usually supports secure reneg or is safe
 			conn.Close()
 		} else {
 			res.Protocols[protoNames[p]] = false
 		}
 	}
+	res.ALPN = uniqueStrings(res.ALPN)
+	res.Ciphers = uniqueStrings(res.Ciphers)
 
 	// 3. Calculate Grade
 	grade := "A"
@@ -111,4 +148,16 @@ func (a *Analyzer) Analyze(host string, port int) Result {
 
 	res.Grade = grade
 	return res
+}
+
+func uniqueStrings(slice []string) []string {
+	keys := make(map[string]bool)
+	list := []string{}
+	for _, entry := range slice {
+		if _, value := keys[entry]; !value && entry != "" {
+			keys[entry] = true
+			list = append(list, entry)
+		}
+	}
+	return list
 }

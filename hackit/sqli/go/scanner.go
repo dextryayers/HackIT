@@ -16,6 +16,7 @@ type Result struct {
 	Parameter string `json:"parameter"`
 	Payload   string `json:"payload"`
 	Type      string `json:"type"` // Error, Boolean, Time
+	DBMS      string `json:"dbms"`
 	Details   string `json:"details"`
 }
 
@@ -252,4 +253,41 @@ func buildURL(u *url.URL, params url.Values, p, pay string) string {
 	}
 	u.RawQuery = newParams.Encode()
 	return u.String()
+}
+
+// Enumerate performs data extraction based on target type
+func (s *Scanner) Enumerate(targetURL string, p string, dbms string, enumType string) Result {
+	res := Result{URL: targetURL, Parameter: "enumeration", Type: enumType, DBMS: dbms}
+	
+	u, err := url.Parse(targetURL)
+	if err != nil {
+		return res
+	}
+	params := u.Query()
+	
+	payloads, ok := EnumPayloads[dbms]
+	if !ok {
+		return res
+	}
+	
+	payload, ok := payloads[enumType]
+	if !ok {
+		return res
+	}
+	
+	attackURL := buildURL(u, params, p, payload)
+	resp, err := s.Client.Get(attackURL)
+	if err != nil {
+		return res
+	}
+	defer resp.Body.Close()
+	
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+	
+	// Extraction logic: Look for patterns or specific tags if we use tags in payloads
+	// For now, assume the result is reflected in the body (Union-based)
+	// We can improve this using the C++ parsing engine later.
+	res.Payload = bodyStr
+	return res
 }

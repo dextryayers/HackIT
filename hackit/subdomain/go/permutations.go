@@ -20,6 +20,9 @@ func runPermutations(foundSubs []*Result, domain string, jobs chan<- string) {
 		"v1", "v2", "api-v1", "api-v2", "backend", "frontend", "client",
 		"partner", "m", "mobile", "app-api", "uat", "preprod", "sandbox",
 		"secret", "private", "devops", "kubernetes", "k8s", "docker", "registry",
+		"db", "database", "sql", "redis", "mongo", "infra", "secure", "security",
+		"backup", "storage", "s3", "bucket", "blob", "aws", "azure", "gcp",
+		"lb", "proxy", "waf", "cloud", "vault", "office", "work", "remote",
 	}
 
 	// Dynamic word generation (common patterns)

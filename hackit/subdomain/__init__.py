@@ -71,11 +71,11 @@ def extract_from_web(domain):
                                         subs.add(jm[0].lower().strip("."))
                                     else:
                                         subs.add(jm.lower().strip("."))
-                        except:
+                        except Exception:
                             continue
-            except:
+            except Exception:
                 continue
-    except:
+    except Exception:
         pass
     
     # Filter out junk

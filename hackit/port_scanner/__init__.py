@@ -5,6 +5,8 @@ Rombak total dengan atribut lengkap untuk powerfull scanning.
 import click
 import json
 import os
+import sys
+import time as _time
 from datetime import datetime
 from hackit.ui import display_tool_banner, _colored, GREEN, YELLOW, RED, BLUE, CYAN, PURPLE, B_GREEN, B_CYAN, B_WHITE, B_RED, B_YELLOW, DIM
 from .go_bridge import get_engine
@@ -200,6 +202,7 @@ def scan_ports(**kwargs):
     """
     Super Powerful Port Scanner (Go-Powered) - Nmap Version.
     """
+    import sys
     if kwargs.get('show_version'):
         click.echo("HackIt Port Scanner v2.0.0")
         return
@@ -304,16 +307,12 @@ def scan_ports(**kwargs):
         5: {'timeout': 200, 'workers': 500, 'cooldown': 0},     # Insane
     }
     
-    speed = kwargs.get('timing_template') if kwargs.get('timing_template') is not None else kwargs.get('speed', 3)
-    if speed in timing_map:
-        t_conf = timing_map[speed]
-        wait = kwargs.get('wait') or t_conf['timeout']
-        workers = kwargs.get('workers') or t_conf['workers']
-        cooldown = kwargs.get('cooldown') or t_conf['cooldown']
-    else:
-        wait = kwargs.get('wait', 1000)
-        workers = kwargs.get('workers', 100)
-        cooldown = kwargs.get('cooldown', 0)
+    t_idx = kwargs.get('timing_template', 3)
+    t_conf = timing_map.get(t_idx, timing_map[3])
+    
+    wait = kwargs.get('wait') or t_conf['timeout']
+    workers = kwargs.get('workers') or t_conf['workers']
+    cooldown = kwargs.get('cooldown', 0)
 
     # Map Nmap-style OS/Service flags
     if kwargs.get('scan_os'): kwargs['os_detection'] = True
@@ -327,22 +326,43 @@ def scan_ports(**kwargs):
     if kwargs.get('mac_addr'): kwargs['spoof_mac'] = kwargs.get('mac_addr')
     if kwargs.get('fragment_packets'): kwargs['packet_split'] = True
 
+    # State tracking for powerful tactical UI
+    results_cache = []
+    last_status = {"msg": "", "time": _time.time()}
+    
     def scan_callback(type, data):
-        if type == "result":
+        nonlocal last_status
+        if type == "status":
+            # Real-time status ticker (Non-intrusive)
+            msg = data.get('message', '')
+            if msg:
+                ticker = _colored(f"\r  » [TACTICAL] {msg}...", DIM)
+                sys.stdout.write(ticker + "\033[K")
+                sys.stdout.flush()
+                last_status = {"msg": msg, "time": _time.time()}
+        elif type == "result":
             status = data.get('status', 'unknown')
-            if status == 'open':
-                port = data.get('port')
-                service = data.get('service', 'unknown')
-                version = data.get('version') or data.get('banner') or ''
-                click.echo(f"  {_colored(str(port).ljust(9), B_GREEN)} {_colored('open', GREEN)}    {_colored(service.ljust(12), B_CYAN)} {version}")
+            port = data.get('port', 0)
+            if status == 'open' and port > 0:
+                if not any(r.get('port') == port for r in results_cache):
+                    results_cache.append(data)
+                sys.stdout.flush()
+
+    # Apply Power-Scan Enhancements
+    kwargs['turbo_scan'] = True
+    kwargs['workers'] = kwargs.get('workers', 250) # Boost default concurrency
+    kwargs['timeout'] = kwargs.get('wait', 800)     # Aggressive timing
 
     for t in target_list:
-        click.echo(f"\n[*] Scanning target: {_colored(t, B_WHITE, bold=True)}")
-        click.echo(_colored("  PORT      STATE   SERVICE      VERSION/BANNER", B_CYAN))
-        click.echo(_colored("  ----      -----   -------      --------------", DIM))
+        click.echo(f"\n" + _colored("┌── [POWERFUL RECONNAISSANCE INITIALIZED]", B_CYAN))
+        click.echo(_colored("│", B_CYAN) + f" TARGET NODE: {_colored(t, B_WHITE, bold=True)}")
+        click.echo(_colored("│", B_CYAN) + f" SCAN ENGINE: {_colored('MULTI-SYNC (GO+RUST+LUA)', GREEN)}")
+        click.echo(_colored("└" + "─" * 40, B_CYAN) + "\n")
+        
+        results_cache = []
+        last_status = {"msg": "", "time": _time.time()}
         
         # Mapping kwargs to engine params
-        # Remove keys that are already passed as positional/named arguments to avoid "got multiple values" error
         engine_kwargs = kwargs.copy()
         engine_kwargs.pop('ports', None)
         engine_kwargs.pop('timeout', None)
@@ -355,8 +375,8 @@ def scan_ports(**kwargs):
         engine_res = engine.run(
             t,
             ports=ports_str,
-            timeout=wait,
-            threads=workers,
+            timeout=kwargs.get('wait', 1000),
+            threads=kwargs.get('workers', 100),
             include_closed=False,
             stealth=kwargs.get('stealth') or scan_mode == 'stealth',
             mode=scan_mode,
@@ -367,27 +387,42 @@ def scan_ports(**kwargs):
         # Add to all results for output saving
         all_results.append(engine_res)
 
-        # Display Network Intel
+        # Display Professional IP Intelligence Section (Tactical Overview)
         intel = engine_res.get('intel', {})
+        os_info = engine_res.get('os', {})
+        ip_addr = engine_res.get('ip', 'Unknown')
+        
+        click.echo(f"\n" + _colored("╔══════════════════════════════════════════════════════════════════════════════╗", B_WHITE))
+        click.echo(_colored("║", B_WHITE) + f"  {_colored('TACTICAL IP INTELLIGENCE GRID', B_WHITE):<75} " + _colored("║", B_WHITE))
+        click.echo(_colored("╠══════════════════════════════════════════════════════════════════════════════╣", B_WHITE))
+        click.echo(_colored("║", B_WHITE) + f"  » TARGET IP   : {_colored(ip_addr, B_YELLOW):<64} " + _colored("║", B_WHITE))
+        
+        if intel.get('asn') and intel['asn'] != 'N/A':
+            click.echo(_colored("║", B_WHITE) + f"  » ASN/ORG     : {intel['asn']:<64} " + _colored("║", B_WHITE))
+        
+        if intel.get('geo') and intel['geo'] != 'N/A':
+            click.echo(_colored("║", B_WHITE) + f"  » GEOLOCATION : {intel['geo']:<64} " + _colored("║", B_WHITE))
+            
         if intel.get('dns'):
-            click.echo(f"\n[+] DNS: {', '.join(intel['dns'])}")
-        if intel.get('reverse') and intel['reverse'] != 'N/A':
-            click.echo(f"[+] Reverse DNS: {intel['reverse']}")
+            dns_str = ", ".join(intel['dns'][:2]) # Show top 2 for spacing
+            click.echo(_colored("║", B_WHITE) + f"  » DNS RECORDS : {dns_str:<64} " + _colored("║", B_WHITE))
+
+        os_name = os_info.get('name', 'Unknown')
+        if os_name != 'Unknown':
+            conf = os_info.get('confidence', os_info.get('accuracy', 0))
+            os_display = f"{os_name} ({conf}%)"
+            click.echo(_colored("║", B_WHITE) + f"  » OS FINGERPRNT: {_colored(os_display, B_GREEN):<75} " + _colored("║", B_WHITE))
+            
+        click.echo(_colored("╚══════════════════════════════════════════════════════════════════════════════╝", B_WHITE))
 
         # Subdomain Enumeration
         if kwargs.get('sub_enum'):
-            click.echo(f"[*] Enumerating subdomains for {t}...")
+            click.echo(f"\n[*] Enumerating subdomains for {t}...")
             sub_engine = get_sub_engine()
             if sub_engine.available:
                 sub_engine.run(domain=t, passive_only=True)
             else:
                 click.echo(_colored("[!] Subdomain engine not available.", RED))
-
-        # Display OS if requested
-        if kwargs.get('os_detection') or kwargs.get('identify_os'):
-            os_info = engine_res.get('os', {})
-            click.echo(f"[+] OS Detection: {_colored(os_info.get('name', 'Unknown'), YELLOW)} (Confidence: {os_info.get('confidence', 0)})")
-            click.echo(f"[+] IP Address: {engine_res.get('ip', 'Unknown')}")
 
     # 5. Handle Output Formats
     if kwargs.get('output_json'):

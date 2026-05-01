@@ -3,204 +3,84 @@ package main
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
-	"time"
 )
 
+type PortResult struct {
+	Port            int      `json:"port"`
+	State           string   `json:"status"`
+	Service         string   `json:"service"`
+	Banner          string   `json:"banner"`
+	Version         string   `json:"version"`
+	TTL             int      `json:"ttl"`
+	Scripts         []string `json:"scripts,omitempty"`
+	Vulnerabilities []string `json:"vulnerabilities,omitempty"`
+	DeepAnalysis    string   `json:"deep_analysis,omitempty"`
+	RiskScore       float64  `json:"risk_score,omitempty"`
+}
+
 type ScanEngine struct {
-	Host          string
-	TimeoutMs     int
-	Threads       int
-	IncludeClosed bool
-	Stealth       bool
-	ScanMode      string // "connect", "udp", "stealth", etc.
-	Reporter      *Reporter
-	Lua           *LuaEngine
-
-	// Nmap parity flags
-	LuaScript     string
-	LuaArgs       string
-	MTU           int
-	DataLength    int
-	SourcePort    int
-	IdentifyOS    bool
-	DetectService bool
-	CustomTTL     int
-	SpoofIP       string
-	SpoofMAC      string
-	PacketSplit   bool
-	BadSum        bool
-	Traceroute    bool
-
-	// New Intel & Web flags
-	DNSInfo       bool
-	ReverseLookup bool
-	SubEnum       bool
-	WhoisInfo     bool
-	GeoInfo       bool
-	ASNInfo       bool
-	HttpInspect   bool
-	TechAnalyze   bool
-	TlsAnalyze    bool
-	CertView      bool
-	ShowTitle     bool
+	Host                   string
+	Ports                  []int
+	Threads                int
+	TimeoutMs              int
+	Stealth                bool
+	ScanMode               string
+	Reporter               *Reporter
+	Lua                    *LuaEngine
+	LuaScript              string
+	LuaArgs                string
+	MTU                    int
+	DataLength             int
+	SourcePort             int
+	IdentifyOS             bool
+	DetectService          bool
+	CustomTTL              int
+	SpoofIP                string
+	SpoofMAC               string
+	PacketSplit            bool
+	Traceroute             bool
+	IncludeClosed          bool
+	BadSum                 bool
+	DNSInfo                bool
+	ReverseLookup          bool
+	SubEnum                bool
+	WhoisInfo              bool
+	GeoInfo                bool
+	ASNInfo                bool
+	HttpInspect            bool
+	TechAnalyze            bool
+	TlsAnalyze             bool
+	CertView               bool
+	ShowTitle              bool
+	DetectHoneypot         bool
+	SmartBypass            bool
+	RandomOrder            bool
+	DecoyIP                string
+	UseProxy               string
+	UseTor                 bool
+	VersionIntensity       int
+	OSScanLimit            bool
+	OSScanGuess            bool
+	HostTimeout            int
+	ScanDelay              int
+	MaxScanDelay           int
+	DefeatRstRateLimit     bool
+	DefeatIcmpRateLimit    bool
+	NsockEngine            string
+	UltraDeep              bool
+	VulnScan               bool
 }
 
-func NewScanEngine(host string, timeoutMs int, threads int, includeClosed bool, stealth bool, scanMode string, reporter *Reporter) *ScanEngine {
-	return &ScanEngine{
-		Host:          host,
-		TimeoutMs:     timeoutMs,
-		Threads:       threads,
-		IncludeClosed: includeClosed,
-		Stealth:       stealth,
-		ScanMode:      scanMode,
-		Reporter:      reporter,
-		Lua:           NewLuaEngine(),
-	}
-}
-
-func (e *ScanEngine) Run(ports []int) []PortResult {
-	// If scan mode is "c-turbo", use the ultra-fast C socket engine
-	if e.ScanMode == "c-turbo" {
-		fmt.Printf("[*] Starting Ultra-Fast C Turbo Engine for %s...\n", e.Host)
-		// Convert ports to string for C engine
-		var portsStr string
-		if len(ports) > 0 {
-			portsStr = fmt.Sprintf("%d-%d", ports[0], ports[len(ports)-1])
-		} else {
-			portsStr = "1-1024"
-		}
-
-		results := RunCTurboScan(e.Host, portsStr, e.TimeoutMs)
-
-		// Enrich results with service identification
-		for i := range results {
-			if results[i].State == "open" {
-				// 1. First, identify basic service with Go
-				s, v := IdentifyService(results[i].Port, results[i].Banner, e.Host)
-				results[i].Service = s
-				results[i].Version = v
-
-				// 2. Call C++ Expert Engine for Deep Banner & Version analysis
-				cppRes := RunCppServiceScan(e.Host, results[i].Port, e.TimeoutMs)
-				if cppRes.Version != "" && cppRes.Version != "unknown" {
-					results[i].Version = cppRes.Version
-					results[i].Banner = cppRes.Banner
-				}
-
-				// 3. Add OS info from C engine
-				if results[i].OS != "" {
-					results[i].Banner = fmt.Sprintf("%s [OS: %s]", results[i].Banner, results[i].OS)
-				}
-			}
-		}
-
-		// Sort results by port
-		sort.Slice(results, func(i, j int) bool {
-			return results[i].Port < results[j].Port
-		})
-
-		// Print real-time like output for consistency
-		if e.Reporter != nil {
-			for _, res := range results {
-				// Run Lua Scripts (NSE-style)
-				if e.Lua != nil {
-					scriptResults := e.Lua.RunScripts(e.Host, res.Port, res.Service, res.Banner)
-					for _, sr := range scriptResults {
-						fmt.Printf(" |  \033[33m%s\033[0m\n", sr)
-					}
-				}
-				e.Reporter.ReportResult(res)
-			}
-		}
-
-		return results
+func (e *ScanEngine) Run() []PortResult {
+	if e.Reporter != nil {
+		e.Reporter.ReportStatus("Initializing Tactical Discovery Engine", 0)
 	}
 
-	// If scan mode is "syn" (default), use the Ultimate Rust Mass Scanner
-	// This replaces the per-port loop with a single high-performance Rust call
-	if e.ScanMode == "syn" {
-		fmt.Printf("[*] Starting Ultimate Rust Core Engine for %s...\n", e.Host)
-		results := RustMassScan(e.Host, ports, e.Threads, e.TimeoutMs, e.Stealth)
-
-		// Enrich results with service identification
-		for i := range results {
-			if results[i].State == "open" {
-				// 1. First, identify basic service with Go
-				s, v := IdentifyService(results[i].Port, results[i].Banner, e.Host)
-				results[i].Service = s
-				results[i].Version = v
-
-				// 2. Call C++ Expert Engine for Deep Banner & Version analysis
-				cppRes := RunCppServiceScan(e.Host, results[i].Port, e.TimeoutMs)
-				if cppRes.Version != "" && cppRes.Version != "unknown" {
-					results[i].Version = cppRes.Version
-					results[i].Banner = cppRes.Banner
-				}
-
-				// 3. Add OS info from C engine
-				if results[i].OS != "" {
-					results[i].Banner = fmt.Sprintf("%s [OS: %s]", results[i].Banner, results[i].OS)
-				}
-			}
-		}
-
-		// Sort results by port
-		sort.Slice(results, func(i, j int) bool {
-			return results[i].Port < results[j].Port
-		})
-
-		// Print real-time like output for consistency
-		if e.Reporter != nil {
-			for _, res := range results {
-				// Run Lua Scripts (NSE-style)
-				if e.Lua != nil {
-					scriptResults := e.Lua.RunScripts(e.Host, res.Port, res.Service, res.Banner)
-					for _, sr := range scriptResults {
-						fmt.Printf(" |  \033[33m%s\033[0m\n", sr)
-					}
-				}
-				e.Reporter.ReportResult(res)
-			}
-		}
-
-		return results
-	}
-
-	// If scan mode is "ruby", use the Ruby-based engine
-	if e.ScanMode == "ruby" {
-		fmt.Printf("[*] Starting Ruby Engine for %s...\n", e.Host)
-		var portsStr string
-		if len(ports) > 0 {
-			portsStr = fmt.Sprintf("%d-%d", ports[0], ports[len(ports)-1])
-		} else {
-			portsStr = "1-1024"
-		}
-		results := RunRubyScan(e.Host, portsStr, e.TimeoutMs)
-		if e.Reporter != nil {
-			for _, res := range results {
-				e.Reporter.ReportResult(res)
-			}
-		}
-		return results
-	}
-
-	// If scan mode is "python", use the Python-based engine
-	if e.ScanMode == "python" {
-		fmt.Printf("[*] Starting Python Engine for %s...\n", e.Host)
-		var portsStr string
-		if len(ports) > 0 {
-			portsStr = fmt.Sprintf("%d-%d", ports[0], ports[len(ports)-1])
-		} else {
-			portsStr = "1-1024"
-		}
-		results := RunPythonScan(e.Host, portsStr, e.TimeoutMs)
-		if e.Reporter != nil {
-			for _, res := range results {
-				e.Reporter.ReportResult(res)
-			}
-		}
-		return results
+	ports := e.Ports
+	if len(ports) == 0 {
+		return nil
 	}
 
 	results := make([]PortResult, 0)
@@ -208,152 +88,145 @@ func (e *ScanEngine) Run(ports []int) []PortResult {
 	var wg sync.WaitGroup
 	portsChan := make(chan int, e.Threads)
 
-	// Total ports for progress calculation
 	totalPorts := len(ports)
 	processedPorts := 0
 	var progressMu sync.Mutex
 
-	// Start workers
-	for i := 0; i < e.Threads; i++ {
+	workerCount := e.Threads
+	if workerCount > totalPorts {
+		workerCount = totalPorts
+	}
+
+	for i := 0; i < workerCount; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			defer func() {
-				if r := recover(); r != nil {
-					if e.Reporter != nil {
-						e.Reporter.ReportError(fmt.Sprintf("Worker panic: %v", r))
-					}
-				}
-			}()
-			currentTimeout := e.TimeoutMs
 			for port := range portsChan {
-				// Stealth: add jitter and randomize timing
+				if port <= 0 || port > 65535 {
+					continue
+				}
 				if e.Stealth {
 					jitterSleep(10, 50)
 				}
 
-				// Adaptive timing: measure response time and adjust
-				start := time.Now()
-
 				var res PortResult
 				var open bool
 
-				// Select scanning logic based on mode
-				if e.ScanMode == "udp" {
-					res, open = ScanUDP(e.Host, port, currentTimeout)
-				} else if e.ScanMode == "syn" {
-					// Use the new Rust Fast Scanner for superior performance and accuracy
-					res = RustFastScan(e.Host, port, currentTimeout, e.Stealth)
+				// Multi-Engine Selector logic
+				switch e.ScanMode {
+				case "udp":
+					res, open = ScanUDP(e.Host, port, e.TimeoutMs)
+				case "syn":
+					// Call Rust for high-speed SYN scan
+					res = RustFastScan(e.Host, port, e.TimeoutMs, e.Stealth)
 					open = res.State == "open"
-
-					// If it's a web port, force firewall bypass check
-					if port == 80 || port == 443 || port == 8443 {
-						bypassMethod, confidence := RustFirewallBypass(e.Host, port)
-						if confidence > 50 {
-							res.Banner += fmt.Sprintf(" [WAF-Bypass: %s]", bypassMethod)
-						}
-					}
-				} else if e.ScanMode != "connect" {
-					res, open = ScanRaw(e.Host, port, e.ScanMode, currentTimeout)
-				} else {
-					res, open = ScanPort(e.Host, port, currentTimeout)
+				case "c-turbo":
+					// Placeholder for C engine call
+					res, open = ScanPort(e.Host, port, e.TimeoutMs)
+				default:
+					res, open = ScanPort(e.Host, port, e.TimeoutMs)
 				}
 
-				elapsed := time.Since(start)
-				// Adaptive Timeout Logic:
-				if open {
-					// If response was fast, lower timeout slightly (confidence in network speed)
-					if elapsed < time.Duration(currentTimeout/2)*time.Millisecond {
-						currentTimeout = int(float64(currentTimeout) * 0.95)
-					}
-				} else {
-					// If it timed out, increase timeout slightly for next ports (noise/latency detected)
-					if elapsed >= time.Duration(currentTimeout)*time.Millisecond {
-						currentTimeout = int(float64(currentTimeout) * 1.05)
-					}
-				}
-				// Keep within sane bounds
-				if currentTimeout < 200 {
-					currentTimeout = 200
-				}
-				if currentTimeout > 5000 {
-					currentTimeout = 5000
-				}
-
-				if open {
-					// Double-check accuracy for open ports to avoid false positives
-					// Especially useful in noisy networks. For raw scans, we might do a connect check.
-					verified := false
-					if e.ScanMode == "connect" {
-						_, verified = ScanPort(e.Host, port, currentTimeout+500)
-					} else if e.ScanMode == "stealth" {
-						// For stealth, re-run raw check or just trust if response was clear
-						_, verified = ScanRaw(e.Host, port, e.ScanMode, currentTimeout+500)
-					} else {
-						verified = true // Trust other specialized scans for now
-					}
-
-					if verified {
-						// Run Lua Scripts (NSE-style)
-						if e.Lua != nil {
-							res.Scripts = e.Lua.RunScripts(e.Host, res.Port, res.Service, res.Banner)
+				if open || e.IncludeClosed {
+					// 1. Service & Banner Recon (Nmap-Style)
+					if e.DetectService && open {
+						if res.Banner == "" {
+							res.Banner = GrabBannerByHost(e.Host, port, e.TimeoutMs)
 						}
+						res.Service, res.Version = DetectService(port, res.Banner, e.Host)
+					}
 
-						mutex.Lock()
-						results = append(results, res)
-						mutex.Unlock()
-
-						// Report real-time
-						// Run Lua Scripts (NSE-style) for each open port
-						if e.Lua != nil {
-							scriptResults := e.Lua.RunScripts(e.Host, res.Port, res.Service, res.Banner)
-							for _, sr := range scriptResults {
-								fmt.Printf(" |  \033[33m%s\033[0m\n", sr)
-							}
-						}
-
-						if e.Reporter != nil {
-							e.Reporter.ReportResult(res)
+					// 2. Vulnerability Discovery (The "Powerfull" part)
+					if open {
+						// Call specialized vulnerability scanners
+						vulns := e.AnalyzeVulnerabilities(res)
+						if len(vulns) > 0 {
+							res.Vulnerabilities = append(res.Vulnerabilities, vulns...)
 						}
 					}
-				} else if e.IncludeClosed {
-					state := QuickCheckPort(e.Host, port, currentTimeout)
-					service, version := IdentifyService(port, "", e.Host)
-					closedRes := PortResult{
-						Port:    port,
-						State:   state,
-						Service: service,
-						Version: version,
+
+					// 3. Lua/NSE Script Integration
+					if e.Lua != nil && open {
+						scriptOutput := e.Lua.RunScripts(e.Host, port, res.Service, res.Banner)
+						if len(scriptOutput) > 0 {
+							res.Scripts = append(res.Scripts, scriptOutput...)
+						}
 					}
+					// DEEP RECON: Every open port gets a deep check if enabled (Rust Engine)
+					if e.VulnScan {
+						res.Vulnerabilities = RustCheckVulnerabilities(e.Host, port, res.Service, res.Banner)
+					}
+					
+					// ULTRA-DEEP: Engaging C/CPP/Rust Deep Audit Engines if flag is set
+					if e.UltraDeep {
+						deepData := RustPerformDeepScan(e.Host, port, res.Banner)
+						res.DeepAnalysis = deepData
+						
+						// Add more detailed info from C/CPP if needed (future integration)
+						// For now, Rust orchestrates the Deep results.
+					}
+
 					mutex.Lock()
-					results = append(results, closedRes)
+					results = append(results, res)
 					mutex.Unlock()
 
 					if e.Reporter != nil {
-						e.Reporter.ReportResult(closedRes)
+						e.Reporter.ReportResult(res)
 					}
 				}
 
-				// Update progress
 				progressMu.Lock()
 				processedPorts++
-				if processedPorts%100 == 0 || processedPorts == totalPorts {
+				if e.Reporter != nil {
 					progress := float64(processedPorts) / float64(totalPorts) * 100
-					if e.Reporter != nil {
-						e.Reporter.ReportStatus("Scanning", progress)
-					}
+					e.Reporter.ReportStatus(fmt.Sprintf("RECON: %d/%d ports mapped", processedPorts, totalPorts), progress)
 				}
 				progressMu.Unlock()
 			}
 		}()
 	}
 
-	// Feed ports to channel
-	for _, port := range ports {
-		portsChan <- port
+	for _, p := range ports {
+		portsChan <- p
 	}
 	close(portsChan)
 
 	wg.Wait()
+
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Port < results[j].Port
+	})
+
 	return results
+}
+
+// AnalyzeVulnerabilities performs multi-engine vulnerability fingerprinting
+func (e *ScanEngine) AnalyzeVulnerabilities(res PortResult) []string {
+	var vulns []string
+	
+	// 1. Simple Go-based signature matching
+	if res.Port == 22 && strings.Contains(strings.ToLower(res.Banner), "openssh 8.7") {
+		vulns = append(vulns, "POTENTIAL: CVE-2024-6387 (regreSSHion)")
+	}
+
+	// 2. Call Rust for advanced OS/Service-based vuln analysis
+	// We'll implement this wrapper in rust_wrapper.go
+	rustVulns := RustCheckVulnerabilities(e.Host, res.Port, res.Service, res.Banner)
+	if len(rustVulns) > 0 {
+		vulns = append(vulns, rustVulns...)
+	}
+
+	return vulns
+}
+
+func NewScanEngine(host string, ports []int, threads int, timeoutMs int, stealth bool, mode string, reporter *Reporter) *ScanEngine {
+	return &ScanEngine{
+		Host:      host,
+		Ports:     ports,
+		Threads:   threads,
+		TimeoutMs: timeoutMs,
+		Stealth:   stealth,
+		ScanMode:  mode,
+		Reporter:  reporter,
+	}
 }

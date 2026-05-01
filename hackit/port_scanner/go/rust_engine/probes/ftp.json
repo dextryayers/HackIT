@@ -1,0 +1,41 @@
+[
+  {
+    "id": "ftp-banner",
+    "protocol": "tcp",
+    "ports": [21],
+    "read_limit": 1024,
+    "timeout_ms": 5000,
+    "matchers": [
+      {
+        "kind": "regex",
+        "pattern": "220[- ].+",
+        "weight": 10.0,
+        "metadata": {"label": "ftp", "service": "FTP"}
+      },
+      {
+        "kind": "contains",
+        "pattern": "vsftpd",
+        "weight": 8.0,
+        "metadata": {"label": "vsftpd", "vendor": "vsftpd"}
+      },
+      {
+        "kind": "contains",
+        "pattern": "ProFTPD",
+        "weight": 8.0,
+        "metadata": {"label": "proftpd", "vendor": "ProFTPD"}
+      },
+      {
+        "kind": "contains",
+        "pattern": "FileZilla",
+        "weight": 8.0,
+        "metadata": {"label": "filezilla", "vendor": "FileZilla"}
+      },
+      {
+        "kind": "contains",
+        "pattern": "Microsoft FTP",
+        "weight": 7.0,
+        "metadata": {"label": "ms-ftp", "vendor": "Microsoft"}
+      }
+    ]
+  }
+]

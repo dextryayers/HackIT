@@ -232,17 +232,28 @@ func (e *Engine) Start() []Result {
 			}
 		}
 
-		if e.Opts.ListTables || e.Opts.DumpAll {
-			if len(dbs) == 0 {
-				dbs = []string{"current_database"}
+		if e.Opts.ListTables || e.Opts.DumpAll || e.Opts.Table != "" {
+			targetDbs := dbs
+			if e.Opts.Database != "" {
+				targetDbs = []string{e.Opts.Database}
 			}
-			for _, db := range dbs {
+			if len(targetDbs) == 0 {
+				targetDbs = []string{"current_database"}
+			}
+			for _, db := range targetDbs {
 				// Skip system DBs for MySQL to avoid cluttering dump-all
 				if bestResult.DBMS == "MySQL" && (db == "information_schema" || db == "performance_schema" || db == "mysql" || db == "sys") {
 					continue
 				}
 
-				tables, err := enum.ListTables(db, bestResult.Parameter, bestResult.DBMS)
+				var tables []string
+				var err error
+				if e.Opts.Table != "" {
+					tables = []string{e.Opts.Table}
+				} else {
+					tables, err = enum.ListTables(db, bestResult.Parameter, bestResult.DBMS)
+				}
+
 				if err == nil {
 					e.Log.Success(fmt.Sprintf("Tables in %s: %s", db, strings.Join(tables, ", ")))
 					results = append(results, Result{

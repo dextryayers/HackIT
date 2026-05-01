@@ -71,7 +71,7 @@ func main() {
 
 	if config.Deep {
 		config.Recursive = true
-		config.Permutations = true
+		// Permutations are now optional and not forced by deep mode if user wants pure crawl
 		if !config.Stealth {
 			config.Concurrency = 300
 		}
@@ -85,14 +85,17 @@ func main() {
 		config.Timeout = 20
 	}
 
+	// Luxury Startup UI
+	fmt.Printf("%s[#] HACKIT ENGINE v2.1.0 %s|%s TARGET: %s%s%s %s|%s MODE: %s%s\n", 
+		colorCyan, colorWhite, colorGreen, colorWhite, config.Domain, colorReset, colorWhite, colorBlue, "CRAWL-OPTIMIZED", colorReset)
+	fmt.Printf("%s[*] Initialization complete. Starting deep intelligence sequence...%s\n\n", colorYellow, colorReset)
+
 	// 0. Wildcard Detection
 	DetectWildcard(config.Domain)
 
-	// 1. Passive Enumeration
+	// 1. Passive Enumeration (Crawl Engine)
 	if !config.ActiveOnly {
-		if config.Verbose {
-			fmt.Println("[*] Starting Passive Enumeration...")
-		}
+		fmt.Printf("%s[>] PHASE 1:%s %sStarting OSINT Crawl Engine (80+ Sources)...%s\n", colorBlue, colorReset, colorWhite, colorReset)
 
 		passiveChan := make(chan []string)
 		go runPassive(config.Domain, passiveChan, config.Verbose)
@@ -104,14 +107,15 @@ func main() {
 				count++
 			}
 		}
+	}
 
-		if config.Verbose {
-			fmt.Printf("[+] Passive Sources found %d subdomains\n", count)
-		}
+	// 2. Probing Phase
+	if config.Probe || config.ShowIP || config.ShowSC {
+		fmt.Printf("%s[>] PHASE 2:%s %sAnalyzing Assets & Probing Life-signs...%s\n", colorBlue, colorReset, colorWhite, colorReset)
 	}
 
 	// 2. Active Enumeration
-	if !config.PassiveOnly {
+	if !config.PassiveOnly && config.Wordlist != "" {
 		jobs := make(chan string, config.Concurrency)
 		var wgResolve sync.WaitGroup
 
@@ -204,8 +208,7 @@ func main() {
 	printResults(finalResults, config)
 
 	// 7. Summary
-	fmt.Println(" ------------------------------------------------------------ ")
-	fmt.Println(" [+] Scan Completed Successfully.")
-	fmt.Printf(" [*] Total Subdomains Found: %d\n", len(finalResults))
-	fmt.Println(" ------------------------------------------------------------ ")
+	fmt.Printf("\n %s[#] SCAN COMPLETE %s|%s TOTAL DISCOVERED: %s%d%s\n", 
+		colorCyan, colorWhite, colorGreen, colorWhite, len(finalResults), colorReset)
+	fmt.Printf(" %s----------------------------------------------------------------------------%s\n\n", colorBlue, colorReset)
 }

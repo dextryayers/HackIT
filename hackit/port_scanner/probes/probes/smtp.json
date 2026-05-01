@@ -1,0 +1,41 @@
+[
+  {
+    "id": "smtp-banner",
+    "protocol": "tcp",
+    "ports": [25, 587, 465],
+    "read_limit": 1024,
+    "timeout_ms": 5000,
+    "matchers": [
+      {
+        "kind": "regex",
+        "pattern": "220[- ].+",
+        "weight": 10.0,
+        "metadata": {"label": "smtp", "service": "SMTP"}
+      },
+      {
+        "kind": "contains",
+        "pattern": "Postfix",
+        "weight": 8.0,
+        "metadata": {"label": "postfix", "vendor": "Postfix"}
+      },
+      {
+        "kind": "contains",
+        "pattern": "Exim",
+        "weight": 8.0,
+        "metadata": {"label": "exim", "vendor": "Exim"}
+      },
+      {
+        "kind": "contains",
+        "pattern": "Sendmail",
+        "weight": 7.0,
+        "metadata": {"label": "sendmail", "vendor": "Sendmail"}
+      },
+      {
+        "kind": "contains",
+        "pattern": "Microsoft",
+        "weight": 6.0,
+        "metadata": {"label": "ms-smtp", "vendor": "Microsoft"}
+      }
+    ]
+  }
+]

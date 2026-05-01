@@ -10,46 +10,53 @@ import (
 	"strings"
 	"sync"
 	"time"
-
 	"github.com/fatih/color"
 )
 
-func printHeader(target string) {
-	cGreen := color.New(color.FgGreen)
-	cCyan := color.New(color.FgCyan)
-	cYellow := color.New(color.FgYellow)
-	cRed := color.New(color.FgRed)
-	cWhite := color.New(color.FgWhite)
+var (
+	cMagenta = color.New(color.FgMagenta).Add(color.Bold)
+	cCyan    = color.New(color.FgCyan)
+	cYellow  = color.New(color.FgYellow)
+	cWhite   = color.New(color.FgWhite)
+	cBlue    = color.New(color.FgBlue)
+	cRed     = color.New(color.FgRed)
+)
 
-	fmt.Println(cCyan.Sprint(" ┌──────────────────────────────────────────────────────────┐"))
-	fmt.Printf(" │ %-15s : %-38s │\n", cCyan.Sprint("SYSTEM STATUS"), "")
-	fmt.Printf(" │ %-15s : %-38s │\n", cWhite.Sprint("User IP"), cGreen.Sprint("203.78.113.10"))
-	fmt.Printf(" │ %-15s : %-38s │\n", cWhite.Sprint("Geo Location"), cGreen.Sprint("Malang, Indonesia"))
-	fmt.Printf(" │ %-15s : %-38s │\n", cWhite.Sprint("Website"), cGreen.Sprint("haniipp.space"))
-	fmt.Printf(" │ %-15s : %-38s │\n", cWhite.Sprint("Device Name"), cGreen.Sprint("Dextry"))
-	fmt.Printf(" │ %-15s : %-38s │\n", cWhite.Sprint("Exploit Engine"), cGreen.Sprint("ONLINE"))
-	fmt.Println(cCyan.Sprint(" └──────────────────────────────────────────────────────────┘"))
+func printHeader(config *ScanConfig) {
+
+	// Creative DirFinder Banner
+	fmt.Println(cMagenta.Sprint(`
+    ____  _      _______           __           
+   / __ \(_)____/ ____(_)___  ____/ /__  _____ 
+  / / / / / ___/ /_  / / __ \/ __  / _ \/ ___/ 
+ / /_/ / / /  / __/ / / / / / /_/ /  __/ /     
+/_____/_/_/  /_/   /_/_/ /_/\__,_/\___/_/      v2.2.0
+`))
+
+	// Extensions info
+	extsStr := "None"
+	if len(config.Extensions) > 0 {
+		extsStr = strings.Join(config.Extensions, ", ")
+	}
+	fmt.Printf("%s %s | %s %s | %s %s | %s %s\n",
+		color.New(color.FgYellow).Add(color.Bold).Sprint("Extensions:"), color.New(color.FgCyan).Sprint(extsStr),
+		color.New(color.FgYellow).Add(color.Bold).Sprint("HTTP method:"), color.New(color.FgCyan).Sprint(config.Method),
+		color.New(color.FgYellow).Add(color.Bold).Sprint("Threads:"), color.New(color.FgCyan).Sprint(config.Threads),
+		color.New(color.FgYellow).Add(color.Bold).Sprint("Wordlist size:"), color.New(color.FgCyan).Sprint(len(config.Paths)),
+	)
 	fmt.Println()
 
-	now := time.Now().Format("2006-01-02 15:04:05")
-	fmt.Printf("%s Session: 10984 | User: anonim | %s\n", cGreen.Sprint("[+]"), now)
-	fmt.Printf("%s \"Exploiting the impossible.\"\n", cYellow.Sprint("[!]"))
-	fmt.Println(cCyan.Sprint(" ────────────────────────────────────────────────────────────"))
-	fmt.Printf("%s %s | %s\n", cRed.Sprint("▲"), cWhite.Sprint("AUTHORIZED USE ONLY"), cGreen.Sprint("HackIt v2.0"))
+	// Target info
+	fmt.Printf("%s %s\n",
+		color.New(color.FgYellow).Add(color.Bold).Sprint("Target:"),
+		cBlue.Sprint(config.Target),
+	)
 	fmt.Println()
 
-	fmt.Println(cCyan.Sprint(" ╔══════════════════════════════════════════════════════════╗"))
-	fmt.Printf(" ║ %-56s ║\n", cWhite.Sprint("DIR FINDER (EXPERT ENGINE)"))
-	fmt.Println(cCyan.Sprint(" ╚══════════════════════════════════════════════════════════╝"))
-	fmt.Printf(" %s %s\n", cWhite.Sprint(">"), cGreen.Sprint("MODULE LOADED: SUCCESS"))
-	fmt.Println()
-
-	fmt.Printf("%s Target: %s\n", cWhite.Sprint("[*]"), cCyan.Sprint(target))
-	fmt.Printf("%s Engine: %s\n", cWhite.Sprint("[*]"), cGreen.Sprint("Rust (Async Core) + Go (Orchestrator)"))
-	fmt.Printf("%s Threads: %d | Timeout: %ds\n", cWhite.Sprint("[*]"), 50, 10)
-	fmt.Println()
-	fmt.Printf("%s Starting Expert Scan...\n", cGreen.Sprint("[+]"))
-	fmt.Println()
+	// Starting time
+	now := time.Now().Format("15:04:05")
+	fmt.Printf("[%s] Starting:\n", cYellow.Sprint(now))
+	os.Stdout.Sync()
 }
 
 func main() {
@@ -61,8 +68,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	// 1. Banner
-	printHeader(config.Target)
+	// 1. Banner & Header
+	printHeader(config)
 
 	// 2. Load Wordlist from db/ recursively
 	// Try multiple possible paths for db/
@@ -112,6 +119,23 @@ func main() {
 		}
 	}
 
+	// 3.1. Extension Fuzzing Expansion
+	if len(config.Extensions) > 0 {
+		var extendedPaths []string
+		for _, p := range config.Paths {
+			extendedPaths = append(extendedPaths, p)
+			// Don't add extensions to directory paths (ending in /)
+			if !strings.HasSuffix(p, "/") {
+				for _, ext := range config.Extensions {
+					ext = strings.TrimPrefix(ext, ".")
+					extendedPaths = append(extendedPaths, p+"."+ext)
+				}
+			}
+		}
+		config.Paths = extendedPaths
+		color.Green("[+] Extension Fuzzing enabled: Total paths expanded to %d", len(config.Paths))
+	}
+
 	results := make(chan DirResult)
 	var wg sync.WaitGroup
 	var collectorWg sync.WaitGroup
@@ -122,6 +146,7 @@ func main() {
 	wildcardSize := int64(-1)
 
 	fmt.Printf("%s Detecting Wildcard / Soft-404 status...\n", color.CyanString("[*]"))
+	os.Stdout.Sync()
 	tempClient := CreateClient(int(config.TimeoutMS), config.FollowRedirects)
 
 	// Test 1: Random path
@@ -232,13 +257,23 @@ func main() {
 		fmt.Printf("%s Added %d backup patterns to scan queue\n", color.GreenString("[+]"), len(newPaths))
 	}
 
-	// 4. Result collector (Expert Style)
+	// 5. Engine Creation
+	client := CreateClient(int(config.TimeoutMS), config.FollowRedirects)
+
+	// Result collector (Expert Style)
 	collectorWg.Add(1)
+	sizeFrequency := make(map[string]int)
 	go func() {
 		defer collectorWg.Done()
 		for res := range results {
-			// Cross-Check: Skip if it matches wildcard profile (optional, maybe just highlight?)
-			// For now, let's just show everything as requested by user, but with correct colors
+			// Honeypot Protection
+			sizeKey := fmt.Sprintf("%d-%d", res.Status, res.Size)
+			sizeFrequency[sizeKey]++
+			if sizeFrequency[sizeKey] > 15 { continue }
+			if sizeFrequency[sizeKey] == 15 {
+				fmt.Printf("%s High frequency pattern detected (%s). Suppressing noise...\n", color.YellowString("[!]"), sizeKey)
+				continue
+			}
 
 			timestamp := time.Now().Format("15:04:05")
 			statusStr := fmt.Sprintf("%d", res.Status)
@@ -247,34 +282,41 @@ func main() {
 			switch {
 			case res.Status >= 200 && res.Status < 300:
 				statusColored = color.New(color.FgGreen).Add(color.Bold).Sprint(statusStr)
+				// If directory found and recursive is on, add to queue
+				if config.Recursive && strings.HasSuffix(res.Path, "/") {
+					// We only recurse if it's a directory
+					// (Implementation detail: usually we should check if depth is allowed)
+				}
 			case res.Status >= 300 && res.Status < 400:
 				statusColored = color.New(color.FgYellow).Sprint(statusStr)
-			case res.Status == 401 || res.Status == 403:
-				statusColored = color.New(color.FgMagenta).Add(color.Bold).Sprint(statusStr)
+			case res.Status == 403:
+				statusColored = color.New(color.FgBlue).Add(color.Bold).Sprint(statusStr)
 			case res.Status == 404:
 				statusColored = color.New(color.FgRed).Sprint(statusStr)
-			case res.Status == 400:
-				statusColored = color.New(color.FgHiBlack).Sprint(statusStr) // Gray for 400
+			case res.Status >= 400 && res.Status < 500:
+				statusColored = color.New(color.FgHiYellow).Sprint(statusStr) 
 			case res.Status >= 500:
-				statusColored = color.New(color.FgBlue).Sprint(statusStr)
+				statusColored = color.New(color.FgHiRed).Add(color.Bold).Sprint(statusStr)
 			default:
 				statusColored = color.New(color.FgWhite).Sprint(statusStr)
 			}
 
 			sizeStr := fmt.Sprintf("%7s", FormatSize(int64(res.Size)))
+			redirectStr := ""
+			if res.Redirect != "" {
+				redirectStr = color.HiBlackString(" -> " + res.Redirect)
+			}
 
-			// Format: [15:04:05] 200 -    178B - /admin
-			fmt.Printf("[%s] %s - %s - %s\n",
-				color.WhiteString(timestamp),
+			fmt.Printf("[%s] %s - %s - %s%s\n",
+				cYellow.Sprint(timestamp),
 				statusColored,
-				color.WhiteString(sizeStr),
-				color.CyanString("/"+strings.TrimPrefix(res.Path, "/")),
+				sizeStr,
+				cBlue.Sprint("/"+strings.TrimPrefix(res.Path, "/")),
+				redirectStr,
 			)
+			os.Stdout.Sync()
 		}
 	}()
-
-	// 5. Engine Creation
-	client := CreateClient(int(config.TimeoutMS), config.FollowRedirects)
 
 	// Rate Limiter
 	var ticker *time.Ticker
@@ -329,13 +371,18 @@ func main() {
 			defer resp.Body.Close()
 
 			finalStatus := resp.StatusCode
-			body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024*1024)) // Read up to 1MB
-			finalSize := int64(len(body))
+			finalSize := resp.ContentLength
+			redirectURL := ""
+			if finalStatus >= 300 && finalStatus < 400 {
+				redirectURL = resp.Header.Get("Location")
+			}
 
 			// Check for Soft 404 (keywords in body if status is 200)
 			if finalStatus == 200 {
+				body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024*1024)) // Read up to 1MB
+				finalSize = int64(len(body))
 				bodyLower := strings.ToLower(string(body))
-				soft404Keywords := []string{"not found", "error 404", "page not found", "doesn't exist"}
+				soft404Keywords := []string{"not found", "error 404", "page not found", "doesn't exist", "maaf, halaman tidak ditemukan"}
 				for _, kw := range soft404Keywords {
 					if strings.Contains(bodyLower, kw) {
 						finalStatus = 404 // Mark as 404
@@ -353,9 +400,10 @@ func main() {
 			}
 
 			results <- DirResult{
-				Path:   p,
-				Status: finalStatus,
-				Size:   uint64(finalSize),
+				Path:     p,
+				Status:   finalStatus,
+				Size:     uint64(finalSize),
+				Redirect: redirectURL,
 			}
 		}(path)
 	}
@@ -364,6 +412,6 @@ func main() {
 	close(results)
 	collectorWg.Wait()
 
-	// 5. Final Report
-	color.White("\n[*] HackIt Scan Complete.")
+	fmt.Println()
+	color.New(color.FgYellow).Add(color.Bold).Println("Task Completed")
 }

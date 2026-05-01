@@ -44,6 +44,9 @@ type Options struct {
 	ListDBs     bool
 	ListTables  bool
 	ListColumns bool
+	Database    string
+	Table       string
+	Column      string
 	Schema      bool
 	CountRows   bool
 	Search      string
@@ -85,8 +88,14 @@ func NewEngine(opts *Options) *Engine {
 		transport.Proxy = http.ProxyURL(proxyURL)
 	}
 
+	// Adaptive timeout for Stealth mode
+	timeout := time.Duration(opts.Timeout) * time.Second
+	if opts.Stealth {
+		timeout = time.Duration(opts.Timeout*2) * time.Second
+	}
+
 	client := &http.Client{
-		Timeout:   time.Duration(opts.Timeout) * time.Second,
+		Timeout:   timeout,
 		Transport: transport,
 	}
 
@@ -96,12 +105,18 @@ func NewEngine(opts *Options) *Engine {
 		}
 	}
 
-	return &Engine{
+	e := &Engine{
 		Opts:   opts,
 		Client: client,
 		Log:    utils.NewLogger(opts.Verbose, opts.NoColor),
 		Perf:   utils.NewPerformanceManager(opts.Retry, time.Duration(opts.Delay)*time.Millisecond),
 	}
+
+	if opts.BypassWAF {
+		e.Log.Info("WAF Evasion hard-mode enabled: Tuning engine for maximum stealth...")
+	}
+
+	return e
 }
 
 func (e *Engine) GetLogger() *utils.Logger {

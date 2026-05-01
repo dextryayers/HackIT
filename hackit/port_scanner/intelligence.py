@@ -51,11 +51,11 @@ def enrich_results(scan_data: Dict[str, Any]) -> Dict[str, Any]:
         }
         return scan_data
 
-    for result in results:  # type: Dict[str, Any]
+    for result in results:
         status = result.get("status", "").lower()
         if status != "open":
             result["cves"] = []
-            result["risk_score"] = 0
+            result["risk_score"] = 0.0
             continue
 
         service = result.get("service", "").lower()
@@ -104,7 +104,7 @@ def enrich_results(scan_data: Dict[str, Any]) -> Dict[str, Any]:
                 risk_score += 5
         
         # Cap risk score per port
-        result["risk_score"] = min(risk_score, 100)
+        result["risk_score"] = float(min(risk_score, 100))
         total_risk_score += result["risk_score"]
         vulnerabilities_found += len(matched_cves)
 

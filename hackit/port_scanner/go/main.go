@@ -6,20 +6,11 @@ import (
 	"flag"
 	"fmt"
 	"net"
+	"os"
 	"os/exec"
 	"sort"
+	"time"
 )
-
-type PortResult struct {
-	Port    int      `json:"port"`
-	State   string   `json:"status"`
-	Service string   `json:"service"`
-	Banner  string   `json:"banner"`
-	Version string   `json:"version"`
-	TTL     int      `json:"ttl"`
-	OS      string   `json:"os"`
-	Scripts []string `json:"scripts,omitempty"`
-}
 
 type ScanResult struct {
 	Host         string       `json:"host"`
@@ -40,6 +31,8 @@ func main() {
 	scanMode := flag.String("mode", "connect", "Scan mode (connect, syn, udp, stealth, fin, xmas, etc.)")
 	enrich := flag.Bool("enrich", false, "Enrich results with Python Intelligence Layer")
 	profile := flag.String("profile", "default", "Scan profile (fast, stealth, full, web, lan)")
+	format := flag.String("format", "text", "Output format: text or json")
+	quietJSON := flag.Bool("quiet-json", false, "When format=json, suppress human-readable output")
 
 	// Nmap parity flags
 	script := flag.String("script", "", "Run specific Lua scripts (NSE-style)")
@@ -47,13 +40,16 @@ func main() {
 	mtu := flag.Int("mtu", 0, "Set MTU size for fragmentation")
 	dataLength := flag.Int("data-length", 0, "Append random data to packets")
 	sourcePort := flag.Int("source-port", 0, "Set custom source port")
-	identifyOS := flag.Bool("identify-os", false, "Enable OS detection")
+	identifyOS := flag.Bool("O", true, "Enable OS detection (Enabled by default for Deep Recon)")
+	detailedOS := flag.Bool("detailed-os", true, "Enable detailed OS fingerprinting (Default: Deep)")
+	ultraDeep := flag.Bool("ultra-deep", false, "Enable Extremely Deep Analysis (C/CPP/Rust Deep Audit)")
 	detectService := flag.Bool("detect-service", false, "Enable service detection")
-
+	osDetection := flag.Bool("os-detection", false, "Enable detailed OS detection and IP information")
 	// Network Intel flags
 	dnsInfo := flag.Bool("dns-info", false, "Enable DNS lookup")
 	reverseLookup := flag.Bool("reverse-lookup", false, "Enable reverse DNS")
-	subEnum := flag.Bool("sub-enum", false, "Enable subdomain discovery")
+	subEnum := flag.Bool("sub-enum", false, "Enable subdomain enumeration")
+	vulnScan := flag.Bool("vuln", true, "Enable vulnerability scanning (Default: Enabled)")
 	whoisInfo := flag.Bool("whois-info", false, "Enable WHOIS lookup")
 	geoInfo := flag.Bool("geo-info", false, "Enable GeoIP lookup")
 	asnInfo := flag.Bool("asn-info", false, "Enable ASN lookup")
@@ -65,8 +61,7 @@ func main() {
 	certView := flag.Bool("cert-view", false, "Enable certificate info")
 	showTitle := flag.Bool("show-title", false, "Extract page title")
 
-	flag.Parse()
-
+	// Advanced flags
 	customTTL := flag.Int("custom-ttl", 0, "Set custom TTL")
 	spoofIP := flag.String("mask-ip", "", "Spoof source IP")
 	spoofMAC := flag.String("spoof-mac", "", "Spoof MAC address")
@@ -74,10 +69,27 @@ func main() {
 	badSum := flag.Bool("badsum", false, "Send packets with bad checksum")
 	traceroute := flag.Bool("traceroute", false, "Enable traceroute")
 
+	// New advanced evasion and timing flags
+	detectHoneypot := flag.Bool("detect-honeypot", false, "Check for potential honeypots")
+	smartBypass := flag.Bool("smart-bypass", false, "Try automatic firewall bypass")
+	randomOrder := flag.Bool("random-order", false, "Randomize target")
+	decoyIP := flag.String("decoy-ip", "", "Gunakan IP decoy (comma separated)")
+	useProxy := flag.String("use-proxy", "", "Gunakan proxy (http://ip:port)")
+	useTor := flag.Bool("use-tor", false, "Route via TOR")
+	versionIntensity := flag.Int("version-intensity", 7, "Intensity for version detection (0-9)")
+	osScanLimit := flag.Bool("osscan-limit", false, "Limit OS detection to promising targets")
+	osScanGuess := flag.Bool("osscan-guess", false, "Guess OS more aggressively")
+	hostTimeout := flag.Int("host-timeout", 0, "Give up on target after X ms")
+	scanDelay := flag.Int("scan-delay", 0, "Delay between probes (ms)")
+	maxScanDelay := flag.Int("max-scan-delay", 0, "Max delay between probes (ms)")
+	defeatRstRateLimit := flag.Bool("defeat-rst-ratelimit", false, "Bypass RST rate limits")
+	defeatIcmpRateLimit := flag.Bool("defeat-icmp-ratelimit", false, "Bypass ICMP rate limits")
+	nsockEngine := flag.String("nsock-engine", "poll", "Select nsock IO engine")
+
 	flag.Parse()
 
 	if *target == "" {
-		fmt.Println(`{"error": "Target is required"}`)
+		fmt.Println(`ERROR:{"type":"error","error":"Target is required"}`)
 		return
 	}
 
@@ -103,42 +115,35 @@ func main() {
 		*timeout = 1000
 		*concurrency = 100
 		if *ports == "" {
-			*ports = "80,443,8080,8443,8000,8888"
+			*ports = "80,443,8080,8443,8000,8888,21,22,25,53,110,143,3306,5432,6379,27017,3389,5900"
 		}
 	case "lan":
 		*timeout = 300
 		*concurrency = 300
 	}
 
+	// Parse Ports
+	portList := parsePorts(*ports)
+
+	// Targets processing
 	targets, err := expandTargets(*target)
 	if err != nil {
-		fmt.Printf(`{"error": "Invalid target: %v"}`+"\n", err)
+		fmt.Printf(`ERROR:{"type":"error","error":"Invalid target: %v"}`+"\n", err)
 		return
 	}
 
-	portList := parsePorts(*ports)
-	// If no ports specified, scan full range 1-65535 (User request)
-	if len(portList) == 0 {
-		for i := 1; i <= 65535; i++ {
-			portList = append(portList, i)
-		}
-	}
-
-	if *stealth {
-		portList = shufflePorts(portList)
-		if *concurrency > 200 {
-			*concurrency = *concurrency / 2
-		}
-	}
-
 	reporter := &Reporter{}
+	if *format == "json" && *quietJSON {
+		reporter = &Reporter{SuppressHuman: true}
+	}
 	allResults := make([]ScanResult, 0)
+	startTime := time.Now()
 
 	for _, host := range targets {
-		reporter.ReportStatus(fmt.Sprintf("Scanning %s", host), 0)
-		engine := NewScanEngine(host, *timeout, *concurrency, *includeClosed, *stealth, *scanMode, reporter)
+		reporter.PrintStatus(host, 0)
+		engine := NewScanEngine(host, portList, *concurrency, *timeout, *stealth, *scanMode, reporter)
 
-		// Pass new flags to engine
+		// Pass all flags to engine for full power
 		engine.LuaScript = *script
 		engine.LuaArgs = *scriptArgs
 		engine.MTU = *mtu
@@ -147,16 +152,13 @@ func main() {
 		engine.IdentifyOS = *identifyOS
 		engine.DetectService = *detectService
 		engine.CustomTTL = *customTTL
-		engine.SpoofIP = *spoofIP
-		engine.SpoofMAC = *spoofMAC
-		engine.PacketSplit = *packetSplit
-		engine.BadSum = *badSum
-		engine.Traceroute = *traceroute
-
-		// New Intel & Web flags
 		engine.DNSInfo = *dnsInfo
 		engine.ReverseLookup = *reverseLookup
 		engine.SubEnum = *subEnum
+		engine.UltraDeep = *ultraDeep
+		engine.IdentifyOS = *identifyOS
+		engine.DetectService = *detailedOS
+		engine.VulnScan = *vulnScan
 		engine.WhoisInfo = *whoisInfo
 		engine.GeoInfo = *geoInfo
 		engine.ASNInfo = *asnInfo
@@ -165,8 +167,31 @@ func main() {
 		engine.TlsAnalyze = *tlsAnalyze
 		engine.CertView = *certView
 		engine.ShowTitle = *showTitle
+		engine.IncludeClosed = *includeClosed
+		engine.BadSum = *badSum
+		engine.Traceroute = *traceroute
+		engine.DetectHoneypot = *detectHoneypot
+		engine.SmartBypass = *smartBypass
+		engine.RandomOrder = *randomOrder
+		engine.DecoyIP = *decoyIP
+		engine.UseProxy = *useProxy
+		engine.UseTor = *useTor
+		engine.VersionIntensity = *versionIntensity
+		engine.OSScanLimit = *osScanLimit
+		engine.OSScanGuess = *osScanGuess
+		engine.HostTimeout = *hostTimeout
+		engine.ScanDelay = *scanDelay
+		engine.MaxScanDelay = *maxScanDelay
+		engine.DefeatRstRateLimit = *defeatRstRateLimit
+		engine.DefeatIcmpRateLimit = *defeatIcmpRateLimit
+		engine.NsockEngine = *nsockEngine
+		engine.SpoofIP = *spoofIP
+		engine.SpoofMAC = *spoofMAC
+		engine.PacketSplit = *packetSplit
+		engine.BadSum = *badSum
+		engine.Traceroute = *traceroute
 
-		results := engine.Run(portList)
+		results := engine.Run()
 
 		// Resolve IP
 		ipAddr := ""
@@ -200,11 +225,29 @@ func main() {
 		}
 	}
 
-	finalJSON, _ := json.Marshal(allResults)
-	fmt.Printf("\nFINAL:%s\n", string(finalJSON))
+	// Print the final comprehensive Nmap-style summary
+	if *format != "json" {
+		reporter.PrintNmapStyleSummary(*target, startTime, len(portList), *osDetection)
+	}
 
-	// Print the final Nmap-style sorted table
-	reporter.PrintFinalTable()
+	// Machine-readable final payload for Python bridge
+	finalPayload := map[string]any{
+		"schema_version":    "1",
+		"os_schema_version": "1",
+		"scanner":           "hackit-port-scanner",
+		"format":            *format,
+		"target":            *target,
+		"started_at":        startTime.Format(time.RFC3339),
+		"elapsed_ms":        int(time.Since(startTime).Milliseconds()),
+		"notes":             "os.fingerprint may contain evidence details when available",
+		"results":           allResults,
+	}
+	if b, err := json.Marshal(finalPayload); err == nil {
+		fmt.Printf("FINAL:%s\n", string(b))
+	} else {
+		fmt.Printf("ERROR:%s\n", `{"type":"error","error":"failed to marshal final payload"}`)
+	}
+	os.Stdout.Sync()
 }
 
 func EnrichWithPython(data ScanResult) ScanResult {

@@ -1,0 +1,64 @@
+[
+  {
+    "id": "http-get",
+    "protocol": "tcp",
+    "ports": [80, 8080, 8000, 8888],
+    "payload_text": "GET / HTTP/1.0\r\nHost: localhost\r\n\r\n",
+    "read_limit": 4096,
+    "timeout_ms": 5000,
+    "matchers": [
+      {
+        "kind": "contains",
+        "pattern": "HTTP/",
+        "weight": 10.0,
+        "metadata": {"label": "http", "service": "HTTP Server"}
+      },
+      {
+        "kind": "regex",
+        "pattern": "Server: (.+)",
+        "weight": 5.0,
+        "metadata": {"label": "server-header"}
+      },
+      {
+        "kind": "contains",
+        "pattern": "<!DOCTYPE html>",
+        "weight": 3.0,
+        "metadata": {"label": "html-response"}
+      },
+      {
+        "kind": "contains",
+        "pattern": "nginx",
+        "weight": 8.0,
+        "metadata": {"label": "nginx", "vendor": "nginx", "confidence": "high"}
+      },
+      {
+        "kind": "contains",
+        "pattern": "Apache",
+        "weight": 8.0,
+        "metadata": {"label": "apache", "vendor": "Apache", "confidence": "high"}
+      },
+      {
+        "kind": "contains",
+        "pattern": "Microsoft-IIS",
+        "weight": 8.0,
+        "metadata": {"label": "iis", "vendor": "Microsoft", "product": "IIS"}
+      }
+    ]
+  },
+  {
+    "id": "http-options",
+    "protocol": "tcp",
+    "ports": [80, 8080, 8000],
+    "payload_text": "OPTIONS / HTTP/1.0\r\nHost: localhost\r\n\r\n",
+    "read_limit": 1024,
+    "timeout_ms": 3000,
+    "matchers": [
+      {
+        "kind": "contains",
+        "pattern": "Allow:",
+        "weight": 5.0,
+        "metadata": {"label": "http-options", "info": "HTTP methods exposed"}
+      }
+    ]
+  }
+]

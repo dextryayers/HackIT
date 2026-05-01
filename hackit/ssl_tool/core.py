@@ -88,7 +88,7 @@ class SSLAnalyzer:
                     try:
                         ext = cert.extensions.get_extension_for_oid(x509.oid.ExtensionOID.SUBJECT_ALTERNATIVE_NAME)
                         san = [n.value for n in ext.value]
-                    except:
+                    except Exception:
                         pass
 
                     # Key Info

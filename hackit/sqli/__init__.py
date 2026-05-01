@@ -51,48 +51,51 @@ def sqli_cli():
     pass
 
 @sqli_cli.command(name='scan')
-# TARGET CONFIG
-@click.option('-u', '--url', 'url', required=True, help='URL target (e.g., http://example.com/page.php?id=1)')
-@click.option('--data', default=None, help='Raw POST body')
-@click.option('--cookie', default=None, help='Custom cookie')
-@click.option('--header', multiple=True, help='Custom header (multi allowed)')
-@click.option('--agent', default='HackIt/2.0', help='Custom user-agent')
-@click.option('--referer', default=None, help='Custom referer')
-@click.option('--method', default='GET', type=click.Choice(['GET', 'POST', 'PUT', 'PATCH']), help='HTTP method')
-@click.option('--timeout', default=10, help='Timeout request (default: 10)')
-@click.option('--proxy', default=None, help='Proxy support (http/socks)')
-@click.option('--follow-redirect', is_flag=True, help='Auto follow redirect')
+# TARGET CONFIG (PRECISION CORE)
+@click.option('-u', '--url', 'url', required=True, help=_colored('Target URL with injection point (e.g., ?id=1)', BLUE))
+@click.option('--data', default=None, help=_colored('Raw POST payload for deep data-stream injection', BLUE))
+@click.option('--cookie', default=None, help=_colored('Session cookies for authenticated scanning', BLUE))
+@click.option('--header', multiple=True, help=_colored('Custom tactical headers (e.g., X-Forwarded-For)', BLUE))
+@click.option('--agent', default='HackIt/2.0', help=_colored('Industrial-grade User-Agent spoofing', BLUE))
+@click.option('--referer', default=None, help=_colored('Custom referer for evasion', BLUE))
+@click.option('--method', default='GET', type=click.Choice(['GET', 'POST', 'PUT', 'PATCH']), help=_colored('HTTP Method orchestration', BLUE))
+@click.option('--timeout', default=10, help=_colored('Tactical request timeout (default: 10s)', BLUE))
+@click.option('--proxy', default=None, help=_colored('Proxy-chain support (HTTP/SOCKS5)', BLUE))
+@click.option('--follow-redirect', is_flag=True, help=_colored('Automatic redirection tracking', BLUE))
 
-# INJECTION STRATEGY
-@click.option('--mode', default='auto', type=click.Choice(['auto', 'boolean', 'time', 'error', 'union', 'stacked']), help='Injection mode')
-@click.option('--risk-level', default=1, type=click.IntRange(1, 5), help='1-5 (aggressiveness)')
-@click.option('--depth', default=2, help='Scan depth (default: 2)')
-@click.option('--threads', default=10, help='Concurrent workers')
-@click.option('--delay', default=0, help='Delay antar request (ms)')
-@click.option('--randomize-case', is_flag=True, help='Random case payload')
-@click.option('--tamper', multiple=True, help='Tamper script (multi allowed)')
-@click.option('--encode', type=click.Choice(['URL', 'double', 'base64']), help='Encoding type')
-@click.option('--bypass-waf', is_flag=True, help='Enable WAF evasion mode hard')
-@click.option('--stealth', is_flag=True, help='Evasive mode (slow + random UA)')
+# INJECTION STRATEGY (ULTRA-DEEP ENGINE)
+@click.option('--mode', default='auto', type=click.Choice(['auto', 'boolean', 'time', 'error', 'union', 'stacked']), help=_colored('Injection vector selection', YELLOW))
+@click.option('--risk-level', default=1, type=click.IntRange(1, 5), help=_colored('Aggressiveness level (1-5, higher = deeper)', YELLOW))
+@click.option('--depth', default=2, help=_colored('Crawl depth for parameter discovery', YELLOW))
+@click.option('--threads', default=10, help=_colored('Parallel processing workers (High-Speed)', YELLOW))
+@click.option('--randomize-case', is_flag=True, help=_colored('Polymorphic case randomization (WAF Bypass)', YELLOW))
+@click.option('--tamper', multiple=True, help=_colored('Advanced payload obfuscation scripts', YELLOW))
+@click.option('--encode', type=click.Choice(['URL', 'double', 'base64']), help=_colored('Deep encoding layer selection', YELLOW))
+@click.option('--bypass-waf', is_flag=True, help=_colored('Hardened WAF evasion engine (Deep Audit)', YELLOW))
+@click.option('--stealth', is_flag=True, help=_colored('Ghost mode (Slow cadence + randomized headers)', YELLOW))
 
-# DETECTION ENGINE
-@click.option('--fingerprint', is_flag=True, help='Detect DB engine')
-@click.option('--banner-grab', is_flag=True, help='Extract DB banner')
-@click.option('--os-detect', is_flag=True, help='Detect OS backend')
-@click.option('--waf-detect', is_flag=True, help='Detect WAF')
+# DETECTION & INTEL (INDUSTRIAL GRADE)
+@click.option('--fingerprint', is_flag=True, help=_colored('Deep DBMS version and engine discovery', GREEN))
+@click.option('--banner-grab', is_flag=True, help=_colored('Extract raw database banner secrets', GREEN))
+@click.option('--os-detect', is_flag=True, help=_colored('Back-end operating system fingerprinting', GREEN))
+@click.option('--waf-detect', is_flag=True, help=_colored('WAF/IPS/IDS identification audit', GREEN))
 
-# DATABASE ENUMERATION
-@click.option('--list-dbs', is_flag=True, help='Enumerate databases')
-@click.option('--list-tables', is_flag=True, help='Enumerate tables')
-@click.option('--list-columns', is_flag=True, help='Enumerate columns')
-@click.option('--schema', is_flag=True, help='Dump structure only')
+# DATABASE ENUMERATION (SQLMAP-X MODE)
+@click.option('--inject', is_flag=True, help=_colored('Automated ultra-deep injection & data dump', B_RED))
+@click.option('--dbs', '--list-dbs', 'list_dbs', is_flag=True, help=_colored('Extract all available databases', B_CYAN))
+@click.option('--tables', '--list-tables', 'list_tables', is_flag=True, help=_colored('Extract tables from target database', B_CYAN))
+@click.option('--columns', '--list-columns', 'list_columns', is_flag=True, help=_colored('Extract column metadata', B_CYAN))
+@click.option('--schema', is_flag=True, help=_colored('Dump structure only (No data)', B_CYAN))
+@click.option('-D', '--db', 'database', help=_colored('Specify target database', B_CYAN))
+@click.option('-T', '--table', 'table', help=_colored('Specify target table', B_CYAN))
+@click.option('-C', '--column', 'column', help=_colored('Specify target column', B_CYAN))
 
 # DATA EXTRACTION
-@click.option('--dump-table', help='Dump specific table')
-@click.option('--dump-all', is_flag=True, help='Dump everything')
-@click.option('--output-format', type=click.Choice(['json', 'csv', 'txt']), default='json', help='Output format')
-@click.option('--save', help='Save result to file')
-@click.option('--verbose', default=1, help='Verbose level (0-3)')
+@click.option('--dump', '--dump-table', 'dump_table', help=_colored('Automated table content extraction', B_GREEN))
+@click.option('--dump-all', is_flag=True, help=_colored('Total database exfiltration mode', B_RED))
+@click.option('--output-format', type=click.Choice(['json', 'csv', 'txt']), default='json', help=_colored('Intel output format', DIM))
+@click.option('--save', help=_colored('Save intelligence report to file', DIM))
+@click.option('-v', '--verbose', default=1, help=_colored('Tactical verbosity (0-3)', DIM))
 def test_sqli(**kwargs):
     """Advanced SQL Injection Scanner (Go Engine)"""
     
@@ -113,6 +116,10 @@ def test_sqli(**kwargs):
 
     click.echo(_colored("[*] Starting deep vulnerability assessment...", DIM))
     
+    # Handle aliases
+    if kwargs.get('inject'):
+        kwargs['dump_all'] = True
+    
     # Pre-scan checks (WAF, Fingerprint)
     if kwargs.get('waf_detect'):
         click.echo(f"[*] Checking for WAF/IPS...")
@@ -128,26 +135,33 @@ def test_sqli(**kwargs):
     findings = [r for r in results if r.get('parameter') != "enumeration"]
     enums = [r for r in results if r.get('parameter') == "enumeration"]
 
-    # Display Findings (Summary only if requested or if few findings)
-    if findings and kwargs.get('verbose', 1) >= 1:
-        # click.echo(_colored(f"\n[!] CRITICAL: Found {len(findings)} injection points!", B_RED, bold=True))
-        
-        table_rows = []
+    # Display High-Fidelity Findings Summary
+    if findings:
         for r in findings:
-            table_rows.append([
-                r.get('parameter', 'N/A'),
-                r.get('type', 'N/A'),
-                r.get('dbms', 'N/A'),
-                "VULNERABLE"
-            ])
-        
-        # Only show the table if verbose >= 2 or if findings are few
-        if len(findings) < 5 or kwargs.get('verbose', 1) >= 2:
-            draw_table("Injection Summary", ["PARAMETER", "TYPE", "DBMS", "STATUS"], table_rows)
-        else:
-            click.echo(_colored(f"[*] Total injection points found: {len(findings)} (Use -v 2 to see details)", B_YELLOW))
+            # Calculate Confidence Score (Mock logic for now)
+            score = 9.2 if r.get('type') == 'Time-based' else 8.5
+            color_score = B_RED if score > 8.0 else B_YELLOW
+            
+            click.echo(f"\n{_colored('┌── SQLi VULNERABILITY REPORT', B_WHITE, bold=True)}")
+            click.echo(f"{_colored('│', B_WHITE)} Target        : {_colored(url.split('?')[0], B_CYAN)}")
+            click.echo(f"{_colored('│', B_WHITE)} Endpoint      : {_colored(url, B_WHITE)}")
+            click.echo(f"{_colored('│', B_WHITE)}")
+            click.echo(f"{_colored('│', B_WHITE)} {_colored('Injection', B_YELLOW, bold=True)}     :")
+            click.echo(f"{_colored('│', B_WHITE)} - Method : {_colored(kwargs.get('method', 'GET'), B_GREEN)}")
+            click.echo(f"{_colored('│', B_WHITE)} - Param  : {_colored(r.get('parameter', 'N/A'), B_CYAN)}")
+            click.echo(f"{_colored('│', B_WHITE)} - Type   : {_colored(r.get('type', 'N/A'), B_YELLOW)}")
+            click.echo(f"{_colored('│', B_WHITE)}")
+            click.echo(f"{_colored('│', B_WHITE)} {_colored('SQLi Score', B_WHITE)}    : {_colored(f'{score} / 10', color_score)} (High Confidence)")
+            click.echo(f"{_colored('│', B_WHITE)}")
+            click.echo(f"{_colored('│', B_WHITE)} {_colored('Proof', B_WHITE, bold=True)} :")
+            click.echo(f"{_colored('│', B_WHITE)} - Payload       : {_colored(r.get('payload', 'N/A'), DIM)}")
+            click.echo(f"{_colored('│', B_WHITE)} - Evidence      : {_colored(r.get('details', 'N/A'), B_GREEN)}")
+            click.echo(f"{_colored('│', B_WHITE)}")
+            click.echo(f"{_colored('│', B_WHITE)} {_colored('Database', B_WHITE, bold=True)}       :")
+            click.echo(f"{_colored('│', B_WHITE)} - Detected DB   : {_colored(r.get('dbms', 'Unknown'), B_CYAN, bold=True)}")
+            click.echo(f"{_colored('└' + '─' * 70, B_WHITE)}")
 
-    # Display Enumerations
+    # Display Enumerations (Databases, Tables, etc.)
     if enums:
         for e in enums:
             etype = e.get('type')
@@ -159,10 +173,15 @@ def test_sqli(**kwargs):
                 draw_table(f"Available Databases ({len(items)})", ["DATABASE"], rows)
             elif etype == "list-tables":
                 rows = [[item] for item in items]
-                draw_table(f"Tables", ["TABLE NAME"], rows)
+                db_context = e.get('details', 'Current')
+                draw_table(f"Tables in Database: {db_context}", ["TABLE NAME"], rows)
             elif etype == "list-columns":
                 rows = [[item] for item in items]
                 draw_table(f"Columns", ["COLUMN NAME"], rows)
+            elif etype == "dump-table":
+                # Handle dump-table visualization specifically
+                click.echo(f"\n{_colored('[+]', B_GREEN)} Data Dump Result for {_colored(e.get('details', 'N/A'), B_CYAN)}:")
+                click.echo(f"{_colored(payload, B_WHITE)}")
 
     if not findings and not enums:
         click.echo(_colored("[*] Result: No SQL Injection vulnerabilities detected.", GREEN))

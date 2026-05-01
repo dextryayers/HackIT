@@ -186,10 +186,24 @@ def dirfinder(**kwargs):
     click.echo("\n[+] Starting Expert Scan...\n")
     
     try:
-        # Execute Go binary and stream output with UTF-8 encoding
-        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8', errors='replace')
-        for line in process.stdout:
-            print(line, end='')
+        # Execute Go binary and stream output unbuffered
+        process = subprocess.Popen(
+            cmd, 
+            stdout=subprocess.PIPE, 
+            stderr=subprocess.STDOUT, 
+            text=True, 
+            encoding='utf-8', 
+            errors='replace',
+            bufsize=1
+        )
+        
+        while True:
+            line = process.stdout.readline()
+            if not line and process.poll() is not None:
+                break
+            if line:
+                print(line, end='', flush=True)
+        
         process.wait()
     except KeyboardInterrupt:
         click.echo("\n[!] Scan interrupted by user.")

@@ -21,15 +21,21 @@ func parsePorts(pStr string) []int {
 		if strings.Contains(part, "-") {
 			ranges := strings.Split(part, "-")
 			if len(ranges) == 2 {
-				start, _ := strconv.Atoi(ranges[0])
-				end, _ := strconv.Atoi(ranges[1])
-				for i := start; i <= end; i++ {
-					ports = append(ports, i)
+				start, err1 := strconv.Atoi(ranges[0])
+				end, err2 := strconv.Atoi(ranges[1])
+				if err1 == nil && err2 == nil {
+					for i := start; i <= end; i++ {
+						if i > 0 && i <= 65535 {
+							ports = append(ports, i)
+						}
+					}
 				}
 			}
 		} else {
-			p, _ := strconv.Atoi(part)
-			ports = append(ports, p)
+			p, err := strconv.Atoi(part)
+			if err == nil && p > 0 && p <= 65535 {
+				ports = append(ports, p)
+			}
 		}
 	}
 	return unique(ports)
