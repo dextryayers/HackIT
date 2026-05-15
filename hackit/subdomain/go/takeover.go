@@ -1,11 +1,11 @@
 package main
 
 import (
+	"crypto/tls"
 	"fmt"
 	"io/ioutil"
 	"net"
 	"net/http"
-	"os"
 	"runtime"
 	"strings"
 	"sync"
@@ -42,14 +42,15 @@ type Signature struct {
 	Content string
 }
 
+// Enhanced Industrial Signatures (v2.5)
 var signatures = []Signature{
-	{Service: "GitHub Pages", CNAME: []string{"github.io"}, Content: "There isn't a GitHub Pages site here."},
+	{Service: "GitHub Pages", CNAME: []string{"github.io", "github.com"}, Content: "There isn't a GitHub Pages site here."},
 	{Service: "Heroku", CNAME: []string{"herokuapp.com"}, Content: "Heroku | Welcome to your new app!"},
 	{Service: "Heroku", CNAME: []string{"herokuapp.com"}, Content: "no-such-app.html"},
 	{Service: "Shopify", CNAME: []string{"myshopify.com"}, Content: "Sorry, this shop is currently unavailable."},
 	{Service: "Tumblr", CNAME: []string{"tumblr.com"}, Content: "There's nothing here."},
 	{Service: "WordPress.com", CNAME: []string{"wordpress.com"}, Content: "Do you want to register"},
-	{Service: "AWS S3", CNAME: []string{"amazonaws.com"}, Content: "The specified bucket does not exist"},
+	{Service: "AWS S3", CNAME: []string{"amazonaws.com", "s3.amazonaws.com"}, Content: "The specified bucket does not exist"},
 	{Service: "Bitbucket", CNAME: []string{"bitbucket.io"}, Content: "Repository not found"},
 	{Service: "Zendesk", CNAME: []string{"zendesk.com"}, Content: "Help Center Closed"},
 	{Service: "Surge.sh", CNAME: []string{"surge.sh"}, Content: "project not found"},
@@ -69,11 +70,15 @@ var signatures = []Signature{
 	{Service: "Tictail", CNAME: []string{"tictail.com"}, Content: "to see this store"},
 	{Service: "Unbounce", CNAME: []string{"unbouncepages.com"}, Content: "The requested URL was not found on this server"},
 	{Service: "UserVoice", CNAME: []string{"uservoice.com"}, Content: "This UserVoice subdomain is currently available"},
-	{Service: "Wix", CNAME: []string{"wixdns.net"}, Content: "The domain is not connected to a website"},
+	{Service: "Wix", CNAME: []string{"wixdns.net", "wixsite.com"}, Content: "The domain is not connected to a website"},
+	{Service: "Azure App Service", CNAME: []string{"azurewebsites.net"}, Content: "404 Web Site not found"},
+	{Service: "Cloudfront", CNAME: []string{"cloudfront.net"}, Content: "Bad request. We can't connect to the server for this app or website at this time."},
+	{Service: "Acquia", CNAME: []string{"acquia-test.co"}, Content: "Site not found"},
+	{Service: "Fastly", CNAME: []string{"fastly.net"}, Content: "Fastly error: unknown domain"},
 }
 
 func checkTakeovers(results []*Result, concurrency int) {
-	fmt.Println("[*] Checking for Subdomain Takeover vulnerabilities...")
+	fmt.Println("[*] Running Advanced Subdomain Takeover Analysis...")
 
 	sem := make(chan bool, concurrency)
 	var wg sync.WaitGroup
@@ -85,66 +90,83 @@ func checkTakeovers(results []*Result, concurrency int) {
 			defer wg.Done()
 			defer func() { <-sem }()
 
-			// 1. Rust-powered Takeover Check (Expert & Fast)
+			// 1. Rust-powered Takeover Check (Aurat Presisi)
 			if rustCheckSubTakeover != nil && rustCheckSubTakeover.Find() == nil {
 				cDomain := []byte(res.Subdomain + "\x00")
 				ptr, _, _ := rustCheckSubTakeover.Call(uintptr(unsafe.Pointer(&cDomain[0])))
 				if ptr != 0 {
-					rustResult := strings.TrimSpace(os.ExpandEnv(string(CStrToGo(ptr))))
+					rustResult := strings.TrimSpace(string(CStrToGo(ptr)))
 					if strings.HasPrefix(rustResult, "VULNERABLE:") {
 						vulnInfo := strings.TrimPrefix(rustResult, "VULNERABLE:")
 						res.TakeoverVuln = vulnInfo
-						fmt.Printf("[!] POTENTIAL TAKEOVER (RUST): %s [%s]\n", res.Subdomain, vulnInfo)
+						fmt.Printf("\033[1;31m[!] POTENTIAL TAKEOVER (RUST): %s [%s]\033[0m\n", res.Subdomain, vulnInfo)
 						return
 					}
 				}
 			}
 
-			// 2. Fallback to Go implementation
-			// 1. Check CNAME
-			cnames, err := net.LookupCNAME(res.Subdomain)
-			if err != nil {
-				return
-			}
-
-			// Clean CNAME (remove trailing dot)
-			cnames = strings.TrimSuffix(cnames, ".")
-
-			for _, sig := range signatures {
-				matchedCNAME := false
-				for _, c := range sig.CNAME {
-					if strings.Contains(strings.ToLower(cnames), strings.ToLower(c)) {
-						matchedCNAME = true
-						break
-					}
-				}
-
-				if matchedCNAME {
-					// Potentially vulnerable, check content
-					if checkContent(res.Subdomain, sig.Content) {
-						res.TakeoverVuln = sig.Service
-						fmt.Printf("%s[!] POTENTIAL TAKEOVER: %s [%s] (CNAME: %s)%s\n", "\033[31m", res.Subdomain, sig.Service, cnames, "\033[0m")
-						return
-					}
-				}
-			}
+			// 2. Fallback to Go Implementation (Recursive CNAME Tracking)
+			trackCNAME(res)
 		}(r)
 	}
 	wg.Wait()
 }
 
+func trackCNAME(res *Result) {
+	domain := res.Subdomain
+	maxRecursion := 3
+	
+	for i := 0; i < maxRecursion; i++ {
+		cname, err := net.LookupCNAME(domain)
+		if err != nil {
+			return
+		}
+		cname = strings.TrimSuffix(cname, ".")
+		if cname == domain {
+			break
+		}
+
+		for _, sig := range signatures {
+			matched := false
+			for _, s := range sig.CNAME {
+				if strings.Contains(strings.ToLower(cname), strings.ToLower(s)) {
+					matched = true
+					break
+				}
+			}
+
+			if matched {
+				if checkContent(res.Subdomain, sig.Content) {
+					res.TakeoverVuln = sig.Service
+					fmt.Printf("\033[1;31m[!] POTENTIAL TAKEOVER: %s [%s] (CNAME: %s)\033[0m\n", res.Subdomain, sig.Service, cname)
+					return
+				}
+			}
+		}
+		domain = cname
+	}
+}
+
 func checkContent(domain string, signature string) bool {
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get("http://" + domain)
-	if err != nil {
-		return false
+	client := &http.Client{
+		Timeout: 5 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
 	}
-	defer resp.Body.Close()
-
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return false
+	
+	// Try HTTPS first, then HTTP
+	protocols := []string{"https://", "http://"}
+	for _, proto := range protocols {
+		resp, err := client.Get(proto + domain)
+		if err != nil {
+			continue
+		}
+		defer resp.Body.Close()
+		body, err := ioutil.ReadAll(resp.Body)
+		if err == nil && strings.Contains(string(body), signature) {
+			return true
+		}
 	}
-
-	return strings.Contains(string(body), signature)
+	return false
 }

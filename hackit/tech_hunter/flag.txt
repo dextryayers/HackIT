@@ -1,0 +1,204 @@
+================= HUNTER CLI FLAGS =================
+
+[ CORE ]
+-t, --target <domain|ip>        : Target utama (domain/IP)
+-i, --input <file>              : File berisi banyak target
+--scope-file <file>             : Scope yang diperbolehkan
+--exclude <file>                : Target yang di-skip
+--threads <num>                 : Jumlah thread
+--timeout <sec>                 : Timeout request
+--rate <num>                    : Request per detik
+--proxy <url>                   : Gunakan proxy
+--output <file>                 : Simpan hasil
+--format json|txt|yaml|html     : Format output
+--silent                        : Output minimal
+--verbose                       : Output detail
+--debug                         : Debug mode
+
+[ TARGET IDENTITY ]
+--whois                         : Ambil data WHOIS
+--whois-full                    : WHOIS lengkap
+--registrar                     : Info registrar
+--org                           : Info organisasi
+--contacts                      : Email & kontak
+
+[ DNS ]
+--dns                           : Query DNS dasar
+--dns-bruteforce                : Brute subdomain DNS
+--dns-zone-transfer             : Coba AXFR
+--dns-records A,AAAA,MX,TXT     : Record spesifik
+--dns-history                   : Riwayat DNS
+--passive-dns                   : Data DNS pasif
+
+[ NETWORK ]
+--port-scan                     : Scan port
+--ports 1-65535                 : Range port
+--top-ports <num>               : Port populer
+--udp                           : Scan UDP
+--service-detect                : Deteksi service
+--banner                        : Ambil banner
+--os-detect                     : Deteksi OS
+--traceroute                    : Jalur network
+
+[ WEB & TLS ]
+--http                          : Scan HTTP
+--headers                       : Ambil header
+--tls                           : Info TLS dasar
+--tls-deep                      : TLS mendalam
+--ciphers                       : Cipher suite
+--ssl-cert                      : Info sertifikat
+--cert-transparency             : Data CT log
+
+[ TECHNOLOGY ]
+--tech                          : Deteksi teknologi
+--tech-deep                     : Versi & detail
+--cms-detect                    : CMS (WordPress, dll)
+--framework-detect              : Framework backend
+--js-libs                       : Library JS
+
+[ SUBDOMAIN & ASSET ]
+--subdomains                    : Enumerasi subdomain
+--sub-passive                   : Tanpa brute
+--sub-active                    : Scan aktif
+--sub-bruteforce                : Brute subdomain
+--sub-takeover                  : Cek takeover
+--asset-discovery               : Cari asset lain
+
+[ FILE & DIRECTORY ]
+--fuzz                          : Fuzzing path
+--wordlist <file>               : Wordlist custom
+--dirscan                       : Scan direktori
+--filescan                      : Scan file
+--sensitive-files               : Cari file sensitif
+--backup-files                  : Cari backup
+
+[ AUTH ]
+--auth-detect                   : Deteksi login/auth
+--session-analysis              : Analisis session
+--jwt-analysis                  : Analisis JWT
+--oauth-check                   : Cek OAuth
+--mfa-detect                    : Deteksi MFA
+
+[ API ]
+--api                           : Deteksi API
+--api-discovery                 : Cari endpoint
+--graphql                       : Deteksi GraphQL
+--swagger                       : Cek Swagger
+--postman-leak                  : Cari Postman
+--api-auth                      : Auth API
+
+[ CLOUD ]
+--cloud                         : Deteksi cloud
+--s3-scan                       : Scan S3 bucket
+--firebase                      : Cek Firebase
+--azure                         : Asset Azure
+--gcp                           : Asset GCP
+--third-party                   : Integrasi eksternal
+--cdn-detect                    : Deteksi CDN
+--waf-detect                    : Deteksi WAF
+--origin-ip                     : Cari IP asli
+
+[ JAVASCRIPT ]
+--js                            : Analisis JS
+--js-endpoints                  : Endpoint dari JS
+--js-secrets                    : Secret di JS
+--js-map                        : Source map
+
+[ BEHAVIOR ]
+--behavior                      : Pola respon server
+--rate-limit-detect             : Deteksi rate limit
+--anomaly-detect                : Cari keanehan
+--logic-analysis                : Analisis logic app
+
+[ GRAPH & CORRELATION ]
+--graph                         : Mapping relasi
+--relations                     : Hubungan asset
+--data-flow                     : Alur data
+--trust-boundary                : Zona sistem
+
+[ SCORING ]
+--attack-surface                : Luas attack surface
+--score                         : Skor risiko
+--risk                          : Level risiko
+--priority                      : Prioritas target
+
+[ ATTACK PATH ]
+--attack-path                   : Jalur serangan
+--exploit-path                  : Jalur exploit
+--chain-analysis                : Korelasi vuln
+
+[ INTELLIGENCE ]
+--insight                       : Insight otomatis
+--smart-analysis                : Analisis pintar
+--auto-recon                    : Recon otomatis
+
+[ HISTORY ]
+--wayback                       : Data archive
+--archive                       : Snapshot lama
+--change-detect                 : Perubahan
+--historical                    : Data historis
+
+[ OSINT ]
+--osint                         : Data publik
+--employees                     : Info karyawan
+--emails                        : Email ditemukan
+--github                        : Repo terkait
+--leaks                         : Data bocor
+--darkweb                       : Referensi darkweb
+
+[ DOCUMENT ]
+--docs                          : Cari dokumen
+--metadata                      : Metadata file
+--exif                          : Data EXIF
+--file-dork                     : Google dork file
+
+[ EMAIL SECURITY ]
+--email-sec                     : Analisis email
+--spf                           : SPF record
+--dkim                          : DKIM
+--dmarc                         : DMARC
+--spoof-check                   : Cek spoofing
+
+[ MOBILE ]
+--mobile                        : Analisis app
+--apk                           : Android APK
+--ios                           : iOS app
+--mobile-api                    : API mobile
+
+[ GEO ]
+--geo                           : Lokasi IP
+--location                      : Detail lokasi
+--office                        : Kantor target
+--wifi                          : SSID sekitar
+
+[ THREAT ]
+--threat                        : Threat intel
+--breach                        : Data breach
+--malware                       : Malware terkait
+--blacklist                     : Status blacklist
+
+[ SUPPLY CHAIN ]
+--supply-chain                  : Vendor pihak ke-3
+--vendors                       : Daftar vendor
+--partners                      : Partner bisnis
+
+[ MODES ]
+--quick                         : Scan cepat
+--recon                         : Recon standar
+--full                          : Semua modul
+--stealth                       : Low profile scan
+--aggressive                    : Scan agresif
+
+[ SPECIAL ]
+--only-high                     : Tampilkan high risk
+--no-noise                      : Filter hasil
+--safe-mode                     : Tanpa agresif
+--evade-waf                     : Bypass WAF
+--fingerprint-deep              : Fingerprint dalam
+
+====================================================
+
+Contoh:
+hunter -t example.com --full --output result.json
+hunter -t example.com --api --js --auth --attack-path
+hunter -t example.com --cloud --s3-scan --origin-ip

@@ -1,5 +1,5 @@
 /*
- * Advanced C Port Scanner with Nmap-like Capabilities
+ * Advanced C Port Scanner with HackIT-like Capabilities
  * Real-time streaming, advanced probing, and comprehensive service detection
  */
 

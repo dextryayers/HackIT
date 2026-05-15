@@ -1,4 +1,4 @@
-// Ultra-Fast Rust Port Scanner with Nmap-like Capabilities
+// Ultra-Fast Rust Port Scanner with HackIT-like Capabilities
 // Masscan-style performance with real-time streaming
 
 use std::net::{SocketAddr, TcpStream, UdpSocket};

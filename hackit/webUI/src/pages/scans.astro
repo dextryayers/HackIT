@@ -1,0 +1,39 @@
+---
+import Layout from '../layouts/Layout.astro';
+---
+
+<Layout title="HackIt | Scan History">
+	<div class="p-8 lg:p-10 space-y-8">
+		<header>
+			<h2 class="text-xl font-bold text-white tracking-tight">MISSION HISTORY</h2>
+			<p class="text-slate-500 text-xs">Audit trail of all tactical reconnaissance and OSINT operations</p>
+		</header>
+
+		<div class="bg-[#0a0a0a] border border-white/5 rounded-2xl overflow-hidden shadow-2xl">
+			<table class="w-full text-left border-collapse">
+				<thead class="bg-white/[0.02] border-b border-white/5">
+					<tr>
+						<th class="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">ID</th>
+						<th class="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Target</th>
+						<th class="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Profile</th>
+						<th class="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Findings</th>
+						<th class="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Duration</th>
+						<th class="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Status</th>
+					</tr>
+				</thead>
+				<tbody class="divide-y divide-white/5 text-xs">
+					<!-- Empty State: No mission history -->
+					<tr>
+						<td colspan="6" class="px-6 py-24 text-center">
+							<div class="flex flex-col items-center gap-3 opacity-20">
+								<div class="text-3xl">📜</div>
+								<p class="text-[10px] font-bold tracking-[0.4em] uppercase text-slate-500">History Log Empty</p>
+								<p class="text-[10px] text-slate-700">No tactical engagements recorded in this session</p>
+							</div>
+						</td>
+					</tr>
+				</tbody>
+			</table>
+		</div>
+	</div>
+</Layout>

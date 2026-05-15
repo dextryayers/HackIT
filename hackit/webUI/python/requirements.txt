@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+httpx
+dnspython
+pydantic
+typing-extensions
+python-multipart

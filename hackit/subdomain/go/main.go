@@ -5,9 +5,18 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"time"
 )
 
 func main() {
+	// Global Recovery for Industrial Stability
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Printf("\n\033[1;31m[!] CRITICAL ENGINE FAILURE: %v\033[0m\n", r)
+			os.Exit(1)
+		}
+	}()
+
 	// Parse Flags
 	domain := flag.String("d", "", "Target domain")
 	wordlist := flag.String("w", "", "Wordlist path")
@@ -38,9 +47,7 @@ func main() {
 	flag.Parse()
 
 	if *domain == "" {
-		// Only print help/error if no arguments or domain missing
-		// But for CLI tools, maybe just exit 1
-		fmt.Println("[!] Domain is required")
+		fmt.Println("[!] Target domain is required (-d domain.com)")
 		os.Exit(1)
 	}
 
@@ -69,146 +76,99 @@ func main() {
 		Verbose:      *verbose,
 	}
 
+	// Industrial-Grade Adaptive Tuning
 	if config.Deep {
 		config.Recursive = true
-		// Permutations are now optional and not forced by deep mode if user wants pure crawl
 		if !config.Stealth {
-			config.Concurrency = 300
+			config.Concurrency = 400 // Boosted for deep intelligence
 		}
 	}
 	if config.Fast {
-		config.Concurrency = 200
-		config.Timeout = 5
+		config.Concurrency = 500 // Ultra-high for lightning speed
+		config.Timeout = 4
 	}
 	if config.Stealth {
-		config.Concurrency = 10
-		config.Timeout = 20
+		config.Concurrency = 5
+		config.Timeout = 15
 	}
 
-	// Luxury Startup UI
-	fmt.Printf("%s[#] HACKIT ENGINE v2.1.0 %s|%s TARGET: %s%s%s %s|%s MODE: %s%s\n", 
-		colorCyan, colorWhite, colorGreen, colorWhite, config.Domain, colorReset, colorWhite, colorBlue, "CRAWL-OPTIMIZED", colorReset)
-	fmt.Printf("%s[*] Initialization complete. Starting deep intelligence sequence...%s\n\n", colorYellow, colorReset)
+	// Luxury Professional Banner
+	startTime := time.Now()
+	fmt.Printf("\033[1;36m[#] HACKIT INDUSTRIAL RECON v3.0\033[0m | \033[1;32mTARGET: %s\033[0m\n", config.Domain)
+	fmt.Printf("\033[1;34m[*] Engaged Engines: OSINT, Brute, CNAME-Chain, HTTP-Probe\033[0m\n")
+	fmt.Printf("\033[1;33m[*] Threading Grid: %d workers | Timeout: %ds\033[0m\n\n", config.Concurrency, config.Timeout)
 
-	// 0. Wildcard Detection
+	// 0. Wildcard Detection (Essential for professional results)
 	DetectWildcard(config.Domain)
 
-	// 1. Passive Enumeration (Crawl Engine)
+	// 1. Passive OSINT Phase
 	if !config.ActiveOnly {
-		fmt.Printf("%s[>] PHASE 1:%s %sStarting OSINT Crawl Engine (80+ Sources)...%s\n", colorBlue, colorReset, colorWhite, colorReset)
-
+		fmt.Printf("\033[1;34m[>] PHASE 1:\033[0m Executing Multi-Source Passive Extraction...\n")
 		passiveChan := make(chan []string)
 		go runPassive(config.Domain, passiveChan, config.Verbose)
 
-		count := 0
 		for subs := range passiveChan {
 			for _, s := range subs {
 				addResult(s, nil, "passive")
-				count++
 			}
 		}
 	}
 
-	// 2. Probing Phase
-	if config.Probe || config.ShowIP || config.ShowSC {
-		fmt.Printf("%s[>] PHASE 2:%s %sAnalyzing Assets & Probing Life-signs...%s\n", colorBlue, colorReset, colorWhite, colorReset)
-	}
-
-	// 2. Active Enumeration
-	if !config.PassiveOnly && config.Wordlist != "" {
-		jobs := make(chan string, config.Concurrency)
+	// 2. Active Discovery Phase
+	if !config.PassiveOnly {
+		fmt.Printf("\033[1;34m[>] PHASE 2:\033[0m Activating High-Performance Active Discovery...\n")
+		jobs := make(chan string, config.Concurrency*2)
 		var wgResolve sync.WaitGroup
 
-		// Start Resolver Workers
 		for i := 0; i < config.Concurrency; i++ {
 			wgResolve.Add(1)
 			go resolveWorker(jobs, &wgResolve, config.Verbose, config.Domain, config.Recursive)
 		}
 
-		// Run Active
 		runActive(config, jobs)
+		
+		// Permutations
+		if config.Permutations {
+			fmt.Printf("\033[1;34m[>] PHASE 3:\033[0m Generating Smart Permutations (Altdns style)...\n")
+			currentResults := getResults()
+			runPermutations(currentResults, config.Domain, jobs)
+		}
+
 		close(jobs)
 		wgResolve.Wait()
 	}
 
-	// 2.5 Permutations
-	if config.Permutations {
-		finalResultsSoFar := getResults()
-		if len(finalResultsSoFar) > 0 {
-			jobs := make(chan string, config.Concurrency)
-			var wgPerm sync.WaitGroup
-
-			for i := 0; i < config.Concurrency; i++ {
-				wgPerm.Add(1)
-				go resolveWorker(jobs, &wgPerm, config.Verbose, config.Domain, config.Recursive)
-			}
-
-			runPermutations(finalResultsSoFar, config.Domain, jobs)
-			close(jobs)
-			wgPerm.Wait()
-		}
-	}
-
-	// 2.6 Deep Recursive Scan
-	if config.Recursive {
-		finalResultsSoFar := getResults()
-		if len(finalResultsSoFar) > 0 {
-			runDeep(finalResultsSoFar, config)
-		}
-	}
-
-	// 3. Collect Results
+	// 3. Post-Discovery Intelligence
 	finalResults := getResults()
-
-	// 4. Resolve IPs if requested (and not already resolved by active)
-	// Active scan resolves IPs, but Passive ones might not have IPs yet
-	if config.ShowIP || config.Takeover || config.ShowASN {
-		if config.Verbose {
-			fmt.Println("[*] Resolving IPs...")
-		}
+	
+	if len(finalResults) > 0 {
+		fmt.Printf("\033[1;34m[>] PHASE 4:\033[0m Consolidating Assets & Auditing Infrastructure...\n")
+		
+		// Resolve missing IPs for OSINT findings
 		resolveIPs(finalResults, config.Concurrency)
-
-		// 4.1 Filter Wildcard False Positives
 		finalResults = filterWildcards(finalResults)
-	}
 
-	// 5. ASN Lookup
-	if config.ShowASN {
-		if config.Verbose {
-			fmt.Println("[*] Resolving ASNs...")
+		if config.ShowASN {
+			resolveASNs(finalResults, config.Concurrency)
 		}
-		resolveASNs(finalResults, config.Concurrency)
-	}
 
-	// 6. Takeover Check
-	if config.Takeover {
-		if config.Verbose {
-			fmt.Println("[*] Checking for Takeovers...")
+		if config.Takeover {
+			checkTakeovers(finalResults, config.Concurrency)
 		}
-		checkTakeovers(finalResults, config.Concurrency)
-	}
 
-	// 7. Probe HTTP if requested
-	needsProbe := config.ShowSC || config.ShowTitle || config.ShowServer || config.TechDetect || config.Probe
-	if needsProbe {
-		if config.Verbose {
-			fmt.Println("[*] Probing HTTP services...")
+		needsProbe := config.ShowSC || config.ShowTitle || config.ShowServer || config.TechDetect || config.Probe
+		if needsProbe {
+			fmt.Printf("\033[1;34m[>] PHASE 5:\033[0m Probing Life-signs & Fingerprinting Tech Stacks...\n")
+			runProbe(finalResults, config)
 		}
-		runProbe(finalResults, config)
 	}
 
-	// 6. Output
-	if len(finalResults) == 0 {
-		fmt.Println("[!] No subdomains found.")
-		fmt.Println("    Hints:")
-		fmt.Println("    - Check domain spelling (e.g., .go.id vs .gp.id)")
-		fmt.Println("    - Check internet connectivity")
-		fmt.Println("    - Try using a wordlist with -w")
-	}
+	// 4. Output Generation
 	printResults(finalResults, config)
 
-	// 7. Summary
-	fmt.Printf("\n %s[#] SCAN COMPLETE %s|%s TOTAL DISCOVERED: %s%d%s\n", 
-		colorCyan, colorWhite, colorGreen, colorWhite, len(finalResults), colorReset)
-	fmt.Printf(" %s----------------------------------------------------------------------------%s\n\n", colorBlue, colorReset)
+	// 5. Tactical Summary
+	duration := time.Since(startTime)
+	fmt.Printf("\n\033[1;36m[#] MISSION ACCOMPLISHED\033[0m | \033[1;32mELAPSED: %v\033[0m | \033[1;32mTOTAL ASSETS: %d\033[0m\n", 
+		duration.Truncate(time.Second), len(finalResults))
+	fmt.Printf("\033[1;34m--------------------------------------------------------------------------------\033[0m\n\n")
 }

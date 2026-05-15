@@ -92,7 +92,7 @@ public:
             return "";
         }
 
-        // For some protocols, we need to send a probe first (like Nmap)
+        // For some protocols, we need to send a probe first (like HackIT)
         if (port == 80 || port == 8080) {
             string probe = "HEAD / HTTP/1.0\r\n\r\n";
             send(s, probe.c_str(), probe.length(), 0);

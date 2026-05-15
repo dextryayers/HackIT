@@ -1,16 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"net"
-	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
-	"regexp"
-	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -20,976 +19,834 @@ import (
 	"github.com/fatih/color"
 )
 
-type PathDiscovery struct {
-	Path          string `json:"path"`
-	Status        int    `json:"status"`
-	ContentLength int64  `json:"content_length"`
-	Title         string `json:"title"`
-	Risk          string `json:"risk"`
+// --- Full Intelligence Map Structs ---
+
+type Result struct {
+	URL             string              `json:"url"`
+	Status          int                 `json:"status"`
+	Title           string              `json:"title"`
+	IP              string              `json:"ip"`
+	Server          string              `json:"server"`
+	Technologies    map[string]TechInfo `json:"technologies"`
+	Headers         map[string]string   `json:"headers"`
+	DNS             *DNSInfo            `json:"dns,omitempty"`
+	Whois           *WhoisInfo          `json:"whois,omitempty"`
+	Forensics       string              `json:"forensics,omitempty"`
+	Industry        string              `json:"industry,omitempty"`
+	Description     string              `json:"description,omitempty"`
+	Aliases         []string            `json:"aliases,omitempty"`
+	Network         []*NetworkInfo      `json:"network,omitempty"`
+	DNSEnum         *DNSEnumResult      `json:"dns_enum,omitempty"`
+	DNSHistory      *DNSHistoryResult   `json:"dns_history,omitempty"`
+	SSLAnalysis     *SSLAnalysisResult  `json:"ssl_analysis,omitempty"`
+	PassiveDNS      *PassiveDNSResult   `json:"passive_dns,omitempty"`
+	PortScan        []PortResult        `json:"port_scan,omitempty"`
+	WAF             *WAFResult          `json:"waf,omitempty"`
+	WebAudit        *WebAudit           `json:"web_audit,omitempty"`
+	OriginDiscovery *OriginResult       `json:"origin_discovery,omitempty"`
+	Subsidiaries    *SubsidiaryResult   `json:"subsidiaries,omitempty"`
+	InfraForensics  *InfraForensics     `json:"infra_forensics,omitempty"`
+	TCPForensics    string              `json:"tcp_forensics,omitempty"`
+	BypassStrategy  string              `json:"bypass_strategy,omitempty"`
+	AppFingerprint  *AppFingerprint     `json:"app_fingerprint,omitempty"`
+	CMSCloud        *CMSCloudResult     `json:"cms_cloud,omitempty"`
+	TechStackAdvanced *TechStackAdvanced `json:"tech_stack_advanced,omitempty"`
+	Endpoints       []string            `json:"endpoints,omitempty"`
+	ThirdParty      string              `json:"third_party,omitempty"`
+	ScrapedContacts *ContactResult      `json:"scraped_contacts,omitempty"`
 }
 
-// RustScanResult matches the Rust struct
-type SubdomainInfo struct {
-	Subdomain string `json:"subdomain"`
-	IP        string `json:"ip"`
-	Status    string `json:"status"`
+type ContactResult struct {
+	Emails []string `json:"emails"`
+	Phones []string `json:"phones"`
 }
 
-// RustTechInfo matches the Rust TechInfo struct
-type RustTechInfo struct {
-	Name       string `json:"name"`
+type CMSCloudResult struct {
+	CMS         string `json:"cms"`
+	Framework   string `json:"framework"`
+	CloudAssets struct {
+		S3Buckets   []string `json:"s3_buckets"`
+		GCPBuckets  []string `json:"gcp_buckets"`
+		Firebase    []string `json:"firebase"`
+		GithubOrg   string   `json:"github_org"`
+	} `json:"cloud_assets"`
+}
+
+type TechStackAdvanced struct {
+	Frontend      string   `json:"frontend"`
+	Backend       string   `json:"backend"`
+	JSLibs        []string `json:"js_libs"`
+	CSSFrameworks []string `json:"css_frameworks"`
+	BuildTools    string   `json:"build_tools"`
+	Analytics     []string `json:"analytics"`
+}
+
+type SubsidiaryResult struct {
+	Aliases      []string `json:"aliases"`
+	Subsidiaries []string `json:"subsidiaries"`
+}
+
+type InfraForensics struct {
+	Traceroute string `json:"traceroute"`
+}
+
+type AppFingerprint struct {
+	Framework  string `json:"framework"`
+	CMS        string `json:"cms"`
 	Confidence int    `json:"confidence"`
-	Category   string `json:"category"`
-	Version    string `json:"version,omitempty"`
 }
 
-type RustScanResult struct {
-	URL             string                  `json:"url"`
-	Status          int                     `json:"status"`
-	Headers         map[string]string       `json:"headers"`
-	BodySnippet     string                  `json:"body_snippet"`
-	ResponseTimeMs  int64                   `json:"response_time_ms"`
-	Error           string                  `json:"error"`
-	FaviconHash     string                  `json:"favicon_hash"`
-	TLSInfo         *TLSInfo                `json:"tls_info"`
-	Technologies    map[string]RustTechInfo `json:"detected_techs"`
-	WAFInfo         []string                `json:"waf_info"`
-	Vulnerabilities []Vulnerability         `json:"vulnerabilities"`
-	Whois           *WhoisInfo              `json:"whois"`
-	OpenPorts       []PortInfo              `json:"open_ports"`
-	ContactInfo     ContactInfo             `json:"contact_info"`
-	JSRecon         JSReconInfo             `json:"js_recon"`
-	DNSInfo         *DNSInfo                `json:"dns_info"`
-	HeaderSecurity  *HeaderSecurity         `json:"header_security"`
-	PathDiscoveries []PathDiscovery         `json:"path_discoveries"`
-	Subdomains      []SubdomainInfo         `json:"subdomains"`
-	ServerDetails   ServerDetails           `json:"server_details"`
-	DBDetails       *DBDetails              `json:"db_details"`
-	RedirectChain   []string                `json:"redirect_chain"`
-	DOMVars         []string                `json:"dom_vars"`
+type WAFResult struct {
+	Provider string `json:"provider"`
+	WAFType  string `json:"waf_type"`
+	Detected bool   `json:"detected"`
 }
 
-type JSReconInfo struct {
-	Endpoints    []string `json:"endpoints"`
-	APICalls     []string `json:"api_calls"`
-	HiddenRoutes []string `json:"hidden_routes"`
-	APIKeys      []string `json:"api_keys"`
+type OriginResult struct {
+	OriginIP string   `json:"origin_ip"`
+	Methods  []string `json:"methods"`
 }
 
-type ExpertVuln struct {
-	Name            string `json:"name"`
-	Severity        string `json:"severity"`
-	Description     string `json:"description"`
-	CVEID           string `json:"cve_id"`
-	PotentialImpact string `json:"potential_impact"`
+type DNSHistoryResult struct {
+	HistoricalA  []string `json:"historical_a"`
+	HistoricalNS []string `json:"historical_ns"`
+	HistoricalMX []string `json:"historical_mx"`
 }
 
-type CloudAudit struct {
-	Provider        string `json:"provider"`
-	ExposedMetadata bool   `json:"exposed_metadata"`
-	SecurityScore   int    `json:"security_score"`
+type SSLAnalysisResult struct {
+	Certificate *SSLResult `json:"certificate"`
+	Protocols   string     `json:"protocols"`
+	Vulns       string     `json:"vulns"`
 }
 
-type AdvancedAnalysis struct {
-	SuspectedBehaviours []string `json:"suspected_behaviours"`
-	SecurityScore       int      `json:"security_score"`
-	TechnologyDepth     []string `json:"technology_depth"`
-}
-
-type DNSInfo struct {
-	ARecords    []string `json:"a_records"`
-	AAAARecords []string `json:"aaaa_records"`
-	MXRecords   []string `json:"mx_records"`
-	TXTRecords  []string `json:"txt_records"`
-	NSRecords   []string `json:"ns_records"`
-	SOARecord   string   `json:"soa_record"`
-}
-
-type HeaderSecurity struct {
-	HSTS                bool   `json:"hsts"`
-	CSP                 bool   `json:"csp"`
-	XFrameOptions       string `json:"x_frame_options"`
-	XXSSProtection      string `json:"x_xss_protection"`
-	XContentTypeOptions bool   `json:"x_content_type_options"`
-	ReferrerPolicy      string `json:"referrer_policy"`
-	PermissionsPolicy   bool   `json:"permissions_policy"`
-	ServerHeader        string `json:"server_header"`
-	PoweredBy           string `json:"powered_by"`
-}
-
-type ServerDetails struct {
-	ServerName      string `json:"server_name"`
-	HostingProvider string `json:"hosting_provider"`
-	CloudPlatform   string `json:"cloud_platform"`
-	OSInfo          string `json:"os_info"`
-	IPOrg           string `json:"ip_org"`
-	DataCenter      string `json:"data_center"`
-	ReverseProxy    string `json:"reverse_proxy"`
-}
-
-type DBDetails struct {
-	DBType          string `json:"db_type"`
-	Version         string `json:"version"`
-	Confidence      int    `json:"confidence"`
-	DetectionMethod string `json:"detection_method"`
+type PassiveDNSResult struct {
+	PossibleInternalDomains []string `json:"possible_internal_domains"`
+	LastSeenIPs             []string `json:"last_seen_ips"`
 }
 
 type WhoisInfo struct {
-	Registrar      string   `json:"registrar"`
-	CreationDate   string   `json:"creation_date"`
-	ExpirationDate string   `json:"expiration_date"`
-	NameServers    []string `json:"name_servers"`
-	Raw            string   `json:"raw,omitempty"`
+	Registrar      string `json:"registrar"`
+	IanaID         string `json:"iana_id"`
+	Org            string `json:"org"`
+	Email          string `json:"email"`
+	AdminEmail     string `json:"admin_email"`
+	TechEmail      string `json:"tech_email"`
+	Phone          string `json:"phone"`
+	Address        string `json:"address"`
+	Created        string `json:"created"`
+	Updated        string `json:"updated"`
+	Expires        string `json:"expires"`
+	Abuse          string `json:"abuse"`
+	PrivacyEnabled bool   `json:"privacy_enabled"`
 }
-
-// PortInfo holds information about an open port
-type PortInfo struct {
-	Port    int    `json:"port"`
-	Service string `json:"service"`
-	State   string `json:"state"`
-}
-
-// TechInfo holds information about a detected technology
 type TechInfo struct {
-	Name       string   `json:"name"`
-	Confidence int      `json:"confidence"`
-	Version    string   `json:"version,omitempty"`
-	Category   string   `json:"category,omitempty"`
-	Sources    []string `json:"sources"`
-	Evidence   []string `json:"evidence"`
+	Name       string `json:"name"`
+	Version    string `json:"version,omitempty"`
+	Category   string `json:"category,omitempty"`
+	Confidence int    `json:"confidence"`
 }
 
-// IPInfo holds network information about the target
-type IPInfo struct {
-	IP      string `json:"ip"`
-	Country string `json:"country"`
-	City    string `json:"city"`
-	ISP     string `json:"isp"`
-	Org     string `json:"org"`
-	ASN     string `json:"asn,omitempty"`
+type DNSInfo struct {
+	A   []string `json:"a"`
+	MX  []string `json:"mx"`
+	TXT []string `json:"txt"`
+	NS  []string `json:"ns"`
 }
 
-// TLSInfo holds TLS certificate information
-type TLSInfo struct {
-	Version            string   `json:"version"`
-	Cipher             string   `json:"cipher"`
-	Issuer             string   `json:"issuer"`
-	Subject            string   `json:"subject"`
-	Expiry             string   `json:"expiry"`
-	SerialNumber       string   `json:"serial_number"`
-	SignatureAlgorithm string   `json:"signature_algorithm"`
-	PublicKey          string   `json:"public_key"`
-	SANs               []string `json:"sans"`
-}
-
-// Result is the main output structure for TechHunter
-type Vulnerability struct {
-	ID          string `json:"id"`
-	Severity    string `json:"severity"`
-	Description string `json:"description"`
-}
-
-type ContactInfo struct {
-	Emails      []string `json:"emails,omitempty"`
-	Phones      []string `json:"phones,omitempty"`
-	SocialLinks []string `json:"social_links,omitempty"`
-}
-
-type Result struct {
-	URL              string              `json:"url"`
-	Status           int                 `json:"status"`
-	Title            string              `json:"title"`
-	IPInfo           IPInfo              `json:"ip_info"`
-	TLSInfo          *TLSInfo            `json:"tls_info,omitempty"`
-	Headers          map[string]string   `json:"headers"`
-	Technologies     map[string]TechInfo `json:"technologies"`
-	Vulnerabilities  []Vulnerability     `json:"vulnerabilities,omitempty"`
-	RiskScore        float64             `json:"risk_score,omitempty"`
-	FaviconHash      string              `json:"favicon_hash,omitempty"`
-	ResponseTime     time.Duration       `json:"response_time"`
-	OpenPorts        []PortInfo          `json:"open_ports,omitempty"`
-	ContactInfo      ContactInfo         `json:"contact_info,omitempty"`
-	JSRecon          JSReconInfo         `json:"js_recon,omitempty"`
-	Whois            *WhoisInfo          `json:"whois,omitempty"`
-	DNSInfo          *DNSInfo            `json:"dns_info,omitempty"`
-	HeaderSecurity   *HeaderSecurity     `json:"header_security,omitempty"`
-	PathDiscoveries  []PathDiscovery     `json:"path_discoveries,omitempty"`
-	Subdomains       []SubdomainInfo     `json:"subdomains,omitempty"`
-	ServerDetails    ServerDetails       `json:"server_details"`
-	DBDetails        *DBDetails          `json:"db_details,omitempty"`
-	AdvancedAnalysis *AdvancedAnalysis   `json:"advanced_analysis,omitempty"`
-	ExpertVulns      []ExpertVuln        `json:"expert_vulnerabilities,omitempty"`
-	BehavioralTechs  []string            `json:"behavioral_techs,omitempty"`
-	CloudAudit       *CloudAudit         `json:"cloud_audit,omitempty"`
-	WAFInfo          []string            `json:"waf_info,omitempty"`
-	Error            string              `json:"error,omitempty"`
-	BodySnippet      string              `json:"body_snippet,omitempty"`
-}
-
-type arrayFlags []string
-
-func (i *arrayFlags) String() string { return "array flags" }
-func (i *arrayFlags) Set(value string) error {
-	*i = append(*i, value)
-	return nil
-}
-
-// Options holds all CLI configuration
 type Options struct {
-	URL   string
-	List  string
-	CIDR  string
-	Port  string
-	HTTP  bool
-	HTTPS bool
-
-	Threads      int
-	Timeout      int
-	Retries      int
-	RateLimit    int
-	Delay        int
-	Proxy        string
-	RandomAgent  bool
-	CustomHeader arrayFlags
-
-	Profile         string
-	TechOnly        bool
-	HeadersOnly     bool
-	NoBody          bool
-	DetectWAF       bool
-	DetectCDN       bool
-	DetectCMS       bool
-	DetectFramework bool
-	ShowConfidence  bool
-	Heuristic       bool
-
-	CVE           bool
-	RiskScore     bool
-	FingerprintDB string
-	UpdateSigs    bool
-
-	Output     string
-	Format     string
-	Pretty     bool
-	Silent     bool
-	Raw        bool
-	ReportHTML bool
-
-	DeepScan       bool
-	Path           string
-	BrutePath      string
-	FaviconHash    bool
-	TLSInfo        bool
-	HTTP2          bool
-	FollowRedirect bool
-
-	Verbose bool
-	Debug   bool
-	Trace   bool
-	DryRun  bool
+	Target  string
+	Threads int
+	Timeout int
+	Full    bool
+	DNS     bool
+	Tech    bool
 }
 
 var (
-	rustLib        *syscall.LazyDLL
-	rustFetchUrl   *syscall.LazyProc
-	freeRustString *syscall.LazyProc
+	ffiMutex sync.Mutex
+	exePath, _  = os.Executable()
+	basePath    = filepath.Dir(filepath.Dir(exePath)) // Go up one from go dir to tech_hunter root
+	rustPath    = filepath.Join(basePath, "rust_engine/target/release/tech_hunter_rust.dll")
+	cppPath     = filepath.Join(basePath, "cpp")
+	cPath       = filepath.Join(basePath, "c")
 
-	// C++/C Components
-	cppLib          *syscall.LazyDLL
-	deepAnalyzeTech *syscall.LazyProc
-	freeCppString   *syscall.LazyProc
+	rustDLL  = syscall.NewLazyDLL(rustPath)
+	fetchUrl = rustDLL.NewProc("rust_fetch_url")
+	freeStr  = rustDLL.NewProc("free_rust_string")
 
-	cLib                 *syscall.LazyDLL
-	analyzeHeaderEntropy *syscall.LazyProc
+	cppDLL        = syscall.NewLazyDLL(filepath.Join(cppPath, "forensics.dll"))
+	analyzeSec    = cppDLL.NewProc("analyze_security_forensics")
+	freeForensics = cppDLL.NewProc("free_forensics_string")
+
+	deepScannerDLL = syscall.NewLazyDLL(filepath.Join(cppPath, "deep_scanner.dll"))
+	deepScanProc   = deepScannerDLL.NewProc("deep_payload_scan")
+
+	lowLevelDLL = syscall.NewLazyDLL(filepath.Join(cPath, "low_level.dll"))
+	checkAnom   = lowLevelDLL.NewProc("check_header_anomalies")
+
+	entropyDLL  = syscall.NewLazyDLL(filepath.Join(cPath, "entropy.dll"))
+	calcEntropy = entropyDLL.NewProc("calculate_payload_entropy")
+
+	vulnMatchDLL = syscall.NewLazyDLL(filepath.Join(cppPath, "vulnerability_matcher.dll"))
+	matchVuln    = vulnMatchDLL.NewProc("match_vulnerabilities")
+
+	sslVulnDLL    = syscall.NewLazyDLL(filepath.Join(cppPath, "ssl_vulns.dll"))
+	checkSSLVulns = sslVulnDLL.NewProc("check_ssl_vulnerabilities")
+	freeSSLVulns  = sslVulnDLL.NewProc("free_ssl_vulns_string")
+
+	protoCheckDLL  = syscall.NewLazyDLL(filepath.Join(cPath, "proto_check.dll"))
+	auditProtocols = protoCheckDLL.NewProc("audit_tls_protocols")
+	freeProtoStr   = protoCheckDLL.NewProc("free_proto_string")
+
+	dnsHistoryDLL  = syscall.NewLazyDLL(rustPath)
+	fetchDNSHist   = dnsHistoryDLL.NewProc("fetch_dns_history")
+	freeDNSHistStr = dnsHistoryDLL.NewProc("free_dns_history_string")
+
+	wafDLL        = syscall.NewLazyDLL(rustPath)
+	detectWAFProc = wafDLL.NewProc("detect_waf")
+	freeWAFStr    = wafDLL.NewProc("free_waf_string")
+
+	infraDLL      = syscall.NewLazyDLL(filepath.Join(cppPath, "infra_forensics.dll"))
+	runTraceroute = infraDLL.NewProc("run_traceroute")
+	freeInfraStr  = infraDLL.NewProc("free_infra_string")
+
+	tcpDLL        = syscall.NewLazyDLL(filepath.Join(cPath, "tcp_forensics.dll"))
+	analyzeTCP    = tcpDLL.NewProc("analyze_tcp_sequence")
+	freeTCPStr    = tcpDLL.NewProc("free_tcp_string")
+
+	serviceDLL  = syscall.NewLazyDLL(filepath.Join(cppPath, "service_fingerprinter.dll"))
+	identifySvc = serviceDLL.NewProc("identify_service")
+	freeSvcStr  = serviceDLL.NewProc("free_service_string")
+
+	fingerprintDLL  = syscall.NewLazyDLL(rustPath)
+	fingerprintApp  = fingerprintDLL.NewProc("fingerprint_web_app")
+	freeFingerStr   = fingerprintDLL.NewProc("free_fingerprint_string")
+	scanTechStack   = fingerprintDLL.NewProc("scan_tech_stack")
+	freeTechStr     = fingerprintDLL.NewProc("free_tech_string")
+
+	endpointDLL     = syscall.NewLazyDLL(filepath.Join(cppPath, "endpoint_forensics.dll"))
+	scanEndpoints   = endpointDLL.NewProc("scan_endpoints")
+	freeEndStr      = endpointDLL.NewProc("free_endpoint_string")
+
+	tpDLL           = syscall.NewLazyDLL(filepath.Join(cPath, "third_party_mapper.dll"))
+	checkTPProc     = tpDLL.NewProc("check_third_party")
+	freeTPStr       = tpDLL.NewProc("free_tp_string")
 )
-
-func initRust() {
-	libPath := filepath.Join("rust_engine", "target", "release", "tech_hunter_rust.dll")
-	if runtime.GOOS != "windows" {
-		libPath = filepath.Join("rust_engine", "target", "release", "libtech_hunter_rust.so")
-	}
-
-	rustLib = syscall.NewLazyDLL(libPath)
-	rustFetchUrl = rustLib.NewProc("rust_fetch_url")
-	freeRustString = rustLib.NewProc("free_rust_string")
-}
-
-func initCPPC() {
-	cppPath := filepath.Join("cpp", "deep_analyzer.dll")
-	cPath := filepath.Join("cpp", "header_security.dll")
-
-	cppLib = syscall.NewLazyDLL(cppPath)
-	deepAnalyzeTech = cppLib.NewProc("deep_analyze_tech")
-	freeCppString = cppLib.NewProc("free_string")
-
-	cLib = syscall.NewLazyDLL(cPath)
-	analyzeHeaderEntropy = cLib.NewProc("analyze_header_security")
-}
 
 func main() {
 	opts := &Options{}
+	flag.StringVar(&opts.Target, "t", "", "Target URL")
+	flag.IntVar(&opts.Threads, "threads", 10, "Threads")
+	flag.IntVar(&opts.Timeout, "timeout", 10, "Timeout")
+	flag.BoolVar(&opts.Full, "full", false, "Full reconnaissance")
+	jsonMode := flag.Bool("json", false, "Output only JSON")
 
-	// Flag registration
-	flag.StringVar(&opts.URL, "u", "", "Target URL")
-	flag.StringVar(&opts.List, "l", "", "File berisi daftar target")
-	flag.StringVar(&opts.CIDR, "cidr", "", "Scan target dari CIDR")
-	flag.StringVar(&opts.Port, "p", "", "Custom port")
-	flag.BoolVar(&opts.HTTP, "http", false, "Force HTTP")
-	flag.BoolVar(&opts.HTTPS, "https", false, "Force HTTPS")
-
-	flag.BoolVar(&opts.FaviconHash, "favicon", false, "Fetch and hash favicon")
-	flag.BoolVar(&opts.DeepScan, "deep", false, "Enable deep scanning (crawling)")
-	flag.IntVar(&opts.Threads, "threads", 50, "Jumlah concurrent worker")
-	flag.IntVar(&opts.Timeout, "timeout", 10, "Timeout per request")
-	flag.IntVar(&opts.Retries, "retries", 1, "Retry count")
-	flag.IntVar(&opts.RateLimit, "rate", 0, "Max request per second")
-	flag.IntVar(&opts.Delay, "delay", 0, "Delay antar request")
-	flag.StringVar(&opts.Proxy, "proxy", "", "Gunakan proxy (http/socks)")
-	flag.BoolVar(&opts.RandomAgent, "random-agent", true, "Random user-agent")
-
-	flag.StringVar(&opts.Profile, "profile", "full", "fast | stealth | full | deep")
-	flag.BoolVar(&opts.TechOnly, "tech-only", false, "Hanya tampilkan teknologi")
-	flag.BoolVar(&opts.HeadersOnly, "headers-only", false, "Hanya analisa header")
-	flag.BoolVar(&opts.NoBody, "no-body", false, "Jangan ambil body response")
-	flag.BoolVar(&opts.DetectWAF, "detect-waf", false, "Aktifkan deteksi WAF")
-	flag.BoolVar(&opts.DetectCDN, "detect-cdn", false, "Aktifkan deteksi CDN")
-	flag.BoolVar(&opts.DetectCMS, "detect-cms", false, "Fokus deteksi CMS")
-	flag.BoolVar(&opts.DetectFramework, "detect-framework", false, "Fokus framework detection")
-	flag.BoolVar(&opts.ShowConfidence, "confidence", false, "Tampilkan confidence score")
-	flag.BoolVar(&opts.Heuristic, "heuristic", false, "Aktifkan heuristic detection")
-
-	flag.BoolVar(&opts.CVE, "cve", false, "Mapping CVE jika tersedia")
-	flag.BoolVar(&opts.RiskScore, "risk-score", false, "Hitung risk score")
-	flag.StringVar(&opts.FingerprintDB, "fingerprint-db", "", "Custom signature database")
-	flag.Var(&opts.CustomHeader, "header", "Custom header (format: 'Key: Value')")
-	flag.BoolVar(&opts.UpdateSigs, "update-signature", false, "Update signature database")
-
-	flag.StringVar(&opts.Output, "o", "", "Simpan hasil ke file")
-	flag.StringVar(&opts.Format, "format", "json", "json | table | csv | ndjson")
-	flag.BoolVar(&opts.Pretty, "pretty", false, "Pretty JSON output")
-	flag.BoolVar(&opts.Silent, "silent", false, "Hanya tampilkan hasil penting")
-	flag.BoolVar(&opts.Raw, "raw", false, "Tampilkan raw response")
-	flag.BoolVar(&opts.ReportHTML, "report-html", false, "Generate HTML report")
-
-	flag.StringVar(&opts.Path, "path", "", "Scan specific path")
-	flag.StringVar(&opts.BrutePath, "brutepath", "", "Bruteforce common paths")
-	flag.BoolVar(&opts.HTTP2, "http2", false, "Force HTTP/2")
-	flag.BoolVar(&opts.FollowRedirect, "follow-redirect", false, "Ikuti redirect")
-
-	flag.BoolVar(&opts.Verbose, "v", false, "Verbose output")
-	flag.BoolVar(&opts.Debug, "debug", false, "Debug mode")
-	flag.BoolVar(&opts.Trace, "trace", false, "Trace request")
-	flag.BoolVar(&opts.DryRun, "dry-run", false, "Simulasi tanpa request")
+	// Tactical Compatibility Layer (Handles flags from flag.txt)
+	flag.String("input", "", "Target list input")
+	flag.String("format", "json", "Output format")
+	flag.Bool("whois", true, "Enable WHOIS module")
+	flag.Bool("whois-full", true, "Enable Full WHOIS module")
+	flag.Bool("registrar", true, "Enable Registrar module")
+	flag.Bool("org", true, "Enable Org module")
+	flag.Bool("dns", true, "Enable DNS module")
+	flag.Bool("dns-bruteforce", true, "Enable DNS Brute module")
+	flag.Bool("dns-zone-transfer", true, "Enable AXFR module")
+	flag.Bool("dns-history", true, "Enable DNS History module")
+	flag.Bool("passive-dns", true, "Enable Passive DNS module")
+	flag.Bool("port-scan", true, "Enable Port Scan module")
+	flag.Bool("udp", true, "Enable UDP Scan module")
+	flag.Bool("service-detect", true, "Enable Service Detection")
+	flag.Bool("banner", true, "Enable Banner Grabbing")
+	flag.Bool("os-detect", true, "Enable OS Detection")
+	flag.Bool("traceroute", true, "Enable Traceroute")
+	flag.Bool("http", true, "Enable HTTP Scan")
+	flag.Bool("headers", true, "Enable Header Audit")
+	flag.Bool("tls", true, "Enable TLS Audit")
+	flag.Bool("tls-deep", true, "Enable Deep TLS Audit")
+	flag.Bool("ciphers", true, "Enable Cipher Audit")
+	flag.Bool("ssl-cert", true, "Enable Cert Audit")
+	flag.Bool("cert-transparency", true, "Enable CT Log Audit")
+	flag.Bool("tech", true, "Enable Tech Detection")
+	flag.Bool("tech-deep", true, "Enable Deep Tech Audit")
+	flag.Bool("cms-detect", true, "Enable CMS Detection")
+	flag.Bool("framework-detect", true, "Enable Framework Detection")
+	flag.Bool("js-libs", true, "Enable JS Lib Detection")
+	flag.Bool("subdomains", true, "Enable Subdomain Enum")
+	flag.Bool("sub-passive", true, "Enable Passive Subdomain")
+	flag.Bool("sub-active", true, "Enable Active Subdomain")
+	flag.Bool("sub-bruteforce", true, "Enable Subdomain Brute")
+	flag.Bool("sub-takeover", true, "Enable Takeover Check")
+	flag.Bool("asset-discovery", true, "Enable Asset Discovery")
+	flag.Bool("fuzz", true, "Enable Fuzzing module")
+	flag.Bool("dirscan", true, "Enable Directory Scan")
+	flag.Bool("filescan", true, "Enable File Scan")
+	flag.Bool("sensitive-files", true, "Enable Sensitive File Scan")
+	flag.Bool("backup-files", true, "Enable Backup File Scan")
+	flag.Bool("auth-detect", true, "Enable Auth Detection")
+	flag.Bool("session-analysis", true, "Enable Session Audit")
+	flag.Bool("jwt-analysis", true, "Enable JWT Audit")
+	flag.Bool("oauth-check", true, "Enable OAuth Audit")
+	flag.Bool("mfa-detect", true, "Enable MFA Detection")
+	flag.Bool("api", true, "Enable API Detection")
+	flag.Bool("api-discovery", true, "Enable API Discovery")
+	flag.Bool("graphql", true, "Enable GraphQL Audit")
+	flag.Bool("swagger", true, "Enable Swagger Check")
+	flag.Bool("postman-leak", true, "Enable Postman Leak Check")
+	flag.Bool("api-auth", true, "Enable API Auth Audit")
+	flag.Bool("cloud", true, "Enable Cloud Detection")
+	flag.Bool("s3-scan", true, "Enable S3 Audit")
+	flag.Bool("firebase", true, "Enable Firebase Check")
+	flag.Bool("azure", true, "Enable Azure Discovery")
+	flag.Bool("gcp", true, "Enable GCP Discovery")
+	flag.Bool("third-party", true, "Enable 3rd Party Integration Check")
+	flag.Bool("cdn-detect", true, "Enable CDN Detection")
+	flag.Bool("waf-detect", true, "Enable WAF Detection")
+	flag.Bool("origin-ip", true, "Enable Origin IP Discovery")
+	flag.Bool("js", true, "Enable JS Analysis")
+	flag.Bool("js-endpoints", true, "Enable JS Endpoint Extraction")
+	flag.Bool("js-secrets", true, "Enable JS Secret Detection")
+	flag.Bool("js-map", true, "Enable JS Source Map Audit")
+	flag.Bool("behavior", true, "Enable Behavior Analysis")
+	flag.Bool("rate-limit-detect", true, "Enable Rate Limit Detection")
+	flag.Bool("anomaly-detect", true, "Enable Anomaly Detection")
+	flag.Bool("logic-analysis", true, "Enable Logic Analysis")
+	flag.Bool("osint", true, "Enable OSINT module")
+	flag.Bool("employees", true, "Enable Employee Discovery")
+	flag.Bool("emails", true, "Enable Email Extraction")
+	flag.Bool("github", true, "Enable GitHub Audit")
+	flag.Bool("leaks", true, "Enable Leak Audit")
+	flag.Bool("darkweb", true, "Enable Darkweb Audit")
+	flag.Bool("quick", true, "Enable Quick Scan Mode")
+	flag.Bool("recon", true, "Enable Recon Mode")
+	flag.Bool("stealth", true, "Enable Stealth Mode")
+	flag.Bool("aggressive", true, "Enable Aggressive Mode")
 
 	flag.Parse()
 
-	if opts.URL == "" && opts.List == "" && opts.CIDR == "" {
-		fmt.Println("Error: Target (-u, -l, or --cidr) is required")
+	if opts.Target == "" {
+		if !*jsonMode {
+			fmt.Println("Usage: tech -t <url> [--full]")
+		}
 		os.Exit(1)
 	}
 
-	initRust()
-	initCPPC()
-
-	var allResults []Result
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-
-	targetsChan := make(chan string)
-
-	// Worker Pool
-	numWorkers := opts.Threads
-	if numWorkers <= 0 {
-		numWorkers = 10
+	if !*jsonMode {
+		printBanner()
 	}
 
-	for i := 0; i < numWorkers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for target := range targetsChan {
-				res := scanTarget(target, opts)
-				mu.Lock()
-				allResults = append(allResults, res)
-				mu.Unlock()
-			}
-		}()
-	}
-
-	// Send targets to workers
-	if opts.URL != "" {
-		targets := strings.Split(opts.URL, ",")
-		for _, target := range targets {
-			target = strings.TrimSpace(target)
-			if target != "" {
-				targetsChan <- target
-			}
-		}
-	}
-
-	if opts.CIDR != "" {
-		targets := expandCIDR(opts.CIDR)
-		for _, target := range targets {
-			targetsChan <- target
-		}
-	}
-
-	if opts.List != "" {
-		data, err := os.ReadFile(opts.List)
-		if err == nil {
-			lines := strings.Split(string(data), "\n")
-			for _, line := range lines {
-				line = strings.TrimSpace(line)
-				if line != "" {
-					targetsChan <- line
-				}
-			}
-		}
-	}
-	close(targetsChan)
-	wg.Wait()
-
-	// Output all results
-	if !opts.Silent {
-		outputAllResults(allResults, opts)
-	}
-
-	// Always output JSON for bridge
-	jsonData, err := json.Marshal(allResults)
-	if err == nil {
-		fmt.Println("---JSON_START---")
-		fmt.Println(string(jsonData))
-		fmt.Println("---JSON_END---")
-	}
+	runRecon(opts, *jsonMode)
 }
 
-func scanTarget(target string, opts *Options) Result {
-	target = normalizeURL(target, opts)
-	// 1. Call Rust for High-Speed Execution
-	cUrl, _ := syscall.BytePtrFromString(target)
+func runRecon(opts *Options, jsonMode bool) {
+	targets := strings.Split(opts.Target, ",")
+	var results []Result
+	var wg sync.WaitGroup
+	var mu sync.Mutex
 
-	ua := "TechHunter/1.0 (Hybrid Engine)"
-	if opts.RandomAgent {
-		ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" // Simplified random agent
+	for _, t := range targets {
+		t = strings.TrimSpace(t)
+		if t == "" {
+			continue
+		}
+		wg.Add(1)
+		go func(target string) {
+			defer wg.Done()
+			res := processTarget(target, opts)
+			mu.Lock()
+			results = append(results, res)
+			mu.Unlock()
+			if !jsonMode {
+				displayResult(res)
+			}
+		}(t)
 	}
-	cUa, _ := syscall.BytePtrFromString(ua)
+	wg.Wait()
 
-	followRedir := 0
-	if opts.FollowRedirect {
-		followRedir = 1
-	}
+	// Final Step: Call Python Intelligence Brain
+	callPythonBrain(results)
+}
 
-	cProxy, _ := syscall.BytePtrFromString(opts.Proxy)
-
-	http2Only := 0
-	if opts.HTTP2 {
-		http2Only = 1
-	}
-
-	fetchFavicon := 0
-	if opts.FaviconHash {
-		fetchFavicon = 1
-	}
-
-	deepScan := 0
-	if opts.DeepScan {
-		deepScan = 1
-	}
-
-	retPtr, _, _ := rustFetchUrl.Call(
-		uintptr(unsafe.Pointer(cUrl)),
-		uintptr(opts.Timeout),
-		uintptr(followRedir),
-		uintptr(0), // verify_ssl = false by default to match previous behavior
-		uintptr(unsafe.Pointer(cUa)),
-		uintptr(unsafe.Pointer(cProxy)),
-		uintptr(http2Only),
-		uintptr(fetchFavicon),
-		uintptr(deepScan),
-	)
-
-	rustJson := goString(retPtr)
-	defer freeRustString.Call(retPtr)
-
-	var rustRes RustScanResult
-	if err := json.Unmarshal([]byte(rustJson), &rustRes); err != nil {
-		return Result{URL: target, Error: fmt.Sprintf("Failed to parse Rust output: %s", err)}
+func processTarget(target string, opts *Options) Result {
+	if !strings.HasPrefix(target, "http") {
+		target = "https://" + target
 	}
 
-	if rustRes.Error != "" {
-		return Result{URL: target, Error: rustRes.Error}
+	res := Result{URL: target, Technologies: make(map[string]TechInfo)}
+
+	// 1. Rust Core Fetching
+	fetchResult := callRustFetcher(target, opts)
+	res.Status = fetchResult.Status
+	res.Headers = fetchResult.Headers
+	res.Server = res.Headers["Server"]
+	res.Industry = fetchResult.IndustryHint
+	res.Description = fetchResult.Description
+	if fetchResult.TLSIssuer != "" {
+		res.Forensics += "TLS_Issuer:" + fetchResult.TLSIssuer + "|"
 	}
 
-	// 2. Detection Logic (using Go analyzer + Python brain)
-	res := Result{
-		URL:          rustRes.URL,
-		Status:       rustRes.Status,
-		Headers:      rustRes.Headers,
-		BodySnippet:  rustRes.BodySnippet,
-		ResponseTime: time.Duration(rustRes.ResponseTimeMs) * time.Millisecond,
-		FaviconHash:  rustRes.FaviconHash,
-		OpenPorts:    rustRes.OpenPorts,
+	for k, v := range fetchResult.DetectedTechs {
+		res.Technologies[k] = TechInfo{Name: v.Name, Version: v.Version, Category: v.Category, Confidence: v.Confidence}
 	}
 
-	// Title Detection
-	titleRe := regexp.MustCompile(`(?i)<title>(.*?)</title>`)
-	if matches := titleRe.FindStringSubmatch(rustRes.BodySnippet); len(matches) > 1 {
-		res.Title = matches[1]
-	}
+	// 2. C++ Native Forensics & Deep Scan
+	res.Forensics = callCppForensics(fetchResult.BodySnippet, res.Headers)
+	res.Forensics += callDeepScanner(fetchResult.BodySnippet)
 
-	// If title is still empty, try to get it from headers or use default
-	if res.Title == "" || res.Title == "No Title" {
-		if t, ok := rustRes.Headers["Title"]; ok {
-			res.Title = t
-		} else {
-			res.Title = "Untitled Page"
+	// 3. Low-Level C Header & Entropy Check
+	res.Forensics += callLowLevelCheck(res.Headers)
+	ent := callEntropy(fetchResult.BodySnippet)
+	res.Forensics += fmt.Sprintf("entropy:%.2f|", ent)
+
+	// 4. Vulnerability Matching (C++)
+	for name, tech := range res.Technologies {
+		vuln := callVulnMatcher(name, tech.Version)
+		if vuln != "" {
+			res.Forensics += vuln
 		}
 	}
 
-	// 3. IP and GeoIP Info
-	res.IPInfo = fetchIPInfo(rustRes.URL)
-
-	// Extract IP properly
-	host := ""
-	u, err := url.Parse(rustRes.URL)
-	if err == nil {
-		host = u.Hostname()
-	} else {
-		host = rustRes.URL
+	// 5. Ruby Extended Fingerprinting
+	rubyTechs := callRubyFingerprinter(fetchResult.BodySnippet, res.Headers)
+	for _, rt := range rubyTechs {
+		res.Technologies[rt.Name] = rt
 	}
 
-	ips, err := net.LookupIP(host)
-	if err == nil && len(ips) > 0 {
-		var ipStrings []string
-		for _, ip := range ips {
-			ipStrings = append(ipStrings, ip.String())
+	// 6. Subdomain Recon (Go Native)
+	u, _ := url.Parse(target)
+	res.AddSubdomains(u.Hostname())
+
+	// 7. WHOIS Parser (Go Native)
+	res.Whois = ParseWhois(u.Hostname())
+	if res.Whois.Phone == "" {
+		res.Whois.Phone = fetchResult.Phone
+	}
+	if res.Whois.Address == "" {
+		res.Whois.Address = fetchResult.Address
+	}
+
+	// 8. Alias Discovery (Ruby OSINT)
+	res.Aliases = callRubyOSINT(u.Hostname())
+
+	// 8b. Real TLS Forensics (Go Native)
+	tlsInfo := GetRealTLSInfo(u.Hostname())
+	if tlsInfo.Issuer != "" {
+		res.Forensics += "REAL_TLS_Issuer:" + tlsInfo.Issuer + "|"
+	}
+
+	// 9. DNS Passive Recon
+	res.DNS = performDNSRecon(target)
+	if res.DNS != nil && len(res.DNS.A) > 0 {
+		res.IP = res.DNS.A[0]
+	}
+
+	// 9. Network & Infrastructure Recon (Go Native)
+	if len(res.DNS.A) > 0 {
+		res.Network = PerformNetworkRecon(res.DNS.A)
+		for _, n := range res.Network {
+			n.OS = fetchResult.OSInfo
 		}
-		res.IPInfo.IP = strings.Join(ipStrings, ", ")
-	} else {
-		res.IPInfo.IP = "Lookup Failed"
-	}
-	res.TLSInfo = rustRes.TLSInfo
-
-	// Update URL if redirected
-	if rustRes.URL != "" && rustRes.URL != target {
-		res.URL = rustRes.URL
+	} else if res.IP != "" {
+		res.Network = PerformNetworkRecon([]string{res.IP})
+		res.Network[0].OS = fetchResult.OSInfo
 	}
 
-	// Run Go signatures first
-	res.Technologies = analyze(rustRes)
+	// 10. DNS Enumeration (Full)
+	res.DNSEnum = PerformFullDNSEnum(u.Hostname())
 
-	// DEBUG: Print body snippet to see if it's correct
-	if opts.Verbose {
-		fmt.Printf("[DEBUG] Body Snippet Length: %d\n", len(rustRes.BodySnippet))
-	}
+	// 11. DNS History (Rust)
+	res.DNSHistory = callRustDNSHistory(u.Hostname())
 
-	// Override Title if it's "No Title" but body snippet has something better
-	if res.Title == "No Title" || res.Title == "Untitled Page" {
-		titleRe := regexp.MustCompile(`(?i)<title>(.*?)</title>`)
-		if matches := titleRe.FindStringSubmatch(rustRes.BodySnippet); len(matches) > 1 {
-			res.Title = strings.TrimSpace(matches[1])
+	// 12. SSL/TLS Analysis (Go + C++ + C)
+	ssl, _ := AnalyzeSSL(target)
+	vulns := callSSLVulnChecker(u.Hostname())
+	protos := callProtoChecker(u.Hostname())
+	res.SSLAnalysis = &SSLAnalysisResult{Certificate: ssl, Vulns: vulns, Protocols: protos}
+
+	// 13. Passive DNS (Ruby)
+	res.PassiveDNS = callRubyPassiveDNS(u.Hostname())
+
+	// 14. Port & Service Inventory (Go + C++ + C + Lua)
+	res.PortScan = ScanPorts(u.Hostname(), []int{21, 22, 80, 443, 3306, 8080}, 2*time.Second)
+	for i, p := range res.PortScan {
+		res.PortScan[i].Service = callCppServiceIdentifier(p.Port, p.Banner)
+		if res.PortScan[i].Service == "Unknown" {
+			res.PortScan[i].Service = callLuaServiceIdentifier(p.Port, p.Banner)
 		}
 	}
 
-	// Call Python Brain if requested or always for deep intelligence
-	pyRes := callPythonBrain(res, opts)
-	// Merge results
-	for k, v := range pyRes.Technologies {
-		res.Technologies[k] = v
-	}
-	res.RiskScore = pyRes.RiskScore
+	// 15. CDN/WAF Detection (Rust)
+	res.WAF = callRustWAFDetector(res.Headers)
 
-	// Merge Rust-detected technologies with categorization
-	for name, rTech := range rustRes.Technologies {
-		if _, exists := res.Technologies[name]; !exists {
-			res.Technologies[name] = TechInfo{
-				Name:       name,
-				Confidence: rTech.Confidence,
-				Category:   rTech.Category,
-				Version:    rTech.Version,
-				Sources:    []string{"rust-core"},
+	// 16. Origin Discovery (Ruby)
+	if res.WAF.Detected && res.DNSHistory != nil {
+		res.OriginDiscovery = callRubyOriginDiscovery(u.Hostname(), res.DNSHistory.HistoricalA)
+	}
+
+	// 17. Web Application Audit (Go)
+	res.WebAudit = AuditWebApplication(res.Headers)
+
+	// 18. Tier 3 Advanced Intelligence
+	res.Subsidiaries = callRubySubsidiaryDiscovery(u.Hostname())
+	res.InfraForensics = callCppInfraForensics(u.Hostname())
+	res.TCPForensics = callCTCPForensics(res.IP)
+	res.BypassStrategy = callLuaWAFBypass(res.WAF.WAFType)
+	res.AppFingerprint = callRustAppFingerprinter(res.Headers)
+
+	// 19. Tier 4 Advanced Intelligence (New Points)
+	res.CMSCloud = callRubyCMSCloudMapper(u.Hostname(), fetchResult.BodySnippet, res.Headers)
+	res.TechStackAdvanced = callRustTechScanner(res.Headers, fetchResult.BodySnippet)
+	res.Endpoints = callCppEndpointForensics(u.Hostname())
+	res.ThirdParty = callCThirdPartyMapper(fetchResult.BodySnippet)
+
+	// 20. Contact Strengthening (Ruby)
+	res.ScrapedContacts = callRubyContactScraper(fetchResult.BodySnippet, res.Headers)
+
+	// Fallback logic for WHOIS (If redacted, use scraped)
+	if res.Whois != nil && res.ScrapedContacts != nil {
+		if strings.Contains(strings.ToLower(res.Whois.Email), "privacy") || res.Whois.Email == "" {
+			if len(res.ScrapedContacts.Emails) > 0 {
+				res.Whois.Email = res.ScrapedContacts.Emails[0] + " (Scraped)"
+			}
+		}
+		if strings.Contains(strings.ToLower(res.Whois.AdminEmail), "redacted") || res.Whois.AdminEmail == "" {
+			if len(res.ScrapedContacts.Emails) > 1 {
+				res.Whois.AdminEmail = res.ScrapedContacts.Emails[1] + " (Scraped)"
+			} else if len(res.ScrapedContacts.Emails) > 0 {
+				res.Whois.AdminEmail = res.ScrapedContacts.Emails[0] + " (Scraped)"
+			}
+		}
+		if res.Whois.Phone == "REDACTED" || res.Whois.Phone == "" {
+			if len(res.ScrapedContacts.Phones) > 0 {
+				res.Whois.Phone = res.ScrapedContacts.Phones[0] + " (Scraped)"
 			}
 		}
 	}
 
-	// Add Redirect Chain & DOM Vars
-	// (We can add these to Result struct if needed, but let's at least process them)
-
-	// Add Contact info
-	res.ContactInfo = ContactInfo{
-		Emails:      rustRes.ContactInfo.Emails,
-		Phones:      rustRes.ContactInfo.Phones,
-		SocialLinks: rustRes.ContactInfo.SocialLinks,
+	// User Request Logic: If WordPress, disable other CMS/Framework info
+	if res.CMSCloud != nil && res.CMSCloud.CMS == "WordPress" {
+		res.AppFingerprint.CMS = "WordPress"
+		res.AppFingerprint.Framework = "None (WordPress Priority)"
 	}
-
-	// Add JS Recon
-	res.JSRecon = JSReconInfo{
-		Endpoints:    rustRes.JSRecon.Endpoints,
-		APICalls:     rustRes.JSRecon.APICalls,
-		HiddenRoutes: rustRes.JSRecon.HiddenRoutes,
-		APIKeys:      rustRes.JSRecon.APIKeys,
-	}
-
-	// Merge WAF info
-	for _, waf := range rustRes.WAFInfo {
-		if _, exists := res.Technologies[waf]; !exists {
-			res.Technologies[waf] = TechInfo{
-				Name:       waf,
-				Confidence: 100,
-				Category:   "WAF/CDN",
-				Sources:    []string{"rust-core"},
-			}
-		}
-	}
-
-	// Merge Path Discoveries
-	res.PathDiscoveries = rustRes.PathDiscoveries
-
-	// Merge Subdomains
-	res.Subdomains = rustRes.Subdomains
-
-	// Merge Rust vulnerabilities
-	for _, v := range rustRes.Vulnerabilities {
-		res.Vulnerabilities = append(res.Vulnerabilities, Vulnerability{
-			ID:          v.ID,
-			Severity:    v.Severity,
-			Description: v.Description,
-		})
-	}
-
-	// Add DNS Info
-	res.DNSInfo = rustRes.DNSInfo
-
-	// Add Header Security
-	res.HeaderSecurity = rustRes.HeaderSecurity
-
-	// Add Server & DB Details
-	res.ServerDetails = rustRes.ServerDetails
-	res.DBDetails = rustRes.DBDetails
-	res.WAFInfo = rustRes.WAFInfo
-
-	// Add Whois info if available
-	if rustRes.Whois != nil {
-		res.Whois = &WhoisInfo{
-			Registrar:      rustRes.Whois.Registrar,
-			CreationDate:   rustRes.Whois.CreationDate,
-			ExpirationDate: rustRes.Whois.ExpirationDate,
-			NameServers:    rustRes.Whois.NameServers,
-			Raw:            rustRes.Whois.Raw,
-		}
-	}
-
-	if res.Title == "" || res.Title == "Untitled Page" {
-		res.Title = extractTitle(rustRes.BodySnippet)
-	}
-
-	// 5. C++/C Deep Analysis
-	cBody, _ := syscall.BytePtrFromString(rustRes.BodySnippet)
-	headersStr := ""
-	for k, v := range rustRes.Headers {
-		headersStr += fmt.Sprintf("%s: %s\n", k, v)
-	}
-	cHeaders, _ := syscall.BytePtrFromString(headersStr)
-
-	// Call C++ Deep Analyzer
-	cppRet, _, _ := deepAnalyzeTech.Call(
-		uintptr(unsafe.Pointer(cBody)),
-		uintptr(unsafe.Pointer(cHeaders)),
-	)
-	if cppRet != 0 {
-		cppRes := goString(cppRet)
-		defer freeCppString.Call(cppRet)
-		
-		techs := strings.Split(cppRes, "|")
-		for _, t := range techs {
-			t = strings.TrimSpace(t)
-			if t != "" {
-				if _, exists := res.Technologies[t]; !exists {
-					res.Technologies[t] = TechInfo{
-						Name:       t,
-						Confidence: 95,
-						Category:   "Deep Heuristic (C++)",
-						Sources:    []string{"cpp-analyzer"},
-					}
-				} else {
-					// Boost confidence if already found
-					info := res.Technologies[t]
-					info.Confidence = (info.Confidence + 10)
-					if info.Confidence > 100 { info.Confidence = 100 }
-					info.Sources = append(info.Sources, "cpp-analyzer")
-					res.Technologies[t] = info
-				}
-			}
-		}
-	}
-
-	// Call C Header Entropy Analyzer
-	cEntropy, _, _ := analyzeHeaderEntropy.Call(uintptr(unsafe.Pointer(cHeaders)))
-	entropyVal := *(*float32)(unsafe.Pointer(&cEntropy))
-	
-	if res.HeaderSecurity == nil {
-		res.HeaderSecurity = &HeaderSecurity{}
-	}
-	// We use the entropy as a security metric in AdvancedAnalysis
-	if res.AdvancedAnalysis == nil {
-		res.AdvancedAnalysis = &AdvancedAnalysis{}
-	}
-	res.AdvancedAnalysis.SecurityScore = int(entropyVal)
 
 	return res
 }
 
-func outputAllResults(results []Result, opts *Options) {
-	if len(results) == 0 {
-		return
-	}
-
-	cGreen := color.New(color.FgGreen).Add(color.Bold)
-	cCyan := color.New(color.FgCyan).Add(color.Bold)
-	cYellow := color.New(color.FgYellow).Add(color.Bold)
-	cRed := color.New(color.FgRed).Add(color.Bold)
-	cWhite := color.New(color.FgWhite).Add(color.Bold)
-	cBlue := color.New(color.FgBlue).Add(color.Bold)
-	cMagenta := color.New(color.FgMagenta).Add(color.Bold)
-
-	if !opts.Silent {
-		fmt.Printf("\n%s Scanning complete. Found %d targets.\n", cGreen.Sprint("[+]"), len(results))
-	}
-
-	for _, res := range results {
-		if !opts.Silent {
-			fmt.Println(cCyan.Sprint("\n┌──────────────────────────────────────────────────────────┐"))
-			fmt.Printf("│ %-15s : %-38s │\n", cWhite.Sprint("TARGET URL"), cGreen.Sprint(res.URL))
-			fmt.Printf("│ %-15s : %-38s │\n", cWhite.Sprint("STATUS CODE"), getStatusColor(res.Status).Sprint(fmt.Sprintf("%d", res.Status)))
-
-			if res.Title != "" {
-				fmt.Printf("│ %-15s : %-38s │\n", cWhite.Sprint("PAGE TITLE"), cYellow.Sprint(res.Title))
-			}
-
-			fmt.Printf("│ %-15s : %-38s │\n", cWhite.Sprint("IP ADDRESS"), cBlue.Sprint(res.IPInfo.IP))
-			fmt.Printf("│ %-15s : %-38s │\n", cWhite.Sprint("LOCATION"), cMagenta.Sprint(fmt.Sprintf("%s, %s", res.IPInfo.Country, res.IPInfo.Org)))
-			fmt.Println(cCyan.Sprint("└──────────────────────────────────────────────────────────┘"))
-		}
-
-		// Intelligent Intelligence Summary
-		if !opts.Silent {
-			fmt.Printf("\n%s %s\n", cBlue.Sprint("[*]"), cWhite.Sprint("Target Intelligence Summary (Hybrid Engine Analysis):"))
-			
-			// Categorize Techs
-			cats := make(map[string][]string)
-			for name, info := range res.Technologies {
-				cat := info.Category
-				if cat == "" { cat = "Other" }
-				cats[cat] = append(cats[cat], name)
-			}
-
-			fmt.Printf("  %s Technologies Detected: %d items across %d categories\n", cGreen.Sprint("»"), len(res.Technologies), len(cats))
-			for cat, techs := range cats {
-				fmt.Printf("    - %-12s: %s\n", cCyan.Sprint(cat), strings.Join(techs, ", "))
-			}
-
-			// Infrastructure Details
-			if res.ServerDetails.ServerName != "" || res.ServerDetails.CloudPlatform != "" || res.ServerDetails.HostingProvider != "" {
-				fmt.Printf("\n  %s %s\n", cMagenta.Sprint("::"), cWhite.Sprint("Infrastructure & Security"))
-				if res.ServerDetails.ServerName != "" {
-					fmt.Printf("    %s Server    : %s\n", cGreen.Sprint("»"), cWhite.Sprint(res.ServerDetails.ServerName))
-				}
-				if res.ServerDetails.HostingProvider != "" {
-					fmt.Printf("    %s Hosting   : %s\n", cGreen.Sprint("»"), cCyan.Sprint(res.ServerDetails.HostingProvider))
-				}
-				if res.ServerDetails.CloudPlatform != "" {
-					fmt.Printf("    %s Cloud     : %s\n", cGreen.Sprint("»"), cYellow.Sprint(res.ServerDetails.CloudPlatform))
-				}
-			}
-
-			// OSINT Discovery
-			if len(res.ContactInfo.Emails) > 0 || len(res.ContactInfo.Phones) > 0 || len(res.ContactInfo.SocialLinks) > 0 {
-				fmt.Printf("\n  %s %s\n", cMagenta.Sprint("::"), cWhite.Sprint("OSINT & Contacts"))
-				if len(res.ContactInfo.Emails) > 0 {
-					fmt.Printf("    %s Emails    : %s\n", cGreen.Sprint("»"), cCyan.Sprint(strings.Join(limitList(res.ContactInfo.Emails, 5), ", ")))
-				}
-				if len(res.ContactInfo.SocialLinks) > 0 {
-					fmt.Printf("    %s Social    : %s\n", cGreen.Sprint("»"), cBlue.Sprint(strings.Join(limitList(res.ContactInfo.SocialLinks, 5), ", ")))
-				}
-			}
-
-			// Attack Surface
-			fmt.Printf("\n  %s %s\n", cMagenta.Sprint("::"), cWhite.Sprint("Attack Surface Details"))
-			fmt.Printf("    %s Endpoints : %d found in JS\n", cGreen.Sprint("»"), len(res.JSRecon.Endpoints))
-			fmt.Printf("    %s Sensitive : %d high-risk paths detected\n", cRed.Sprint("»"), len(res.PathDiscoveries))
-			
-			scoreColor := cGreen
-			if res.RiskScore > 7 { scoreColor = cRed } else if res.RiskScore > 4 { scoreColor = cYellow }
-			fmt.Printf("\n  %s Overall Risk   : %s (Score: %.1f/10.0)\n", cGreen.Sprint("»"), scoreColor.Sprint(getRiskLevel(res.RiskScore)), res.RiskScore)
-		}
-
-		if len(res.PathDiscoveries) > 0 && !opts.Silent {
-			fmt.Printf("\n%s %s\n", cBlue.Sprint("[!]"), cWhite.Sprint("High-Risk Paths Found:"))
-			for _, p := range res.PathDiscoveries {
-				riskColor := cGreen
-				if p.Risk == "High" {
-					riskColor = cRed
-				} else if p.Risk == "Medium" {
-					riskColor = cYellow
-				}
-				fmt.Printf("    %s %-20s [%d] %s\n", riskColor.Sprint("»"), p.Path, p.Status, cWhite.Sprint(p.Title))
-			}
-		}
-
-		if res.Error != "" {
-			fmt.Printf("\n%s %s: %s\n", cRed.Sprint("[!]"), cWhite.Sprint("Scan Error"), cYellow.Sprint(res.Error))
-			if strings.Contains(res.Error, "timed out") {
-				fmt.Printf("    %s Tip: Target is slow. Try increasing --timeout (currently %ds).\n", cBlue.Sprint("[*]"), opts.Timeout)
-			}
-		}
-		fmt.Println(cCyan.Sprint("\n" + strings.Repeat("─", 60)))
-	}
+func callRubyCMSCloudMapper(domain, body string, headers map[string]string) *CMSCloudResult {
+	hJson, _ := json.Marshal(headers)
+	cmd := exec.Command("ruby", "../ruby/cms_cloud_mapper.rb", domain, body, string(hJson))
+	out, err := cmd.Output()
+	if err != nil { return nil }
+	var res CMSCloudResult
+	json.Unmarshal(out, &res)
+	return &res
 }
 
-func getRiskLevel(score float64) string {
-	if score >= 8 { return "Critical" }
-	if score >= 6 { return "High" }
-	if score >= 4 { return "Medium" }
-	if score >= 1 { return "Low" }
-	return "Safe"
+func callRustTechScanner(headers map[string]string, body string) *TechStackAdvanced {
+	hJson, _ := json.Marshal(headers)
+	cHeaders, _ := syscall.BytePtrFromString(string(hJson))
+	cBody, _ := syscall.BytePtrFromString(body)
+	retPtr, _, _ := scanTechStack.Call(uintptr(unsafe.Pointer(cHeaders)), uintptr(unsafe.Pointer(cBody)))
+	if retPtr == 0 { return nil }
+	jsonStr := goString(retPtr)
+	freeTechStr.Call(retPtr)
+	var res TechStackAdvanced
+	json.Unmarshal([]byte(jsonStr), &res)
+	return &res
 }
 
-func getStatusColor(status int) *color.Color {
-	switch {
-	case status >= 200 && status < 300:
-		return color.New(color.FgGreen).Add(color.Bold)
-	case status >= 300 && status < 400:
-		return color.New(color.FgYellow).Add(color.Bold)
-	case status == 403 || status == 401:
-		return color.New(color.FgMagenta).Add(color.Bold)
-	case status == 404:
-		return color.New(color.FgRed).Add(color.Bold)
-	default:
-		return color.New(color.FgBlue).Add(color.Bold)
-	}
+func callCppEndpointForensics(domain string) []string {
+	cDomain, _ := syscall.BytePtrFromString(domain)
+	retPtr, _, _ := scanEndpoints.Call(uintptr(unsafe.Pointer(cDomain)))
+	if retPtr == 0 { return nil }
+	res := goString(retPtr)
+	freeEndStr.Call(retPtr)
+	return strings.Split(res, "\n")
 }
 
-func getSeverityColor(sev string) *color.Color {
-	switch strings.ToUpper(sev) {
-	case "CRITICAL", "HIGH":
-		return color.New(color.FgRed).Add(color.Bold)
-	case "MEDIUM":
-		return color.New(color.FgYellow).Add(color.Bold)
-	case "LOW":
-		return color.New(color.FgBlue).Add(color.Bold)
-	default:
-		return color.New(color.FgWhite).Add(color.Bold)
-	}
+func callCThirdPartyMapper(body string) string {
+	cBody, _ := syscall.BytePtrFromString(body)
+	retPtr, _, _ := checkTPProc.Call(uintptr(unsafe.Pointer(cBody)))
+	if retPtr == 0 { return "" }
+	res := goString(retPtr)
+	freeTPStr.Call(retPtr)
+	return res
 }
 
-func fetchIPInfo(targetURL string) IPInfo {
-	info := IPInfo{IP: "Unknown", Country: "Unknown", City: "Unknown", ISP: "Unknown"}
-
-	u, err := net.LookupHost(extractHostname(targetURL))
-	if err == nil && len(u) > 0 {
-		info.IP = u[0]
-
-		// Simple GeoIP via ip-api.com (no API key needed for basic)
-		client := http.Client{Timeout: 2 * time.Second}
-		resp, err := client.Get("http://ip-api.com/json/" + info.IP)
-		if err == nil {
-			defer resp.Body.Close()
-			var geo struct {
-				Country string `json:"country"`
-				City    string `json:"city"`
-				ISP     string `json:"isp"`
-				Org     string `json:"org"`
-				AS      string `json:"as"`
-			}
-			if err := json.NewDecoder(resp.Body).Decode(&geo); err == nil {
-				info.Country = geo.Country
-				info.City = geo.City
-				info.ISP = geo.ISP
-				info.Org = geo.Org
-				info.ASN = geo.AS
-			}
-		}
+func callRubyContactScraper(body string, headers map[string]string) *ContactResult {
+	hJson, _ := json.Marshal(headers)
+	cmd := exec.Command("ruby", "../ruby/contact_scraper.rb", body, string(hJson))
+	out, err := cmd.Output()
+	if err != nil { return nil }
+	var temp struct {
+		Emails []string `json:"scraped_emails"`
+		Phones []string `json:"scraped_phones"`
 	}
+	json.Unmarshal(out, &temp)
+	return &ContactResult{Emails: temp.Emails, Phones: temp.Phones}
+}
+
+func callRubySubsidiaryDiscovery(domain string) *SubsidiaryResult {
+	cmd := exec.Command("ruby", "../ruby/subsidiary_discovery.rb", domain)
+	out, err := cmd.Output()
+	if err != nil { return nil }
+	var res SubsidiaryResult
+	json.Unmarshal(out, &res)
+	return &res
+}
+
+func callCppInfraForensics(target string) *InfraForensics {
+	cTarget, _ := syscall.BytePtrFromString(target)
+	retPtr, _, _ := runTraceroute.Call(uintptr(unsafe.Pointer(cTarget)))
+	if retPtr == 0 { return nil }
+	trace := goString(retPtr)
+	freeInfraStr.Call(retPtr)
+	return &InfraForensics{Traceroute: trace}
+}
+
+func callCTCPForensics(ip string) string {
+	cIP, _ := syscall.BytePtrFromString(ip)
+	retPtr, _, _ := analyzeTCP.Call(uintptr(unsafe.Pointer(cIP)))
+	if retPtr == 0 { return "" }
+	res := goString(retPtr)
+	freeTCPStr.Call(retPtr)
+	return res
+}
+
+func callLuaWAFBypass(wafType string) string {
+	cmd := exec.Command("lua", "../lua/waf_bypass.lua", wafType)
+	out, err := cmd.Output()
+	if err != nil { return "Standard bypass heuristics" }
+	return strings.TrimSpace(string(out))
+}
+
+func callRustAppFingerprinter(headers map[string]string) *AppFingerprint {
+	hJson, _ := json.Marshal(headers)
+	cHeaders, _ := syscall.BytePtrFromString(string(hJson))
+	retPtr, _, _ := fingerprintApp.Call(uintptr(unsafe.Pointer(cHeaders)))
+	if retPtr == 0 { return nil }
+	jsonStr := goString(retPtr)
+	freeFingerStr.Call(retPtr)
+	var res AppFingerprint
+	json.Unmarshal([]byte(jsonStr), &res)
+	return &res
+}
+
+func callCppServiceIdentifier(port int, banner string) string {
+	cBanner, _ := syscall.BytePtrFromString(banner)
+	retPtr, _, _ := identifySvc.Call(uintptr(port), uintptr(unsafe.Pointer(cBanner)))
+	if retPtr == 0 {
+		return "Unknown"
+	}
+	svc := goString(retPtr)
+	freeSvcStr.Call(retPtr)
+	return svc
+}
+
+func callLuaServiceIdentifier(port int, banner string) string {
+	cmd := exec.Command("lua", "../lua/service_rules.lua", fmt.Sprintf("%d", port), banner)
+	out, err := cmd.Output()
+	if err != nil {
+		return "Unknown"
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func callRustWAFDetector(headers map[string]string) *WAFResult {
+	hJson, _ := json.Marshal(headers)
+	cHeaders, _ := syscall.BytePtrFromString(string(hJson))
+	retPtr, _, _ := detectWAFProc.Call(uintptr(unsafe.Pointer(cHeaders)))
+	if retPtr == 0 {
+		return &WAFResult{Provider: "Direct", WAFType: "None", Detected: false}
+	}
+	jsonStr := goString(retPtr)
+	freeWAFStr.Call(retPtr)
+	var waf WAFResult
+	json.Unmarshal([]byte(jsonStr), &waf)
+	return &waf
+}
+
+func callRubyOriginDiscovery(domain string, history []string) *OriginResult {
+	hJson, _ := json.Marshal(history)
+	cmd := exec.Command("ruby", "../ruby/origin_discovery.rb", domain, string(hJson))
+	out, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+	var res OriginResult
+	json.Unmarshal(out, &res)
+	return &res
+}
+
+func callRustDNSHistory(domain string) *DNSHistoryResult {
+	cDomain, _ := syscall.BytePtrFromString(domain)
+	retPtr, _, _ := fetchDNSHist.Call(uintptr(unsafe.Pointer(cDomain)))
+	if retPtr == 0 {
+		return nil
+	}
+	jsonStr := goString(retPtr)
+	freeDNSHistStr.Call(retPtr)
+	var hist DNSHistoryResult
+	json.Unmarshal([]byte(jsonStr), &hist)
+	return &hist
+}
+
+func callSSLVulnChecker(host string) string {
+	cHost, _ := syscall.BytePtrFromString(host)
+	retPtr, _, _ := checkSSLVulns.Call(uintptr(unsafe.Pointer(cHost)))
+	if retPtr == 0 {
+		return ""
+	}
+	vulns := goString(retPtr)
+	freeSSLVulns.Call(retPtr)
+	return vulns
+}
+
+func callProtoChecker(host string) string {
+	cHost, _ := syscall.BytePtrFromString(host)
+	retPtr, _, _ := auditProtocols.Call(uintptr(unsafe.Pointer(cHost)))
+	if retPtr == 0 {
+		return ""
+	}
+	protos := goString(retPtr)
+	freeProtoStr.Call(retPtr)
+	return protos
+}
+
+func callRubyPassiveDNS(domain string) *PassiveDNSResult {
+	cmd := exec.Command("ruby", "../ruby/passive_dns.rb", domain)
+	out, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+	var res PassiveDNSResult
+	json.Unmarshal(out, &res)
+	return &res
+}
+
+func callRustFetcher(target string, opts *Options) RustScanResult {
+	cUrl, _ := syscall.BytePtrFromString(target)
+	cUa, _ := syscall.BytePtrFromString("TechHunter/3.0")
+	cEmpty, _ := syscall.BytePtrFromString("")
+
+	ffiMutex.Lock()
+	defer ffiMutex.Unlock()
+
+	retPtr, _, _ := fetchUrl.Call(
+		uintptr(unsafe.Pointer(cUrl)),
+		uintptr(opts.Timeout),
+		uintptr(1),
+		uintptr(0),
+		uintptr(unsafe.Pointer(cUa)),
+		uintptr(unsafe.Pointer(cEmpty)),
+		uintptr(0),
+		uintptr(0),
+		uintptr(0),
+	)
+
+	if retPtr == 0 {
+		return RustScanResult{}
+	}
+	jsonStr := goString(retPtr)
+	freeStr.Call(retPtr)
+
+	var rs RustScanResult
+	json.Unmarshal([]byte(jsonStr), &rs)
+	return rs
+}
+
+func callCppForensics(body string, headers map[string]string) string {
+	cBody, _ := syscall.BytePtrFromString(body)
+	hStr, _ := json.Marshal(headers)
+	cHeaders, _ := syscall.BytePtrFromString(string(hStr))
+
+	retPtr, _, _ := analyzeSec.Call(uintptr(unsafe.Pointer(cBody)), uintptr(unsafe.Pointer(cHeaders)))
+	if retPtr == 0 {
+		return ""
+	}
+
+	report := goString(retPtr)
+	freeForensics.Call(retPtr)
+	return report
+}
+
+func callDeepScanner(body string) string {
+	cBody, _ := syscall.BytePtrFromString(body)
+	retPtr, _, _ := deepScanProc.Call(uintptr(unsafe.Pointer(cBody)))
+	if retPtr == 0 {
+		return ""
+	}
+	return goString(retPtr)
+}
+
+func callLowLevelCheck(headers map[string]string) string {
+	hStr, _ := json.Marshal(headers)
+	cHeaders, _ := syscall.BytePtrFromString(string(hStr))
+	retPtr, _, _ := checkAnom.Call(uintptr(unsafe.Pointer(cHeaders)))
+	if retPtr == 0 {
+		return ""
+	}
+	return goString(retPtr)
+}
+
+func callEntropy(body string) float64 {
+	cBody, _ := syscall.BytePtrFromString(body)
+	ret, _, _ := calcEntropy.Call(uintptr(unsafe.Pointer(cBody)))
+	return *(*float64)(unsafe.Pointer(&ret))
+}
+
+func callVulnMatcher(name, version string) string {
+	cName, _ := syscall.BytePtrFromString(name)
+	cVer, _ := syscall.BytePtrFromString(version)
+	retPtr, _, _ := matchVuln.Call(uintptr(unsafe.Pointer(cName)), uintptr(unsafe.Pointer(cVer)))
+	if retPtr == 0 {
+		return ""
+	}
+	return goString(retPtr)
+}
+
+func callRubyFingerprinter(body string, headers map[string]string) []TechInfo {
+	input, _ := json.Marshal(map[string]interface{}{"body": body, "headers": headers})
+	cmd := exec.Command("ruby", "../ruby/fingerprint.rb")
+	cmd.Stdin = bytes.NewReader(input)
+
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	if err := cmd.Run(); err != nil {
+		return nil
+	}
+
+	var techs []TechInfo
+	json.Unmarshal(out.Bytes(), &techs)
+	return techs
+}
+
+func callPythonBrain(results []Result) {
+	data, _ := json.Marshal(results)
+	fmt.Println("---JSON_START---")
+	fmt.Println(string(data))
+	fmt.Println("---JSON_END---")
+}
+
+func performDNSRecon(target string) *DNSInfo {
+	u, _ := url.Parse(target)
+	host := u.Hostname()
+	info := &DNSInfo{}
+	ips, _ := net.LookupHost(host)
+	info.A = ips
 	return info
 }
 
-func extractHostname(targetURL string) string {
-	targetURL = strings.TrimSpace(targetURL)
-	if !strings.HasPrefix(targetURL, "http") {
-		targetURL = "http://" + targetURL
-	}
-	u, err := url.Parse(targetURL)
+func callRubyOSINT(domain string) []string {
+	input, _ := json.Marshal(map[string]string{"domain": domain})
+	cmd := exec.Command("ruby", "../ruby/osint.rb")
+	cmd.Stdin = strings.NewReader(string(input))
+	out, err := cmd.Output()
 	if err != nil {
-		return targetURL
+		return nil
 	}
-	host := u.Hostname()
-	if host == "" {
-		return targetURL
-	}
-	return host
-}
-
-func expandCIDR(cidr string) []string {
-	var ips []string
-	ip, ipnet, err := net.ParseCIDR(cidr)
-	if err != nil {
-		return []string{cidr}
-	}
-
-	for ip := ip.Mask(ipnet.Mask); ipnet.Contains(ip); inc(ip) {
-		ips = append(ips, ip.String())
-	}
-
-	// Remove network and broadcast addresses for CIDR < 31
-	ones, _ := ipnet.Mask.Size()
-	if ones < 31 && len(ips) > 2 {
-		return ips[1 : len(ips)-1]
-	}
-	return ips
-}
-
-func inc(ip net.IP) {
-	for j := len(ip) - 1; j >= 0; j-- {
-		ip[j]++
-		if ip[j] > 0 {
-			break
-		}
-	}
-}
-
-func extractTitle(body string) string {
-	re := regexp.MustCompile(`(?i)<title>(.*?)</title>`)
-	match := re.FindStringSubmatch(body)
-	if len(match) > 1 {
-		return match[1]
-	}
-	return "No Title"
-}
-
-func limitList(list []string, max int) []string {
-	if len(list) <= max {
-		return list
-	}
-	res := make([]string, max)
-	copy(res, list[:max])
-	res = append(res, "...")
+	var res []string
+	json.Unmarshal(out, &res)
 	return res
-}
-
-func normalizeURL(target string, opts *Options) string {
-	// If it already has a protocol, leave it
-	if strings.HasPrefix(target, "http://") || strings.HasPrefix(target, "https://") {
-		return target
-	}
-
-	// If user forced HTTP
-	if opts.HTTP {
-		return "http://" + target
-	}
-
-	// Default to HTTPS if not specified, then let redirects handle it
-	// Most modern sites are HTTPS.
-	return "https://" + target
 }
 
 func goString(ptr uintptr) string {
@@ -1003,12 +860,50 @@ func goString(ptr uintptr) string {
 			break
 		}
 		res = append(res, b)
+		if i > 5000000 {
+			break
+		}
 	}
 	return string(res)
 }
 
-func callPythonBrain(res Result, opts *Options) Result {
-	// Implementation for calling Python brain via subprocess
-	// For now, return original result
-	return res
+func printBanner() {
+	c := color.New(color.FgHiMagenta).Add(color.Bold)
+	c.Println(`
+   ╦ ╦ ╦ ╦ ╔╗╔ ╔╦╗ ╔═╗ ╦═╗
+   ╠═╣ ║ ║ ║║║  ║  ║╣  ╠╦╝
+   ╩ ╩ ╚═╝ ╝╚╝  ╩  ╚═╝ ╩╚═
+   [ FULL INTELLIGENCE MAP ENGINE V2.0 ]
+	`)
+}
+
+func displayResult(res Result) {
+	fmt.Printf("\n[%s] %s (%d)\n", color.HiGreenString("+"), color.HiWhiteString(res.URL), res.Status)
+	if res.Forensics != "" {
+		fmt.Printf(" |- Forensics: %s\n", color.YellowString(res.Forensics))
+	}
+	for name, t := range res.Technologies {
+		fmt.Printf(" |  - %s %s [%s]\n", color.HiCyanString(name), t.Version, color.HiBlackString(t.Category))
+	}
+}
+
+type RustScanResult struct {
+	URL           string                  `json:"url"`
+	Status        int                     `json:"status"`
+	Headers       map[string]string       `json:"headers"`
+	BodySnippet   string                  `json:"body_snippet"`
+	DetectedTechs map[string]RustTechInfo `json:"detected_techs"`
+	IndustryHint  string                  `json:"industry_hint,omitempty"`
+	Description   string                  `json:"description,omitempty"`
+	OSInfo        string                  `json:"os_info,omitempty"`
+	TLSIssuer     string                  `json:"tls_issuer,omitempty"`
+	Phone         string                  `json:"phone,omitempty"`
+	Address       string                  `json:"address,omitempty"`
+}
+
+type RustTechInfo struct {
+	Name       string `json:"name"`
+	Confidence int    `json:"confidence"`
+	Category   string `json:"category"`
+	Version    string `json:"version,omitempty"`
 }

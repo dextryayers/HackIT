@@ -1,0 +1,115 @@
+---
+interface Props {
+	title: string;
+}
+
+const { title } = Astro.props;
+---
+
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="description" content="Spiderfoot HX Clone Dashboard" />
+		<meta name="viewport" content="width=device-width" />
+		<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+		<meta name="generator" content={Astro.generator} />
+		<title>{title}</title>
+		
+		<!-- CDNs -->
+		<script src="https://cdn.tailwindcss.com" is:inline></script>
+		<script is:inline>
+			tailwind.config = {
+				theme: {
+					extend: {
+						colors: {
+							sf: {
+								blue: '#0b3558',
+								lightbg: '#f0f2f5',
+								card: '#ffffff',
+								text: '#333333',
+								muted: '#777777',
+								border: '#dddddd',
+								tabActive: '#3b82f6',
+								green: '#10b981'
+							}
+						},
+						fontFamily: {
+							sans: ['Inter', 'Segoe UI', 'Roboto', 'sans-serif'],
+						}
+					}
+				}
+			}
+		</script>
+		<!-- Chart.js -->
+		<script src="https://cdn.jsdelivr.net/npm/chart.js" is:inline></script>
+		<!-- Vis Network for Graphs -->
+		<script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js" is:inline></script>
+		<link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet" />
+	</head>
+	<body class="bg-sf-lightbg text-sf-text overflow-x-hidden font-sans text-sm h-screen flex flex-col">
+		<!-- Top Navigation Bar (Spiderfoot Style) -->
+		<header class="bg-sf-blue text-white shadow-md z-50">
+			<div class="px-6 h-14 flex items-center justify-between">
+				<!-- Left side -->
+				<div class="flex items-center gap-8">
+					<div class="flex items-center gap-2">
+						<!-- Spiderfoot icon mockup -->
+						<svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6 text-cyan-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a10 10 0 0 1 10 10 10 10 0 0 1-10 10A10 10 0 0 1 2 12 10 10 0 0 1 12 2zM12 6v6l4 2"/></svg>
+						<span class="text-lg font-normal tracking-tight">HackIT <span class="font-bold">OSINT</span></span>
+					</div>
+					
+					<nav class="flex items-center gap-1">
+						<a href="/" class="px-4 py-2 hover:bg-white/10 rounded flex items-center gap-2 text-sm transition-colors">
+							<i class="fas fa-crosshairs opacity-70"></i> Scan
+						</a>
+						<a href="/intelligence" class="px-4 py-2 hover:bg-white/10 rounded flex items-center gap-2 text-sm transition-colors">
+							<i class="fas fa-search opacity-70"></i> Investigate
+						</a>
+						<a href="#" class="px-4 py-2 hover:bg-white/10 rounded flex items-center gap-2 text-sm transition-colors">
+							<i class="fas fa-desktop opacity-70"></i> Monitor
+						</a>
+						<button class="px-4 py-2 hover:bg-white/10 rounded flex items-center gap-2 text-sm transition-colors">
+							<i class="fas fa-cog opacity-70"></i> Configure <i class="fas fa-caret-down opacity-50 ml-1"></i>
+						</button>
+					</nav>
+				</div>
+
+				<!-- Right side -->
+				<div class="flex items-center gap-4">
+					<button class="px-3 py-2 hover:bg-white/10 rounded flex items-center gap-2 text-sm transition-colors">
+						<i class="far fa-question-circle opacity-70"></i> Help <i class="fas fa-caret-down opacity-50 ml-1"></i>
+					</button>
+					<button class="px-3 py-2 hover:bg-white/10 rounded flex items-center gap-2 text-sm transition-colors">
+						<i class="fas fa-user opacity-70"></i> System <i class="fas fa-caret-down opacity-50 ml-1"></i>
+					</button>
+				</div>
+			</div>
+		</header>
+
+		<!-- Main Content Area -->
+		<main class="flex-1 overflow-y-auto">
+			<slot />
+		</main>
+	</body>
+</html>
+
+<style is:global>
+	@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+	
+	/* Scrollbar to match corporate style */
+	::-webkit-scrollbar {
+		width: 8px;
+		height: 8px;
+	}
+	::-webkit-scrollbar-track {
+		background: #f0f2f5;
+	}
+	::-webkit-scrollbar-thumb {
+		background: #cbd5e1;
+		border-radius: 4px;
+	}
+	::-webkit-scrollbar-thumb:hover {
+		background: #94a3b8;
+	}
+</style>

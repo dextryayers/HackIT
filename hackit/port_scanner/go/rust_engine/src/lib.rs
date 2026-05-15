@@ -9,6 +9,8 @@ mod ffi_probe;
 mod exploit_db;
 mod deep_scan;
 mod secret_mapper;
+mod evasion;
+mod scanner_core;
 
 pub use fast_scanner::*;
 pub use os_fingerprint::*;
@@ -21,6 +23,8 @@ pub use ffi_probe::*;
 pub use exploit_db::*;
 pub use deep_scan::*;
 pub use secret_mapper::*;
+pub use evasion::*;
+pub use scanner_core::*;
 
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
@@ -39,7 +43,7 @@ lazy_static! {
     static ref VERSION_PATTERNS: HashMap<&'static str, Vec<Regex>> = {
         let mut m = HashMap::new();
 
-        // HTTP/HTTPS Variants
+        // HTTP/HTTPS Variants (Aurat Presisi)
         m.insert("http", vec![
             Regex::new(r"Server:\s*([^\\r\\n]+)").unwrap(),
             Regex::new(r"nginx/([0-9.]+)").unwrap(),
@@ -47,17 +51,19 @@ lazy_static! {
             Regex::new(r"IIS/([0-9.]+)").unwrap(),
             Regex::new(r"LiteSpeed/([0-9.]+)").unwrap(),
             Regex::new(r"lighttpd/([0-9.]+)").unwrap(),
-            Regex::new(r"Cherokee/([0-9.]+)").unwrap(),
-            Regex::new(r"Tomcat/([0-9.]+)").unwrap(),
-            Regex::new(r"Cloudflare").unwrap(),
+            Regex::new(r"node\.js").unwrap(),
+            Regex::new(r"Gunicorn/([0-9.]+)").unwrap(),
+            Regex::new(r"openresty/([0-9.]+)").unwrap(),
         ]);
 
-        // SSH with sub-variants
+        // SSH with deep forensic variants
         m.insert("ssh", vec![
             Regex::new(r"SSH-([0-9.]+)-([^\\s]+)").unwrap(),
-            Regex::new(r"OpenSSH_([0-9.]+)").unwrap(),
+            Regex::new(r"OpenSSH_([0-9.p1-]+)").unwrap(),
             Regex::new(r"Dropbear_([0-9.]+)").unwrap(),
             Regex::new(r"libssh_([0-9.]+)").unwrap(),
+            Regex::new(r"PuTTY_Release_([0-9.]+)").unwrap(),
+            Regex::new(r"Bitvise_SSH_Server_([0-9.]+)").unwrap(),
         ]);
 
         // FTP Enhanced
@@ -150,41 +156,31 @@ fn grab_banner(host: &str, port: u16, timeout_ms: u64) -> String {
     best_banner
 }
 
-// Get protocol-specific probes for a port
+// Get protocol-specific probes for a port (Industrial Accuracy)
 fn get_probes_for_port(port: u16) -> Vec<String> {
     match port {
         80 | 443 | 8080 | 8443 | 8000 | 8888 => {
             vec![
-                "HEAD / HTTP/1.1\r\nHost: localhost\r\n\r\n".to_string(),
-                "GET / HTTP/1.0\r\n\r\n".to_string(),
+                "HEAD / HTTP/1.1\r\nHost: localhost\r\nUser-Agent: HackIT-Tactical/3.0\r\n\r\n".to_string(),
+                "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n".to_string(),
             ]
         },
-        21 => vec!["".to_string()], // FTP sends banner automatically
-        22 => vec!["SSH-2.0-HackIT-Scanner\r\n".to_string()],
-        25 | 587 => vec!["EHLO hackit-scanner\r\n".to_string()],
-        110 => vec!["CAPA\r\n".to_string()],
+        21 => vec!["SYST\r\n".to_string(), "FEAT\r\n".to_string()], 
+        22 => vec!["SSH-2.0-HackIT-Tactical_Discovery_Engine\r\n".to_string()],
+        25 | 465 | 587 => vec!["EHLO tactical-discovery.node\r\n".to_string()],
+        110 => vec!["CAPA\r\n".to_string(), "USER anonymous\r\n".to_string()],
         143 => vec!["A001 CAPABILITY\r\n".to_string()],
-        3306 => vec![String::from_utf8_lossy(&[0x00, 0x00, 0x00, 0x01]).to_string()], // MySQL handshake
-        5432 => vec![String::from_utf8_lossy(&[0x00, 0x00, 0x00, 0x08, 0x04, 0xd2, 0x16, 0x2f]).to_string()], // PostgreSQL startup
-        6379 => vec!["INFO\r\n".to_string()], // Redis
+        3306 => vec!["".to_string()], // MySQL is greeting-based
+        5432 => vec![String::from_utf8_lossy(&[0x00, 0x00, 0x00, 0x08, 0x04, 0xd2, 0x16, 0x2f]).to_string()],
+        6379 => vec!["INFO\r\n".to_string(), "PING\r\n".to_string()], 
         27017 => vec![String::from_utf8_lossy(&[
             0x3b, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xd4, 0x07, 0x00, 0x00,
             0x00, 0x00, 0x00, 0x00, 0x00, 0x61, 0x64, 0x6d, 0x69, 0x6e, 0x2e, 0x24, 0x63, 0x6d, 0x64, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0x13, 0x00, 0x00,
-            0x00, 0x10, 0x69, 0x73, 0x6d, 0x61, 0x73, 0x74, 0x65, 0x72, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
-        ]).to_string()], // MongoDB
-        23 => vec![String::from_utf8_lossy(&[0xff, 0xfb, 0x01, 0xff, 0xfb, 0x03]).to_string()], // Telnet negotiation
-        5900 => vec!["RFB 003.008\n".to_string()], // VNC
-        3389 => vec![String::from_utf8_lossy(&[
-            0x03, 0x00, 0x00, 0x00, 0x13, 0x0e, 0xe0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x08,
-            0x00, 0x03, 0x00, 0x00, 0x00, 0x00,
-        ]).to_string()], // RDP
-        445 => vec![String::from_utf8_lossy(&[
-            0x00, 0x00, 0x00, 0x2f, 0xff, 0x53, 0x4d, 0x42, 0x72, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x5c, 0x02, 0x00, 0x0c, 0x00, 0x02,
-            0x4e, 0x54, 0x4c, 0x4d, 0x20, 0x30, 0x2e, 0x31, 0x32, 0x00,
-        ]).to_string()], // SMB
-        _ => vec!["".to_string()], // Default: no probe, just connect
+        ]).to_string()],
+        5900 => vec!["RFB 003.008\n".to_string()],
+        3389 => vec![String::from_utf8_lossy(&[0x03, 0x00, 0x00, 0x13, 0x0e, 0xe0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x08, 0x00, 0x03, 0x00, 0x00, 0x00]).to_string()],
+        11211 => vec!["stats\r\n".to_string()],
+        _ => vec!["\r\n\r\n".to_string()], // Generic "wake-up" probe
     }
 }
 
@@ -671,9 +667,16 @@ pub unsafe extern "C" fn rust_extract_version(banner: *const c_char, _service: *
     CString::new("").unwrap().into_raw()
 }
 
-// Advanced OS Detection and IP Information Gathering
+// Advanced OS Detection with HackIT-style logic (Guess, Limit, Precision)
 #[no_mangle]
-pub unsafe extern "C" fn rust_os_detect(host: *const c_char, ports: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn rust_os_detect_advanced(
+    host: *const c_char, 
+    ports: *const c_char, 
+    guess: i32, 
+    limit: i32
+) -> *mut c_char {
+    let i_guess = guess == 1;
+    let i_limit = limit == 1;
     let c_host = CStr::from_ptr(host).to_str().unwrap_or("");
     let c_ports = CStr::from_ptr(ports).to_str().unwrap_or("");
     
@@ -682,6 +685,10 @@ pub unsafe extern "C" fn rust_os_detect(host: *const c_char, ports: *const c_cha
         .filter_map(|p| p.parse().ok())
         .collect();
     
+    if i_limit && open_ports_nums.is_empty() {
+        return CString::new("OS DETECTION: Skipped (Limit enabled, no open ports found)").unwrap().into_raw();
+    }
+
     let mut os_info = String::new();
     
     // Get IP info first (text block)
@@ -723,15 +730,26 @@ pub unsafe extern "C" fn rust_os_detect(host: *const c_char, ports: *const c_cha
     // Build the output string
     os_info.push_str("OS DETECTION:\n");
     if let Some(fingerprint) = best_match {
+        let confidence_display = if i_guess && max_confidence < 90 {
+            format!("{}% (Guessing Enabled)", max_confidence + 5)
+        } else {
+            format!("{}%", max_confidence)
+        };
+
         os_info.push_str(&format!("  Operating System: {} {}\n", fingerprint.name, fingerprint.version));
         os_info.push_str(&format!("  Details: {}\n", fingerprint.name));
-        os_info.push_str(&format!("  Confidence: {}%\n", fingerprint.confidence));
+        os_info.push_str(&format!("  Confidence: {}\n", confidence_display));
         os_info.push_str(&format!("  TTL Range: {}-{}\n", fingerprint.ttl_range.0, fingerprint.ttl_range.1));
         os_info.push_str(&format!("  TCP Options: {}\n", fingerprint.tcp_options.join(", ")));
     } else {
-        os_info.push_str("  Operating System: Unknown\n");
-        os_info.push_str("  Details: Unable to determine OS from open ports\n");
-        os_info.push_str("  Confidence: 0%\n");
+        if i_guess {
+             os_info.push_str("  Operating System: Linux/Unix (Heuristic Guess)\n");
+             os_info.push_str("  Confidence: 35% (Inaccurate)\n");
+        } else {
+            os_info.push_str("  Operating System: Unknown\n");
+            os_info.push_str("  Details: Unable to determine OS from open ports\n");
+            os_info.push_str("  Confidence: 0%\n");
+        }
     }
     
     // Add IP information
@@ -954,4 +972,62 @@ pub unsafe extern "C" fn rust_udp_scan(host: *const c_char, port: i32, timeout_m
     });
 
     CString::new(result).unwrap().into_raw()
+}
+// High-Performance Batch Scanning (Industrial Grade)
+// Tactical Batch Scanning (Industrial Turbo Engine)
+#[no_mangle]
+pub unsafe extern "C" fn rust_batch_scan(
+    host: *const c_char, 
+    start_port: i32, 
+    end_port: i32, 
+    timeout_ms: i32, 
+    concurrency: i32
+) -> *mut c_char {
+    let host_str = CStr::from_ptr(host).to_str().unwrap_or("").to_string();
+    let (tx, rx) = std::sync::mpsc::channel();
+    
+    // Tactical Engines
+    let quantum = QuantumEngine::new(true);
+    let _chaos = ChaosEngine::new(false);
+    
+    let mut ports: Vec<u16> = (start_port as u16..=end_port as u16).collect();
+    
+    // Apply Quantum Port Ordering (Prioritize Common Ports)
+    quantum.prioritize_ports(&mut ports);
+    
+    // We use a dedicated runtime for mass scanning to avoid blocking the main FFI thread
+    let tx_thread = tx.clone();
+    std::thread::spawn(move || {
+        let rt = Runtime::new().unwrap();
+        rt.block_on(async {
+            use futures::stream::{self, StreamExt};
+            
+            stream::iter(ports).for_each_concurrent(concurrency as usize, |port| {
+                let host_clone = host_str.clone();
+                let tx_clone = tx_thread.clone();
+                let timeout = Duration::from_millis(timeout_ms as u64);
+                
+                async move {
+                    let addr = format!("{}:{}", host_clone, port);
+                    match tokio_timeout(timeout, AsyncTcpStream::connect(&addr)).await {
+                        Ok(Ok(_)) => {
+                            let _ = tx_clone.send(port);
+                        }
+                        _ => {}
+                    }
+                }
+            }).await;
+        });
+    });
+
+    // Drop original tx so rx.recv() returns Err when all threads finish
+    drop(tx);
+
+    let mut open_ports = Vec::new();
+    while let Ok(port) = rx.recv() {
+        open_ports.push(port.to_string());
+        if open_ports.len() > 20000 { break; } // Industrial range limit
+    }
+    
+    CString::new(open_ports.join(",")).unwrap().into_raw()
 }

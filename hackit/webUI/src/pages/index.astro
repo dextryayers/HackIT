@@ -1,0 +1,118 @@
+---
+import Layout from '../layouts/Layout.astro';
+---
+
+<Layout title="HackIT | OSINT">
+	<div class="max-w-6xl mx-auto p-8 space-y-6">
+		<header class="border-b border-sf-border pb-4">
+			<h2 class="text-2xl font-normal text-sf-text">New Scan</h2>
+		</header>
+
+		<div class="bg-white border border-sf-border rounded shadow-sm p-6">
+			<div class="max-w-3xl space-y-6">
+				<!-- Scan Target -->
+				<div class="space-y-2">
+					<label class="block font-semibold text-sm text-sf-text">Scan Target</label>
+					<p class="text-xs text-sf-muted">Enter a target (domain name, IP address, hostname, subnet, or email address) to scan.</p>
+					<input 
+						type="text" 
+						id="target-input"
+						placeholder="e.g. example.com" 
+						class="w-full border border-sf-border rounded px-4 py-2 focus:outline-none focus:border-sf-tabActive focus:ring-1 focus:ring-sf-tabActive transition-all"
+					/>
+				</div>
+
+				<!-- Scan Name -->
+				<div class="space-y-2">
+					<label class="block font-semibold text-sm text-sf-text">Scan Name (Optional)</label>
+					<input 
+						type="text" 
+						placeholder="Custom name for this scan" 
+						class="w-full border border-sf-border rounded px-4 py-2 focus:outline-none focus:border-sf-tabActive focus:ring-1 focus:ring-sf-tabActive transition-all"
+					/>
+				</div>
+
+				<!-- Scan Options -->
+				<div class="space-y-2 pt-4">
+					<label class="block font-semibold text-sm text-sf-text mb-3">Scan Type</label>
+					
+					<div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+						<!-- Option 1 -->
+						<label class="border border-sf-tabActive bg-blue-50/50 rounded p-4 cursor-pointer flex flex-col gap-2 relative">
+							<div class="flex items-center gap-2">
+								<input type="radio" name="scantype" checked class="text-sf-tabActive focus:ring-sf-tabActive" />
+								<span class="font-bold text-sm">All Modules</span>
+							</div>
+							<p class="text-xs text-sf-muted">Query all available OSINT modules for maximum intelligence gathering.</p>
+						</label>
+						
+						<!-- Option 2 -->
+						<label class="border border-sf-border hover:border-sf-border/80 rounded p-4 cursor-pointer flex flex-col gap-2 transition-colors">
+							<div class="flex items-center gap-2">
+								<input type="radio" name="scantype" class="text-sf-tabActive focus:ring-sf-tabActive" />
+								<span class="font-bold text-sm">Passive Only</span>
+							</div>
+							<p class="text-xs text-sf-muted">Only use passive modules that do not directly touch the target infrastructure.</p>
+						</label>
+
+						<!-- Option 3 -->
+						<label class="border border-sf-border hover:border-sf-border/80 rounded p-4 cursor-pointer flex flex-col gap-2 transition-colors">
+							<div class="flex items-center gap-2">
+								<input type="radio" name="scantype" class="text-sf-tabActive focus:ring-sf-tabActive" />
+								<span class="font-bold text-sm">Investigate</span>
+							</div>
+							<p class="text-xs text-sf-muted">Perform a deep, targeted investigation focusing on specific threat intelligence.</p>
+						</label>
+					</div>
+				</div>
+
+				<!-- Actions -->
+				<div class="pt-6 flex gap-3">
+					<button id="run-scan-btn" class="bg-sf-green hover:bg-emerald-600 text-white px-6 py-2 rounded shadow text-sm font-medium transition-colors flex items-center gap-2">
+						<i class="fas fa-play text-xs"></i> Run Scan
+					</button>
+					<button class="bg-white border border-sf-border hover:bg-gray-50 text-sf-text px-6 py-2 rounded shadow-sm text-sm font-medium transition-colors">
+						Cancel
+					</button>
+				</div>
+			</div>
+		</div>
+	</div>
+
+	<script is:inline>
+		const runBtn = document.getElementById('run-scan-btn');
+		const targetInput = document.getElementById('target-input');
+		
+		runBtn.addEventListener('click', () => {
+			const target = targetInput.value.trim();
+			if (!target) {
+				targetInput.focus();
+				targetInput.classList.add('border-red-500', 'ring-1', 'ring-red-500');
+				setTimeout(() => targetInput.classList.remove('border-red-500', 'ring-1', 'ring-red-500'), 2000);
+				return;
+			}
+			
+			runBtn.innerHTML = '<i class="fas fa-spinner fa-spin text-xs"></i> Starting...';
+			runBtn.classList.add('opacity-75', 'pointer-events-none');
+			
+			setTimeout(() => {
+				window.location.href = `/intelligence?target=${encodeURIComponent(target)}`;
+			}, 500);
+		});
+
+		// Radio selection visual feedback
+		const radios = document.querySelectorAll('input[name="scantype"]');
+		radios.forEach(radio => {
+			radio.addEventListener('change', (e) => {
+				document.querySelectorAll('input[name="scantype"]').forEach(r => {
+					r.closest('label').classList.remove('border-sf-tabActive', 'bg-blue-50/50');
+					r.closest('label').classList.add('border-sf-border');
+				});
+				if (e.target.checked) {
+					e.target.closest('label').classList.remove('border-sf-border');
+					e.target.closest('label').classList.add('border-sf-tabActive', 'bg-blue-50/50');
+				}
+			});
+		});
+	</script>
+</Layout>

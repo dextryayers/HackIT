@@ -1,39 +1,75 @@
-"""
-Global configuration helpers for HackIt.
-
-Reads environment variables set by the CLI group or user.
-"""
+import json
 import os
-try:
-    from fake_useragent import UserAgent
-    _ua = UserAgent()
-except ImportError:
-    _ua = None
+import getpass
+import socket
 
-def get_random_user_agent() -> str:
-    """Return a random User-Agent string."""
-    if _ua:
-        try:
-            return _ua.random
-        except Exception:
-            pass
-    return "HackIt/1.0.0 (Security Testing Tool)"
+CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".hackit_config.json")
 
+DEFAULT_CONFIG = {
+    "theme": "kali",
+    "user": getpass.getuser(),
+    "hostname": socket.gethostname(),
+    "aggressive_default": True,
+    "stealth_default": True,
+    "ai_keys": {
+        "gemini": "",
+        "groq": "",
+        "openai": "",
+        "claude": "",
+        "deepseek": "",
+        "openrouter": ""
+    },
+    "ai_provider": "gemini"
+}
 
-def get_proxy() -> str | None:
-    """Return proxy URL from environment or None."""
-    return os.environ.get('HACKIT_PROXY')
+def load_config():
+    if not os.path.exists(CONFIG_PATH):
+        save_config(DEFAULT_CONFIG)
+        return DEFAULT_CONFIG
+    try:
+        with open(CONFIG_PATH, "r") as f:
+            data = json.load(f)
+            # Deep merge with defaults to ensure all keys exist
+            merged = DEFAULT_CONFIG.copy()
+            for k, v in data.items():
+                if isinstance(v, dict) and k in merged and isinstance(merged[k], dict):
+                    merged[k].update(v)
+                else:
+                    merged[k] = v
+            return merged
+    except Exception:
+        return DEFAULT_CONFIG
 
-
-def verify_ssl_default() -> bool:
-    """Return whether SSL verification should be enabled by default.
-
-    Controlled via the `HACKIT_VERIFY` environment variable. If the value
-    is missing or truthy, verification is enabled. If it's '0', 'false',
-    or 'no', verification is disabled.
-    """
-    val = os.environ.get('HACKIT_VERIFY')
-    if val is None:
+def save_config(config):
+    try:
+        # Ensure parent directory exists
+        os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
+        
+        # Write to a temporary file first for atomic-like safety
+        tmp_path = CONFIG_PATH + ".tmp"
+        with open(tmp_path, "w") as f:
+            json.dump(config, f, indent=4)
+        
+        # Replace the real config file
+        if os.path.exists(CONFIG_PATH):
+            os.remove(CONFIG_PATH)
+        os.rename(tmp_path, CONFIG_PATH)
         return True
-    return val.lower() not in ('0', 'false', 'no')
+    except Exception as e:
+        print(f"  [!] Config save error: {str(e)}")
+        return False
 
+def get_theme():
+    config = load_config()
+    return config.get("theme", "kali")
+
+def set_theme(theme_name):
+    config = load_config()
+    config["theme"] = theme_name
+    save_config(config)
+
+def get_user_info():
+    config = load_config()
+    user = config.get("user") or getpass.getuser()
+    host = config.get("hostname") or socket.gethostname()
+    return user, host

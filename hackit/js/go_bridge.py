@@ -30,15 +30,38 @@ class GoEngine:
                 return False
         return True
 
-    def run(self, url: str) -> List[Dict[str, Any]]:
+    def run(self, url: str):
+        """Runs the Go engine and yields results line-by-line (Streaming)"""
         if not self.ensure_compiled():
-            return [{"error": "Failed to compile Go engine"}]
+            yield {"error": "Failed to compile Go engine"}
+            return
 
         try:
-            result = subprocess.run(
+            process = subprocess.Popen(
                 [self.binary_path, '-url', url],
-                capture_output=True, text=True, check=True
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=1
             )
-            return json.loads(result.stdout)
+            
+            for line in process.stdout:
+                line = line.strip()
+                if not line:
+                    continue
+                
+                # Filter out noise and extract JSON
+                if '{' in line:
+                    json_str = line[line.find('{'):]
+                    if '}' in json_str:
+                        json_str = json_str[:json_str.rfind('}')+1]
+                        try:
+                            yield json.loads(json_str)
+                        except:
+                            continue
+            
+            process.stdout.close()
+            process.wait()
+            
         except Exception as e:
-            return [{"error": str(e)}]
+            yield {"error": f"Bridge error: {str(e)}"}

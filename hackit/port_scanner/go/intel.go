@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -33,12 +34,27 @@ func GetNetworkIntel(host string) IntelInfo {
 		ASN:     "N/A",
 	}
 
-	// 1. DNS Lookup
+	// 1. Multi-Source DNS Resolution (High-Fidelity)
 	ips, err := net.LookupIP(host)
 	if err == nil {
 		for _, ip := range ips {
 			intel.DNS = append(intel.DNS, ip.String())
 		}
+	} else {
+		// Fallback: system-level resolution using net.DefaultResolver
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		ipAddrs, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+		if err == nil {
+			for _, addr := range ipAddrs {
+				intel.DNS = append(intel.DNS, addr.IP.String())
+			}
+		}
+	}
+	
+	// Ensure we have at least one entry if it's already an IP
+	if len(intel.DNS) == 0 && net.ParseIP(host) != nil {
+		intel.DNS = append(intel.DNS, host)
 	}
 
 	// 2. Reverse DNS
@@ -71,7 +87,14 @@ func GetNetworkIntel(host string) IntelInfo {
 				AS         string `json:"as"`
 			}
 			if err := json.NewDecoder(resp.Body).Decode(&data); err == nil && data.Status == "success" {
-				intel.Geo = fmt.Sprintf("%s, %s, %s", data.City, data.RegionName, data.Country)
+				var parts []string
+				if data.City != "" { parts = append(parts, data.City) }
+				if data.RegionName != "" { parts = append(parts, data.RegionName) }
+				if data.Country != "" { parts = append(parts, data.Country) }
+				
+				if len(parts) > 0 {
+					intel.Geo = strings.Join(parts, ", ")
+				}
 				intel.ASN = data.AS
 				intel.WHOIS = fmt.Sprintf("ISP: %s | ORG: %s", data.ISP, data.Org)
 			}

@@ -113,6 +113,9 @@ func resolveWorker(jobs chan string, wg *sync.WaitGroup, verbose bool, domain st
 				// Use a small list for recursive to avoid explosion
 				smallList := []string{"dev", "test", "stage", "prod", "api", "vpn", "mail", "admin", "internal", "corp"}
 				go func(foundSub string) {
+					// CRITICAL: Recover from panic if jobs channel is already closed
+					defer func() { recover() }()
+					
 					for _, s := range smallList {
 						// Be careful not to block here if channel is full
 						select {

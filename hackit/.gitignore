@@ -1,0 +1,27 @@
+# Node.js
+node_modules/
+dist/
+.astro/
+.vercel
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.env
+.venv
+env/
+venv/
+ENV/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project Specific
+*.log
+temp/
+results/

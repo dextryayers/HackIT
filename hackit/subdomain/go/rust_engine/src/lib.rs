@@ -7,9 +7,15 @@ use reqwest::blocking::Client;
 use serde::Deserialize;
 use once_cell::sync::Lazy;
 use std::time::Duration;
+use rayon::prelude::*;
 
 mod providers;
 pub use providers::*;
+
+/**
+ * HackIT Industrial Subdomain Recon Engine (Rust-Core v3.5)
+ * Multi-Engine Orchestration for Subdomain Takeover & High-Speed DNS
+ */
 
 #[derive(Debug, Deserialize)]
 struct Signature {
@@ -19,11 +25,12 @@ struct Signature {
     vulnerable: bool,
 }
 
+// Expanded Professional Takeover Signatures
 static SIGNATURES: Lazy<Vec<Signature>> = Lazy::new(|| {
     let data = r#"[
         {
             "platform": "GitHub Pages",
-            "cname": ["github.io"],
+            "cname": ["github.io", "github.com"],
             "fingerprints": ["There isn't a GitHub Pages site here", "For root domains (example.com), you must create a CNAME record"],
             "vulnerable": true
         },
@@ -35,26 +42,26 @@ static SIGNATURES: Lazy<Vec<Signature>> = Lazy::new(|| {
         },
         {
             "platform": "Azure",
-            "cname": ["azurewebsites.net", "cloudapp.net", "azureedge.net"],
-            "fingerprints": ["404 Not Found", "The resource you are looking for has been removed", "Web Site not found"],
+            "cname": ["azurewebsites.net", "cloudapp.net", "azureedge.net", "windows.net"],
+            "fingerprints": ["404 Not Found", "The resource you are looking for has been removed", "Web Site not found", "404 - Web Site not found"],
             "vulnerable": true
         },
         {
             "platform": "AWS S3",
-            "cname": ["s3.amazonaws.com", "s3-website"],
-            "fingerprints": ["The specified bucket does not exist", "NoSuchBucket"],
+            "cname": ["s3.amazonaws.com", "s3-website", "s3.eu-central-1.amazonaws.com"],
+            "fingerprints": ["The specified bucket does not exist", "NoSuchBucket", "Bucket name is not valid"],
             "vulnerable": true
         },
         {
             "platform": "Shopify",
             "cname": ["myshopify.com"],
-            "fingerprints": ["Sorry, this shop is currently unavailable", "Only one step left!"],
+            "fingerprints": ["Sorry, this shop is currently unavailable", "Only one step left!", "This shop is currently unavailable"],
             "vulnerable": true
         },
         {
             "platform": "Zendesk",
             "cname": ["zendesk.com"],
-            "fingerprints": ["Help Center Closed", "No help center found"],
+            "fingerprints": ["Help Center Closed", "No help center found", "this help center no longer exists"],
             "vulnerable": true
         },
         {
@@ -67,6 +74,18 @@ static SIGNATURES: Lazy<Vec<Signature>> = Lazy::new(|| {
             "platform": "WPEngine",
             "cname": ["wpengine.com"],
             "fingerprints": ["The site you were looking for could not be found"],
+            "vulnerable": true
+        },
+        {
+            "platform": "CloudFront",
+            "cname": ["cloudfront.net"],
+            "fingerprints": ["Bad request. We can't connect to the server for this app or website at this time."],
+            "vulnerable": true
+        },
+        {
+            "platform": "Netlify",
+            "cname": ["netlify.app", "netlify.com"],
+            "fingerprints": ["Not Found", "404 not found"],
             "vulnerable": true
         }
     ]"#;
@@ -91,8 +110,6 @@ pub extern "C" fn rust_check_subdomain_takeover(domain: *const c_char) -> *mut c
     c_string.into_raw()
 }
 
-use rayon::prelude::*;
-
 #[unsafe(no_mangle)]
 pub extern "C" fn rust_resolve_dns_batch(domains: *const c_char) -> *mut c_char {
     if domains.is_null() {
@@ -107,24 +124,26 @@ pub extern "C" fn rust_resolve_dns_batch(domains: *const c_char) -> *mut c_char 
 
     let domain_list: Vec<&str> = domains_str.split(',').collect();
     
-    // Configure a high-performance, accurate resolver with multiple public DNS servers
+    // Industrial Resolver Configuration (Massive Parallelism)
     let mut config = ResolverConfig::new();
-    config.add_name_server(NameServerConfig::new("8.8.8.8:53".parse().unwrap(), Protocol::Udp));
-    config.add_name_server(NameServerConfig::new("1.1.1.1:53".parse().unwrap(), Protocol::Udp));
-    config.add_name_server(NameServerConfig::new("9.9.9.9:53".parse().unwrap(), Protocol::Udp));
-    config.add_name_server(NameServerConfig::new("8.8.4.4:53".parse().unwrap(), Protocol::Udp));
+    if let Ok(ip) = "1.1.1.1:53".parse() { config.add_name_server(NameServerConfig::new(ip, Protocol::Udp)); }
+    if let Ok(ip) = "8.8.8.8:53".parse() { config.add_name_server(NameServerConfig::new(ip, Protocol::Udp)); }
+    if let Ok(ip) = "9.9.9.9:53".parse() { config.add_name_server(NameServerConfig::new(ip, Protocol::Udp)); }
+    if let Ok(ip) = "1.0.0.1:53".parse() { config.add_name_server(NameServerConfig::new(ip, Protocol::Udp)); }
 
     let mut opts = ResolverOpts::default();
-    opts.timeout = Duration::from_secs(2);
-    opts.attempts = 2; // Retry once if failed
-    opts.use_hosts_file = false; // Bypass local hosts for OSINT accuracy
+    opts.timeout = Duration::from_secs(3);
+    opts.attempts = 3; 
+    opts.use_hosts_file = false; 
 
-    let resolver = Resolver::new(config, opts).unwrap_or_else(|_| Resolver::from_system_conf().unwrap());
+    let resolver = Resolver::new(config, opts).unwrap_or_else(|_| {
+        Resolver::from_system_conf().unwrap_or_else(|_| Resolver::new(ResolverConfig::default(), ResolverOpts::default()).unwrap())
+    });
 
     let results: Vec<String> = domain_list.par_iter().map(|&domain| {
-        // Perform multiple lookups for accuracy (A and AAAA)
         let mut all_ips = Vec::new();
         
+        // Accurate Dual-Stack Resolution (IPv4 + IPv6)
         if let Ok(lookup) = resolver.lookup_ip(domain) {
             for ip in lookup.iter() {
                 all_ips.push(ip.to_string());
@@ -177,46 +196,53 @@ fn perform_advanced_subdomain_check(domain: &str) -> String {
         Err(_) => return "ERROR:Failed to init resolver".to_string(),
     };
 
-    // 1. CNAME Lookup using generic lookup method
-    let cname = match resolver.lookup(domain, RecordType::CNAME) {
-        Ok(lookup) => {
-            lookup.iter()
-                .filter_map(|r| r.as_cname())
-                .next()
-                .map(|c| c.to_string().trim_end_matches('.').to_string())
-                .unwrap_or_default()
-        },
-        Err(_) => String::new(),
-    };
-
-    if cname.is_empty() {
-        return "SAFE:No CNAME found".to_string();
+    // Recursive CNAME Forensic Tracking
+    let mut current_target = domain.to_string();
+    let mut cname_chain = Vec::new();
+    
+    for _ in 0..3 {
+        match resolver.lookup(&current_target, RecordType::CNAME) {
+            Ok(lookup) => {
+                if let Some(c) = lookup.iter().filter_map(|r| r.as_cname()).next() {
+                    let c_str = c.to_string().trim_end_matches('.').to_string();
+                    if c_str == current_target { break; }
+                    cname_chain.push(c_str.clone());
+                    current_target = c_str;
+                } else { break; }
+            },
+            Err(_) => break,
+        }
     }
 
-    // 2. Signature Matching
+    if cname_chain.is_empty() {
+        return "SAFE:No CNAME chain detected".to_string();
+    }
+
+    let final_cname = cname_chain.last().unwrap();
+
+    // Deep Signature Audit
     for sig in SIGNATURES.iter() {
-        let matches_cname = sig.cname.iter().any(|c| cname.contains(c));
+        let matches_cname = sig.cname.iter().any(|c| final_cname.contains(c));
         
         if matches_cname {
-            // 3. HTTP Verification (Checking fingerprints)
             if verify_http_takeover(domain, &sig.fingerprints) {
-                return format!("VULNERABLE:{} Subdomain Takeover possible on {} (CNAME: {})", sig.platform, domain, cname);
+                return format!("VULNERABLE:{} Takeover possible on {} (CNAME: {})", sig.platform, domain, final_cname);
             }
             
             // If CNAME matches but fingerprints don't, check if CNAME itself resolves
-            match resolver.lookup_ip(&cname) {
-                Ok(_) => return format!("INFO:CNAME found to {} ({}) - Likely claimed but check manually", cname, sig.platform),
-                Err(_) => return format!("VULNERABLE:{} Subdomain Takeover likely (CNAME {} does not resolve)", sig.platform, cname),
+            match resolver.lookup_ip(final_cname) {
+                Ok(_) => return format!("INFO:CNAME chain found to {} ({}) - Likely claimed", final_cname, sig.platform),
+                Err(_) => return format!("VULNERABLE:{} Takeover likely (CNAME {} is dangling)", sig.platform, final_cname),
             }
         }
     }
 
-    format!("INFO:CNAME found to {} - No known signature matched", cname)
+    format!("INFO:CNAME chain found to {} - No signature matched", final_cname)
 }
 
 fn verify_http_takeover(domain: &str, fingerprints: &[String]) -> bool {
     let client = Client::builder()
-        .timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(8))
         .danger_accept_invalid_certs(true)
         .build()
         .unwrap_or_else(|_| Client::new());

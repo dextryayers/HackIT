@@ -56,6 +56,26 @@ B_MAGENTA = CSI + "95m"
 B_CYAN = CSI + "96m"
 B_WHITE = CSI + "97m"
 
+# Background Colors
+BG_BLACK = CSI + "40m"
+BG_RED = CSI + "41m"
+BG_GREEN = CSI + "42m"
+BG_YELLOW = CSI + "43m"
+BG_BLUE = CSI + "44m"
+BG_MAGENTA = CSI + "45m"
+BG_CYAN = CSI + "46m"
+BG_WHITE = CSI + "47m"
+
+# Bright Background Colors
+BG_B_BLACK = CSI + "100m"
+BG_B_RED = CSI + "101m"
+BG_B_GREEN = CSI + "102m"
+BG_B_YELLOW = CSI + "103m"
+BG_B_BLUE = CSI + "104m"
+BG_B_MAGENTA = CSI + "105m"
+BG_B_CYAN = CSI + "106m"
+BG_B_WHITE = CSI + "107m"
+
 # Collection of banners (Global)
 BANNERS = [
     r"""
@@ -96,19 +116,25 @@ BANNERS = [
 ###    ### ###     ###  ########  ###    ### ###########     ###     
 """,
     r"""
- _    _    _    ____ _  _____ _____ 
-| |  | |  / \  / ___| |/ /_ _|_   _|
-| |  | | / _ \| |   | ' / | |  | |  
-| |__| |/ ___ \ |___| . \ | |  | |  
-|_____/_/   \_\____|_|\_\___| |_|  
+  _    _          _____ _  _______ _______ 
+ | |  | |   /\   / ____| |/ /_   _|__   __|
+ | |__| |  /  \ | |    | ' /  | |    | |   
+ |  __  | / /\ \| |    |  <   | |    | |   
+ | |  | |/ ____ \ |____| . \ _| |_   | |   
+ |_|  |_/_/    \_\_____|_|\_\_____|  |_|   
 """,
     r"""
-db   db  .d8b.   .o88b. db   dD d888888b d888888b 
-88   88 d8' `8b d8P  Y8 88 ,8P'   `88'   `~~88~~' 
-88ooo88 88ooo88 8P      88,8P      88       88    
-88~~~88 88~~~88 8b      88`8b      88       88    
-88   88 88   88 Y8b  d8 88 `88.   .88.      88    
-YP   YP YP   YP  `Y88P' YP   YD Y888888P    YP    
+ .----------------.  .----------------.  .----------------.  .----------------.  .----------------.  .----------------. 
+| .--------------. || .--------------. || .--------------. || .--------------. || .--------------. || .--------------. |
+| |  ____  ____  | || |      __      | || |     _______  | || |  ___  ____   | || |     _____    | || |  _________   | |
+| | |_   ||   _| | || |     /  \     | || |    |_   __ \ | || | |_  ||_  _|  | || |    |_   _|   | || | |  _   _  |  | |
+| |   | |__| |   | || |    / /\ \    | || |      | |__) | | || |   | |_/ /    | || |      | |     | || | |_/ | | \_|  | |
+| |   |  __  |   | || |   / ____ \   | || |      |  __ /  | || |   |  __'.    | || |      | |     | || |     | |      | |
+| |  _| |  | |_  | || | _/ /    \ \_ | || |     _| |  \ \_ | || |  _| |  \ \_  | || |     _| |_    | || |    _| |_     | |
+| | |____||____| | || ||____|  |____|| || |    |____| |___|| || | |____||____| | || |    |_____|   | || |   |_____|    | |
+| |              | || |              | || |              | || |              | || |              | || |              | |
+| '--------------' || '--------------' || '--------------' || '--------------' || '--------------' || '--------------' |
+ '----------------'  '----------------'  '----------------'  '----------------'  '----------------'  '----------------' 
 """,
     r"""
   )      )            (     
@@ -204,6 +230,27 @@ TOOL_ART = {
  ___/ /___/ / /___     / / / /___ ___/ /  / ___ |/ / / / /_/ / / /_/ / / /_/  __/ /    
 /____//____/_____/    /_/ /_____//____/  /_/  |_/_/ /_/\__,_/_/\__, / /___/\___/_/     
                                                               /____/                   
+""",
+    "AI AGENT": r"""
+           .----------.
+          /          / \
+         /          /   \
+        /__________/     \
+        |          |     |
+        |  O    O  |     |
+        |    __    |     |   [ HackIt AI v2.1 ]
+        |   |__|   |     |   [ Status: ONLINE ]
+        |__________|    /
+         \          \  /
+          \__________\/
+""",
+    "JS HUNTER": r"""
+      _  _____   _   _ _   _ _   _ _____ _____ _____ 
+     | |/ ____| | | | | | | | \ | |_   _|  ___|  __ \
+     | | (___   | |_| | | | |  \| | | | | |__ | |__) |
+ _   | |\___ \  |  _  | | | | . ` | | | |  __||  _  / 
+| |__| |____) | | | | | |_| | |\  |_| |_| |___| | \ \ 
+ \____/|_____/  |_| |_|\___/|_| \_|_____|_____|_|  \_\
 """
 }
 
@@ -253,39 +300,27 @@ def _colored(text: str, color: str, bold: bool = False) -> str:
 
 
 def get_ip_info():
-    """Fetch public IP and Geo location with fallback"""
-    try:
-        with urllib.request.urlopen(
-            "http://ip-api.com/json/?fields=status,message,country,city,query,isp",
-            timeout=5
-        ) as url:
-            data = json.loads(url.read().decode())
-            if data.get('status') == 'success':
-                return {
-                    'ip':  data.get('query', 'Unknown'),
-                    'geo': f"{data.get('city', '?')}, {data.get('country', '?')}"
-                }
-    except Exception:
-        pass
+    """Fetch public IP and Geo location with multi-layered fallback for maximum accuracy."""
+    providers = [
+        ("http://ip-api.com/json/?fields=status,country,city,query", lambda d: (d.get('query'), f"{d.get('city')}, {d.get('country')}")),
+        ("https://ipinfo.io/json", lambda d: (d.get('ip'), f"{d.get('city')}, {d.get('country')}")),
+        ("https://ipapi.co/json/", lambda d: (d.get('ip'), f"{d.get('city')}, {d.get('country_name')}")),
+        ("https://freeipapi.com/api/json", lambda d: (d.get('ipAddress'), f"{d.get('cityName')}, {d.get('countryName')}")),
+    ]
 
-    try:
-        with urllib.request.urlopen("https://ipinfo.io/json", timeout=5) as url:
-            data = json.loads(url.read().decode())
-            return {
-                'ip':  data.get('ip', 'Unknown'),
-                'geo': f"{data.get('city', '?')}, {data.get('country', '?')}"
-            }
-    except Exception:
-        pass
+    for url, parser in providers:
+        try:
+            with urllib.request.urlopen(url, timeout=3) as response:
+                data = json.loads(response.read().decode())
+                ip, geo = parser(data)
+                if ip and geo and 'None' not in geo and '?' not in geo:
+                    # Clean up geo string
+                    geo = geo.replace(', None', '').replace('Unknown, ', '')
+                    return {'ip': ip, 'geo': geo}
+        except Exception:
+            continue
 
-    try:
-        with urllib.request.urlopen("https://api.ipify.org?format=json", timeout=5) as url:
-            data = json.loads(url.read().decode())
-            return {'ip': data.get('ip', 'Unknown'), 'geo': 'Unknown'}
-    except Exception:
-        pass
-
-    return {'ip': 'Unavailable', 'geo': 'Unavailable'}
+    return {'ip': 'Offline/VPN', 'geo': 'Unknown Location'}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -317,45 +352,32 @@ def display_banner():
     quote   = random.choice(QUOTES)
 
     # ── Box geometry ─────────────────────────────────────────────────────────
-    # W  = total VISIBLE chars between the two outer │ chars on every row.
-    # Every row: INDENT + │ + <W visible chars> + │
     W      = 72
     INDENT = '  '
-    IN_BAR = INDENT + _colored('│', mc)   # left border piece
+    IN_BAR = INDENT + _colored('║', mc)   # left border piece (Double Line)
 
-    def hline(lc: str, rc: str):
-        print(INDENT + _colored(lc + '=' * W + rc, mc))
+    def hline(lc: str, rc: str, char='═'):
+        print(INDENT + _colored(lc + char * W + rc, mc))
 
     def row(content: str):
-        """Print one box row, always exactly W visible chars wide."""
-        print(IN_BAR + pad_to(content, W) + _colored('│', mc))
+        print(IN_BAR + pad_to(content, W) + _colored('║', mc))
 
     # ── Two-column cell helper ───────────────────────────────────────────────
-    # Layout per cell:  ' KEY          >> VALUE            '
-    #                    1  + KW + 4 + VW                  = CELL_W
-    # Two cells + centre divider: CELL_W + 1 + CELL_W = W
-    CELL_W = W // 2          # = 36
-    KW     = 13              # key width
-    VW     = CELL_W - 1 - KW - 4  # value width = 36-1-13-4 = 18
+    CELL_W = W // 2
+    KW     = 13
+    VW     = CELL_W - 1 - KW - 4
 
     def cell(key: str, val: str, vc=B_CYAN) -> str:
-        """
-        Build one fixed-width cell (CELL_W visible chars).
-        Value is truncated to VW chars BEFORE coloring — so vlen() is correct.
-        """
         val_plain = trunc_plain(val, VW)
         k   = _colored(f' {key:<{KW}}', DIM)
-        sep = _colored(' >> ', ac)
+        sep = _colored(' » ', ac) # Stylized separator
         v   = _colored(f'{val_plain:<{VW}}', vc, bold=True)
-        # visible = 1+KW + 4 + VW = CELL_W  (no ANSI escapes counted)
         return k + sep + v
 
     def two_col(lk, lv, lc, rk, rv, rc):
-        """Print a two-column info row, perfectly aligned."""
-        left  = cell(lk, lv, lc)          # CELL_W visible
-        right = cell(rk, rv, rc)          # CELL_W visible
-        mid   = _colored('│', DIM)        # 1 visible
-        # Total visible = CELL_W + 1 + CELL_W = W  ✓
+        left  = cell(lk, lv, lc)
+        right = cell(rk, rv, rc)
+        mid   = _colored('║', DIM) # Internal divider
         row(left + mid + right)
 
     # ── Fetch live data ───────────────────────────────────────────────────────
@@ -367,18 +389,17 @@ def display_banner():
     dstr  = now.strftime('%Y-%m-%d')
     tstr  = now.strftime('%H:%M:%S')
 
-    # ── Print banner art ──────────────────────────────────────────────────────
+    # ── Print Random Banner Art ───────────────────────────────────────────────
     print()
     print(_colored(banner, mc, bold=True))
 
-    # ── Box top ───────────────────────────────────────────────────────────────
-    hline('┌', '┐')
+    # ── Box top (Heavy Double Line) ──────────────────────────────────────────
+    hline('╔', '╗')
 
     # ── Header row ────────────────────────────────────────────────────────────
-    # ' █ HACKIT OS █   V2.1.0   |   SESSION: 14716 '
-    h_t1 = ' █ HACKIT OS █'           # 14
-    h_t2 = f'   V2.1.0   |   SESSION: {pid:<5}' # 25
-    h_t3 = ' [ ANALYST MODE ] '        # 18
+    h_t1 = ' █ HACKIT OS █'
+    h_t2 = f'   V2.1.0   |   SESSION: {pid:<5}'
+    h_t3 = ' [ ANALYST MODE ] '
     h_vis = len(h_t1) + len(h_t2) + len(h_t3)
     h_pad = ' ' * (W - h_vis)
     header_str = (
@@ -388,7 +409,15 @@ def display_banner():
         + h_pad
     )
     row(header_str)
-    hline('├', '┤')
+    hline('╠', '╣')
+
+    # ── Made In Indonesia Row (Hardened Branding) ─────────────────────────────
+    # Standardized branding row using the core row() padding engine for perfect alignment.
+    f_logo = f" {RED}{BG_WHITE}▀▀▀{RESET} " 
+    f_text = _colored('MADE IN INDONESIA', WHITE, bold=True)
+    f_desc = _colored(' | ADVANCED SECURITY INTELLIGENCE ECOSYSTEM', DIM)
+    row(f_logo + f_text + f_desc)
+    hline('╠', '╣')
 
     # ── Info grid ────────────────────────────────────────────────────────────
     two_col('Public IP',  net['ip'],                     B_CYAN,
@@ -397,14 +426,13 @@ def display_banner():
             'OS / Python', f'{os_n} Py{py_v[:4]}',       B_CYAN)
     two_col('Date',        dstr,                          YELLOW,
             'Time',        tstr,                          YELLOW)
-    hline('├', '┤')
+    hline('╠', '╣')
 
     # ── Engine Health / Tech Stack ──────────────────────────────────────────
-    # ' TECH STACK: [■■■■■] 100% | ENGINES: Go, Rust, C++, Py, Ruby '
     s_t1 = ' TECH STACK '
     s_bar = _colored('[', DIM) + _colored('■' * 5, B_GREEN) + _colored(']', DIM)
     s_t2 = ' 100% | ENGINES: Go, Rust, C++, Py, Ruby '
-    s_vis = len(s_t1) + 7 + len(s_t2) # [■■■■■] is 7 visible
+    s_vis = len(s_t1) + 7 + len(s_t2)
     s_pad = ' ' * (W - s_vis)
     status_str = (
         _colored(s_t1, mc, bold=True)
@@ -413,18 +441,18 @@ def display_banner():
         + s_pad
     )
     row(status_str)
-    hline('├', '┤')
+    hline('╠', '╣')
 
     # ── Quote row ─────────────────────────────────────────────────────────────
     q_plain = trunc_plain(quote, W - 6)
     q_str   = _colored('  " ', ac, bold=True) + _colored(q_plain, DIM)
     row(q_str)
 
-    hline('├', '┤')
+    hline('╠', '╣')
 
     # ── Footer row ────────────────────────────────────────────────────────────
-    f_left  = '  [!] AUTHORIZED ACCESS ONLY'       # 28 visible
-    f_right = 'HACKIT SEC-SUITE  '                 # 17 visible
+    f_left  = '  [!] AUTHORIZED ACCESS ONLY'
+    f_right = 'HACKIT SEC-SUITE  '
     f_pad   = W - len(f_left) - len(f_right)
     footer  = (
         _colored(f_left, B_RED, bold=True)
@@ -432,15 +460,15 @@ def display_banner():
         + _colored(f_right, DIM)
     )
     row(footer)
-    hline('└', '┘')
+    hline('╚', '╝')
     print()
     sys.stdout.flush()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-def display_tool_banner(tool_name: str):
+def display_tool_banner(tool_name: str, force: bool = False):
     """Print a premium tool-specific banner."""
-    if os.environ.get('HACKIT_NO_BANNER'):
+    if os.environ.get('HACKIT_NO_BANNER') and not force:
         return
 
     import re as _re

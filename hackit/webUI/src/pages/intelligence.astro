@@ -1,0 +1,558 @@
+---
+import Layout from '../layouts/Layout.astro';
+---
+
+<Layout title="Spiderfoot HX | Scan Results">
+	<!-- Page Header -->
+	<div class="bg-white border-b border-sf-border shadow-sm px-6 py-4 flex items-center justify-between z-10 relative">
+		<div>
+			<h2 class="text-xl text-sf-text flex items-center gap-2">
+				<span id="header-target" class="font-normal">Target Name</span>
+				<span id="header-status" class="bg-green-100 text-green-700 text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wide border border-green-200">RUNNING</span>
+			</h2>
+		</div>
+		<div class="flex items-center gap-2 text-xs">
+			<span class="text-sf-muted"><i class="far fa-clock"></i> Duration:</span>
+			<span class="font-mono text-sf-text" id="scan-duration">00:00:00</span>
+		</div>
+	</div>
+
+	<!-- Tab Navigation -->
+	<div class="bg-white border-b border-sf-border px-6 sticky top-0 z-10 flex justify-between items-center">
+		<nav class="flex gap-1 pt-2" id="tab-nav">
+			<button class="px-4 py-2 text-sm font-semibold border-b-2 border-sf-tabActive text-sf-tabActive transition-colors flex items-center gap-2" data-target="tab-overview">
+				<i class="fas fa-tachometer-alt"></i> Overview
+			</button>
+			<button class="px-4 py-2 text-sm font-semibold border-b-2 border-transparent text-sf-muted hover:text-sf-text transition-colors flex items-center gap-2" data-target="tab-browse">
+				<i class="fas fa-list"></i> Browse
+			</button>
+			<button class="px-4 py-2 text-sm font-semibold border-b-2 border-transparent text-sf-muted hover:text-sf-text transition-colors flex items-center gap-2" data-target="tab-graph">
+				<i class="fas fa-project-diagram"></i> Graph
+			</button>
+			<button class="px-4 py-2 text-sm font-semibold border-b-2 border-transparent text-sf-muted hover:text-sf-text transition-colors flex items-center gap-2" data-target="tab-raw">
+				<i class="fas fa-code"></i> Raw Data
+			</button>
+			<button class="px-4 py-2 text-sm font-semibold border-b-2 border-transparent text-sf-muted hover:text-sf-text transition-colors flex items-center gap-2">
+				<i class="fas fa-cog"></i> Scan Settings
+			</button>
+			<button class="px-4 py-2 text-sm font-semibold border-b-2 border-transparent text-sf-muted hover:text-sf-text transition-colors flex items-center gap-2" data-target="tab-log">
+				<i class="fas fa-file-alt"></i> Log
+			</button>
+		</nav>
+		<div class="flex gap-2 pb-2">
+			<button id="btn-export-titan" class="bg-sf-blue hover:bg-sf-blueActive text-white px-3 py-1.5 rounded text-xs font-bold flex items-center gap-2 transition-colors">
+				<i class="fas fa-file-export"></i> Export Titan Report
+			</button>
+			<button class="bg-sf-green hover:bg-emerald-600 text-white w-8 h-8 rounded flex items-center justify-center transition-colors">
+				<i class="fas fa-sync-alt text-xs"></i>
+			</button>
+			<button class="bg-white border border-sf-border text-sf-text hover:bg-gray-50 w-8 h-8 rounded flex items-center justify-center transition-colors">
+				<i class="fas fa-download text-xs"></i>
+			</button>
+		</div>
+	</div>
+
+	<!-- Main Content Area -->
+	<div class="p-6">
+		
+		<!-- TAB: OVERVIEW -->
+		<div id="tab-overview" class="tab-content space-y-6 block">
+			<!-- Top 3 Metrics Cards (Like Spiderfoot Tracked Changes, Correlations, Data Volume) -->
+			<div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+				<!-- Tracked Changes Equivalent -->
+				<div class="bg-white border border-sf-border rounded p-4 shadow-sm">
+					<h3 class="text-xs font-bold text-center text-sf-text mb-4">Tracked Changes</h3>
+					<div class="space-y-4 px-4">
+						<div class="flex justify-between items-center border-b border-sf-border pb-2">
+							<span class="text-sm text-sf-muted">Data element changes</span>
+							<span class="text-sm font-mono text-sf-text" id="overview-total-count">0 <i class="fas fa-caret-up text-green-500"></i></span>
+						</div>
+						<div class="flex justify-between items-center border-b border-sf-border pb-2">
+							<span class="text-sm text-sf-muted">Risky data element changes</span>
+							<span class="text-sm font-mono text-sf-text" id="overview-risk-count">0 <i class="fas fa-caret-up text-red-500"></i></span>
+						</div>
+						<div class="flex justify-between items-center">
+							<span class="text-sm text-sf-muted">Correlation changes</span>
+							<span class="text-sm font-mono text-sf-text" id="overview-correlation-count">0 <i class="fas fa-caret-up text-sf-tabActive"></i></span>
+						</div>
+					</div>
+				</div>
+
+				<!-- Correlations (Radar Chart) -->
+				<div class="bg-white border border-sf-border rounded p-4 shadow-sm flex flex-col">
+					<h3 class="text-xs font-bold text-center text-sf-text mb-2">Correlations</h3>
+					<div class="flex-1 relative w-full flex justify-center items-center min-h-[150px]">
+						<canvas id="radarChart"></canvas>
+					</div>
+				</div>
+
+				<!-- Data Volume (Horizontal Bar) -->
+				<div class="bg-white border border-sf-border rounded p-4 shadow-sm flex flex-col">
+					<h3 class="text-xs font-bold text-center text-sf-text mb-2">Data Volume</h3>
+					<div class="flex-1 relative w-full min-h-[150px]">
+						<canvas id="volChart"></canvas>
+					</div>
+				</div>
+			</div>
+
+			<!-- Bottom Wide Chart (Unique Data Elements Vertical Bar) -->
+			<div class="bg-white border border-sf-border rounded p-6 shadow-sm">
+				<h3 class="text-sm font-bold text-center text-sf-text mb-4">Unique Data Elements</h3>
+				<div class="w-full h-64 relative">
+					<canvas id="barChart"></canvas>
+				</div>
+			</div>
+		</div>
+
+		<!-- TAB: BROWSE (SpiderFoot Industrial Style) -->
+		<div id="tab-browse" class="tab-content hidden h-[calc(100vh-200px)] flex flex-col">
+			<!-- Summary Table View -->
+			<div id="browse-summary-container" class="flex-1 overflow-auto bg-white border border-sf-border rounded shadow-sm">
+				<table class="w-full text-left text-sm border-collapse">
+					<thead class="bg-sf-bg sticky top-0 z-10 border-b border-sf-border">
+						<tr>
+							<th class="px-6 py-4 font-bold text-sf-text uppercase tracking-wider text-xs border-r border-sf-border">Type</th>
+							<th class="px-6 py-4 font-bold text-sf-text uppercase tracking-wider text-xs border-r border-sf-border">Category</th>
+							<th class="px-6 py-4 font-bold text-sf-text uppercase tracking-wider text-xs border-r border-sf-border text-center">Unique</th>
+							<th class="px-6 py-4 font-bold text-sf-text uppercase tracking-wider text-xs border-r border-sf-border text-center">Total</th>
+							<th class="px-6 py-4 font-bold text-sf-text uppercase tracking-wider text-xs">Last Finding</th>
+						</tr>
+					</thead>
+					<tbody id="browse-summary-tbody" class="divide-y divide-sf-border">
+						<!-- Summary rows will be injected here -->
+					</tbody>
+				</table>
+			</div>
+
+			<!-- Detail Table View (Hidden by default) -->
+			<div id="browse-detail-container" class="hidden flex-1 flex flex-col bg-white border border-sf-border rounded shadow-sm overflow-hidden">
+				<div class="p-4 bg-sf-bg border-b border-sf-border flex justify-between items-center">
+					<div class="flex items-center gap-4">
+						<button id="browse-back-btn" class="flex items-center gap-2 text-sf-blue hover:underline font-bold text-sm">
+							<i class="fas fa-arrow-left"></i> Back to Summary
+						</button>
+						<span id="browse-detail-type" class="px-3 py-1 bg-sf-blue/10 text-sf-blue rounded-full text-xs font-bold border border-sf-blue/20"></span>
+					</div>
+					<div class="flex items-center gap-3">
+						<div class="relative">
+							<i class="fas fa-search absolute left-3 top-1/2 -translate-y-1/2 text-sf-muted text-xs"></i>
+							<input type="text" id="browse-detail-search" placeholder="Filter these results..." class="pl-8 pr-3 py-1.5 text-xs border border-sf-border rounded bg-white w-64 focus:outline-none focus:border-sf-blue">
+						</div>
+					</div>
+				</div>
+				<div class="flex-1 overflow-auto">
+					<table class="w-full text-left text-sm border-collapse">
+						<thead class="bg-gray-50 sticky top-0 z-10 border-b border-sf-border">
+							<tr>
+								<th class="px-6 py-3 font-bold text-sf-text uppercase text-[10px]">Entity</th>
+								<th class="px-6 py-3 font-bold text-sf-text uppercase text-[10px]">Source</th>
+								<th class="px-6 py-3 font-bold text-sf-text uppercase text-[10px]">Status</th>
+								<th class="px-6 py-3 font-bold text-sf-text uppercase text-[10px]">Resolution</th>
+							</tr>
+						</thead>
+						<tbody id="browse-detail-tbody" class="divide-y divide-sf-border">
+							<!-- Detail rows will be injected here -->
+						</tbody>
+					</table>
+				</div>
+			</div>
+		</div>
+
+		<!-- TAB: GRAPH (Vis-Network) -->
+		<div id="tab-graph" class="tab-content hidden h-[calc(100vh-250px)]">
+			<div class="bg-white border border-sf-border rounded shadow-sm w-full h-full relative overflow-hidden">
+				<!-- Toolbars inside graph area -->
+				<div class="absolute top-4 right-4 z-10 flex gap-2">
+					<button id="graph-pause" class="bg-white border border-sf-border hover:bg-gray-50 p-2 rounded shadow-sm text-sf-text">
+						<i class="fas fa-pause"></i>
+					</button>
+					<button id="graph-recenter" class="bg-white border border-sf-border hover:bg-gray-50 p-2 rounded shadow-sm text-sf-text">
+						<i class="fas fa-compress-arrows-alt"></i>
+					</button>
+				</div>
+				
+				<!-- The Network Container -->
+				<div id="network-container" class="w-full h-full bg-[#f9fbfc]"></div>
+				
+				<!-- Graph Loading Overlay -->
+				<div id="graph-loading" class="absolute inset-0 bg-white/80 flex flex-col items-center justify-center z-20">
+					<i class="fas fa-project-diagram text-4xl text-sf-blue mb-4 animate-pulse"></i>
+					<p class="text-sm font-semibold text-sf-text">Building Force-Directed Graph...</p>
+				</div>
+			</div>
+		</div>
+
+		<!-- TAB: LOG -->
+		<div id="tab-log" class="tab-content hidden">
+			<div class="bg-white border border-sf-border rounded shadow-sm overflow-hidden">
+				<div class="bg-gray-50 px-4 py-2 border-b border-sf-border font-bold text-xs uppercase text-sf-muted">Module Execution Logs</div>
+				<div class="p-0 max-h-[600px] overflow-y-auto">
+					<table class="w-full text-xs text-left">
+						<thead class="bg-white sticky top-0 border-b border-sf-border">
+							<tr>
+								<th class="px-4 py-2">Time</th>
+								<th class="px-4 py-2">Module</th>
+								<th class="px-4 py-2">Status</th>
+								<th class="px-4 py-2">Result</th>
+							</tr>
+						</thead>
+						<tbody id="log-table-body" class="divide-y divide-sf-border">
+							<!-- Log rows here -->
+						</tbody>
+					</table>
+				</div>
+			</div>
+		</div>
+
+		<!-- TAB: RAW DATA -->
+		<div id="tab-raw" class="tab-content hidden">
+			<div class="bg-gray-900 text-green-400 p-6 rounded-lg font-mono text-sm overflow-auto max-h-[700px] shadow-inner border-2 border-gray-700">
+				<div class="flex justify-between items-center mb-4 border-b border-gray-700 pb-2">
+					<span class="text-xs">[ SYSTEM_DATA_DUMP ]</span>
+					<button class="text-xs bg-gray-800 hover:bg-gray-700 px-2 py-1 rounded text-white" id="copy-raw">Copy JSON</button>
+				</div>
+				<pre id="raw-json-display" class="whitespace-pre-wrap break-all">Initializing data stream...</pre>
+			</div>
+		</div>
+
+	</div>
+
+	<!-- System Error Overlay -->
+	<div id="error-overlay" class="fixed inset-0 bg-black/50 z-[100] hidden items-center justify-center">
+		<div class="bg-white rounded p-6 max-w-md w-full border-t-4 border-red-500 shadow-2xl">
+			<h3 class="text-lg font-bold text-red-600 flex items-center gap-2 mb-2"><i class="fas fa-exclamation-triangle"></i> Engine Connection Failed</h3>
+			<p class="text-sm text-sf-text mb-4">Could not establish connection to the OSINT Python engine on port 8080.</p>
+			<div class="bg-gray-100 p-3 rounded border border-gray-200 font-mono text-xs text-sf-text mb-4">
+				1. Open Terminal<br>
+				2. cd d:\web\hacks\hackstools\hackit\webUI<br>
+				3. run_engine.bat
+			</div>
+			<button onclick="window.location.reload()" class="w-full bg-sf-green hover:bg-emerald-600 text-white py-2 rounded font-medium transition-colors mb-2">Retry Mission</button>
+			<button onclick="document.getElementById('error-overlay').classList.replace('flex','hidden')" class="w-full bg-gray-200 hover:bg-gray-300 text-sf-text py-2 rounded font-medium transition-colors">Dismiss</button>
+		</div>
+	</div>
+
+	<script is:inline>
+		// Tab Switching Logic
+		document.querySelectorAll('[data-target]').forEach(btn => {
+			btn.addEventListener('click', () => {
+				const target = btn.getAttribute('data-target');
+				if(!target) return;
+				
+				// Update buttons
+				document.querySelectorAll('[data-target]').forEach(b => {
+					b.classList.remove('border-sf-tabActive', 'text-sf-tabActive');
+					b.classList.add('border-transparent', 'text-sf-muted');
+				});
+				btn.classList.remove('border-transparent', 'text-sf-muted');
+				btn.classList.add('border-sf-tabActive', 'text-sf-tabActive');
+				
+				// Update content
+				document.querySelectorAll('.tab-content').forEach(c => c.classList.add('hidden'));
+				document.getElementById(target).classList.remove('hidden');
+			});
+		});
+
+		function renderLogs(logs) {
+			const logBody = document.getElementById('log-table-body');
+			if(!logBody) return;
+			logBody.innerHTML = '';
+			[...logs].reverse().forEach(log => {
+				const tr = document.createElement('tr');
+				const statusColor = log.status === 'Success' ? 'text-green-600' : 'text-red-600';
+				tr.innerHTML = `
+					<td class="px-4 py-2 font-mono text-gray-400">${log.time}</td>
+					<td class="px-4 py-2 font-bold">${log.module}</td>
+					<td class="px-4 py-2 ${statusColor}">${log.status}</td>
+					<td class="px-4 py-2">${log.found ? log.found + ' items' : log.error || '-'}</td>
+				`;
+				logBody.appendChild(tr);
+			});
+		}
+
+		// Global Data State
+		let networkInstance = null;
+		let latestFindings = [];
+		let currentSummary = [];
+
+		const API_ENDPOINTS = ['/api/scan'];
+
+		async function requestScan(url) {
+			try {
+				const res = await fetch(url);
+				if (!res.ok) throw new Error(`HTTP Error: ${res.status} ${res.statusText}`);
+				return await res.json();
+			} catch (err) {
+				console.error("Scan Request Failed:", url, err);
+				throw err;
+			}
+		}
+
+		// Timer
+		let seconds = 0;
+		setInterval(() => {
+			seconds++;
+			const h = Math.floor(seconds / 3600).toString().padStart(2, '0');
+			const m = Math.floor((seconds % 3600) / 60).toString().padStart(2, '0');
+			const s = (seconds % 60).toString().padStart(2, '0');
+			document.getElementById('scan-duration').innerText = `${h}:${m}:${s}`;
+		}, 1000);
+
+		// Charts
+		function renderCharts(stats) {
+			const riskDist = stats.risk_distribution || {};
+			
+			const radarCtx = document.getElementById('radarChart').getContext('2d');
+			new Chart(radarCtx, {
+				type: 'radar',
+				data: {
+					labels: ['High', 'Medium', 'Low', 'Info'],
+					datasets: [{
+						label: 'Current Scan',
+						data: [riskDist['High Risk'] || 0, riskDist['Elevated Risk'] || 0, riskDist['Standard Target'] || 0, riskDist['Informational'] || 0],
+						backgroundColor: 'rgba(59, 130, 246, 0.2)',
+						borderColor: '#3b82f6',
+						pointBackgroundColor: '#3b82f6',
+						borderWidth: 1.5
+					}]
+				},
+				options: { responsive: true, maintainAspectRatio: false, scales: { r: { ticks: { display: false } } }, plugins: { legend: { display: false } } }
+			});
+
+			const volCtx = document.getElementById('volChart').getContext('2d');
+			new Chart(volCtx, {
+				type: 'bar',
+				data: {
+					labels: ['Unique Elements', 'Risky Elements', 'Correlations'],
+					datasets: [{ data: [stats.total_findings || 0, (riskDist['High Risk'] || 0) + (riskDist['Elevated Risk'] || 0), Math.floor((stats.total_findings || 0) / 10)], backgroundColor: ['#0b3558', '#3b82f6', '#94a3b8'] }]
+				},
+				options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { display: false }, y: { grid: { display: false } } } }
+			});
+
+			const barCtx = document.getElementById('barChart').getContext('2d');
+			const typeDist = stats.type_distribution || {};
+			const labels = Object.keys(typeDist).length > 0 ? Object.keys(typeDist).slice(0, 15) : ['DNS', 'IP', 'Web', 'Email', 'SSL', 'BGP'];
+			const data = Object.values(typeDist).length > 0 ? Object.values(typeDist).slice(0, 15) : [0,0,0,0,0,0];
+
+			new Chart(barCtx, {
+				type: 'bar',
+				data: { labels: labels, datasets: [{ data: data, backgroundColor: '#0b3558', barPercentage: 0.6 }] },
+				options: {
+					responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } },
+					scales: { y: { beginAtZero: true, grid: { color: '#f0f2f5' } }, x: { grid: { display: false }, ticks: { maxRotation: 45, minRotation: 45, font: { size: 10 } } } }
+				}
+			});
+		}
+
+		// Graph
+		function renderGraph(target, findings) {
+			const container = document.getElementById('network-container');
+			const nodes = new vis.DataSet([
+				{ id: 0, label: target, shape: 'icon', icon: { face: '"Font Awesome 6 Free"', code: '\uf1ad', size: 50, color: '#0b3558' } }
+			]);
+			const edges = new vis.DataSet([]);
+
+			let nodeId = 1;
+			findings.forEach((f, idx) => {
+				if(idx > 150) return;
+				let iconCode = '\uf0ac';
+				let color = '#3b82f6';
+				if(f.type.includes('IP') || f.type.includes('Port')) { iconCode = '\uf233'; color = '#ef4444'; }
+				else if(f.type.includes('DNS') || f.type.includes('Nameserver')) { iconCode = '\uf1c0'; }
+				else if(f.type.includes('SSL') || f.type.includes('Certificate')) { iconCode = '\uf023'; color = '#10b981'; }
+				else if(f.type.includes('Tech') || f.type.includes('Web')) { iconCode = '\uf121'; color = '#f97316'; }
+				if(f.threat_level && f.threat_level.includes('High')) color = '#ef4444';
+
+				nodes.add({ id: nodeId, label: f.entity.substring(0,25), title: `Source: ${f.source}\nType: ${f.type}`, shape: 'icon', icon: { face: '"Font Awesome 6 Free"', code: iconCode, size: 20, color: color } });
+				edges.add({ from: 0, to: nodeId, color: { color: '#cbd5e1' }, length: 150 });
+				nodeId++;
+			});
+
+			const options = {
+				physics: { enabled: true, stabilization: { enabled: true, iterations: 200 }, barnesHut: { gravitationalConstant: -8000, springLength: 120 } },
+				interaction: { hover: true, dragNodes: true, dragView: true, zoomView: true },
+				nodes: { shape: 'icon', scaling: { min: 14, max: 32 }, font: { multi: 'html' } },
+				edges: { smooth: { enabled: true, type: 'dynamic' }, color: { color: '#cbd5e1' } }
+			};
+			document.getElementById('graph-loading').classList.add('hidden');
+			networkInstance = new vis.Network(container, { nodes, edges }, options);
+
+			document.getElementById('graph-pause').addEventListener('click', () => {
+				if(networkInstance.physics.options.enabled) {
+					networkInstance.setOptions({ physics: { enabled: false } });
+					document.getElementById('graph-pause').innerHTML = '<i class="fas fa-play"></i>';
+				} else {
+					networkInstance.setOptions({ physics: { enabled: true } });
+					document.getElementById('graph-pause').innerHTML = '<i class="fas fa-pause"></i>';
+				}
+			});
+			document.getElementById('graph-recenter').addEventListener('click', () => networkInstance.fit());
+		}
+
+		// Data Fetching & Polling
+		document.addEventListener('DOMContentLoaded', async () => {
+			const urlParams = new URLSearchParams(window.location.search);
+			const target = urlParams.get('target') || 'unknown-target';
+			document.getElementById('header-target').innerText = target;
+
+			let jobId = null;
+			let pollingInterval = null;
+
+			for (const endpoint of API_ENDPOINTS) {
+				try {
+					document.getElementById('header-status').innerText = 'INITIATING...';
+					const res = await requestScan(`${endpoint}?target=${encodeURIComponent(target)}`);
+					if (res.job_id) {
+						jobId = res.job_id;
+						startPolling('/api/status', jobId, target);
+						break;
+					}
+				} catch (err) { console.warn('Endpoint failed:', endpoint, err); }
+			}
+
+			if (!jobId) { showError('Could not connect to OSINT Python engine on port 8080.'); }
+
+			function startPolling(statusUrl, id, targetName) {
+				document.getElementById('header-status').innerText = 'SCANNING...';
+				pollingInterval = setInterval(async () => {
+					try {
+						const res = await fetch(`${statusUrl}?job_id=${id}`);
+						const job = await res.json();
+						
+						// Update Logs and Raw
+						if(job.stats && job.stats.module_logs) {
+							renderLogs(job.stats.module_logs);
+						}
+						document.getElementById('raw-json-display').innerText = JSON.stringify(job, null, 2);
+
+						if (job.status === 'Completed' || job.status === 'Error') {
+							clearInterval(pollingInterval);
+							processResults(job, targetName);
+						} else if (job.duration) {
+							document.getElementById('scan-duration').innerText = job.duration;
+						}
+					} catch (e) { console.error(e); }
+				}, 2000);
+			}
+
+			function processResults(data, targetName) {
+				if (data && data.findings) {
+					latestFindings = data.findings;
+					currentSummary = data.summary || [];
+					renderBrowseSummary(currentSummary);
+					renderGraph(targetName, latestFindings);
+
+					if (data.stats) {
+						renderCharts(data.stats);
+						document.getElementById('overview-total-count').innerHTML = `${latestFindings.length} <i class="fas fa-caret-up text-green-500"></i>`;
+						document.getElementById('overview-risk-count').innerHTML = `${data.stats.risk_distribution['High Risk'] || 0} <i class="fas fa-caret-up text-red-500"></i>`;
+						const corrCount = latestFindings.filter(f => f.type === 'Shared Hosting' || f.type === 'SSL SAN').length;
+						document.getElementById('overview-correlation-count').innerHTML = `${corrCount} <i class="fas fa-caret-up text-sf-tabActive"></i>`;
+					}
+					document.getElementById('header-status').innerText = 'FINISHED';
+					document.getElementById('header-status').className = 'px-3 py-1 bg-gray-200 text-gray-700 rounded-full text-xs font-bold border border-gray-300';
+				} else {
+					showError('Scan completed but no findings were returned.');
+				}
+			}
+
+			function showError(msg) {
+				document.getElementById('header-status').innerText = 'ERROR';
+				document.getElementById('header-status').className = 'px-3 py-1 bg-red-100 text-red-700 rounded-full text-xs font-bold border border-red-200';
+				document.getElementById('error-overlay').classList.replace('hidden', 'flex');
+				if(msg) document.querySelector('#error-overlay p').innerText = msg;
+			}
+		});
+
+		// Browse Logic (SpiderFoot Style)
+		function renderBrowseSummary(summary) {
+			const tbody = document.getElementById('browse-summary-tbody');
+			if(!tbody) return;
+			tbody.innerHTML = '';
+			
+			// Sort summary by category number
+			const sortedSummary = [...summary].sort((a, b) => {
+				const getNum = (cat) => {
+					const match = cat.match(/^(\d+)\./);
+					return match ? parseInt(match[1]) : 999;
+				};
+				return getNum(a.category) - getNum(b.category);
+			});
+
+			sortedSummary.forEach(item => {
+				const tr = document.createElement('tr');
+				tr.className = 'hover:bg-sf-blue/5 cursor-pointer group transition-colors';
+				tr.innerHTML = `
+					<td class="px-6 py-4 text-sf-blue font-bold group-hover:underline border-r border-sf-border">${item.type}</td>
+					<td class="px-6 py-4 text-sf-muted text-xs border-r border-sf-border font-bold text-gray-600">${item.category || 'MISCELLANEOUS'}</td>
+					<td class="px-6 py-4 text-sf-text font-mono border-r border-sf-border text-center">${item.unique_count}</td>
+					<td class="px-6 py-4 text-sf-text font-mono border-r border-sf-border text-center">${item.total_count}</td>
+					<td class="px-6 py-4 text-sf-muted text-xs">${item.last_finding || '-'}</td>
+				`;
+				tr.onclick = () => showBrowseDetail(item.type);
+				tbody.appendChild(tr);
+			});
+		}
+
+		function showBrowseDetail(type) {
+			const filtered = latestFindings.filter(f => f.type === type);
+			document.getElementById('browse-summary-container').classList.add('hidden');
+			document.getElementById('browse-detail-container').classList.remove('hidden');
+			document.getElementById('browse-detail-type').innerText = type;
+			renderDetailTable(filtered);
+		}
+
+		document.getElementById('browse-back-btn').onclick = () => {
+			document.getElementById('browse-detail-container').classList.add('hidden');
+			document.getElementById('browse-summary-container').classList.remove('hidden');
+		};
+
+		function renderDetailTable(findings) {
+			const tbody = document.getElementById('browse-detail-tbody');
+			tbody.innerHTML = '';
+			findings.forEach(f => {
+				const tr = document.createElement('tr');
+				const riskClass = f.threat_level === 'High Risk' ? 'bg-red-50' : '';
+				tr.className = `hover:bg-gray-100 ${riskClass}`;
+				tr.innerHTML = `
+					<td class="px-6 py-3 font-mono font-bold text-sf-text">
+						<div class="flex items-center gap-2">
+							${f.threat_level === 'High Risk' ? '<i class="fas fa-exclamation-circle text-red-500"></i>' : ''}
+							${f.entity}
+						</div>
+					</td>
+					<td class="px-6 py-3 text-sf-muted">${f.source}</td>
+					<td class="px-6 py-3 text-xs font-bold uppercase ${f.status === 'Live' ? 'text-emerald-600' : 'text-gray-400'}">${f.status || 'Unknown'}</td>
+					<td class="px-6 py-3 font-mono text-xs text-sf-muted overflow-hidden max-w-xs truncate" title="${f.resolution || ''}">${f.resolution || '-'}</td>
+				`;
+				tbody.appendChild(tr);
+			});
+		}
+
+		document.getElementById('browse-detail-search').oninput = (e) => {
+			const term = e.target.value.toLowerCase();
+			const type = document.getElementById('browse-detail-type').innerText;
+			const filtered = latestFindings.filter(f => f.type === type && (f.entity.toLowerCase().includes(term) || f.source.toLowerCase().includes(term)));
+			renderDetailTable(filtered);
+		};
+
+		document.getElementById('copy-raw').onclick = () => {
+			const content = document.getElementById('raw-json-display').innerText;
+			navigator.clipboard.writeText(content);
+			alert('Copied to clipboard!');
+		};
+
+		document.getElementById('btn-export-titan').onclick = () => {
+			const rawData = document.getElementById('raw-json-display').innerText;
+			if(!rawData || rawData.includes('Initializing')) return alert('No scan data available yet.');
+			
+			const blob = new Blob([rawData], { type: 'application/json' });
+			const url = URL.createObjectURL(blob);
+			const a = document.createElement('a');
+			a.href = url;
+			a.download = `titan_report_${new Date().getTime()}.json`;
+			a.click();
+			URL.revokeObjectURL(url);
+		};
+	</script>
+</Layout>

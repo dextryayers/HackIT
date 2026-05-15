@@ -21,10 +21,11 @@ var (
 	rustFreeNetworkIntel       = rustLib.NewProc("rust_free_network_intel")
 	procRustFingerprintService = rustLib.NewProc("rust_fingerprint_service")
 	procRustExtractVersion     = rustLib.NewProc("rust_extract_version")
-	rustDetectOsDetailed       = rustLib.NewProc("rust_os_detect")
+	rustDetectOsDetailed       = rustLib.NewProc("rust_os_detect_advanced")
 	rustGatherIpInfo           = rustLib.NewProc("rust_gather_ip_info")
 	procRustCheckVulnerabilities = rustLib.NewProc("rust_check_vulnerabilities")
 	rustPerformDeepScan         = rustLib.NewProc("rust_perform_deep_scan")
+	rustBatchScan               = rustLib.NewProc("rust_batch_scan")
 )
 
 type RustOSResult struct {
@@ -249,14 +250,21 @@ func goString(ptr *byte) string {
 	return string(s)
 }
 
-// RustDetectOsDetailed calls the Rust engine for detailed OS detection with IP information
-func RustDetectOsDetailed(host string, openPorts string) string {
+// RustDetectOsDetailed calls the Rust engine for detailed OS detection with IP information and HackIT-style flags
+func RustDetectOsDetailed(host string, openPorts string, guess bool, limit bool) string {
 	cHost := []byte(host + "\x00")
 	cPorts := []byte(openPorts + "\x00")
+	
+	iGuess := 0
+	if guess { iGuess = 1 }
+	iLimit := 0
+	if limit { iLimit = 1 }
 
 	ret, _, _ := rustDetectOsDetailed.Call(
 		uintptr(unsafe.Pointer(&cHost[0])),
 		uintptr(unsafe.Pointer(&cPorts[0])),
+		uintptr(iGuess),
+		uintptr(iLimit),
 	)
 
 	if ret == 0 {
@@ -303,7 +311,7 @@ func RustCheckVulnerabilities(host string, port int, service string, banner stri
 
 	// 2. Secondary check via detailed OS detection context
 	openPortsStr := fmt.Sprintf("%d", port)
-	detailedInfo := RustDetectOsDetailed(host, openPortsStr)
+	detailedInfo := RustDetectOsDetailed(host, openPortsStr, true, false)
 	
 	if detailedInfo != "" {
 		if strings.Contains(strings.ToLower(detailedInfo), "outdated") || 
@@ -334,4 +342,24 @@ func RustPerformDeepScan(host string, port int, banner string) string {
 	result := goString(resultPtr)
 
 	return result
+}
+
+// RustBatchScan calls the high-performance Rust batch scanner for massive port ranges
+func RustBatchScan(host string, startPort int, endPort int, timeout int, concurrency int) string {
+	cHost := []byte(host + "\x00")
+	
+	ret, _, _ := rustBatchScan.Call(
+		uintptr(unsafe.Pointer(&cHost[0])),
+		uintptr(startPort),
+		uintptr(endPort),
+		uintptr(timeout),
+		uintptr(concurrency),
+	)
+
+	if ret == 0 {
+		return ""
+	}
+
+	resultPtr := (*byte)(unsafe.Pointer(ret))
+	return goString(resultPtr)
 }

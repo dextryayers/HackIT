@@ -88,30 +88,105 @@ An NSE-inspired (Nmap Scripting Engine) layer for rapid modular development.
 
 ---
 
-## 🚀 Recent Updates: Tech Hunter "Ultra" & Tactical XSS
-The HackIt framework has been upgraded to **Version 3.5**, introducing the **Tech Hunter "Ultra"** engine and a modernized **Tactical XSS** scanner. These updates focus on surgical precision, multi-engine fusion, and industrial-grade reporting.
+## 🚀 Recent Updates: Tech Hunter V3 & Advanced OSINT
 
-### 🎯 Tech Hunter "Ultra" (The Hexa-Engine Fusion)
-A massive architectural leap that fuses 5 programming languages into a single, surgical reconnaissance module.
+The HackIt framework has been upgraded to **Version 3.0**, introducing the **Tech Hunter V3** engine and deep **OSINT Intelligence** capabilities. These updates focus on granular technology mapping, secret discovery, and infrastructure analysis.
 
-- **Deep Analyzer (C++)**: High-performance heuristic engine that unmasks hidden technologies (e.g., Nuxt.js, Drupal) by analyzing script ordering and hidden HTML comments.
-- **Header Security Auditor (C)**: Low-level component that calculates **Shannon Entropy** across HTTP headers to detect anomalies and custom security layers.
-- **Rust "Sentinel" Core**: Upgraded signature engine with 300+ fingerprints and a **Multi-Signal Scoring System** (Confidence Bonus for multi-vector matches).
-- **Go Orchestration**: Seamlessly coordinates Rust, C++, C, and Python results into a unified data stream.
-- **Tactical Intelligence Summary**: A "WhatWeb-style" report providing a categorized view of CMS, Frameworks, and Infrastructure, plus Attack Surface metrics.
+### 🎯 Tech Hunter V3 (Hybrid Rust/Go Engine)
 
-### 💉 Tactical XSS Engine (Context-Aware Intelligence)
-The XSS scanner has been modernized into a professional-grade tactical tool.
+<<<<<<< HEAD
+A complete overhaul of the fingerprinting module, now featuring a **Refined Confidence Scoring** system and expanded signature database.
 
-- **Dynamic Payload Loading**: Link directly to tactical databases (e.g., `payload.txt`) at runtime for infinite extensibility.
-- **Context-Aware Detection**: Distinguishes between reflected HTML, script tags, and URI handlers, drastically reducing false positives.
-- **Professional Reporting**: Classifies vulnerabilities with `Critical`, `High`, and `Medium` severity, accompanied by industrial-standard impact descriptions.
-- **Automation Bridge**: Seamless Go/Python integration for high-speed scanning with localized intelligence.
+- **Granular Fingerprinting**: Detects 200+ technologies including CMS (Wix, Squarespace, Ghost, TYPO3), Frontend Frameworks (Astro, Svelte, Tailwind CSS), and JS Libraries (GSAP, Alpine.js).
+- **Confidence Scoring Engine**:
+  - **Meta Tags**: 90% confidence weight.
+  - **HTTP Headers**: 80% confidence weight.
+  - **Script Patterns**: 70% confidence weight.
+  - **HTML Keywords**: 60% confidence weight.
+  - **Cookies**: 50% confidence weight.
+  - _Bonus: +10% boost for multiple matching signals._
+- **Version Extraction**: Real-time extraction of software versions using advanced regex capture groups from headers and meta generators.
 
-### 📂 Advanced Infrastructure & Secret Discovery
-- **API Key Sentinel**: Improved detection for Google, AWS, Slack, and Firebase keys hidden in obfuscated JS.
-- **WAF/CDN Deep Mapping**: Precision detection for Cloudflare, Akamai, Fastly, and custom Varnish layers.
-- **Sensitive Path Discovery**: Automated mapping of high-risk exposures like `.env`, `.git`, and backup SQL files.
+### 🔍 Advanced JS Recon & Secret Discovery
+
+The Python and Rust engines now collaborate to perform deep-dive analysis of client-side code.
+
+- **API Key Detection**: Automatically identifies leaked secrets in JS files, including:
+  - **Google/Firebase API Keys**
+  - **AWS Access Key IDs**
+  - **Slack Tokens**
+  - **Mapbox/Algolia Keys**
+- **Endpoint Discovery**: Extracts internal API endpoints, hidden routes (SPA), and `fetch/axios` call patterns to map the internal application structure.
+
+### 🌐 Infrastructure & Cloud Intelligence
+
+Enhanced detection of modern cloud stacks and security layers.
+
+- **WAF/CDN Identification**: Precision detection for Cloudflare, Akamai, AWS CloudFront, Azure Front Door, Fastly, and Varnish.
+- **Server Forensics**:
+  - **OS Detection**: Identifies target OS (Ubuntu, Debian, CentOS, Windows) and CPU Architecture (x64, ARM64) via side-channel header analysis.
+  - **Backend Mapping**: Detects database types (MySQL, PostgreSQL, MongoDB) through specialized error-based and banner-based probes.
+
+### 📂 Web Structure & Sensitive Path Mapping
+
+# Automated discovery of high-value paths and misconfigurations.
+
+A complete overhaul of the fingerprinting module, now featuring a **Refined Confidence Scoring** system and expanded signature database.
+
+- **Granular Fingerprinting**: Detects 200+ technologies including CMS (Wix, Squarespace, Ghost, TYPO3), Frontend Frameworks (Astro, Svelte, Tailwind CSS), and JS Libraries (GSAP, Alpine.js).
+- **Confidence Scoring Engine**:
+  - **Meta Tags**: 90% confidence weight.
+  - **HTTP Headers**: 80% confidence weight.
+  - **Script Patterns**: 70% confidence weight.
+  - **HTML Keywords**: 60% confidence weight.
+  - **Cookies**: 50% confidence weight.
+  - _Bonus: +10% boost for multiple matching signals._
+- **Version Extraction**: Real-time extraction of software versions using advanced regex capture groups from headers and meta generators.
+
+### 🔍 Advanced JS Recon & Secret Discovery
+
+The Python and Rust engines now collaborate to perform deep-dive analysis of client-side code.
+
+- **API Key Detection**: Automatically identifies leaked secrets in JS files, including:
+  - **Google/Firebase API Keys**
+  - **AWS Access Key IDs**
+  - **Slack Tokens**
+  - **Mapbox/Algolia Keys**
+- **Endpoint Discovery**: Extracts internal API endpoints, hidden routes (SPA), and `fetch/axios` call patterns to map the internal application structure.
+
+### 🌐 Infrastructure & Cloud Intelligence
+
+Enhanced detection of modern cloud stacks and security layers.
+
+- **WAF/CDN Identification**: Precision detection for Cloudflare, Akamai, AWS CloudFront, Azure Front Door, Fastly, and Varnish.
+- **Server Forensics**:
+  - **OS Detection**: Identifies target OS (Ubuntu, Debian, CentOS, Windows) and CPU Architecture (x64, ARM64) via side-channel header analysis.
+  - **Backend Mapping**: Detects database types (MySQL, PostgreSQL, MongoDB) through specialized error-based and banner-based probes.
+
+### 📂 Web Structure & Sensitive Path Mapping
+
+Automated discovery of high-value paths and misconfigurations.
+
+> > > > > > > 2c84c70 (Update HackIT Suite: Modernized XSS & Ultra Tech Hunter V3.5 (Hybrid CPP/C/Rust/Go Engine))
+
+- **Sensitive Path Scanner**: Monitors for `.env`, `.git/index`, `backup.sql`, `wp-config.php.bak`, and other critical file exposures.
+- **Administrative Interface Detection**: Locates hidden `/admin`, `/dashboard`, `/cpanel`, and `/graphql` interfaces.
+
+### 📊 Hybrid Intelligence Summary
+
+<<<<<<< HEAD
+The CLI output now includes a comprehensive **Target Intelligence Summary**, providing an immediate overview of:
+=======
+
+The CLI output now includes a comprehensive **Target Intelligence Summary**, providing an immediate overview of:
+
+> > > > > > > 2c84c70 (Update HackIT Suite: Modernized XSS & Ultra Tech Hunter V3.5 (Hybrid CPP/C/Rust/Go Engine))
+
+- Total technologies detected across categories.
+- Infrastructure provider and ISP details.
+- OSINT findings (Emails, Phones, Social Links).
+- Attack Surface metrics (Endpoints, Hidden Routes, Sensitive Paths).
+- **Calculated Risk Score**: A dynamic 1.0 - 10.0 score based on discovered vulnerabilities and exposures.
 
 ---
 
@@ -317,6 +392,19 @@ HackIt takes security seriously. To prevent the tool from being used to compromi
 3. Commit your changes (`git commit -m 'Add some AmazingFeature'`).
 4. Push to the branch (`git push origin feature/AmazingFeature`).
 5. Open a Pull Request.
+
+---
+
+## ❓ Troubleshooting & FAQ
+
+**Q: Why am I getting "Permission Denied" when running a SYN scan?**
+**A:** SYN scans require raw socket access. You must run HackIt with `sudo` or administrator privileges on Linux/macOS.
+
+**Q: The Rust engine isn't compiling.**
+**A:** Ensure you have the latest `cargo` and `rustc` installed. Run `rustup update stable` to be sure.
+
+**Q: How do I update the CVE database?**
+**A:** Use the command `hackit update --db` to fetch the latest vulnerability signatures from our global repository.
 
 ---
 

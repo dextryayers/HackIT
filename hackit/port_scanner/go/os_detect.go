@@ -223,7 +223,7 @@ func AnalyzeTCPCharacteristics(data []byte) (ttl, window, mss int, ipid string) 
 // HeuristicTCPAnalysis performs heuristic TCP analysis
 func HeuristicTCPAnalysis(host string) (ttl, window, mss int, ipid string) {
 	// Use known OS fingerprinting patterns
-	// This is a simplified version - real Nmap uses extensive databases
+	// This is a simplified version - real HackIT uses extensive databases
 	return 64, 5840, 1460, "Random"
 }
 
@@ -359,37 +359,36 @@ func HeuristicOSDetect(host string) OSInfo {
 
 // AnalyzeOSFromResults analyzes collected scan results to guess the OS
 func AnalyzeOSFromResults(host string, results []PortResult) OSInfo {
+	var evidence []string
 	bannerSample := ""
 	for _, r := range results {
 		if r.Banner != "" {
 			bannerSample += r.Banner + " "
 		}
+		if r.State == "open" {
+			evidence = append(evidence, fmt.Sprintf("open port %d/tcp", r.Port))
+		}
 	}
 
-	// 1. Try Advanced Rust OS Fingerprinting
-	rustOS := RustDetectOS(host)
-	if rustOS.Accuracy > 70 {
-		name := strings.TrimSpace(strings.TrimSpace(rustOS.Name) + " " + strings.TrimSpace(rustOS.Version))
-		if name == "" {
-			name = "Unknown"
+	// 1. Try Advanced Rust OS Fingerprinting (HackIT Expert Mode)
+	// Passing heuristic guess and scan limit settings
+	rustOSRaw := RustDetectOsDetailed(host, strings.Join(evidence, ","), true, false)
+	if rustOSRaw != "" && strings.Contains(rustOSRaw, "Operating System:") {
+		// Parse text block for name and confidence
+		lines := strings.Split(rustOSRaw, "\n")
+		var name, version string
+		for _, line := range lines {
+			if strings.Contains(line, "Operating System:") {
+				name = strings.TrimSpace(strings.Split(line, ":")[1])
+			}
 		}
-		family := rustOS.Family
-		if family == "" {
-			family = normalizeOSFamily(name)
-		}
-		fp := rustOS.Fingerprint
-		if fp == "" {
-			fp = fmt.Sprintf("OS:%s|VER:%s|FAM:%s|ACC:%d", rustOS.Name, rustOS.Version, family, rustOS.Accuracy)
-		}
+		
 		return OSInfo{
 			Name:        name,
-			Version:     rustOS.Version,
-			Family:      family,
-			Accuracy:    rustOS.Accuracy,
-			Confidence:  float64(rustOS.Accuracy) / 100.0,
-			TTL:         rustOS.TTL,
-			Window:      rustOS.Window,
-			Fingerprint: fp,
+			Version:     version,
+			Family:      normalizeOSFamily(name),
+			Confidence:  0.8, // Base confidence for text-parsed results
+			Fingerprint: rustOSRaw,
 		}
 	}
 
@@ -408,7 +407,7 @@ func AnalyzeOSFromResults(host string, results []PortResult) OSInfo {
 	var scoreLinux, scoreWindows, scoreNetwork, scoreFreeBSD int
 	var detectedOS string
 	var maxConfidence float64
-	var evidence []string
+	// evidence is already declared above
 
 	// Distro specific detection
 	distros := map[string]int{

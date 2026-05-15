@@ -5,14 +5,42 @@ import (
 	"strings"
 )
 
-// detectTech identifies technologies used by the target
+// detectTech identifies technologies used by the target with industrial-grade precision
 func detectTech(headers http.Header, body string) []string {
 	var techs []string
 
-	// Headers Analysis
-	if server := headers.Get("Server"); server != "" {
+	// 1. Header-Based Fingerprinting (Aurat Presisi)
+	server := headers.Get("Server")
+	if server != "" {
 		techs = append(techs, server)
 	}
+	
+	// WAF & Security Layers
+	if headers.Get("CF-RAY") != "" || headers.Get("cf-cache-status") != "" {
+		techs = append(techs, "Cloudflare WAF/CDN")
+	}
+	if strings.Contains(strings.ToLower(headers.Get("X-Akamai-Transformed")), "true") {
+		techs = append(techs, "Akamai CDN")
+	}
+	if headers.Get("X-Amz-Cf-Id") != "" {
+		techs = append(techs, "AWS CloudFront")
+	}
+	if headers.Get("X-Azure-Ref") != "" {
+		techs = append(techs, "Azure FrontDoor")
+	}
+	if strings.Contains(headers.Get("Via"), "google") {
+		techs = append(techs, "Google Cloud Load Balancer")
+	}
+
+	// Security Headers (Tactical Intel)
+	if headers.Get("X-Content-Type-Options") == "nosniff" {
+		techs = append(techs, "Sec:HSTS")
+	}
+	if headers.Get("Content-Security-Policy") != "" {
+		techs = append(techs, "Sec:CSP")
+	}
+
+	// App Frameworks & Servers
 	if powered := headers.Get("X-Powered-By"); powered != "" {
 		techs = append(techs, "PoweredBy:"+powered)
 	}
@@ -22,137 +50,111 @@ func detectTech(headers http.Header, body string) []string {
 	if aspVer := headers.Get("X-AspNet-Version"); aspVer != "" {
 		techs = append(techs, "ASP.NET:"+aspVer)
 	}
-
-	// Body Analysis (CMS & Frameworks)
-	bodyLower := strings.ToLower(body)
-
-	// CMS
-	if strings.Contains(bodyLower, "wp-content") || strings.Contains(bodyLower, "wp-includes") {
-		techs = append(techs, "WordPress")
-	}
-	if strings.Contains(bodyLower, "joomla") {
-		techs = append(techs, "Joomla")
-	}
-	if strings.Contains(bodyLower, "drupal") {
+	if headers.Get("X-Drupal-Cache") != "" {
 		techs = append(techs, "Drupal")
 	}
-	if strings.Contains(bodyLower, "magento") {
-		techs = append(techs, "Magento")
-	}
-	if strings.Contains(bodyLower, "shopify") {
-		techs = append(techs, "Shopify")
+
+	// 2. Body-Based Heuristics (Deep Scan)
+	bodyLower := strings.ToLower(body)
+
+	// CMS & E-commerce
+	cmsMap := map[string][]string{
+		"WordPress":   {"wp-content", "wp-includes", "wp-json"},
+		"Joomla":      {"joomla", "/administrator/", "com_content"},
+		"Drupal":      {"drupal", "sites/default"},
+		"Magento":     {"magento", "mage-cache"},
+		"Shopify":     {"shopify", "cdn.shopify.com"},
+		"Squarespace": {"squarespace", "static1.squarespace.com"},
+		"Wix":         {"wix.com", "wix-code-sdk"},
+		"Webflow":     {"webflow", "w-nav"},
+		"Ghost CMS":   {"ghost.org", "ghost-sdk"},
+		"Bitrix":      {"bitrix", "/bitrix/"},
+		"PrestaShop":  {"prestashop"},
+		"OpenCart":    {"opencart"},
 	}
 
-	// Frameworks
-	if strings.Contains(bodyLower, "laravel") {
-		techs = append(techs, "Laravel")
-	}
-	if strings.Contains(bodyLower, "django") {
-		techs = append(techs, "Django")
-	}
-	if strings.Contains(bodyLower, "react") || strings.Contains(bodyLower, "react-dom") {
-		techs = append(techs, "React")
-	}
-	if strings.Contains(bodyLower, "vue.js") || strings.Contains(bodyLower, "vuejs") {
-		techs = append(techs, "Vue.js")
-	}
-	if strings.Contains(bodyLower, "angular") {
-		techs = append(techs, "Angular")
-	}
-	if strings.Contains(bodyLower, "bootstrap") {
-		techs = append(techs, "Bootstrap")
-	}
-	if strings.Contains(bodyLower, "jquery") {
-		techs = append(techs, "jQuery")
+	for tech, sigs := range cmsMap {
+		for _, sig := range sigs {
+			if strings.Contains(bodyLower, sig) {
+				techs = append(techs, tech)
+				break
+			}
+		}
 	}
 
-	// Server/Infrastructure (Body check if header missing)
-	if strings.Contains(bodyLower, "nginx") {
-		techs = append(techs, "Nginx")
+	// Frameworks & JS Libraries
+	frameworkMap := map[string][]string{
+		"Laravel":     {"laravel", "XSRF-TOKEN"},
+		"Django":      {"django", "csrfmiddlewaretoken"},
+		"React":       {"react", "react-dom", "data-reactid"},
+		"Vue.js":      {"vue.js", "vuejs", "__vue__"},
+		"Angular":     {"angular", "ng-app", "ng-controller"},
+		"Next.js":     {"_next/static", "__NEXT_DATA__"},
+		"Nuxt.js":     {"__NUXT__"},
+		"Gatsby":      {"GatsbyJS"},
+		"jQuery":      {"jquery"},
+		"Bootstrap":   {"bootstrap"},
+		"Tailwind":    {"tailwind"},
+		"Webpack":     {"webpack"},
+		"Svelte":      {"svelte-"},
 	}
-	if strings.Contains(bodyLower, "apache") {
-		techs = append(techs, "Apache")
+
+	for tech, sigs := range frameworkMap {
+		for _, sig := range sigs {
+			if strings.Contains(bodyLower, sig) {
+				techs = append(techs, tech)
+				break
+			}
+		}
 	}
-	if strings.Contains(bodyLower, "cloudflare") {
-		techs = append(techs, "Cloudflare")
+
+	// Analytics & Tracking
+	trackingMap := map[string][]string{
+		"Google Analytics":    {"google-analytics.com", "googletagmanager.com"},
+		"Facebook Pixel":      {"connect.facebook.net/en_US/fbevents.js"},
+		"Hotjar":              {"hotjar.com"},
+		"New Relic":           {"newrelic.com", "NREUM"},
+		"Sentry":              {"sentry.io"},
+		"Datadog":             {"datadoghq.com"},
+		"Segment":             {"segment.com"},
+		"Mixpanel":            {"mixpanel.com"},
+		"Intercom":            {"intercom.io", "intercom.help"},
+		"HubSpot":             {"hubspot.com"},
+		"Zendesk":             {"zendesk.com", "zdassets.com"},
+		"Salesforce":          {"salesforce.com"},
 	}
-	if strings.Contains(bodyLower, "firebase") || strings.Contains(bodyLower, "firebaseapp.com") {
-		techs = append(techs, "Firebase")
+
+	for tech, sigs := range trackingMap {
+		for _, sig := range sigs {
+			if strings.Contains(bodyLower, sig) {
+				techs = append(techs, tech)
+				break
+			}
+		}
 	}
-	if strings.Contains(bodyLower, "sentry.io") {
-		techs = append(techs, "Sentry")
+
+	// Infrastructure & Cloud
+	infraMap := map[string][]string{
+		"Nginx":      {"nginx"},
+		"Apache":     {"apache"},
+		"Heroku":     {"heroku"},
+		"Netlify":    {"netlify"},
+		"Vercel":     {"vercel"},
+		"Firebase":   {"firebaseapp.com", "firebase"},
+		"Okta":       {"okta.com"},
+		"Auth0":      {"auth0.com"},
+		"Microsoft":  {"microsoft", "iis"},
+		"OpenShift":  {"openshift"},
+		"Kubernetes": {"k8s"},
 	}
-	if strings.Contains(bodyLower, "google-analytics.com") || strings.Contains(bodyLower, "googletagmanager.com") {
-		techs = append(techs, "Google Analytics")
-	}
-	if strings.Contains(bodyLower, "netlify") {
-		techs = append(techs, "Netlify")
-	}
-	if strings.Contains(bodyLower, "vercel") {
-		techs = append(techs, "Vercel")
-	}
-	if strings.Contains(bodyLower, "heroku") {
-		techs = append(techs, "Heroku")
-	}
-	if strings.Contains(bodyLower, "_next/static") {
-		techs = append(techs, "Next.js")
-	}
-	if strings.Contains(bodyLower, "wix.com") {
-		techs = append(techs, "Wix")
-	}
-	if strings.Contains(bodyLower, "squarespace") {
-		techs = append(techs, "Squarespace")
-	}
-	if strings.Contains(bodyLower, "webflow") {
-		techs = append(techs, "Webflow")
-	}
-	if strings.Contains(bodyLower, "ghost.org") {
-		techs = append(techs, "Ghost CMS")
-	}
-	if strings.Contains(bodyLower, "intercom.io") {
-		techs = append(techs, "Intercom")
-	}
-	if strings.Contains(bodyLower, "segment.com") {
-		techs = append(techs, "Segment")
-	}
-	if strings.Contains(bodyLower, "newrelic.com") {
-		techs = append(techs, "New Relic")
-	}
-	if strings.Contains(bodyLower, "datadoghq.com") {
-		techs = append(techs, "Datadog")
-	}
-	if strings.Contains(bodyLower, "hotjar.com") {
-		techs = append(techs, "Hotjar")
-	}
-	if strings.Contains(bodyLower, "tailwind") {
-		techs = append(techs, "Tailwind CSS")
-	}
-	if strings.Contains(bodyLower, "webpack") {
-		techs = append(techs, "Webpack")
-	}
-	if strings.Contains(bodyLower, "elementor") {
-		techs = append(techs, "Elementor")
-	}
-	if strings.Contains(bodyLower, "wp-json") {
-		techs = append(techs, "WP-API")
-	}
-	if strings.Contains(bodyLower, "bitrix") {
-		techs = append(techs, "Bitrix")
-	}
-	if strings.Contains(bodyLower, "prestashop") {
-		techs = append(techs, "PrestaShop")
-	}
-	if strings.Contains(bodyLower, "opencart") {
-		techs = append(techs, "OpenCart")
-	}
-	if strings.Contains(bodyLower, "firebaseapp.com") {
-		techs = append(techs, "Firebase")
-	}
-	if strings.Contains(bodyLower, "okta.com") {
-		techs = append(techs, "Okta")
-	}
-	if strings.Contains(bodyLower, "auth0.com") {
-		techs = append(techs, "Auth0")
+
+	for tech, sigs := range infraMap {
+		for _, sig := range sigs {
+			if strings.Contains(bodyLower, sig) {
+				techs = append(techs, tech)
+				break
+			}
+		}
 	}
 
 	return unique(techs)

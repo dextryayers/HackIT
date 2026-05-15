@@ -1,0 +1,288 @@
+---
+import Layout from "../../layouts/Layout.astro";
+---
+
+<Layout title="HackIt | Penta-Engine Port Scanner">
+  <div class="p-8 lg:p-12">
+    <!-- Header -->
+    <div class="mb-10 flex items-center justify-between">
+      <div>
+        <h2 class="text-3xl font-black tracking-tighter text-yellow-500 uppercase flex items-center gap-3">
+          <span class="bg-yellow-500 text-black px-2 py-1 rounded">PENTA</span>
+          Engine Port Scanner
+        </h2>
+        <p class="text-white/40 text-xs mt-2 uppercase tracking-[0.2em] font-medium">
+          Industrial-Grade Multi-threaded Infrastructure Probe
+        </p>
+      </div>
+      <div id="status-badge" class="hidden">
+        <div class="flex items-center gap-3 bg-yellow-500/10 border border-yellow-500/30 px-6 py-2 rounded-full shadow-lg shadow-yellow-500/10">
+          <div class="w-2.5 h-2.5 rounded-full bg-yellow-500 animate-pulse shadow-[0_0_10px_#eab308]"></div>
+          <span class="text-[11px] font-black text-yellow-500 uppercase tracking-widest">PROBE_ACTIVE</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
+      <!-- Controls Panel -->
+      <div class="lg:col-span-3 space-y-6">
+        <div class="bg-dark-800/80 backdrop-blur-xl border border-white/10 p-8 rounded-3xl shadow-2xl relative overflow-hidden group">
+          <div class="absolute top-0 right-0 p-4 opacity-5 group-hover:opacity-10 transition-opacity">
+            <svg class="w-24 h-24 text-yellow-500" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>
+          </div>
+          
+          <div class="relative space-y-6">
+            <div>
+              <label class="text-[10px] text-yellow-500 font-black block mb-2 uppercase tracking-widest">Target Infrastructure</label>
+              <input type="text" id="target-host" placeholder="127.0.0.1" class="w-full bg-black/60 border border-white/10 rounded-xl px-5 py-3 text-sm focus:border-yellow-500 outline-none text-white transition-all placeholder:text-white/10" />
+            </div>
+            <div>
+              <label class="text-[10px] text-yellow-500 font-black block mb-2 uppercase tracking-widest">Scanning Range</label>
+              <input type="text" id="port-range" placeholder="1-1024" class="w-full bg-black/60 border border-white/10 rounded-xl px-5 py-3 text-sm focus:border-yellow-500 outline-none text-white transition-all placeholder:text-white/10" />
+            </div>
+            
+            <div class="pt-4">
+              <button id="start-btn" class="group relative w-full bg-yellow-500 hover:bg-yellow-400 text-black font-black py-4 rounded-xl text-xs transition-all shadow-xl shadow-yellow-500/20 uppercase tracking-[0.2em]">
+                <span class="relative z-10">INITIALIZE PROBE</span>
+                <div class="absolute inset-0 bg-white/20 scale-x-0 group-hover:scale-x-100 transition-transform origin-left rounded-xl"></div>
+              </button>
+            </div>
+
+            <div class="pt-2 flex justify-between items-center px-1 border-t border-white/5 mt-4">
+              <div class="flex items-center gap-2">
+                <div id="bridge-dot" class="w-1.5 h-1.5 rounded-full bg-white/10"></div>
+                <span id="bridge-link" class="text-[9px] text-white/30 font-bold uppercase tracking-tighter">Bridge Linking...</span>
+              </div>
+              <span class="text-[9px] text-white/30 font-black uppercase tracking-widest">HACKIT v4.8</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Metrics Section -->
+        <div class="bg-dark-800/80 backdrop-blur-xl border border-white/10 p-8 rounded-3xl shadow-2xl">
+          <div class="flex items-center justify-between mb-6">
+            <h3 class="text-[11px] font-black text-white/40 tracking-[0.2em] uppercase">Discovery Metrics</h3>
+            <div id="total-found" class="text-yellow-500 font-black text-lg">0</div>
+          </div>
+          <div class="relative h-[200px] flex items-center justify-center">
+            <canvas id="portChart"></canvas>
+            <div class="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+              <div id="percent-display" class="text-2xl font-black text-white/80">0%</div>
+              <div class="text-[8px] text-white/20 font-bold uppercase">Accuracy</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Results Engine -->
+      <div class="lg:col-span-9 space-y-6">
+        <div class="bg-dark-800/80 backdrop-blur-xl border border-white/10 rounded-3xl shadow-2xl overflow-hidden min-h-[600px] flex flex-col">
+          <!-- Table Header -->
+          <div class="px-8 py-5 bg-white/[0.02] border-b border-white/5 flex items-center justify-between">
+            <div class="flex items-center gap-6">
+              <span class="text-[10px] font-black text-yellow-500 uppercase tracking-widest">Live Feed</span>
+              <div class="flex items-center gap-2">
+                <div class="w-1.5 h-1.5 rounded-full bg-green-500"></div>
+                <span class="text-[9px] text-white/40 font-bold uppercase tracking-tighter">TCP Handshake Validated</span>
+              </div>
+            </div>
+            <button id="export-btn" class="text-[9px] font-black text-white/40 hover:text-white uppercase tracking-widest transition-colors flex items-center gap-2 border border-white/10 px-3 py-1.5 rounded-lg hover:bg-white/5">
+              <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a2 2 0 002 2h12a2 2 0 002-2v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+              Export JSON
+            </button>
+          </div>
+
+          <!-- Main View -->
+          <div class="flex-grow overflow-auto p-8">
+            <div id="results-container" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+              <!-- Empty State -->
+              <div class="col-span-full py-32 flex flex-col items-center justify-center text-center opacity-20">
+                <svg class="w-16 h-16 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                <h4 class="text-lg font-black uppercase tracking-[0.3em] mb-2">Engine Idle</h4>
+                <p class="text-xs max-w-xs mx-auto font-medium">Ready for infrastructure reconnaissance. Enter a target to initialize the Penta-Engine probes.</p>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Tactical Footer -->
+          <div class="px-8 py-4 bg-white/[0.02] border-t border-white/5 flex items-center justify-between text-[9px] font-bold text-white/20 uppercase tracking-widest">
+            <div id="scan-time">Elapsed Time: 0.00s</div>
+            <div id="scan-speed">Thread Density: 100/sec</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script is:inline>
+    let chart;
+    let scanResults = [];
+    const API_PORT = 5050;
+    const API_PATHS = [`http://127.0.0.1:${API_PORT}`, `http://localhost:${API_PORT}`];
+
+    function initChart(open = 0, total = 100) {
+      const ctx = document.getElementById("portChart").getContext("2d");
+      if (chart) chart.destroy();
+      
+      const closed = Math.max(0, total - open);
+      
+      chart = new Chart(ctx, {
+        type: "doughnut",
+        data: {
+          labels: ["OPEN", "FILTERED/CLOSED"],
+          datasets: [{
+            data: [open, closed],
+            backgroundColor: ["#eab308", "rgba(255,255,255,0.03)"],
+            hoverBackgroundColor: ["#facc15", "rgba(255,255,255,0.05)"],
+            borderWidth: 0,
+            cutout: '85%'
+          }],
+        },
+        options: {
+          plugins: { legend: { display: false }, tooltip: { enabled: false } },
+          animation: { duration: 2000, easing: 'easeOutQuart' }
+        },
+      });
+      
+      const percent = total > 0 ? Math.round((open / total) * 100) : 0;
+      document.getElementById('percent-display').textContent = `${percent}%`;
+    }
+
+    async function checkBridge() {
+      const statusBtn = document.getElementById("bridge-link");
+      const dot = document.getElementById("bridge-dot");
+      for (const path of API_PATHS) {
+        try {
+          const res = await fetch(`${path}/api/ping`, { mode: "cors" });
+          if (res.ok) {
+            statusBtn.innerHTML = "BRIDGE LINK: ACTIVE";
+            statusBtn.className = "text-[9px] text-green-500 font-black uppercase tracking-tighter";
+            dot.className = "w-1.5 h-1.5 rounded-full bg-green-500 shadow-[0_0_5px_#22c55e]";
+            return path;
+          }
+        } catch (e) {}
+      }
+      statusBtn.innerHTML = "BRIDGE LINK: OFFLINE";
+      statusBtn.className = "text-[9px] text-red-500 font-black uppercase animate-pulse";
+      dot.className = "w-1.5 h-1.5 rounded-full bg-red-500";
+      return null;
+    }
+
+    async function runPortScan() {
+      const target = document.getElementById("target-host").value.trim();
+      const prange = document.getElementById("port-range").value.trim() || "1-1024";
+      if (!target) return alert("Enter target host");
+
+      const activePath = await checkBridge();
+      if (!activePath) return alert('API Bridge Offline. Check terminal for [NEURAL BRIDGE ENGINE] status.');
+
+      const btn = document.getElementById("start-btn");
+      const badge = document.getElementById("status-badge");
+      const container = document.getElementById("results-container");
+      const countDisp = document.getElementById("total-found");
+      const timerDisp = document.getElementById("scan-time");
+
+      btn.disabled = true;
+      btn.innerHTML = '<span class="animate-pulse">SYNCHRONIZING...</span>';
+      badge.classList.remove("hidden");
+      container.innerHTML = '<div class="col-span-full py-32 text-center text-yellow-500/50 animate-pulse font-black uppercase tracking-[0.5em]">Initializing Penta-Engine Probes...</div>';
+      countDisp.textContent = "0";
+      
+      const startTime = Date.now();
+      const timerInterval = setInterval(() => {
+        const elapsed = (Date.now() - startTime) / 1000;
+        timerDisp.textContent = `Elapsed Time: ${elapsed.toFixed(2)}s`;
+      }, 50);
+
+      try {
+        const response = await fetch(`${activePath}/api/portscan?target=${target}&range=${prange}`, {
+          method: "GET",
+          headers: { Accept: "application/json" },
+          mode: "cors",
+        });
+
+        if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
+        const data = await response.json();
+        scanResults = data;
+
+        if (data.error) throw new Error(data.error);
+
+        container.innerHTML = "";
+        countDisp.textContent = data.length;
+        
+        if (data.length === 0) {
+          container.innerHTML = '<div class="col-span-full py-32 text-center text-white/20 italic bg-white/[0.01] border border-white/5 rounded-3xl">No open ports discovered in target range.</div>';
+          initChart(0, 100);
+        } else {
+          data.forEach((p, idx) => {
+            const card = document.createElement("div");
+            card.className = "group bg-dark-800 border border-white/10 p-6 rounded-2xl hover:border-yellow-500/50 hover:bg-yellow-500/[0.02] transition-all relative overflow-hidden";
+            card.style.animation = `fadeSlideIn 0.5s ease-out forwards ${idx * 0.05}s`;
+            card.style.opacity = "0";
+            
+            const isCritical = [21, 22, 445, 3306, 6379].includes(p.port);
+            
+            card.innerHTML = `
+              <div class="absolute top-0 right-0 p-3">
+                <div class="text-[8px] font-black text-white/10 uppercase group-hover:text-yellow-500/20 transition-colors">Port: ${p.port}</div>
+              </div>
+              <div class="flex items-start gap-4">
+                <div class="w-12 h-12 bg-yellow-500/10 rounded-xl flex items-center justify-center text-yellow-500 border border-yellow-500/20 group-hover:bg-yellow-500 group-hover:text-black transition-all">
+                  <span class="text-lg font-black">${p.port}</span>
+                </div>
+                <div class="flex-grow">
+                  <h4 class="text-sm font-black text-white/90 uppercase tracking-widest mb-1">${p.service}</h4>
+                  <div class="flex flex-col gap-1">
+                    <div class="flex items-center gap-2">
+                      <div class="w-1.5 h-1.5 rounded-full bg-green-500 shadow-[0_0_5px_#22c55e]"></div>
+                      <span class="text-[9px] text-green-500 font-black uppercase tracking-tighter">Status: Open</span>
+                    </div>
+                    ${isCritical ? '<div class="text-[8px] text-red-500 font-bold uppercase bg-red-500/10 px-1.5 py-0.5 rounded w-fit mt-1">Critical Service</div>' : ''}
+                  </div>
+                </div>
+              </div>
+              <div class="mt-4 pt-4 border-t border-white/5">
+                <div class="text-[8px] text-white/20 font-black uppercase mb-1 tracking-widest">Fingerprint / Version</div>
+                <div class="text-[10px] text-white/60 font-mono break-all bg-black/40 p-2 rounded-lg border border-white/5 group-hover:border-yellow-500/20 transition-colors">
+                  ${p.version || 'No banner response detected'}
+                </div>
+              </div>
+            `;
+            container.appendChild(card);
+          });
+          initChart(data.length, parseInt(prange.split('-')[1]) - parseInt(prange.split('-')[0]) + 1 || 100);
+        }
+      } catch (err) {
+        container.innerHTML = `<div class="col-span-full py-32 text-center text-red-500 font-black uppercase tracking-widest">[!] PROBE FAILED: ${err.message}</div>`;
+      } finally {
+        clearInterval(timerInterval);
+        btn.disabled = false;
+        btn.innerHTML = '<span class="relative z-10">INITIALIZE PROBE</span>';
+        badge.classList.add("hidden");
+      }
+    }
+
+    document.getElementById('export-btn').addEventListener('click', () => {
+      if (scanResults.length === 0) return alert('No data to export');
+      const blob = new Blob([JSON.stringify(scanResults, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `portscan_report_${new Date().getTime()}.json`;
+      a.click();
+    });
+
+    window.addEventListener("load", () => {
+      initChart(0, 0);
+      checkBridge();
+      document.getElementById("start-btn").addEventListener("click", runPortScan);
+    });
+  </script>
+
+  <style>
+    @keyframes fadeSlideIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+  </style>
+</Layout>

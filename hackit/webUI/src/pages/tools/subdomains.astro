@@ -1,0 +1,231 @@
+---
+import Layout from "../../layouts/Layout.astro";
+---
+
+<Layout title="HackIt | Subdomain Enumerator">
+  <div class="p-8 lg:p-12">
+    <div class="mb-10 flex justify-between items-center">
+      <div>
+        <h2
+          class="text-2xl font-bold tracking-tighter text-magenta-500 uppercase"
+        >
+          Neural Subdomain Enumerator
+        </h2>
+        <p class="text-white/40 text-xs mt-1 uppercase tracking-widest">
+          Global Passive Intelligence Gathering
+        </p>
+      </div>
+      <div id="status-badge" class="hidden">
+        <div
+          class="flex items-center gap-2 bg-magenta-500/10 border border-magenta-500/20 px-4 py-1 rounded-full"
+        >
+          <div class="w-2 h-2 rounded-full bg-magenta-500 animate-ping"></div>
+          <span class="text-[10px] font-bold text-magenta-500 uppercase"
+            >SCANNING_ACTIVE</span
+          >
+        </div>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-4 gap-8">
+      <!-- Controls -->
+      <div class="lg:col-span-1 space-y-6">
+        <div class="bg-dark-800 border border-white/5 p-6 rounded-2xl">
+          <div class="space-y-4">
+            <div>
+              <label
+                class="text-[10px] text-magenta-400 font-bold block mb-1 uppercase"
+                >Target Domain</label
+              >
+              <input
+                type="text"
+                id="target-domain"
+                placeholder="example.com"
+                class="w-full bg-black/40 border border-white/10 rounded-lg px-4 py-2 text-xs focus:border-magenta-500 outline-none text-white"
+              />
+              <p class="mt-2 text-[8px] text-white/20 uppercase leading-tight">Engines: Niat dan Tawakkal</p>
+            </div>
+            <button
+              id="start-btn"
+              class="w-full bg-magenta-600 hover:bg-magenta-500 text-white font-bold py-3 rounded-lg text-xs transition-all shadow-lg shadow-magenta-600/20 uppercase tracking-widest"
+            >
+              START ENUMERATION
+            </button>
+            <div class="mt-2 flex justify-between items-center px-1">
+              <span id="bridge-link" class="text-[9px] text-white/20 font-bold"
+                >BRIDGE LINK: CHECKING...</span
+              >
+              <span class="text-[9px] text-white/20 font-bold uppercase"
+                >v3.8 HUB</span
+              >
+            </div>
+          </div>
+        </div>
+
+        <div class="bg-dark-800 border border-white/5 p-6 rounded-2xl">
+          <h3
+            class="text-xs font-bold text-white/40 tracking-widest mb-4 uppercase"
+          >
+            Discovery Metrics
+          </h3>
+          <div class="text-3xl font-bold text-white mb-1" id="count-display">
+            0
+          </div>
+          <div class="text-[10px] text-white/20 uppercase">
+            Unique Subdomains Found
+          </div>
+          <canvas id="subChart" class="mt-4" height="150"></canvas>
+        </div>
+      </div>
+
+      <!-- Results Table -->
+      <div
+        class="lg:col-span-3 bg-dark-800 border border-white/5 rounded-2xl overflow-hidden shadow-2xl min-h-[500px]"
+      >
+        <div class="overflow-x-auto">
+          <table class="w-full text-left border-collapse" id="results-table">
+            <thead>
+              <tr class="bg-white/5 border-b border-white/10">
+                <th class="px-6 py-4 text-[10px] font-bold text-magenta-400 uppercase tracking-widest">Subdomain</th>
+                <th class="px-6 py-4 text-[10px] font-bold text-magenta-400 uppercase tracking-widest text-center">SC</th>
+                <th class="px-6 py-4 text-[10px] font-bold text-magenta-400 uppercase tracking-widest">IP Address</th>
+                <th class="px-6 py-4 text-[10px] font-bold text-magenta-400 uppercase tracking-widest">Source</th>
+              </tr>
+            </thead>
+            <tbody class="text-xs" id="table-body">
+              <tr>
+                <td colspan="4" class="px-6 py-10 text-center text-white/20 italic">No data discovered. Enter a domain to begin.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script is:inline>
+    let chart;
+    const API_PORT = 5050;
+    const API_PATHS = [`http://127.0.0.1:${API_PORT}`, `http://localhost:${API_PORT}`];
+
+    function initChart() {
+      const ctx = document.getElementById("subChart").getContext("2d");
+      chart = new Chart(ctx, {
+        type: "line",
+        data: {
+          labels: [],
+          datasets: [{
+            data: [],
+            borderColor: "#d946ef",
+            backgroundColor: "rgba(217, 70, 239, 0.1)",
+            fill: true,
+            borderWidth: 2,
+            pointRadius: 0,
+            tension: 0.4,
+          }],
+        },
+        options: {
+          plugins: { legend: { display: false } },
+          scales: { x: { display: false }, y: { display: false } },
+        },
+      });
+    }
+
+    async function checkBridge() {
+      const statusBtn = document.getElementById("bridge-link");
+      for (const path of API_PATHS) {
+        try {
+          const res = await fetch(`${path}/api/ping`, { mode: "cors" });
+          if (res.ok) {
+            statusBtn.innerHTML = "BRIDGE LINK: ACTIVE";
+            statusBtn.className = "text-[9px] text-green-500 font-bold";
+            return path;
+          }
+        } catch (e) {}
+      }
+      statusBtn.innerHTML = "BRIDGE LINK: OFFLINE";
+      statusBtn.className = "text-[9px] text-red-500 font-bold animate-pulse";
+      return null;
+    }
+
+    async function runScan() {
+      const domain = document.getElementById("target-domain").value.trim();
+      if (!domain) return alert("Enter target domain");
+
+      const activePath = await checkBridge();
+      if (!activePath) return alert('API Bridge is offline. Restart "py main.py run" in your terminal.');
+
+      const btn = document.getElementById("start-btn");
+      const badge = document.getElementById("status-badge");
+      const tbody = document.getElementById("table-body");
+      const countDisp = document.getElementById("count-display");
+
+      btn.disabled = true;
+      btn.textContent = "ENUMERATING...";
+      badge.classList.remove("hidden");
+      tbody.innerHTML = '<tr><td colspan="4" class="px-6 py-10 text-center text-magenta-400 animate-pulse">PROBING TARGET INFRASTRUCTURE... PLEASE WAIT</td></tr>';
+      countDisp.textContent = "0";
+      if (chart) {
+        chart.data.labels = [];
+        chart.data.datasets[0].data = [];
+        chart.update();
+      }
+
+      try {
+        const response = await fetch(`${activePath}/api/subdomains?domain=${domain}`, {
+          method: "GET",
+          headers: { Accept: "application/json" },
+          mode: "cors",
+        });
+
+        if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
+        const data = await response.json();
+
+        if (data.error) throw new Error(data.error);
+
+        countDisp.textContent = data.length;
+        tbody.innerHTML = '';
+
+        if (data.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="4" class="px-6 py-10 text-center text-white/20 italic">No subdomains found.</td></tr>';
+        } else {
+          data.forEach((item, index) => {
+            const row = document.createElement("tr");
+            row.className = "border-b border-white/5 hover:bg-white/5 transition-colors";
+            
+            const scColor = item.sc === '200' ? 'text-green-500' : (item.sc === 'OFF' ? 'text-white/20' : 'text-yellow-500');
+            
+            row.innerHTML = `
+              <td class="px-6 py-4 font-bold text-white/80">${item.sub}</td>
+              <td class="px-6 py-4 text-center">
+                <span class="${scColor} font-bold">${item.sc}</span>
+              </td>
+              <td class="px-6 py-4 text-white/40 font-mono">${item.ip}</td>
+              <td class="px-6 py-4">
+                <span class="bg-magenta-500/10 text-magenta-500 px-2 py-0.5 rounded text-[10px] font-bold uppercase">${item.mode}</span>
+              </td>
+            `;
+            tbody.appendChild(row);
+            if (index % 5 === 0) {
+              chart.data.labels.push("");
+              chart.data.datasets[0].data.push(index + 1);
+            }
+          });
+          chart.update();
+        }
+      } catch (err) {
+        tbody.innerHTML = `<tr><td colspan="4" class="px-6 py-10 text-center text-red-500 font-bold uppercase">[!] ERROR: ${err.message}</td></tr>`;
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "START ENUMERATION";
+        badge.classList.add("hidden");
+      }
+    }
+
+    window.addEventListener("load", () => {
+      initChart();
+      checkBridge();
+      document.getElementById("start-btn").addEventListener("click", runScan);
+    });
+  </script>
+</Layout>

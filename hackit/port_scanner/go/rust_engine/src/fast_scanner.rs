@@ -18,6 +18,8 @@ lazy_static! {
         (Regex::new(r"(?i)server: nginx/([0-9.]+)").unwrap(), "HTTP"),
         (Regex::new(r"(?i)server: apache/([0-9.]+)").unwrap(), "HTTP"),
         (Regex::new(r"(?i)server: microsoft-iis/([0-9.]+)").unwrap(), "HTTP"),
+        (Regex::new(r"(?i)server: litespeed").unwrap(), "HTTP (LiteSpeed)"),
+        (Regex::new(r"(?i)server: cloudflare").unwrap(), "HTTP (Cloudflare)"),
         (Regex::new(r"(?i)mysql[ \-]([0-9.-]+[a-z0-9.-]*)").unwrap(), "MYSQL"),
         (Regex::new(r"(?i)mariadb[ \-]([0-9.-]+[a-z0-9.-]*)").unwrap(), "MYSQL"),
         (Regex::new(r"(?i)postgresql ([0-9.]+)").unwrap(), "POSTGRESQL"),
@@ -27,6 +29,8 @@ lazy_static! {
         (Regex::new(r"(?i)http/1\.[01]").unwrap(), "HTTP"),
         (Regex::new(r"(?i)html").unwrap(), "HTTP"),
         (Regex::new(r"(?i)dovecot").unwrap(), "IMAP/POP3"),
+        (Regex::new(r"(?i)smb").unwrap(), "SMB"),
+        (Regex::new(r"(?i)rfb ([\d.]+)").unwrap(), "VNC"),
     ];
 }
 
@@ -57,17 +61,22 @@ pub unsafe extern "C" fn rust_fast_scan(host: *const c_char, port: i32, timeout_
                 let mut banner = String::new();
                 let mut buffer = [0u8; 1024];
 
-                // Special probes for certain ports to trigger banner
                 match port {
                     80 | 8080 | 443 | 8443 => {
-                        let _ = stream.write_all(b"HEAD / HTTP/1.0\r\n\r\n").await;
+                        let _ = stream.write_all(b"HEAD / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").await;
                     },
-                    21 => { /* FTP sends banner automatically */ },
-                    25 | 587 => { let _ = stream.write_all(b"HELO rust-scanner\r\n").await; },
-                    _ => {}
+                    25 | 587 | 465 => { let _ = stream.write_all(b"EHLO hackit-recon\r\n").await; },
+                    3389 => { 
+                        let _ = stream.write_all(&[0x03, 0x00, 0x00, 0x13, 0x0e, 0xe0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x08, 0x00, 0x03, 0x00, 0x00, 0x00]).await;
+                    },
+                    1433 => {
+                        let _ = stream.write_all(&[0x12, 0x01, 0x00, 0x34, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x15, 0x00, 0x06, 0x01, 0x00, 0x1b, 0x00, 0x01, 0x02, 0x00, 0x1c, 0x00, 0x0c, 0x03, 0x00, 0x28, 0x00, 0x04, 0xff, 0x08, 0x00, 0x01, 0x55, 0x00, 0x00, 0x00]).await;
+                    },
+                    _ => {
+                        let _ = stream.write_all(b"\r\n\r\n").await;
+                    }
                 }
 
-                // Try to read banner
                 if let Ok(Ok(n)) = tokio_timeout(Duration::from_millis(800), stream.read(&mut buffer)).await {
                     if n > 0 {
                         banner = String::from_utf8_lossy(&buffer[..n]).to_string();
@@ -87,7 +96,6 @@ pub unsafe extern "C" fn rust_fast_scan(host: *const c_char, port: i32, timeout_
                     }
                 }
 
-                // Fallback for empty banner
                 if service == "UNKNOWN" {
                     service = match port {
                         21 => "FTP", 22 => "SSH", 23 => "TELNET", 25 => "SMTP", 53 => "DNS",
@@ -98,28 +106,28 @@ pub unsafe extern "C" fn rust_fast_scan(host: *const c_char, port: i32, timeout_
                     }.to_string();
                 }
 
-                (true, service, banner, version)
+                (true, "open".to_string(), service, banner, version)
+            },
+            Ok(Err(e)) => {
+                let err_str = e.to_string().to_lowercase();
+                if err_str.contains("refused") {
+                    (false, "closed".to_string(), "UNKNOWN".to_string(), String::new(), String::new())
+                } else {
+                    (false, "filtered".to_string(), "UNKNOWN".to_string(), "(no response)".to_string(), String::new())
+                }
+            },
+            Err(_) => {
+                (false, "filtered".to_string(), "UNKNOWN".to_string(), "(timeout)".to_string(), String::new())
             }
-            _ => (false, "CLOSED".to_string(), String::new(), String::new()),
         }
     });
 
-    let res = if result.0 {
-        RustScanResult {
-            port,
-            state: CString::new("open").unwrap().into_raw(),
-            service: CString::new(result.1).unwrap().into_raw(),
-            banner: CString::new(result.2).unwrap().into_raw(),
-            version: CString::new(result.3).unwrap().into_raw(),
-        }
-    } else {
-        RustScanResult {
-            port,
-            state: CString::new("closed").unwrap().into_raw(),
-            service: CString::new("UNKNOWN").unwrap().into_raw(),
-            banner: CString::new("").unwrap().into_raw(),
-            version: CString::new("").unwrap().into_raw(),
-        }
+    let res = RustScanResult {
+        port,
+        state: CString::new(result.1).unwrap().into_raw(),
+        service: CString::new(result.2).unwrap().into_raw(),
+        banner: CString::new(result.3).unwrap().into_raw(),
+        version: CString::new(result.4).unwrap().into_raw(),
     };
 
     Box::into_raw(Box::new(res))

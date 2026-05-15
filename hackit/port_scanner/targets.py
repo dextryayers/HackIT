@@ -77,4 +77,4 @@ def parse_ports(ports=None, port_range=None, popular=False, full_range=False, to
         return str(ports).strip()
     if port_range:
         return str(port_range).strip()
-    return "1-1000" # Default
+    return "default" # Let the engine handle common ports

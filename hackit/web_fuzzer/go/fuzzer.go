@@ -41,6 +41,8 @@ func FuzzURL(url string, bypass bool) (Result, error) {
 	bodyStr := string(bodyStart[:n])
 	
 	title := ExtractTitle(bodyStr)
+	waf := CheckWAF(bodyStr, resp.Header)
+	
 	redirect := ""
 	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
 		redirect = resp.Header.Get("Location")
@@ -52,6 +54,7 @@ func FuzzURL(url string, bypass bool) (Result, error) {
 		URL:      url,
 		Title:    title,
 		Redirect: redirect,
+		WAF:      waf,
 	}
 	
 	// Handle -1 content length

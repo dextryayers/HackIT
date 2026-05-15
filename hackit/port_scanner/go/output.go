@@ -19,7 +19,7 @@ const (
 
 // ScanReport represents a complete scan report
 type ScanReport struct {
-	XMLName     xml.Name     `json:"-" xml:"nmaprun"`
+	XMLName     xml.Name     `json:"-" xml:"hackitrun"`
 	Scanner     string       `json:"scanner" xml:"scanner,attr"`
 	Args        string       `json:"args" xml:"args,attr"`
 	StartStr    string       `json:"start" xml:"startstr,attr"`
@@ -224,7 +224,7 @@ func (of *OutputFormatter) formatJSON(report ScanReport) (string, error) {
 func (of *OutputFormatter) formatNormal(report ScanReport) string {
 	var output strings.Builder
 
-	output.WriteString(fmt.Sprintf("Starting Nmap %s at %s\n", report.Version, report.StartStr))
+	output.WriteString(fmt.Sprintf("Starting HackIT %s at %s\n", report.Version, report.StartStr))
 	output.WriteString(fmt.Sprintf("Scanned %d hosts, %d up, %d down\n",
 		report.RunStats.Hosts.Total,
 		report.RunStats.Hosts.Up,
@@ -242,27 +242,35 @@ func (of *OutputFormatter) formatNormal(report ScanReport) string {
 			}
 		}
 
-		output.WriteString("  Ports:\n")
-		output.WriteString("    PORT      STATE    SERVICE    VERSION\n")
-		output.WriteString("    ----      -----    -------    -------\n")
+		output.WriteString("  [#] TACTICAL RECONNAISSANCE MAP:\n")
+		output.WriteString("  ======================================================================\n")
+		output.WriteString("  [PORT]      [STATE]     [SERVICE]    [VERSION / INTELLIGENCE]\n")
+		output.WriteString("  ----------------------------------------------------------------------\n")
 
 		for _, port := range host.Ports.Ports {
-			serviceInfo := ""
-			serviceVersion := ""
+			serviceName := "unknown"
+			serviceDetail := ""
 			if port.Service != nil {
-				serviceInfo = fmt.Sprintf("%s %s %s",
-					port.Service.Name,
-					port.Service.Product,
-					port.Service.Version)
-				serviceVersion = port.Service.Version
+				serviceName = port.Service.Name
+				if port.Service.Product != "" {
+					serviceDetail = port.Service.Product
+				}
+				if port.Service.Version != "" {
+					if serviceDetail != "" {
+						serviceDetail += " "
+					}
+					serviceDetail += port.Service.Version
+				}
 			}
-			output.WriteString(fmt.Sprintf("    %-9d %-9s %-10s %s\n",
+			
+			output.WriteString(fmt.Sprintf("  %-11d %-11s %-12s %s\n",
 				port.PortID,
-				port.State.State,
-				serviceInfo,
-				serviceVersion,
+				strings.ToUpper(port.State.State),
+				serviceName,
+				serviceDetail,
 			))
 		}
+		output.WriteString("  ----------------------------------------------------------------------\n")
 
 		if len(host.OS.Matches) > 0 {
 			output.WriteString("  OS detection:\n")
@@ -384,7 +392,7 @@ func GetOutputExtension(format OutputFormat) string {
 	case OutputXML:
 		return ".xml"
 	case OutputGrepable:
-		return ".gnmap"
+		return ".ghackit"
 	case OutputJSON:
 		return ".json"
 	default:

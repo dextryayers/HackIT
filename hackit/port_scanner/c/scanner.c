@@ -16,7 +16,7 @@ typedef struct {
     char host[256];
     int port;
     int timeout;
-    int timing_level; // 0-5 (like Nmap T0-T5)
+    int timing_level; // 0-5 (like HackIT T0-T5)
     int scan_type;    // 0=connect, 1=syn, 2=fin, 3=null, 4=xmas, 5=udp
 } scan_task_t;
 
@@ -216,7 +216,7 @@ int main(int argc, char* argv[]) {
         case 5: delay_ms = 0;    break; // Insane
     }
 
-    printf("[*] Nmap-Expert C Engine: Scanning %s (Timing T%d, Type %d)...\n", host, timing, scan_type);
+    printf("[*] HackIT-Expert C Engine: Scanning %s (Timing T%d, Type %d)...\n", host, timing, scan_type);
     fflush(stdout);
 
     if (strchr(port_arg, '-')) {

@@ -1,7 +1,6 @@
 import os
 import subprocess
 import json
-import sys
 import platform
 from typing import Dict, Any, List
 
@@ -9,59 +8,43 @@ class GoEngine:
     def __init__(self):
         self.base_dir = os.path.dirname(os.path.abspath(__file__))
         self.go_dir = os.path.join(self.base_dir, 'go')
-        self.binary_name = 'worker.exe' if platform.system() == 'Windows' else 'worker'
+        self.binary_name = 'fuzzer.exe' if platform.system() == 'Windows' else 'fuzzer'
         self.binary_path = os.path.join(self.go_dir, self.binary_name)
-        self.source_path = os.path.join(self.go_dir, 'main.go')
 
-    @property
-    def available(self) -> bool:
-        """Check if Go is installed."""
-        try:
-            subprocess.run(['go', 'version'], capture_output=True, check=True)
-            return True
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            return False
-
-    def ensure_compiled(self) -> bool:
-        """Compile the Go binary if it doesn't exist or is outdated."""
-        if not os.path.exists(self.binary_path) or \
-           os.path.getmtime(self.source_path) > os.path.getmtime(self.binary_path):
+    def ensure_compiled(self, force: bool = False) -> bool:
+        if force or not os.path.exists(self.binary_path):
             try:
-                # Build the binary
-                cmd = ['go', 'build', '-o', self.binary_name, '.']
-                subprocess.run(cmd, cwd=self.go_dir, check=True, capture_output=True)
+                # High-Performance Go Build: Stripped and Optimized
+                subprocess.run(['go', 'build', '-ldflags="-s -w"', '-o', self.binary_name, '.'], 
+                             cwd=self.go_dir, check=True, capture_output=True)
                 return True
-            except subprocess.CalledProcessError as e:
-                print(f"Compilation error: {e.stderr.decode()}")
+            except Exception as e:
+                print(f"[!] Go Compilation Error: {e}")
                 return False
         return True
 
-    def run(self, url: str, wordlist: str, extensions: str, status: str, threads: int, bypass: bool) -> List[Dict[str, Any]]:
-        """Run the Go worker."""
+    def shape(self, intel_json: str) -> List[Dict[str, Any]]:
+        """Bridge between Rust and C++ via Go Shaper."""
         if not self.ensure_compiled():
-            return [{"error": "Failed to compile Go engine"}]
-
-        cmd = [
-            self.binary_path,
-            '-url', url,
-            '-wordlist', wordlist,
-            '-extensions', extensions,
-            '-status', status,
-            '-threads', str(threads)
-        ]
-        if bypass:
-            cmd.append('-bypass')
+            return []
 
         try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                check=True
-            )
-            # The Go program outputs a JSON array
+            cmd = [self.binary_path, '-intel', intel_json]
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            # The Go program outputs a JSON array on stdout, and status messages on stderr
             return json.loads(result.stdout)
-        except subprocess.CalledProcessError as e:
-            return [{"error": f"Execution failed: {e.stderr}"}]
-        except json.JSONDecodeError:
-            return [{"error": "Failed to parse Go output", "raw": result.stdout}]
+        except Exception as e:
+            return [{"error": str(e)}]
+
+    def harvest(self, domain: str) -> List[str]:
+        """High-performance parameter discovery from multiple sources via Go."""
+        if not self.ensure_compiled():
+            return []
+        try:
+            cmd = [self.binary_path, '-harvest', domain]
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            # Standard lines of URLs
+            return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+        except Exception as e:
+            print(f"[!] Go Harvester Error: {e}")
+            return []

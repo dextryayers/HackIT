@@ -22,69 +22,57 @@ type ScanResult struct {
 }
 
 func main() {
-	target := flag.String("target", "", "Target Host or CIDR (e.g. 192.168.1.1 or 192.168.1.0/24)")
-	ports := flag.String("ports", "", "Ports (comma separated or range 1-100)")
+	target := flag.String("target", "", "Target Host or CIDR")
+	ports := flag.String("ports", "", "Ports (comma separated or range)")
 	timeout := flag.Int("timeout", 1000, "Timeout in ms")
 	concurrency := flag.Int("threads", 100, "Threads")
-	includeClosed := flag.Bool("include-closed", true, "Include closed ports in results")
-	stealth := flag.Bool("stealth", false, "Stealth/Anonymous mode")
-	scanMode := flag.String("mode", "connect", "Scan mode (connect, syn, udp, stealth, fin, xmas, etc.)")
-	enrich := flag.Bool("enrich", false, "Enrich results with Python Intelligence Layer")
-	profile := flag.String("profile", "default", "Scan profile (fast, stealth, full, web, lan)")
-	format := flag.String("format", "text", "Output format: text or json")
-	quietJSON := flag.Bool("quiet-json", false, "When format=json, suppress human-readable output")
+	includeClosed := flag.Bool("include-closed", true, "Include closed ports")
+	stealth := flag.Bool("stealth", false, "Stealth mode")
+	scanMode := flag.String("mode", "connect", "Scan mode")
+	enrich := flag.Bool("enrich", false, "Enrich results")
+	profile := flag.String("profile", "default", "Scan profile")
+	format := flag.String("format", "text", "Output format")
+	outputFile := flag.String("output", "", "Output filename")
+	openOnly := flag.Bool("open-only", false, "Show only open ports")
+	quietJSON := flag.Bool("quiet-json", false, "Suppress human output")
 
-	// Nmap parity flags
-	script := flag.String("script", "", "Run specific Lua scripts (NSE-style)")
-	scriptArgs := flag.String("script-args", "", "Arguments for Lua scripts")
-	mtu := flag.Int("mtu", 0, "Set MTU size for fragmentation")
-	dataLength := flag.Int("data-length", 0, "Append random data to packets")
-	sourcePort := flag.Int("source-port", 0, "Set custom source port")
-	identifyOS := flag.Bool("O", true, "Enable OS detection (Enabled by default for Deep Recon)")
-	detailedOS := flag.Bool("detailed-os", true, "Enable detailed OS fingerprinting (Default: Deep)")
-	ultraDeep := flag.Bool("ultra-deep", false, "Enable Extremely Deep Analysis (C/CPP/Rust Deep Audit)")
-	detectService := flag.Bool("detect-service", false, "Enable service detection")
-	osDetection := flag.Bool("os-detection", false, "Enable detailed OS detection and IP information")
-	// Network Intel flags
-	dnsInfo := flag.Bool("dns-info", false, "Enable DNS lookup")
-	reverseLookup := flag.Bool("reverse-lookup", false, "Enable reverse DNS")
-	subEnum := flag.Bool("sub-enum", false, "Enable subdomain enumeration")
-	vulnScan := flag.Bool("vuln", true, "Enable vulnerability scanning (Default: Enabled)")
-	whoisInfo := flag.Bool("whois-info", false, "Enable WHOIS lookup")
-	geoInfo := flag.Bool("geo-info", false, "Enable GeoIP lookup")
-	asnInfo := flag.Bool("asn-info", false, "Enable ASN lookup")
+	// Stealth & Evasion flags
+	ghostProtocol := flag.Bool("ghost-protocol", false, "Enable Ghost Protocol")
+	chaos := flag.Bool("chaos", false, "Enable Chaos Mode")
+	decoy := flag.String("decoy", "", "Decoy IPs")
+	zombie := flag.String("zombie", "", "Zombie host")
+	spoofIP := flag.String("spoof-ip", "", "Spoof IP")
+	sourcePort := flag.Int("source-port", 0, "Source port")
+	frag := flag.Bool("frag", false, "Fragment packets")
+	fragSize := flag.Int("frag-size", 0, "Fragment size")
+	mtu := flag.Int("mtu", 0, "MTU size")
+	ttl := flag.Int("ttl", 0, "Custom TTL")
 
-	// Web flags
-	httpInspect := flag.Bool("http-inspect", false, "Enable HTTP inspection")
-	techAnalyze := flag.Bool("tech-analyze", false, "Enable technology detection")
-	tlsAnalyze := flag.Bool("tls-analyze", false, "Enable TLS analysis")
-	certView := flag.Bool("cert-view", false, "Enable certificate info")
-	showTitle := flag.Bool("show-title", false, "Extract page title")
+	// Intelligence & Detection flags
+	deep := flag.Bool("deep", false, "Deep inspection")
+	passive := flag.Bool("passive", false, "Passive intelligence")
+	smartProbe := flag.Bool("smart-probe", false, "Smart service probe")
+	fingerprintIntensity := flag.Int("fingerprint-intensity", 5, "Fingerprint intensity")
+	osDetect := flag.Bool("os-detect", false, "Enable OS detection")
+	script := flag.String("script", "", "Run script modules")
+	scriptArgs := flag.String("script-args", "", "Arguments for scripts")
 
-	// Advanced flags
-	customTTL := flag.Int("custom-ttl", 0, "Set custom TTL")
-	spoofIP := flag.String("mask-ip", "", "Spoof source IP")
-	spoofMAC := flag.String("spoof-mac", "", "Spoof MAC address")
-	packetSplit := flag.Bool("packet-split", false, "Fragment packets")
-	badSum := flag.Bool("badsum", false, "Send packets with bad checksum")
-	traceroute := flag.Bool("traceroute", false, "Enable traceroute")
+	// Timing & Performance flags
+	adaptive := flag.Bool("adaptive", false, "Adaptive timing")
+	quantum := flag.Bool("quantum", false, "Quantum port ordering")
+	minRate := flag.Int("min-rate", 0, "Min packets/sec")
+	maxRate := flag.Int("max-rate", 0, "Max packets/sec")
+	maxRetries := flag.Int("max-retries", 3, "Max retries")
+	hostTimeout := flag.Int("host-timeout", 0, "Host timeout")
+	scanDelay := flag.Int("scan-delay", 0, "Scan delay")
 
-	// New advanced evasion and timing flags
-	detectHoneypot := flag.Bool("detect-honeypot", false, "Check for potential honeypots")
-	smartBypass := flag.Bool("smart-bypass", false, "Try automatic firewall bypass")
-	randomOrder := flag.Bool("random-order", false, "Randomize target")
-	decoyIP := flag.String("decoy-ip", "", "Gunakan IP decoy (comma separated)")
-	useProxy := flag.String("use-proxy", "", "Gunakan proxy (http://ip:port)")
-	useTor := flag.Bool("use-tor", false, "Route via TOR")
-	versionIntensity := flag.Int("version-intensity", 7, "Intensity for version detection (0-9)")
-	osScanLimit := flag.Bool("osscan-limit", false, "Limit OS detection to promising targets")
-	osScanGuess := flag.Bool("osscan-guess", false, "Guess OS more aggressively")
-	hostTimeout := flag.Int("host-timeout", 0, "Give up on target after X ms")
-	scanDelay := flag.Int("scan-delay", 0, "Delay between probes (ms)")
-	maxScanDelay := flag.Int("max-scan-delay", 0, "Max delay between probes (ms)")
-	defeatRstRateLimit := flag.Bool("defeat-rst-ratelimit", false, "Bypass RST rate limits")
-	defeatIcmpRateLimit := flag.Bool("defeat-icmp-ratelimit", false, "Bypass ICMP rate limits")
-	nsockEngine := flag.String("nsock-engine", "poll", "Select nsock IO engine")
+	// Network & Discovery flags
+	randomizeTargets := flag.Bool("randomize-targets", false, "Randomize targets")
+	randomizePorts := flag.Bool("randomize-ports", false, "Randomize ports")
+	noPing := flag.Bool("no-ping", false, "Skip host discovery")
+	pingMethod := flag.String("ping-method", "icmp", "Ping method")
+	resolvePolicy := flag.String("resolve", "all", "DNS resolution policy")
+	dnsServer := flag.String("dns-server", "", "Custom DNS server")
 
 	flag.Parse()
 
@@ -141,69 +129,83 @@ func main() {
 
 	for _, host := range targets {
 		reporter.PrintStatus(host, 0)
-		engine := NewScanEngine(host, portList, *concurrency, *timeout, *stealth, *scanMode, reporter)
+		// Resolve IP early to ensure all polyglot engines (Rust/C) get a surgical target
+		targetIP := host
+		if ips, err := net.LookupIP(host); err == nil && len(ips) > 0 {
+			targetIP = ips[0].String()
+		}
 
-		// Pass all flags to engine for full power
-		engine.LuaScript = *script
-		engine.LuaArgs = *scriptArgs
-		engine.MTU = *mtu
-		engine.DataLength = *dataLength
-		engine.SourcePort = *sourcePort
-		engine.IdentifyOS = *identifyOS
-		engine.DetectService = *detectService
-		engine.CustomTTL = *customTTL
-		engine.DNSInfo = *dnsInfo
-		engine.ReverseLookup = *reverseLookup
-		engine.SubEnum = *subEnum
-		engine.UltraDeep = *ultraDeep
-		engine.IdentifyOS = *identifyOS
-		engine.DetectService = *detailedOS
-		engine.VulnScan = *vulnScan
-		engine.WhoisInfo = *whoisInfo
-		engine.GeoInfo = *geoInfo
-		engine.ASNInfo = *asnInfo
-		engine.HttpInspect = *httpInspect
-		engine.TechAnalyze = *techAnalyze
-		engine.TlsAnalyze = *tlsAnalyze
-		engine.CertView = *certView
-		engine.ShowTitle = *showTitle
+		engine := NewScanEngine(targetIP, portList, *concurrency, *timeout, *stealth, *scanMode, reporter)
+		engine.Hostname = host // Keep original for reporting
+
+		// Core Mapping
 		engine.IncludeClosed = *includeClosed
-		engine.BadSum = *badSum
-		engine.Traceroute = *traceroute
-		engine.DetectHoneypot = *detectHoneypot
-		engine.SmartBypass = *smartBypass
-		engine.RandomOrder = *randomOrder
-		engine.DecoyIP = *decoyIP
-		engine.UseProxy = *useProxy
-		engine.UseTor = *useTor
-		engine.VersionIntensity = *versionIntensity
-		engine.OSScanLimit = *osScanLimit
-		engine.OSScanGuess = *osScanGuess
+		engine.ScanMode = *scanMode
+		engine.Format = *format
+		engine.OutputFile = *outputFile
+		engine.OpenOnly = *openOnly
+
+		// Stealth & Evasion Mapping
+		engine.GhostProtocol = *ghostProtocol
+		engine.Chaos = *chaos
+		engine.Decoy = *decoy
+		engine.Zombie = *zombie
+		engine.SpoofIP = *spoofIP
+		engine.SourcePort = *sourcePort
+		engine.Frag = *frag
+		engine.FragSize = *fragSize
+		engine.MTU = *mtu
+		engine.TTL = *ttl
+
+		// Intelligence & Detection Mapping
+		engine.Deep = *deep
+		engine.Passive = *passive
+		engine.SmartProbe = *smartProbe
+		engine.FingerprintIntensity = *fingerprintIntensity
+		engine.OSDetect = *osDetect
+		engine.Script = *script
+		engine.ScriptArgs = *scriptArgs
+
+		// Timing & Performance Mapping
+		engine.Adaptive = *adaptive
+		engine.Quantum = *quantum
+		engine.MinRate = *minRate
+		engine.MaxRate = *maxRate
+		engine.MaxRetries = *maxRetries
 		engine.HostTimeout = *hostTimeout
 		engine.ScanDelay = *scanDelay
-		engine.MaxScanDelay = *maxScanDelay
-		engine.DefeatRstRateLimit = *defeatRstRateLimit
-		engine.DefeatIcmpRateLimit = *defeatIcmpRateLimit
-		engine.NsockEngine = *nsockEngine
-		engine.SpoofIP = *spoofIP
-		engine.SpoofMAC = *spoofMAC
-		engine.PacketSplit = *packetSplit
-		engine.BadSum = *badSum
-		engine.Traceroute = *traceroute
+
+		// Network & Discovery Mapping
+		engine.RandomizeTargets = *randomizeTargets
+		engine.RandomizePorts = *randomizePorts
+		engine.NoPing = *noPing
+		engine.PingMethod = *pingMethod
+		engine.ResolvePolicy = *resolvePolicy
+		engine.DNSServer = *dnsServer
 
 		results := engine.Run()
 
-		// Resolve IP
-		ipAddr := ""
-		ips, _ := net.LookupIP(host)
-		if len(ips) > 0 {
-			ipAddr = ips[0].String()
+		// High-Accuracy IP & Infrastructure Mapping
+		intelInfo := GetNetworkIntel(host)
+		ipAddr := host // Default to target string
+		if len(intelInfo.DNS) > 0 {
+			ipAddr = intelInfo.DNS[0] // Primary resolved IP
 		} else {
-			ipAddr = host // If it's already an IP
+			// Fallback: system resolution
+			if ips, err := net.LookupIP(host); err == nil && len(ips) > 0 {
+				for _, ip := range ips {
+					if ip.To4() != nil {
+						ipAddr = ip.String()
+						break
+					}
+				}
+				if ipAddr == host && len(ips) > 0 {
+					ipAddr = ips[0].String()
+				}
+			}
 		}
 
 		osInfo := AnalyzeOSFromResults(host, results)
-		intelInfo := RustGetNetworkIntelAdvanced(host)
 
 		sort.Slice(results, func(i, j int) bool {
 			return results[i].Port < results[j].Port
@@ -225,9 +227,9 @@ func main() {
 		}
 	}
 
-	// Print the final comprehensive Nmap-style summary
+	// Print the final comprehensive HackIT-style summary
 	if *format != "json" {
-		reporter.PrintNmapStyleSummary(*target, startTime, len(portList), *osDetection)
+		reporter.PrintHackITStyleSummary(*target, startTime, len(portList), *osDetect)
 	}
 
 	// Machine-readable final payload for Python bridge

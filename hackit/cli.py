@@ -15,7 +15,7 @@ from hackit.subdomain import enumerate as scan_subdomains
 from hackit.network_scanner import scan_range
 from hackit.tech_hunter import detect as detect_tech
 from hackit.ssl_tool import scan_ssl as analyze_ssl
-from hackit.web_fuzzer import fuzz as bruteforce_dirs
+from hackit.web_fuzzer import fuzzer as industrial_fuzzer
 
 from hackit.params import fuzz_params
 from hackit.xss import scan_xss
@@ -23,24 +23,30 @@ from hackit.sqli import test_sqli
 from hackit.redirect import find_redirects
 from hackit.js import analyze_js
 from hackit.cve import check_cve
-from hackit.ui import display_banner
+from hackit.agent import agent
+from hackit.ui import display_banner, _colored, YELLOW, B_GREEN, B_CYAN, DIM
+from hackit.config import load_config, save_config, set_theme
 
 
 @click.group(invoke_without_command=True)
 @click.version_option(version='2.1.0', prog_name='HackIt')
-@click.option('--proxy', default=None, help='Proxy URL for tools (e.g., http://127.0.0.1:8080)')
-@click.option('--no-verify', is_flag=True, help='Disable SSL certificate verification globally')
-@click.option('--no-banner', is_flag=True, help='Disable startup banner')
-@click.option('--verbose', is_flag=True, help='Enable verbose logging (DEBUG)')
+@click.option('--proxy', default=None, help='[HACKIT] Proxy URL for tools (e.g., http://127.0.0.1:8080)')
+@click.option('--no-verify', is_flag=True, help='[HACKIT] Disable SSL certificate verification globally')
+@click.option('--no-banner', is_flag=True, help='[HACKIT] Disable startup banner')
+@click.option('--verbose', is_flag=True, help='[HACKIT] Enable verbose logging (DEBUG)')
 @click.pass_context
 def cli(ctx, proxy, no_verify, no_banner, verbose):
     """
     🚀 HackIt - Hexa-Engine Penetration Testing Framework 🚀
 
+
+    
     A professional-grade security suite for research and vulnerability assessment.
     Combines Go, Rust, C, Python, Ruby, and Lua for unmatched speed and precision.
 
     ⚠️ AUTHORIZED USE ONLY.
+
+    Usage: hackit [options]
     """
     # Export chosen global settings to environment so modules can read them.
     if proxy:
@@ -88,9 +94,8 @@ def web():
 
 web.add_command(check_headers, name='headers')
 web.add_command(detect_tech, name='tech')
-web.add_command(bruteforce_dirs, name='dirs')
+web.add_command(industrial_fuzzer, name='fuzz')
 web.add_command(analyze_js, name='js')
-web.add_command(fuzz_params, name='fuzz')
 
 
 # Vulnerability Scanners
@@ -112,6 +117,7 @@ def recon():
 
 recon.add_command(scan_subdomains, name='subdomains')
 recon.add_command(scan_range, name='ips')
+recon.add_command(detect_tech, name='tech-hunter')
 
 
 # SSL/TLS Tools
@@ -130,6 +136,7 @@ def util():
     pass
 
 util.add_command(check_cve, name='cve')
+cli.add_command(agent, name='agent')
 
 
 # Example usage command
@@ -145,6 +152,43 @@ def examples():
     • CVE:      $ hackit util cve --software apache --version 2.4.49
     """
     click.echo(examples_text)
+
+
+@cli.command()
+@click.option('--theme', type=click.Choice(['kali', 'cyberpunk', 'minimalist', 'retro', 'gacor', 'powerline', 'modern', 'pill']), help='Change CLI theme')
+@click.option('--user', help='Change display username')
+@click.option('--host', help='Change display hostname')
+def config(theme, user, host):
+    """Configure HackIt settings and themes"""
+    cfg = load_config()
+    changed = False
+    
+    if theme:
+        cfg["theme"] = theme
+        click.echo(_colored(f"  [+] Theme changed to: {theme.upper()}", B_GREEN))
+        changed = True
+    
+    if user:
+        cfg["user"] = user
+        click.echo(_colored(f"  [+] Username changed to: {user}", B_CYAN))
+        changed = True
+        
+    if host:
+        cfg["hostname"] = host
+        click.echo(_colored(f"  [+] Hostname changed to: {host}", B_CYAN))
+        changed = True
+        
+    if changed:
+        save_config(cfg)
+        click.echo(_colored("  [*] Configuration updated successfully.", DIM))
+    else:
+        # Show current config
+        click.echo(_colored("\n  [ HACKIT CONFIGURATION ]", B_CYAN))
+        click.echo(f"  • Current Theme : " + _colored(cfg['theme'].upper(), YELLOW))
+        click.echo(f"  • Username      : " + _colored(cfg['user'], B_GREEN))
+        click.echo(f"  • Hostname      : " + _colored(cfg['hostname'], B_GREEN))
+        click.echo(_colored("\n  Available Themes: kali, cyberpunk, minimalist, retro, gacor", DIM))
+        click.echo(_colored("  Usage: config --theme <name>\n", DIM))
 
 
 @cli.command()
@@ -174,8 +218,38 @@ def help_tools():
 def console(ctx):
     """Launch interactive HackIt console"""
     from hackit.console import start_console
-    # We pass the main cli group to the console
     start_console(cli)
+
+
+@cli.command()
+def run():
+    """Launch the HackIT Unified Intelligence Web UI Dashboard"""
+    import subprocess
+    import os
+    import sys
+    from hackit.ui import B_GREEN, B_CYAN, RED
+    
+    # Path to the unified main.py in webUI
+    root_dir = os.path.dirname(os.path.abspath(__file__))
+    webui_main = os.path.join(root_dir, 'webUI', 'main.py')
+    
+    click.echo(_colored("\n  [+] INITIALIZING HACKIT UNIFIED INTELLIGENCE CLUSTER...", B_CYAN))
+    click.echo(_colored("  [*] Mode: Unified Python + Astro (Port 8080)", B_CYAN))
+    
+    if not os.path.exists(webui_main):
+        click.echo(_colored(f"  [!] ERROR: Unified entry point not found at {webui_main}", RED))
+        return
+
+    try:
+        # Execute the unified root main.py
+        # Using a quoted string for better Windows compatibility with shell=True
+        cmd = f'"{sys.executable}" "{webui_main}"'
+        subprocess.run(cmd, shell=True)
+    except KeyboardInterrupt:
+        click.echo(_colored("\n  [!] SESSION TERMINATED BY USER.", RED))
+    except Exception as e:
+        click.echo(_colored(f"  [!] CRITICAL ERROR: {e}", RED))
+
 
 
 if __name__ == '__main__':

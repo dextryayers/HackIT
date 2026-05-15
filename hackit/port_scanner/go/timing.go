@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// TimingTemplate represents Nmap-style timing templates (T0-T5)
+// TimingTemplate represents HackIT-style timing templates (T0-T5)
 type TimingTemplate struct {
 	Name           string
 	Timeout        time.Duration
@@ -23,7 +23,7 @@ type TimingTemplate struct {
 	HostGroupSize  int
 }
 
-// TimingTemplates defines all Nmap timing templates
+// TimingTemplates defines all HackIT timing templates
 var TimingTemplates = map[int]TimingTemplate{
 	0: {
 		Name:           "Paranoid",

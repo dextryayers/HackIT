@@ -58,7 +58,8 @@ func ScanPort(host string, port int, timeoutMs int) (PortResult, bool) {
 	address := net.JoinHostPort(host, fmt.Sprintf("%d", port))
 	conn, err := net.DialTimeout("tcp", address, time.Duration(timeoutMs)*time.Millisecond)
 	if err != nil {
-		return PortResult{}, false
+		state := classifyDialError(err)
+		return PortResult{Port: port, State: state}, false
 	}
 	defer conn.Close()
 
@@ -93,13 +94,13 @@ func ScanPort(host string, port int, timeoutMs int) (PortResult, bool) {
 
 // GrabBanner attempts to read the first few bytes from the connection
 func GrabBanner(conn net.Conn, timeoutMs int, port int, host string) string {
-	// Keep banner grabbing fast; do not block the whole port scan on slow banners.
-	readMs := timeoutMs / 3
-	if readMs < 200 {
-		readMs = 200
+	// Increased timeout for industrial-grade accuracy as requested by user
+	readMs := timeoutMs
+	if readMs < 1000 {
+		readMs = 1000 // Minimum 1s for accurate banner discovery
 	}
-	if readMs > 600 {
-		readMs = 600
+	if readMs > 3000 {
+		readMs = 3000 // Cap at 3s to maintain performance
 	}
 	deadline := time.Now().Add(time.Duration(readMs) * time.Millisecond)
 	conn.SetReadDeadline(deadline)
@@ -138,40 +139,71 @@ func GrabBanner(conn net.Conn, timeoutMs int, port int, host string) string {
 	} else if port == 143 {
 		// IMAP
 		_, _ = conn.Write([]byte("A1 CAPABILITY\r\n"))
+	} else if port == 5900 {
+		// VNC Handshake
+		_, _ = conn.Write([]byte("RFB 003.008\n"))
+	} else if port == 3389 {
+		// RDP Connection Initiation
+		_, _ = conn.Write([]byte{0x03, 0x00, 0x00, 0x13, 0x0e, 0xe0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x08, 0x00, 0x03, 0x00, 0x00, 0x00})
+	} else if port == 11211 {
+		// Memcached stats
+		_, _ = conn.Write([]byte("stats\r\n"))
 	}
 
 	// --- PHASE 2: Wait for Response/Greeting ---
-	// No sleep: rely on deadline-based reads.
 	n, err := conn.Read(buffer)
 	if err == nil && n > 0 {
 		return cleanBanner(string(buffer[:n]))
 	}
 
-	// --- PHASE 3: TLS/SSL Handshake (If Phase 2 failed and it's an SSL port) ---
+	// PHASE 2.1: Small delay and retry for slow protocols
+	time.Sleep(150 * time.Millisecond)
+	n, err = conn.Read(buffer)
+	if err == nil && n > 0 {
+		return cleanBanner(string(buffer[:n]))
+	}
+
+	// PHASE 2.2: HEURISTIC PROBE (The "Industrial Kick")
+	// If still nothing, try sending a generic CRLF to wake up some services
+	_, _ = conn.Write([]byte("\r\n\r\n"))
+	time.Sleep(250 * time.Millisecond)
+	n, err = conn.Read(buffer)
+	if err == nil && n > 0 {
+		return "[HEURISTIC]: " + cleanBanner(string(buffer[:n]))
+	}
+
+	// --- PHASE 3: TLS/SSL Handshake (Industrial Depth) ---
 	if isSSLPort(port) {
-		// We need a fresh connection or we can try to wrap the existing one if it's still alive
-		// But since we already tried to read/write, it's safer to just return if it's not a clear banner
-		// Actually, let's try a TLS handshake if the initial read failed
-		tlsConn := tls.Client(conn, &tls.Config{InsecureSkipVerify: true, ServerName: host})
-		tlsConn.SetDeadline(time.Now().Add(time.Duration(timeoutMs) * time.Millisecond))
-		if err := tlsConn.Handshake(); err == nil {
-			if port == 443 || port == 8443 || port == 9443 {
-				req := fmt.Sprintf("GET / HTTP/1.1\r\nHost: %s\r\nUser-Agent: %s\r\nConnection: close\r\n\r\n", host, getRandomUA())
-				_, _ = tlsConn.Write([]byte(req))
-			} else if port == 993 {
-				_, _ = tlsConn.Write([]byte("A1 CAPABILITY\r\n"))
-			} else if port == 995 {
-				_, _ = tlsConn.Write([]byte("CAPA\r\n"))
-			}
-			n, err = tlsConn.Read(buffer)
-			if err == nil && n > 0 {
-				return cleanBanner(string(buffer[:n]))
+		// Create a FRESH connection for SSL to avoid polluted state
+		sslConn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", host, port), time.Duration(timeoutMs)*time.Millisecond)
+		if err == nil {
+			defer sslConn.Close()
+			tlsConn := tls.Client(sslConn, &tls.Config{InsecureSkipVerify: true, ServerName: host})
+			tlsConn.SetDeadline(time.Now().Add(time.Duration(timeoutMs) * time.Millisecond))
+			
+			if err := tlsConn.Handshake(); err == nil {
+				// Protocol-Specific SSL Kicks
+				if port == 443 || port == 8443 || port == 9443 || port == 2083 {
+					req := fmt.Sprintf("GET / HTTP/1.1\r\nHost: %s\r\nUser-Agent: %s\r\nConnection: close\r\n\r\n", host, getRandomUA())
+					_, _ = tlsConn.Write([]byte(req))
+				} else if port == 993 {
+					_, _ = tlsConn.Write([]byte("A1 CAPABILITY\r\n"))
+				} else if port == 995 {
+					_, _ = tlsConn.Write([]byte("CAPA\r\n"))
+				} else if port == 465 {
+					_, _ = tlsConn.Write([]byte("EHLO hackit.local\r\n"))
+				}
+				
+				n, err = tlsConn.Read(buffer)
+				if err == nil && n > 0 {
+					return "[SSL]: " + cleanBanner(string(buffer[:n]))
+				}
 			}
 		}
 	}
 
-	// --- PHASE 4: Specific Protocol Probes (If still no banner) ---
-	if port == 25 || port == 587 || port == 465 || port == 2525 {
+	// --- PHASE 4: Final Protocol Probes (If still no banner) ---
+	if port == 25 || port == 587 || port == 2525 {
 		_, _ = conn.Write([]byte("EHLO hackit.local\r\n"))
 		n, err = conn.Read(buffer)
 		if err == nil && n > 0 {

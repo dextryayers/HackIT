@@ -16,6 +16,213 @@ from urllib.parse import urlparse
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+import threading
+
+def passive_recon(domain):
+    """
+    Query multiple passive sources for subdomains using a multi-threaded architecture.
+    Sources: HackerTarget, crt.sh, AlienVault OTX, Anubis, ThreatMiner, RapidDNS.
+    """
+    subs = set()
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36"}
+    lock = threading.Lock()
+
+    def fetch_crtsh():
+        try:
+            url = f"https://crt.sh/?q=%.{domain}&output=json"
+            resp = requests.get(url, timeout=25, headers=headers)
+            if resp.status_code == 200:
+                data = resp.json()
+                with lock:
+                    for entry in data:
+                        name = entry.get('name_value', '').lower()
+                        for s in name.split('\n'):
+                            if domain in s:
+                                subs.add(s.strip("*.").strip())
+        except Exception: pass
+
+    def fetch_hackertarget():
+        try:
+            url = f"https://api.hackertarget.com/hostsearch/?q={domain}"
+            resp = requests.get(url, timeout=15, headers=headers)
+            if resp.status_code == 200:
+                with lock:
+                    for line in resp.text.splitlines():
+                        if ',' in line:
+                            subs.add(line.split(',')[0].lower().strip())
+        except Exception: pass
+
+    def fetch_alienvault():
+        try:
+            url = f"https://otx.alienvault.com/api/v1/indicators/domain/{domain}/passive_dns"
+            resp = requests.get(url, timeout=15, headers=headers)
+            if resp.status_code == 200:
+                data = resp.json()
+                with lock:
+                    for record in data.get('passive_dns', []):
+                        hostname = record.get('hostname', '').lower()
+                        if domain in hostname:
+                            subs.add(hostname.strip())
+        except Exception: pass
+
+    def fetch_anubis():
+        try:
+            url = f"https://jldc.me/anubis/subdomains/{domain}"
+            resp = requests.get(url, timeout=15, headers=headers)
+            if resp.status_code == 200:
+                data = resp.json()
+                with lock:
+                    for s in data:
+                        subs.add(s.lower().strip())
+        except Exception: pass
+
+    def fetch_threatminer():
+        try:
+            url = f"https://api.threatminer.org/v2/domain.php?q={domain}&rt=5"
+            resp = requests.get(url, timeout=15, headers=headers)
+            if resp.status_code == 200:
+                data = resp.json()
+                with lock:
+                    for s in data.get('results', []):
+                        subs.add(s.lower().strip())
+        except Exception: pass
+
+    def fetch_rapiddns():
+        try:
+            url = f"https://rapiddns.io/subdomain/{domain}?full=1"
+            resp = requests.get(url, timeout=15, headers=headers)
+            if resp.status_code == 200:
+                pattern = re.compile(rf'([a-zA-Z0-9-]+\.)+{re.escape(domain)}')
+                matches = pattern.findall(resp.text)
+                with lock:
+                    for m in matches:
+                        if isinstance(m, tuple):
+                            subs.add(m[0].lower().strip("."))
+                        else:
+                            subs.add(m.lower().strip("."))
+        except Exception: pass
+
+    def fetch_wayback():
+        try:
+            url = f"http://web.archive.org/cdx/search/cdx?url=*.{domain}/*&output=json&collapse=urlkey"
+            resp = requests.get(url, timeout=25, headers=headers)
+            if resp.status_code == 200:
+                data = resp.json()
+                # Skip header row
+                for entry in data[1:]:
+                    raw_url = entry[2]
+                    hostname = urlparse(raw_url).hostname
+                    if hostname and domain in hostname:
+                        with lock:
+                            subs.add(hostname.lower().strip())
+        except Exception: pass
+
+    def fetch_certspotter():
+        try:
+            url = f"https://api.certspotter.com/v1/issuances?domain={domain}&include_subdomains=true&expand=dns_names"
+            resp = requests.get(url, timeout=15, headers=headers)
+            if resp.status_code == 200:
+                data = resp.json()
+                with lock:
+                    for entry in data:
+                        for name in entry.get('dns_names', []):
+                            if domain in name:
+                                subs.add(name.strip("*.").strip())
+        except Exception: pass
+
+    def fetch_subdomaincenter():
+        try:
+            url = f"https://subdomain.center/api/index.php?domain={domain}"
+            resp = requests.get(url, timeout=15, headers=headers)
+            if resp.status_code == 200:
+                data = resp.json()
+                with lock:
+                    for s in data:
+                        if domain in s:
+                            subs.add(s.strip())
+        except Exception: pass
+
+    def fetch_urlscan():
+        try:
+            url = f"https://urlscan.io/api/v1/search/?q=domain:{domain}"
+            resp = requests.get(url, timeout=15, headers=headers)
+            if resp.status_code == 200:
+                data = resp.json()
+                with lock:
+                    for result in data.get('results', []):
+                        hostname = result.get('page', {}).get('domain', '').lower()
+                        if domain in hostname:
+                            subs.add(hostname.strip())
+        except Exception: pass
+
+    # Launch all workers
+    workers = [
+        threading.Thread(target=fetch_crtsh),
+        threading.Thread(target=fetch_hackertarget),
+        threading.Thread(target=fetch_alienvault),
+        threading.Thread(target=fetch_anubis),
+        threading.Thread(target=fetch_threatminer),
+        threading.Thread(target=fetch_rapiddns),
+        threading.Thread(target=fetch_wayback),
+        threading.Thread(target=fetch_certspotter),
+        threading.Thread(target=fetch_subdomaincenter),
+        threading.Thread(target=fetch_urlscan)
+    ]
+    
+    for w in workers: w.start()
+    for w in workers: w.join()
+
+    # Final cleanup & Rapid-Probe Optimization
+    import socket
+    from concurrent.futures import ThreadPoolExecutor
+    final_results = []
+    
+    def probe_host(s):
+        s = s.lower().strip(".")
+        if not (s.endswith("." + domain) or s == domain): return None
+        
+        # 1. IP Resolution (Ultra-fast)
+        ip = "N/A"
+        try:
+            socket.setdefaulttimeout(1.5)
+            ip = socket.gethostbyname(s)
+        except Exception: pass
+        
+        # 2. HTTP Status Code Probe (Aggressive)
+        sc = "OFF"
+        try:
+            # We use a very short timeout for rapid feedback
+            r = requests.get(f"http://{s}", timeout=2, verify=False, headers=headers)
+            sc = str(r.status_code)
+        except Exception: pass
+            
+        return {
+            "sub": s,
+            "ip": ip,
+            "sc": sc,
+            "mode": "Passive"
+        }
+
+    unique_subs = list(set(subs))
+    # Aggressively probe up to 300 interesting subdomains to keep response time < 10s
+    targets = unique_subs[:300]
+    
+    with ThreadPoolExecutor(max_workers=100) as executor:
+        results = list(executor.map(probe_host, targets))
+        for r in results:
+            if r: final_results.append(r)
+
+    # Add remaining without probing to ensure "entire" list is returned instantly
+    for s in unique_subs[300:]:
+        final_results.append({
+            "sub": s.lower().strip("."),
+            "ip": "Pending...",
+            "sc": "---",
+            "mode": "Passive"
+        })
+
+    return final_results
+
 def extract_from_web(domain):
     """
     Extract subdomains from the target's main page and JS files.
@@ -144,17 +351,27 @@ def enumerate(domain, wordlist, passive_only, active_only, permutations, takeove
         click.echo(_colored("[!] Failed to compile Go worker.", RED))
         return
 
-    # Run
-    click.echo("-" * 60)
-    
-    # 1. Python Smart Intelligence: Extract subdomains from web
+    # 1. Passive Recon (APIs)
+    all_passive_subs = set()
+    if not active_only:
+        click.echo(f"[*] Querying passive sources (HackerTarget, crt.sh, AlienVault, CertSpotter, etc.)...")
+        passive_subs = passive_recon(domain)
+        if passive_subs:
+            click.echo(f"[*] Found {len(passive_subs)} subdomains from passive APIs")
+            # FIX: Only update with the subdomain strings, not the result dicts
+            all_passive_subs.update(r['sub'] for r in passive_subs)
+
+    # 2. Python Smart Intelligence: Extract subdomains from web
     temp_wordlist_path = None
     web_subs = extract_from_web(domain)
     if web_subs:
         click.echo(f"[*] Found {len(web_subs)} subdomains in target web and JS files")
+        all_passive_subs.update(web_subs)
+
+    if all_passive_subs:
         # Create a temp file for Go to read
         temp_wordlist = tempfile.NamedTemporaryFile(delete=False, suffix=".txt", mode="w")
-        for s in web_subs:
+        for s in all_passive_subs:
             # We only need the part before the domain
             sub = s.replace(f".{domain}", "")
             temp_wordlist.write(sub + "\n")

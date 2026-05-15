@@ -48,9 +48,13 @@ func (r *Reporter) ReportResult(res PortResult) {
 		return
 	}
 
-	// Real-time notification for open ports (unsorted for speed)
-	// Only print to console, no JSON RESULT: output
-	if res.State == "open" {
+	// Real-time notification:
+	// 1. Always report OPEN ports.
+	// 2. Report CLOSED/FILTERED only if they are "Common/Critical" ports to avoid noise.
+	isCommon := IsCommonPort(res.Port)
+	shouldReport := res.State == "open" || isCommon
+
+	if shouldReport {
 		// Print machine-readable result for bridge
 		if b, err := json.Marshal(res); err == nil {
 			fmt.Printf("RESULT:%s\n", string(b))
@@ -105,58 +109,50 @@ func (r *Reporter) PrintFinalTable() {
 		}
 	}
 
-	// Header
-	fmt.Println("\n" + strings.Repeat("=", 70))
-	fmt.Printf("  PORT SCAN RESULTS  |  Open: %d  |  Closed: %d  |  Filtered: %d\n",
+	// Header Grid
+	fmt.Println("\n" + ColorBright + "┌" + strings.Repeat("─", 78) + "┐" + ColorReset)
+	title := fmt.Sprintf("  HACKIT TACTICAL GRID  |  OPEN: %d  |  CLOSED: %d  |  FILTERED: %d",
 		openCount, closedCount, filteredCount)
-	fmt.Println(strings.Repeat("=", 70))
-
-	fmt.Println("\nPORT      STATE    SERVICE         VERSION / BANNER")
-	fmt.Println("--------- -------- --------------- " + strings.Repeat("-", 22))
+	fmt.Printf("%s│%s│%s\n", ColorBright, padRight(title, 78), ColorReset)
+	fmt.Println(ColorBright + "├" + strings.Repeat("─", 12) + "┬" + strings.Repeat("─", 12) + "┬" + strings.Repeat("─", 14) + "┬" + strings.Repeat("─", 37) + "┤" + ColorReset)
+	fmt.Printf("%s│ %-10s │ %-10s │ %-12s │ %-35s │%s\n", ColorBright, "PORT", "STATE", "SERVICE", "VERSION / INTELLIGENCE", ColorReset)
+	fmt.Println(ColorBright + "├" + strings.Repeat("─", 12) + "┼" + strings.Repeat("─", 12) + "┼" + strings.Repeat("─", 14) + "┼" + strings.Repeat("─", 37) + "┤" + ColorReset)
 
 	for _, res := range r.resultsBuffer {
-		// Color coding based on state
 		state := res.State
-		if state == "" {
-			state = "unknown"
-		}
+		if state == "" { state = "unknown" }
 
 		var stateCol string
 		switch state {
 		case "open":
-			stateCol = "\033[32mopen\033[0m" // Green
+			stateCol = ColorGreen + "OPEN" + ColorReset
 		case "closed":
-			stateCol = "\033[31mclosed\033[0m" // Red
+			stateCol = ColorRed + "CLOSED" + ColorReset
 		case "filtered":
-			stateCol = "\033[33mfiltered\033[0m" // Yellow
+			stateCol = ColorYellow + "FORBIDDEN" + ColorReset
 		default:
-			stateCol = state
+			stateCol = strings.ToUpper(state)
 		}
 
-		// Normalize service name to UPPERCASE for consistency
 		serviceName := strings.ToUpper(res.Service)
-		if serviceName == "" {
-			serviceName = "UNKNOWN"
-		}
+		if serviceName == "" { serviceName = "UNKNOWN" }
 
 		info := res.Version
 		if info == "" && res.Banner != "" {
 			info = res.Banner
-			if idx := strings.Index(info, "\n"); idx != -1 {
-				info = info[:idx]
-			}
-			if len(info) > 40 {
-				info = info[:37] + "..."
-			}
+			if idx := strings.Index(info, "\n"); idx != -1 { info = info[:idx] }
 		}
+		if len(info) > 35 { info = info[:32] + "..." }
 
-		fmt.Printf("%-9s %-18s %-15s %s\n",
-			fmt.Sprintf("%d/tcp", res.Port),
-			stateCol,
-			serviceName,
-			strings.TrimSpace(info),
-		)
+		fmt.Printf("%s│%s %-10d %s│ %s %-15s %s│ %-12s │ %-35s │%s\n", 
+			ColorBright, ColorReset, res.Port, ColorBright, ColorReset, stateCol, ColorBright, serviceName, info, ColorReset)
 	}
+	fmt.Println(ColorBright + "└" + strings.Repeat("─", 12) + "┴" + strings.Repeat("─", 12) + "┴" + strings.Repeat("─", 14) + "┴" + strings.Repeat("─", 37) + "┘" + ColorReset)
+}
+
+func padRight(s string, length int) string {
+	if len(s) >= length { return s }
+	return s + strings.Repeat(" ", length-len(s))
 }
 
 // PrintTacticalSummary prints the ultimate high-fidelity summary report in the requested format
@@ -220,7 +216,7 @@ func (r *Reporter) PrintTacticalSummary(host string, startTime time.Time, totalP
 		openPortsCSV = append(openPortsCSV, fmt.Sprintf("%d", res.Port))
 	}
 	openPortsStr := strings.Join(openPortsCSV, ",")
-	intelRaw := RustDetectOsDetailed(host, openPortsStr)
+	intelRaw := RustDetectOsDetailed(host, openPortsStr, true, false)
 	osInfo := "Unknown"
 	confidence := 0
 	if strings.Contains(intelRaw, "Operating System:") {
@@ -280,8 +276,8 @@ func (r *Reporter) PrintTacticalSummary(host string, startTime time.Time, totalP
 	fmt.Println("\n" + ColorGreen + "[+] Analysis complete. Tactical data cached for intelligence layer." + ColorReset + "\n")
 }
 
-// PrintNmapStyleSummary is now deprecated
-func (r *Reporter) PrintNmapStyleSummary(host string, startTime time.Time, totalPorts int, detailedOS bool) {
+// PrintHackITStyleSummary is now deprecated
+func (r *Reporter) PrintHackITStyleSummary(host string, startTime time.Time, totalPorts int, detailedOS bool) {
 	r.PrintTacticalSummary(host, startTime, totalPorts, detailedOS)
 }
 
@@ -544,9 +540,12 @@ func (r *Reporter) ReportStatus(status string, progress float64) {
 		return
 	}
 
-	// Heartbeat every 1% for better granularity
+	// Heartbeat for better granularity
 	cur := int(progress + 0.5)
-	if cur > r.lastProgress {
+	// Force report if it's a significant jump OR we are at the very end to avoid "stuck" feeling
+	isNearEnd := progress > 90 && progress < 100
+	
+	if cur > r.lastProgress || isNearEnd {
 		r.lastProgress = cur
 		// Print machine-readable status for bridge
 		fmt.Printf("STATUS:{\"progress\":%d,\"message\":\"%s\"}\n", cur, status)

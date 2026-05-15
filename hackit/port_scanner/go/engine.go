@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 )
 
 type PortResult struct {
@@ -22,6 +23,7 @@ type PortResult struct {
 
 type ScanEngine struct {
 	Host                   string
+	Hostname               string
 	Ports                  []int
 	Threads                int
 	TimeoutMs              int
@@ -29,19 +31,60 @@ type ScanEngine struct {
 	ScanMode               string
 	Reporter               *Reporter
 	Lua                    *LuaEngine
-	LuaScript              string
-	LuaArgs                string
-	MTU                    int
-	DataLength             int
+	
+	// Core Config
+	IncludeClosed          bool
+	Format                 string
+	OutputFile             string
+	OpenOnly               bool
+
+	// Evasion & Stealth
+	GhostProtocol          bool
+	Chaos                  bool
+	Decoy                  string
+	Zombie                 string
+	SpoofIP                string
 	SourcePort             int
+	Frag                   bool
+	FragSize               int
+	MTU                    int
+	TTL                    int
+
+	// Detection & Intel
+	Deep                   bool
+	Passive                bool
+	SmartProbe             bool
+	FingerprintIntensity   int
+	OSDetect               bool
+	Script                 string
+	ScriptArgs             string
+
+	// Timing & Performance
+	Adaptive               bool
+	Quantum                bool
+	MinRate                int
+	MaxRate                int
+	MaxRetries             int
+	HostTimeout            int
+	ScanDelay              int
+
+	// Discovery & Resolution
+	RandomizeTargets       bool
+	RandomizePorts         bool
+	NoPing                 bool
+	PingMethod             string
+	ResolvePolicy          string
+	DNSServer              string
+
+	// Internal Logic Flags (Legacy/Internal)
+	UltraDeep              bool
+	VulnScan               bool
 	IdentifyOS             bool
 	DetectService          bool
 	CustomTTL              int
-	SpoofIP                string
 	SpoofMAC               string
 	PacketSplit            bool
 	Traceroute             bool
-	IncludeClosed          bool
 	BadSum                 bool
 	DNSInfo                bool
 	ReverseLookup          bool
@@ -57,20 +100,15 @@ type ScanEngine struct {
 	DetectHoneypot         bool
 	SmartBypass            bool
 	RandomOrder            bool
-	DecoyIP                string
 	UseProxy               string
 	UseTor                 bool
 	VersionIntensity       int
 	OSScanLimit            bool
 	OSScanGuess            bool
-	HostTimeout            int
-	ScanDelay              int
 	MaxScanDelay           int
 	DefeatRstRateLimit     bool
 	DefeatIcmpRateLimit    bool
 	NsockEngine            string
-	UltraDeep              bool
-	VulnScan               bool
 }
 
 func (e *ScanEngine) Run() []PortResult {
@@ -79,11 +117,61 @@ func (e *ScanEngine) Run() []PortResult {
 	}
 
 	ports := e.Ports
+	results := make([]PortResult, 0)
 	if len(ports) == 0 {
-		return nil
+		return results
 	}
 
-	results := make([]PortResult, 0)
+	// 1. Quantum Port Ordering (Industrial Prioritization)
+	if e.Quantum {
+		common := make([]int, 0)
+		rare := make([]int, 0)
+		for _, p := range ports {
+			if IsCommonPort(p) {
+				common = append(common, p)
+			} else {
+				rare = append(rare, p)
+			}
+		}
+		// Prioritize common ports for immediate intelligence
+		ports = append(common, rare...)
+	}
+
+	// 0. Use Rust for Mass Scanning (Industrial Range) - Only if we only care about OPEN ports
+	if !e.IncludeClosed && len(ports) > 1000 && (e.ScanMode == "syn" || e.ScanMode == "connect") {
+		if e.Reporter != nil {
+			e.Reporter.ReportStatus("Engaging Rust-Turbo Engine for Full Range Scan", 10)
+		}
+		
+		// Find range
+		min := ports[0]
+		max := ports[0]
+		for _, p := range ports {
+			if p < min { min = p }
+			if p > max { max = p }
+		}
+		
+		// If it's a dense range, use RustBatchScan
+		if (max - min) < len(ports) * 2 {
+			openPortsStr := RustBatchScan(e.Host, min, max, e.TimeoutMs, e.Threads)
+			if openPortsStr != "" {
+				openPorts := strings.Split(openPortsStr, ",")
+				// Convert back to PortResults for secondary processing
+				for _, pStr := range openPorts {
+					p := 0
+					fmt.Sscanf(pStr, "%d", &p)
+					if p > 0 {
+						res := PortResult{Port: p, State: "open"}
+						// Still perform secondary enrichment (banner, scripts, etc.)
+						results = append(results, res)
+					}
+				}
+				// If we got results, we might want to skip the main loop for THESE ports
+				// For now, let's just proceed with secondary enrichment for these ports
+				// This is a simplified integration.
+			}
+		}
+	}
 	var mutex sync.Mutex
 	var wg sync.WaitGroup
 	portsChan := make(chan int, e.Threads)
@@ -112,58 +200,94 @@ func (e *ScanEngine) Run() []PortResult {
 				var res PortResult
 				var open bool
 
-				// Multi-Engine Selector logic
+				// PHASE 1: Basic Discovery (Ultra Fast)
 				switch e.ScanMode {
 				case "udp":
 					res, open = ScanUDP(e.Host, port, e.TimeoutMs)
 				case "syn":
-					// Call Rust for high-speed SYN scan
-					res = RustFastScan(e.Host, port, e.TimeoutMs, e.Stealth)
-					open = res.State == "open"
+					res = e.MultiEngineOrchestrator(port)
+					if res.State == "error" {
+						res, open = ScanPort(e.Host, port, e.TimeoutMs)
+					} else {
+						open = res.State == "open"
+					}
 				case "c-turbo":
-					// Placeholder for C engine call
 					res, open = ScanPort(e.Host, port, e.TimeoutMs)
+					if open {
+						c_os := CExpertDetectOs(e.Host, fmt.Sprintf("%d", port), 64, 29200)
+						res.DeepAnalysis = c_os
+					}
 				default:
 					res, open = ScanPort(e.Host, port, e.TimeoutMs)
 				}
 
+				// PROGRESS UPDATE: Increment immediately after basic discovery to prevent UI lag
+				progressMu.Lock()
+				processedPorts++
+				if e.Reporter != nil {
+					progress := float64(processedPorts) / float64(totalPorts) * 100
+					e.Reporter.ReportStatus(fmt.Sprintf("RECON: %d/%d ports mapped", processedPorts, totalPorts), progress)
+				}
+				progressMu.Unlock()
+
+				// PHASE 2: Deep Recon (Timeout Protected - Synchronous within Worker)
 				if open || e.IncludeClosed {
-					// 1. Service & Banner Recon (Nmap-Style)
-					if e.DetectService && open {
-						if res.Banner == "" {
-							res.Banner = GrabBannerByHost(e.Host, port, e.TimeoutMs)
-						}
-						res.Service, res.Version = DetectService(port, res.Banner, e.Host)
-					}
+					// Use a dedicated timer for tactical cutoff
+					timer := time.NewTimer(3 * time.Second)
+					reconDone := make(chan bool, 1)
 
-					// 2. Vulnerability Discovery (The "Powerfull" part)
-					if open {
-						// Call specialized vulnerability scanners
-						vulns := e.AnalyzeVulnerabilities(res)
-						if len(vulns) > 0 {
-							res.Vulnerabilities = append(res.Vulnerabilities, vulns...)
+					go func() {
+						if e.DetectService && open {
+							if res.Banner == "" {
+								res.Banner = GrabBannerByHost(e.Host, port, e.TimeoutMs)
+							}
+							res.Service, res.Version = DetectService(port, res.Banner, e.Host)
+							if res.Service == "" || strings.Contains(res.Service, "unassigned") {
+								if name, ok := commonPorts[port]; ok { res.Service = name }
+							}
 						}
-					}
 
-					// 3. Lua/NSE Script Integration
-					if e.Lua != nil && open {
-						scriptOutput := e.Lua.RunScripts(e.Host, port, res.Service, res.Banner)
-						if len(scriptOutput) > 0 {
-							res.Scripts = append(res.Scripts, scriptOutput...)
+						if open && res.Banner != "" {
+							// Rust/C++ Fast Audits
+							rustService := RustFingerprintService(res.Banner)
+							if rustService != "" && rustService != "unknown" { res.Service = rustService }
+							cppRes := CppScanService(e.Host, port, 500)
+							if cppRes.Service != "" && cppRes.Service != "UNKNOWN" { res.Service = cppRes.Service }
+
+							// Vulnerabilities & Scripts
+							vulns := e.AnalyzeVulnerabilities(res)
+							if len(vulns) > 0 { res.Vulnerabilities = append(res.Vulnerabilities, vulns...) }
+
+							audit := LuaRunTactical(e.Host, port, "audit")
+							if audit != "" { res.Vulnerabilities = append(res.Vulnerabilities, "[LUA-AUDIT]: "+audit) }
+							
+							luaEngine := NewLuaEngine()
+							luaResults := luaEngine.RunScripts(e.Host, port, res.Service, res.Banner)
+							if len(luaResults) > 0 { res.Vulnerabilities = append(res.Vulnerabilities, luaResults...) }
+
+							if res.Service == "http" || port == 80 || port == 443 {
+								rubyRes := RubyScanPorts(e.Host, []int{port}, "http")
+								if rubyRes != "" && !strings.Contains(rubyRes, "Error") { res.Vulnerabilities = append(res.Vulnerabilities, "[RUBY-RECON]: "+rubyRes) }
+							}
 						}
-					}
-					// DEEP RECON: Every open port gets a deep check if enabled (Rust Engine)
-					if e.VulnScan {
-						res.Vulnerabilities = RustCheckVulnerabilities(e.Host, port, res.Service, res.Banner)
-					}
-					
-					// ULTRA-DEEP: Engaging C/CPP/Rust Deep Audit Engines if flag is set
-					if e.UltraDeep {
-						deepData := RustPerformDeepScan(e.Host, port, res.Banner)
-						res.DeepAnalysis = deepData
-						
-						// Add more detailed info from C/CPP if needed (future integration)
-						// For now, Rust orchestrates the Deep results.
+
+						if e.UltraDeep && open {
+							rustDeep := RustPerformDeepScan(e.Host, port, res.Banner)
+							if rustDeep != "" { res.DeepAnalysis += "\n[RUST-DEEP]: " + rustDeep }
+							rubyAnalysis := RubyScanProtocol(e.Host, port)
+							if rubyAnalysis != "" { res.DeepAnalysis += "\n" + rubyAnalysis }
+						}
+						reconDone <- true
+					}()
+
+					select {
+					case <-reconDone:
+						timer.Stop()
+					case <-timer.C:
+						// Hard Tactical Cutoff - Prevents single port stalling the entire worker
+						if res.Service == "" {
+							if name, ok := commonPorts[port]; ok { res.Service = name }
+						}
 					}
 
 					mutex.Lock()
@@ -174,14 +298,6 @@ func (e *ScanEngine) Run() []PortResult {
 						e.Reporter.ReportResult(res)
 					}
 				}
-
-				progressMu.Lock()
-				processedPorts++
-				if e.Reporter != nil {
-					progress := float64(processedPorts) / float64(totalPorts) * 100
-					e.Reporter.ReportStatus(fmt.Sprintf("RECON: %d/%d ports mapped", processedPorts, totalPorts), progress)
-				}
-				progressMu.Unlock()
 			}
 		}()
 	}
@@ -191,7 +307,21 @@ func (e *ScanEngine) Run() []PortResult {
 	}
 	close(portsChan)
 
-	wg.Wait()
+	// --- MISSION WATCHDOG: Ensuring Zero-Lag Collation ---
+	c := make(chan struct{})
+	go func() {
+		defer close(c)
+		wg.Wait()
+	}()
+
+	select {
+	case <-c:
+		// Normal completion
+	case <-time.After(15 * time.Second): // Hard Cutoff for stuck workers
+		if e.Reporter != nil {
+			e.Reporter.ReportStatus("TACTICAL: Watchdog triggered - Forcing result collation", 100)
+		}
+	}
 
 	sort.Slice(results, func(i, j int) bool {
 		return results[i].Port < results[j].Port
