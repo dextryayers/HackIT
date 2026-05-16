@@ -107,3 +107,15 @@ func (res *Result) AddSubdomains(domain string) {
 		}
 	}
 }
+
+type OSINTResult struct {
+	CrtshSubdomains []string `json:"crtsh_subdomains"`
+	HackerTargetIPs []string `json:"hackertarget_ips"`
+}
+
+func CollectOSINT(domain string) *OSINTResult {
+	res := &OSINTResult{}
+	res.CrtshSubdomains = fetchCrtsh(domain)
+	res.HackerTargetIPs = fetchHackerTarget(domain)
+	return res
+}

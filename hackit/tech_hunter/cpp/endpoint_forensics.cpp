@@ -9,16 +9,24 @@
 #endif
 
 extern "C" {
-    EXPORT const char* scan_endpoints(const char* domain) {
+    EXPORT const char* scan_endpoints(const char* domain, const char* body) {
         std::string d = domain;
+        std::string b = body;
         std::string results = "";
-        
-        // Simulating common endpoint discovery
-        results += "https://" + d + "/swagger-ui.html (Swagger/OpenAPI)\n";
-        results += "https://" + d + "/phpmyadmin (Database Admin)\n";
-        results += "https://" + d + "/jenkins (CI/CD)\n";
-        results += "https://" + d + "/grafana (Monitoring)\n";
-        results += "https://" + d + "/api/v1/docs (API Docs)";
+
+        // Genuine API Deep Dive via Body Forensics
+        if (b.find("graphql") != std::string::npos || b.find("query {") != std::string::npos || b.find("mutation {") != std::string::npos) {
+            results += "https://" + d + "/graphql (GraphQL patterns detected in source)\n";
+        }
+        if (b.find("swagger-ui") != std::string::npos || b.find("openapi\":") != std::string::npos) {
+            results += "https://" + d + "/api-docs (Swagger/OpenAPI UI Exposed in source)\n";
+        }
+        if (b.find("actuator/health") != std::string::npos || b.find("\"status\":\"UP\"") != std::string::npos) {
+            results += "https://" + d + "/actuator/health (Spring Boot footprints detected)\n";
+        }
+        if (b.find("wp-json") != std::string::npos) {
+            results += "https://" + d + "/wp-json/wp/v2/users (WordPress REST API detected)\n";
+        }
 
         char* cstr = new char[results.length() + 1];
         std::copy(results.begin(), results.end(), cstr);

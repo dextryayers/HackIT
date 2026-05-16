@@ -79,13 +79,15 @@ BG_B_WHITE = CSI + "107m"
 # Collection of banners (Global)
 BANNERS = [
     r"""
-  _    _    _  _____  _   _  _____ __   __ _____
- | |  | |  | ||  __ \| \ | ||  ___|\\ \\ / /  ___|
- | |  | |  | || |  \/|  \| || |__   \ V /\ `--.
- | |/\| |/\| || | __ | . ` ||  __|   \ /  `--. \
- \  /\  /\  / | |_\ \| |\  || |___   | | /\__/ /
-  \/  \/  \/   \____/\_| \_/\____/   \_/ \____/ 
-""",
+    ██╗  ██╗ █████╗  ██████╗██╗  ██╗██╗████████╗
+    ██║  ██║██╔══██╗██╔════╝██║ ██╔╝██║╚══██╔══╝
+    ███████║███████║██║     █████╔╝ ██║   ██║   
+    ██╔══██║██╔══██║██║     ██╔═██╗ ██║   ██║   
+    ██║  ██║██║  ██║╚██████╗██║  ██╗██║   ██║   
+    ╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝╚═╝   ╚═╝   
+          [!] ADVANCED INTELLIGENCE ECOSYSTEM [!]
+          [!]   AUTHORIZED PENETRATION ONLY   [!]
+    """,
     r"""
     __  __            __   _ __ 
    / / / /___ _____  / /__(_) /_
@@ -324,10 +326,14 @@ def get_ip_info():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-def display_banner():
-    """Print a premium startup banner. Suppressed if HACKIT_NO_BANNER is set."""
-    if os.environ.get('HACKIT_NO_BANNER'):
+def display_banner(force=False):
+    """Print a premium startup banner. Suppressed if HACKIT_NO_BANNER is set unless forced."""
+    if os.environ.get('HACKIT_NO_BANNER') and not force:
         return
+    
+    # If forced, we definitely want output
+    if force:
+        pass 
 
     import re as _re
     _strip = _re.compile(r'\x1b\[[0-9;]*m')

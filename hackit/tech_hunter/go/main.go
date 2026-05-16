@@ -54,6 +54,8 @@ type Result struct {
 	Endpoints       []string            `json:"endpoints,omitempty"`
 	ThirdParty      string              `json:"third_party,omitempty"`
 	ScrapedContacts *ContactResult      `json:"scraped_contacts,omitempty"`
+	AuthSession     string              `json:"auth_session,omitempty"`
+	OSINTData       *OSINTResult        `json:"osint_data,omitempty"`
 }
 
 type ContactResult struct {
@@ -231,10 +233,15 @@ var (
 	tpDLL           = syscall.NewLazyDLL(filepath.Join(cPath, "third_party_mapper.dll"))
 	checkTPProc     = tpDLL.NewProc("check_third_party")
 	freeTPStr       = tpDLL.NewProc("free_tp_string")
+
+	sessionDLL      = syscall.NewLazyDLL(filepath.Join(cPath, "session_analyzer.dll"))
+	analyzeSessProc = sessionDLL.NewProc("analyze_session")
+	freeSessStr     = sessionDLL.NewProc("free_session_string")
 )
 
 func main() {
 	opts := &Options{}
+
 	flag.StringVar(&opts.Target, "t", "", "Target URL")
 	flag.IntVar(&opts.Threads, "threads", 10, "Threads")
 	flag.IntVar(&opts.Timeout, "timeout", 10, "Timeout")
@@ -495,8 +502,15 @@ func processTarget(target string, opts *Options) Result {
 	// 19. Tier 4 Advanced Intelligence (New Points)
 	res.CMSCloud = callRubyCMSCloudMapper(u.Hostname(), fetchResult.BodySnippet, res.Headers)
 	res.TechStackAdvanced = callRustTechScanner(res.Headers, fetchResult.BodySnippet)
-	res.Endpoints = callCppEndpointForensics(u.Hostname())
+	
+	// Genuine Endpoint Forensics (C++) + Active Fuzzing (Go)
+	cppEndpoints := callCppEndpointForensics(u.Hostname(), fetchResult.BodySnippet)
+	fuzzEndpoints := ActiveFuzz(target, time.Duration(opts.Timeout)*time.Second)
+	res.Endpoints = append(cppEndpoints, fuzzEndpoints...)
+
 	res.ThirdParty = callCThirdPartyMapper(fetchResult.BodySnippet)
+	res.AuthSession = callCSessionAnalyzer(fetchResult.BodySnippet, res.Headers)
+	res.OSINTData = CollectOSINT(u.Hostname())
 
 	// 20. Contact Strengthening (Ruby)
 	res.ScrapedContacts = callRubyContactScraper(fetchResult.BodySnippet, res.Headers)
@@ -554,9 +568,10 @@ func callRustTechScanner(headers map[string]string, body string) *TechStackAdvan
 	return &res
 }
 
-func callCppEndpointForensics(domain string) []string {
+func callCppEndpointForensics(domain string, body string) []string {
 	cDomain, _ := syscall.BytePtrFromString(domain)
-	retPtr, _, _ := scanEndpoints.Call(uintptr(unsafe.Pointer(cDomain)))
+	cBody, _ := syscall.BytePtrFromString(body)
+	retPtr, _, _ := scanEndpoints.Call(uintptr(unsafe.Pointer(cDomain)), uintptr(unsafe.Pointer(cBody)))
 	if retPtr == 0 { return nil }
 	res := goString(retPtr)
 	freeEndStr.Call(retPtr)
@@ -572,7 +587,19 @@ func callCThirdPartyMapper(body string) string {
 	return res
 }
 
+func callCSessionAnalyzer(body string, headers map[string]string) string {
+	cBody, _ := syscall.BytePtrFromString(body)
+	hStr, _ := json.Marshal(headers)
+	cHeaders, _ := syscall.BytePtrFromString(string(hStr))
+	retPtr, _, _ := analyzeSessProc.Call(uintptr(unsafe.Pointer(cBody)), uintptr(unsafe.Pointer(cHeaders)))
+	if retPtr == 0 { return "" }
+	res := goString(retPtr)
+	freeSessStr.Call(retPtr)
+	return res
+}
+
 func callRubyContactScraper(body string, headers map[string]string) *ContactResult {
+
 	hJson, _ := json.Marshal(headers)
 	cmd := exec.Command("ruby", "../ruby/contact_scraper.rb", body, string(hJson))
 	out, err := cmd.Output()

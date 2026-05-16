@@ -33,12 +33,17 @@ func (o *IntelligenceOrchestrator) GetOptimalModel(provider string) string {
 		return "llama3-70b-8192"
 	case "openrouter":
 		return "google/gemini-pro-1.5"
+	case "ollama":
+		return "llama3"
 	default:
 		return ""
 	}
 }
 
 func (o *IntelligenceOrchestrator) ValidateRoute(provider string) error {
+	if provider == "ollama" {
+		return nil // Ollama is local, doesn't strictly need a key
+	}
 	for _, p := range o.AvailableProviders {
 		if p == provider {
 			return nil

@@ -37,4 +37,5 @@ class ScanJob(BaseModel):
     summary: List[SummaryItem] = [] # For the SpiderFoot Browse table
     stats: Optional[IntelligenceStats] = None
     duration: str = "0s"
+    live_logs: List[str] = []
     created_at: datetime = datetime.now()

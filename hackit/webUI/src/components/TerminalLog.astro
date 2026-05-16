@@ -1,0 +1,143 @@
+---
+interface Props {
+	jobId?: string;
+	target: string;
+}
+
+const { jobId, target } = Astro.props;
+---
+
+<div class="bg-[#050505] border border-sf-border rounded-lg overflow-hidden flex flex-col h-full shadow-2xl">
+	<!-- Terminal Header -->
+	<div class="bg-sf-card border-b border-sf-border px-4 py-2 flex items-center justify-between">
+		<div class="flex items-center gap-2">
+			<div class="flex gap-1.5">
+				<div class="w-2.5 h-2.5 rounded-full bg-red-500/20 border border-red-500/40"></div>
+				<div class="w-2.5 h-2.5 rounded-full bg-yellow-500/20 border border-yellow-500/40"></div>
+				<div class="w-2.5 h-2.5 rounded-full bg-emerald-500/20 border border-emerald-500/40"></div>
+			</div>
+			<span class="text-[10px] font-mono text-sf-muted ml-2 uppercase tracking-widest">Titan Engine v2.1 — {target}</span>
+		</div>
+		<div class="flex items-center gap-4">
+			<span id="log-status" class="text-[10px] font-mono text-sf-muted uppercase tracking-widest flex items-center gap-2">
+				<div class="w-1.5 h-1.5 rounded-full bg-sf-green animate-pulse"></div> Link Established
+			</span>
+			<button id="clear-terminal" class="text-[10px] font-mono text-sf-muted hover:text-sf-text transition-colors uppercase tracking-widest">
+				Clear
+			</button>
+		</div>
+	</div>
+
+	<!-- Terminal Body -->
+	<div id="terminal-body" class="flex-1 p-6 font-mono text-[11px] overflow-auto leading-relaxed scroll-smooth">
+		<div class="space-y-1" id="log-container">
+			<div class="text-sf-muted">[SYSTEM] INITIALIZING TITAN OSINT ORCHESTRATOR...</div>
+			<div class="text-sf-muted">[SYSTEM] CONNECTING TO SECURE GATEWAY...</div>
+			<div class="text-sf-text font-bold">[GATEWAY] SESSION_ID: {jobId || 'PENDING_INIT'}</div>
+			<div class="text-sf-muted">------------------------------------------------------------</div>
+		</div>
+	</div>
+
+	<!-- Terminal Footer -->
+	<div class="bg-sf-card border-t border-sf-border px-4 py-2 flex justify-between items-center text-[9px] font-mono text-sf-muted uppercase tracking-widest">
+		<div class="flex gap-4">
+			<span>CPU: 42%</span>
+			<span>MEM: 124MB</span>
+			<span>TRH: 50</span>
+		</div>
+		<div id="log-count">LOGS: 0</div>
+	</div>
+</div>
+
+<script is:inline define:vars={{ jobId }}>
+	const logContainer = document.getElementById('log-container');
+	const terminalBody = document.getElementById('terminal-body');
+	const logStatus = document.getElementById('log-status');
+	const logCountEl = document.getElementById('log-count');
+	const clearBtn = document.getElementById('clear-terminal');
+
+	let processedLogs = new Set();
+	let pollingInterval = null;
+	let logCount = 0;
+
+	function appendLog(message) {
+		const div = document.createElement('div');
+		
+		// Color coding
+		if (message.includes('[+]')) {
+			div.className = 'text-emerald-400 font-medium';
+		} else if (message.includes('[!]')) {
+			div.className = 'text-red-400 font-medium';
+		} else if (message.includes('[INFO]')) {
+			div.className = 'text-sf-tabActive';
+		} else {
+			div.className = 'text-sf-text opacity-90';
+		}
+
+		div.innerText = message;
+		logContainer.appendChild(div);
+		
+		// Auto scroll
+		terminalBody.scrollTop = terminalBody.scrollHeight;
+		
+		logCount++;
+		logCountEl.innerText = `LOGS: ${logCount}`;
+	}
+
+	async function fetchLogs() {
+		if (!jobId) return;
+
+		try {
+			const res = await fetch(`/api/status?job_id=${jobId}`);
+			if (!res.ok) throw new Error('API Unavailable');
+			
+			const data = await res.json();
+			
+			if (data.live_logs && data.live_logs.length > 0) {
+				data.live_logs.forEach(log => {
+					if (!processedLogs.has(log)) {
+						appendLog(log);
+						processedLogs.add(log);
+					}
+				});
+			}
+
+			if (data.status === 'Completed') {
+				appendLog(`[${new Date().toLocaleTimeString()}] [SYSTEM] MISSION ACCOMPLISHED. TOTAL DURATION: ${data.duration}`);
+				logStatus.innerHTML = '<div class="w-1.5 h-1.5 rounded-full bg-sf-muted"></div> Session Terminated';
+				clearInterval(pollingInterval);
+			} else if (data.status === 'Error') {
+				appendLog(`[${new Date().toLocaleTimeString()}] [!] CRITICAL ENGINE FAILURE DETECTED.`);
+				logStatus.innerHTML = '<div class="w-1.5 h-1.5 rounded-full bg-red-500"></div> Connection Lost';
+				clearInterval(pollingInterval);
+			}
+
+		} catch (err) {
+			console.error('Log Fetch Error:', err);
+		}
+	}
+
+	clearBtn.addEventListener('click', () => {
+		logContainer.innerHTML = '<div class="text-sf-muted">[SYSTEM] LOG BUFFER CLEARED.</div>';
+		logCount = 0;
+		logCountEl.innerText = `LOGS: 0`;
+	});
+
+	if (jobId) {
+		pollingInterval = setInterval(fetchLogs, 1000);
+		fetchLogs(); // Initial fetch
+	}
+</script>
+
+<style>
+	#terminal-body::-webkit-scrollbar {
+		width: 4px;
+	}
+	#terminal-body::-webkit-scrollbar-track {
+		background: transparent;
+	}
+	#terminal-body::-webkit-scrollbar-thumb {
+		background: #222222;
+		border-radius: 2px;
+	}
+</style>

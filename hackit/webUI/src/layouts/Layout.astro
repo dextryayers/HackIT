@@ -20,25 +20,34 @@ const { title } = Astro.props;
 		<script src="https://cdn.tailwindcss.com" is:inline></script>
 		<script is:inline>
 			tailwind.config = {
+				darkMode: 'class',
 				theme: {
 					extend: {
 						colors: {
 							sf: {
-								blue: '#0b3558',
-								lightbg: '#f0f2f5',
-								card: '#ffffff',
-								text: '#333333',
-								muted: '#777777',
-								border: '#dddddd',
-								tabActive: '#3b82f6',
-								green: '#10b981'
+								blue: 'var(--color-bg-primary)',
+								lightbg: 'var(--color-bg-secondary)',
+								card: 'var(--color-bg-card)',
+								text: 'var(--color-text-primary)',
+								muted: 'var(--color-text-muted)',
+								border: 'var(--color-border)',
+								tabActive: '#38BDF8',
+								green: '#10B981',
+								accent: '#6366F1'
 							}
 						},
 						fontFamily: {
-							sans: ['Inter', 'Segoe UI', 'Roboto', 'sans-serif'],
+							sans: ['Inter', 'Outfit', 'sans-serif'],
 						}
 					}
 				}
+			}
+
+			// Theme Initialization
+			if (localStorage.theme === 'light' || (!('theme' in localStorage) && window.matchMedia('(prefers-color-scheme: light)').matches)) {
+				document.documentElement.classList.add('light')
+			} else {
+				document.documentElement.classList.remove('light')
 			}
 		</script>
 		<!-- Chart.js -->
@@ -46,70 +55,114 @@ const { title } = Astro.props;
 		<!-- Vis Network for Graphs -->
 		<script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js" is:inline></script>
 		<link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet" />
+		<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet" />
 	</head>
-	<body class="bg-sf-lightbg text-sf-text overflow-x-hidden font-sans text-sm h-screen flex flex-col">
-		<!-- Top Navigation Bar (Spiderfoot Style) -->
-		<header class="bg-sf-blue text-white shadow-md z-50">
-			<div class="px-6 h-14 flex items-center justify-between">
+	<body class="bg-sf-lightbg text-sf-text overflow-x-hidden font-sans text-sm h-screen flex flex-col transition-colors duration-300">
+		<!-- Top Navigation Bar (Industrial Clean Style) -->
+		<header class="bg-sf-lightbg/90 backdrop-blur-md border-b border-sf-border text-sf-text z-50 sticky top-0">
+			<div class="px-8 h-16 flex items-center justify-between">
 				<!-- Left side -->
-				<div class="flex items-center gap-8">
-					<div class="flex items-center gap-2">
-						<!-- Spiderfoot icon mockup -->
-						<svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6 text-cyan-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a10 10 0 0 1 10 10 10 10 0 0 1-10 10A10 10 0 0 1 2 12 10 10 0 0 1 12 2zM12 6v6l4 2"/></svg>
-						<span class="text-lg font-normal tracking-tight">HackIT <span class="font-bold">OSINT</span></span>
+				<div class="flex items-center gap-10">
+					<div class="flex items-center gap-3">
+						<div class="p-1.5 bg-sf-card border border-sf-border rounded-md shadow-sm">
+							<svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5 text-sf-text" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+						</div>
+						<span class="text-lg font-semibold tracking-tight text-sf-text">HackIT <span class="font-normal text-sf-muted">OSINT</span></span>
 					</div>
 					
-					<nav class="flex items-center gap-1">
-						<a href="/" class="px-4 py-2 hover:bg-white/10 rounded flex items-center gap-2 text-sm transition-colors">
-							<i class="fas fa-crosshairs opacity-70"></i> Scan
+					<nav class="hidden lg:flex items-center gap-2">
+						<a href="/" class="px-4 py-2 hover:bg-sf-card rounded-full flex items-center gap-2 text-sm font-medium transition-all hover:text-sf-tabActive group">
+							<i class="fas fa-rocket opacity-70 group-hover:scale-110 transition-transform"></i> Launch Pad
 						</a>
-						<a href="/intelligence" class="px-4 py-2 hover:bg-white/10 rounded flex items-center gap-2 text-sm transition-colors">
-							<i class="fas fa-search opacity-70"></i> Investigate
+						<a href="/intelligence" class="px-4 py-2 hover:bg-sf-card rounded-full flex items-center gap-2 text-sm font-medium transition-all hover:text-sf-tabActive group">
+							<i class="fas fa-brain opacity-70 group-hover:scale-110 transition-transform"></i> Intelligence
 						</a>
-						<a href="#" class="px-4 py-2 hover:bg-white/10 rounded flex items-center gap-2 text-sm transition-colors">
-							<i class="fas fa-desktop opacity-70"></i> Monitor
-						</a>
-						<button class="px-4 py-2 hover:bg-white/10 rounded flex items-center gap-2 text-sm transition-colors">
-							<i class="fas fa-cog opacity-70"></i> Configure <i class="fas fa-caret-down opacity-50 ml-1"></i>
-						</button>
 					</nav>
 				</div>
 
 				<!-- Right side -->
 				<div class="flex items-center gap-4">
-					<button class="px-3 py-2 hover:bg-white/10 rounded flex items-center gap-2 text-sm transition-colors">
-						<i class="far fa-question-circle opacity-70"></i> Help <i class="fas fa-caret-down opacity-50 ml-1"></i>
+					<!-- Theme Toggle -->
+					<button id="theme-toggle" class="w-9 h-9 rounded-md border border-sf-border bg-sf-card flex items-center justify-center hover:border-sf-muted transition-all">
+						<i class="fas fa-moon dark:hidden"></i>
+						<i class="fas fa-sun hidden dark:block text-yellow-500"></i>
 					</button>
-					<button class="px-3 py-2 hover:bg-white/10 rounded flex items-center gap-2 text-sm transition-colors">
-						<i class="fas fa-user opacity-70"></i> System <i class="fas fa-caret-down opacity-50 ml-1"></i>
+
+					<div class="h-8 w-px bg-sf-border mx-2"></div>
+					<button class="px-4 py-2 bg-sf-card hover:bg-sf-border border border-sf-border rounded-lg flex items-center gap-2 text-sm font-medium transition-all shadow-sm">
+						<div class="w-2 h-2 rounded-full bg-sf-green animate-pulse"></div>
+						Engine: Online
+					</button>
+					<button class="w-10 h-10 rounded-full bg-sf-accent/20 border border-sf-accent/30 flex items-center justify-center text-sf-accent hover:bg-sf-accent hover:text-white transition-all">
+						<i class="fas fa-user-secret"></i>
 					</button>
 				</div>
 			</div>
 		</header>
 
 		<!-- Main Content Area -->
-		<main class="flex-1 overflow-y-auto">
+		<main class="flex-1 overflow-y-auto p-0">
 			<slot />
 		</main>
+
+		<script is:inline>
+			const themeToggle = document.getElementById('theme-toggle');
+			themeToggle.addEventListener('click', () => {
+				document.documentElement.classList.toggle('light');
+				const isLight = document.documentElement.classList.contains('light');
+				localStorage.theme = isLight ? 'light' : 'dark';
+			});
+		</script>
 	</body>
 </html>
 
 <style is:global>
 	@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 	
-	/* Scrollbar to match corporate style */
+	:root {
+		--color-bg-primary: #0A0A0A;
+		--color-bg-secondary: #000000;
+		--color-bg-card: #111111;
+		--color-text-primary: #EDEDED;
+		--color-text-muted: #888888;
+		--color-border: #222222;
+	}
+
+	:root.light {
+		--color-bg-primary: #F8FAFC;
+		--color-bg-secondary: #FFFFFF;
+		--color-bg-card: #F1F5F9;
+		--color-text-primary: #0F172A;
+		--color-text-muted: #64748B;
+		--color-border: #E2E8F0;
+	}
+	
+	/* Smooth Scrollbar */
 	::-webkit-scrollbar {
 		width: 8px;
 		height: 8px;
 	}
 	::-webkit-scrollbar-track {
-		background: #f0f2f5;
+		background: var(--color-bg-secondary);
 	}
 	::-webkit-scrollbar-thumb {
-		background: #cbd5e1;
+		background: var(--color-border);
 		border-radius: 4px;
 	}
 	::-webkit-scrollbar-thumb:hover {
-		background: #94a3b8;
+		background: var(--color-text-muted);
 	}
+
+	body {
+		background-color: var(--color-bg-secondary);
+		color: var(--color-text-primary);
+	}
+
+	/* Dark mode overrides for Tailwind dark: classes */
+	.light .dark\:hidden { display: block !important; }
+	.light .dark\:block { display: none !important; }
+	
+	/* Fallback if not using .dark class on html but using .light */
+	html:not(.light) .dark\:hidden { display: none !important; }
+	html:not(.light) .dark\:block { display: block !important; }
 </style>

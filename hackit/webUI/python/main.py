@@ -11,7 +11,7 @@ from orchestrator import run_modular_scan
 from typing import Dict
 import random
 
-app = FastAPI(title="HackIT Industrial OSINT Engine")
+app = FastAPI(title="HackIT OSINT Tools Engine v2.1")
 
 app.add_middleware(
     CORSMiddleware,
@@ -24,15 +24,15 @@ jobs: Dict[str, ScanJob] = {}
 
 @app.get("/api/ping")
 async def ping():
-    return {"status": "alive", "engine": "Industrial Python"}
+    return {"status": "alive", "engine": "HackIT OSINT Tools Engine v2.1"}
 
 async def run_scan_task(job_id: str, target: str, target_type: str):
     job = jobs[job_id]
     start_time = time.time()
     
     try:
-        # Run modular orchestrator
-        findings, summary, logs = await run_modular_scan(target, target_type)
+        # Run modular orchestrator with live logging support
+        findings, summary, logs = await run_modular_scan(target, target_type, job.live_logs)
         
         # Calculate Stats
         risk_dist = {"High Risk": 0, "Elevated Risk": 0, "Standard Target": 0, "Informational": 0}
@@ -61,6 +61,11 @@ async def run_scan_task(job_id: str, target: str, target_type: str):
 
 @app.get("/api/scan")
 async def start_scan(target: str, target_type: str = "Domain", background_tasks: BackgroundTasks = None):
+    # Check if a scan is already running for this target
+    for existing_job in jobs.values():
+        if existing_job.target == target and existing_job.status == "Running":
+            return {"job_id": existing_job.job_id, "status": "Resumed"}
+
     job_id = f"job_{uuid.uuid4().hex[:8]}"
     job = ScanJob(job_id=job_id, target=target, target_type=target_type, status="Running")
     jobs[job_id] = job
@@ -79,30 +84,51 @@ async def get_status(job_id: str):
         raise HTTPException(status_code=404, detail="Job not found")
     return jobs[job_id]
 
-# --- Static File Serving ---
-dist_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "dist")
+@app.get("/api/jobs")
+async def list_jobs():
+    return list(jobs.values())
 
-if os.path.exists(dist_path):
-    # Mount the dist folder for static assets
-    app.mount("/_astro", StaticFiles(directory=os.path.join(dist_path, "_astro")), name="astro_assets")
-    
-    # Catch-all for pages (Astro builds pages as folder/index.html or page.html)
-    @app.get("/{path:path}")
-    async def serve_static(path: str):
-        # Try to serve exact file
+import httpx
+
+# --- Static File Serving & Dev Proxy ---
+dist_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "dist")
+ASTRO_DEV_URL = "http://localhost:4321"
+
+@app.get("/{path:path}")
+async def serve_frontend(path: str):
+    # 1. Try to proxy to Astro Dev Server (No-Build Workflow)
+    if os.environ.get("DEBUG_MODE") == "True" or not os.path.exists(dist_path):
+        async with httpx.AsyncClient() as client:
+            try:
+                # Try to reach Astro Dev Server
+                response = await client.get(f"{ASTRO_DEV_URL}/{path}")
+                if response.status_code == 200:
+                    from fastapi.responses import Response
+                    return Response(content=response.content, status_code=response.status_code, headers=dict(response.headers))
+            except:
+                pass # Dev server not running, fallback to static
+
+    # 2. Try to serve from dist/ folder
+    if os.path.exists(dist_path):
+        # Try exact file
         file_path = os.path.join(dist_path, path)
         if os.path.isfile(file_path):
             return FileResponse(file_path)
         
-        # Try to serve as directory (index.html)
+        # Try path.html (Astro's default clean URLs)
+        html_file = os.path.join(dist_path, f"{path}.html")
+        if os.path.isfile(html_file):
+            return FileResponse(html_file)
+
+        # Try directory/index.html
         index_path = os.path.join(dist_path, path, "index.html")
         if os.path.isfile(index_path):
             return FileResponse(index_path)
         
         # Fallback to main index
         return FileResponse(os.path.join(dist_path, "index.html"))
-else:
-    print(f"[!] Warning: {dist_path} not found. Run 'npm run build' first.")
+    
+    return {"error": "Frontend not found. Run 'npm run dev' or 'npm run build'"}
 
 if __name__ == "__main__":
     import uvicorn

@@ -7,10 +7,8 @@ import click
 import sys
 import os
 
-# Import all modules
-from hackit.port_scanner import scan_ports as nmap_scan
-from hackit.dir_finder import dirfinder as expert_dir_finder
 from hackit.header_audit import check as check_headers
+from hackit.dir_finder import dirfinder as expert_dir_finder
 from hackit.subdomain import enumerate as scan_subdomains
 from hackit.network_scanner import scan_range
 from hackit.tech_hunter import detect as detect_tech
@@ -137,6 +135,36 @@ def util():
 
 util.add_command(check_cve, name='cve')
 cli.add_command(agent, name='agent')
+
+
+@cli.command()
+def whoami():
+    """Display the current system user info"""
+    import getpass
+    import platform
+    user = getpass.getuser()
+    system = platform.system()
+    node = platform.node()
+    click.echo(_colored("\n  [ USER IDENTITY ]", B_CYAN))
+    click.echo(f"  • User     : " + _colored(user, B_GREEN))
+    click.echo(f"  • Device   : " + _colored(node, B_GREEN))
+    click.echo(f"  • Platform : " + _colored(system, YELLOW))
+    click.echo()
+
+@cli.command()
+def banner():
+    """Display the main HackIt banner"""
+    from hackit.ui import display_banner
+    # We clear the environment flag temporarily to ensure it prints
+    old_flag = os.environ.get('HACKIT_NO_BANNER')
+    if 'HACKIT_NO_BANNER' in os.environ:
+        del os.environ['HACKIT_NO_BANNER']
+    
+    display_banner(force=True)
+    
+    # Restore the flag if it was there
+    if old_flag:
+        os.environ['HACKIT_NO_BANNER'] = old_flag
 
 
 # Example usage command

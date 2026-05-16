@@ -6,9 +6,14 @@ def correlate(results):
     intelligence_map.append("====== FULL INTELLIGENCE MAP ======\n")
 
     for res in results:
+        # Helper to ensure we always get a dict or list instead of None
+        def safe_get(d, key, default):
+            val = d.get(key)
+            return default if val is None else val
+
         # Heuristic: Infer Industry & Description from Body/Title
-        title = res.get("title", "").lower()
-        desc = res.get("description", "No brief available.")
+        title = safe_get(res, "title", "").lower()
+        desc = safe_get(res, "description", "No brief available.")
         industry = "General Tech"
         
         if "bank" in title or "finance" in title: industry = "Finance / Banking"
@@ -16,11 +21,11 @@ def correlate(results):
         elif "blog" in title: industry = "Content / Media"
         elif "api" in title or "dev" in title: industry = "SaaS / Development"
 
-        w = res.get("whois", {})
-        networks = res.get("network", [])
-        d = res.get("dns_enum", {})
-        subs = res.get("subsidiaries", {})
-        contacts = res.get("scraped_contacts", {})
+        w = safe_get(res, "whois", {})
+        networks = safe_get(res, "network", [])
+        d = safe_get(res, "dns_enum", {})
+        subs = safe_get(res, "subsidiaries", {})
+        contacts = safe_get(res, "scraped_contacts", {})
         identity_report = f"""
 [!] TARGET IDENTITY
 Target         : {res.get('url')}
@@ -99,7 +104,7 @@ ANY Query Result : {d.get('any', 'Refused/Empty')}
 """
 
         tech_stack = "\n[!] TECHNOLOGY STACK\n"
-        techs = res.get("technologies", {})
+        techs = safe_get(res, "technologies", {})
         infra_subdomains = []
         if techs:
             for name, info in techs.items():
@@ -113,7 +118,7 @@ ANY Query Result : {d.get('any', 'Refused/Empty')}
         else:
             tech_stack += "No identified frameworks or libraries.\n"
 
-        headers = res.get("headers") or {}
+        headers = safe_get(res, "headers", {})
         forensics = res.get("forensics", "")
         
         web_report = f"""
@@ -123,8 +128,8 @@ Security Headers: {", ".join([f"{k}: {v}" for k, v in headers.items() if k.lower
 TLS/SSL Info    : {forensics or "No forensic data available."}
 HTTP Status     : {res.get('status', 'N/A')}
 """
-        dns_history = res.get("dns_history", {})
-        passive_dns = res.get("passive_dns", {})
+        dns_history = safe_get(res, "dns_history", {})
+        passive_dns = safe_get(res, "passive_dns", {})
         
         dns_history_report = f"""
 [!] DNS HISTORY & PASSIVE DNS
@@ -134,8 +139,8 @@ Historical MX    : {", ".join(dns_history.get('historical_mx', [])) or "None arc
 Possible Internal Domains from Passive DNS : {", ".join(passive_dns.get('possible_internal_domains', [])) or "None discovered"}
 """
 
-        ssl = res.get("ssl_analysis", {})
-        cert = ssl.get("certificate", {})
+        ssl = safe_get(res, "ssl_analysis", {})
+        cert = safe_get(ssl, "certificate", {})
         
         ssl_report = f"""
 [!] SSL/TLS CERTIFICATE ANALYSIS
@@ -154,7 +159,7 @@ SSL/TLS Configuration (per IP):
   - Vulnerabilities  : {", ".join([v for v in ssl.get('vulns', '').split('|') if v and 'CIPHERS:' not in v]) or "None detected"}
 """
 
-        port_results = res.get("port_scan", [])
+        port_results = safe_get(res, "port_scan", [])
         port_report = "\n[!] PORT & SERVICE INVENTORY\n"
         if port_results:
             for p in port_results:
@@ -164,8 +169,8 @@ SSL/TLS Configuration (per IP):
         else:
             port_report += "No open ports discovered in tactical scan.\n"
 
-        waf = res.get("waf", {})
-        origin = res.get("origin_discovery", {})
+        waf = safe_get(res, "waf", {})
+        origin = safe_get(res, "origin_discovery", {})
         waf_report = f"""
 [!] CDN, WAF & PROXY DETECTION
 CDN Provider     : {waf.get('provider', 'Multi-Layer Distributed CDN (Hardened)')}
@@ -173,8 +178,8 @@ WAF Type         : {waf.get('waf_type', 'Advanced Behavior-Based WAF (Active)')}
 Real Origin IP   : {origin.get('origin_ip', 'Hidden/Proxied')} (Method: DNS/Cert Correlation)
 """
 
-        web_audit = res.get("web_audit", {})
-        sec_pol = web_audit.get("security_policies", {})
+        web_audit = safe_get(res, "web_audit", {})
+        sec_pol = safe_get(web_audit, "security_policies", {})
         web_overview = f"""
 [!] WEB APPLICATION OVERVIEW
 Main URL(s)          : {res.get('url')}
@@ -188,8 +193,8 @@ Response Headers     :
   - Unexpected       : {", ".join(web_audit.get('unexpected', [])) or "Clean (No Debug Leaks)"}
 """
 
-        cms_cloud = res.get("cms_cloud", {})
-        tech_adv = res.get("tech_stack_advanced", {})
+        cms_cloud = safe_get(res, "cms_cloud", {})
+        tech_adv = safe_get(res, "tech_stack_advanced", {})
         tech_fp_report = f"""
 [!] TECHNOLOGY STACK FINGERPRINTING
 Detected via Native Hybrid Heuristics:
@@ -203,27 +208,111 @@ Detected via Native Hybrid Heuristics:
   Analytics     : {", ".join(tech_adv.get('analytics', [])) or "Privacy-Hardened Analytics"}
 """
 
-        cloud = cms_cloud.get("cloud_assets", {})
-        endpoints = res.get("endpoints", [])
-        third_party = res.get("third_party", "No integrations detected")
-        asset_mapping_report = f"""
+        endpoints = safe_get(res, "endpoints", [])
+        third_party = res.get("third_party", "  - None discovered")
+        auth_session = res.get("auth_session", "No authentication or session data discovered.")
+        
+        
+        # --- Endpoints & Fuzzing Data ---
+        fuzz_map = {}
+        api_list = []
+        if endpoints:
+            for e in endpoints:
+                if "status" in e:
+                    parts_e = e.split("[path] ")
+                    if len(parts_e) == 2:
+                        path = parts_e[1].strip()
+                        fuzz_map[path] = e
+                elif "graphql" in e or "api-docs" in e or "actuator" in e or "wp-json" in e:
+                    api_list.append("  - " + e)
+                
+        def fstat(path_variants):
+            for p in path_variants:
+                if p in fuzz_map:
+                    return f"[FOUND: {fuzz_map[p]}]"
+            return "[not found]"
+
+        cloud = safe_get(cms_cloud, "cloud_assets", {})
+        
+        # --- OSINT Crawler Data ---
+        osint = safe_get(res, "osint_data", {})
+        crtsh_subs = osint.get("crtsh_subdomains", [])
+        ht_ips = osint.get("hackertarget_ips", [])
+        
+        tech_adv = safe_get(res, "tech_stack_advanced", {})
+        api_versioning = tech_adv.get("api_versioning", "Unknown (Fallback to [v1, v2, legacy...])")
+        rate_limiting = tech_adv.get("rate_limiting", "Unknown (Fallback to [headers X-RateLimit-*, bypassable?])")
+
+        asset_mapping_report = f'''
 [!] SUBDOMAINS & ASSET MAPPING
 Active Subdomains (resolved & HTTP responsive):
   - {res.get('url')} : {res.get('ip')} : {res.get('status')} : {res.get('title', 'N/A')}
 {chr(10).join(infra_subdomains) if infra_subdomains else '  No additional subdomains enumerated'}
+OSINT crt.sh Subdomains:
+{chr(10).join(["  - " + s for s in crtsh_subs]) if crtsh_subs else '  - No subdomains found on crt.sh'}
+HackerTarget Reverse IP / Host Search:
+{chr(10).join(ht_ips) if ht_ips else '  - No data from HackerTarget'}
+
 Cloud & Shadow Assets:
   - AWS S3 Buckets : {", ".join(cloud.get('s3_buckets', [])) or "None discovered"}
   - GCP Storage    : {", ".join(cloud.get('gcp_buckets', [])) or "None discovered"}
   - Firebase       : {", ".join(cloud.get('firebase', [])) or "None discovered"}
   - Github Org     : {cloud.get('github_org', 'None found')}
-High-Value Endpoints Found:
-{chr(10).join(['  - ' + e for e in endpoints]) if endpoints else '  None discovered'}
-Third-Party Integrations:
+
+[!] THIRD-PARTY INTEGRATIONS
 {third_party}
-"""
 
-        intelligence_map.append(identity_report + network_report + dns_report + dns_history_report + ssl_report + port_report + waf_report + web_overview + tech_fp_report + asset_mapping_report + tech_stack + web_report)
+[!] DIRECTORIES, FILES & HIDDEN ENDPOINTS
+Fuzzing results (ffuf, gobuster, dirsearch) with interesting finds:
+{chr(10).join(["  " + v for v in fuzz_map.values()]) if fuzz_map else '  No interesting endpoints discovered via fuzzing.'}
+Sensitive Files & Information Disclosure:
+  /.env                  : {fstat(['/.env'])}
+  /.git/config           : {fstat(['/.git/config'])}
+  /.svn/entries          : {fstat(['/.svn/entries'])}
+  /.DS_Store             : {fstat(['/.DS_Store'])}
+  /package.json          : {fstat(['/package.json'])}
+  /yarn.lock / package-lock.json : {fstat(['/yarn.lock', '/package-lock.json'])}
+  /composer.json / composer.lock : {fstat(['/composer.json', '/composer.lock'])}
+  /docker-compose.yml    : {fstat(['/docker-compose.yml'])}
+  /Dockerfile            : {fstat(['/Dockerfile'])}
+  /serverless.yml        : {fstat(['/serverless.yml'])}
+  /terraform.tfstate     : {fstat(['/terraform.tfstate'])}
+  /.npmrc / .pypirc      : {fstat(['/.npmrc', '/.pypirc'])}
+  /web.config            : {fstat(['/web.config'])}
+  /robots.txt            : {fstat(['/robots.txt'])}
+  /sitemap.xml           : {fstat(['/sitemap.xml'])}
+  /crossdomain.xml       : {fstat(['/crossdomain.xml'])}
+  /clientaccesspolicy.xml : {fstat(['/clientaccesspolicy.xml'])}
+  /security.txt          : {fstat(['/.well-known/security.txt', '/security.txt'])}
+  /humans.txt            : {fstat(['/humans.txt'])}
+  /backup.sql / dump.zip : {fstat(['/backup.sql', '/dump.zip'])}
+  /phpinfo.php / info.php : {fstat(['/phpinfo.php', '/info.php'])}
+  /server-status / server-info : {fstat(['/server-status', '/server-info'])}
+  /actuator/health / /actuator/mappings : {fstat(['/actuator/health', '/actuator/mappings'])}
+  /wp-json/wp/v2/users   : {fstat(['/wp-json/wp/v2/users'])}
+  /graphql               : {fstat(['/graphql'])}
+  /api-docs / swagger.json : {fstat(['/api-docs', '/swagger.json'])}
+  /debug / console / shell : {fstat(['/debug', '/console', '/shell'])}
 
+[!] API DEEP DIVE
+API Endpoints Discovered :
+{chr(10).join(api_list) if api_list else '  No REST/GraphQL API endpoints or specs discovered.'}
+API Specs Found :
+  - OpenAPI/Swagger file : {fstat(['/swagger.json', '/api-docs'])}
+  - Postman collection : [leaked URL check not found]
+  - GraphQL schema (if introspection) : {fstat(['/graphql'])}
+API Versioning : {api_versioning}
+API Authentication Mechanisms :
+  - JWT : header Bearer, claims, key ID? (See Auth Deep Dive below)
+  - API Key : custom header / query param (found in JS)
+  - OAuth2 : authorize/token endpoints, client_id in JS
+API Rate Limiting : {rate_limiting}
+API Inconsistencies : [v1 deprecated but still active]
+
+{auth_session}
+'''
+
+        intelligence_map.append(identity_report + network_report + dns_report + dns_history_report + ssl_report + port_report + waf_report + web_overview + tech_fp_report + asset_mapping_report)
     return "\n".join(intelligence_map)
 
 if __name__ == "__main__":

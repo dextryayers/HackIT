@@ -3,7 +3,8 @@ import subprocess
 import json
 import os
 import re
-from hackit.ui import _colored, RED, YELLOW, DIM, MAGENTA
+import httpx
+from hackit.ui import _colored, RED, YELLOW, DIM, MAGENTA, GREEN
 from hackit.config import load_config
 from hackit.agent.commands import COMMAND_MODES, get_command_prompt
 
@@ -18,6 +19,10 @@ class AIHyperBrain:
         # Binary path for the Go engine
         base_dir = os.path.dirname(os.path.abspath(__file__))
         self.binary_path = os.path.join(base_dir, "go", "ai_engine.exe")
+        
+        # Auto-Detect Ollama
+        if self.provider == "ollama":
+            self._check_ollama_status()
         
         self.system_prompt = """
 You are HackIt AI v2.1 (The Hyper-Brain), an elite Cybersecurity Researcher, Senior Pentester, and Master Software Architect.
@@ -38,6 +43,30 @@ When asked for payloads or code, provide high-performance and secure variants.
 When asked to build a program, provide a creative and complete solution that is ready for production.
 You have access to previous conversation context via a Go-powered history module.
 """
+
+    def _check_ollama_status(self):
+        """Auto-detect local Ollama instance and models"""
+        try:
+            # Probe for local Ollama tags API
+            resp = httpx.get("http://localhost:11434/api/tags", timeout=2.0)
+            if resp.status_code == 200:
+                data = resp.json()
+                models = [m.get("name") for m in data.get("models", [])]
+                if models:
+                    click.echo(_colored(f"  [+] Local Ollama Detected! ({len(models)} models available)", GREEN))
+                    for m in models[:3]: # Show first 3
+                        click.echo(_colored(f"    - {m}", DIM))
+                    if len(models) > 3:
+                        click.echo(_colored(f"    - ... and {len(models)-3} more", DIM))
+                    click.echo(_colored("  [*] Local intelligence is ready to run.", DIM))
+                else:
+                    click.echo(_colored("  [!] Ollama is running but no models are installed.", YELLOW))
+            else:
+                click.echo(_colored(f"  [!] Ollama responded with status {resp.status_code}", YELLOW))
+        except Exception:
+            # Silently fail if not on ollama provider, otherwise warn
+            if self.provider == "ollama":
+                click.echo(_colored("  [!] Ollama not detected at localhost:11434. Please run 'ollama serve'.", RED))
 
     def chat(self, prompt: str) -> str:
         """Surgical routing to the Go AI Engine with command support"""
@@ -94,14 +123,15 @@ You have access to previous conversation context via a Go-powered history module
             system_prompt = self.system_prompt
 
         key = self.keys.get(self.provider)
-        if not key:
+        # Ollama is local, key can be empty or it represents the model name
+        if not key and self.provider != "ollama":
             return _colored(f"[!] API Key for {self.provider.upper()} is not set. Run 'agent setting' to configure.", YELLOW)
 
         try:
             cmd = [
                 self.binary_path,
                 "-provider", self.provider,
-                "-key", key,
+                "-key", key if key else "", # Empty key triggers auto-discovery in Go engine
                 "-prompt", prompt,
                 "-system", system_prompt
             ]

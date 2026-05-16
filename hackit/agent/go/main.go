@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -30,7 +31,7 @@ func main() {
 		return
 	}
 
-	if *provider == "" || *apiKey == "" || (*prompt == "" && !*analyze) {
+	if *provider == "" || (*apiKey == "" && *provider != "ollama") || (*prompt == "" && !*analyze) {
 		fmt.Println(`{"error": "Missing required flags"}`)
 		os.Exit(1)
 	}
@@ -69,6 +70,8 @@ func main() {
 		response, err = handleClaude(client, *apiKey, finalPrompt, finalSystem, *model, histData)
 	case "openai", "openrouter", "deepseek":
 		response, err = handleOpenAICompatible(client, *provider, *apiKey, finalPrompt, finalSystem, *model, histData)
+	case "ollama":
+		response, err = handleOllama(client, *apiKey, finalPrompt, finalSystem, *model, histData)
 	default:
 		err = fmt.Errorf("unsupported provider: %s", *provider)
 	}
@@ -313,4 +316,148 @@ func handleClaude(client *http.Client, key, prompt, system, model string, hist [
 	}
 	
 	return text, nil
+}
+
+func getOllamaModels(client *http.Client) []string {
+	url := "http://localhost:11434/api/tags"
+	resp, err := client.Get(url)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+
+	var res struct {
+		Models []struct {
+			Name string `json:"name"`
+		} `json:"models"`
+	}
+	body, _ := io.ReadAll(resp.Body)
+	json.Unmarshal(body, &res)
+
+	var names []string
+	for _, m := range res.Models {
+		names = append(names, m.Name)
+	}
+	return names
+}
+
+func handleOllama(client *http.Client, modelName, prompt, system, model string, hist []Message) (string, error) {
+	// 1. Resolve the model name correctly
+	if model == "" {
+		model = modelName
+	}
+	
+	available := getOllamaModels(client)
+	
+	// Smart Match: If model is empty, default, or AUTO_DETECT, try to find best match
+	found := false
+	if model == "" || model == "llama3" || model == "AUTO_DETECT" {
+		if len(available) > 0 {
+			// Prefer high-performance ones if they exist
+			for _, m := range available {
+				if strings.HasPrefix(m, "llama3") || strings.HasPrefix(m, "mistral") || strings.HasPrefix(m, "qwen") {
+					model = m
+					found = true
+					break
+				}
+			}
+			if !found {
+				model = available[0]
+				found = true
+			}
+		}
+	} else {
+		// Specific model requested, verify it exists
+		for _, m := range available {
+			if m == model {
+				found = true
+				break
+			}
+		}
+		// If not found exactly, try with prefix matching (tag resolution)
+		if !found {
+			for _, m := range available {
+				if strings.HasPrefix(m, model+":") {
+					model = m
+					found = true
+					break
+				}
+			}
+		}
+	}
+
+	if model == "" {
+		model = "llama3" // Final fallback attempt
+	}
+
+	url := "http://localhost:11434/api/chat"
+
+	// Construct chat request
+	reqBody := struct {
+		Model    string `json:"model"`
+		Messages []struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"messages"`
+		Stream bool `json:"stream"`
+	}{
+		Model:  model,
+		Stream: false,
+	}
+
+	// System prompt
+	reqBody.Messages = append(reqBody.Messages, struct {
+		Role    string `json:"role"`
+		Content string `json:"content"`
+	}{Role: "system", Content: system})
+
+	// History
+	for _, msg := range hist {
+		reqBody.Messages = append(reqBody.Messages, struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		}{Role: msg.Role, Content: msg.Content})
+	}
+
+	// User prompt
+	reqBody.Messages = append(reqBody.Messages, struct {
+		Role    string `json:"role"`
+		Content string `json:"content"`
+	}{Role: "user", Content: prompt})
+
+	jsonData, _ := json.Marshal(reqBody)
+	
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("ollama connection failed: %v (is 'ollama serve' running?)", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("ollama error %d: %s", resp.StatusCode, string(body))
+	}
+
+	var res map[string]interface{}
+	if err := json.Unmarshal(body, &res); err != nil {
+		return "", fmt.Errorf("failed to parse ollama response: %v", err)
+	}
+
+	message, ok := res["message"].(map[string]interface{})
+	if !ok {
+		return "", fmt.Errorf("unexpected response format from ollama: %s", string(body))
+	}
+
+	content, ok := message["content"].(string)
+	if !ok {
+		return "", fmt.Errorf("content is missing in assistant response")
+	}
+
+	return content, nil
 }

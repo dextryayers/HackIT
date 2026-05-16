@@ -20,8 +20,9 @@ func main() {
 	result := analyzer.Analyze(*urlFlag)
 
 	if result.Error != "" {
-		fmt.Printf(`{"error": "%s"}`, result.Error)
-		os.Exit(1)
+		jsonOut, _ := json.Marshal(map[string]string{"error": result.Error})
+		fmt.Println(string(jsonOut))
+		os.Exit(0)
 	}
 
 	jsonOut, _ := json.Marshal(result)

@@ -8,7 +8,7 @@ from crawler_engine import OSINTCrawler
 from typing import Dict
 import random
 
-app = FastAPI(title="HackIT Industrial OSINT Engine (Python)")
+app = FastAPI(title="HackIT OSINT Engine (Python)")
 
 # CORS configuration
 app.add_middleware(

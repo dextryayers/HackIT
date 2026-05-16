@@ -32,7 +32,8 @@ func (c *Crawler) performActiveBrute() {
 			fullURL := fmt.Sprintf("%s%s", strings.TrimSuffix(c.BaseURL, "/"), p)
 			
 			req, _ := http.NewRequest("HEAD", fullURL, nil)
-			req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36")
+			req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+			req.Header.Set("Sec-Ch-Ua", "\"Chromium\";v=\"124\", \"Google Chrome\";v=\"124\", \"Not-A.Brand\";v=\"99\"")
 			
 			resp, err := c.Client.Do(req)
 			if err != nil {

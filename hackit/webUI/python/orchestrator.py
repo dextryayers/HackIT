@@ -11,21 +11,38 @@ import sys
 sys.path.append(os.path.dirname(__file__))
 
 class OSINTOrchestrator:
-    def __init__(self, target: str, target_type: str = "Domain"):
+    def __init__(self, target: str, target_type: str = "Domain", log_list: list = None):
         self.target = target
         self.target_type = target_type
         self.findings = []
-        self.logs = []
-        self.semaphore = asyncio.Semaphore(50) # Titan-Class concurrency
+        self.logs = [] # Module summary logs
+        self.log_list = log_list if log_list is not None else [] # Live verbose logs
+        self.semaphore = asyncio.Semaphore(100) # Increased Concurrency for Ultra-Fast Scanning
+
+    def log_verbose(self, message: str, level: str = "INFO"):
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        prefix = f"[{level}]"
+        if level == "SUCCESS": prefix = "[+]"
+        if level == "ERROR": prefix = "[!]"
+        formatted = f"[{timestamp}] {prefix} {message}"
+        self.log_list.append(formatted)
+        print(formatted) # Also print to stdout
 
     async def run_scan(self):
         modules_path = os.path.join(os.path.dirname(__file__), "modules")
-        async with httpx.AsyncClient(timeout=30.0, verify=False, limits=httpx.Limits(max_connections=100, max_keepalive_connections=50)) as client:
+        # Reduced timeout to 10s and increased connection limits for speed
+        async with httpx.AsyncClient(
+            timeout=10.0, 
+            verify=False, 
+            limits=httpx.Limits(max_connections=200, max_keepalive_connections=100)
+        ) as client:
+            self.log_verbose(f"Mission Initialized for {self.target} ({self.target_type})", "INFO")
             tasks = []
             for filename in os.listdir(modules_path):
                 if filename.endswith(".py") and filename != "__init__.py":
                     module = self.load_module(os.path.join(modules_path, filename))
                     if hasattr(module, 'crawl'):
+                        self.log_verbose(f"Engaging Module: {filename[:-3]}", "INFO")
                         tasks.append(self.safe_crawl(module, client))
             
             results = await asyncio.gather(*tasks)
@@ -57,6 +74,7 @@ class OSINTOrchestrator:
                 
                 module_findings = await module.crawl(self.target, client)
                 
+                self.log_verbose(f"Module {module.__name__} completed. Findings: {len(module_findings)}", "SUCCESS")
                 # Log success
                 self.logs.append({
                     "module": module.__name__,
@@ -66,6 +84,7 @@ class OSINTOrchestrator:
                 })
                 return module_findings
             except Exception as e:
+                self.log_verbose(f"Module {module.__name__} failed: {str(e)}", "ERROR")
                 self.logs.append({
                     "module": module.__name__,
                     "status": "Error",
@@ -121,7 +140,13 @@ class OSINTOrchestrator:
             "Vulnerability": "17. RISK / SECURITY ANALYSIS",
             "Relationship": "18. RELATIONSHIP MAPPING",
             "Screenshot": "19. SCREENSHOT / VISUAL RECON",
-            "Correlation": "20. AUTOMATED CORRELATION ENGINE"
+            "Correlation": "20. AUTOMATED CORRELATION ENGINE",
+            "Financial": "21. FINANCIAL INTELLIGENCE",
+            "Crypto": "22. CRYPTO & BLOCKCHAIN ASSETS",
+            "Darknet": "23. DARKNET & DEEP WEB ANALYSIS",
+            "Social Engineering": "24. SOCIAL ENGINEERING VECTORS",
+            "Hardware": "25. IOT / HARDWARE INTELLIGENCE",
+            "CVE": "26. VULNERABILITY & CVE DATABASE"
         }
         for key, cat in mapping.items():
             if key.lower() in finding_type.lower(): return cat
@@ -143,8 +168,8 @@ class OSINTOrchestrator:
             last_finding=v["last"]
         ) for v in summary_map.values()]
 
-async def run_modular_scan(target: str, target_type: str = "Domain"):
-    orchestrator = OSINTOrchestrator(target, target_type)
+async def run_modular_scan(target: str, target_type: str = "Domain", log_list: list = None):
+    orchestrator = OSINTOrchestrator(target, target_type, log_list)
     findings = await orchestrator.run_scan()
     summary = orchestrator.generate_summary(findings)
     return findings, summary, orchestrator.logs

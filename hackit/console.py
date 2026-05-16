@@ -201,7 +201,20 @@ class HackItConsole:
                     continue
                 
                 if line.lower() == 'banner':
-                    display_banner()
+                    display_banner(force=True)
+                    continue
+
+                if line.lower() == 'whoami':
+                    import getpass
+                    import platform
+                    user = getpass.getuser()
+                    system = platform.system()
+                    node = platform.node()
+                    print(_colored("\n  [ USER IDENTITY ]", B_CYAN))
+                    print(f"  • User     : " + _colored(user, B_GREEN))
+                    print(f"  • Device   : " + _colored(node, B_GREEN))
+                    print(f"  • Platform : " + _colored(system, YELLOW))
+                    print()
                     continue
                 
                 if line.lower() == 'back':

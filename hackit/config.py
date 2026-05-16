@@ -17,7 +17,8 @@ DEFAULT_CONFIG = {
         "openai": "",
         "claude": "",
         "deepseek": "",
-        "openrouter": ""
+        "openrouter": "",
+        "ollama": "llama3"
     },
     "ai_provider": "gemini"
 }

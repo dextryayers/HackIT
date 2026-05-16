@@ -22,7 +22,8 @@ func (c *Crawler) performPassiveChecks() {
 func (c *Crawler) checkSitemap() {
 	sitemapURL := fmt.Sprintf("%s/sitemap.xml", strings.TrimSuffix(c.BaseURL, "/"))
 	req, _ := http.NewRequest("GET", sitemapURL, nil)
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+	req.Header.Set("Sec-Ch-Ua", "\"Chromium\";v=\"124\", \"Google Chrome\";v=\"124\", \"Not-A.Brand\";v=\"99\"")
 
 	resp, err := c.Client.Do(req)
 	if err != nil {
@@ -38,7 +39,8 @@ func (c *Crawler) checkSitemap() {
 func (c *Crawler) checkSecurityTxt() {
 	securityURL := fmt.Sprintf("%s/.well-known/security.txt", strings.TrimSuffix(c.BaseURL, "/"))
 	req, _ := http.NewRequest("GET", securityURL, nil)
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+	req.Header.Set("Sec-Ch-Ua", "\"Chromium\";v=\"124\", \"Google Chrome\";v=\"124\", \"Not-A.Brand\";v=\"99\"")
 
 	resp, err := c.Client.Do(req)
 	if err != nil {

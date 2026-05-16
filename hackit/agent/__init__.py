@@ -87,7 +87,7 @@ def chat():
     start_interactive_chat()
 
 @agent.command()
-@click.option('--provider', type=click.Choice(['gemini', 'groq', 'openai', 'claude', 'deepseek', 'openrouter']), help='Set AI provider')
+@click.option('--provider', type=click.Choice(['gemini', 'groq', 'openai', 'claude', 'deepseek', 'openrouter', 'ollama']), help='Set AI provider')
 @click.option('--key', help='Set API key (or leave empty for interactive prompt)')
 def setting(provider, key):
     """Configure AI Agent settings and API keys"""
@@ -102,14 +102,15 @@ def setting(provider, key):
         click.echo("  4. Claude (Anthropic)")
         click.echo("  5. DeepSeek")
         click.echo("  6. OpenRouter")
+        click.echo("  7. Ollama (Local)")
         click.echo(_colored("  0. Back to Main", DIM))
-        choice = click.prompt(_colored("\n  [?] Select provider (0-6)", YELLOW), type=int)
+        choice = click.prompt(_colored("\n  [?] Select provider (0-7)", YELLOW), type=int)
         
         if choice == 0:
             click.echo(_colored("\n  [*] Returning...", DIM))
             return
             
-        providers = ['gemini', 'groq', 'openai', 'claude', 'deepseek', 'openrouter']
+        providers = ['gemini', 'groq', 'openai', 'claude', 'deepseek', 'openrouter', 'ollama']
         if 1 <= choice <= len(providers):
             provider = providers[choice-1]
         else:
@@ -117,7 +118,12 @@ def setting(provider, key):
             return
 
     if not key:
-        key = click.prompt(_colored(f"  [?] Paste your {provider.upper()} API Key", YELLOW), hide_input=False)
+        if provider == "ollama":
+            # Auto-Detection Mode: Skip prompt and set empty to trigger Go auto-detect
+            key = "AUTO_DETECT" 
+            click.echo(_colored("\n  [*] Ollama Selected: Activating Local Auto-Detection Mode...", DIM))
+        else:
+            key = click.prompt(_colored(f"  [?] Paste your {provider.upper()} API Key", YELLOW), hide_input=False)
     
     if provider and key:
         # Update the specific provider key in the dictionary
@@ -173,7 +179,7 @@ def guide():
     click.echo(_colored("\n  [ 1. INITIAL SETUP ]", YELLOW))
     click.echo("  To start using the AI Hyper-Brain, you must configure at least one API key.")
     click.echo(_colored("  Command:", DIM) + _colored(" agent setting", GREEN))
-    click.echo("  Supported Providers: Gemini, Groq, OpenAI, Claude, DeepSeek, OpenRouter.")
+    click.echo("  Supported Providers: Gemini, Groq, OpenAI, Claude, DeepSeek, OpenRouter, Ollama.")
     
     click.echo(_colored("\n  [ 2. UNIVERSAL AI TRIGGER (/) ]", YELLOW))
     click.echo("  You can call the AI from ANY context (any tool or console) using the '/' prefix.")

@@ -88,7 +88,19 @@ pub extern "C" fn scan_tech_stack(headers_json: *const i8, body: *const i8) -> *
     let h_raw = c_headers.to_str().unwrap_or("{}");
     let b_raw = c_body.to_str().unwrap_or("");
     
-    let json = tech_scanner::get_tech_json(h_raw, b_raw);
+    // Original tech scanner logic
+    let mut json = tech_scanner::get_tech_json(h_raw, b_raw);
+
+    // Rate Limiting Heuristics
+    if h_raw.contains("X-RateLimit") || h_raw.contains("Retry-After") {
+        json = json.replace("\"analytics\":", "\"rate_limiting\": \"Detected via Headers\", \"analytics\":");
+    }
+
+    // API Versioning Heuristics
+    if b_raw.contains("/api/v1/") || b_raw.contains("/api/v2/") || b_raw.contains("/api/v3/") {
+        json = json.replace("\"analytics\":", "\"api_versioning\": \"Detected (/api/vX/)\", \"analytics\":");
+    }
+
     CString::new(json).unwrap().into_raw()
 }
 
