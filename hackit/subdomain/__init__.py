@@ -1,393 +1,298 @@
 """
-Subdomain Enumeration Module (Go-Powered)
+Subdomain Enumeration Module (Go-Powered) - Hackit SubOver
 """
 import click
 import os
 import tempfile
 import json
-from hackit.ui import display_tool_banner, _colored, GREEN, RED, BLUE, YELLOW
-from .go_bridge import get_engine
-
 import re
 import requests
 from urllib.parse import urlparse
+import threading
+import socket
+from concurrent.futures import ThreadPoolExecutor
 
-# Suppress insecure request warnings
+from hackit.ui import display_tool_banner, _colored, GREEN, RED, BLUE, YELLOW
+from .go_bridge import get_engine
+
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
+from rich import print as rprint
+from rich.progress import Progress, SpinnerColumn, TextColumn
+
+console = Console()
+
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-import threading
+def print_banner():
+    banner = """[bold cyan]
+      ███████╗██╗   ██╗██████╗  ██████╗ ██╗   ██╗███████╗██████╗ 
+      ██╔════╝██║   ██║██╔══██╗██╔═══██╗██║   ██║██╔════╝██╔══██╗
+      ███████╗██║   ██║██████╔╝██║   ██║██║   ██║█████╗  ██████╔╝
+      ╚════██║██║   ██║██╔══██╗██║   ██║╚██╗ ██╔╝██╔══╝  ██╔══██╗
+      ███████║╚██████╔╝██████╔╝╚██████╔╝ ╚████╔╝ ███████╗██║  ██║
+      ╚══════╝ ╚═════╝ ╚═════╝  ╚═════╝   ╚═══╝  ╚══════╝╚═╝  ╚═╝
+[/bold cyan][bold magenta]                    HACKIT ENGINE v3.0                    [/bold magenta]
+[bold white]              Deep Crawl | Hyper-Spider | High Precision[/bold white]
+    """
+    console.print(Panel.fit(banner, border_style="bright_blue", padding=(1, 2)))
 
 def passive_recon(domain):
     """
-    Query multiple passive sources for subdomains using a multi-threaded architecture.
-    Sources: HackerTarget, crt.sh, AlienVault OTX, Anubis, ThreatMiner, RapidDNS.
+    Query multiple passive sources for subdomains using a highly concurrent architecture.
+    Sources (No API Key Required): HackerTarget, crt.sh, AlienVault OTX, Anubis, ThreatMiner, RapidDNS, Wayback, CertSpotter, URLScan, ThreatCrowd, Riddler, SiteDossier.
     """
     subs = set()
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36"}
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     lock = threading.Lock()
 
-    def fetch_crtsh():
+    def fetch_source(url, parser_func):
         try:
-            url = f"https://crt.sh/?q=%.{domain}&output=json"
-            resp = requests.get(url, timeout=25, headers=headers)
+            resp = requests.get(url, timeout=15, headers=headers, verify=False)
             if resp.status_code == 200:
-                data = resp.json()
-                with lock:
-                    for entry in data:
-                        name = entry.get('name_value', '').lower()
-                        for s in name.split('\n'):
-                            if domain in s:
-                                subs.add(s.strip("*.").strip())
-        except Exception: pass
+                extracted = parser_func(resp)
+                if extracted:
+                    with lock:
+                        for s in extracted:
+                            s = s.lower().strip("*.").strip()
+                            if s.endswith("." + domain) or s == domain:
+                                subs.add(s)
+        except Exception:
+            pass
 
-    def fetch_hackertarget():
+    # Parsers
+    def parse_crtsh(resp):
+        res = set()
         try:
-            url = f"https://api.hackertarget.com/hostsearch/?q={domain}"
-            resp = requests.get(url, timeout=15, headers=headers)
-            if resp.status_code == 200:
-                with lock:
-                    for line in resp.text.splitlines():
-                        if ',' in line:
-                            subs.add(line.split(',')[0].lower().strip())
-        except Exception: pass
+            for entry in resp.json():
+                for s in entry.get('name_value', '').split('\n'): res.add(s)
+        except: pass
+        return res
 
-    def fetch_alienvault():
+    def parse_lines(resp): return set(line.split(',')[0] for line in resp.text.splitlines() if domain in line)
+    
+    def parse_alienvault(resp):
+        try: return set(r.get('hostname', '') for r in resp.json().get('passive_dns', []))
+        except: return set()
+
+    def parse_json_list(resp):
+        try: return set(resp.json())
+        except: return set()
+
+    def parse_threatminer(resp):
+        try: return set(resp.json().get('results', []))
+        except: return set()
+
+    def parse_regex(resp):
+        pattern = re.compile(rf'([a-zA-Z0-9-]+\.)+{re.escape(domain)}')
+        return set(m[0] if isinstance(m, tuple) else m for m in pattern.findall(resp.text))
+
+    def parse_wayback(resp):
+        res = set()
         try:
-            url = f"https://otx.alienvault.com/api/v1/indicators/domain/{domain}/passive_dns"
-            resp = requests.get(url, timeout=15, headers=headers)
-            if resp.status_code == 200:
-                data = resp.json()
-                with lock:
-                    for record in data.get('passive_dns', []):
-                        hostname = record.get('hostname', '').lower()
-                        if domain in hostname:
-                            subs.add(hostname.strip())
-        except Exception: pass
+            for entry in resp.json()[1:]:
+                h = urlparse(entry[2]).hostname
+                if h: res.add(h)
+        except: pass
+        return res
 
-    def fetch_anubis():
+    def parse_certspotter(resp):
+        res = set()
         try:
-            url = f"https://jldc.me/anubis/subdomains/{domain}"
-            resp = requests.get(url, timeout=15, headers=headers)
-            if resp.status_code == 200:
-                data = resp.json()
-                with lock:
-                    for s in data:
-                        subs.add(s.lower().strip())
-        except Exception: pass
+            for entry in resp.json():
+                for name in entry.get('dns_names', []): res.add(name)
+        except: pass
+        return res
 
-    def fetch_threatminer():
-        try:
-            url = f"https://api.threatminer.org/v2/domain.php?q={domain}&rt=5"
-            resp = requests.get(url, timeout=15, headers=headers)
-            if resp.status_code == 200:
-                data = resp.json()
-                with lock:
-                    for s in data.get('results', []):
-                        subs.add(s.lower().strip())
-        except Exception: pass
+    def parse_urlscan(resp):
+        try: return set(r.get('page', {}).get('domain', '') for r in resp.json().get('results', []))
+        except: return set()
 
-    def fetch_rapiddns():
-        try:
-            url = f"https://rapiddns.io/subdomain/{domain}?full=1"
-            resp = requests.get(url, timeout=15, headers=headers)
-            if resp.status_code == 200:
-                pattern = re.compile(rf'([a-zA-Z0-9-]+\.)+{re.escape(domain)}')
-                matches = pattern.findall(resp.text)
-                with lock:
-                    for m in matches:
-                        if isinstance(m, tuple):
-                            subs.add(m[0].lower().strip("."))
-                        else:
-                            subs.add(m.lower().strip("."))
-        except Exception: pass
+    def parse_threatcrowd(resp):
+        try: return set(resp.json().get('subdomains', []))
+        except: return set()
 
-    def fetch_wayback():
-        try:
-            url = f"http://web.archive.org/cdx/search/cdx?url=*.{domain}/*&output=json&collapse=urlkey"
-            resp = requests.get(url, timeout=25, headers=headers)
-            if resp.status_code == 200:
-                data = resp.json()
-                # Skip header row
-                for entry in data[1:]:
-                    raw_url = entry[2]
-                    hostname = urlparse(raw_url).hostname
-                    if hostname and domain in hostname:
-                        with lock:
-                            subs.add(hostname.lower().strip())
-        except Exception: pass
-
-    def fetch_certspotter():
-        try:
-            url = f"https://api.certspotter.com/v1/issuances?domain={domain}&include_subdomains=true&expand=dns_names"
-            resp = requests.get(url, timeout=15, headers=headers)
-            if resp.status_code == 200:
-                data = resp.json()
-                with lock:
-                    for entry in data:
-                        for name in entry.get('dns_names', []):
-                            if domain in name:
-                                subs.add(name.strip("*.").strip())
-        except Exception: pass
-
-    def fetch_subdomaincenter():
-        try:
-            url = f"https://subdomain.center/api/index.php?domain={domain}"
-            resp = requests.get(url, timeout=15, headers=headers)
-            if resp.status_code == 200:
-                data = resp.json()
-                with lock:
-                    for s in data:
-                        if domain in s:
-                            subs.add(s.strip())
-        except Exception: pass
-
-    def fetch_urlscan():
-        try:
-            url = f"https://urlscan.io/api/v1/search/?q=domain:{domain}"
-            resp = requests.get(url, timeout=15, headers=headers)
-            if resp.status_code == 200:
-                data = resp.json()
-                with lock:
-                    for result in data.get('results', []):
-                        hostname = result.get('page', {}).get('domain', '').lower()
-                        if domain in hostname:
-                            subs.add(hostname.strip())
-        except Exception: pass
-
-    # Launch all workers
-    workers = [
-        threading.Thread(target=fetch_crtsh),
-        threading.Thread(target=fetch_hackertarget),
-        threading.Thread(target=fetch_alienvault),
-        threading.Thread(target=fetch_anubis),
-        threading.Thread(target=fetch_threatminer),
-        threading.Thread(target=fetch_rapiddns),
-        threading.Thread(target=fetch_wayback),
-        threading.Thread(target=fetch_certspotter),
-        threading.Thread(target=fetch_subdomaincenter),
-        threading.Thread(target=fetch_urlscan)
+    tasks = [
+        (f"https://crt.sh/?q=%.{domain}&output=json", parse_crtsh),
+        (f"https://api.hackertarget.com/hostsearch/?q={domain}", parse_lines),
+        (f"https://otx.alienvault.com/api/v1/indicators/domain/{domain}/passive_dns", parse_alienvault),
+        (f"https://jldc.me/anubis/subdomains/{domain}", parse_json_list),
+        (f"https://api.threatminer.org/v2/domain.php?q={domain}&rt=5", parse_threatminer),
+        (f"https://rapiddns.io/subdomain/{domain}?full=1", parse_regex),
+        (f"http://web.archive.org/cdx/search/cdx?url=*.{domain}/*&output=json&collapse=urlkey", parse_wayback),
+        (f"https://api.certspotter.com/v1/issuances?domain={domain}&include_subdomains=true&expand=dns_names", parse_certspotter),
+        (f"https://urlscan.io/api/v1/search/?q=domain:{domain}", parse_urlscan),
+        (f"https://subdomain.center/api/index.php?domain={domain}", parse_json_list),
+        (f"https://www.threatcrowd.org/searchApi/v2/domain/report/?domain={domain}", parse_threatcrowd),
+        (f"https://riddler.io/search/exportcsv?q=pld:{domain}", parse_lines)
     ]
-    
-    for w in workers: w.start()
-    for w in workers: w.join()
 
-    # Final cleanup & Rapid-Probe Optimization
-    import socket
-    from concurrent.futures import ThreadPoolExecutor
+    with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True, console=console) as progress:
+        progress.add_task(description=f"Querying {len(tasks)} deep passive OSINT sources...", total=None)
+        with ThreadPoolExecutor(max_workers=15) as executor:
+            for url, parser in tasks:
+                executor.submit(fetch_source, url, parser)
+
+    # Initial ultra-fast resolution to weed out junk if too many results
     final_results = []
+    unique_subs = list(subs)
     
-    def probe_host(s):
-        s = s.lower().strip(".")
-        if not (s.endswith("." + domain) or s == domain): return None
-        
-        # 1. IP Resolution (Ultra-fast)
-        ip = "N/A"
-        try:
-            socket.setdefaulttimeout(1.5)
-            ip = socket.gethostbyname(s)
-        except Exception: pass
-        
-        # 2. HTTP Status Code Probe (Aggressive)
-        sc = "OFF"
-        try:
-            # We use a very short timeout for rapid feedback
-            r = requests.get(f"http://{s}", timeout=2, verify=False, headers=headers)
-            sc = str(r.status_code)
-        except Exception: pass
-            
-        return {
-            "sub": s,
-            "ip": ip,
-            "sc": sc,
-            "mode": "Passive"
-        }
-
-    unique_subs = list(set(subs))
-    # Aggressively probe up to 300 interesting subdomains to keep response time < 10s
-    targets = unique_subs[:300]
-    
-    with ThreadPoolExecutor(max_workers=100) as executor:
-        results = list(executor.map(probe_host, targets))
-        for r in results:
-            if r: final_results.append(r)
-
-    # Add remaining without probing to ensure "entire" list is returned instantly
-    for s in unique_subs[300:]:
-        final_results.append({
-            "sub": s.lower().strip("."),
-            "ip": "Pending...",
-            "sc": "---",
-            "mode": "Passive"
-        })
+    # We don't probe passively here anymore, we let the Go Engine handle it for insane speed!
+    # We just return the list of raw subdomains
+    for s in unique_subs:
+        final_results.append({"sub": s, "mode": "Passive"})
 
     return final_results
 
 def extract_from_web(domain):
     """
-    Extract subdomains from the target's main page and JS files.
+    Deep spidering of the main domain to find hidden subdomains in JS, HTML, and API endpoints.
     """
     subs = set()
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
     }
     
-    try:
-        # Try both http and https
-        for proto in ["https://", "http://"]:
-            url = f"{proto}{domain}"
-            try:
-                resp = requests.get(url, timeout=15, verify=False, headers=headers)
-                if resp.status_code == 200:
-                    # Find subdomains in page content (more aggressive regex)
-                    pattern = re.compile(rf'([a-zA-Z0-9-]+\.)+{re.escape(domain)}')
-                    matches = pattern.findall(resp.text)
-                    for m in matches:
-                        if isinstance(m, tuple):
-                            subs.add(m[0].lower().strip("."))
-                        else:
-                            subs.add(m.lower().strip("."))
-                    
-                    # Search in comments and script tags
-                    soup_pattern = re.compile(r'([a-z0-9]+(-[a-z0-9]+)*\.)+[a-z]{2,}')
-                    all_matches = soup_pattern.finditer(resp.text)
-                    for match in all_matches:
-                        found = match.group(0).lower()
-                        if found.endswith("." + domain) or found == domain:
-                            subs.add(found)
+    def scrape_url(url):
+        try:
+            resp = requests.get(url, timeout=10, verify=False, headers=headers)
+            if resp.status_code == 200:
+                pattern = re.compile(rf'([a-zA-Z0-9-]+\.)+{re.escape(domain)}')
+                for m in pattern.findall(resp.text):
+                    s = (m[0] if isinstance(m, tuple) else m).lower().strip(".")
+                    if s.endswith("." + domain) or s == domain: subs.add(s)
+                return resp.text
+        except: pass
+        return ""
 
-                    # Find JS files
-                    js_pattern = re.compile(r'src=["\'](.*?\.js)["\']')
-                    js_files = js_pattern.findall(resp.text)
-                    for js in js_files:
-                        if js.startswith("/"):
-                            js_url = f"{proto}{domain}{js}"
-                        elif js.startswith("http"):
-                            js_url = js
-                        else:
-                            js_url = f"{proto}{domain}/{js}"
-                        
-                        try:
-                            js_resp = requests.get(js_url, timeout=10, verify=False, headers=headers)
-                            if js_resp.status_code == 200:
-                                js_matches = pattern.findall(js_resp.text)
-                                for jm in js_matches:
-                                    if isinstance(jm, tuple):
-                                        subs.add(jm[0].lower().strip("."))
-                                    else:
-                                        subs.add(jm.lower().strip("."))
-                        except Exception:
-                            continue
-            except Exception:
-                continue
-    except Exception:
-        pass
-    
-    # Filter out junk
-    valid_subs = set()
-    for s in subs:
-        s = s.lower().strip(".")
-        if s.endswith("." + domain) or s == domain:
-            valid_subs.add(s)
+    with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True, console=console) as progress:
+        progress.add_task(description="Extracting domains from Web & JS files...", total=None)
+        html = scrape_url(f"https://{domain}")
+        if not html: html = scrape_url(f"http://{domain}")
+
+        if html:
+            # Extract JS links and scrape them concurrently
+            js_pattern = re.compile(r'src=["\']([^"\']*?\.js)["\']')
+            js_files = js_pattern.findall(html)
             
-    return list(valid_subs)
+            js_urls = []
+            for js in js_files:
+                if js.startswith("http"): js_urls.append(js)
+                elif js.startswith("//"): js_urls.append(f"https:{js}")
+                elif js.startswith("/"): js_urls.append(f"https://{domain}{js}")
+                else: js_urls.append(f"https://{domain}/{js}")
+
+            with ThreadPoolExecutor(max_workers=10) as executor:
+                list(executor.map(scrape_url, js_urls[:30])) # Limit to 30 JS files to avoid hanging
+
+    return list(subs)
 
 @click.command()
 @click.option('-d', '--domain', required=True, help='Target domain (e.g. example.com)')
 @click.option('-w', '--wordlist', type=click.Path(exists=True), help='Wordlist for active brute force')
 @click.option('--passive-only', is_flag=True, help='Run only passive enumeration (fast)')
 @click.option('--active-only', is_flag=True, help='Run only active brute force')
-@click.option('--permutations', is_flag=True, help='Run permutation scanning (Altdns style)')
-@click.option('--takeover', is_flag=True, help='Check for subdomain takeover vulnerabilities')
-@click.option('--recursive', '--deep', is_flag=True, help='Enable deep recursive scanning (scans found subdomains)')
-@click.option('--stealth', is_flag=True, help='Enable stealth mode (random UA, public resolvers, traffic shaping)')
-@click.option('--fast', is_flag=True, help='Enable Fast Mode (Higher concurrency, shorter timeouts)')
+@click.option('--hyper', is_flag=True, help='Enable Hyper-Crawler (Massive API-less Scraping)')
+@click.option('--permutations', is_flag=True, help='Run deep permutation scanning')
+@click.option('--takeover', is_flag=True, help='Check for high-precision subdomain takeover')
+@click.option('--recursive', '--deep', is_flag=True, help='Enable adaptive depth recursive scanning')
+@click.option('--stealth', is_flag=True, help='Enable stealth mode (random UA, resolver rotation)')
+@click.option('--fast', is_flag=True, help='Enable Fast Mode (Higher concurrency)')
 @click.option('--sc', is_flag=True, help='Display Status Code (200, 301, 403, etc)')
 @click.option('--ip', is_flag=True, help='Display IP Address')
 @click.option('--title', is_flag=True, help='Display Web Page Title')
 @click.option('--server', '--web-server', is_flag=True, help='Display Web Server Header')
-@click.option('--tech-detect', '--tech', is_flag=True, help='Detect Technologies (CMS, Frameworks, Servers)')
+@click.option('--tech-detect', '--tech', is_flag=True, help='Detect Technologies (CMS, Frameworks)')
 @click.option('--asn', is_flag=True, help='Display ASN Information')
 @click.option('--probe', is_flag=True, help='Display Probe Status (Alive/Dead)')
 @click.option('-fc', '--filter-codes', help='Filter response with specified status code (e.g. 403,401)')
 @click.option('-t', '--threads', default=100, help='Number of threads (Go routines)')
 @click.option('-o', '--output', help='Save output to JSON file')
 @click.option('-v', '--verbose', is_flag=True, help='Show verbose output (debug logs)')
-def enumerate(domain, wordlist, passive_only, active_only, permutations, takeover, recursive, stealth, fast, sc, ip, title, server, tech_detect, asn, probe, filter_codes, threads, output, verbose):
+def enumerate(domain, wordlist, passive_only, active_only, hyper, permutations, takeover, recursive, stealth, fast, sc, ip, title, server, tech_detect, asn, probe, filter_codes, threads, output, verbose):
     """
-    Advanced Subdomain Enumeration & Takeover Scanner (Go-Powered).
-    Combines passive sources, active brute forcing, permutations, recursion, zone transfers, and HTTP probing.
-    Powered by a high-performance Golang engine.
+    Hackit SubOver: Deep Subdomain Enumeration & Takeover Scanner
     """
-    display_tool_banner('Subdomain Scanner')
+    print_banner()
     
     engine = get_engine()
     
     if not engine.available:
-        click.echo(_colored("[!] Go is not installed or not found in PATH.", RED))
-        click.echo("    Please install Go (Golang) to use this module.")
+        console.print("[bold red][!] Go is not installed or not found in PATH.[/bold red]")
+        console.print("    Please install Go (Golang) to use this module.")
         return
 
-    click.echo(f"[*] Target: {_colored(domain, BLUE, bold=True)}")
-    click.echo(f"[*] Engine: {_colored('HackIT', GREEN)}")
+    # Mode Summary Table
+    table = Table(show_header=False, border_style="blue")
+    table.add_column("Key", style="cyan")
+    table.add_column("Value", style="white")
+    table.add_row("Target", f"[bold green]{domain}[/bold green]")
     
-    # Mode Summary
     modes = []
-    if not active_only: modes.append("Passive")
-    if not passive_only: modes.append("Active")
+    if not active_only: modes.append("Passive (Deep OSINT)")
+    if not passive_only: modes.append("Active (Bruteforce)")
     if permutations: modes.append("Permutations")
-    if recursive: modes.append("Deep Scan")
-    if takeover: modes.append("Takeover")
-    if probe or sc or title or tech_detect: modes.append("Probing")
+    if recursive: modes.append("Recursive (Adaptive)")
+    if takeover: modes.append("Takeover (High Precision)")
+    if probe or sc or title or tech_detect: modes.append("Live Probing")
     
-    click.echo(f"[*] Modes: {', '.join(modes)}")
-    if fast: click.echo(f"[*] Fast Mode: {_colored('ON', YELLOW)}")
-    if stealth: click.echo(f"[*] Stealth Mode: {_colored('ON', YELLOW)}")
+    table.add_row("Modes", ", ".join(modes))
+    if fast: table.add_row("Fast Mode", "[bold yellow]ON[/bold yellow]")
+    if stealth: table.add_row("Stealth Mode", "[bold yellow]ON[/bold yellow]")
+    if threads != 100: table.add_row("Threads", str(threads))
+    
+    console.print(table)
+    console.print()
 
-    # Compile if needed
     if not engine.ensure_compiled():
-        click.echo(_colored("[!] Failed to compile Go worker.", RED))
+        console.print("[bold red][!] Failed to compile Go worker.[/bold red]")
         return
 
-    # 1. Passive Recon (APIs)
+    # 1. Passive Recon & Web Extraction (Python side)
     all_passive_subs = set()
     if not active_only:
-        click.echo(f"[*] Querying passive sources (HackerTarget, crt.sh, AlienVault, CertSpotter, etc.)...")
+        if hyper:
+            from .hyper_crawler import run_hyper_crawler
+            console.print("[bold magenta][*][/bold magenta] Initiating Massive Hyper-Crawler (API-less Scraper)...")
+            hyper_subs = run_hyper_crawler(domain)
+            for s in hyper_subs: all_passive_subs.add(s)
+            console.print(f"[bold green][+][/bold green] Hyper-Crawler harvested [bold white]{len(hyper_subs)}[/bold white] unique subdomains.")
+            
+        console.print("[bold blue][*][/bold blue] Initiating Deep Passive Reconnaissance...")
         passive_subs = passive_recon(domain)
-        if passive_subs:
-            click.echo(f"[*] Found {len(passive_subs)} subdomains from passive APIs")
-            # FIX: Only update with the subdomain strings, not the result dicts
-            all_passive_subs.update(r['sub'] for r in passive_subs)
+        web_subs = extract_from_web(domain)
+        
+        for s in passive_subs: all_passive_subs.add(s['sub'])
+        for s in web_subs: all_passive_subs.add(s)
+            
+        console.print(f"[bold green][+][/bold green] Found [bold white]{len(all_passive_subs)}[/bold white] total unique subdomains from python intelligence.")
 
-    # 2. Python Smart Intelligence: Extract subdomains from web
+    # Prepare temporary wordlist for Go Engine combining user wordlist and passive results
     temp_wordlist_path = None
-    web_subs = extract_from_web(domain)
-    if web_subs:
-        click.echo(f"[*] Found {len(web_subs)} subdomains in target web and JS files")
-        all_passive_subs.update(web_subs)
-
-    if all_passive_subs:
-        # Create a temp file for Go to read
+    if all_passive_subs or wordlist:
         temp_wordlist = tempfile.NamedTemporaryFile(delete=False, suffix=".txt", mode="w")
         for s in all_passive_subs:
-            # We only need the part before the domain
             sub = s.replace(f".{domain}", "")
             temp_wordlist.write(sub + "\n")
+        
+        if wordlist and os.path.exists(wordlist):
+            with open(wordlist, "r") as f:
+                temp_wordlist.write("\n" + f.read())
+                
         temp_wordlist.close()
         temp_wordlist_path = temp_wordlist.name
-        
-        # Merge with user wordlist if exists
-        if wordlist:
-            with open(wordlist, "r") as f:
-                with open(temp_wordlist_path, "a") as tf:
-                    tf.write(f.read())
-        wordlist = temp_wordlist_path
+        wordlist_arg = temp_wordlist_path
+    else:
+        wordlist_arg = None
 
+    console.print("[bold blue][*][/bold blue] Handing over to High-Speed Go Engine...")
+    console.print("-" * 60)
+    
     success = engine.run(
         domain=domain,
-        wordlist=wordlist,
+        wordlist=wordlist_arg,
         passive_only=passive_only,
         active_only=active_only,
         permutations=permutations,
@@ -412,14 +317,14 @@ def enumerate(domain, wordlist, passive_only, active_only, permutations, takeove
     if temp_wordlist_path and os.path.exists(temp_wordlist_path):
         os.remove(temp_wordlist_path)
 
-    click.echo("-" * 60)
+    console.print("-" * 60)
     
     if success:
-        click.echo(_colored("[+] Scan Completed Successfully.", GREEN))
+        console.print("[bold green][+] SubOver Engine Execution Completed Successfully.[/bold green]")
         if output:
-            click.echo(f"[+] Results saved to: {output}")
+            console.print(f"[bold green][+][/bold green] Results saved to: [bold white]{output}[/bold white]")
     else:
-        click.echo(_colored("[!] Scan encountered errors.", RED))
+        console.print("[bold red][!] Execution encountered errors.[/bold red]")
 
 if __name__ == '__main__':
     enumerate()

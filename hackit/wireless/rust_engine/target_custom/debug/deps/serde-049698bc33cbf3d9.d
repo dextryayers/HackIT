@@ -1,0 +1,14 @@
+D:\web\hacks\hackstools\hackit\wireless\rust_engine\target_custom\debug\deps\serde-049698bc33cbf3d9.d: C:\Users\hanif\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\lib.rs C:\Users\hanif\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\integer128.rs C:\Users\hanif\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\mod.rs C:\Users\hanif\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\de.rs C:\Users\hanif\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\ser.rs D:\web\hacks\hackstools\hackit\wireless\rust_engine\target_custom\debug\build\serde-134c52f821528191\out/private.rs
+
+D:\web\hacks\hackstools\hackit\wireless\rust_engine\target_custom\debug\deps\libserde-049698bc33cbf3d9.rlib: C:\Users\hanif\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\lib.rs C:\Users\hanif\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\integer128.rs C:\Users\hanif\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\mod.rs C:\Users\hanif\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\de.rs C:\Users\hanif\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\ser.rs D:\web\hacks\hackstools\hackit\wireless\rust_engine\target_custom\debug\build\serde-134c52f821528191\out/private.rs
+
+D:\web\hacks\hackstools\hackit\wireless\rust_engine\target_custom\debug\deps\libserde-049698bc33cbf3d9.rmeta: C:\Users\hanif\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\lib.rs C:\Users\hanif\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\integer128.rs C:\Users\hanif\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\mod.rs C:\Users\hanif\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\de.rs C:\Users\hanif\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\ser.rs D:\web\hacks\hackstools\hackit\wireless\rust_engine\target_custom\debug\build\serde-134c52f821528191\out/private.rs
+
+C:\Users\hanif\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\lib.rs:
+C:\Users\hanif\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\integer128.rs:
+C:\Users\hanif\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\mod.rs:
+C:\Users\hanif\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\de.rs:
+C:\Users\hanif\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\ser.rs:
+D:\web\hacks\hackstools\hackit\wireless\rust_engine\target_custom\debug\build\serde-134c52f821528191\out/private.rs:
+
+# env-dep:OUT_DIR=D:\\web\\hacks\\hackstools\\hackit\\wireless\\rust_engine\\target_custom\\debug\\build\\serde-134c52f821528191\\out

@@ -13,7 +13,6 @@ import (
 	"strings"
 	"sync"
 	"syscall"
-	"time"
 	"unsafe"
 
 	"github.com/fatih/color"
@@ -472,14 +471,14 @@ func processTarget(target string, opts *Options) Result {
 	// 13. Passive DNS (Ruby)
 	res.PassiveDNS = callRubyPassiveDNS(u.Hostname())
 
-	// 14. Port & Service Inventory (Go + C++ + C + Lua)
-	res.PortScan = ScanPorts(u.Hostname(), []int{21, 22, 80, 443, 3306, 8080}, 2*time.Second)
-	for i, p := range res.PortScan {
-		res.PortScan[i].Service = callCppServiceIdentifier(p.Port, p.Banner)
-		if res.PortScan[i].Service == "Unknown" {
-			res.PortScan[i].Service = callLuaServiceIdentifier(p.Port, p.Banner)
-		}
-	}
+	// 14. Port & Service Inventory (Disabled for Safety)
+	// res.PortScan = ScanPorts(u.Hostname(), []int{21, 22, 80, 443, 3306, 8080}, 2*time.Second)
+	// for i, p := range res.PortScan {
+	// 	res.PortScan[i].Service = callCppServiceIdentifier(p.Port, p.Banner)
+	// 	if res.PortScan[i].Service == "Unknown" {
+	// 		res.PortScan[i].Service = callLuaServiceIdentifier(p.Port, p.Banner)
+	// 	}
+	// }
 
 	// 15. CDN/WAF Detection (Rust)
 	res.WAF = callRustWAFDetector(res.Headers)
@@ -495,18 +494,18 @@ func processTarget(target string, opts *Options) Result {
 	// 18. Tier 3 Advanced Intelligence
 	res.Subsidiaries = callRubySubsidiaryDiscovery(u.Hostname())
 	res.InfraForensics = callCppInfraForensics(u.Hostname())
-	res.TCPForensics = callCTCPForensics(res.IP)
-	res.BypassStrategy = callLuaWAFBypass(res.WAF.WAFType)
+	// res.TCPForensics = callCTCPForensics(res.IP) // Disabled for safety
+	// res.BypassStrategy = callLuaWAFBypass(res.WAF.WAFType) // Disabled for safety
 	res.AppFingerprint = callRustAppFingerprinter(res.Headers)
 
 	// 19. Tier 4 Advanced Intelligence (New Points)
 	res.CMSCloud = callRubyCMSCloudMapper(u.Hostname(), fetchResult.BodySnippet, res.Headers)
 	res.TechStackAdvanced = callRustTechScanner(res.Headers, fetchResult.BodySnippet)
 	
-	// Genuine Endpoint Forensics (C++) + Active Fuzzing (Go)
-	cppEndpoints := callCppEndpointForensics(u.Hostname(), fetchResult.BodySnippet)
-	fuzzEndpoints := ActiveFuzz(target, time.Duration(opts.Timeout)*time.Second)
-	res.Endpoints = append(cppEndpoints, fuzzEndpoints...)
+	// Genuine Endpoint Forensics (Disabled for safety)
+	// cppEndpoints := callCppEndpointForensics(u.Hostname(), fetchResult.BodySnippet)
+	// fuzzEndpoints := ActiveFuzz(target, time.Duration(opts.Timeout)*time.Second)
+	// res.Endpoints = append(cppEndpoints, fuzzEndpoints...)
 
 	res.ThirdParty = callCThirdPartyMapper(fetchResult.BodySnippet)
 	res.AuthSession = callCSessionAnalyzer(fetchResult.BodySnippet, res.Headers)

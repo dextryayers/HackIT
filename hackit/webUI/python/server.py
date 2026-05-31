@@ -4,7 +4,7 @@ import uuid
 import time
 import asyncio
 from models import ScanJob, IntelligenceFinding, IntelligenceStats
-from crawler_engine import OSINTCrawler
+from orchestrator import run_modular_scan
 from typing import Dict
 import random
 
@@ -38,13 +38,9 @@ async def run_scan_task(job_id: str, target: str):
     start_time = time.time()
     
     try:
-        crawler = OSINTCrawler(target)
-        # 1. Crawl
-        job.findings = await crawler.crawl_all()
-        
-        # 2. Verify (DNS)
-        await crawler.verify_assets()
-        await crawler.close()
+        findings, summary, logs = await run_modular_scan(target, job.target_type, job.live_logs)
+        job.findings = findings
+        job.summary = summary
 
         # 3. Process & Stats (Heuristics)
         risk_dist = {"High Risk": 0, "Elevated Risk": 0, "Standard Target": 0, "Informational": 0}
@@ -63,7 +59,8 @@ async def run_scan_task(job_id: str, target: str):
             total_findings=len(job.findings),
             risk_distribution=risk_dist,
             type_distribution=type_dist,
-            timeline=[{"time": time.strftime("%H:%M:%S"), "count": random.randint(5, 20)} for _ in range(5)]
+            timeline=[{"time": time.strftime("%H:%M:%S"), "count": random.randint(5, 20)} for _ in range(5)],
+            module_logs=logs
         )
         
         job.status = "Completed"

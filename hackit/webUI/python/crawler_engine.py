@@ -25,6 +25,14 @@ class OSINTCrawler:
         return "General OSINT"
 
     async def crawl_all(self):
+        try:
+            from orchestrator import run_modular_scan
+            findings, _summary, _logs = await run_modular_scan(self.target, "Domain")
+            self.findings = findings
+            return findings
+        except Exception:
+            pass
+
         sources = [
             self.crawl_crtsh(), self.crawl_hackertarget(), self.crawl_robtex(),
             self.crawl_rapiddns(), self.crawl_dnsdumpster(), self.crawl_viewdns(),

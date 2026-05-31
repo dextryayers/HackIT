@@ -24,10 +24,12 @@ func runDeep(foundSubs []*Result, config Config) {
 	}
 
 	// For each found subdomain, try to find more subdomains under it
-	// Using a small but effective wordlist for recursion
+	// Using an expanded, aggressive wordlist for deep recursion
 	recursiveWords := []string{
 		"dev", "stg", "test", "api", "corp", "internal", "vpn", "mail",
-		"www", "app", "stage", "prod", "beta", "admin", "portal",
+		"www", "app", "stage", "prod", "beta", "admin", "portal", "sso",
+		"auth", "login", "v1", "v2", "db", "db-prod", "db-dev", "cdn",
+		"static", "assets", "ftp", "ssh", "ops", "ci", "jenkins", "gitlab",
 	}
 
 	for _, res := range foundSubs {

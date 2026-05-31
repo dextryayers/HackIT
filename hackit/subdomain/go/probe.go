@@ -10,7 +10,19 @@ import (
 	"sync"
 	"time"
 	"unsafe"
+	"runtime"
+	"syscall"
 )
+
+// Declare the external rust CNAME function
+var rustGetCname *syscall.LazyProc
+
+func init() {
+	if runtime.GOOS == "windows" {
+		mod := syscall.NewLazyDLL("rust_engine/rust_engine.dll")
+		rustGetCname = mod.NewProc("rust_get_cname")
+	}
+}
 
 var titleRegex = regexp.MustCompile(`(?i)<title>(.*?)</title>`)
 
@@ -152,9 +164,31 @@ func probeURL(client *http.Client, res *Result, scheme string, config Config) {
 				}
 			}
 
-			// 2. Technology Fingerprinting
+			// 2. Technology Fingerprinting & WAF Extraction
 			if config.TechDetect {
 				res.Tech = detectTech(resp.Header, body)
+				// Extract WAF from Tech
+				var cleanedTech []string
+				for _, t := range res.Tech {
+					if strings.HasPrefix(t, "WAF:") {
+						res.WAF = strings.TrimPrefix(t, "WAF:")
+					} else {
+						cleanedTech = append(cleanedTech, t)
+					}
+				}
+				res.Tech = cleanedTech
+			}
+		}
+	}
+	
+	// 3. CNAME Extraction (FFI Rust)
+	if rustGetCname != nil && rustGetCname.Find() == nil {
+		cDomain := []byte(res.Subdomain + "\x00")
+		ptr, _, _ := rustGetCname.Call(uintptr(unsafe.Pointer(&cDomain[0])))
+		if ptr != 0 {
+			cnameStr := strings.TrimSpace(CStrToGo(ptr))
+			if cnameStr != "" {
+				res.CNAME = cnameStr
 			}
 		}
 	}

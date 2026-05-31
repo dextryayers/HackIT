@@ -21,6 +21,7 @@ from hackit.sqli import test_sqli
 from hackit.redirect import find_redirects
 from hackit.js import analyze_js
 from hackit.cve import check_cve
+from hackit.osint import osint as osint_console
 from hackit.agent import agent
 from hackit.ui import display_banner, _colored, YELLOW, B_GREEN, B_CYAN, DIM
 from hackit.config import load_config, save_config, set_theme
@@ -116,6 +117,8 @@ def recon():
 recon.add_command(scan_subdomains, name='subdomains')
 recon.add_command(scan_range, name='ips')
 recon.add_command(detect_tech, name='tech-hunter')
+recon.add_command(osint_console, name='osint')
+cli.add_command(osint_console, name='osint')
 
 
 # SSL/TLS Tools
@@ -136,6 +139,12 @@ def util():
 util.add_command(check_cve, name='cve')
 cli.add_command(agent, name='agent')
 
+# Wireless Tools
+@cli.command()
+def wireless():
+    """Launch the Interactive Wireless Penetration Console"""
+    from hackit.wireless.console import start_wireless_console
+    start_wireless_console()
 
 @cli.command()
 def whoami():
@@ -175,9 +184,11 @@ def examples():
     EXAMPLES:
     • Ports:    $ hackit ports scan -p 80,443 --targets example.com
     • Recon:    $ hackit recon subdomains -d target.com
+    • OSINT:    $ hackit recon osint
     • Web:      $ hackit web headers --url https://example.com
     • Vuln:     $ hackit vuln sqli --url "http://site.com?id=1" --params id
     • CVE:      $ hackit util cve --software apache --version 2.4.49
+    • Wireless: $ hackit wireless sniff -i wlan0 --monitor
     """
     click.echo(examples_text)
 
@@ -235,8 +246,11 @@ def help_tools():
     • vuln sqli     - SQLi boolean tester
     • vuln redirect - Open redirect finder
     • recon subs    - Subdomain bruteforcer
+    • recon osint   - Interactive public footprint scanner
     • ssl check     - TLS/SSL certificate audit
     • util cve      - Vulnerability lookup
+    • wireless sniff- Monitor mode sniffing & PCAP
+    • wireless crack- High-speed dictionary attack
     """
     click.echo(tools_text)
 

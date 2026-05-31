@@ -40,6 +40,8 @@ type Result struct {
 	Tech         []string `json:"tech,omitempty"`
 	ASN          string   `json:"asn,omitempty"`
 	TakeoverVuln string   `json:"takeover_vuln,omitempty"`
+	WAF          string   `json:"waf,omitempty"`
+	CNAME        string   `json:"cname,omitempty"`
 }
 
 var (

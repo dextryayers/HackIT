@@ -28,15 +28,15 @@ class GoEngine:
                 return False
         return True
 
-    def run(self, software, version, output=None):
+    def run(self, target, mode="main", output=None):
         if not self.ensure_compiled():
             print("[!] Engine not available.")
             return False
         
         cmd = [
             self.binary_path,
-            "-software", software,
-            "-version", version
+            "-target", target,
+            "-mode", mode
         ]
         
         if output:

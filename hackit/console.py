@@ -216,6 +216,13 @@ class HackItConsole:
                     print(f"  • Platform : " + _colored(system, YELLOW))
                     print()
                     continue
+
+                if line.lower() in ['recon/osint', 'osint']:
+                    self.current_context = "recon/osint"
+                    from hackit.osint import start_osint_console
+                    start_osint_console()
+                    self.current_context = "main"
+                    continue
                 
                 if line.lower() == 'back':
                     if '/' in self.current_context:

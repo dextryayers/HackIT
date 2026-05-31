@@ -5,15 +5,61 @@ pub mod web_server_fingerprint;
 pub mod tech_scanner;
 
 use std::ffi::{CStr, CString};
+use reqwest::blocking::Client;
+use std::time::Duration;
+use regex::Regex;
+use serde_json::json;
 
 #[no_mangle]
 pub extern "C" fn rust_fetch_url(url: *const i8) -> *mut i8 {
     let c_str = unsafe { CStr::from_ptr(url) };
     let url_str = c_str.to_str().unwrap_or("");
-    // In a real scenario, this would use reqwest/curl
-    // For this simulation, we return a JSON with status 200 and a body snippet
-    let res = format!(r#"{{"status": 200, "body": "<html><title>Simulated</title><body><h1>Target: {}</h1><script src='jquery.js'></script></body></html>"}}"#, url_str);
-    CString::new(res).unwrap().into_raw()
+    
+    let client = Client::builder()
+        .timeout(Duration::from_secs(10))
+        .danger_accept_invalid_certs(true)
+        .user_agent("TechHunter/3.0 (Asset Mapping)")
+        .build()
+        .unwrap_or_else(|_| Client::new());
+
+    let mut status = 0;
+    let mut body = String::new();
+    let mut desc = String::from("No brief available.");
+    let mut title = String::from("No Title");
+
+    if let Ok(resp) = client.get(url_str).send() {
+        status = resp.status().as_u16();
+        if let Ok(text) = resp.text() {
+            body = text.clone();
+            
+            // Extract Title
+            if let Ok(re_title) = Regex::new(r"(?i)<title>(.*?)</title>") {
+                if let Some(cap) = re_title.captures(&text) {
+                    title = cap.get(1).map_or("", |m| m.as_str()).trim().to_string();
+                }
+            }
+            
+            // Extract Description
+            if let Ok(re_desc) = Regex::new(r#"(?i)<meta[^>]*name=["']description["'][^>]*content=["']([^"']*)["']"#) {
+                if let Some(cap) = re_desc.captures(&text) {
+                    desc = cap.get(1).map_or("", |m| m.as_str()).trim().to_string();
+                }
+            } else if let Ok(re_desc2) = Regex::new(r#"(?i)<meta[^>]*content=["']([^"']*)["'][^>]*name=["']description["']"#) {
+                if let Some(cap) = re_desc2.captures(&text) {
+                    desc = cap.get(1).map_or("", |m| m.as_str()).trim().to_string();
+                }
+            }
+        }
+    }
+
+    let result = json!({
+        "status": status,
+        "title": title,
+        "description": desc,
+        "body": body
+    });
+
+    CString::new(result.to_string()).unwrap_or_else(|_| CString::new("{}").unwrap()).into_raw()
 }
 
 #[no_mangle]

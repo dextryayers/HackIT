@@ -1,0 +1,282 @@
+{
+  "SQLi": {
+    "CWE": "CWE-89",
+    "Score": 9.8,
+    "Severity": "CRITICAL",
+    "Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+    "Description": "Improper Neutralization of Special Elements used in an SQL Command"
+  },
+  "XSS": {
+    "CWE": "CWE-79",
+    "Score": 6.1,
+    "Severity": "MEDIUM",
+    "Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N",
+    "Description": "Improper Neutralization of Input During Web Page Generation (Cross-site Scripting)"
+  },
+  "LFI": {
+    "CWE": "CWE-22",
+    "Score": 7.5,
+    "Severity": "HIGH",
+    "Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+    "Description": "Improper Limitation of a Pathname to a Restricted Directory (Path Traversal)"
+  },
+  "SSRF": {
+    "CWE": "CWE-918",
+    "Score": 8.6,
+    "Severity": "HIGH",
+    "Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:N/A:N",
+    "Description": "Server-Side Request Forgery (SSRF)"
+  },
+  "SSTI": {
+    "CWE": "CWE-1336",
+    "Score": 9.8,
+    "Severity": "CRITICAL",
+    "Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+    "Description": "Improper Neutralization of Special Elements Used in a Template Engine (SSTI)"
+  },
+  "CSRF": {
+    "CWE": "CWE-352",
+    "Score": 6.5,
+    "Severity": "MEDIUM",
+    "Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:N/I:H/A:N",
+    "Description": "Cross-Site Request Forgery (CSRF)"
+  },
+  "Open Redirect": {
+    "CWE": "CWE-601",
+    "Score": 6.1,
+    "Severity": "MEDIUM",
+    "Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N",
+    "Description": "URL Redirection to Untrusted Site ('Open Redirect')"
+  },
+  "RCE": {
+    "CWE": "CWE-78",
+    "Score": 9.8,
+    "Severity": "CRITICAL",
+    "Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+    "Description": "Improper Neutralization of Special Elements used in an OS Command (OS Command Injection)"
+  },
+  "IDOR": {
+    "CWE": "CWE-639",
+    "Score": 5.3,
+    "Severity": "MEDIUM",
+    "Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:N",
+    "Description": "Insecure Direct Object Reference (Missing Authorization)"
+  },
+  "XXE": {
+    "CWE": "CWE-611",
+    "Score": 8.2,
+    "Severity": "HIGH",
+    "Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:L",
+    "Description": "Improper Restriction of XML External Entity Reference (XXE)"
+  },
+  "NoSQL Injection": {
+    "CWE": "CWE-943",
+    "Score": 9.8,
+    "Severity": "CRITICAL",
+    "Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+    "Description": "Improper Neutralization of Special Elements used in a NoSQL Query (NoSQL Injection)"
+  },
+  "LDAP Injection": {
+    "CWE": "CWE-90",
+    "Score": 8.6,
+    "Severity": "HIGH",
+    "Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:L",
+    "Description": "Improper Neutralization of Special Elements used in an LDAP Query (LDAP Injection)"
+  },
+  "Remote File Inclusion": {
+    "CWE": "CWE-98",
+    "Score": 8.8,
+    "Severity": "HIGH",
+    "Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:L",
+    "Description": "Improper Control of Filename for Include/Require Statement in PHP Program (RFI)"
+  },
+  "HTTP Request Smuggling": {
+    "CWE": "CWE-444",
+    "Score": 8.6,
+    "Severity": "HIGH",
+    "Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:L/I:L/A:L",
+    "Description": "Inconsistent Interpretation of HTTP Requests (HTTP Request Smuggling)"
+  },
+  "Host Header Injection": {
+    "CWE": "CWE-74",
+    "Score": 6.1,
+    "Severity": "MEDIUM",
+    "Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N",
+    "Description": "Improper Neutralization of Special Elements in Output Used by a Downstream Component (Host Header Injection)"
+  },
+  "CORS Misconfiguration": {
+    "CWE": "CWE-942",
+    "Score": 7.5,
+    "Severity": "HIGH",
+    "Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+    "Description": "Permissive Cross-domain Policy with Untrusted Domains (CORS Misconfiguration)"
+  },
+  "Insecure Deserialization": {
+    "CWE": "CWE-502",
+    "Score": 9.8,
+    "Severity": "CRITICAL",
+    "Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+    "Description": "Deserialization of Untrusted Data (Insecure Deserialization)"
+  },
+  "JWT None Algorithm": {
+    "CWE": "CWE-345",
+    "Score": 8.1,
+    "Severity": "HIGH",
+    "Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N",
+    "Description": "Insufficient Verification of Data Authenticity (JWT None Algorithm or Algorithm Confusion)"
+  },
+  "Log4j JNDI": {
+    "CWE": "CWE-917",
+    "Score": 9.8,
+    "Severity": "CRITICAL",
+    "Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+    "Description": "Improper Neutralization of Special Elements used in an Expression Language Statement (Log4Shell - CVE-2021-44228)"
+  },
+  "GraphQL Introspection": {
+    "CWE": "CWE-200",
+    "Score": 5.3,
+    "Severity": "MEDIUM",
+    "Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N",
+    "Description": "Exposure of Sensitive Information to an Unauthorized Actor (GraphQL Introspection Enabled)"
+  },
+  "Mass Assignment": {
+    "CWE": "CWE-915",
+    "Score": 7.5,
+    "Severity": "HIGH",
+    "Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:L",
+    "Description": "Improperly Controlled Modification of Dynamically-Determined Object Attributes (Mass Assignment)"
+  },
+  "Race Condition": {
+    "CWE": "CWE-362",
+    "Score": 7.0,
+    "Severity": "HIGH",
+    "Vector": "CVSS:3.1/AV:N/AC:H/PR:L/UI:N/S:U/C:H/I:H/A:H",
+    "Description": "Concurrent Execution using Shared Resource with Improper Synchronization (Race Condition)"
+  },
+  "Clickjacking": {
+    "CWE": "CWE-1021",
+    "Score": 4.3,
+    "Severity": "MEDIUM",
+    "Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:N/I:L/A:N",
+    "Description": "Improper Restriction of Rendered UI Layers or Frames (Clickjacking)"
+  },
+  "HTTP Parameter Pollution": {
+    "CWE": "CWE-235",
+    "Score": 5.8,
+    "Severity": "MEDIUM",
+    "Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:N",
+    "Description": "Improper Handling of Extra Parameters (HTTP Parameter Pollution)"
+  },
+  "Subdomain Takeover": {
+    "CWE": "CWE-345",
+    "Score": 7.5,
+    "Severity": "HIGH",
+    "Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N",
+    "Description": "Insufficient Verification of Data Authenticity (Subdomain Takeover via dangling DNS record)"
+  },
+  "Email Header Injection": {
+    "CWE": "CWE-93",
+    "Score": 7.5,
+    "Severity": "HIGH",
+    "Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:L",
+    "Description": "Improper Neutralization of CRLF Sequences (Email Header Injection / SMTP Injection)"
+  },
+  "HTTP Response Splitting": {
+    "CWE": "CWE-113",
+    "Score": 7.5,
+    "Severity": "HIGH",
+    "Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:N",
+    "Description": "Improper Neutralization of CRLF Sequences in HTTP Headers (HTTP Response Splitting)"
+  },
+  "Session Fixation": {
+    "CWE": "CWE-384",
+    "Score": 6.5,
+    "Severity": "MEDIUM",
+    "Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:N/A:N",
+    "Description": "Session Fixation"
+  },
+  "Weak Password Recovery": {
+    "CWE": "CWE-640",
+    "Score": 5.3,
+    "Severity": "MEDIUM",
+    "Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N",
+    "Description": "Weak Password Recovery Mechanism for Forgotten Password"
+  },
+  "Predictable Resource Location": {
+    "CWE": "CWE-425",
+    "Score": 5.3,
+    "Severity": "MEDIUM",
+    "Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N",
+    "Description": "Direct Request ('Forced Browsing') to Predictable Resource Location"
+  },
+  "Insufficient Logging": {
+    "CWE": "CWE-778",
+    "Score": 3.3,
+    "Severity": "LOW",
+    "Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L",
+    "Description": "Insufficient Logging of Security-Relevant Events"
+  },
+  "Hard-coded Credentials": {
+    "CWE": "CWE-798",
+    "Score": 7.8,
+    "Severity": "HIGH",
+    "Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N",
+    "Description": "Use of Hard-coded Credentials"
+  },
+  "Missing Security Headers": {
+    "CWE": "CWE-693",
+    "Score": 5.3,
+    "Severity": "MEDIUM",
+    "Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:N",
+    "Description": "Missing Security Headers (e.g., CSP, HSTS, X-Frame-Options, X-Content-Type-Options)"
+  },
+  "Prototype Pollution": {
+    "CWE": "CWE-1321",
+    "Score": 9.8,
+    "Severity": "CRITICAL",
+    "Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+    "Description": "Improperly Controlled Modification of Object Prototype Attributes (Prototype Pollution)"
+  },
+  "XPath Injection": {
+    "CWE": "CWE-643",
+    "Score": 8.2,
+    "Severity": "HIGH",
+    "Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:L/A:N",
+    "Description": "Improper Neutralization of Data within XPath Expressions (XPath Injection)"
+  },
+  "ReDoS": {
+    "CWE": "CWE-1333",
+    "Score": 5.9,
+    "Severity": "MEDIUM",
+    "Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H",
+    "Description": "Inefficient Regular Expression Complexity (Regular Expression Denial of Service - ReDoS)"
+  },
+  "Expression Language Injection": {
+    "CWE": "CWE-917",
+    "Score": 9.8,
+    "Severity": "CRITICAL",
+    "Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+    "Description": "Improper Neutralization of Special Elements used in an Expression Language Statement (EL Injection)"
+  },
+  "WebSocket Hijacking": {
+    "CWE": "CWE-1385",
+    "Score": 6.1,
+    "Severity": "MEDIUM",
+    "Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N",
+    "Description": "Missing Origin Validation in WebSocket Handshake (Cross-Site WebSocket Hijacking)"
+  },
+  "Cache Poisoning": {
+    "CWE": "CWE-525",
+    "Score": 6.5,
+    "Severity": "MEDIUM",
+    "Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:N/I:H/A:N",
+    "Description": "Web Cache Poisoning via Unkeyed Headers or Input"
+  },
+  "Blind XXE": {
+    "CWE": "CWE-611",
+    "Score": 7.5,
+    "Severity": "HIGH",
+    "Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+    "Description": "Improper Restriction of XML External Entity Reference (Blind XXE - Out-of-Band Data Exfiltration)"
+  }
+}

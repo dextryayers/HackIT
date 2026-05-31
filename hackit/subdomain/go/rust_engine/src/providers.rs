@@ -137,6 +137,36 @@ pub fn rust_fetch_osint(domain: &str) -> Vec<String> {
         }
     }
 
+    // 9. RapidDNS (Scraping)
+    let rapiddns_url = format!("https://rapiddns.io/subdomain/{}?full=1", domain);
+    if let Ok(resp) = client.get(&rapiddns_url).send() {
+        if let Ok(text) = resp.text() {
+            let re = Regex::new(&format!(r"(?i)([a-zA-Z0-9-]+\.)+{}", regex::escape(domain))).unwrap();
+            for cap in re.captures_iter(&text) {
+                subs.push(cap[0].to_lowercase().trim_start_matches(".").to_string());
+            }
+        }
+    }
+
+    // 10. CertSpotter
+    let certspotter_url = format!("https://api.certspotter.com/v1/issuances?domain={}&include_subdomains=true&expand=dns_names", domain);
+    if let Ok(resp) = client.get(&certspotter_url).send() {
+        if let Ok(json) = resp.json::<Vec<serde_json::Value>>() {
+            for entry in json {
+                if let Some(dns_names) = entry["dns_names"].as_array() {
+                    for name in dns_names {
+                        if let Some(n) = name.as_str() {
+                            let clean = n.to_lowercase();
+                            if clean.ends_with(domain) {
+                                subs.push(clean);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     subs.sort();
     subs.dedup();
     subs

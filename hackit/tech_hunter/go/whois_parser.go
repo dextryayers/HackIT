@@ -8,7 +8,6 @@ import (
 	"time"
 )
 
-// ParseWhois retrieves and parses raw WHOIS data for a domain
 func ParseWhois(domain string) *WhoisInfo {
 	raw, err := queryWhois(domain)
 	if err != nil {
@@ -16,44 +15,69 @@ func ParseWhois(domain string) *WhoisInfo {
 	}
 
 	info := &WhoisInfo{}
-	lines := strings.Split(raw, "\n")
 	
+	// Pre-check for Privacy
+	isRedacted := strings.Contains(strings.ToLower(raw), "privacy") || 
+	              strings.Contains(strings.ToLower(raw), "redacted") || 
+	              strings.Contains(strings.ToLower(raw), "protect") ||
+	              strings.Contains(strings.ToLower(raw), "gdpr")
+	              
+	info.PrivacyEnabled = isRedacted
+
+	lines := strings.Split(raw, "\n")
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
-		if line == "" { continue }
+		if line == "" || strings.HasPrefix(line, "%") || strings.HasPrefix(line, ">") { continue }
 		
 		parts := strings.SplitN(line, ":", 2)
 		if len(parts) < 2 { continue }
 		
 		key := strings.ToLower(strings.TrimSpace(parts[0]))
 		val := strings.TrimSpace(parts[1])
+		if val == "" { continue }
 		
 		switch {
-		case strings.Contains(key, "registrar"):
-			if !strings.Contains(key, "url") && info.Registrar == "" { info.Registrar = val }
+		case key == "registrar":
+			if info.Registrar == "" { info.Registrar = val }
 		case strings.Contains(key, "iana id"):
-			info.IanaID = val
-		case strings.Contains(key, "registrant organization") || strings.Contains(key, "org:"):
-			info.Org = val
-		case strings.Contains(key, "registrant email") || strings.Contains(key, "email:"):
+			if info.IanaID == "" { info.IanaID = val }
+		case key == "registrant organization" || key == "registrant org" || key == "org":
+			if info.Org == "" { info.Org = val }
+		case key == "registrant email" || key == "registrant contact email" || key == "email":
 			if info.Email == "" { info.Email = val }
-		case strings.Contains(key, "creation date") || strings.Contains(key, "created:"):
-			info.Created = val
-		case strings.Contains(key, "expiry date") || strings.Contains(key, "expires:"):
-			info.Expires = val
-		case strings.Contains(key, "updated date") || strings.Contains(key, "updated:"):
-			info.Updated = val
-		case strings.Contains(key, "registrant phone") || strings.Contains(key, "phone:"):
-			info.Phone = val
-		case strings.Contains(key, "abuse"):
+		case key == "admin email" || key == "admin contact email":
+			if info.AdminEmail == "" { info.AdminEmail = val }
+		case key == "tech email" || key == "tech contact email":
+			if info.TechEmail == "" { info.TechEmail = val }
+		case key == "creation date" || key == "created":
+			if info.Created == "" { info.Created = val }
+		case key == "registry expiry date" || key == "expiry date" || key == "expires":
+			if info.Expires == "" { info.Expires = val }
+		case key == "updated date" || key == "updated":
+			if info.Updated == "" { info.Updated = val }
+		case key == "registrant phone" || key == "phone":
+			if info.Phone == "" { info.Phone = val }
+		case strings.Contains(key, "abuse contact email"):
 			if info.Abuse == "" { info.Abuse = val }
-		case strings.Contains(key, "registrant street") || strings.Contains(key, "address:"):
+		case strings.Contains(key, "registrant street") || strings.Contains(key, "address"):
 			info.Address += val + " "
 		}
 	}
 
-	if strings.Contains(strings.ToLower(raw), "privacy") || strings.Contains(strings.ToLower(raw), "redacted") {
-		info.PrivacyEnabled = true
+	// Apply Privacy Overrides
+	if isRedacted {
+		if info.Org == "" || strings.Contains(strings.ToLower(info.Org), "redacted") { info.Org = "REDACTED FOR PRIVACY" }
+		if info.Email == "" || strings.Contains(strings.ToLower(info.Email), "redacted") { info.Email = "REDACTED FOR PRIVACY" }
+		if info.AdminEmail == "" || strings.Contains(strings.ToLower(info.AdminEmail), "redacted") { info.AdminEmail = "REDACTED FOR PRIVACY" }
+		if info.TechEmail == "" || strings.Contains(strings.ToLower(info.TechEmail), "redacted") { info.TechEmail = "REDACTED FOR PRIVACY" }
+		if info.Phone == "" || strings.Contains(strings.ToLower(info.Phone), "redacted") { info.Phone = "REDACTED FOR PRIVACY" }
+	} else {
+		// Fill empty with defaults to avoid visual blank spaces
+		if info.Org == "" { info.Org = "Not Specified" }
+		if info.Email == "" { info.Email = "Not Specified" }
+		if info.AdminEmail == "" { info.AdminEmail = "Not Specified" }
+		if info.TechEmail == "" { info.TechEmail = "Not Specified" }
+		if info.Phone == "" { info.Phone = "Not Specified" }
 	}
 
 	return info

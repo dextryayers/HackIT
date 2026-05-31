@@ -6,13 +6,17 @@ from models import IntelligenceFinding, SummaryItem
 import dns.resolver
 from datetime import datetime
 import sys
+from collections import defaultdict, Counter
+from urllib.parse import urlparse
+
+from osint_common import normalize_target
 
 # Ensure modules can import models from the same directory
 sys.path.append(os.path.dirname(__file__))
 
 class OSINTOrchestrator:
     def __init__(self, target: str, target_type: str = "Domain", log_list: list = None):
-        self.target = target
+        self.target = normalize_target(target)
         self.target_type = target_type
         self.findings = []
         self.logs = [] # Module summary logs
@@ -54,6 +58,9 @@ class OSINTOrchestrator:
         
         # 2. Verify
         await self.verify_findings(unique_findings)
+
+        # 3. Correlate / enrich
+        unique_findings = self.deduplicate(unique_findings + self.correlate_findings(unique_findings))
         
         return unique_findings
 
@@ -100,6 +107,90 @@ class OSINTOrchestrator:
             if key not in seen:
                 seen[key] = f
         return list(seen.values())
+
+    def correlate_findings(self, findings):
+        derived = []
+        by_resolution = defaultdict(list)
+        type_counts = Counter()
+        email_domains = Counter()
+        cloud_tags = Counter()
+        high_risk = []
+
+        for f in findings:
+            type_counts[f.type] += 1
+            if f.resolution and f.type == "Subdomain":
+                by_resolution[f.resolution].append(f.entity)
+            if f.type == "Email Address" and "@" in f.entity:
+                email_domains[f.entity.split("@")[-1].lower()] += 1
+            for tag in f.tags:
+                if tag in ["AWS", "Azure", "Google Cloud", "Cloudflare Pages", "Vercel", "Netlify", "Heroku"]:
+                    cloud_tags[tag] += 1
+            if f.threat_level in ["High Risk", "Critical", "Elevated Risk"]:
+                high_risk.append(f)
+
+        for ip, hosts in by_resolution.items():
+            if len(hosts) >= 2:
+                derived.append(IntelligenceFinding(
+                    entity=f"{len(hosts)} hosts share {ip}",
+                    type="Relationship",
+                    source="Correlation Engine",
+                    confidence="High",
+                    color="purple",
+                    threat_level="Informational",
+                    status="Correlated",
+                    resolution=", ".join(sorted(hosts)[:10]),
+                    raw_data="\n".join(sorted(hosts)),
+                    tags=["shared-infrastructure"],
+                ))
+
+        for domain, count in email_domains.items():
+            derived.append(IntelligenceFinding(
+                entity=f"{count} email(s) observed for {domain}",
+                type="Email Pattern",
+                source="Correlation Engine",
+                confidence="Medium",
+                color="purple",
+                status="Correlated",
+                tags=["email-osint"],
+            ))
+
+        for provider, count in cloud_tags.items():
+            derived.append(IntelligenceFinding(
+                entity=f"{provider}: {count} indicator(s)",
+                type="Cloud Relationship",
+                source="Correlation Engine",
+                confidence="High",
+                color="orange",
+                status="Correlated",
+                tags=["cloud"],
+            ))
+
+        if high_risk:
+            derived.append(IntelligenceFinding(
+                entity=f"{len(high_risk)} elevated/high-risk exposure signal(s)",
+                type="Risk Summary",
+                source="Correlation Engine",
+                confidence="High",
+                color="red",
+                threat_level="High Risk",
+                status="Prioritize",
+                raw_data="\n".join(f"{f.type}: {f.entity}" for f in high_risk[:30]),
+                tags=["risk"],
+            ))
+
+        for ftype, count in type_counts.items():
+            if count >= 10:
+                derived.append(IntelligenceFinding(
+                    entity=f"{count} {ftype} findings",
+                    type="Correlation",
+                    source="Correlation Engine",
+                    confidence="Medium",
+                    color="slate",
+                    status="Clustered",
+                    tags=["summary"],
+                ))
+
+        return derived
 
     async def verify_findings(self, findings):
         async def resolve(f):

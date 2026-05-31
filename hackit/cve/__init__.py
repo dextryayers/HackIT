@@ -1,21 +1,53 @@
 import click
 import json
 from hackit.cve.go_bridge import GoEngine
-from hackit.ui import display_tool_banner
+from hackit.ui import _colored, BLUE, CYAN, YELLOW, RESET, MAGENTA
 
-@click.command()
-@click.option('--software', required=True, help='Software name (e.g. wordpress)')
-@click.option('--version', required=True, help='Version (e.g. 5.0.0)')
-@click.option('--output', help='Save results to JSON file')
-def check_cve(software, version, output):
-    """CVE Vulnerability Checker"""
-    display_tool_banner('CVE CHECKER')
+def _show_cve_banner():
+    banner = f"""{CYAN}
+       _____     _______   _____                                
+      / ___/| | / / ____/  / ___/_________ _____  ____  ___  ____
+     / /   | | / / __/     \__ \/ ___/ __ `/ __ \/ __ \/ _ \/ ___/
+    / /___ | |/ / /___    ___/ / /__/ /_/ / / / / / / /  __/ /    
+    \____/ |___/_____/   /____/\___/\__,_/_/ /_/_/ /_/\___/_/     
+    {RESET}{BLUE}
+    [+] Professional Defensive Vulnerability & Exposure Scanner [+]
+    {RESET}
+    {MAGENTA} "Knowing your vulnerabilities is the first step to true defense.
+     Intelligence-driven security saves networks."{RESET}
+    """
+    click.echo(banner)
+
+@click.command(name='cve')
+@click.option('--output', help='Simpan hasil pencarian ke file JSON')
+def check_cve(output):
+    """
+    Pemindai Kerentanan Defensif (Multi-Source Intelligence).
+    Mendeteksi teknologi dan memetakan skor CVE, CWE, OSV, CISA, OWASP, dan Exploit-DB.
+    """
+    _show_cve_banner()
     
-    # CVE Checker Go Engine Integration
+    click.secho("[ Pilih Mode Pemindaian ]", fg='yellow', bold=True)
+    click.echo("  [1] Parameter Link (WAF & Logic Scanning)")
+    click.echo("  [2] Main URL (Deep Port & Tech Scanning)")
+    
+    mode_choice = input(f"\n{YELLOW}Pilih [1/2]: {RESET}").strip()
+    mode_str = "parameter" if mode_choice == "1" else "main"
+    
+    target = input(f"{YELLOW}Input URL Target [Http/Https/IP] : {RESET}").strip()
+        
+    if not target:
+        click.secho("[!] Target tidak boleh kosong.", fg='red', bold=True)
+        return
+
+    click.secho(f"\n[*] Menginisialisasi Mesin Deteksi & Analisis Kerentanan untuk {target} (Mode: {mode_str})...", fg='cyan', bold=True)
     engine = GoEngine()
     
-    engine.run(
-        software=software,
-        version=version,
+    success = engine.run(
+        target=target,
+        mode=mode_str,
         output=output
     )
+    
+    if not success:
+        click.secho("\n[!] Proses pemindaian kerentanan gagal atau dibatalkan.", fg='red', bold=True)

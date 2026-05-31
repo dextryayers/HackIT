@@ -151,9 +151,20 @@ func resolveIPs(results []*Result, concurrency int) {
 			defer wg.Done()
 			defer func() { <-sem }()
 
-			ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second) // Faster timeout
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second) // Slightly longer timeout for public DNS
 			defer cancel()
-			ips, err := net.DefaultResolver.LookupHost(ctx, res.Subdomain)
+
+			// Pick a random public resolver for high precision and avoiding rate limits
+			resolverAddr := publicResolvers[rand.Intn(len(publicResolvers))]
+			customResolver := &net.Resolver{
+				PreferGo: true,
+				Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+					d := net.Dialer{Timeout: 2 * time.Second}
+					return d.DialContext(ctx, "udp", resolverAddr)
+				},
+			}
+
+			ips, err := customResolver.LookupHost(ctx, res.Subdomain)
 			if err == nil && len(ips) > 0 {
 				res.IPs = ips
 			}

@@ -190,6 +190,35 @@ pub extern "C" fn rust_resolve_dns(domain: *const c_char) -> *mut c_char {
     }
 }
 
+#[unsafe(no_mangle)]
+pub extern "C" fn rust_get_cname(domain: *const c_char) -> *mut c_char {
+    if domain.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    let c_str = unsafe { CStr::from_ptr(domain) };
+    let domain_str = match c_str.to_str() {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+
+    let resolver = match Resolver::new(ResolverConfig::default(), ResolverOpts::default()) {
+        Ok(r) => r,
+        Err(_) => return CString::new("").unwrap().into_raw(),
+    };
+
+    match resolver.lookup(domain_str, RecordType::CNAME) {
+        Ok(lookup) => {
+            if let Some(c) = lookup.iter().filter_map(|r| r.as_cname()).next() {
+                let c_str = c.to_string().trim_end_matches('.').to_string();
+                return CString::new(c_str).unwrap().into_raw();
+            }
+            CString::new("").unwrap().into_raw()
+        },
+        Err(_) => CString::new("").unwrap().into_raw(),
+    }
+}
+
 fn perform_advanced_subdomain_check(domain: &str) -> String {
     let resolver = match Resolver::new(ResolverConfig::default(), ResolverOpts::default()) {
         Ok(r) => r,

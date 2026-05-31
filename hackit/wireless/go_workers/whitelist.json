@@ -1,0 +1,14 @@
+[
+  {
+    "ssid": "Enterprise-HQ",
+    "bssid": "00:1A:2B:3C:4D:01"
+  },
+  {
+    "ssid": "Redmi Note 12",
+    "bssid": "44:87:63:B8:AE:D2"
+  },
+  {
+    "ssid": "TP-Link",
+    "bssid": "44:87:63:B8:AE:D3"
+  }
+]

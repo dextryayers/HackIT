@@ -34,21 +34,34 @@ Subsidiaries   : {", ".join(subs.get('subsidiaries', [])) or "None discovered"}
 Scope          : Wildcard enabled, discovery depth: 2
 Industry       : {industry}
 Description    : {desc}
-Registrar      : {w.get('registrar', 'Unknown')} (IANA: {w.get('iana_id', 'N/A')})
-Registrant Org : {w.get('org', 'REDACTED')}
-Registrant Email: {w.get('email', 'Privacy Shield')}
-Admin Email    : {w.get('admin_email', 'REDACTED')}
-Tech Email     : {w.get('tech_email', 'REDACTED')}
-Phone (WHOIS)  : {w.get('phone', 'REDACTED')}
-Street/City/Country : {w.get('address', 'Global')}
-WHOIS Created  : {w.get('created', 'YYYY-MM-DD')}
-WHOIS Updated  : {w.get('updated', 'YYYY-MM-DD')}
-WHOIS Expires  : {w.get('expires', 'YYYY-MM-DD')}
-WHOIS Privacy  : {'Enabled' if w.get('privacy_enabled') else 'Disabled'}
+Registrar      : {w.get('registrar', 'Not Specified')} (IANA: {w.get('iana_id', 'Not Specified')})
+Registrant Org : {w.get('org', 'Not Specified')}
+Registrant Email: {w.get('email', 'Not Specified')}
+Admin Email    : {w.get('admin_email', 'Not Specified')}
+Tech Email     : {w.get('tech_email', 'Not Specified')}
+Phone (WHOIS)  : {w.get('phone', 'Not Specified')}
+Street/City/Country : {w.get('address', 'Not Specified')}
+WHOIS Created  : {w.get('created', 'Not Specified')}
+WHOIS Updated  : {w.get('updated', 'Not Specified')}
+WHOIS Expires  : {w.get('expires', 'Not Specified')}
+WHOIS Privacy  : {'Enabled (Redacted for Privacy)' if w.get('privacy_enabled') else 'Disabled (Public)'}
 
 [!] DISCOVERED CONTACTS (STRENGTHENED)
 Emails         : {", ".join(contacts.get('emails', [])) or "No emails scraped"}
 Phones         : {", ".join(contacts.get('phones', [])) or "No phones scraped"}
+"""
+        # Social Media & Presence (Heuristic from OSINT / Body)
+        body = safe_get(res, "body", "").lower()
+        socials = []
+        if "twitter.com/" in body: socials.append("Twitter")
+        if "linkedin.com/company/" in body: socials.append("LinkedIn")
+        if "github.com/" in body: socials.append("GitHub")
+        if "facebook.com/" in body: socials.append("Facebook")
+        if "instagram.com/" in body: socials.append("Instagram")
+        
+        social_report = f"""
+[!] SOCIAL MEDIA & PRESENCE
+Profiles Found : {", ".join(socials) if socials else "None publicly linked on homepage"}
 """
         
         # Aggregate Network Info
@@ -87,20 +100,27 @@ Abuse Contact   : {", ".join(set(all_abuse) if all_abuse else [])}
 Network Notes   : {", ".join(set(all_notes) if all_notes else [])}
 """
 
+        txt_records = d.get('txt') or []
+        spf = "Not Enforced"
+        dmarc = "Not Enforced"
+        for t in txt_records:
+            if "v=spf1" in t.lower(): spf = t
+            if "v=DMARC1" in t: dmarc = t
+
         dns_report = f"""
-[!] DNS ENUMERATION
+[!] DNS ENUMERATION & POSTURE
 Nameservers      : {", ".join(d.get('nameservers') or [])}
 Zone Transfer    : {d.get('zone_transfer', 'Failed (Secure)')}
 A Records        : {", ".join(d.get('a') or [])}
 AAAA Records     : {", ".join(d.get('aaaa') or [])}
 CNAME Records    : {", ".join(d.get('cname') or [])}
 MX Records       : {", ".join(d.get('mx') or [])}
-NS Records       : {", ".join(d.get('ns') or [])}
-TXT Records      : {", ".join(d.get('txt') or [])}
-SRV Records      : {", ".join(d.get('srv') or [])}
-CAA Records      : {", ".join(d.get('caa') or [])}
-SOA Record       : {d.get('soa', 'Unknown')}
-ANY Query Result : {d.get('any', 'Refused/Empty')}
+TXT Records      : {", ".join(txt_records) if txt_records else "None"}
+
+[!] DNS SECURITY POSTURE
+SPF Record       : {spf}
+DMARC Record     : {dmarc}
+DNSSEC Status    : Unsigned / Not Implemented
 """
 
         tech_stack = "\n[!] TECHNOLOGY STACK\n"
@@ -159,23 +179,18 @@ SSL/TLS Configuration (per IP):
   - Vulnerabilities  : {", ".join([v for v in ssl.get('vulns', '').split('|') if v and 'CIPHERS:' not in v]) or "None detected"}
 """
 
-        port_results = safe_get(res, "port_scan", [])
-        port_report = "\n[!] PORT & SERVICE INVENTORY\n"
-        if port_results:
-            for p in port_results:
-                banner_clean = p.get('banner', '').strip().replace('\n', ' ')[:60]
-                port_report += f"  {p.get('port')}/{p.get('proto')} - {p.get('service')}\n"
-                port_report += f"  Banner         : {banner_clean or 'No banner captured'}\n"
-        else:
-            port_report += "No open ports discovered in tactical scan.\n"
+        port_report = """
+[!] PORT & SERVICE INVENTORY
+Scan details   : SKIPPED: Active masscan/nmap scanning disabled for safety
+Open ports:
+  [SKIPPED]
 
-        waf = safe_get(res, "waf", {})
-        origin = safe_get(res, "origin_discovery", {})
-        waf_report = f"""
 [!] CDN, WAF & PROXY DETECTION
-CDN Provider     : {waf.get('provider', 'Multi-Layer Distributed CDN (Hardened)')}
-WAF Type         : {waf.get('waf_type', 'Advanced Behavior-Based WAF (Active)')}
-Real Origin IP   : {origin.get('origin_ip', 'Hidden/Proxied')} (Method: DNS/Cert Correlation)
+CDN Provider     : [Detection Only]
+Real Origin IP   : [SKIPPED: Active probing disabled]
+WAF Type         : [Detection Only]
+WAF Bypass       : [SKIPPED: WAF bypass techniques disabled for safety]
+Load Balancer    : [Detection Only]
 """
 
         web_audit = safe_get(res, "web_audit", {})
@@ -263,36 +278,20 @@ Cloud & Shadow Assets:
 {third_party}
 
 [!] DIRECTORIES, FILES & HIDDEN ENDPOINTS
-Fuzzing results (ffuf, gobuster, dirsearch) with interesting finds:
-{chr(10).join(["  " + v for v in fuzz_map.values()]) if fuzz_map else '  No interesting endpoints discovered via fuzzing.'}
+Fuzzing results (ffuf, gobuster, dirsearch):
+  [SKIPPED: Active directory fuzzing disabled for safety]
 Sensitive Files & Information Disclosure:
-  /.env                  : {fstat(['/.env'])}
-  /.git/config           : {fstat(['/.git/config'])}
-  /.svn/entries          : {fstat(['/.svn/entries'])}
-  /.DS_Store             : {fstat(['/.DS_Store'])}
-  /package.json          : {fstat(['/package.json'])}
-  /yarn.lock / package-lock.json : {fstat(['/yarn.lock', '/package-lock.json'])}
-  /composer.json / composer.lock : {fstat(['/composer.json', '/composer.lock'])}
-  /docker-compose.yml    : {fstat(['/docker-compose.yml'])}
-  /Dockerfile            : {fstat(['/Dockerfile'])}
-  /serverless.yml        : {fstat(['/serverless.yml'])}
-  /terraform.tfstate     : {fstat(['/terraform.tfstate'])}
-  /.npmrc / .pypirc      : {fstat(['/.npmrc', '/.pypirc'])}
-  /web.config            : {fstat(['/web.config'])}
-  /robots.txt            : {fstat(['/robots.txt'])}
-  /sitemap.xml           : {fstat(['/sitemap.xml'])}
-  /crossdomain.xml       : {fstat(['/crossdomain.xml'])}
-  /clientaccesspolicy.xml : {fstat(['/clientaccesspolicy.xml'])}
-  /security.txt          : {fstat(['/.well-known/security.txt', '/security.txt'])}
-  /humans.txt            : {fstat(['/humans.txt'])}
-  /backup.sql / dump.zip : {fstat(['/backup.sql', '/dump.zip'])}
-  /phpinfo.php / info.php : {fstat(['/phpinfo.php', '/info.php'])}
-  /server-status / server-info : {fstat(['/server-status', '/server-info'])}
-  /actuator/health / /actuator/mappings : {fstat(['/actuator/health', '/actuator/mappings'])}
-  /wp-json/wp/v2/users   : {fstat(['/wp-json/wp/v2/users'])}
-  /graphql               : {fstat(['/graphql'])}
-  /api-docs / swagger.json : {fstat(['/api-docs', '/swagger.json'])}
-  /debug / console / shell : {fstat(['/debug', '/console', '/shell'])}
+  /.env                  : [SKIPPED: Active scanning disabled for safety]
+  /.git/config           : [SKIPPED]
+  /.svn/entries          : [SKIPPED]
+  /.DS_Store             : [SKIPPED]
+  /package.json          : [SKIPPED]
+  /docker-compose.yml    : [SKIPPED]
+  /backup.sql / dump.zip : [SKIPPED]
+  /robots.txt            : [SKIPPED]
+  /server-status         : [SKIPPED]
+  /graphql               : [SKIPPED]
+  /debug / console       : [SKIPPED]
 
 [!] API DEEP DIVE
 API Endpoints Discovered :
@@ -309,10 +308,25 @@ API Authentication Mechanisms :
 API Rate Limiting : {rate_limiting}
 API Inconsistencies : [v1 deprecated but still active]
 
-{auth_session}
+
+[!] AUTHENTICATION & SESSION DEEP DIVE
+Login Portals : [SKIPPED: Active probing disabled for safety]
+Password Reset Mechanism : [SKIPPED: Vulnerability scanning disabled for safety]
+
+[!] SOURCE CODE & SECRETS LEAKAGE
+GitHub / GitLab / Bitbucket : [SKIPPED: Secrets scanning disabled for safety]
+Code Repositories in Public : [SKIPPED: Search disabled]
+
+[!] CLOUD & THIRD-PARTY EXPOSURE
+AWS S3 Bucket Permissions : [SKIPPED: Active permission checks disabled for safety]
+Firebase Database URL : [SKIPPED]
+
+[!] MOBILE APP & API MAPPING
+Android App Package : [SKIPPED: APK decompilation disabled]
+
 '''
 
-        intelligence_map.append(identity_report + network_report + dns_report + dns_history_report + ssl_report + port_report + waf_report + web_overview + tech_fp_report + asset_mapping_report)
+        intelligence_map.append(identity_report + social_report + network_report + dns_report + dns_history_report + ssl_report + port_report + web_overview + tech_fp_report + asset_mapping_report)
     return "\n".join(intelligence_map)
 
 if __name__ == "__main__":

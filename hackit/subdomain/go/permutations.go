@@ -8,7 +8,7 @@ import (
 func runPermutations(foundSubs []*Result, domain string, jobs chan<- string) {
 	fmt.Println("[*] Running Permutation Scanning...")
 
-	// Advanced permutation list (Expert Altdns & Subjack style)
+	// Advanced permutation list (Expert Altdns & Subjack style) - Deeply improved for massive coverage
 	permWords := []string{
 		"dev", "stg", "test", "admin", "prod", "beta", "vpn", "mail", "web",
 		"internal", "corp", "demo", "stage", "staging", "api", "app", "cdn",
@@ -17,12 +17,18 @@ func runPermutations(foundSubs []*Result, domain string, jobs chan<- string) {
 		"payment", "payments", "checkout", "order", "account", "customer",
 		"jenkins", "gitlab", "jira", "wiki", "docs", "portal", "support",
 		"monitor", "status", "grafana", "prometheus", "elastic", "kibana",
-		"v1", "v2", "api-v1", "api-v2", "backend", "frontend", "client",
+		"v1", "v2", "v3", "api-v1", "api-v2", "backend", "frontend", "client",
 		"partner", "m", "mobile", "app-api", "uat", "preprod", "sandbox",
 		"secret", "private", "devops", "kubernetes", "k8s", "docker", "registry",
 		"db", "database", "sql", "redis", "mongo", "infra", "secure", "security",
 		"backup", "storage", "s3", "bucket", "blob", "aws", "azure", "gcp",
 		"lb", "proxy", "waf", "cloud", "vault", "office", "work", "remote",
+		"sys", "system", "tools", "util", "utils", "config", "config", "ops",
+		"ci", "cd", "build", "deploy", "release", "admin-panel", "dashboard",
+		"intranet", "extranet", "vpn-gw", "ssh", "ftp", "sftp", "smtp", "imap",
+		"pop3", "mx", "ns", "dns", "dns1", "dns2", "git", "svn", "repo",
+		"search", "find", "query", "analytics", "stats", "metrics", "data",
+		"pay", "billing", "invoice", "crm", "erp", "hr", "sales", "marketing",
 	}
 
 	// Dynamic word generation (common patterns)

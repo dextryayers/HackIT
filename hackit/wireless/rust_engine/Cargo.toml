@@ -1,0 +1,43 @@
+[package]
+name = "hackit_wireless_engine"
+version = "0.1.0"
+edition = "2021"
+authors = ["HackIT OSINT Framework"]
+description = "Core async packet engine for HackIT wireless penetration testing"
+
+[dependencies]
+# Async Runtime
+tokio = { version = "1", features = ["full"] }
+
+# CLI Parsing
+clap = { version = "4", features = ["derive"] }
+
+# Packet Parsing
+etherparse = "0.13"
+
+# Logging and formatting
+tracing = "0.1"
+tracing-subscriber = "0.3"
+indicatif = "0.17"
+ctrlc = "3.4.4"
+
+# FFI and C interaction
+libc = "0.2"
+
+# Advanced Packet Tracking and Utilities
+pcap = "1.2.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+crossbeam = "0.8"
+parking_lot = "0.12"
+colored = "2.0"
+
+[build-dependencies]
+# Removed bindgen because it requires libclang to be installed on Windows.
+# We will hardcode the FFI bindings in c_bindings.rs instead.
+
+[profile.release]
+opt-level = "z"      # Optimize for size to reduce build stress
+codegen-units = 1    # Reduce parallel compilation overhead
+lto = false          # Disable LTO to prevent out-of-memory compiler panic
+panic = "abort"      # Prevent heavy unwind generation

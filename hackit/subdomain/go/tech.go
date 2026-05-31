@@ -16,18 +16,29 @@ func detectTech(headers http.Header, body string) []string {
 	}
 	
 	// WAF & Security Layers
-	if headers.Get("CF-RAY") != "" || headers.Get("cf-cache-status") != "" {
-		techs = append(techs, "Cloudflare WAF/CDN")
+	wafHeaders := map[string]string{
+		"cf-ray": "Cloudflare", "cf-cache-status": "Cloudflare",
+		"x-akamai-transformed": "Akamai",
+		"x-amz-cf-id": "AWS CloudFront",
+		"x-azure-ref": "Azure FrontDoor",
+		"x-sucuri-id": "Sucuri",
+		"x-sucuri-cache": "Sucuri",
+		"incap-sess": "Imperva Incapsula",
+		"visid_incap": "Imperva Incapsula",
+		"x-cdn": "Incapsula",
+		"x-edge-ip": "F5 BIG-IP",
+		"x-iinfo": "F5 BIG-IP",
+		"x-dotdefense": "DotDefender",
+		"x-fw-rule": "Barracuda",
+		"x-wep-waf": "AWS WAF",
 	}
-	if strings.Contains(strings.ToLower(headers.Get("X-Akamai-Transformed")), "true") {
-		techs = append(techs, "Akamai CDN")
+	
+	for header, waf := range wafHeaders {
+		if headers.Get(header) != "" || strings.Contains(strings.ToLower(headers.Get(header)), "true") {
+			techs = append(techs, "WAF:"+waf)
+		}
 	}
-	if headers.Get("X-Amz-Cf-Id") != "" {
-		techs = append(techs, "AWS CloudFront")
-	}
-	if headers.Get("X-Azure-Ref") != "" {
-		techs = append(techs, "Azure FrontDoor")
-	}
+
 	if strings.Contains(headers.Get("Via"), "google") {
 		techs = append(techs, "Google Cloud Load Balancer")
 	}
@@ -137,6 +148,9 @@ func detectTech(headers http.Header, body string) []string {
 	infraMap := map[string][]string{
 		"Nginx":      {"nginx"},
 		"Apache":     {"apache"},
+		"LiteSpeed":  {"litespeed"},
+		"Caddy":      {"caddy"},
+		"Envoy":      {"envoy"},
 		"Heroku":     {"heroku"},
 		"Netlify":    {"netlify"},
 		"Vercel":     {"vercel"},
