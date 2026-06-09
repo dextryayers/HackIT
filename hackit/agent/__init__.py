@@ -42,19 +42,28 @@ def start_interactive_chat():
                 click.echo(_colored("\n  [*] Returning to main menu...", DIM))
                 break
             
-            # Command Interception (clear, setting, status, guide, help)
-            clean_input = user_input.lower().strip()
-            if clean_input in ['clear', 'setting', 'status', 'guide', 'help', '?', '/help']:
-                from hackit.agent import clear, setting, status, guide, help
+            # Command Interception
+            parts = user_input.split()
+            if not parts:
+                continue
+                
+            base_cmd = parts[0].lower()
+            if base_cmd in ['clear', 'setting', 'status', 'guide', 'help', '?', '/help', 'autopilot']:
+                from hackit.agent import clear, setting, status, guide, help, autopilot
                 cmd_map = {
                     'clear': clear, 'setting': setting, 'status': status, 
                     'guide': guide, 'help': help, '?': guide, '/help': guide
                 }
                 ctx = click.get_current_context()
-                ctx.invoke(cmd_map[clean_input])
-                continue
                 
-            if not user_input:
+                if base_cmd == 'autopilot':
+                    if len(parts) > 1:
+                        target = parts[1]
+                        ctx.invoke(autopilot, target=target)
+                    else:
+                        click.echo(_colored("\n  [!] Usage: autopilot <target_domain_or_ip>", RED))
+                else:
+                    ctx.invoke(cmd_map[base_cmd])
                 continue
                 
             # If it's a slash command, handle it, otherwise chat normally
@@ -73,6 +82,7 @@ def help():
     """Show core commands and options for the AI Agent"""
     click.echo(_colored("\n  [ HACKIT AI AGENT - COMMANDS ]", B_CYAN))
     click.echo(_colored("  ------------------------------------------------", DIM))
+    click.echo(f"  • {_colored('autopilot [domain/ip]', YELLOW):<12} : Autopilot, Automation Testing with Ai")
     click.echo(f"  • {_colored('status', YELLOW):<12} : Check AI connectivity and active providers.")
     click.echo(f"  • {_colored('setting', YELLOW):<12} : Configure API keys and select AI models.")
     click.echo(f"  • {_colored('clear', YELLOW):<12} : Reset conversation history and clear context.")
@@ -121,12 +131,11 @@ def setting(provider, key):
         if provider == "ollama":
             # Auto-Detection Mode: Skip prompt and set empty to trigger Go auto-detect
             key = "AUTO_DETECT" 
-            click.echo(_colored("\n  [*] Ollama Selected: Activating Local Auto-Detection Mode...", DIM))
+            click.echo(_colored("\n  [*] Ollama Selected: Checking Local Auto-Detection Mode...", DIM))
         else:
             key = click.prompt(_colored(f"  [?] Paste your {provider.upper()} API Key", YELLOW), hide_input=False)
     
     if provider and key:
-        # Update the specific provider key in the dictionary
         if "ai_keys" not in cfg:
             cfg["ai_keys"] = {}
         
@@ -138,9 +147,7 @@ def setting(provider, key):
         else:
             click.echo(_colored(f"\n  [!] FAILED: Could not write configuration file.", RED))
         
-    # Re-load to verify state from disk
     cfg = load_config()
-    # Show current settings
     click.echo(_colored("\n  [ AI AGENT STATUS ]", B_CYAN))
     click.echo(f"  • Active Provider : " + _colored(cfg.get('ai_provider', 'NONE').upper(), YELLOW))
     for p, k in cfg.get('ai_keys', {}).items():
@@ -159,6 +166,29 @@ def status():
     for p, k in cfg.get('ai_keys', {}).items():
         status = _colored("READY", GREEN) if k else _colored("NOT CONFIGURED", DIM)
         click.echo(f"  • {p:<15}: {status}")
+
+@agent.command()
+@click.argument('target')
+def autopilot(target):
+    """Launch the Autonomous AI Bug Hunter against a target"""
+    import subprocess
+    click.echo(_colored(f"\n  [⚡] INITIATING FULL AUTOPILOT AI HUNTER ON {target}...", B_CYAN, bold=True))
+    
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    engine_path = os.path.join(base_dir, 'go', 'ai_engine.exe' if os.name == 'nt' else 'ai_engine')
+    
+    if not os.path.exists(engine_path):
+        click.echo(_colored(f"  [!] Missing AI engine at {engine_path}", RED))
+        return
+
+    try:
+        cmd = [engine_path, '--autopilot', target]
+        # Run it directly without capturing output so the user sees the animated console
+        subprocess.run(cmd)
+    except KeyboardInterrupt:
+        click.echo(_colored("\n  [!] Autopilot terminated by user.", RED))
+    except Exception as e:
+        click.echo(_colored(f"\n  [!] Autopilot crashed: {str(e)}", RED))
 
 @agent.command()
 def clear():
@@ -282,26 +312,7 @@ def handle_ai_command(cmd: str):
     
     selected_provider = cfg.get("ai_provider", "gemini")
     
-    # If multiple keys are available, offer a quick selection
-    if len(available_keys) > 1:
-        click.echo(_colored("\n  ┌────────────────────────────────────────────────────────────┐", DIM))
-        click.echo(_colored("  │             SELECT ACTIVE INTELLIGENCE CORE                │", B_CYAN))
-        click.echo(_colored("  └────────────────────────────────────────────────────────────┘", DIM))
-        
-        providers = sorted(list(available_keys.keys()))
-        for i, p in enumerate(providers, 1):
-            status = _colored("ONLINE", GREEN)
-            active_mark = _colored(" <CURRENT>", YELLOW) if p == selected_provider else ""
-            click.echo(f"  [{i}] {p.upper():<12} : {status}{active_mark}")
-        
-        click.echo(_colored(f"  [0] Keep Default ({selected_provider.upper()})", DIM))
-        
-        try:
-            choice = click.prompt(_colored("\n  [?] Switch core?", YELLOW), type=int, default=0, show_default=False)
-            if 1 <= choice <= len(providers):
-                selected_provider = providers[choice-1]
-        except:
-            pass
+    selected_provider = cfg.get("ai_provider", "gemini")
 
     click.echo(_colored(f"\n[*] Consulting HackIt AI...", DIM))
     brain = AIHyperBrain()

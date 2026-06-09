@@ -13,10 +13,4 @@ func shufflePorts(in []int) []int {
 	return out
 }
 
-func jitterSleep(minMs, maxMs int) {
-	if maxMs <= minMs {
-		maxMs = minMs + 1
-	}
-	d := rand.Intn(maxMs-minMs) + minMs
-	time.Sleep(time.Duration(d) * time.Millisecond)
-}
+// jitterSleep is now defined in engine.go — removed from here to avoid redeclaration

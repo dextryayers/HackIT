@@ -22,12 +22,19 @@ func main() {
 	toolName := flag.String("tool", "", "Name of the tool being analyzed")
 	clearHist := flag.Bool("clear", false, "Clear conversation history")
 	mode := flag.String("mode", "", "Specialized Command Mode (e.g., risk, attack)")
+	autopilot := flag.String("autopilot", "", "Target for Autonomous AI Bug Hunter")
 	flag.Parse()
 
 	history := NewHistoryManager()
 	if *clearHist {
 		history.Clear()
 		fmt.Println(`{"text": "History cleared successfully"}`)
+		return
+	}
+
+	if *autopilot != "" {
+		hunter := &AutonomousHunter{Target: *autopilot}
+		hunter.Run()
 		return
 	}
 

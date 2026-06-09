@@ -64,9 +64,8 @@ You have access to previous conversation context via a Go-powered history module
             else:
                 click.echo(_colored(f"  [!] Ollama responded with status {resp.status_code}", YELLOW))
         except Exception:
-            # Silently fail if not on ollama provider, otherwise warn
-            if self.provider == "ollama":
-                click.echo(_colored("  [!] Ollama not detected at localhost:11434. Please run 'ollama serve'.", RED))
+            # Tell the user explicitly if it's completely unreachable
+            click.echo(_colored("  [!] Ollama AI Local Engine Not Found. Please run 'ollama serve'.", RED))
 
     def chat(self, prompt: str) -> str:
         """Surgical routing to the Go AI Engine with command support"""

@@ -50,7 +50,8 @@ def passive_recon(domain):
 
     def fetch_source(url, parser_func):
         try:
-            resp = requests.get(url, timeout=15, headers=headers, verify=False)
+            # Set explicit connect and read timeouts
+            resp = requests.get(url, timeout=(3, 10), headers=headers, verify=False)
             if resp.status_code == 200:
                 extracted = parser_func(resp)
                 if extracted:
@@ -92,7 +93,9 @@ def passive_recon(domain):
     def parse_wayback(resp):
         res = set()
         try:
-            for entry in resp.json()[1:]:
+            # Limit to a smaller subset if it's too large
+            data = resp.json()
+            for entry in data[1:1000]: # Limit to 1000 records
                 h = urlparse(entry[2]).hostname
                 if h: res.add(h)
         except: pass
@@ -121,7 +124,7 @@ def passive_recon(domain):
         (f"https://jldc.me/anubis/subdomains/{domain}", parse_json_list),
         (f"https://api.threatminer.org/v2/domain.php?q={domain}&rt=5", parse_threatminer),
         (f"https://rapiddns.io/subdomain/{domain}?full=1", parse_regex),
-        (f"http://web.archive.org/cdx/search/cdx?url=*.{domain}/*&output=json&collapse=urlkey", parse_wayback),
+        (f"http://web.archive.org/cdx/search/cdx?url=*.{domain}/*&output=json&collapse=urlkey&limit=1000", parse_wayback),
         (f"https://api.certspotter.com/v1/issuances?domain={domain}&include_subdomains=true&expand=dns_names", parse_certspotter),
         (f"https://urlscan.io/api/v1/search/?q=domain:{domain}", parse_urlscan),
         (f"https://subdomain.center/api/index.php?domain={domain}", parse_json_list),
@@ -132,8 +135,11 @@ def passive_recon(domain):
     with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True, console=console) as progress:
         progress.add_task(description=f"Querying {len(tasks)} deep passive OSINT sources...", total=None)
         with ThreadPoolExecutor(max_workers=15) as executor:
+            futures = []
             for url, parser in tasks:
-                executor.submit(fetch_source, url, parser)
+                futures.append(executor.submit(fetch_source, url, parser))
+            # Optional: wait with timeout in Python 3, but concurrent.futures automatically joins on exit.
+            # We rely on the request timeout to free up threads.
 
     # Initial ultra-fast resolution to weed out junk if too many results
     final_results = []

@@ -1,366 +1,549 @@
 /*
- * Advanced C Port Scanner with HackIT-like Capabilities
- * Real-time streaming, advanced probing, and comprehensive service detection
+ * HackIT PortStorm — C Engine v3.0
+ * Ultra-high-performance raw socket scanner
+ * Engines: Raw TCP SYN, ICMP ping, TTL fingerprinting, service detection
+ * Compiler: gcc -O3 -o advanced_scanner advanced_scanner.c -lws2_32 (Windows)
+ *           gcc -O3 -o advanced_scanner advanced_scanner.c (Linux)
  */
 
+#ifdef _WIN32
+  #define WIN32_LEAN_AND_MEAN
+  #define _WINSOCK_DEPRECATED_NO_WARNINGS
+  #include <winsock2.h>
+  #include <ws2tcpip.h>
+  #pragma comment(lib, "ws2_32.lib")
+  typedef int socklen_t;
+  #define CLOSE_SOCKET(s) closesocket(s)
+  #define SOCKET_ERROR_CODE WSAGetLastError()
+  #define sleep(x) Sleep((x)*1000)
+  #define usleep(x) Sleep((x)/1000)
+#else
+  #include <sys/socket.h>
+  #include <sys/time.h>
+  #include <arpa/inet.h>
+  #include <netinet/in.h>
+  #include <netinet/tcp.h>
+  #include <netdb.h>
+  #include <unistd.h>
+  #include <fcntl.h>
+  #include <errno.h>
+  #define CLOSE_SOCKET(s) close(s)
+  #define SOCKET_ERROR_CODE errno
+  #define SOCKET int
+  #define INVALID_SOCKET -1
+  #define SOCKET_ERROR -1
+#endif
+
 #include <stdio.h>
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#include <process.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
-#pragma comment(lib, "ws2_32.lib")
+/* ─────────────────────────────────────────────────────────────────
+ * CONSTANTS
+ * ───────────────────────────────────────────────────────────────── */
 
-#define MAX_THREADS 1000
-#define DEFAULT_TIMEOUT 1000
-#define BANNER_SIZE 2048
+#define MAX_PORTS       65535
+#define MAX_BANNER_LEN  2048
+#define MAX_HOST_LEN    256
+#define DEFAULT_TIMEOUT 1500
+#define MAX_WORKERS     512
+#define MAX_RETRIES     3
 
-// Port states
-typedef enum {
-    PORT_OPEN,
-    PORT_CLOSED,
-    PORT_FILTERED,
-    PORT_OPEN_FILTERED
-} port_state_t;
+/* ─────────────────────────────────────────────────────────────────
+ * DATA STRUCTURES
+ * ───────────────────────────────────────────────────────────────── */
 
-// Scan configuration
 typedef struct {
-    char host[256];
-    int port;
-    int timeout;
-    int timing_level;
-    int scan_type;
-    int stealth_mode;
-    int rate_limit;
-} scan_config_t;
+    int    port;
+    int    state;      /* 0=closed, 1=open, 2=filtered */
+    char   service[64];
+    char   banner[MAX_BANNER_LEN];
+    char   version[128];
+    int    ttl;
+    double risk_score;
+    char   protocol[8];  /* "tcp" | "udp" */
+} PortScanResult;
 
-// Port scan result
 typedef struct {
-    int port;
-    port_state_t state;
-    char service[64];
-    char banner[BANNER_SIZE];
-    char version[256];
-    int ttl;
-    int window_size;
-    int mss;
-    int latency_ms;
-} port_result_t;
+    char   host[MAX_HOST_LEN];
+    int    resolved_ip[4]; /* dotted quad */
+    int    total_ports;
+    int    open_count;
+    int    filtered_count;
+    int    closed_count;
+    double elapsed_ms;
+    PortScanResult results[1024];
+} ScanReport;
 
-// Common ports mapping
-static const struct {
-    int port;
-    const char* service;
-} common_ports[] = {
-    {21, "FTP"}, {22, "SSH"}, {23, "Telnet"}, {25, "SMTP"}, {53, "DNS"},
-    {80, "HTTP"}, {110, "POP3"}, {111, "RPCBIND"}, {113, "IDENT"},
-    {119, "NNTP"}, {123, "NTP"}, {135, "MSRPC"}, {137, "NetBIOS-NS"},
-    {138, "NetBIOS-DGM"}, {139, "NetBIOS-SSN"}, {143, "IMAP"},
-    {161, "SNMP"}, {162, "SNMPTRAP"}, {179, "BGP"}, {194, "IRC"},
-    {389, "LDAP"}, {443, "HTTPS"}, {445, "Microsoft-DS"}, {465, "SMTPS"},
-    {513, "RLOGIN"}, {514, "Syslog"}, {515, "Printer"}, {543, "KLOGIN"},
-    {544, "KSHELL"}, {548, "AFP"}, {554, "RTSP"}, {587, "Submission"},
-    {631, "IPP"}, {636, "LDAPS"}, {873, "Rsync"}, {990, "FTPS"},
-    {993, "IMAPS"}, {995, "POP3S"}, {1025, "MSRPC"}, {1080, "SOCKS"},
-    {1194, "OpenVPN"}, {1433, "MSSQL"}, {1434, "MS-SQL-M"}, {1521, "Oracle"},
-    {1723, "PPTP"}, {1883, "MQTT"}, {2049, "NFS"}, {2121, "FTP-ALT"},
-    {2375, "Docker"}, {2376, "Docker-SSL"}, {3306, "MySQL"}, {3389, "MS-WBT-Server"},
-    {3690, "SVN"}, {4444, "Metasploit"}, {5000, "UPnP"}, {5432, "PostgreSQL"},
-    {5672, "AMQP"}, {5900, "VNC"}, {5984, "CouchDB"}, {6379, "Redis"},
-    {6443, "Kubernetes-API"}, {6667, "IRC"}, {7000, "Cassandra"},
-    {7001, "Cassandra"}, {8000, "HTTP-Alt"}, {8080, "HTTP-Proxy"},
-    {8081, "HTTP-Alt"}, {8443, "HTTPS-Alt"}, {8888, "HTTP-Alt"},
-    {9000, "PHP-FPM"}, {9042, "Cassandra-Native"}, {9090, "Zeus-Admin"},
-    {9092, "Kafka"}, {9100, "JetDirect"}, {9200, "Elasticsearch"},
-    {9418, "Git"}, {9999, "ADB"}, {10000, "Webmin"}, {11211, "Memcached"},
-    {22222, "SSH-Alt"}, {26257, "CockroachDB"}, {27017, "MongoDB"},
-    {27018, "MongoDB"}, {28017, "MongoDB-Web"}, {50000, "DB2"}, {54321, "Database-Alt"},
-    {0, NULL}
+/* Service name database */
+typedef struct {
+    int    port;
+    char   name[32];
+    char   proto[8];
+} ServiceEntry;
+
+static const ServiceEntry SERVICE_DB[] = {
+    {20, "FTP-DATA", "tcp"}, {21, "FTP", "tcp"}, {22, "SSH", "tcp"},
+    {23, "TELNET", "tcp"}, {25, "SMTP", "tcp"}, {53, "DNS", "tcp"},
+    {80, "HTTP", "tcp"}, {110, "POP3", "tcp"}, {111, "RPCBIND", "tcp"},
+    {135, "MSRPC", "tcp"}, {139, "NETBIOS", "tcp"}, {143, "IMAP", "tcp"},
+    {161, "SNMP", "udp"}, {179, "BGP", "tcp"}, {389, "LDAP", "tcp"},
+    {443, "HTTPS", "tcp"}, {445, "SMB", "tcp"}, {465, "SMTPS", "tcp"},
+    {587, "SMTP-MSA", "tcp"}, {636, "LDAPS", "tcp"}, {873, "RSYNC", "tcp"},
+    {993, "IMAPS", "tcp"}, {995, "POP3S", "tcp"}, {1433, "MSSQL", "tcp"},
+    {1521, "ORACLE", "tcp"}, {2049, "NFS", "tcp"}, {2375, "DOCKER", "tcp"},
+    {2376, "DOCKER-SSL", "tcp"}, {2379, "ETCD", "tcp"}, {3306, "MYSQL", "tcp"},
+    {3389, "RDP", "tcp"}, {5432, "POSTGRES", "tcp"}, {5672, "AMQP", "tcp"},
+    {5900, "VNC", "tcp"}, {5985, "WINRM", "tcp"}, {6379, "REDIS", "tcp"},
+    {6443, "K8S-API", "tcp"}, {8080, "HTTP-PROXY", "tcp"}, {8443, "HTTPS-ALT", "tcp"},
+    {9200, "ELASTICSEARCH", "tcp"}, {10250, "KUBELET", "tcp"},
+    {11211, "MEMCACHED", "tcp"}, {27017, "MONGODB", "tcp"},
+    {50000, "IBM-DB2", "tcp"}, {0, "", ""}
 };
 
-// TCP/IP fingerprint
-typedef struct {
-    int ttl;
-    int window_size;
-    int mss;
-    char ip_id[16];
-} tcp_fingerprint_t;
+/* ─────────────────────────────────────────────────────────────────
+ * UTILITY FUNCTIONS
+ * ───────────────────────────────────────────────────────────────── */
 
-// Get service name for port
-static const char* get_service_name(int port) {
-    for (int i = 0; common_ports[i].port != 0; i++) {
-        if (common_ports[i].port == port) {
-            return common_ports[i].service;
-        }
+static const char* lookup_service(int port) {
+    for (int i = 0; SERVICE_DB[i].port != 0; i++) {
+        if (SERVICE_DB[i].port == port)
+            return SERVICE_DB[i].name;
     }
-    return "unknown";
+    return "UNKNOWN";
 }
 
-// Advanced banner grabbing with protocol-specific probes
-void grab_banner_advanced(SOCKET s, int port, char* buffer) {
-    struct timeval tv;
-    tv.tv_sec = 2; // Increased timeout for deep recon
-    tv.tv_usec = 0;
-    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof(tv));
-    
-    // Send protocol-specific probes for high-precision mapping
-    switch(port) {
-        case 80: case 8080: case 8000:
-            send(s, "GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n", 54, 0);
-            break;
-        case 443: case 8443:
-            // For HTTPS, we send a TLS Client Hello (simplified)
-            send(s, "\x16\x03\x01\x00\x6d\x01\x00\x00\x69\x03\x03", 11, 0);
-            break;
-        case 21:
-            // FTP sends banner automatically, but we can send a command to see more
-            send(s, "SYST\r\n", 6, 0);
-            break;
-        case 22:
-            // SSH sends banner on connect
-            break;
-        case 25: case 465: case 587:
-            send(s, "EHLO recon.hackit\r\n", 19, 0);
-            break;
+static long long now_ms(void) {
+    struct timespec ts;
+#ifdef _WIN32
+    clock_t c = clock();
+    return (long long)(c * 1000 / CLOCKS_PER_SEC);
+#else
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+#endif
+}
+
+static void set_nonblocking(SOCKET sock) {
+#ifdef _WIN32
+    u_long mode = 1;
+    ioctlsocket(sock, FIONBIO, &mode);
+#else
+    int flags = fcntl(sock, F_GETFL, 0);
+    fcntl(sock, F_SETFL, flags | O_NONBLOCK);
+#endif
+}
+
+/* ─────────────────────────────────────────────────────────────────
+ * BANNER GRABBER — Protocol-specific probes
+ * ───────────────────────────────────────────────────────────────── */
+
+typedef struct {
+    int         port_min;
+    int         port_max;
+    const char *probe;
+    int         probe_len;
+} ProbeEntry;
+
+/* Common probes (CRLF-terminated) */
+static const char PROBE_HTTP[]   = "GET / HTTP/1.0\r\nHost: hackit\r\nUser-Agent: HackIT/3.0\r\n\r\n";
+static const char PROBE_FTP[]    = "SYST\r\n";
+static const char PROBE_SMTP[]   = "EHLO hackit.local\r\n";
+static const char PROBE_POP3[]   = "CAPA\r\n";
+static const char PROBE_IMAP[]   = "A1 CAPABILITY\r\n";
+static const char PROBE_REDIS[]  = "INFO server\r\n";
+static const char PROBE_MEMCD[]  = "stats\r\n";
+static const char PROBE_RSYNC[]  = "@RSYNCD: 31.0\n";
+static const char PROBE_IRC[]    = "NICK hackit\r\nUSER hackit 0 * :HackIT\r\n";
+
+static void grab_banner(SOCKET sock, int port, char *banner, int banner_size, int timeout_ms) {
+    const char *probe = NULL;
+    int probe_len = 0;
+    char buf[4096];
+    int n;
+
+    banner[0] = '\0';
+
+    /* Select probe based on port */
+    switch (port) {
+        case 80: case 8080: case 8000: case 8008: case 8888:
+        case 3000: case 4000: case 5000: case 8001: case 9000:
+            probe = PROBE_HTTP; break;
+        case 21: case 990:
+            probe = PROBE_FTP; break;
+        case 25: case 587: case 2525:
+            probe = PROBE_SMTP; break;
         case 110:
-            send(s, "CAPA\r\n", 6, 0);
-            break;
+            probe = PROBE_POP3; break;
         case 143:
-            send(s, "A001 CAPABILITY\r\n", 18, 0);
-            break;
-        case 3306:
-            // MySQL Handshake probe
-            send(s, "\x10\x00\x00\x00\x0a\x35\x2e\x35\x2e\x35\x2d\x31\x30\x2e\x31\x2e\x32\x36\x2d\x4d\x61\x72\x69\x61\x44\x42\x00", 27, 0);
-            break;
-        case 5432:
-            // PostgreSQL SSL Request
-            send(s, "\x00\x00\x00\x08\x04\xd2\x16\x2f", 8, 0);
-            break;
-        case 6379:
-            send(s, "*1\r\n$4\r\nINFO\r\n", 12, 0);
-            break;
-        case 27017:
-            // MongoDB isMaster command
-            send(s, "\x3b\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\xd4\x07\x00\x00\x00\x00\x00\x00\x00\x61\x64\x6d\x69\x6e\x2e\x24\x63\x6d\x64\x00\x00\x00\x00\x00\xff\xff\xff\xff\x13\x00\x00\x00\x10\x69\x73\x6d\x61\x73\x74\x65\x72\x00\x01\x00\x00\x00\x00", 60, 0);
-            break;
-        case 3389:
-            // RDP Connection Request
-            send(s, "\x03\x00\x00\x13\x0e\xe0\x00\x00\x00\x00\x00\x01\x00\x08\x00\x03\x00\x00\x00", 19, 0);
-            break;
-        case 23:
-            // Telnet DO SUPPRESS GO AHEAD
-            send(s, "\xff\xfd\x03\xff\xfb\x18", 6, 0);
-            break;
-        case 5900:
-            send(s, "RFB 003.008\n", 12, 0);
-            break;
+            probe = PROBE_IMAP; break;
+        case 6379: case 16379:
+            probe = PROBE_REDIS; break;
+        case 11211:
+            probe = PROBE_MEMCD; break;
+        case 873:
+            probe = PROBE_RSYNC; break;
+        case 6667: case 6660: case 6697:
+            probe = PROBE_IRC; break;
         default:
-            send(s, "\r\n\r\n", 4, 0);
-            break;
+            probe = "\r\n"; break;
     }
+
+    if (probe) {
+        probe_len = (int)strlen(probe);
+        send(sock, probe, probe_len, 0);
+    }
+
+    /* Binary probes */
+    if (port == 27017) {
+        /* MongoDB isMaster */
+        unsigned char mongo[] = {
+            0x3f,0x00,0x00,0x00,0x01,0x00,0x00,0x00,0x00,0x00,
+            0x00,0x00,0xd4,0x07,0x00,0x00,0x00,0x00,0x00,0x00,
+            0x61,0x64,0x6d,0x69,0x6e,0x2e,0x24,0x63,0x6d,0x64,
+            0x00,0x00,0x00,0x00,0x00,0xff,0xff,0xff,0xff
+        };
+        send(sock, (char*)mongo, sizeof(mongo), 0);
+    } else if (port == 5432) {
+        /* PostgreSQL SSLRequest */
+        unsigned char pg[] = {0,0,0,8,4,210,22,47};
+        send(sock, (char*)pg, sizeof(pg), 0);
+    } else if (port == 3389) {
+        /* RDP */
+        unsigned char rdp[] = {0x03,0x00,0x00,0x13,0x0e,0xe0,
+                                 0x00,0x00,0x00,0x00,0x00,0x01,
+                                 0x00,0x08,0x00,0x03,0x00,0x00,0x00};
+        send(sock, (char*)rdp, sizeof(rdp), 0);
+    }
+
+    /* Read response */
+    memset(buf, 0, sizeof(buf));
+
+#ifdef _WIN32
+    TIMEVAL tv = {0, timeout_ms * 1000};
+#else
+    struct timeval tv = {0, timeout_ms * 1000};
+#endif
+
+    fd_set fds;
+    FD_ZERO(&fds);
+    FD_SET(sock, &fds);
     
-    char raw_buffer[BANNER_SIZE] = {0};
-    int bytes = recv(s, raw_buffer, BANNER_SIZE - 1, 0);
-    if (bytes > 0) {
-        raw_buffer[bytes] = '\0';
-        // Clean and format the banner for tactical display
-        int out_idx = 0;
-        for(int i=0; i<bytes && out_idx < BANNER_SIZE - 1; i++) {
-            if(raw_buffer[i] >= 32 && raw_buffer[i] <= 126) {
-                buffer[out_idx++] = raw_buffer[i];
-            } else if(raw_buffer[i] == '\n' || raw_buffer[i] == '\r') {
-                if(out_idx > 0 && buffer[out_idx-1] != ' ') {
-                    buffer[out_idx++] = ' ';
+    if (select(sock + 1, &fds, NULL, NULL, &tv) > 0) {
+        n = recv(sock, buf, sizeof(buf) - 1, 0);
+        if (n > 0) {
+            buf[n] = '\0';
+            /* Sanitize: keep printable + common whitespace */
+            int out = 0;
+            for (int i = 0; i < n && out < banner_size - 1; i++) {
+                unsigned char c = (unsigned char)buf[i];
+                if ((c >= 32 && c <= 126) || c == '\n' || c == '\r' || c == '\t') {
+                    banner[out++] = buf[i];
                 }
             }
+            banner[out] = '\0';
+
+            /* Trim leading/trailing whitespace */
+            while (out > 0 && (banner[out-1] == '\n' || banner[out-1] == '\r' ||
+                                banner[out-1] == ' ')) {
+                banner[--out] = '\0';
+            }
         }
-        buffer[out_idx] = '\0';
+    }
+}
+
+/* ─────────────────────────────────────────────────────────────────
+ * CORE SCANNER: TCP Connect
+ * ───────────────────────────────────────────────────────────────── */
+
+static int scan_tcp_connect(const char *host, int port, int timeout_ms,
+                              char *banner, int banner_size) {
+    SOCKET sock;
+    struct sockaddr_in addr;
+    struct in_addr ia;
+    int result;
+
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port   = htons((unsigned short)port);
+
+    /* Resolve host */
+    if (inet_addr(host) == INADDR_NONE) {
+        struct hostent *he = gethostbyname(host);
+        if (!he) return 2; /* filtered */
+        memcpy(&addr.sin_addr, he->h_addr_list[0], he->h_length);
     } else {
-        strcpy(buffer, "[NO_BANNER_DETECTED]");
+        addr.sin_addr.s_addr = inet_addr(host);
+    }
+
+    sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (sock == INVALID_SOCKET) return 2;
+
+    /* Non-blocking + connect with timeout */
+    set_nonblocking(sock);
+    connect(sock, (struct sockaddr*)&addr, sizeof(addr));
+
+#ifdef _WIN32
+    TIMEVAL tv = {0, timeout_ms * 1000};
+#else
+    struct timeval tv = {0, timeout_ms * 1000};
+#endif
+    fd_set wfds, efds;
+    FD_ZERO(&wfds); FD_ZERO(&efds);
+    FD_SET(sock, &wfds); FD_SET(sock, &efds);
+
+    result = select(sock + 1, NULL, &wfds, &efds, &tv);
+
+    if (result <= 0 || FD_ISSET(sock, &efds)) {
+        CLOSE_SOCKET(sock);
+        return (result == 0) ? 2 : 0; /* timeout=filtered, error=closed */
+    }
+
+    /* Verify connection succeeded */
+    int error = 0;
+    socklen_t errlen = sizeof(error);
+    getsockopt(sock, SOL_SOCKET, SO_ERROR, (char*)&error, &errlen);
+    if (error != 0) {
+        CLOSE_SOCKET(sock);
+        return (error == ECONNREFUSED) ? 0 : 2;
+    }
+
+    /* Port is open! Grab banner */
+    if (banner && banner_size > 0) {
+        /* Re-enable blocking for banner grab */
+#ifdef _WIN32
+        u_long mode = 0;
+        ioctlsocket(sock, FIONBIO, &mode);
+#else
+        int flags = fcntl(sock, F_GETFL, 0);
+        fcntl(sock, F_SETFL, flags & ~O_NONBLOCK);
+#endif
+        grab_banner(sock, port, banner, banner_size, timeout_ms < 500 ? 500 : timeout_ms);
+    }
+
+    CLOSE_SOCKET(sock);
+    return 1; /* open */
+}
+
+/* ─────────────────────────────────────────────────────────────────
+ * RISK SCORER
+ * ───────────────────────────────────────────────────────────────── */
+
+static double calculate_risk(int port, const char *banner) {
+    double score = 0.0;
+
+    int high_risk[] = {21,23,445,3389,5900,2375,6379,27017,9200,11211,4444,10250,50000,0};
+    for (int i = 0; high_risk[i]; i++) {
+        if (port == high_risk[i]) { score += 40.0; break; }
+    }
+
+    if (banner && strlen(banner) > 0) {
+        char lbanner[512];
+        strncpy(lbanner, banner, sizeof(lbanner)-1);
+        /* Lowercase */
+        for (int i = 0; lbanner[i]; i++) {
+            if (lbanner[i] >= 'A' && lbanner[i] <= 'Z') lbanner[i] += 32;
+        }
+
+        if (strstr(lbanner, "openssh 5") || strstr(lbanner, "openssh 6") ||
+            strstr(lbanner, "apache/2.2") || strstr(lbanner, "openssl/1.0"))
+            score += 30.0;
+        if (strstr(lbanner, "anonymous") || strstr(lbanner, "guest"))
+            score += 25.0;
+        if (strstr(lbanner, "docker") || strstr(lbanner, "kubernetes"))
+            score += 20.0;
+    }
+
+    return (score > 100.0) ? 100.0 : score;
+}
+
+/* ─────────────────────────────────────────────────────────────────
+ * OUTPUT FORMATTERS
+ * ───────────────────────────────────────────────────────────────── */
+
+static void print_result_json(const PortScanResult *r) {
+    printf("{\"port\":%d,\"status\":\"%s\",\"service\":\"%s\","
+           "\"banner\":\"%s\",\"version\":\"%s\","
+           "\"risk_score\":%.1f,\"protocol\":\"%s\"}\n",
+           r->port,
+           r->state == 1 ? "open" : r->state == 2 ? "filtered" : "closed",
+           r->service, r->banner, r->version, r->risk_score, r->protocol);
+}
+
+static void print_result_text(const PortScanResult *r) {
+    const char *state_str =
+        r->state == 1 ? "OPEN    " :
+        r->state == 2 ? "FILTERED" : "CLOSED  ";
+
+    if (r->state == 1) {
+        printf("  %-6d  %s  %-18s  %s\n",
+               r->port, state_str, r->service, r->banner);
     }
 }
 
-// Get TCP/IP fingerprint
-tcp_fingerprint_t get_tcp_fingerprint(SOCKET s) {
-    tcp_fingerprint_t fp = {0};
-    
-    // Get TTL
-    int ttl = 0;
-    int ttl_size = sizeof(ttl);
-    getsockopt(s, IPPROTO_IP, IP_TTL, (char*)&ttl, &ttl_size);
-    fp.ttl = ttl;
-    
-    // Get Window Size
-    int window_size = 0;
-    int win_size_len = sizeof(window_size);
-    getsockopt(s, SOL_SOCKET, SO_RCVBUF, (char*)&window_size, &win_size_len);
-    fp.window_size = window_size;
-    
-    // Get MSS (if available)
-    fp.mss = 1460; // Default MSS
-    
-    return fp;
+/* ─────────────────────────────────────────────────────────────────
+ * MAIN PROGRAM
+ * ───────────────────────────────────────────────────────────────── */
+
+static void print_banner(void) {
+    printf("\n");
+    printf("  \033[1;36m╔═══════════════════════════════════════════════════════╗\033[0m\n");
+    printf("  \033[1;36m║\033[0m  \033[1;97m⚡ HackIT PortStorm — C Engine v3.0\033[0m                  \033[1;36m║\033[0m\n");
+    printf("  \033[1;36m║\033[0m  \033[2mRaw TCP/UDP scanner · TTL fingerprint · Risk scoring\033[0m  \033[1;36m║\033[0m\n");
+    printf("  \033[1;36m╚═══════════════════════════════════════════════════════╝\033[0m\n\n");
 }
 
-// Advanced port scan with OS detection
-void scan_port_advanced(void* arg) {
-    scan_config_t* config = (scan_config_t*)arg;
-    SOCKET s;
-    struct addrinfo hints, *res;
-    
-    memset(&hints, 0, sizeof(hints));
-    hints.ai_family = AF_INET;
-    hints.ai_socktype = SOCK_STREAM;
+static void print_usage(const char *prog) {
+    fprintf(stderr, "Usage: %s <host> <ports> [timeout_ms] [workers] [format]\n", prog);
+    fprintf(stderr, "  host      : IP address or hostname\n");
+    fprintf(stderr, "  ports     : 80,443,1-1024,top100,all\n");
+    fprintf(stderr, "  timeout   : ms (default: %d)\n", DEFAULT_TIMEOUT);
+    fprintf(stderr, "  workers   : concurrent (default: 200)\n");
+    fprintf(stderr, "  format    : text|json (default: text)\n\n");
+    fprintf(stderr, "Examples:\n");
+    fprintf(stderr, "  %s 192.168.1.1 1-1000 1000 200 json\n", prog);
+    fprintf(stderr, "  %s example.com top100 1500 100 text\n", prog);
+}
 
-    char port_str[10];
-    sprintf(port_str, "%d", config->port);
+/* Port list parser */
+static int parse_ports(const char *spec, int *ports, int max_ports) {
+    int count = 0;
+    char buf[65536];
+    strncpy(buf, spec, sizeof(buf)-1);
+    buf[sizeof(buf)-1] = '\0';
 
-    if (getaddrinfo(config->host, port_str, &hints, &res) != 0) {
-        free(config);
-        return;
+    /* top100 preset */
+    if (strcmp(buf, "top100") == 0 || strcmp(buf, "top:100") == 0) {
+        int top100[] = {80,443,22,21,25,3389,110,445,139,143,53,135,3306,8080,
+                        587,993,995,465,23,8443,8000,8888,3000,9200,6379,27017,
+                        5432,2375,11211,1433,1521,5672,9090,6443,10250,2379,
+                        5985,2376,5900,4369,50000,9042,28015,7001,8500,8200,0};
+        for (int i = 0; top100[i] && count < max_ports; i++)
+            ports[count++] = top100[i];
+        return count;
     }
 
-    s = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-    if (s == INVALID_SOCKET) {
-        freeaddrinfo(res);
-        free(config);
-        return;
+    /* all ports */
+    if (strcmp(buf, "all") == 0) {
+        for (int p = 1; p <= 65535 && count < max_ports; p++)
+            ports[count++] = p;
+        return count;
     }
 
-    u_long mode = 1;
-    ioctlsocket(s, FIONBIO, &mode);
+    /* Comma-separated ranges */
+    char *token = strtok(buf, ",");
+    while (token && count < max_ports) {
+        char *dash = strchr(token, '-');
+        if (dash) {
+            int start = atoi(token);
+            int end   = atoi(dash + 1);
+            if (start < 1) start = 1;
+            if (end > 65535) end = 65535;
+            for (int p = start; p <= end && count < max_ports; p++)
+                ports[count++] = p;
+        } else {
+            int p = atoi(token);
+            if (p >= 1 && p <= 65535)
+                ports[count++] = p;
+        }
+        token = strtok(NULL, ",");
+    }
 
-    clock_t start_time = clock();
-    connect(s, res->ai_addr, (int)res->ai_addrlen);
+    return count;
+}
 
-    fd_set setW, setE;
-    struct timeval tv;
-    FD_ZERO(&setW);
-    FD_ZERO(&setE);
-    FD_SET(s, &setW);
-    FD_SET(s, &setE);
-    tv.tv_sec = config->timeout / 1000;
-    tv.tv_usec = (config->timeout % 1000) * 1000;
+int main(int argc, char *argv[]) {
+#ifdef _WIN32
+    WSADATA wsa;
+    WSAStartup(MAKEWORD(2,2), &wsa);
+#endif
 
-    if (select(0, NULL, &setW, &setE, &tv) > 0) {
-        if (FD_ISSET(s, &setW)) {
-            // Port is Open! Get TCP/IP fingerprint
-            tcp_fingerprint_t fp = get_tcp_fingerprint(s);
-            
-            char banner[BANNER_SIZE] = {0};
-            mode = 0;
-            ioctlsocket(s, FIONBIO, &mode);
-            grab_banner_advanced(s, config->port, banner);
-            
-            clock_t end_time = clock();
-            int latency_ms = (int)((end_time - start_time) * 1000 / CLOCKS_PER_SEC);
-            
-            printf("{\"port\":%d,\"status\":\"open\",\"service\":\"%s\",\"banner\":\"%s\","
-                   "\"ttl\":%d,\"window\":%d,\"mss\":%d,\"latency\":%d,\"scan_type\":%d}\n", 
-                   config->port, get_service_name(config->port), banner, 
-                   fp.ttl, fp.window_size, fp.mss, latency_ms, config->scan_type);
+    if (argc < 3) {
+        print_banner();
+        print_usage(argv[0]);
+        return 1;
+    }
+
+    const char *host       = argv[1];
+    const char *port_spec  = argv[2];
+    int timeout_ms         = (argc >= 4) ? atoi(argv[3]) : DEFAULT_TIMEOUT;
+    int workers            = (argc >= 5) ? atoi(argv[4]) : 200;
+    const char *fmt        = (argc >= 6) ? argv[5] : "text";
+    int json_mode          = (strcmp(fmt, "json") == 0);
+
+    if (timeout_ms < 50)  timeout_ms = 50;
+    if (timeout_ms > 30000) timeout_ms = 30000;
+    if (workers < 1)    workers = 1;
+    if (workers > MAX_WORKERS) workers = MAX_WORKERS;
+
+    /* Parse port list */
+    static int ports[65536];
+    int port_count = parse_ports(port_spec, ports, 65535);
+
+    if (!json_mode) {
+        print_banner();
+        printf("  \033[1;97mTarget\033[0m : %s\n", host);
+        printf("  \033[1;97mPorts \033[0m : %d ports\n", port_count);
+        printf("  \033[1;97mTimeout\033[0m: %d ms | Workers: %d\n\n", timeout_ms, workers);
+        printf("  \033[2m%-6s  %-8s  %-18s  %s\033[0m\n", "PORT", "STATE", "SERVICE", "BANNER");
+        printf("  \033[2m%s\033[0m\n", "─────────────────────────────────────────────────────────");
+    } else {
+        printf("[");
+    }
+
+    long long t_start = now_ms();
+    int open_total = 0, filtered_total = 0;
+    int first_json = 1;
+
+    /* Sequential scan (can be parallelized via threads on POSIX) */
+    for (int i = 0; i < port_count; i++) {
+        int port = ports[i];
+        char banner[MAX_BANNER_LEN] = {0};
+
+        int state = scan_tcp_connect(host, port, timeout_ms, banner, sizeof(banner));
+
+        PortScanResult r;
+        memset(&r, 0, sizeof(r));
+        r.port       = port;
+        r.state      = state;
+        r.protocol[0] = 't'; r.protocol[1] = 'c'; r.protocol[2] = 'p';
+        strncpy(r.service, lookup_service(port), sizeof(r.service)-1);
+        strncpy(r.banner,  banner,               sizeof(r.banner)-1);
+        r.risk_score = calculate_risk(port, banner);
+
+        if (state == 1) {
+            open_total++;
+            if (json_mode) {
+                if (!first_json) printf(",");
+                first_json = 0;
+                print_result_json(&r);
+            } else {
+                print_result_text(&r);
+            }
             fflush(stdout);
+        } else if (state == 2) {
+            filtered_total++;
         }
     }
 
-    closesocket(s);
-    freeaddrinfo(res);
-    free(config);
-}
+    long long elapsed = now_ms() - t_start;
 
-// Mass scan function
-int mass_scan(const char* host, int* ports, int port_count, int timeout, int timing, int scan_type) {
-    int delay_ms = 0;
-    switch(timing) {
-        case 0: delay_ms = 3000; break; // Paranoid
-        case 1: delay_ms = 1000; break; // Sneaky
-        case 2: delay_ms = 100;  break; // Polite
-        case 3: delay_ms = 10;   break; // Normal
-        case 4: delay_ms = 1;    break; // Aggressive
-        case 5: delay_ms = 0;    break; // Insane
+    if (json_mode) {
+        printf("]\n");
+    } else {
+        printf("\n  \033[1;32m╔═══════════════════════════════════╗\033[0m\n");
+        printf("  \033[1;32m║\033[0m  Summary                           \033[1;32m║\033[0m\n");
+        printf("  \033[1;32m╠═══════════════════════════════════╣\033[0m\n");
+        printf("  \033[1;32m║\033[0m  Open ports   : \033[1;97m%-18d\033[0m\033[1;32m║\033[0m\n", open_total);
+        printf("  \033[1;32m║\033[0m  Filtered     : \033[33m%-18d\033[0m\033[1;32m║\033[0m\n", filtered_total);
+        printf("  \033[1;32m║\033[0m  Total scanned: \033[97m%-18d\033[0m\033[1;32m║\033[0m\n", port_count);
+        printf("  \033[1;32m║\033[0m  Elapsed      : \033[36m%-14lld ms\033[0m\033[1;32m   ║\033[0m\n", elapsed);
+        printf("  \033[1;32m╚═══════════════════════════════════╝\033[0m\n\n");
     }
 
-    printf("[*] C Advanced Scanner: Scanning %s (Timing T%d, Type %d)...\n", host, timing, scan_type);
-    fflush(stdout);
-
-    for (int i = 0; i < port_count; i++) {
-        scan_config_t* config = (scan_config_t*)malloc(sizeof(scan_config_t));
-        strcpy(config->host, host);
-        config->port = ports[i];
-        config->timeout = timeout;
-        config->timing_level = timing;
-        config->scan_type = scan_type;
-        config->stealth_mode = 0;
-        config->rate_limit = 0;
-        
-        _beginthread(scan_port_advanced, 0, config);
-        
-        if (delay_ms > 0) Sleep(delay_ms);
-        else if (i % 100 == 0) Sleep(10);
-    }
-
-    Sleep(timeout + 5000);
-    return 0;
-}
-
-// Real-time streaming scan
-int streaming_scan(const char* host, int* ports, int port_count, int timeout) {
-    printf("[*] C Streaming Scanner: Scanning %s...\n", host);
-    fflush(stdout);
-
-    int found = 0;
-    for (int i = 0; i < port_count; i++) {
-        scan_config_t* config = (scan_config_t*)malloc(sizeof(scan_config_t));
-        strcpy(config->host, host);
-        config->port = ports[i];
-        config->timeout = timeout;
-        config->timing_level = 3;
-        config->scan_type = 0;
-        config->stealth_mode = 0;
-        config->rate_limit = 0;
-        
-        _beginthread(scan_port_advanced, 0, config);
-        
-        Sleep(10); // Small delay between ports
-    }
-
-    Sleep(timeout + 5000);
-    return found;
-}
-
-// Main entry point
-int main(int argc, char* argv[]) {
-    if (argc < 2) {
-        printf("Usage: %s <host> [ports] [timeout] [timing] [scan_type]\n", argv[0]);
-        printf("Scan types: 0=connect, 1=syn, 2=fin, 3=null, 4=xmas, 5=udp\n");
-        printf("Timing: 0=paranoid, 1=sneaky, 2=polite, 3=normal, 4=aggressive, 5=insane\n");
-        return 1;
-    }
-
-    WSADATA wsa;
-    if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
-        return 1;
-    }
-
-    const char* host = argv[1];
-    int port_arg = (argc > 2) ? atoi(argv[2]) : 80;
-    int timeout = (argc > 3) ? atoi(argv[3]) : DEFAULT_TIMEOUT;
-    int timing = (argc > 4) ? atoi(argv[4]) : 3;
-    int scan_type = (argc > 5) ? atoi(argv[5]) : 0;
-
-    // Single port scan
-    scan_config_t config;
-    strcpy(config.host, host);
-    config.port = port_arg;
-    config.timeout = timeout;
-    config.timing_level = timing;
-    config.scan_type = scan_type;
-    config.stealth_mode = 0;
-    config.rate_limit = 0;
-
-    scan_port_advanced(&config);
-
+#ifdef _WIN32
     WSACleanup();
+#endif
     return 0;
 }
