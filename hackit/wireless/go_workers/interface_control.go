@@ -46,11 +46,11 @@ func (c *InterfaceControlManager) TransitionMAC(iface string, action string) err
 
 	if action == "random" {
 		rand.Seed(time.Now().UnixNano())
-		targetMAC = fmt.Sprintf("00:1A:2B:3C:%02X:%02X", rand.Intn(256), rand.Intn(256))
+		targetMAC = fmt.Sprintf("02:00:%02X:%02X:%02X:%02X", rand.Intn(256), rand.Intn(256), rand.Intn(256), rand.Intn(256))
 	} else {
 		targetMAC = action
 		if !c.IsValidMAC(targetMAC) {
-			return fmt.Errorf("invalid MAC address syntax: %s. Must be formatted like 00:11:22:33:44:55", targetMAC)
+			return fmt.Errorf("invalid MAC address syntax: %s. Use format XX:XX:XX:XX:XX:XX", targetMAC)
 		}
 	}
 

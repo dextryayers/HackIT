@@ -64,7 +64,7 @@ func FuzzDirectories(baseURL string, concurrency int) []FuzzResult {
 
 func fuzzWorker(baseURL string, paths <-chan string, results chan<- FuzzResult, wg *sync.WaitGroup) {
 	defer wg.Done()
-	
+
 	tr := &http.Transport{
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 		MaxIdleConns:    100,
@@ -82,12 +82,12 @@ func fuzzWorker(baseURL string, paths <-chan string, results chan<- FuzzResult, 
 		targetURL := baseURL + path
 		req, _ := http.NewRequest("GET", targetURL, nil)
 		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
-		
+
 		resp, err := client.Do(req)
 		if err != nil {
 			continue
 		}
-		
+
 		statusCode := resp.StatusCode
 		resp.Body.Close()
 

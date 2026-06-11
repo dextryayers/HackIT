@@ -152,6 +152,78 @@ src/adapter_detection.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles\hackit_wireless_c.dir\build.make CMakeFiles/hackit_wireless_c.dir/src/adapter_detection.c.s
 .PHONY : src/adapter_detection.c.s
 
+src/beacon_flood.obj: src/beacon_flood.c.obj
+.PHONY : src/beacon_flood.obj
+
+# target to build an object file
+src/beacon_flood.c.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\hackit_wireless_c.dir\build.make CMakeFiles/hackit_wireless_c.dir/src/beacon_flood.c.obj
+.PHONY : src/beacon_flood.c.obj
+
+src/beacon_flood.i: src/beacon_flood.c.i
+.PHONY : src/beacon_flood.i
+
+# target to preprocess a source file
+src/beacon_flood.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\hackit_wireless_c.dir\build.make CMakeFiles/hackit_wireless_c.dir/src/beacon_flood.c.i
+.PHONY : src/beacon_flood.c.i
+
+src/beacon_flood.s: src/beacon_flood.c.s
+.PHONY : src/beacon_flood.s
+
+# target to generate assembly for a file
+src/beacon_flood.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\hackit_wireless_c.dir\build.make CMakeFiles/hackit_wireless_c.dir/src/beacon_flood.c.s
+.PHONY : src/beacon_flood.c.s
+
+src/channel_hopper.obj: src/channel_hopper.c.obj
+.PHONY : src/channel_hopper.obj
+
+# target to build an object file
+src/channel_hopper.c.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\hackit_wireless_c.dir\build.make CMakeFiles/hackit_wireless_c.dir/src/channel_hopper.c.obj
+.PHONY : src/channel_hopper.c.obj
+
+src/channel_hopper.i: src/channel_hopper.c.i
+.PHONY : src/channel_hopper.i
+
+# target to preprocess a source file
+src/channel_hopper.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\hackit_wireless_c.dir\build.make CMakeFiles/hackit_wireless_c.dir/src/channel_hopper.c.i
+.PHONY : src/channel_hopper.c.i
+
+src/channel_hopper.s: src/channel_hopper.c.s
+.PHONY : src/channel_hopper.s
+
+# target to generate assembly for a file
+src/channel_hopper.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\hackit_wireless_c.dir\build.make CMakeFiles/hackit_wireless_c.dir/src/channel_hopper.c.s
+.PHONY : src/channel_hopper.c.s
+
+src/client_probe.obj: src/client_probe.c.obj
+.PHONY : src/client_probe.obj
+
+# target to build an object file
+src/client_probe.c.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\hackit_wireless_c.dir\build.make CMakeFiles/hackit_wireless_c.dir/src/client_probe.c.obj
+.PHONY : src/client_probe.c.obj
+
+src/client_probe.i: src/client_probe.c.i
+.PHONY : src/client_probe.i
+
+# target to preprocess a source file
+src/client_probe.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\hackit_wireless_c.dir\build.make CMakeFiles/hackit_wireless_c.dir/src/client_probe.c.i
+.PHONY : src/client_probe.c.i
+
+src/client_probe.s: src/client_probe.c.s
+.PHONY : src/client_probe.s
+
+# target to generate assembly for a file
+src/client_probe.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\hackit_wireless_c.dir\build.make CMakeFiles/hackit_wireless_c.dir/src/client_probe.c.s
+.PHONY : src/client_probe.c.s
+
 src/crypto_security.obj: src/crypto_security.c.obj
 .PHONY : src/crypto_security.obj
 
@@ -175,6 +247,54 @@ src/crypto_security.s: src/crypto_security.c.s
 src/crypto_security.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles\hackit_wireless_c.dir\build.make CMakeFiles/hackit_wireless_c.dir/src/crypto_security.c.s
 .PHONY : src/crypto_security.c.s
+
+src/deauth_engine.obj: src/deauth_engine.c.obj
+.PHONY : src/deauth_engine.obj
+
+# target to build an object file
+src/deauth_engine.c.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\hackit_wireless_c.dir\build.make CMakeFiles/hackit_wireless_c.dir/src/deauth_engine.c.obj
+.PHONY : src/deauth_engine.c.obj
+
+src/deauth_engine.i: src/deauth_engine.c.i
+.PHONY : src/deauth_engine.i
+
+# target to preprocess a source file
+src/deauth_engine.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\hackit_wireless_c.dir\build.make CMakeFiles/hackit_wireless_c.dir/src/deauth_engine.c.i
+.PHONY : src/deauth_engine.c.i
+
+src/deauth_engine.s: src/deauth_engine.c.s
+.PHONY : src/deauth_engine.s
+
+# target to generate assembly for a file
+src/deauth_engine.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\hackit_wireless_c.dir\build.make CMakeFiles/hackit_wireless_c.dir/src/deauth_engine.c.s
+.PHONY : src/deauth_engine.c.s
+
+src/eapol_analyzer.obj: src/eapol_analyzer.cpp.obj
+.PHONY : src/eapol_analyzer.obj
+
+# target to build an object file
+src/eapol_analyzer.cpp.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\hackit_wireless_c.dir\build.make CMakeFiles/hackit_wireless_c.dir/src/eapol_analyzer.cpp.obj
+.PHONY : src/eapol_analyzer.cpp.obj
+
+src/eapol_analyzer.i: src/eapol_analyzer.cpp.i
+.PHONY : src/eapol_analyzer.i
+
+# target to preprocess a source file
+src/eapol_analyzer.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\hackit_wireless_c.dir\build.make CMakeFiles/hackit_wireless_c.dir/src/eapol_analyzer.cpp.i
+.PHONY : src/eapol_analyzer.cpp.i
+
+src/eapol_analyzer.s: src/eapol_analyzer.cpp.s
+.PHONY : src/eapol_analyzer.s
+
+# target to generate assembly for a file
+src/eapol_analyzer.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\hackit_wireless_c.dir\build.make CMakeFiles/hackit_wireless_c.dir/src/eapol_analyzer.cpp.s
+.PHONY : src/eapol_analyzer.cpp.s
 
 src/frame_parser.obj: src/frame_parser.cpp.obj
 .PHONY : src/frame_parser.obj
@@ -224,6 +344,30 @@ src/interface_control.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles\hackit_wireless_c.dir\build.make CMakeFiles/hackit_wireless_c.dir/src/interface_control.c.s
 .PHONY : src/interface_control.c.s
 
+src/key_manager.obj: src/key_manager.cpp.obj
+.PHONY : src/key_manager.obj
+
+# target to build an object file
+src/key_manager.cpp.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\hackit_wireless_c.dir\build.make CMakeFiles/hackit_wireless_c.dir/src/key_manager.cpp.obj
+.PHONY : src/key_manager.cpp.obj
+
+src/key_manager.i: src/key_manager.cpp.i
+.PHONY : src/key_manager.i
+
+# target to preprocess a source file
+src/key_manager.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\hackit_wireless_c.dir\build.make CMakeFiles/hackit_wireless_c.dir/src/key_manager.cpp.i
+.PHONY : src/key_manager.cpp.i
+
+src/key_manager.s: src/key_manager.cpp.s
+.PHONY : src/key_manager.s
+
+# target to generate assembly for a file
+src/key_manager.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\hackit_wireless_c.dir\build.make CMakeFiles/hackit_wireless_c.dir/src/key_manager.cpp.s
+.PHONY : src/key_manager.cpp.s
+
 src/packet_capture.obj: src/packet_capture.c.obj
 .PHONY : src/packet_capture.obj
 
@@ -247,6 +391,78 @@ src/packet_capture.s: src/packet_capture.c.s
 src/packet_capture.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles\hackit_wireless_c.dir\build.make CMakeFiles/hackit_wireless_c.dir/src/packet_capture.c.s
 .PHONY : src/packet_capture.c.s
+
+src/packet_forge.obj: src/packet_forge.cpp.obj
+.PHONY : src/packet_forge.obj
+
+# target to build an object file
+src/packet_forge.cpp.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\hackit_wireless_c.dir\build.make CMakeFiles/hackit_wireless_c.dir/src/packet_forge.cpp.obj
+.PHONY : src/packet_forge.cpp.obj
+
+src/packet_forge.i: src/packet_forge.cpp.i
+.PHONY : src/packet_forge.i
+
+# target to preprocess a source file
+src/packet_forge.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\hackit_wireless_c.dir\build.make CMakeFiles/hackit_wireless_c.dir/src/packet_forge.cpp.i
+.PHONY : src/packet_forge.cpp.i
+
+src/packet_forge.s: src/packet_forge.cpp.s
+.PHONY : src/packet_forge.s
+
+# target to generate assembly for a file
+src/packet_forge.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\hackit_wireless_c.dir\build.make CMakeFiles/hackit_wireless_c.dir/src/packet_forge.cpp.s
+.PHONY : src/packet_forge.cpp.s
+
+src/packet_injector.obj: src/packet_injector.c.obj
+.PHONY : src/packet_injector.obj
+
+# target to build an object file
+src/packet_injector.c.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\hackit_wireless_c.dir\build.make CMakeFiles/hackit_wireless_c.dir/src/packet_injector.c.obj
+.PHONY : src/packet_injector.c.obj
+
+src/packet_injector.i: src/packet_injector.c.i
+.PHONY : src/packet_injector.i
+
+# target to preprocess a source file
+src/packet_injector.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\hackit_wireless_c.dir\build.make CMakeFiles/hackit_wireless_c.dir/src/packet_injector.c.i
+.PHONY : src/packet_injector.c.i
+
+src/packet_injector.s: src/packet_injector.c.s
+.PHONY : src/packet_injector.s
+
+# target to generate assembly for a file
+src/packet_injector.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\hackit_wireless_c.dir\build.make CMakeFiles/hackit_wireless_c.dir/src/packet_injector.c.s
+.PHONY : src/packet_injector.c.s
+
+src/pmkid_harvest.obj: src/pmkid_harvest.c.obj
+.PHONY : src/pmkid_harvest.obj
+
+# target to build an object file
+src/pmkid_harvest.c.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\hackit_wireless_c.dir\build.make CMakeFiles/hackit_wireless_c.dir/src/pmkid_harvest.c.obj
+.PHONY : src/pmkid_harvest.c.obj
+
+src/pmkid_harvest.i: src/pmkid_harvest.c.i
+.PHONY : src/pmkid_harvest.i
+
+# target to preprocess a source file
+src/pmkid_harvest.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\hackit_wireless_c.dir\build.make CMakeFiles/hackit_wireless_c.dir/src/pmkid_harvest.c.i
+.PHONY : src/pmkid_harvest.c.i
+
+src/pmkid_harvest.s: src/pmkid_harvest.c.s
+.PHONY : src/pmkid_harvest.s
+
+# target to generate assembly for a file
+src/pmkid_harvest.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\hackit_wireless_c.dir\build.make CMakeFiles/hackit_wireless_c.dir/src/pmkid_harvest.c.s
+.PHONY : src/pmkid_harvest.c.s
 
 src/raw_networking.obj: src/raw_networking.c.obj
 .PHONY : src/raw_networking.obj
@@ -296,6 +512,54 @@ src/signal_processing.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles\hackit_wireless_c.dir\build.make CMakeFiles/hackit_wireless_c.dir/src/signal_processing.cpp.s
 .PHONY : src/signal_processing.cpp.s
 
+src/spectrum_scanner.obj: src/spectrum_scanner.cpp.obj
+.PHONY : src/spectrum_scanner.obj
+
+# target to build an object file
+src/spectrum_scanner.cpp.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\hackit_wireless_c.dir\build.make CMakeFiles/hackit_wireless_c.dir/src/spectrum_scanner.cpp.obj
+.PHONY : src/spectrum_scanner.cpp.obj
+
+src/spectrum_scanner.i: src/spectrum_scanner.cpp.i
+.PHONY : src/spectrum_scanner.i
+
+# target to preprocess a source file
+src/spectrum_scanner.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\hackit_wireless_c.dir\build.make CMakeFiles/hackit_wireless_c.dir/src/spectrum_scanner.cpp.i
+.PHONY : src/spectrum_scanner.cpp.i
+
+src/spectrum_scanner.s: src/spectrum_scanner.cpp.s
+.PHONY : src/spectrum_scanner.s
+
+# target to generate assembly for a file
+src/spectrum_scanner.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\hackit_wireless_c.dir\build.make CMakeFiles/hackit_wireless_c.dir/src/spectrum_scanner.cpp.s
+.PHONY : src/spectrum_scanner.cpp.s
+
+src/wep_cracker.obj: src/wep_cracker.cpp.obj
+.PHONY : src/wep_cracker.obj
+
+# target to build an object file
+src/wep_cracker.cpp.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\hackit_wireless_c.dir\build.make CMakeFiles/hackit_wireless_c.dir/src/wep_cracker.cpp.obj
+.PHONY : src/wep_cracker.cpp.obj
+
+src/wep_cracker.i: src/wep_cracker.cpp.i
+.PHONY : src/wep_cracker.i
+
+# target to preprocess a source file
+src/wep_cracker.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\hackit_wireless_c.dir\build.make CMakeFiles/hackit_wireless_c.dir/src/wep_cracker.cpp.i
+.PHONY : src/wep_cracker.cpp.i
+
+src/wep_cracker.s: src/wep_cracker.cpp.s
+.PHONY : src/wep_cracker.s
+
+# target to generate assembly for a file
+src/wep_cracker.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\hackit_wireless_c.dir\build.make CMakeFiles/hackit_wireless_c.dir/src/wep_cracker.cpp.s
+.PHONY : src/wep_cracker.cpp.s
+
 src/wifi_stack.obj: src/wifi_stack.c.obj
 .PHONY : src/wifi_stack.obj
 
@@ -344,6 +608,54 @@ src/wireless_frame.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles\hackit_wireless_c.dir\build.make CMakeFiles/hackit_wireless_c.dir/src/wireless_frame.c.s
 .PHONY : src/wireless_frame.c.s
 
+src/wpa3_sae.obj: src/wpa3_sae.c.obj
+.PHONY : src/wpa3_sae.obj
+
+# target to build an object file
+src/wpa3_sae.c.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\hackit_wireless_c.dir\build.make CMakeFiles/hackit_wireless_c.dir/src/wpa3_sae.c.obj
+.PHONY : src/wpa3_sae.c.obj
+
+src/wpa3_sae.i: src/wpa3_sae.c.i
+.PHONY : src/wpa3_sae.i
+
+# target to preprocess a source file
+src/wpa3_sae.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\hackit_wireless_c.dir\build.make CMakeFiles/hackit_wireless_c.dir/src/wpa3_sae.c.i
+.PHONY : src/wpa3_sae.c.i
+
+src/wpa3_sae.s: src/wpa3_sae.c.s
+.PHONY : src/wpa3_sae.s
+
+# target to generate assembly for a file
+src/wpa3_sae.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\hackit_wireless_c.dir\build.make CMakeFiles/hackit_wireless_c.dir/src/wpa3_sae.c.s
+.PHONY : src/wpa3_sae.c.s
+
+src/wps_attack.obj: src/wps_attack.cpp.obj
+.PHONY : src/wps_attack.obj
+
+# target to build an object file
+src/wps_attack.cpp.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\hackit_wireless_c.dir\build.make CMakeFiles/hackit_wireless_c.dir/src/wps_attack.cpp.obj
+.PHONY : src/wps_attack.cpp.obj
+
+src/wps_attack.i: src/wps_attack.cpp.i
+.PHONY : src/wps_attack.i
+
+# target to preprocess a source file
+src/wps_attack.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\hackit_wireless_c.dir\build.make CMakeFiles/hackit_wireless_c.dir/src/wps_attack.cpp.i
+.PHONY : src/wps_attack.cpp.i
+
+src/wps_attack.s: src/wps_attack.cpp.s
+.PHONY : src/wps_attack.s
+
+# target to generate assembly for a file
+src/wps_attack.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\hackit_wireless_c.dir\build.make CMakeFiles/hackit_wireless_c.dir/src/wps_attack.cpp.s
+.PHONY : src/wps_attack.cpp.s
+
 # Help Target
 help:
 	@echo The following are some of the valid targets for this Makefile:
@@ -356,30 +668,69 @@ help:
 	@echo ... src/adapter_detection.obj
 	@echo ... src/adapter_detection.i
 	@echo ... src/adapter_detection.s
+	@echo ... src/beacon_flood.obj
+	@echo ... src/beacon_flood.i
+	@echo ... src/beacon_flood.s
+	@echo ... src/channel_hopper.obj
+	@echo ... src/channel_hopper.i
+	@echo ... src/channel_hopper.s
+	@echo ... src/client_probe.obj
+	@echo ... src/client_probe.i
+	@echo ... src/client_probe.s
 	@echo ... src/crypto_security.obj
 	@echo ... src/crypto_security.i
 	@echo ... src/crypto_security.s
+	@echo ... src/deauth_engine.obj
+	@echo ... src/deauth_engine.i
+	@echo ... src/deauth_engine.s
+	@echo ... src/eapol_analyzer.obj
+	@echo ... src/eapol_analyzer.i
+	@echo ... src/eapol_analyzer.s
 	@echo ... src/frame_parser.obj
 	@echo ... src/frame_parser.i
 	@echo ... src/frame_parser.s
 	@echo ... src/interface_control.obj
 	@echo ... src/interface_control.i
 	@echo ... src/interface_control.s
+	@echo ... src/key_manager.obj
+	@echo ... src/key_manager.i
+	@echo ... src/key_manager.s
 	@echo ... src/packet_capture.obj
 	@echo ... src/packet_capture.i
 	@echo ... src/packet_capture.s
+	@echo ... src/packet_forge.obj
+	@echo ... src/packet_forge.i
+	@echo ... src/packet_forge.s
+	@echo ... src/packet_injector.obj
+	@echo ... src/packet_injector.i
+	@echo ... src/packet_injector.s
+	@echo ... src/pmkid_harvest.obj
+	@echo ... src/pmkid_harvest.i
+	@echo ... src/pmkid_harvest.s
 	@echo ... src/raw_networking.obj
 	@echo ... src/raw_networking.i
 	@echo ... src/raw_networking.s
 	@echo ... src/signal_processing.obj
 	@echo ... src/signal_processing.i
 	@echo ... src/signal_processing.s
+	@echo ... src/spectrum_scanner.obj
+	@echo ... src/spectrum_scanner.i
+	@echo ... src/spectrum_scanner.s
+	@echo ... src/wep_cracker.obj
+	@echo ... src/wep_cracker.i
+	@echo ... src/wep_cracker.s
 	@echo ... src/wifi_stack.obj
 	@echo ... src/wifi_stack.i
 	@echo ... src/wifi_stack.s
 	@echo ... src/wireless_frame.obj
 	@echo ... src/wireless_frame.i
 	@echo ... src/wireless_frame.s
+	@echo ... src/wpa3_sae.obj
+	@echo ... src/wpa3_sae.i
+	@echo ... src/wpa3_sae.s
+	@echo ... src/wps_attack.obj
+	@echo ... src/wps_attack.i
+	@echo ... src/wps_attack.s
 .PHONY : help
 
 

@@ -8,23 +8,23 @@ import (
 )
 
 type SSLResult struct {
-	Issuer         string
-	Subject        string
-	ExpiryDate     time.Time
-	DaysUntilExpy  int
-	TLSVersion     string
-	IsExpired      bool
+	Issuer          string
+	Subject         string
+	ExpiryDate      time.Time
+	DaysUntilExpy   int
+	TLSVersion      string
+	IsExpired       bool
 	Vulnerabilities []string
 }
 
 // AuditSSL audits the SSL/TLS configuration of an HTTPS port
 func AuditSSL(ip string, port int) *SSLResult {
 	target := fmt.Sprintf("%s:%d", ip, port)
-	
+
 	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: 5 * time.Second}, "tcp", target, &tls.Config{
 		InsecureSkipVerify: true, // We still want to see the cert even if it's invalid
 	})
-	
+
 	if err != nil {
 		return nil
 	}
@@ -36,7 +36,7 @@ func AuditSSL(ip string, port int) *SSLResult {
 	}
 
 	cert := state.PeerCertificates[0]
-	
+
 	result := &SSLResult{
 		Issuer:        cert.Issuer.Organization[0] + " " + cert.Issuer.CommonName,
 		Subject:       cert.Subject.CommonName,

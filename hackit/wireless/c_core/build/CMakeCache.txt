@@ -239,26 +239,6 @@ CMAKE_TAPI:FILEPATH=CMAKE_TAPI-NOTFOUND
 // Studio IDE projects all commands are done without /nologo.
 CMAKE_VERBOSE_MAKEFILE:BOOL=FALSE
 
-//Directory under which to collect all populated content
-FETCHCONTENT_BASE_DIR:PATH=D:/web/hacks/hackstools/hackit/wireless/c_core/build/_deps
-
-//Disables all attempts to download or update content and assumes
-// source dirs already exist
-FETCHCONTENT_FULLY_DISCONNECTED:BOOL=OFF
-
-//Enables QUIET option for all content population
-FETCHCONTENT_QUIET:BOOL=ON
-
-//When not empty, overrides where to find pre-populated content
-// for json
-FETCHCONTENT_SOURCE_DIR_JSON:PATH=
-
-//Enables UPDATE_DISCONNECTED behavior for all content population
-FETCHCONTENT_UPDATES_DISCONNECTED:BOOL=OFF
-
-//Enables UPDATE_DISCONNECTED behavior just for population of json
-FETCHCONTENT_UPDATES_DISCONNECTED_JSON:BOOL=OFF
-
 //Value Computed by CMake
 HackITWirelessCCore_BINARY_DIR:STATIC=D:/web/hacks/hackstools/hackit/wireless/c_core/build
 
@@ -267,6 +247,12 @@ HackITWirelessCCore_IS_TOP_LEVEL:STATIC=ON
 
 //Value Computed by CMake
 HackITWirelessCCore_SOURCE_DIR:STATIC=D:/web/hacks/hackstools/hackit/wireless/c_core
+
+//Path to a file.
+PCAP_INCLUDE_DIR:PATH=PCAP_INCLUDE_DIR-NOTFOUND
+
+//Path to a library.
+PCAP_LIBRARY:FILEPATH=PCAP_LIBRARY-NOTFOUND
 
 
 ########################

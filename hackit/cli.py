@@ -96,6 +96,10 @@ web.add_command(detect_tech, name='tech')
 web.add_command(industrial_fuzzer, name='fuzz')
 web.add_command(analyze_js, name='js')
 
+import importlib
+run_bypass_cli = importlib.import_module("hackit.403bypass").run_bypass_cli
+web.add_command(run_bypass_cli, name='403bypass')
+
 
 # Vulnerability Scanners
 @cli.group()

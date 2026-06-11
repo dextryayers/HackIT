@@ -15,6 +15,7 @@ class AIHyperBrain:
         self.config = load_config()
         self.keys = self.config.get("ai_keys", {})
         self.provider = self.config.get("ai_provider", "gemini")
+        self.model = self.config.get("ai_models", {}).get(self.provider, "")
         
         # Binary path for the Go engine
         base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -98,6 +99,7 @@ You have access to previous conversation context via a Go-powered history module
                 for next_p in available_providers:
                     click.echo(_colored(f"  [*] Attempting Failover to {next_p.upper()}...", DIM))
                     self.provider = next_p
+                    self.model = self.config.get("ai_models", {}).get(next_p, "")
                     response = self._invoke_engine(prompt, mode=command)
                     if "[!] AI Error:" not in response and "[!] Engine Error:" not in response:
                         click.echo(_colored(f"  [+] Failover Successful! (Using {next_p.upper()})", GREEN))
@@ -134,6 +136,9 @@ You have access to previous conversation context via a Go-powered history module
                 "-prompt", prompt,
                 "-system", system_prompt
             ]
+            
+            if hasattr(self, 'model') and self.model:
+                cmd.extend(["-model", self.model])
             
             if mode:
                 cmd.extend(["-mode", mode])

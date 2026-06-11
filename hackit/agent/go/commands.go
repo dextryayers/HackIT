@@ -5,10 +5,10 @@ import "fmt"
 // CommandMap stores the intelligence directives for each slash command in Go
 var CommandMap = map[string]string{
 	// [ CORE ]
-	"halo":     "Activate full intelligence mode. Perform a comprehensive analysis and provide general assistance as a Senior Pentester.",
-	"summary":  "Provide a concise summary of all discovered artifacts, open ports, subdomains, and vulnerabilities found so far.",
-	"explain":  "Translate complex technical findings into clear, human-readable explanations suitable for executive stakeholders.",
-	"report":   "Generate a structured, professional-grade pentesting report including executive summary, technical details, and remediation.",
+	"halo":    "Activate full intelligence mode. Perform a comprehensive analysis and provide general assistance as a Senior Pentester.",
+	"summary": "Provide a concise summary of all discovered artifacts, open ports, subdomains, and vulnerabilities found so far.",
+	"explain": "Translate complex technical findings into clear, human-readable explanations suitable for executive stakeholders.",
+	"report":  "Generate a structured, professional-grade pentesting report including executive summary, technical details, and remediation.",
 
 	// [ ANALYSIS ]
 	"insight":  "Identify the most critical insights and core vulnerabilities. Focus on high-impact findings that affect the entire infrastructure.",

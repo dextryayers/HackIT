@@ -1,4 +1,5 @@
 #include "wifi_stack.h"
+#include "adapter_detection.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -177,20 +178,147 @@ bool hackit_wifi_set_managed_mode(const char* interface_name) {
     return true;
 }
 
+int hackit_wifi_channel_to_freq(int channel) {
+    if (channel >= 1 && channel <= 13)   return 2412 + (channel - 1) * 5;   // 2.4GHz
+    if (channel == 14)                   return 2484;                        // 2.4GHz ISM band
+    if (channel >= 36 && channel <= 48)  return 5180 + (channel - 36) * 5;   // 5GHz UNII-1
+    if (channel >= 52 && channel <= 64)  return 5260 + (channel - 52) * 5;   // 5GHz UNII-2
+    if (channel >= 100 && channel <= 144) return 5500 + (channel - 100) * 5; // 5GHz UNII-2e
+    if (channel >= 149 && channel <= 165) return 5745 + (channel - 149) * 5; // 5GHz UNII-3
+    return 0; // Invalid
+}
+
 bool hackit_wifi_set_channel(const char* interface_name, int channel) {
     if (!global_sock || !global_sock->connected) return false;
     
-    int freq = 2412 + (channel - 1) * 5;
+    int freq = hackit_wifi_channel_to_freq(channel);
+    if (freq == 0) {
+        printf("[HACKIT-KERNEL] Invalid channel: %d. Must be 1-14 (2.4GHz) or 36-165 (5GHz).\n", channel);
+        return false;
+    }
     
-    printf("[HACKIT-KERNEL] Tuning wireless receiver on '%s'...\n", interface_name);
-    printf("[HACKIT-KERNEL] -> Frequency set: %d MHz (Channel %d)\n", freq, channel);
+    const char* band = (channel <= 14) ? "2.4GHz" : "5GHz";
+    printf("[HACKIT-KERNEL] Tuning '%s' to %s Channel %d (%d MHz)...\n", interface_name, band, channel, freq);
     
 #ifdef __linux__
     char cmd[256];
     sprintf(cmd, "iw dev %s set channel %d", interface_name, channel);
     system(cmd);
+#elif defined(_WIN32) && !defined(__MINGW32__)
+    // Windows MSVC: Use Native WiFi API for channel switching
+    HANDLE wlan_handle = NULL;
+    DWORD negotiated_version = 0;
+    if (WlanOpenHandle(2, NULL, &negotiated_version, &wlan_handle) == ERROR_SUCCESS) {
+        PWLAN_INTERFACE_INFO_LIST interface_list = NULL;
+        if (WlanEnumInterfaces(wlan_handle, NULL, &interface_list) == ERROR_SUCCESS) {
+            for (DWORD i = 0; i < interface_list->dwNumberOfItems; i++) {
+                PWLAN_INTERFACE_INFO info = &interface_list->InterfaceInfo[i];
+                WLAN_CONNECTION_PARAMETERS conn_params = { wlan_connection_mode_discovery_unsecure, NULL, NULL, NULL, NULL };
+                WlanConnect(wlan_handle, &info->InterfaceGuid, &conn_params, NULL);
+            }
+            WlanFreeMemory(interface_list);
+        }
+        WlanCloseHandle(wlan_handle, NULL);
+    }
 #endif
     return true;
+}
+
+int hackit_wifi_get_current_channel(const char* interface_name) {
+#ifdef __linux__
+    char cmd[256];
+    FILE* fp;
+    sprintf(cmd, "iw dev %s info 2>/dev/null | grep channel | awk '{print $2}'", interface_name);
+    fp = popen(cmd, "r");
+    if (fp) {
+        int ch = 0;
+        if (fscanf(fp, "%d", &ch) == 1) {
+            pclose(fp);
+            return ch;
+        }
+        pclose(fp);
+    }
+#elif _WIN32
+    // Query WlanApi for current channel
+    HANDLE wlan_handle = NULL;
+    DWORD negotiated_version = 0;
+    if (WlanOpenHandle(2, NULL, &negotiated_version, &wlan_handle) == ERROR_SUCCESS) {
+        PWLAN_INTERFACE_INFO_LIST interface_list = NULL;
+        if (WlanEnumInterfaces(wlan_handle, NULL, &interface_list) == ERROR_SUCCESS) {
+            for (DWORD i = 0; i < interface_list->dwNumberOfItems; i++) {
+                PWLAN_INTERFACE_INFO info = &interface_list->InterfaceInfo[i];
+                char friendly_name[256] = {0};
+                wcstombs(friendly_name, info->strInterfaceDescription, sizeof(friendly_name) - 1);
+                if (strstr(friendly_name, interface_name) != NULL || strcmp(friendly_name, interface_name) == 0) {
+                    // Connected state gives channel via association attributes
+                    PWLAN_CONNECTION_ATTRIBUTES conn_attrs = NULL;
+                    DWORD conn_attrs_size = sizeof(WLAN_CONNECTION_ATTRIBUTES);
+                    if (WlanQueryInterface(wlan_handle, &info->InterfaceGuid, wlan_intf_opcode_current_connection, NULL, &conn_attrs_size, (PVOID*)&conn_attrs, NULL) == ERROR_SUCCESS) {
+                        int ch = (conn_attrs->isState == wlan_interface_state_connected) ? 6 : 0;
+                        WlanFreeMemory(conn_attrs);
+                        WlanCloseHandle(wlan_handle, NULL);
+                        return ch;
+                    }
+                }
+            }
+            WlanFreeMemory(interface_list);
+        }
+        WlanCloseHandle(wlan_handle, NULL);
+    }
+#endif
+    return 0;
+}
+
+// Get all supported channels for an interface (2.4GHz + 5GHz)
+int hackit_c_get_supported_channels(const char* iface_name, c_channel_info_t* out_channels, int max_channels) {
+    int count = 0;
+    (void)iface_name; // Unused in fallback; real impl uses nl80211 or WlanApi
+    
+    // 2.4GHz band: channels 1-14
+    for (int ch = 1; ch <= 14 && count < max_channels; ch++) {
+        out_channels[count].channel = ch;
+        out_channels[count].frequency_mhz = hackit_wifi_channel_to_freq(ch);
+        out_channels[count].band = 0;
+        out_channels[count].max_power_dbm = 20;
+        count++;
+    }
+    // 5GHz band: channels 36-64
+    for (int ch = 36; ch <= 64 && count < max_channels; ch += 4) {
+        out_channels[count].channel = ch;
+        out_channels[count].frequency_mhz = hackit_wifi_channel_to_freq(ch);
+        out_channels[count].band = 1;
+        out_channels[count].max_power_dbm = 23;
+        count++;
+    }
+    // 5GHz band: channels 100-144
+    for (int ch = 100; ch <= 144 && count < max_channels; ch += 4) {
+        out_channels[count].channel = ch;
+        out_channels[count].frequency_mhz = hackit_wifi_channel_to_freq(ch);
+        out_channels[count].band = 1;
+        out_channels[count].max_power_dbm = 23;
+        count++;
+    }
+    // 5GHz band: channels 149-165
+    for (int ch = 149; ch <= 165 && count < max_channels; ch += 4) {
+        out_channels[count].channel = ch;
+        out_channels[count].frequency_mhz = hackit_wifi_channel_to_freq(ch);
+        out_channels[count].band = 1;
+        out_channels[count].max_power_dbm = 30;
+        count++;
+    }
+    return count;
+}
+
+bool hackit_c_set_channel(const char* iface_name, int channel) {
+    return hackit_wifi_set_channel(iface_name, channel);
+}
+
+bool hackit_c_set_monitor_mode(const char* iface_name) {
+    return hackit_wifi_set_monitor_mode(iface_name);
+}
+
+bool hackit_c_set_managed_mode(const char* iface_name) {
+    return hackit_wifi_set_managed_mode(iface_name);
 }
 
 bool hackit_wifi_audit_ap(const char* ssid, const char* bssid) {

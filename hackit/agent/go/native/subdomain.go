@@ -51,10 +51,10 @@ func EnumerateSubdomains(domain string) ([]string, error) {
 
 func fetchCrtSh(domain string, wg *sync.WaitGroup, mu *sync.Mutex, subMap map[string]bool) {
 	defer wg.Done()
-	
+
 	client := &http.Client{Timeout: 15 * time.Second}
 	url := fmt.Sprintf("https://crt.sh/?q=%%25.%s&output=json", domain)
-	
+
 	resp, err := client.Get(url)
 	if err != nil || resp.StatusCode != 200 {
 		return
@@ -88,10 +88,10 @@ func fetchCrtSh(domain string, wg *sync.WaitGroup, mu *sync.Mutex, subMap map[st
 
 func fetchHackerTarget(domain string, wg *sync.WaitGroup, mu *sync.Mutex, subMap map[string]bool) {
 	defer wg.Done()
-	
+
 	client := &http.Client{Timeout: 15 * time.Second}
 	url := fmt.Sprintf("https://api.hackertarget.com/hostsearch/?q=%s", domain)
-	
+
 	resp, err := client.Get(url)
 	if err != nil || resp.StatusCode != 200 {
 		return
@@ -102,9 +102,9 @@ func fetchHackerTarget(domain string, wg *sync.WaitGroup, mu *sync.Mutex, subMap
 	if err != nil {
 		return
 	}
-	
+
 	lines := strings.Split(string(body), "\n")
-	
+
 	mu.Lock()
 	defer mu.Unlock()
 	for _, line := range lines {
@@ -120,10 +120,10 @@ func fetchHackerTarget(domain string, wg *sync.WaitGroup, mu *sync.Mutex, subMap
 
 func fetchRapidDNS(domain string, wg *sync.WaitGroup, mu *sync.Mutex, subMap map[string]bool) {
 	defer wg.Done()
-	
+
 	client := &http.Client{Timeout: 15 * time.Second}
 	url := fmt.Sprintf("https://rapiddns.io/subdomain/%s?full=1#result", domain)
-	
+
 	resp, err := client.Get(url)
 	if err != nil || resp.StatusCode != 200 {
 		return
@@ -134,11 +134,11 @@ func fetchRapidDNS(domain string, wg *sync.WaitGroup, mu *sync.Mutex, subMap map
 	if err != nil {
 		return
 	}
-	
+
 	// Regex to find table cells that look like subdomains
 	re := regexp.MustCompile(fmt.Sprintf(`(?i)<td>([a-z0-9.-]+\.%s)</td>`, regexp.QuoteMeta(domain)))
 	matches := re.FindAllStringSubmatch(string(body), -1)
-	
+
 	mu.Lock()
 	defer mu.Unlock()
 	for _, match := range matches {

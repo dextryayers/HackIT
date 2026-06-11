@@ -14,15 +14,20 @@ typedef struct {
 bool hackit_wifi_init(void);
 
 // Set a specific interface to monitor mode
-// interface_name: e.g., "wlan0"
 bool hackit_wifi_set_monitor_mode(const char* interface_name);
 
 // Set a specific interface to managed (station) mode
 bool hackit_wifi_set_managed_mode(const char* interface_name);
 
 // Change the wireless channel of an interface
-// channel: channel number (e.g., 1, 6, 11)
+// channel: channel number (1-14 for 2.4GHz, 36-165 for 5GHz)
 bool hackit_wifi_set_channel(const char* interface_name, int channel);
+
+// Convert channel number to frequency in MHz (both 2.4GHz and 5GHz)
+int hackit_wifi_channel_to_freq(int channel);
+
+// Get the current channel of a wireless interface (0 if unavailable)
+int hackit_wifi_get_current_channel(const char* interface_name);
 
 // Low-level high-integrity frame audit function
 bool hackit_wifi_audit_ap(const char* ssid, const char* bssid);

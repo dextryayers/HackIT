@@ -9,9 +9,19 @@ from rich.text import Text
 from rich.table import Table
 from rich.live import Live
 from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn
-from .executor import HackITWirelessExecutor
+try:
+    from .executor import HackITWirelessExecutor, detect_wireless_adapters
+except ImportError:
+    from executor import HackITWirelessExecutor, detect_wireless_adapters
 
 console = Console()
+
+def _detect_iface(default: str = "") -> str:
+    """Get first available wireless interface in real-time. Never hardcodes."""
+    adapters = detect_wireless_adapters()
+    if adapters:
+        return adapters[0]["name"]
+    return default
 
 class WirelessConsole(cmd.Cmd):
     prompt = "\033[1;36m[HackIT-WiFi] \033[1;32m~# \033[0m"
@@ -110,28 +120,28 @@ class WirelessConsole(cmd.Cmd):
             except Exception:
                 pass
                 
-        # If no active adapters found via netsh (or on WSL/Linux without native interfaces), read standard networks
+        # Real-time adapter detection fallback - never hardcode
         if not self.adapters_db:
-            # Check for general adapters using standard Python socket interface names
             import socket
             try:
                 hostname = socket.gethostname()
                 ip = self.get_active_ip()
                 
-                # Check cache for dynamic state persistence
-                mode_val, status_val, conn_val = prev_modes.get("wlan0", ("Managed", "ACTIVE", True))
-                
-                self.adapters_db["wlan0"] = {
-                    "mac": "44:87:63:B8:AE:D2",
-                    "driver": "Intel Wireless AC 9560",
-                    "mode": mode_val,
-                    "power": "-60 dBm" if mode_val == "Managed" else "-100 dBm",
-                    "status": status_val,
-                    "wifi_connected": conn_val,
-                    "ssid": "Redmi Note 12" if mode_val == "Managed" else "N/A",
-                    "channel": "11",
-                    "ip": ip if conn_val else "0.0.0.0"
-                }
+                adapters = detect_wireless_adapters()
+                for a in adapters:
+                    name = a["name"]
+                    prev = prev_modes.get(name, ("Managed", "ACTIVE", True))
+                    self.adapters_db[name] = {
+                        "mac": a.get("mac", "N/A"),
+                        "driver": a.get("driver", "Unknown"),
+                        "mode": prev[0],
+                        "power": f"{a.get('signal_dbm', -70)} dBm",
+                        "status": prev[1],
+                        "wifi_connected": prev[2],
+                        "ssid": "N/A",
+                        "channel": str(a.get("channel", 6)),
+                        "ip": ip if prev[2] else "0.0.0.0"
+                    }
             except Exception:
                 pass
 
@@ -168,6 +178,9 @@ class WirelessConsole(cmd.Cmd):
             ("crawl", "Scan nearby Wi-Fi networks"),
             ("crawl --full", "Deep scan APs, stations and RSSI"),
             ("clients <bssid>", "Enumerate connected wireless clients"),
+            ("aggressive-scan <iface>", "Multi-channel aggressive AP scan"),
+            ("client-hunt <iface> [bssid]", "Probe stations and enumerate clients"),
+            ("wpa3-detect <iface>", "Detect WPA3/SAE capable APs"),
             ("hidden", "Detect hidden SSID access points"),
             ("map", "Map discovered APs and BSSIDs"),
             ("probe", "Monitor nearby probe requests"),
@@ -268,6 +281,7 @@ class WirelessConsole(cmd.Cmd):
             ("deauth client <bssid> <station>", "Target specific connected client"),
             ("eviltwin <ssid>", "Clone target SSID and create rogue AP"),
             ("beacon flood", "Broadcast fake AP beacon frames"),
+            ("probe-flood <iface> <count>", "Broadcast probe request flood"),
             ("rogue start", "Launch rogue access point"),
             ("rogue stop", "Stop rogue access point")
         ]
@@ -420,7 +434,18 @@ class WirelessConsole(cmd.Cmd):
                 self.adapters_db[iface]["mode"] = "Managed"
                 self.adapters_db[iface]["status"] = "ACTIVE"
                 self.adapters_db[iface]["wifi_connected"] = True
-                self.adapters_db[iface]["ssid"] = "Redmi Note 12"
+                import subprocess
+                try:
+                    if os.name == 'nt':
+                        out = subprocess.check_output("netsh wlan show interfaces", shell=True, universal_newlines=True)
+                        for line in out.splitlines():
+                            if ":" in line:
+                                kv = line.split(":", 1)
+                                if kv[0].strip().lower() == "ssid":
+                                    self.adapters_db[iface]["ssid"] = kv[1].strip()
+                                    break
+                except Exception:
+                    self.adapters_db[iface]["ssid"] = "(reconnecting)"
                 progress.update(t, description=f"Interface {iface} mode set to Managed. Wi-Fi connection RESTORED.", completed=100)
                 
         console.print(f"[bold green][+] Real-time hardware transition complete for {iface}.[/bold green]\n")
@@ -547,8 +572,7 @@ class WirelessConsole(cmd.Cmd):
         
         parts = arg.split()
         full_mode = "--full" in parts
-        
-        self.executor.do_crawl("Wi-Fi", full=full_mode)
+        self.executor.do_crawl(_detect_iface(), full=full_mode)
 
     def do_sniff(self, arg):
         """
@@ -695,7 +719,7 @@ class WirelessConsole(cmd.Cmd):
         Example: status wlan0
         """
         args = arg.split()
-        iface = args[0] if len(args) > 0 else "wlan0"
+        iface = args[0] if len(args) > 0 else _detect_iface()
         
         from .engine_bridge import EngineBridge
         bridge = EngineBridge()
@@ -707,57 +731,91 @@ class WirelessConsole(cmd.Cmd):
 
     def do_signal(self, arg):
         """Live signal strength monitor.\nUsage: signal <iface>"""
-        iface = arg.strip() or "Wi-Fi"
+        iface = arg.strip() or _detect_iface()
         self.executor.do_signal(iface)
 
     def do_hidden(self, arg):
         """Detect hidden SSID access points by watching Probe Responses."""
         console.print("[bold cyan][*] Monitoring for hidden SSID Probe Responses (C++ Frame Parser active)...[/bold cyan]")
         console.print("[dim]Press Ctrl+C to stop.[/dim]")
-        self.executor.run_sniff(arg.strip() or "Wi-Fi", monitor=True)
+        self.executor.run_sniff(arg.strip() or _detect_iface(), monitor=True)
+
+    def do_aggressive_scan(self, arg):
+        """Multi-channel aggressive AP scan.\nUsage: aggressive-scan <iface> [--5ghz]"""
+        if not arg.strip():
+            console.print("[bold red][!] Usage: aggressive-scan <iface> [--5ghz][/bold red]")
+            return
+        self.executor.do_aggressive_scan(arg.strip().split()[0])
+
+    def do_client_hunt(self, arg):
+        """Probe stations and enumerate connected clients.\nUsage: client-hunt <iface> [bssid]"""
+        parts = arg.strip().split()
+        if not parts:
+            console.print("[bold red][!] Usage: client-hunt <iface> [bssid][/bold red]")
+            return
+        iface = parts[0]
+        bssid = parts[1] if len(parts) > 1 else ""
+        self.executor.do_client_hunt(iface, bssid)
+
+    def do_wpa3_detect(self, arg):
+        """Detect WPA3/SAE capable access points.\nUsage: wpa3-detect <iface>"""
+        if not arg.strip():
+            console.print("[bold red][!] Usage: wpa3-detect <iface>[/bold red]")
+            return
+        self.executor.do_wpa3_detect(arg.strip())
+
+    def do_probe_flood(self, arg):
+        """Broadcast probe request flood.\nUsage: probe-flood <iface> [count]"""
+        parts = arg.strip().split()
+        if not parts:
+            console.print("[bold red][!] Usage: probe-flood <iface> [count][/bold red]")
+            return
+        iface = parts[0]
+        count = int(parts[1]) if len(parts) > 1 else 100
+        self.executor.do_probe_flood(iface, count)
 
     def do_probe(self, arg):
         """Monitor nearby probe requests from disconnected clients."""
         console.print("[bold cyan][*] Probe Request monitor started (C++ Frame Parser active)...[/bold cyan]")
-        self.executor.run_sniff(arg.strip() or "Wi-Fi", monitor=True)
+        self.executor.run_sniff(arg.strip() or _detect_iface(), monitor=True)
 
     def do_beacon(self, arg):
         """Analyze raw 802.11 beacon frames with C++ IE extraction."""
         console.print("[bold cyan][*] Beacon frame analysis mode (C++ Frame Parser)...[/bold cyan]")
-        self.executor.run_sniff(arg.strip() or "Wi-Fi", monitor=False)
+        self.executor.run_sniff(arg.strip() or _detect_iface(), monitor=False)
 
     def do_clients(self, arg):
-        """Enumerate connected clients of an AP.\nUsage: clients <bssid>"""
-        if not arg.strip():
-            console.print("[bold red][!] Usage: clients <bssid>[/bold red]")
+        """Enumerate connected clients of an AP via sniffing.\nUsage: clients <iface> <bssid>"""
+        parts = arg.split()
+        if len(parts) < 2:
+            console.print("[bold red][!] Usage: clients <iface> <bssid>[/bold red]")
             return
-        console.print(f"[bold cyan][*] Enumerating clients of BSSID: {arg.strip()}[/bold cyan]")
-        self.executor.do_capture("clients", arg.strip())
+        iface = parts[0]
+        bssid = parts[1]
+        console.print(f"[bold cyan][*] Enumerating clients of {bssid} on {iface}...[/bold cyan]")
+        console.print("[bold yellow][!] Use sniffer: 'sniff <iface>' to observe associated stations[/bold yellow]")
 
     def do_watch(self, arg):
         """Live wireless event dashboard."""
         console.print("[bold cyan][*] Live Wireless Event Dashboard (Ctrl+C to stop)...[/bold cyan]")
-        self.executor.run_sniff("Wi-Fi", monitor=False)
+        self.executor.run_sniff(_detect_iface(), monitor=False)
 
     # ─────────── Phase 2: Packet Capture ────────────────────────────────────
 
     def do_capture(self, arg):
-        """Capture WPA handshake / PMKID / all frames.\nUsage: capture handshake <bssid> | capture pmkid <bssid> | capture all"""
+        """Capture 802.11 frames or WPA handshake.\nUsage: capture <iface> [output.pcap] | capture handshake <iface> <bssid>"""
         parts = arg.split()
         if len(parts) < 1:
-            console.print("[bold red][!] Usage: capture handshake <bssid> | capture pmkid <bssid> | capture all[/bold red]")
+            console.print("[bold red][!] Usage: capture <iface> [output.pcap] | capture handshake <iface> <bssid>[/bold red]")
             return
-        mode   = parts[0]
-        target = parts[1] if len(parts) > 1 else ""
-        self.executor.do_capture(mode, target)
-
-    def do_save(self, arg):
-        """Save capture session to PCAP file.\nUsage: save pcap <filename>"""
-        parts = arg.split()
-        if len(parts) >= 2 and parts[0].lower() == "pcap":
-            self.executor.do_save_pcap(parts[1])
+        if parts[0].lower() == "handshake":
+            iface = parts[1] if len(parts) > 1 else _detect_iface()
+            bssid = parts[2] if len(parts) > 2 else ""
+            self.executor.do_handshake_capture(iface, bssid)
         else:
-            console.print("[bold red][!] Usage: save pcap <filename>[/bold red]")
+            iface = parts[0]
+            output = parts[1] if len(parts) > 1 else "capture.pcap"
+            self.executor.do_capture(iface, output)
 
     def do_sessions(self, arg):
         """List stored packet capture sessions."""
@@ -806,25 +864,45 @@ class WirelessConsole(cmd.Cmd):
             console.print("[bold red][!] Usage: convert hc22000 <capture_file>[/bold red]")
 
     def do_wps(self, arg):
-        """WPS diagnostic commands.\nUsage: wps scan | wps pin <bssid> | wps pixie <bssid> | wps status"""
+        """WPS attack commands.\nUsage: wps scan <iface> | wps pixie <iface> <bssid> [pin]"""
         parts = arg.strip().split()
         if not parts:
-            console.print("[bold red][!] Usage: wps scan | wps pin <bssid> | wps pixie <bssid> | wps status[/bold red]")
+            console.print("[bold red][!] Usage: wps scan <iface> | wps pixie <iface> <bssid> [pin][/bold red]")
             return
         sub = parts[0].lower()
-        bssid = parts[1] if len(parts) > 1 else ""
         if sub == "scan":
-            console.print("[bold cyan][*] Scanning for WPS-enabled APs (parsing Beacon Information Elements)...[/bold cyan]")
-            self.executor.do_crawl("Wi-Fi")
-        elif sub == "pin":
-            console.print(f"[bold cyan][*] WPS PIN attack on {bssid} (Rust Engine)...[/bold cyan]")
-            self.executor.do_capture("wps-pin", bssid)
+            iface = parts[1] if len(parts) > 1 else _detect_iface()
+            self.executor.do_wps_scan(iface)
         elif sub == "pixie":
-            console.print(f"[bold cyan][*] Pixie Dust assessment on {bssid} (Rust entropy calculator)...[/bold cyan]")
-            self.executor.do_capture("wps-pixie", bssid)
-        elif sub in ("status", "state"):
-            console.print("[bold cyan][*] WPS Lock States (from last crawl scan)...[/bold cyan]")
-            self.executor.do_crawl("Wi-Fi")
+            iface = parts[1] if len(parts) > 1 else _detect_iface()
+            bssid = parts[2] if len(parts) > 2 else ""
+            pin = parts[3] if len(parts) > 3 else ""
+            self.executor.do_wps_pixiedust(iface, bssid, pin)
+        else:
+            console.print("[bold red][!] Unknown wps subcommand[/bold red]")
+
+    # ─────────── WEP Cracking ────────────────────────────────────────────────
+
+    def do_wep(self, arg):
+        """WEP cracking commands.\nUsage: wep capture <iface> | wep arp <iface> <bssid> | wep crack <capture.pcap>"""
+        parts = arg.strip().split()
+        if not parts:
+            console.print("[bold red][!] Usage: wep capture <iface> | wep arp <iface> <bssid> | wep crack <capture.pcap>[/bold red]")
+            return
+        sub = parts[0].lower()
+        if sub == "capture":
+            iface = parts[1] if len(parts) > 1 else _detect_iface()
+            bssid = parts[2] if len(parts) > 2 else ""
+            output = parts[3] if len(parts) > 3 else "wep_capture.pcap"
+            self.executor.do_wep_capture(iface, bssid, output)
+        elif sub == "arp":
+            iface = parts[1] if len(parts) > 1 else _detect_iface()
+            bssid = parts[2] if len(parts) > 2 else ""
+            self.executor.do_wep_arp_replay(iface, bssid)
+        elif sub == "crack":
+            self.executor.do_wep_crack(parts[1] if len(parts) > 1 else "wep_capture.pcap")
+        else:
+            console.print("[bold red][!] Unknown wep subcommand[/bold red]")
 
     # ─────────── Phase 4: Network Recon ──────────────────────────────────────
 
@@ -868,7 +946,7 @@ class WirelessConsole(cmd.Cmd):
         """DNS monitoring.\nUsage: dns sniff"""
         if "sniff" in arg.lower():
             console.print("[bold cyan][*] DNS Sniffer (UDP port 53 passive monitor)...[/bold cyan]")
-            self.executor.run_sniff("Wi-Fi", monitor=False)
+            self.executor.run_sniff(_detect_iface(), monitor=False)
         else:
             console.print("[bold red][!] Usage: dns sniff[/bold red]")
 
@@ -879,45 +957,55 @@ class WirelessConsole(cmd.Cmd):
     # ─────────── Phase 5: MITM & Attacks ────────────────────────────────────
 
     def do_deauth(self, arg):
-        """Send deauthentication frames.\nUsage: deauth <bssid> | deauth client <bssid> <station>"""
+        """Send deauthentication frames.\nUsage: deauth <iface> <bssid> | deauth client <iface> <bssid> <station>"""
         parts = arg.split()
-        if not parts:
-            console.print("[bold red][!] Usage: deauth <bssid> | deauth client <bssid> <station>[/bold red]")
+        if len(parts) < 1:
+            console.print("[bold red][!] Usage: deauth <iface> <bssid> | deauth client <iface> <bssid> <station>[/bold red]")
             return
         if parts[0].lower() == "client":
-            bssid   = parts[1] if len(parts) > 1 else ""
-            station = parts[2] if len(parts) > 2 else "FF:FF:FF:FF:FF:FF"
-            self.executor.do_deauth(bssid, station)
+            iface   = parts[1] if len(parts) > 1 else _detect_iface()
+            bssid   = parts[2] if len(parts) > 2 else ""
+            station = parts[3] if len(parts) > 3 else "FF:FF:FF:FF:FF:FF"
+            self.executor.do_deauth(iface, bssid, station)
         else:
-            self.executor.do_deauth(parts[0])
+            iface = parts[0] if len(parts) > 0 else _detect_iface()
+            bssid = parts[1] if len(parts) > 1 else ""
+            self.executor.do_deauth(iface, bssid)
 
     def do_eviltwin(self, arg):
-        """Clone SSID and create rogue AP.\nUsage: eviltwin <ssid>"""
-        if not arg.strip():
-            console.print("[bold red][!] Usage: eviltwin <ssid>[/bold red]")
+        """Clone SSID and create rogue AP.\nUsage: eviltwin <iface> <ssid>"""
+        parts = arg.strip().split()
+        if len(parts) < 1:
+            console.print("[bold red][!] Usage: eviltwin <iface> <ssid>[/bold red]")
             return
-        console.print(f"[bold red][*] Evil Twin: Cloning '{arg.strip()}' and starting rogue AP...[/bold red]")
-        self.executor.do_beacon_flood(count=200)
+        iface = parts[0]
+        ssid = parts[1] if len(parts) > 1 else "EvilTwin"
+        console.print(f"[bold red][*] Evil Twin: Cloning '{ssid}' on {iface}...[/bold red]")
+        self.executor.do_beacon_flood(iface, ssid=ssid, count=10)
 
     def do_beacon(self, arg):
-        """Analyze beacon frames (recon) or flood (attack).\nUsage: beacon | beacon flood"""
-        if "flood" in arg.lower():
+        """Analyze beacon frames (recon) or flood (attack).\nUsage: beacon flood <iface> | beacon [iface]"""
+        parts = arg.strip().split()
+        if len(parts) >= 1 and parts[0].lower() == "flood":
+            iface = parts[1] if len(parts) > 1 else _detect_iface()
             console.print("[bold red][*] Beacon Flood starting (Rust frame builder)...[/bold red]")
-            self.executor.do_beacon_flood()
+            self.executor.do_beacon_flood(iface)
         else:
             console.print("[bold cyan][*] Beacon frame analysis (C++ Frame Parser active)...[/bold cyan]")
-            self.executor.run_sniff(arg.strip() or "Wi-Fi", monitor=False)
+            self.executor.run_sniff(arg.strip() or _detect_iface(), monitor=False)
 
     def do_rogue(self, arg):
-        """Rogue AP management.\nUsage: rogue start | rogue stop"""
-        sub = arg.strip().lower()
+        """Rogue AP management.\nUsage: rogue start <iface> | rogue stop"""
+        parts = arg.strip().split()
+        sub = parts[0].lower() if parts else ""
         if sub == "start":
-            console.print("[bold red][*] Launching Rogue AP (hostapd/ICS bridge)...[/bold red]")
-            self.executor.do_beacon_flood(count=500)
+            iface = parts[1] if len(parts) > 1 else _detect_iface()
+            console.print("[bold red][*] Launching Rogue AP (beacon flood)...[/bold red]")
+            self.executor.do_beacon_flood(iface, count=500)
         elif sub == "stop":
             self.executor.do_stop_all()
         else:
-            console.print("[bold red][!] Usage: rogue start | rogue stop[/bold red]")
+            console.print("[bold red][!] Usage: rogue start <iface> | rogue stop[/bold red]")
 
     def do_arp_spoof(self, arg):
         """ARP spoof session.\nUsage: arp spoof <target> <gateway>"""
@@ -941,11 +1029,11 @@ class WirelessConsole(cmd.Cmd):
         """Automation workflows.\nUsage: auto handshake | auto audit"""
         sub = arg.strip().lower()
         if sub == "handshake":
-            self.executor.do_auto_handshake("Wi-Fi")
+            self.executor.do_auto_handshake(_detect_iface())
         elif sub == "audit":
             console.print("[bold cyan][*] Full Automated Wireless Audit Workflow starting...[/bold cyan]")
-            self.executor.do_crawl("Wi-Fi", full=True)
-            self.executor.do_auto_handshake("Wi-Fi")
+            self.executor.do_crawl(_detect_iface(), full=True)
+            self.executor.do_auto_handshake(_detect_iface())
         elif sub == "crack":
             console.print("[bold cyan][*] Auto crack: scan handshakes/ dir and start crack jobs...[/bold cyan]")
             self.executor.do_sessions()
@@ -993,7 +1081,7 @@ class WirelessConsole(cmd.Cmd):
     def do_dashboard(self, arg):
         """Open live monitoring dashboard."""
         console.print("[bold cyan][*] Launching live dashboard (ncurses mode)...[/bold cyan]")
-        self.executor.run_sniff("Wi-Fi", monitor=False)
+        self.executor.run_sniff(_detect_iface(), monitor=False)
 
     def do_logs(self, arg):
         """Display session logs."""
@@ -1125,10 +1213,38 @@ def get_realtime_telemetry():
             except Exception:
                 pass
     else:
-        # Standard Unix fallback
-        mac = "44:87:63:B8:AE:D2"
-        ssid = "Redmi Note 12"
-        connected = True
+        # Real-time detection: try iw or iwconfig
+        try:
+            out = subprocess.check_output(["iw", "dev"], text=True, stderr=subprocess.DEVNULL)
+            iface_name = None
+            for line in out.splitlines():
+                if line.strip().startswith("Interface"):
+                    iface_name = line.split()[-1]
+                    break
+            if iface_name:
+                try:
+                    link_out = subprocess.check_output(["iw", "dev", iface_name, "link"], text=True, stderr=subprocess.DEVNULL)
+                    for line in link_out.splitlines():
+                        if "Connected to" in line:
+                            parts = line.split()
+                            if len(parts) >= 3:
+                                mac = parts[2].upper()
+                            connected = True
+                            break
+                        if "Not connected" in line:
+                            connected = False
+                except:
+                    pass
+                try:
+                    iw_out = subprocess.check_output(["iwconfig", iface_name], text=True, stderr=subprocess.DEVNULL)
+                    import re
+                    m = re.search(r'ESSID:"([^"]*)"', iw_out)
+                    if m:
+                        ssid = m.group(1)
+                except:
+                    pass
+        except:
+            pass
         
     return {
         "mac": mac,

@@ -99,7 +99,8 @@ def chat():
 @agent.command()
 @click.option('--provider', type=click.Choice(['gemini', 'groq', 'openai', 'claude', 'deepseek', 'openrouter', 'ollama']), help='Set AI provider')
 @click.option('--key', help='Set API key (or leave empty for interactive prompt)')
-def setting(provider, key):
+@click.option('--model', help='Set AI model (or leave empty for optimal default)')
+def setting(provider, key, model):
     """Configure AI Agent settings and API keys"""
     from hackit.config import load_config, save_config
     cfg = load_config()
@@ -138,20 +139,78 @@ def setting(provider, key):
     if provider and key:
         if "ai_keys" not in cfg:
             cfg["ai_keys"] = {}
+        if "ai_models" not in cfg:
+            cfg["ai_models"] = {}
         
         cfg["ai_provider"] = provider
         cfg["ai_keys"][provider] = key
         
+        if model is None:
+            models = []
+            try:
+                import requests
+                if provider == "ollama":
+                    resp = requests.get("http://localhost:11434/api/tags", timeout=2.0)
+                    if resp.status_code == 200:
+                        models = [m.get("name") for m in resp.json().get("models", [])]
+                elif provider in ["openai", "groq", "deepseek"]:
+                    urls = {
+                        "openai": "https://api.openai.com/v1/models",
+                        "groq": "https://api.groq.com/openai/v1/models",
+                        "deepseek": "https://api.deepseek.com/models"
+                    }
+                    resp = requests.get(urls[provider], headers={"Authorization": f"Bearer {key}"}, timeout=3.0)
+                    if resp.status_code == 200:
+                        models = [m.get("id") for m in resp.json().get("data", [])]
+                elif provider == "openrouter":
+                    resp = requests.get("https://openrouter.ai/api/v1/models", timeout=3.0)
+                    if resp.status_code == 200:
+                        # OpenRouter has too many, just take top 20 or we flood the terminal
+                        models = [m.get("id") for m in resp.json().get("data", [])][:20]
+            except Exception:
+                pass
+            
+            if models:
+                click.echo(_colored(f"\n  [+] Available {provider.upper()} Models (Real-Time):", GREEN))
+                for i, m in enumerate(models):
+                    click.echo(f"    {i+1}. {m}")
+                model_idx = click.prompt(_colored("  [?] Select a model (enter number) or leave empty for auto/manual typing", YELLOW), default="", show_default=False)
+                if model_idx.isdigit() and 1 <= int(model_idx) <= len(models):
+                    model = models[int(model_idx)-1]
+                    
+            if model is None or (isinstance(model, str) and model.isdigit() and not (1 <= int(model) <= len(models))):
+                model = click.prompt(_colored(f"  [?] Enter specific Model for {provider.upper()} (leave empty for optimal default)", YELLOW), default="", show_default=False)
+            
+        cfg["ai_models"][provider] = model.strip() if isinstance(model, str) else ""
+        
         if save_config(cfg):
-            click.echo(_colored(f"\n  [+] SUCCESS: {provider.upper()} API Key saved permanently and privately!", GREEN))
+            click.echo(_colored(f"\n  [+] SUCCESS: {provider.upper()} Configuration saved permanently and privately!", GREEN))
         else:
             click.echo(_colored(f"\n  [!] FAILED: Could not write configuration file.", RED))
         
     cfg = load_config()
     click.echo(_colored("\n  [ AI AGENT STATUS ]", B_CYAN))
     click.echo(f"  • Active Provider : " + _colored(cfg.get('ai_provider', 'NONE').upper(), YELLOW))
+    active_model = cfg.get("ai_models", {}).get(cfg.get('ai_provider'), "")
+    if active_model:
+        click.echo(f"  • Active Model    : " + _colored(active_model, YELLOW))
+    ollama_running = False
+    if "ollama" in cfg.get('ai_keys', {}):
+        try:
+            if requests.get("http://localhost:11434/", timeout=0.5).status_code == 200:
+                ollama_running = True
+        except Exception:
+            pass
+
     for p, k in cfg.get('ai_keys', {}).items():
-        status = _colored("READY", GREEN) if k else _colored("NOT CONFIGURED", DIM)
+        if p == "ollama" and k:
+            status = _colored("READY", GREEN) if ollama_running else _colored("OFFLINE (NOT RUNNING)", RED)
+        else:
+            status = _colored("READY", GREEN) if k else _colored("NOT CONFIGURED", DIM)
+            
+        m = cfg.get("ai_models", {}).get(p, "")
+        if m:
+            status += f" (Model: {m})"
         click.echo(f"  • {p:<15}: {status}")
 
 @agent.command()
@@ -163,8 +222,23 @@ def status():
     click.echo(f"  • Active Provider : " + _colored(cfg.get('ai_provider', 'NONE').upper(), YELLOW))
     click.echo(f"  • Config File     : " + _colored(os.path.join(os.path.expanduser('~'), '.hackit_config.json'), DIM))
     
+    ollama_running = False
+    if "ollama" in cfg.get('ai_keys', {}):
+        try:
+            if requests.get("http://localhost:11434/", timeout=0.5).status_code == 200:
+                ollama_running = True
+        except Exception:
+            pass
+            
     for p, k in cfg.get('ai_keys', {}).items():
-        status = _colored("READY", GREEN) if k else _colored("NOT CONFIGURED", DIM)
+        if p == "ollama" and k:
+            status = _colored("READY", GREEN) if ollama_running else _colored("OFFLINE (NOT RUNNING)", RED)
+        else:
+            status = _colored("READY", GREEN) if k else _colored("NOT CONFIGURED", DIM)
+            
+        m = cfg.get("ai_models", {}).get(p, "")
+        if m:
+            status += f" (Model: {m})"
         click.echo(f"  • {p:<15}: {status}")
 
 @agent.command()
@@ -308,15 +382,41 @@ def handle_ai_command(cmd: str):
         return True
     
     cfg = load_config()
-    available_keys = {p: k for p, k in cfg.get("ai_keys", {}).items() if k}
     
-    selected_provider = cfg.get("ai_provider", "gemini")
-    
-    selected_provider = cfg.get("ai_provider", "gemini")
+    available_providers = []
+    # Check Ollama
+    try:
+        import requests
+        if requests.get("http://localhost:11434/", timeout=0.5).status_code == 200:
+            if cfg.get("ai_keys", {}).get("ollama"):
+                available_providers.append("ollama")
+    except Exception:
+        pass
+        
+    for p, k in cfg.get("ai_keys", {}).items():
+        if k and p != "ollama":
+            available_providers.append(p)
 
-    click.echo(_colored(f"\n[*] Consulting HackIt AI...", DIM))
+    selected_provider = cfg.get("ai_provider", "gemini")
+    
+    if selected_provider not in available_providers and available_providers:
+        from hackit.config import save_config
+        selected_provider = available_providers[0]
+        click.echo(_colored(f"  [*] Previous AI offline/missing. Auto-switching to {selected_provider.upper()}...", YELLOW))
+        cfg["ai_provider"] = selected_provider
+        save_config(cfg)
+    elif not available_providers:
+        click.echo(_colored(f"  [!] No AI providers are configured or online. Run 'agent setting'.", RED))
+        return True
+
+    click.echo(_colored(f"\n[*] Consulting HackIt AI ({selected_provider.upper()})...", DIM))
     brain = AIHyperBrain()
     brain.provider = selected_provider 
+    
+    # Send the configured model to the brain
+    configured_model = cfg.get("ai_models", {}).get(selected_provider, "")
+    if configured_model:
+        brain.model = configured_model
     
     response = brain.chat(prompt)
     

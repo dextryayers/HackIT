@@ -40,13 +40,13 @@ func GenerateReport(target string, vectors []AttackVector, flowchart string) str
 	sb.WriteString(fmt.Sprintf("# 🛡️ HackIT Autonomous AI Hunter Report\n\n"))
 	sb.WriteString(fmt.Sprintf("**Target:** `%s`\n", report.Target))
 	sb.WriteString(fmt.Sprintf("**Scan Time:** `%s`\n\n", report.ScanTime))
-	
+
 	sb.WriteString("## 1. Executive Summary\n")
 	sb.WriteString(report.ExecutiveSum + "\n\n")
-	
+
 	sb.WriteString("## 2. Attack Vectors & Flowchart\n")
 	sb.WriteString(flowchart + "\n\n")
-	
+
 	sb.WriteString("## 3. Detailed Findings\n")
 	if len(vectors) == 0 {
 		sb.WriteString("*No vulnerabilities exploited.*\n\n")
@@ -58,7 +58,7 @@ func GenerateReport(target string, vectors []AttackVector, flowchart string) str
 			sb.WriteString("- **Status:** `Verified by AI`\n\n")
 		}
 	}
-	
+
 	sb.WriteString("## 4. Conclusion & Remediation\n")
 	sb.WriteString("**Conclusion:**\n" + report.Conclusion + "\n\n")
 	sb.WriteString("**Remediation:**\n" + report.Remediation + "\n")

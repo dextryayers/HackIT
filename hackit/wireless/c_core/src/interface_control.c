@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
+#include <time.h>
 
 // Dynamic validation to prevent any character injection or invalid MAC address setups
 static bool is_valid_mac(const char* mac) {
@@ -25,7 +26,7 @@ static int execute_command(const char* format, ...) {
     char cmd[512];
     va_list args;
     va_start(args, format);
-    vsprintf(cmd, format, args);
+    vsnprintf(cmd, sizeof(cmd), format, args);
     va_end(args);
     
     return system(cmd);
@@ -111,8 +112,13 @@ bool hackit_wifi_restore_mac(const char* interface_name) {
         }
         pclose(fp);
     }
-    return execute_command("ip link set dev %s down && ip link set dev %s address 44:87:63:B8:AE:D2 && ip link set dev %s up",
-                           interface_name, interface_name, interface_name) == 0;
+    // Fallback: generate random locally-administered MAC instead of hardcoded
+    char fallback_mac[18];
+    srand(time(NULL));
+    sprintf(fallback_mac, "02:00:%02X:%02X:%02X:%02X",
+            rand() % 256, rand() % 256, rand() % 256, rand() % 256);
+    return execute_command("ip link set dev %s down && ip link set dev %s address %s && ip link set dev %s up",
+                           interface_name, interface_name, fallback_mac, interface_name) == 0;
 #endif
 
     return false;

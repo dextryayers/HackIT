@@ -23,7 +23,7 @@ func DetectWAF(ip string, port int, isHTTPS bool) WAFResult {
 	}
 
 	targetURL := fmt.Sprintf("%s://%s:%d/", protocol, ip, port)
-	
+
 	// Malicious payload to trigger WAF
 	maliciousURL := fmt.Sprintf("%s?id=1'%%20OR%%201=1--&exec=/bin/bash", targetURL)
 
@@ -39,7 +39,7 @@ func DetectWAF(ip string, port int, isHTTPS bool) WAFResult {
 	req, _ := http.NewRequest("GET", targetURL, nil)
 	req.Header.Set("User-Agent", "Mozilla/5.0")
 	resp, err := client.Do(req)
-	
+
 	wafName := ""
 	if err == nil {
 		defer resp.Body.Close()
@@ -62,14 +62,14 @@ func DetectWAF(ip string, port int, isHTTPS bool) WAFResult {
 		reqMal, _ := http.NewRequest("GET", maliciousURL, nil)
 		reqMal.Header.Set("User-Agent", "Mozilla/5.0")
 		respMal, errMal := client.Do(reqMal)
-		
+
 		if errMal == nil {
 			defer respMal.Body.Close()
 			if respMal.StatusCode == 403 || respMal.StatusCode == 406 || respMal.StatusCode == 501 {
 				// Read body to find signature
 				bodyBytes, _ := io.ReadAll(io.LimitReader(respMal.Body, 8192))
 				bodyStr := strings.ToLower(string(bodyBytes))
-				
+
 				if strings.Contains(bodyStr, "cloudflare") {
 					wafName = "Cloudflare"
 				} else if strings.Contains(bodyStr, "wordfence") {

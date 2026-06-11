@@ -28,6 +28,12 @@ func (p *WorkerPool) Start() {
 		p.WG.Add(1)
 		go p.worker(w)
 	}
+	// Drain Results channel in background to prevent deadlock
+	go func() {
+		for range p.Results {
+			// consumed, not currently used for further processing
+		}
+	}()
 }
 
 func (p *WorkerPool) worker(id int) {

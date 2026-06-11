@@ -6,6 +6,7 @@ require (
 	github.com/fatih/color v1.19.0
 	github.com/spf13/cobra v1.8.0
 	go.uber.org/zap v1.28.0
+	golang.org/x/crypto v0.28.0
 )
 
 require (

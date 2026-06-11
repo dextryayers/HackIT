@@ -1,0 +1,3 @@
+D:/web/hacks/hackstools/hackit/wireless/c_core/build2/CMakeFiles/hackit_wireless_c.dir
+D:/web/hacks/hackstools/hackit/wireless/c_core/build2/CMakeFiles/edit_cache.dir
+D:/web/hacks/hackstools/hackit/wireless/c_core/build2/CMakeFiles/rebuild_cache.dir

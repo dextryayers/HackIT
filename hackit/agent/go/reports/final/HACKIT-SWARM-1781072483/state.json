@@ -1,0 +1,538 @@
+{
+  "session_id": "HACKIT-SWARM-1781072483",
+  "start_time": "2026-06-10T13:21:23.3857097+07:00",
+  "target": {
+    "primary_domain": "test.com",
+    "ip_range": "",
+    "scope_type": "active_stealth",
+    "rules_of_engagement": [
+      "SLOW_RATE_LIMITING",
+      "USER_AGENT_RANDOMIZATION",
+      "WAF_EVASION_MODE_ON",
+      "NO_DENIAL_OF_SERVICE"
+    ]
+  },
+  "recon_data": {
+    "subdomains": [
+      "api.test.com",
+      "dev.test.com",
+      "staging.test.com"
+    ],
+    "asn": "AS13335 (Cloudflare Inc)",
+    "cloud_infra": "Cloudflare"
+  },
+  "discovered_services": [
+    {
+      "ip": "dev.test.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 400 Bad Request",
+      "tech": "Cloudflare WAF, PHP, WordPress"
+    },
+    {
+      "ip": "dev.test.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "TLSv1.3",
+      "tech": "Cloudflare WAF, PHP, WordPress"
+    },
+    {
+      "ip": "staging.test.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 400 Bad Request",
+      "tech": "Cloudflare WAF, PHP, WordPress"
+    },
+    {
+      "ip": "staging.test.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "TLSv1.3",
+      "tech": "Cloudflare WAF, PHP, WordPress"
+    },
+    {
+      "ip": "api.test.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 400 Bad Request",
+      "tech": "Cloudflare WAF, PHP, WordPress"
+    },
+    {
+      "ip": "api.test.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "TLSv1.3",
+      "tech": "Cloudflare WAF, PHP, WordPress"
+    }
+  ],
+  "vulnerabilities": [
+    {
+      "id": "CVE-2023-XXXX",
+      "name": "WordPress Plugin Vulnerability",
+      "severity": "High",
+      "cvss": 8.5,
+      "description": "Outdated WordPress installation detected on dev.test.com",
+      "evidence": "Wappalyzer signature matched outdated WP-JSON API."
+    },
+    {
+      "id": "CVE-2023-XXXX",
+      "name": "WordPress Plugin Vulnerability",
+      "severity": "High",
+      "cvss": 8.5,
+      "description": "Outdated WordPress installation detected on dev.test.com",
+      "evidence": "Wappalyzer signature matched outdated WP-JSON API."
+    },
+    {
+      "id": "CVE-2023-XXXX",
+      "name": "WordPress Plugin Vulnerability",
+      "severity": "High",
+      "cvss": 8.5,
+      "description": "Outdated WordPress installation detected on staging.test.com",
+      "evidence": "Wappalyzer signature matched outdated WP-JSON API."
+    },
+    {
+      "id": "CVE-2023-XXXX",
+      "name": "WordPress Plugin Vulnerability",
+      "severity": "High",
+      "cvss": 8.5,
+      "description": "Outdated WordPress installation detected on staging.test.com",
+      "evidence": "Wappalyzer signature matched outdated WP-JSON API."
+    },
+    {
+      "id": "CVE-2023-XXXX",
+      "name": "WordPress Plugin Vulnerability",
+      "severity": "High",
+      "cvss": 8.5,
+      "description": "Outdated WordPress installation detected on api.test.com",
+      "evidence": "Wappalyzer signature matched outdated WP-JSON API."
+    },
+    {
+      "id": "CVE-2023-XXXX",
+      "name": "WordPress Plugin Vulnerability",
+      "severity": "High",
+      "cvss": 8.5,
+      "description": "Outdated WordPress installation detected on api.test.com",
+      "evidence": "Wappalyzer signature matched outdated WP-JSON API."
+    },
+    {
+      "id": "MISCONF-002",
+      "name": "Exposed Git Repository",
+      "severity": "High",
+      "cvss": 7.5,
+      "description": "Source code repository exposed at http://dev.test.com:80/.git/config",
+      "evidence": "HTTP 200 OK containing [core] repository info"
+    },
+    {
+      "id": "MISCONF-001",
+      "name": "Exposed Environment Variables",
+      "severity": "Critical",
+      "cvss": 10,
+      "description": "Sensitive .env file exposed at http://dev.test.com:80/.env (CRITICAL: Confirmed chained with WordPress DB exposure)",
+      "evidence": "HTTP 200 OK containing DB_PASSWORD"
+    },
+    {
+      "id": "MISCONF-002",
+      "name": "Exposed Git Repository",
+      "severity": "High",
+      "cvss": 7.5,
+      "description": "Source code repository exposed at https://dev.test.com:443/.git/config",
+      "evidence": "HTTP 200 OK containing [core] repository info"
+    },
+    {
+      "id": "MISCONF-001",
+      "name": "Exposed Environment Variables",
+      "severity": "Critical",
+      "cvss": 10,
+      "description": "Sensitive .env file exposed at https://dev.test.com:443/.env (CRITICAL: Confirmed chained with WordPress DB exposure)",
+      "evidence": "HTTP 200 OK containing DB_PASSWORD"
+    },
+    {
+      "id": "MISCONF-002",
+      "name": "Exposed Git Repository",
+      "severity": "High",
+      "cvss": 7.5,
+      "description": "Source code repository exposed at http://staging.test.com:80/.git/config",
+      "evidence": "HTTP 200 OK containing [core] repository info"
+    },
+    {
+      "id": "MISCONF-001",
+      "name": "Exposed Environment Variables",
+      "severity": "Critical",
+      "cvss": 10,
+      "description": "Sensitive .env file exposed at http://staging.test.com:80/.env (CRITICAL: Confirmed chained with WordPress DB exposure)",
+      "evidence": "HTTP 200 OK containing DB_PASSWORD"
+    },
+    {
+      "id": "MISCONF-002",
+      "name": "Exposed Git Repository",
+      "severity": "High",
+      "cvss": 7.5,
+      "description": "Source code repository exposed at https://staging.test.com:443/.git/config",
+      "evidence": "HTTP 200 OK containing [core] repository info"
+    },
+    {
+      "id": "MISCONF-001",
+      "name": "Exposed Environment Variables",
+      "severity": "Critical",
+      "cvss": 10,
+      "description": "Sensitive .env file exposed at https://staging.test.com:443/.env (CRITICAL: Confirmed chained with WordPress DB exposure)",
+      "evidence": "HTTP 200 OK containing DB_PASSWORD"
+    }
+  ],
+  "logs": [
+    {
+      "timestamp": "2026-06-10T13:21:23.3857097+07:00",
+      "agent": "Agent-20: Autonomous Security Orchestrator",
+      "action": "BOOT",
+      "message": "Swarm Session ID: HACKIT-SWARM-1781072483"
+    },
+    {
+      "timestamp": "2026-06-10T13:21:23.3857097+07:00",
+      "agent": "Agent-20: Autonomous Security Orchestrator",
+      "action": "BOOT",
+      "message": "Target Locked: test.com"
+    },
+    {
+      "timestamp": "2026-06-10T13:21:23.3857097+07:00",
+      "agent": "Agent-20: Autonomous Security Orchestrator",
+      "action": "INVOKE",
+      "message": "Waking up Agent-1: Planning..."
+    },
+    {
+      "timestamp": "2026-06-10T13:21:23.5861086+07:00",
+      "agent": "Agent-1: Planning",
+      "action": "INIT",
+      "message": "Initializing Planning Phase..."
+    },
+    {
+      "timestamp": "2026-06-10T13:21:23.5861086+07:00",
+      "agent": "Agent-1: Planning",
+      "action": "ANALYSIS",
+      "message": "Analyzing target 'test.com' with mode 'active_stealth'"
+    },
+    {
+      "timestamp": "2026-06-10T13:21:23.5861086+07:00",
+      "agent": "Agent-1: Planning",
+      "action": "RULE_SET",
+      "message": "Applied active stealth rules. Traffic will be heavily jittered and masked."
+    },
+    {
+      "timestamp": "2026-06-10T13:21:23.5861086+07:00",
+      "agent": "Agent-1: Planning",
+      "action": "COMPLETE",
+      "message": "Test plan finalized. Proceeding to Agent-2: Reconnaissance."
+    },
+    {
+      "timestamp": "2026-06-10T13:21:23.5861086+07:00",
+      "agent": "Agent-20: Autonomous Security Orchestrator",
+      "action": "INVOKE",
+      "message": "Waking up Agent-2: Reconnaissance..."
+    },
+    {
+      "timestamp": "2026-06-10T13:21:23.7867043+07:00",
+      "agent": "Agent-2: Reconnaissance",
+      "action": "START",
+      "message": "Commencing reconnaissance on test.com"
+    },
+    {
+      "timestamp": "2026-06-10T13:21:23.7867043+07:00",
+      "agent": "Agent-2: Reconnaissance",
+      "action": "TASK",
+      "message": "Triggering Native Subdomain Enumerator..."
+    },
+    {
+      "timestamp": "2026-06-10T13:21:23.7867043+07:00",
+      "agent": "Agent-2: Reconnaissance",
+      "action": "DISCOVERY",
+      "message": "Found 3 subdomains"
+    },
+    {
+      "timestamp": "2026-06-10T13:21:23.7867043+07:00",
+      "agent": "Agent-2: Reconnaissance",
+      "action": "TASK",
+      "message": "Resolving ASN and DNS routing..."
+    },
+    {
+      "timestamp": "2026-06-10T13:21:23.7867043+07:00",
+      "agent": "Agent-2: Reconnaissance",
+      "action": "DISCOVERY",
+      "message": "Target routed through Cloudflare"
+    },
+    {
+      "timestamp": "2026-06-10T13:21:23.7867043+07:00",
+      "agent": "Agent-2: Reconnaissance",
+      "action": "COMPLETE",
+      "message": "Reconnaissance data secured. Handing over to Agent-3: Discovery."
+    },
+    {
+      "timestamp": "2026-06-10T13:21:23.7867043+07:00",
+      "agent": "Agent-20: Autonomous Security Orchestrator",
+      "action": "INVOKE",
+      "message": "Waking up Agent-3: Discovery..."
+    },
+    {
+      "timestamp": "2026-06-10T13:21:23.9872167+07:00",
+      "agent": "Agent-3: Discovery",
+      "action": "START",
+      "message": "Commencing active surface discovery..."
+    },
+    {
+      "timestamp": "2026-06-10T13:21:23.9872167+07:00",
+      "agent": "Agent-3: Discovery",
+      "action": "TASK",
+      "message": "Triggering High-Speed Port Scanner on 3 targets"
+    },
+    {
+      "timestamp": "2026-06-10T13:21:23.9872167+07:00",
+      "agent": "Agent-3: Discovery",
+      "action": "MODE",
+      "message": "Running in top-1000 standard port mode"
+    },
+    {
+      "timestamp": "2026-06-10T13:21:24.4878818+07:00",
+      "agent": "Agent-3: Discovery",
+      "action": "DISCOVERY",
+      "message": "Successfully mapped 6 open services across the surface"
+    },
+    {
+      "timestamp": "2026-06-10T13:21:24.4878818+07:00",
+      "agent": "Agent-3: Discovery",
+      "action": "COMPLETE",
+      "message": "Surface mapping complete. Handing over to Agent-4: Fingerprint."
+    },
+    {
+      "timestamp": "2026-06-10T13:21:24.4878818+07:00",
+      "agent": "Agent-20: Autonomous Security Orchestrator",
+      "action": "INVOKE",
+      "message": "Waking up Agent-4: Fingerprint..."
+    },
+    {
+      "timestamp": "2026-06-10T13:21:24.6885565+07:00",
+      "agent": "Agent-4: Fingerprint",
+      "action": "START",
+      "message": "Initiating profound tech-stack fingerprinting..."
+    },
+    {
+      "timestamp": "2026-06-10T13:21:24.6885565+07:00",
+      "agent": "Agent-4: Fingerprint",
+      "action": "TASK",
+      "message": "Analyzing 6 discovered endpoints for technology headers"
+    },
+    {
+      "timestamp": "2026-06-10T13:21:24.6885565+07:00",
+      "agent": "Agent-4: Fingerprint",
+      "action": "DISCOVERY",
+      "message": "Successfully fingerprinted the underlying technologies."
+    },
+    {
+      "timestamp": "2026-06-10T13:21:24.6885565+07:00",
+      "agent": "Agent-4: Fingerprint",
+      "action": "COMPLETE",
+      "message": "Fingerprinting complete. Handing over to Agent-5: Enumeration."
+    },
+    {
+      "timestamp": "2026-06-10T13:21:24.6885565+07:00",
+      "agent": "Agent-20: Autonomous Security Orchestrator",
+      "action": "INVOKE",
+      "message": "Waking up Agent-5: Enumeration..."
+    },
+    {
+      "timestamp": "2026-06-10T13:21:24.8890958+07:00",
+      "agent": "Agent-5: Enumeration",
+      "action": "START",
+      "message": "Starting Deep Directory \u0026 API Enumeration..."
+    },
+    {
+      "timestamp": "2026-06-10T13:21:24.8890958+07:00",
+      "agent": "Agent-5: Enumeration",
+      "action": "TASK",
+      "message": "Triggering Native Go Fuzzer on 6 web targets"
+    },
+    {
+      "timestamp": "2026-06-10T13:21:24.8890958+07:00",
+      "agent": "Agent-5: Enumeration",
+      "action": "DISCOVERY",
+      "message": "Fuzzer mapped 16 hidden endpoints across the attack surface."
+    },
+    {
+      "timestamp": "2026-06-10T13:21:24.8890958+07:00",
+      "agent": "Agent-5: Enumeration",
+      "action": "COMPLETE",
+      "message": "Enumeration complete. Handing over to Agent-6: Vulnerability Analysis."
+    },
+    {
+      "timestamp": "2026-06-10T13:21:24.8890958+07:00",
+      "agent": "Agent-20: Autonomous Security Orchestrator",
+      "action": "INVOKE",
+      "message": "Waking up Agent-6: Vulnerability Analysis..."
+    },
+    {
+      "timestamp": "2026-06-10T13:21:25.0896119+07:00",
+      "agent": "Agent-6: Vulnerability Analysis",
+      "action": "START",
+      "message": "Commencing Deep Vulnerability Analysis..."
+    },
+    {
+      "timestamp": "2026-06-10T13:21:25.0896119+07:00",
+      "agent": "Agent-6: Vulnerability Analysis",
+      "action": "TASK",
+      "message": "Analyzing 6 services and 16 endpoints against Exploit KB..."
+    },
+    {
+      "timestamp": "2026-06-10T13:21:25.0896119+07:00",
+      "agent": "Agent-6: Vulnerability Analysis",
+      "action": "DISCOVERY",
+      "message": "Identified 14 distinct vulnerabilities."
+    },
+    {
+      "timestamp": "2026-06-10T13:21:25.0896119+07:00",
+      "agent": "Agent-6: Vulnerability Analysis",
+      "action": "COMPLETE",
+      "message": "Vulnerability analysis complete. Handing over to Agent-7: Correlation."
+    },
+    {
+      "timestamp": "2026-06-10T13:21:25.0896119+07:00",
+      "agent": "Agent-20: Autonomous Security Orchestrator",
+      "action": "INVOKE",
+      "message": "Waking up Agent-7: Correlation..."
+    },
+    {
+      "timestamp": "2026-06-10T13:21:25.2899438+07:00",
+      "agent": "Agent-7: Correlation",
+      "action": "START",
+      "message": "Starting Threat Correlation Matrix..."
+    },
+    {
+      "timestamp": "2026-06-10T13:21:25.2899438+07:00",
+      "agent": "Agent-7: Correlation",
+      "action": "TASK",
+      "message": "Analyzing 14 isolated findings for attack chains..."
+    },
+    {
+      "timestamp": "2026-06-10T13:21:25.2899438+07:00",
+      "agent": "Agent-7: Correlation",
+      "action": "ALERT",
+      "message": "ATTACK CHAIN DETECTED: [Exposed .env] -\u003e DB Credentials -\u003e [WordPress DB Compromise] -\u003e [Admin Account Takeover] -\u003e [Remote Code Execution]"
+    },
+    {
+      "timestamp": "2026-06-10T13:21:25.2899438+07:00",
+      "agent": "Agent-7: Correlation",
+      "action": "COMPLETE",
+      "message": "Correlation complete. Handing over to Agent-8: Evidence Collection."
+    },
+    {
+      "timestamp": "2026-06-10T13:21:25.2899438+07:00",
+      "agent": "Agent-20: Autonomous Security Orchestrator",
+      "action": "INVOKE",
+      "message": "Waking up Agent-8: Evidence Collection..."
+    },
+    {
+      "timestamp": "2026-06-10T13:21:25.4907371+07:00",
+      "agent": "Agent-8: Evidence Collection",
+      "action": "START",
+      "message": "Starting Evidence Collection..."
+    },
+    {
+      "timestamp": "2026-06-10T13:21:25.4913028+07:00",
+      "agent": "Agent-8: Evidence Collection",
+      "action": "TASK",
+      "message": "Saving evidence artifacts to reports\\evidence\\HACKIT-SWARM-1781072483"
+    },
+    {
+      "timestamp": "2026-06-10T13:21:25.4969781+07:00",
+      "agent": "Agent-8: Evidence Collection",
+      "action": "COMPLETE",
+      "message": "Saved 14 evidence artifacts. Handing over to Agent-9: Risk Scoring."
+    },
+    {
+      "timestamp": "2026-06-10T13:21:25.4975204+07:00",
+      "agent": "Agent-20: Autonomous Security Orchestrator",
+      "action": "INVOKE",
+      "message": "Waking up Agent-9: Risk Scoring..."
+    },
+    {
+      "timestamp": "2026-06-10T13:21:25.6979076+07:00",
+      "agent": "Agent-9: Risk Scoring",
+      "action": "START",
+      "message": "Starting Risk \u0026 CVSS Scoring Matrix..."
+    },
+    {
+      "timestamp": "2026-06-10T13:21:25.6979076+07:00",
+      "agent": "Agent-9: Risk Scoring",
+      "action": "TASK",
+      "message": "Scoring 14 vulnerabilities for business impact."
+    },
+    {
+      "timestamp": "2026-06-10T13:21:25.6979076+07:00",
+      "agent": "Agent-9: Risk Scoring",
+      "action": "ALERT",
+      "message": "Max CVSS (10.0) assigned to Exposed Environment Variables due to chained exposure context."
+    },
+    {
+      "timestamp": "2026-06-10T13:21:25.6979076+07:00",
+      "agent": "Agent-9: Risk Scoring",
+      "action": "ALERT",
+      "message": "Max CVSS (10.0) assigned to Exposed Environment Variables due to chained exposure context."
+    },
+    {
+      "timestamp": "2026-06-10T13:21:25.6979076+07:00",
+      "agent": "Agent-9: Risk Scoring",
+      "action": "ALERT",
+      "message": "Max CVSS (10.0) assigned to Exposed Environment Variables due to chained exposure context."
+    },
+    {
+      "timestamp": "2026-06-10T13:21:25.6979076+07:00",
+      "agent": "Agent-9: Risk Scoring",
+      "action": "ALERT",
+      "message": "Max CVSS (10.0) assigned to Exposed Environment Variables due to chained exposure context."
+    },
+    {
+      "timestamp": "2026-06-10T13:21:25.6979076+07:00",
+      "agent": "Agent-9: Risk Scoring",
+      "action": "COMPLETE",
+      "message": "Risk scoring applied. Handing over to Agent-10: Report Generation."
+    },
+    {
+      "timestamp": "2026-06-10T13:21:25.6979076+07:00",
+      "agent": "Agent-20: Autonomous Security Orchestrator",
+      "action": "INVOKE",
+      "message": "Waking up Agent-10: Report Generation..."
+    },
+    {
+      "timestamp": "2026-06-10T13:21:25.898447+07:00",
+      "agent": "Agent-10: Report Generation",
+      "action": "START",
+      "message": "Starting Final Report Compilation..."
+    },
+    {
+      "timestamp": "2026-06-10T13:21:25.8997192+07:00",
+      "agent": "Agent-10: Report Generation",
+      "action": "TASK",
+      "message": "Generating Markdown Report to reports\\final\\HACKIT-SWARM-1781072483"
+    }
+  ],
+  "context_data": {
+    "attack_chains": [
+      "ATTACK CHAIN DETECTED: [Exposed .env] -\u003e DB Credentials -\u003e [WordPress DB Compromise] -\u003e [Admin Account Takeover] -\u003e [Remote Code Execution]"
+    ],
+    "enumerated_endpoints": [
+      "http://dev.test.com:80/.git/config",
+      "http://dev.test.com:80/admin/login",
+      "http://dev.test.com:80/.env",
+      "https://dev.test.com:443/.git/config",
+      "https://dev.test.com:443/admin/login",
+      "https://dev.test.com:443/.env",
+      "http://staging.test.com:80/.git/config",
+      "http://staging.test.com:80/admin/login",
+      "http://staging.test.com:80/.env",
+      "https://staging.test.com:443/.git/config",
+      "https://staging.test.com:443/admin/login",
+      "https://staging.test.com:443/.env",
+      "http://api.test.com:80/v1/users",
+      "http://api.test.com:80/v2/graphql",
+      "https://api.test.com:443/v1/users",
+      "https://api.test.com:443/v2/graphql"
+    ]
+  },
+  "Mu": {}
+}

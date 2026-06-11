@@ -68,21 +68,21 @@ var KnowledgeBase = []AITactic{
 func LookupTactic(service string) []AITactic {
 	var results []AITactic
 	svc := strings.ToLower(service)
-	
+
 	// Direct match
 	for _, tactic := range KnowledgeBase {
 		if strings.Contains(svc, tactic.ServiceName) {
 			results = append(results, tactic)
 		}
 	}
-	
+
 	return results
 }
 
 // GenerateAttackPlan creates a strategic plan based on discovered open ports.
 func GenerateAttackPlan(openServices []string) string {
 	plan := "🎯 **AI Autonomous Attack Plan Generated**\n\n"
-	
+
 	for _, svc := range openServices {
 		tactics := LookupTactic(svc)
 		for _, t := range tactics {
@@ -92,10 +92,10 @@ func GenerateAttackPlan(openServices []string) string {
 			plan += "   - **Tooling**: " + strings.Join(t.Tools, ", ") + "\n\n"
 		}
 	}
-	
+
 	if plan == "🎯 **AI Autonomous Attack Plan Generated**\n\n" {
 		plan += "No known strategic vectors found for the listed services. Will default to deep probing.\n"
 	}
-	
+
 	return plan
 }

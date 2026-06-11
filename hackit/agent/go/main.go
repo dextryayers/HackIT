@@ -10,6 +10,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"hackit_ai_engine/swarm/orchestrator"
 )
 
 func main() {
@@ -23,6 +25,8 @@ func main() {
 	clearHist := flag.Bool("clear", false, "Clear conversation history")
 	mode := flag.String("mode", "", "Specialized Command Mode (e.g., risk, attack)")
 	autopilot := flag.String("autopilot", "", "Target for Autonomous AI Bug Hunter")
+	swarmMode := flag.String("swarm", "", "Trigger 20-Node Autonomous Swarm on Target")
+	swarmScope := flag.String("swarm-scope", "passive", "Scope for Swarm (passive, active_stealth, aggressive)")
 	flag.Parse()
 
 	history := NewHistoryManager()
@@ -35,6 +39,16 @@ func main() {
 	if *autopilot != "" {
 		hunter := &AutonomousHunter{Target: *autopilot}
 		hunter.Run()
+		return
+	}
+
+	if *swarmMode != "" {
+		masterNode := orchestrator.NewOrchestratorAgent()
+		err := masterNode.Execute(*swarmMode, *swarmScope)
+		if err != nil {
+			fmt.Printf(`{"error": "Swarm execution failed: %v"}`+"\n", err)
+			os.Exit(1)
+		}
 		return
 	}
 
@@ -112,9 +126,9 @@ func handleGemini(client *http.Client, key, prompt, system, model string, hist [
 			if m == "" {
 				continue
 			}
-			
+
 			url := fmt.Sprintf("https://generativelanguage.googleapis.com/%s/models/%s:generateContent?key=%s", v, m, key)
-			
+
 			fullPrompt := system + "\n\n"
 			for _, msg := range hist {
 				fullPrompt += fmt.Sprintf("%s: %s\n", msg.Role, msg.Content)
@@ -154,19 +168,19 @@ func handleGemini(client *http.Client, key, prompt, system, model string, hist [
 				lastErr = fmt.Errorf("no candidates in response")
 				continue
 			}
-			
+
 			content, ok := candidates[0].(map[string]interface{})["content"].(map[string]interface{})
 			if !ok {
 				lastErr = fmt.Errorf("no content in candidate")
 				continue
 			}
-			
+
 			parts, ok := content["parts"].([]interface{})
 			if !ok || len(parts) == 0 {
 				lastErr = fmt.Errorf("no parts in content")
 				continue
 			}
-			
+
 			text, ok := parts[0].(map[string]interface{})["text"].(string)
 			if !ok {
 				lastErr = fmt.Errorf("text is not a string")
@@ -202,9 +216,12 @@ func handleOpenAICompatible(client *http.Client, provider, key, prompt, system, 
 
 	if model == "" {
 		switch provider {
-		case "openrouter": model = "google/gemini-pro-1.5"
-		case "deepseek": model = "deepseek-chat"
-		case "openai": model = "gpt-4o"
+		case "openrouter":
+			model = "google/gemini-pro-1.5"
+		case "deepseek":
+			model = "deepseek-chat"
+		case "openai":
+			model = "gpt-4o"
 		}
 	}
 
@@ -254,17 +271,17 @@ func handleOpenAICompatible(client *http.Client, provider, key, prompt, system, 
 		}
 		return "", fmt.Errorf("[%s ERROR] Unexpected response: %s", provider, string(body))
 	}
-	
+
 	message, ok := choices[0].(map[string]interface{})["message"].(map[string]interface{})
 	if !ok {
 		return "", fmt.Errorf("malformed message in choices")
 	}
-	
+
 	text, ok := message["content"].(string)
 	if !ok {
 		return "", fmt.Errorf("content field is missing or not a string")
 	}
-	
+
 	return text, nil
 }
 
@@ -279,7 +296,7 @@ func handleClaude(client *http.Client, key, prompt, system, model string, hist [
 		System:    system,
 		MaxTokens: 1024,
 	}
-	
+
 	// Add history
 	for _, msg := range hist {
 		reqBody.Messages = append(reqBody.Messages, struct {
@@ -316,12 +333,12 @@ func handleClaude(client *http.Client, key, prompt, system, model string, hist [
 		}
 		return "", fmt.Errorf("[CLAUDE ERROR] Unexpected response: %s", string(body))
 	}
-	
+
 	text, ok := content[0].(map[string]interface{})["text"].(string)
 	if !ok {
 		return "", fmt.Errorf("text field is missing in content")
 	}
-	
+
 	return text, nil
 }
 
@@ -353,9 +370,9 @@ func handleOllama(client *http.Client, modelName, prompt, system, model string, 
 	if model == "" {
 		model = modelName
 	}
-	
+
 	available := getOllamaModels(client)
-	
+
 	// Smart Match: If model is empty, default, or AUTO_DETECT, try to find best match
 	found := false
 	if model == "" || model == "llama3" || model == "AUTO_DETECT" {
@@ -433,7 +450,7 @@ func handleOllama(client *http.Client, modelName, prompt, system, model string, 
 	}{Role: "user", Content: prompt})
 
 	jsonData, _ := json.Marshal(reqBody)
-	
+
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return "", fmt.Errorf("failed to create request: %v", err)

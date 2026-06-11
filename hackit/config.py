@@ -18,7 +18,16 @@ DEFAULT_CONFIG = {
         "claude": "",
         "deepseek": "",
         "openrouter": "",
-        "ollama": "llama3"
+        "ollama": ""
+    },
+    "ai_models": {
+        "gemini": "",
+        "groq": "",
+        "openai": "",
+        "claude": "",
+        "deepseek": "",
+        "openrouter": "",
+        "ollama": ""
     },
     "ai_provider": "gemini"
 }

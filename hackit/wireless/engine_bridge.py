@@ -151,24 +151,23 @@ class EngineBridge:
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             creationflags=self._get_creation_flags(), universal_newlines=True)
 
-    def launch_rust_deauth(self, bssid: str, station: str = "FF:FF:FF:FF:FF:FF", count: int = 10):
-        return subprocess.Popen(
-            [self.rust_engine_path, "deauth",
-             "--bssid", bssid, "--station", station, "--count", str(count)],
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            creationflags=self._get_creation_flags(), universal_newlines=True)
+    def launch_rust_deauth(self, iface: str, bssid: str, station: str = "", count: int = 10):
+        cmd = [self.rust_engine_path, "deauth", "--interface", iface, "--bssid", bssid, "--count", str(count)]
+        if station:
+            cmd.extend(["--station", station])
+        return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                creationflags=self._get_creation_flags(), universal_newlines=True)
 
-    def launch_rust_beacon_flood(self, ssid: str, bssid: str, channel: int = 6, count: int = 50):
-        return subprocess.Popen(
-            [self.rust_engine_path, "beacon-flood",
-             "--ssid", ssid, "--bssid", bssid,
-             "--channel", str(channel), "--count", str(count)],
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            creationflags=self._get_creation_flags(), universal_newlines=True)
+    def launch_rust_beacon_flood(self, iface: str, ssid: str = "", count: int = 50):
+        cmd = [self.rust_engine_path, "beacon-flood", "--interface", iface, "--count", str(count)]
+        if ssid:
+            cmd.extend(["--ssid", ssid])
+        return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                creationflags=self._get_creation_flags(), universal_newlines=True)
 
     def launch_rust_capture(self, iface: str, output: str = "capture.pcap"):
         return subprocess.Popen(
-            [self.rust_engine_path, "capture", f"--iface={iface}", f"--output={output}"],
+            [self.rust_engine_path, "capture", "--iface", iface, "--output", output],
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             creationflags=self._get_creation_flags(), universal_newlines=True)
 

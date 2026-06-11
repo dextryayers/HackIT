@@ -2,6 +2,7 @@ CMakeFiles/hackit_wireless_c.dir/src/adapter_detection.c.obj: \
  D:\web\hacks\hackstools\hackit\wireless\c_core\src\adapter_detection.c \
  D:/web/hacks/hackstools/hackit/wireless/c_core/include/adapter_detection.h \
  C:/mingw64/lib/gcc/x86_64-w64-mingw32/15.1.0/include/stdbool.h \
+ D:/web/hacks/hackstools/hackit/wireless/c_core/include/wifi_stack.h \
  C:/mingw64/x86_64-w64-mingw32/include/string.h \
  C:/mingw64/x86_64-w64-mingw32/include/crtdefs.h \
  C:/mingw64/x86_64-w64-mingw32/include/corecrt.h \

@@ -1,0 +1,63 @@
+{
+  "active_services": 8,
+  "asset_map": [
+    {
+      "ip": "example.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 403 Forbidden",
+      "tech": "cloudflare"
+    },
+    {
+      "ip": "example.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 400 Bad Request",
+      "tech": "cloudflare"
+    },
+    {
+      "ip": "example.com",
+      "port": 8443,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 400 Bad Request",
+      "tech": "https-alt"
+    },
+    {
+      "ip": "example.com",
+      "port": 8080,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 403 Forbidden",
+      "tech": "http-proxy"
+    },
+    {
+      "ip": "www.example.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 403 Forbidden",
+      "tech": "cloudflare"
+    },
+    {
+      "ip": "www.example.com",
+      "port": 8443,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 400 Bad Request",
+      "tech": "https-alt"
+    },
+    {
+      "ip": "www.example.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 400 Bad Request",
+      "tech": "cloudflare"
+    },
+    {
+      "ip": "www.example.com",
+      "port": 8080,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 403 Forbidden",
+      "tech": "http-proxy"
+    }
+  ],
+  "corporate_domain": "example.com",
+  "total_subdomains": 3
+}

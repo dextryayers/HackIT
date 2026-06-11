@@ -21,7 +21,7 @@ pub struct RustWifiAdapter {
     pub is_monitor: bool,
 }
 
-pub fn list_adapters_json() -> String {
+fn detect_adapters_inner() -> Vec<RustWifiAdapter> {
     let mut c_adapters = [CWifiAdapter {
         name: [0; 32],
         mac: [0; 18],
@@ -38,10 +38,9 @@ pub fn list_adapters_json() -> String {
         )
     };
 
-    let mut json = String::from("[");
+    let mut adapters = Vec::new();
     for i in 0..(count as usize) {
         let adapter = &c_adapters[i];
-        
         let name = unsafe { std::ffi::CStr::from_ptr(adapter.name.as_ptr()) }
             .to_string_lossy()
             .into_owned();
@@ -51,16 +50,32 @@ pub fn list_adapters_json() -> String {
         let driver = unsafe { std::ffi::CStr::from_ptr(adapter.driver.as_ptr()) }
             .to_string_lossy()
             .into_owned();
-
-        if i > 0 {
-            json.push_str(", ");
-        }
-
-        json.push_str(&format!(
-            r#"{{"name": "{}", "mac": "{}", "driver": "{}", "channel": {}, "signal_dbm": {}, "is_monitor": {}}}"#,
-            name, mac, driver, adapter.channel, adapter.signal_dbm, adapter.is_monitor
-        ));
+        adapters.push(RustWifiAdapter {
+            name,
+            mac,
+            driver,
+            channel: adapter.channel,
+            signal_dbm: adapter.signal_dbm,
+            is_monitor: adapter.is_monitor,
+        });
     }
-    json.push(']');
-    json
+    adapters
+}
+
+pub fn list_adapters() -> Vec<String> {
+    detect_adapters_inner().into_iter().map(|a| a.name).collect()
+}
+
+pub fn list_adapters_json() -> String {
+    let adapters = detect_adapters_inner();
+    serde_json::to_string(&adapters.iter().map(|a| {
+        serde_json::json!({
+            "name": a.name,
+            "mac": a.mac,
+            "driver": a.driver,
+            "channel": a.channel,
+            "signal_dbm": a.signal_dbm,
+            "is_monitor": a.is_monitor,
+        })
+    }).collect::<Vec<_>>()).unwrap_or_else(|_| "[]".into())
 }

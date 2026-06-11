@@ -84,12 +84,12 @@ clean: CMakeFiles/hackit_wireless_c.dir/clean
 CMakeFiles/hackit_wireless_c.dir/all:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles\hackit_wireless_c.dir\build.make CMakeFiles/hackit_wireless_c.dir/depend
 	$(MAKE) $(MAKESILENT) -f CMakeFiles\hackit_wireless_c.dir\build.make CMakeFiles/hackit_wireless_c.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=D:\web\hacks\hackstools\hackit\wireless\c_core\build\CMakeFiles --progress-num=1,2,3,4,5,6,7,8,9,10 "Built target hackit_wireless_c"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=D:\web\hacks\hackstools\hackit\wireless\c_core\build\CMakeFiles --progress-num=1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23 "Built target hackit_wireless_c"
 .PHONY : CMakeFiles/hackit_wireless_c.dir/all
 
 # Build rule for subdir invocation for target.
 CMakeFiles/hackit_wireless_c.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start D:\web\hacks\hackstools\hackit\wireless\c_core\build\CMakeFiles 10
+	$(CMAKE_COMMAND) -E cmake_progress_start D:\web\hacks\hackstools\hackit\wireless\c_core\build\CMakeFiles 23
 	$(MAKE) $(MAKESILENT) -f CMakeFiles\Makefile2 CMakeFiles/hackit_wireless_c.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start D:\web\hacks\hackstools\hackit\wireless\c_core\build\CMakeFiles 0
 .PHONY : CMakeFiles/hackit_wireless_c.dir/rule
@@ -101,7 +101,7 @@ hackit_wireless_c: CMakeFiles/hackit_wireless_c.dir/rule
 # codegen rule for target.
 CMakeFiles/hackit_wireless_c.dir/codegen:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles\hackit_wireless_c.dir\build.make CMakeFiles/hackit_wireless_c.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=D:\web\hacks\hackstools\hackit\wireless\c_core\build\CMakeFiles --progress-num=1,2,3,4,5,6,7,8,9,10 "Finished codegen for target hackit_wireless_c"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=D:\web\hacks\hackstools\hackit\wireless\c_core\build\CMakeFiles --progress-num=1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23 "Finished codegen for target hackit_wireless_c"
 .PHONY : CMakeFiles/hackit_wireless_c.dir/codegen
 
 # clean rule for target.

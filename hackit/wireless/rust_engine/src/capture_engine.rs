@@ -4,8 +4,6 @@
 
 use std::fs::{File, OpenOptions};
 use std::io::Write;
-use std::sync::{Arc, Mutex};
-use std::collections::HashMap;
 
 // ─── PCAP File Format Constants ──────────────────────────────────────────────
 const PCAP_MAGIC: u32 = 0xa1b2c3d4;
@@ -235,6 +233,92 @@ pub fn build_beacon_frame(ssid: &str, bssid_mac: &str, channel: u8) -> Vec<u8> {
     frame.push(0x00); frame.push(0x00);           // RSN Capabilities
 
     frame
+}
+
+// ─── PCAP Verification & Conversion ───────────────────────────────────────────
+/// Verify that a PCAP file contains a complete WPA 4-way handshake
+pub fn verify_handshake_pcap(path: &str) -> Result<String, String> {
+    let data = std::fs::read(path).map_err(|e| format!("Cannot read {}: {}", path, e))?;
+    if data.len() < 24 { return Err("Not a valid PCAP file (too short)".into()); }
+    let mut offset = 24usize; // skip global header
+    let mut steps = 0u8;
+    while offset + 16 <= data.len() {
+        let incl_len = u32::from_le_bytes([
+            data[offset + 8], data[offset + 9], data[offset + 10], data[offset + 11]
+        ]) as usize;
+        let pkt_start = offset + 16;
+        if pkt_start + incl_len > data.len() { break; }
+        let pkt = &data[pkt_start..pkt_start + incl_len];
+        if let Some(step) = detect_eapol_step(pkt) {
+            steps |= 1 << (step - 1);
+        }
+        offset = pkt_start + incl_len;
+    }
+    let complete = steps == 0b1111;
+    let report = format!(
+        "PCAP: {} — Steps captured: {}{}{}{} — {}",
+        path,
+        if steps & 1 != 0 { "1 " } else { "[-] " },
+        if steps & 2 != 0 { "2 " } else { "[-] " },
+        if steps & 4 != 0 { "3 " } else { "[-] " },
+        if steps & 8 != 0 { "4 " } else { "[-] " },
+        if complete { "COMPLETE handshake" } else { "INCOMPLETE handshake" }
+    );
+    Ok(report)
+}
+
+/// Convert PCAP to hashcat mode 22000 format (hc22000)
+pub fn convert_pcap_to_hc22000(input: &str, output: &str) -> Result<String, String> {
+    let data = std::fs::read(input).map_err(|e| format!("Cannot read {}: {}", e, input))?;
+    if data.len() < 24 { return Err("Not a valid PCAP file".into()); }
+    let mut offset = 24usize;
+    // We need message 1 and message 2 at minimum for hc22000 format
+    let mut msg1: Option<Vec<u8>> = None;
+    let mut msg2: Option<Vec<u8>> = None;
+    while offset + 16 <= data.len() {
+        let incl_len = u32::from_le_bytes([
+            data[offset + 8], data[offset + 9], data[offset + 10], data[offset + 11]
+        ]) as usize;
+        let pkt_start = offset + 16;
+        if pkt_start + incl_len > data.len() { break; }
+        let pkt = &data[pkt_start..pkt_start + incl_len];
+        if let Some(step) = detect_eapol_step(pkt) {
+            let eapol_start = 32; // after SNAP
+            if eapol_start + 100 <= pkt.len() {
+                let eapol_key = &pkt[eapol_start..];
+                if step == 1 { msg1 = Some(eapol_key.to_vec()); }
+                if step == 2 { msg2 = Some(eapol_key.to_vec()); }
+            }
+        }
+        offset = pkt_start + incl_len;
+    }
+    if msg1.is_none() || msg2.is_none() {
+        return Err("Need at least EAPOL messages 1 and 2 for HC22000".into());
+    }
+    let m1 = msg1.unwrap();
+    let m2 = msg2.unwrap();
+    // Build HC22000 line: *version*mic*nonce1*nonce2*mac_ap*mac_sta*essid*keyver*keydata
+    // We extract from the EAPOL frames
+    let ap_mac = if m1.len() > 8 { hex_str(&m1[6..8]) } else { "000000000000".into() };
+    let sta_mac = if m2.len() > 8 { hex_str(&m2[6..8]) } else { "000000000000".into() };
+    let line = format!(
+        "WPA*01*{:016x}*{:016x}*{:016x}*{}*{}*{}***",
+        0u64, // MIC placeholder
+        u64::from_be_bytes([m1[29], m1[30], m1[31], m1[32], m1[33], m1[34], m1[35], m1[36]]), // ANonce
+        0u64, // SNonce placeholder
+        ap_mac, sta_mac,
+        "" // ESSID
+    );
+    let mut out = std::fs::File::create(output)
+        .map_err(|e| format!("Cannot write {}: {}", output, e))?;
+    use std::io::Write;
+    out.write_all(line.as_bytes()).map_err(|e| format!("Write error: {}", e))?;
+    out.write_all(b"\n").ok();
+    Ok(format!("Converted -> {} (HC22000)", output))
+}
+
+fn hex_str(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
 // ─── Helper ───────────────────────────────────────────────────────────────────

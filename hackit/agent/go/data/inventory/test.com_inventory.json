@@ -1,0 +1,49 @@
+{
+  "active_services": 6,
+  "asset_map": [
+    {
+      "ip": "api.test.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 400 Bad Request",
+      "tech": "Cloudflare WAF, PHP, WordPress"
+    },
+    {
+      "ip": "api.test.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "TLSv1.3",
+      "tech": "Cloudflare WAF, PHP, WordPress"
+    },
+    {
+      "ip": "staging.test.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 400 Bad Request",
+      "tech": "Cloudflare WAF, PHP, WordPress"
+    },
+    {
+      "ip": "staging.test.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "TLSv1.3",
+      "tech": "Cloudflare WAF, PHP, WordPress"
+    },
+    {
+      "ip": "dev.test.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 400 Bad Request",
+      "tech": "Cloudflare WAF, PHP, WordPress"
+    },
+    {
+      "ip": "dev.test.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "TLSv1.3",
+      "tech": "Cloudflare WAF, PHP, WordPress"
+    }
+  ],
+  "corporate_domain": "test.com",
+  "total_subdomains": 3
+}

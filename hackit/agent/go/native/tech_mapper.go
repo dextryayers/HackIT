@@ -44,7 +44,7 @@ func MapTechnologies(ip string, port int, banner string) TechResult {
 		}
 
 		targetURL := fmt.Sprintf("%s://%s:%d", scheme, ip, port)
-		
+
 		// Custom HTTP Client ignoring SSL errors
 		tr := &http.Transport{
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
@@ -58,15 +58,15 @@ func MapTechnologies(ip string, port int, banner string) TechResult {
 		if err == nil {
 			req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
 			resp, err := client.Do(req)
-			
+
 			if err == nil {
 				defer resp.Body.Close()
-				
+
 				// Extract Server Header
 				if srv := resp.Header.Get("Server"); srv != "" && result.Server == "" {
 					result.Server = srv
 				}
-				
+
 				// Extract X-Powered-By
 				if xpb := resp.Header.Get("X-Powered-By"); xpb != "" {
 					result.Frameworks = append(result.Frameworks, xpb)
@@ -89,12 +89,12 @@ func MapTechnologies(ip string, port int, banner string) TechResult {
 				// Read a chunk of body for meta tags
 				bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 16384))
 				bodyStr := string(bodyBytes)
-				
+
 				if strings.Contains(strings.ToLower(bodyStr), "wp-content") {
 					result.Frameworks = append(result.Frameworks, "WordPress")
 					result.Vulnerabilities = append(result.Vulnerabilities, "WordPress Detected: Run WPScan for plugin vulns")
 				}
-				
+
 				reGenerator := regexp.MustCompile(`(?i)<meta name="generator" content="([^"]+)"`)
 				if match := reGenerator.FindStringSubmatch(bodyStr); len(match) > 1 {
 					result.Frameworks = append(result.Frameworks, match[1])

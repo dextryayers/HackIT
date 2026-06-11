@@ -7,9 +7,9 @@ import (
 
 // RawPortScanResult represents the JSON output from `python main.py ports scan --json`
 type RawPortScanResult struct {
-	Host       string `json:"host"`
-	IP         string `json:"ip"`
-	Ports      []struct {
+	Host  string `json:"host"`
+	IP    string `json:"ip"`
+	Ports []struct {
 		Port    int    `json:"port"`
 		State   string `json:"state"`
 		Service string `json:"service"`
@@ -53,12 +53,12 @@ func ParseSubdomainJSON(jsonData string) ([]string, error) {
 		Subdomain string `json:"subdomain"`
 	}
 	var results []SubdomainResult
-	
+
 	err := json.Unmarshal([]byte(jsonData), &results)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse subdomain JSON: %v", err)
 	}
-	
+
 	var subs []string
 	for _, r := range results {
 		if r.Subdomain != "" {

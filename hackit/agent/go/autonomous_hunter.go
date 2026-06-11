@@ -30,26 +30,26 @@ func (h *AutonomousHunter) Run() {
 
 	// 2 & 3. Concurrent Recon Phase (Real-Time Subdomain & Port Scanning)
 	fmt.Println("\n🔍 [PHASE 2 & 3] Massive Concurrent Reconnaissance (Ports & Subdomains)...")
-	
+
 	var subdomains []string
 	var openServices []string
 	var wg sync.WaitGroup
-	
+
 	wg.Add(2)
-	
+
 	go func() {
 		defer wg.Done()
 		subdomains = h.executeSubdomainEnum()
 	}()
-	
+
 	go func() {
 		defer wg.Done()
 		openServices = h.executePortScan()
 	}()
-	
+
 	// Wait for both hyper-scans to finish
 	wg.Wait()
-	
+
 	if len(openServices) == 0 {
 		fmt.Println("❌ No open services detected. Target appears completely stealth or offline.")
 		return
@@ -72,7 +72,7 @@ func (h *AutonomousHunter) Run() {
 	// 7. Reporting Phase
 	fmt.Println("\n📝 [PHASE 7] Compiling Intelligence Report...")
 	report := GenerateReport(h.Target, vectors, flowchart)
-	
+
 	fmt.Println("\n✅ [AI HUNTER] Mission Complete. Evidence Captured.")
 	fmt.Println("=========================================================================")
 	fmt.Println(report)
@@ -80,43 +80,43 @@ func (h *AutonomousHunter) Run() {
 
 func (h *AutonomousHunter) executeSubdomainEnum() []string {
 	subs, err := native.EnumerateSubdomains(h.Target)
-	
+
 	var foundSubs []string
 	if err == nil {
 		foundSubs = subs
 	}
-	
+
 	fmt.Printf("   [+] Discovered %d unique subdomains\n", len(foundSubs))
 	return foundSubs
 }
 
 func (h *AutonomousHunter) executePortScan() []string {
 	ports := native.ScanPorts(h.Target, native.TopPorts, 100, 2*time.Second)
-	
+
 	var services []string
 	for _, p := range ports {
 		// Map it using native tech mapper
 		tech := native.MapTechnologies(h.Target, p.Port, p.Banner)
-		
+
 		svcStr := fmt.Sprintf("%d/%s (Banner: %s)", p.Port, p.Service, p.Banner)
 		services = append(services, svcStr)
-		
+
 		if tech.Server != "" {
 			fmt.Printf("      [*] Detected %s on port %d\n", tech.Server, p.Port)
 		}
 	}
-	
+
 	fmt.Printf("   [+] Discovered Open Services: %v\n", services)
 	return services
 }
 
 func (h *AutonomousHunter) executeAttacks(services []string, subdomains []string) []AttackVector {
 	var results []AttackVector
-	
+
 	for _, svc := range services {
 		svcLower := strings.ToLower(svc)
 		fmt.Printf("   -> Probing %s...\n", svc)
-		
+
 		// --- ADDED ADVANCED BANNER EXPLOIT CHECK ---
 		// We extract the port number and banner string
 		parts := strings.SplitN(svc, "/", 2)
@@ -140,10 +140,10 @@ func (h *AutonomousHunter) executeAttacks(services []string, subdomains []string
 			results = append(results, advVectors...)
 			FormatDeepProbeOutput(advVectors)
 		}
-		
+
 		// If HTTP/HTTPS is found, we run web fuzzer and header checks
 		if strings.Contains(svcLower, "http") || strings.Contains(svcLower, "443") || strings.Contains(svcLower, "80") {
-			
+
 			protocol := "http://"
 			if strings.Contains(svcLower, "443") || strings.Contains(svcLower, "https") {
 				protocol = "https://"
@@ -156,10 +156,10 @@ func (h *AutonomousHunter) executeAttacks(services []string, subdomains []string
 				if sslResult != nil && len(sslResult.Vulnerabilities) > 0 {
 					for _, v := range sslResult.Vulnerabilities {
 						results = append(results, AttackVector{
-							Port: portNum,
-							Service: "https",
+							Port:          portNum,
+							Service:       "https",
 							Vulnerability: v,
-							Impact: "Medium - Encryption Downgrade / Interception",
+							Impact:        "Medium - Encryption Downgrade / Interception",
 						})
 						fmt.Printf("      [!] SSL VULN FOUND: %s\n", v)
 					}
@@ -176,7 +176,7 @@ func (h *AutonomousHunter) executeAttacks(services []string, subdomains []string
 			} else {
 				fmt.Printf("      [-] No WAF Detected. Target is exposed.\n")
 			}
-			
+
 			// Native Tech Mapper already mapped headers, we don't need python script output
 			// We can check if it's HTTPS missing HSTS for example:
 			if protocol == "https://" && sslResult != nil {
@@ -187,14 +187,14 @@ func (h *AutonomousHunter) executeAttacks(services []string, subdomains []string
 			fmt.Printf("      [*] Initiating Native High-Speed Directory Fuzzing...\n")
 			targetBaseURL := fmt.Sprintf("%s%s:%d", protocol, h.Target, portNum)
 			fuzzHits := native.FuzzDirectories(targetBaseURL, 20)
-			
+
 			if len(fuzzHits) > 0 {
 				for _, hit := range fuzzHits {
 					results = append(results, AttackVector{
-						Port: portNum,
-						Service: "http/https",
+						Port:          portNum,
+						Service:       "http/https",
 						Vulnerability: fmt.Sprintf("Sensitive Endpoint Exposed: %s (HTTP %d)", hit.Path, hit.StatusCode),
-						Impact: "High - Data Leakage / RCE",
+						Impact:        "High - Data Leakage / RCE",
 					})
 					fmt.Printf("      [!] CRITICAL HIT: %s (Status: %d)\n", hit.Path, hit.StatusCode)
 				}
@@ -203,19 +203,19 @@ func (h *AutonomousHunter) executeAttacks(services []string, subdomains []string
 			}
 		}
 	}
-	
+
 	// --- NATIVE SUBDOMAIN TAKEOVER CHECK ---
 	if len(subdomains) > 0 {
 		fmt.Printf("   -> Auditing %d subdomains for Takeover vulnerabilities...\n", len(subdomains))
 		takeovers := native.CheckSubdomainTakeover(subdomains, 15)
-		
+
 		if len(takeovers) > 0 {
 			for _, to := range takeovers {
 				results = append(results, AttackVector{
-					Port: 443,
-					Service: "https",
+					Port:          443,
+					Service:       "https",
 					Vulnerability: fmt.Sprintf("Subdomain Takeover on %s (%s)", to.Subdomain, to.Platform),
-					Impact: "High - Phishing / Brand Reputation Damage",
+					Impact:        "High - Phishing / Brand Reputation Damage",
 				})
 				fmt.Printf("      [!] CRITICAL VULN FOUND: Subdomain Takeover vector on %s via %s\n", to.Subdomain, to.Platform)
 			}
@@ -223,7 +223,7 @@ func (h *AutonomousHunter) executeAttacks(services []string, subdomains []string
 			fmt.Printf("      [-] No Subdomain Takeovers detected.\n")
 		}
 	}
-	
+
 	return results
 }
 

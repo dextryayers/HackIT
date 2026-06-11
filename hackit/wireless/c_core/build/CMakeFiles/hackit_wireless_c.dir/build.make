@@ -176,11 +176,116 @@ CMakeFiles/hackit_wireless_c.dir/src/interface_control.c.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/hackit_wireless_c.dir/src/interface_control.c.s"
 	C:\mingw64\bin\gcc.exe $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S D:\web\hacks\hackstools\hackit\wireless\c_core\src\interface_control.c -o CMakeFiles\hackit_wireless_c.dir\src\interface_control.c.s
 
+CMakeFiles/hackit_wireless_c.dir/src/packet_injector.c.obj: CMakeFiles/hackit_wireless_c.dir/flags.make
+CMakeFiles/hackit_wireless_c.dir/src/packet_injector.c.obj: CMakeFiles/hackit_wireless_c.dir/includes_C.rsp
+CMakeFiles/hackit_wireless_c.dir/src/packet_injector.c.obj: D:/web/hacks/hackstools/hackit/wireless/c_core/src/packet_injector.c
+CMakeFiles/hackit_wireless_c.dir/src/packet_injector.c.obj: CMakeFiles/hackit_wireless_c.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=D:\web\hacks\hackstools\hackit\wireless\c_core\build\CMakeFiles --progress-num=$(CMAKE_PROGRESS_8) "Building C object CMakeFiles/hackit_wireless_c.dir/src/packet_injector.c.obj"
+	C:\mingw64\bin\gcc.exe $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/hackit_wireless_c.dir/src/packet_injector.c.obj -MF CMakeFiles\hackit_wireless_c.dir\src\packet_injector.c.obj.d -o CMakeFiles\hackit_wireless_c.dir\src\packet_injector.c.obj -c D:\web\hacks\hackstools\hackit\wireless\c_core\src\packet_injector.c
+
+CMakeFiles/hackit_wireless_c.dir/src/packet_injector.c.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing C source to CMakeFiles/hackit_wireless_c.dir/src/packet_injector.c.i"
+	C:\mingw64\bin\gcc.exe $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E D:\web\hacks\hackstools\hackit\wireless\c_core\src\packet_injector.c > CMakeFiles\hackit_wireless_c.dir\src\packet_injector.c.i
+
+CMakeFiles/hackit_wireless_c.dir/src/packet_injector.c.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/hackit_wireless_c.dir/src/packet_injector.c.s"
+	C:\mingw64\bin\gcc.exe $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S D:\web\hacks\hackstools\hackit\wireless\c_core\src\packet_injector.c -o CMakeFiles\hackit_wireless_c.dir\src\packet_injector.c.s
+
+CMakeFiles/hackit_wireless_c.dir/src/deauth_engine.c.obj: CMakeFiles/hackit_wireless_c.dir/flags.make
+CMakeFiles/hackit_wireless_c.dir/src/deauth_engine.c.obj: CMakeFiles/hackit_wireless_c.dir/includes_C.rsp
+CMakeFiles/hackit_wireless_c.dir/src/deauth_engine.c.obj: D:/web/hacks/hackstools/hackit/wireless/c_core/src/deauth_engine.c
+CMakeFiles/hackit_wireless_c.dir/src/deauth_engine.c.obj: CMakeFiles/hackit_wireless_c.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=D:\web\hacks\hackstools\hackit\wireless\c_core\build\CMakeFiles --progress-num=$(CMAKE_PROGRESS_9) "Building C object CMakeFiles/hackit_wireless_c.dir/src/deauth_engine.c.obj"
+	C:\mingw64\bin\gcc.exe $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/hackit_wireless_c.dir/src/deauth_engine.c.obj -MF CMakeFiles\hackit_wireless_c.dir\src\deauth_engine.c.obj.d -o CMakeFiles\hackit_wireless_c.dir\src\deauth_engine.c.obj -c D:\web\hacks\hackstools\hackit\wireless\c_core\src\deauth_engine.c
+
+CMakeFiles/hackit_wireless_c.dir/src/deauth_engine.c.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing C source to CMakeFiles/hackit_wireless_c.dir/src/deauth_engine.c.i"
+	C:\mingw64\bin\gcc.exe $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E D:\web\hacks\hackstools\hackit\wireless\c_core\src\deauth_engine.c > CMakeFiles\hackit_wireless_c.dir\src\deauth_engine.c.i
+
+CMakeFiles/hackit_wireless_c.dir/src/deauth_engine.c.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/hackit_wireless_c.dir/src/deauth_engine.c.s"
+	C:\mingw64\bin\gcc.exe $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S D:\web\hacks\hackstools\hackit\wireless\c_core\src\deauth_engine.c -o CMakeFiles\hackit_wireless_c.dir\src\deauth_engine.c.s
+
+CMakeFiles/hackit_wireless_c.dir/src/pmkid_harvest.c.obj: CMakeFiles/hackit_wireless_c.dir/flags.make
+CMakeFiles/hackit_wireless_c.dir/src/pmkid_harvest.c.obj: CMakeFiles/hackit_wireless_c.dir/includes_C.rsp
+CMakeFiles/hackit_wireless_c.dir/src/pmkid_harvest.c.obj: D:/web/hacks/hackstools/hackit/wireless/c_core/src/pmkid_harvest.c
+CMakeFiles/hackit_wireless_c.dir/src/pmkid_harvest.c.obj: CMakeFiles/hackit_wireless_c.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=D:\web\hacks\hackstools\hackit\wireless\c_core\build\CMakeFiles --progress-num=$(CMAKE_PROGRESS_10) "Building C object CMakeFiles/hackit_wireless_c.dir/src/pmkid_harvest.c.obj"
+	C:\mingw64\bin\gcc.exe $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/hackit_wireless_c.dir/src/pmkid_harvest.c.obj -MF CMakeFiles\hackit_wireless_c.dir\src\pmkid_harvest.c.obj.d -o CMakeFiles\hackit_wireless_c.dir\src\pmkid_harvest.c.obj -c D:\web\hacks\hackstools\hackit\wireless\c_core\src\pmkid_harvest.c
+
+CMakeFiles/hackit_wireless_c.dir/src/pmkid_harvest.c.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing C source to CMakeFiles/hackit_wireless_c.dir/src/pmkid_harvest.c.i"
+	C:\mingw64\bin\gcc.exe $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E D:\web\hacks\hackstools\hackit\wireless\c_core\src\pmkid_harvest.c > CMakeFiles\hackit_wireless_c.dir\src\pmkid_harvest.c.i
+
+CMakeFiles/hackit_wireless_c.dir/src/pmkid_harvest.c.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/hackit_wireless_c.dir/src/pmkid_harvest.c.s"
+	C:\mingw64\bin\gcc.exe $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S D:\web\hacks\hackstools\hackit\wireless\c_core\src\pmkid_harvest.c -o CMakeFiles\hackit_wireless_c.dir\src\pmkid_harvest.c.s
+
+CMakeFiles/hackit_wireless_c.dir/src/wpa3_sae.c.obj: CMakeFiles/hackit_wireless_c.dir/flags.make
+CMakeFiles/hackit_wireless_c.dir/src/wpa3_sae.c.obj: CMakeFiles/hackit_wireless_c.dir/includes_C.rsp
+CMakeFiles/hackit_wireless_c.dir/src/wpa3_sae.c.obj: D:/web/hacks/hackstools/hackit/wireless/c_core/src/wpa3_sae.c
+CMakeFiles/hackit_wireless_c.dir/src/wpa3_sae.c.obj: CMakeFiles/hackit_wireless_c.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=D:\web\hacks\hackstools\hackit\wireless\c_core\build\CMakeFiles --progress-num=$(CMAKE_PROGRESS_11) "Building C object CMakeFiles/hackit_wireless_c.dir/src/wpa3_sae.c.obj"
+	C:\mingw64\bin\gcc.exe $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/hackit_wireless_c.dir/src/wpa3_sae.c.obj -MF CMakeFiles\hackit_wireless_c.dir\src\wpa3_sae.c.obj.d -o CMakeFiles\hackit_wireless_c.dir\src\wpa3_sae.c.obj -c D:\web\hacks\hackstools\hackit\wireless\c_core\src\wpa3_sae.c
+
+CMakeFiles/hackit_wireless_c.dir/src/wpa3_sae.c.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing C source to CMakeFiles/hackit_wireless_c.dir/src/wpa3_sae.c.i"
+	C:\mingw64\bin\gcc.exe $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E D:\web\hacks\hackstools\hackit\wireless\c_core\src\wpa3_sae.c > CMakeFiles\hackit_wireless_c.dir\src\wpa3_sae.c.i
+
+CMakeFiles/hackit_wireless_c.dir/src/wpa3_sae.c.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/hackit_wireless_c.dir/src/wpa3_sae.c.s"
+	C:\mingw64\bin\gcc.exe $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S D:\web\hacks\hackstools\hackit\wireless\c_core\src\wpa3_sae.c -o CMakeFiles\hackit_wireless_c.dir\src\wpa3_sae.c.s
+
+CMakeFiles/hackit_wireless_c.dir/src/beacon_flood.c.obj: CMakeFiles/hackit_wireless_c.dir/flags.make
+CMakeFiles/hackit_wireless_c.dir/src/beacon_flood.c.obj: CMakeFiles/hackit_wireless_c.dir/includes_C.rsp
+CMakeFiles/hackit_wireless_c.dir/src/beacon_flood.c.obj: D:/web/hacks/hackstools/hackit/wireless/c_core/src/beacon_flood.c
+CMakeFiles/hackit_wireless_c.dir/src/beacon_flood.c.obj: CMakeFiles/hackit_wireless_c.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=D:\web\hacks\hackstools\hackit\wireless\c_core\build\CMakeFiles --progress-num=$(CMAKE_PROGRESS_12) "Building C object CMakeFiles/hackit_wireless_c.dir/src/beacon_flood.c.obj"
+	C:\mingw64\bin\gcc.exe $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/hackit_wireless_c.dir/src/beacon_flood.c.obj -MF CMakeFiles\hackit_wireless_c.dir\src\beacon_flood.c.obj.d -o CMakeFiles\hackit_wireless_c.dir\src\beacon_flood.c.obj -c D:\web\hacks\hackstools\hackit\wireless\c_core\src\beacon_flood.c
+
+CMakeFiles/hackit_wireless_c.dir/src/beacon_flood.c.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing C source to CMakeFiles/hackit_wireless_c.dir/src/beacon_flood.c.i"
+	C:\mingw64\bin\gcc.exe $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E D:\web\hacks\hackstools\hackit\wireless\c_core\src\beacon_flood.c > CMakeFiles\hackit_wireless_c.dir\src\beacon_flood.c.i
+
+CMakeFiles/hackit_wireless_c.dir/src/beacon_flood.c.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/hackit_wireless_c.dir/src/beacon_flood.c.s"
+	C:\mingw64\bin\gcc.exe $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S D:\web\hacks\hackstools\hackit\wireless\c_core\src\beacon_flood.c -o CMakeFiles\hackit_wireless_c.dir\src\beacon_flood.c.s
+
+CMakeFiles/hackit_wireless_c.dir/src/client_probe.c.obj: CMakeFiles/hackit_wireless_c.dir/flags.make
+CMakeFiles/hackit_wireless_c.dir/src/client_probe.c.obj: CMakeFiles/hackit_wireless_c.dir/includes_C.rsp
+CMakeFiles/hackit_wireless_c.dir/src/client_probe.c.obj: D:/web/hacks/hackstools/hackit/wireless/c_core/src/client_probe.c
+CMakeFiles/hackit_wireless_c.dir/src/client_probe.c.obj: CMakeFiles/hackit_wireless_c.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=D:\web\hacks\hackstools\hackit\wireless\c_core\build\CMakeFiles --progress-num=$(CMAKE_PROGRESS_13) "Building C object CMakeFiles/hackit_wireless_c.dir/src/client_probe.c.obj"
+	C:\mingw64\bin\gcc.exe $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/hackit_wireless_c.dir/src/client_probe.c.obj -MF CMakeFiles\hackit_wireless_c.dir\src\client_probe.c.obj.d -o CMakeFiles\hackit_wireless_c.dir\src\client_probe.c.obj -c D:\web\hacks\hackstools\hackit\wireless\c_core\src\client_probe.c
+
+CMakeFiles/hackit_wireless_c.dir/src/client_probe.c.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing C source to CMakeFiles/hackit_wireless_c.dir/src/client_probe.c.i"
+	C:\mingw64\bin\gcc.exe $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E D:\web\hacks\hackstools\hackit\wireless\c_core\src\client_probe.c > CMakeFiles\hackit_wireless_c.dir\src\client_probe.c.i
+
+CMakeFiles/hackit_wireless_c.dir/src/client_probe.c.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/hackit_wireless_c.dir/src/client_probe.c.s"
+	C:\mingw64\bin\gcc.exe $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S D:\web\hacks\hackstools\hackit\wireless\c_core\src\client_probe.c -o CMakeFiles\hackit_wireless_c.dir\src\client_probe.c.s
+
+CMakeFiles/hackit_wireless_c.dir/src/channel_hopper.c.obj: CMakeFiles/hackit_wireless_c.dir/flags.make
+CMakeFiles/hackit_wireless_c.dir/src/channel_hopper.c.obj: CMakeFiles/hackit_wireless_c.dir/includes_C.rsp
+CMakeFiles/hackit_wireless_c.dir/src/channel_hopper.c.obj: D:/web/hacks/hackstools/hackit/wireless/c_core/src/channel_hopper.c
+CMakeFiles/hackit_wireless_c.dir/src/channel_hopper.c.obj: CMakeFiles/hackit_wireless_c.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=D:\web\hacks\hackstools\hackit\wireless\c_core\build\CMakeFiles --progress-num=$(CMAKE_PROGRESS_14) "Building C object CMakeFiles/hackit_wireless_c.dir/src/channel_hopper.c.obj"
+	C:\mingw64\bin\gcc.exe $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/hackit_wireless_c.dir/src/channel_hopper.c.obj -MF CMakeFiles\hackit_wireless_c.dir\src\channel_hopper.c.obj.d -o CMakeFiles\hackit_wireless_c.dir\src\channel_hopper.c.obj -c D:\web\hacks\hackstools\hackit\wireless\c_core\src\channel_hopper.c
+
+CMakeFiles/hackit_wireless_c.dir/src/channel_hopper.c.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing C source to CMakeFiles/hackit_wireless_c.dir/src/channel_hopper.c.i"
+	C:\mingw64\bin\gcc.exe $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E D:\web\hacks\hackstools\hackit\wireless\c_core\src\channel_hopper.c > CMakeFiles\hackit_wireless_c.dir\src\channel_hopper.c.i
+
+CMakeFiles/hackit_wireless_c.dir/src/channel_hopper.c.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/hackit_wireless_c.dir/src/channel_hopper.c.s"
+	C:\mingw64\bin\gcc.exe $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S D:\web\hacks\hackstools\hackit\wireless\c_core\src\channel_hopper.c -o CMakeFiles\hackit_wireless_c.dir\src\channel_hopper.c.s
+
 CMakeFiles/hackit_wireless_c.dir/src/signal_processing.cpp.obj: CMakeFiles/hackit_wireless_c.dir/flags.make
 CMakeFiles/hackit_wireless_c.dir/src/signal_processing.cpp.obj: CMakeFiles/hackit_wireless_c.dir/includes_CXX.rsp
 CMakeFiles/hackit_wireless_c.dir/src/signal_processing.cpp.obj: D:/web/hacks/hackstools/hackit/wireless/c_core/src/signal_processing.cpp
 CMakeFiles/hackit_wireless_c.dir/src/signal_processing.cpp.obj: CMakeFiles/hackit_wireless_c.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=D:\web\hacks\hackstools\hackit\wireless\c_core\build\CMakeFiles --progress-num=$(CMAKE_PROGRESS_8) "Building CXX object CMakeFiles/hackit_wireless_c.dir/src/signal_processing.cpp.obj"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=D:\web\hacks\hackstools\hackit\wireless\c_core\build\CMakeFiles --progress-num=$(CMAKE_PROGRESS_15) "Building CXX object CMakeFiles/hackit_wireless_c.dir/src/signal_processing.cpp.obj"
 	C:\mingw64\bin\c++.exe $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/hackit_wireless_c.dir/src/signal_processing.cpp.obj -MF CMakeFiles\hackit_wireless_c.dir\src\signal_processing.cpp.obj.d -o CMakeFiles\hackit_wireless_c.dir\src\signal_processing.cpp.obj -c D:\web\hacks\hackstools\hackit\wireless\c_core\src\signal_processing.cpp
 
 CMakeFiles/hackit_wireless_c.dir/src/signal_processing.cpp.i: cmake_force
@@ -195,7 +300,7 @@ CMakeFiles/hackit_wireless_c.dir/src/frame_parser.cpp.obj: CMakeFiles/hackit_wir
 CMakeFiles/hackit_wireless_c.dir/src/frame_parser.cpp.obj: CMakeFiles/hackit_wireless_c.dir/includes_CXX.rsp
 CMakeFiles/hackit_wireless_c.dir/src/frame_parser.cpp.obj: D:/web/hacks/hackstools/hackit/wireless/c_core/src/frame_parser.cpp
 CMakeFiles/hackit_wireless_c.dir/src/frame_parser.cpp.obj: CMakeFiles/hackit_wireless_c.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=D:\web\hacks\hackstools\hackit\wireless\c_core\build\CMakeFiles --progress-num=$(CMAKE_PROGRESS_9) "Building CXX object CMakeFiles/hackit_wireless_c.dir/src/frame_parser.cpp.obj"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=D:\web\hacks\hackstools\hackit\wireless\c_core\build\CMakeFiles --progress-num=$(CMAKE_PROGRESS_16) "Building CXX object CMakeFiles/hackit_wireless_c.dir/src/frame_parser.cpp.obj"
 	C:\mingw64\bin\c++.exe $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/hackit_wireless_c.dir/src/frame_parser.cpp.obj -MF CMakeFiles\hackit_wireless_c.dir\src\frame_parser.cpp.obj.d -o CMakeFiles\hackit_wireless_c.dir\src\frame_parser.cpp.obj -c D:\web\hacks\hackstools\hackit\wireless\c_core\src\frame_parser.cpp
 
 CMakeFiles/hackit_wireless_c.dir/src/frame_parser.cpp.i: cmake_force
@@ -206,6 +311,96 @@ CMakeFiles/hackit_wireless_c.dir/src/frame_parser.cpp.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/hackit_wireless_c.dir/src/frame_parser.cpp.s"
 	C:\mingw64\bin\c++.exe $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S D:\web\hacks\hackstools\hackit\wireless\c_core\src\frame_parser.cpp -o CMakeFiles\hackit_wireless_c.dir\src\frame_parser.cpp.s
 
+CMakeFiles/hackit_wireless_c.dir/src/eapol_analyzer.cpp.obj: CMakeFiles/hackit_wireless_c.dir/flags.make
+CMakeFiles/hackit_wireless_c.dir/src/eapol_analyzer.cpp.obj: CMakeFiles/hackit_wireless_c.dir/includes_CXX.rsp
+CMakeFiles/hackit_wireless_c.dir/src/eapol_analyzer.cpp.obj: D:/web/hacks/hackstools/hackit/wireless/c_core/src/eapol_analyzer.cpp
+CMakeFiles/hackit_wireless_c.dir/src/eapol_analyzer.cpp.obj: CMakeFiles/hackit_wireless_c.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=D:\web\hacks\hackstools\hackit\wireless\c_core\build\CMakeFiles --progress-num=$(CMAKE_PROGRESS_17) "Building CXX object CMakeFiles/hackit_wireless_c.dir/src/eapol_analyzer.cpp.obj"
+	C:\mingw64\bin\c++.exe $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/hackit_wireless_c.dir/src/eapol_analyzer.cpp.obj -MF CMakeFiles\hackit_wireless_c.dir\src\eapol_analyzer.cpp.obj.d -o CMakeFiles\hackit_wireless_c.dir\src\eapol_analyzer.cpp.obj -c D:\web\hacks\hackstools\hackit\wireless\c_core\src\eapol_analyzer.cpp
+
+CMakeFiles/hackit_wireless_c.dir/src/eapol_analyzer.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/hackit_wireless_c.dir/src/eapol_analyzer.cpp.i"
+	C:\mingw64\bin\c++.exe $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E D:\web\hacks\hackstools\hackit\wireless\c_core\src\eapol_analyzer.cpp > CMakeFiles\hackit_wireless_c.dir\src\eapol_analyzer.cpp.i
+
+CMakeFiles/hackit_wireless_c.dir/src/eapol_analyzer.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/hackit_wireless_c.dir/src/eapol_analyzer.cpp.s"
+	C:\mingw64\bin\c++.exe $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S D:\web\hacks\hackstools\hackit\wireless\c_core\src\eapol_analyzer.cpp -o CMakeFiles\hackit_wireless_c.dir\src\eapol_analyzer.cpp.s
+
+CMakeFiles/hackit_wireless_c.dir/src/spectrum_scanner.cpp.obj: CMakeFiles/hackit_wireless_c.dir/flags.make
+CMakeFiles/hackit_wireless_c.dir/src/spectrum_scanner.cpp.obj: CMakeFiles/hackit_wireless_c.dir/includes_CXX.rsp
+CMakeFiles/hackit_wireless_c.dir/src/spectrum_scanner.cpp.obj: D:/web/hacks/hackstools/hackit/wireless/c_core/src/spectrum_scanner.cpp
+CMakeFiles/hackit_wireless_c.dir/src/spectrum_scanner.cpp.obj: CMakeFiles/hackit_wireless_c.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=D:\web\hacks\hackstools\hackit\wireless\c_core\build\CMakeFiles --progress-num=$(CMAKE_PROGRESS_18) "Building CXX object CMakeFiles/hackit_wireless_c.dir/src/spectrum_scanner.cpp.obj"
+	C:\mingw64\bin\c++.exe $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/hackit_wireless_c.dir/src/spectrum_scanner.cpp.obj -MF CMakeFiles\hackit_wireless_c.dir\src\spectrum_scanner.cpp.obj.d -o CMakeFiles\hackit_wireless_c.dir\src\spectrum_scanner.cpp.obj -c D:\web\hacks\hackstools\hackit\wireless\c_core\src\spectrum_scanner.cpp
+
+CMakeFiles/hackit_wireless_c.dir/src/spectrum_scanner.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/hackit_wireless_c.dir/src/spectrum_scanner.cpp.i"
+	C:\mingw64\bin\c++.exe $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E D:\web\hacks\hackstools\hackit\wireless\c_core\src\spectrum_scanner.cpp > CMakeFiles\hackit_wireless_c.dir\src\spectrum_scanner.cpp.i
+
+CMakeFiles/hackit_wireless_c.dir/src/spectrum_scanner.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/hackit_wireless_c.dir/src/spectrum_scanner.cpp.s"
+	C:\mingw64\bin\c++.exe $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S D:\web\hacks\hackstools\hackit\wireless\c_core\src\spectrum_scanner.cpp -o CMakeFiles\hackit_wireless_c.dir\src\spectrum_scanner.cpp.s
+
+CMakeFiles/hackit_wireless_c.dir/src/wps_attack.cpp.obj: CMakeFiles/hackit_wireless_c.dir/flags.make
+CMakeFiles/hackit_wireless_c.dir/src/wps_attack.cpp.obj: CMakeFiles/hackit_wireless_c.dir/includes_CXX.rsp
+CMakeFiles/hackit_wireless_c.dir/src/wps_attack.cpp.obj: D:/web/hacks/hackstools/hackit/wireless/c_core/src/wps_attack.cpp
+CMakeFiles/hackit_wireless_c.dir/src/wps_attack.cpp.obj: CMakeFiles/hackit_wireless_c.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=D:\web\hacks\hackstools\hackit\wireless\c_core\build\CMakeFiles --progress-num=$(CMAKE_PROGRESS_19) "Building CXX object CMakeFiles/hackit_wireless_c.dir/src/wps_attack.cpp.obj"
+	C:\mingw64\bin\c++.exe $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/hackit_wireless_c.dir/src/wps_attack.cpp.obj -MF CMakeFiles\hackit_wireless_c.dir\src\wps_attack.cpp.obj.d -o CMakeFiles\hackit_wireless_c.dir\src\wps_attack.cpp.obj -c D:\web\hacks\hackstools\hackit\wireless\c_core\src\wps_attack.cpp
+
+CMakeFiles/hackit_wireless_c.dir/src/wps_attack.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/hackit_wireless_c.dir/src/wps_attack.cpp.i"
+	C:\mingw64\bin\c++.exe $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E D:\web\hacks\hackstools\hackit\wireless\c_core\src\wps_attack.cpp > CMakeFiles\hackit_wireless_c.dir\src\wps_attack.cpp.i
+
+CMakeFiles/hackit_wireless_c.dir/src/wps_attack.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/hackit_wireless_c.dir/src/wps_attack.cpp.s"
+	C:\mingw64\bin\c++.exe $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S D:\web\hacks\hackstools\hackit\wireless\c_core\src\wps_attack.cpp -o CMakeFiles\hackit_wireless_c.dir\src\wps_attack.cpp.s
+
+CMakeFiles/hackit_wireless_c.dir/src/wep_cracker.cpp.obj: CMakeFiles/hackit_wireless_c.dir/flags.make
+CMakeFiles/hackit_wireless_c.dir/src/wep_cracker.cpp.obj: CMakeFiles/hackit_wireless_c.dir/includes_CXX.rsp
+CMakeFiles/hackit_wireless_c.dir/src/wep_cracker.cpp.obj: D:/web/hacks/hackstools/hackit/wireless/c_core/src/wep_cracker.cpp
+CMakeFiles/hackit_wireless_c.dir/src/wep_cracker.cpp.obj: CMakeFiles/hackit_wireless_c.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=D:\web\hacks\hackstools\hackit\wireless\c_core\build\CMakeFiles --progress-num=$(CMAKE_PROGRESS_20) "Building CXX object CMakeFiles/hackit_wireless_c.dir/src/wep_cracker.cpp.obj"
+	C:\mingw64\bin\c++.exe $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/hackit_wireless_c.dir/src/wep_cracker.cpp.obj -MF CMakeFiles\hackit_wireless_c.dir\src\wep_cracker.cpp.obj.d -o CMakeFiles\hackit_wireless_c.dir\src\wep_cracker.cpp.obj -c D:\web\hacks\hackstools\hackit\wireless\c_core\src\wep_cracker.cpp
+
+CMakeFiles/hackit_wireless_c.dir/src/wep_cracker.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/hackit_wireless_c.dir/src/wep_cracker.cpp.i"
+	C:\mingw64\bin\c++.exe $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E D:\web\hacks\hackstools\hackit\wireless\c_core\src\wep_cracker.cpp > CMakeFiles\hackit_wireless_c.dir\src\wep_cracker.cpp.i
+
+CMakeFiles/hackit_wireless_c.dir/src/wep_cracker.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/hackit_wireless_c.dir/src/wep_cracker.cpp.s"
+	C:\mingw64\bin\c++.exe $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S D:\web\hacks\hackstools\hackit\wireless\c_core\src\wep_cracker.cpp -o CMakeFiles\hackit_wireless_c.dir\src\wep_cracker.cpp.s
+
+CMakeFiles/hackit_wireless_c.dir/src/packet_forge.cpp.obj: CMakeFiles/hackit_wireless_c.dir/flags.make
+CMakeFiles/hackit_wireless_c.dir/src/packet_forge.cpp.obj: CMakeFiles/hackit_wireless_c.dir/includes_CXX.rsp
+CMakeFiles/hackit_wireless_c.dir/src/packet_forge.cpp.obj: D:/web/hacks/hackstools/hackit/wireless/c_core/src/packet_forge.cpp
+CMakeFiles/hackit_wireless_c.dir/src/packet_forge.cpp.obj: CMakeFiles/hackit_wireless_c.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=D:\web\hacks\hackstools\hackit\wireless\c_core\build\CMakeFiles --progress-num=$(CMAKE_PROGRESS_21) "Building CXX object CMakeFiles/hackit_wireless_c.dir/src/packet_forge.cpp.obj"
+	C:\mingw64\bin\c++.exe $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/hackit_wireless_c.dir/src/packet_forge.cpp.obj -MF CMakeFiles\hackit_wireless_c.dir\src\packet_forge.cpp.obj.d -o CMakeFiles\hackit_wireless_c.dir\src\packet_forge.cpp.obj -c D:\web\hacks\hackstools\hackit\wireless\c_core\src\packet_forge.cpp
+
+CMakeFiles/hackit_wireless_c.dir/src/packet_forge.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/hackit_wireless_c.dir/src/packet_forge.cpp.i"
+	C:\mingw64\bin\c++.exe $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E D:\web\hacks\hackstools\hackit\wireless\c_core\src\packet_forge.cpp > CMakeFiles\hackit_wireless_c.dir\src\packet_forge.cpp.i
+
+CMakeFiles/hackit_wireless_c.dir/src/packet_forge.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/hackit_wireless_c.dir/src/packet_forge.cpp.s"
+	C:\mingw64\bin\c++.exe $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S D:\web\hacks\hackstools\hackit\wireless\c_core\src\packet_forge.cpp -o CMakeFiles\hackit_wireless_c.dir\src\packet_forge.cpp.s
+
+CMakeFiles/hackit_wireless_c.dir/src/key_manager.cpp.obj: CMakeFiles/hackit_wireless_c.dir/flags.make
+CMakeFiles/hackit_wireless_c.dir/src/key_manager.cpp.obj: CMakeFiles/hackit_wireless_c.dir/includes_CXX.rsp
+CMakeFiles/hackit_wireless_c.dir/src/key_manager.cpp.obj: D:/web/hacks/hackstools/hackit/wireless/c_core/src/key_manager.cpp
+CMakeFiles/hackit_wireless_c.dir/src/key_manager.cpp.obj: CMakeFiles/hackit_wireless_c.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=D:\web\hacks\hackstools\hackit\wireless\c_core\build\CMakeFiles --progress-num=$(CMAKE_PROGRESS_22) "Building CXX object CMakeFiles/hackit_wireless_c.dir/src/key_manager.cpp.obj"
+	C:\mingw64\bin\c++.exe $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/hackit_wireless_c.dir/src/key_manager.cpp.obj -MF CMakeFiles\hackit_wireless_c.dir\src\key_manager.cpp.obj.d -o CMakeFiles\hackit_wireless_c.dir\src\key_manager.cpp.obj -c D:\web\hacks\hackstools\hackit\wireless\c_core\src\key_manager.cpp
+
+CMakeFiles/hackit_wireless_c.dir/src/key_manager.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/hackit_wireless_c.dir/src/key_manager.cpp.i"
+	C:\mingw64\bin\c++.exe $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E D:\web\hacks\hackstools\hackit\wireless\c_core\src\key_manager.cpp > CMakeFiles\hackit_wireless_c.dir\src\key_manager.cpp.i
+
+CMakeFiles/hackit_wireless_c.dir/src/key_manager.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/hackit_wireless_c.dir/src/key_manager.cpp.s"
+	C:\mingw64\bin\c++.exe $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S D:\web\hacks\hackstools\hackit\wireless\c_core\src\key_manager.cpp -o CMakeFiles\hackit_wireless_c.dir\src\key_manager.cpp.s
+
 # Object files for target hackit_wireless_c
 hackit_wireless_c_OBJECTS = \
 "CMakeFiles/hackit_wireless_c.dir/src/packet_capture.c.obj" \
@@ -215,8 +410,21 @@ hackit_wireless_c_OBJECTS = \
 "CMakeFiles/hackit_wireless_c.dir/src/crypto_security.c.obj" \
 "CMakeFiles/hackit_wireless_c.dir/src/adapter_detection.c.obj" \
 "CMakeFiles/hackit_wireless_c.dir/src/interface_control.c.obj" \
+"CMakeFiles/hackit_wireless_c.dir/src/packet_injector.c.obj" \
+"CMakeFiles/hackit_wireless_c.dir/src/deauth_engine.c.obj" \
+"CMakeFiles/hackit_wireless_c.dir/src/pmkid_harvest.c.obj" \
+"CMakeFiles/hackit_wireless_c.dir/src/wpa3_sae.c.obj" \
+"CMakeFiles/hackit_wireless_c.dir/src/beacon_flood.c.obj" \
+"CMakeFiles/hackit_wireless_c.dir/src/client_probe.c.obj" \
+"CMakeFiles/hackit_wireless_c.dir/src/channel_hopper.c.obj" \
 "CMakeFiles/hackit_wireless_c.dir/src/signal_processing.cpp.obj" \
-"CMakeFiles/hackit_wireless_c.dir/src/frame_parser.cpp.obj"
+"CMakeFiles/hackit_wireless_c.dir/src/frame_parser.cpp.obj" \
+"CMakeFiles/hackit_wireless_c.dir/src/eapol_analyzer.cpp.obj" \
+"CMakeFiles/hackit_wireless_c.dir/src/spectrum_scanner.cpp.obj" \
+"CMakeFiles/hackit_wireless_c.dir/src/wps_attack.cpp.obj" \
+"CMakeFiles/hackit_wireless_c.dir/src/wep_cracker.cpp.obj" \
+"CMakeFiles/hackit_wireless_c.dir/src/packet_forge.cpp.obj" \
+"CMakeFiles/hackit_wireless_c.dir/src/key_manager.cpp.obj"
 
 # External object files for target hackit_wireless_c
 hackit_wireless_c_EXTERNAL_OBJECTS =
@@ -228,11 +436,24 @@ libhackit_wireless_c.a: CMakeFiles/hackit_wireless_c.dir/src/wireless_frame.c.ob
 libhackit_wireless_c.a: CMakeFiles/hackit_wireless_c.dir/src/crypto_security.c.obj
 libhackit_wireless_c.a: CMakeFiles/hackit_wireless_c.dir/src/adapter_detection.c.obj
 libhackit_wireless_c.a: CMakeFiles/hackit_wireless_c.dir/src/interface_control.c.obj
+libhackit_wireless_c.a: CMakeFiles/hackit_wireless_c.dir/src/packet_injector.c.obj
+libhackit_wireless_c.a: CMakeFiles/hackit_wireless_c.dir/src/deauth_engine.c.obj
+libhackit_wireless_c.a: CMakeFiles/hackit_wireless_c.dir/src/pmkid_harvest.c.obj
+libhackit_wireless_c.a: CMakeFiles/hackit_wireless_c.dir/src/wpa3_sae.c.obj
+libhackit_wireless_c.a: CMakeFiles/hackit_wireless_c.dir/src/beacon_flood.c.obj
+libhackit_wireless_c.a: CMakeFiles/hackit_wireless_c.dir/src/client_probe.c.obj
+libhackit_wireless_c.a: CMakeFiles/hackit_wireless_c.dir/src/channel_hopper.c.obj
 libhackit_wireless_c.a: CMakeFiles/hackit_wireless_c.dir/src/signal_processing.cpp.obj
 libhackit_wireless_c.a: CMakeFiles/hackit_wireless_c.dir/src/frame_parser.cpp.obj
+libhackit_wireless_c.a: CMakeFiles/hackit_wireless_c.dir/src/eapol_analyzer.cpp.obj
+libhackit_wireless_c.a: CMakeFiles/hackit_wireless_c.dir/src/spectrum_scanner.cpp.obj
+libhackit_wireless_c.a: CMakeFiles/hackit_wireless_c.dir/src/wps_attack.cpp.obj
+libhackit_wireless_c.a: CMakeFiles/hackit_wireless_c.dir/src/wep_cracker.cpp.obj
+libhackit_wireless_c.a: CMakeFiles/hackit_wireless_c.dir/src/packet_forge.cpp.obj
+libhackit_wireless_c.a: CMakeFiles/hackit_wireless_c.dir/src/key_manager.cpp.obj
 libhackit_wireless_c.a: CMakeFiles/hackit_wireless_c.dir/build.make
 libhackit_wireless_c.a: CMakeFiles/hackit_wireless_c.dir/link.txt
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=D:\web\hacks\hackstools\hackit\wireless\c_core\build\CMakeFiles --progress-num=$(CMAKE_PROGRESS_10) "Linking CXX static library libhackit_wireless_c.a"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=D:\web\hacks\hackstools\hackit\wireless\c_core\build\CMakeFiles --progress-num=$(CMAKE_PROGRESS_23) "Linking CXX static library libhackit_wireless_c.a"
 	$(CMAKE_COMMAND) -P CMakeFiles\hackit_wireless_c.dir\cmake_clean_target.cmake
 	$(CMAKE_COMMAND) -E cmake_link_script CMakeFiles\hackit_wireless_c.dir\link.txt --verbose=$(VERBOSE)
 

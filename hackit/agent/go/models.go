@@ -30,11 +30,11 @@ type OpenAIRequest struct {
 }
 
 type ClaudeRequest struct {
-	Model     string `json:"model"`
-	System    string `json:"system"`
-	Messages  []struct {
+	Model    string `json:"model"`
+	System   string `json:"system"`
+	Messages []struct {
 		Role    string `json:"role"`
 		Content string `json:"content"`
 	} `json:"messages"`
-	MaxTokens int    `json:"max_tokens"`
+	MaxTokens int `json:"max_tokens"`
 }

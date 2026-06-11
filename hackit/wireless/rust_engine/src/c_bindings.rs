@@ -63,4 +63,17 @@ extern "C" {
     pub fn hackit_wifi_set_txpower(interface_name: *const c_char, value: c_int) -> bool;
     pub fn hackit_wifi_get_adapter_info(interface_name: *const c_char, info_buf: *mut c_char, buf_size: c_int) -> bool;
     pub fn hackit_wifi_get_status(interface_name: *const c_char, status_buf: *mut c_char, buf_size: c_int) -> bool;
+
+    // 2.4/5GHz channel support
+    pub fn hackit_wifi_channel_to_freq(channel: c_int) -> c_int;
+    pub fn hackit_wifi_get_current_channel(interface_name: *const c_char) -> c_int;
+    pub fn hackit_c_get_supported_channels(
+        iface_name: *const c_char,
+        out_channels: *mut c_void,
+        max_channels: c_int,
+    ) -> c_int;
+    pub fn hackit_c_set_channel(iface_name: *const c_char, channel: c_int) -> bool;
+    pub fn hackit_c_set_monitor_mode(iface_name: *const c_char) -> bool;
+    pub fn hackit_c_set_managed_mode(iface_name: *const c_char) -> bool;
+    pub fn hackit_c_get_current_channel(iface_name: *const c_char) -> c_int;
 }

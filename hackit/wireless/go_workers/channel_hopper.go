@@ -23,7 +23,10 @@ type ChannelHopper struct {
 
 // NewChannelHopper initializes a safe channel hopper
 func NewChannelHopper(iface string, channels []int) *ChannelHopper {
-	logger, _ := zap.NewProduction()
+	logger, err := zap.NewProduction()
+	if err != nil {
+		logger = zap.NewNop()
+	}
 	return &ChannelHopper{
 		Interface: iface,
 		Channels:  channels,

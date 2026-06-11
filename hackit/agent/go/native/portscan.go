@@ -77,25 +77,25 @@ func ScanPorts(target string, ports []int, concurrency int, timeout time.Duratio
 
 func portWorker(ip string, ports <-chan int, results chan<- PortResult, wg *sync.WaitGroup, timeout time.Duration) {
 	defer wg.Done()
-	
+
 	for port := range ports {
 		targetAddr := fmt.Sprintf("%s:%d", ip, port)
 		conn, err := net.DialTimeout("tcp", targetAddr, timeout)
-		
+
 		if err != nil {
 			// Closed or filtered
 			continue
 		}
-		
+
 		// Port is OPEN, let's try to grab a banner
 		svcName := portServices[port]
 		if svcName == "" {
 			svcName = "unknown"
 		}
-		
+
 		banner := grabBanner(conn, port, timeout)
 		conn.Close()
-		
+
 		results <- PortResult{
 			Port:    port,
 			State:   "open",
@@ -107,7 +107,7 @@ func portWorker(ip string, ports <-chan int, results chan<- PortResult, wg *sync
 
 func grabBanner(conn net.Conn, port int, timeout time.Duration) string {
 	conn.SetDeadline(time.Now().Add(timeout))
-	
+
 	// Send basic probe for HTTP-like services
 	if port == 80 || port == 8080 || port == 8000 || port == 443 || port == 8443 {
 		conn.Write([]byte("GET / HTTP/1.1\r\nHost: scanner\r\nConnection: close\r\n\r\n"))
@@ -117,18 +117,18 @@ func grabBanner(conn net.Conn, port int, timeout time.Duration) string {
 		// Generic ping
 		conn.Write([]byte("\r\n"))
 	}
-	
+
 	buffer := make([]byte, 1024)
 	n, err := conn.Read(buffer)
 	if err != nil || n == 0 {
 		return ""
 	}
-	
+
 	banner := string(buffer[:n])
 	banner = strings.Split(banner, "\n")[0] // Just get first line
 	banner = strings.TrimSpace(banner)
 	banner = cleanUTF8(banner)
-	
+
 	if len(banner) > 80 {
 		return banner[:77] + "..."
 	}
@@ -150,7 +150,7 @@ func resolveToIPv4(domain string) string {
 	if err != nil {
 		return ""
 	}
-	
+
 	for _, ip := range ips {
 		if ipv4 := ip.To4(); ipv4 != nil {
 			return ipv4.String()

@@ -11,21 +11,21 @@ import (
 )
 
 type TakeoverResult struct {
-	Subdomain string
+	Subdomain  string
 	Vulnerable bool
-	Platform  string
+	Platform   string
 }
 
 // Fingerprints for common subdomain takeover platforms
 var takeoverSignatures = map[string]string{
-	"AWS S3":         "The specified bucket does not exist",
-	"GitHub Pages":   "There isn't a GitHub Pages site here",
-	"Heroku":         "No such app",
-	"Pantheon":       "The lack of a trailing slash",
-	"Tumblr":         "Whatever you were looking for doesn't currently exist at this address",
-	"WordPress":      "Do you want to register",
-	"Shopify":        "Sorry, this shop is currently unavailable",
-	"Ghost":          "The thing you were looking for is no longer here",
+	"AWS S3":       "The specified bucket does not exist",
+	"GitHub Pages": "There isn't a GitHub Pages site here",
+	"Heroku":       "No such app",
+	"Pantheon":     "The lack of a trailing slash",
+	"Tumblr":       "Whatever you were looking for doesn't currently exist at this address",
+	"WordPress":    "Do you want to register",
+	"Shopify":      "Sorry, this shop is currently unavailable",
+	"Ghost":        "The thing you were looking for is no longer here",
 }
 
 // CheckSubdomainTakeover concurrently checks a list of subdomains for takeover vulnerabilities
@@ -61,7 +61,7 @@ func CheckSubdomainTakeover(subdomains []string, concurrency int) []TakeoverResu
 
 func takeoverWorker(subs <-chan string, results chan<- TakeoverResult, wg *sync.WaitGroup) {
 	defer wg.Done()
-	
+
 	tr := &http.Transport{
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 	}
@@ -97,7 +97,7 @@ func checkHTTP(client *http.Client, url string) (bool, string) {
 	req, _ := http.NewRequest("GET", url, nil)
 	req.Header.Set("User-Agent", "Mozilla/5.0")
 	resp, err := client.Do(req)
-	
+
 	if err != nil {
 		return false, ""
 	}
@@ -106,13 +106,13 @@ func checkHTTP(client *http.Client, url string) (bool, string) {
 	if resp.StatusCode == 404 || resp.StatusCode == 403 || resp.StatusCode == 200 {
 		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 16384))
 		bodyStr := string(bodyBytes)
-		
+
 		for platform, sig := range takeoverSignatures {
 			if strings.Contains(bodyStr, sig) {
 				return true, platform
 			}
 		}
 	}
-	
+
 	return false, ""
 }
