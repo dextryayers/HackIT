@@ -316,13 +316,123 @@ def get_ip_info():
                 data = json.loads(response.read().decode())
                 ip, geo = parser(data)
                 if ip and geo and 'None' not in geo and '?' not in geo:
-                    # Clean up geo string
                     geo = geo.replace(', None', '').replace('Unknown, ', '')
                     return {'ip': ip, 'geo': geo}
         except Exception:
             continue
 
     return {'ip': 'Offline/VPN', 'geo': 'Unknown Location'}
+
+
+def detect_wifi_adapter():
+    """Detect the active Wi-Fi adapter name. Returns name or 'N/A'."""
+    try:
+        import subprocess
+        result = subprocess.run(
+            ['iwgetid'], capture_output=True, text=True, timeout=3
+        )
+        if result.returncode == 0:
+            line = result.stdout.strip()
+            if line:
+                return line.split()[0].rstrip(':')
+    except Exception:
+        pass
+
+    try:
+        for iface in os.listdir('/sys/class/net'):
+            wireless_dir = f'/sys/class/net/{iface}/wireless'
+            if os.path.exists(wireless_dir):
+                return iface
+    except Exception:
+        pass
+
+    try:
+        import subprocess
+        result = subprocess.run(
+            ['nmcli', '-t', '-f', 'DEVICE,TYPE', 'device', 'status'],
+            capture_output=True, text=True, timeout=3
+        )
+        for line in result.stdout.strip().split('\n'):
+            if ':wifi' in line or ':wireless' in line:
+                return line.split(':')[0]
+    except Exception:
+        pass
+
+    return 'N/A'
+
+
+def check_adapter_status(iface):
+    """Check if a Wi-Fi adapter is connected/online/offline."""
+    if iface == 'N/A':
+        return 'N/A'
+
+    try:
+        import subprocess
+        result = subprocess.run(
+            ['iwgetid', iface, '-r'], capture_output=True, text=True, timeout=3
+        )
+        ssid = result.stdout.strip()
+        if ssid:
+            return 'CONNECT' + ' ' + ssid[:20]
+    except Exception:
+        pass
+
+    try:
+        state_path = f'/sys/class/net/{iface}/operstate'
+        if os.path.exists(state_path):
+            with open(state_path) as f:
+                state = f.read().strip()
+            if state == 'up':
+                return 'ONLINE'
+            return state.upper()
+    except Exception:
+        pass
+
+    try:
+        import subprocess
+        result = subprocess.run(
+            ['nmcli', '-t', '-f', 'DEVICE,STATE', 'device', 'status'],
+            capture_output=True, text=True, timeout=3
+        )
+        for line in result.stdout.strip().split('\n'):
+            parts = line.split(':')
+            if parts[0] == iface and len(parts) > 1:
+                state = parts[1].upper()
+                return state
+    except Exception:
+        pass
+
+    return 'OFFLINE'
+
+
+# ── Theme-to-color mappings for creative terminal themes ──────────────────
+THEME_COLORSETS = {
+    'kali':       {'main': B_BLUE,   'accent': B_CYAN,    'dim': DIM,     'status': B_GREEN},
+    'cyberpunk':  {'main': B_CYAN,   'accent': B_MAGENTA, 'dim': DIM,     'status': B_GREEN},
+    'minimalist': {'main': B_WHITE,  'accent': DIM,       'dim': DIM,     'status': B_GREEN},
+    'retro':      {'main': B_GREEN,  'accent': GREEN,     'dim': DIM,     'status': B_GREEN},
+    'gacor':      {'main': B_MAGENTA,'accent': B_CYAN,    'dim': DIM,     'status': B_GREEN},
+    'powerline':  {'main': B_BLUE,   'accent': YELLOW,    'dim': DIM,     'status': B_GREEN},
+    'modern':     {'main': B_CYAN,   'accent': B_GREEN,   'dim': DIM,     'status': B_GREEN},
+    'pill':       {'main': B_BLUE,   'accent': B_GREEN,   'dim': DIM,     'status': B_GREEN},
+    'nexus':      {'main': B_CYAN,   'accent': B_BLUE,    'dim': DIM,     'status': B_GREEN},
+    'zinc':       {'main': B_GREEN,  'accent': WHITE,     'dim': DIM,     'status': B_GREEN},
+    'vault':      {'main': B_WHITE,  'accent': B_CYAN,    'dim': DIM,     'status': B_GREEN},
+    'storm':      {'main': B_YELLOW, 'accent': B_MAGENTA, 'dim': DIM,     'status': B_GREEN},
+    'drift':      {'main': B_CYAN,   'accent': B_MAGENTA, 'dim': DIM,     'status': B_GREEN},
+    'pulse':      {'main': B_GREEN,  'accent': B_BLUE,    'dim': DIM,     'status': B_GREEN},
+    'slash':      {'main': B_RED,    'accent': WHITE,     'dim': DIM,     'status': B_GREEN},
+}
+
+
+def get_theme_colors():
+    """Return color set for the active theme."""
+    try:
+        from hackit.config import load_config
+        theme = load_config().get('theme', 'kali')
+    except Exception:
+        theme = 'kali'
+    return THEME_COLORSETS.get(theme, THEME_COLORSETS['kali'])
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -353,8 +463,9 @@ def display_banner(force=False):
     # ── Theme ────────────────────────────────────────────────────────────────
     now     = datetime.now()
     banner  = random.choice(BANNERS)
-    mc      = random.choice([CYAN, B_CYAN, MAGENTA, B_MAGENTA, GREEN, B_GREEN])
-    ac      = random.choice([YELLOW, B_YELLOW, WHITE, B_WHITE])
+    tc      = get_theme_colors()
+    mc      = tc['main']
+    ac      = tc['accent']
     quote   = random.choice(QUOTES)
 
     # ── Box geometry ─────────────────────────────────────────────────────────
@@ -394,6 +505,8 @@ def display_banner(force=False):
     pid   = os.getpid()
     dstr  = now.strftime('%Y-%m-%d')
     tstr  = now.strftime('%H:%M:%S')
+    w_iface = detect_wifi_adapter()
+    w_status = check_adapter_status(w_iface)
 
     # ── Print Random Banner Art ───────────────────────────────────────────────
     print()
@@ -434,9 +547,18 @@ def display_banner(force=False):
             'Time',        tstr,                          YELLOW)
     hline('╠', '╣')
 
+    # ── Wi-Fi Adapter ──────────────────────────────────────────────────────
+    if w_iface != 'N/A':
+        w_color = B_GREEN if w_status != 'OFFLINE' else B_RED
+    else:
+        w_color = DIM
+    two_col('Adapter',  w_iface,  w_color,
+            'Status',   w_status, w_color)
+    hline('╠', '╣')
+
     # ── Engine Health / Tech Stack ──────────────────────────────────────────
     s_t1 = ' TECH STACK '
-    s_bar = _colored('[', DIM) + _colored('■' * 5, B_GREEN) + _colored(']', DIM)
+    s_bar = _colored('[', DIM) + _colored('■' * 5, tc['status']) + _colored(']', DIM)
     s_t2 = ' 100% | ENGINES: Go, Rust, C++, Py, Ruby '
     s_vis = len(s_t1) + 7 + len(s_t2)
     s_pad = ' ' * (W - s_vis)

@@ -1,0 +1,23 @@
+id: ldap-attribute-injection
+info:
+  name: LDAP Attribute Injection
+  author: AniipID
+  severity: medium
+  description: Tests for LDAP attribute injection by manipulating attribute names in requests
+  tags: ldap,injection,attribute
+
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?attr=userPassword"
+      - "{{BaseURL}}?attribute=mail"
+      - "{{BaseURL}}?fields=uid,userPassword"
+    matchers:
+      - type: word
+        words:
+          - "userPassword"
+          - "shadowLastChange"
+          - "loginTime"
+          - "userCertificate"
+        condition: or
+        part: body

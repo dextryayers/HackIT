@@ -63,8 +63,29 @@ const target = ""; // We'll handle this in the client side to avoid SSR complexi
 			targetBadge.innerText = `TARGET: ${target}`;
 
 			try {
-				// Start a new scan job for this target
-				const res = await fetch(`/api/scan?target=${encodeURIComponent(target)}`);
+				const savedSettings = localStorage.getItem('hackit_scan_settings');
+				let scanUrl = `/api/scan?target=${encodeURIComponent(target)}`;
+				if (savedSettings) {
+					try {
+						const s = JSON.parse(savedSettings);
+						scanUrl += `&depth=${encodeURIComponent(s.depth || 'deep')}`;
+						scanUrl += `&sniper_ratio=${encodeURIComponent(s.sniperRatio || 'max')}`;
+						scanUrl += `&timeout=${encodeURIComponent(s.timeout || 15)}`;
+						scanUrl += `&verbose=${encodeURIComponent(s.verbose ?? 1)}`;
+						scanUrl += `&max_findings=${encodeURIComponent(s.maxFindings || 5000)}`;
+						scanUrl += `&format=${encodeURIComponent(s.exportFormat || 'json')}`;
+						if (s.modules) {
+							const activeModules = Object.entries(s.modules).filter(([,v]) => v).map(([k]) => k).join(',');
+							if (activeModules) scanUrl += `&modules=${encodeURIComponent(activeModules)}`;
+						}
+						if (s.toggles) {
+							Object.entries(s.toggles).forEach(([k, v]) => {
+								scanUrl += `&${encodeURIComponent(k)}=${v ? '1' : '0'}`;
+							});
+						}
+					} catch(e) {}
+				}
+				const res = await fetch(scanUrl);
 				const data = await res.json();
 				
 				if (data.job_id) {

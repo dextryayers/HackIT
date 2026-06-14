@@ -1,0 +1,332 @@
+id: generic-info-endpoints
+info:
+  name: Generic Information Endpoints
+  author: AniipID
+  severity: info
+  description: Discovers common information endpoints
+  tags: generic,info,discovery
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/health"
+      - "{{BaseURL}}/healthcheck"
+      - "{{BaseURL}}/status"
+      - "{{BaseURL}}/api/health"
+      - "{{BaseURL}}/api/status"
+      - "{{BaseURL}}/version"
+      - "{{BaseURL}}/api/version"
+      - "{{BaseURL}}/ping"
+      - "{{BaseURL}}/api/ping"
+    matchers:
+      - type: word
+        words:
+          - "ok"
+          - "healthy"
+          - "alive"
+          - "UP"
+          - "true"
+          - "\"status\""
+        condition: or
+        name: "info-endpoint"
+---
+id: generic-common-files
+info:
+  name: Common Web Files
+  author: AniipID
+  severity: info
+  description: Enumerates common web files
+  tags: generic,discovery,files
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/favicon.ico"
+      - "{{BaseURL}}/logo.png"
+      - "{{BaseURL}}/apple-touch-icon.png"
+      - "{{BaseURL}}/browserconfig.xml"
+      - "{{BaseURL}}/service-worker.js"
+      - "{{BaseURL}}/manifest.json"
+    matchers:
+      - type: word
+        words:
+          - "200 OK"
+        part: header
+        name: "file-exists"
+  - method: GET
+    path:
+      - "{{BaseURL}}/404"
+      - "{{BaseURL}}/nonexistent-123456"
+    matchers:
+      - type: status
+        status:
+          - 404
+        name: "custom-404"
+---
+id: generic-missing-security-headers
+info:
+  name: Missing Security Headers
+  author: AniipID
+  severity: low
+  description: Checks for missing standard security headers
+  tags: generic,security,headers
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}"
+    matchers:
+      - type: word
+        words:
+          - "Strict-Transport-Security"
+          - "Content-Security-Policy"
+          - "X-Content-Type-Options"
+          - "X-Frame-Options"
+          - "X-XSS-Protection"
+          - "Referrer-Policy"
+          - "Permissions-Policy"
+        condition: or
+        part: header
+        name: "security-headers-present"
+---
+id: generic-admin-panels
+info:
+  name: Admin Panel Discovery
+  author: AniipID
+  severity: high
+  description: Discovers common admin panel paths
+  tags: generic,admin,discovery
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/admin"
+      - "{{BaseURL}}/administrator"
+      - "{{BaseURL}}/admin/login"
+      - "{{BaseURL}}/wp-admin"
+      - "{{BaseURL}}/dashboard"
+      - "{{BaseURL}}/panel"
+      - "{{BaseURL}}/manager"
+      - "{{BaseURL}}/management"
+      - "{{BaseURL}}/login"
+      - "{{BaseURL}}/cms"
+    matchers:
+      - type: word
+        words:
+          - "login"
+          - "Login"
+          - "LOGIN"
+          - "admin"
+          - "Admin"
+          - "dashboard"
+          - "Dashboard"
+          - "username"
+          - "password"
+          - "Sign In"
+          - "Sign in"
+        condition: or
+        name: "admin-panel"
+---
+id: generic-api-endpoints
+info:
+  name: Common API Endpoints
+  author: AniipID
+  severity: medium
+  description: Discovers common REST API endpoints
+  tags: generic,api,discovery
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/api"
+      - "{{BaseURL}}/api/v1"
+      - "{{BaseURL}}/api/v2"
+      - "{{BaseURL}}/api/users"
+      - "{{BaseURL}}/api/admin"
+      - "{{BaseURL}}/rest"
+      - "{{BaseURL}}/api/rest"
+    matchers:
+      - type: word
+        words:
+          - "\"users\""
+          - "\"data\""
+          - "application/json"
+          - "\"results\""
+          - "\"total\""
+        condition: or
+        name: "api-endpoint"
+---
+id: generic-http-methods
+info:
+  name: HTTP Methods Discovery
+  author: AniipID
+  severity: medium
+  description: Tests allowed HTTP methods on endpoints
+  tags: generic,http,methods
+requests:
+  - method: OPTIONS
+    path:
+      - "{{BaseURL}}"
+      - "{{BaseURL}}/api"
+    matchers:
+      - type: word
+        words:
+          - "Allow:"
+          - "Access-Control-Allow-Methods:"
+        part: header
+        name: "methods-discovered"
+  - method: PUT
+    path:
+      - "{{BaseURL}}/test.txt"
+    body: "test"
+    matchers:
+      - type: word
+        words:
+          - "201 Created"
+        part: header
+        name: "put-allowed"
+  - method: DELETE
+    path:
+      - "{{BaseURL}}/test.txt"
+    matchers:
+      - type: word
+        words:
+          - "200 OK"
+          - "204 No Content"
+        condition: or
+        part: header
+        name: "delete-allowed"
+---
+id: generic-directory-listing
+info:
+  name: Directory Listing Detection
+  author: AniipID
+  severity: medium
+  description: Detects enabled directory listings
+  tags: generic,listing,directory
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/images/"
+      - "{{BaseURL}}/css/"
+      - "{{BaseURL}}/js/"
+      - "{{BaseURL}}/uploads/"
+      - "{{BaseURL}}/static/"
+      - "{{BaseURL}}/assets/"
+      - "{{BaseURL}}/files/"
+    matchers:
+      - type: word
+        words:
+          - "Index of /"
+          - "[DIR]"
+          - "Parent Directory"
+          - "Directory listing for"
+        condition: or
+        name: "dir-listing-enabled"
+---
+id: generic-error-handling
+info:
+  name: Error Handling & Stack Trace
+  author: AniipID
+  severity: medium
+  description: Detects verbose error messages revealing internal paths
+  tags: generic,error,info
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/nonexistent.php"
+      - "{{BaseURL}}/../../../../etc/passwd"
+    matchers:
+      - type: regex
+        regex:
+          - "Warning:.*on line"
+          - "Fatal error:.*in /"
+          - "Parse error:.*in /"
+          - "Notice:.*in /"
+          - "SQL syntax.*MySQL"
+          - "stacktrace|stack trace|at .*\\.php\\(|in /var/www"
+          - "FileNotFoundException"
+          - "TypeError:.*null"
+        condition: or
+        name: "verbose-error"
+---
+id: generic-parameter-pollution
+info:
+  name: HTTP Parameter Pollution
+  author: AniipID
+  severity: low
+  description: Tests for HTTP parameter pollution vulnerability
+  tags: generic,hpp,parameter
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?id=1&id=2"
+      - "{{BaseURL}}?id=1&id=2&id=3"
+    matchers:
+      - type: word
+        words:
+          - "id=2"
+          - "[1, 2, 3]"
+        condition: or
+        name: "hpp-detected"
+---
+id: generic-rate-limit
+info:
+  name: Rate Limiting Check
+  author: AniipID
+  severity: info
+  description: Checks if rate limiting is enforced
+  tags: generic,rate-limit,security
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/login"
+      - "{{BaseURL}}/api/login"
+    matchers:
+      - type: word
+        words:
+          - "429"
+          - "Too Many Requests"
+          - "Rate limit"
+          - "Retry-After"
+        condition: or
+        name: "rate-limited"
+---
+id: generic-http-verbs
+info:
+  name: Verb Tampering Check
+  author: AniipID
+  severity: medium
+  description: Tests alternative HTTP methods for bypassing auth
+  tags: generic,verb-tampering,bypass
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/admin"
+    matchers:
+      - type: word
+        words:
+          - "Access-Control-Allow-Origin"
+        name: "admin-accessible"
+  - method: POST
+    path:
+      - "{{BaseURL}}/admin"
+    matchers:
+      - type: word
+        words:
+          - "200 OK"
+        part: header
+        name: "post-admin-not-blocked"
+  - method: HEAD
+    path:
+      - "{{BaseURL}}/admin"
+    matchers:
+      - type: word
+        words:
+          - "200 OK"
+        part: header
+        name: "head-admin-not-blocked"
+  - method: PATCH
+    path:
+      - "{{BaseURL}}/admin"
+    matchers:
+      - type: word
+        words:
+          - "200 OK"
+        part: header
+        name: "patch-admin-not-blocked"

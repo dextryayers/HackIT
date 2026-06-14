@@ -1,0 +1,113 @@
+id: redirect-param-pollution
+info:
+  name: Redirect Parameter Pollution
+  author: AniipID
+  severity: medium
+  description: Detects open redirect via parameter pollution
+  tags: redirect,parameter-pollution
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?url=http://evil.com&next=http://trusted.com"
+      - "{{BaseURL}}?next=http://trusted.com&redirect=http://evil.com"
+      - "{{BaseURL}}?url=valid.com&url=http://evil.com"
+    matchers:
+      - type: word
+        words:
+          - "Location: http://evil.com"
+          - "Location: http://trusted.com"
+        part: header
+        condition: or
+        name: "redirect-param-pollution"
+---
+id: redirect-unicode-bypass
+info:
+  name: Open Redirect Unicode Bypass
+  author: AniipID
+  severity: medium
+  description: Detects open redirect using Unicode URL encoding bypass
+  tags: redirect,unicode,bypass
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?url=https://evil%E3%80%82com"
+      - "{{BaseURL}}?url=https://evil。com"
+      - "{{BaseURL}}?url=https://evilⓒom"
+      - "{{BaseURL}}?url=https://evil.com%E2%81%84trusted.com"
+    matchers:
+      - type: word
+        words:
+          - "Location: https://evil"
+          - "Location: https://evil%E3%80%82"
+        part: header
+        condition: or
+        name: "unicode-redirect"
+---
+id: redirect-crlf-injection
+info:
+  name: CRLF Injection in Redirect
+  author: AniipID
+  severity: high
+  description: Detects CRLF injection through redirect parameters
+  tags: redirect,crlf,injection
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?url=http://evil.com%0d%0aX-Injected:%20true"
+      - "{{BaseURL}}?redirect=http://evil.com%0aX-Injected:%20true"
+    matchers:
+      - type: word
+        words:
+          - "X-Injected: true"
+        part: header
+        name: "crlf-injected"
+---
+id: redirect-host-header
+info:
+  name: Host Header Redirect
+  author: AniipID
+  severity: medium
+  description: Detects redirect based on Host header (password reset poisoning)
+  tags: redirect,host-header,poisoning
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/reset"
+      - "{{BaseURL}}/forgot-password"
+    headers:
+      Host: "evil.com"
+    matchers:
+      - type: word
+        words:
+          - "Location: http://evil.com"
+          - "Location: https://evil.com"
+          - "evil.com/reset"
+        condition: or
+        name: "host-header-redirect"
+---
+id: redirect-relative-path
+info:
+  name: Relative Path Redirect
+  author: AniipID
+  severity: low
+  description: Detects relative path-based redirect that could be exploited
+  tags: redirect,relative,path
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?return=//evil.com"
+      - "{{BaseURL}}?redirect=///evil.com"
+      - "{{BaseURL}}?url=https:evil.com"
+      - "{{BaseURL}}?url=http:/\\evil.com"
+      - "{{BaseURL}}?url=\\evil.com"
+    matchers:
+      - type: word
+        words:
+          - "Location: //evil.com"
+          - "Location: ///evil.com"
+          - "Location: https:evil.com"
+          - "Location: http:/"
+          - "Location: \\evil.com"
+        part: header
+        condition: or
+        name: "relative-path-redirect"

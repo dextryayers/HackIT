@@ -21,7 +21,8 @@ func main() {
 	domain := flag.String("d", "", "Target domain")
 	wordlist := flag.String("w", "", "Wordlist path")
 	concurrency := flag.Int("c", 100, "Concurrency/Threads")
-	output := flag.String("o", "", "Output file (JSON)")
+	output := flag.String("o", "", "Output file")
+	outputFormat := flag.String("of", "text", "Output format: text, json, csv")
 	verbose := flag.Bool("v", false, "Verbose output")
 
 	// Modes
@@ -33,6 +34,13 @@ func main() {
 	stealth := flag.Bool("stealth", false, "Stealth mode")
 	fast := flag.Bool("fast", false, "Fast mode")
 	deep := flag.Bool("deep", false, "Deep scan mode")
+
+	// Enhancement Flags
+	common := flag.Bool("common", false, "Use built-in common subdomain wordlist")
+	all := flag.Bool("all", false, "Max depth: common+passive+active+permutations+takeover+probe")
+	noWildcard := flag.Bool("no-wildcard", false, "Disable wildcard DNS filtering")
+	dnsOverHTTPS := flag.Bool("doh", false, "Use DNS-over-HTTPS resolvers")
+	resolve := flag.Bool("resolve", true, "Resolve DNS for passive-only findings")
 
 	// Probe
 	sc := flag.Bool("sc", false, "Show status code")
@@ -49,6 +57,25 @@ func main() {
 	if *domain == "" {
 		fmt.Println("[!] Target domain is required (-d domain.com)")
 		os.Exit(1)
+	}
+
+	// --all flag enables everything
+	if *all {
+		*passiveOnly = false
+		*activeOnly = false
+		*permutations = true
+		*takeover = true
+		*recursive = true
+		*probe = true
+		*sc = true
+		*ip = true
+		*title = true
+		*server = true
+		*tech = true
+		*asn = true
+		*common = true
+		*resolve = true
+		*deep = true
 	}
 
 	config := Config{
@@ -73,18 +100,30 @@ func main() {
 		Probe:        *probe,
 		FilterCodes:  *filterCodes,
 		Output:       *output,
+		OutputFormat: *outputFormat,
 		Verbose:      *verbose,
+		Common:       *common,
+		All:          *all,
+		NoWildcard:   *noWildcard,
+		DNSOverHTTPS: *dnsOverHTTPS,
+		Resolve:      *resolve,
 	}
 
 	// Industrial-Grade Adaptive Tuning
 	if config.Deep {
 		config.Recursive = true
+		config.Permutations = true
+		config.Takeover = true
+		config.Probe = true
+		config.Resolve = true
 		if !config.Stealth {
 			config.Concurrency = 400 // Boosted for deep intelligence
 		}
 	}
 	if config.Fast {
-		config.Concurrency = 500 // Ultra-high for lightning speed
+		if config.Concurrency < 500 {
+			config.Concurrency = 500 // Ultra-high for lightning speed
+		}
 		config.Timeout = 4
 	}
 	if config.Stealth {
@@ -94,29 +133,57 @@ func main() {
 
 	// Luxury Professional Banner
 	startTime := time.Now()
-	fmt.Printf("\033[1;36m[#] HACKIT INDUSTRIAL RECON v3.0\033[0m | \033[1;32mTARGET: %s\033[0m\n", config.Domain)
-	fmt.Printf("\033[1;34m[*] Engaged Engines: OSINT, Brute, CNAME-Chain, HTTP-Probe\033[0m\n")
-	fmt.Printf("\033[1;33m[*] Threading Grid: %d workers | Timeout: %ds\033[0m\n\n", config.Concurrency, config.Timeout)
+	fmt.Printf("\033[1;36m╔══════════════════════════════════════════════════╗\033[0m\n")
+	fmt.Printf("\033[1;36m║\033[0m  \033[1;33mHACKIT SUBDOMAIN RECON v3.5\033[0m              \033[1;36m║\033[0m\n")
+	fmt.Printf("\033[1;36m╚══════════════════════════════════════════════════╝\033[0m\n")
+	fmt.Printf("\033[1;32m  TARGET:\033[0m %s\n", config.Domain)
+
+	engines := "OSINT"
+	if !config.PassiveOnly {
+		engines += " + Brute"
+	}
+	if config.Permutations {
+		engines += " + Permutations"
+	}
+	if config.Takeover {
+		engines += " + Takeover"
+	}
+	if config.Probe {
+		engines += " + HTTP-Probe"
+	}
+	fmt.Printf("\033[1;36m  ENGINES:\033[0m %s\n", engines)
+	fmt.Printf("\033[1;35m  WORKERS:\033[0m %d | \033[1;35mTIMEOUT:\033[0m %ds", config.Concurrency, config.Timeout)
+	if config.Common {
+		fmt.Printf(" | \033[1;32m+COMMON WL\033[0m")
+	}
+	fmt.Println()
 
 	// 0. Wildcard Detection (Essential for professional results)
-	DetectWildcard(config.Domain)
+	if !config.NoWildcard {
+		DetectWildcard(config.Domain)
+	} else if config.Verbose {
+		fmt.Println("\033[1;33m[*] Wildcard detection disabled\033[0m")
+	}
 
 	// 1. Passive OSINT Phase
 	if !config.ActiveOnly {
-		fmt.Printf("\033[1;34m[>] PHASE 1:\033[0m Executing Multi-Source Passive Extraction...\n")
+		fmt.Printf("\033[1;34m[>] PHASE 1:\033[0m Multi-Source Passive Extraction...\n")
 		passiveChan := make(chan []string)
 		go runPassive(config.Domain, passiveChan, config.Verbose)
 
 		for subs := range passiveChan {
 			for _, s := range subs {
-				addResult(s, nil, "passive")
+				cs := cleanSubdomain(s, config.Domain)
+				if cs != "" {
+					addResult(cs, nil, "passive")
+				}
 			}
 		}
 	}
 
 	// 2. Active Discovery Phase
 	if !config.PassiveOnly {
-		fmt.Printf("\033[1;34m[>] PHASE 2:\033[0m Activating High-Performance Active Discovery...\n")
+		fmt.Printf("\033[1;34m[>] PHASE 2:\033[0m Active Discovery...\n")
 		jobs := make(chan string, config.Concurrency*2)
 		var wgResolve sync.WaitGroup
 
@@ -126,10 +193,10 @@ func main() {
 		}
 
 		runActive(config, jobs)
-		
+
 		// Permutations
 		if config.Permutations {
-			fmt.Printf("\033[1;34m[>] PHASE 3:\033[0m Generating Smart Permutations (Altdns style)...\n")
+			fmt.Printf("\033[1;34m[>] PHASE 3:\033[0m Smart Permutations...\n")
 			currentResults := getResults()
 			runPermutations(currentResults, config.Domain, jobs)
 		}
@@ -142,11 +209,16 @@ func main() {
 	finalResults := getResults()
 	
 	if len(finalResults) > 0 {
-		fmt.Printf("\033[1;34m[>] PHASE 4:\033[0m Consolidating Assets & Auditing Infrastructure...\n")
-		
+		fmt.Printf("\033[1;34m[>] PHASE 4:\033[0m Consolidating Assets...\n")
+
 		// Resolve missing IPs for OSINT findings
-		resolveIPs(finalResults, config.Concurrency)
-		finalResults = filterWildcards(finalResults)
+		if config.Resolve {
+			resolveIPs(finalResults, config.Concurrency)
+		}
+
+		if !config.NoWildcard {
+			finalResults = filterWildcards(finalResults)
+		}
 
 		if config.ShowASN {
 			resolveASNs(finalResults, config.Concurrency)
@@ -158,17 +230,31 @@ func main() {
 
 		needsProbe := config.ShowSC || config.ShowTitle || config.ShowServer || config.TechDetect || config.Probe
 		if needsProbe {
-			fmt.Printf("\033[1;34m[>] PHASE 5:\033[0m Probing Life-signs & Fingerprinting Tech Stacks...\n")
+			fmt.Printf("\033[1;34m[>] PHASE 5:\033[0m HTTP Probing & Fingerprinting...\n")
 			runProbe(finalResults, config)
 		}
 	}
 
-	// 4. Output Generation
-	printResults(finalResults, config)
+	// 4. Print ALL final results with full enrichment detail
+	if len(finalResults) > 0 {
+		fmt.Printf("\n\033[1;34m[>]\033[0m \033[1;32mFINAL ENRICHED RESULTS:\033[0m\n")
+		for _, r := range finalResults {
+			if needsProbe := config.ShowSC || config.ShowTitle || config.ShowServer || config.TechDetect || config.Probe; needsProbe {
+				printResultDetail(r, config)
+			} else if config.ShowASN || config.ShowIP {
+				printResultDetail(r, config)
+			} else {
+				// Silent mode: just subdomain
+				fmt.Printf("\x1b[1;32m[+]\x1b[0m \x1b[1;36m[sub]\x1b[0m %s\n", r.Subdomain)
+			}
+		}
+	}
 
 	// 5. Tactical Summary
 	duration := time.Since(startTime)
-	fmt.Printf("\n\033[1;36m[#] MISSION ACCOMPLISHED\033[0m | \033[1;32mELAPSED: %v\033[0m | \033[1;32mTOTAL ASSETS: %d\033[0m\n", 
-		duration.Truncate(time.Second), len(finalResults))
-	fmt.Printf("\033[1;34m--------------------------------------------------------------------------------\033[0m\n\n")
+	fmt.Printf("\n\033[1;32m═══════════════════════════════════════\033[0m\n")
+	fmt.Printf("\033[1;33m  TOTAL: %d subdomains | ELAPSED: %v\033[0m\n",
+		len(finalResults), duration.Truncate(time.Second))
+	fmt.Printf("\033[1;32m═══════════════════════════════════════\033[0m\n")
+	fmt.Println()
 }

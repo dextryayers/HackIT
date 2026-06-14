@@ -1,0 +1,37 @@
+id: deser-python-pickle
+info:
+  name: Python Pickle Deserialization
+  author: AniipID
+  severity: critical
+  description: Detects Python pickle deserialization endpoints that could lead to RCE
+  tags: deserialization,python,pickle,rce
+
+requests:
+  - method: POST
+    path:
+      - "{{BaseURL}}/api/load"
+      - "{{BaseURL}}/api/restore"
+      - "{{BaseURL}}/deserialize"
+    headers:
+      Content-Type: application/octet-stream
+    body: "gAN9cQAoWAMAAABrZXlxAlgFAAAAdmFsdWVxA3VzLg=="
+    matchers:
+      - type: word
+        words:
+          - "pickle"
+          - "unpickle"
+          - "UnpicklingError"
+          - "loads"
+        condition: or
+
+  - method: POST
+    path:
+      - "{{BaseURL}}/api/session"
+    headers:
+      Content-Type: application/x-www-form-urlencoded
+    body: "session=gAN9cQAoWAQAAABkYXRhcQFYBQAAAHZhbHVlcQJ1cy4="
+    matchers:
+      - type: status
+        status:
+          - 200
+          - 500

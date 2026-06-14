@@ -1031,3 +1031,126 @@ pub unsafe extern "C" fn rust_batch_scan(
     
     CString::new(open_ports.join(",")).unwrap().into_raw()
 }
+
+// ═══════════════════════════════════════════════════════════════════
+// ENHANCED DETECTION FFI — Kernel / DNS / Web Fingerprint
+// ═══════════════════════════════════════════════════════════════════
+
+#[no_mangle]
+pub unsafe extern "C" fn rust_kernel_detect(host: *const c_char, ports: *const c_char) -> *mut c_char {
+    let host_str = CStr::from_ptr(host).to_str().unwrap_or("");
+    let ports_str = CStr::from_ptr(ports).to_str().unwrap_or("22,80,443");
+    let ping_ttl = if cfg!(target_os = "windows") { 0 } else {
+        let out = std::process::Command::new("ping")
+            .args(["-c", "1", "-W", "2", host_str])
+            .output();
+        if let Ok(o) = out {
+            let s = String::from_utf8_lossy(&o.stdout);
+            s.lines().find_map(|l| {
+                l.find("ttl=").and_then(|pos| {
+                    let rest: String = l[pos + 4..].chars().take_while(|c| c.is_ascii_digit()).collect();
+                    rest.parse().ok()
+                })
+            }).unwrap_or(0)
+        } else { 0 }
+    };
+    let probe_ports: Vec<u16> = ports_str.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+    let mut info = String::new();
+    info.push_str(&format!("PING_TTL:{}\n", ping_ttl));
+    info.push_str(&format!("PROBE_PORTS:{}\n", probe_ports.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(",")));
+    let os_guess = if ping_ttl <= 64 { "Linux/Unix/macOS" }
+        else if ping_ttl <= 128 { "Windows" }
+        else if ping_ttl <= 255 { "Network Device (Cisco/Juniper)" }
+        else { "Unknown" };
+    info.push_str(&format!("OS_GUESS:{}\n", os_guess));
+    let adjusted = if ping_ttl <= 64 {
+        let ttl_guess = if probe_ports.contains(&445) || probe_ports.contains(&3389) { 128 - ping_ttl } else { ping_ttl };
+        format!("{} (initial={})", ping_ttl + ttl_guess, ping_ttl)
+    } else { ping_ttl.to_string() };
+    info.push_str(&format!("ADJUSTED_TTL:{}\n", adjusted));
+    let has_rdp = probe_ports.contains(&3389);
+    let has_smb = probe_ports.contains(&445);
+    let has_ssh = probe_ports.contains(&22);
+    let has_http = probe_ports.contains(&80) || probe_ports.contains(&443);
+    let has_mysql = probe_ports.contains(&3306);
+    if has_rdp || has_smb { info.push_str("FAMILY:Windows\n"); }
+    else if has_ssh && has_http && has_mysql { info.push_str("FAMILY:Linux Server\n"); }
+    else if has_ssh && has_http { info.push_str("FAMILY:Linux/Unix\n"); }
+    else { info.push_str("FAMILY:Unknown\n"); }
+    CString::new(info).unwrap().into_raw()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn rust_web_fingerprint(host: *const c_char, port: i32) -> *mut c_char {
+    let host_str = CStr::from_ptr(host).to_str().unwrap_or("");
+    let port_u16 = port as u16;
+    let addr = format!("{}:{}", host_str, port);
+    if let Ok(mut stream) = TcpStream::connect_timeout(&addr.parse().unwrap_or(addr.parse().unwrap()), Duration::from_millis(3000)) {
+        let _ = stream.set_read_timeout(Some(Duration::from_millis(3000)));
+        let request = format!("GET / HTTP/1.0\r\nHost: {}\r\nUser-Agent: HackIT-RS/3.0\r\nAccept: */*\r\n\r\n", host_str);
+        let _ = stream.write_all(request.as_bytes());
+        let mut buf = [0u8; 8192];
+        if let Ok(n) = stream.read(&mut buf) {
+            let resp = String::from_utf8_lossy(&buf[..n]);
+            let server = Regex::new(r"(?i)^server:\s*(.+)").unwrap()
+                .captures(&resp).and_then(|c| c.get(1)).map(|m| m.as_str()).unwrap_or("Unknown");
+            let powered = Regex::new(r"(?i)^x-powered-by:\s*(.+)").unwrap()
+                .captures(&resp).and_then(|c| c.get(1)).map(|m| m.as_str()).unwrap_or("");
+            let title = Regex::new(r"(?i)<title>([^<]+)</title>").unwrap()
+                .captures(&resp).and_then(|c| c.get(1)).map(|m| m.as_str()).unwrap_or("");
+            let result = serde_json::json!({
+                "server": server.trim(),
+                "x_powered_by": powered.trim(),
+                "title": title.trim(),
+                "port": port_u16,
+                "host": host_str,
+            });
+            return CString::new(result.to_string()).unwrap().into_raw();
+        }
+    }
+    CString::new(r#"{"error":"connection failed"}"#).unwrap().into_raw()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn rust_deep_scan(host: *const c_char, port: i32, banner: *const c_char) -> *mut c_char {
+    let host_str = CStr::from_ptr(host).to_str().unwrap_or("");
+    let _ = port;
+    let banner_str = CStr::from_ptr(banner).to_str().unwrap_or("");
+    let mut findings = Vec::new();
+    let b_lower = banner_str.to_lowercase();
+    if b_lower.contains("openssh") {
+        if let Some(caps) = Regex::new(r"OpenSSH_([0-9.]+)").unwrap().captures(banner_str) {
+            let ver = caps.get(1).map(|m| m.as_str()).unwrap_or("?");
+            findings.push(format!("SSH Version: {}", ver));
+            if ver.starts_with("7.") || ver.starts_with("8.") || ver.starts_with("9.") {
+                findings.push("VULN_CHECK: Check for recent OpenSSH CVEs".to_string());
+            }
+        }
+    }
+    if b_lower.contains("apache") || b_lower.contains("nginx") || b_lower.contains("iis") {
+        if let Some(caps) = Regex::new(r"Server:\s*([^\r\n]+)").unwrap().captures(banner_str) {
+            findings.push(format!("Web Server: {}", caps.get(1).map(|m| m.as_str()).unwrap_or("?")));
+        }
+    }
+    if b_lower.contains("mysql") || b_lower.contains("mariadb") {
+        findings.push("Database: MySQL/MariaDB".to_string());
+    }
+    if b_lower.contains("redis") {
+        findings.push("Database: Redis".to_string());
+    }
+    if b_lower.contains("postgresql") || b_lower.contains("postgres") {
+        findings.push("Database: PostgreSQL".to_string());
+    }
+    if b_lower.contains("mongodb") {
+        findings.push("Database: MongoDB".to_string());
+    }
+    if findings.is_empty() {
+        findings.push("No deep signatures matched. Banner captured for reference.".to_string());
+    }
+    let result = serde_json::json!({
+        "host": host_str,
+        "findings": findings,
+        "total": findings.len(),
+    });
+    CString::new(result.to_string()).unwrap().into_raw()
+}

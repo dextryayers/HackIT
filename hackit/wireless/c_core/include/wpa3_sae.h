@@ -1,3 +1,4 @@
+#include <stddef.h>
 #ifndef HACKIT_WPA3_SAE_H
 #define HACKIT_WPA3_SAE_H
 

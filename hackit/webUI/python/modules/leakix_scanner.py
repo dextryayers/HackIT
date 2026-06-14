@@ -1,38 +1,231 @@
 import httpx
+import json
 from models import IntelligenceFinding
 
-async def crawl(target, client):
-    findings = []
-    domain = target.replace("http://", "").replace("https://", "").split("/")[0]
-    
-    # LeakIX API (Public endpoint for domain/IP)
-    # They have a free tier that allows searching for host information
+LEAKIX_BASE = "https://leakix.net"
+UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+SERVICE_QUERIES = {
+    "HTTP": {"protocol": "http", "ports": [80, 443, 8080, 8443], "severity": "Medium", "color": "orange"},
+    "HTTPS": {"protocol": "https", "ports": [443, 8443], "severity": "Medium", "color": "orange"},
+    "SMTP": {"protocol": "smtp", "ports": [25, 465, 587, 2525], "severity": "Medium", "color": "orange"},
+    "FTP": {"protocol": "ftp", "ports": [21], "severity": "High", "color": "red"},
+    "MYSQL": {"protocol": "mysql", "ports": [3306], "severity": "Critical", "color": "red"},
+    "MONGODB": {"protocol": "mongodb", "ports": [27017, 27018], "severity": "Critical", "color": "red"},
+    "ELASTICSEARCH": {"protocol": "elasticsearch", "ports": [9200, 9300], "severity": "Critical", "color": "red"},
+    "REDIS": {"protocol": "redis", "ports": [6379], "severity": "Critical", "color": "red"},
+    "MEMCACHED": {"protocol": "memcached", "ports": [11211], "severity": "High", "color": "red"},
+    "POSTGRESQL": {"protocol": "postgresql", "ports": [5432], "severity": "Critical", "color": "red"},
+    "SSH": {"protocol": "ssh", "ports": [22], "severity": "Medium", "color": "orange"},
+    "RDP": {"protocol": "rdp", "ports": [3389], "severity": "High", "color": "red"},
+}
+
+LEAK_TYPES = {
+    "open_database": {"type": "Open Database", "severity": "Critical", "color": "red"},
+    "credential_leak": {"type": "Credential Leak", "severity": "Critical", "color": "red"},
+    "information_disclosure": {"type": "Info Disclosure", "severity": "High", "color": "red"},
+    "misconfiguration": {"type": "Misconfiguration", "severity": "High", "color": "orange"},
+    "vulnerability": {"type": "Vulnerability", "severity": "Critical", "color": "red"},
+    "exposed_service": {"type": "Exposed Service", "severity": "High", "color": "orange"},
+}
+
+def detect_leak_type(entry: dict) -> dict:
+    leak_str = json.dumps(entry).lower()
+    if any(w in leak_str for w in ["mongodb", "27017", "no auth", "unauthorized"]):
+        return {"type": "Open MongoDB", "severity": "Critical", "color": "red"}
+    if any(w in leak_str for w in ["elasticsearch", "9200", "cluster_name"]):
+        return {"type": "Open Elasticsearch", "severity": "Critical", "color": "red"}
+    if any(w in leak_str for w in ["redis", "6379", "keyspace"]):
+        return {"type": "Open Redis", "severity": "Critical", "color": "red"}
+    if any(w in leak_str for w in ["mysql", "3306", "sql"]):
+        return {"type": "Open MySQL", "severity": "Critical", "color": "red"}
+    if any(w in leak_str for w in ["memcached", "11211"]):
+        return {"type": "Open Memcached", "severity": "High", "color": "red"}
+    if any(w in leak_str for w in ["ftp", "anonymous", "login"]):
+        return {"type": "Open FTP", "severity": "High", "color": "red"}
+    if any(w in leak_str for w in ["smtp", "25/tcp", "mail"]):
+        return {"type": "Open SMTP", "severity": "Medium", "color": "orange"}
+    if any(w in leak_str for w in ["password", "passwd", "credential", "login:", "pwd"]):
+        return {"type": "Credential Leak", "severity": "Critical", "color": "red"}
+    if any(w in leak_str for w in ["vuln", "cve", "exploit"]):
+        return {"type": "Vulnerability", "severity": "Critical", "color": "red"}
+    if any(w in leak_str for w in ["leak", "breach", "exposed"]):
+        return {"type": "Data Leak", "severity": "High", "color": "red"}
+    return {"type": "Exposed Service", "severity": "Medium", "color": "orange"}
+
+def score_severity(entries: list) -> tuple:
+    critical = 0
+    high = 0
+    medium = 0
+    total = len(entries)
+    for e in entries:
+        sev = detect_leak_type(e).get("severity", "Low")
+        if sev == "Critical":
+            critical += 1
+        elif sev == "High":
+            high += 1
+        elif sev == "Medium":
+            medium += 1
+    if critical > 0:
+        return "Critical", critical, high, medium
+    elif high > 0:
+        return "High Risk", critical, high, medium
+    elif medium > 0:
+        return "Elevated Risk", critical, high, medium
+    return "Informational", critical, high, medium
+
+async def search_service(target: str, service: str, config: dict, client: httpx.AsyncClient) -> list:
+    results = []
+    protocol = config["protocol"]
     try:
-        # Search by host
-        url = f"https://leakix.net/search?scope=leak&q={domain}"
-        # LeakIX uses a specific JSON structure in their API, but we'll use the search UI scraper for speed/no-key
-        resp = await client.get(url, timeout=10.0, headers={"Accept": "application/json"})
-        
-        if resp.status_code == 200:
+        url = f"{LEAKIX_BASE}/search?q={protocol}:{target}&scope=leak"
+        resp = await client.get(
+            url, timeout=15.0,
+            headers={"User-Agent": UA, "Accept": "application/json"},
+        )
+        if resp.status_code == 200 and resp.text.strip().startswith(("[")):
             data = resp.json()
-            for entry in data:
-                event_type = entry.get("event_type", "Leak")
-                summary = entry.get("summary", "No summary")
-                ip = entry.get("ip", "Unknown IP")
-                
-                findings.append(IntelligenceFinding(
-                    entity=f"{ip} ({event_type})",
-                    type="Exposure Leak",
-                    source="LeakIX",
-                    confidence="High",
-                    color="red",
-                    threat_level="High Risk",
-                    status="Live",
-                    resolution=summary,
-                    raw_data=str(entry)
-                ))
-    except:
-        # Fallback to general host info if search fails
+            if isinstance(data, list):
+                for entry in data:
+                    if isinstance(entry, dict):
+                        entry["_service"] = service
+                        entry["_protocol"] = protocol
+                        results.append(entry)
+    except Exception:
         pass
-        
+    return results
+
+async def crawl(target: str, client: httpx.AsyncClient):
+    findings = []
+    domain = target.strip().lower()
+    if domain.startswith("http"):
+        from urllib.parse import urlparse
+        domain = urlparse(domain).netloc
+
+    all_leaks = []
+    service_counts = {}
+
+    for service, config in SERVICE_QUERIES.items():
+        leaks = await search_service(domain, service, config, client)
+        all_leaks.extend(leaks)
+        if leaks:
+            service_counts[service] = len(leaks)
+
+    seen_events = set()
+    for leak in all_leaks:
+        event = leak.get("event", "")
+        ip = leak.get("ip", "")
+        port = leak.get("port", 0)
+        leak_service = leak.get("_service", "Unknown")
+        protocol = leak.get("_protocol", "")
+        title = leak.get("title", "")
+        description = leak.get("description", "")
+        count = leak.get("count", 0)
+        leak_type = leak.get("type", "")
+        severity_val = leak.get("severity", "")
+
+        dedup_key = f"{ip}:{port}:{event}"
+        if dedup_key in seen_events:
+            continue
+        seen_events.add(dedup_key)
+
+        detected = detect_leak_type(leak)
+        leak_label = detected["type"] if not leak_type else leak_type
+        sev = detected["severity"] if not severity_val else severity_val
+        color = detected["color"]
+
+        entity = f"{leak_label}"
+        if event:
+            entity = f"{event} ({leak_label})"
+        if ip:
+            entity += f" @ {ip}"
+        if port:
+            entity += f":{port}"
+
+        raw = json.dumps(leak)[:1000]
+        tags = ["leak", leak_service.lower().replace(" ", "-")]
+        if "credential" in leak_label.lower() or "password" in raw.lower():
+            tags.append("credential-leak")
+        if "open" in leak_label.lower() or "unauthorized" in raw.lower():
+            tags.append("open-access")
+
+        findings.append(IntelligenceFinding(
+            entity=entity[:200],
+            type=f"LeakIX: {leak_service}",
+            source="LeakIX Scanner",
+            confidence="High",
+            color=color,
+            threat_level=sev if sev in ("Critical", "High Risk") else "Elevated Risk",
+            status="Confirmed",
+            resolution=ip if ip else None,
+            raw_data=raw,
+            tags=tags,
+        ))
+
+        if description:
+            findings.append(IntelligenceFinding(
+                entity=f"{leak_label} details: {description[:200]}",
+                type=f"LeakIX: {leak_service} Description",
+                source="LeakIX Scanner",
+                confidence="Medium",
+                color="slate",
+                threat_level="Informational",
+                raw_data=description[:1000],
+                tags=["description"],
+            ))
+
+        if count > 0:
+            findings.append(IntelligenceFinding(
+                entity=f"{leak_label} impact: {count} records",
+                type="LeakIX: Breach Impact",
+                source="LeakIX Scanner",
+                confidence="Medium",
+                color="red",
+                threat_level="High Risk",
+                raw_data=f"{count} records affected in {event or leak_label}",
+                tags=["impact"],
+            ))
+
+    for service, count in sorted(service_counts.items()):
+        config = SERVICE_QUERIES.get(service, {})
+        sev = config.get("severity", "Medium")
+        color = config.get("color", "orange")
+        findings.append(IntelligenceFinding(
+            entity=f"{service}: {count} leaks detected on {domain}",
+            type=f"LeakIX: {service} Summary",
+            source="LeakIX Scanner",
+            confidence="High",
+            color=color,
+            threat_level=sev if sev in ("Critical", "High") else "Elevated Risk",
+            status="Analyzed",
+            raw_data=f"Service {service} on {domain}: {count} leaks found",
+            tags=[f"service-{service.lower()}", "summary"],
+        ))
+
+    if all_leaks:
+        overall_sev, crit, high, med = score_severity(all_leaks)
+        color = "red" if crit > 0 else ("orange" if high > 0 else "slate")
+        findings.append(IntelligenceFinding(
+            entity=f"LeakIX scan summary: {len(all_leaks)} total leaks | {crit} critical, {high} high, {med} medium across {len(service_counts)} services",
+            type="LeakIX: Scan Summary",
+            source="LeakIX Scanner",
+            confidence="High",
+            color=color,
+            threat_level=overall_sev,
+            status="Completed",
+            raw_data=f"Total entries: {len(all_leaks)}, Services affected: {list(service_counts.keys())}, Severity: {overall_sev}",
+            tags=["scan-summary"],
+        ))
+    else:
+        findings.append(IntelligenceFinding(
+            entity=f"No leaks found for {domain} on LeakIX",
+            type="LeakIX: Clear",
+            source="LeakIX Scanner",
+            confidence="Low",
+            color="emerald",
+            threat_level="Informational",
+            status="Scanned",
+            tags=["clear"],
+        ))
+
     return findings

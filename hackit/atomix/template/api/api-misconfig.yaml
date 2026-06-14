@@ -1,0 +1,110 @@
+id: api-cors-wildcard
+info:
+  name: API CORS Wildcard Origin
+  author: AniipID
+  severity: medium
+  description: Tests for permissive CORS policy allowing any origin
+  tags: api,cors,misconfig
+
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/api/users"
+      - "{{BaseURL}}/api/v1/data"
+      - "{{BaseURL}}/api/config"
+    headers:
+      Origin: https://evil-attacker.com
+    matchers:
+      - type: word
+        words:
+          - "Access-Control-Allow-Origin: *"
+          - "Access-Control-Allow-Origin: https://evil-attacker.com"
+        condition: or
+        part: header
+
+---
+id: api-verbose-error
+info:
+  name: API Verbose Error Messages
+  author: AniipID
+  severity: medium
+  description: Tests for verbose error messages leaking implementation details
+  tags: api,error,disclosure
+
+requests:
+  - method: POST
+    path:
+      - "{{BaseURL}}/api/login"
+      - "{{BaseURL}}/api/auth"
+      - "{{BaseURL}}/api/v1/auth"
+    headers:
+      Content-Type: application/json
+    body: '{"username": null, "password": null}'
+    matchers:
+      - type: word
+        words:
+          - "stack trace"
+          - "Traceback"
+          - "NullPointerException"
+          - "TypeError"
+          - "SyntaxError"
+          - "at file"
+          - "line "
+          - "column "
+        condition: or
+        part: body
+
+---
+id: api-mass-assignment
+info:
+  name: API Mass Assignment Detection
+  author: AniipID
+  severity: high
+  description: Tests for mass assignment vulnerabilities allowing modification of protected fields
+  tags: api,mass-assignment
+
+requests:
+  - method: PUT
+    path:
+      - "{{BaseURL}}/api/users/1"
+      - "{{BaseURL}}/api/profile"
+    headers:
+      Content-Type: application/json
+    body: '{"role": "admin", "isAdmin": true, "permissions": ["*"]}'
+    matchers:
+      - type: word
+        words:
+          - "admin"
+          - "role"
+          - "permissions"
+        condition: or
+        part: body
+
+---
+id: api-idor
+info:
+  name: API Insecure Direct Object Reference (IDOR)
+  author: AniipID
+  severity: high
+  description: Tests for IDOR by accessing sequential user IDs
+  tags: api,idor,access-control
+
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/api/users/1"
+      - "{{BaseURL}}/api/users/2"
+      - "{{BaseURL}}/api/users/3"
+      - "{{BaseURL}}/api/v1/users/1"
+    matchers:
+      - type: word
+        words:
+          - "email"
+          - "password"
+          - "ssn"
+          - "credit_card"
+          - "phone"
+          - "address"
+          - "role"
+        condition: or
+        part: body

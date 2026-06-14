@@ -1,0 +1,267 @@
+id: api-rate-limit
+info:
+  name: API Rate Limiting Check
+  author: AniipID
+  severity: low
+  description: Tests if API endpoints enforce rate limiting
+  tags: api,rate-limit,security
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/api"
+      - "{{BaseURL}}/api/v1"
+      - "{{BaseURL}}/api/v2"
+    matchers:
+      - type: word
+        words:
+          - "429"
+          - "Too Many Requests"
+          - "Rate limit exceeded"
+        condition: or
+        name: "rate-limited"
+---
+id: api-cors
+info:
+  name: API CORS Misconfiguration
+  author: AniipID
+  severity: medium
+  description: Detects CORS misconfigurations on API endpoints
+  tags: api,cors,misconfig
+requests:
+  - method: OPTIONS
+    path:
+      - "{{BaseURL}}/api"
+      - "{{BaseURL}}/api/v1"
+    headers:
+      Origin: "https://evil.com"
+      Access-Control-Request-Method: "GET"
+    matchers:
+      - type: word
+        words:
+          - "Access-Control-Allow-Origin: https://evil.com"
+          - "Access-Control-Allow-Origin: *"
+        part: header
+        condition: or
+        name: "api-cors-misconfig"
+---
+id: api-auth-bypass
+info:
+  name: API Authentication Bypass
+  author: AniipID
+  severity: high
+  description: Tests for API authentication bypass techniques
+  tags: api,auth,bypass
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/api/admin"
+      - "{{BaseURL}}/api/users"
+      - "{{BaseURL}}/admin/api"
+    headers:
+      X-Forwarded-For: "127.0.0.1"
+      X-Real-IP: "127.0.0.1"
+      X-Forwarded-Host: "localhost"
+    matchers:
+      - type: word
+        words:
+          - "200 OK"
+        part: header
+        name: "auth-bypass"
+  - method: GET
+    path:
+      - "{{BaseURL}}/api/admin"
+    matchers:
+      - type: word
+        words:
+          - "admin"
+          - "users"
+          - "password"
+        condition: or
+        name: "api-data-access"
+---
+id: api-mass-assignment
+info:
+  name: API Mass Assignment
+  author: AniipID
+  severity: high
+  description: Tests for mass assignment vulnerabilities in API
+  tags: api,mass-assignment,privilege
+requests:
+  - method: PUT
+    path:
+      - "{{BaseURL}}/api/user"
+      - "{{BaseURL}}/api/profile"
+    body: '{"role":"admin","is_admin":true,"admin":true}'
+    headers:
+      Content-Type: "application/json"
+    matchers:
+      - type: word
+        words:
+          - "200 OK"
+          - "201 Created"
+          - "admin"
+        condition: or
+        name: "mass-assignment"
+---
+id: api-idor
+info:
+  name: API Insecure Direct Object Reference
+  author: AniipID
+  severity: high
+  description: Tests for IDOR vulnerabilities in API endpoints
+  tags: api,idor,access-control
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/api/user/1"
+      - "{{BaseURL}}/api/user/2"
+      - "{{BaseURL}}/api/user/3"
+      - "{{BaseURL}}/api/users/1"
+      - "{{BaseURL}}/api/profile/1"
+    matchers:
+      - type: regex
+        regex:
+          - "\"id\":\\s*[0-9]+"
+          - "\"email\":\\s*\"[^@]+@[^\"']+\""
+          - "\"role\"\\s*:\\s*\"[a-z]+\""
+          - "\"username\"\\s*:"
+        condition: or
+        name: "idor-accessible"
+---
+id: api-nosqli
+info:
+  name: API NoSQL Injection
+  author: AniipID
+  severity: critical
+  description: Tests for NoSQL injection via JSON body
+  tags: api,nosql,injection,mongodb
+requests:
+  - method: POST
+    path:
+      - "{{BaseURL}}/api/login"
+      - "{{BaseURL}}/api/auth"
+      - "{{BaseURL}}/api/search"
+    body: '{"username":{"$ne":""},"password":{"$ne":""}}'
+    headers:
+      Content-Type: "application/json"
+    matchers:
+      - type: word
+        words:
+          - "200 OK"
+          - "token"
+          - "success"
+        condition: or
+        name: "nosql-bypass"
+  - method: POST
+    path:
+      - "{{BaseURL}}/api/login"
+    body: '{"username":{"$gt":""},"password":{"$gt":""}}'
+    headers:
+      Content-Type: "application/json"
+    matchers:
+      - type: word
+        words:
+          - "token"
+          - "success"
+        condition: or
+        name: "nosql-gt-bypass"
+---
+id: api-jsonp-callback
+info:
+  name: API JSONP Callback Injection
+  author: AniipID
+  severity: high
+  description: Tests for JSONP callback parameter injection
+  tags: api,jsonp,callback,xss
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/api/data?callback=alert(1)"
+      - "{{BaseURL}}/api/jsonp?callback=alert(1)"
+    matchers:
+      - type: word
+        words:
+          - "alert(1)"
+          - "alert"
+        condition: or
+        name: "jsonp-callback"
+---
+id: api-versioning
+info:
+  name: API Version Discovery
+  author: AniipID
+  severity: info
+  description: Discovers API versions and deprecated endpoints
+  tags: api,version,discovery
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/api/v1"
+      - "{{BaseURL}}/api/v2"
+      - "{{BaseURL}}/api/v3"
+      - "{{BaseURL}}/api/v1.0"
+      - "{{BaseURL}}/api/v2.0"
+      - "{{BaseURL}}/api/1"
+      - "{{BaseURL}}/api/2"
+    matchers:
+      - type: word
+        words:
+          - "\"version\""
+          - "application/json"
+          - "\"status\""
+          - "\"message\""
+        condition: or
+        name: "api-version-discovered"
+---
+id: api-graphql-playground
+info:
+  name: GraphQL Playground Exposure
+  author: AniipID
+  severity: medium
+  description: Detects exposed GraphQL Playground IDE
+  tags: api,graphql,playground,ide
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/graphql/playground"
+      - "{{BaseURL}}/graphiql"
+      - "{{BaseURL}}/playground"
+      - "{{BaseURL}}/graphql/ide"
+    matchers:
+      - type: word
+        words:
+          - "GraphiQL"
+          - "GraphQL Playground"
+          - "Playground"
+          - "graphiql"
+        condition: or
+        name: "graphql-playground"
+---
+id: api-documentation
+info:
+  name: API Documentation Exposure
+  author: AniipID
+  severity: medium
+  description: Detects exposed API documentation endpoints
+  tags: api,documentation,swagger,openapi
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/docs"
+      - "{{BaseURL}}/api/docs"
+      - "{{BaseURL}}/swagger"
+      - "{{BaseURL}}/api/swagger"
+      - "{{BaseURL}}/redoc"
+      - "{{BaseURL}}/openapi.json"
+      - "{{BaseURL}}/api/openapi.json"
+      - "{{BaseURL}}/api-spec"
+    matchers:
+      - type: word
+        words:
+          - "openapi"
+          - "swagger"
+          - "info"
+          - "paths"
+          - "Redoc"
+        condition: or
+        name: "api-docs-exposed"

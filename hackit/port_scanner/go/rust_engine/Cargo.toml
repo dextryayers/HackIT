@@ -1,11 +1,36 @@
 [package]
 name = "rust_port_scanner"
-version = "0.1.0"
+version = "3.0.0"
 edition = "2021"
+description = "HackIT Rust Engine — High-Performance Port Scanner with Multi-Engine Fusion"
 
 [lib]
 name = "rust_port_scanner"
 crate-type = ["cdylib"]
+
+[[bin]]
+name = "hyper_scan"
+path = "src/bin/hyper_scan.rs"
+
+[[bin]]
+name = "syn_scanner"
+path = "src/bin/syn_scanner.rs"
+
+[[bin]]
+name = "os_detect"
+path = "src/bin/os_detect.rs"
+
+[[bin]]
+name = "dns_detect"
+path = "src/bin/dns_detect.rs"
+
+[[bin]]
+name = "web_fingerprint"
+path = "src/bin/web_fingerprint.rs"
+
+[[bin]]
+name = "kernel_detect"
+path = "src/bin/kernel_detect.rs"
 
 [dependencies]
 libc = "0.2"

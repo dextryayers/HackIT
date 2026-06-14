@@ -1,15 +1,11 @@
 #!/bin/bash
-# HackIT Tool Wrapper
+# HackIT Subdomain Recon v3.5 — Direct Go Worker launcher
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+WORKER="$SCRIPT_DIR/go/worker"
 
-TOOL_DIR="$(basename "$PWD")"
-GLOBAL_WRAPPER="../../hackit.sh"
-
-echo -e "\033[0;36m[+] Launching $TOOL_DIR module via HackIT Swarm...\033[0m"
-
-if [ -f "$GLOBAL_WRAPPER" ]; then
-    $GLOBAL_WRAPPER -mode $TOOL_DIR "$@"
-else
-    echo -e "\033[0;31m[X] Global HackIT Wrapper not found. Please run from root directory.\033[0m"
-    exit 1
+if [ ! -f "$WORKER" ]; then
+  echo "[!] Worker not found. Run: python3 build_all.py"
+  exit 1
 fi
 
+exec "$WORKER" "$@"

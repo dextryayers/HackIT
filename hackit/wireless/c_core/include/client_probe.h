@@ -1,3 +1,4 @@
+#include <stddef.h>
 #ifndef HACKIT_CLIENT_PROBE_H
 #define HACKIT_CLIENT_PROBE_H
 

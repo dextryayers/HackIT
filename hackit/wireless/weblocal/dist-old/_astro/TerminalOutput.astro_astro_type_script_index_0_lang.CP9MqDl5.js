@@ -1,0 +1,7 @@
+(function(){const o=document.getElementById("{id}"),l=document.getElementById("{id}-lines"),s=document.getElementById("{id}-ts");if(!o)return;function a(){s&&(s.textContent=new Date().toLocaleTimeString("en-US",{hour12:!1}))}a(),setInterval(a,1e3);function i(){if(!l)return;const n=o.innerHTML.split(`
+`).length,t=Array.from({length:n},(e,r)=>String(r+1).padStart(3)).join(`
+`);l.textContent=t}window.appendTerminal=function(n){const t=new Date().toLocaleTimeString("en-US",{hour12:!1});o.innerHTML+=`
+<span class="text-cyber-green/80">[${t}]</span> ${n}`,o.scrollTop=o.scrollHeight,i()},window.appendTerminalById=function(n,t){const e=document.getElementById(n);if(!e)return;const r=new Date().toLocaleTimeString("en-US",{hour12:!1});e.innerHTML+=`
+<span class="text-cyber-green/80">[${r}]</span> ${t}`,e.scrollTop=e.scrollHeight;const c=document.getElementById(n+"-lines");if(c){const d=e.innerHTML.split(`
+`).length;c.textContent=Array.from({length:d},(m,u)=>String(u+1).padStart(3)).join(`
+`)}},window.clearTerminal=function(){o.innerHTML='<span class="text-muted-foreground/40">// HackIT Wireless — ready</span>',i()},window.clearTerminalById=function(n){const t=document.getElementById(n);if(!t)return;t.innerHTML='<span class="text-muted-foreground/40">// HackIT Wireless — ready</span>';const e=document.getElementById(n+"-lines");e&&(e.textContent="  1")},i(),o.addEventListener("keydown",n=>{n.ctrlKey&&n.key==="l"&&(n.preventDefault(),window.clearTerminalById("{id}"))})})();

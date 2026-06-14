@@ -1,0 +1,86 @@
+id: takeover-aws-s3
+info:
+  name: AWS S3 Bucket Subdomain Takeover
+  author: AniipID
+  severity: high
+  description: Detects AWS S3 buckets that can be claimed (subdomain takeover)
+  tags: takeover,aws,s3,dns
+
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}"
+    matchers:
+      - type: word
+        words:
+          - "NoSuchBucket"
+          - "The specified bucket does not exist"
+          - "Code: NoSuchBucket"
+        condition: or
+        part: body
+
+---
+id: takeover-github-pages
+info:
+  name: GitHub Pages Subdomain Takeover
+  author: AniipID
+  severity: high
+  description: Detects unclaimed GitHub Pages subdomains
+  tags: takeover,github,pages,dns
+
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}"
+    matchers:
+      - type: word
+        words:
+          - "There isn't a GitHub Pages site here"
+          - "404 - File not found"
+          - "Repository not found"
+        condition: or
+        part: body
+
+---
+id: takeover-heroku
+info:
+  name: Heroku Subdomain Takeover
+  author: AniipID
+  severity: high
+  description: Detects unclaimed Heroku app subdomains
+  tags: takeover,heroku,dns
+
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}"
+    matchers:
+      - type: word
+        words:
+          - "No such app"
+          - "Heroku | No such app"
+          - "There is no app configured at that hostname"
+        condition: or
+        part: body
+
+---
+id: takeover-digitalocean
+info:
+  name: DigitalOcean App Platform Subdomain Takeover
+  author: AniipID
+  severity: high
+  description: Detects unclaimed DigitalOcean App Platform subdomains
+  tags: takeover,digitalocean,dns
+
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}"
+    matchers:
+      - type: word
+        words:
+          - "Domain does not exist"
+          - "DigitalOcean App Platform"
+          - "The app you're looking for doesn't exist"
+        condition: or
+        part: body

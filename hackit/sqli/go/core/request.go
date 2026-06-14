@@ -31,17 +31,19 @@ func (e *Engine) Request(payload string, param string) (string, int, http.Header
 		return "", 0, nil, err
 	}
 
-	// Smart parameter injection
+	// Smart parameter injection — APPEND payload to existing value, NEVER replace
 	if e.Opts.Method == "GET" || e.Opts.Method == "" {
 		q := u.Query()
 		if param != "" {
-			q.Set(param, payload)
+			existing := q.Get(param)
+			q.Set(param, existing+payload)
 		}
 		u.RawQuery = q.Encode()
 	} else {
 		if e.Opts.Data != "" && param != "" {
 			vals, _ := url.ParseQuery(e.Opts.Data)
-			vals.Set(param, payload)
+			existing := vals.Get(param)
+			vals.Set(param, existing+payload)
 			body = strings.NewReader(vals.Encode())
 		} else if e.Opts.Data != "" {
 			body = strings.NewReader(e.Opts.Data)
@@ -86,7 +88,9 @@ func (e *Engine) Request(payload string, param string) (string, int, http.Header
 		req.Header.Set("Referer", e.Opts.Referer)
 	}
 
+	startTime := time.Now()
 	resp, err := e.Client.Do(req)
+	elapsed := time.Since(startTime)
 	if err != nil {
 		e.Log.Critical(err.Error())
 		return "", 0, nil, err
@@ -97,6 +101,11 @@ func (e *Engine) Request(payload string, param string) (string, int, http.Header
 	if err != nil {
 		return "", 0, nil, err
 	}
+
+	// Store last response metadata
+	e.LastResponseHeaders = resp.Header
+	e.LastResponseBody = string(respBody)
+	e.LastResponseTime = elapsed
 
 	return string(respBody), len(respBody), resp.Header, nil
 }

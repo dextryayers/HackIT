@@ -1,0 +1,218 @@
+---
+import Layout from "../layouts/Layout.astro";
+import Navbar from "../components/Navbar.astro";
+import TerminalOutput from "../components/TerminalOutput.astro";
+import Button from "../components/ui/Button.astro";
+import Card from "../components/ui/Card.astro";
+---
+
+<Layout title="Plugins">
+  <Navbar slot="nav" active="/plugins" />
+
+  <div class="animate-fade-in">
+    <div class="flex items-center gap-4 mb-8">
+      <div class="w-12 h-12 rounded-2xl bg-card flex items-center justify-center text-white shadow-lg shadow-md shrink-0">
+        <i data-lucide="package" class="w-5 h-5"></i>
+      </div>
+      <div>
+        <h1 class="text-3xl font-extrabold tracking-tight bg-card bg-clip-text text-transparent">Plugin Engine</h1>
+        <p class="text-sm text-muted-foreground mt-0.5">Browse and run Lua &amp; Ruby attack scripts</p>
+      </div>
+    </div>
+
+    <!-- Tab System + Search + Stats -->
+    <Card class="p-5 mb-6">
+      <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-5">
+        <div class="flex items-center gap-1 bg-background rounded-xl p-1 border border-border">
+          <Button variant="ghost" id="tab-lua" onclick="switchTab('lua')" class="tab-btn active-tab">
+            <span class="w-5 h-5 rounded-md bg-card flex items-center justify-center text-[10px] font-bold text-white">L</span>
+            Lua
+            <span id="lua-count-badge" class="text-[11px] text-muted-foreground bg-muted/50 px-1.5 py-0.5 rounded-md">0</span>
+          </Button>
+          <Button variant="ghost" id="tab-ruby" onclick="switchTab('ruby')" class="tab-btn">
+            <span class="w-5 h-5 rounded-md bg-card flex items-center justify-center text-[10px] font-bold text-white">R</span>
+            Ruby
+            <span id="ruby-count-badge" class="text-[11px] text-muted-foreground bg-muted/50 px-1.5 py-0.5 rounded-md">0</span>
+          </Button>
+          <div id="tab-indicator" class="absolute h-9 rounded-lg bg-primary/10 transition-all duration-300 pointer-events-none"></div>
+        </div>
+        <div class="flex items-center gap-3 w-full sm:w-auto">
+          <div class="relative flex-1 sm:flex-initial">
+            <i data-lucide="search" class="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"></i>
+            <input type="text" id="plugin-search" placeholder="Search plugins..." oninput="filterPlugins()" class="flex h-10 w-full sm:w-64 rounded-xl border border-border bg-background pl-9 pr-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all" />
+          </div>
+          <span id="total-count-badge" class="text-[11px] text-muted-foreground bg-muted/50 px-3 py-1.5 rounded-full border border-border whitespace-nowrap">0 plugins loaded</span>
+        </div>
+      </div>
+
+      <!-- Plugin Cards Grid -->
+      <div id="plugin-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 min-h-[120px]">
+        <div class="skeleton h-16 w-full rounded-xl"></div>
+        <div class="skeleton h-16 w-full rounded-xl"></div>
+        <div class="skeleton h-16 w-full rounded-xl"></div>
+      </div>
+
+      <!-- Run Plugin Section -->
+      <div class="mt-5 pt-5 border-t border-border">
+        <form id="plugin-form" onsubmit="runPlugin(); return false">
+          <div class="flex flex-wrap gap-3 items-end">
+            <div class="flex-1 min-w-[200px]">
+              <label class="text-xs text-muted-foreground mb-1.5 block font-medium">Script</label>
+              <select id="plugin-script" class="flex h-10 w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"></select>
+            </div>
+            <div class="w-32">
+              <label class="text-xs text-muted-foreground mb-1.5 block font-medium">Engine</label>
+              <select id="plugin-engine" class="flex h-10 w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all">
+                <option value="lua">Lua</option>
+                <option value="ruby">Ruby</option>
+              </select>
+            </div>
+            <div>
+              <Button variant="gradient" size="sm" type="submit" id="plugin-submit" class="group/btn">
+                <span class="absolute inset-0 bg-card -translate-x-full group-hover/btn:translate-x-full transition-transform duration-700"></span>
+                <i data-lucide="play" class="w-4 h-4"></i>
+                Run
+              </Button>
+            </div>
+          </div>
+        </form>
+      </div>
+    </Card>
+
+    <TerminalOutput id="plugin-terminal" height="300px" label="PLUGIN OUTPUT" />
+  </div>
+</Layout>
+
+<script>
+let allLua = [];
+let allRuby = [];
+let currentTab = 'lua';
+
+function switchTab(tab) {
+  currentTab = tab;
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active-tab', 'bg-primary/10', 'text-primary'));
+  document.getElementById(`tab-${tab}`).classList.add('active-tab', 'bg-primary/10', 'text-primary');
+  renderGrid();
+}
+
+async function init() {
+  try {
+    const r = await fetch('/api/plugins');
+    const d = await r.json();
+    allLua = d.lua || [];
+    allRuby = d.ruby || [];
+    document.getElementById('lua-count-badge').textContent = allLua.length;
+    document.getElementById('ruby-count-badge').textContent = allRuby.length;
+    document.getElementById('total-count-badge').textContent = `${allLua.length + allRuby.length} plugins loaded`;
+    renderGrid();
+    const sel = document.getElementById('plugin-script');
+    sel.innerHTML = [
+      ...allLua.map(s => `<option value="${s}" data-engine="lua">${s}</option>`),
+      ...allRuby.map(s => `<option value="${s}" data-engine="ruby">${s}</option>`)
+    ].join('');
+    document.getElementById('tab-lua').classList.add('active-tab', 'bg-primary/10', 'text-primary');
+  } catch { /* ignore */ }
+}
+
+function renderGrid(filtered) {
+  const grid = document.getElementById('plugin-grid');
+  const list = filtered || (currentTab === 'lua' ? allLua : allRuby);
+  const engine = currentTab;
+  const isLua = engine === 'lua';
+
+  if (list.length === 0) {
+    grid.innerHTML = `<div class="col-span-full flex flex-col items-center py-10">
+      <div class="w-14 h-14 rounded-2xl bg-muted/50 flex items-center justify-center mb-3 border border-border">
+        <i data-lucide="package" class="w-6 h-6 text-muted-foreground"></i>
+      </div>
+      <p class="text-sm text-muted-foreground font-medium">No ${isLua ? 'Lua' : 'Ruby'} plugins found</p>
+      <p class="text-xs text-muted-foreground/60 mt-1">Add scripts to the plugin directory</p>
+    </div>`;
+    return;
+  }
+
+  grid.innerHTML = list.map(s => {
+    const accent = isLua ? 'from-primary to-cyan-600' : 'from-violet-500 to-pink-500';
+    const dotColor = isLua ? 'bg-primary' : 'bg-violet-500';
+    const shadow = isLua ? 'hover:shadow-[0_0_20px_rgba(0,212,255,0.15)]' : 'hover:shadow-[0_0_20px_rgba(176,38,255,0.15)]';
+    const borderHover = isLua ? 'hover:border-primary/30' : 'hover:border-violet-500/30';
+    return `<div class="group relative overflow-hidden rounded-xl bg-card border border-border ${borderHover} ${shadow} hover:-translate-y-0.5 transition-all duration-300 p-4 cursor-pointer" onclick="selectPlugin('${s}', '${engine}')">
+      <div class="absolute inset-0 bg-gradient-to-br from-${isLua ? 'primary' : 'violet-500'}/5 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
+      <div class="relative z-10 flex items-center justify-between gap-3">
+        <div class="flex items-center gap-3 min-w-0">
+          <span class="w-8 h-8 rounded-lg bg-gradient-to-br ${accent} flex items-center justify-center text-white text-[10px] font-bold shrink-0 shadow-lg">${isLua ? 'L' : 'R'}</span>
+          <div class="min-w-0">
+            <p class="text-sm font-medium text-foreground truncate">${s}</p>
+            <p class="text-[11px] text-muted-foreground/60 truncate">${engine}/${s}</p>
+          </div>
+        </div>
+        <span class="w-7 h-7 rounded-lg bg-muted/50 flex items-center justify-center text-muted-foreground group-hover:text-${isLua ? 'primary' : 'violet-500'} group-hover:bg-${isLua ? 'primary' : 'violet-500'}/10 transition-all duration-200 shrink-0">
+          <i data-lucide="play" class="w-3.5 h-3.5"></i>
+        </span>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function filterPlugins() {
+  const q = document.getElementById('plugin-search').value.toLowerCase();
+  const filtered = (currentTab === 'lua' ? allLua : allRuby).filter(s => s.toLowerCase().includes(q));
+  renderGrid(filtered);
+}
+
+function selectPlugin(name, engine) {
+  document.getElementById('plugin-script').value = name;
+  document.getElementById('plugin-engine').value = engine;
+}
+
+async function runPlugin() {
+  const script = document.getElementById('plugin-script').value;
+  const engine = document.getElementById('plugin-engine').value;
+  if (!script) {
+    HackitUI.toast({ icon: 'warning', title: 'No Script', text: 'Select a plugin script first' });
+    return;
+  }
+
+  const { isConfirmed } = await HackitUI.confirm({
+    title: 'Run Plugin?',
+    html: `<div class="text-sm"><span class="text-muted-foreground">Engine: </span><span class="text-primary font-semibold">${engine}</span><br><span class="text-muted-foreground">Script: </span><span class="text-foreground font-semibold">${script}</span></div>`,
+    icon: 'question',
+    confirmButtonColor: '#00d4ff',
+    cancelButtonColor: '#1e293b',
+    confirmButtonText: '<span class="flex items-center gap-2">Run</span>',
+    background: 'rgba(10,10,26,0.95)',
+    color: '#f8fafc',
+    backdrop: 'rgba(0,0,0,0.7)',
+    customClass: { popup: 'rounded-2xl border border-border' }
+  });
+  if (!isConfirmed) return;
+
+  const submitBtn = document.getElementById('plugin-submit');
+  submitBtn.disabled = true;
+  submitBtn.innerHTML = '<span class="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></span> Running...';
+
+  window.clearTerminal?.();
+  window.appendTerminal?.(`<span class="text-yellow-400">Running ${engine}: ${script}...</span>`);
+
+  try {
+    const r = await fetch('/api/plugin/run', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({engine, script})
+    });
+    const result = await r.json();
+    if (result.stdout) window.appendTerminal?.(result.stdout);
+    if (result.stderr) window.appendTerminal?.(`<span class="text-red-500">${result.stderr}</span>`);
+    window.appendTerminal?.(`<span class="text-emerald-500">[DONE]</span>`);
+    HackitUI.success('Plugin Executed');
+  } catch (e) {
+    window.appendTerminal?.(`<span class="text-red-500">Error: ${e.message}</span>`);
+    HackitUI.error('Execution Failed', e.message);
+  }
+
+  submitBtn.disabled = false;
+  submitBtn.innerHTML = '<i data-lucide="play" class="w-4 h-4"></i> Run';
+}
+
+init();
+</script>

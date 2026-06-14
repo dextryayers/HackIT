@@ -11,13 +11,14 @@ import (
 
 func main() {
 	opts := &core.Options{}
+	var outputFormat string
 
 	flag.StringVar(&opts.URL, "u", "", "URL target")
 	flag.StringVar(&opts.Data, "data", "", "Raw POST body")
 	flag.StringVar(&opts.Cookie, "cookie", "", "Custom cookie")
 	var headers string
 	flag.StringVar(&headers, "header", "", "Custom headers (comma separated)")
-	flag.StringVar(&opts.Agent, "agent", "HackIt/2.0", "Custom user-agent")
+	flag.StringVar(&opts.Agent, "agent", "HackIT/4.0", "Custom user-agent")
 	flag.StringVar(&opts.Referer, "referer", "", "Custom referer")
 	flag.StringVar(&opts.Method, "method", "GET", "HTTP method")
 	flag.IntVar(&opts.Timeout, "timeout", 10, "Timeout request")
@@ -38,6 +39,7 @@ func main() {
 	flag.BoolVar(&opts.OSDetect, "os-detect", false, "Detect OS backend")
 	flag.BoolVar(&opts.WAFDetect, "waf-detect", false, "Detect WAF")
 	flag.BoolVar(&opts.SmartDiff, "smart-diff", false, "Smart response compare")
+	flag.BoolVar(&opts.Baseline, "baseline", false, "Baseline")
 	flag.BoolVar(&opts.TechDetect, "tech-detect", false, "Detect all backend tech")
 
 	flag.BoolVar(&opts.ListDBs, "list-dbs", false, "Enumerate databases")
@@ -46,15 +48,31 @@ func main() {
 	flag.StringVar(&opts.Database, "db", "", "Target database")
 	flag.StringVar(&opts.Table, "table", "", "Target table")
 	flag.StringVar(&opts.Column, "column", "", "Target column")
-	flag.BoolVar(&opts.Schema, "schema", false, "Dump structure only")
+	flag.BoolVar(&opts.Schema, "schema", false, "Dump schema only")
 	flag.StringVar(&opts.DumpTable, "dump-table", "", "Dump specific table")
 	flag.BoolVar(&opts.DumpAll, "dump-all", false, "Dump everything")
 
-	flag.IntVar(&opts.Verbose, "verbose", 0, "Verbose level")
+	flag.BoolVar(&opts.PrivEsc, "priv-esc", false, "Privilege escalation")
+	flag.BoolVar(&opts.OSAccess, "os-access", false, "OS command execution")
+	flag.BoolVar(&opts.ExfilDNS, "exfil-dns", false, "OOB DNS exfiltration")
+	flag.BoolVar(&opts.ExfilHTTP, "exfil-http", false, "OOB HTTP exfiltration")
 	flag.BoolVar(&opts.NoColor, "no-color", false, "Disable color")
+	flag.StringVar(&outputFormat, "output-format", "json", "Output format (json/csv/txt)")
+	var tamperList string
+	flag.StringVar(&tamperList, "tamper", "", "Tamper scripts (comma separated)")
+	flag.StringVar(&opts.Encode, "encode", "", "Encoding type (URL/double/base64)")
+	flag.BoolVar(&opts.CountRows, "count-rows", false, "Count rows in table")
+	flag.StringVar(&opts.Search, "search", "", "Search keyword in database")
+	flag.IntVar(&opts.Verbose, "verbose", 1, "Verbose level")
+	flag.IntVar(&opts.Verbose, "v", 1, "Verbose level (shorthand)")
 	flag.IntVar(&opts.Retry, "retry", 3, "Retry count")
 
 	flag.Parse()
+
+	if tamperList != "" {
+		opts.Tamper = strings.Split(tamperList, ",")
+	}
+	_ = outputFormat // handled by Python layer
 
 	if opts.URL == "" {
 		fmt.Println(`{"error": "URL is required"}`)

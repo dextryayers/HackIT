@@ -1,0 +1,29 @@
+---
+export interface Props {
+  variant?: 'default' | 'primary' | 'destructive' | 'ghost' | 'outline' | 'gradient';
+  size?: 'sm' | 'md' | 'lg';
+  class?: string;
+  [key: string]: any;
+}
+
+const { variant = 'default', size = 'md', class: className = '', ...rest } = Astro.props;
+
+const variantClasses = {
+  default: 'bg-card border border-border text-muted-foreground hover:text-foreground hover:border-primary/40',
+  primary: 'bg-primary text-primary-foreground hover:shadow-md',
+  destructive: 'bg-destructive text-destructive-foreground hover:bg-destructive/90',
+  ghost: 'text-muted-foreground hover:text-foreground hover:bg-card',
+  outline: 'border border-border bg-transparent text-muted-foreground hover:text-foreground hover:border-primary/40',
+  gradient: 'bg-primary text-white hover:shadow-md',
+};
+
+const sizeClasses = {
+  sm: 'px-3 py-1.5 text-xs rounded-lg',
+  md: 'px-4 py-2.5 text-sm rounded-xl',
+  lg: 'px-6 py-3 text-base rounded-xl',
+};
+---
+
+<button class="inline-flex items-center justify-center gap-2 font-medium transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-primary/50 {variantClasses[variant]} {sizeClasses[size]} {className}" {...rest}>
+  <slot />
+</button>

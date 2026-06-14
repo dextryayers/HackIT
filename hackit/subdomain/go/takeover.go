@@ -3,46 +3,36 @@ package main
 import (
 	"crypto/tls"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net"
 	"net/http"
 	"runtime"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 	"unsafe"
 )
 
-var (
-	rustLib              *syscall.LazyDLL
-	rustCheckSubTakeover *syscall.LazyProc
-	rustResolveDNS       *syscall.LazyProc
-	rustResolveDNSBatch  *syscall.LazyProc
-	rustOSINTScan        *syscall.LazyProc
-	rustGetTitle         *syscall.LazyProc
-)
-
-func init() {
-	// Initialize Rust FFI for Windows
-	if runtime.GOOS == "windows" {
-		rustLib = syscall.NewLazyDLL("rust_engine/target/release/subdomain_rust_engine.dll")
-		rustCheckSubTakeover = rustLib.NewProc("rust_check_subdomain_takeover")
-		rustResolveDNS = rustLib.NewProc("rust_resolve_dns")
-		rustResolveDNSBatch = rustLib.NewProc("rust_resolve_dns_batch")
-		rustOSINTScan = rustLib.NewProc("rust_osint_scan")
-		rustGetTitle = rustLib.NewProc("rust_get_title")
-	}
+type lazyProc interface {
+	Call(a ...uintptr) (r1, r2 uintptr, lastErr error)
+	Find() error
 }
 
-// Signature represents a takeover fingerprint
+var (
+	rustCheckSubTakeover lazyProc
+	rustResolveDNS       lazyProc
+	rustResolveDNSBatch  lazyProc
+	rustOSINTScan        lazyProc
+	rustGetTitle         lazyProc
+	rustGetCname         lazyProc
+)
+
 type Signature struct {
 	Service string
 	CNAME   []string
 	Content string
 }
 
-// Enhanced Industrial Signatures (v2.5)
 var signatures = []Signature{
 	{Service: "GitHub Pages", CNAME: []string{"github.io", "github.com"}, Content: "There isn't a GitHub Pages site here."},
 	{Service: "Heroku", CNAME: []string{"herokuapp.com"}, Content: "Heroku | Welcome to your new app!"},
@@ -75,11 +65,32 @@ var signatures = []Signature{
 	{Service: "Cloudfront", CNAME: []string{"cloudfront.net"}, Content: "Bad request. We can't connect to the server for this app or website at this time."},
 	{Service: "Acquia", CNAME: []string{"acquia-test.co"}, Content: "Site not found"},
 	{Service: "Fastly", CNAME: []string{"fastly.net"}, Content: "Fastly error: unknown domain"},
+	{Service: "Vercel", CNAME: []string{"vercel.app", "vercel.com"}, Content: "The deployment could not be found"},
 }
 
 func checkTakeovers(results []*Result, concurrency int) {
-	fmt.Println("[*] Running Advanced Subdomain Takeover Analysis...")
+	fmt.Println("[*] Running Subdomain Takeover Analysis...")
 
+	var takeoverDomains []string
+	for _, r := range results {
+		takeoverDomains = append(takeoverDomains, r.Subdomain)
+	}
+
+	// Linux: batch via Rust binary
+	if runtime.GOOS == "linux" {
+		if len(takeoverDomains) > 0 {
+			vulnMap := linuxRustCheckSubTakeover(takeoverDomains)
+			for _, r := range results {
+				if vuln, ok := vulnMap[r.Subdomain]; ok {
+					r.TakeoverVuln = vuln
+					fmt.Printf("\033[1;31m[!] TAKEOVER: %s [%s]\033[0m\n", r.Subdomain, vuln)
+				}
+			}
+		}
+		return
+	}
+
+	// Windows: per-domain with Rust FFI + Go fallback
 	sem := make(chan bool, concurrency)
 	var wg sync.WaitGroup
 
@@ -90,7 +101,6 @@ func checkTakeovers(results []*Result, concurrency int) {
 			defer wg.Done()
 			defer func() { <-sem }()
 
-			// 1. Rust-powered Takeover Check (Aurat Presisi)
 			if rustCheckSubTakeover != nil && rustCheckSubTakeover.Find() == nil {
 				cDomain := []byte(res.Subdomain + "\x00")
 				ptr, _, _ := rustCheckSubTakeover.Call(uintptr(unsafe.Pointer(&cDomain[0])))
@@ -105,7 +115,6 @@ func checkTakeovers(results []*Result, concurrency int) {
 				}
 			}
 
-			// 2. Fallback to Go Implementation (Recursive CNAME Tracking)
 			trackCNAME(res)
 		}(r)
 	}
@@ -115,7 +124,7 @@ func checkTakeovers(results []*Result, concurrency int) {
 func trackCNAME(res *Result) {
 	domain := res.Subdomain
 	maxRecursion := 3
-	
+
 	for i := 0; i < maxRecursion; i++ {
 		cname, err := net.LookupCNAME(domain)
 		if err != nil {
@@ -154,8 +163,7 @@ func checkContent(domain string, signature string) bool {
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 		},
 	}
-	
-	// Try HTTPS first, then HTTP
+
 	protocols := []string{"https://", "http://"}
 	for _, proto := range protocols {
 		resp, err := client.Get(proto + domain)
@@ -163,7 +171,7 @@ func checkContent(domain string, signature string) bool {
 			continue
 		}
 		defer resp.Body.Close()
-		body, err := ioutil.ReadAll(resp.Body)
+		body, err := io.ReadAll(resp.Body)
 		if err == nil && strings.Contains(string(body), signature) {
 			return true
 		}

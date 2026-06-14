@@ -2,12 +2,12 @@ package main
 
 import (
 	"fmt"
+	"runtime"
 	"strings"
 	"time"
 	"unsafe"
 )
 
-// runPassive handles passive subdomain enumeration
 func runPassive(domain string, ch chan<- []string, verbose bool) {
 	sources := []ProviderFunc{
 		queryCrtSh,
@@ -74,7 +74,6 @@ func runPassive(domain string, ch chan<- []string, verbose bool) {
 		queryBitbucket,
 		querySourceForge,
 		queryCertDB,
-		querySSLMate,
 		queryBinaryEdge,
 		queryDNSDB,
 		queryPassiveTotal,
@@ -83,28 +82,45 @@ func runPassive(domain string, ch chan<- []string, verbose bool) {
 		queryGrepApp,
 	}
 
-	// 1. Rust OSINT Engine (Super Fast)
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		if rustOSINTScan != nil && rustOSINTScan.Find() == nil {
-			cDomain := []byte(domain + "\x00")
-			ptr, _, _ := rustOSINTScan.Call(uintptr(unsafe.Pointer(&cDomain[0])))
-			if ptr != 0 {
-				rustRes := string(CStrToGo(ptr))
-				if rustRes != "" {
-					subs := strings.Split(rustRes, ",")
-					if verbose {
-						fmt.Printf("[*] Rust OSINT Engine found %d subdomains\n", len(subs))
+	// 1. Linux Rust OSINT Engine
+	if runtime.GOOS == "linux" {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			rustSubs := linuxRustOSINTScan(domain)
+			if len(rustSubs) > 0 {
+				if verbose {
+					fmt.Printf("[*] Rust OSINT Engine found %d subdomains\n", len(rustSubs))
+				}
+				ch <- rustSubs
+			}
+		}()
+	}
+
+	// 2. Windows Rust OSINT Engine
+	if runtime.GOOS == "windows" {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if rustOSINTScan != nil && rustOSINTScan.Find() == nil {
+				cDomain := []byte(domain + "\x00")
+				ptr, _, _ := rustOSINTScan.Call(uintptr(unsafe.Pointer(&cDomain[0])))
+				if ptr != 0 {
+					rustRes := string(CStrToGo(ptr))
+					if rustRes != "" {
+						subs := strings.Split(rustRes, ",")
+						if verbose {
+							fmt.Printf("[*] Rust OSINT Engine found %d subdomains\n", len(subs))
+						}
+						ch <- subs
 					}
-					ch <- subs
 				}
 			}
-		}
-	}()
+		}()
+	}
 
-	// 2. Parallel sources with concurrency limit
-	concurrency := 30 // Increased concurrency for speed
+	// 3. Go-based passive sources with concurrency limit
+	concurrency := 30
 	sem := make(chan struct{}, concurrency)
 
 	for _, source := range sources {
@@ -127,13 +143,11 @@ func runPassive(domain string, ch chan<- []string, verbose bool) {
 					}
 					ch <- res
 				}
-			case <-time.After(20 * time.Second): // Reduced timeout for speed
-				return
+			case <-time.After(20 * time.Second):
 			}
 		}(source)
 	}
 
-	// Closer routine
 	go func() {
 		wg.Wait()
 		close(ch)

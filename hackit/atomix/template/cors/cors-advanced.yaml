@@ -1,0 +1,115 @@
+id: cors-multiple-origins
+info:
+  name: CORS Multiple Origin Reflection
+  author: AniipID
+  severity: medium
+  description: Tests CORS reflection of multiple origins
+  tags: cors,misconfig,reflection
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/api"
+      - "{{BaseURL}}/api/v1"
+    headers:
+      Origin: "https://evil.com https://attacker.com"
+    matchers:
+      - type: word
+        words:
+          - "Access-Control-Allow-Origin: https://evil.com"
+        part: header
+        name: "cors-multi-reflect"
+---
+id: cors-custom-header
+info:
+  name: CORS Custom Header Exposure
+  author: AniipID
+  severity: medium
+  description: Tests if CORS exposes custom headers to unauthorized origins
+  tags: cors,headers,misconfig
+requests:
+  - method: OPTIONS
+    path:
+      - "{{BaseURL}}"
+      - "{{BaseURL}}/api"
+    headers:
+      Origin: "https://evil.com"
+      Access-Control-Request-Method: "GET"
+    matchers:
+      - type: word
+        words:
+          - "Access-Control-Expose-Headers:"
+        part: header
+        name: "cors-custom-header-exposed"
+---
+id: cors-methods-all
+info:
+  name: CORS All Methods Accepted
+  author: AniipID
+  severity: low
+  description: Tests if all HTTP methods are allowed via CORS preflight
+  tags: cors,methods,misconfig
+requests:
+  - method: OPTIONS
+    path:
+      - "{{BaseURL}}/api"
+    headers:
+      Origin: "https://test.com"
+      Access-Control-Request-Method: "DELETE"
+    matchers:
+      - type: word
+        words:
+          - "Access-Control-Allow-Methods:.*DELETE"
+        part: header
+        name: "cors-delete-allowed"
+  - method: OPTIONS
+    path:
+      - "{{BaseURL}}/api"
+    headers:
+      Origin: "https://test.com"
+      Access-Control-Request-Method: "PATCH"
+    matchers:
+      - type: word
+        words:
+          - "Access-Control-Allow-Methods:.*PATCH"
+        part: header
+        name: "cors-patch-allowed"
+---
+id: cors-subdomain-takeover
+info:
+  name: CORS Subdomain Takeover Test
+  author: AniipID
+  severity: high
+  description: Tests CORS with subdomain-based trust for takeover potential
+  tags: cors,subdomain,takeover
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}"
+    headers:
+      Origin: "https://nonexistent-subdomain.evil.com"
+    matchers:
+      - type: word
+        words:
+          - "Access-Control-Allow-Origin: https://nonexistent-subdomain.evil.com"
+        part: header
+        name: "cors-subdomain-trust"
+---
+id: cors-trusted-prefix
+info:
+  name: CORS Trusted Prefix Bypass
+  author: AniipID
+  severity: high
+  description: Tests CORS prefix matching bypass (e.g. evil.com matching evil.com.attacker.com)
+  tags: cors,bypass,prefix
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}"
+    headers:
+      Origin: "https://example.com.evil.com"
+    matchers:
+      - type: word
+        words:
+          - "Access-Control-Allow-Origin: https://example.com.evil.com"
+        part: header
+        name: "cors-prefix-bypass"

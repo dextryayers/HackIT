@@ -1,0 +1,75 @@
+id: open-redirect-param
+info:
+  name: Open Redirect via Parameter
+  author: AniipID
+  severity: medium
+  description: Detects open redirect in common redirect parameters
+  tags: redirect,open-redirect
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?url=https://evil.com"
+      - "{{BaseURL}}?next=https://evil.com"
+      - "{{BaseURL}}?redirect=https://evil.com"
+      - "{{BaseURL}}?redirect_uri=https://evil.com"
+      - "{{BaseURL}}?return=https://evil.com"
+      - "{{BaseURL}}?return_to=https://evil.com"
+      - "{{BaseURL}}?return_url=https://evil.com"
+      - "{{BaseURL}}?goto=https://evil.com"
+      - "{{BaseURL}}?target=https://evil.com"
+      - "{{BaseURL}}?to=https://evil.com"
+      - "{{BaseURL}}?out=https://evil.com"
+      - "{{BaseURL}}?view=https://evil.com"
+      - "{{BaseURL}}?dir=https://evil.com"
+      - "{{BaseURL}}?continue=https://evil.com"
+    matchers:
+      - type: word
+        words:
+          - "Location: https://evil.com"
+          - "Location: http://evil.com"
+        part: header
+        name: "open-redirect-confirmed"
+---
+id: open-redirect-protocol
+info:
+  name: Open Redirect via Protocol Manipulation
+  author: AniipID
+  severity: medium
+  description: Detects open redirect via URL protocol manipulation
+  tags: redirect,open-redirect,waf-bypass
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?url=//evil.com"
+      - "{{BaseURL}}?url=\\evil.com"
+      - "{{BaseURL}}?url=https://evil.com@trusted.com"
+      - "{{BaseURL}}?url=https://evil.com%2F%2Ftrusted.com"
+      - "{{BaseURL}}?url=https://trusted.com.evil.com"
+    matchers:
+      - type: word
+        words:
+          - "Location: //evil.com"
+          - "Location: \\evil.com"
+          - "Location: https://evil.com"
+        part: header
+        name: "protocol-redirect"
+---
+id: open-redirect-dom-based
+info:
+  name: Open Redirect via DOM
+  author: AniipID
+  severity: medium
+  description: Detects client-side open redirect via DOM manipulation
+  tags: redirect,dom,open-redirect
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?url=javascript:alert(1)"
+      - "{{BaseURL}}?url=data:text/html,<script>alert(1)</script>"
+    matchers:
+      - type: word
+        words:
+          - "javascript:alert"
+          - "data:text/html"
+        condition: or
+        name: "dom-redirect"

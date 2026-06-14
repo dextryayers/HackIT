@@ -1,0 +1,344 @@
+---
+import Layout from "../layouts/Layout.astro";
+import Navbar from "../components/Navbar.astro";
+import TerminalOutput from "../components/TerminalOutput.astro";
+import Button from "../components/ui/Button.astro";
+import Card from "../components/ui/Card.astro";
+import Input from "../components/ui/Input.astro";
+---
+
+<Layout title="Crack">
+  <Navbar slot="nav" active="/crack" />
+
+  <div class="animate-fade-in">
+    <div class="flex items-center gap-4 mb-8">
+      <div class="w-12 h-12 rounded-2xl bg-card flex items-center justify-center text-white shadow-lg shadow-amber-400/20 shrink-0">
+        <i data-lucide="key" class="w-5 h-5"></i>
+      </div>
+      <div>
+        <h1 class="text-3xl font-extrabold tracking-tight bg-card bg-clip-text text-transparent">Cracking Engine</h1>
+        <p class="text-sm text-muted-foreground mt-0.5">Dictionary attack against captured handshake / PMKID hashes</p>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+      <!-- Crack Settings Card -->
+      <Card variant="gradient" class="group hover:border-amber-400/20 hover:shadow-md">
+        <div class="absolute inset-0 bg-gradient-to-br from-amber-400/5 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
+        <div class="absolute top-0 left-0 w-full h-0.5 bg-card
+        <div class="relative z-10 p-6">
+          <div class="flex items-center gap-3 mb-6">
+            <div class="w-10 h-10 rounded-xl bg-card flex items-center justify-center text-white shadow-md">
+              <i data-lucide="lock" class="w-4 h-4"></i>
+            </div>
+            <div>
+              <h2 class="text-sm font-bold text-foreground">Crack Settings</h2>
+              <p class="text-[11px] text-muted-foreground">Configure hash, wordlist, and rules</p>
+            </div>
+          </div>
+
+          <form id="crack-form" onsubmit="runCrack(); return false">
+            <div class="space-y-4">
+              <div>
+                <label class="text-xs text-muted-foreground mb-1.5 block font-medium">Hash file <span class="text-muted-foreground/50">(.hc22000 / .hccapx)</span></label>
+                <div class="flex gap-2">
+                  <input type="text" name="hashfile" class="flex h-10 w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-amber-400/50 focus:border-amber-400 transition-all font-mono" placeholder="/path/to/hash.hc22000" />
+                  <Button variant="outline" type="button" onclick="browseHashFile()">
+                    <i data-lucide="upload" class="w-3.5 h-3.5"></i>
+                    Browse
+                  </Button>
+                </div>
+              </div>
+              <div>
+                <label class="text-xs text-muted-foreground mb-1.5 block font-medium">Wordlist</label>
+                <div class="flex gap-2">
+                  <input type="text" name="wordlist" id="wordlist-input" class="flex h-10 w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-amber-400/50 focus:border-amber-400 transition-all font-mono" placeholder="/usr/share/wordlists/rockyou.txt" />
+                  <Button variant="outline" type="button" onclick="browseWordlist()">
+                    <i data-lucide="upload" class="w-3.5 h-3.5"></i>
+                    Browse
+                  </Button>
+                </div>
+              </div>
+
+              <!-- Rules Toggle -->
+              <div class="flex items-center justify-between p-3 rounded-xl bg-muted/30 border border-border">
+                <div class="flex items-center gap-2.5">
+                  <i data-lucide="list" class="w-4 h-4 text-amber-400"></i>
+                  <div>
+                    <span class="text-sm text-foreground font-medium">Rules Engine</span>
+                    <p class="text-[11px] text-muted-foreground">Apply mangling rules during cracking</p>
+                  </div>
+                </div>
+                <label class="relative inline-flex items-center cursor-pointer">
+                  <input type="checkbox" id="rules-toggle" class="sr-only peer" />
+                  <div class="w-11 h-6 rounded-full bg-muted-foreground/30 peer-checked:bg-amber-400/60 peer-focus:ring-2 peer-focus:ring-amber-400/50 transition-all duration-300 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all after:duration-300 peer-checked:after:translate-x-full"></div>
+                </label>
+              </div>
+
+              <!-- Rules input (shown when toggle is on) -->
+              <div id="rules-input-wrapper" class="hidden animate-slide-down">
+                <div class="flex gap-2">
+                  <input type="text" name="rules" class="flex h-10 w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-amber-400/50 focus:border-amber-400 transition-all font-mono" placeholder="best64.rule" />
+                  <button type="button" onclick="document.querySelector('[name=rules]').value = 'best64.rule'" class="shrink-0 h-10 px-3 rounded-xl border border-border bg-background text-xs text-muted-foreground hover:text-foreground transition-all">best64</button>
+                </div>
+              </div>
+
+              <!-- GPU Acceleration -->
+              <div class="flex items-center justify-between p-3 rounded-xl bg-muted/30 border border-border">
+                <div class="flex items-center gap-2.5">
+                  <i data-lucide="cpu" class="w-4 h-4 text-emerald-500"></i>
+                  <div>
+                    <span class="text-sm text-foreground font-medium">GPU Acceleration</span>
+                    <p class="text-[11px] text-muted-foreground">Use hashcat for GPU-powered cracking</p>
+                  </div>
+                </div>
+                <span id="gpu-status-badge" class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-muted/50 border border-border text-muted-foreground">
+                  <span class="w-1.5 h-1.5 rounded-full bg-muted-foreground/50"></span>
+                  Checking...
+                </span>
+              </div>
+
+              <Button variant="gradient" type="submit" id="crack-submit" class="w-full group/btn">
+                <span class="absolute inset-0 bg-card -translate-x-full group-hover/btn:translate-x-full transition-transform duration-700"></span>
+                <i data-lucide="terminal" class="w-4 h-4"></i>
+                <span>Start Cracking</span>
+              </Button>
+            </div>
+          </form>
+        </div>
+      </Card>
+
+      <!-- Wordlists + Progress + Results -->
+      <div class="space-y-6">
+        <!-- Wordlists -->
+        <Card variant="gradient" class="group hover:border-primary/20">
+          <div class="absolute top-0 left-0 w-full h-0.5 bg-card
+          <div class="relative z-10 p-6">
+            <div class="flex items-center gap-3 mb-4">
+              <div class="w-8 h-8 rounded-lg bg-card flex items-center justify-center text-white">
+                <i data-lucide="search" class="w-4 h-4"></i>
+              </div>
+              <h2 class="text-sm font-bold text-foreground">Available Wordlists</h2>
+            </div>
+            <div id="wordlist-results" class="text-sm text-muted-foreground">
+              <div class="space-y-2">
+                <div class="skeleton h-8 w-full rounded-xl"></div>
+                <div class="skeleton h-8 w-5/6 rounded-xl"></div>
+                <div class="skeleton h-8 w-3/4 rounded-xl"></div>
+              </div>
+            </div>
+          </div>
+        </Card>
+
+        <!-- Progress -->
+        <Card variant="gradient" id="crack-progress-wrapper" class="p-6 hidden animate-slide-up">
+          <div class="flex items-center justify-between mb-3">
+            <span class="text-xs text-muted-foreground font-medium flex items-center gap-2">
+              <i data-lucide="terminal" class="w-3.5 h-3.5 text-amber-400"></i>
+              Cracking Progress
+            </span>
+            <span id="crack-progress-pct" class="text-sm font-bold text-amber-400 font-mono">0%</span>
+          </div>
+          <div class="w-full h-2.5 rounded-full bg-muted/50 overflow-hidden">
+            <div id="crack-progress-bar" class="h-full rounded-full bg-card transition-all duration-300" style="width: 0%"></div>
+          </div>
+          <p id="crack-progress-status" class="text-xs text-muted-foreground mt-2">Initializing crack...</p>
+        </Card>
+
+        <!-- Cracked Keys Results -->
+        <Card variant="gradient" id="crack-results" class="overflow-hidden hidden animate-slide-up">
+          <div class="px-5 py-3 border-b border-border flex items-center gap-2.5">
+            <i data-lucide="key" class="w-4 h-4 text-emerald-500"></i>
+            <span class="text-xs font-semibold text-foreground uppercase tracking-wider">Cracked Keys</span>
+          </div>
+          <div class="p-5">
+            <div class="overflow-x-auto rounded-xl border border-border">
+              <table class="w-full text-xs">
+                <thead>
+                  <tr class="bg-muted/50 text-muted-foreground uppercase tracking-wider text-[11px]">
+                    <th class="px-3 py-2.5 text-left font-semibold">BSSID</th>
+                    <th class="px-3 py-2.5 text-left font-semibold">ESSID</th>
+                    <th class="px-3 py-2.5 text-left font-semibold">Key</th>
+                    <th class="px-3 py-2.5 text-left font-semibold">Algorithm</th>
+                  </tr>
+                </thead>
+                <tbody id="cracked-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+        </Card>
+      </div>
+    </div>
+
+    <TerminalOutput id="crack-terminal" height="300px" label="CRACK OUTPUT" />
+  </div>
+</Layout>
+
+<script>
+async function checkGPU() {
+  const badge = document.getElementById('gpu-status-badge');
+  try {
+    const r = await fetch('/api/crack/gpu-status');
+    if (!r.ok) throw new Error('GPU check failed');
+    const d = await r.json();
+    if (d.available) {
+      badge.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse-soft"></span> GPU Ready (${d.device || 'hashcat'})`;
+      badge.className = 'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-emerald-500/10 border border-emerald-500/30 text-emerald-500';
+    } else {
+      badge.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-muted-foreground/50"></span> CPU Only`;
+      badge.className = 'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-muted/50 border border-border text-muted-foreground';
+    }
+  } catch {
+    badge.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-red-500/50"></span> Unavailable`;
+    badge.className = 'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-red-500/10 border border-red-500/30 text-red-500';
+  }
+}
+
+document.getElementById('rules-toggle')?.addEventListener('change', function() {
+  const wrapper = document.getElementById('rules-input-wrapper');
+  if (this.checked) {
+    wrapper.classList.remove('hidden');
+  } else {
+    wrapper.classList.add('hidden');
+  }
+});
+
+function browseHashFile() {
+  const input = document.querySelector('[name=hashfile]');
+  input.value = '/path/to/hash.hc22000';
+  input.focus();
+}
+
+function browseWordlist() {
+  const input = document.getElementById('wordlist-input');
+  input.value = '/usr/share/wordlists/rockyou.txt';
+  input.focus();
+}
+
+async function runCrack() {
+  const f = document.getElementById('crack-form');
+  const fd = new FormData(f);
+  const data = {};
+  for (const [k, v] of fd) data[k] = v;
+  delete data.hashcat;
+
+  if (!data.hashfile || !data.wordlist) {
+    HackitUI.toast({ icon: 'warning', title: 'Missing Fields', text: 'Hash file and wordlist are required' });
+    return;
+  }
+
+  const { isConfirmed } = await HackitUI.confirm({
+    title: 'Start Cracking?',
+    html: `<div class="text-sm text-left space-y-1">
+      <p><span class="text-muted-foreground">Hash: </span><span class="text-foreground font-mono font-semibold">${data.hashfile}</span></p>
+      <p><span class="text-muted-foreground">Wordlist: </span><span class="text-foreground font-mono font-semibold">${data.wordlist}</span></p>
+      <p><span class="text-muted-foreground">Rules: </span><span class="text-foreground font-mono">${data.rules || '(none)'}</span></p>
+    </div>`,
+    icon: 'warning',
+    confirmButtonColor: '#ffd700',
+    cancelButtonColor: '#1e293b',
+    confirmButtonText: '<span class="flex items-center gap-2">Start Crack</span>',
+    background: 'rgba(10,10,26,0.95)',
+    color: '#f8fafc',
+    backdrop: 'rgba(0,0,0,0.7)',
+    customClass: { popup: 'rounded-2xl border border-border' }
+  });
+  if (!isConfirmed) return;
+
+  const submitBtn = document.getElementById('crack-submit');
+  const progressWrapper = document.getElementById('crack-progress-wrapper');
+  const progressBar = document.getElementById('crack-progress-bar');
+  const progressPct = document.getElementById('crack-progress-pct');
+  const progressStatus = document.getElementById('crack-progress-status');
+
+  submitBtn.disabled = true;
+  submitBtn.innerHTML = '<span class="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></span> Cracking...';
+  progressWrapper.classList.remove('hidden');
+
+  window.clearTerminal?.();
+  window.appendTerminal?.('<span class="text-yellow-400">Starting crack...</span>');
+  window.appendTerminal?.(`<span class="text-muted-foreground">Hash: ${data.hashfile}</span>`);
+  window.appendTerminal?.(`<span class="text-muted-foreground">Wordlist: ${data.wordlist}</span>`);
+
+  // Simulated progress
+  let progress = 0;
+  const progressInterval = setInterval(() => {
+    progress = Math.min(progress + Math.random() * 8, 90);
+    progressBar.style.width = progress + '%';
+    progressPct.textContent = Math.round(progress) + '%';
+    if (progress < 30) progressStatus.textContent = 'Loading wordlist...';
+    else if (progress < 60) progressStatus.textContent = 'Cracking in progress...';
+    else if (progress < 90) progressStatus.textContent = 'Finalizing...';
+  }, 800);
+
+  try {
+    const r = await fetch('/api/crack/run', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(data)
+    });
+    const result = await r.json();
+
+    clearInterval(progressInterval);
+
+    if (result.stdout) window.appendTerminal?.(result.stdout);
+    if (result.stderr) window.appendTerminal?.(`<span class="text-red-500">${result.stderr}</span>`);
+
+    const success = result.code === 0;
+    window.appendTerminal?.(`<span class="text-${success ? 'emerald-500' : 'red-500'}">[DONE] exit code: ${result.code}</span>`);
+
+    progressBar.style.width = '100%';
+    progressPct.textContent = '100%';
+    progressStatus.textContent = success ? 'Crack completed successfully' : 'Crack failed';
+
+    if (result.cracked && result.cracked.length) {
+      const tbody = document.getElementById('cracked-tbody');
+      tbody.innerHTML = result.cracked.map((c, i) =>
+        `<tr class="${i % 2 === 0 ? 'bg-transparent' : 'bg-muted/20'} border-b border-border/40">
+          <td class="px-3 py-2.5 font-mono text-foreground font-medium">${c.bssid || '-'}</td>
+          <td class="px-3 py-2.5 text-foreground">${c.essid || '-'}</td>
+          <td class="px-3 py-2.5 font-mono text-emerald-500 font-bold">${c.key || c.password || ''}</td>
+          <td class="px-3 py-2.5 text-muted-foreground">${c.algorithm || 'WPA/WPA2'}</td>
+        </tr>`
+      ).join('');
+      document.getElementById('crack-results').classList.remove('hidden');
+    }
+
+    if (success && result.cracked?.length) {
+      HackitUI.success(`${result.cracked.length} Key${result.cracked.length > 1 ? 's' : ''} Cracked`);
+    } else if (success) {
+      HackitUI.info('Crack Complete', 'No keys were cracked');
+    } else {
+      HackitUI.confirm({ icon: 'error', title: 'Crack Failed', text: result.stderr || 'Unknown error', showCancelButton: false, confirmButtonColor: '#ff0040' });
+    }
+  } catch (e) {
+    clearInterval(progressInterval);
+    window.appendTerminal?.(`<span class="text-red-500">Error: ${e.message}</span>`);
+    progressStatus.textContent = 'Error: ' + e.message;
+    HackitUI.confirm({ icon: 'error', title: 'Crack Failed', text: e.message, showCancelButton: false, confirmButtonColor: '#ff0040' });
+  }
+
+  submitBtn.disabled = false;
+  submitBtn.innerHTML = '<i data-lucide="terminal" class="w-4 h-4"></i> Start Cracking';
+}
+
+checkGPU();
+
+fetch('/api/wordlists').then(r => r.json()).then(d => {
+  const el = document.getElementById('wordlist-results');
+  const wl = d.wordlists || [];
+  if (wl.length === 0) {
+    el.innerHTML = '<div class="text-center py-8"><p class="text-muted-foreground">No wordlists found</p><p class="text-xs text-muted-foreground/60 mt-1">Try installing rockyou.txt or custom wordlists</p></div>';
+    return;
+  }
+  el.innerHTML = `<div class="space-y-1">${wl.map(w =>
+    `<div class="flex items-center justify-between py-2.5 px-3 rounded-xl hover:bg-muted/30 transition-colors cursor-pointer hover:border-primary/20 border border-transparent" onclick="document.getElementById('wordlist-input').value='${(w.path || w.name).replace(/'/g, "\\'")}'">
+      <span class="text-sm text-foreground">${w.name}</span>
+      <span class="text-xs text-muted-foreground">${w.size || ''}</span>
+    </div>`
+  ).join('')}</div>`;
+}).catch(() => {
+  const el = document.getElementById('wordlist-results');
+  el.innerHTML = '<div class="text-center py-8 text-red-500">Failed to load wordlists</div>';
+});
+</script>

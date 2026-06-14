@@ -1,0 +1,127 @@
+id: basic-simple-ping
+info:
+  name: Simple ICMP Ping Back
+  author: AniipID
+  severity: low
+  description: Tests if basic command execution is possible via ping
+  tags: basic,exec,ping
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?ping=127.0.0.1"
+      - "{{BaseURL}}?host=127.0.0.1"
+      - "{{BaseURL}}?ip=127.0.0.1"
+    matchers:
+      - type: word
+        words:
+          - "PING"
+          - "ping statistics"
+          - "1 packets transmitted"
+        condition: or
+        name: "ping-reflected"
+---
+id: basic-default-cred
+info:
+  name: Default Credential Check
+  author: AniipID
+  severity: high
+  description: Checks for common default credentials on login pages
+  tags: basic,auth,default-creds
+requests:
+  - method: POST
+    path:
+      - "{{BaseURL}}/login"
+      - "{{BaseURL}}/admin/login"
+      - "{{BaseURL}}/wp-login.php"
+    body: "username=admin&password=admin"
+    headers:
+      Content-Type: "application/x-www-form-urlencoded"
+    matchers:
+      - type: word
+        words:
+          - "Welcome"
+          - "Dashboard"
+          - "Logged in"
+          - "admin"
+        condition: or
+        name: "default-creds-accepted"
+---
+id: basic-http-version
+info:
+  name: HTTP Version Detection
+  author: AniipID
+  severity: info
+  description: Detects whether the server supports HTTP/2
+  tags: basic,info,http
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}"
+    matchers:
+      - type: word
+        words:
+          - "HTTP/2"
+          - "h2"
+        part: header
+        condition: or
+        name: "http2-supported"
+---
+id: basic-serialized
+info:
+  name: Insecure Deserialization
+  author: AniipID
+  severity: high
+  description: Tests for insecure deserialization via PHP/Python/Java serialized objects
+  tags: basic,deserialization,rce
+requests:
+  - method: POST
+    path:
+      - "{{BaseURL}}/api/data"
+      - "{{BaseURL}}/deserialize"
+    body: 'O:1:"a":1:{s:1:"b";s:1:"c";}'
+    headers:
+      Content-Type: "application/x-www-form-urlencoded"
+    matchers:
+      - type: word
+        words:
+          - "PHP Notice"
+          - "__toString"
+          - "unserialize"
+        condition: or
+        name: "deserialization-error"
+---
+id: basic-redirect-check
+info:
+  name: Basic Redirect Chain Check
+  author: AniipID
+  severity: info
+  description: Follows redirect chains to detect unusual behavior
+  tags: basic,redirect,chain
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}"
+    matchers:
+      - type: word
+        words:
+          - "Location:"
+        part: header
+        name: "redirect-detected"
+---
+id: basic-verbose-server
+info:
+  name: Verbose Server Header
+  author: AniipID
+  severity: low
+  description: Detects verbose server header information disclosure
+  tags: basic,info,server
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}"
+    matchers:
+      - type: regex
+        regex:
+          - "Server:\\s+[A-Za-z]+/\\d+\\.\\d+\\.\\d+"
+        part: header
+        name: "verbose-server-version"

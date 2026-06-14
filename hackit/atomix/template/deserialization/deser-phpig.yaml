@@ -1,0 +1,35 @@
+id: deser-phpig
+info:
+  name: PHP Deserialization via Unserialize()
+  author: AniipID
+  severity: critical
+  description: Detects PHP deserialization vulnerabilities by sending crafted serialized objects
+  tags: deserialization,php,unserialize,rce
+
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?data=O:1:\"A\":0:{}"
+      - "{{BaseURL}}?obj=R:1"
+    matchers:
+      - type: word
+        words:
+          - "__wakeup"
+          - "__destruct"
+          - "O:"
+          - "s:"
+        condition: or
+
+  - method: POST
+    path:
+      - "{{BaseURL}}/api/data"
+      - "{{BaseURL}}/deserialize"
+    headers:
+      Content-Type: application/x-www-form-urlencoded
+    body: "data=O:1:\"A\":1:{s:1:\"x\";s:3:\"yay\";}"
+    matchers:
+      - type: word
+        words:
+          - "yay"
+          - "O:1"
+        condition: or

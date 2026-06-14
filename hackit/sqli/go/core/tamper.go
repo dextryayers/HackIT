@@ -6,14 +6,6 @@ import (
 	"math/rand"
 	"net/url"
 	"strings"
-	"syscall"
-	"unsafe"
-)
-
-var (
-	rustLib               = syscall.NewLazyDLL("./rust_engine/target/release/rust_engine.dll")
-	rustTamperPolymorphic = rustLib.NewProc("rust_tamper_polymorphic")
-	freeRustString        = rustLib.NewProc("free_rust_string")
 )
 
 func (e *Engine) ApplyTamper(payload string) string {
@@ -24,8 +16,6 @@ func (e *Engine) ApplyTamper(payload string) string {
 	result := payload
 	for _, t := range e.Opts.Tamper {
 		switch strings.ToLower(t) {
-		case "rust_polymorphic":
-			result = e.callRustTamper(result)
 		case "space2comment":
 			result = strings.ReplaceAll(result, " ", "/**/")
 		case "randomcase":
@@ -49,25 +39,6 @@ func (e *Engine) ApplyTamper(payload string) string {
 		}
 	}
 	return result
-}
-
-func (e *Engine) callRustTamper(payload string) string {
-	cStr, _ := syscall.BytePtrFromString(payload)
-	ret, _, _ := rustTamperPolymorphic.Call(uintptr(unsafe.Pointer(cStr)))
-	if ret == 0 {
-		return payload
-	}
-	defer freeRustString.Call(ret)
-
-	// Convert C string back to Go string
-	p := (*byte)(unsafe.Pointer(ret))
-	var s []byte
-	for *p != 0 {
-		s = append(s, *p)
-		ret++
-		p = (*byte)(unsafe.Pointer(ret))
-	}
-	return string(s)
 }
 
 func hexEncode(s string) string {

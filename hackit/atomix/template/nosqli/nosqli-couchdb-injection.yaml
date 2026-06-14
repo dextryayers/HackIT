@@ -1,0 +1,35 @@
+id: nosqli-couchdb-injection
+info:
+  name: NoSQL CouchDB Injection
+  author: AniipID
+  severity: high
+  description: Tests for CouchDB NoSQL injection through JSON key manipulation
+  tags: nosqli,couchdb,injection
+
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/_all_docs"
+      - "{{BaseURL}}/_utils"
+    matchers:
+      - type: word
+        words:
+          - "couchdb"
+          - "CouchDB"
+        condition: or
+
+  - method: POST
+    path:
+      - "{{BaseURL}}/{{BasePath}}/_find"
+    headers:
+      Content-Type: application/json
+    body: '{"selector": {"$where": "1"}}'
+    matchers:
+      - type: status
+        status:
+          - 200
+      - type: word
+        words:
+          - "docs"
+          - "bookmark"
+        condition: or

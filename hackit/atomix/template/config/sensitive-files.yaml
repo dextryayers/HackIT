@@ -1,0 +1,282 @@
+id: git-config-disclosure
+info:
+  name: Git Configuration Disclosure
+  author: AniipID
+  severity: high
+  description: Detects exposed .git/config file
+  tags: config,git,disclosure
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/.git/config"
+      - "{{BaseURL}}/.git/HEAD"
+    matchers:
+      - type: regex
+        regex:
+          - "\\[core\\]"
+          - "ref: refs/heads"
+        condition: or
+        name: "git-disclosure"
+---
+id: env-file-disclosure
+info:
+  name: Environment File Disclosure
+  author: AniipID
+  severity: critical
+  description: Detects exposed .env file with sensitive credentials
+  tags: config,env,credentials
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/.env"
+      - "{{BaseURL}}/.env.example"
+      - "{{BaseURL}}/.env.production"
+      - "{{BaseURL}}/.env.local"
+    matchers:
+      - type: regex
+        regex:
+          - "DB_HOST|DB_USER|DB_PASS|DB_NAME"
+          - "APP_KEY|APP_SECRET"
+          - "AWS_ACCESS|AWS_SECRET"
+          - "API_KEY|API_SECRET"
+          - "JWT_SECRET|TOKEN"
+          - "PASSWORD|PASSWD"
+        condition: or
+        name: "env-file-leaked"
+---
+id: htaccess-disclosure
+info:
+  name: .htaccess Accessible
+  author: AniipID
+  severity: medium
+  description: Detects accessible .htaccess files
+  tags: config,apache,htaccess
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/.htaccess"
+      - "{{BaseURL}}/.htpasswd"
+    matchers:
+      - type: word
+        words:
+          - "RewriteEngine"
+          - "AuthType"
+          - "AuthUserFile"
+          - "Require"
+        condition: or
+        name: "htaccess-exposed"
+---
+id: robots-sitemap-disclosure
+info:
+  name: Robots & Sitemap Disclosure
+  author: AniipID
+  severity: info
+  description: Discovers disallowed paths and sitemaps
+  tags: config,info,discovery
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/robots.txt"
+      - "{{BaseURL}}/sitemap.xml"
+    matchers:
+      - type: regex
+        regex:
+          - "Disallow:"
+          - "Sitemap:"
+          - "<urlset"
+          - "<sitemapindex"
+        condition: or
+        name: "info-disclosure"
+---
+id: phpinfo-disclosure
+info:
+  name: PHPInfo Disclosure
+  author: AniipID
+  severity: medium
+  description: Detects exposed phpinfo() pages
+  tags: config,php,info
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/phpinfo.php"
+      - "{{BaseURL}}/info.php"
+      - "{{BaseURL}}/test.php"
+    matchers:
+      - type: word
+        words:
+          - "PHP Version"
+          - "PHP License"
+          - "phpinfo()"
+        condition: or
+        name: "phpinfo-exposed"
+---
+id: backup-file-disclosure
+info:
+  name: Backup File Disclosure
+  author: AniipID
+  severity: high
+  description: Detects exposed backup/source files
+  tags: config,backup,source
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/index.php.bak"
+      - "{{BaseURL}}/index.php.old"
+      - "{{BaseURL}}/index.php.swp"
+      - "{{BaseURL}}/config.php.bak"
+      - "{{BaseURL}}/config.php~"
+      - "{{BaseURL}}/config.php.save"
+      - "{{BaseURL}}/config.php.orig"
+      - "{{BaseURL}}/wp-config.php.bak"
+      - "{{BaseURL}}/db_backup.sql"
+      - "{{BaseURL}}/backup.sql"
+    matchers:
+      - type: word
+        words:
+          - "<?php"
+          - "<?="
+          - "DB_HOST"
+          - "DB_NAME"
+          - "INSERT INTO"
+          - "CREATE TABLE"
+          - "DROP TABLE"
+        condition: or
+        name: "backup-exposed"
+---
+id: ds-store-disclosure
+info:
+  name: .DS_Store Disclosure
+  author: AniipID
+  severity: low
+  description: Detects exposed .DS_Store files revealing directory structure
+  tags: config,info,macos
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/.DS_Store"
+    matchers:
+      - type: word
+        words:
+          - "Bud1"
+          - "DS_Store"
+        part: header
+        name: "ds-store-exposed"
+---
+id: crossdomain-disclosure
+info:
+  name: Crossdomain Policy Disclosure
+  author: AniipID
+  severity: medium
+  description: Detects overly permissive crossdomain.xml or clientaccesspolicy.xml
+  tags: config,flash,cors
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/crossdomain.xml"
+      - "{{BaseURL}}/clientaccesspolicy.xml"
+    matchers:
+      - type: word
+        words:
+          - "allow-http-request-headers-from"
+          - "domain=\"*\""
+        condition: or
+        name: "permissive-crossdomain"
+---
+id: npm-package-disclosure
+info:
+  name: Package.json Disclosure
+  author: AniipID
+  severity: medium
+  description: Detects exposed package.json revealing dependencies and scripts
+  tags: config,nodejs,package
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/package.json"
+      - "{{BaseURL}}/package-lock.json"
+      - "{{BaseURL}}/yarn.lock"
+    matchers:
+      - type: word
+        words:
+          - "\"dependencies\""
+          - "\"devDependencies\""
+          - "\"scripts\""
+          - "\"name\""
+        condition: or
+        name: "package-json-exposed"
+---
+id: debug-endpoint
+info:
+  name: Debug Endpoint Exposure
+  author: AniipID
+  severity: medium
+  description: Detects exposed debug/development endpoints
+  tags: config,debug,dev
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/debug"
+      - "{{BaseURL}}/dev"
+      - "{{BaseURL}}/api/debug"
+      - "{{BaseURL}}/console"
+    matchers:
+      - type: word
+        words:
+          - "debug"
+          - "DEBUG"
+          - "development"
+          - "traceback"
+          - "stacktrace"
+        condition: or
+        name: "debug-endpoint"
+---
+id: swagger-ui
+info:
+  name: Swagger/OpenAPI UI Exposure
+  author: AniipID
+  severity: medium
+  description: Detects exposed Swagger UI or OpenAPI documentation
+  tags: config,api,swagger
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/swagger"
+      - "{{BaseURL}}/swagger-ui"
+      - "{{BaseURL}}/api/docs"
+      - "{{BaseURL}}/api/swagger"
+      - "{{BaseURL}}/openapi.json"
+    matchers:
+      - type: word
+        words:
+          - "Swagger UI"
+          - "SwaggerUIBundle"
+          - "openapi"
+          - "\"paths\""
+        condition: or
+        name: "swagger-exposed"
+---
+id: graphql-introspection
+info:
+  name: GraphQL Introspection Enabled
+  author: AniipID
+  severity: high
+  description: Detects GraphQL endpoint with introspection enabled
+  tags: config,graphql,api
+requests:
+  - method: POST
+    path:
+      - "{{BaseURL}}/graphql"
+      - "{{BaseURL}}/graphql/explore"
+      - "{{BaseURL}}/v1/graphql"
+      - "{{BaseURL}}/api/graphql"
+    body: '{"query":"{__schema{types{name}}}"}'
+    headers:
+      Content-Type: "application/json"
+    matchers:
+      - type: word
+        words:
+          - "__schema"
+          - "mutationType"
+          - "queryType"
+        condition: or
+        name: "graphql-introspection"

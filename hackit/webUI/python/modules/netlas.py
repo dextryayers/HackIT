@@ -1,26 +1,339 @@
 import httpx
+import json
 from models import IntelligenceFinding
 
-async def crawl(target: str, client: httpx.AsyncClient):
-    """Netlas.io — queries their search API for internet-facing assets."""
-    findings = []
+NETLAS_BASE = "https://app.netlas.io/api"
+NETLAS_KEY = ""
+UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+QUERY_TYPES = {
+    "domain": {"endpoint": "/domains/", "query_field": "q", "query_template": "domain:{target}"},
+    "host": {"endpoint": "/hosts/", "query_field": "q", "query_template": "host:{target}"},
+    "ip": {"endpoint": "/hosts/", "query_field": "q", "query_template": "ip:{target}"},
+    "cert": {"endpoint": "/certs/", "query_field": "q", "query_template": "domain:{target}"},
+}
+
+SERVICE_CATEGORIES = {
+    "http": "Web Server",
+    "https": "Web Server (SSL)",
+    "ssh": "Remote Access",
+    "ftp": "File Transfer",
+    "smtp": "Mail Server",
+    "dns": "DNS",
+    "mysql": "Database",
+    "postgresql": "Database",
+    "mongodb": "Database",
+    "redis": "Cache Store",
+    "elasticsearch": "Search Engine",
+    "memcached": "Cache Store",
+}
+
+TECH_INDICATORS = {
+    "nginx/": "Nginx",
+    "apache/": "Apache",
+    "cloudflare": "Cloudflare",
+    "iis/": "IIS",
+    "lighttpd/": "Lighttpd",
+    "openresty/": "OpenResty",
+    "gunicorn/": "Gunicorn",
+    "python/": "Python",
+    "php/": "PHP",
+    "java/": "Java",
+    "node.js": "Node.js",
+    "express": "Express.js",
+    "next.js": "Next.js",
+    "vue.js": "Vue.js",
+    "react": "React",
+    "wordpress": "WordPress",
+    "drupal": "Drupal",
+    "joomla": "Joomla",
+    "tomcat": "Tomcat",
+    "jetty": "Jetty",
+}
+
+async def netlas_search(target: str, query_type: str, config: dict, client: httpx.AsyncClient) -> list:
+    results = []
+    template = config["query_template"].format(target=target)
+    params = {config["query_field"]: template, "size": 50}
+    headers = {
+        "User-Agent": UA,
+        "Accept": "application/json",
+        "X-API-Key": NETLAS_KEY,
+    }
     try:
-        url = f"https://app.netlas.io/api/domains/?q={target}&source_type=include&start=0&count=20"
-        resp = await client.get(url, headers={"User-Agent": "Mozilla/5.0"})
+        resp = await client.get(
+            f"{NETLAS_BASE}{config['endpoint']}",
+            params=params,
+            timeout=20.0,
+            headers=headers,
+        )
         if resp.status_code == 200:
             data = resp.json()
-            for item in data.get("items", []):
-                domain = item.get("data", {}).get("domain", "")
-                a_records = item.get("data", {}).get("a", [])
-                if domain:
-                    findings.append(IntelligenceFinding(
-                        entity=domain,
-                        type="Subdomain",
-                        source="Netlas.io",
-                        confidence="High",
-                        color="blue",
-                        resolution=str(a_records[0]) if a_records else ""
-                    ))
+            items = data.get("items", data.get("data", data.get("results", [])))
+            total = data.get("total", data.get("count", len(items)))
+            results.append({"type": "summary", "count": total, "query_type": query_type, "items": items[:40]})
+            for item in items[:40]:
+                results.append({"type": "item", "query_type": query_type, "data": item})
     except Exception as e:
-        print(f"[Netlas] Error: {e}")
+        results.append({"type": "error", "query_type": query_type, "message": str(e)[:100]})
+    return results
+
+def extract_ip(item: dict) -> str:
+    for key in ["ip", "ip_address", "address", "host_ip"]:
+        val = item.get(key, "")
+        if val:
+            return str(val)
+    return ""
+
+def extract_port(item: dict) -> int:
+    for key in ["port", "port_number"]:
+        val = item.get(key, 0)
+        if val:
+            return int(val)
+    return 0
+
+def extract_service(item: dict) -> str:
+    for key in ["service", "service_name", "protocol", "application_protocol"]:
+        val = item.get(key, "")
+        if val:
+            return str(val).lower()
+    return ""
+
+def extract_host(item: dict) -> str:
+    for key in ["domain", "host", "hostname", "name", "fqdn"]:
+        val = item.get(key, "")
+        if val:
+            return str(val).lower()
+    return ""
+
+def detect_technology(banner: str) -> list:
+    techs = []
+    if not banner:
+        return techs
+    banner_lower = banner.lower()
+    for indicator, tech_name in TECH_INDICATORS.items():
+        if indicator in banner_lower:
+            techs.append(tech_name)
+    return techs
+
+def detect_http_techs(item: dict) -> list:
+    techs = []
+    http_data = item.get("http", {})
+    if isinstance(http_data, dict):
+        server = http_data.get("server", "")
+        if server:
+            techs.append(f"Server: {server}")
+        x_powered = http_data.get("x-powered-by", "")
+        if x_powered:
+            techs.append(f"Powered by: {x_powered}")
+        via = http_data.get("via", "")
+        if via:
+            techs.append(f"Via: {via}")
+        title = http_data.get("title", "")
+        if title:
+            techs.append(f"Title: {title}")
+    headers = item.get("headers", {})
+    if isinstance(headers, dict):
+        for hdr in ["server", "x-powered-by", "x-generator"]:
+            val = headers.get(hdr, "")
+            if val:
+                techs.append(f"{hdr}: {val}")
+    return techs
+
+async def crawl(target: str, client: httpx.AsyncClient):
+    findings = []
+    domain = target.strip().lower()
+    if domain.startswith("http"):
+        from urllib.parse import urlparse
+        domain = urlparse(domain).netloc
+
+    ip_target = domain
+    try:
+        import socket
+        ip_target = socket.gethostbyname(domain)
+    except Exception:
+        pass
+
+    all_items = []
+    for qtype, config in QUERY_TYPES.items():
+        results = await netlas_search(domain, qtype, config, client)
+        for res in results:
+            if res["type"] == "item":
+                all_items.append(res)
+            elif res["type"] == "summary":
+                if res["count"] > 0:
+                    findings.append(IntelligenceFinding(
+                        entity=f"{res['count']} results for {qtype} query on {domain}",
+                        type=f"Netlas: {qtype.title()} Search Summary",
+                        source="Netlas",
+                        confidence="High",
+                        color="purple",
+                        threat_level="Informational",
+                        status="Found",
+                        raw_data=f"Query type: {qtype}, Total: {res['count']}",
+                        tags=[f"netlas-{qtype}", "summary"],
+                    ))
+
+    seen_services = {}
+    for res_item in all_items:
+        item = res_item.get("data", {})
+        if not isinstance(item, dict):
+            continue
+
+        ip = extract_ip(item)
+        port = extract_port(item)
+        service = extract_service(item)
+        host = extract_host(item)
+        banner = item.get("banner", item.get("data", ""))
+        if isinstance(banner, bytes):
+            banner = banner.decode("utf-8", errors="replace")
+
+        dedup_key = f"{ip}:{port}:{service}"
+        if dedup_key in seen_services:
+            continue
+        seen_services[dedup_key] = True
+
+        entity = host or ip or domain
+        if port:
+            entity += f":{port}"
+        if service:
+            entity += f" ({service})"
+
+        cat = SERVICE_CATEGORIES.get(service, "Unknown Service")
+        raw = json.dumps(item)[:1000]
+
+        tags = ["netlas"]
+        if service:
+            tags.append(f"service-{service}")
+
+        findings.append(IntelligenceFinding(
+            entity=entity[:200],
+            type=f"Netlas: {cat}",
+            source="Netlas",
+            confidence="Medium",
+            color="emerald",
+            threat_level="Informational",
+            status="Discovered",
+            resolution=ip if ip else None,
+            raw_data=raw,
+            tags=tags,
+        ))
+
+        techs = detect_technology(str(banner)) + detect_http_techs(item)
+        for tech in set(techs):
+            findings.append(IntelligenceFinding(
+                entity=tech[:200],
+                type="Netlas: Technology Detection",
+                source="Netlas",
+                confidence="Medium",
+                color="blue",
+                threat_level="Informational",
+                raw_data=f"Technology detected on {entity}: {tech}",
+                tags=["technology"],
+            ))
+
+        ssl_data = item.get("ssl", item.get("tls", {}))
+        if isinstance(ssl_data, dict):
+            cert = ssl_data.get("cert", ssl_data.get("certificate", {}))
+            if isinstance(cert, dict):
+                issuer = cert.get("issuer", cert.get("issuer_dn", ""))
+                if issuer:
+                    findings.append(IntelligenceFinding(
+                        entity=str(issuer)[:200],
+                        type="Netlas: SSL Certificate Issuer",
+                        source="Netlas",
+                        confidence="High",
+                        color="emerald",
+                        threat_level="Informational",
+                        raw_data=f"SSL cert issuer on {entity}: {issuer}",
+                        tags=["ssl"],
+                    ))
+                validity = cert.get("validity", cert.get("valid_to", ""))
+                if validity:
+                    findings.append(IntelligenceFinding(
+                        entity=str(validity)[:200],
+                        type="Netlas: SSL Certificate Expiry",
+                        source="Netlas",
+                        confidence="High",
+                        color="orange",
+                        threat_level="Informational",
+                        raw_data=f"SSL cert validity on {entity}: {validity}",
+                        tags=["ssl"],
+                    ))
+                sans = cert.get("subject_alt_name", cert.get("san", []))
+                if isinstance(sans, list):
+                    for san in sans[:5]:
+                        findings.append(IntelligenceFinding(
+                            entity=str(san)[:200],
+                            type="Netlas: SSL SAN",
+                            source="Netlas",
+                            confidence="High",
+                            color="slate",
+                            threat_level="Informational",
+                            tags=["ssl", "san"],
+                        ))
+
+        http_resp = item.get("http", item.get("response", {}))
+        if isinstance(http_resp, dict):
+            status_code = http_resp.get("status_code", http_resp.get("code", 0))
+            if status_code:
+                findings.append(IntelligenceFinding(
+                    entity=f"HTTP {status_code} on {entity}",
+                    type="Netlas: HTTP Status",
+                    source="Netlas",
+                    confidence="High",
+                    color="emerald" if 200 <= int(status_code) < 400 else "orange",
+                    threat_level="Informational",
+                    raw_data=f"HTTP response code: {status_code} on {entity}",
+                    tags=["http"],
+                ))
+            location = http_resp.get("location", http_resp.get("redirect", ""))
+            if location:
+                findings.append(IntelligenceFinding(
+                    entity=str(location)[:200],
+                    type="Netlas: HTTP Redirect",
+                    source="Netlas",
+                    confidence="Medium",
+                    color="slate",
+                    threat_level="Informational",
+                    raw_data=f"Redirects to: {location}",
+                    tags=["http", "redirect"],
+                ))
+
+        geo = item.get("geo", item.get("geolocation", {}))
+        if isinstance(geo, dict):
+            country = geo.get("country", geo.get("country_name", ""))
+            city = geo.get("city", "")
+            org = geo.get("org", geo.get("organization", geo.get("asn_description", "")))
+            if country:
+                asn = geo.get("asn", geo.get("as_number", ""))
+                loc_str = f"{city}, {country}" if city else country
+                if org:
+                    loc_str += f" ({org})"
+                if asn:
+                    loc_str += f" [AS{asn}]"
+                findings.append(IntelligenceFinding(
+                    entity=loc_str[:200],
+                    type="Netlas: Geolocation",
+                    source="Netlas",
+                    confidence="High",
+                    color="slate",
+                    threat_level="Informational",
+                    resolution=ip,
+                    raw_data=f"Geo for {entity}: {loc_str}",
+                    tags=["geolocation"],
+                ))
+
+    if not findings:
+        findings.append(IntelligenceFinding(
+            entity=f"No Netlas results found for {domain}",
+            type="Netlas: Empty",
+            source="Netlas",
+            confidence="Low",
+            color="emerald",
+            threat_level="Informational",
+            status="No Results",
+            tags=["empty"],
+        ))
+
     return findings

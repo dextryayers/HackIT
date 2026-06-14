@@ -1,0 +1,182 @@
+id: graphql-introspection-query
+info:
+  name: GraphQL Introspection Query
+  author: AniipID
+  severity: high
+  description: Detects GraphQL introspection enabled via query
+  tags: graphql,introspection,api
+requests:
+  - method: POST
+    path:
+      - "{{BaseURL}}/graphql"
+      - "{{BaseURL}}/graphql/explore"
+      - "{{BaseURL}}/gql"
+    body: '{"query":"query{__schema{types{name fields{name type{name}}}}}"}'
+    headers:
+      Content-Type: "application/json"
+    matchers:
+      - type: word
+        words:
+          - "__schema"
+          - "types"
+          - "fields"
+        condition: and
+        name: "introspection-enabled"
+---
+id: graphql-batch-attack
+info:
+  name: GraphQL Batch Attack
+  author: AniipID
+  severity: high
+  description: Detects GraphQL batch querying without rate limiting
+  tags: graphql,batch,rate-limit
+requests:
+  - method: POST
+    path:
+      - "{{BaseURL}}/graphql"
+      - "{{BaseURL}}/graphql/explore"
+    body: '[{"query":"query{__typename}"},{"query":"query{__typename}"},{"query":"query{__typename}"},{"query":"query{__typename}"},{"query":"query{__typename}"}]'
+    headers:
+      Content-Type: "application/json"
+    matchers:
+      - type: word
+        words:
+          - "__typename"
+          - "data"
+        condition: and
+        name: "batch-queries-allowed"
+---
+id: graphql-depth-limit
+info:
+  name: GraphQL Query Depth Attack
+  author: AniipID
+  severity: medium
+  description: Tests for GraphQL query depth limits
+  tags: graphql,depth,dos
+requests:
+  - method: POST
+    path:
+      - "{{BaseURL}}/graphql"
+    body: '{"query":"query{__schema{types{name fields{type{name fields{type{name fields{type{name}}}}}}}}}"}'
+    headers:
+      Content-Type: "application/json"
+    matchers:
+      - type: word
+        words:
+          - "errors"
+          - "400"
+          - "depth"
+        condition: or
+        name: "depth-limited"
+---
+id: graphql-alias-attack
+info:
+  name: GraphQL Alias Attack
+  author: AniipID
+  severity: medium
+  description: Tests for GraphQL alias-based resource exhaustion
+  tags: graphql,alias,dos
+requests:
+  - method: POST
+    path:
+      - "{{BaseURL}}/graphql"
+    body: '{"query":"query{a1:__typename a2:__typename a3:__typename a4:__typename a5:__typename a6:__typename a7:__typename a8:__typename a9:__typename a10:__typename}"}'
+    headers:
+      Content-Type: "application/json"
+    matchers:
+      - type: word
+        words:
+          - "__typename"
+        name: "aliases-allowed"
+---
+id: graphql-field-suggestions
+info:
+  name: GraphQL Field Suggestions
+  author: AniipID
+  severity: medium
+  description: Detects GraphQL with field suggestions enabled (information disclosure)
+  tags: graphql,suggestions,info
+requests:
+  - method: POST
+    path:
+      - "{{BaseURL}}/graphql"
+    body: '{"query":"query{nonExistentField}"}'
+    headers:
+      Content-Type: "application/json"
+    matchers:
+      - type: word
+        words:
+          - "Did you mean"
+          - "Cannot query field"
+          - "suggestion"
+        condition: or
+        name: "field-suggestions"
+---
+id: graphql-mutation-exposure
+info:
+  name: GraphQL Mutations Exposure
+  author: AniipID
+  severity: high
+  description: Enumerates all available GraphQL mutations
+  tags: graphql,mutations,enumeration
+requests:
+  - method: POST
+    path:
+      - "{{BaseURL}}/graphql"
+    body: '{"query":"query{__schema{mutationType{name fields{name description args{name type{name}}}}}}"}'
+    headers:
+      Content-Type: "application/json"
+    matchers:
+      - type: word
+        words:
+          - "mutationType"
+          - "fields"
+          - "name"
+        condition: and
+        name: "mutations-exposed"
+---
+id: graphql-error-leak
+info:
+  name: GraphQL Error Leak
+  author: AniipID
+  severity: medium
+  description: Detects detailed error messages from GraphQL
+  tags: graphql,error,info
+requests:
+  - method: POST
+    path:
+      - "{{BaseURL}}/graphql"
+    body: '{"query":"query{__typename"}'
+    headers:
+      Content-Type: "application/json"
+    matchers:
+      - type: word
+        words:
+          - "locations"
+          - "stacktrace"
+          - "Internal"
+          - "Error"
+        condition: or
+        name: "detailed-errors"
+---
+id: graphql-unauth-access
+info:
+  name: GraphQL Unauthenticated Access
+  author: AniipID
+  severity: high
+  description: Tests if GraphQL endpoint is accessible without authentication
+  tags: graphql,auth,bypass
+requests:
+  - method: POST
+    path:
+      - "{{BaseURL}}/graphql"
+    body: '{"query":"query{__typename}"}'
+    headers:
+      Content-Type: "application/json"
+    matchers:
+      - type: word
+        words:
+          - "data"
+          - "__typename"
+        condition: and
+        name: "unauthenticated-access"

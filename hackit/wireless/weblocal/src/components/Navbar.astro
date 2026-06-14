@@ -1,0 +1,174 @@
+---
+const { active = "" } = Astro.props;
+const links = [
+  { href: "/", label: "Dashboard", icon: "layout-dashboard" },
+  { href: "/attacks", label: "Attacks", icon: "zap" },
+  { href: "/recon", label: "Recon", icon: "search" },
+  { href: "/crack", label: "Cracking", icon: "terminal" },
+  { href: "/plugins", label: "Plugins", icon: "package" },
+  { href: "/sessions", label: "Sessions", icon: "database" },
+  { href: "/settings", label: "Settings", icon: "settings" },
+];
+
+function isActive(href: string) {
+  if (href === "/" && active === "/") return true;
+  if (href !== "/" && active.startsWith(href)) return true;
+  return false;
+}
+
+
+---
+
+<nav class="fixed top-0 z-50 w-full bg-card/80 border-b border-border backdrop-blur-xl">
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center h-16 gap-1">
+    <a href="/" class="flex items-center gap-2.5 mr-6 shrink-0 group">
+      <span class="w-9 h-9 rounded-xl flex items-center justify-center text-sm font-bold text-white bg-primary shadow-md group-hover:shadow-md/50 transition-shadow duration-300">W</span>
+      <span class="hidden sm:inline text-xl font-black tracking-tight bg-primary bg-clip-text text-transparent">HackIT</span>
+      <span class="hidden sm:inline text-xs font-semibold text-muted-foreground">Wireless</span>
+    </a>
+
+    <div class="hidden md:flex items-center gap-1">
+      {links.map(l => (
+        <a href={l.href}
+          class="relative px-3 py-2 text-sm font-medium transition-all duration-200 rounded-lg"
+          class:list={[
+            isActive(l.href) ? 'text-primary' : 'text-muted-foreground hover:text-foreground hover:bg-accent/5'
+          ]}>
+          <span class="flex items-center gap-1.5">
+            <i data-lucide={l.icon} class="w-4 h-4"></i>
+            <span>{l.label}</span>
+          </span>
+          {isActive(l.href) && <span class="absolute -bottom-px left-2 right-2 h-0.5 rounded-full bg-primary shadow-md"></span>}
+        </a>
+      ))}
+    </div>
+
+    <div class="ml-auto flex items-center gap-3">
+      <div class="group relative">
+        <span id="adapter-status" class="text-xs text-muted-foreground flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-card/50 border border-border/30 cursor-default">
+          <span class="w-2 h-2 rounded-full bg-muted-foreground/50 animate-pulse-soft"></span>
+          <span class="hidden sm:inline">Loading...</span>
+        </span>
+        <div id="adapter-tooltip" class="absolute right-0 top-full mt-2 w-72 rounded-xl p-3 text-xs text-muted-foreground opacity-0 translate-y-1 group-hover:opacity-100 group-hover:translate-y-0 transition-all duration-200 pointer-events-none hidden bg-card/90 backdrop-blur-xl border border-border/30 shadow-md">
+          <div class="space-y-1.5" id="tooltip-content">
+            <div class="skeleton h-3 w-3/4"></div>
+            <div class="skeleton h-3 w-1/2"></div>
+          </div>
+        </div>
+      </div>
+
+      <span id="go-web-nav-status" class="text-[10px] text-muted-foreground hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-card/40 border border-border/20">
+        <span class="w-1.5 h-1.5 rounded-full bg-muted-foreground/50"></span>
+        Go
+      </span>
+
+      <button id="mobile-menu-btn" class="md:hidden w-9 h-9 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-accent/5 transition-colors" aria-label="Menu">
+        <i data-lucide="menu" class="w-5 h-5"></i>
+      </button>
+    </div>
+  </div>
+
+  <div id="mobile-menu" class="md:hidden hidden border-t border-border/50">
+    <div class="px-4 py-3 space-y-1">
+      {links.map(l => (
+        <a href={l.href}
+          class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200"
+          class:list={[
+            isActive(l.href) ? 'text-primary bg-primary/10' : 'text-muted-foreground hover:text-foreground hover:bg-accent/5'
+          ]}>
+          <i data-lucide={l.icon} class="w-5 h-5"></i>
+          {l.label}
+        </a>
+      ))}
+    </div>
+  </div>
+</nav>
+
+<script>
+(function() {
+  const btn = document.getElementById('mobile-menu-btn');
+  const menu = document.getElementById('mobile-menu');
+  if (btn && menu) {
+    btn.addEventListener('click', () => {
+      const isOpen = !menu.classList.contains('hidden');
+      menu.classList.toggle('hidden');
+      menu.classList.toggle('animate-slide-down');
+      btn.innerHTML = isOpen
+        ? '<i data-lucide="menu" class="w-5 h-5"></i>'
+        : '<i data-lucide="x" class="w-5 h-5"></i>';
+    });
+  }
+
+  let adapterErrorCount = 0;
+
+  async function updateAdapterStatus() {
+    try {
+      const r = await fetch('/api/adapters');
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const d = await r.json();
+      adapterErrorCount = 0;
+      const adapters = d.adapters || [];
+      const el = document.getElementById('adapter-status');
+      const tooltip = document.getElementById('adapter-tooltip');
+      const tcontent = document.getElementById('tooltip-content');
+      if (!el) return;
+
+      if (adapters.length === 0) {
+        el.innerHTML = '<span class="w-2 h-2 rounded-full bg-destructive animate-pulse-soft"></span> <span class="hidden sm:inline">No adapters</span>';
+        if (tcontent) tcontent.innerHTML = '<div class="text-center py-2 text-muted-foreground">No wireless adapters detected</div>';
+      } else {
+        const mon = adapters.filter(a => a.is_monitor).length;
+        const hasMon = mon > 0;
+        el.innerHTML = `<span class="w-2 h-2 rounded-full ${hasMon ? 'bg-primary' : 'bg-muted-foreground'} animate-pulse-soft"></span> <span class="hidden sm:inline">${adapters.length} adapter${mon > 0 ? ', ' + mon + ' monitor' : ''}</span>`;
+        if (tcontent) {
+          tcontent.innerHTML = adapters.map(a =>
+            `<div class="border-b border-border/10 py-1.5 last:border-0">
+              <div class="flex items-center justify-between">
+                <span class="text-foreground font-medium text-xs">${a.name}</span>
+                <span class="text-[10px] ${a.is_monitor ? 'text-primary' : 'text-muted-foreground'}">${a.is_monitor ? 'monitor' : 'managed'}</span>
+              </div>
+              <div class="flex gap-2 text-[10px] text-muted-foreground mt-0.5">
+                ${a.mac ? `<span>${a.mac}</span>` : ''}
+                ${a.driver ? `<span>${a.driver}</span>` : ''}
+              </div>
+            </div>`
+          ).join('');
+        }
+        if (tooltip) tooltip.classList.remove('hidden');
+      }
+    } catch (e) {
+      adapterErrorCount++;
+      if (adapterErrorCount === 1) {
+        HackitUI.error('Connection Error', 'Failed to fetch adapter status. Ensure the backend is running.');
+      }
+    }
+  }
+  updateAdapterStatus();
+  setInterval(updateAdapterStatus, 5000);
+
+  let goErrorCount = 0;
+
+  async function updateGoWebStatus() {
+    const nav = document.getElementById('go-web-nav-status');
+    if (!nav) return;
+    try {
+      const r = await fetch('/api/go-web/status');
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const d = await r.json();
+      goErrorCount = 0;
+      if (d.running) {
+        nav.innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-primary animate-pulse-soft"></span> Go';
+      } else if (d.binary_ready) {
+        nav.innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-muted-foreground animate-pulse-soft"></span> Go';
+      } else {
+        nav.innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-muted-foreground/50"></span> Go';
+      }
+    } catch {
+      goErrorCount++;
+      nav.innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-destructive animate-pulse-soft"></span> Go';
+    }
+  }
+  updateGoWebStatus();
+  setInterval(updateGoWebStatus, 5000);
+})();
+</script>

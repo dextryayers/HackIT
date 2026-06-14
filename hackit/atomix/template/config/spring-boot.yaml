@@ -1,0 +1,183 @@
+id: spring-actuator
+info:
+  name: Spring Actuator Exposure
+  author: AniipID
+  severity: high
+  description: Detects exposed Spring Boot Actuator endpoints
+  tags: spring,actuator,info
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/actuator"
+      - "{{BaseURL}}/actuator/health"
+      - "{{BaseURL}}/actuator/info"
+      - "{{BaseURL}}/actuator/env"
+      - "{{BaseURL}}/actuator/beans"
+      - "{{BaseURL}}/actuator/mappings"
+      - "{{BaseURL}}/actuator/configprops"
+      - "{{BaseURL}}/actuator/threaddump"
+      - "{{BaseURL}}/actuator/heapdump"
+      - "{{BaseURL}}/actuator/logfile"
+      - "{{BaseURL}}/actuator/httptrace"
+      - "{{BaseURL}}/actuator/conditions"
+    matchers:
+      - type: word
+        words:
+          - "_links"
+          - "self"
+          - "health"
+          - "status"
+          - "{\"status\":\"UP\""
+          - "spring.application"
+          - "spring.jpa"
+          - "spring.datasource"
+          - "spring.security"
+          - "java.runtime"
+          - "JAVA_HOME"
+        condition: or
+        name: "actuator-endpoint"
+---
+id: spring-env-leak
+info:
+  name: Spring Env Endpoint Leak
+  author: AniipID
+  severity: critical
+  description: Detects Spring Boot env actuator with sensitive data exposure
+  tags: spring,actuator,env,leak
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/actuator/env"
+      - "{{BaseURL}}/actuator/env/spring.datasource.password"
+      - "{{BaseURL}}/actuator/env/SECRET"
+    matchers:
+      - type: regex
+        regex:
+          - "\"password\":\"[^\"]+\""
+          - "\"secret\":\"[^\"]+\""
+          - "\"key\":\"[^\"]+\""
+          - "\"token\":\"[^\"]+\""
+          - "\"spring\\.datasource\\.password"
+          - "\"JAVA_HOME\""
+          - "password"
+        condition: or
+        name: "env-secret-leak"
+---
+id: spring-heapdump
+info:
+  name: Spring Heapdump Exposure
+  author: AniipID
+  severity: critical
+  description: Detects accessible heapdump file that can contain secrets
+  tags: spring,heapdump,memory
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/actuator/heapdump"
+    matchers:
+      - type: word
+        words:
+          - "application/octet-stream"
+          - "java_pid"
+        part: header
+        condition: or
+        name: "heapdump-accessible"
+  - method: GET
+    path:
+      - "{{BaseURL}}/heapdump"
+      - "{{BaseURL}}/dump.bin"
+    matchers:
+      - type: word
+        words:
+          - "application/octet-stream"
+        part: header
+        name: "heapdump-alt-path"
+---
+id: spring-route-injection
+info:
+  name: Spring Route/Framework Bypass
+  author: AniipID
+  severity: high
+  description: Detects Spring routing bypass via path traversal
+  tags: spring,bypass,routing
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/..;/actuator/health"
+      - "{{BaseURL}}/..;/actuator/env"
+      - "{{BaseURL}}/..;/actuator"
+    matchers:
+      - type: word
+        words:
+          - "status"
+          - "_links"
+          - "password"
+        condition: or
+        name: "route-bypass"
+---
+id: spring-h2-console
+info:
+  name: Spring H2 Console
+  author: AniipID
+  severity: critical
+  description: Detects exposed H2 database console
+  tags: spring,h2,database,console
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/h2-console"
+      - "{{BaseURL}}/h2-console/login.jsp"
+      - "{{BaseURL}}/console"
+    matchers:
+      - type: word
+        words:
+          - "H2 Console"
+          - "H2"
+          - "Login"
+        condition: or
+        name: "h2-console"
+---
+id: spring-eureka
+info:
+  name: Spring Eureka Dashboard
+  author: AniipID
+  severity: medium
+  description: Detects exposed Eureka service registry
+  tags: spring,eureka,discovery
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/eureka"
+      - "{{BaseURL}}/eureka/apps"
+    matchers:
+      - type: word
+        words:
+          - "eureka"
+          - "application"
+          - "status"
+        condition: or
+        name: "eureka-dashboard"
+---
+id: spring-swagger-ui
+info:
+  name: Spring Swagger UI
+  author: AniipID
+  severity: medium
+  description: Detects exposed Swagger/OpenAPI documentation
+  tags: spring,swagger,api,doc
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/swagger-ui.html"
+      - "{{BaseURL}}/swagger-resources"
+      - "{{BaseURL}}/v2/api-docs"
+      - "{{BaseURL}}/v3/api-docs"
+    matchers:
+      - type: word
+        words:
+          - "Swagger UI"
+          - "Swagger"
+          - "swagger"
+          - "openapi"
+        condition: or
+        name: "spring-swagger"

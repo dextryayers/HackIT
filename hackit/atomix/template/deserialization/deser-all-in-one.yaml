@@ -1,0 +1,72 @@
+id: deser-node-serialize
+info:
+  name: Node.js Serialization Injection
+  author: AniipID
+  severity: critical
+  description: Detects Node.js deserialization via node-serialize or similar packages
+  tags: deserialization,nodejs,rce
+
+requests:
+  - method: POST
+    path:
+      - "{{BaseURL}}/api/session"
+      - "{{BaseURL}}/deserialize"
+      - "{{BaseURL}}/auth"
+    headers:
+      Content-Type: application/json
+    body: '{"rce":"_$$ND_FUNC$$_function(){return 1}()"}'
+    matchers:
+      - type: word
+        words:
+          - "ND_FUNC"
+          - "FUNCTION"
+          - "SyntaxError"
+          - "eval"
+        condition: or
+
+---
+id: deser-ruby-marshal
+info:
+  name: Ruby Marshal Deserialization
+  author: AniipID
+  severity: critical
+  description: Detects Ruby Marshal.load deserialization vulnerabilities
+  tags: deserialization,ruby,marshal,rce
+
+requests:
+  - method: POST
+    path:
+      - "{{BaseURL}}/api/load"
+      - "{{BaseURL}}/deserialize"
+    headers:
+      Content-Type: application/x-yaml
+    body: "--- !ruby/object:ERB {}"
+    matchers:
+      - type: word
+        words:
+          - "ERB"
+          - "Object"
+          - "Marshal"
+        condition: or
+
+---
+id: deser-dotnet-viewstate
+info:
+  name: .NET ViewState Deserialization
+  author: AniipID
+  severity: high
+  description: Detects ASP.NET ViewState without MAC validation, allowing deserialization attacks
+  tags: deserialization,dotnet,viewstate
+
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/default.aspx"
+      - "{{BaseURL}}/index.aspx"
+    matchers:
+      - type: word
+        words:
+          - "__VIEWSTATE"
+          - "__EVENTVALIDATION"
+        condition: or
+        part: body

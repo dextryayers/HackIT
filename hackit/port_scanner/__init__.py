@@ -18,6 +18,7 @@ from datetime import datetime
 from hackit.ui import display_tool_banner, _colored, GREEN, YELLOW, RED, BLUE, CYAN, PURPLE, B_GREEN, B_CYAN, B_WHITE, B_RED, B_YELLOW, DIM
 from .go_bridge import get_engine
 from .targets import parse_targets, parse_ports
+from .plugin_loader import discover_plugins, run_lua_plugin, run_ruby_plugin, run_rust_engine, run_c_engine
 from hackit.subdomain.go_bridge import get_engine as get_sub_engine
 
 # ─────────────────────────────────────────────────────────────────
@@ -821,6 +822,55 @@ def scan_ports(**kwargs):
                         for line in str(deep_a).split('\n')[:5]:
                             if line.strip():
                                 click.echo(f"    {_colored('↳', PURPLE)} {line.strip()[:80]}")
+
+        # ── Plugin enrichment (Lua + Ruby) ────────────────────
+        if kwargs.get('deep') or kwargs.get('script'):
+            for pr in open_ports[:5]:
+                port_num = pr.get('port', 0)
+                banner = pr.get('banner', '')
+                for lua_plugin in discover_plugins("lua"):
+                    try:
+                        lua_res = run_lua_plugin(lua_plugin, t, port_num, banner)
+                        if lua_res.get('status') == 'ok':
+                            findings = lua_res.get('findings', [])
+                            if findings:
+                                pr.setdefault('plugins', {})[f'lua:{lua_plugin}'] = findings
+                    except Exception:
+                        pass
+                for ruby_plugin in discover_plugins("ruby"):
+                    try:
+                        ruby_res = run_ruby_plugin(ruby_plugin, t, port_num, banner)
+                        if ruby_res.get('status') == 'ok':
+                            findings = ruby_res.get('findings', [])
+                            if findings:
+                                pr.setdefault('plugins', {})[f'ruby:{ruby_plugin}'] = findings
+                    except Exception:
+                        pass
+
+        # ── DNS / Kernel / Web enrichment (Rust deep engines) ──
+        if kwargs.get('deep'):
+            for pr in open_ports[:3]:
+                port_num = pr.get('port', 0)
+                web_res = run_rust_engine("web_fingerprint", [t, str(port_num)])
+                if web_res.get('status') == 'ok' and web_res.get('results'):
+                    pr['web_fingerprint'] = web_res['results']
+            dns_res = run_rust_engine("dns_detect", [t])
+            if dns_res.get('status') == 'ok' and dns_res.get('results'):
+                dns_enum = " | ".join(
+                    r.get('value', '') for r in dns_res['results']
+                    if r.get('record_type') in ('A', 'MX', 'NS')
+                )
+                if dns_enum:
+                    click.echo(f"\n  {_colored('◈ DNS ENRICHMENT', B_CYAN)}: {_colored(dns_enum[:78], DIM)}")
+            kernel_res = run_rust_engine("kernel_detect", [t, ",".join(str(p.get('port', '')) for p in open_ports[:10])])
+            if kernel_res.get('status') == 'ok' and kernel_res.get('results'):
+                for kr in kernel_res['results']:
+                    os_name = kr.get('os_name', '')
+                    kernel_v = kr.get('kernel_version', '')
+                    conf = kr.get('confidence', 0)
+                    if os_name:
+                        click.echo(f"  {_colored('◈ KERNEL DETECT', B_CYAN)}: {_colored(os_name, B_WHITE)} "
+                                   f"({_colored(kernel_v, DIM)}) — {_colored(f'{conf:.0f}%', B_GREEN)}")
 
         # ── OS details (verbose) ───────────────────────────────
         if kwargs.get('os_detect') and os_info and kwargs.get('verbose', 0) >= 1:

@@ -1,0 +1,292 @@
+---
+import Layout from "../layouts/Layout.astro";
+import Navbar from "../components/Navbar.astro";
+import TerminalOutput from "../components/TerminalOutput.astro";
+import Button from "../components/ui/Button.astro";
+import Card from "../components/ui/Card.astro";
+---
+
+<Layout title="Sessions">
+  <Navbar slot="nav" active="/sessions" />
+
+  <div class="animate-fade-in">
+    <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-8">
+      <div>
+        <h1 class="text-3xl font-extrabold tracking-tight bg-card bg-clip-text text-transparent">
+          Sessions &amp; Workspaces
+        </h1>
+        <p class="text-sm text-muted-foreground mt-1.5">Manage capture sessions, workspaces, and audit reports</p>
+      </div>
+      <Button variant="gradient" onclick="createWorkspace()" class="group shrink-0">
+        <span class="absolute inset-0 bg-card -translate-x-full group-hover:translate-x-full transition-transform duration-700"></span>
+        <i data-lucide="plus" class="w-4 h-4"></i>
+        Create Workspace
+      </Button>
+    </div>
+
+    <div class="grid grid-cols-1 gap-6">
+      <Card>
+        <div class="absolute top-0 left-0 w-full h-0.5 bg-card
+        <div class="relative z-10 p-5">
+          <h2 class="text-sm font-bold text-foreground mb-5 flex items-center gap-2">
+            <i data-lucide="folder" class="w-4 h-4 text-primary"></i>
+            Workspaces
+          </h2>
+          <div id="workspace-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            <div class="col-span-full">
+              <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                <div class="skeleton h-32 rounded-xl"></div>
+                <div class="skeleton h-32 rounded-xl"></div>
+                <div class="skeleton h-32 rounded-xl"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </Card>
+
+      <Card id="sessions-section" class="hidden">
+        <div class="absolute top-0 left-0 w-full h-0.5 bg-card
+        <div class="relative z-10 p-5">
+          <div class="flex items-center justify-between mb-5">
+            <h2 class="text-sm font-bold text-foreground flex items-center gap-2">
+              <i data-lucide="database" class="w-4 h-4 text-emerald-500"></i>
+              Sessions — <span id="selected-workspace-name" class="text-primary font-mono"></span>
+            </h2>
+          </div>
+          <div class="overflow-x-auto rounded-xl border border-border">
+            <table class="w-full text-xs">
+              <thead>
+                <tr class="bg-muted/50 text-muted-foreground uppercase tracking-wider text-[11px]">
+                  <th class="px-4 py-3 text-left font-semibold">ID</th>
+                  <th class="px-4 py-3 text-left font-semibold">Attack Type</th>
+                  <th class="px-4 py-3 text-left font-semibold">Target</th>
+                  <th class="px-4 py-3 text-left font-semibold">Status</th>
+                  <th class="px-4 py-3 text-left font-semibold">Started</th>
+                  <th class="px-4 py-3 text-left font-semibold">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="sessions-tbody"></tbody>
+            </table>
+          </div>
+          <div id="sessions-empty" class="hidden flex flex-col items-center py-10">
+            <div class="w-14 h-14 rounded-2xl bg-muted/50 flex items-center justify-center mb-4 border border-border">
+              <i data-lucide="database" class="w-6 h-6 text-muted-foreground"></i>
+            </div>
+            <p class="text-sm text-muted-foreground font-medium">No sessions yet</p>
+            <p class="text-xs text-muted-foreground/60 mt-1">Capture handshakes or run attacks to create sessions</p>
+          </div>
+        </div>
+      </Card>
+    </div>
+
+    <div class="mt-6">
+      <TerminalOutput id="sessions-terminal" height="250px" label="SESSIONS LOG" />
+    </div>
+  </div>
+</Layout>
+
+<script>
+async function loadWorkspaces() {
+  const grid = document.getElementById('workspace-grid');
+  try {
+    const r = await fetch('/api/workspaces');
+    const d = await r.json();
+    const workspaces = d.workspaces || [];
+    if (workspaces.length === 0) {
+      grid.innerHTML = `<div class="col-span-full flex flex-col items-center py-16">
+        <div class="w-16 h-16 rounded-2xl bg-muted/50 flex items-center justify-center mb-5 border border-border">
+          <i data-lucide="folder" class="w-7 h-7 text-muted-foreground"></i>
+        </div>
+        <p class="text-sm text-muted-foreground font-medium">No workspaces</p>
+        <p class="text-xs text-muted-foreground/60 mt-1 mb-5">Create a workspace to organize your sessions</p>
+        <button onclick="createWorkspace()" class="px-5 py-2.5 rounded-xl bg-card text-white text-sm font-semibold transition-all duration-300 shadow-lg shadow-md hover:shadow-md flex items-center gap-2">
+          <i data-lucide="plus" class="w-4 h-4"></i>
+          Create Workspace
+        </button>
+      </div>`;
+    } else {
+      grid.innerHTML = `<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">${workspaces.map(w => {
+        const name = typeof w === 'string' ? w : (w.name || w.id || 'Unnamed');
+        const created = w.created_at || w.created || '';
+        const count = w.attack_count ?? w.session_count ?? 0;
+        const status = w.status || 'active';
+        const statusBadge = status === 'active'
+          ? '<span class="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-500 text-[10px] font-semibold border border-emerald-500/20">Active</span>'
+          : '<span class="px-2 py-0.5 rounded-full bg-muted/50 text-muted-foreground text-[10px] font-semibold border border-border">Inactive</span>';
+        const dateStr = created ? new Date(created).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '';
+        return `<div onclick="selectWorkspace('${name}')" class="group relative overflow-hidden rounded-xl bg-card border border-border hover:border-primary/30 hover:shadow-[0_0_25px_rgba(0,212,255,0.12)] transition-all duration-300 cursor-pointer hover:-translate-y-0.5">
+          <div class="absolute inset-0 bg-gradient-to-br from-primary/[0.03] via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
+          <div class="absolute top-0 left-0 w-full h-0.5 bg-card scale-x-0 group-hover:scale-x-100 transition-transform duration-500 origin-left"></div>
+          <div class="relative z-10 p-4">
+            <div class="flex items-start justify-between mb-3">
+              <div class="w-9 h-9 rounded-lg bg-card flex items-center justify-center">
+                <i data-lucide="folder" class="w-4 h-4 text-primary"></i>
+              </div>
+              <button onclick="event.stopPropagation(); deleteWorkspace('${name}')" class="opacity-0 group-hover:opacity-100 transition-opacity duration-200 p-1 rounded-md hover:bg-red-500/10 text-muted-foreground hover:text-red-500" title="Delete workspace">
+                <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+              </button>
+            </div>
+            <h3 class="text-sm font-semibold text-foreground group-hover:text-primary transition-colors">${name}</h3>
+            <div class="flex items-center gap-3 mt-2 text-[11px] text-muted-foreground">
+              ${dateStr ? `<span>${dateStr}</span>` : ''}
+              <span>${count} attack${count !== 1 ? 's' : ''}</span>
+            </div>
+            <div class="mt-3">${statusBadge}</div>
+          </div>
+        </div>`;
+      }).join('')}</div>`;
+    }
+    window.appendTerminalById?.('sessions-terminal', `<span class="text-emerald-500">Loaded ${workspaces.length} workspaces</span>`);
+  } catch {
+    grid.innerHTML = '<div class="col-span-full flex flex-col items-center py-16"><div class="w-14 h-14 rounded-2xl bg-red-500/10 flex items-center justify-center mb-4 border border-red-500/20"><i data-lucide="x-circle" class="w-6 h-6 text-red-500"></i></div><p class="text-sm text-red-500 font-medium">Failed to load workspaces</p><p class="text-xs text-muted-foreground/60 mt-1">Check backend connection</p></div>';
+  }
+}
+
+async function selectWorkspace(name) {
+  const section = document.getElementById('sessions-section');
+  const nameEl = document.getElementById('selected-workspace-name');
+  const tbody = document.getElementById('sessions-tbody');
+  const empty = document.getElementById('sessions-empty');
+
+  nameEl.textContent = name;
+  section.classList.remove('hidden');
+  section.classList.add('animate-slide-up-fade');
+
+  try {
+    const r = await fetch(`/api/sessions?workspace=${encodeURIComponent(name)}`);
+    const d = await r.json();
+    const sessions = d.sessions || [];
+
+    if (sessions.length === 0) {
+      tbody.innerHTML = '';
+      empty.classList.remove('hidden');
+    } else {
+      empty.classList.add('hidden');
+      tbody.innerHTML = sessions.map(s => {
+        const sid = s.id || s.name || '—';
+        const attack = s.attack_type || s.type || '—';
+        const target = s.target || s.bssid || '—';
+        const status = s.status || 'unknown';
+        const started = s.started_at || s.timestamp || s.created || '—';
+        const dateStr = started !== '—' ? new Date(started).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—';
+
+        let statusBadge = '';
+        if (status === 'running' || status === 'active') {
+          statusBadge = '<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-500 text-[10px] font-semibold border border-emerald-500/20"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse-glow"></span>Running</span>';
+        } else if (status === 'completed' || status === 'done') {
+          statusBadge = '<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-primary/10 text-primary text-[10px] font-semibold border border-primary/20"><span class="w-1.5 h-1.5 rounded-full bg-primary"></span>Completed</span>';
+        } else if (status === 'failed' || status === 'error') {
+          statusBadge = '<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-red-500/10 text-red-500 text-[10px] font-semibold border border-red-500/20"><span class="w-1.5 h-1.5 rounded-full bg-red-500"></span>Failed</span>';
+        } else {
+          statusBadge = `<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-muted/50 text-muted-foreground text-[10px] font-semibold border border-border">${status}</span>`;
+        }
+
+        return `<tr class="border-b border-border/40 hover:bg-primary/[0.02] transition-colors">
+          <td class="px-4 py-3 font-mono text-muted-foreground text-[11px]">${sid}</td>
+          <td class="px-4 py-3 text-foreground font-medium">${attack}</td>
+          <td class="px-4 py-3 font-mono text-muted-foreground text-[11px]">${target}</td>
+          <td class="px-4 py-3">${statusBadge}</td>
+          <td class="px-4 py-3 text-muted-foreground text-[11px]">${dateStr}</td>
+          <td class="px-4 py-3">
+            <button onclick="viewSessionDetails('${sid}')" class="px-2.5 py-1 rounded-lg bg-muted/30 border border-border/30 text-[10px] text-muted-foreground hover:text-foreground hover:border-border/60 transition-all font-medium">View</button>
+          </td>
+        </tr>`;
+      }).join('');
+    }
+    window.appendTerminalById?.('sessions-terminal', `Loaded <span class="text-primary">${sessions.length}</span> sessions for <span class="text-emerald-500">${name}</span>`);
+  } catch {
+    tbody.innerHTML = '';
+    empty.classList.add('hidden');
+    tbody.innerHTML = `<tr><td colspan="6" class="px-4 py-8 text-center text-red-500 text-xs">Failed to load sessions</td></tr>`;
+  }
+}
+
+async function viewSessionDetails(id) {
+  try {
+    const r = await fetch(`/api/sessions/${encodeURIComponent(id)}`);
+    const s = await r.json();
+    HackitUI.confirm({
+      title: `<span class="text-foreground font-mono text-sm">${s.id || id}</span>`,
+      html: `<div class="text-left space-y-2 text-xs font-mono" style="color: #94a3b8">
+        ${s.attack_type ? `<div><span class="text-muted-foreground">Type:</span> <span class="text-foreground">${s.attack_type}</span></div>` : ''}
+        ${s.target ? `<div><span class="text-muted-foreground">Target:</span> <span class="text-foreground">${s.target}</span></div>` : ''}
+        ${s.bssid ? `<div><span class="text-muted-foreground">BSSID:</span> <span class="text-foreground">${s.bssid}</span></div>` : ''}
+        ${s.ssid ? `<div><span class="text-muted-foreground">SSID:</span> <span class="text-foreground">${s.ssid}</span></div>` : ''}
+        ${s.channel ? `<div><span class="text-muted-foreground">Channel:</span> <span class="text-foreground">${s.channel}</span></div>` : ''}
+        ${s.status ? `<div><span class="text-muted-foreground">Status:</span> <span class="text-foreground">${s.status}</span></div>` : ''}
+        ${s.created_at ? `<div><span class="text-muted-foreground">Started:</span> <span class="text-foreground">${new Date(s.created_at).toLocaleString()}</span></div>` : ''}
+        ${s.duration ? `<div><span class="text-muted-foreground">Duration:</span> <span class="text-foreground">${s.duration}s</span></div>` : ''}
+        ${s.result ? `<div class="mt-2 pt-2 border-t border-border"><span class="text-muted-foreground block mb-1">Result:</span><pre class="text-foreground/80 text-[11px] leading-relaxed max-h-28 overflow-y-auto">${s.result}</pre></div>` : ''}
+      </div>`,
+      icon: 'info',
+      confirmButtonText: 'Close',
+      showCancelButton: false,
+      confirmButtonColor: '#00d4ff',
+      background: 'rgba(10,10,26,0.96)',
+      color: '#f8fafc',
+      customClass: { popup: 'rounded-2xl border border-border' }
+    });
+  } catch {
+    HackitUI.confirm({ icon: 'error', title: 'Error', text: 'Could not load session details', showCancelButton: false, confirmButtonColor: '#00d4ff' });
+  }
+}
+
+async function createWorkspace() {
+  const { value: name } = await HackitUI.input({
+    title: '<span class="text-foreground text-base font-bold">Create Workspace</span>',
+    placeholder: 'Workspace name...',
+    confirmButtonText: 'Create',
+    cancelButtonText: 'Cancel',
+    confirmButtonColor: '#00d4ff',
+    cancelButtonColor: '#475569',
+    background: 'rgba(10,10,26,0.96)',
+    color: '#f8fafc',
+    customClass: { popup: 'rounded-2xl border border-border' },
+    validator: (v) => !v?.trim() ? 'Name is required' : null
+  });
+  if (!name) return;
+  try {
+    const r = await fetch('/api/workspaces', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name: name.trim()}) });
+    const d = await r.json();
+    if (d.ok) {
+      HackitUI.success('Workspace Created', name.trim());
+      loadWorkspaces();
+    } else {
+      HackitUI.confirm({ icon: 'error', title: 'Failed', text: d.message || 'Could not create workspace', showCancelButton: false, confirmButtonColor: '#ff0040' });
+    }
+      } catch (e) {
+    HackitUI.confirm({ icon: 'error', title: 'Error', text: e.message, showCancelButton: false, confirmButtonColor: '#ff0040' });
+  }
+}
+
+async function deleteWorkspace(name) {
+  const { isConfirmed } = await HackitUI.confirm({
+    title: `<span class="text-foreground text-base font-bold">Delete Workspace</span>`,
+    text: `Permanently delete "${name}" and all its sessions?`,
+    icon: 'warning',
+    confirmButtonText: 'Delete',
+    cancelButtonText: 'Cancel',
+    confirmButtonColor: '#ff0040',
+    cancelButtonColor: '#475569',
+    background: 'rgba(10,10,26,0.96)',
+    color: '#f8fafc',
+    customClass: { popup: 'rounded-2xl border border-border' }
+  });
+  if (!isConfirmed) return;
+  try {
+    const r = await fetch(`/api/workspaces/${encodeURIComponent(name)}`, { method: 'DELETE' });
+    const d = await r.json();
+    if (d.ok) {
+      HackitUI.success('Deleted', `"${name}" removed`);
+      loadWorkspaces();
+      document.getElementById('sessions-section')?.classList.add('hidden');
+    } else {
+      HackitUI.confirm({ icon: 'error', title: 'Failed', text: d.message || 'Could not delete', showCancelButton: false, confirmButtonColor: '#ff0040' });
+    }
+  } catch (e) {
+    HackitUI.confirm({ icon: 'error', title: 'Error', text: e.message, showCancelButton: false, confirmButtonColor: '#ff0040' });
+  }
+}
+
+loadWorkspaces();
+</script>

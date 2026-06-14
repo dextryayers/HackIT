@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/tls"
+	"fmt"
 	"math/rand"
 	"net/http"
 	"strings"
@@ -106,6 +107,111 @@ func safeGet(url string, timeout time.Duration) (*http.Response, error) {
 	req.Header.Set("Connection", "close") // Avoid keeping too many idle conns
 
 	return client.Do(req)
+}
+
+// CommonSubdomains is a built-in wordlist of ~350 common subdomain prefixes
+var CommonSubdomains = []string{
+	"www", "mail", "remote", "blog", "webmail", "server", "ns1", "ns2",
+	"smtp", "secure", "vpn", "admin", "mx", "api", "dev", "ftp", "test",
+	"www2", "mail2", "static", "app", "m", "img", "cdn", "video", "wiki",
+	"forum", "news", "shop", "store", "portal", "help", "support", "chat",
+	"docs", "status", "analytics", "tracker", "data", "backup", "db",
+	"mysql", "sql", "redis", "git", "svn", "jenkins", "jira", "confluence",
+	"docker", "k8s", "kube", "swarm", "prod", "staging", "stage", "qa",
+	"demo", "beta", "alpha", "preprod", "sandbox", "edge", "origin",
+	"ns", "ns3", "ns4", "dns", "dns1", "dns2", "mx1", "mx2", "mx3",
+	"pop3", "imap", "imap4", "mail1", "mail3", "email",
+	"owa", "exchange", "outlook", "autodiscover", "msoid",
+	"lync", "lyncdiscover", "sip", "teams", "skype",
+	"mg", "eu", "us", "uk", "de", "jp", "cn", "br", "au", "in", "ca",
+	"en", "fr", "es", "it", "nl", "ru", "pl", "se", "no", "fi", "dk",
+	"sg", "hk", "kr", "tw", "th", "my", "id", "ph", "vn",
+	"web", "web1", "web2", "web3", "web4", "web5",
+	"lb", "lb1", "lb2", "loadbalancer", "balancer",
+	"proxy", "proxy1", "proxy2", "gateway", "edge", "waf",
+	"firewall", "fw", "fw1", "ips", "ids", "splunk", "elk", "elastic",
+	"kibana", "logstash", "grafana", "prometheus", "alertmanager",
+	"monitor", "monitoring", "nagios", "zabbix", "cacti", "munin",
+	"puppet", "chef", "ansible", "salt", "terraform",
+	"ldap", "ldaps", "radius", "sso", "oauth", "auth", "login",
+	"signin", "signup", "register", "account", "accounts",
+	"billing", "pay", "payment", "checkout", "cart", "shop",
+	"crm", "erp", "hr", "intranet", "extranet", "partner",
+	"wholesale", "retail", "dealer", "distributor",
+	"mta", "mda", "mua", "spam", "antispam", "barracuda",
+	"mx", "relay", "send", "mailout", "mailer", "bounce",
+	"newsletter", "marketing", "campaign", "mailchimp",
+	"survey", "forms", "feedback", "bug", "bugs", "issues",
+	"roadmap", "changelog", "releases", "download", "downloads",
+	"software", "sdk", "api", "developer", "developers", "devs",
+	"code", "source", "repo", "repository", "bitbucket", "gitlab",
+	"ci", "cd", "build", "builder", "artifact", "artifacts",
+	"maven", "nexus", "npm", "pypi", "dockerhub", "registry",
+	"cloud", "cloud1", "cloud2", "console", "dashboard", "control",
+	"panel", "cpanel", "whm", "plesk", "directadmin",
+	"host", "hosting", "server", "dedicated", "vps",
+	"node", "node1", "node2", "node3", "cluster", "cluster1",
+	"dc", "dc1", "dc2", "rack", "rack1", "rack2",
+	"sw", "switch", "router", "core", "border",
+	"san", "nas", "storage", "backup", "tape", "archive",
+	"phone", "voip", "pbx", "asterisk", "freeswitch",
+	"printer", "print", "scan", "scanner", "fax",
+	"camera", "cam", "cam1", "cam2", "webcam", "cctv",
+	"atm", "pos", "terminal", "kiosk",
+	"sensor", "iot", "device", "devices", "gateway",
+	"office", "floor1", "floor2", "floor3", "basement",
+	"lab", "labs", "research", "rd", "innovation",
+	"temp", "tmp", "test1", "test2", "tests", "testing",
+	"example", "sample", "demo", "demo1", "demo2",
+	"training", "learn", "education", "e-learning", "elearning",
+	"student", "teacher", "faculty", "staff", "alumni",
+	"library", "lib", "books", "catalog", "catalogue",
+	"event", "events", "calendar", "schedule",
+	"ticket", "tickets", "booking", "reservation",
+	"media", "gallery", "photo", "photos", "image", "images",
+	"assets", "upload", "uploads", "download", "downloads",
+	"content", "contents", "feed", "feeds", "rss", "atom",
+	"xmlrpc", "soap", "rest", "graphql", "websocket", "wss",
+	"service", "services", "microservice", "ms", "svc",
+	"health", "healthcheck", "ping", "heartbeat",
+	"metrics", "stats", "statistics", "reports", "reporting",
+	"audit", "audits", "compliance",
+	"license", "licensing", "activation",
+	"partner", "partners", "vendor", "vendors",
+	"affiliate", "affiliates", "referral", "referrals",
+	"ad", "ads", "advertising", "adserver", "advert",
+	"jobs", "career", "careers", "recruit", "recruiting",
+	"about", "contact", "info", "faq", "help", "manual",
+	"terms", "privacy", "legal", "gdpr", "security",
+	"status", "uptime", "incident", "incidents",
+	"brand", "branding", "press", "newsroom",
+	"investor", "investors", "ir", "financial",
+	"corp", "corporate", "company", "about-us",
+	"community", "forum", "discuss", "discourse",
+	"blog", "blogs", "wordpress", "wp", "wp-admin",
+	"cms", "drupal", "joomla", "magento", "shopify",
+	"squarespace", "wix", "weebly", "ghost",
+	"static", "static1", "static2", "static3",
+	"assets", "assets1", "assets2",
+	"upload", "uploads", "files", "file", "data",
+	"media", "media1", "media2",
+	"img", "img1", "img2", "image", "images",
+	"css", "js", "scripts", "styles", "fonts",
+	"theme", "themes", "template", "templates",
+	"plugin", "plugins", "extension", "extensions",
+	"widget", "widgets", "module", "modules",
+	"mobile", "mobi", "iphone", "ipad", "android",
+	"ios", "windows", "mac", "linux",
+}
+
+func loadBuiltinWordlist(domain string, jobs chan<- string) int {
+	count := 0
+	for _, word := range CommonSubdomains {
+		sub := fmt.Sprintf("%s.%s", word, domain)
+		jobs <- sub
+		count++
+	}
+	return count
 }
 
 // CStrToGo converts a C-style string pointer (from Rust FFI) to a Go string

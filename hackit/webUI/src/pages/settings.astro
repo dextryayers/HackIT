@@ -1,0 +1,624 @@
+---
+import Layout from '../layouts/Layout.astro';
+
+const MODULE_CATEGORIES = {
+  "dns_domain": { label: "DNS & Domain", icon: "fa-globe", color: "text-sky-400", desc: "DNS records, subdomains, whois", modules: ["crtsh", "dns_brute", "dns_deep_forensics", "dns_enum_full", "dns_resolver", "dnsdumpster", "dnshistory", "dnstwister", "domain_profile_deep", "rapiddns", "securitytrails", "subdomain_passive", "subdomain_takeover", "viewdns", "whois", "certificate_search", "certspotter", "hackertarget", "fullhunt"] },
+  "web_server": { label: "Web & Server", icon: "fa-server", color: "text-emerald-400", desc: "HTTP headers, SSL, tech detection", modules: ["api_scanner", "builtwith", "crawler_core", "header_audit", "js_secrets", "secret_finder", "sensitive_files_hunter", "ssl_analyzer", "urlscan", "vulnerability_scanner_lite", "web_surface_mapper", "web_tech", "cloud_fingerprint_deep", "cve_exploit_lookup", "publicwww", "netlas", "fofa", "zoomeye", "binaryedge", "onyphe", "intelx", "leakix", "leakix_scanner", "censys", "firewall_detector", "javascript_deps_analyzer", "ssl_chain_analyzer", "http2_fingerprinter", "api_endpoint_fuzzer", "tracker_network_mapper", "open_redirect_scanner", "web_cookie_analyzer", "technology_stack_profiler", "cdn_origin_finder", "vulnerability_db_scanner"] },
+  "email_osint": { label: "Email OSINT", icon: "fa-envelope", color: "text-cyan-400", desc: "Email harvest, SPF/DKIM/DMARC", modules: ["email_harvester", "email_security_deep", "email_verifier", "hunterhow", "breach_directory", "haveibeenpwned", "email_reputation_checker", "mail_server_analyzer"] },
+  "people_social": { label: "People & Social", icon: "fa-users", color: "text-purple-400", desc: "Social media, people search", modules: ["people_org_osint", "social_alias_hunter", "social_search", "tracker_identity_mapper", "whatsmyname_checker", "mobile_recon", "reverse_image_search"] },
+  "cloud_infrastructure": { label: "Cloud & Infrastructure", icon: "fa-cloud", color: "text-orange-400", desc: "Cloud providers, CDN, ASN", modules: ["cloud_infrastructure_hunter", "cloud_probe", "cloud_recon", "asn_bgp_radar", "bgp_he_net", "robtex", "cloudflare_resolver"] },
+  "threat_leaks": { label: "Threat & Leaks", icon: "fa-shield-halved", color: "text-red-400", desc: "Breach data, malware, VT", modules: ["abuseipdb", "breach_forensics", "darkweb_intel", "greynoise", "malware_reputation_radar", "otx", "pastebin_monitor", "shodan_full", "shodan", "threat_intel", "threatminer", "virustotal_full", "virustotal", "crypto_abuse_radar", "leak_checker_pro", "dark_web_scanner", "malware_sandbox_check", "phishing_detector"] },
+  "historical_archive": { label: "Historical & Archive", icon: "fa-archive", color: "text-slate-400", desc: "Wayback, CDX, DNS history", modules: ["archive_forensics", "archive_url_miner", "archive", "wayback", "dork_engine", "git_leaks", "exposure_surface_deep", "google_dorks_deep"] },
+  "geolocation_network": { label: "Geolocation & Network", icon: "fa-map-pin", color: "text-amber-400", desc: "IP geo, ports, topology", modules: ["geo_recon", "ip_geolocation", "network_topology_mapper", "port_scanner", "device_search", "financial_recon", "wigle"] }
+};
+---
+
+<Layout title="HackIT OSINT | System Settings">
+  <div class="max-w-6xl mx-auto p-8 space-y-6">
+    <!-- Page Header -->
+    <header class="flex justify-between items-start">
+      <div>
+        <h2 class="text-3xl font-bold text-sf-text tracking-tight flex items-center gap-3">
+          <i class="fas fa-cog text-sf-tabActive"></i> System Settings
+        </h2>
+        <p class="text-sf-muted text-sm mt-1">Configure the HackIT OSINT intelligence engine. Settings are saved to your browser.</p>
+      </div>
+      <div class="flex items-center gap-3">
+        <a href="/intelligence" class="px-5 py-2.5 bg-sf-tabActive text-black text-xs font-bold rounded-lg hover:bg-sky-400 transition-all uppercase tracking-widest flex items-center gap-2">
+          <i class="fas fa-brain"></i> Intelligence
+        </a>
+      </div>
+    </header>
+
+    <!-- Settings Grid -->
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+
+      <!-- LEFT COLUMN (2/3) -->
+      <div class="lg:col-span-2 space-y-6">
+
+        <!-- Scan Profile -->
+        <div class="bg-sf-card border border-sf-border rounded-lg p-6">
+          <h3 class="text-sm font-semibold text-sf-text mb-5 flex items-center gap-2"><i class="fas fa-sliders-h text-sf-tabActive"></i> Scan Profile</h3>
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+            <label class="cursor-pointer" data-setting="depth" data-value="quick">
+              <input type="radio" name="scan-depth" value="quick" class="hidden peer">
+              <div class="p-4 rounded-xl border border-sf-border bg-sf-lightbg peer-checked:border-sf-tabActive peer-checked:bg-sf-tabActive/5 transition-all text-center">
+                <i class="fas fa-bolt text-lg text-yellow-500 mb-1"></i>
+                <div class="text-xs font-bold text-sf-text">Quick</div>
+                <div class="text-[9px] text-sf-muted mt-0.5">~2 min</div>
+              </div>
+            </label>
+            <label class="cursor-pointer" data-setting="depth" data-value="normal">
+              <input type="radio" name="scan-depth" value="normal" class="hidden peer">
+              <div class="p-4 rounded-xl border border-sf-border bg-sf-lightbg peer-checked:border-sf-tabActive peer-checked:bg-sf-tabActive/5 transition-all text-center">
+                <i class="fas fa-gauge text-lg text-emerald-500 mb-1"></i>
+                <div class="text-xs font-bold text-sf-text">Normal</div>
+                <div class="text-[9px] text-sf-muted mt-0.5">~5 min</div>
+              </div>
+            </label>
+            <label class="cursor-pointer" data-setting="depth" data-value="deep">
+              <input type="radio" name="scan-depth" value="deep" class="hidden peer" checked>
+              <div class="p-4 rounded-xl border border-sf-border bg-sf-lightbg peer-checked:border-sf-tabActive peer-checked:bg-sf-tabActive/5 transition-all text-center">
+                <i class="fas fa-water text-lg text-blue-500 mb-1"></i>
+                <div class="text-xs font-bold text-sf-text">Deep</div>
+                <div class="text-[9px] text-sf-muted mt-0.5">~15 min</div>
+              </div>
+            </label>
+            <label class="cursor-pointer" data-setting="depth" data-value="exhaustive">
+              <input type="radio" name="scan-depth" value="exhaustive" class="hidden peer">
+              <div class="p-4 rounded-xl border border-sf-border bg-sf-lightbg peer-checked:border-sf-tabActive peer-checked:bg-sf-tabActive/5 transition-all text-center">
+                <i class="fas fa-infinity text-lg text-purple-500 mb-1"></i>
+                <div class="text-xs font-bold text-sf-text">Exhaustive</div>
+                <div class="text-[9px] text-sf-muted mt-0.5">~30+ min</div>
+              </div>
+            </label>
+          </div>
+          <div class="flex items-center gap-4 p-3 rounded-lg bg-sf-lightbg border border-sf-border mb-3">
+            <i class="fas fa-bullseye text-sf-tabActive"></i>
+            <div class="flex-1">
+              <div class="text-xs text-sf-text font-medium">Sniper Ratio</div>
+              <div class="text-[10px] text-sf-muted">Concurrency & resource profile</div>
+            </div>
+            <select id="setting-sniper-ratio" class="bg-sf-card border border-sf-border text-xs text-sf-text rounded-lg px-3 py-2 focus:outline-none focus:border-sf-tabActive">
+              <option value="stealth">Stealth (30 threads)</option>
+              <option value="balanced">Balanced (150 threads)</option>
+              <option value="max" selected>MAX POWER (300 threads)</option>
+            </select>
+          </div>
+          <div class="flex items-center gap-4 p-3 rounded-lg bg-sf-lightbg border border-sf-border">
+            <i class="fas fa-clock text-sf-muted"></i>
+            <div class="flex-1">
+              <div class="text-xs text-sf-text font-medium">Module Timeout</div>
+              <div class="text-[10px] text-sf-muted">Seconds per module before timeout</div>
+            </div>
+            <select id="setting-timeout" class="bg-sf-card border border-sf-border text-xs text-sf-text rounded-lg px-3 py-2 focus:outline-none focus:border-sf-tabActive">
+              <option value="5">5s</option>
+              <option value="10">10s</option>
+              <option value="15" selected>15s</option>
+              <option value="30">30s</option>
+              <option value="60">60s</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Module Selection -->
+        <div class="bg-sf-card border border-sf-border rounded-lg p-6">
+          <h3 class="text-sm font-semibold text-sf-text mb-5 flex items-center gap-2"><i class="fas fa-puzzle-piece text-sf-tabActive"></i> Module Selection</h3>
+          <div class="space-y-3" id="module-categories">
+            {Object.entries(MODULE_CATEGORIES).map(([key, cat]) => (
+              <div class="module-category border border-sf-border rounded-lg overflow-hidden">
+                <div class="flex items-center justify-between p-3 bg-sf-lightbg cursor-pointer category-header" data-category={key}>
+                  <div class="flex items-center gap-3">
+                    <i class={`fas ${cat.icon} ${cat.color} w-4`}></i>
+                    <div>
+                      <div class="text-xs font-medium text-sf-text">{cat.label}</div>
+                      <div class="text-[9px] text-sf-muted">{cat.desc} &mdash; {cat.modules.length} modules</div>
+                    </div>
+                  </div>
+                  <div class="flex items-center gap-2">
+                    <label class="flex items-center gap-1.5 text-[10px] text-sf-muted cursor-pointer" onclick="event.stopPropagation()">
+                      <input type="checkbox" class="category-toggle accent-sf-tabActive" data-category={key} checked onchange="toggleCategory(event)">
+                      <span>{cat.modules.length} modules</span>
+                    </label>
+                    <i class="fas fa-chevron-down text-sf-muted text-[10px] transition-transform category-chevron"></i>
+                  </div>
+                </div>
+                <div class="module-list hidden border-t border-sf-border">
+                  <div class="grid grid-cols-2 md:grid-cols-3 gap-1 p-3">
+                    {cat.modules.map(mod => (
+                      <label class="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-sf-card cursor-pointer text-[11px]">
+                        <input type="checkbox" class="module-toggle accent-sf-tabActive" data-category={key} data-module={mod} checked>
+                        <span class="text-sf-text font-mono">{mod}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div class="flex gap-3 mt-4">
+            <button id="select-all-modules" class="text-[10px] bg-sf-lightbg border border-sf-border hover:border-sf-muted px-3 py-1.5 rounded text-sf-text transition-all font-medium">Select All</button>
+            <button id="deselect-all-modules" class="text-[10px] bg-sf-lightbg border border-sf-border hover:border-sf-muted px-3 py-1.5 rounded text-sf-text transition-all font-medium">Deselect All</button>
+          </div>
+        </div>
+
+        <!-- API Keys & Integrations -->
+        <div class="bg-sf-card border border-sf-border rounded-lg p-6">
+          <h3 class="text-sm font-semibold text-sf-text mb-5 flex items-center gap-2"><i class="fas fa-key text-sf-tabActive"></i> API Keys & Integrations</h3>
+          <p class="text-[10px] text-sf-muted mb-4">These keys are stored locally in your browser and sent with each scan request. Never share your browser's storage.</p>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div class="p-3 rounded-lg bg-sf-lightbg border border-sf-border">
+              <label class="text-[11px] text-sf-text font-medium flex items-center gap-2 mb-1">
+                <i class="fas fa-shield text-red-400 text-[10px]"></i> Shodan API Key
+              </label>
+              <input type="password" id="api-shodan" class="api-key-input w-full bg-sf-card border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text focus:outline-none focus:border-sf-tabActive font-mono" placeholder="Enter Shodan API key..." spellcheck="false">
+            </div>
+            <div class="p-3 rounded-lg bg-sf-lightbg border border-sf-border">
+              <label class="text-[11px] text-sf-text font-medium flex items-center gap-2 mb-1">
+                <i class="fas fa-bug text-emerald-400 text-[10px]"></i> VirusTotal API Key
+              </label>
+              <input type="password" id="api-virustotal" class="api-key-input w-full bg-sf-card border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text focus:outline-none focus:border-sf-tabActive font-mono" placeholder="Enter VirusTotal API key..." spellcheck="false">
+            </div>
+            <div class="p-3 rounded-lg bg-sf-lightbg border border-sf-border">
+              <label class="text-[11px] text-sf-text font-medium flex items-center gap-2 mb-1">
+                <i class="fas fa-eye text-sky-400 text-[10px]"></i> SecurityTrails API Key
+              </label>
+              <input type="password" id="api-securitytrails" class="api-key-input w-full bg-sf-card border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text focus:outline-none focus:border-sf-tabActive font-mono" placeholder="Enter SecurityTrails API key..." spellcheck="false">
+            </div>
+            <div class="p-3 rounded-lg bg-sf-lightbg border border-sf-border">
+              <label class="text-[11px] text-sf-text font-medium flex items-center gap-2 mb-1">
+                <i class="fas fa-search text-purple-400 text-[10px]"></i> Censys API Key
+              </label>
+              <input type="password" id="api-censys" class="api-key-input w-full bg-sf-card border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text focus:outline-none focus:border-sf-tabActive font-mono" placeholder="Enter Censys API key..." spellcheck="false">
+            </div>
+            <div class="p-3 rounded-lg bg-sf-lightbg border border-sf-border">
+              <label class="text-[11px] text-sf-text font-medium flex items-center gap-2 mb-1">
+                <i class="fas fa-network-wired text-orange-400 text-[10px]"></i> Shodan.io Full Feed
+              </label>
+              <input type="password" id="api-shodan-full" class="api-key-input w-full bg-sf-card border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text focus:outline-none focus:border-sf-tabActive font-mono" placeholder="Enter Shodan Full Feed API..." spellcheck="false">
+            </div>
+            <div class="p-3 rounded-lg bg-sf-lightbg border border-sf-border">
+              <label class="text-[11px] text-sf-text font-medium flex items-center gap-2 mb-1">
+                <i class="fas fa-database text-cyan-400 text-[10px]"></i> Have I Been Pwned Key
+              </label>
+              <input type="password" id="api-hibp" class="api-key-input w-full bg-sf-card border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text focus:outline-none focus:border-sf-tabActive font-mono" placeholder="Enter HIBP API key..." spellcheck="false">
+            </div>
+          </div>
+        </div>
+
+        <!-- Network & Proxy -->
+        <div class="bg-sf-card border border-sf-border rounded-lg p-6">
+          <h3 class="text-sm font-semibold text-sf-text mb-5 flex items-center gap-2"><i class="fas fa-globe text-sf-tabActive"></i> Network & Proxy</h3>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div class="p-3 rounded-lg bg-sf-lightbg border border-sf-border">
+              <label class="text-[11px] text-sf-text font-medium mb-1 flex items-center gap-2">
+                <i class="fas fa-shield-halved text-yellow-400 text-[10px]"></i> HTTP/HTTPS Proxy
+              </label>
+              <input type="text" id="setting-proxy-http" class="w-full bg-sf-card border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text focus:outline-none focus:border-sf-tabActive font-mono" placeholder="http://proxy.example.com:8080" spellcheck="false">
+              <p class="text-[9px] text-sf-muted mt-1">Leave empty for direct connection</p>
+            </div>
+            <div class="p-3 rounded-lg bg-sf-lightbg border border-sf-border">
+              <label class="text-[11px] text-sf-text font-medium mb-1 flex items-center gap-2">
+                <i class="fas fa-socks text-blue-400 text-[10px]"></i> SOCKS5 Proxy
+              </label>
+              <input type="text" id="setting-proxy-socks" class="w-full bg-sf-card border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text focus:outline-none focus:border-sf-tabActive font-mono" placeholder="socks5://127.0.0.1:9050" spellcheck="false">
+              <p class="text-[9px] text-sf-muted mt-1">SOCKS proxy overrides HTTP proxy</p>
+            </div>
+            <div class="p-3 rounded-lg bg-sf-lightbg border border-sf-border">
+              <label class="text-[11px] text-sf-text font-medium mb-1 flex items-center gap-2">
+                <i class="fas fa-server text-slate-400 text-[10px]"></i> Custom DNS Resolver
+              </label>
+              <input type="text" id="setting-dns-resolver" class="w-full bg-sf-card border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text focus:outline-none focus:border-sf-tabActive font-mono" placeholder="8.8.8.8" spellcheck="false">
+              <p class="text-[9px] text-sf-muted mt-1">Default: system DNS</p>
+            </div>
+            <div class="p-3 rounded-lg bg-sf-lightbg border border-sf-border">
+              <label class="text-[11px] text-sf-text font-medium mb-1 flex items-center gap-2">
+                <i class="fas fa-user-secret text-sf-text text-[10px]"></i> Custom User-Agent
+              </label>
+              <input type="text" id="setting-user-agent" class="w-full bg-sf-card border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text focus:outline-none focus:border-sf-tabActive font-mono" placeholder="Mozilla/5.0 (X11; Linux x86_64) ..." spellcheck="false">
+              <p class="text-[9px] text-sf-muted mt-1">Browser user agent for HTTP requests</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- RIGHT COLUMN (1/3) -->
+      <div class="space-y-6">
+
+        <!-- Stealth & Evasion -->
+        <div class="bg-sf-card border border-sf-border rounded-lg p-6">
+          <h3 class="text-sm font-semibold text-sf-text mb-5 flex items-center gap-2"><i class="fas fa-shield text-sf-tabActive"></i> Stealth & Evasion</h3>
+          <div class="space-y-4">
+            <label class="flex items-center justify-between cursor-pointer">
+              <div><div class="text-xs font-medium text-sf-text">Stealth Mode</div><div class="text-[9px] text-sf-muted">Avoid intrusive probes</div></div>
+              <div class="relative w-9 h-5" data-setting="stealth_mode" onclick="toggleSwitch(this)">
+                <div class="w-9 h-5 bg-sf-border rounded-full transition-colors"><div class="absolute left-0.5 top-0.5 w-4 h-4 bg-white/20 rounded-full transition-all"></div></div>
+              </div>
+            </label>
+            <label class="flex items-center justify-between cursor-pointer">
+              <div><div class="text-xs font-medium text-sf-text">Verify Findings</div><div class="text-[9px] text-sf-muted">Resolve & verify DNS</div></div>
+              <div class="relative w-9 h-5 bg-sf-green rounded-full" data-setting="verify_findings" onclick="toggleSwitch(this)">
+                <div class="absolute right-0.5 top-0.5 w-4 h-4 bg-white rounded-full transition-all"></div>
+              </div>
+            </label>
+            <label class="flex items-center justify-between cursor-pointer">
+              <div><div class="text-xs font-medium text-sf-text">Passive Only</div><div class="text-[9px] text-sf-muted">No direct connections</div></div>
+              <div class="relative w-9 h-5 bg-sf-border rounded-full" data-setting="passive_only" onclick="toggleSwitch(this)">
+                <div class="absolute left-0.5 top-0.5 w-4 h-4 bg-white/20 rounded-full transition-all"></div>
+              </div>
+            </label>
+            <label class="flex items-center justify-between cursor-pointer">
+              <div><div class="text-xs font-medium text-sf-text">Correlation Engine</div><div class="text-[9px] text-sf-muted">Cross-link findings</div></div>
+              <div class="relative w-9 h-5 bg-sf-green rounded-full" data-setting="correlation_engine" onclick="toggleSwitch(this)">
+                <div class="absolute right-0.5 top-0.5 w-4 h-4 bg-white rounded-full transition-all"></div>
+              </div>
+            </label>
+            <label class="flex items-center justify-between cursor-pointer">
+              <div><div class="text-xs font-medium text-sf-text">Screenshot Pages</div><div class="text-[9px] text-sf-muted">Capture visual recon</div></div>
+              <div class="relative w-9 h-5 bg-sf-border rounded-full" data-setting="screenshot_pages" onclick="toggleSwitch(this)">
+                <div class="absolute left-0.5 top-0.5 w-4 h-4 bg-white/20 rounded-full transition-all"></div>
+              </div>
+            </label>
+            <label class="flex items-center justify-between cursor-pointer">
+              <div><div class="text-xs font-medium text-sf-text">Rate Limiting</div><div class="text-[9px] text-sf-muted">Throttle requests</div></div>
+              <div class="relative w-9 h-5 bg-sf-border rounded-full" data-setting="rate_limiting" onclick="toggleSwitch(this)">
+                <div class="absolute left-0.5 top-0.5 w-4 h-4 bg-white/20 rounded-full transition-all"></div>
+              </div>
+            </label>
+          </div>
+        </div>
+
+        <!-- Output & Verbosity -->
+        <div class="bg-sf-card border border-sf-border rounded-lg p-6">
+          <h3 class="text-sm font-semibold text-sf-text mb-5 flex items-center gap-2"><i class="fas fa-plug text-sf-tabActive"></i> Output & Verbosity</h3>
+          <div class="space-y-4">
+            <div>
+              <div class="text-xs text-sf-text font-medium mb-1">Verbosity Level</div>
+              <select id="setting-verbose" class="w-full bg-sf-lightbg border border-sf-border text-xs text-sf-text rounded-lg px-3 py-2 focus:outline-none focus:border-sf-tabActive">
+                <option value="0">Silent</option>
+                <option value="1" selected>Normal</option>
+                <option value="2">Verbose</option>
+                <option value="3">Debug</option>
+              </select>
+            </div>
+            <div>
+              <div class="text-xs text-sf-text font-medium mb-1">Max Findings</div>
+              <select id="setting-max-findings" class="w-full bg-sf-lightbg border border-sf-border text-xs text-sf-text rounded-lg px-3 py-2 focus:outline-none focus:border-sf-tabActive">
+                <option value="100">100</option>
+                <option value="500">500</option>
+                <option value="1000">1,000</option>
+                <option value="5000" selected>5,000</option>
+                <option value="10000">10,000</option>
+                <option value="0">Unlimited</option>
+              </select>
+            </div>
+            <div>
+              <div class="text-xs text-sf-text font-medium mb-1">Export Format</div>
+              <div class="flex gap-2">
+                <label class="flex-1 cursor-pointer"><input type="radio" name="export-format" value="json" class="hidden peer" checked><div class="text-center p-2 rounded-lg border border-sf-border bg-sf-lightbg peer-checked:border-sf-tabActive peer-checked:bg-sf-tabActive/5 text-xs text-sf-text">JSON</div></label>
+                <label class="flex-1 cursor-pointer"><input type="radio" name="export-format" value="csv" class="hidden peer"><div class="text-center p-2 rounded-lg border border-sf-border bg-sf-lightbg peer-checked:border-sf-tabActive peer-checked:bg-sf-tabActive/5 text-xs text-sf-text">CSV</div></label>
+                <label class="flex-1 cursor-pointer"><input type="radio" name="export-format" value="html" class="hidden peer"><div class="text-center p-2 rounded-lg border border-sf-border bg-sf-lightbg peer-checked:border-sf-tabActive peer-checked:bg-sf-tabActive/5 text-xs text-sf-text">HTML</div></label>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Automation -->
+        <div class="bg-sf-card border border-sf-border rounded-lg p-6">
+          <h3 class="text-sm font-semibold text-sf-text mb-5 flex items-center gap-2"><i class="fas fa-robot text-sf-tabActive"></i> Automation</h3>
+          <div class="space-y-4">
+            <label class="flex items-center justify-between cursor-pointer">
+              <div><div class="text-xs font-medium text-sf-text">Auto-Export Report</div><div class="text-[9px] text-sf-muted">Download JSON on completion</div></div>
+              <div class="relative w-9 h-5 bg-sf-border rounded-full" data-setting="auto_export" onclick="toggleSwitch(this)">
+                <div class="absolute left-0.5 top-0.5 w-4 h-4 bg-white/20 rounded-full transition-all"></div>
+              </div>
+            </label>
+            <div>
+              <div class="text-xs text-sf-text font-medium mb-1 flex items-center gap-2">
+                <i class="fas fa-bell text-sf-muted"></i> Notification Webhook
+              </div>
+              <input type="text" id="setting-webhook-url" class="w-full bg-sf-lightbg border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text font-mono focus:outline-none focus:border-sf-tabActive" placeholder="https://hooks.discord.com/..." spellcheck="false">
+              <p class="text-[9px] text-sf-muted mt-1">POST JSON to this URL when scan completes</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Save / Reset -->
+        <div class="bg-sf-card border border-sf-border rounded-lg p-6">
+          <div class="space-y-3">
+            <button id="save-settings" class="w-full bg-sf-tabActive hover:bg-sky-400 text-black text-xs font-bold py-3 rounded-lg transition-all uppercase tracking-widest flex items-center justify-center gap-2">
+              <i class="fas fa-check"></i> Save Settings
+            </button>
+            <button id="reset-settings" class="w-full bg-sf-border hover:bg-sf-muted/20 text-sf-muted text-xs font-medium py-2 rounded-lg transition-all uppercase tracking-widest flex items-center justify-center gap-2">
+              <i class="fas fa-undo"></i> Reset Defaults
+            </button>
+          </div>
+        </div>
+
+        <!-- Settings Status -->
+        <div class="bg-sf-card border border-sf-border rounded-lg p-4">
+          <div class="flex items-center gap-3 text-[10px] text-sf-muted">
+            <i class="fas fa-info-circle text-sf-tabActive"></i>
+            <span>Settings are saved to <span class="font-mono text-sf-text">localStorage</span> and persist across sessions. Apply globally to all missions.</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script is:inline>
+    /* ─── Shared helpers ─── */
+    function toggleSwitch(el) {
+      const track = el.querySelector('div');
+      if (!track) return;
+      const thumb = track.querySelector('div');
+      const isOn = track.classList.contains('bg-sf-green');
+      if (isOn) {
+        track.classList.remove('bg-sf-green');
+        thumb.classList.remove('right-0.5', 'bg-white');
+        track.classList.add('bg-sf-border');
+        thumb.classList.add('left-0.5', 'bg-white/20');
+      } else {
+        track.classList.remove('bg-sf-border');
+        thumb.classList.remove('left-0.5', 'bg-white/20');
+        track.classList.add('bg-sf-green');
+        thumb.classList.add('right-0.5', 'bg-white');
+      }
+    }
+
+    /* ─── Module category accordion ─── */
+    document.querySelectorAll('.category-header').forEach(header => {
+      header.addEventListener('click', () => {
+        const list = header.nextElementSibling;
+        const chevron = header.querySelector('.category-chevron');
+        if (list) {
+          list.classList.toggle('hidden');
+          if (chevron) chevron.classList.toggle('rotate-180');
+        }
+      });
+    });
+
+    function toggleCategory(event) {
+      const cb = event.target;
+      const category = cb.dataset.category;
+      const checked = cb.checked;
+      document.querySelectorAll(`.module-toggle[data-category="${category}"]`).forEach(m => m.checked = checked);
+    }
+
+    document.querySelectorAll('.module-toggle').forEach(cb => {
+      cb.addEventListener('change', () => {
+        const category = cb.dataset.category;
+        const allInCat = document.querySelectorAll(`.module-toggle[data-category="${category}"]`);
+        const allChecked = [...allInCat].every(c => c.checked);
+        const catToggle = document.querySelector(`.category-toggle[data-category="${category}"]`);
+        if (catToggle) catToggle.checked = allChecked;
+      });
+    });
+
+    document.getElementById('select-all-modules')?.addEventListener('click', () => {
+      document.querySelectorAll('.module-toggle').forEach(cb => cb.checked = true);
+      document.querySelectorAll('.category-toggle').forEach(cb => cb.checked = true);
+    });
+
+    document.getElementById('deselect-all-modules')?.addEventListener('click', () => {
+      document.querySelectorAll('.module-toggle').forEach(cb => cb.checked = false);
+      document.querySelectorAll('.category-toggle').forEach(cb => cb.checked = false);
+    });
+
+    /* ─── Settings Management ─── */
+    function getSettings() {
+      const settings = {
+        depth: document.querySelector('input[name="scan-depth"]:checked')?.value || 'deep',
+        sniperRatio: document.getElementById('setting-sniper-ratio')?.value || 'max',
+        timeout: parseInt(document.getElementById('setting-timeout')?.value || '15'),
+        verbose: parseInt(document.getElementById('setting-verbose')?.value || '1'),
+        maxFindings: parseInt(document.getElementById('setting-max-findings')?.value || '5000'),
+        exportFormat: document.querySelector('input[name="export-format"]:checked')?.value || 'json',
+        modules: {},
+        toggles: {},
+        apiKeys: {},
+        proxy: {},
+        network: {},
+        automation: {}
+      };
+
+      // Module categories
+      document.querySelectorAll('.category-toggle').forEach(cb => {
+        settings.modules[cb.dataset.category] = cb.checked;
+      });
+
+      // Module-level toggles (detailed module selection)
+      settings.moduleToggles = {};
+      document.querySelectorAll('.module-toggle').forEach(cb => {
+        const cat = cb.dataset.category;
+        const mod = cb.dataset.module;
+        if (!settings.moduleToggles[cat]) settings.moduleToggles[cat] = {};
+        settings.moduleToggles[cat][mod] = cb.checked;
+      });
+
+      // Toggle switches
+      document.querySelectorAll('[data-setting]').forEach(el => {
+        const track = el.querySelector('div');
+        const isOn = track?.classList.contains('bg-sf-green');
+        const name = el.getAttribute('data-setting');
+        if (name) settings.toggles[name] = !!isOn;
+      });
+
+      // API Keys
+      document.querySelectorAll('.api-key-input').forEach(input => {
+        const key = input.id.replace('api-', '');
+        if (input.value.trim()) settings.apiKeys[key] = input.value.trim();
+      });
+
+      // Proxy & Network
+      settings.proxy.http = document.getElementById('setting-proxy-http')?.value?.trim() || '';
+      settings.proxy.socks = document.getElementById('setting-proxy-socks')?.value?.trim() || '';
+      settings.network.dnsResolver = document.getElementById('setting-dns-resolver')?.value?.trim() || '';
+      settings.network.userAgent = document.getElementById('setting-user-agent')?.value?.trim() || '';
+
+      // Automation
+      settings.automation.webhookUrl = document.getElementById('setting-webhook-url')?.value?.trim() || '';
+
+      return settings;
+    }
+
+    function applySettings(settings) {
+      if (!settings) return;
+
+      const depthInput = document.querySelector(`input[name="scan-depth"][value="${settings.depth || 'deep'}"]`);
+      if (depthInput) depthInput.checked = true;
+
+      const sniperEl = document.getElementById('setting-sniper-ratio');
+      if (sniperEl) sniperEl.value = settings.sniperRatio || 'max';
+
+      const timeoutEl = document.getElementById('setting-timeout');
+      if (timeoutEl) timeoutEl.value = String(settings.timeout || '15');
+
+      const verboseEl = document.getElementById('setting-verbose');
+      if (verboseEl) verboseEl.value = String(settings.verbose ?? '1');
+
+      const maxFindingsEl = document.getElementById('setting-max-findings');
+      if (maxFindingsEl) maxFindingsEl.value = String(settings.maxFindings || '5000');
+
+      const exportInput = document.querySelector(`input[name="export-format"][value="${settings.exportFormat || 'json'}"]`);
+      if (exportInput) exportInput.checked = true;
+
+      // Module categories
+      if (settings.modules) {
+        Object.entries(settings.modules).forEach(([name, val]) => {
+          const catToggle = document.querySelector(`.category-toggle[data-category="${name}"]`);
+          if (catToggle) catToggle.checked = val;
+        });
+      }
+
+      // Module-level toggles
+      if (settings.moduleToggles) {
+        Object.entries(settings.moduleToggles).forEach(([cat, mods]) => {
+          Object.entries(mods).forEach(([mod, val]) => {
+            const cb = document.querySelector(`.module-toggle[data-category="${cat}"][data-module="${mod}"]`);
+            if (cb) cb.checked = val;
+          });
+        });
+      }
+
+      // Toggles
+      if (settings.toggles) {
+        Object.entries(settings.toggles).forEach(([name, val]) => {
+          const el = document.querySelector(`[data-setting="${name}"]`);
+          if (el) {
+            const track = el.querySelector('div');
+            const thumb = track?.querySelector('div');
+            if (track && thumb) {
+              if (val) {
+                track.classList.remove('bg-sf-border');
+                thumb.classList.remove('left-0.5', 'bg-white/20');
+                track.classList.add('bg-sf-green');
+                thumb.classList.add('right-0.5', 'bg-white');
+              } else {
+                track.classList.remove('bg-sf-green');
+                thumb.classList.remove('right-0.5', 'bg-white');
+                track.classList.add('bg-sf-border');
+                thumb.classList.add('left-0.5', 'bg-white/20');
+              }
+            }
+          }
+        });
+      }
+
+      // API Keys
+      if (settings.apiKeys) {
+        Object.entries(settings.apiKeys).forEach(([key, val]) => {
+          const input = document.getElementById(`api-${key}`);
+          if (input) input.value = val;
+        });
+      }
+
+      // Proxy & Network
+      if (settings.proxy) {
+        if (settings.proxy.http) document.getElementById('setting-proxy-http').value = settings.proxy.http;
+        if (settings.proxy.socks) document.getElementById('setting-proxy-socks').value = settings.proxy.socks;
+      }
+      if (settings.network) {
+        if (settings.network.dnsResolver) document.getElementById('setting-dns-resolver').value = settings.network.dnsResolver;
+        if (settings.network.userAgent) document.getElementById('setting-user-agent').value = settings.network.userAgent;
+      }
+
+      // Automation
+      if (settings.automation?.webhookUrl) {
+        document.getElementById('setting-webhook-url').value = settings.automation.webhookUrl;
+      }
+    }
+
+    function saveSettingsToStorage() {
+      const settings = getSettings();
+      localStorage.setItem('hackit_scan_settings', JSON.stringify(settings));
+      const btn = document.getElementById('save-settings');
+      if (btn) {
+        const orig = btn.innerHTML;
+        btn.innerHTML = '<i class="fas fa-check-circle"></i> Saved!';
+        btn.classList.add('bg-emerald-500');
+        setTimeout(() => {
+          btn.innerHTML = orig;
+          btn.classList.remove('bg-emerald-500');
+        }, 1500);
+      }
+    }
+
+    function resetSettingsToDefault() {
+      localStorage.removeItem('hackit_scan_settings');
+
+      document.querySelector('input[name="scan-depth"][value="deep"]').checked = true;
+      document.getElementById('setting-sniper-ratio').value = 'max';
+      document.getElementById('setting-timeout').value = '15';
+      document.getElementById('setting-verbose').value = '1';
+      document.getElementById('setting-max-findings').value = '5000';
+      document.querySelector('input[name="export-format"][value="json"]').checked = true;
+
+      document.querySelectorAll('.category-toggle').forEach(cb => cb.checked = true);
+      document.querySelectorAll('.module-toggle').forEach(cb => cb.checked = true);
+
+      document.querySelectorAll('[data-setting]').forEach(el => {
+        const track = el.querySelector('div');
+        const thumb = track?.querySelector('div');
+        if (track && thumb) {
+          track.classList.remove('bg-sf-green');
+          track.classList.add('bg-sf-border');
+          thumb.classList.remove('right-0.5', 'bg-white');
+          thumb.classList.add('left-0.5', 'bg-white/20');
+        }
+      });
+
+      document.querySelectorAll('.api-key-input').forEach(input => input.value = '');
+      document.getElementById('setting-proxy-http').value = '';
+      document.getElementById('setting-proxy-socks').value = '';
+      document.getElementById('setting-dns-resolver').value = '';
+      document.getElementById('setting-user-agent').value = '';
+      document.getElementById('setting-webhook-url').value = '';
+
+      const btn = document.getElementById('reset-settings');
+      if (btn) {
+        const orig = btn.innerHTML;
+        btn.innerHTML = '<i class="fas fa-check"></i> Defaults Restored';
+        setTimeout(() => btn.innerHTML = orig, 1500);
+      }
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      const saved = localStorage.getItem('hackit_scan_settings');
+      if (saved) {
+        try { applySettings(JSON.parse(saved)); } catch(e) { console.warn('Failed to apply settings:', e); }
+      }
+
+      document.getElementById('save-settings')?.addEventListener('click', saveSettingsToStorage);
+      document.getElementById('reset-settings')?.addEventListener('click', resetSettingsToDefault);
+
+      // Show unsaved indicator on any change
+      document.querySelectorAll('input, select').forEach(el => {
+        el.addEventListener('change', () => {
+          const btn = document.getElementById('save-settings');
+          if (btn) btn.innerHTML = '<i class="fas fa-check"></i> Save Settings';
+        });
+      });
+    });
+  </script>
+</Layout>

@@ -1,0 +1,93 @@
+---
+const { id = "terminal-output", height = "300px", label = "OUTPUT" } = Astro.props;
+---
+
+<div class="group relative overflow-hidden rounded-2xl bg-card border border-border transition-all duration-300 focus-within:border-primary/40 focus-within:shadow-[0_0_20px_rgba(0,212,255,0.15)]" style="height: {height};" tabindex="-1">
+  <div class="absolute inset-0 pointer-events-none opacity-[0.03]"
+    style="background-image: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(255,255,255,0.03) 2px, rgba(255,255,255,0.03) 4px);"></div>
+  <div class="flex items-center justify-between px-4 py-2.5 bg-muted/20 border-b border-border">
+    <div class="flex items-center gap-2.5">
+      <div class="flex items-center gap-1.5">
+        <span class="w-3 h-3 rounded-full bg-red-500/70 group-hover:bg-red-500 transition-colors duration-300" title="Close"></span>
+        <span class="w-3 h-3 rounded-full bg-amber-400/70 group-hover:bg-amber-400 transition-colors duration-300" title="Minimize"></span>
+        <span class="w-3 h-3 rounded-full bg-emerald-500/70 group-hover:bg-emerald-500 transition-colors duration-300" title="Maximize"></span>
+      </div>
+      <span class="text-[10px] text-muted-foreground/60 font-mono uppercase tracking-[0.15em] font-semibold ml-2 select-none">{label}</span>
+      <span class="text-[10px] text-muted-foreground/30 font-mono select-none" id="{id}-ts"></span>
+    </div>
+    <button onclick="clearTerminalById('{id}')" class="text-[10px] text-muted-foreground/50 hover:text-foreground transition-colors px-2.5 py-1 rounded-lg border border-border/30 hover:border-border/60 hover:bg-muted/30 font-medium">
+      Clear
+    </button>
+  </div>
+  <div class="flex" style="height: calc({height} - 41px);">
+    <div class="w-10 shrink-0 bg-background/50 border-r border-border/10 py-3 text-[10px] text-muted-foreground/20 text-right pr-2 select-none font-mono leading-relaxed overflow-hidden" id="{id}-lines"> </div>
+    <pre id={id} class="flex-1 p-3 overflow-y-auto text-muted-foreground/90 leading-relaxed font-mono text-xs outline-none scroll-smooth" tabindex="0">
+      <span class="text-muted-foreground/40">// HackIT Wireless — ready</span>
+    </pre>
+  </div>
+</div>
+
+<script>
+(function() {
+  let lineCount = 0;
+  const el = document.getElementById('{id}');
+  const linesEl = document.getElementById('{id}-lines');
+  const tsEl = document.getElementById('{id}-ts');
+  if (!el) return;
+
+  function updateTimestamp() {
+    if (tsEl) tsEl.textContent = new Date().toLocaleTimeString('en-US', { hour12: false });
+  }
+  updateTimestamp();
+  setInterval(updateTimestamp, 1000);
+
+  function updateLineNumbers() {
+    if (!linesEl) return;
+    const count = el.innerHTML.split('\n').length;
+    const nums = Array.from({length: count}, (_, i) => String(i + 1).padStart(3)).join('\n');
+    linesEl.textContent = nums;
+  }
+
+  window.appendTerminal = function(text) {
+    const ts = new Date().toLocaleTimeString('en-US', { hour12: false });
+    el.innerHTML += `\n<span class="text-emerald-500/80">[${ts}]</span> ${text}`;
+    el.scrollTop = el.scrollHeight;
+    updateLineNumbers();
+  };
+
+  window.appendTerminalById = function(targetId, text) {
+    const target = document.getElementById(targetId);
+    if (!target) return;
+    const ts = new Date().toLocaleTimeString('en-US', { hour12: false });
+    target.innerHTML += `\n<span class="text-emerald-500/80">[${ts}]</span> ${text}`;
+    target.scrollTop = target.scrollHeight;
+    const lineNumEl = document.getElementById(targetId + '-lines');
+    if (lineNumEl) {
+      const count = target.innerHTML.split('\n').length;
+      lineNumEl.textContent = Array.from({length: count}, (_, i) => String(i + 1).padStart(3)).join('\n');
+    }
+  };
+
+  window.clearTerminal = function() {
+    el.innerHTML = '<span class="text-muted-foreground/40">// HackIT Wireless — ready</span>';
+    updateLineNumbers();
+  };
+
+  window.clearTerminalById = function(targetId) {
+    const target = document.getElementById(targetId);
+    if (!target) return;
+    target.innerHTML = '<span class="text-muted-foreground/40">// HackIT Wireless — ready</span>';
+    const lineNumEl = document.getElementById(targetId + '-lines');
+    if (lineNumEl) lineNumEl.textContent = '  1';
+  };
+
+  updateLineNumbers();
+
+  el.addEventListener('keydown', (e) => {
+    if (e.ctrlKey && e.key === 'l') {
+      e.preventDefault();
+      window.clearTerminalById('{id}');
+    }
+  });
+})();
+</script>

@@ -9,58 +9,32 @@ DEFAULT_CONFIG = {
     "theme": "kali",
     "user": getpass.getuser(),
     "hostname": socket.gethostname(),
-    "aggressive_default": True,
-    "stealth_default": True,
-    "ai_keys": {
-        "gemini": "",
-        "groq": "",
-        "openai": "",
-        "claude": "",
-        "deepseek": "",
-        "openrouter": "",
-        "ollama": ""
-    },
-    "ai_models": {
-        "gemini": "",
-        "groq": "",
-        "openai": "",
-        "claude": "",
-        "deepseek": "",
-        "openrouter": "",
-        "ollama": ""
-    },
-    "ai_provider": "gemini"
+    "accent": "cyan",
+    "border": "double",
+    "prompt": "arrow"
 }
 
 def load_config():
     if not os.path.exists(CONFIG_PATH):
         save_config(DEFAULT_CONFIG)
-        return DEFAULT_CONFIG
+        return DEFAULT_CONFIG.copy()
     try:
         with open(CONFIG_PATH, "r") as f:
             data = json.load(f)
-            # Deep merge with defaults to ensure all keys exist
             merged = DEFAULT_CONFIG.copy()
             for k, v in data.items():
-                if isinstance(v, dict) and k in merged and isinstance(merged[k], dict):
-                    merged[k].update(v)
-                else:
+                if k in merged:
                     merged[k] = v
             return merged
     except Exception:
-        return DEFAULT_CONFIG
+        return DEFAULT_CONFIG.copy()
 
 def save_config(config):
     try:
-        # Ensure parent directory exists
         os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
-        
-        # Write to a temporary file first for atomic-like safety
         tmp_path = CONFIG_PATH + ".tmp"
         with open(tmp_path, "w") as f:
             json.dump(config, f, indent=4)
-        
-        # Replace the real config file
         if os.path.exists(CONFIG_PATH):
             os.remove(CONFIG_PATH)
         os.rename(tmp_path, CONFIG_PATH)

@@ -1,3 +1,4 @@
+#include <stddef.h>
 #ifndef HACKIT_BEACON_FLOOD_H
 #define HACKIT_BEACON_FLOOD_H
 

@@ -1,0 +1,41 @@
+id: ldap-search-filter-injection
+info:
+  name: LDAP Search Filter Injection
+  author: AniipID
+  severity: high
+  description: Detects LDAP search filter injection through crafted filter expressions
+  tags: ldap,injection,search,filter
+
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/search?q=admin)(|(uid=*"
+      - "{{BaseURL}}/find?filter=(|(cn=*))"
+      - "{{BaseURL}}/users?filter=uid=*)"
+    matchers:
+      - type: word
+        words:
+          - "(&"
+          - "(|"
+          - "(!"
+          - "cn="
+          - "uid="
+          - "dc="
+        condition: or
+        part: body
+
+  - method: POST
+    path:
+      - "{{BaseURL}}/api/search"
+      - "{{BaseURL}}/api/ldap"
+    headers:
+      Content-Type: application/json
+    body: '{"filter": "(|(cn=admin))"}'
+    matchers:
+      - type: word
+        words:
+          - "dn:"
+          - "cn:"
+          - "uid:"
+          - "mail:"
+        condition: or

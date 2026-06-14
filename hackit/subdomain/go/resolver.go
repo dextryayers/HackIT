@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/rand"
 	"net"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -92,8 +93,41 @@ func resolveIPs(results []*Result, concurrency int) {
 		return
 	}
 
-	// Use Rust Batch Resolver for high-speed resolution
-	if rustResolveDNSBatch != nil && rustResolveDNSBatch.Find() == nil {
+	// Use Linux Rust Bridge first
+	if runtime.GOOS == "linux" {
+		// Batch resolve via Rust binary
+		var pending []*Result
+		for _, r := range results {
+			if len(r.IPs) == 0 {
+				pending = append(pending, r)
+			}
+		}
+		if len(pending) > 0 {
+			chunkSize := 500
+			for i := 0; i < len(pending); i += chunkSize {
+				end := i + chunkSize
+				if end > len(pending) {
+					end = len(pending)
+				}
+				chunk := pending[i:end]
+				var subs []string
+				for _, r := range chunk {
+					subs = append(subs, r.Subdomain)
+				}
+				resMap := linuxRustResolveDNSBatch(subs)
+				for _, r := range chunk {
+					if ips, ok := resMap[r.Subdomain]; ok && len(ips) > 0 {
+						r.IPs = ips
+						fmt.Printf("\x1b[1;32m[+]\x1b[0m \x1b[1;36m[sub]\x1b[0m %s \x1b[1;36m[ip]\x1b[0m %s \x1b[1;33m[from]\x1b[0m rust-resolve\n",
+							r.Subdomain, ips[0])
+					}
+				}
+			}
+		}
+	}
+
+	// Use Windows Rust Batch Resolver
+	if runtime.GOOS == "windows" && rustResolveDNSBatch != nil && rustResolveDNSBatch.Find() == nil {
 		// Split results into chunks to avoid passing too large strings to FFI
 		chunkSize := 500
 		for i := 0; i < len(results); i += chunkSize {
@@ -167,6 +201,8 @@ func resolveIPs(results []*Result, concurrency int) {
 			ips, err := customResolver.LookupHost(ctx, res.Subdomain)
 			if err == nil && len(ips) > 0 {
 				res.IPs = ips
+				fmt.Printf("\x1b[1;32m[+]\x1b[0m \x1b[1;36m[sub]\x1b[0m %s \x1b[1;36m[ip]\x1b[0m %s \x1b[1;33m[from]\x1b[0m dns-resolve\n",
+					res.Subdomain, ips[0])
 			}
 		}(r)
 	}

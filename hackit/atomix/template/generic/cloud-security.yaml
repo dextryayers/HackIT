@@ -1,0 +1,228 @@
+id: k8s-api-server
+info:
+  name: Kubernetes API Server
+  author: AniipID
+  severity: critical
+  description: Detects exposed Kubernetes API server
+  tags: kubernetes,api,cloud
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/api"
+      - "{{BaseURL}}/api/v1"
+      - "{{BaseURL}}/apis"
+    matchers:
+      - type: word
+        words:
+          - "kubernetes"
+          - "kind"
+          - "apiVersion"
+          - "namespaces"
+        condition: or
+        name: "k8s-api"
+---
+id: k8s-dashboard
+info:
+  name: Kubernetes Dashboard
+  author: AniipID
+  severity: critical
+  description: Detects exposed Kubernetes Dashboard
+  tags: kubernetes,dashboard,cloud
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/api/v1/namespaces/kubernetes-dashboard/services/https:kubernetes-dashboard:/proxy/"
+      - "{{BaseURL}}/dashboard"
+      - "{{BaseURL}}/kubernetes-dashboard"
+    matchers:
+      - type: word
+        words:
+          - "Kubernetes Dashboard"
+          - "kubernetes-dashboard"
+          - "Kubernete"
+        condition: or
+        name: "k8s-dashboard"
+---
+id: k8s-etcd
+info:
+  name: Kubernetes etcd API
+  author: AniipID
+  severity: critical
+  description: Detects exposed etcd key-value store
+  tags: kubernetes,etcd,cloud
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/v2/keys"
+      - "{{BaseURL}}/v3alpha"
+      - "{{BaseURL}}/version"
+    matchers:
+      - type: word
+        words:
+          - "etcd"
+          - "etcdserver"
+          - "action"
+          - "node"
+        condition: or
+        name: "etcd-api"
+---
+id: k8s-kubelet
+info:
+  name: Kubernetes Kubelet API
+  author: AniipID
+  severity: critical
+  description: Detects exposed Kubelet API with pod information
+  tags: kubernetes,kubelet,cloud
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/pods"
+      - "{{BaseURL}}/runningpods"
+      - "{{BaseURL}}/healthz"
+    matchers:
+      - type: word
+        words:
+          - "kind"
+          - "PodList"
+          - "kubelet"
+        condition: or
+        name: "kubelet-api"
+---
+id: k8s-secrets
+info:
+  name: Kubernetes Secrets Exposure
+  author: AniipID
+  severity: critical
+  description: Detects exposed Kubernetes secrets via API
+  tags: kubernetes,secrets,cloud
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/api/v1/secrets"
+      - "{{BaseURL}}/api/v1/namespaces/default/secrets"
+    matchers:
+      - type: word
+        words:
+          - "kind"
+          - "Secret"
+          - "data"
+        condition: and
+        name: "secrets-exposed"
+---
+id: aws-metadata
+info:
+  name: AWS Metadata Service
+  author: AniipID
+  severity: critical
+  description: Detects AWS EC2 metadata service access via SSRF
+  tags: cloud,aws,metadata
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/latest/meta-data/"
+      - "{{BaseURL}}/latest/meta-data/iam/security-credentials/"
+      - "{{BaseURL}}/latest/user-data/"
+    matchers:
+      - type: word
+        words:
+          - "ami-id"
+          - "instance-id"
+          - "public-keys"
+          - "security-credentials"
+          - "AccessKeyId"
+        condition: or
+        name: "aws-metadata"
+---
+id: gcp-metadata
+info:
+  name: GCP Metadata Service
+  author: AniipID
+  severity: critical
+  description: Detects GCP metadata service access
+  tags: cloud,gcp,metadata
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/computeMetadata/v1/"
+      - "{{BaseURL}}/computeMetadata/v1/instance/service-accounts/"
+    headers:
+      Metadata-Flavor: "Google"
+    matchers:
+      - type: word
+        words:
+          - "service-accounts"
+          - "instance"
+          - "project"
+        condition: or
+        name: "gcp-metadata"
+---
+id: azure-metadata
+info:
+  name: Azure Metadata Service
+  author: AniipID
+  severity: critical
+  description: Detects Azure instance metadata service access
+  tags: cloud,azure,metadata
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/metadata/instance?api-version=2021-02-01"
+    headers:
+      Metadata: "true"
+    matchers:
+      - type: word
+        words:
+          - "compute"
+          - "network"
+          - "vmId"
+          - "azEnvironment"
+        condition: or
+        name: "azure-metadata"
+---
+id: docker-socket
+info:
+  name: Docker Socket Exposure
+  author: AniipID
+  severity: critical
+  description: Detects exposed Docker daemon socket
+  tags: cloud,docker,container
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/containers/json"
+      - "{{BaseURL}}/version"
+      - "{{BaseURL}}/info"
+    matchers:
+      - type: word
+        words:
+          - "Docker"
+          - "docker"
+          - "Containers"
+          - "Images"
+        condition: or
+        name: "docker-socket"
+---
+id: cloud-storage-bucket
+info:
+  name: Cloud Storage Bucket
+  author: AniipID
+  severity: high
+  description: Detects open cloud storage buckets
+  tags: cloud,storage,bucket
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/storage/v1/b"
+      - "{{BaseURL}}/s3"
+      - "{{BaseURL}}/bucket"
+      - "{{BaseURL}}/static"
+    matchers:
+      - type: word
+        words:
+          - "ListBucketResult"
+          - "Contents"
+          - "Key"
+          - "ETag"
+          - "StorageClass"
+        condition: or
+        name: "cloud-storage"

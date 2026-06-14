@@ -2,13 +2,13 @@
 /// SYN stealth scan, TCP connect scan, service detection, OS fingerprinting
 
 use std::io::{Read, Write};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream, ToSocketAddrs, UdpSocket};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream, ToSocketAddrs};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use crate::network_recon::{self, ServiceInfo, PortState, ScanResult, parse_port_range, TOP_1000_PORTS, grab_banner, identify_service, detect_service_version};
+use crate::network_recon::{ServiceInfo, PortState, ScanResult, parse_port_range, TOP_1000_PORTS, identify_service, detect_service_version};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ScanType {
@@ -106,17 +106,6 @@ impl ScanConfig {
 }
 
 pub fn run_scan(config: ScanConfig) -> ScanResult {
-    run_scan_inner(config, None)
-}
-
-pub fn run_scan_async<F>(config: ScanConfig, progress: F) -> ScanResult
-where
-    F: Fn(usize, usize) + Send + 'static,
-{
-    run_scan_inner(config, Some(Box::new(progress)))
-}
-
-fn run_scan_inner(config: ScanConfig, progress: Option<Box<dyn Fn(usize, usize) + Send>>) -> ScanResult {
     let start = Instant::now();
     let host = config.host.clone();
     let ip = resolve_host(&host).unwrap_or_else(|| host.clone());
@@ -152,18 +141,6 @@ fn run_scan_inner(config: ScanConfig, progress: Option<Box<dyn Fn(usize, usize) 
         let scan_type = config.scan_type.clone();
         let total_ports = total;
 
-        let progress_cb = if let Some(ref cb) = progress {
-            let cb_clone = /* need Arc for closure */ {
-                struct Wrap(Box<dyn Fn(usize, usize) + Send>);
-                unsafe impl Send for Wrap {}
-                let ptr: *const Box<dyn Fn(usize, usize) + Send> = cb as *const Box<dyn Fn(usize, usize) + Send>;
-                Some(Wrap(unsafe { (&*ptr).clone_boxed() }))
-            };
-            Some(progress_cb)
-        } else {
-            None
-        };
-
         let handle = thread::spawn(move || {
             for &port in &chunk_owned {
                 let (is_open, is_filtered) = match scan_type {
@@ -187,7 +164,7 @@ fn run_scan_inner(config: ScanConfig, progress: Option<Box<dyn Fn(usize, usize) 
                             let (svc, ver) = detect_service_version(&b);
                             service_name = svc;
                             version = ver;
-                            product = Some(service_name.clone());
+                            product = Some(service_name.to_string());
                         }
                     }
 
@@ -206,10 +183,7 @@ fn run_scan_inner(config: ScanConfig, progress: Option<Box<dyn Fn(usize, usize) 
                     opened.push(svc);
                 }
 
-                let done = completed_clone.fetch_add(1, Ordering::SeqCst) + 1;
-                if let Some(ref cb_inner) = progress_cb {
-                    (cb_inner.0)(done, total_ports);
-                }
+                let _done = completed_clone.fetch_add(1, Ordering::SeqCst) + 1;
             }
         });
         handles.push(handle);
@@ -248,19 +222,6 @@ fn run_scan_inner(config: ScanConfig, progress: Option<Box<dyn Fn(usize, usize) 
         rtt_min: if rtt_min.is_infinite() { 0.0 } else { rtt_min },
         rtt_max: if rtt_max.is_infinite() { 0.0 } else { rtt_max },
         rtt_avg,
-    }
-}
-
-trait BoxedClone: Fn(usize, usize) + Send {
-    fn clone_boxed(&self) -> Box<dyn Fn(usize, usize) + Send>;
-}
-
-impl<T> BoxedClone for T
-where
-    T: Fn(usize, usize) + Send + Clone + 'static,
-{
-    fn clone_boxed(&self) -> Box<dyn Fn(usize, usize) + Send> {
-        Box::new(self.clone())
     }
 }
 
@@ -338,7 +299,7 @@ fn raw_syn_scan(host: &str, port: u16, timeout_ms: u64) -> Result<(bool, bool), 
         sin_addr: libc::in_addr {
             s_addr: u32::from(dst_ip).to_be(),
         },
-        sin_zero: [0i8; 8],
+        sin_zero: [0u8; 8],
     };
 
     let sent = unsafe {
@@ -459,7 +420,7 @@ fn get_local_ipv4() -> Option<Ipv4Addr> {
         sin_addr: libc::in_addr {
             s_addr: 0x08080808u32.to_be(),
         },
-        sin_zero: [0i8; 8],
+        sin_zero: [0u8; 8],
     };
 
     let ret = unsafe {
@@ -671,7 +632,7 @@ fn grab_banner_with_timeout(host: &str, port: u16, timeout_ms: u64) -> Option<St
     let timeout = Duration::from_millis(timeout_ms);
     let addr: SocketAddr = addr_str.parse().ok()?;
 
-    let stream = TcpStream::connect_timeout(&addr, timeout).ok()?;
+    let mut stream = TcpStream::connect_timeout(&addr, timeout).ok()?;
     let _ = stream.set_read_timeout(Some(Duration::from_millis(2000)));
     let _ = stream.set_write_timeout(Some(Duration::from_millis(2000)));
 
@@ -704,11 +665,10 @@ fn grab_banner_with_timeout(host: &str, port: u16, timeout_ms: u64) -> Option<St
                 let mut inner_buf = [0u8; 512];
                 if let Ok(n) = s.read(&mut inner_buf) {
                     if n > 0 {
-                        if let Ok(text) = String::from_utf8_lossy(&inner_buf[..n]).to_string() {
-                            last = text;
-                            if !last.is_empty() {
-                                break;
-                            }
+                        let text = String::from_utf8_lossy(&inner_buf[..n]).to_string();
+                        last = text;
+                        if !last.is_empty() {
+                            break;
                         }
                     }
                 }
@@ -798,7 +758,7 @@ pub fn print_results_json(result: &ScanResult) {
             let mut map = serde_json::Map::new();
             map.insert("port".to_string(), serde_json::Value::Number(serde_json::Number::from(s.port)));
             map.insert("state".to_string(), serde_json::Value::String(format!("{:?}", s.state)));
-            map.insert("service".to_string(), serde_json::Value::String(s.service.clone()));
+            map.insert("service".to_string(), serde_json::Value::String(s.service.to_string()));
             if let Some(ref p) = s.product {
                 map.insert("product".to_string(), serde_json::Value::String(p.clone()));
             }
@@ -877,7 +837,7 @@ pub fn print_results_table(result: &ScanResult) {
     println!("└────────────────────────────────────────────────────────────┘\n");
 }
 
-pub fn detect_os_by_ports(host: &str, open_ports: &[u16]) -> Option<String> {
+pub fn detect_os_by_ports(_host: &str, open_ports: &[u16]) -> Option<String> {
     let port_set: std::collections::BTreeSet<u16> = open_ports.iter().cloned().collect();
 
     let windows_ports: &[u16] = &[135, 139, 445, 3389, 5985, 5986, 1433, 2179, 47001];
@@ -983,32 +943,4 @@ pub fn detect_os_by_ports(host: &str, open_ports: &[u16]) -> Option<String> {
     }
 }
 
-pub fn parse_port_range(range: &str) -> Vec<u16> {
-    let mut ports = Vec::new();
 
-    for part in range.split(',') {
-        let part = part.trim();
-        if part.is_empty() {
-            continue;
-        }
-
-        if part.contains('-') {
-            let sides: Vec<&str> = part.splitn(2, '-').collect();
-            if sides.len() == 2 {
-                let lo = sides[0].trim().parse::<u16>().unwrap_or(1);
-                let hi = sides[1].trim().parse::<u16>().unwrap_or(65535);
-                for p in lo..=hi.min(65535) {
-                    ports.push(p);
-                }
-            }
-        } else {
-            if let Ok(p) = part.parse::<u16>() {
-                ports.push(p);
-            }
-        }
-    }
-
-    ports.sort();
-    ports.dedup();
-    ports
-}

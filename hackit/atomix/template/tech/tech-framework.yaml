@@ -1,0 +1,217 @@
+id: tech-django
+info:
+  name: Django Detection
+  author: AniipID
+  severity: info
+  description: Detects Django web framework
+  tags: tech,django,python
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}"
+      - "{{BaseURL}}/admin"
+    matchers:
+      - type: word
+        words:
+          - "csrftoken"
+          - "django-admin"
+          - "Django"
+          - "django.session"
+        condition: or
+        name: "django-detected"
+---
+id: tech-flask
+info:
+  name: Flask Detection
+  author: AniipID
+  severity: info
+  description: Detects Flask web framework
+  tags: tech,flask,python
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}"
+    matchers:
+      - type: word
+        words:
+          - "Server: Werkzeug"
+          - "flask"
+          - "session="
+        part: header
+        condition: or
+        name: "flask-detected"
+---
+id: tech-laravel
+info:
+  name: Laravel Detection
+  author: AniipID
+  severity: info
+  description: Detects Laravel PHP framework
+  tags: tech,laravel,php
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}"
+    matchers:
+      - type: word
+        words:
+          - "laravel_session"
+          - "XSRF-TOKEN"
+          - "Laravel"
+        condition: or
+        name: "laravel-detected"
+---
+id: tech-wordpress
+info:
+  name: WordPress Detection
+  author: AniipID
+  severity: info
+  description: Detects WordPress CMS with version fingerprinting
+  tags: tech,wordpress,cms
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}"
+      - "{{BaseURL}}/wp-content"
+      - "{{BaseURL}}/wp-includes"
+      - "{{BaseURL}}/wp-json"
+    matchers:
+      - type: word
+        words:
+          - "/wp-content/"
+          - "/wp-includes/"
+          - "wp-json"
+          - "WordPress"
+          - "wordpress"
+        condition: or
+        name: "wordpress-detected"
+---
+id: tech-joomla
+info:
+  name: Joomla Detection
+  author: AniipID
+  severity: info
+  description: Detects Joomla CMS
+  tags: tech,joomla,cms
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}"
+    matchers:
+      - type: word
+        words:
+          - "/media/jui/"
+          - "/components/com_"
+          - "/modules/mod_"
+          - "Joomla!"
+          - "joomla"
+        condition: or
+        name: "joomla-detected"
+---
+id: tech-drupal
+info:
+  name: Drupal Detection
+  author: AniipID
+  severity: info
+  description: Detects Drupal CMS
+  tags: tech,drupal,cms
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}"
+    matchers:
+      - type: word
+        words:
+          - "Drupal"
+          - "drupal"
+          - "/sites/default/"
+          - "Drupal.settings"
+        condition: or
+        name: "drupal-detected"
+---
+id: tech-aspnet
+info:
+  name: ASP.NET Detection
+  author: AniipID
+  severity: info
+  description: Detects ASP.NET framework
+  tags: tech,aspnet,.net
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}"
+    matchers:
+      - type: word
+        words:
+          - "X-AspNet-Version"
+          - "X-AspNetMvc-Version"
+          - "ASP.NET_SessionId"
+          - "__VIEWSTATE"
+          - "__EVENTVALIDATION"
+        condition: or
+        name: "aspnet-detected"
+---
+id: tech-ruby-rails
+info:
+  name: Ruby on Rails Detection
+  author: AniipID
+  severity: info
+  description: Detects Ruby on Rails framework
+  tags: tech,ruby,rails
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}"
+    matchers:
+      - type: word
+        words:
+          - "_session_id"
+          - "rails"
+          - "Rails"
+          - "X-Powered-By: Phusion"
+        condition: or
+        name: "rails-detected"
+---
+id: tech-golang
+info:
+  name: Go Web Server Detection
+  author: AniipID
+  severity: info
+  description: Detects Go web applications and frameworks
+  tags: tech,golang,go
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}"
+    matchers:
+      - type: word
+        words:
+          - "Server: golang"
+          - "Server: Go"
+          - "X-Powered-By: go"
+          - "gin-gonic"
+          - "fasthttp"
+        condition: or
+        name: "golang-detected"
+---
+id: tech-cloudflare
+info:
+  name: Cloudflare Detection
+  author: AniipID
+  severity: info
+  description: Detects Cloudflare reverse proxy
+  tags: tech,cloudflare,cdn
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}"
+    matchers:
+      - type: word
+        words:
+          - "Server: cloudflare"
+          - "__cfduid"
+          - "__cf_bm"
+          - "cf-ray"
+          - "CF-RAY"
+        condition: or
+        name: "cloudflare-detected"

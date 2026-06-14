@@ -1,0 +1,100 @@
+id: api-rate-limit-bypass
+info:
+  name: API Rate Limit Bypass via Headers
+  author: AniipID
+  severity: medium
+  description: Tests for API rate limiting bypass using X-Forwarded-For and similar headers
+  tags: api,rate-limit,bypass,security
+
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/api/v1/users"
+      - "{{BaseURL}}/api/users"
+      - "{{BaseURL}}/api/admin"
+    headers:
+      X-Forwarded-For: 127.0.0.1
+      X-Real-IP: 127.0.0.1
+      X-Originating-IP: 127.0.0.1
+    matchers:
+      - type: word
+        words:
+          - "users"
+          - "admin"
+          - "email"
+          - "role"
+        condition: or
+        part: body
+
+---
+id: api-auth-bypass-methods
+info:
+  name: API Authentication Bypass via HTTP Method Manipulation
+  author: AniipID
+  severity: high
+  description: Tests for auth bypass by switching HTTP methods (GET to POST, PUT to PATCH, etc.)
+  tags: api,auth-bypass,method
+
+requests:
+  - method: PATCH
+    path:
+      - "{{BaseURL}}/api/admin/settings"
+      - "{{BaseURL}}/api/users/admin"
+      - "{{BaseURL}}/api/config"
+    matchers:
+      - type: word
+        words:
+          - "updated"
+          - "modified"
+          - "success"
+          - "settings"
+        condition: or
+        part: body
+
+---
+id: api-graphql-batch-attack
+info:
+  name: GraphQL Batching/Batch Attack
+  author: AniipID
+  severity: high
+  description: Tests for GraphQL batch query attacks that can bypass rate limiting
+  tags: api,graphql,batch
+
+requests:
+  - method: POST
+    path:
+      - "{{BaseURL}}/graphql"
+      - "{{BaseURL}}/api/graphql"
+    headers:
+      Content-Type: application/json
+    body: '[{"query": "{__schema{types{name}}}"}, {"query": "{__schema{queryType{name}}}"}]'
+    matchers:
+      - type: word
+        words:
+          - "types"
+          - "queryType"
+          - "Schema"
+        condition: or
+        part: body
+
+---
+id: api-open-redirect
+info:
+  name: API Open Redirect via Redirect Endpoint
+  author: AniipID
+  severity: medium
+  description: Tests API endpoints that perform redirects based on user input
+  tags: api,redirect,open-redirect
+
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/api/redirect?url=https://evil.com"
+      - "{{BaseURL}}/api/v1/auth?redirect_uri=https://evil.com"
+      - "{{BaseURL}}/api/callback?url=https://evil.com"
+    matchers:
+      - type: word
+        words:
+          - "evil.com"
+          - "Location: https://evil.com"
+        condition: or

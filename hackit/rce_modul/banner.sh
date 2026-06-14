@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# RCE Module Banner — HackIT V2.1 | By:AniipID
+
+R='\033[0;31m'; G='\033[0;32m'; Y='\033[1;33m'
+B='\033[0;34m'; M='\033[0;35m'; C='\033[0;36m'; W='\033[1;37m'; N='\033[0m'
+
+banner() {
+echo -e "${R}   ███████╗ ██████╗███████╗    ███████╗██╗  ██╗███████╗${N}"
+echo -e "${R}   ██╔════╝██╔════╝██╔════╝    ██╔════╝╚██╗██╔╝██╔════╝${N}"
+echo -e "${R}   █████╗  ██║     █████╗      █████╗   ╚███╔╝ █████╗  ${N}"
+echo -e "${R}   ██╔══╝  ██║     ██╔══╝      ██╔══╝   ██╔██╗ ██╔══╝  ${N}"
+echo -e "${R}   ██║     ╚██████╗███████╗    ███████╗██╔╝ ██╗███████╗${N}"
+echo -e "${R}   ╚═╝      ╚═════╝╚══════╝    ╚══════╝╚═╝  ╚═╝╚══════╝${N}"
+echo -e "${R}   ┌───────────────────────────────────────────────────┐${N}"
+echo -e "${R}   │  ${Y}[🔪] CHAINSAW ACTIVATED. CUTTING THROUGH FIREWALL${R}   │${N}"
+echo -e "${R}   │  ${R}[💀] RCE.EXE — SLASH. EXECUTE. DESTROY.${R}            │${N}"
+echo -e "${R}   │  ${C}[X]  HackIT V2.1 - By AniipID${R}                    │${N}"
+echo -e "${R}   │  ${G}[+] 4 Engines: Go | Rust | C++ | C${R}                │${N}"
+echo -e "${R}   │  ${G}[+] 150+ Payloads · 12 Techniques${R}                 │${N}"
+echo -e "${R}   │  ${G}[+] WAF Bypass · OOB · Blind · SSTI${R}               │${N}"
+echo -e "${R}   └───────────────────────────────────────────────────┘${N}"
+}

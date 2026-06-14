@@ -24,6 +24,8 @@ mod wep_engine;
 mod evil_twin;
 mod captive_portal;
 mod port_scanner;
+mod pbkdf2_sha1;
+mod offensive;
 
 use clap::{Parser, Subcommand};
 use std::ffi::CString;

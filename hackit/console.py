@@ -19,7 +19,9 @@ import socket
 from datetime import datetime
 from hackit.ui import (
     _colored, B_CYAN, B_GREEN, B_MAGENTA, B_BLUE, WHITE, YELLOW, DIM, display_banner,
-    BG_BLUE, BG_CYAN, BG_GREEN, BG_MAGENTA, BG_YELLOW, BG_WHITE, BG_BLACK, RESET, BOLD
+    BG_BLUE, BG_CYAN, BG_GREEN, BG_MAGENTA, BG_YELLOW, BG_WHITE, BG_BLACK, RESET, BOLD,
+    CYAN, MAGENTA, GREEN, RED, B_RED, B_WHITE, B_YELLOW, BLUE,
+    BG_RED, BG_B_RED, BG_B_BLUE, BG_B_MAGENTA, BG_B_CYAN, BG_B_GREEN, BG_B_YELLOW, BG_B_WHITE,
 )
 
 class HackItConsole:
@@ -73,37 +75,23 @@ class HackItConsole:
         print(_colored("  [*] Type 'help' for commands or 'exit' to quit\n", DIM))
 
     def get_prompt(self):
-        """Generate the prompt based on the selected theme."""
+        """Generate the prompt based on the selected theme (15 creative modes)."""
         from hackit.config import load_config
         cfg = load_config()
         theme = cfg.get("theme", "kali")
         user = cfg.get("user", "aniipID")
         hostname = cfg.get("hostname", "hackit")
         now = datetime.now().strftime("%H:%M:%S")
-        
-        # Debug: Print current theme being used
-        # print(f"DEBUG: Active Theme is {theme}")
-        
+
+        # ── ORIGINAL 8 THEMES ──
+
         if theme == "powerline":
-            # Style 1: Segmented backgrounds (Powerline-like)
-            #  (U+E0B0)
-            sep = " \x1b[0m\x1b[34m\x1b[43m\ue0b0\x1b[0m"
-            sep2 = " \x1b[0m\x1b[33m\ue0b0\x1b[0m"
-            
-            p1 = f"{BG_BLUE}{WHITE} \uf120 {user} {RESET}"
-            p2 = f"{BG_YELLOW}\x1b[30m \uf07b {self.current_context} {RESET}"
-            p3 = f"{BG_MAGENTA}{WHITE} \uf017 {now} {RESET}"
-            
-            # Simple version for non-nerd fonts
             s1 = f"{BG_BLUE}{WHITE} {user} {RESET}"
             s2 = f"{BG_CYAN}\x1b[30m {self.current_context} {RESET}"
             s3 = f"{BG_MAGENTA}{WHITE} {now} {RESET}"
-            
             return f"{s1}{s2}{s3} \u276f "
 
         elif theme == "modern":
-            # Style 2: Angled/Modern segments
-            #  (U+E0B1)
             p1 = _colored(f"{user} ", B_CYAN)
             p2 = _colored("\u276f ", B_MAGENTA)
             p3 = _colored(f"{self.current_context} ", B_GREEN)
@@ -111,54 +99,72 @@ class HackItConsole:
             return f"{p1}{p2}{p3}{p4}"
 
         elif theme == "pill":
-            # Style 3: Pill/Rounded segments
             p1 = _colored(f" ({user}) ", BG_BLUE + WHITE)
             p2 = _colored(f" ({self.current_context}) ", BG_GREEN + WHITE)
             p3 = _colored(f" [{now}] ", DIM)
             return f"{p1} {p2} {p3} \u279c "
 
         elif theme == "cyberpunk":
-            # Cyberpunk: Neon, 1-line, geometric
             p_user = _colored(user, B_CYAN)
             p_sep = _colored(" ❯❯ ", B_MAGENTA)
             p_ctx = _colored(f"[{self.current_context}]", B_GREEN)
             return f"{p_user}{p_sep}{p_ctx} "
-            
+
         elif theme == "minimalist":
-            # Minimalist: Just text and a caret
             return _colored(f"hackit({self.current_context}) > ", DIM)
-            
+
         elif theme == "retro":
-            # Retro: Green on black, matrix style
             return _colored(f"{user}@{hostname}:{self.current_context}$ ", B_GREEN)
-            
+
         elif theme == "gacor":
-            # Gacor: Industrial, symbol heavy
             p_icon = _colored("🔥 ", YELLOW)
             p_user = _colored(f"[{user}@{hostname}]", B_MAGENTA)
             p_ctx = _colored(f" ⚙️  {self.current_context}", B_CYAN)
             p_end = _colored(" 🚀 ", B_GREEN)
             return f"{p_icon}{p_user}{p_ctx}{p_end}"
-            
+
+        # ── 7 NEW CREATIVE THEMES ──
+
+        elif theme == "nexus":
+            c1 = B_CYAN
+            c2 = B_BLUE
+            return f"{_colored('❯❯', c1)} {_colored(f'[{user}]', c2)} {_colored(f'[{self.current_context}]', c1)} {_colored('>>', c2)} "
+
+        elif theme == "zinc":
+            c1 = B_GREEN
+            c2 = WHITE
+            return f"{_colored(f'[{user}@HackIT]', c1)} {_colored('➜', c2)} {_colored(self.current_context, c1)} {_colored('➜', c2)} "
+
+        elif theme == "vault":
+            c1 = B_WHITE
+            c2 = B_CYAN
+            return f"{_colored('[[', c1)} {_colored(f'{user}@HackIT', c2)} {_colored(']]', c1)} {_colored('[[', c1)} {_colored(self.current_context, c2)} {_colored(']]', c1)} {_colored('$', c1)} "
+
+        elif theme == "storm":
+            c1 = B_YELLOW
+            c2 = B_MAGENTA
+            return f"{_colored('[⚡', c1)} {_colored(user, c2)} {_colored('⚡]', c1)} {_colored(f'[{self.current_context}]', c2)} {_colored('#', c1)} "
+
+        elif theme == "drift":
+            c1 = B_CYAN
+            c2 = B_MAGENTA
+            return f"{_colored(f'[{user}@hackit:', c1)}{_colored(self.current_context, c2)}{_colored(']', c1)} {_colored('➤', B_WHITE)} "
+
+        elif theme == "pulse":
+            c1 = B_GREEN
+            c2 = B_BLUE
+            return f"{_colored(f'[{user}]', c1)} {_colored('←', c2)} {_colored(f'[{self.current_context}]', c1)} {_colored('->', c2)} {_colored('$', c1)} "
+
+        elif theme == "slash":
+            c1 = B_RED
+            c2 = WHITE
+            return f"{_colored('//', c1)} {_colored(user, c2)} {_colored('//', c1)} {_colored(self.current_context, c2)} {_colored('//', c1)} {_colored('#', c2)} "
+
         else:
-            # Kali Linux Style Prompt (Default)
-            # Line 1: ┌──([user]㉿host)-[time]-[context]
-            l1_prefix = _colored("┌──(", B_BLUE)
-            l1_user = _colored(user, B_BLUE)
-            l1_sep = _colored("㉿", B_BLUE)
-            l1_host = _colored(hostname, B_BLUE)
-            l1_mid = _colored(")-[", B_BLUE)
-            l1_time = _colored(now, WHITE)
-            l1_mid2 = _colored("]-[", B_BLUE)
-            l1_ctx = _colored(self.current_context, B_MAGENTA)
-            l1_end = _colored("]", B_BLUE)
-            
-            line1 = f"{l1_prefix}{l1_user}{l1_sep}{l1_host}{l1_mid}{l1_time}{l1_mid2}{l1_ctx}{l1_end}"
-            
-            # Line 2: └─$
-            line2 = _colored("└─$ ", B_BLUE)
-            
-            return f"{line1}\n{line2}"
+            # kali — Default Kali Linux style
+            l1 = f"{_colored('┌──(', B_BLUE)}{_colored(user, B_BLUE)}{_colored('㉿', B_BLUE)}{_colored(hostname, B_BLUE)}{_colored(')-[', B_BLUE)}{_colored(now, WHITE)}{_colored(']-[', B_BLUE)}{_colored(self.current_context, B_MAGENTA)}{_colored(']', B_BLUE)}"
+            l2 = f"{_colored('└─$ ', B_BLUE)}"
+            return f"{l1}\n{l2}"
 
     def start(self):
         """Start the interactive loop."""

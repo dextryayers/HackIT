@@ -1,0 +1,197 @@
+id: generic-cors-headers
+info:
+  name: CORS Header Detection
+  author: AniipID
+  severity: info
+  description: Detects various CORS headers present on the application
+  tags: generic,cors,headers
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}"
+    matchers:
+      - type: word
+        words:
+          - "Access-Control-Allow-Origin"
+          - "Access-Control-Allow-Methods"
+          - "Access-Control-Allow-Headers"
+          - "Access-Control-Expose-Headers"
+          - "Access-Control-Max-Age"
+        condition: or
+        part: header
+        name: "cors-headers-detected"
+---
+id: generic-form-discovery
+info:
+  name: Form Field Discovery
+  author: AniipID
+  severity: info
+  description: Discovers forms and input fields on pages
+  tags: generic,forms,discovery
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}"
+      - "{{BaseURL}}/login"
+      - "{{BaseURL}}/register"
+      - "{{BaseURL}}/contact"
+      - "{{BaseURL}}/search"
+    matchers:
+      - type: regex
+        regex:
+          - "<form[^>]*action=[\"']([^\"']+)[\"']"
+          - "type=[\"'](?:text|password|email|search|file|hidden)[\"']"
+          - "name=[\"']([^\"']+)[\"']"
+        condition: or
+        name: "form-fields"
+---
+id: generic-session-fingerprint
+info:
+  name: Session Fingerprinting
+  author: AniipID
+  severity: info
+  description: Detects session/cookie naming conventions for framework identification
+  tags: generic,session,fingerprint
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}"
+      - "{{BaseURL}}/login"
+    matchers:
+      - type: regex
+        regex:
+          - "Set-Cookie:\\s*[A-Za-z]+="
+          - "PHPSESSID=[a-z0-9]+"
+          - "JSESSIONID=[A-Z0-9]+"
+          - "laravel_session=[a-zA-Z0-9]+"
+          - "connect\\.sid=[a-zA-Z0-9%]+"
+          - "ASP\\.NET_SessionId=[a-z0-9]+"
+          - "ci_session=[a-z0-9]+"
+        condition: or
+        name: "session-cookie"
+---
+id: generic-content-type
+info:
+  name: Content Type Detection
+  author: AniipID
+  severity: info
+  description: Detects content types and response encoding
+  tags: generic,content-type,info
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}"
+      - "{{BaseURL}}/api"
+      - "{{BaseURL}}/api/v1"
+    matchers:
+      - type: word
+        words:
+          - "application/json"
+          - "application/xml"
+          - "text/xml"
+          - "multipart/form-data"
+          - "application/octet-stream"
+        condition: or
+        part: header
+        name: "content-type-detected"
+---
+id: generic-cookie-flags
+info:
+  name: Cookie Security Flags Audit
+  author: AniipID
+  severity: low
+  description: Checks for Secure and HttpOnly flags on cookies
+  tags: generic,cookies,security
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}"
+      - "{{BaseURL}}/login"
+    matchers:
+      - type: word
+        words:
+          - "Set-Cookie:"
+          - "HttpOnly"
+          - "Secure"
+        condition: or
+        part: header
+        name: "cookie-flags-checked"
+---
+id: generic-trace-method
+info:
+  name: TRACE Method Detection
+  author: AniipID
+  severity: medium
+  description: Tests if HTTP TRACE method is enabled (XST vulnerability)
+  tags: generic,xst,trace
+requests:
+  - method: TRACE
+    path:
+      - "{{BaseURL}}"
+    matchers:
+      - type: word
+        words:
+          - "TRACE"
+          - "Max-Forwards"
+        condition: or
+        name: "trace-enabled"
+---
+id: generic-cors-preflight
+info:
+  name: CORS Preflight Cache
+  author: AniipID
+  severity: info
+  description: Checks CORS preflight cache duration
+  tags: generic,cors,preflight
+requests:
+  - method: OPTIONS
+    path:
+      - "{{BaseURL}}"
+    headers:
+      Origin: "https://example.com"
+      Access-Control-Request-Method: "GET"
+    matchers:
+      - type: word
+        words:
+          - "Access-Control-Max-Age"
+        part: header
+        name: "cors-preflight-cached"
+---
+id: generic-email-disclosure
+info:
+  name: Email Disclosure
+  author: AniipID
+  severity: low
+  description: Detects email addresses disclosed in responses
+  tags: generic,email,info
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}"
+      - "{{BaseURL}}/contact"
+      - "{{BaseURL}}/about"
+    matchers:
+      - type: regex
+        regex:
+          - "[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}"
+        name: "email-disclosed"
+---
+id: generic-ip-disclosure
+info:
+  name: Internal IP Disclosure
+  author: AniipID
+  severity: medium
+  description: Detects internal IP addresses disclosed in responses
+  tags: generic,ip,info
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}"
+    matchers:
+      - type: regex
+        regex:
+          - "10\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}"
+          - "172\\.(1[6-9]|2[0-9]|3[01])\\.\\d{1,3}\\.\\d{1,3}"
+          - "192\\.168\\.\\d{1,3}\\.\\d{1,3}"
+        condition: or
+        name: "ip-disclosed"

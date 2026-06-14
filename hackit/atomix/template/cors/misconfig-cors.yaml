@@ -1,0 +1,105 @@
+id: cors-wildcard-origin
+info:
+  name: CORS Wildcard Origin
+  author: AniipID
+  severity: medium
+  description: Detects CORS policy allowing all origins with credentials
+  tags: cors,misconfig
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}"
+      - "{{BaseURL}}/api"
+      - "{{BaseURL}}/api/v1"
+    headers:
+      Origin: "https://evil.com"
+    matchers:
+      - type: word
+        words:
+          - "Access-Control-Allow-Origin: https://evil.com"
+          - "Access-Control-Allow-Origin: *"
+        part: header
+        name: "cors-reflect-origin"
+---
+id: cors-credentials
+info:
+  name: CORS with Credentials
+  author: AniipID
+  severity: high
+  description: Detects CORS with wildcard origin AND allow-credentials
+  tags: cors,misconfig,credentials
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}"
+    headers:
+      Origin: "https://attacker.com"
+    matchers:
+      - type: word
+        words:
+          - "Access-Control-Allow-Credentials: true"
+        part: header
+        name: "cors-credentials-enabled"
+---
+id: cors-null-origin
+info:
+  name: CORS Null Origin Accepted
+  author: AniipID
+  severity: medium
+  description: Detects CORS that accepts null Origin header
+  tags: cors,misconfig,null
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}"
+    headers:
+      Origin: "null"
+    matchers:
+      - type: word
+        words:
+          - "Access-Control-Allow-Origin: null"
+        part: header
+        name: "cors-null-accepted"
+---
+id: cors-all-methods
+info:
+  name: CORS All Methods Allowed
+  author: AniipID
+  severity: low
+  description: Detects overly permissive CORS methods
+  tags: cors,misconfig,methods
+requests:
+  - method: OPTIONS
+    path:
+      - "{{BaseURL}}"
+    headers:
+      Origin: "https://evil.com"
+      Access-Control-Request-Method: "PUT"
+    matchers:
+      - type: word
+        words:
+          - "Access-Control-Allow-Methods: *"
+          - "Access-Control-Allow-Methods: PUT"
+        condition: or
+        part: header
+        name: "cors-put-allowed"
+---
+id: cors-private-ip
+info:
+  name: CORS Internal IP Allowed
+  author: AniipID
+  severity: high
+  description: Detects CORS allowing internal IP origins
+  tags: cors,misconfig,internal
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}"
+    headers:
+      Origin: "http://192.168.1.1"
+    matchers:
+      - type: word
+        words:
+          - "Access-Control-Allow-Origin: http://192.168.1.1"
+        part: header
+        name: "cors-internal-ip"

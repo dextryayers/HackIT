@@ -77,6 +77,9 @@ const { title } = Astro.props;
 						<a href="/intelligence" class="px-4 py-2 hover:bg-sf-card rounded-full flex items-center gap-2 text-sm font-medium transition-all hover:text-sf-tabActive group">
 							<i class="fas fa-brain opacity-70 group-hover:scale-110 transition-transform"></i> Intelligence
 						</a>
+						<a href="/settings" class="px-4 py-2 hover:bg-sf-card rounded-full flex items-center gap-2 text-sm font-medium transition-all hover:text-sf-tabActive group">
+							<i class="fas fa-cog opacity-70 group-hover:scale-110 transition-transform"></i> Settings
+						</a>
 					</nav>
 				</div>
 
@@ -105,13 +108,51 @@ const { title } = Astro.props;
 			<slot />
 		</main>
 
+		<!-- Copyright Footer -->
+		<footer class="border-t border-sf-border bg-sf-lightbg/80 backdrop-blur-sm py-3 px-8 text-center">
+			<p class="text-[11px] text-sf-muted tracking-wider">
+				&copy; 2026 <a href="https://haniipp.space" target="_blank" class="text-sf-tabActive hover:underline font-medium">Hanif Abdurrohim</a> &mdash; Built with experience, for the security community.
+			</p>
+		</footer>
+
+		<!-- Cookie Consent Banner -->
+		<div id="cookie-banner" class="fixed bottom-6 left-1/2 -translate-x-1/2 z-[999] max-w-2xl w-[90%] bg-sf-card border border-sf-border rounded-2xl shadow-2xl p-5 hidden transition-all duration-500">
+			<div class="flex items-start gap-4">
+				<div class="w-10 h-10 rounded-full bg-sf-tabActive/10 flex items-center justify-center flex-shrink-0">
+					<svg class="w-5 h-5 text-sf-tabActive" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+				</div>
+				<div class="flex-1">
+					<p class="text-xs text-sf-text leading-relaxed">
+						<strong class="text-sf-tabActive">Hi, I am Hanif Abdurrohim</strong> as the developer. This tool is built legally based on hands-on experience and real-world cybersecurity expertise. Use responsibly and only on targets you own or have explicit permission to test.
+					</p>
+				</div>
+				<button id="cookie-accept" class="flex-shrink-0 px-5 py-2 bg-sf-tabActive text-black text-xs font-bold rounded-lg hover:opacity-90 transition-all uppercase tracking-wider">
+					Acknowledge
+				</button>
+			</div>
+		</div>
+
 		<script is:inline>
+			// Theme Toggle
 			const themeToggle = document.getElementById('theme-toggle');
 			themeToggle.addEventListener('click', () => {
 				document.documentElement.classList.toggle('light');
 				const isLight = document.documentElement.classList.contains('light');
 				localStorage.theme = isLight ? 'light' : 'dark';
 			});
+			// Cookie Banner
+			(function() {
+				const banner = document.getElementById('cookie-banner');
+				const acceptBtn = document.getElementById('cookie-accept');
+				if (!localStorage.getItem('hackit_cookie_consent')) {
+					setTimeout(() => banner.classList.remove('hidden'), 500);
+				}
+				acceptBtn.addEventListener('click', () => {
+					localStorage.setItem('hackit_cookie_consent', 'acknowledged');
+					banner.classList.add('opacity-0');
+					setTimeout(() => banner.classList.add('hidden'), 300);
+				});
+			})();
 		</script>
 	</body>
 </html>

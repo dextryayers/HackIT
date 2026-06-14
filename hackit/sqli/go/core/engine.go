@@ -9,6 +9,8 @@ import (
 	"time"
 )
 
+var _ = time.Second // ensure time is used
+
 // Engine Options
 type Options struct {
 	URL            string
@@ -54,16 +56,24 @@ type Options struct {
 	DumpTable string
 	DumpAll   bool
 
+	PrivEsc  bool
+	OSAccess bool
+	ExfilDNS  bool
+	ExfilHTTP bool
+	NoColor   bool
+
 	Verbose int
-	NoColor bool
 	Retry   int
 }
 
 type Engine struct {
-	Opts   *Options
-	Client *http.Client
-	Log    *utils.Logger
-	Perf   *utils.PerformanceManager
+	Opts                 *Options
+	Client               *http.Client
+	Log                  *utils.Logger
+	Perf                 *utils.PerformanceManager
+	LastResponseHeaders  http.Header
+	LastResponseBody     string
+	LastResponseTime     time.Duration
 }
 
 func NewEngine(opts *Options) *Engine {

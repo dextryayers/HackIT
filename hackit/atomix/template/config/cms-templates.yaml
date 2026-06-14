@@ -1,0 +1,218 @@
+id: wp-user-enum
+info:
+  name: WordPress User Enumeration
+  author: AniipID
+  severity: medium
+  description: Detects WordPress user enumeration via REST API
+  tags: cms,wordpress,user-enum
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/wp-json/wp/v2/users"
+      - "{{BaseURL}}/?author=1"
+      - "{{BaseURL}}/wp-json/wp/v2/users/1"
+    matchers:
+      - type: word
+        words:
+          - "slug"
+          - "name"
+          - "avatar_urls"
+        condition: or
+        name: "user-enum"
+---
+id: wp-xmlrpc
+info:
+  name: WordPress XML-RPC Enabled
+  author: AniipID
+  severity: medium
+  description: Detects WordPress XML-RPC API access
+  tags: cms,wordpress,xmlrpc
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/xmlrpc.php"
+    matchers:
+      - type: word
+        words:
+          - "XML-RPC"
+          - "XMLRPC"
+          - "system.listMethods"
+        condition: or
+        name: "xmlrpc-enabled"
+---
+id: wp-debug-log
+info:
+  name: WordPress Debug Log
+  author: AniipID
+  severity: high
+  description: Detects exposed WordPress debug log
+  tags: cms,wordpress,debug,log
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/wp-content/debug.log"
+      - "{{BaseURL}}/debug.log"
+    matchers:
+      - type: word
+        words:
+          - "PHP"
+          - "PHP Notice"
+          - "PHP Warning"
+          - "PHP Fatal"
+          - "Stack trace"
+        condition: or
+        name: "debug-log-exposed"
+---
+id: wp-config-backup
+info:
+  name: WordPress Config Backup
+  author: AniipID
+  severity: critical
+  description: Detects exposed WordPress configuration backups
+  tags: cms,wordpress,config,backup
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/wp-config.php~"
+      - "{{BaseURL}}/wp-config.php.bak"
+      - "{{BaseURL}}/wp-config.php.swp"
+      - "{{BaseURL}}/wp-config.php.old"
+      - "{{BaseURL}}/wp-config.bak"
+    matchers:
+      - type: word
+        words:
+          - "DB_NAME"
+          - "DB_USER"
+          - "DB_PASSWORD"
+          - "DB_HOST"
+          - "AUTH_KEY"
+          - "SECURE_AUTH_KEY"
+        condition: or
+        name: "wp-config-exposed"
+---
+id: wp-uploads-index
+info:
+  name: WordPress Uploads Directory Indexing
+  author: AniipID
+  severity: low
+  description: Detects directory listing on WordPress uploads
+  tags: cms,wordpress,uploads,listing
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/wp-content/uploads/"
+      - "{{BaseURL}}/wp-content/uploads/2024/"
+    matchers:
+      - type: word
+        words:
+          - "Index of /"
+          - "wp-content/uploads"
+        condition: or
+        name: "uploads-listing"
+---
+id: wp-admin-accessible
+info:
+  name: WordPress Admin Accessible
+  author: AniipID
+  severity: medium
+  description: Checks if WordPress admin login is accessible
+  tags: cms,wordpress,admin
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/wp-admin"
+      - "{{BaseURL}}/wp-login.php"
+    matchers:
+      - type: word
+        words:
+          - "wp-admin"
+          - "wp-login"
+          - "user_login"
+        condition: or
+        name: "admin-accessible"
+---
+id: wp-plugin-disclosure
+info:
+  name: WordPress Plugin Disclosure
+  author: AniipID
+  severity: low
+  description: Discovers WordPress plugins from page source
+  tags: cms,wordpress,plugins,discovery
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}"
+      - "{{BaseURL}}/wp-content/plugins/"
+    matchers:
+      - type: regex
+        regex:
+          - "/wp-content/plugins/([^/]+)/"
+          - "/wp-content/themes/([^/]+)/"
+        condition: or
+        name: "plugin-theme-disclosure"
+---
+id: wp-timthumb
+info:
+  name: WordPress TimThumb Vulnerability
+  author: AniipID
+  severity: high
+  description: Detects TimThumb script with known vulnerabilities
+  tags: cms,wordpress,timthumb,rce
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/wp-content/themes/*/timthumb.php"
+      - "{{BaseURL}}/wp-content/plugins/*/timthumb.php"
+      - "{{BaseURL}}/timthumb.php"
+    matchers:
+      - type: word
+        words:
+          - "TimThumble"
+          - "TIMTHUMB"
+          - "timthumb"
+        condition: or
+        name: "timthumb-detected"
+---
+id: joomla-configuration
+info:
+  name: Joomla Configuration Disclosure
+  author: AniipID
+  severity: critical
+  description: Detects exposed Joomla configuration file
+  tags: cms,joomla,config
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/configuration.php"
+      - "{{BaseURL}}/configuration.php.bak"
+    matchers:
+      - type: word
+        words:
+          - "class JConfig"
+          - "public $host"
+          - "public $user"
+          - "public $password"
+          - "public $db"
+        condition: or
+        name: "joomla-config-exposed"
+---
+id: drupal-user-enum
+info:
+  name: Drupal User Enumeration
+  author: AniipID
+  severity: medium
+  description: Detects Drupal user enumeration
+  tags: cms,drupal,user-enum
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/user/?page=0"
+      - "{{BaseURL}}/?q=user&page=0"
+    matchers:
+      - type: word
+        words:
+          - "users"
+          - "member for"
+          - "View user profile"
+        condition: or
+        name: "drupal-user-enum"

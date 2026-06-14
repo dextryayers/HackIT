@@ -215,11 +215,18 @@ def extract_from_web(domain):
 @click.option('--probe', is_flag=True, help='Display Probe Status (Alive/Dead)')
 @click.option('-fc', '--filter-codes', help='Filter response with specified status code (e.g. 403,401)')
 @click.option('-t', '--threads', default=100, help='Number of threads (Go routines)')
-@click.option('-o', '--output', help='Save output to JSON file')
+@click.option('-o', '--output', help='Save output file path')
+@click.option('--output-format', '--of', type=click.Choice(['text', 'json', 'csv']), default='text', help='Output format')
 @click.option('-v', '--verbose', is_flag=True, help='Show verbose output (debug logs)')
-def enumerate(domain, wordlist, passive_only, active_only, hyper, permutations, takeover, recursive, stealth, fast, sc, ip, title, server, tech_detect, asn, probe, filter_codes, threads, output, verbose):
+@click.option('--common', is_flag=True, help='Use built-in common subdomain wordlist (~350 entries)')
+@click.option('--all', 'all_flag', is_flag=True, help='Max depth: enable everything (common+permutations+takeover+probe)')
+@click.option('--no-wildcard', is_flag=True, help='Disable wildcard DNS filtering')
+@click.option('--doh', is_flag=True, help='Use DNS-over-HTTPS resolvers')
+@click.option('--no-resolve', is_flag=True, help='Skip DNS resolution for passive findings')
+def enumerate(domain, wordlist, passive_only, active_only, hyper, permutations, takeover, recursive, stealth, fast, sc, ip, title, server, tech_detect, asn, probe, filter_codes, threads, output, output_format, verbose, common, all_flag, no_wildcard, doh, no_resolve):
     """
-    Hackit SubOver: Deep Subdomain Enumeration & Takeover Scanner
+    Hackit SubOver v3.5: Deep Subdomain Enumeration & Takeover Scanner
+    Flags: --all (max depth), --common (built-in WL), --doh, --no-wildcard
     """
     print_banner()
     
@@ -247,6 +254,9 @@ def enumerate(domain, wordlist, passive_only, active_only, hyper, permutations, 
     table.add_row("Modes", ", ".join(modes))
     if fast: table.add_row("Fast Mode", "[bold yellow]ON[/bold yellow]")
     if stealth: table.add_row("Stealth Mode", "[bold yellow]ON[/bold yellow]")
+    if common: table.add_row("Built-in WL", "[bold green]ON[/bold green]")
+    if no_wildcard: table.add_row("Wildcard Filter", "[bold red]OFF[/bold red]")
+    if all_flag: table.add_row("Max Depth", "[bold magenta]ALL[/bold magenta]")
     if threads != 100: table.add_row("Threads", str(threads))
     
     console.print(table)
@@ -316,7 +326,13 @@ def enumerate(domain, wordlist, passive_only, active_only, hyper, permutations, 
         filter_codes=filter_codes,
         threads=threads,
         output=output,
-        verbose=verbose
+        output_format=output_format,
+        verbose=verbose,
+        common=common,
+        all_flag=all_flag,
+        no_wildcard=no_wildcard,
+        doh=doh,
+        resolve=not no_resolve,
     )
     
     # Cleanup temp file

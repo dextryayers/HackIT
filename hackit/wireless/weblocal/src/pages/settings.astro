@@ -1,0 +1,293 @@
+---
+import Layout from "../layouts/Layout.astro";
+import Navbar from "../components/Navbar.astro";
+import Button from "../components/ui/Button.astro";
+import Card from "../components/ui/Card.astro";
+---
+
+<Layout title="Settings">
+  <Navbar slot="nav" active="/settings" />
+
+  <div class="max-w-2xl animate-fade-in">
+    <div class="flex items-center justify-between mb-2">
+      <div>
+        <h1 class="text-3xl font-extrabold tracking-tight bg-card bg-clip-text text-transparent">
+          Settings
+        </h1>
+        <p class="text-sm text-muted-foreground mt-1.5">Configure wireless web interface preferences</p>
+      </div>
+      <div class="flex items-center gap-2">
+        <span id="save-indicator" class="flex items-center gap-1.5 text-xs text-emerald-500 opacity-0 transition-all duration-300">
+          <i data-lucide="check" class="w-3.5 h-3.5 text-emerald-500"></i>
+          Saved
+        </span>
+      </div>
+    </div>
+
+    <div class="space-y-5 mt-8">
+      <!-- Go Web Server -->
+      <Card class="group hover:border-orange-500/20">
+        <div class="absolute top-0 left-0 w-1 h-full bg-gradient-to-b from-orange-500 to-amber-400"></div>
+        <div class="absolute inset-0 bg-gradient-to-br from-orange-500/[0.02] via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
+        <div class="relative z-10 p-5 pl-6">
+          <div class="flex items-center justify-between mb-4">
+            <h2 class="text-sm font-bold text-foreground flex items-center gap-2">
+              <i data-lucide="info" class="w-4 h-4 text-orange-500"></i>
+              Go Web Server
+            </h2>
+            <div class="flex items-center gap-2">
+              <span class="text-[10px] text-muted-foreground">Status</span>
+              <span id="go-web-status-dot" class="w-2.5 h-2.5 rounded-full bg-gray-600"></span>
+            </div>
+          </div>
+          <p class="text-xs text-muted-foreground/70 mb-4 leading-relaxed">
+            Standalone Go HTTP server with direct nmcli/iw scanning, interface control, and cracking.
+            Runs parallel to the Python backend.
+          </p>
+          <div class="flex flex-wrap items-center gap-2.5">
+            <Button id="go-web-start" onclick="goWebAction('start')" class="bg-emerald-500/10 border-emerald-500/20 text-emerald-500 hover:bg-emerald-500/20 hover:shadow-md">Start</Button>
+            <Button id="go-web-stop" onclick="goWebAction('stop')" class="bg-red-500/10 border-red-500/20 text-red-500 hover:bg-red-500/20 hover:shadow-md">Stop</Button>
+            <Button id="go-web-build" onclick="goWebAction('build')" class="bg-muted/30 border-border/40 text-muted-foreground hover:text-foreground hover:border-border/70 hover:bg-muted/50">Build</Button>
+            <Button id="go-web-fetch" onclick="goWebAction('fetch')" class="bg-muted/30 border-border/40 text-muted-foreground hover:text-foreground hover:border-border/70 hover:bg-muted/50">Test</Button>
+          </div>
+          <div id="go-web-info" class="mt-3 text-xs text-emerald-500 space-y-1 hidden"></div>
+          <div id="go-web-error" class="mt-2 text-xs text-red-500 hidden"></div>
+        </div>
+      </Card>
+
+      <!-- Interface -->
+      <Card class="group hover:border-primary/20">
+        <div class="absolute top-0 left-0 w-1 h-full bg-gradient-to-b from-primary to-cyan-400"></div>
+        <div class="absolute inset-0 bg-gradient-to-br from-primary/[0.02] via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
+        <div class="relative z-10 p-5 pl-6">
+          <h2 class="text-sm font-bold text-foreground mb-5 flex items-center gap-2">
+            <i data-lucide="wifi" class="w-4 h-4 text-primary"></i>
+            Interface
+          </h2>
+          <div class="mb-4">
+            <label class="text-xs text-muted-foreground mb-1.5 block font-medium">Default adapter</label>
+            <select id="default-iface" class="w-full px-3.5 py-2.5 rounded-xl bg-muted/30 border border-border/40 text-sm text-foreground focus:outline-none focus:border-primary/50 focus:shadow-[0_0_12px_rgba(0,212,255,0.1)] transition-all duration-300 cursor-pointer">
+              <option value="wlan0" class="bg-card">wlan0</option>
+              <option value="wlan1" class="bg-card">wlan1</option>
+            </select>
+          </div>
+          <label class="flex items-center justify-between gap-3 p-3.5 rounded-xl bg-muted/20 border border-border/30 cursor-pointer hover:border-border/60 hover:bg-muted/30 transition-all duration-300">
+            <span>
+              <span class="text-sm text-foreground font-medium">Auto-refresh adapter status</span>
+              <span class="text-xs text-muted-foreground/60 block mt-0.5">Poll adapter info every 5 seconds</span>
+            </span>
+            <div class="relative inline-flex items-center">
+              <input type="checkbox" id="auto-refresh" class="sr-only peer" checked />
+              <div class="w-11 h-6 rounded-full bg-muted/50 border border-border/40 peer-checked:bg-primary/20 peer-checked:border-primary/40 transition-all duration-300 cursor-pointer after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:w-5 after:h-5 after:rounded-full after:bg-muted-foreground/40 after:transition-all after:duration-300 peer-checked:after:translate-x-5 peer-checked:after:bg-primary peer-checked:after:shadow-[0_0_10px_rgba(0,212,255,0.4)]"></div>
+            </div>
+          </label>
+        </div>
+      </Card>
+
+      <!-- Attack Defaults -->
+      <Card class="group hover:border-violet-500/20">
+        <div class="absolute top-0 left-0 w-1 h-full bg-gradient-to-b from-violet-500 to-primary"></div>
+        <div class="absolute inset-0 bg-gradient-to-br from-violet-500/[0.02] via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
+        <div class="relative z-10 p-5 pl-6">
+          <h2 class="text-sm font-bold text-foreground mb-5 flex items-center gap-2">
+            <i data-lucide="zap" class="w-4 h-4 text-violet-500"></i>
+            Attack Defaults
+          </h2>
+          <div class="mb-4">
+            <label class="text-xs text-muted-foreground mb-1.5 block font-medium">Default timeout <span class="text-muted-foreground/40">(seconds)</span></label>
+            <input type="number" id="default-timeout" class="w-full px-3.5 py-2.5 rounded-xl bg-muted/30 border border-border/40 text-sm text-foreground focus:outline-none focus:border-primary/50 focus:shadow-[0_0_12px_rgba(0,212,255,0.1)] transition-all duration-300" value="60" />
+          </div>
+          <label class="flex items-center justify-between gap-3 p-3.5 rounded-xl bg-muted/20 border border-border/30 cursor-pointer hover:border-border/60 hover:bg-muted/30 transition-all duration-300">
+            <span>
+              <span class="text-sm text-foreground font-medium">Confirm before launching attacks</span>
+              <span class="text-xs text-muted-foreground/60 block mt-0.5">Show a confirmation dialog before executing attacks</span>
+            </span>
+            <div class="relative inline-flex items-center">
+              <input type="checkbox" id="confirm-attacks" class="sr-only peer" checked />
+              <div class="w-11 h-6 rounded-full bg-muted/50 border border-border/40 peer-checked:bg-emerald-500/20 peer-checked:border-emerald-500/40 transition-all duration-300 cursor-pointer after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:w-5 after:h-5 after:rounded-full after:bg-muted-foreground/40 after:transition-all after:duration-300 peer-checked:after:translate-x-5 peer-checked:after:bg-emerald-500 peer-checked:after:shadow-[0_0_10px_rgba(0,255,65,0.4)]"></div>
+            </div>
+          </label>
+        </div>
+      </Card>
+
+      <!-- About -->
+      <Card class="group">
+        <div class="absolute top-0 left-0 w-1 h-full bg-gradient-to-b from-amber-400 to-orange-500"></div>
+        <div class="absolute inset-0 bg-gradient-to-br from-amber-400/[0.01] via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
+        <div class="relative z-10 p-5 pl-6">
+          <h2 class="text-sm font-bold text-foreground mb-5 flex items-center gap-2">
+            <i data-lucide="info" class="w-4 h-4 text-amber-400"></i>
+            About
+          </h2>
+          <div class="text-sm text-muted-foreground space-y-0">
+            <div class="flex items-center justify-between py-2.5 border-b border-border/10">
+              <span class="text-muted-foreground/60">Version</span>
+              <span class="text-foreground font-mono text-xs font-semibold">3.0.0</span>
+            </div>
+            <div class="flex items-center justify-between py-2.5 border-b border-border/10">
+              <span class="text-muted-foreground/60">Engines</span>
+              <span class="text-muted-foreground text-[11px] font-mono">C / C++ / C# / Rust / Go / Python / Lua / Ruby</span>
+            </div>
+            <div class="flex items-center justify-between py-2.5 border-b border-border/10">
+              <span class="text-muted-foreground/60">Python Backend</span>
+              <span class="text-primary font-mono text-xs font-medium">FastAPI + Executor Bridge</span>
+            </div>
+            <div class="flex items-center justify-between py-2.5 border-b border-border/10">
+              <span class="text-muted-foreground/60">Go Backend</span>
+              <span class="text-orange-500 font-mono text-xs font-medium" id="about-go-web">Not running</span>
+            </div>
+            <div class="flex items-center justify-between py-2.5">
+              <span class="text-muted-foreground/60">Frontend</span>
+              <span class="text-emerald-500 font-mono text-xs font-medium">Astro + Tailwind</span>
+            </div>
+          </div>
+        </div>
+      </Card>
+
+      <!-- Actions -->
+      <div class="flex items-center gap-3 pt-2 pb-8">
+        <Button onclick="resetSettings()" class="bg-muted/30 border-border/40 text-muted-foreground hover:text-foreground hover:border-red-500/30 hover:bg-red-500/5">
+          Reset to Defaults
+        </Button>
+      </div>
+    </div>
+  </div>
+</Layout>
+
+<script>
+(function() {
+  const saveKey = 'hackit_wireless_settings';
+  const indicator = document.getElementById('save-indicator');
+  let saveTimer;
+
+  function showSaved(msg) {
+    if (!indicator) return;
+    indicator.classList.remove('opacity-0');
+    indicator.innerHTML = `<i data-lucide="check" class="w-3.5 h-3.5 text-emerald-500"></i> ${msg || 'Saved'}`;
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => indicator.classList.add('opacity-0'), 2500);
+  }
+
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(saveKey) || '{}'); } catch { saved = {}; }
+
+  const iface = document.getElementById('default-iface');
+  const timeout = document.getElementById('default-timeout');
+  const auto = document.getElementById('auto-refresh');
+  const confirm = document.getElementById('confirm-attacks');
+
+  if (saved.iface && iface) iface.value = saved.iface;
+  if (saved.timeout && timeout) timeout.value = saved.timeout;
+  if (saved.autoRefresh !== undefined && auto) auto.checked = saved.autoRefresh;
+  if (saved.confirm !== undefined && confirm) confirm.checked = saved.confirm;
+
+  function saveSettings() {
+    localStorage.setItem(saveKey, JSON.stringify({
+      iface: iface?.value || 'wlan0',
+      timeout: timeout?.value || '60',
+      autoRefresh: auto?.checked ?? true,
+      confirm: confirm?.checked ?? true,
+    }));
+    showSaved('Saved');
+    HackitUI.success('Settings Saved');
+  }
+
+  [iface, timeout, auto, confirm].forEach(el => {
+    if (el) el.addEventListener('change', saveSettings);
+  });
+
+  window.resetSettings = async function() {
+    const { isConfirmed } = await HackitUI.confirm({
+      title: '<span class="text-foreground text-base font-bold">Reset Settings</span>',
+      text: 'Restore all settings to their default values?',
+      icon: 'warning',
+      confirmButtonText: 'Reset',
+      cancelButtonText: 'Cancel',
+      confirmButtonColor: '#ff6600',
+      cancelButtonColor: '#475569',
+      background: 'rgba(10,10,26,0.96)',
+      color: '#f8fafc',
+      customClass: { popup: 'rounded-2xl border border-border' }
+    });
+    if (!isConfirmed) return;
+    if (iface) iface.value = 'wlan0';
+    if (timeout) timeout.value = '60';
+    if (auto) auto.checked = true;
+    if (confirm) confirm.checked = true;
+    saveSettings();
+    showSaved('Defaults restored');
+    HackitUI.success('Defaults Restored');
+  };
+
+  // ── Go Web Server ──────────────────────────────────────────────
+  const dot = document.getElementById('go-web-status-dot');
+  const info = document.getElementById('go-web-info');
+  const err = document.getElementById('go-web-error');
+  const startBtn = document.getElementById('go-web-start');
+  const stopBtn = document.getElementById('go-web-stop');
+  const buildBtn = document.getElementById('go-web-build');
+  const fetchBtn = document.getElementById('go-web-fetch');
+  const aboutGo = document.getElementById('about-go-web');
+
+  async function goWebStatus() {
+    try {
+      const r = await fetch('/api/go-web/status');
+      const d = await r.json();
+      if (d.running) {
+        dot.className = 'w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse-glow';
+        if (aboutGo) aboutGo.innerHTML = `<a href="${d.url}/api/health" class="text-emerald-500 hover:underline" target="_blank">Running (port ${d.port})</a>`;
+        startBtn.disabled = true;
+        stopBtn.disabled = false;
+        fetchBtn.disabled = false;
+      } else {
+        dot.className = 'w-2.5 h-2.5 rounded-full bg-muted-foreground/40';
+        if (aboutGo) aboutGo.textContent = d.binary_ready ? 'Ready (stopped)' : 'Not built';
+        startBtn.disabled = !d.binary_ready;
+        stopBtn.disabled = true;
+        fetchBtn.disabled = true;
+      }
+    } catch {}
+  }
+
+  window.goWebAction = async function(action) {
+    err.classList.add('hidden');
+    info.classList.add('hidden');
+    if (action === 'fetch') {
+      const r = await fetch('/api/go-web/status');
+      const d = await r.json();
+      if (!d.running) { showGoError('Not running'); return; }
+      try {
+        const resp = await fetch(`${d.url}/api/health`);
+        const data = await resp.json();
+        showGoInfo(`Go server OK — uptime: ${data.uptime}, interfaces: ${(data.interfaces||[]).length}`);
+      } catch (e) {
+        showGoError('Cannot reach Go server: ' + e.message);
+      }
+      return;
+    }
+
+    const r = await fetch(`/api/go-web/${action}`, { method: 'POST' });
+    const d = await r.json();
+
+    if (d.ok) {
+      showGoInfo(d.message || 'OK');
+    } else {
+      showGoError(d.message || 'Failed');
+    }
+    goWebStatus();
+  };
+
+  function showGoInfo(msg) {
+    info.innerHTML = `<span class="inline-flex items-center gap-1.5"><i data-lucide="check" class="w-3 h-3 text-emerald-500"></i> ${msg}</span>`;
+    info.classList.remove('hidden');
+  }
+
+  function showGoError(msg) {
+    err.innerHTML = `<span class="inline-flex items-center gap-1.5"><i data-lucide="x-circle" class="w-3 h-3 text-red-500"></i> ${msg}</span>`;
+    err.classList.remove('hidden');
+  }
+
+  goWebStatus();
+  setInterval(goWebStatus, 5000);
+})();
+</script>

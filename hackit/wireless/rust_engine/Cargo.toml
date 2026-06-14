@@ -22,6 +22,7 @@ parking_lot = "0.12"
 [features]
 default = ["pcap"]
 pcap = ["dep:pcap"]
+c-ffi = []
 # Build without default features to avoid wpcap.lib linking on Windows:
 #   cargo build --no-default-features
 

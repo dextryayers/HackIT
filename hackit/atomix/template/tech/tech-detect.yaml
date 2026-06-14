@@ -1,0 +1,172 @@
+id: tech-php
+info:
+  name: PHP Technology Detection
+  author: AniipID
+  severity: info
+  description: Detects PHP usage via headers and file extensions
+  tags: tech,php
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}"
+      - "{{BaseURL}}/index.php"
+      - "{{BaseURL}}/phpinfo.php"
+    matchers:
+      - type: regex
+        regex:
+          - "X-Powered-By:\\s*PHP"
+          - "PHP/\\d+\\.\\d+\\.\\d+"
+        condition: or
+        part: header
+        name: "php-detected"
+---
+id: tech-nginx
+info:
+  name: Nginx Technology Detection
+  author: AniipID
+  severity: info
+  description: Detects Nginx web server
+  tags: tech,nginx,server
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}"
+    matchers:
+      - type: word
+        words:
+          - "Server: nginx"
+          - "nginx/"
+        part: header
+        name: "nginx-detected"
+---
+id: tech-apache
+info:
+  name: Apache Technology Detection
+  author: AniipID
+  severity: info
+  description: Detects Apache HTTP Server
+  tags: tech,apache,server
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}"
+    matchers:
+      - type: word
+        words:
+          - "Server: Apache"
+          - "Apache/"
+        part: header
+        name: "apache-detected"
+---
+id: tech-nodejs
+info:
+  name: Node.js Technology Detection
+  author: AniipID
+  severity: info
+  description: Detects Node.js/Express servers
+  tags: tech,nodejs,express
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}"
+    matchers:
+      - type: word
+        words:
+          - "X-Powered-By: Express"
+          - "Server: Node.js"
+        part: header
+        name: "nodejs-detected"
+---
+id: tech-python
+info:
+  name: Python Framework Detection
+  author: AniipID
+  severity: info
+  description: Detects Python web frameworks (Django, Flask, FastAPI)
+  tags: tech,python,django,flask
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}"
+    matchers:
+      - type: word
+        words:
+          - "Server: Python"
+          - "Server: Werkzeug"
+          - "X-Frame-Options: DENY"
+        part: header
+        condition: or
+        name: "python-detected"
+---
+id: tech-java
+info:
+  name: Java Technology Detection
+  author: AniipID
+  severity: info
+  description: Detects Java application servers (Tomcat, Jetty, JBoss)
+  tags: tech,java,tomcat,jetty
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}"
+    matchers:
+      - type: word
+        words:
+          - "Server: Apache-Coyote"
+          - "Server: Jetty"
+          - "Server: JBoss"
+          - "X-Powered-By: Servlet"
+          - "X-Powered-By: JSP"
+        part: header
+        condition: or
+        name: "java-detected"
+---
+id: tech-cdn
+info:
+  name: CDN Technology Detection
+  author: AniipID
+  severity: info
+  description: Detects CDN/proxy technologies
+  tags: tech,cdn,proxy,cloudflare
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}"
+    matchers:
+      - type: word
+        words:
+          - "Server: cloudflare"
+          - "CF-RAY"
+          - "X-Sucuri-ID"
+          - "X-Cache"
+          - "Via: 1.1 varnish"
+          - "AkamaiGHost"
+        part: header
+        condition: or
+        name: "cdn-detected"
+---
+id: tech-framework-cookies
+info:
+  name: Framework Detection via Cookies
+  author: AniipID
+  severity: info
+  description: Detects frameworks via session cookie names
+  tags: tech,framework,cookies
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}"
+    matchers:
+      - type: word
+        words:
+          - "PHPSESSID"
+          - "JSESSIONID"
+          - "ASP.NET_SessionId"
+          - "connect.sid"
+          - "sessionid"
+          - "laravel_session"
+          - "ci_session"
+          - ".AspNetCore."
+        part: header
+        condition: or
+        name: "framework-cookie-detected"

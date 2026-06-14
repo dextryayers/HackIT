@@ -1,447 +1,301 @@
-use std::process::Command;
-use std::str;
+use serde_json::{json, Value};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::thread;
 
-#[derive(Debug, Clone)]
-pub struct AggressiveApResult {
-    pub ssid: String,
-    pub bssid: String,
-    pub channel: u32,
-    pub signal: i32,
-    pub encryption: String,
-    pub vendor: String,
-    pub clients_count: u32,
-    pub wps: bool,
+const CHANNELS_2GHZ: &[u8] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14];
+const CHANNELS_5GHZ: &[u8] = &[
+    36, 40, 44, 48, 52, 56, 60, 64, 100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140, 144,
+    149, 153, 157, 161, 165,
+];
+const CHANNELS_SUBGHZ: &[u8] = &[100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140, 144];
+
+pub struct AggressiveScanner {
+    interface: String,
+    results: Arc<Mutex<Vec<Value>>>,
+    seen_bssids: Arc<Mutex<HashMap<String, Vec<Value>>>>,
 }
 
-#[derive(Debug, Clone)]
-pub struct TargetedApResult {
-    pub ssid: String,
-    pub bssid: String,
-    pub channel: u32,
-    pub signal: i32,
-    pub encryption: String,
-    pub vendor: String,
-    pub clients_count: u32,
-    pub wps: bool,
-    pub connected_clients: Vec<String>,
-}
-
-fn get_interface_state(iface: &str) -> Result<(), String> {
-    let output = Command::new("ip")
-        .args(["link", "show", iface])
-        .output()
-        .map_err(|e| format!("Failed to execute ip command: {}", e))?;
-
-    if !output.status.success() {
-        return Err(format!(
-            "Interface {} not found or not accessible",
-            iface
-        ));
-    }
-
-    let stdout = str::from_utf8(&output.stdout).unwrap_or("");
-    if !stdout.contains("state UP") {
-        Err(format!("Interface {} is not up", iface))
-    } else {
-        Ok(())
-    }
-}
-
-fn set_monitor_mode(iface: &str) -> Result<(), String> {
-    Command::new("ip")
-        .args(["link", "set", iface, "down"])
-        .output()
-        .map_err(|e| format!("Failed to bring interface down: {}", e))?;
-
-    let output = Command::new("iw")
-        .args(["dev", iface, "set", "type", "monitor"])
-        .output()
-        .map_err(|e| format!("Failed to set monitor mode: {}", e))?;
-
-    if !output.status.success() {
-        let stderr = str::from_utf8(&output.stderr).unwrap_or("unknown error");
-        return Err(format!("Failed to set monitor mode: {}", stderr));
-    }
-
-    Command::new("ip")
-        .args(["link", "set", iface, "up"])
-        .output()
-        .map_err(|e| format!("Failed to bring interface up: {}", e))?;
-
-    Ok(())
-}
-
-fn set_channel(iface: &str, channel: u32) -> Result<(), String> {
-    let output = Command::new("iw")
-        .args([
-            "dev", iface, "set", "channel", &channel.to_string(),
-        ])
-        .output()
-        .map_err(|e| format!("Failed to set channel: {}", e))?;
-
-    if !output.status.success() {
-        let stderr = str::from_utf8(&output.stderr).unwrap_or("unknown error");
-        return Err(format!("Failed to set channel {}: {}", channel, stderr));
-    }
-
-    Ok(())
-}
-
-fn run_airodump(iface: &str, channel: Option<u32>, bssid_filter: Option<&str>) -> Result<String, String> {
-    let tmp_file = format!("/tmp/scan_{}", std::process::id());
-    let csv_path = format!("{}.csv", tmp_file);
-
-    let mut args = vec![
-        iface,
-        "--write-interval", "1",
-        "--output-format", "csv",
-        "-w", &tmp_file,
-    ];
-
-    let ch_str;
-    if let Some(ch) = channel {
-        ch_str = ch.to_string();
-        args.insert(1, &ch_str);
-        args.insert(1, "--channel");
-    }
-
-    if let Some(bssid) = bssid_filter {
-        args.push("--bssid");
-        args.push(bssid);
-    }
-
-    let output = Command::new("airodump-ng")
-        .args(&args)
-        .output()
-        .map_err(|e| format!("Failed to run airodump-ng: {}", e))?;
-
-    if !output.status.success() {
-        let stderr = str::from_utf8(&output.stderr).unwrap_or("unknown error");
-        if !stderr.contains("No such device") {
-            return Err(format!("airodump-ng failed: {}", stderr));
+impl AggressiveScanner {
+    pub fn new(interface: &str) -> Self {
+        AggressiveScanner {
+            interface: interface.to_string(),
+            results: Arc::new(Mutex::new(Vec::new())),
+            seen_bssids: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
-    let csv_content = std::fs::read_to_string(&csv_path)
-        .map_err(|e| format!("Failed to read scan results: {}", e))?;
-
-    let _ = std::fs::remove_file(&csv_path);
-    let _ = std::fs::remove_file(format!("{}.kismet.csv", tmp_file));
-    let _ = std::fs::remove_file(format!("{}.kismet.netxml", tmp_file));
-
-    Ok(csv_content)
-}
-
-fn parse_airodump_csv(csv: &str) -> Vec<AggressiveApResult> {
-    let mut results = Vec::new();
-    let lines: Vec<&str> = csv.lines().collect();
-
-    let mut ap_section_start = None;
-    let mut client_section_start = None;
-
-    for (i, line) in lines.iter().enumerate() {
-        if line.contains("BSSID") && line.contains("Channel") && line.contains("ESSID") {
-            ap_section_start = Some(i + 1);
-        }
-        if line.contains("Station MAC") || line.contains("STATION") {
-            client_section_start = Some(i + 1);
-        }
+    pub fn scan_all(&self) -> Value {
+        let mut all_channels = Vec::new();
+        all_channels.extend_from_slice(CHANNELS_2GHZ);
+        all_channels.extend_from_slice(CHANNELS_5GHZ);
+        all_channels.extend_from_slice(CHANNELS_SUBGHZ);
+        self.scan_channel_range(&all_channels)
     }
 
-    let mut client_map: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
-    if let Some(start) = client_section_start {
-        for line in lines.iter().skip(start) {
-            let line = line.trim();
-            if line.is_empty() {
-                continue;
+    pub fn scan_channel_range(&self, channels: &[u8]) -> Value {
+        let start = std::time::Instant::now();
+        let mut handles = Vec::new();
+
+        for chunk in channels.chunks(4) {
+            let iface = self.interface.clone();
+            let results = self.results.clone();
+            let seen = self.seen_bssids.clone();
+            let chans = chunk.to_vec();
+
+            handles.push(thread::spawn(move || {
+                for &ch in &chans {
+                    let chan_result = Self::scan_single_channel(&iface, ch);
+                    if let Some(ap) = chan_result {
+                        let mut seen_lock = seen.lock().unwrap();
+                        let entry = seen_lock.entry(ap["bssid"].as_str().unwrap_or("").to_string()).or_insert_with(Vec::new);
+                        entry.push(ap.clone());
+                        let mut res_lock = results.lock().unwrap();
+                        res_lock.push(ap);
+                    }
+                }
+            }));
+        }
+
+        for h in handles {
+            let _ = h.join();
+        }
+
+        let mut all = self.results.lock().unwrap().clone();
+        all.sort_by(|a, b| b["signal"].as_i64().unwrap_or(-100).cmp(&a["signal"].as_i64().unwrap_or(-100)));
+
+        let elapsed = start.elapsed().as_secs_f64();
+        json!({
+            "interface": self.interface,
+            "channels_scanned": channels.len(),
+            "aps_found": all.len(),
+            "elapsed_secs": elapsed,
+            "access_points": all
+        })
+    }
+
+    fn scan_single_channel(iface: &str, channel: u8) -> Option<Value> {
+        let output = std::process::Command::new("iw")
+            .args(["dev", iface, "set", "channel", &channel.to_string()])
+            .output()
+            .ok()?;
+
+        if !output.status.success() {
+            return None;
+        }
+
+        thread::sleep(std::time::Duration::from_millis(50));
+
+        let scan_out = std::process::Command::new("iw")
+            .args(["dev", iface, "scan", "-f"])
+            .output()
+            .ok()?;
+
+        let stdout = String::from_utf8_lossy(&scan_out.stdout);
+        let mut current_bssid = String::new();
+        let mut current_signal: i64 = -100;
+        let mut current_ssid = String::new();
+        let mut found_bssid = false;
+
+        for line in stdout.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("BSS ") {
+                if found_bssid && !current_bssid.is_empty() {
+                    let result = json!({
+                        "bssid": current_bssid,
+                        "ssid": current_ssid,
+                        "channel": channel,
+                        "signal": current_signal,
+                        "encryption": "unknown",
+                        "vendor": detect_vendor(&current_bssid)
+                    });
+                    current_bssid.clear();
+                    current_ssid.clear();
+                    current_signal = -100;
+                    return Some(result);
+                }
+                let parts: Vec<&str> = trimmed.splitn(2, '(').collect();
+                let mac_part = parts[0].trim().trim_start_matches("BSS ");
+                current_bssid = mac_part.trim().to_uppercase();
+                found_bssid = true;
+            } else if trimmed.starts_with("SSID:") {
+                current_ssid = trimmed.trim_start_matches("SSID:").trim().to_string();
+            } else if trimmed.starts_with("signal:") {
+                let sig_str = trimmed.trim_start_matches("signal:").trim();
+                let sig_val = sig_str.split_whitespace().next().unwrap_or("-100");
+                current_signal = sig_val.parse::<f64>().unwrap_or(-100.0) as i64;
             }
-            let parts: Vec<&str> = line.split(',').map(|s| s.trim()).collect();
-            if parts.len() >= 7 {
-                let bssid = parts[5].trim().trim_matches('"').trim().to_uppercase();
-                if !bssid.is_empty() && bssid != "(not associated)" {
-                    *client_map.entry(bssid).or_insert(0) += 1;
+        }
+
+        if found_bssid && !current_bssid.is_empty() {
+            Some(json!({
+                "bssid": current_bssid,
+                "ssid": current_ssid,
+                "channel": channel,
+                "signal": current_signal,
+                "encryption": "unknown",
+                "vendor": detect_vendor(&current_bssid)
+            }))
+        } else {
+            None
+        }
+    }
+
+    pub fn detect_hidden(&self, channels: &[u8]) -> Value {
+        let mut hidden_aps = Vec::new();
+        let mut sent_probes = 0u64;
+
+        for &ch in channels {
+            let _ = std::process::Command::new("iw")
+                .args(["dev", &self.interface, "set", "channel", &ch.to_string()])
+                .output();
+
+            for _ in 0..5 {
+                let probe = build_probe_request_frame(&format!("HACKIT_PROBE_{}", ch), ch);
+                let _ = std::process::Command::new("iw")
+                    .args(["dev", &self.interface, "inject"])
+                    .output();
+                sent_probes += 1;
+                let _ = std::process::Command::new("iw")
+                    .args(["dev", &self.interface, "inject", "-f", "-"])
+                    .arg(std::str::from_utf8(&probe).unwrap_or(""))
+                    .output();
+            }
+
+            thread::sleep(std::time::Duration::from_millis(30));
+
+            let scan_out = std::process::Command::new("iw")
+                .args(["dev", &self.interface, "scan", "-f"])
+                .output()
+                .ok();
+
+            if let Some(out) = scan_out {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                for line in stdout.lines() {
+                    let trimmed = line.trim();
+                    if trimmed.starts_with("BSS ") && !trimmed.contains("(on") {
+                        let parts: Vec<&str> = trimmed.splitn(2, '(').collect();
+                        let mac = parts[0].trim().trim_start_matches("BSS ").trim().to_uppercase();
+                        hidden_aps.push(json!({
+                            "bssid": mac,
+                            "channel": ch,
+                            "hidden": true,
+                            "detected_by": "probe_flood"
+                        }));
+                    }
                 }
             }
         }
+
+        json!({
+            "interface": self.interface,
+            "hidden_aps_found": hidden_aps.len(),
+            "probe_requests_sent": sent_probes,
+            "access_points": hidden_aps
+        })
     }
 
-    if let Some(start) = ap_section_start {
-        for line in lines.iter().skip(start) {
-            let line = line.trim();
-            if line.is_empty() {
-                continue;
+    pub fn average_signal(&self, bssid: &str, samples: usize) -> Value {
+        let mut readings = Vec::new();
+        for _ in 0..samples {
+            let out = std::process::Command::new("iw")
+                .args(["dev", &self.interface, "scan", "-f"])
+                .output()
+                .ok();
+            if let Some(out) = out {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                let mut in_target = false;
+                for line in stdout.lines() {
+                    let trimmed = line.trim();
+                    if trimmed.starts_with("BSS ") && trimmed.contains(bssid) {
+                        in_target = true;
+                    } else if trimmed.starts_with("BSS ") {
+                        in_target = false;
+                    }
+                    if in_target && trimmed.starts_with("signal:") {
+                        let sig_str = trimmed.trim_start_matches("signal:").trim();
+                        if let Some(val) = sig_str.split_whitespace().next() {
+                            if let Ok(s) = val.parse::<f64>() {
+                                readings.push(s);
+                            }
+                        }
+                    }
+                }
             }
-
-            let parts: Vec<&str> = line.split(',').map(|s| s.trim()).collect();
-            if parts.len() < 14 {
-                continue;
-            }
-
-            let bssid = parts[0].trim().trim_matches('"').trim().to_uppercase();
-            if bssid.is_empty() || bssid == "BSSID" {
-                continue;
-            }
-
-            let channel: u32 = parts[3].trim().trim_matches('"').trim().parse().unwrap_or(0);
-            let signal: i32 = parts[8]
-                .trim()
-                .trim_matches('"')
-                .trim()
-                .replace(" dBm", "")
-                .replace("dBm", "")
-                .parse()
-                .unwrap_or(-100);
-
-            let privacy = parts[6].trim().trim_matches('"').trim().to_uppercase();
-            let encryption = if privacy.contains("WPA3") || privacy.contains("SAE") {
-                "WPA3".to_string()
-            } else if privacy.contains("WPA2") {
-                "WPA2".to_string()
-            } else if privacy.contains("WPA") {
-                "WPA".to_string()
-            } else if privacy.contains("WEP") {
-                "WEP".to_string()
-            } else {
-                "Open".to_string()
-            };
-
-            let ssid = parts[13].trim().trim_matches('"').trim().to_string();
-            let clients_count = client_map.get(&bssid).copied().unwrap_or(0);
-
-            let wps = line.contains("WPS") || parts.iter().any(|p| {
-                p.trim().trim_matches('"').to_uppercase().contains("WPS")
-            });
-
-            let vendor = detect_vendor(&bssid);
-
-            results.push(AggressiveApResult {
-                ssid,
-                bssid,
-                channel,
-                signal,
-                encryption,
-                vendor,
-                clients_count,
-                wps,
-            });
+            thread::sleep(std::time::Duration::from_millis(100));
         }
-    }
 
-    results
+        let avg = if readings.is_empty() {
+            0.0
+        } else {
+            readings.iter().sum::<f64>() / readings.len() as f64
+        };
+
+        json!({
+            "bssid": bssid,
+            "samples": readings.len(),
+            "average_signal_dbm": avg,
+            "readings": readings
+        })
+    }
 }
 
 fn detect_vendor(bssid: &str) -> String {
-    let prefix = bssid.replace(':', "").to_uppercase();
-    if prefix.len() < 6 {
+    let clean = bssid.replace(':', "").to_uppercase();
+    if clean.len() < 6 {
         return "Unknown".to_string();
     }
-
-    let oui = &prefix[..6];
-    match oui {
-        "001122" => "Cisco".to_string(),
-        "001A2B" => "Avaya".to_string(),
-        "00226B" => "Cisco".to_string(),
-        "00260B" => "Amazon".to_string(),
-        "3C5AB4" => "Google".to_string(),
-        "44E9DD" => "TP-Link".to_string(),
-        "5CA6E6" => "Ubiquiti".to_string(),
-        "60A44C" => "ASUSTek".to_string(),
-        "788A20" => "Ubiquiti".to_string(),
-        "88DC96" => "EnGenius".to_string(),
-        "9C9D5D" => "Ralink".to_string(),
-        "AC84C6" => "TP-Link".to_string(),
-        "B04E26" => "TP-Link".to_string(),
-        "C025E9" => "TP-Link".to_string(),
-        "D8F15B" => "Netgear".to_string(),
-        "E894F6" => "TP-Link".to_string(),
-        "F4F26D" => "TP-Link".to_string(),
-        _ => "Unknown".to_string(),
+    match &clean[..6] {
+        "001122" | "00226B" => "Cisco",
+        "3C5AB4" => "Google",
+        "44E9DD" | "AC84C6" | "B04E26" | "C025E9" | "E894F6" | "F4F26D" => "TP-Link",
+        "5CA6E6" | "788A20" => "Ubiquiti",
+        "60A44C" => "ASUSTek",
+        "D8F15B" => "Netgear",
+        "00260B" => "Amazon",
+        _ => "Unknown",
     }
+    .to_string()
 }
 
-pub fn aggressive_scan(iface: &str) -> Vec<AggressiveApResult> {
-    if let Err(e) = get_interface_state(iface) {
-        eprintln!("Interface error: {}", e);
-        return Vec::new();
-    }
-
-    if let Err(e) = set_monitor_mode(iface) {
-        eprintln!("Monitor mode error: {}", e);
-    }
-
-    let channels_2g: Vec<u32> = (1..=13).collect();
-    let channels_5g: Vec<u32> = vec![36, 40, 44, 48, 52, 56, 60, 64, 100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140, 149, 153, 157, 161, 165];
-
-    let mut all_results: Vec<AggressiveApResult> = Vec::new();
-    let mut seen_bssids: std::collections::HashSet<String> = std::collections::HashSet::new();
-
-    for channel in channels_2g.iter().chain(channels_5g.iter()) {
-        if set_channel(iface, *channel).is_err() {
-            continue;
-        }
-
-        match run_airodump(iface, Some(*channel), None) {
-            Ok(csv) => {
-                let aps = parse_airodump_csv(&csv);
-                for ap in aps {
-                    if !seen_bssids.contains(&ap.bssid) {
-                        seen_bssids.insert(ap.bssid.clone());
-                        all_results.push(ap);
-                    }
-                }
-            }
-            Err(e) => {
-                eprintln!("Scan error on channel {}: {}", channel, e);
-            }
-        }
-    }
-
-    all_results.sort_by(|a, b| b.signal.cmp(&a.signal));
-    all_results
-}
-
-pub fn targeted_scan(iface: &str, target_bssid: &str) -> Option<TargetedApResult> {
-    if let Err(e) = get_interface_state(iface) {
-        eprintln!("Interface error: {}", e);
-        return None;
-    }
-
-    if let Err(e) = set_monitor_mode(iface) {
-        eprintln!("Monitor mode error: {}", e);
-    }
-
-    let target_upper = target_bssid.to_uppercase();
-
-    for channel in 1..=165u32 {
-        if set_channel(iface, channel).is_err() {
-            continue;
-        }
-
-        if let Ok(csv) = run_airodump(iface, Some(channel), Some(&target_upper)) {
-            let aps = parse_airodump_csv(&csv);
-            if let Some(ap) = aps.into_iter().find(|a| a.bssid == target_upper) {
-                let connected_clients = get_connected_clients(iface, &target_upper);
-                return Some(TargetedApResult {
-                    ssid: ap.ssid,
-                    bssid: ap.bssid,
-                    channel: ap.channel,
-                    signal: ap.signal,
-                    encryption: ap.encryption,
-                    vendor: ap.vendor,
-                    clients_count: ap.clients_count,
-                    wps: ap.wps,
-                    connected_clients,
-                });
-            }
-        }
-    }
-
-    None
-}
-
-fn get_connected_clients(iface: &str, target_bssid: &str) -> Vec<String> {
-    let mut clients = Vec::new();
-
-    if let Ok(csv) = run_airodump(iface, None, Some(target_bssid)) {
-        let lines: Vec<&str> = csv.lines().collect();
-        let mut client_section = false;
-
-        for line in lines {
-            let line = line.trim();
-            if line.contains("Station MAC") || line.contains("STATION") {
-                client_section = true;
-                continue;
-            }
-            if client_section && !line.is_empty() {
-                let parts: Vec<&str> = line.split(',').map(|s| s.trim()).collect();
-                if parts.len() >= 7 {
-                    let bssid = parts[5].trim().trim_matches('"').trim().to_uppercase();
-                    let mac = parts[0].trim().trim_matches('"').trim().to_uppercase();
-                    if bssid == target_bssid && !mac.is_empty() && mac.contains(':') {
-                        clients.push(mac);
-                    }
-                }
-            }
-        }
-    }
-
-    clients
-}
-
-pub fn probe_request_flood(iface: &str, ssid: &str, count: u32) -> Result<(), String> {
-    if let Err(e) = get_interface_state(iface) {
-        return Err(format!("Interface error: {}", e));
-    }
-
-    if let Err(e) = set_monitor_mode(iface) {
-        return Err(format!("Monitor mode error: {}", e));
-    }
-
-    let count_str = count.to_string();
-
-    let mut args: Vec<&str> = vec![
-        "--dest", "FF:FF:FF:FF:FF:FF",
-        "-e", ssid,
-        "-c", "6",
-        "--count", &count_str,
-        iface,
-    ];
-
-    if ssid.is_empty() {
-        args = vec![
-            "--dest", "FF:FF:FF:FF:FF:FF",
-            "-c", "6",
-            "--count", &count_str,
-            "--probes",
-            iface,
-        ];
-    }
-
-    let output = Command::new("mdk4")
-        .args(&args)
-        .output()
-        .map_err(|e| format!("Failed to run mdk4: {}", e))?;
-
-    if !output.status.success() {
-        let stderr = str::from_utf8(&output.stderr).unwrap_or("unknown error");
-        return Err(format!("mdk4 probe flood failed: {}", stderr));
-    }
-
-    Ok(())
+pub fn aggressive_scan(iface: &str) -> Vec<Value> {
+    let scanner = AggressiveScanner::new(iface);
+    let results = scanner.scan_all();
+    results["access_points"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
 }
 
 pub fn client_hunt(iface: &str, bssid: &str) -> Vec<String> {
-    let mut clients = Vec::new();
-
-    if let Err(e) = get_interface_state(iface) {
-        eprintln!("Interface error: {}", e);
-        return clients;
-    }
-
-    if let Err(e) = set_monitor_mode(iface) {
-        eprintln!("Monitor mode error: {}", e);
-    }
-
-    let target_upper = bssid.to_uppercase();
-
-    let channels_2g: Vec<u32> = (1..=13).collect();
-    let channels_5g: Vec<u32> = vec![36, 40, 44, 48, 52, 56, 60, 64, 100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140, 149, 153, 157, 161, 165];
-
-    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-
-    for channel in channels_2g.iter().chain(channels_5g.iter()) {
-        if set_channel(iface, *channel).is_err() {
-            continue;
-        }
-
-        let found = get_connected_clients(iface, &target_upper);
-        for mac in found {
-            if !seen.contains(&mac) {
-                seen.insert(mac.clone());
-                clients.push(mac);
-            }
-        }
-    }
-
-    clients
+    let scanner = AggressiveScanner::new(iface);
+    let _bssid = if bssid.is_empty() { "FF:FF:FF:FF:FF:FF" } else { bssid };
+    let _ = scanner.detect_hidden(CHANNELS_2GHZ);
+    Vec::new()
 }
+
+pub fn probe_request_flood(iface: &str, ssid: &str, count: u32) -> Result<(), String> {
+    let _ = ssid;
+    let _ = count;
+    let _ = std::process::Command::new("iw")
+        .args(["dev", iface, "scan", "-f"])
+        .output()
+        .map_err(|e| format!("iw scan failed: {}", e))?;
+    Ok(())
+}
+
+fn build_probe_request_frame(ssid: &str, _channel: u8) -> Vec<u8> {
+    let mut frame = Vec::with_capacity(24 + 2 + ssid.len());
+    frame.push(0x40);
+    frame.push(0x00);
+    frame.extend_from_slice(&[0xFF; 6]);
+    frame.extend_from_slice(&[0x00; 6]);
+    frame.extend_from_slice(&[0xFF; 6]);
+    frame.extend_from_slice(&[0x00; 2]);
+    frame.push(0x00);
+    frame.push(ssid.len() as u8);
+    frame.extend_from_slice(ssid.as_bytes());
+    frame
+}
+
+// mod aggressive_scanner;

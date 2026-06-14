@@ -1,0 +1,34 @@
+id: deser-java-rmi
+info:
+  name: Java RMI Deserialization Detection
+  author: AniipID
+  severity: critical
+  description: Detects exposed Java RMI endpoints that may be vulnerable to deserialization attacks
+  tags: deserialization,java,rmi
+
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/rmi"
+      - "{{BaseURL}}/jndi"
+      - "{{BaseURL}}/invoker"
+      - "{{BaseURL}}/JMXInvokerServlet"
+    matchers:
+      - type: word
+        words:
+          - "Invoker"
+          - "JMX"
+          - "jndi"
+          - "rmi"
+        condition: or
+        part: body
+
+  - method: POST
+    path:
+      - "{{BaseURL}}/invoker/JMXInvokerServlet"
+    body: "test"
+    matchers:
+      - type: status
+        status:
+          - 200
+          - 500

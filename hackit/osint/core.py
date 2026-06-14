@@ -1,7 +1,3 @@
-"""
-Public OSINT scanner core.
-"""
-
 from __future__ import annotations
 
 import hashlib
@@ -9,7 +5,7 @@ import re
 import socket
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, asdict
-from typing import Callable, List, Dict
+from typing import Callable, List, Dict, Optional
 from urllib.parse import quote_plus
 
 import requests
@@ -75,7 +71,7 @@ def _request_profile(session: requests.Session, source: Dict[str, str], handle: 
         if code == 200:
             not_found_markers = [
                 "not found", "page not found", "user not found", "doesn't exist",
-                "does not exist", "couldn\u2019t find", "couldn't find", "isn't available",
+                "does not exist", "couldn't find", "isn't available",
             ]
             metadata = _extract_metadata(response.text[:20000])
             if any(marker in text for marker in not_found_markers):
@@ -93,12 +89,56 @@ def _request_profile(session: requests.Session, source: Dict[str, str], handle: 
         return ProfileFinding(source["name"], source["category"], handle, url, "unknown", "low", None, type(exc).__name__)
 
 
+def scan_usernames_rust(
+    query: str,
+    proxy: Optional[str] = None,
+    retry: int = 1,
+    timeout: int = 15,
+    workers: int = 50,
+    on_result: Callable[[ProfileFinding], None] | None = None,
+) -> List[ProfileFinding]:
+    from .go_bridge import check_username
+
+    data = check_username(query, proxy=proxy, retry=retry, timeout=timeout, workers=workers)
+    results = data.get("results", [])
+    findings = []
+
+    for r in results:
+        finding = ProfileFinding(
+            platform=r.get("platform", ""),
+            category=r.get("category", ""),
+            handle=query,
+            url=r.get("url", ""),
+            status=r.get("status", "unknown"),
+            confidence=str(r.get("confidence", 0)),
+            http_status=r.get("http_status"),
+            note=r.get("note", ""),
+            title=r.get("title", ""),
+            description=r.get("description", ""),
+        )
+        findings.append(finding)
+        if on_result:
+            on_result(finding)
+
+    order = {"hit": 0, "possible": 1, "unknown": 2, "miss": 3}
+    return sorted(findings, key=lambda f: (order.get(f.status, 9), f.platform, f.handle))
+
+
 def scan_usernames(
     query: str,
     timeout: int = 8,
     workers: int = 24,
     on_result: Callable[[ProfileFinding], None] | None = None,
+    use_rust: bool = True,
+    proxy: Optional[str] = None,
+    retry: int = 1,
 ) -> List[ProfileFinding]:
+    if use_rust:
+        try:
+            return scan_usernames_rust(query, proxy=proxy, retry=retry, timeout=max(timeout, 10), workers=workers, on_result=on_result)
+        except Exception:
+            pass
+
     handles = normalize_handles(query)
     sources = get_social_sources()
     findings: List[ProfileFinding] = []
@@ -130,7 +170,9 @@ def inspect_email(query: str, timeout: int = 8) -> Dict[str, object]:
         "gravatar": None,
         "candidates": build_email_candidates(query),
         "candidate_signals": [],
+        "breaches": [],
     }
+
     if not result["is_email"]:
         result["candidate_signals"] = check_email_candidates(result["candidates"][:20], timeout=timeout)
         return result
@@ -140,7 +182,6 @@ def inspect_email(query: str, timeout: int = 8) -> Dict[str, object]:
 
     try:
         import dns.resolver
-
         answers = dns.resolver.resolve(domain, "MX")
         result["mx_records"] = sorted([str(r.exchange).rstrip(".") for r in answers])
     except Exception:
@@ -161,6 +202,12 @@ def inspect_email(query: str, timeout: int = 8) -> Dict[str, object]:
         }
     except requests.RequestException as exc:
         result["gravatar"] = {"url": f"https://www.gravatar.com/{digest}", "exists": None, "error": type(exc).__name__}
+
+    try:
+        from .breach import check_breaches
+        result["breaches"] = [asdict(b) for b in check_breaches(email)]
+    except Exception:
+        pass
 
     return result
 
@@ -203,14 +250,18 @@ def run_full_scan(
     timeout: int = 8,
     workers: int = 24,
     on_result: Callable[[ProfileFinding], None] | None = None,
+    use_rust: bool = True,
+    proxy: Optional[str] = None,
+    retry: int = 1,
+    check_phone: bool = False,
+    check_domain: bool = False,
+    generate_html: bool = False,
+    html_output: str = "",
 ) -> Dict[str, object]:
-    profiles = scan_usernames(query, timeout=timeout, workers=workers, on_result=on_result)
-    sources = get_social_sources()
+    profiles = scan_usernames(query, timeout=timeout, workers=workers, on_result=on_result, use_rust=use_rust, proxy=proxy, retry=retry)
     data = {
         "query": query,
         "handles": normalize_handles(query),
-        "source_count": len(sources),
-        "planned_probes": len(sources) * len(normalize_handles(query)),
         "profiles": [asdict(item) for item in profiles],
         "email": inspect_email(query, timeout=timeout),
         "trace_leads": build_trace_leads(query),
@@ -221,5 +272,30 @@ def run_full_scan(
             "checked": len(profiles),
         },
     }
+
+    if check_phone and any(c.isdigit() for c in query):
+        try:
+            from .phone import analyze_phone
+            data["phone"] = analyze_phone(query)
+        except Exception:
+            pass
+
+    if check_domain and "." in query and not query.startswith("@"):
+        try:
+            from .domain_intel import analyze_domain
+            data["domain"] = analyze_domain(query.split("@")[-1])
+        except Exception:
+            pass
+
     data["analysis"] = analyze_scan(data)
+
+    if generate_html or html_output:
+        try:
+            from .reporter import generate_html_report
+            path = html_output or f"osint_report_{query.replace('@','').replace('.','_')}.html"
+            generate_html_report(data, path)
+            data["html_report"] = path
+        except Exception as e:
+            data["html_report_error"] = str(e)
+
     return data

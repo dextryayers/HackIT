@@ -1,0 +1,15 @@
+[package]
+name = "osint_rust_engine"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "osint_checker"
+path = "src/bin/osint_checker.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", features = ["blocking", "socks", "gzip", "brotli"] }
+regex = "1"
+sha2 = "0.10"
