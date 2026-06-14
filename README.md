@@ -28,7 +28,7 @@
 
 </div>
 
-![img](image.png)
+![img](/img/main.png)
 
 ---
 
