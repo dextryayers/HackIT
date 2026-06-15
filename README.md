@@ -1,6 +1,6 @@
 <div align="center">
 
-# HackIT 🔐
+# HackIT Framwork Security Toolkit🔐
 ### *The Apex Modern Ethical Hacking & Advanced Autonomous Intelligence Framework*
 
 ![banner](/img/banner.png)
@@ -28,7 +28,13 @@
 
 </div>
 
-![img](image.png)
+![img](/img/main.png)
+
+---
+
+## Demo Gif
+
+![demo](/img/gif.gif)
 
 ---
 

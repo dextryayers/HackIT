@@ -1,27 +1,54 @@
+#!/usr/bin/env ruby
+# Subsidiary & Related Domain Discovery
 require 'json'
+require 'resolv'
 
-def discover_subsidiaries(domain)
-  # Heuristic/OSINT Simulation: Identifying subsidiaries and alternate brands
-  # In production, this would query Crunchbase, LinkedIn, or similar APIs
-  base_name = domain.split('.').first
-  
-  {
-    "aliases" => [
-      "dev.#{domain}",
-      "staging.#{domain}",
-      "internal.#{domain}",
-      "test-#{base_name}.io",
-      "#{base_name}-acquisitions.net"
-    ],
-    "subsidiaries" => [
-      "#{base_name} Labs",
-      "#{base_name} Security Services",
-      "#{base_name} Cloud Infrastructure"
-    ]
-  }
+domain = ARGV[0] || ''
+return puts JSON.generate({ subsidiaries: [], related_domains: [], error: "No domain provided" }) if domain.empty?
+
+domain = domain.downcase.sub(/^https?:\/\//, '').sub(/\/.*$/, '')
+
+results = { subsidiaries: [], related_domains: [], organization: "" }
+
+# Try to get organization name from WHOIS-like patterns
+org_name = domain.split('.').first.capitalize
+results[:organization] = org_name
+
+# Generate subsidiary domain candidates
+tlds = %w[.com .net .org .io .co .ai .app .dev .cloud .tech .io .me .tv .info .biz]
+prefixes = %w[dev test staging prod admin portal app api cdn cloud mail]
+suffixes = %w[inc corp ltd llc limited group global international]
+
+regions = %w[us eu uk asia na sa af me apac]
+divisions = %w[sales support hr it finance legal marketing product engineering]
+
+# Related domains
+candidates = []
+[org_name.downcase].each do |base|
+  tlds.each do |tld|
+    candidates << "#{base}#{tld}"
+    prefixes.each { |p| candidates << "#{p}-#{base}#{tld}" }
+    suffixes.each { |s| candidates << "#{base}#{s}#{tld}" }
+  end
+  regions.each { |r| candidates << "#{base}-#{r}.com" }
+  divisions.each { |d| candidates << "#{base}-#{d}.com" }
 end
 
-if __FILE__ == $0
-  domain = ARGV[0] || "example.com"
-  puts JSON.generate(discover_subsidiaries(domain))
+# Verify candidates via DNS
+live_domains = []
+candidates.uniq.each do |candidate|
+  next if candidate == domain
+  begin
+    Resolv.getaddresses(candidate)
+    live_domains << candidate
+  rescue Resolv::ResolvError
+    # not resolvable
+  rescue => e
+    # timeout or other error
+  end
 end
+
+results[:related_domains] = live_domains
+results[:subsidiaries] = live_domains.first(5) # Top 5 as subsidiaries
+
+puts JSON.generate(results)

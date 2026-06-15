@@ -1,19 +1,50 @@
--- Tech Hunter API Mapper (Lua)
+-- API Endpoint Mapper from Response Body
+local body = arg[1] or ""
+local base_url = arg[2] or ""
 
-function map_api_endpoints(body)
-    local endpoints = {}
-    
-    -- Heuristic patterns for API routes & Scope
-    local patterns = {
-        "/api/v1", "/api/v2", "/graphql", "/swagger", "/v1/", "/v2/", "/rest/",
-        "/*.php", "/*.aspx", "/wp-json/", "/node_modules/"
-    }
+local patterns = {
+    {pat = '"/api/',       title = "API Endpoint"},
+    {pat = '"/v[0-9]/',    title = "Versioned API"},
+    {pat = '"/graphql',    title = "GraphQL Endpoint"},
+    {pat = '"/rest/',      title = "REST API"},
+    {pat = '"/swagger',    title = "Swagger UI"},
+    {pat = '"openapi',     title = "OpenAPI Spec"},
+    {pat = '"redoc',       title = "Redoc UI"},
+    {pat = '"/.well-known', title = "Well-Known"},
+    {pat = '"/oauth',      title = "OAuth Endpoint"},
+    {pat = '"/auth',       title = "Auth Endpoint"},
+    {pat = '"/token',      title = "Token Endpoint"},
+    {pat = '"/login',      title = "Login Endpoint"},
+    {pat = '"/logout',     title = "Logout Endpoint"},
+    {pat = '"/register',   title = "Register Endpoint"},
+    {pat = '"/reset',      title = "Password Reset"},
+    {pat = '"/webhook',    title = "Webhook"},
+    {pat = '"/callback',   title = "OAuth Callback"},
+    {pat = '"/sso',        title = "SSO Endpoint"},
+    {pat = '"/saml',       title = "SAML Endpoint"},
+    {pat = '"/ws',         title = "WebSocket"},
+    {pat = '"/socket.io',  title = "Socket.IO"},
+    {pat = '"/upload',     title = "File Upload"},
+    {pat = '"/export',     title = "Data Export"},
+    {pat = '"/import',     title = "Data Import"},
+    {pat = '"/health',     title = "Health Check"},
+    {pat = '"/metrics',    title = "Metrics Endpoint"},
+    {pat = '"/debug',      title = "Debug Endpoint"},
+    {pat = '"/admin',      title = "Admin Panel"},
+    {pat = '"/console',    title = "Console"},
+    {pat = '"/actuator',   title = "Spring Actuator"},
+}
 
-    for _, p in ipairs(patterns) do
-        if string.find(body, p) then
-            table.insert(endpoints, {path = p, type = "In-Scope Pattern"})
-        end
+local found_endpoints = {}
+for _, p in ipairs(patterns) do
+    local _, count = string.gsub(body, p.pat, "")
+    if count > 0 then
+        table.insert(found_endpoints, string.format("%s|%s", p.title, p.pat))
     end
-    
-    return endpoints
+end
+
+if #found_endpoints > 0 then
+    print(table.concat(found_endpoints, "\n"))
+else
+    print("NO_API_ENDPOINTS")
 end
