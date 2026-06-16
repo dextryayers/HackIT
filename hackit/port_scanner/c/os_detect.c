@@ -37,7 +37,6 @@ EXPORT char* c_get_detailed_os_ip_info(const char* host, const char* open_ports,
     const char* os_ver = "N/A";
     int confidence = 0;
 
-    // TTL Analysis (Industrial Grade Heuristics)
     if (ttl_obs > 0) {
         if (ttl_obs <= 64) {
             os_name = "Linux/Unix";
@@ -51,6 +50,15 @@ EXPORT char* c_get_detailed_os_ip_info(const char* host, const char* open_ports,
             } else if (window_obs == 16384 || window_obs == 14600) {
                 os_ver = "Embedded Linux / Android";
                 confidence = 75;
+            } else if (window_obs == 65536) {
+                os_ver = "macOS / FreeBSD";
+                confidence = 70;
+            } else if (window_obs == 32768) {
+                os_ver = "Solaris / AIX";
+                confidence = 65;
+            } else if (window_obs == 57344) {
+                os_ver = "Linux 5.x+ (Custom)";
+                confidence = 80;
             }
         } else if (ttl_obs <= 128) {
             os_name = "Windows";
@@ -64,12 +72,24 @@ EXPORT char* c_get_detailed_os_ip_info(const char* host, const char* open_ports,
             } else if (window_obs == 16384) {
                 os_ver = "Windows Vista/2008";
                 confidence = 85;
+            } else if (window_obs == 65536) {
+                os_ver = "Windows 11 / Server 2022";
+                confidence = 90;
+            } else if (window_obs == 65520) {
+                os_ver = "Windows 10 / Server 2019";
+                confidence = 85;
             }
         } else if (ttl_obs <= 255) {
             os_name = "Infrastructure";
             if (window_obs == 4128 || window_obs == 512) {
                 os_ver = "Cisco IOS / RouterOS";
                 confidence = 85;
+            } else if (window_obs == 16384 || window_obs == 8760) {
+                os_ver = "Juniper / Network Device";
+                confidence = 75;
+            } else if (window_obs == 65535) {
+                os_ver = "Solaris / HP-UX";
+                confidence = 70;
             } else {
                 os_ver = "Generic Network Node";
                 confidence = 65;

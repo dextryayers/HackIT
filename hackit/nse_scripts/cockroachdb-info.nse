@@ -1,0 +1,98 @@
+local stdnse = require "stdnse"
+local http = require "http"
+local json = require "json"
+
+description = [[Retrieves information from CockroachDB instances via the HTTP API (port 8080). Returns cluster ID, node ID, build version, SQL health status, node metrics, and range statistics.]]
+author = "HackIT Framework"
+license = "HackIT Framework — Internal Use Only"
+categories = {"safe", "discovery", "database"}
+
+portrule = function(host, port)
+  return port.protocol == "tcp" and port.state == "open" and port.number == 8080
+end
+
+local crdb_paths = {
+  "/health", "/health?ready=1",
+  "/_status/nodes", "/_status/range_sizes",
+  "/_status/sessions", "/_status/hotranges",
+  "/_admin/v1/settings", "/_admin/v1/health",
+  "/_admin/v1/events", "/_admin/v1/databases",
+  "/sqlusers", "/metrics", "/_status/stores",
+  "/_status/statements",
+  "/debug/pprof/",
+}
+
+action = function(host, port)
+  local result = stdnse.output_table()
+
+  local ok, health_resp = pcall(http.get, host.ip, port.number, "/health", { timeout = 5000 })
+  if not ok or not health_resp or health_resp.status ~= 200 then
+    return stdnse.format_output(false, "CockroachDB not detected or health endpoint not accessible")
+  end
+
+  local ok2, health = pcall(json.parse, health_resp.body)
+  if ok2 and health then
+    result.health_status = health.status or "ok"
+  end
+
+  for _, path in ipairs(crdb_paths) do
+    if path ~= "/health" then
+      local ok3, resp = pcall(http.get, host.ip, port.number, path, { timeout = 5000 })
+      if ok3 and resp and resp.status == 200 and resp.body then
+        local path_key = path:gsub("^/", ""):gsub("[?=]", "_"):gsub("/", "_"):gsub("^_", "")
+        local ok4, pd = pcall(json.parse, resp.body)
+        if ok4 and pd then
+          if path == "/_status/nodes" and pd.nodes and #pd.nodes > 0 then
+            local node = pd.nodes[1]
+            result.nodes_count = #pd.nodes
+            result.node_id = node.desc and node.desc.node_id
+            result.build_tag = node.build and node.build.tag
+            result.build_release = node.build and node.build.release_version
+            result.build_time = node.build and node.build.time
+            result.build_platform = node.build and node.build.platform
+            result.build_type = node.build and node.build.type
+            result.build_cgo = node.build and node.build.cgo_compiler
+            result.uptime_seconds = node.uptime
+            result.uptime_human = node.uptime and string.format("%.1f hours", node.uptime / 3600)
+
+            if node.metrics then
+              result.live_bytes = node.metrics.livebytes
+              result.system_bytes = node.metrics.sysbytes
+              result.gc_count = node.metrics.gc_count
+              result.total_sql_connections = node.metrics.sql_conns
+              result.active_sql_connections = node.metrics.sql_active_conns
+            end
+
+            if node.store_statuses then
+              result.store_count = #node.store_statuses
+              for i, store in ipairs(node.store_statuses) do
+                result["store_" .. i .. "_id"] = store.desc and store.desc.store_id
+              end
+            end
+          elseif path == "/_status/range_sizes" then
+            result.range_stats = pd
+          elseif path == "/_status/sessions" and pd.sessions then
+            result.active_sessions = #pd.sessions
+          elseif path == "/sqlusers" then
+            result.sql_users = pd.users or pd
+            result.sql_users_count = result.sql_users and #result.sql_users
+          elseif path == "/_admin/v1/databases" and pd.databases then
+            result.databases = pd.databases
+            result.database_count = #pd.databases
+          elseif path == "metrics" then
+            result.metrics_endpoint_exposed = true
+          else
+            result[path_key .. "_accessible"] = true
+          end
+        end
+      end
+    end
+  end
+
+  local ok5, sql_ready = pcall(http.get, host.ip, port.number, "/health?ready=1", { timeout = 3000 })
+  if ok5 and sql_ready and sql_ready.status == 200 then
+    result.sql_ready = true
+  end
+
+  return stdnse.format_output(true, result)
+end

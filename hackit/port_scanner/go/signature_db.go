@@ -260,6 +260,79 @@ func initSignatures() {
 	addSig(9418, "Git", `git`, "Git Daemon", "Generic", 0.80)
 	addSig(4369, "EPMD", `epmd`, "Erlang Port Mapper", "Generic", 0.80)
 	addSig(9100, "Print", `jetdirect`, "HP JetDirect", "Generic", 0.85)
+
+	// ─── Pure-FTPd (broader patterns) ───
+	addSig(21, "FTP", `Pure-FTPd`, "Pure-FTPd", "Unix/Linux", 0.85)
+	addSig(21, "FTP", `Welcome to Pure-FTPd`, "Pure-FTPd", "Unix/Linux", 0.90)
+	addSig(21, "FTP", `pure-ftpd`, "Pure-FTPd", "Unix/Linux", 0.85)
+	addSig(21, "FTP", `pure-ftpd.*\[privsep\]`, "Pure-FTPd", "Unix/Linux", 0.95)
+
+	// ─── Exim SMTP ───
+	addSig(25, "SMTP", `Exim\s+([\d.]+)`, "Exim", "Unix/Linux", 0.95)
+	addSig(25, "SMTP", `Exim\s+([\d.]+)\s+`, "Exim", "Unix/Linux", 0.90)
+	addSig(25, "SMTP", `220.*Exim`, "Exim", "Unix/Linux", 0.85)
+	addSig(465, "SMTP", `Exim`, "Exim SMTPS", "Unix/Linux", 0.85)
+	addSig(587, "SMTP", `Exim`, "Exim Submission", "Unix/Linux", 0.85)
+
+	// ─── Dovecot ───
+	addSig(110, "POP3", `Dovecot.*ready`, "Dovecot POP3", "Unix/Linux", 0.95)
+	addSig(110, "POP3", `Dovecot`, "Dovecot POP3", "Unix/Linux", 0.85)
+	addSig(143, "IMAP", `Dovecot.*ready`, "Dovecot IMAP", "Unix/Linux", 0.95)
+	addSig(143, "IMAP", `Dovecot`, "Dovecot IMAP", "Unix/Linux", 0.85)
+	addSig(993, "IMAP", `Dovecot`, "Dovecot IMAPS", "Unix/Linux", 0.85)
+	addSig(995, "POP3", `Dovecot`, "Dovecot POP3S", "Unix/Linux", 0.85)
+
+	// ─── LiteSpeed ───
+	addSig(80, "HTTP", `Server:\s*LiteSpeed`, "LiteSpeed", "Unix/Linux", 0.95)
+	addSig(80, "HTTP", `LiteSpeed`, "LiteSpeed", "Unix/Linux", 0.90)
+	addSig(443, "HTTPS", `LiteSpeed`, "LiteSpeed SSL", "Unix/Linux", 0.90)
+	addSig(8080, "HTTP", `LiteSpeed`, "LiteSpeed", "Unix/Linux", 0.85)
+	addSig(8443, "HTTPS", `LiteSpeed`, "LiteSpeed SSL", "Unix/Linux", 0.85)
+
+	// ─── cPanel ───
+	addSig(2082, "HTTP", `cpanel`, "cPanel", "CentOS/CloudLinux", 0.90)
+	addSig(2083, "HTTPS", `cpanel`, "cPanel SSL", "CentOS/CloudLinux", 0.90)
+	addSig(2086, "HTTP", `whm`, "cPanel WHM", "CentOS/CloudLinux", 0.90)
+	addSig(2087, "HTTPS", `whm`, "cPanel WHM SSL", "CentOS/CloudLinux", 0.90)
+	addSig(80, "HTTP", `cpanel`, "cPanel", "CentOS/CloudLinux", 0.80)
+
+	// ─── Postfix SMTP variants ───
+	addSig(25, "SMTP", `220.*Postfix.*ESMTP`, "Postfix", "Unix/Linux", 0.95)
+	addSig(587, "SMTP", `Postfix`, "Postfix Submission", "Unix/Linux", 0.85)
+	addSig(465, "SMTP", `Postfix`, "Postfix SMTPS", "Unix/Linux", 0.80)
+
+	// ─── Sendmail ───
+	addSig(25, "SMTP", `Sendmail\s+([\d.]+)`, "Sendmail", "Unix/Linux", 0.90)
+
+	// ─── Dovecot IMAP/POP3 broader ───
+	addSig(143, "IMAP", `\* OK.*\[CAPABILITY`, "Dovecot IMAP", "Unix/Linux", 0.85)
+
+	// ─── MySQL/MariaDB ───
+	addSig(3306, "MySQL", `8\.\d+\.\d+`, "MySQL 8.x", "Generic", 0.85)
+	addSig(3306, "MySQL", `10\.\d+\.\d+`, "MariaDB 10.x", "Generic", 0.85)
+
+	// ─── HTTPS variants ───
+	addSig(443, "HTTPS", `HTTP/1\.\d\s+\d{3}`, "HTTPS", "Generic", 0.80)
+	addSig(8443, "HTTPS", `HTTP/1\.\d\s+\d{3}`, "HTTPS", "Generic", 0.80)
+	addSig(9443, "HTTPS", `HTTP/1\.\d\s+\d{3}`, "HTTPS", "Generic", 0.80)
+
+	// ─── SMTPS / Submission ───
+	addSig(465, "SMTP", `220.*ESMTP`, "SMTPS", "Generic", 0.75)
+	addSig(587, "SMTP", `220.*ESMTP`, "SMTP Submission", "Generic", 0.75)
+	addSig(2525, "SMTP", `220.*ESMTP`, "SMTP Alternate", "Generic", 0.75)
+
+	// ─── POP3S / IMAPS ───
+	addSig(995, "POP3", `\+OK`, "POP3S", "Generic", 0.70)
+	addSig(993, "IMAP", `\* OK`, "IMAPS", "Generic", 0.70)
+
+	// ─── Shared hosting panels ───
+	addSig(2083, "HTTPS", `cPanel.*SSL`, "cPanel SSL", "CentOS/CloudLinux", 0.95)
+
+	// ─── Web servers: IIS, Tomcat ───
+	addSig(80, "HTTP", `Microsoft-IIS`, "Microsoft IIS", "Windows Server", 0.95)
+	addSig(443, "HTTPS", `Microsoft-IIS`, "Microsoft IIS SSL", "Windows Server", 0.90)
+	addSig(80, "HTTP", `Apache-Coyote`, "Apache Tomcat", "Generic", 0.85)
+	addSig(8009, "AJP", `Apache.*Tomcat`, "Apache Tomcat AJP", "Generic", 0.85)
 }
 
 func addSig(port int, protocol, pattern, product, osHint string, confidence float64) {
@@ -327,6 +400,7 @@ func MatchServiceSignatures(port int, banner string) *ServiceSignature {
 
 	var best *ServiceSignature
 	var bestConfidence float64
+	bannerLower := strings.ToLower(banner)
 
 	for i := range serviceSignatures {
 		sig := &serviceSignatures[i]
@@ -336,10 +410,19 @@ func MatchServiceSignatures(port int, banner string) *ServiceSignature {
 		matches := sig.Pattern.FindStringSubmatch(banner)
 		if matches != nil {
 			conf := sig.Confidence
+			// Confidence boost: matching on exact product name in banner adds weight
+			productLower := strings.ToLower(sig.Product)
+			if strings.Contains(bannerLower, productLower) {
+				conf += 0.05
+			}
+			if conf > 1.0 {
+				conf = 1.0
+			}
 			if conf > bestConfidence {
 				best = sig
 				bestConfidence = conf
-				if len(matches) > 1 {
+				best.Confidence = conf
+				if len(matches) > 1 && matches[1] != "" {
 					best.Version = matches[1]
 				}
 			}

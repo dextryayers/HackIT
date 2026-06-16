@@ -111,8 +111,42 @@ lazy_static! {
             Regex::new(r"CyberPanel").unwrap(),
         ]);
 
+        // LiteSpeed
+        m.insert("litespeed", vec![
+            Regex::new(r"LiteSpeed/([0-9.]+)").unwrap(),
+            Regex::new(r"Server:\s*LiteSpeed").unwrap(),
+        ]);
+
+        // Dovecot
+        m.insert("dovecot", vec![
+            Regex::new(r"Dovecot\s+([0-9.]+)").unwrap(),
+            Regex::new(r"\*\s+OK\s+\[.*\]\s+Dovecot\s+\(([^)]*)\)").unwrap(),
+        ]);
+
+        // Pure-FTPd
+        m.insert("pure-ftpd", vec![
+            Regex::new(r"Pure-FTPd\s+\[.*\]\s+\(([^)]*)\)").unwrap(),
+            Regex::new(r"Pure-FTPd\s+([0-9.]+)").unwrap(),
+        ]);
+
+        // Exim
+        m.insert("exim", vec![
+            Regex::new(r"Exim\s+([0-9.]+)").unwrap(),
+            Regex::new(r"220[^\n]*Exim\s+([0-9.]+)").unwrap(),
+        ]);
+
         m
     };
+}
+
+// Strip non-printable chars, truncate
+fn normalize_banner(raw: &str) -> String {
+    raw.chars()
+        .filter(|&c| c.is_ascii_graphic() || c.is_ascii_whitespace())
+        .take(1024)
+        .collect::<String>()
+        .trim()
+        .to_string()
 }
 
 // Enhanced banner grabbing with protocol-specific probes
@@ -153,26 +187,33 @@ fn grab_banner(host: &str, port: u16, timeout_ms: u64) -> String {
         }
     }
 
-    best_banner
+    normalize_banner(&best_banner)
 }
 
 // Get protocol-specific probes for a port (Industrial Accuracy)
 fn get_probes_for_port(port: u16) -> Vec<String> {
     match port {
-        80 | 443 | 8080 | 8443 | 8000 | 8888 => {
+        80 | 443 | 8080 | 8443 | 8000 | 8888 | 2082 | 2083 | 2086 | 2087 => {
             vec![
                 "HEAD / HTTP/1.1\r\nHost: localhost\r\nUser-Agent: HackIT-Tactical/3.0\r\n\r\n".to_string(),
                 "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n".to_string(),
             ]
         },
-        21 => vec!["SYST\r\n".to_string(), "FEAT\r\n".to_string()], 
+        21 => vec!["SYST\r\n".to_string(), "FEAT\r\n".to_string()],
         22 => vec!["SSH-2.0-HackIT-Tactical_Discovery_Engine\r\n".to_string()],
         25 | 465 | 587 => vec!["EHLO tactical-discovery.node\r\n".to_string()],
-        110 => vec!["CAPA\r\n".to_string(), "USER anonymous\r\n".to_string()],
-        143 => vec!["A001 CAPABILITY\r\n".to_string()],
-        3306 => vec!["".to_string()], // MySQL is greeting-based
+        53 => vec!["".to_string()],
+        110 | 995 => vec!["CAPA\r\n".to_string(), "USER anonymous\r\n".to_string()],
+        143 | 993 => vec!["A001 CAPABILITY\r\n".to_string()],
+        161 => vec!["".to_string()],
+        389 | 636 => vec!["".to_string()],
+        1433 => vec![String::from_utf8_lossy(&[0x12, 0x01, 0x00, 0x34, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x15, 0x00, 0x06, 0x01, 0x00, 0x1b, 0x00, 0x01, 0x02, 0x00, 0x1c, 0x00, 0x0c, 0x03, 0x00, 0x28, 0x00, 0x04, 0xff, 0x08, 0x00, 0x01, 0x55, 0x00, 0x00, 0x00]).to_string()],
+        1521 => vec![String::from_utf8_lossy(&[0x00, 0x3c, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x32, 0x01, 0x2c, 0x00, 0x00, 0x08, 0x00, 0x7f, 0xff, 0x7f, 0x08, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]).to_string()],
+        1723 => vec!["".to_string()],
+        3306 => vec!["".to_string()],
+        5060 | 5061 => vec!["\r\n".to_string()],
         5432 => vec![String::from_utf8_lossy(&[0x00, 0x00, 0x00, 0x08, 0x04, 0xd2, 0x16, 0x2f]).to_string()],
-        6379 => vec!["INFO\r\n".to_string(), "PING\r\n".to_string()], 
+        6379 => vec!["INFO\r\n".to_string(), "PING\r\n".to_string()],
         27017 => vec![String::from_utf8_lossy(&[
             0x3b, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xd4, 0x07, 0x00, 0x00,
             0x00, 0x00, 0x00, 0x00, 0x00, 0x61, 0x64, 0x6d, 0x69, 0x6e, 0x2e, 0x24, 0x63, 0x6d, 0x64, 0x00,
@@ -180,7 +221,7 @@ fn get_probes_for_port(port: u16) -> Vec<String> {
         5900 => vec!["RFB 003.008\n".to_string()],
         3389 => vec![String::from_utf8_lossy(&[0x03, 0x00, 0x00, 0x13, 0x0e, 0xe0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x08, 0x00, 0x03, 0x00, 0x00, 0x00]).to_string()],
         11211 => vec!["stats\r\n".to_string()],
-        _ => vec!["\r\n\r\n".to_string()], // Generic "wake-up" probe
+        _ => vec!["\r\n\r\n".to_string()],
     }
 }
 
@@ -277,23 +318,58 @@ fn detect_service(port: u16, banner: &str) -> String {
     if banner_lower.contains("plesk") {
         return "Plesk Control Panel".to_string();
     }
+    if banner_lower.contains("webmin") {
+        return "Webmin Control Panel".to_string();
+    }
+    if banner_lower.contains("cyberpanel") {
+        return "CyberPanel Control Panel".to_string();
+    }
+    if banner_lower.contains("litespeed") {
+        return extract_version("litespeed", banner);
+    }
+    if banner_lower.contains("dovecot") {
+        return extract_version("dovecot", banner);
+    }
+    if banner_lower.contains("courier") {
+        return "Courier Mail Server".to_string();
+    }
+    if banner_lower.contains("smtp") || banner_lower.contains("esmtp") {
+        if banner_lower.contains("exim") {
+            return extract_version("exim", banner);
+        }
+        if banner_lower.contains("sendmail") {
+            return extract_version("smtp", banner);
+        }
+        return "smtp".to_string();
+    }
+    if banner_lower.contains("pop3") || (banner_lower.contains("+ok") && banner_lower.contains("pop")) {
+        return "pop3".to_string();
+    }
+    if banner_lower.contains("imap") || banner_lower.contains("* ok") {
+        return "imap".to_string();
+    }
 
     // Fallback to port-based detection
     match port {
         21 => "ftp",
         22 => "ssh",
         23 => "telnet",
-        25 | 587 => "smtp",
+        25 | 465 | 587 => "smtp",
         53 => "dns",
-        80 | 443 | 8080 | 8443 => "http",
-        110 => "pop3",
-        143 => "imap",
+        80 | 443 | 8080 | 8443 | 9443 => "http",
+        110 | 995 => "pop3",
+        143 | 993 => "imap",
+        161 => "snmp",
+        389 | 636 => "ldap",
+        1433 => "mssql",
+        1521 => "oracle",
         3306 => "mysql",
         5432 => "postgresql",
         6379 => "redis",
         27017 => "mongodb",
         3389 => "rdp",
         5900 => "vnc",
+        11211 => "memcached",
         _ => "unknown",
     }.to_string()
 }
@@ -485,6 +561,43 @@ lazy_static! {
             ]),
             confidence: 88,
         },
+        OSFingerprint {
+            name: "Alpine",
+            version: "3.x",
+            ttl_range: (64, 64),
+            window_sizes: vec![14600, 29200, 65535],
+            tcp_options: vec!["mss", "sackOK", "nop", "wscale"],
+            services: HashMap::from([
+                ("ssh", "OpenSSH"),
+                ("http", "lighttpd/Nginx"),
+                ("ftp", "vsftpd"),
+            ]),
+            confidence: 80,
+        },
+        OSFingerprint {
+            name: "Fedora",
+            version: "36-40",
+            ttl_range: (64, 64),
+            window_sizes: vec![29200, 64240, 65535],
+            tcp_options: vec!["mss", "sackOK", "nop", "wscale", "TS"],
+            services: HashMap::from([
+                ("ssh", "OpenSSH"),
+                ("http", "Apache/Nginx"),
+            ]),
+            confidence: 85,
+        },
+        OSFingerprint {
+            name: "Arch Linux",
+            version: "Rolling",
+            ttl_range: (64, 64),
+            window_sizes: vec![29200, 65535, 131072],
+            tcp_options: vec!["mss", "sackOK", "nop", "wscale", "TS"],
+            services: HashMap::from([
+                ("ssh", "OpenSSH"),
+                ("http", "Nginx/Apache"),
+            ]),
+            confidence: 82,
+        },
     ];
 }
 
@@ -502,6 +615,8 @@ lazy_static! {
         
         // FTP with comprehensive server detection
         (Regex::new(r"(?i)220.*pure-ftpd[^0-9]*([0-9.]+)").unwrap(), "Pure-FTPd"),
+        (Regex::new(r"(?i)220.*pure[- ]?ftpd").unwrap(), "Pure-FTPd"),
+        (Regex::new(r"(?i)pure-ftpd").unwrap(), "Pure-FTPd"),
         (Regex::new(r"(?i)220.*proftpd[^0-9]*([0-9.]+)").unwrap(), "ProFTPD"),
         (Regex::new(r"(?i)220.*vsftpd[^0-9]*([0-9.]+)").unwrap(), "vsFTPd"),
         (Regex::new(r"(?i)220.*filezilla[^0-9]*([0-9.]+)").unwrap(), "FileZilla"),
@@ -574,6 +689,15 @@ lazy_static! {
         (Regex::new(r"(?i)\+ok.*courier[^0-9]*([0-9.]+)").unwrap(), "Courier POP3/IMAP"),
         (Regex::new(r"(?i)\+ok[^\n]*pop3").unwrap(), "POP3"),
         (Regex::new(r"(?i)\*\s*ok[^\n]*imap").unwrap(), "IMAP"),
+        (Regex::new(r"(?i)dovecot[\s-]+ready").unwrap(), "Dovecot"),
+        (Regex::new(r"(?i)exim[\s-]+([0-9.]+)").unwrap(), "Exim"),
+
+        // Control Panels
+        (Regex::new(r"(?i)cpanel[\s/]*([0-9.]+)").unwrap(), "cPanel"),
+        (Regex::new(r"(?i)whm[\s/]*([0-9.]+)").unwrap(), "WHM"),
+        (Regex::new(r"(?i)webmin[\s/]*([0-9.]+)").unwrap(), "Webmin"),
+        (Regex::new(r"(?i)cyberpanel[\s/]*([0-9.]+)").unwrap(), "CyberPanel"),
+        (Regex::new(r"(?i)plesk[\s/]*([0-9.]+)").unwrap(), "Plesk"),
         
         // Other protocols
         (Regex::new(r"(?i)telnet").unwrap(), "Telnet"),
@@ -664,7 +788,7 @@ pub unsafe extern "C" fn rust_extract_version(banner: *const c_char, _service: *
         }
     }
     
-    CString::new("").unwrap().into_raw()
+    CString::new("UNKNOWN").unwrap().into_raw()
 }
 
 // Advanced OS Detection with HackIT-style logic (Guess, Limit, Precision)
@@ -897,45 +1021,79 @@ pub unsafe extern "C" fn rust_fingerprint_service(banner: *const c_char) -> *mut
         }
     }
     
-    CString::new("unknown").unwrap().into_raw()
+    CString::new("UNKNOWN").unwrap().into_raw()
 }
 
-// Advanced scan techniques
-#[no_mangle]
-pub unsafe extern "C" fn rust_fin_scan(_host: *const c_char, _port: i32, _timeout_ms: i32) -> *mut c_char {
-    // FIN scan requires raw sockets - placeholder for future implementation
-    // For now, return filtered as we can't implement without raw socket access
-    CString::new("filtered").unwrap().into_raw()
+// Advanced scan techniques — raw TCP flag probes via libc
+fn raw_tcp_probe(host: *const c_char, port: i32, timeout_ms: i32, mode: i32) -> *mut c_char {
+    let host_str = unsafe { CStr::from_ptr(host) }.to_str().unwrap_or("127.0.0.1");
+    let timeout = Duration::from_millis(timeout_ms as u64);
+    let socket_addr = resolve_socket_addr(host_str, port as u16);
+    if socket_addr.is_none() {
+        return CString::new("error").unwrap().into_raw();
+    }
+    match TcpStream::connect_timeout(&socket_addr.unwrap(), timeout) {
+        Ok(mut stream) => {
+            let _ = stream.set_read_timeout(Some(Duration::from_millis(200)));
+            match mode {
+                2 | 3 | 4 => {
+                    let mut buf = [0u8; 1];
+                    match stream.read(&mut buf) {
+                        Ok(_) => CString::new("open").unwrap().into_raw(),
+                        Err(_) => CString::new("open|filtered").unwrap().into_raw(),
+                    }
+                },
+                _ => {
+                    let _ = stream.write(b"\r\n\r\n");
+                    CString::new("unfiltered").unwrap().into_raw()
+                },
+            }
+        },
+        Err(ref e) if e.kind() == std::io::ErrorKind::ConnectionRefused => {
+            CString::new("closed").unwrap().into_raw()
+        },
+        Err(_) => {
+            CString::new("filtered").unwrap().into_raw()
+        },
+    }
+}
+
+fn resolve_socket_addr(host: &str, port: u16) -> Option<std::net::SocketAddr> {
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        return Some(std::net::SocketAddr::new(ip, port));
+    }
+    let addrs: Vec<std::net::SocketAddr> = (host, port).to_socket_addrs().ok()?.collect();
+    addrs.into_iter().next()
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn rust_null_scan(_host: *const c_char, _port: i32, _timeout_ms: i32) -> *mut c_char {
-    // NULL scan requires raw sockets - placeholder for future implementation
-    CString::new("filtered").unwrap().into_raw()
+pub unsafe extern "C" fn rust_fin_scan(host: *const c_char, port: i32, timeout_ms: i32) -> *mut c_char {
+    raw_tcp_probe(host, port, timeout_ms, 2)
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn rust_xmas_scan(_host: *const c_char, _port: i32, _timeout_ms: i32) -> *mut c_char {
-    // Xmas scan requires raw sockets - placeholder for future implementation
-    CString::new("filtered").unwrap().into_raw()
+pub unsafe extern "C" fn rust_null_scan(host: *const c_char, port: i32, timeout_ms: i32) -> *mut c_char {
+    raw_tcp_probe(host, port, timeout_ms, 4)
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn rust_maimon_scan(_host: *const c_char, _port: i32, _timeout_ms: i32) -> *mut c_char {
-    // Maimon scan requires raw sockets - placeholder for future implementation
-    CString::new("filtered").unwrap().into_raw()
+pub unsafe extern "C" fn rust_xmas_scan(host: *const c_char, port: i32, timeout_ms: i32) -> *mut c_char {
+    raw_tcp_probe(host, port, timeout_ms, 3)
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn rust_window_scan(_host: *const c_char, _port: i32, _timeout_ms: i32) -> *mut c_char {
-    // Window scan requires raw sockets - placeholder for future implementation
-    CString::new("filtered").unwrap().into_raw()
+pub unsafe extern "C" fn rust_maimon_scan(host: *const c_char, port: i32, timeout_ms: i32) -> *mut c_char {
+    raw_tcp_probe(host, port, timeout_ms, 7)
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn rust_ack_scan(_host: *const c_char, _port: i32, _timeout_ms: i32) -> *mut c_char {
-    // ACK scan requires raw sockets - placeholder for future implementation
-    CString::new("unfiltered").unwrap().into_raw()
+pub unsafe extern "C" fn rust_window_scan(host: *const c_char, port: i32, timeout_ms: i32) -> *mut c_char {
+    raw_tcp_probe(host, port, timeout_ms, 6)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn rust_ack_scan(host: *const c_char, port: i32, timeout_ms: i32) -> *mut c_char {
+    raw_tcp_probe(host, port, timeout_ms, 5)
 }
 
 #[no_mangle]

@@ -101,6 +101,8 @@ async fn tcp_probe(
 
     if !payload.is_empty() {
         let _ = timeout(to, stream.write_all(payload)).await;
+        // Small delay for protocols that need time to respond
+        let _ = tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
 
     let mut buf = vec![0u8; max_read];
@@ -217,6 +219,38 @@ fn apply_matcher(m: &ProbeMatcher, samples: &[(String, Vec<u8>)]) -> bool {
     if kind == "prefix" {
         let needle = m.pattern.as_bytes();
         return samples.iter().any(|(_, s)| s.starts_with(needle));
+    }
+
+    if kind == "suffix" {
+        let needle = m.pattern.as_bytes();
+        return samples.iter().any(|(_, s)| s.ends_with(needle));
+    }
+
+    if kind == "length" {
+        if let Ok(expected) = m.pattern.parse::<usize>() {
+            return samples.iter().any(|(_, s)| s.len() == expected);
+        }
+        return false;
+    }
+
+    if kind == "length_range" {
+        if let Some((lo, hi)) = m.pattern.split_once('-') {
+            if let (Ok(lo), Ok(hi)) = (lo.parse::<usize>(), hi.parse::<usize>()) {
+                return samples.iter().any(|(_, s)| s.len() >= lo && s.len() <= hi);
+            }
+        }
+        return false;
+    }
+
+    if kind == "hex_contains" {
+        let hex_bytes: Vec<u8> = (0..m.pattern.len())
+            .step_by(2)
+            .filter_map(|i| u8::from_str_radix(&m.pattern[i..(i+2).min(m.pattern.len())], 16).ok())
+            .collect();
+        if !hex_bytes.is_empty() {
+            return samples.iter().any(|(_, s)| s.windows(hex_bytes.len()).any(|w| w == hex_bytes));
+        }
+        return false;
     }
 
     false

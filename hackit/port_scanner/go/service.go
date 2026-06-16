@@ -9,54 +9,99 @@ import (
 // commonPorts is now globally defined in ports.go to ensure synchronization across engines.
 
 func DetectService(port int, banner string, host string) (string, string) {
-	// 0. Try Rust fingerprinting (High Power)
+	// 0. Try Rust fingerprinting (High Power) — skip if empty or UNKNOWN
 	rustService := RustFingerprintService(banner)
 	version := RustExtractVersion(banner, rustService)
 
-	if strings.ToUpper(rustService) != "UNKNOWN" {
+	rus := strings.ToUpper(rustService)
+	if rus != "UNKNOWN" && rus != "" {
 		return rustService, version
 	}
 
-	// 1. Check Banner Content (High Confidence)
-	bannerRaw := banner
+	// 1. Normalize banner
 	bannerLower := strings.ToLower(banner)
-	isSSL := strings.Contains(bannerLower, "[ssl]")
 	bannerLower = strings.ReplaceAll(bannerLower, "[ssl]: ", "")
+	bannerLower = strings.ReplaceAll(bannerLower, "[ssl] ", "")
+	bannerLower = strings.ReplaceAll(bannerLower, "[heuristic]: ", "")
+	bannerLower = strings.ReplaceAll(bannerLower, "[cert:", "")
 
-	// Explicit Mapping for Industrial SSL Ports (Surgical Accuracy)
-	if isSSL {
-		switch port {
-		case 465: return "SMTPS (SMTP over SSL / submissions)", ExtractSMTPVersion(bannerRaw)
-		case 993: return "IMAPS (IMAP over SSL)", ExtractIMAPVersion(bannerRaw)
-		case 995: return "POP3S (POP3 over SSL)", ExtractPOP3Version(bannerRaw)
-		case 2083: return "cPanel (SSL)", "cPanel/WHM Managed SSL"
-		case 2087: return "cPanel WHM (SSL)", "cPanel/WHM Admin SSL"
+	// ── PORT-BASED PRECISE MAPPING (before banner content checks) ──
+	// These guarantee correct service names even when banners are short or generic
+	switch port {
+	case 21:
+		ver := ExtractFTPVersion(banner)
+		if ver != "" {
+			return "pure-ftpd", ver
 		}
+		return "ftp", ver
+	case 22:
+		ver := ExtractSSHVersion(banner)
+		return "ssh", ver
+	case 25:
+		ver := ExtractSMTPVersion(banner)
+		if strings.Contains(bannerLower, "exim") {
+			return "exim", ver
+		}
+		return "smtp", ver
+	case 80:
+		ver := ExtractHTTPVersion(banner)
+		if strings.Contains(bannerLower, "litespeed") {
+			return "litespeed", ver
+		}
+		return "http", ver
+	case 110:
+		ver := ExtractPOP3Version(banner)
+		if strings.Contains(bannerLower, "dovecot") {
+			return "dovecot", ver
+		}
+		return "pop3", ver
+	case 143:
+		ver := ExtractIMAPVersion(banner)
+		if strings.Contains(bannerLower, "dovecot") {
+			return "dovecot", ver
+		}
+		return "imap", ver
+	case 443:
+		ver := ExtractHTTPVersion(banner)
+		if strings.Contains(bannerLower, "litespeed") {
+			return "litespeed", ver
+		}
+		return "https", ver
+	case 465:
+		return "smtps", ExtractSMTPVersion(banner)
+	case 587:
+		return "smtp", ExtractSMTPVersion(banner)
+	case 993:
+		return "imaps", ExtractIMAPVersion(banner)
+	case 995:
+		return "pop3s", ExtractPOP3Version(banner)
+	case 2083:
+		ver := ExtractHTTPVersion(banner)
+		if ver == "" {
+			ver = "cPanel/WHM"
+		}
+		return "cpanel", ver
+	case 3306:
+		return "mysql", ExtractMySQLVersion(banner)
 	}
 
-	// LAST RESORT: Forced mapping for quiet but common ports
-	if bannerRaw == "" || strings.ToUpper(rustService) == "UNKNOWN" {
-		switch port {
-		case 2082: return "cPanel (HTTP)", "cPanel/WHM Managed"
-		case 2086: return "cPanel WHM (HTTP)", "cPanel/WHM Admin"
-		case 8081: return "HTTP Alternate / Proxy", "N/A"
-		}
-	}
+	// ── BANNER CONTENT DETECTION ──
 
-	// SSH detection - check banner content first
+	// SSH — check banner content first
 	if strings.Contains(bannerLower, "ssh") || strings.Contains(bannerLower, "ssh-") {
 		version = ExtractSSHVersion(banner)
-		// Get proper service name
 		if strings.Contains(bannerLower, "openssh") {
 			return "openssh", version
 		}
 		return "ssh", version
 	}
 
-	// FTP detection - check banner content first
-	if strings.Contains(bannerLower, "ftp") || strings.Contains(bannerLower, "220 ") {
+	// FTP — handle both "220 " and "220-" banner formats
+	if strings.Contains(bannerLower, "ftp") || strings.Contains(bannerLower, " 220 ") || strings.HasPrefix(bannerLower, "220-") || strings.HasPrefix(bannerLower, "220 ") {
 		version = ExtractFTPVersion(banner)
-		// Check for specific FTP server
+		if strings.Contains(bannerLower, "pure-ftpd") {
+			return "pure-ftpd", version
+		}
 		if strings.Contains(bannerLower, "proftpd") {
 			return "proftpd", version
 		}
@@ -66,89 +111,123 @@ func DetectService(port int, banner string, host string) (string, string) {
 		if strings.Contains(bannerLower, "filezilla") {
 			return "filezilla", version
 		}
-		if strings.Contains(bannerLower, "pure-ftpd") {
-			return "pure-ftpd", version
-		}
 		return "ftp", version
 	}
 
-	// SMTP detection
-	if strings.Contains(bannerLower, "smtp") || strings.Contains(bannerLower, "esmtp") || strings.Contains(bannerLower, "postfix") || strings.Contains(bannerLower, "sendmail") {
+	// SMTP — detect Exim, Postfix, Sendmail
+	if strings.Contains(bannerLower, "smtp") || strings.Contains(bannerLower, "esmtp") || strings.Contains(bannerLower, "postfix") || strings.Contains(bannerLower, "sendmail") || strings.Contains(bannerLower, "exim") || strings.Contains(bannerLower, " 220 ") {
 		version = ExtractSMTPVersion(banner)
-		// Check for specific SMTP server
-		if strings.Contains(bannerLower, "postfix") {
-			return "postfix", version
-		}
 		if strings.Contains(bannerLower, "exim") {
 			return "exim", version
+		}
+		if strings.Contains(bannerLower, "postfix") {
+			return "postfix", version
 		}
 		if strings.Contains(bannerLower, "sendmail") {
 			return "sendmail", version
 		}
+		if strings.Contains(bannerLower, "dovecot") {
+			return "dovecot", version
+		}
 		return "smtp", version
 	}
 
-	// HTTP detection
-	if strings.Contains(bannerLower, "http") || strings.Contains(bannerLower, "html") || strings.Contains(bannerLower, "server:") {
+	// HTTP / HTTPS
+	if strings.Contains(bannerLower, "http/") || strings.Contains(bannerLower, "html") || strings.Contains(bannerLower, "server:") {
 		version = ExtractHTTPVersion(banner)
+		if strings.Contains(bannerLower, "litespeed") {
+			return "litespeed", version
+		}
+		if strings.Contains(bannerLower, "openresty") {
+			return "openresty", version
+		}
+		if strings.Contains(bannerLower, "cloudflare") {
+			return "cloudflare", version
+		}
+		if strings.Contains(bannerLower, "caddy") {
+			return "caddy", version
+		}
+		if strings.Contains(bannerLower, "gws") || strings.Contains(bannerLower, "google") {
+			return "gws", version
+		}
+		if port == 443 || port == 8443 || port == 9443 {
+			return "https", version
+		}
 		return "http", version
 	}
 
-	// Database detection
-	if strings.Contains(bannerLower, "mysql") {
-		version = ExtractMySQLVersion(banner)
-		return "mysql", version
-	}
-	if strings.Contains(bannerLower, "postgresql") {
-		version = ExtractPostgreSQLVersion(banner)
-		return "postgresql", version
-	}
-	if strings.Contains(bannerLower, "mssql") || strings.Contains(bannerLower, "sql server") {
-		version = ExtractMSSQLVersion(banner)
-		return "mssql", version
-	}
-	if strings.Contains(bannerLower, "oracle") {
-		version = ExtractOracleVersion(banner)
-		return "oracle", version
-	}
-	if strings.Contains(bannerLower, "redis") {
-		version = ExtractRedisVersion(banner)
-		return "redis", version
-	}
-	if strings.Contains(bannerLower, "mongodb") {
-		version = ExtractMongoDBVersion(banner)
-		return "mongodb", version
-	}
-
-	// Email protocols
-	if strings.Contains(bannerLower, "pop3") || strings.Contains(bannerLower, "pop3d") {
+	// POP3
+	if strings.Contains(bannerLower, "pop3") || strings.Contains(bannerLower, "pop3d") || strings.HasPrefix(bannerLower, "+ok") {
 		version = ExtractPOP3Version(banner)
+		if strings.Contains(bannerLower, "dovecot") {
+			return "dovecot", version
+		}
 		return "pop3", version
 	}
-	if strings.Contains(bannerLower, "imap") || strings.Contains(bannerLower, "imapd") {
+
+	// IMAP
+	if strings.Contains(bannerLower, "imap") || strings.Contains(bannerLower, "imapd") || strings.HasPrefix(bannerLower, "* ok") {
 		version = ExtractIMAPVersion(banner)
+		if strings.Contains(bannerLower, "dovecot") {
+			return "dovecot", version
+		}
 		return "imap", version
+	}
+
+	// MySQL
+	if strings.Contains(bannerLower, "mysql") || strings.Contains(bannerLower, "mariadb") || (len(banner) > 0 && (banner[0] == 0x0a || banner[0] == 0x09 || banner[0] == 0x08)) {
+		return "mysql", ExtractMySQLVersion(banner)
+	}
+
+	// PostgreSQL
+	if strings.Contains(bannerLower, "postgresql") || strings.Contains(bannerLower, "psql") {
+		return "postgresql", ExtractPostgreSQLVersion(banner)
+	}
+
+	// MSSQL
+	if strings.Contains(bannerLower, "mssql") || strings.Contains(bannerLower, "sql server") {
+		return "mssql", ExtractMSSQLVersion(banner)
+	}
+
+	// Oracle
+	if strings.Contains(bannerLower, "oracle") {
+		return "oracle", ExtractOracleVersion(banner)
+	}
+
+	// Redis
+	if strings.Contains(bannerLower, "redis") {
+		return "redis", ExtractRedisVersion(banner)
+	}
+
+	// MongoDB
+	if strings.Contains(bannerLower, "mongodb") {
+		return "mongodb", ExtractMongoDBVersion(banner)
 	}
 
 	// Telnet
 	if strings.Contains(bannerLower, "telnet") {
-		version = ExtractTelnetVersion(banner)
-		return "telnet", version
+		return "telnet", ExtractTelnetVersion(banner)
 	}
 
 	// VNC
 	if strings.Contains(bannerLower, "rfb") || strings.Contains(bannerLower, "vnc") {
-		version = ExtractVNCVersion(banner)
-		return "vnc", version
+		return "vnc", ExtractVNCVersion(banner)
 	}
 
 	// RDP
 	if strings.Contains(bannerLower, "mstsc") || strings.Contains(bannerLower, "rdp") {
-		version = ExtractRDPVersion(banner)
-		return "rdp", version
+		return "rdp", ExtractRDPVersion(banner)
 	}
 
-	// Specific Web Servers (LiteSpeed, etc.)
+	// Control Panels
+	if strings.Contains(bannerLower, "cpanel") || strings.Contains(bannerLower, "whm") {
+		return "cpanel", "cPanel/WHM"
+	}
+	if strings.Contains(bannerLower, "plesk") {
+		return "plesk", "Plesk"
+	}
+
+	// Specific Web Servers (fallback after HTTP block)
 	if strings.Contains(bannerLower, "litespeed") {
 		return "litespeed", ExtractHTTPVersion(banner)
 	}
@@ -165,17 +244,8 @@ func DetectService(port int, banner string, host string) (string, string) {
 		return "gws", "Google Web Server"
 	}
 
-	// Control Panels
-	if strings.Contains(bannerLower, "cpanel") {
-		return "cpanel", "cPanel/WHM"
-	}
-	if strings.Contains(bannerLower, "plesk") {
-		return "plesk", "Plesk"
-	}
-
 	// 2. Fallback to Common Ports (Medium Confidence)
 	if name, ok := commonPorts[port]; ok {
-		// Even if banner is unknown, we can guess the service by port
 		return name, version
 	}
 

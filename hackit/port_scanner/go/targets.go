@@ -153,6 +153,24 @@ func (ts *TargetSpec) loadTargetsFromFile(filename string) error {
 	return scanner.Err()
 }
 
+// resolveHost prefers IPv4 over IPv6 to avoid NAT64 link-local issues
+func resolveHost(host string) (string, error) {
+	if ip := net.ParseIP(host); ip != nil {
+		return host, nil
+	}
+	ips, err := net.LookupIP(host)
+	if err != nil {
+		return host, err
+	}
+	for _, ip := range ips {
+		if ip.To4() != nil {
+			return ip.String(), nil
+		}
+	}
+	// Fallback to first IP (likely IPv6-only)
+	return ips[0].String(), nil
+}
+
 // ResolveTargets resolves all targets to IP addresses
 func (ts *TargetSpec) ResolveTargets() error {
 	for _, target := range ts.Targets {
@@ -162,14 +180,22 @@ func (ts *TargetSpec) ResolveTargets() error {
 			continue
 		}
 
-		// Resolve hostname to IP
+		// Resolve hostname to IP, preferring IPv4
 		ips, err := net.LookupIP(target)
 		if err != nil {
 			return fmt.Errorf("failed to resolve %s: %w", target, err)
 		}
 
+		// Add IPv4 first, then IPv6
 		for _, ip := range ips {
-			ts.ResolvedIPs = append(ts.ResolvedIPs, ip.String())
+			if ip.To4() != nil {
+				ts.ResolvedIPs = append(ts.ResolvedIPs, ip.String())
+			}
+		}
+		for _, ip := range ips {
+			if ip.To4() == nil {
+				ts.ResolvedIPs = append(ts.ResolvedIPs, ip.String())
+			}
 		}
 	}
 

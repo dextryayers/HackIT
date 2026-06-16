@@ -129,11 +129,8 @@ func main() {
 
 	for _, host := range targets {
 		reporter.PrintStatus(host, 0)
-		// Resolve IP early to ensure all polyglot engines (Rust/C) get a surgical target
-		targetIP := host
-		if ips, err := net.LookupIP(host); err == nil && len(ips) > 0 {
-			targetIP = ips[0].String()
-		}
+		// Resolve IP early (prefer IPv4 to avoid NAT64 issues)
+		targetIP, _ := resolveHost(host)
 
 		engine := NewScanEngine(targetIP, portList, *concurrency, *timeout, *stealth, *scanMode, reporter)
 		engine.Hostname = host // Keep original for reporting
@@ -185,25 +182,9 @@ func main() {
 
 		results := engine.Run()
 
-		// High-Accuracy IP & Infrastructure Mapping
-		intelInfo := GetNetworkIntel(host)
-		ipAddr := host // Default to target string
-		if len(intelInfo.DNS) > 0 {
-			ipAddr = intelInfo.DNS[0] // Primary resolved IP
-		} else {
-			// Fallback: system resolution
-			if ips, err := net.LookupIP(host); err == nil && len(ips) > 0 {
-				for _, ip := range ips {
-					if ip.To4() != nil {
-						ipAddr = ip.String()
-						break
-					}
-				}
-				if ipAddr == host && len(ips) > 0 {
-					ipAddr = ips[0].String()
-				}
-			}
-		}
+		// High-Accuracy IP & Infrastructure Mapping (use resolved IPv4)
+		intelInfo := GetNetworkIntel(targetIP)
+		ipAddr := targetIP
 
 		osInfo := AnalyzeOSFromResults(host, results)
 

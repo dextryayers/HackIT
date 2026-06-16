@@ -42,6 +42,11 @@ func resolveIP(host string) net.IP {
 	if err != nil || len(ips) == 0 {
 		return nil
 	}
+	for _, ip := range ips {
+		if ip.To4() != nil {
+			return ip
+		}
+	}
 	return ips[0]
 }
 

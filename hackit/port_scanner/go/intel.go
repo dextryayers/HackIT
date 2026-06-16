@@ -34,11 +34,19 @@ func GetNetworkIntel(host string) IntelInfo {
 		ASN:     "N/A",
 	}
 
-	// 1. Multi-Source DNS Resolution (High-Fidelity)
+	// 1. Multi-Source DNS Resolution (Prefer IPv4)
 	ips, err := net.LookupIP(host)
 	if err == nil {
+		// Add IPv4 first, then IPv6
 		for _, ip := range ips {
-			intel.DNS = append(intel.DNS, ip.String())
+			if ip.To4() != nil {
+				intel.DNS = append(intel.DNS, ip.String())
+			}
+		}
+		for _, ip := range ips {
+			if ip.To4() == nil {
+				intel.DNS = append(intel.DNS, ip.String())
+			}
 		}
 	} else {
 		// Fallback: system-level resolution using net.DefaultResolver

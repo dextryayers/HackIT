@@ -1,0 +1,159 @@
+local stdnse = require "stdnse"
+local http = require "http"
+local string = require "string"
+local json = require "json"
+
+description = [[Detects JSON API endpoints by probing common paths and analyzing content types, response bodies, and error messages. Identifies RESTful JSON APIs, HAL, JSON:API, and custom JSON-based services.]]
+author = "HackIT Framework"
+license = "HackIT Framework — Internal Use Only"
+categories = {"safe", "discovery"}
+
+portrule = function(host, port)
+    return port.protocol == "tcp" and port.state == "open" and
+        (port.service == "http" or port.service == "https")
+end
+
+local json_paths = {
+    "/api", "/api/v1", "/api/v2",
+    "/api/users", "/api/posts", "/api/items",
+    "/api/data", "/api/status", "/api/health",
+    "/api/config", "/api/info", "/api/version",
+    "/users", "/posts", "/data",
+    "/status", "/health", "/version",
+    "/v1/users", "/v2/users",
+    "/.well-known/ai-plugin.json",
+    "/api/me", "/api/profile",
+    "/api/search", "/api/query",
+    "/api/products", "/api/orders",
+    "/api/categories", "/api/tags",
+    "/api/comments", "/api/reviews",
+    "/api/settings", "/api/preferences",
+    "/api/notifications", "/api/messages",
+    "/json", "/api/json",
+    "/api/v1/items", "/api/v2/items",
+}
+
+local function is_json_response(response)
+    if not response or not response.status then return false end
+
+    local content_type = (response.header and response.header["content-type"]) or ""
+    if content_type:find("application/json") or content_type:find("application/hal") or
+       content_type:find("application/vnd%.api") or content_type:find("text/json") or
+       content_type:find("application/json-patch") or content_type:find("application/problem+json") then
+        return true, content_type
+    end
+
+    if response.body and #response.body > 0 then
+        local trimmed = response.body:match("^%s*(.-)%s*$") or response.body
+        if trimmed:sub(1, 1) == "{" or trimmed:sub(1, 1) == "[" then
+            local ok, parsed = pcall(json.parse, trimmed)
+            if ok then
+                return true, "application/parse-json"
+            end
+        end
+    end
+
+    return false, ""
+end
+
+local function probe_json(host, port, path)
+    local ok, response = pcall(http.get, host, port, path, {
+        timeout = 5000,
+        header = {
+            ["Accept"] = "application/json, application/hal+json, application/vnd.api+json, text/json",
+        }
+    })
+
+    if not ok or not response or not response.status then return nil end
+
+    local info = { path = path, status = response.status }
+
+    local is_json, ct = is_json_response(response)
+    if is_json then
+        info.format = "JSON"
+        info.content_type = ct
+
+        if response.body and #response.body > 0 then
+            local ok2, data = pcall(json.parse, response.body)
+            if ok2 and data then
+                info.parsed = true
+                if type(data) == "table" then
+                    if #data > 0 then
+                        info.data_type = "array"
+                        info.element_count = #data
+                    else
+                        info.data_type = "object"
+                        local key_count = 0
+                        for k in pairs(data) do
+                            key_count = key_count + 1
+                        end
+                        info.key_count = key_count
+                        if data.id then info.has_id = true end
+                        if data.data then info.has_data_wrapper = true end
+                        info.keys = key_count <= 10 and data or nil
+                    end
+                end
+            end
+        end
+
+        return info
+    end
+
+    if response.status == 401 then
+        local ct = (response.header and response.header["content-type"]) or ""
+        if ct:find("json") then
+            info.format = "JSON (auth required)"
+            info.auth_type = response.header["www-authenticate"]
+            return info
+        end
+    end
+
+    if response.status == 403 then
+        local ct = (response.header and response.header["content-type"]) or ""
+        if ct:find("json") then
+            info.format = "JSON (forbidden)"
+            return info
+        end
+    end
+
+    if response.status == 400 or response.status == 422 then
+        local ct = (response.header and response.header["content-type"]) or ""
+        if ct:find("json") or ct:find("problem") then
+            info.format = "JSON (validation error)"
+            return info
+        end
+    end
+
+    if response.status == 405 then
+        local allow = (response.header and response.header["allow"]) or ""
+        if allow ~= "" then
+            info.allowed_methods = allow
+            info.format = "JSON (method not allowed)"
+            return info
+        end
+    end
+
+    return nil
+end
+
+action = function(host, port)
+    local result = stdnse.output_table()
+    local endpoints = {}
+
+    for _, path in ipairs(json_paths) do
+        local info = probe_json(host, port, path)
+        if info then
+            table.insert(endpoints, info)
+        end
+    end
+
+    if #endpoints == 0 then
+        return stdnse.format_output(false, "No JSON API endpoints detected")
+    end
+
+    result.endpoints = endpoints
+    result.endpoint_count = #endpoints
+    result.api_format = "JSON"
+
+    return stdnse.format_output(true, result)
+end

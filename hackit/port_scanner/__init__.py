@@ -627,7 +627,8 @@ def scan_ports(**kwargs):
         'window-spy':     'window',
         'idle-zombie':    'idle',
         'protocol-sweep': 'protocol',
-        'anon-self':      'syn',
+        'anon-self':      'anon-self',
+        'c-turbo':        'c-turbo',
     }
     scan_mode = SCAN_MODE_MAP.get(mode, 'connect')
     stealth_val = False

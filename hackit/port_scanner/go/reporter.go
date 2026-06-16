@@ -134,7 +134,22 @@ func (r *Reporter) PrintFinalTable() {
 			stateCol = strings.ToUpper(state)
 		}
 
-		serviceName := strings.ToUpper(res.Service)
+		// Ensure service is populated — fallback to banner detection + commonPorts
+		serviceName := res.Service
+		if serviceName == "" || serviceName == "unknown" {
+			if res.Banner != "" {
+				svc, _ := DetectService(res.Port, res.Banner, "")
+				if svc != "" {
+					serviceName = svc
+				}
+			}
+			if serviceName == "" || serviceName == "unknown" {
+				if name, ok := commonPorts[res.Port]; ok {
+					serviceName = name
+				}
+			}
+		}
+		serviceName = strings.ToUpper(serviceName)
 		if serviceName == "" { serviceName = "UNKNOWN" }
 
 		info := res.Version
@@ -175,11 +190,8 @@ func (r *Reporter) PrintTacticalSummary(host string, startTime time.Time, totalP
 		return r.resultsBuffer[i].Port < r.resultsBuffer[j].Port
 	})
 
-	// 2. Resolve IP and gather basic info
-	ipAddr := host
-	if addrs, err := net.LookupHost(host); err == nil && len(addrs) > 0 {
-		ipAddr = addrs[0]
-	}
+	// 2. Resolve IP (prefer IPv4 to avoid NAT64 issues)
+	ipAddr, _ := resolveHost(host)
 	ipInfo := gatherIPInfo(host)
 	elapsed := time.Since(startTime)
 

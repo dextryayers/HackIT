@@ -1,3 +1,30 @@
+/*
+ * HackIT TLS/SSL Certificate Extraction & Cipher Scanner v2.0
+ * Supports: 443, 465, 993, 995, 2083, 8443, 636, 990, 992, 853, 587
+ * Compiler: g++ -std=c++17 -O3 -o tls_scanner tls_scanner.cpp -lssl -lcrypto -lpthread
+ */
+
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <string>
+#include <vector>
+#include <map>
+#include <set>
+#include <regex>
+#include <thread>
+#include <mutex>
+#include <atomic>
+#include <functional>
+#include <algorithm>
+#include <chrono>
+#include <sstream>
+#include <queue>
+#include <cctype>
+#include <cmath>
+#include <cstdint>
+#include <iomanip>
+
 #ifdef _WIN32
   #define WIN32_LEAN_AND_MEAN
   #include <winsock2.h>
@@ -30,28 +57,9 @@
   #include <openssl/ssl.h>
   #include <openssl/err.h>
   #include <openssl/x509v3.h>
+  #include <openssl/pem.h>
+  #include <openssl/bio.h>
 #endif
-
-#include <cstdio>
-#include <cstdlib>
-#include <cstring>
-#include <string>
-#include <vector>
-#include <map>
-#include <set>
-#include <regex>
-#include <thread>
-#include <mutex>
-#include <atomic>
-#include <functional>
-#include <algorithm>
-#include <chrono>
-#include <sstream>
-#include <queue>
-#include <cctype>
-#include <cmath>
-#include <cstdint>
-#include <iomanip>
 
 using namespace std;
 using namespace chrono;
@@ -151,6 +159,13 @@ static long long now_ms() {
     return duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
 }
 
+static void init_openssl() {
+#ifndef _WIN32
+    SSL_load_error_strings();
+    OpenSSL_add_ssl_algorithms();
+#endif
+}
+
 static void set_nonblocking(SOCKET s, bool nb) {
 #ifdef _WIN32
     u_long mode = nb ? 1 : 0;
@@ -221,6 +236,145 @@ static bool probe_tls_version(const string& host, int port, int timeout_ms, cons
     return total >= 5 && (unsigned char)buf[0] == 0x16 && (unsigned char)buf[5] == 0x02;
 }
 
+#ifndef _WIN32
+static X509* get_certificate_openssl(const string& host, int port, int timeout_ms) {
+    SOCKET s = tcp_connect(host, port, timeout_ms);
+    if (IS_INVALID(s)) return nullptr;
+
+    SSL_CTX* ctx = SSL_CTX_new(SSLv23_client_method());
+    if (!ctx) { CLOSE_SOCKET(s); return nullptr; }
+
+    SSL_CTX_set_options(ctx, SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3);
+    SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, NULL);
+    SSL_CTX_set_timeout(ctx, timeout_ms / 1000);
+
+    SSL* ssl = SSL_new(ctx);
+    if (!ssl) { SSL_CTX_free(ctx); CLOSE_SOCKET(s); return nullptr; }
+
+    SSL_set_fd(ssl, (int)s);
+    SSL_set_connect_state(ssl);
+
+    // Set SNI
+    SSL_set_tlsext_host_name(ssl, host.c_str());
+
+    int ret = SSL_connect(ssl);
+    X509* cert = nullptr;
+    if (ret == 1) {
+        cert = SSL_get_peer_certificate(ssl);
+    }
+
+    SSL_free(ssl);
+    SSL_CTX_free(ctx);
+    CLOSE_SOCKET(s);
+
+    return cert;
+}
+
+static string time_to_string(const ASN1_TIME* time) {
+    BIO* bio = BIO_new(BIO_s_mem());
+    if (!bio) return "";
+    ASN1_TIME_print(bio, time);
+    char buf[128];
+    int len = BIO_read(bio, buf, sizeof(buf) - 1);
+    buf[len] = 0;
+    string result(buf);
+    BIO_free(bio);
+    return result;
+}
+
+static string extract_cert_info(X509* cert, TLSResult& r) {
+    if (!cert) return "";
+
+    // Subject
+    char subject[512];
+    X509_NAME_oneline(X509_get_subject_name(cert), subject, sizeof(subject));
+    r.cert_subject = subject;
+
+    // Issuer
+    char issuer[512];
+    X509_NAME_oneline(X509_get_issuer_name(cert), issuer, sizeof(issuer));
+    r.cert_issuer = issuer;
+
+    // Serial
+    ASN1_INTEGER* serial = X509_get_serialNumber(cert);
+    if (serial) {
+        BIGNUM* bn = ASN1_INTEGER_to_BN(serial, NULL);
+        if (bn) {
+            char* hex = BN_bn2hex(bn);
+            r.cert_serial = hex;
+            OPENSSL_free(hex);
+            BN_free(bn);
+        }
+    }
+
+    // Validity
+    const ASN1_TIME* not_before = X509_get0_notBefore(cert);
+    const ASN1_TIME* not_after = X509_get0_notAfter(cert);
+    if (not_before) r.cert_not_before = time_to_string(not_before);
+    if (not_after) r.cert_not_after = time_to_string(not_after);
+
+    // Days remaining
+    if (not_after) {
+        struct tm tm = {};
+        const char* fmt = nullptr;
+        if (not_after->type == V_ASN1_UTCTIME) fmt = "%y%m%d%H%M%S";
+        else if (not_after->type == V_ASN1_GENERALIZEDTIME) fmt = "%Y%m%d%H%M%S";
+        if (fmt) {
+            strptime((const char*)not_after->data, fmt, &tm);
+            time_t expiry = timegm(&tm);
+            time_t now_t = time(nullptr);
+            double diff = difftime(expiry, now_t);
+            r.cert_days_remaining = (int)(diff / 86400.0);
+            r.cert_expired = diff < 0;
+        }
+    }
+
+    // Self-signed
+    r.cert_self_signed = (X509_name_cmp(X509_get_subject_name(cert), X509_get_issuer_name(cert)) == 0);
+
+    // SAN (Subject Alternative Names)
+    GENERAL_NAMES* names = (GENERAL_NAMES*)X509_get_ext_d2i(cert, NID_subject_alt_name, NULL, NULL);
+    if (names) {
+        for (int i = 0; i < sk_GENERAL_NAME_num(names); i++) {
+            GENERAL_NAME* name = sk_GENERAL_NAME_value(names, i);
+            if (name->type == GEN_DNS) {
+                r.san_dns.push_back(string((const char*)ASN1_STRING_get0_data(name->d.dNSName),
+                                           ASN1_STRING_length(name->d.dNSName)));
+            } else if (name->type == GEN_IPADD) {
+                char ip[INET6_ADDRSTRLEN];
+                const unsigned char* d = ASN1_STRING_get0_data(name->d.iPAddress);
+                if (ASN1_STRING_length(name->d.iPAddress) == 4) {
+                    snprintf(ip, sizeof(ip), "%d.%d.%d.%d", d[0], d[1], d[2], d[3]);
+                    r.san_ip.push_back(ip);
+                }
+            }
+        }
+        GENERAL_NAMES_free(names);
+    }
+
+    // Signature algorithm
+    int sig_nid = X509_get_signature_nid(cert);
+    r.signature_algorithm = OBJ_nid2ln(sig_nid);
+
+    // Public key info
+    EVP_PKEY* pkey = X509_get_pubkey(cert);
+    if (pkey) {
+        r.key_bits = EVP_PKEY_bits(pkey);
+        int type = EVP_PKEY_id(pkey);
+        switch (type) {
+            case EVP_PKEY_RSA: r.public_key_type = "RSA"; break;
+            case EVP_PKEY_EC: r.public_key_type = "ECDSA"; break;
+            case EVP_PKEY_DSA: r.public_key_type = "DSA"; break;
+            case EVP_PKEY_DH: r.public_key_type = "DH"; break;
+            default: r.public_key_type = "Unknown"; break;
+        }
+        EVP_PKEY_free(pkey);
+    }
+
+    return r.cert_subject;
+}
+#endif
+
 static double grade_tls(TLSResult& r) {
     double score = 100;
     if (r.rc4_used || r.null_cipher || r.anon_cipher) score -= 40;
@@ -234,7 +388,8 @@ static double grade_tls(TLSResult& r) {
     if (!r.tls13_supported) score -= 10;
     if (r.cert_expired) score -= 25;
     if (r.cert_self_signed) score -= 15;
-    if (r.cert_days_remaining < 30) score -= 10;
+    if (r.cert_days_remaining < 30 && r.cert_days_remaining > 0) score -= 10;
+    if (r.cert_days_remaining < 0) score -= 25;
     if (score > 100) score = 100;
     if (score < 0) score = 0;
     if (score >= 90) { r.grade_label = "A+"; r.risk_level = "LOW"; }
@@ -253,17 +408,21 @@ static TLSResult scan_tls(const string& host, int port, int timeout_ms) {
     r.port = port;
     string sh;
     int n;
+
+    // Probe TLS versions
     r.tls13_supported = probe_tls_version(host, port, timeout_ms, "TLS 1.3", 0x03, 0x04, sh, n);
     r.tls_supported = probe_tls_version(host, port, timeout_ms, "TLS 1.2", 0x03, 0x03, sh, n) ||
                       probe_tls_version(host, port, timeout_ms, "TLS 1.1", 0x03, 0x02, sh, n) ||
                       probe_tls_version(host, port, timeout_ms, "TLS 1.0", 0x03, 0x01, sh, n) ||
                       probe_tls_version(host, port, timeout_ms, "SSL 3.0", 0x03, 0x00, sh, n);
+
     if (probe_tls_version(host, port, timeout_ms, "TLS 1.3", 0x03, 0x04, sh, n)) r.version = "TLS 1.3";
     else if (probe_tls_version(host, port, timeout_ms, "TLS 1.2", 0x03, 0x03, sh, n)) r.version = "TLS 1.2";
     else if (probe_tls_version(host, port, timeout_ms, "TLS 1.1", 0x03, 0x02, sh, n)) r.version = "TLS 1.1";
     else if (probe_tls_version(host, port, timeout_ms, "TLS 1.0", 0x03, 0x01, sh, n)) r.version = "TLS 1.0";
     else if (probe_tls_version(host, port, timeout_ms, "SSL 3.0", 0x03, 0x00, sh, n)) r.version = "SSL 3.0";
     else r.version = "none";
+
     if (r.tls_supported) {
         for (int i = 0; CIPHER_IDS[i]; i++) {
             CipherSuite cs;
@@ -272,44 +431,100 @@ static TLSResult scan_tls(const string& host, int port, int timeout_ms) {
             cs.severity = CIPHER_SEVERITY[i] ? CIPHER_SEVERITY[i] : "UNKNOWN";
             r.ciphers.push_back(cs);
         }
-        r.tls13_supported = probe_tls_version(host, port, timeout_ms, "TLS 1.3", 0x03, 0x04, sh, n);
+
+        // Extract certificate via OpenSSL
+#ifndef _WIN32
+        X509* cert = get_certificate_openssl(host, port, timeout_ms);
+        if (cert) {
+            extract_cert_info(cert, r);
+            X509_free(cert);
+        }
+#endif
     }
+
     r.grade = grade_tls(r);
     return r;
 }
 
 static void print_json(const TLSResult& r) {
-    printf("RESULT:{\"port\":%d,\"tls\":%s,\"version\":\"%s\",\"grade\":\"%s\",\"risk\":\"%s\",\"ciphers\":%zu,\"tls13\":%s}\n",
-        r.port, r.tls_supported ? "true" : "false", r.version.c_str(),
-        r.grade_label.c_str(), r.risk_level.c_str(),
-        r.ciphers.size(), r.tls13_supported ? "true" : "false");
+    printf("RESULT:{"
+           "\"port\":%d,"
+           "\"tls\":%s,"
+           "\"version\":\"%s\","
+           "\"grade\":\"%s\","
+           "\"risk\":\"%s\","
+           "\"ciphers\":%zu,"
+           "\"tls13\":%s,"
+           "\"cert_subject\":\"%s\","
+           "\"cert_issuer\":\"%s\","
+           "\"cert_serial\":\"%s\","
+           "\"cert_not_before\":\"%s\","
+           "\"cert_not_after\":\"%s\","
+           "\"cert_days_remaining\":%d,"
+           "\"cert_self_signed\":%s,"
+           "\"cert_expired\":%s,"
+           "\"san_dns\":[",
+           r.port,
+           r.tls_supported ? "true" : "false",
+           r.version.c_str(),
+           r.grade_label.c_str(),
+           r.risk_level.c_str(),
+           r.ciphers.size(),
+           r.tls13_supported ? "true" : "false",
+           r.cert_subject.c_str(),
+           r.cert_issuer.c_str(),
+           r.cert_serial.c_str(),
+           r.cert_not_before.c_str(),
+           r.cert_not_after.c_str(),
+           r.cert_days_remaining,
+           r.cert_self_signed ? "true" : "false",
+           r.cert_expired ? "true" : "false");
+
+    for (size_t i = 0; i < r.san_dns.size(); i++) {
+        if (i > 0) printf(",");
+        printf("\"%s\"", r.san_dns[i].c_str());
+    }
+    printf("],\"san_ip\":[");
+    for (size_t i = 0; i < r.san_ip.size(); i++) {
+        if (i > 0) printf(",");
+        printf("\"%s\"", r.san_ip[i].c_str());
+    }
+    printf("],\"sig_algo\":\"%s\",\"key_bits\":%d,\"key_type\":\"%s\"}",
+           r.signature_algorithm.c_str(), r.key_bits, r.public_key_type.c_str());
+    printf("\n");
 }
 
 int main(int argc, char* argv[]) {
     if (argc < 2) {
         fprintf(stderr, "Usage: %s <host> [ports] [timeout_ms]\n", argv[0]);
-        fprintf(stderr, "  ports: comma-separated (default: 443,8443,465,993,995,636,990,992,853,587)\n");
+        fprintf(stderr, "  ports: comma-separated (default: 443,8443,465,993,995,636,990,992,853,587,2083)\n");
         return 1;
     }
+
 #ifdef _WIN32
     WSADATA wsa;
     WSAStartup(MAKEWORD(2, 2), &wsa);
 #endif
+
+    init_openssl();
+
     vector<int> ports;
     if (argc > 2) {
         char* p = strtok(argv[2], ",");
         while (p) { ports.push_back(atoi(p)); p = strtok(NULL, ","); }
     }
     if (ports.empty()) {
-        ports = {443, 8443, 465, 993, 995, 636, 990, 992, 853, 587};
+        ports = {443, 8443, 465, 993, 995, 636, 990, 992, 853, 587, 2083};
     }
     int timeout = argc > 3 ? atoi(argv[3]) : DEFAULT_TIMEOUT_MS;
     fprintf(stderr, "TLS_SCANNER target=%s ports=%zu timeout=%dms\n", argv[1], ports.size(), timeout);
+
     for (int port : ports) {
         TLSResult r = scan_tls(argv[1], port, timeout);
         print_json(r);
         fflush(stdout);
     }
+
 #ifdef _WIN32
     WSACleanup();
 #endif

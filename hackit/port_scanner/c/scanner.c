@@ -53,7 +53,7 @@ typedef int socklen_t;
 #define MAX_PORTS 65536
 #define MAX_THREADS 512
 #define DEFAULT_TIMEOUT 2000
-#define BANNER_SIZE 2048
+#define BANNER_SIZE 4096
 
 typedef struct { int port; const char* name; } port_entry_t;
 
@@ -304,10 +304,12 @@ static const port_entry_t PORT_NAMES[] = {
     {2030,"device2"},
     {2049,"nfs"},
     {2080,"autodesk"},
-    {2082,"infowave"},
-    {2083,"infowave"},
-    {2086,"gnunet"},
-    {2087,"gnunet"},
+    {2082,"cpanel"},
+    {2083,"cpanel-ssl"},
+    {2086,"whm"},
+    {2087,"whm-ssl"},
+    {2095,"cpanel-webmail"},
+    {2096,"cpanel-webmail"},
     {2100,"amiganet"},
     {2102,"zephyr"},
     {2103,"zephyr"},
@@ -1416,9 +1418,9 @@ typedef struct {
     const char* pattern;
     const char* product;
     const char* ver_marker;
-} sig_t;
+} scan_sig_t;
 
-static const sig_t SIGNATURES[] = {
+static const scan_sig_t SIGNATURES[] = {
     {"http","Server: Apache/","Apache httpd","/"}
     ,{"http","Server: nginx","nginx","nginx"}
     ,{"http","Server: Microsoft-IIS/","Microsoft IIS","/"}
@@ -1467,6 +1469,17 @@ static const sig_t SIGNATURES[] = {
     ,{"http","php/","PHP","php/"}
     ,{"http","Python/","Python","Python/"}
     ,{"http","IIS","IIS","IIS"}
+    ,{"http","Server: LiteSpeed","LiteSpeed","/"}
+    ,{"http","X-Powered-By: LiteSpeed","LiteSpeed","LiteSpeed"}
+    ,{"http","cpsrvd/","cPanel","cpsrvd/"}
+    ,{"http","WHM/","cPanel WHM","/"}
+    ,{"http","Apache/","Apache httpd","/"}
+    ,{"http","nginx/","nginx","nginx/"}
+    ,{"smtp","220 ","Generic SMTP","220"}
+    ,{"pop3","+OK","Generic POP3","+OK"}
+    ,{"imap"," OK ","Generic IMAP","OK"}
+    ,{"ftp","220 ","Generic FTP","220"}
+    ,{"ssh","SSH-","Generic SSH","SSH-"}
     ,{NULL,NULL,NULL,NULL}
 };
 
@@ -1523,28 +1536,34 @@ int scan_port(const char* host, int port, int timeout_ms, char* banner, int bann
 #else
         fcntl(s, F_SETFL, flags);
 #endif
+        int short_ms = timeout_ms < 500 ? timeout_ms : 500;
         struct timeval rtv;
-        rtv.tv_sec = timeout_ms / 1000;
-        rtv.tv_usec = (timeout_ms % 1000) * 1000;
+        rtv.tv_sec = short_ms / 1000;
+        rtv.tv_usec = (short_ms % 1000) * 1000;
         setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (const char*)&rtv, sizeof(rtv));
 
-        char tmp[2048];
-        int total = 0;
-        int n;
+        char tmp[4096];
+        int total = 0, n;
 
         n = (int)recv(s, tmp + total, sizeof(tmp) - 1 - total, 0);
         if (n > 0) total += n;
 
-        if (port == 80 || port == 8080 || port == 443 || port == 8443)
-            send(s, "HEAD / HTTP/1.0\r\n\r\n", 20, 0);
-        else if (port == 25 || port == 587)
-            send(s, "EHLO scan\r\n", 12, 0);
-        else if (port == 110)
-            send(s, "CAPA\r\n", 6, 0);
-        else if (port == 143)
-            send(s, "A001 CAPABILITY\r\n", 18, 0);
-        else if (port == 21 || port == 22)
+        if (port == 21)
+            send(s, "SYST\r\n", 6, 0);
+        else if (port == 22)
             ;
+        else if (port == 25 || port == 465 || port == 587 || port == 2525)
+            send(s, "EHLO scan\r\n", 12, 0);
+        else if (port == 110 || port == 995)
+            send(s, "CAPA\r\n", 6, 0);
+        else if (port == 143 || port == 993 || port == 220 || port == 585)
+            send(s, "A001 CAPABILITY\r\n", 18, 0);
+        else if (port == 119)
+            send(s, "CAPABILITIES\r\n", 14, 0);
+        else if (port == 80 || port == 443 || port == 8080 || port == 8443 ||
+                 port == 8000 || port == 8008 || port == 8888 || port == 2082 ||
+                 port == 2083 || port == 2086 || port == 2087 || port == 2096)
+            send(s, "HEAD / HTTP/1.0\r\n\r\n", 20, 0);
         else if (port == 3306)
             ;
         else if (port == 5432)
@@ -1559,8 +1578,12 @@ int scan_port(const char* host, int port, int timeout_ms, char* banner, int bann
             send(s, "\r\n\r\n", 4, 0);
 
         SLEEP_MS(200);
-        n = (int)recv(s, tmp + total, sizeof(tmp) - 1 - total, 0);
-        if (n > 0) total += n;
+        for (int i = 0; i < 3; i++) {
+            n = (int)recv(s, tmp + total, sizeof(tmp) - 1 - total, 0);
+            if (n > 0) total += n;
+            else break;
+            if (total >= (int)sizeof(tmp) - 1) break;
+        }
 
         if (total > 0) {
             tmp[total] = 0;
@@ -1589,24 +1612,52 @@ void detect_version(const char* banner, const char* service, char* product_out, 
         if (SIGNATURES[i].service && service && strcmp(SIGNATURES[i].service, service) != 0) continue;
         const char* m = strstr(banner, SIGNATURES[i].pattern);
         if (!m) continue;
-        if (product_out) strncpy(product_out, SIGNATURES[i].product, product_size - 1);
+        if (product_out) {
+            strncpy(product_out, SIGNATURES[i].product, product_size - 1);
+            product_out[product_size - 1] = 0;
+        }
         if (version_out && SIGNATURES[i].ver_marker) {
             const char* vp = strstr(banner, SIGNATURES[i].ver_marker);
             if (vp) {
                 vp += strlen(SIGNATURES[i].ver_marker);
-                while (*vp && !isdigit((unsigned char)*vp)) vp++;
-                int vi = 0;
-                while (*vp && vi < version_size - 1 && (isdigit((unsigned char)*vp) || *vp == '.' || *vp == '_' || *vp == 'p')) {
-                    version_out[vi++] = *vp;
-                    vp++;
-                }
-                if (vi > 0) {
-                    while (vi > 0 && (version_out[vi-1] == '.' || version_out[vi-1] == '_')) vi--;
-                    version_out[vi] = 0;
+                while (*vp && *vp != '/' && *vp != ' ' && *vp != '\t' && *vp != '\r' && *vp != '\n' && !isdigit((unsigned char)*vp)) vp++;
+                if (isdigit((unsigned char)*vp)) {
+                    int vi = 0;
+                    while (*vp && vi < version_size - 1 && (isdigit((unsigned char)*vp) || *vp == '.' || *vp == '_' || *vp == '-' || *vp == 'p' || *vp == 'P')) {
+                        version_out[vi++] = *vp;
+                        vp++;
+                    }
+                    if (vi > 0) {
+                        while (vi > 0 && (version_out[vi-1] == '.' || version_out[vi-1] == '_' || version_out[vi-1] == '-')) vi--;
+                        version_out[vi] = 0;
+                    }
                 }
             }
         }
         return;
+    }
+
+    if (version_out && !version_out[0]) {
+        const char* markers[] = {"version ", "Version ", "/v", " V", "v", NULL};
+        for (int mi = 0; markers[mi]; mi++) {
+            const char* p = strstr(banner, markers[mi]);
+            if (!p) continue;
+            p += strlen(markers[mi]);
+            while (*p && !isdigit((unsigned char)*p) && *p != ' ') p++;
+            while (*p == ' ') p++;
+            if (isdigit((unsigned char)*p)) {
+                int vi = 0;
+                while (*p && vi < version_size - 1 && (isdigit((unsigned char)*p) || *p == '.' || *p == '_' || *p == '-')) {
+                    version_out[vi++] = *p;
+                    p++;
+                }
+                if (vi > 0) {
+                    while (vi > 0 && (version_out[vi-1] == '.' || version_out[vi-1] == '_' || version_out[vi-1] == '-')) vi--;
+                    version_out[vi] = 0;
+                }
+                break;
+            }
+        }
     }
 }
 

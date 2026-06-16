@@ -59,6 +59,7 @@ typedef struct {
     bool nop_support;
     int seq;
     char opts[256];
+    char banner[512];
 } TCPProbeResult;
 
 static long long now_ms(void) {
@@ -176,28 +177,62 @@ static int connect_and_probe(const char* host, uint32_t ip, int port, int timeou
     socklen_t err_len = sizeof(so_err);
     getsockopt(sock, SOL_SOCKET, SO_ERROR, &so_err, &err_len);
     if (so_err != 0) { close(sock); return -1; }
+
     struct tcp_info tcpinfo;
     socklen_t tcpinfo_len = sizeof(tcpinfo);
     if (getsockopt(sock, IPPROTO_TCP, TCP_INFO, &tcpinfo, &tcpinfo_len) == 0) {
+        result->mss = tcpinfo.tcpi_advmss;
+        result->wscale = tcpinfo.tcpi_snd_wscale;
+        result->ts = (tcpinfo.tcpi_options & TCPI_OPT_TIMESTAMPS) != 0;
+        result->sack = (tcpinfo.tcpi_options & TCPI_OPT_SACK) != 0;
+        result->window = tcpinfo.tcpi_rcv_space;
     }
+
     int flags = fcntl(sock, F_GETFL, 0);
     fcntl(sock, F_SETFL, flags & ~O_NONBLOCK);
-    struct timeval tv = {timeout_ms / 1000, (timeout_ms % 1000) * 1000};
+    int short_ms = timeout_ms < 500 ? timeout_ms : 500;
+    struct timeval tv = {short_ms / 1000, (short_ms % 1000) * 1000};
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-    unsigned char probe_opts[] = {
-        2, 4, 0x05, 0xb4,
-        4, 2,
-        3, 3, 0x07,
-        8, 10, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
-        1, 1, 1, 1, 1
-    };
+
     char buf[MAX_BANNER];
     memset(buf, 0, sizeof(buf));
-    int total = 0;
-    int n = (int)read(sock, buf, sizeof(buf) - 1);
-    if (n > 0) total = n;
-    buf[total] = 0;
+    int total = 0, n;
+
+    n = (int)read(sock, buf + total, sizeof(buf) - 1 - total);
+    if (n > 0) total += n;
+
+    if (port == 80 || port == 8080 || port == 443 || port == 8443)
+        send(sock, "HEAD / HTTP/1.0\r\n\r\n", 20, 0);
+    else if (port == 25 || port == 587)
+        send(sock, "EHLO scan\r\n", 12, 0);
+    else if (port == 110)
+        send(sock, "CAPA\r\n", 6, 0);
+    else if (port == 143)
+        send(sock, "A001 CAPABILITY\r\n", 18, 0);
+    else if (port == 21)
+        send(sock, "SYST\r\n", 6, 0);
+
+    usleep(200000);
+    for (int i = 0; i < 3; i++) {
+        n = (int)read(sock, buf + total, sizeof(buf) - 1 - total);
+        if (n > 0) total += n;
+        else break;
+        if (total >= (int)sizeof(buf) - 1) break;
+    }
+
     close(sock);
+    buf[total] = 0;
+
+    int si = 0, di = 0;
+    while (buf[si] && di < (int)sizeof(result->banner) - 1) {
+        char c = buf[si++];
+        if (c == '\r') continue;
+        if (c == '\n') { result->banner[di++] = ' '; continue; }
+        if (c >= 32 && c < 127) result->banner[di++] = c;
+        else if (di > 0 && result->banner[di-1] != '.') result->banner[di++] = '.';
+    }
+    result->banner[di] = 0;
+
     struct in_addr ia; ia.s_addr = ip;
     char ip_str[64];
     strncpy(ip_str, inet_ntoa(ia), sizeof(ip_str) - 1);
@@ -209,15 +244,14 @@ static int connect_and_probe(const char* host, uint32_t ip, int port, int timeou
         if (fscanf(f, "%d", &ping_ttl) == 1) result->ttl = ping_ttl;
         pclose(f);
     }
+
     if (result->ttl == 0) result->ttl = 64;
-    result->window = 65535;
+    if (result->window == 0) result->window = 65535;
+    if (result->mss == 0) result->mss = 1460;
+    if (result->wscale == 0) result->wscale = 7;
     result->df = true;
-    result->mss = 1460;
-    result->wscale = 7;
-    result->ts = true;
-    result->sack = true;
     result->seq = 12345678;
-    return n > 0 ? 1 : 0;
+    return total > 0 ? 1 : 0;
 }
 
 static void fingerprint_os(OSContext* ctx) {
@@ -261,48 +295,84 @@ static void fingerprint_os(OSContext* ctx) {
     const char* os_name = "Unknown";
     const char* os_ver = "";
     float conf = 0;
-    if (fp->ttl <= 64) {
-        if (fp->window_size == 5840 || fp->window_size == 29200) {
-            os_name = "Linux"; os_ver = "2.6.x - 5.x"; conf = 85;
-        } else if (fp->window_size == 65535 && fp->mss == 1460) {
-            os_name = "Linux"; os_ver = "Modern (5.x+ / 6.x)"; conf = 90;
-        } else if (fp->window_size == 65535 && fp->mss == 1440) {
-            os_name = "macOS / FreeBSD"; os_ver = "Modern"; conf = 80;
-        } else if (fp->window_size == 16384 || fp->window_size == 14600) {
-            os_name = "Linux"; os_ver = "Embedded / Android"; conf = 75;
-        } else if (fp->window_size == 65535 && fp->mss == 1360) {
-            os_name = "macOS"; os_ver = "Ventura+"; conf = 85;
-        } else if (fp->window_size == 65535 && fp->mss == 1380) {
-            os_name = "iOS / iPadOS"; os_ver = "Modern"; conf = 80;
-        } else if (fp->window_size == 65535 && fp->wscale == 7) {
-            os_name = "Linux"; os_ver = "Generic"; conf = 70;
-        } else {
-            os_name = "Unix-like"; os_ver = "Generic"; conf = 50;
-        }
-    } else if (fp->ttl <= 128) {
-        if (fp->window_size == 8192 || fp->window_size == 64240) {
-            if (fp->mss == 1460) { os_name = "Windows"; os_ver = "10/11 / Server 2016+"; conf = 95; }
-            else { os_name = "Windows"; os_ver = "Modern"; conf = 85; }
-        } else if (fp->window_size == 65535) {
-            os_name = "Windows"; os_ver = "XP/2003 (Legacy)"; conf = 80;
-        } else if (fp->window_size == 16384) {
-            os_name = "Windows"; os_ver = "Vista/2008"; conf = 85;
-        } else if (fp->window_size == 65536 && fp->mss == 1380) {
-            os_name = "Windows"; os_ver = "11 / Server 2022"; conf = 90;
-        } else {
-            os_name = "Windows"; os_ver = "Generic"; conf = 60;
-        }
-    } else if (fp->ttl <= 255) {
-        if (fp->window_size == 4128 || fp->window_size == 512) {
-            os_name = "Cisco IOS"; os_ver = "Generic"; conf = 85;
-        } else if (fp->mss == 1500 || fp->mss == 1460) {
-            os_name = "Network Device"; os_ver = "Generic Router/Switch"; conf = 65;
-        } else if (fp->wscale == 0 && fp->mss == 536) {
-            os_name = "Legacy / Embedded"; os_ver = "Minimal TCP stack"; conf = 70;
-        } else {
-            os_name = "Infrastructure"; os_ver = "Solaris / HP-UX / AIX"; conf = 55;
+
+    for (int i = 0; i < valid_results; i++) {
+        const char* b = results[i].banner;
+        if (!b || !b[0]) continue;
+        if (strstr(b, "SSH-2.0-OpenSSH")) {
+            if (strstr(b, "Ubuntu")) { os_name = "Linux"; os_ver = "Ubuntu"; conf = 85; break; }
+            else if (strstr(b, "Debian")) { os_name = "Linux"; os_ver = "Debian"; conf = 85; break; }
+            else if (strstr(b, "FreeBSD")) { os_name = "FreeBSD"; os_ver = ""; conf = 85; break; }
+            else if (strstr(b, "openSUSE")) { os_name = "Linux"; os_ver = "openSUSE"; conf = 80; break; }
+            else if (strstr(b, "Fedora")) { os_name = "Linux"; os_ver = "Fedora"; conf = 80; break; }
+            else if (strstr(b, "CentOS")) { os_name = "Linux"; os_ver = "CentOS"; conf = 80; break; }
+            else if (strstr(b, "RHEL")) { os_name = "Linux"; os_ver = "RHEL"; conf = 80; break; }
+            else if (strstr(b, "Darwin")) { os_name = "macOS"; os_ver = ""; conf = 85; break; }
+            else { os_name = "Linux/Unix"; os_ver = "SSH generic"; conf = 60; break; }
+        } else if (strstr(b, "220 Microsoft FTP")) {
+            os_name = "Windows"; os_ver = "FTP Service"; conf = 80; break;
+        } else if (strstr(b, "220 ProFTPD") || strstr(b, "220 vsFTPd")) {
+            os_name = "Linux/Unix"; os_ver = ""; conf = 70; break;
+        } else if (strstr(b, "220 Pure-FTPd")) {
+            os_name = "Linux/Unix"; os_ver = ""; conf = 65;
+        } else if (strstr(b, "Server: Microsoft-IIS")) {
+            os_name = "Windows"; os_ver = "IIS"; conf = 90; break;
         }
     }
+
+    if (conf == 0) {
+        if (fp->ttl <= 64) {
+            if (fp->window_size == 5840 || fp->window_size == 29200) {
+                os_name = "Linux"; os_ver = "2.6.x - 5.x"; conf = 85;
+            } else if (fp->window_size == 65535 && fp->mss == 1460) {
+                os_name = "Linux"; os_ver = "Modern (5.x+ / 6.x)"; conf = 90;
+            } else if (fp->window_size == 65535 && fp->mss == 1440) {
+                os_name = "macOS / FreeBSD"; os_ver = "Modern"; conf = 80;
+            } else if (fp->window_size == 16384 || fp->window_size == 14600) {
+                os_name = "Linux"; os_ver = "Embedded / Android"; conf = 75;
+            } else if (fp->window_size == 65535 && fp->mss == 1360) {
+                os_name = "macOS"; os_ver = "Ventura+"; conf = 85;
+            } else if (fp->window_size == 65535 && fp->mss == 1380) {
+                os_name = "iOS / iPadOS"; os_ver = "Modern"; conf = 80;
+            } else if (fp->window_size == 65535 && fp->wscale == 7) {
+                os_name = "Linux"; os_ver = "Generic"; conf = 70;
+            } else if (fp->window_size == 65536) {
+                os_name = "macOS / FreeBSD"; os_ver = "Modern"; conf = 70;
+            } else if (fp->window_size == 32768) {
+                os_name = "Solaris / AIX"; os_ver = "Generic"; conf = 60;
+            } else {
+                os_name = "Unix-like"; os_ver = "Generic"; conf = 50;
+            }
+        } else if (fp->ttl <= 128) {
+            if (fp->window_size == 8192 || fp->window_size == 64240) {
+                if (fp->mss == 1460) { os_name = "Windows"; os_ver = "10/11 / Server 2016+"; conf = 95; }
+                else { os_name = "Windows"; os_ver = "Modern"; conf = 85; }
+            } else if (fp->window_size == 65535) {
+                os_name = "Windows"; os_ver = "XP/2003 (Legacy)"; conf = 80;
+            } else if (fp->window_size == 16384) {
+                os_name = "Windows"; os_ver = "Vista/2008"; conf = 85;
+            } else if (fp->window_size == 65536 && fp->mss == 1380) {
+                os_name = "Windows"; os_ver = "11 / Server 2022"; conf = 90;
+            } else if (fp->window_size == 65520) {
+                os_name = "Windows"; os_ver = "10 / Server 2019"; conf = 85;
+            } else {
+                os_name = "Windows"; os_ver = "Generic"; conf = 60;
+            }
+        } else if (fp->ttl <= 255) {
+            if (fp->window_size == 4128 || fp->window_size == 512) {
+                os_name = "Cisco IOS"; os_ver = "Generic"; conf = 85;
+            } else if (fp->mss == 1500 || fp->mss == 1460) {
+                os_name = "Network Device"; os_ver = "Generic Router/Switch"; conf = 65;
+            } else if (fp->wscale == 0 && fp->mss == 536) {
+                os_name = "Legacy / Embedded"; os_ver = "Minimal TCP stack"; conf = 70;
+            } else if (fp->window_size == 16384 || fp->window_size == 8760) {
+                os_name = "Juniper / Network Device"; os_ver = ""; conf = 70;
+            } else {
+                os_name = "Infrastructure"; os_ver = "Solaris / HP-UX / AIX"; conf = 55;
+            }
+        }
+    }
+
     snprintf(fp->os_name, sizeof(fp->os_name), "%s", os_name);
     snprintf(fp->os_version, sizeof(fp->os_version), "%s", os_ver);
     fp->confidence = conf;

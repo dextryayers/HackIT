@@ -1,0 +1,65 @@
+local stdnse = require "stdnse"
+
+description = [[Connects to Microsoft SQL Server and retrieves server information such as version, instance name, and configured options via the pre-login handshake. Uses structured output with version extraction.]]
+author = "HackIT Framework"
+license = "HackIT Framework — Internal Use Only"
+categories = {"safe", "discovery"}
+
+portrule = function(host, port) return port.protocol == "tcp" and port.state == "open" and (port.number == 1433 or port.service == "ms-sql-s") end
+
+local function build_prelogin()
+    return string.char(
+        0x02, 0x01, 0x00, 0x4c, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+    )
+end
+
+action = function(host, port)
+    local sock = nmap.new_socket()
+    sock:set_timeout(10000)
+    local ok, result = pcall(function()
+        local status = sock:connect(host.ip, port)
+        if not status then return end
+        sock:send(build_prelogin())
+        local _, resp = sock:receive_buf("", 5000)
+        sock:close()
+        if resp and #resp > 20 then
+            local res = stdnse.output_table()
+            if resp:find("Microsoft") or resp:find("MS") or resp:find("SQL Server") then
+                res.server = "Microsoft SQL Server"
+            end
+            local version_bytes = resp:sub(37, 40)
+            local parts = {}
+            for i = 1, #version_bytes do
+                table.insert(parts, tostring(string.byte(version_bytes, i)))
+            end
+            res.version_raw = table.concat(parts, ".")
+            local ver_str = resp:match("version[%s:=]+([%d%.]+)") or resp:match("SQL Server (%d%d%d%d)")
+            if ver_str then
+                res.version = ver_str
+                local major = ver_str:match("^(%d+)")
+                if major then res.version_major = tonumber(major) end
+            end
+            local instance = resp:match("InstanceName[^\x00]*[\x00]([^\x00]+)")
+            if instance then res.instance_name = instance end
+            local server_name = resp:match("ServerName[^\x00]*[\x00]([^\x00]+)")
+            if server_name then res.server_name = server_name end
+            return res
+        end
+    end)
+    if not ok then
+        pcall(function() sock:close() end)
+    end
+    if not result then
+        return stdnse.format_output(false, "Could not retrieve MSSQL info")
+    end
+    return result
+end

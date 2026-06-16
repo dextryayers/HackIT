@@ -360,6 +360,7 @@ func HeuristicOSDetect(host string) OSInfo {
 // AnalyzeOSFromResults analyzes collected scan results to guess the OS
 func AnalyzeOSFromResults(host string, results []PortResult) OSInfo {
 	var evidence []string
+	var openPorts []int
 	bannerSample := ""
 	for _, r := range results {
 		if r.Banner != "" {
@@ -367,6 +368,18 @@ func AnalyzeOSFromResults(host string, results []PortResult) OSInfo {
 		}
 		if r.State == "open" {
 			evidence = append(evidence, fmt.Sprintf("open port %d/tcp", r.Port))
+			openPorts = append(openPorts, r.Port)
+		}
+	}
+
+	// Priority: Polyglot cross-engine detection
+	if len(openPorts) > 0 {
+		poly := PolyglotOSDetect(host, openPorts)
+		if poly.Confidence >= 0.4 {
+			if poly.Fingerprint == "" {
+				poly.Fingerprint = joinEvidence(evidence)
+			}
+			return poly
 		}
 	}
 
@@ -565,4 +578,119 @@ func AnalyzeOSFromResults(host string, results []PortResult) OSInfo {
 	}
 
 	return OSInfo{Name: "General Purpose (Likely Linux/Unix)", Family: "Linux/Unix", Confidence: 0.4, Fingerprint: joinEvidence(evidence)}
+}
+
+// PolyglotOSDetect runs ALL engines (C, C++, Rust, Go) and returns cross-validated result
+func PolyglotOSDetect(host string, openPorts []int) OSInfo {
+	timeoutMs := 3000
+	if len(openPorts) == 0 {
+		openPorts = []int{22, 80, 443}
+	}
+
+	// Run all 4 engines concurrently
+	type osResult struct {
+		engine string
+		info   OSInfo
+	}
+	ch := make(chan osResult, 4)
+
+	// 1. C engine — TCP/IP stack fingerprinting
+	go func() {
+		info := COsFingerprint(host, openPorts, timeoutMs)
+		ch <- osResult{"c", info}
+	}()
+
+	// 2. C++ engine — deep signature matching
+	go func() {
+		info := CppOsDetect(host, openPorts, timeoutMs)
+		ch <- osResult{"cpp", info}
+	}()
+
+	// 3. Rust engine — async probing + banner analysis
+	go func() {
+		info := RustDetectOS(host)
+		ch <- osResult{"rust", info}
+	}()
+
+	// 4. Go engine — banner-based + result analysis
+	go func() {
+		info := DetectOS(host)
+		ch <- osResult{"go", info}
+	}()
+
+	results := make(map[string]OSInfo)
+	for i := 0; i < 4; i++ {
+		r := <-ch
+		results[r.engine] = r.info
+	}
+
+	// Cross-validation scoring
+	type scored struct {
+		name       string
+		version    string
+		family     string
+		totalScore float64
+		count      int
+	}
+	candidates := make(map[string]*scored)
+
+	for _, info := range results {
+		if info.Confidence < 0.1 || info.Name == "Unknown" {
+			continue
+		}
+		key := info.Name
+		if info.Version != "" {
+			key += " " + info.Version
+		}
+		if _, ok := candidates[key]; !ok {
+			candidates[key] = &scored{
+				name:    info.Name,
+				version: info.Version,
+				family:  info.Family,
+			}
+		}
+		candidates[key].totalScore += info.Confidence
+		candidates[key].count++
+	}
+
+	// Find best match
+	var best *scored
+	bestScore := 0.0
+	for _, s := range candidates {
+		// Score = average confidence + engine count bonus
+		avg := s.totalScore / float64(s.count)
+		engBonus := float64(s.count) * 0.15
+		if s.count >= 2 {
+			engBonus += 0.10 // cross-engine validation bonus
+		}
+		total := avg + engBonus
+		if total > bestScore {
+			bestScore = total
+			best = s
+		}
+	}
+
+	if best == nil {
+		// Fallback to Go engine
+		if r, ok := results["go"]; ok {
+			return r
+		}
+		return OSInfo{Name: "Unknown", Confidence: 0}
+	}
+
+	// Build combined fingerprint string
+	fp := fmt.Sprintf("engines=4")
+	for eng, info := range results {
+		if info.Fingerprint != "" {
+			fp += fmt.Sprintf(" [%s:%s]", eng, info.Fingerprint)
+		}
+	}
+
+	return OSInfo{
+		Name:        best.name,
+		Version:     best.version,
+		Family:      best.family,
+		Confidence:  bestScore,
+		Fingerprint: fp,
+	}
 }

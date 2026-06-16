@@ -124,12 +124,21 @@ func RunPythonScan(host string, ports string, timeout int) []PortResult {
 // This is a foundational implementation for advanced stealth modes.
 
 func ScanRaw(host string, port int, scanType string, timeoutMs int) (PortResult, bool) {
-	// 1. Resolve target IP
-	ips, err := net.LookupIP(host)
-	if err != nil || len(ips) == 0 {
-		return PortResult{}, false
+	// 1. Resolve target IP (prefer IPv4)
+	dstIP := net.ParseIP(host)
+	if dstIP == nil {
+		ips, err := net.LookupIP(host)
+		if err != nil || len(ips) == 0 {
+			return PortResult{}, false
+		}
+		dstIP = ips[0]
+		for _, ip := range ips {
+			if ip.To4() != nil {
+				dstIP = ip
+				break
+			}
+		}
 	}
-	dstIP := ips[0]
 
 	// 2. Get local IP and source port
 	srcIP, srcPort := getLocalIPAndPort(dstIP)

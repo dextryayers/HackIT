@@ -173,14 +173,13 @@ func GrabBanner(conn net.Conn, timeoutMs int, port int, host string) string {
 	if readMs > 4000 {
 		readMs = 4000
 	}
-	buffer := make([]byte, 4096)
+	buffer := make([]byte, 8192)
 
 	// ── PHASE 0: Pre-read for greeting protocols ─────────────────
-	// Many protocols send a banner immediately upon connection.
-	// Sending a probe before reading can cause strict servers to disconnect.
 	switch port {
-	case 21, 22, 2222, 2223, 25, 110, 143, 587, 990, 2525, 3306, 5432:
-		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	case 21, 22, 2222, 2223, 25, 110, 143, 587, 990, 2525, 3306, 5432,
+		465, 993, 995, 2083, 2087, 2096:
+		conn.SetReadDeadline(time.Now().Add(800 * time.Millisecond))
 		n, err := conn.Read(buffer)
 		if err == nil && n > 0 {
 			return cleanBanner(string(buffer[:n]))
@@ -194,7 +193,8 @@ func GrabBanner(conn net.Conn, timeoutMs int, port int, host string) string {
 	switch {
 	// HTTP family
 	case port == 80 || port == 8080 || port == 8000 || port == 8081 ||
-		port == 8888 || port == 8008 || port == 3000 || port == 4000 ||
+		port == 8888 || port == 8008 || port == 7080 || port == 7081 ||
+		port == 3000 || port == 4000 ||
 		port == 5000 || port == 8009 || port == 8069 || port == 9000:
 		req := fmt.Sprintf("GET / HTTP/1.1\r\nHost: %s\r\nUser-Agent: %s\r\nAccept: */*\r\nConnection: close\r\n\r\n", host, getRandomUA())
 		conn.Write([]byte(req))
@@ -210,18 +210,18 @@ func GrabBanner(conn net.Conn, timeoutMs int, port int, host string) string {
 
 	// FTP
 	case port == 21 || port == 990:
-		conn.Write([]byte("USER anonymous\r\n"))
+		conn.Write([]byte("AUTH TLS\r\n"))
 
 	// SMTP family
-	case port == 25 || port == 587 || port == 2525:
+	case port == 25 || port == 587 || port == 2525 || port == 465:
 		conn.Write([]byte("EHLO hackit.local\r\n"))
 
 	// POP3
-	case port == 110:
+	case port == 110 || port == 995:
 		conn.Write([]byte("CAPA\r\n"))
 
 	// IMAP
-	case port == 143:
+	case port == 143 || port == 993:
 		conn.Write([]byte("A1 CAPABILITY\r\n"))
 
 	// Redis
@@ -406,11 +406,14 @@ func GrabBanner(conn net.Conn, timeoutMs int, port int, host string) string {
 
 	// Tomcat AJP
 	case port == 8009:
-		// Ghostcat AJP probe
 		conn.Write([]byte{0x12, 0x34, 0x00, 0x0e, 0x02, 0x00, 0x00, 0x00})
 
+	// cPanel / WHM
+	case port == 2082 || port == 2086:
+		req := fmt.Sprintf("GET / HTTP/1.1\r\nHost: %s\r\nUser-Agent: %s\r\nConnection: close\r\n\r\n", host, getRandomUA())
+		conn.Write([]byte(req))
+
 	default:
-		// Generic heuristic kick
 		conn.Write([]byte("\r\n\r\n"))
 	}
 
@@ -481,10 +484,10 @@ func grabSSLBanner(host string, port int, timeoutMs int) string {
 	}
 
 	// Protocol-specific kicks
-	buf := make([]byte, 4096)
+	buf := make([]byte, 8192)
 	switch {
-	case port == 443 || port == 8443 || port == 9443:
-		req := fmt.Sprintf("GET / HTTP/1.1\r\nHost: %s\r\nUser-Agent: %s\r\nConnection: close\r\n\r\n", host, getRandomUA())
+	case port == 443 || port == 8443 || port == 9443 || port == 2083 || port == 2087 || port == 2096 || port == 7443:
+		req := fmt.Sprintf("GET / HTTP/1.1\r\nHost: %s\r\nUser-Agent: %s\r\nAccept: */*\r\nConnection: close\r\n\r\n", host, getRandomUA())
 		tlsConn.Write([]byte(req))
 	case port == 993:
 		tlsConn.Write([]byte("A1 CAPABILITY\r\n"))
@@ -537,7 +540,7 @@ func cleanBanner(banner string) string {
 	}
 	result := cleaned.String()
 
-	// HTTP: extract useful headers
+	// HTTP: extract status line + key headers
 	if strings.Contains(strings.ToUpper(result), "HTTP/") {
 		var relevant []string
 		lines := strings.Split(result, "\r\n")
@@ -546,7 +549,9 @@ func cleanBanner(banner string) string {
 		}
 		for _, line := range lines {
 			ll := strings.ToLower(line)
-			if strings.HasPrefix(ll, "server:") ||
+			if strings.HasPrefix(ll, "http/") {
+				relevant = append(relevant, strings.TrimSpace(line))
+			} else if strings.HasPrefix(ll, "server:") ||
 				strings.HasPrefix(ll, "x-powered-by:") ||
 				strings.HasPrefix(ll, "x-aspnet-version:") ||
 				strings.HasPrefix(ll, "x-generator:") ||
@@ -558,19 +563,33 @@ func cleanBanner(banner string) string {
 		if len(relevant) > 0 {
 			return strings.Join(relevant, " | ")
 		}
-		// Fallback: first line (HTTP status)
 		if len(lines) > 0 {
 			return strings.TrimSpace(lines[0])
 		}
 	}
 
-	// For non-HTTP: return first meaningful line
+	// For non-HTTP: return first meaningful line, preferring lines with service identifiers
 	lines := strings.Split(result, "\n")
+	var bestLine string
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if len(line) > 3 {
-			return line
+			bestLine = line
+			ll := strings.ToLower(line)
+			// Prefer lines containing known service identifiers
+			if strings.Contains(ll, "pure-ftpd") || strings.Contains(ll, "proftpd") ||
+				strings.Contains(ll, "vsftpd") || strings.Contains(ll, "openssh") ||
+				strings.Contains(ll, "exim") || strings.Contains(ll, "dovecot") ||
+				strings.Contains(ll, "postfix") || strings.Contains(ll, "sendmail") ||
+				strings.Contains(ll, "litespeed") || strings.Contains(ll, "nginx") ||
+				strings.Contains(ll, "apache") || strings.Contains(ll, "mysql") ||
+				strings.Contains(ll, "mariadb") || strings.Contains(ll, "courier") {
+				return line
+			}
 		}
+	}
+	if bestLine != "" {
+		return bestLine
 	}
 	return strings.TrimSpace(result)
 }

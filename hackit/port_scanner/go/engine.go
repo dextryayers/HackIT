@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math/rand"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -231,7 +232,7 @@ func (e *ScanEngine) Run() []PortResult {
 					time.Sleep(time.Duration(e.ScanDelay) * time.Millisecond)
 				}
 
-				// Phase 1: Port discovery
+				// Phase 1: Port discovery with multi-engine cross-check
 				var res PortResult
 				var isOpen bool
 
@@ -266,12 +267,18 @@ func (e *ScanEngine) Run() []PortResult {
 				case "protocol":
 					res, isOpen = ScanProtocol(e.Host, port, e.TimeoutMs)
 				case "c-turbo":
-					res, isOpen = ScanPort(e.Host, port, e.TimeoutMs)
+					res = e.CrossCheckOrchestrator(port)
+					isOpen = res.State == "open"
 					if isOpen {
 						cOS := CExpertDetectOs(e.Host, fmt.Sprintf("%d", port), 64, 29200)
 						res.DeepAnalysis = cOS
 					}
-				default: // "connect"
+				case "anon-self":
+					res, isOpen = ScanPort(e.Host, port, e.TimeoutMs)
+					if isOpen && e.GhostProtocol {
+						res.State = "self-listening"
+					}
+				default: // "connect" — standard TCP connect scan
 					res, isOpen = ScanPort(e.Host, port, e.TimeoutMs)
 				}
 
@@ -294,17 +301,15 @@ func (e *ScanEngine) Run() []PortResult {
 					)
 				}
 
-				// Phase 2: Deep enrichment (open ports only)
-				if isOpen || (e.IncludeClosed && res.State != "") {
-					e.enrichPort(&res, port, isOpen)
+				// Phase 2: Always include all scanned ports so Python CLI can display counts
+				e.enrichPort(&res, port, isOpen)
 
-					mutex.Lock()
-					results = append(results, res)
-					mutex.Unlock()
+				mutex.Lock()
+				results = append(results, res)
+				mutex.Unlock()
 
-					if e.Reporter != nil {
-						e.Reporter.ReportResult(res)
-					}
+				if e.Reporter != nil {
+					e.Reporter.ReportResult(res)
 				}
 			}
 		}()
@@ -356,45 +361,41 @@ func (e *ScanEngine) enrichPort(res *PortResult, port int, isOpen bool) {
 		return
 	}
 
-	// Timeout-protected enrichment (3s per port max)
-	timer := time.NewTimer(4 * time.Second)
+	timer := time.NewTimer(5 * time.Second)
 	done := make(chan struct{}, 1)
 
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				// Silently recover from panic in enrichment
 			}
 			done <- struct{}{}
 		}()
 
-		// 1. Banner grab if missing (Fast Go Probe)
+		// 1. Banner grab if missing
 		if res.Banner == "" && (e.SmartProbe || e.Deep) {
 			res.Banner = GrabBannerByHost(e.Host, port, e.TimeoutMs)
 		}
 
-		// 2. Ultra-Powerful Detection Chain: Rust → C++ → Go
-		// Per user request, prioritize C and Rust engines for high-accuracy version detection.
+		// 2. Detection Chain: Go baseline → Rust → C++ override
+		// Always run Go DetectService first to get baseline service
+		goService, goVersion := DetectService(port, res.Banner, e.Host)
 
-		// 2a. Rust Fingerprinting (Fastest, most signatures)
+		// 2a. Rust Fingerprinting — override if confident
 		if res.Banner != "" {
 			rustSvc := RustFingerprintService(res.Banner)
-			if rustSvc != "" && rustSvc != "UNKNOWN" && rustSvc != "unknown" {
+			rus := strings.ToUpper(rustSvc)
+			if rus != "" && rus != "UNKNOWN" {
 				res.Service = rustSvc
 				res.Version = RustExtractVersion(res.Banner, rustSvc)
 			}
 		}
 
-		// 2b. C++ Deep Fingerprint (Active probe, highly accurate)
-		// Trigger if service or version is still unknown, regardless of Go's banner.
+		// 2b. C++ Deep Fingerprint — override if service still unknown
 		if res.Service == "" || res.Service == "unknown" || res.Version == "" {
 			cppRes := CppScanService(e.Host, port, 800)
-			
-			// If C++ grabbed a banner but Go failed, use C++'s banner
 			if cppRes.Banner != "" && res.Banner == "" {
 				res.Banner = cppRes.Banner
 			}
-			
 			if cppRes.Service != "" && cppRes.Service != "UNKNOWN" {
 				res.Service = cppRes.Service
 				if cppRes.Version != "" {
@@ -403,9 +404,12 @@ func (e *ScanEngine) enrichPort(res *PortResult, port int, isOpen bool) {
 			}
 		}
 
-		// 2c. Go Fallback (If C++ and Rust both failed to identify)
+		// 2c. Go baseline fallback — fill in if Rust/C++ returned nothing
 		if res.Service == "" || res.Service == "unknown" {
-			res.Service, res.Version = DetectService(port, res.Banner, e.Host)
+			res.Service = goService
+			res.Version = goVersion
+		} else if res.Version == "" && goVersion != "" {
+			res.Version = goVersion
 		}
 
 		// 3. Lua script engine
@@ -443,13 +447,25 @@ func (e *ScanEngine) enrichPort(res *PortResult, port int, isOpen bool) {
 
 		// 7. Risk scoring
 		res.RiskScore = calculateRiskScore(port, res.Service, res.Banner, res.Vulnerabilities)
+
+		// 8. Final safety net: ensure Service is never empty if banner exists
+		if res.Service == "" && res.Banner != "" {
+			res.Service, res.Version = DetectService(port, res.Banner, e.Host)
+		}
+		if res.Service == "" {
+			if name, ok := commonPorts[port]; ok {
+				res.Service = name
+			}
+		}
 	}()
 
 	select {
 	case <-done:
 		timer.Stop()
 	case <-timer.C:
-		// Hard cutoff — fill in service name at minimum
+		if res.Service == "" && res.Banner != "" {
+			res.Service, res.Version = DetectService(port, res.Banner, e.Host)
+		}
 		if res.Service == "" {
 			if name, ok := commonPorts[port]; ok {
 				res.Service = name
@@ -552,22 +568,25 @@ func (e *ScanEngine) AnalyzeVulnerabilities(res PortResult) []string {
 // SCANNING MODES (stubs that use best available method)
 // ─────────────────────────────────────────────────────────────────
 
-// ScanACK — ACK scan for firewall mapping
+// ScanACK — ACK scan for firewall mapping via C raw engine
 func ScanACK(host string, port int, timeoutMs int) (PortResult, bool) {
-	// Try via Rust/C raw socket first, fallback to connect probe
+	if _, _, state := CRawScan(host, port, timeoutMs, 5, 0, 0, nil, false, 0); state != "no-result" && state != "error" {
+		return PortResult{Port: port, State: state}, state == "unfiltered" || state == "open"
+	}
 	res := RustFastScan(host, port, timeoutMs, true)
 	if res.State == "error" || res.State == "" {
 		return ScanPort(host, port, timeoutMs)
 	}
-	// ACK scan: "unfiltered" = open|closed, "filtered" = firewall present
 	return res, res.State == "open" || res.State == "unfiltered"
 }
 
 // ScanFIN — FIN scan (expects RST from closed, silence from open/filtered)
 func ScanFIN(host string, port int, timeoutMs int) (PortResult, bool) {
+	if _, _, state := CRawScan(host, port, timeoutMs, 2, 0, 0, nil, false, 0); state != "no-result" && state != "error" {
+		return PortResult{Port: port, State: state}, state == "open"
+	}
 	res := RustFastScan(host, port, timeoutMs, true)
 	if res.State == "error" {
-		// Fallback: if connect works, it's open
 		return ScanPort(host, port, timeoutMs)
 	}
 	return res, res.State == "open"
@@ -575,6 +594,9 @@ func ScanFIN(host string, port int, timeoutMs int) (PortResult, bool) {
 
 // ScanXMAS — Christmas tree scan (FIN+PSH+URG)
 func ScanXMAS(host string, port int, timeoutMs int) (PortResult, bool) {
+	if _, _, state := CRawScan(host, port, timeoutMs, 3, 0, 0, nil, false, 0); state != "no-result" && state != "error" {
+		return PortResult{Port: port, State: state}, state == "open"
+	}
 	res := RustFastScan(host, port, timeoutMs, true)
 	if res.State == "error" {
 		return ScanPort(host, port, timeoutMs)
@@ -584,6 +606,9 @@ func ScanXMAS(host string, port int, timeoutMs int) (PortResult, bool) {
 
 // ScanNULL — Null scan (no flags)
 func ScanNULL(host string, port int, timeoutMs int) (PortResult, bool) {
+	if _, _, state := CRawScan(host, port, timeoutMs, 4, 0, 0, nil, false, 0); state != "no-result" && state != "error" {
+		return PortResult{Port: port, State: state}, state == "open"
+	}
 	res := RustFastScan(host, port, timeoutMs, true)
 	if res.State == "error" {
 		return ScanPort(host, port, timeoutMs)
@@ -593,6 +618,9 @@ func ScanNULL(host string, port int, timeoutMs int) (PortResult, bool) {
 
 // ScanWindow — Window scan (RST response, window size determines state)
 func ScanWindow(host string, port int, timeoutMs int) (PortResult, bool) {
+	if _, _, state := CRawScan(host, port, timeoutMs, 6, 0, 0, nil, false, 0); state != "no-result" && state != "error" {
+		return PortResult{Port: port, State: state}, state == "open"
+	}
 	res := RustFastScan(host, port, timeoutMs, false)
 	if res.State == "error" {
 		return ScanPort(host, port, timeoutMs)
@@ -602,6 +630,9 @@ func ScanWindow(host string, port int, timeoutMs int) (PortResult, bool) {
 
 // ScanMaimon — Maimon scan (FIN/ACK)
 func ScanMaimon(host string, port int, timeoutMs int) (PortResult, bool) {
+	if _, _, state := CRawScan(host, port, timeoutMs, 7, 0, 0, nil, false, 0); state != "no-result" && state != "error" {
+		return PortResult{Port: port, State: state}, state == "open"
+	}
 	res := RustFastScan(host, port, timeoutMs, true)
 	if res.State == "error" {
 		return ScanPort(host, port, timeoutMs)
@@ -609,11 +640,12 @@ func ScanMaimon(host string, port int, timeoutMs int) (PortResult, bool) {
 	return res, res.State == "open"
 }
 
-// ScanIdle — Idle/IPID zombie scan
+// ScanIdle — Idle/IPID zombie scan via C raw engine
 func ScanIdle(host string, port int, zombie string, timeoutMs int) (PortResult, bool) {
-	// Probe zombie's IPID, send SYN spoofed from zombie, re-probe IPID
-	// If IPID incremented by 2 → port open; by 1 → closed
-	// This is a simplified implementation
+	decoys := []string{zombie}
+	if _, _, state := CRawScan(host, port, timeoutMs, 9, 0, 0, decoys, false, 0); state != "no-result" && state != "error" {
+		return PortResult{Port: port, State: state}, state == "open"
+	}
 	res := RustFastScan(host, port, timeoutMs, true)
 	if res.State == "error" {
 		return ScanPort(host, port, timeoutMs)
@@ -641,14 +673,123 @@ func ScanProtocol(host string, port int, timeoutMs int) (PortResult, bool) {
 // ─────────────────────────────────────────────────────────────────
 
 func (e *ScanEngine) MultiEngineOrchestrator(port int) PortResult {
-	// Try Rust fast-scan first (zero-copy, epoll-based)
+	// Phase 1: Try Rust fast-scan (zero-copy, epoll-based)
 	res := RustFastScan(e.Host, port, e.TimeoutMs, e.Stealth)
-	if res.State != "error" && res.State != "" {
+	if res.State == "open" {
+		// Cross-validate with Go
+		goRes, goOpen := ScanPort(e.Host, port, e.TimeoutMs)
+		if !goOpen {
+			// Rust says open but Go says closed — mark as filtered
+			res.State = "filtered"
+		} else if goRes.Service != "" {
+			res.Service = goRes.Service
+			res.Banner = goRes.Banner
+			res.Version = goRes.Version
+		}
 		return res
 	}
-	// Fallback: Go connect scan
-	goRes, _ := ScanPort(e.Host, port, e.TimeoutMs)
+
+	// Phase 2: Fallback: Go connect scan
+	goRes, isOpen := ScanPort(e.Host, port, e.TimeoutMs)
+	if isOpen {
+		// Cross-validate with C scanner
+		cRes := CScannerScan(e.Host, []int{port}, e.TimeoutMs, 1)
+		if len(cRes) > 0 && cRes[0].State == "open" {
+			if cRes[0].Service != "" {
+				goRes.Service = cRes[0].Service
+			}
+			if cRes[0].Banner != "" {
+				goRes.Banner = cRes[0].Banner
+			}
+			if cRes[0].Version != "" {
+				goRes.Version = cRes[0].Version
+			}
+		}
+	}
 	return goRes
+}
+
+// CrossCheckOrchestrator runs ALL engines on a port and returns consensus
+func (e *ScanEngine) CrossCheckOrchestrator(port int) PortResult {
+	// Run all engines in parallel
+	type engineResult struct {
+		name string
+		res  PortResult
+	}
+	ch := make(chan engineResult, 4)
+
+	go func() {
+		goRes, _ := ScanPort(e.Host, port, e.TimeoutMs)
+		ch <- engineResult{"go", goRes}
+	}()
+
+	go func() {
+		rustRes := RustFastScan(e.Host, port, e.TimeoutMs, e.Stealth)
+		ch <- engineResult{"rust", rustRes}
+	}()
+
+	go func() {
+		cRes := CScannerScan(e.Host, []int{port}, e.TimeoutMs, 1)
+		if len(cRes) > 0 {
+			ch <- engineResult{"c", cRes[0]}
+		} else {
+			ch <- engineResult{"c", PortResult{Port: port, State: "error"}}
+		}
+	}()
+
+	go func() {
+		cppRes := CppServiceScanner(e.Host, port, e.TimeoutMs)
+		ch <- engineResult{"cpp", cppRes}
+	}()
+
+	results := make(map[string]PortResult)
+	for i := 0; i < 4; i++ {
+		r := <-ch
+		results[r.name] = r.res
+	}
+
+	// Consensus: open count vs filtered count
+	openCount := 0
+	var best PortResult
+	for _, r := range results {
+		if r.State == "open" {
+			openCount++
+			if best.State == "" || best.State == "error" {
+				best = r
+			}
+			if r.Service != "" && best.Service == "" {
+				best.Service = r.Service
+			}
+			if r.Banner != "" && best.Banner == "" {
+				best.Banner = r.Banner
+			}
+			if r.Version != "" && best.Version == "" {
+				best.Version = r.Version
+			}
+		} else if best.State == "" || best.State == "error" {
+			if r.State != "" {
+				best = r
+			}
+		}
+	}
+
+	if best.State == "" || best.State == "error" {
+		// Use Go result as default
+		if r, ok := results["go"]; ok {
+			best = r
+		}
+	}
+
+	// If at least 2 engines agree it's open, mark as open
+	if openCount >= 2 {
+		best.State = "open"
+	} else if best.State == "open" && openCount < 2 {
+		// Only one engine says open — mark as filtered
+		best.State = "filtered"
+	}
+
+	best.Port = port
+	return best
 }
 
 // ─────────────────────────────────────────────────────────────────
