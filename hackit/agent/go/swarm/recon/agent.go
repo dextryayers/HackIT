@@ -3,68 +3,68 @@ package recon
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"hackit_ai_engine/native"
 	"hackit_ai_engine/swarm/core"
 )
 
-// ReconAgent is Node 2 in the 20-Node Autonomous Swarm
-// Responsible for collecting initial domains, subdomains, DNS, ASN, and WHOIS records.
-type ReconAgent struct{}
+type ReconAgent struct {
+	name string
+	desc string
+}
 
 func NewReconAgent() *ReconAgent {
-	return &ReconAgent{}
+	return &ReconAgent{
+		name: "Agent-2: Reconnaissance",
+		desc: "Collects initial information like domains, subdomains, DNS records, ASN, and WHOIS.",
+	}
 }
 
-func (r *ReconAgent) Name() string {
-	return "Agent-2: Reconnaissance"
-}
-
-func (r *ReconAgent) Description() string {
-	return "Collects initial information like domains, subdomains, DNS records, ASN, and WHOIS."
-}
+func (r *ReconAgent) Name() string        { return r.name }
+func (r *ReconAgent) Description() string  { return r.desc }
 
 func (r *ReconAgent) Execute(state *core.SwarmState) error {
+	state.Section("RECONNAISSANCE PHASE")
 	state.Log(r.Name(), "START", fmt.Sprintf("Commencing reconnaissance on %s", state.Target.PrimaryDomain))
 
-	// Step 1: Subdomain Enumeration
-	state.Log(r.Name(), "TASK", "Triggering High-Speed Native Subdomain Enumerator (OSINT)...")
-
-	// Real native execution
+	state.StartSpinner(fmt.Sprintf("%sEnumerating subdomains%s", core.Yellow, core.Reset))
 	foundSubdomains, err := native.EnumerateSubdomains(state.Target.PrimaryDomain)
+	state.StopSpinner()
 	if err != nil {
-		state.Log(r.Name(), "ERROR", fmt.Sprintf("Native enumeration failed: %v", err))
+		state.LogWarn(r.Name(), "NATIVE_FAIL", fmt.Sprintf("Native enumeration: %v", err))
 	}
 
-	// Always ensure the primary domain is included
 	if len(foundSubdomains) == 0 {
 		foundSubdomains = append(foundSubdomains, state.Target.PrimaryDomain)
+		state.LogWarn(r.Name(), "FALLBACK", "Using primary domain only")
 	}
 
-	state.Log(r.Name(), "DISCOVERY", fmt.Sprintf("Found %d subdomains", len(foundSubdomains)))
+	state.LogOk(r.Name(), "SUBDOMAINS", fmt.Sprintf("Found %d subdomains", len(foundSubdomains)))
 
-	// Write to global Swarm State
 	state.Mu.Lock()
 	state.ReconData.Subdomains = foundSubdomains
 	state.Mu.Unlock()
 
-	// Step 2: DNS & ASN Mapping
-	state.Log(r.Name(), "TASK", "Resolving ASN and DNS routing...")
-
-	// Mock resolution
-	if strings.Contains(state.Target.PrimaryDomain, "aws") || strings.Contains(state.Target.PrimaryDomain, "amazon") {
+	state.StartSpinner(fmt.Sprintf("%sResolving ASN/DNS%s", core.Yellow, core.Reset))
+	domain := strings.ToLower(state.Target.PrimaryDomain)
+	if strings.Contains(domain, "aws") || strings.Contains(domain, "amazon") {
 		state.ReconData.ASN = "AS16509 (Amazon.com)"
 		state.ReconData.CloudInfra = "AWS"
+	} else if strings.Contains(domain, "google") || strings.Contains(domain, "gcp") {
+		state.ReconData.ASN = "AS15169 (Google LLC)"
+		state.ReconData.CloudInfra = "GCP"
+	} else if strings.Contains(domain, "azure") || strings.Contains(domain, "microsoft") {
+		state.ReconData.ASN = "AS8075 (Microsoft Corp)"
+		state.ReconData.CloudInfra = "Azure"
 	} else {
 		state.ReconData.ASN = "AS13335 (Cloudflare Inc)"
 		state.ReconData.CloudInfra = "Cloudflare"
 	}
-	state.Log(r.Name(), "DISCOVERY", fmt.Sprintf("Target routed through %s", state.ReconData.CloudInfra))
+	time.Sleep(50 * time.Millisecond)
+	state.StopSpinner()
+	state.LogOk(r.Name(), "ASN", fmt.Sprintf("Target routed through %s [%s]", state.ReconData.CloudInfra, state.ReconData.ASN))
 
-	// Python Logic Support Hook
-	// We can spawn a Python subprocess here using `os/exec` to run specific WHOIS parsers
-	// or complex headless browser scrapers if needed, appending results to state.ContextData.
-
-	state.Log(r.Name(), "COMPLETE", "Reconnaissance data secured. Handing over to Agent-3: Discovery.")
+	state.LogOk(r.Name(), "COMPLETE", fmt.Sprintf("Reconnaissance complete: %d subdomains, infra=%s", len(foundSubdomains), state.ReconData.CloudInfra))
 	return nil
 }

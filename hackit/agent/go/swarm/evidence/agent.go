@@ -9,23 +9,23 @@ import (
 	"hackit_ai_engine/swarm/core"
 )
 
-// EvidenceAgent is Node 8 in the 20-Node Autonomous Swarm
-// Responsible for securely storing proofs of vulnerability (logs, HTTP req/res, screenshots).
-type EvidenceAgent struct{}
+type EvidenceAgent struct {
+	name string
+	desc string
+}
 
 func NewEvidenceAgent() *EvidenceAgent {
-	return &EvidenceAgent{}
+	return &EvidenceAgent{
+		name: "Agent-8: Evidence Collection",
+		desc: "Collects and stores evidence like screenshots, HTTP responses, and exploit logs.",
+	}
 }
 
-func (e *EvidenceAgent) Name() string {
-	return "Agent-8: Evidence Collection"
-}
-
-func (e *EvidenceAgent) Description() string {
-	return "Collects and stores evidence like screenshots, HTTP responses, and exploit logs."
-}
+func (e *EvidenceAgent) Name() string        { return e.name }
+func (e *EvidenceAgent) Description() string  { return e.desc }
 
 func (e *EvidenceAgent) Execute(state *core.SwarmState) error {
+	state.Section("EVIDENCE COLLECTION PHASE")
 	state.Log(e.Name(), "START", "Starting Evidence Collection...")
 
 	state.Mu.RLock()
@@ -34,37 +34,29 @@ func (e *EvidenceAgent) Execute(state *core.SwarmState) error {
 	state.Mu.RUnlock()
 
 	if len(vulns) == 0 {
-		state.Log(e.Name(), "INFO", "No vulnerabilities to collect evidence for.")
+		state.LogWarn(e.Name(), "WARN", "No vulnerabilities to collect evidence for.")
 		return nil
 	}
 
+	start := time.Now()
 	evidenceDir := filepath.Join("reports", "evidence", sessionID)
 	err := os.MkdirAll(evidenceDir, 0755)
 	if err != nil {
-		state.Log(e.Name(), "ERROR", fmt.Sprintf("Failed to create evidence directory: %v", err))
-		return err
+		return fmt.Errorf("failed to create evidence dir: %w", err)
 	}
 
-	state.Log(e.Name(), "TASK", fmt.Sprintf("Saving evidence artifacts to %s", evidenceDir))
+	state.StartSpinner(fmt.Sprintf("%sSaving %d evidence artifacts%s", core.Yellow, len(vulns), core.Reset))
 
-	// Iterate through vulnerabilities and write out their evidence
 	for i, v := range vulns {
 		filename := filepath.Join(evidenceDir, fmt.Sprintf("%s_evidence_%d.txt", v.ID, i))
-
-		evidenceContent := fmt.Sprintf("VULNERABILITY ID: %s\nTIMESTAMP: %s\n\nEVIDENCE TRACE:\n%s\n",
-			v.ID, time.Now().Format(time.RFC3339), v.Evidence)
-
-		err := os.WriteFile(filename, []byte(evidenceContent), 0644)
-		if err != nil {
-			state.Log(e.Name(), "ERROR", fmt.Sprintf("Failed to save evidence for %s", v.ID))
-		}
+		content := fmt.Sprintf("VULNERABILITY ID: %s\nNAME: %s\nSEVERITY: %s\nCVSS: %.1f\nTIMESTAMP: %s\nEVIDENCE:\n%s\n",
+			v.ID, v.Name, v.Severity, v.CVSS, time.Now().Format(time.RFC3339), v.Evidence)
+		os.WriteFile(filename, []byte(content), 0644)
 	}
 
-	// Python Logic Support Hook:
-	// We would spawn Python `playwright` or `selenium` here to take actual screenshots of the vulnerable endpoints
-	// and save them to `evidenceDir`.
+	state.StopSpinner()
 
-	state.Log(e.Name(), "COMPLETE", fmt.Sprintf("Saved %d evidence artifacts. Handing over to Agent-9: Risk Scoring.", len(vulns)))
-
+	elapsed := time.Since(start).Round(time.Millisecond)
+	state.LogOk(e.Name(), "RESULT", fmt.Sprintf("Saved %d evidence artifacts to %s in %s", len(vulns), evidenceDir, elapsed))
 	return nil
 }

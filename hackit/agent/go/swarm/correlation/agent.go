@@ -2,26 +2,29 @@ package correlation
 
 import (
 	"fmt"
+	"strings"
+	"time"
+
 	"hackit_ai_engine/swarm/core"
 )
 
-// CorrelationAgent is Node 7 in the 20-Node Autonomous Swarm
-// Responsible for connecting isolated findings into contextual attack chains.
-type CorrelationAgent struct{}
+type CorrelationAgent struct {
+	name string
+	desc string
+}
 
 func NewCorrelationAgent() *CorrelationAgent {
-	return &CorrelationAgent{}
+	return &CorrelationAgent{
+		name: "Agent-7: Correlation",
+		desc: "Connects isolated vulnerabilities into larger risk contexts and attack chains.",
+	}
 }
 
-func (c *CorrelationAgent) Name() string {
-	return "Agent-7: Correlation"
-}
-
-func (c *CorrelationAgent) Description() string {
-	return "Connects isolated vulnerabilities into larger risk contexts and attack chains."
-}
+func (c *CorrelationAgent) Name() string        { return c.name }
+func (c *CorrelationAgent) Description() string  { return c.desc }
 
 func (c *CorrelationAgent) Execute(state *core.SwarmState) error {
+	state.Section("CORRELATION PHASE")
 	state.Log(c.Name(), "START", "Starting Threat Correlation Matrix...")
 
 	state.Mu.Lock()
@@ -29,40 +32,50 @@ func (c *CorrelationAgent) Execute(state *core.SwarmState) error {
 	state.Mu.Unlock()
 
 	if len(vulns) == 0 {
-		state.Log(c.Name(), "INFO", "No vulnerabilities to correlate. Attack surface appears sterile.")
+		state.LogWarn(c.Name(), "WARN", "No vulnerabilities to correlate.")
 		return nil
 	}
 
-	state.Log(c.Name(), "TASK", fmt.Sprintf("Analyzing %d isolated findings for attack chains...", len(vulns)))
-
+	start := time.Now()
 	var attackChains []string
-
-	// Detect if a .env leak can lead to RCE or DB compromise
-	hasEnvLeak := false
-	hasWordPress := false
+	severityMap := map[string]bool{}
 
 	for _, v := range vulns {
 		if v.ID == "MISCONF-001" {
-			hasEnvLeak = true
+			severityMap["env_leak"] = true
 		}
-		if v.ID == "CVE-2023-XXXX" { // Our mock WP vuln
-			hasWordPress = true
+		if v.ID == "MISCONF-002" {
+			severityMap["git_leak"] = true
+		}
+		if strings.Contains(v.ID, "CVE-2023") || strings.Contains(v.ID, "MISCONF-WP") {
+			severityMap["cms"] = true
+		}
+		if v.Port == 3306 || v.Port == 6379 || v.Port == 27017 {
+			severityMap["db_exposed"] = true
 		}
 	}
 
-	if hasEnvLeak && hasWordPress {
-		chain := "ATTACK CHAIN DETECTED: [Exposed .env] -> DB Credentials -> [WordPress DB Compromise] -> [Admin Account Takeover] -> [Remote Code Execution]"
+	if severityMap["env_leak"] && severityMap["cms"] {
+		chain := "ATTACK CHAIN: [Exposed .env] -> DB Credentials -> [CMS Compromise] -> [RCE]"
 		attackChains = append(attackChains, chain)
-		state.Log(c.Name(), "ALERT", chain)
-
-		// Elevate the severity of the original vulns because they chain
+		state.LogWarn(c.Name(), "CHAIN", chain)
 		state.Mu.Lock()
 		for i := range state.Vulns {
 			if state.Vulns[i].ID == "MISCONF-001" {
-				state.Vulns[i].Description += " (CRITICAL: Confirmed chained with WordPress DB exposure)"
+				state.Vulns[i].Description += " (CRITICAL: Chained with CMS exposure)"
 			}
 		}
 		state.Mu.Unlock()
+	}
+	if severityMap["git_leak"] && severityMap["db_exposed"] {
+		chain := "ATTACK CHAIN: [Exposed .git] -> Source Code -> [DB Credentials] -> [Data Exfil]"
+		attackChains = append(attackChains, chain)
+		state.LogWarn(c.Name(), "CHAIN", chain)
+	}
+	if severityMap["cms"] && severityMap["db_exposed"] {
+		chain := "ATTACK CHAIN: [CMS Vuln] -> [DB Exposed] -> [Direct Data Access]"
+		attackChains = append(attackChains, chain)
+		state.LogWarn(c.Name(), "CHAIN", chain)
 	}
 
 	state.Mu.Lock()
@@ -71,7 +84,7 @@ func (c *CorrelationAgent) Execute(state *core.SwarmState) error {
 	}
 	state.Mu.Unlock()
 
-	state.Log(c.Name(), "COMPLETE", "Correlation complete. Handing over to Agent-8: Evidence Collection.")
-
+	elapsed := time.Since(start).Round(time.Millisecond)
+	state.LogOk(c.Name(), "RESULT", fmt.Sprintf("Correlated %d vulns into %d attack chains in %s", len(vulns), len(attackChains), elapsed))
 	return nil
 }

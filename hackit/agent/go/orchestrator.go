@@ -22,17 +22,21 @@ func NewIntelligenceOrchestrator(keys map[string]string) *IntelligenceOrchestrat
 func (o *IntelligenceOrchestrator) GetOptimalModel(provider string) string {
 	switch provider {
 	case "gemini":
-		return "gemini-2.5-flash"
+		return "gemini-3.5-flash"
 	case "openai":
-		return "gpt-4o"
+		return "gpt-4o-mini"
 	case "claude":
-		return "claude-3-opus-20240229"
+		return "claude-4-sonnet-20250514"
 	case "deepseek":
 		return "deepseek-chat"
 	case "groq":
-		return "llama3-70b-8192"
+		return "llama-3.3-70b-versatile"
 	case "openrouter":
-		return "google/gemini-pro-1.5"
+		return "google/gemini-2.5-flash:free"
+	case "mistral":
+		return "mistral-small-latest"
+	case "togetherai":
+		return "meta-llama/Llama-3.3-70B-Instruct-Turbo"
 	case "ollama":
 		return "llama3"
 	default:

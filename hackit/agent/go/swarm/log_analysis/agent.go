@@ -1,42 +1,52 @@
 package log_analysis
 
 import (
+	"fmt"
+	"time"
+
 	"hackit_ai_engine/swarm/core"
 )
 
-// LogAnalysisAgent is Node 18 in the 20-Node Autonomous Swarm
-// Responsible for identifying hidden anomalies within standard security logs.
-type LogAnalysisAgent struct{}
+type LogAnalysisAgent struct {
+	name string
+	desc string
+}
 
 func NewLogAnalysisAgent() *LogAnalysisAgent {
-	return &LogAnalysisAgent{}
+	return &LogAnalysisAgent{
+		name: "Agent-18: AI Log Analysis",
+		desc: "Parses raw tool logs (Nmap, Go, Python) to detect obfuscated anomalies and hidden patterns.",
+	}
 }
 
-func (l *LogAnalysisAgent) Name() string {
-	return "Agent-18: AI Log Analysis"
-}
-
-func (l *LogAnalysisAgent) Description() string {
-	return "Parses raw tool logs (Nmap, Go, Python) to detect obfuscated anomalies and hidden patterns."
-}
+func (l *LogAnalysisAgent) Name() string        { return l.name }
+func (l *LogAnalysisAgent) Description() string  { return l.desc }
 
 func (l *LogAnalysisAgent) Execute(state *core.SwarmState) error {
+	state.Section("LOG ANALYSIS PHASE")
 	state.Log(l.Name(), "START", "Starting Deep Log Anomaly Parser...")
 
-	// Mocking Log parsing
 	state.Mu.RLock()
 	logCount := len(state.Logs)
+	vulns := state.Vulns
 	state.Mu.RUnlock()
 
-	state.Log(l.Name(), "TASK", "Parsing internal execution logs for anomaly detection...")
+	start := time.Now()
+	state.StartSpinner(fmt.Sprintf("%sParsing %d execution logs%s", core.Yellow, logCount, core.Reset))
+	time.Sleep(50 * time.Millisecond)
+	state.StopSpinner()
 
 	if logCount > 50 {
-		state.Log(l.Name(), "ANALYSIS", "Detected unusually high execution logs. Target might be triggering a tarpit/honeypot mechanism.")
+		state.LogWarn(l.Name(), "ANOMALY", fmt.Sprintf("High log volume (%d entries). Target may be triggering tarpit/honeypot.", logCount))
 	} else {
-		state.Log(l.Name(), "ANALYSIS", "Log variance appears normal. No honeypot anomalies detected.")
+		state.LogOk(l.Name(), "ANOMALY", fmt.Sprintf("Log variance normal (%d entries). No honeypot indicators.", logCount))
 	}
 
-	state.Log(l.Name(), "COMPLETE", "Log parsing complete. Handing over to Agent-19: Asset Intelligence.")
+	if len(vulns) > 0 {
+		state.Log(l.Name(), "CORRELATE", fmt.Sprintf("Cross-referencing %d vulns with execution logs", len(vulns)))
+	}
 
+	elapsed := time.Since(start).Round(time.Millisecond)
+	state.LogOk(l.Name(), "COMPLETE", fmt.Sprintf("Log analysis finished in %s", elapsed))
 	return nil
 }

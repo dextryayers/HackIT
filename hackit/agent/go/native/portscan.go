@@ -79,7 +79,7 @@ func portWorker(ip string, ports <-chan int, results chan<- PortResult, wg *sync
 	defer wg.Done()
 
 	for port := range ports {
-		targetAddr := fmt.Sprintf("%s:%d", ip, port)
+		targetAddr := net.JoinHostPort(ip, fmt.Sprintf("%d", port))
 		conn, err := net.DialTimeout("tcp", targetAddr, timeout)
 
 		if err != nil {

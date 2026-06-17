@@ -22,8 +22,9 @@ type GeminiRequest struct {
 }
 
 type OpenAIRequest struct {
-	Model    string `json:"model"`
-	Messages []struct {
+	Model     string `json:"model"`
+	MaxTokens int    `json:"max_tokens,omitempty"`
+	Messages  []struct {
 		Role    string `json:"role"`
 		Content string `json:"content"`
 	} `json:"messages"`

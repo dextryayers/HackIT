@@ -11,7 +11,10 @@ DEFAULT_CONFIG = {
     "hostname": socket.gethostname(),
     "accent": "cyan",
     "border": "double",
-    "prompt": "arrow"
+    "prompt": "arrow",
+    "ai_provider": "",
+    "ai_keys": {},
+    "ai_models": {}
 }
 
 def load_config():
@@ -23,8 +26,7 @@ def load_config():
             data = json.load(f)
             merged = DEFAULT_CONFIG.copy()
             for k, v in data.items():
-                if k in merged:
-                    merged[k] = v
+                merged[k] = v
             return merged
     except Exception:
         return DEFAULT_CONFIG.copy()

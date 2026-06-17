@@ -2,37 +2,41 @@ package enumeration
 
 import (
 	"fmt"
+	"strings"
+	"time"
+
 	"hackit_ai_engine/native"
 	"hackit_ai_engine/swarm/core"
 )
 
-// EnumerationAgent is Node 5 in the 20-Node Autonomous Swarm
-// Responsible for brute-forcing paths, APIs, admin panels, and finding sensitive files.
-type EnumerationAgent struct{}
+type EnumerationAgent struct {
+	name string
+	desc string
+}
 
 func NewEnumerationAgent() *EnumerationAgent {
-	return &EnumerationAgent{}
+	return &EnumerationAgent{
+		name: "Agent-5: Enumeration",
+		desc: "Deeply enumerates web directories, API endpoints, and sensitive cloud assets.",
+	}
 }
 
-func (e *EnumerationAgent) Name() string {
-	return "Agent-5: Enumeration"
-}
-
-func (e *EnumerationAgent) Description() string {
-	return "Deeply enumerates web directories, API endpoints, and sensitive cloud assets."
-}
+func (e *EnumerationAgent) Name() string        { return e.name }
+func (e *EnumerationAgent) Description() string  { return e.desc }
 
 func (e *EnumerationAgent) Execute(state *core.SwarmState) error {
-	state.Log(e.Name(), "START", "Starting Deep Directory & API Enumeration...")
+	state.Section("ENUMERATION PHASE")
+	state.Log(e.Name(), "START", "Starting Deep Directory and API Enumeration...")
 
 	state.Mu.Lock()
 	services := state.Discovered
 	state.Mu.Unlock()
 
+	webPorts := map[int]bool{80: true, 443: true, 8080: true, 8443: true, 3000: true, 5000: true, 8000: true, 8888: true, 9000: true}
 	var webTargets []string
 
 	for _, svc := range services {
-		if svc.Port == 80 || svc.Port == 443 || svc.Port == 8080 || svc.Port == 8443 {
+		if webPorts[svc.Port] || strings.Contains(strings.ToLower(svc.Tech), "http") {
 			protocol := "http://"
 			if svc.Port == 443 || svc.Port == 8443 {
 				protocol = "https://"
@@ -42,11 +46,10 @@ func (e *EnumerationAgent) Execute(state *core.SwarmState) error {
 	}
 
 	if len(webTargets) == 0 {
-		state.Log(e.Name(), "WARN", "No HTTP/HTTPS services found. Skipping web enumeration.")
+		state.LogWarn(e.Name(), "WARN", "No HTTP/HTTPS services found. Skipping web enumeration.")
 		return nil
 	}
 
-	// Determine Fuzzing Aggressiveness
 	concurrency := 10
 	for _, rule := range state.Target.Rules {
 		if rule == "FULL_BRUTEFORCE_ALLOWED" || rule == "HIGH_THREAD_CONCURRENCY" {
@@ -55,30 +58,33 @@ func (e *EnumerationAgent) Execute(state *core.SwarmState) error {
 		}
 	}
 
-	state.Log(e.Name(), "TASK", fmt.Sprintf("Triggering Native Go HTTP Fuzzer on %d web targets (%d threads)", len(webTargets), concurrency))
-
-	// Native Enumeration Logic
+	start := time.Now()
 	var enumeratedPaths []string
+	statusCount := map[int]int{}
+
+	state.StartSpinner(fmt.Sprintf("%sFuzzing %d web targets [%d threads]%s", core.Yellow, len(webTargets), concurrency, core.Reset))
 
 	for _, target := range webTargets {
-		state.Log(e.Name(), "SCAN", fmt.Sprintf("Fuzzing paths on %s...", target))
 		fuzzResults := native.FuzzDirectories(target, concurrency)
-
 		for _, res := range fuzzResults {
 			fullPath := target + res.Path
 			enumeratedPaths = append(enumeratedPaths, fullPath)
-			state.Log(e.Name(), "DISCOVERY", fmt.Sprintf("Found [HTTP %d] %s", res.StatusCode, fullPath))
+			statusCount[res.StatusCode]++
 		}
 	}
 
-	state.Log(e.Name(), "DISCOVERY", fmt.Sprintf("Fuzzer mapped %d sensitive endpoints across the attack surface.", len(enumeratedPaths)))
+	state.StopSpinner()
 
-	// Save to State Context Data (Since it's unstructured URLs)
 	state.Mu.Lock()
 	state.ContextData["enumerated_endpoints"] = enumeratedPaths
 	state.Mu.Unlock()
 
-	state.Log(e.Name(), "COMPLETE", "Enumeration complete. Handing over to Agent-6: Vulnerability Analysis.")
+	elapsed := time.Since(start).Round(time.Millisecond)
+	summary := fmt.Sprintf("Fuzzer found %d endpoints in %s", len(enumeratedPaths), elapsed)
+	for code, count := range statusCount {
+		summary += fmt.Sprintf(" | %d: %d", code, count)
+	}
+	state.LogOk(e.Name(), "RESULT", summary)
 
 	return nil
 }

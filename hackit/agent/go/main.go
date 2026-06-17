@@ -89,7 +89,7 @@ func main() {
 		response, err = handleOpenAICompatible(client, "groq", *apiKey, finalPrompt, finalSystem, *model, histData)
 	case "claude":
 		response, err = handleClaude(client, *apiKey, finalPrompt, finalSystem, *model, histData)
-	case "openai", "openrouter", "deepseek":
+	case "openai", "openrouter", "deepseek", "mistral", "togetherai":
 		response, err = handleOpenAICompatible(client, *provider, *apiKey, finalPrompt, finalSystem, *model, histData)
 	case "ollama":
 		response, err = handleOllama(client, *apiKey, finalPrompt, finalSystem, *model, histData)
@@ -115,48 +115,62 @@ func main() {
 }
 
 func handleGemini(client *http.Client, key, prompt, system, model string, hist []Message) (string, error) {
-	// Deep Repair: Try multiple endpoints and models to find what's active for this key
-	// In 2026, Gemini 1.5 is retired. We must try 2.5, 3, and aliases.
-	modelsToTry := []string{model, "gemini-2.5-flash", "gemini-flash-latest", "gemini-3-flash", "gemini-pro-latest", "gemini-1.5-flash"}
-	versionsToTry := []string{"v1", "v1beta"}
+	defaults := []string{"gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-3-flash", "gemini-2.5-flash", "gemini-2.0-flash"}
+	modelsToTry := defaults
+	if model != "" {
+		modelsToTry = []string{model}
+		modelsToTry = append(modelsToTry, defaults...)
+	}
 
-	var lastErr error
-	for _, v := range versionsToTry {
-		for _, m := range modelsToTry {
-			if m == "" {
-				continue
+	apiVersions := []string{"v1", "v1beta"}
+	var errs []string
+
+	for _, m := range modelsToTry {
+		if m == "" {
+			continue
+		}
+		for _, apiVer := range apiVersions {
+			url := fmt.Sprintf("https://generativelanguage.googleapis.com/%s/models/%s:generateContent", apiVer, m)
+
+			contents := []map[string]interface{}{}
+			if system != "" {
+				contents = append(contents, map[string]interface{}{
+					"role": "user",
+					"parts": []map[string]string{
+						{"text": fmt.Sprintf("[System Instruction]\n%s\n\nUse the above system instruction to guide all responses.", system)},
+					},
+				})
 			}
-
-			url := fmt.Sprintf("https://generativelanguage.googleapis.com/%s/models/%s:generateContent?key=%s", v, m, key)
-
-			fullPrompt := system + "\n\n"
 			for _, msg := range hist {
-				fullPrompt += fmt.Sprintf("%s: %s\n", msg.Role, msg.Content)
+				contents = append(contents, map[string]interface{}{
+					"role":  msg.Role,
+					"parts": []map[string]string{{"text": msg.Content}},
+				})
 			}
-			fullPrompt += fmt.Sprintf("User: %s", prompt)
-
-			reqData := GeminiRequest{}
-			reqData.Contents = append(reqData.Contents, struct {
-				Parts []struct {
-					Text string `json:"text"`
-				} `json:"parts"`
-			}{
-				Parts: []struct {
-					Text string `json:"text"`
-				}{{Text: fullPrompt}},
+			contents = append(contents, map[string]interface{}{
+				"role":  "user",
+				"parts": []map[string]string{{"text": prompt}},
 			})
 
+			reqData := map[string]interface{}{"contents": contents}
 			jsonData, _ := json.Marshal(reqData)
-			resp, err := client.Post(url, "application/json", bytes.NewBuffer(jsonData))
+			req, _ := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("X-Goog-Api-Key", key)
+			resp, err := client.Do(req)
 			if err != nil {
-				lastErr = err
+				errs = append(errs, fmt.Sprintf("%s(%s): %v", m, apiVer, err))
 				continue
 			}
-			defer resp.Body.Close()
 
 			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+
 			if resp.StatusCode != http.StatusOK {
-				lastErr = fmt.Errorf("status %d: %s", resp.StatusCode, string(body))
+				if resp.StatusCode == 403 {
+					return "", fmt.Errorf("[GEMINI] %s: HTTP 403 — check API key/permissions", m)
+				}
+				errs = append(errs, fmt.Sprintf("%s(%s): HTTP %d", m, apiVer, resp.StatusCode))
 				continue
 			}
 
@@ -165,40 +179,33 @@ func handleGemini(client *http.Client, key, prompt, system, model string, hist [
 
 			candidates, ok := res["candidates"].([]interface{})
 			if !ok || len(candidates) == 0 {
-				lastErr = fmt.Errorf("no candidates in response")
+				if errObj, ok := res["error"].(map[string]interface{}); ok {
+					errs = append(errs, fmt.Sprintf("%s(%s): %v", m, apiVer, errObj["message"]))
+				} else {
+					errs = append(errs, fmt.Sprintf("%s(%s): no candidates", m, apiVer))
+				}
 				continue
 			}
 
 			content, ok := candidates[0].(map[string]interface{})["content"].(map[string]interface{})
 			if !ok {
-				lastErr = fmt.Errorf("no content in candidate")
+				errs = append(errs, fmt.Sprintf("%s(%s): no content", m, apiVer))
 				continue
 			}
-
 			parts, ok := content["parts"].([]interface{})
 			if !ok || len(parts) == 0 {
-				lastErr = fmt.Errorf("no parts in content")
+				errs = append(errs, fmt.Sprintf("%s(%s): no parts", m, apiVer))
 				continue
 			}
-
 			text, ok := parts[0].(map[string]interface{})["text"].(string)
 			if !ok {
-				lastErr = fmt.Errorf("text is not a string")
+				errs = append(errs, fmt.Sprintf("%s(%s): not a string", m, apiVer))
 				continue
 			}
-
 			return text, nil
 		}
 	}
-
-	return "", fmt.Errorf("[GEMINI ALL FAILED] Last Error: %v", lastErr)
-}
-
-func handleGroq(client *http.Client, key, prompt, system, model string, hist []Message) (string, error) {
-	if model == "" {
-		model = "llama3-70b-8192"
-	}
-	return handleOpenAICompatible(client, "groq", key, prompt, system, model, hist)
+	return "", fmt.Errorf("[GEMINI all %d attempts failed] %s", len(errs), strings.Join(errs, "; "))
 }
 
 func handleOpenAICompatible(client *http.Client, provider, key, prompt, system, model string, hist []Message) (string, error) {
@@ -212,28 +219,38 @@ func handleOpenAICompatible(client *http.Client, provider, key, prompt, system, 
 		url = "https://api.deepseek.com/v1/chat/completions"
 	case "openai":
 		url = "https://api.openai.com/v1/chat/completions"
+	case "mistral":
+		url = "https://api.mistral.ai/v1/chat/completions"
+	case "togetherai":
+		url = "https://api.together.xyz/v1/chat/completions"
 	}
 
 	if model == "" {
 		switch provider {
+		case "groq":
+			model = "llama-3.3-70b-versatile"
 		case "openrouter":
-			model = "google/gemini-pro-1.5"
+			model = "google/gemini-2.5-flash:free"
 		case "deepseek":
 			model = "deepseek-chat"
 		case "openai":
-			model = "gpt-4o"
+			model = "gpt-4o-mini"
+		case "mistral":
+			model = "mistral-small-latest"
+		case "togetherai":
+			model = "meta-llama/Llama-3.3-70B-Instruct-Turbo"
 		}
 	}
 
 	reqBody := OpenAIRequest{
-		Model: model,
+		Model:     model,
+		MaxTokens: 4096,
 	}
 	reqBody.Messages = append(reqBody.Messages, struct {
 		Role    string `json:"role"`
 		Content string `json:"content"`
 	}{Role: "system", Content: system})
 
-	// Add history
 	for _, msg := range hist {
 		reqBody.Messages = append(reqBody.Messages, struct {
 			Role    string `json:"role"`
@@ -252,6 +269,7 @@ func handleOpenAICompatible(client *http.Client, provider, key, prompt, system, 
 	req.Header.Set("Content-Type", "application/json")
 	if provider == "openrouter" {
 		req.Header.Set("HTTP-Referer", "https://hackit.com")
+		req.Header.Set("X-Title", "HackIt AI")
 	}
 
 	resp, err := client.Do(req)
@@ -261,25 +279,39 @@ func handleOpenAICompatible(client *http.Client, provider, key, prompt, system, 
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != http.StatusOK {
+		var errRes map[string]interface{}
+		json.Unmarshal(body, &errRes)
+		if errorObj, ok := errRes["error"].(map[string]interface{}); ok {
+			errMsg, _ := errorObj["message"].(string)
+			if provider == "openrouter" && !strings.HasSuffix(model, ":free") &&
+				(strings.Contains(errMsg, "credits") || strings.Contains(errMsg, "paid") ||
+					strings.Contains(errMsg, "upgrade") || strings.Contains(errMsg, "insufficient")) {
+				model2 := model + ":free"
+				return handleOpenAICompatible(client, provider, key, prompt, system, model2, hist)
+			}
+			return "", fmt.Errorf("[%s ERROR] %s", provider, errMsg)
+		}
+		return "", fmt.Errorf("[%s ERROR] HTTP %d: %s", provider, resp.StatusCode, string(body))
+	}
+
 	var res map[string]interface{}
 	json.Unmarshal(body, &res)
 
 	choices, ok := res["choices"].([]interface{})
 	if !ok || len(choices) == 0 {
-		if errorObj, ok := res["error"].(map[string]interface{}); ok {
-			return "", fmt.Errorf("[%s ERROR] %v", provider, errorObj["message"])
-		}
-		return "", fmt.Errorf("[%s ERROR] Unexpected response: %s", provider, string(body))
+		return "", fmt.Errorf("[%s ERROR] no choices in response: %s", provider, string(body))
 	}
 
 	message, ok := choices[0].(map[string]interface{})["message"].(map[string]interface{})
 	if !ok {
-		return "", fmt.Errorf("malformed message in choices")
+		return "", fmt.Errorf("[%s ERROR] malformed message in choices", provider)
 	}
 
 	text, ok := message["content"].(string)
 	if !ok {
-		return "", fmt.Errorf("content field is missing or not a string")
+		return "", fmt.Errorf("[%s ERROR] content field missing or not a string", provider)
 	}
 
 	return text, nil
@@ -288,16 +320,15 @@ func handleOpenAICompatible(client *http.Client, provider, key, prompt, system, 
 func handleClaude(client *http.Client, key, prompt, system, model string, hist []Message) (string, error) {
 	url := "https://api.anthropic.com/v1/messages"
 	if model == "" {
-		model = "claude-3-haiku-20240307"
+		model = "claude-3-5-haiku-20241022"
 	}
 
 	reqBody := ClaudeRequest{
 		Model:     model,
 		System:    system,
-		MaxTokens: 1024,
+		MaxTokens: 8192,
 	}
 
-	// Add history
 	for _, msg := range hist {
 		reqBody.Messages = append(reqBody.Messages, struct {
 			Role    string `json:"role"`
@@ -323,20 +354,27 @@ func handleClaude(client *http.Client, key, prompt, system, model string, hist [
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != http.StatusOK {
+		var errRes map[string]interface{}
+		json.Unmarshal(body, &errRes)
+		if errorObj, ok := errRes["error"].(map[string]interface{}); ok {
+			return "", fmt.Errorf("[CLAUDE ERROR] %v", errorObj["message"])
+		}
+		return "", fmt.Errorf("[CLAUDE ERROR] HTTP %d: %s", resp.StatusCode, string(body))
+	}
+
 	var res map[string]interface{}
 	json.Unmarshal(body, &res)
 
 	content, ok := res["content"].([]interface{})
 	if !ok || len(content) == 0 {
-		if errorObj, ok := res["error"].(map[string]interface{}); ok {
-			return "", fmt.Errorf("[CLAUDE ERROR] %v", errorObj["message"])
-		}
-		return "", fmt.Errorf("[CLAUDE ERROR] Unexpected response: %s", string(body))
+		return "", fmt.Errorf("[CLAUDE ERROR] no content in response: %s", string(body))
 	}
 
 	text, ok := content[0].(map[string]interface{})["text"].(string)
 	if !ok {
-		return "", fmt.Errorf("text field is missing in content")
+		return "", fmt.Errorf("[CLAUDE ERROR] text field missing in content")
 	}
 
 	return text, nil
@@ -365,19 +403,16 @@ func getOllamaModels(client *http.Client) []string {
 	return names
 }
 
-func handleOllama(client *http.Client, modelName, prompt, system, model string, hist []Message) (string, error) {
-	// 1. Resolve the model name correctly
+func handleOllama(client *http.Client, key, prompt, system, model string, hist []Message) (string, error) {
 	if model == "" {
-		model = modelName
+		model = key // Ollama uses model name from key field
 	}
 
 	available := getOllamaModels(client)
 
-	// Smart Match: If model is empty, default, or AUTO_DETECT, try to find best match
 	found := false
 	if model == "" || model == "llama3" || model == "AUTO_DETECT" {
 		if len(available) > 0 {
-			// Prefer high-performance ones if they exist
 			for _, m := range available {
 				if strings.HasPrefix(m, "llama3") || strings.HasPrefix(m, "mistral") || strings.HasPrefix(m, "qwen") {
 					model = m
@@ -387,36 +422,22 @@ func handleOllama(client *http.Client, modelName, prompt, system, model string, 
 			}
 			if !found {
 				model = available[0]
-				found = true
 			}
 		}
 	} else {
-		// Specific model requested, verify it exists
 		for _, m := range available {
-			if m == model {
+			if m == model || strings.HasPrefix(m, model+":") {
+				model = m
 				found = true
 				break
-			}
-		}
-		// If not found exactly, try with prefix matching (tag resolution)
-		if !found {
-			for _, m := range available {
-				if strings.HasPrefix(m, model+":") {
-					model = m
-					found = true
-					break
-				}
 			}
 		}
 	}
 
 	if model == "" {
-		model = "llama3" // Final fallback attempt
+		model = "llama3"
 	}
 
-	url := "http://localhost:11434/api/chat"
-
-	// Construct chat request
 	reqBody := struct {
 		Model    string `json:"model"`
 		Messages []struct {
@@ -429,13 +450,11 @@ func handleOllama(client *http.Client, modelName, prompt, system, model string, 
 		Stream: false,
 	}
 
-	// System prompt
 	reqBody.Messages = append(reqBody.Messages, struct {
 		Role    string `json:"role"`
 		Content string `json:"content"`
 	}{Role: "system", Content: system})
 
-	// History
 	for _, msg := range hist {
 		reqBody.Messages = append(reqBody.Messages, struct {
 			Role    string `json:"role"`
@@ -443,15 +462,13 @@ func handleOllama(client *http.Client, modelName, prompt, system, model string, 
 		}{Role: msg.Role, Content: msg.Content})
 	}
 
-	// User prompt
 	reqBody.Messages = append(reqBody.Messages, struct {
 		Role    string `json:"role"`
 		Content string `json:"content"`
 	}{Role: "user", Content: prompt})
 
 	jsonData, _ := json.Marshal(reqBody)
-
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	req, err := http.NewRequest("POST", "http://localhost:11434/api/chat", bytes.NewBuffer(jsonData))
 	if err != nil {
 		return "", fmt.Errorf("failed to create request: %v", err)
 	}
@@ -459,28 +476,28 @@ func handleOllama(client *http.Client, modelName, prompt, system, model string, 
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("ollama connection failed: %v (is 'ollama serve' running?)", err)
+		return "", err
 	}
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("ollama error %d: %s", resp.StatusCode, string(body))
+		return "", fmt.Errorf("[OLLAMA] HTTP %d: %s", resp.StatusCode, string(body))
 	}
 
 	var res map[string]interface{}
 	if err := json.Unmarshal(body, &res); err != nil {
-		return "", fmt.Errorf("failed to parse ollama response: %v", err)
+		return "", fmt.Errorf("[OLLAMA] parse error: %v", err)
 	}
 
 	message, ok := res["message"].(map[string]interface{})
 	if !ok {
-		return "", fmt.Errorf("unexpected response format from ollama: %s", string(body))
+		return "", fmt.Errorf("[OLLAMA] unexpected response format: %s", string(body))
 	}
 
 	content, ok := message["content"].(string)
 	if !ok {
-		return "", fmt.Errorf("content is missing in assistant response")
+		return "", fmt.Errorf("[OLLAMA] content missing in response")
 	}
 
 	return content, nil
