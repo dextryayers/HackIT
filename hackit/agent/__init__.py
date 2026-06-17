@@ -166,7 +166,7 @@ def enter_agent_shell():
             if base_cmd == 'clear':
                 _sp.run(['clear' if os.name == 'posix' else 'cls'], shell=True)
                 click.echo(f"\n  {B_CYAN}╭{RESET}{'─' * 18}{B_CYAN}╮{RESET}")
-                click.echo(f"  │{'SHELL CLEARED':^20}│")
+                click.echo(f"  │{'SHELL CLEARED':^18}│")
                 click.echo(f"  {B_CYAN}╰{RESET}{'─' * 18}{B_CYAN}╯{RESET}\n")
                 continue
 

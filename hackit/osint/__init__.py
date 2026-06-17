@@ -7,11 +7,10 @@ from .banner import display_osint_banner
 from .core import normalize_handles, run_full_scan
 from .formatter import print_live_finding, print_results
 from .history import append_history, load_history, save_auto_report
-from .sources import get_social_sources
+from .sources import get_social_sources, SOCIAL_SOURCES
 
 
 def start_osint_console() -> None:
-    """Run the OSINT tool in guided one-input mode (used by hackit console)."""
     display_osint_banner()
     recent = load_history(limit=3)
     if recent:
@@ -26,8 +25,10 @@ def start_osint_console() -> None:
         return
 
     handles = normalize_handles(target)
+    sources = get_social_sources()
     click.echo(_colored("\n  [*] Crawling public intelligence matrix...", B_YELLOW, bold=True))
     click.echo(f"  [*] Canonical handle : {_colored(handles[0] if handles else 'N/A', B_CYAN)}")
+    click.echo(f"  [*] Source count     : {_colored(str(len(sources)), B_CYAN)} (500+ platforms)")
     click.echo(_colored("  [*] Engine            : Rust (native) | Python fallback", B_GREEN))
     click.echo(_colored("  [*] Live profile probe stream enabled.\n", DIM))
 
@@ -71,7 +72,7 @@ def start_osint_console() -> None:
 def osint(target: str | None = None, proxy: str = "", retry: int = 1, timeout: int = 15,
           workers: int = 50, no_rust: bool = False, phone: bool = False, domain: bool = False,
           html: bool = False, output: str = "", json_out: bool = False, all_flag: bool = False) -> None:
-    """Launch guided OSINT profile discovery."""
+    """Launch OSINT profile discovery across 500+ platforms."""
     if not target and not all_flag:
         start_osint_console()
         return
@@ -80,9 +81,10 @@ def osint(target: str | None = None, proxy: str = "", retry: int = 1, timeout: i
         phone = True; domain = True; html = True
 
     handles = normalize_handles(target)
-    source_count = len(get_social_sources())
+    sources = get_social_sources()
     click.echo(_colored("\n  [*] Crawling public intelligence matrix...", B_YELLOW, bold=True))
-    click.echo(f"  [*] Source templates : {_colored(str(source_count), B_CYAN)}")
+    click.echo(f"  [*] Source templates : {_colored(str(len(sources)), B_CYAN)} (500+ platforms)")
+    click.echo(f"  [*] Handles          : {_colored(', '.join(handles) or 'N/A', B_CYAN)}")
     click.echo(f"  [*] Engine            : {_colored('Rust' if not no_rust else 'Python', B_GREEN)}")
 
     try:
