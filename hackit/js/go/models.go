@@ -10,6 +10,8 @@ const (
 	TypeMap      DiscoveryType = "Source Map"
 	TypeRobots   DiscoveryType = "Robots.txt"
 	TypeActive   DiscoveryType = "Active Brute"
+	TypeSensitive DiscoveryType = "Sensitive Data"
+	TypeComment  DiscoveryType = "Code Comment"
 )
 
 type Result struct {

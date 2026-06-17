@@ -1,263 +1,226 @@
 package main
 
 import (
-	"crypto/tls"
-	"encoding/json"
 	"fmt"
-	"io"
+	"math/rand"
 	"net/http"
-	"regexp"
-	"strings"
+	"net/url"
 	"sync"
 	"time"
 )
 
-type Task struct {
-	URL   string
-	Depth int
-}
-
 type Crawler struct {
 	BaseURL    string
-	Host       string
+	BaseHost   string
+	BaseDomain string
 	Client     *http.Client
-	Results    map[string]bool
-	ResMux     sync.Mutex
-	Visited    map[string]bool
-	VisMux     sync.Mutex
-	Workers    int
-	MaxDepth   int
-	Queue      chan Task
+	Scope      *Scope
+	Filters    *Filters
 	WG         sync.WaitGroup
+	queueWg    sync.WaitGroup
+	mu         sync.Mutex
+	queuedURLs chan urlQueue
+	ShowCode   bool
+
+	// Subdomain tracking
+	Subdomains    map[string]bool
+	subdomainURLs map[string]string
+	subMu         sync.Mutex
+
+	allCrawled []CrawlResult
+	startTime  time.Time
 }
 
-func NewCrawler(baseURL, host string) *Crawler {
-	return &Crawler{
-		BaseURL: baseURL,
-		Host:    host,
-		Client: &http.Client{
-			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-			},
-			Timeout: 10 * time.Second,
-		},
-		Results:  make(map[string]bool),
-		Visited:  make(map[string]bool),
-		Workers:  40, // Increased for speed
-		MaxDepth: 2,  // Prevent infinite crawl
-		Queue:    make(chan Task, 5000),
+func (c *Crawler) addQueueItem(item urlQueue) {
+	c.queueWg.Add(1)
+	c.queuedURLs <- item
+}
+
+func NewCrawler(baseURL string, baseHost string, showCode bool) *Crawler {
+	transport := &http.Transport{
+		MaxIdleConns:        200,
+		MaxIdleConnsPerHost: 50,
+		IdleConnTimeout:     30 * time.Second,
+		DisableCompression:  false,
 	}
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   30 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 5 {
+				return fmt.Errorf("too many redirects")
+			}
+			if len(via) > 0 {
+				for k, v := range via[0].Header {
+					if k != "Authorization" && k != "Cookie" {
+						req.Header[k] = v
+					}
+				}
+			}
+			return nil
+		},
+	}
+
+	u, _ := url.Parse(baseURL)
+	host := hostWithoutPort(u.Host)
+	parts := hostParts(host)
+	var baseDomain string
+	if len(parts) >= 2 {
+		baseDomain = parts[len(parts)-2] + "." + parts[len(parts)-1]
+	} else {
+		baseDomain = host
+	}
+
+	return &Crawler{
+		BaseURL:    baseURL,
+		BaseHost:   host,
+		BaseDomain: baseDomain,
+		Client:     client,
+		Scope:      NewScope(baseURL, 3),
+		Filters:    NewFilters(),
+		queuedURLs: make(chan urlQueue, 10000),
+		Subdomains: make(map[string]bool),
+		subdomainURLs: make(map[string]string),
+		ShowCode:   showCode,
+		allCrawled: make([]CrawlResult, 0),
+		startTime:  time.Now(),
+	}
+}
+
+func hostWithoutPort(host string) string {
+	for i, c := range host {
+		if c == ':' {
+			return host[:i]
+		}
+	}
+	return host
+}
+
+func hostParts(host string) []string {
+	return splitHost(host)
+}
+
+func splitHost(host string) []string {
+	var parts []string
+	current := ""
+	for _, c := range host {
+		if c == '.' {
+			parts = append(parts, current)
+			current = ""
+		} else {
+			current += string(c)
+		}
+	}
+	if current != "" {
+		parts = append(parts, current)
+	}
+	return parts
+}
+
+func (c *Crawler) setHeaders(req *http.Request) {
+	uas := []string{
+		"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+		"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+		"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+	}
+	req.Header.Set("User-Agent", uas[rand.Intn(len(uas))])
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,application/javascript,*/*;q=0.8")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	req.Header.Set("Accept-Encoding", "gzip, deflate")
+	req.Header.Set("Referer", c.BaseURL)
+	req.Header.Set("Sec-Fetch-Dest", "document")
+	req.Header.Set("Sec-Fetch-Mode", "navigate")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	req.Header.Set("Sec-Ch-Ua", "\"Not/A)Brand\";v=\"99\", \"Google Chrome\";v=\"126\", \"Chromium\";v=\"126\"")
+	req.Header.Set("Sec-Ch-Ua-Mobile", "?0")
+	req.Header.Set("Sec-Ch-Ua-Platform", "\"Linux\"")
 }
 
 func (c *Crawler) Start() {
+	// Start queue consumer first to prevent deadlock
+	go c.crawlQueue()
+
+	// ── PHASE 1: Main domain deep crawl ──
+	// 1a. Passive checks (robots, sitemap, security.txt)
 	c.performPassiveChecks()
+
+	// 1b. Wayback Machine historical JS discovery
+	go c.queryWayback(c.BaseURL)
+
+	// 1c. Active brute-force (common JS paths on main domain)
 	c.performActiveBrute()
-	
-	c.WG.Add(1)
-	c.Queue <- Task{URL: c.BaseURL, Depth: 0}
 
-	// Start workers
-	for i := 0; i < c.Workers; i++ {
-		go c.worker()
+	// 1d. Queue base URL + common entries
+	c.addQueueItem(urlQueue{url: c.BaseURL, source: "", depth: 0, phase: 1})
+	for _, entry := range []string{c.BaseURL, c.BaseURL + "/"} {
+		if !c.Filters.Seen(entry) {
+			c.addQueueItem(urlQueue{url: entry, source: "", depth: 0, phase: 1})
+		}
 	}
 
-	c.WG.Wait()
-	close(c.Queue)
+	// Wait for phase 1 to complete
+	c.queueWg.Wait()
+
+	// ── PHASE 2: Subdomain discovery & crawl ──
+	c.startSubdomainPhase()
+
+	// Close the channel
+	close(c.queuedURLs)
+
+	// Print summary
+	c.printSummary()
 }
 
-func (c *Crawler) worker() {
-	for task := range c.Queue {
-		c.process(task.URL, task.Depth)
-		c.WG.Done()
-	}
-}
+func (c *Crawler) startSubdomainPhase() {
+	// Discover subdomains from multiple sources
+	var wg sync.WaitGroup
+	wg.Add(4)
+	go func() { defer wg.Done(); c.discoverCTLogs() }()
+	go func() { defer wg.Done(); c.discoverAlienVault() }()
+	go func() { defer wg.Done(); c.discoverGoogleCT() }()
+	go func() { defer wg.Done(); c.discoverDNSBrute() }()
+	wg.Wait()
+	c.discoverSubdomainsFromJS()
 
-func (c *Crawler) process(targetURL string, depth int) {
-	if depth > c.MaxDepth {
-		return
-	}
-
-	c.VisMux.Lock()
-	if c.Visited[targetURL] {
-		c.VisMux.Unlock()
-		return
-	}
-	c.Visited[targetURL] = true
-	c.VisMux.Unlock()
-
-	req, _ := http.NewRequest("GET", targetURL, nil)
-	// Professional Browser Headers to bypass WAF
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
-	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
-	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
-	req.Header.Set("Sec-Ch-Ua", "\"Chromium\";v=\"124\", \"Google Chrome\";v=\"124\", \"Not-A.Brand\";v=\"99\"")
-	req.Header.Set("Sec-Ch-Ua-Mobile", "?0")
-	req.Header.Set("Sec-Ch-Ua-Platform", "\"Windows\"")
-	req.Header.Set("Sec-Fetch-Dest", "document")
-	req.Header.Set("Sec-Fetch-Mode", "navigate")
-	req.Header.Set("Sec-Fetch-Site", "none")
-	req.Header.Set("Sec-Fetch-User", "?1")
-	req.Header.Set("Upgrade-Insecure-Requests", "1")
-
-	resp, err := c.Client.Do(req)
-	if err != nil {
-		return
-	}
-	defer resp.Body.Close()
-
-	// Update host if redirected to handle www/non-www correctly
-	finalURL := resp.Request.URL.String()
-	if depth == 0 && finalURL != targetURL {
-		c.Host = resp.Request.URL.Host
-	}
-
-	bodyBytes, _ := io.ReadAll(resp.Body)
-	body := string(bodyBytes)
-
-	// --- Official Katana Master Regex (Ported from pkg/utils/regex.go) ---
-	reBody := regexp.MustCompile(`(?:((?:[\.]{1,2}/[A-Za-z0-9\-_/\\?&@\.?=%]+)|(https?://[A-Za-z0-9_\-\.]+([\.]{0,2})?\/[A-Za-z0-9\-_/\\?&@\.?=%]+)|(/[A-Za-z0-9\-_/\\?&@\.%]+\.(aspx?|action|cfm|cgi|do|pl|css|x?html?|js(p|on)?|pdf|php5?|py|rss))|([A-Za-z0-9\-_?&@\.%]+/[A-Za-z0-9/\\\-_?&@\.%]+\.(aspx?|action|cfm|cgi|do|pl|css|x?html?|js(p|on)?|pdf|php5?|py|rss))))`)
-	
-	for _, m := range reBody.FindAllStringSubmatch(body, -1) {
-		if len(m) < 2 || m[1] == "" {
+	// Queue all discovered subdomains for crawling
+	c.subMu.Lock()
+	for subdomain, subURL := range c.subdomainURLs {
+		if c.Filters.Seen(subURL) {
 			continue
 		}
-		link := resolveURL(m[1], finalURL) // Use finalURL for correct relative resolution
-		if link == "" {
-			continue
-		}
-		
-		ext := getExtension(link)
-		if ext == "js" {
-			c.addResult(link, finalURL, TypeTag)
-			c.checkSourceMap(link)
-		} else {
-			// Deep internal discovery
-			if depth < c.MaxDepth && isInternal(link, c.Host) && !strings.Contains(link, "#") {
-				c.addResult(link, finalURL, TypeEndpoint)
-				c.WG.Add(1)
-				select {
-				case c.Queue <- Task{URL: link, Depth: depth + 1}:
-				default:
-					c.WG.Done()
-				}
-			}
+		fmt.Printf(`{"type":"subdomain","url":%q,"subdomain":%q,"method":"discovery"}`+"\n", subURL, subdomain)
+		c.addQueueItem(urlQueue{url: subURL, source: c.BaseURL, depth: 0, phase: 2})
+		// Also queue common JS paths for this subdomain
+		for _, p := range getBrutePaths() {
+			c.addQueueItem(urlQueue{url: subURL + p, source: subURL, depth: 1, phase: 2})
 		}
 	}
+	c.subMu.Unlock()
 
-	// Dynamic Script Discovery
-	reTag := regexp.MustCompile(`(?i)<script[^>]+src=["']([^"']+\.js[^"']*)["']`)
-	for _, m := range reTag.FindAllStringSubmatch(body, -1) {
-		jsURL := m[1]
-		absJS := resolveURL(jsURL, finalURL)
-		if absJS != "" && isInternal(absJS, c.Host) {
-			c.addResult(absJS, finalURL, TypeTag)
-			c.checkSourceMap(absJS)
-			c.WG.Add(1)
-			go c.deepScanJS(absJS)
-		}
-	}
+	// Wait for phase 2 to complete
+	c.queueWg.Wait()
 }
 
-func (c *Crawler) deepScanJS(jsURL string) {
-	defer c.WG.Done()
-	
-	req, _ := http.NewRequest("GET", jsURL, nil)
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
-	req.Header.Set("Sec-Ch-Ua", "\"Chromium\";v=\"124\", \"Google Chrome\";v=\"124\", \"Not-A.Brand\";v=\"99\"")
-	req.Header.Set("Referer", c.BaseURL)
-
-	resp, err := c.Client.Do(req)
-	if err != nil {
-		return
-	}
-	defer resp.Body.Close()
-
-	bodyBytes, _ := io.ReadAll(resp.Body)
-	body := string(bodyBytes)
-
-	// --- Official Katana Master Regex (Ported from pkg/utils/regex.go) ---
-	// Page Body Discovery
-	reBody := regexp.MustCompile(`(?:((?:[\.]{1,2}/[A-Za-z0-9\-_/\\?&@\.?=%]+)|(https?://[A-Za-z0-9_\-\.]+([\.]{0,2})?\/[A-Za-z0-9\-_/\\?&@\.?=%]+)|(/[A-Za-z0-9\-_/\\?&@\.%]+\.(aspx?|action|cfm|cgi|do|pl|css|x?html?|js(p|on)?|pdf|php5?|py|rss))|([A-Za-z0-9\-_?&@\.%]+/[A-Za-z0-9/\\\-_?&@\.%]+\.(aspx?|action|cfm|cgi|do|pl|css|x?html?|js(p|on)?|pdf|php5?|py|rss))))`)
-	
-	// JS/Relative Endpoint Discovery
-	reJS := regexp.MustCompile(`(?i)(?:"|'|\s)((https?://[A-Za-z0-9_\-.]+(?:\:\d{1,5})?)+([\.]{1,2})?/[A-Za-z0-9/\-_\\.%]+(?:[\?|#][^"']+)?)?|((\.{1,2}/)?[a-zA-Z0-9\-_/\\%]+\.(aspx?|js(?:on|p)?|html|php5?|action|do)(?:[\?|#][^"']+)?)?|((\.{0,2}/)[a-zA-Z0-9\-_/\\%]+(?:/|\\)[a-zA-Z0-9\-_]{3,}(?:[\?|#][^"']+)?)?|((\.{0,2})[a-zA-Z0-9\-_/\\%]{3,}/)?(?:"|'|\s)`)
-
-	processMatch := func(m string) {
-		clean := strings.Trim(m, "\"' \t\n")
-		if clean == "" || len(clean) < 3 {
-			return
-		}
-		
-		abs := resolveURL(clean, jsURL)
-		if abs == "" {
-			return
-		}
-		
-		ext := getExtension(abs)
-		if ext == "js" {
-			c.VisMux.Lock()
-			isVisited := c.Visited[abs]
-			c.VisMux.Unlock()
-
-			if !isVisited {
-				c.addResult(abs, jsURL, TypeNested)
-				c.WG.Add(1)
-				go c.deepScanJS(abs)
-			}
-		} else {
-			c.addResult(abs, jsURL, TypeEndpoint)
+func (c *Crawler) printSummary() {
+	c.mu.Lock()
+	totalCrawled := len(c.allCrawled)
+	jsCount := 0
+	for _, r := range c.allCrawled {
+		if r.Extension == "js" || r.Type == "JavaScript" {
+			jsCount++
 		}
 	}
+	subCount := len(c.Subdomains)
+	elapsed := time.Since(c.startTime).Round(time.Millisecond)
+	c.mu.Unlock()
 
-	// 1. Scrape Body with Katana Patterns
-	for _, m := range reBody.FindAllStringSubmatch(body, -1) {
-		if len(m) > 1 && m[1] != "" {
-			processMatch(m[1])
-		}
-	}
-
-	// 2. Deep JS Analysis with Katana Patterns
-	for _, m := range reJS.FindAllStringSubmatch(body, -1) {
-		for i := 1; i < len(m); i++ {
-			if m[i] != "" {
-				processMatch(m[i])
-			}
-		}
-	}
-
-	// 3. Secret/Comment Extraction
-	reComments := regexp.MustCompile(`(?m)//.*$|/\*[\s\S]*?\*/`)
-	for _, comment := range reComments.FindAllString(body, -1) {
-		for _, m := range reJS.FindAllStringSubmatch(comment, -1) {
-			for i := 1; i < len(m); i++ {
-				if m[i] != "" {
-					processMatch(m[i])
-				}
-			}
-		}
-	}
+	fmt.Printf(`{"type":"summary","total":%d,"js_files":%d,"subdomains":%d,"elapsed":"%s"}`,
+		totalCrawled, jsCount, subCount, elapsed)
+	fmt.Println()
 }
 
-func (c *Crawler) addResult(rawURL string, source string, dType DiscoveryType) {
-	abs := resolveURL(rawURL, source)
-	if abs == "" {
-		return
-	}
-
-	c.ResMux.Lock()
-	defer c.ResMux.Unlock()
-
-	if _, exists := c.Results[abs]; !exists {
-		c.Results[abs] = true
-		
-		// Stream to stdout immediately as JSON
-		res := Result{
-			SourceURL: source,
-			URL:       abs,
-			Type:      dType,
-			Ext:       getExtension(abs),
-		}
-		out, _ := json.Marshal(res)
-		fmt.Println(string(out))
-	}
+var uaList = []string{
+	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0.0.0 Safari/537.36",
+	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/126.0.0.0 Safari/537.36",
+	"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/126.0.0.0 Safari/537.36",
 }
