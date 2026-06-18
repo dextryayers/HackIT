@@ -57,7 +57,7 @@ func DeepScanPorts(target string) []DetectedTech {
 		wg.Add(1)
 		go func(p int, guess string) {
 			defer wg.Done()
-			address := fmt.Sprintf("%s:%d", host, p)
+			address := net.JoinHostPort(host, fmt.Sprintf("%d", p))
 			conn, err := net.DialTimeout("tcp", address, 3*time.Second)
 			if err != nil {
 				return

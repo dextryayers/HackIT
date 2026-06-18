@@ -20,7 +20,9 @@ def _show_cve_banner():
 
 @click.command(name='cve')
 @click.option('--output', help='Simpan hasil pencarian ke file JSON')
-def check_cve(output):
+@click.option('--api-key', help='NVD API key (untuk rate limit lebih tinggi)')
+@click.option('--max-results', type=int, default=20, help='Max CVEs per teknologi/scan')
+def check_cve(output, api_key, max_results):
     """
     Pemindai Kerentanan Defensif (Multi-Source Intelligence).
     Mendeteksi teknologi dan memetakan skor CVE, CWE, OSV, CISA, OWASP, dan Exploit-DB.
@@ -46,7 +48,9 @@ def check_cve(output):
     success = engine.run(
         target=target,
         mode=mode_str,
-        output=output
+        output=output,
+        api_key=api_key,
+        max_results=max_results
     )
     
     if not success:

@@ -28,7 +28,7 @@ class GoEngine:
                 return False
         return True
 
-    def run(self, target, mode="main", output=None):
+    def run(self, target, mode="main", output=None, api_key=None, max_results=None):
         if not self.ensure_compiled():
             print("[!] Engine not available.")
             return False
@@ -41,9 +41,12 @@ class GoEngine:
         
         if output:
             cmd.extend(["-output", output])
+        if api_key:
+            cmd.extend(["--api-key", api_key])
+        if max_results:
+            cmd.extend(["--max-results", str(max_results)])
 
         try:
-            # Pass through stdout/stderr to show real-time progress
             process = subprocess.Popen(cmd)
             process.wait()
             return process.returncode == 0
