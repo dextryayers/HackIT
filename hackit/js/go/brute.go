@@ -166,15 +166,76 @@ func (c *Crawler) performActiveBrute() {
 		"/.well-known/keybase.txt",
 		"/.well-known/nodeinfo",
 		"/.well-known/webfinger",
+
+		// -- Next.js 13+ App Router --
+		"/_next/static/chunks/app/layout.js",
+		"/_next/static/chunks/app/page.js",
+		"/_next/static/chunks/app/loading.js",
+		"/_next/static/chunks/app/error.js",
+		"/_next/static/css/app.css",
+		"/_next/static/css/pages.css",
+		"/_next/data/build-id.json",
+
+		// -- Vite-specific --
+		"/@vite/client", "/@vite/env",
+		"/manifest.json", "/vite.svg",
+
+		// -- SPA Routes (client-side) --
+		"/dashboard", "/profile", "/settings", "/search",
+		"/checkout", "/cart", "/payment", "/billing",
+		"/onboarding", "/verify-email", "/reset-password",
+		"/forgot-password", "/2fa", "/mfa",
+		"/admin/users", "/admin/settings", "/admin/logs",
+		"/admin/analytics", "/admin/api-keys", "/admin/webhooks",
+		"/api-keys", "/webhooks", "/integrations",
+		"/notifications", "/subscriptions", "/plans", "/pricing",
+
+		// -- API Documentation --
+		"/redoc", "/rapidoc", "/graphiql", "/graphql/playground",
+		"/altair", "/voyager", "/prisma", "/admin/panel",
+		"/docs/swagger", "/docs/api", "/api/docs",
+
+		// -- Cloud Config Files --
+		"/.aws/credentials", "/aws-config.json",
+		"/aws-exports.js", "/amplify-config.js",
+		"/firebase-config.js", "/firebaseConfig.js",
+		"/supabase-config.js", "/supabaseClient.js",
+		"/vercel.json", "/netlify.toml",
+		"/_redirects", "/_headers",
+		"/deno.json", "/deno.jsonc", "/import_map.json",
+		"/bun.lockb", "/bunfig.toml",
+
+		// -- Test / Debug Files --
+		"/jest.config.js", "/vitest.config.ts",
+		"/.storybook/", "/playwright.config.ts",
+		"/cypress.json", "/cypress/",
+		"/.snyk", "/dependabot.yml",
+		"/.github/dependabot.yml",
+		"/.github/workflows/codeql.yml",
+		"/sonar-project.properties",
+		"/codecov.yml",
+
+		// -- SSR Leakage --
+		"/_render", "/_ssr", "/_rsc", "/__rsc",
+		"/_next/data/",
+
+		// -- Source Code / Build --
+		"/src/", "/app/", "/pages/", "/components/",
+		"/lib/", "/utils/", "/helpers/",
 	}
+
+	// Limit concurrent brute force requests to avoid connection saturation
+	limiter := make(chan struct{}, 20)
 
 	for _, p := range paths {
 		p := p
+		limiter <- struct{}{}
 		c.WG.Add(1)
 		go func() {
 			defer c.WG.Done()
+			defer func() { <-limiter }()
 			fullURL := fmt.Sprintf("%s%s", strings.TrimSuffix(c.BaseURL, "/"), p)
-			if c.Filters.Seen(fullURL) {
+			if c.Filters.HasSeen(fullURL) {
 				return
 			}
 			req, _ := http.NewRequest("GET", fullURL, nil)
@@ -211,11 +272,11 @@ func (c *Crawler) performActiveBrute() {
 
 					if c.ShowCode && isJS && bodyStr != "" && len(bodyStr) < 512*1024 {
 						bodyJSON, _ := json.Marshal(bodyStr)
-						fmt.Printf(`{"type":"js_source","url":%q,"status":200,"length":%d,"body":%s,"method":"brute"}`+"\n",
+						writeOutput(`{"type":"js_source","url":%q,"status":200,"length":%d,"body":%s,"method":"brute"}`+"\n",
 							fullURL, len(bodyStr), string(bodyJSON))
 					}
 				}
-				fmt.Printf(`{"type":"discovered","url":%q,"source":%q,"method":"brute","status":200}`+"\n", fullURL, c.BaseURL)
+				writeOutput(`{"type":"discovered","url":%q,"source":%q,"method":"brute","status":200}`+"\n", fullURL, c.BaseURL)
 			}
 		}()
 	}

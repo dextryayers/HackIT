@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"regexp"
 	"strings"
 )
@@ -51,14 +50,14 @@ func (c *Crawler) extractDependencies(body string, sourceURL string, depth int) 
 
 			// Skip bare module names (node_modules)
 			if isBareModule(mod) {
-				fmt.Printf(`{"type":"dependency","source":%q,"module":%q,"resolved":"%s","kind":%q}`+"\n",
+				writeOutput(`{"type":"dependency","source":%q,"module":%q,"resolved":"%s","kind":%q}`+"\n",
 					sourceURL, mod, "npm:"+mod, p.name)
 				continue
 			}
 
 			absURL := resolveJSImport(mod, sourceURL, p.name)
-			if absURL != "" && c.Scope.IsInScope(absURL, depth+1) && !c.Filters.Seen(absURL) {
-				fmt.Printf(`{"type":"dependency","source":%q,"module":%q,"resolved":%q,"kind":%q}`+"\n",
+			if absURL != "" && c.Scope.IsInScope(absURL, depth+1) && !c.Filters.HasSeen(absURL) {
+				writeOutput(`{"type":"dependency","source":%q,"module":%q,"resolved":%q,"kind":%q}`+"\n",
 					sourceURL, mod, absURL, p.name)
 				c.addQueueItem(urlQueue{url: absURL, source: sourceURL, depth: depth + 1, phase: 1})
 			}
@@ -79,8 +78,8 @@ func (c *Crawler) extractDependencies(body string, sourceURL string, depth int) 
 			v := strings.Trim(strings.TrimSpace(parts[1]), "\"")
 			if k != "" && v != "" && strings.HasPrefix(v, "http") {
 				absURL := resolveURL(v, sourceURL)
-				if absURL != "" && c.Scope.IsInScope(absURL, depth+1) && !c.Filters.Seen(absURL) {
-					fmt.Printf(`{"type":"import_map","source":%q,"module":%q,"resolved":%q}`+"\n",
+				if absURL != "" && c.Scope.IsInScope(absURL, depth+1) && !c.Filters.HasSeen(absURL) {
+					writeOutput(`{"type":"import_map","source":%q,"module":%q,"resolved":%q}`+"\n",
 						sourceURL, k, absURL)
 					c.addQueueItem(urlQueue{url: absURL, source: sourceURL, depth: depth + 1, phase: 1})
 				}

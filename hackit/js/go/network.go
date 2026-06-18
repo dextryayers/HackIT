@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"regexp"
@@ -10,14 +9,25 @@ import (
 )
 
 var (
-	xhrPattern     = regexp.MustCompile(`(?:fetch|XMLHttpRequest|axios|xhr|ajax)\.?\s*\(?\s*["'\` + "`" + `]([^"'\` + "`" + `]+)["'\` + "`" + `]`)
-	wsPattern      = regexp.MustCompile(`["'\` + "`" + `](wss?://[^"'\` + "`" + `]+)["'\` + "`" + `]`)
-	eventSourcePat = regexp.MustCompile(`(?:EventSource|WebSocket)\s*\(?\s*["'\` + "`" + `]([^"'\` + "`" + `]+)["'\` + "`" + `]`)
-	importCallPat  = regexp.MustCompile(`import\s*\(\s*["'\` + "`" + `]([^"'\` + "`" + `]+)["'\` + "`" + `]\s*\)`)
-	scriptLoadPat  = regexp.MustCompile(`(?:createElement|appendChild|innerHTML|insertAdjacentHTML)\s*\(?[^)]*["'\` + "`" + `]([^"'\` + "`" + `]+\.(?:js|json))["'\` + "`" + `]`)
-	dynamicSrcPat  = regexp.MustCompile(`\.src\s*=\s*["'\` + "`" + `]([^"'\` + "`" + `]+)["'\` + "`" + `]`)
-	serviceWorker  = regexp.MustCompile(`navigator\.serviceWorker\.register\s*\(\s*["'\` + "`" + `]([^"'\` + "`" + `]+)["'\` + "`" + `]`)
-	pageUrlPattern = regexp.MustCompile(`["'\` + "`" + `]([^"'\` + "`" + `]*page[^"'\` + "`" + `]*\.(?:js|json|html))["'\` + "`" + `]`)
+	xhrPattern      = regexp.MustCompile(`(?:fetch|XMLHttpRequest|axios|xhr|ajax)\.?\s*\(?\s*["'\` + "`" + `]([^"'\` + "`" + `]+)["'\` + "`" + `]`)
+	axiosMethodPat  = regexp.MustCompile(`axios\.(?:get|post|put|patch|delete|head|options|request)\([` + "`" + `"']([^` + "`" + `"']+)[` + "`" + `"']`)
+	kyPattern       = regexp.MustCompile(`ky\.(?:get|post|put|patch|delete|head)\([` + "`" + `"']([^` + "`" + `"']+)[` + "`" + `"']`)
+	superagentPat   = regexp.MustCompile(`superagent\.(?:get|post|put|patch|delete)\([` + "`" + `"']([^` + "`" + `"']+)[` + "`" + `"']`)
+	wsPattern       = regexp.MustCompile(`["'\` + "`" + `](wss?://[^"'\` + "`" + `]+)["'\` + "`" + `]`)
+	eventSourcePat  = regexp.MustCompile(`(?:EventSource|WebSocket)\s*\(?\s*["'\` + "`" + `]([^"'\` + "`" + `]+)["'\` + "`" + `]`)
+	importCallPat   = regexp.MustCompile(`import\s*\(\s*["'\` + "`" + `]([^"'\` + "`" + `]+)["'\` + "`" + `]\s*\)`)
+	scriptLoadPat   = regexp.MustCompile(`(?:createElement|appendChild|innerHTML|insertAdjacentHTML)\s*\(?[^)]*["'\` + "`" + `]([^"'\` + "`" + `]+\.(?:js|json))["'\` + "`" + `]`)
+	dynamicSrcPat   = regexp.MustCompile(`\.src\s*=\s*["'\` + "`" + `]([^"'\` + "`" + `]+)["'\` + "`" + `]`)
+	serviceWorker   = regexp.MustCompile(`navigator\.serviceWorker\.register\s*\(\s*["'\` + "`" + `]([^"'\` + "`" + `]+)["'\` + "`" + `]`)
+	pageUrlPattern  = regexp.MustCompile(`["'\` + "`" + `]([^"'\` + "`" + `]*page[^"'\` + "`" + `]*\.(?:js|json|html))["'\` + "`" + `]`)
+	useQueryPat     = regexp.MustCompile(`use(?:Query|Mutation|SWR)\s*\([^,]*[` + "`" + `"']([^` + "`" + `"']+)[` + "`" + `"']`)
+	apolloClientPat = regexp.MustCompile(`(?:apolloClient|client)\.(?:query|mutate)\s*\([^}]*[` + "`" + `"']([^` + "`" + `"']+)[` + "`" + `"']`)
+	useFetchPat     = regexp.MustCompile(`use(?:Fetch|AsyncData)\s*\([` + "`" + `"']([^` + "`" + `"']+)[` + "`" + `"']`)
+	jqueryGetJSON   = regexp.MustCompile(`\$\.getJSON\s*\(\s*["'\` + "`" + `]([^"'\` + "`" + `]+)["'\` + "`" + `]`)
+	navigatorBeacon = regexp.MustCompile(`navigator\.sendBeacon\s*\(\s*["'\` + "`" + `]([^"'\` + "`" + `]+)["'\` + "`" + `]`)
+	newRequestPat   = regexp.MustCompile(`new\s+Request\s*\(\s*["'\` + "`" + `]([^"'\` + "`" + `]+)["'\` + "`" + `]`)
+	xhrOpenPat      = regexp.MustCompile(`\.open\s*\(\s*["'\` + "`" + `](?:GET|POST|PUT|DELETE)[` + "`" + `"']\s*,\s*["'\` + "`" + `]([^"'\` + "`" + `]+)["'\` + "`" + `]`)
+	postMessagePat  = regexp.MustCompile(`postMessage\s*\([^,]*,\s*["'\` + "`" + `]([^"'\` + "`" + `]+)["'\` + "`" + `]`)
 )
 
 type NetworkEntry struct {
@@ -78,12 +88,12 @@ func (c *Crawler) captureHTMLResources(body string, pageURL string, depth int) {
 			}
 
 			// Check if this is a new URL we haven't seen
-			if c.Filters.Seen(absURL) {
+			if c.Filters.HasSeen(absURL) {
 				continue
 			}
 
 			// Report the resource
-			fmt.Printf(`{"type":"network_entry","url":%q,"source_url":%q,"resource_type":%q,"method":"GET"}`+"\n",
+			writeOutput(`{"type":"network_entry","url":%q,"source_url":%q,"resource_type":%q,"method":"GET"}`+"\n",
 				absURL, pageURL, p.rtype)
 
 			// Queue JS files for crawling
@@ -103,11 +113,47 @@ func (c *Crawler) captureHTMLResources(body string, pageURL string, depth int) {
 	for _, m := range jsonld {
 		if len(m) >= 3 {
 			absURL := resolveURL(m[2], pageURL)
-			if absURL != "" && c.Scope.IsInScope(absURL, depth+1) && !c.Filters.Seen(absURL) {
-				fmt.Printf(`{"type":"network_entry","url":%q,"source_url":%q,"resource_type":"jsonld","method":"GET"}`+"\n",
+			if absURL != "" && c.Scope.IsInScope(absURL, depth+1) && !c.Filters.HasSeen(absURL) {
+				writeOutput(`{"type":"network_entry","url":%q,"source_url":%q,"resource_type":"jsonld","method":"GET"}`+"\n",
 					absURL, pageURL)
 				c.addQueueItem(urlQueue{url: absURL, source: pageURL, depth: depth + 1, phase: 1})
 			}
+		}
+	}
+
+	// Additional HTML resources
+	extraPatterns := []struct {
+		re    *regexp.Regexp
+		group int
+		rtype string
+	}{
+		{regexp.MustCompile(`<link[^>]+rel=["'](?:dns-prefetch|preconnect)["'][^>]+href=["']([^"']+)["']`), 1, "preconnect"},
+		{regexp.MustCompile(`<meta[^>]+http-equiv=["']refresh["'][^>]+content=["'][^;]*;\s*url=["']?([^"'\s;]+)["']?`), 1, "meta_refresh"},
+		{regexp.MustCompile(`<meta[^>]+property=["']og:url["'][^>]+content=["']([^"']+)["']`), 1, "og_url"},
+		{regexp.MustCompile(`<base[^>]+href=["']([^"']+)["']`), 1, "base_url"},
+		{regexp.MustCompile(`<track[^>]+src=["']([^"']+)["']`), 1, "track"},
+	}
+
+	for _, p := range extraPatterns {
+		matches := p.re.FindAllStringSubmatch(body, -1)
+		for _, m := range matches {
+			if len(m) <= p.group {
+				continue
+			}
+			rawURL := strings.TrimSpace(m[p.group])
+			if rawURL == "" || strings.HasPrefix(rawURL, "#") || strings.HasPrefix(rawURL, "javascript:") ||
+				strings.HasPrefix(rawURL, "data:") || strings.HasPrefix(rawURL, "mailto:") {
+				continue
+			}
+			absURL := resolveURL(rawURL, pageURL)
+			if absURL == "" || !c.Scope.IsInScope(absURL, depth+1) {
+				continue
+			}
+			if c.Filters.HasSeen(absURL) {
+				continue
+			}
+			writeOutput(`{"type":"network_entry","url":%q,"source_url":%q,"resource_type":%q,"method":"GET"}`+"\n",
+				absURL, pageURL, p.rtype)
 		}
 	}
 }
@@ -120,6 +166,9 @@ func (c *Crawler) captureJSNetwork(body string, sourceURL string, depth int) {
 		rtype string
 	}{
 		{xhrPattern, 1, "fetch"},
+		{axiosMethodPat, 1, "axios"},
+		{kyPattern, 1, "ky"},
+		{superagentPat, 1, "superagent"},
 		{wsPattern, 1, "websocket"},
 		{eventSourcePat, 1, "eventsource"},
 		{importCallPat, 1, "dynamic_import"},
@@ -127,6 +176,14 @@ func (c *Crawler) captureJSNetwork(body string, sourceURL string, depth int) {
 		{dynamicSrcPat, 1, "dynamic_src"},
 		{serviceWorker, 1, "service_worker"},
 		{pageUrlPattern, 1, "page_reference"},
+		{useQueryPat, 1, "react_query"},
+		{apolloClientPat, 1, "apollo_client"},
+		{useFetchPat, 1, "use_fetch"},
+		{jqueryGetJSON, 1, "jquery_getjson"},
+		{navigatorBeacon, 1, "send_beacon"},
+		{newRequestPat, 1, "new_request"},
+		{xhrOpenPat, 1, "xhr_open"},
+		{postMessagePat, 1, "post_message"},
 	}
 
 	seen := make(map[string]bool)
@@ -156,15 +213,15 @@ func (c *Crawler) captureJSNetwork(body string, sourceURL string, depth int) {
 
 			if !c.Scope.IsInScope(absURL, depth+1) {
 				// Still report out-of-scope URLs for network visibility
-				fmt.Printf(`{"type":"network_entry","url":%q,"source_url":%q,"resource_type":"%s_out","method":"GET"}`+"\n",
+				writeOutput(`{"type":"network_entry","url":%q,"source_url":%q,"resource_type":"%s_out","method":"GET"}`+"\n",
 					absURL, sourceURL, p.rtype)
 				continue
 			}
 
-			fmt.Printf(`{"type":"network_entry","url":%q,"source_url":%q,"resource_type":%q,"method":"GET"}`+"\n",
+			writeOutput(`{"type":"network_entry","url":%q,"source_url":%q,"resource_type":%q,"method":"GET"}`+"\n",
 				absURL, sourceURL, p.rtype)
 
-			if !c.Filters.Seen(absURL) && (strings.HasSuffix(absURL, ".js") || strings.HasSuffix(absURL, ".mjs") || strings.HasSuffix(absURL, ".cjs")) {
+			if !c.Filters.HasSeen(absURL) && (strings.HasSuffix(absURL, ".js") || strings.HasSuffix(absURL, ".mjs") || strings.HasSuffix(absURL, ".cjs")) {
 				c.addQueueItem(urlQueue{url: absURL, source: sourceURL, depth: depth + 1, phase: 1})
 			}
 		}
@@ -179,7 +236,7 @@ func (c *Crawler) fetchAndReport(url string, source string, rtype string) {
 
 	resp, err := c.Client.Do(req)
 	if err != nil {
-		fmt.Printf(`{"type":"network_result","url":%q,"source_url":%q,"resource_type":%q,"status":0,"error":%q}`+"\n",
+		writeOutput(`{"type":"network_result","url":%q,"source_url":%q,"resource_type":%q,"status":0,"error":%q}`+"\n",
 			url, source, rtype, err.Error())
 		return
 	}
@@ -190,14 +247,14 @@ func (c *Crawler) fetchAndReport(url string, source string, rtype string) {
 
 	// Report the actual response
 	bodyJSON, _ := json.Marshal(string(bodyBytes))
-	fmt.Printf(`{"type":"network_result","url":%q,"source_url":%q,"resource_type":%q,"status":%d,"content_type":%q,"length":%d,"body":%s}`+"\n",
+	writeOutput(`{"type":"network_result","url":%q,"source_url":%q,"resource_type":%q,"status":%d,"content_type":%q,"length":%d,"body":%s}`+"\n",
 		url, source, rtype, resp.StatusCode, ct, len(bodyBytes), string(bodyJSON))
 
 	// If it returned JS, queue for deeper analysis
 	if (strings.Contains(ct, "javascript") || strings.HasSuffix(url, ".js")) && resp.StatusCode == 200 {
 		// Output JS source
 		if c.ShowCode && len(bodyBytes) < 512*1024 {
-			fmt.Printf(`{"type":"js_source","url":%q,"status":200,"length":%d,"body":%s,"method":"network"}`+"\n",
+			writeOutput(`{"type":"js_source","url":%q,"status":200,"length":%d,"body":%s,"method":"network"}`+"\n",
 				url, len(bodyBytes), string(bodyJSON))
 		}
 		c.parseJSSource(string(bodyBytes), url, 2)

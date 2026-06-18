@@ -1,79 +1,155 @@
 package main
 
+import "strings"
+
 func CalculateGrade(score int) string {
 	switch {
-	case score >= 90:
+	case score >= 95:
 		return "A+"
-	case score >= 80:
+	case score >= 85:
 		return "A"
-	case score >= 70:
+	case score >= 75:
 		return "B"
 	case score >= 60:
 		return "C"
 	case score >= 40:
 		return "D"
+	case score >= 20:
+		return "E"
 	default:
 		return "F"
 	}
 }
 
-func AuditSecurityHeaders(headers map[string][]string) ([]Finding, int) {
-	var missing []Finding
-	penalty := 0
-
-	targets := []struct {
-		Name string
-		Desc string
-		Rec  string
-		Sev  string
-	}{
-		{"Strict-Transport-Security", "Missing HSTS", "max-age=31536000; includeSubDomains", "High"},
-		{"Content-Security-Policy", "Missing CSP", "default-src 'self'", "High"},
-		{"X-Frame-Options", "Missing Clickjacking protection", "DENY or SAMEORIGIN", "Medium"},
-		{"X-Content-Type-Options", "Missing MIME sniffing protection", "nosniff", "Low"},
-		{"Referrer-Policy", "Missing Referrer control", "strict-origin-when-cross-origin", "Low"},
-	}
-
-	for _, t := range targets {
-		if len(headers[t.Name]) == 0 {
-			missing = append(missing, Finding{
-				Header:         t.Name,
-				Description:    t.Desc,
-				Recommendation: t.Rec,
-				Severity:       t.Sev,
-			})
-			penalty += 15
-		}
-	}
-
-	return missing, penalty
+type ScoreBreakdown struct {
+	SecurityHeaders int `json:"security_headers"`
+	DangerousLeaks  int `json:"dangerous_leaks"`
+	CookieAudit     int `json:"cookie_audit"`
+	CorsAudit       int `json:"cors_audit"`
+	CacheAudit      int `json:"cache_audit"`
+	TLSAudit        int `json:"tls_audit"`
 }
 
-func AuditDangerousHeaders(headers map[string][]string) ([]Finding, int) {
-	var dangerous []Finding
-	penalty := 0
+func CalculateScore(
+	missingSecurity []Finding,
+	dangerous []Finding,
+	cookieFindings []CookieFinding,
+	corsFindings []Finding,
+	cacheAudit *CacheAudit,
+	tlsFindings []Finding,
+) (int, map[string]int) {
+	score := 100
+	breakdown := make(map[string]int)
 
-	targets := []struct {
-		Name string
-		Desc string
-		Sev  string
-	}{
-		{"Server", "Exposes server software version", "Medium"},
-		{"X-Powered-By", "Exposes underlying technology stack", "Low"},
-		{"X-AspNet-Version", "Exposes specific .NET version", "Medium"},
-	}
-
-	for _, t := range targets {
-		if val := headers[t.Name]; len(val) > 0 {
-			dangerous = append(dangerous, Finding{
-				Header:      t.Name,
-				Value:       val[0],
-				Description: t.Desc,
-				Severity:    t.Sev,
-			})
-			penalty += 5
+	secPenalty := 0
+	for _, f := range missingSecurity {
+		switch f.Severity {
+		case SeverityCritical:
+			secPenalty += 25
+		case SeverityHigh:
+			secPenalty += 20
+		case SeverityMedium:
+			secPenalty += 10
+		case SeverityLow:
+			secPenalty += 5
 		}
 	}
+	breakdown["security_headers"] = secPenalty
+	score -= secPenalty
 
-	return dangerous, penalty
+	dangerousPenalty := 0
+	for _, f := range dangerous {
+		switch f.Severity {
+		case SeverityCritical:
+			dangerousPenalty += 25
+		case SeverityHigh:
+			dangerousPenalty += 15
+		case SeverityMedium:
+			dangerousPenalty += 10
+		case SeverityLow:
+			dangerousPenalty += 5
+		}
+	}
+	breakdown["dangerous_leaks"] = dangerousPenalty
+	score -= dangerousPenalty
+
+	cookiePenalty := 0
+	for _, c := range cookieFindings {
+		switch c.Severity {
+		case SeverityMedium:
+			cookiePenalty += 8
+		case SeverityLow:
+			cookiePenalty += 3
+		default:
+			cookiePenalty += 5
+		}
+	}
+	breakdown["cookie_audit"] = cookiePenalty
+	score -= cookiePenalty
+
+	corsPenalty := 0
+	for _, f := range corsFindings {
+		switch f.Severity {
+		case SeverityCritical:
+			corsPenalty += 30
+		case SeverityHigh:
+			corsPenalty += 20
+		case SeverityMedium:
+			corsPenalty += 10
+		case SeverityLow:
+			corsPenalty += 3
+		}
+	}
+	breakdown["cors_audit"] = corsPenalty
+	score -= corsPenalty
+
+	cachePenalty := 0
+	if cacheAudit != nil {
+		for _, f := range cacheAudit.Findings {
+			switch f.Severity {
+			case SeverityMedium:
+				cachePenalty += 5
+			case SeverityLow:
+				cachePenalty += 2
+			}
+		}
+	}
+	breakdown["cache_audit"] = cachePenalty
+	score -= cachePenalty
+
+	tlsPenalty := 0
+	for _, f := range tlsFindings {
+		switch f.Severity {
+		case SeverityCritical:
+			tlsPenalty += 30
+		case SeverityHigh:
+			tlsPenalty += 20
+		case SeverityMedium:
+			tlsPenalty += 10
+		case SeverityLow:
+			tlsPenalty += 3
+		}
+	}
+	breakdown["tls_audit"] = tlsPenalty
+	score -= tlsPenalty
+
+	if score < 0 {
+		score = 0
+	}
+
+	return score, breakdown
+}
+
+func AnalyzeHSTSValue(value string) string {
+	v := strings.ToLower(value)
+	if strings.Contains(v, "preload") && strings.Contains(v, "includesubdomains") && strings.Contains(v, "max-age=") {
+		return "HSTS with preload ready"
+	}
+	if strings.Contains(v, "includesubdomains") && strings.Contains(v, "max-age=") {
+		return "HSTS configured (consider adding preload)"
+	}
+	if strings.Contains(v, "max-age=") {
+		return "HSTS configured (add includeSubDomains)"
+	}
+	return "HSTS misconfigured"
 }

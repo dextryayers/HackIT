@@ -28,17 +28,18 @@ def print_live_finding(finding) -> None:
     title = getattr(finding, "title", "")
 
     if status == "hit":
-        prefix = _colored("  [+] FOUND", B_GREEN, bold=True)
+        prefix = _colored("  [+]", B_GREEN, bold=True)
     elif status == "possible":
-        prefix = _colored("  [?] POSSIBLE", B_YELLOW, bold=True)
+        prefix = _colored("  [?]", B_YELLOW, bold=True)
     elif status == "unknown":
-        prefix = _colored("  [!] UNKNOWN", CYAN, bold=True)
+        prefix = _colored("  [!]", CYAN, bold=True)
     else:
-        prefix = _colored("  [-] MISS", B_RED, bold=True)
+        prefix = _colored("  [-] ", B_RED, bold=True)
 
-    meta = _colored(f" | {platform}", DIM)
-    t = f" :: {title[:80]}" if title and status in {"hit", "possible"} else ""
-    click.echo(f"{prefix}{meta}{t}")
+    meta = _colored(f" {platform}", DIM)
+    url_part = _colored(f" {url[:90]}{'..' if len(url)>90 else ''}", B_CYAN)
+    title_part = f" :: {_colored(title[:60], DIM)}" if title else ""
+    click.echo(f"{prefix}{meta} {url_part}{title_part}")
 
 
 def print_results(data: Dict[str, object], show_misses: bool = False) -> None:

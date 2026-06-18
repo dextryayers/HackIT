@@ -18,6 +18,7 @@ type Crawler struct {
 	Filters    *Filters
 	WG         sync.WaitGroup
 	queueWg    sync.WaitGroup
+	waybackWg  sync.WaitGroup
 	mu         sync.Mutex
 	queuedURLs chan urlQueue
 	ShowCode   bool
@@ -27,11 +28,22 @@ type Crawler struct {
 	subdomainURLs map[string]string
 	subMu         sync.Mutex
 
+	// Per-subdomain sequential crawl
+	subdomainActive bool
+	subdomainQueue  chan urlQueue
+	subdomainWg     sync.WaitGroup
+	subdomainWorkers int
+
 	allCrawled []CrawlResult
 	startTime  time.Time
 }
 
 func (c *Crawler) addQueueItem(item urlQueue) {
+	if c.subdomainActive && c.subdomainQueue != nil {
+		c.subdomainWg.Add(1)
+		c.subdomainQueue <- item
+		return
+	}
 	c.queueWg.Add(1)
 	c.queuedURLs <- item
 }
@@ -84,6 +96,7 @@ func NewCrawler(baseURL string, baseHost string, showCode bool) *Crawler {
 		ShowCode:   showCode,
 		allCrawled: make([]CrawlResult, 0),
 		startTime:  time.Now(),
+		subdomainWorkers: 3,
 	}
 }
 
@@ -141,38 +154,45 @@ func (c *Crawler) Start() {
 	go c.crawlQueue()
 
 	// ── PHASE 1: Main domain deep crawl ──
-	// 1a. Passive checks (robots, sitemap, security.txt)
 	c.performPassiveChecks()
 
-	// 1b. Wayback Machine historical JS discovery
-	go c.queryWayback(c.BaseURL)
+	// Wayback Machine historical JS discovery
+	c.waybackWg.Add(1)
+	go func() {
+		defer c.waybackWg.Done()
+		c.queryWayback(c.BaseURL)
+	}()
 
-	// 1c. Active brute-force (common JS paths on main domain)
+	// Active brute-force (common JS paths on main domain)
 	c.performActiveBrute()
 
-	// 1d. Queue base URL + common entries
-	c.addQueueItem(urlQueue{url: c.BaseURL, source: "", depth: 0, phase: 1})
-	for _, entry := range []string{c.BaseURL, c.BaseURL + "/"} {
-		if !c.Filters.Seen(entry) {
-			c.addQueueItem(urlQueue{url: entry, source: "", depth: 0, phase: 1})
-		}
+	// Queue base URL + trailing-slash variant (some servers treat them differently)
+	if !c.Filters.HasSeen(c.BaseURL) {
+		c.addQueueItem(urlQueue{url: c.BaseURL, source: "", depth: 0, phase: 1})
+	}
+	if c.BaseURL+"/" != c.BaseURL && !c.Filters.HasSeen(c.BaseURL+"/") {
+		c.addQueueItem(urlQueue{url: c.BaseURL + "/", source: "", depth: 0, phase: 1})
 	}
 
-	// Wait for phase 1 to complete
+	// Wait for phase 1 crawl to complete
 	c.queueWg.Wait()
 
-	// ── PHASE 2: Subdomain discovery & crawl ──
-	c.startSubdomainPhase()
+	// Wait for wayback discovery to finish, then drain its items
+	c.waybackWg.Wait()
+	// Drain any remaining wayback-discovered URLs still in the queue
+	c.queueWg.Wait()
 
-	// Close the channel
+	// ── PHASE 2: Sequential subdomain processing ──
+	c.discoverAllSubdomains()
+	c.crawlSubdomainsSequentially()
+
+	// ── Cleanup ──
 	close(c.queuedURLs)
-
-	// Print summary
 	c.printSummary()
 }
 
-func (c *Crawler) startSubdomainPhase() {
-	// Discover subdomains from multiple sources
+// discoverAllSubdomains collects subdomains from all sources
+func (c *Crawler) discoverAllSubdomains() {
 	var wg sync.WaitGroup
 	wg.Add(4)
 	go func() { defer wg.Done(); c.discoverCTLogs() }()
@@ -181,24 +201,72 @@ func (c *Crawler) startSubdomainPhase() {
 	go func() { defer wg.Done(); c.discoverDNSBrute() }()
 	wg.Wait()
 	c.discoverSubdomainsFromJS()
+}
 
-	// Queue all discovered subdomains for crawling
+// crawlSubdomainsSequentially processes each subdomain one at a time.
+// A subdomain is fully crawled (including all discovered JS, sub-pages, etc.)
+// before the next subdomain begins.
+func (c *Crawler) crawlSubdomainsSequentially() {
 	c.subMu.Lock()
-	for subdomain, subURL := range c.subdomainURLs {
-		if c.Filters.Seen(subURL) {
+	var subList []struct {
+		name string
+		url  string
+	}
+	for name, u := range c.subdomainURLs {
+		if c.Filters.HasSeen(u) {
 			continue
 		}
-		fmt.Printf(`{"type":"subdomain","url":%q,"subdomain":%q,"method":"discovery"}`+"\n", subURL, subdomain)
-		c.addQueueItem(urlQueue{url: subURL, source: c.BaseURL, depth: 0, phase: 2})
-		// Also queue common JS paths for this subdomain
-		for _, p := range getBrutePaths() {
-			c.addQueueItem(urlQueue{url: subURL + p, source: subURL, depth: 1, phase: 2})
-		}
+		subList = append(subList, struct {
+			name string
+			url  string
+		}{name, u})
 	}
 	c.subMu.Unlock()
 
-	// Wait for phase 2 to complete
-	c.queueWg.Wait()
+	if len(subList) == 0 {
+		return
+	}
+
+	// Create the per-subdomain work queue + workers
+	c.subdomainQueue = make(chan urlQueue, 10000)
+	c.subdomainActive = true
+
+	// Start subdomain workers
+	for i := 0; i < c.subdomainWorkers; i++ {
+		go func() {
+			for item := range c.subdomainQueue {
+				c.crawlPage(item.url, item.source, item.depth)
+				c.subdomainWg.Done()
+			}
+		}()
+	}
+
+	// Process each subdomain: queue its URL, wait for full drain, repeat
+	for _, s := range subList {
+		if c.Filters.HasSeen(s.url) {
+			continue
+		}
+		writeOutput(`{"type":"subdomain","url":%q,"subdomain":%q,"method":"sequential"}`+"\n", s.url, s.name)
+
+		// Queue the subdomain main page
+		c.subdomainWg.Add(1)
+		c.subdomainQueue <- urlQueue{url: s.url, source: c.BaseURL, depth: 1, phase: 2}
+
+		// Queue common brute paths for this subdomain
+		for _, p := range getBrutePaths() {
+			c.subdomainWg.Add(1)
+			c.subdomainQueue <- urlQueue{url: s.url + p, source: s.url, depth: 2, phase: 2}
+		}
+
+		// Wait for ALL work for this subdomain to complete
+		// (all pages, JS files, SSRF configs, etc.)
+		c.subdomainWg.Wait()
+	}
+
+	// Cleanup subdomain channel
+	close(c.subdomainQueue)
+	c.subdomainActive = false
+	c.subdomainQueue = nil
 }
 
 func (c *Crawler) printSummary() {
@@ -214,9 +282,9 @@ func (c *Crawler) printSummary() {
 	elapsed := time.Since(c.startTime).Round(time.Millisecond)
 	c.mu.Unlock()
 
-	fmt.Printf(`{"type":"summary","total":%d,"js_files":%d,"subdomains":%d,"elapsed":"%s"}`,
+	writeOutput(`{"type":"summary","total":%d,"js_files":%d,"subdomains":%d,"elapsed":"%s"}`,
 		totalCrawled, jsCount, subCount, elapsed)
-	fmt.Println()
+	writeOutput("\n")
 }
 
 var uaList = []string{

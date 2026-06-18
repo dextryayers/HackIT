@@ -75,11 +75,11 @@ func (c *Crawler) queryWayback(targetURL string) {
 		if !strings.HasPrefix(rawURL, "http") {
 			continue
 		}
-		if c.Filters.Seen(rawURL) {
+		if c.Filters.HasSeen(rawURL) {
 			continue
 		}
 
-		fmt.Printf(`{"type":"wayback","url":%q,"timestamp":%q,"source":%q}`+"\n", rawURL, ts, domain)
+		writeOutput(`{"type":"wayback","url":%q,"timestamp":%q,"source":%q}`+"\n", rawURL, ts, domain)
 
 		if strings.HasSuffix(rawURL, ".js") || strings.HasSuffix(rawURL, ".json") || strings.HasSuffix(rawURL, ".map") {
 			c.addQueueItem(urlQueue{url: rawURL, source: "archive.org", depth: 1, phase: 1})

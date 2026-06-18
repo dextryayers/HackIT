@@ -32,12 +32,13 @@ def generate_html_report(data: dict, output_path: str = "") -> str:
         icon = {"hit": "✅", "possible": "❓", "miss": "❌", "unknown": "⚠️"}.get(st, "➖")
         bg = {"hit": "rgba(0,200,83,.12)", "possible": "rgba(255,145,0,.1)", "miss": "rgba(255,23,68,.08)", "unknown": "rgba(158,158,158,.08)"}.get(st, "")
         cl = {"hit": "#00e676", "possible": "#ff9100", "miss": "#ff1744", "unknown": "#9e9e9e"}.get(st, "#666")
+        link_display = url[:120] + (".." if len(url) > 120 else "")
         rows += f"""<tr style="background:{bg}">
             <td style="padding:10px 12px;text-align:center">{icon}</td>
             <td style="padding:10px 12px;font-weight:600">{plat}</td>
             <td style="padding:10px 12px"><span class="badge" style="background:{cl}">{st.upper()}</span></td>
             <td style="padding:10px 12px;color:#888;font-size:13px">{cat}</td>
-            <td style="padding:10px 12px"><a href="{url}" target="_blank" class="truncate">{url}</a></td>
+            <td style="padding:10px 12px"><a href="{url}" target="_blank" class="truncate" title="{url}">{link_display}</a></td>
             <td style="padding:10px 12px;color:#aaa;font-size:12px">{title}</td>
         </tr>"""
 

@@ -8,7 +8,6 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
-	"time"
 )
 
 var (
@@ -25,6 +24,22 @@ var (
 	inlineJSVar     = regexp.MustCompile(`(?:var|let|const|window\.)\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*["'\` + "`" + `](https?://[^"'\` + "`" + `]+)["'\` + "`" + `]`)
 	fetchPattern    = regexp.MustCompile(`(?:fetch|axios|xhr|XMLHttpRequest)\s*\(?\s*["'\` + "`" + `]([^"'\` + "`" + `]+)["'\` + "`" + `]`)
 	ajaxPattern     = regexp.MustCompile(`\$.+(?:get|post|ajax|load)\s*\(?\s*["'\` + "`" + `]([^"'\` + "`" + `]+)["'\` + "`" + `]`)
+
+	// Template literal URL patterns
+	templateURLPat  = regexp.MustCompile("`[^`]*(?:https?://[^`\"'\\\\${\\s]+)[^`]*`")
+	templateRelPat  = regexp.MustCompile("`[^`]*(?:/[^`\"'\\\\${\\s]*(?:api|graphql|rest|v1|v2|v3|auth|oauth|token|login|register|users|admin|upload|download|webhook)[^`\"'\\\\${\\s]*)[^`]*`")
+
+	// Inline JSON config patterns (SSR payloads)
+	nextDataPattern = regexp.MustCompile(`<script id="__NEXT_DATA__"[^>]*type="application/json"[^>]*>({.*?})</script>`)
+	nuxtDataPattern = regexp.MustCompile(`<script id="__NUXT__"[^>]*type="application/json"[^>]*>({.*?})</script>`)
+	apolloStatePat  = regexp.MustCompile(`<script id="__APOLLO_STATE__"[^>]*>({.*?})</script>`)
+	rscPayloadPat   = regexp.MustCompile(`<script id="__RSC__"[^>]*>({.*?})</script>`)
+	relayDataPat    = regexp.MustCompile(`<script id="__RELAY_DATA__"[^>]*>({.*?})</script>`)
+	bootstrapPat    = regexp.MustCompile(`<script id="__BOOTSTRAP_DATA__"[^>]*>({.*?})</script>`)
+
+	// Template literal substring extraction
+	absURLInTemplate = regexp.MustCompile(`(https?://[^"'\` + "`" + `\s]+)`)
+	relURLInTemplate  = regexp.MustCompile(`(/\S+(?:api|graphql|rest|v1|v2|v3|auth|oauth|token|login|register|users|admin|upload|download|webhook|trpc)\S*)`)
 )
 
 type CrawlResult struct {
@@ -73,17 +88,47 @@ func (c *Crawler) crawlPage(pageURL string, sourceURL string, depth int) {
 		crawlType = "JSON"
 	}
 
+	// Run deep extraction on HTML pages (SSR configs, import maps, webpack)
+	if crawlType == "HTML" && resp.StatusCode == 200 {
+		deep := performDeepExtraction(body, pageURL)
+		for _, s := range deep.BootstrapConfigs {
+			if s.IsURL || s.IsPath {
+				absURL := resolveURL(s.Value, c.BaseURL)
+				if absURL != "" && c.Scope.IsInScope(absURL, depth+1) && !c.Filters.HasSeen(absURL) {
+					writeOutput(`{"type":"ssr_url","url":%q,"source":%q,"ctx":%q}`+"\n",
+						absURL, pageURL, s.Context)
+					c.addQueueItem(urlQueue{url: absURL, source: pageURL, depth: depth + 1, phase: 1})
+				}
+			} else {
+				writeOutput(`{"type":"ssr_config","name":%q,"source":%q,"ctx":%q}`+"\n",
+					s.Value, pageURL, s.Context)
+			}
+		}
+		for _, s := range deep.ImportMapURLs {
+			absURL := resolveURL(s.Value, c.BaseURL)
+			if absURL != "" && c.Scope.IsInScope(absURL, depth+1) && !c.Filters.HasSeen(absURL) {
+				writeOutput(`{"type":"importmap","url":%q,"source":%q,"ctx":%q}`+"\n",
+					absURL, pageURL, s.Context)
+				c.addQueueItem(urlQueue{url: absURL, source: pageURL, depth: depth + 1, phase: 1})
+			}
+		}
+	}
+
 	// Output JS source code when ShowCode is enabled
 	if c.ShowCode && resp.StatusCode == 200 && crawlType == "JavaScript" {
 		if len(body) > 0 && len(body) < 1024*1024 {
 			bodyJSON, _ := json.Marshal(body)
-			fmt.Printf(`{"type":"js_source","url":%q,"status":200,"length":%d,"body":%s}`+"\n",
+			writeOutput(`{"type":"js_source","url":%q,"status":200,"length":%d,"body":%s}`+"\n",
 				pageURL, len(body), string(bodyJSON))
 		} else {
-			fmt.Printf(`{"type":"js_source","url":%q,"status":200,"length":%d,"body":"[skipped: %d bytes]"}`+"\n",
+			writeOutput(`{"type":"js_source","url":%q,"status":200,"length":%d,"body":"[skipped: %d bytes]"}`+"\n",
 				pageURL, len(body), len(body))
 		}
 	}
+
+	// Always emit discovered line for progress tracking
+	writeOutput(`{"type":"discovered","url":%q,"source":%q,"content_type":%q,"status":%d,"depth":%d}`+"\n",
+		pageURL, sourceURL, crawlType, resp.StatusCode, depth)
 
 	result := CrawlResult{
 		URL:        pageURL,
@@ -103,48 +148,161 @@ func (c *Crawler) crawlPage(pageURL string, sourceURL string, depth int) {
 		// Extract inline JS network calls (fetch, XHR, axios)
 		c.extractInlineJS(body, pageURL, depth)
 		c.extractFromHTML(body, pageURL, depth)
+
+		// Extract inline JSON SSR configs (Next.js, Nuxt, Apollo, etc.)
+		configURLs := extractInlineJSONConfigs(body, pageURL)
+		for _, cu := range configURLs {
+			absURL := resolveURL(cu, pageURL)
+			if absURL != "" && c.Scope.IsInScope(absURL, depth+1) && !c.Filters.HasSeen(absURL) {
+				c.addQueueItem(urlQueue{url: absURL, source: pageURL, depth: depth + 1, phase: 1})
+			}
+		}
 	}
 }
 
 func (c *Crawler) parseJSSource(body string, sourceURL string, depth int) {
-	endpoints := extractEndpoints(body)
-	for _, ep := range endpoints {
-		absURL := resolveURL(ep.URL, c.BaseURL)
-		if absURL != "" && c.Scope.IsInScope(absURL, depth+1) && !c.Filters.Seen(absURL) {
+	analysis := analyzeJS(body, sourceURL)
+
+	// ── Helper: resolve + queue + emit NDJSON ──
+	emitAndQueue := func(val, ndjsonType, ctx string, enqueueOnly bool) {
+		absURL := resolveURL(val, c.BaseURL)
+		if absURL == "" {
+			return
+		}
+		if !enqueueOnly {
+			writeOutput(`{"type":%q,"url":%q,"source":%q,"ctx":%q}`+"\n",
+				ndjsonType, absURL, sourceURL, ctx)
+		}
+		if c.Scope.IsInScope(absURL, depth+1) && !c.Filters.HasSeen(absURL) {
 			c.addQueueItem(urlQueue{url: absURL, source: sourceURL, depth: depth + 1, phase: 1})
 		}
-		// Extract potential subdomains from every endpoint
-		c.extractSubdomainFromURL(ep.URL)
+		c.extractSubdomainFromURL(val)
 	}
 
-	imports := extractImports(body)
-	for _, imp := range imports {
+	// ── Phase 1: All string literals ──
+	for _, s := range analysis.Strings {
+		emitAndQueue(s.Value, "js_string_url", s.Context, false)
+	}
+
+	// ── Phase 2: Module URLs (dynamic import, ESM export, webpack chunks) ──
+	for _, s := range analysis.ModuleURLs {
+		emitAndQueue(s.Value, "module_url", s.Context, false)
+	}
+
+	// ── Phase 3: Template literal interpolation parts ──
+	for _, s := range analysis.TemplateParts {
+		emitAndQueue(s.Value, "template_reconstructed", s.Context, false)
+	}
+
+	// ── Phase 4: CSS references (url(), @import from CSS-in-JS) ──
+	for _, s := range analysis.CSSRefs {
+		emitAndQueue(s.Value, "css_ref", s.Context, false)
+	}
+
+	// ── Phase 5: Environment URLs (Worker, SW, Wasm, Router, Window, Location) ──
+	for _, s := range analysis.EnvURLs {
+		emitAndQueue(s.Value, "env_url", s.Context, false)
+	}
+
+	// ── Phase 6: Concatenation patterns ──
+	for _, s := range analysis.Concatenations {
+		emitAndQueue(s.Value, "concat_url", s.Context, false)
+	}
+
+	// ── Phase 7: JSON config objects ──
+	for _, s := range analysis.ConfigObjects {
+		emitAndQueue(s.Value, "config_url", s.Context, false)
+	}
+
+	// ── Phase 8: SvelteKit load function URLs ──
+	for _, s := range analysis.SvelteKitURLs {
+		emitAndQueue(s.Value, "sveltekit_url", s.Context, false)
+	}
+
+	// ── Phase 8.5: Deep extraction (webpack, GraphQL, SW cache, SSR, etc.) ──
+	deep := performDeepExtraction(body, sourceURL)
+	for _, s := range deep.WebpackChunks {
+		emitAndQueue(s.Value, "webpack_chunk", s.Context, false)
+	}
+	for _, s := range deep.GraphQLQueries {
+		if s.IsURL || s.IsPath {
+			emitAndQueue(s.Value, "graphql_url", s.Context, false)
+		} else {
+			writeOutput(`{"type":"graphql_op","name":%q,"source":%q}`+"\n", s.Value, sourceURL)
+		}
+	}
+	for _, s := range deep.SWCacheURLs {
+		emitAndQueue(s.Value, "sw_cache", s.Context, false)
+	}
+	for _, s := range deep.ConsoleURLs {
+		emitAndQueue(s.Value, "console_url", s.Context, false)
+	}
+	for _, s := range deep.ImportMapURLs {
+		emitAndQueue(s.Value, "importmap", s.Context, false)
+	}
+	for _, s := range deep.InlineWasmURLs {
+		emitAndQueue(s.Value, "wasm_url", s.Context, false)
+	}
+	for _, s := range deep.JSONPEndpoints {
+		emitAndQueue(s.Value, "jsonp_endpoint", s.Context, false)
+	}
+	for _, s := range deep.MinifiedHints {
+		emitAndQueue(s.Value, "minified_hint", s.Context, false)
+	}
+	for _, s := range deep.BootstrapConfigs {
+		if s.IsURL || s.IsPath {
+			emitAndQueue(s.Value, "ssr_url", s.Context, false)
+		} else {
+			writeOutput(`{"type":"ssr_config","name":%q,"source":%q,"ctx":%q}`+"\n",
+				s.Value, sourceURL, s.Context)
+		}
+	}
+
+	// ── Phase 9: Standard endpoint patterns (legacy extractEndpoints) ──
+	for _, ep := range analysis.Endpoints {
+		emitAndQueue(ep.URL, "endpoint", "legacy_endpoint", false)
+	}
+
+	// ── Phase 10: Template literal URLs (legacy extractTemplateLiteralURLs) ──
+	for _, tu := range extractTemplateLiteralURLs(body) {
+		absURL := resolveURL(tu, sourceURL)
+		if absURL != "" && c.Scope.IsInScope(absURL, depth+1) && !c.Filters.HasSeen(absURL) {
+			writeOutput(`{"type":"template_url","url":%q,"source":%q}`+"\n", absURL, sourceURL)
+			if c.Scope.IsJS(absURL) {
+				c.addQueueItem(urlQueue{url: absURL, source: sourceURL, depth: depth + 1, phase: 1})
+			}
+		}
+	}
+
+	// ── Phase 11: Subdomain extraction ──
+	c.extractSubdomainsFromBody(body, sourceURL)
+
+	// ── Phase 12: Sensitive data ──
+	for _, f := range analysis.Secrets {
+		writeOutput(`{"type":"sensitive","name":%q,"match":%q,"source":%q}`+"\n",
+			f.Name, f.Match, sourceURL)
+	}
+
+	// ── Phase 13: Comments ──
+	for _, cm := range findComments(body, sourceURL) {
+		writeOutput(`{"type":"comment","comment":%q,"source":%q}`+"\n", cm.Comment, cm.Source)
+	}
+
+	// ── Phase 14: Dependencies (legacy extractImports / extractDependencies) ──
+	for _, imp := range extractImports(body) {
 		absURL := resolveURL(imp, sourceURL)
 		if absURL != "" && c.Scope.IsJS(absURL) && c.Scope.IsInScope(absURL, depth+1) {
 			c.addQueueItem(urlQueue{url: absURL, source: sourceURL, depth: depth + 1, phase: 1})
 		}
 	}
-
-	// Extract subdomains from JS content
-	c.extractSubdomainsFromBody(body, sourceURL)
-
-	findings := findSensitive(body, sourceURL)
-	for _, f := range findings {
-		fmt.Printf(`{"type":"sensitive","name":%q,"match":%q,"source":%q}`+"\n", f.Name, f.Match, sourceURL)
-	}
-
-	comments := findComments(body, sourceURL)
-	for _, cm := range comments {
-		fmt.Printf(`{"type":"comment","comment":%q,"source":%q}`+"\n", cm.Comment, cm.Source)
-	}
-
-	// Extract dependency tree (require/import/dynamic imports)
 	c.extractDependencies(body, sourceURL, depth)
 
-	// Capture all dynamic network calls from JS (fetch, XHR, WebSocket, etc.)
+	// ── Phase 15: Network calls ──
 	c.captureJSNetwork(body, sourceURL, depth)
 
+	// ── Phase 16: Source maps ──
 	if depth < c.Scope.MaxDepth {
+		c.extractInlineSourceMap(body, sourceURL)
 		c.checkSourceMap(sourceURL)
 	}
 }
@@ -173,7 +331,7 @@ func (c *Crawler) extractFromHTML(body string, pageURL string, depth int) {
 				if absURL == "" || !c.Scope.IsInScope(absURL, depth+1) {
 					continue
 				}
-				if c.Filters.Seen(absURL) {
+				if c.Filters.HasSeen(absURL) {
 					continue
 				}
 				if p.rtype == "Script" || c.Scope.IsJS(absURL) {
@@ -243,7 +401,6 @@ func (c *Crawler) crawlQueue() {
 		go func(q urlQueue) {
 			defer func() { <-workerLimit; c.queueWg.Done() }()
 			c.crawlPage(q.url, q.source, q.depth)
-			time.Sleep(time.Duration(50+time.Now().UnixNano()%200) * time.Millisecond)
 		}(q)
 	}
 }
@@ -290,3 +447,101 @@ func cleanPath(p string) string {
 	scheme := result[0] + "//"
 	return scheme + strings.Join(result[1:], "/")
 }
+
+// Extract URLs from template literals (backtick strings without interpolation)
+func extractTemplateLiteralURLs(body string) []string {
+	var urls []string
+	seen := make(map[string]bool)
+
+	// Absolute URLs in template literals
+	tm := templateURLPat.FindAllString(body, -1)
+	for _, t := range tm {
+		m := absURLInTemplate.FindAllStringSubmatch(t, -1)
+		for _, mm := range m {
+			if len(mm) >= 2 && !seen[mm[1]] {
+				seen[mm[1]] = true
+				urls = append(urls, mm[1])
+			}
+		}
+	}
+
+	// Relative API/graphql paths in template literals
+	tr := templateRelPat.FindAllString(body, -1)
+	for _, t := range tr {
+		m := relURLInTemplate.FindAllStringSubmatch(t, -1)
+		for _, mm := range m {
+			if len(mm) >= 2 && !seen[mm[1]] {
+				seen[mm[1]] = true
+				urls = append(urls, mm[1])
+			}
+		}
+	}
+
+	return urls
+}
+
+// Extract inline JSON config blobs (Next.js/Nuxt/Apollo SSR payloads)
+func extractInlineJSONConfigs(body string, sourceURL string) []string {
+	var urls []string
+	seen := make(map[string]bool)
+
+	patterns := []struct {
+		re    *regexp.Regexp
+		name  string
+	}{
+		{nextDataPattern, "__NEXT_DATA__"},
+		{nuxtDataPattern, "__NUXT__"},
+		{apolloStatePat, "__APOLLO_STATE__"},
+		{rscPayloadPat, "__RSC__"},
+		{relayDataPat, "__RELAY_DATA__"},
+		{bootstrapPat, "__BOOTSTRAP_DATA__"},
+	}
+
+	for _, p := range patterns {
+		matches := p.re.FindAllStringSubmatch(body, -1)
+		for _, m := range matches {
+			if len(m) < 2 {
+				continue
+			}
+			payload := m[1]
+
+			// Try to parse as JSON and extract URLs
+			var data interface{}
+			if err := json.Unmarshal([]byte(payload), &data); err != nil {
+				continue
+			}
+
+			writeOutput(`{"type":"ssr_config","name":%q,"source":%q,"size":%d}`+"\n",
+				p.name, sourceURL, len(payload))
+
+			// Extract all string values that look like URLs from the JSON
+			extractStringsFromJSON(data, &urls, seen, sourceURL)
+		}
+	}
+
+	return urls
+}
+
+func extractStringsFromJSON(data interface{}, urls *[]string, seen map[string]bool, sourceURL string) {
+	switch v := data.(type) {
+	case map[string]interface{}:
+		for key, val := range v {
+			if s, ok := val.(string); ok {
+				if (strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://") ||
+					strings.HasPrefix(s, "/")) && !seen[s] {
+					seen[s] = true
+					*urls = append(*urls, s)
+					writeOutput(`{"type":"ssr_url","url":%q,"source":%q,"field":%q}`+"\n",
+						s, sourceURL, key)
+				}
+			} else {
+				extractStringsFromJSON(val, urls, seen, sourceURL)
+			}
+		}
+	case []interface{}:
+		for _, item := range v {
+			extractStringsFromJSON(item, urls, seen, sourceURL)
+		}
+	}
+}
+

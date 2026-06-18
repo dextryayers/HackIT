@@ -125,6 +125,68 @@ def analyze_js(ctx, target_url, output, code):
                         click.echo(f"    {_colored(f'{i+1:>4}', DIM)} {row}")
                     if len(rows) > 20:
                         click.echo(f"    {_colored('... truncated', DIM)}")
+            elif rtype == 'js_string_url':
+                ctx = result.get('ctx', '')
+                click.echo(f"  {_colored('[STR]', MAGENTA)} {url_val} {_colored(f'({ctx})', DIM)}")
+            elif rtype == 'module_url':
+                ctx = result.get('ctx', '')
+                emoji_map = {'dynamic_import': '[IMP]', 'webpack_import': '[WPK]', 'import_assert': '[ASR]',
+                             'dynamic_import_assert': '[ASR]', 'export_from': '[EXP]'}
+                tag = emoji_map.get(ctx, '[MOD]')
+                click.echo(f"  {_colored(tag, B_CYAN)} {url_val} {_colored(f'({ctx})', DIM)}")
+            elif rtype == 'template_reconstructed':
+                click.echo(f"  {_colored('[TMP]', MAGENTA)} {url_val}")
+            elif rtype == 'css_ref':
+                ctx = result.get('ctx', '')
+                tag = '[CSS]' if 'import' in ctx else '[CSS]'
+                click.echo(f"  {_colored(tag, YELLOW)} {url_val} {_colored(f'({ctx})', DIM)}")
+            elif rtype == 'env_url':
+                ctx = result.get('ctx', '')
+                env_tags = {'worker': '[WRK]', 'service_worker': '[SW]', 'wasm': '[WASM]',
+                            'postmessage_origin': '[PMO]', 'window_open': '[WIN]',
+                            'location_assign': '[LOC]', 'router_push': '[RTR]',
+                            'angular_router': '[ANG]', 'vue_router': '[VUE]'}
+                tag = env_tags.get(ctx, '[ENV]')
+                click.echo(f"  {_colored(tag, CYAN)} {url_val}")
+            elif rtype == 'sveltekit_url':
+                click.echo(f"  {_colored('[SK]', B_CYAN)} {url_val}")
+            elif rtype == 'webpack_chunk':
+                ctx = result.get('ctx', '')
+                click.echo(f"  {_colored('[WPK]', YELLOW)} {url_val} {_colored(f'({ctx})', DIM)}")
+            elif rtype == 'graphql_url':
+                click.echo(f"  {_colored('[GQL]', MAGENTA)} {url_val}")
+            elif rtype == 'graphql_op':
+                click.echo(f"  {_colored('[GQL]', MAGENTA)} {result.get('name', url_val)}")
+            elif rtype == 'sw_cache':
+                click.echo(f"  {_colored('[CACHE]', CYAN)} {url_val}")
+            elif rtype == 'console_url':
+                click.echo(f"  {_colored('[CONSOLE]', YELLOW)} {url_val}")
+            elif rtype == 'importmap':
+                ctx = result.get('ctx', '')
+                click.echo(f"  {_colored('[IMPORT]', B_CYAN)} {url_val} {_colored(f'({ctx})', DIM)}")
+            elif rtype == 'wasm_url':
+                click.echo(f"  {_colored('[WASM]', B_CYAN)} {url_val}")
+            elif rtype == 'jsonp_endpoint':
+                click.echo(f"  {_colored('[JSONP]', YELLOW)} {url_val}")
+            elif rtype == 'minified_hint':
+                ctx = result.get('ctx', '')
+                click.echo(f"  {_colored('[MIN]', MAGENTA)} {url_val} {_colored(f'({ctx})', DIM)}")
+            elif rtype == 'concat_url':
+                click.echo(f"  {_colored('[CON]', YELLOW)} {url_val}")
+            elif rtype == 'config_url':
+                click.echo(f"  {_colored('[CFG]', BLUE)} {url_val}")
+            elif rtype == 'template_url':
+                click.echo(f"  {_colored('[TPL]', MAGENTA)} {url_val}")
+            elif rtype == 'sourcemap_content':
+                click.echo(f"  {_colored('[SMC]', YELLOW)} {result.get('source', '')} ({result.get('sources', 0)} sources, {result.get('size', 0)}b)")
+            elif rtype == 'sourcemap_content_source':
+                click.echo(f"         {_colored('  └─', DIM)} {result.get('name', '')} ({result.get('size', 0)}b)")
+            elif rtype == 'sourcemap_find':
+                click.echo(f"           {_colored('  ├─', DIM)} {url_val}")
+            elif rtype == 'ssr_config':
+                click.echo(f"  {_colored('[SSR]', YELLOW)} {result.get('name', '')} ({result.get('size', 0)}b)")
+            elif rtype == 'ssr_url':
+                click.echo(f"         {_colored('  └─', DIM)} {url_val} ({result.get('field', '')})")
             elif rtype == 'summary':
                 all_results.append(result)
                 click.echo(f"\n  {_colored('═' * 56, DIM)}")

@@ -3,17 +3,21 @@ package main
 import (
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
 type Analyzer struct {
-	Client *http.Client
+	Client         *http.Client
+	NoRedirectClient *http.Client
 }
 
 func NewAnalyzer() *Analyzer {
 	return &Analyzer{
-		Client: CreateEliteClient(),
+		Client:            CreateClient(),
+		NoRedirectClient:  CreateNoRedirectClient(),
 	}
 }
 
@@ -23,96 +27,278 @@ func (a *Analyzer) Analyze(targetURL string) Result {
 	}
 
 	start := time.Now()
-	req, _ := http.NewRequest("GET", targetURL, nil)
-	SetStealthHeaders(req)
 
-	resp, err := a.Client.Do(req)
+	u, err := url.Parse(targetURL)
 	if err != nil {
-		// Fallback to HTTP if HTTPS fails
-		if strings.HasPrefix(targetURL, "https://") {
-			targetURL = strings.Replace(targetURL, "https://", "http://", 1)
-			req, _ = http.NewRequest("GET", targetURL, nil)
-			SetStealthHeaders(req)
-			resp, err = a.Client.Do(req)
-		}
-		
-		if err != nil {
-			return Result{Error: fmt.Sprintf("Connection failed: %v", err)}
+		return Result{Error: fmt.Sprintf("Invalid URL: %v", err)}
+	}
+	hostname := u.Hostname()
+	resolvedIP := ResolveIP(hostname)
+
+	var (
+		allHeaders      []HeaderInfo
+		missing         []Finding
+		dangerous       []Finding
+		cookieFindings  []CookieFinding
+		corsFindings    []Finding
+		tlsInfo         *TLSInfo
+		tlsFindings     []Finding
+		technologies    []TechFingerprint
+		redirectChain   []RedirectStep
+		scanPaths       []ScanPath
+		methodsAllowed  []string
+		cacheAudit      *CacheAudit
+		subdomainResults []SubdomainResult
+	)
+
+	resp, err := a.fetchWithFallback(targetURL)
+	if err != nil {
+		return Result{
+			Target:     targetURL,
+			ResolvedIP: resolvedIP,
+			Error:      fmt.Sprintf("Connection failed: %v", err),
 		}
 	}
 	defer resp.Body.Close()
 
 	elapsed := time.Since(start).Milliseconds()
+	allHeaders = ExtractHeaderList(resp.Header)
 
-	var allHeaders []HeaderInfo
-	for k, v := range resp.Header {
-		val := strings.Join(v, ", ")
-		desc, cat := GetHeaderMetadata(k)
-		allHeaders = append(allHeaders, HeaderInfo{
-			Key:         k,
-			Value:       val,
-			Description: desc,
-			Category:    cat,
-			IsSecurity:  cat == "Security",
-		})
-	}
+	server := resp.Header.Get("Server")
+	poweredBy := resp.Header.Get("X-Powered-By")
 
-	// Run specialized audits
-	missing, missingPenalty := AuditSecurityHeaders(resp.Header)
-	dangerous, dangerousPenalty := AuditDangerousHeaders(resp.Header)
-	cookieFindings := AuditCookies(resp.Header)
-	corsFindings := AuditCORS(resp.Header)
+	missing, _ = AuditSecurityHeaders(resp.Header)
+	dangerous, _ = AuditDangerousHeaders(resp.Header)
+	cookieFindings = AuditCookies(resp.Header)
+	corsFindings = AuditCORS(resp.Header)
 
-	// Additional penalty for cookie issues
-	cookiePenalty := len(cookieFindings) * 5
-	corsPenalty := len(corsFindings) * 10
+	corsFindings = append(corsFindings, a.auditDeepCORS(targetURL)...)
 
-	score := 100 - missingPenalty - dangerousPenalty - cookiePenalty - corsPenalty
-	if score < 0 { score = 0 }
+	tlsInfo = AuditTLS(targetURL)
+	tlsFindings = AuditTLSSecurity(tlsInfo)
+
+	cacheAudit = AuditCachePolicy(resp.Header)
+
+	technologies = FingerprintTechnologies(resp.Header)
+
+	redirectChain = TraceRedirectChain(targetURL)
+
+	scanPaths = a.scanMultiplePaths(targetURL)
+
+	methodsAllowed = CheckAllowedMethods(targetURL)
+
+	subdomainResults = a.scanSubdomains(u.Hostname(), targetURL)
+
+	score, breakdown := CalculateScore(missing, dangerous, cookieFindings, corsFindings, cacheAudit, tlsFindings)
 
 	return Result{
-		Target:       targetURL,
-		Grade:        CalculateGrade(score),
-		Score:        score,
-		AllHeaders:   allHeaders,
-		Missing:      missing,
-		Dangerous:    dangerous,
-		CookieAudit:  cookieFindings,
-		CORSAudit:    corsFindings,
-		ServerInfo:   resp.Header.Get("Server"),
-		PoweredBy:    resp.Header.Get("X-Powered-By"),
-		ResponseTime: elapsed,
+		Target:          targetURL,
+		ResolvedIP:     resolvedIP,
+		Grade:           CalculateGrade(score),
+		Score:           score,
+		ScoreBreakdown:  breakdown,
+		ResponseTimeMs:  elapsed,
+		AllHeaders:      allHeaders,
+		Missing:         missing,
+		Dangerous:       dangerous,
+		CookieAudit:     cookieFindings,
+		CorsAudit:       corsFindings,
+		CacheAudit:      cacheAudit,
+		ServerInfo:      server,
+		PoweredBy:       poweredBy,
+		TLSInfo:         tlsInfo,
+		Technologies:    technologies,
+		RedirectChain:   redirectChain,
+		ScanPaths:       scanPaths,
+		MethodsAllowed:  methodsAllowed,
+		SubdomainResults: subdomainResults,
 	}
 }
 
-func getHeaderMetadata(key string) (string, string) {
-	k := strings.ToLower(key)
-	// Known Headers Dictionary
-	dict := map[string][2]string{
-		"server":               {"Identifies the server software", "Information"},
-		"content-type":         {"Media type of the resource", "Content"},
-		"content-length":       {"Size of the response body in bytes", "Content"},
-		"date":                 {"The date and time the message was sent", "Network"},
-		"connection":           {"Controls whether the network connection stays open", "Network"},
-		"strict-transport-security": {"Enforces HTTPS connections", "Security"},
-		"content-security-policy":   {"Prevents XSS and other injection attacks", "Security"},
-		"x-frame-options":           {"Prevents Clickjacking", "Security"},
-		"x-content-type-options":    {"Prevents MIME-sniffing", "Security"},
-		"referrer-policy":           {"Controls Referrer information", "Security"},
-		"x-xss-protection":          {"Legacy XSS protection", "Security"},
-		"cache-control":             {"Directives for caching mechanisms", "Caching"},
-		"expires":                   {"The date/time after which the response is considered stale", "Caching"},
-		"vary":                      {"Tells caches how to match future request headers", "Caching"},
-		"x-powered-by":              {"Underlying technology (Risk of leak)", "Information"},
-		"set-cookie":                {"Sends cookies from the server to the user agent", "Security/Session"},
-		"access-control-allow-origin": {"Indicates whether the response can be shared (CORS)", "Security"},
-		"alt-svc":                   {"Alternative services available", "Network"},
-		"transfer-encoding":         {"The form of encoding used to transfer the entity", "Network"},
-		"cf-ray":                    {"Cloudflare internal tracking ID", "Network"},
+func (a *Analyzer) fetchWithFallback(targetURL string) (*http.Response, error) {
+	req, err := http.NewRequest("GET", targetURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	SetHeaders(req)
+
+	resp, err := a.Client.Do(req)
+	if err == nil {
+		return resp, nil
 	}
 
-	if val, ok := dict[k]; ok {
-		return val[0], val[1]
+	if strings.HasPrefix(targetURL, "https://") {
+		httpURL := strings.Replace(targetURL, "https://", "http://", 1)
+		req, err = http.NewRequest("GET", httpURL, nil)
+		if err != nil {
+			return nil, err
+		}
+		SetHeaders(req)
+		return a.Client.Do(req)
 	}
-	return "General response header", "General"
+
+	return nil, err
+}
+
+func (a *Analyzer) auditDeepCORS(targetURL string) []Finding {
+	var findings []Finding
+	seenPreflight := false
+
+	testOrigins := []string{
+		"https://evil.com",
+		"https://attacker.com",
+		"null",
+	}
+
+	for _, origin := range testOrigins {
+		req, err := http.NewRequest("GET", targetURL, nil)
+		if err != nil {
+			continue
+		}
+		SetHeaders(req)
+		req.Header.Set("Origin", origin)
+
+		resp, err := a.NoRedirectClient.Do(req)
+		if err != nil {
+			continue
+		}
+
+		reflectFinding := AuditCORSOriginReflection(resp.Header, origin)
+		if reflectFinding != nil {
+			findings = append(findings, *reflectFinding)
+		}
+		resp.Body.Close()
+	}
+
+	for _, origin := range testOrigins {
+		resp := PerformCORSPreflight(targetURL, origin)
+		if resp != nil {
+			if !seenPreflight {
+				preflightFindings := AuditCORSPreflight(resp, origin)
+				findings = append(findings, preflightFindings...)
+				seenPreflight = true
+			}
+			resp.Body.Close()
+		}
+	}
+
+	return findings
+}
+
+func (a *Analyzer) scanMultiplePaths(baseURL string) []ScanPath {
+	var paths []ScanPath
+
+	checkPaths := []string{"/", "/api", "/admin", "/graphql", "/robots.txt", "/.env", "/.well-known/security.txt"}
+
+	for _, p := range checkPaths {
+		fullURL := strings.TrimRight(baseURL, "/") + p
+		pathResult := ScanPath{Path: p}
+
+		req, err := http.NewRequest("GET", fullURL, nil)
+		if err != nil {
+			continue
+		}
+		SetHeaders(req)
+		resp, err := a.Client.Do(req)
+		if err != nil {
+			continue
+		}
+
+		pathResult.StatusCode = resp.StatusCode
+		pathResult.GETHeaders = ExtractHeaderList(resp.Header)
+
+		missing, _ := AuditSecurityHeaders(resp.Header)
+		pathResult.Missing = missing
+		dangerous, _ := AuditDangerousHeaders(resp.Header)
+		pathResult.Dangerous = dangerous
+		pathResult.CacheAudit = AuditCachePolicy(resp.Header)
+		resp.Body.Close()
+
+		optResp := PerformOPTIONS(fullURL)
+		if optResp != nil {
+			allowed := optResp.StatusCode < 400
+			pathResult.OPTIONSResult = &MethodCheck{
+				Method: "OPTIONS", StatusCode: optResp.StatusCode, Allowed: allowed,
+			}
+			allowHeader := strings.Join(optResp.Header["Allow"], ", ")
+			if allowHeader != "" && allowed {
+				pathResult.OPTIONSResult = &MethodCheck{
+					Method: "OPTIONS", StatusCode: optResp.StatusCode, Allowed: true,
+				}
+			}
+			optResp.Body.Close()
+		}
+
+		paths = append(paths, pathResult)
+	}
+
+	return paths
+}
+
+func (a *Analyzer) scanSubdomains(hostname, baseURL string) []SubdomainResult {
+	var results []SubdomainResult
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	parts := strings.Split(hostname, ".")
+	if len(parts) < 2 {
+		return results
+	}
+	baseDomain := strings.Join(parts[len(parts)-2:], ".")
+
+	// Only scan subdomains if we're not already on a subdomain
+	if len(parts) > 2 {
+		return results
+	}
+
+	subs := []string{"www", "api", "admin", "mail", "cdn", "app", "dev", "blog", "static", "docs", "m", "test", "staging"}
+
+	sem := make(chan struct{}, 5)
+
+	for _, sub := range subs {
+		wg.Add(1)
+		go func(sub string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			subURL := fmt.Sprintf("https://%s.%s", sub, baseDomain)
+
+			req, err := http.NewRequest("GET", subURL, nil)
+			if err != nil {
+				return
+			}
+			SetHeaders(req)
+
+			client := &http.Client{Timeout: 5 * time.Second,
+				CheckRedirect: func(req *http.Request, via []*http.Request) error {
+					return http.ErrUseLastResponse
+				},
+			}
+			resp, err := client.Do(req)
+			if err != nil {
+				return
+			}
+			defer resp.Body.Close()
+
+			server := resp.Header.Get("Server")
+			missing, _ := AuditSecurityHeaders(resp.Header)
+			dangerous, _ := AuditDangerousHeaders(resp.Header)
+			score, _ := CalculateScore(missing, dangerous, nil, nil, nil, nil)
+
+			mu.Lock()
+			results = append(results, SubdomainResult{
+				Subdomain: subURL,
+				Status:    resp.StatusCode,
+				Grade:     CalculateGrade(score),
+				Score:     score,
+				Server:    server,
+				Findings:  len(missing) + len(dangerous),
+			})
+			mu.Unlock()
+		}(sub)
+	}
+
+	wg.Wait()
+	return results
 }

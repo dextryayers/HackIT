@@ -70,7 +70,7 @@ func (c *Crawler) extractSubdomainsFromBody(body string, sourceURL string) {
 		vm = strings.Trim(vm, ".")
 		potential := vm + "." + c.BaseDomain
 		if !c.Subdomains[potential] {
-			fmt.Printf(`{"type":"subdomain_hint","host":%q,"source":%q,"method":"variable_pattern"}`+"\n",
+			writeOutput(`{"type":"subdomain_hint","host":%q,"source":%q,"method":"variable_pattern"}`+"\n",
 				potential, sourceURL)
 		}
 	}
@@ -126,40 +126,51 @@ func (c *Crawler) discoverCTLogs() {
 
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024))
 
-	var entries []struct {
-		NameValue string `json:"name_value"`
-	}
-	if err := json.Unmarshal(body, &entries); err != nil {
-		// crt.sh sometimes returns non-standard JSON, try line-by-line
-		lines := strings.Split(string(body), "\n")
-		for _, line := range lines {
-			line = strings.TrimSpace(line)
-			if !strings.HasPrefix(line, "{") {
+	// crt.sh often returns name_value with newline-separated multiple domain names.
+	// Also sometimes returns non-standard JSON (not wrapped in array).
+	processCTName := func(name string) {
+		for _, n := range strings.Split(name, "\n") {
+			n = strings.TrimSpace(n)
+			if n == "" {
 				continue
 			}
-			var entry struct {
-				NameValue string `json:"name_value"`
+			if !strings.HasSuffix(n, "."+c.BaseDomain) && n != c.BaseDomain {
+				continue
 			}
-			if json.Unmarshal([]byte(line), &entry) == nil && entry.NameValue != "" {
-				name := strings.TrimSpace(entry.NameValue)
-				if strings.HasSuffix(name, "."+c.BaseDomain) && name != c.BaseHost {
-					scheme := "https"
-					c.addSubdomain(name, scheme+"://"+name)
-					fmt.Printf(`{"type":"subdomain","url":%q,"subdomain":%q,"method":"ct_log"}`+"\n",
-						scheme+"://"+name, name)
-				}
+			if n == c.BaseHost {
+				continue
 			}
+			scheme := "https"
+			c.addSubdomain(n, scheme+"://"+n)
+			writeOutput(`{"type":"subdomain","url":%q,"subdomain":%q,"method":"ct_log"}`+"\n",
+				scheme+"://"+n, n)
 		}
-		return
 	}
 
-	for _, entry := range entries {
-		name := strings.TrimSpace(entry.NameValue)
-		if strings.HasSuffix(name, "."+c.BaseDomain) && name != c.BaseHost {
-			scheme := "https"
-			c.addSubdomain(name, scheme+"://"+name)
-			fmt.Printf(`{"type":"subdomain","url":%q,"subdomain":%q,"method":"ct_log"}`+"\n",
-				scheme+"://"+name, name)
+	if strings.HasPrefix(string(body), "[") {
+		var entries []struct {
+			NameValue string `json:"name_value"`
+		}
+		if err := json.Unmarshal(body, &entries); err == nil {
+			for _, entry := range entries {
+				processCTName(entry.NameValue)
+			}
+			return
+		}
+	}
+
+	// Fallback: try line-by-line parsing for non-standard JSON
+	lines := strings.Split(string(body), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "{") {
+			continue
+		}
+		var entry struct {
+			NameValue string `json:"name_value"`
+		}
+		if json.Unmarshal([]byte(line), &entry) == nil && entry.NameValue != "" {
+			processCTName(entry.NameValue)
 		}
 	}
 }
@@ -206,7 +217,7 @@ func (c *Crawler) discoverAlienVault() {
 		}
 		scheme := "https"
 		c.addSubdomain(name, scheme+"://"+name)
-		fmt.Printf(`{"type":"subdomain","url":%q,"subdomain":%q,"method":"alienvault"}`+"\n",
+		writeOutput(`{"type":"subdomain","url":%q,"subdomain":%q,"method":"alienvault"}`+"\n",
 			scheme+"://"+name, name)
 	}
 }
@@ -279,7 +290,7 @@ func (c *Crawler) discoverDNSBrute() {
 
 		scheme := "https"
 		c.addSubdomain(name, scheme+"://"+name)
-		fmt.Printf(`{"type":"subdomain","url":%q,"subdomain":%q,"method":"dns_brute","ips":%q}`+"\n",
+		writeOutput(`{"type":"subdomain","url":%q,"subdomain":%q,"method":"dns_brute","ips":%q}`+"\n",
 			scheme+"://"+name, name, strings.Join(addrs, ","))
 	}
 }

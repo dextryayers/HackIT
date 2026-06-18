@@ -29,6 +29,14 @@ func (f *Filters) Seen(rawURL string) bool {
 	return false
 }
 
+// HasSeen checks if a URL has been visited without marking it.
+func (f *Filters) HasSeen(rawURL string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	key := normalizeKey(rawURL)
+	return f.visited[key]
+}
+
 func normalizeKey(rawURL string) string {
 	u, err := url.Parse(rawURL)
 	if err != nil {
