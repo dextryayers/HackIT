@@ -95,6 +95,7 @@ web.add_command(check_headers, name='headers')
 web.add_command(detect_tech, name='tech')
 web.add_command(industrial_fuzzer, name='fuzz')
 web.add_command(analyze_js, name='js')
+web.add_command(fuzz_params, name='params')
 
 import importlib
 run_bypass_cli = importlib.import_module("hackit.403bypass").run_bypass_cli
