@@ -8,7 +8,7 @@ from hackit.ui import (
 
 BANNER = r"""
 [bold cyan]
-   ▒▓█ PERMISSION OR PRISON. CHOOSE WISELY. █▓▒
+   ▒▓█ \ PERMISSION OR PRISON. CHOOSE WISELY. █▓▒
    █████╗ ████████╗ ██████╗ ███╗   ███╗██╗██╗  ██╗
   ██╔══██╗╚══██╔══╝██╔═══██╗████╗ ████║██║╚██╗██╔╝
   ███████║   ██║   ██║   ██║██╔████╔██║██║ ╚███╔╝ 
@@ -17,7 +17,7 @@ BANNER = r"""
   ╚═╝  ╚═╝   ╚═╝    ╚═════╝ ╚═╝     ╚═╝╚═╝╚═╝  ╚═╝
   ┌─────────────────────────────────────────────────┐
   │ HackIT V2.1 - By: AniipID                       │
-  │ Vulnerability Toolkit - Nailed It                │
+  │ Vulnerability Toolkit - Nailed It               │
   └─────────────────────────────────────────────────┘
 [/bold cyan]"""
 
@@ -57,9 +57,9 @@ SECTIONS = {
         "fuzz", "fuzz_thread", "fuzz_recursive", "path", "payloads",
         "detect_tech", "waf_skip", "waf_bypass", "api_discovery",
         "auth", "auth_token", "api_key", "custom_agent", "rand_agent",
-        "cookie", "cookie_jar", "headers", "dns_resolver", "scan_all_ips",
+        "cookie", "cookie_jar", "header", "dns_resolver", "scan_all_ips",
         "exclude_ports", "interactsh", "oob_server", "oob_token", "oob_type",
-        "monitor", "diff", "replay", "resume", "trace", "target_file",
+        "monitor", "diff", "replay",
     ],
     "HEADLESS BROWSER": [
         "headless", "no_sandbox", "show_browser", "system_chrome",
@@ -139,6 +139,7 @@ class _GroupedHelpCommand(click.Command):
 
         fmtr.write_paragraph()
         fmtr.write_text("Use 'atomix <flag>' for each option or combine multiple flags.")
+        click.echo(fmtr.getvalue())
 
 @click.command(name="atomix", context_settings=dict(help_option_names=["-h", "--help"]),
                cls=_GroupedHelpCommand)

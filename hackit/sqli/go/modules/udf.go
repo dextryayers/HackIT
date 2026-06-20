@@ -2,7 +2,6 @@ package modules
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -45,11 +44,11 @@ func (u *UDFManager) CompileAndInstall(dbms string, pluginDir string) (bool, str
 	}
 
 	dest := filepath.Join(pluginDir, filepath.Base(soPath))
-	input, err := ioutil.ReadFile(soPath)
+	input, err := os.ReadFile(soPath)
 	if err != nil {
 		return false, fmt.Sprintf("read .so failed: %v", err)
 	}
-	if err := ioutil.WriteFile(dest, input, 0755); err != nil {
+	if err := os.WriteFile(dest, input, 0755); err != nil {
 		return false, fmt.Sprintf("write .so failed: %v", err)
 	}
 
@@ -77,14 +76,14 @@ my_bool sys_exec_init(UDF_INIT *initid, UDF_ARGS *args, char *message) {
 }
 }
 `
-	tmpDir, err := ioutil.TempDir("", "udf")
+	tmpDir, err := os.MkdirTemp("", "udf")
 	if err != nil {
 		return "", err
 	}
 	defer os.RemoveAll(tmpDir)
 
 	srcPath := filepath.Join(tmpDir, "udf.cpp")
-	if err := ioutil.WriteFile(srcPath, []byte(src), 0644); err != nil {
+	if err := os.WriteFile(srcPath, []byte(src), 0644); err != nil {
 		return "", err
 	}
 
@@ -118,14 +117,14 @@ Datum sys_exec(PG_FUNCTION_ARGS) {
 }
 }
 `
-	tmpDir, err := ioutil.TempDir("", "udf")
+	tmpDir, err := os.MkdirTemp("", "udf")
 	if err != nil {
 		return "", err
 	}
 	defer os.RemoveAll(tmpDir)
 
 	srcPath := filepath.Join(tmpDir, "udf.c")
-	if err := ioutil.WriteFile(srcPath, []byte(src), 0644); err != nil {
+	if err := os.WriteFile(srcPath, []byte(src), 0644); err != nil {
 		return "", err
 	}
 

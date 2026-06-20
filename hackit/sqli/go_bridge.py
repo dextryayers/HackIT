@@ -24,9 +24,6 @@ class GoEngine:
             return False
 
     def ensure_compiled(self) -> bool:
-        if os.path.exists(self.binary_path) and \
-           os.path.getmtime(self.source_path) <= os.path.getmtime(self.binary_path):
-            return True
         try:
             os.makedirs(os.path.join(self.go_dir, 'bin'), exist_ok=True)
             subprocess.run(

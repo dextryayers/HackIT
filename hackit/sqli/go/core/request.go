@@ -1,6 +1,7 @@
 package core
 
 import (
+	"fmt"
 	"io"
 	"math/rand"
 	"net/http"
@@ -18,7 +19,13 @@ var userAgents = []string{
 }
 
 func (e *Engine) Request(payload string, param string) (string, int, http.Header, error) {
-	// Stealth mode: Random delay
+	// Adaptive rate limiting
+	adaptiveDelay := e.rateLimiter.GetDelay()
+	if adaptiveDelay > 0 {
+		time.Sleep(adaptiveDelay)
+	}
+
+	// Stealth mode: Random jitter on top of adaptive delay
 	if e.Opts.Stealth {
 		jitter := rand.Intn(1000)
 		time.Sleep(time.Duration(e.Opts.Delay+jitter) * time.Millisecond)
@@ -92,7 +99,7 @@ func (e *Engine) Request(payload string, param string) (string, int, http.Header
 	resp, err := e.Client.Do(req)
 	elapsed := time.Since(startTime)
 	if err != nil {
-		e.Log.Critical(err.Error())
+		e.Log.Warning(fmt.Sprintf("connection error: %v", err))
 		return "", 0, nil, err
 	}
 	defer resp.Body.Close()
@@ -106,6 +113,9 @@ func (e *Engine) Request(payload string, param string) (string, int, http.Header
 	e.LastResponseHeaders = resp.Header
 	e.LastResponseBody = string(respBody)
 	e.LastResponseTime = elapsed
+
+	// Feed response time to rate limiter
+	e.rateLimiter.RecordResponseTime(elapsed)
 
 	return string(respBody), len(respBody), resp.Header, nil
 }

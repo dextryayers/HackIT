@@ -18,4 +18,6 @@ var AllPayloads = []PayloadGroup{
 	NoSQL,
 	Polyglot,
 	Bypasser,
+	Heavy,
+	Mega,
 }

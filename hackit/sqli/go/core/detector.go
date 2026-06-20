@@ -287,41 +287,145 @@ func DetectWAF(headers http.Header, body string) WAFInfo {
 	return WAFInfo{Detected: false, Name: "Unknown"}
 }
 
-func DetectTechStack(headers http.Header) map[string]string {
-	tech := make(map[string]string)
+func DetectBackendStack(headers http.Header, body string) map[string]string {
+	stack := make(map[string]string)
 
 	server := headers.Get("Server")
 	if server != "" {
-		tech["Web Server"] = server
-	}
-	xpowered := headers.Get("X-Powered-By")
-	if xpowered != "" {
-		tech["Powered By"] = xpowered
-	}
-	xaspnet := headers.Get("X-AspNet-Version")
-	if xaspnet != "" {
-		tech["ASP.NET"] = xaspnet
-	}
-	xfw := headers.Get("X-Frame-Options")
-	if xfw != "" {
-		tech["Frame Options"] = xfw
-	}
-	xssprot := headers.Get("X-XSS-Protection")
-	if xssprot != "" {
-		tech["XSS Protection"] = xssprot
-	}
-	contenttype := headers.Get("Content-Type")
-	if contenttype != "" {
-		tech["Content Type"] = contenttype
-	}
-	setcookie := headers.Get("Set-Cookie")
-	if setcookie != "" {
-		if strings.Contains(setcookie, "session") {
-			tech["Session Mgmt"] = "Session cookies present"
-		}
+		stack["Web Server"] = server
 	}
 
-	return tech
+	xpowered := headers.Get("X-Powered-By")
+	if xpowered != "" {
+		stack["Powered By"] = xpowered
+	}
+
+	xaspnet := headers.Get("X-AspNet-Version")
+	if xaspnet != "" {
+		stack["ASP.NET"] = xaspnet
+	}
+
+	backendLang := DetectBackendLang(headers, body)
+	if backendLang != "Unknown" {
+		stack["Backend Language"] = backendLang
+	}
+
+	dbms := DetectDBMS(body, headers)
+	if dbms != "Unknown" {
+		stack["Database"] = dbms
+	}
+
+	contenttype := headers.Get("Content-Type")
+	if contenttype != "" {
+		stack["Content Type"] = contenttype
+	}
+
+	return stack
+}
+
+func DetectBackendLang(headers http.Header, body string) string {
+	bodyLower := strings.ToLower(body)
+
+	scores := make(map[string]int)
+
+	xpowered := strings.ToLower(headers.Get("X-Powered-By"))
+	if strings.Contains(xpowered, "php") {
+		scores["PHP"] += 5
+	}
+	if strings.Contains(xpowered, "asp.net") {
+		scores["ASP.NET"] += 5
+	}
+	if strings.Contains(xpowered, "python") || strings.Contains(xpowered, "django") {
+		scores["Python"] += 5
+	}
+	if strings.Contains(xpowered, "java") || strings.Contains(xpowered, "jsp") || strings.Contains(xpowered, "servlet") {
+		scores["Java/JSP"] += 5
+	}
+	if strings.Contains(xpowered, "ruby") || strings.Contains(xpowered, "rails") || strings.Contains(xpowered, "rack") {
+		scores["Ruby"] += 5
+	}
+	if strings.Contains(xpowered, "node") || strings.Contains(xpowered, "express") {
+		scores["Node.js"] += 5
+	}
+	if strings.Contains(xpowered, "go") || strings.Contains(xpowered, "golang") || strings.Contains(xpowered, "gin") {
+		scores["Go"] += 5
+	}
+
+	server := strings.ToLower(headers.Get("Server"))
+	if strings.Contains(server, "apache") || strings.Contains(server, "php") {
+		scores["PHP"] += 3
+	}
+	if strings.Contains(server, "iis") {
+		scores["ASP.NET"] += 4
+	}
+	if strings.Contains(server, "gunicorn") || strings.Contains(server, "python") || strings.Contains(server, "twisted") {
+		scores["Python"] += 4
+	}
+	if strings.Contains(server, "jetty") || strings.Contains(server, "tomcat") || strings.Contains(server, "java") || strings.Contains(server, "oracle-application-server") {
+		scores["Java/JSP"] += 4
+	}
+	if strings.Contains(server, "passenger") || strings.Contains(server, "unicorn") {
+		scores["Ruby"] += 4
+	}
+	if strings.Contains(server, "node.js") || strings.Contains(server, "express") {
+		scores["Node.js"] += 4
+	}
+
+	setcookie := strings.ToLower(headers.Get("Set-Cookie"))
+	if strings.Contains(setcookie, "php") || strings.Contains(setcookie, "phpsessid") {
+		scores["PHP"] += 3
+	}
+	if strings.Contains(setcookie, "asp.net") || strings.Contains(setcookie, "aspsessionid") {
+		scores["ASP.NET"] += 3
+	}
+	if strings.Contains(setcookie, "jsessionid") {
+		scores["Java/JSP"] += 3
+	}
+
+	// Body content clues
+	if strings.Contains(bodyLower, ".php") || strings.Contains(bodyLower, "php?") {
+		scores["PHP"] += 2
+	}
+	if strings.Contains(bodyLower, ".aspx") || strings.Contains(bodyLower, ".asp") {
+		scores["ASP.NET"] += 2
+	}
+	if strings.Contains(bodyLower, ".jsp") || strings.Contains(bodyLower, ".do?") {
+		scores["Java/JSP"] += 2
+	}
+	if strings.Contains(bodyLower, ".py") || strings.Contains(bodyLower, "django") {
+		scores["Python"] += 2
+	}
+	if strings.Contains(bodyLower, ".rhtml") || strings.Contains(bodyLower, ".erb") {
+		scores["Ruby"] += 2
+	}
+
+	best := ""
+	bestScore := 0
+	for lang, score := range scores {
+		if score > bestScore {
+			bestScore = score
+			best = lang
+		}
+	}
+	if bestScore >= 3 {
+		return best
+	}
+	return "Unknown"
+}
+
+func DetectSoftwareVersion(headers http.Header) string {
+	server := headers.Get("Server")
+	if server == "" {
+		return ""
+	}
+	server = strings.TrimSpace(server)
+
+	re := regexp.MustCompile(`[0-9]+\.[0-9]+(\.[0-9]+)?`)
+	matches := re.FindString(server)
+	if matches != "" {
+		return fmt.Sprintf("%s (%s)", server, matches)
+	}
+	return server
 }
 
 func (e *Engine) DetectOS() string {
