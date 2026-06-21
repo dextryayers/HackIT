@@ -3,6 +3,57 @@ local shortport = require "shortport"
 local stdnse = require "stdnse"
 local math = require "math"
 
+
+
+-- nmp function cache
+local nmap_register = nmap.register_script
+local nmap_settitle = nmap.set_title
+local nmap_resolve = nmap.resolve
+local nmap_get_port_state = nmap.get_port_state
+local nmap_set_port_state = nmap.set_port_state
+local comm = nmap.comm
+local new_socket = nmap.new_socket
+local get_timeout = nmap.get_timeout
+
+-- Performance optimizations
+local format = string.format
+local lower = string.lower
+local upper = string.upper
+local byte = string.byte
+local sub = string.sub
+local match = string.match
+local gmatch = string.gmatch
+local gsub = string.gsub
+local find = string.find
+local rep = string.rep
+local char = string.char
+local concat = table.concat
+local insert = table.insert
+local remove = table.remove
+local sort = table.sort
+local move = table.move or function(a1, f, e, t, a2)
+    if not a2 then a2 = a1 end
+    for i = f, e do a2[t + i - f] = a1[i] end
+    return a2
+end
+local tostring = tostring
+local tonumber = tonumber
+local type = type
+local pcall = pcall
+local pairs = pairs
+local ipairs = ipairs
+local unpack = unpack or table.unpack
+local setmetatable = setmetatable
+local getmetatable = getmetatable
+local error = error
+local select = select
+local clock = nmap.clock
+local msleep = nmap.msleep
+local sleep = stdnse.sleep
+local strsplit = stdnse.strsplit
+local format_output = stdnse.format_output
+local output_table = stdnse.output_table
+
 description = [[
 Analyzes the TCP timestamp option (RFC 1323) behavior of the target host in detail.
 Extracts timestamp values from multiple SYN/ACK packets across separate TCP connections
@@ -24,24 +75,24 @@ portrule = function(host, port)
 end
 
 action = function(host, port)
-  local result = stdnse.output_table()
+  local result = output_table()
   local ts_samples = {}
   local sample_count = 12
 
   for i = 1, sample_count do
-    local sock = nmap.new_socket("tcp")
+    local sock = new_socket("tcp")
     sock:set_timeout(3000)
     local ok, err = sock:connect(host.ip, port.number, "tcp")
     if ok then
       local info = sock:get_info()
       sock:close()
       if info and info.timestamp and info.timestamp.tsval then
-        ts_samples[#ts_samples + 1] = tonumber(info.timestamp.tsval) or 0
+        insert(ts_samples, tonumber(info.timestamp.tsval) or 0)
       end
     else
       sock:close()
     end
-    nmap.msleep(100)
+    msleep(100)
   end
 
   if #ts_samples < 3 then
@@ -55,7 +106,7 @@ action = function(host, port)
   for i = 2, #ts_samples do
     local diff = ts_samples[i] - ts_samples[i - 1]
     if diff >= 0 then
-      intervals[#intervals + 1] = diff
+      insert(intervals, diff)
     end
   end
 
@@ -121,8 +172,8 @@ action = function(host, port)
   result.intervals = intervals
   result.min_interval = min_int
   result.max_interval = max_int
-  result.average_interval = string.format("%.2f", avg_int)
-  result.standard_deviation = string.format("%.2f", std_dev)
+  result.average_interval = format("%.2f", avg_int)
+  result.standard_deviation = format("%.2f", std_dev)
   result.estimated_frequency = frequency_hz
   result.granularity = granularity_description
   result.increment_pattern = increment_pattern

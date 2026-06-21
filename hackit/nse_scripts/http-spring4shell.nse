@@ -1,5 +1,58 @@
 local http = require "http"
 local stdnse = require "stdnse"
+local nmap = require "nmap"
+local shortport = require "shortport"
+
+
+
+-- nmp function cache
+local nmap_register = nmap.register_script
+local nmap_settitle = nmap.set_title
+local nmap_resolve = nmap.resolve
+local nmap_get_port_state = nmap.get_port_state
+local nmap_set_port_state = nmap.set_port_state
+local comm = nmap.comm
+local new_socket = nmap.new_socket
+local get_timeout = nmap.get_timeout
+
+-- Performance optimizations
+local format = string.format
+local lower = string.lower
+local upper = string.upper
+local byte = string.byte
+local sub = string.sub
+local match = string.match
+local gmatch = string.gmatch
+local gsub = string.gsub
+local find = string.find
+local rep = string.rep
+local char = string.char
+local concat = table.concat
+local insert = table.insert
+local remove = table.remove
+local sort = table.sort
+local move = table.move or function(a1, f, e, t, a2)
+    if not a2 then a2 = a1 end
+    for i = f, e do a2[t + i - f] = a1[i] end
+    return a2
+end
+local tostring = tostring
+local tonumber = tonumber
+local type = type
+local pcall = pcall
+local pairs = pairs
+local ipairs = ipairs
+local unpack = unpack or table.unpack
+local setmetatable = setmetatable
+local getmetatable = getmetatable
+local error = error
+local select = select
+local clock = nmap.clock
+local msleep = nmap.msleep
+local sleep = stdnse.sleep
+local strsplit = stdnse.strsplit
+local format_output = stdnse.format_output
+local output_table = stdnse.output_table
 
 description = [[Detects Spring4Shell (CVE-2022-22965) via class.module.classLoader manipulation in parameters and headers.]]
 author = "HackIT Framework"
@@ -40,10 +93,10 @@ action = function(host, port)
         local body = req.body or ""
         local body_upper = body:upper()
         if body_upper:match("CLASS%.MODULE") or body_upper:match("CLASS%.CLASSLOADER") then
-          table.insert(findings, {path = probe.path, method = probe.method, status = req.status, detail = "class.module reflection in response body"})
+          insert(findings, {path = probe.path, method = probe.method, status = req.status, detail = "class.module reflection in response body"})
         end
         if body:match("org%.springframework") or body:match("java%.lang%.Class") then
-          table.insert(findings, {path = probe.path, method = probe.method, status = req.status, detail = "Java class name disclosed"})
+          insert(findings, {path = probe.path, method = probe.method, status = req.status, detail = "Java class name disclosed"})
         end
       end
     end
@@ -60,7 +113,7 @@ action = function(host, port)
       if req and req.body then
         local body = req.body
         if body:match("class%.module") or body:match("DefaultContext") or body:match("classLoader") then
-          table.insert(findings, {path = "/ (via " .. hp.header .. ")", method = "GET", status = req.status, detail = "Header-based injection reflected"})
+          insert(findings, {path = "/ (via " .. hp.header .. ")", method = "GET", status = req.status, detail = "Header-based injection reflected"})
         end
       end
     end
@@ -69,11 +122,11 @@ action = function(host, port)
       header = {["Cookie"] = "class.module.classLoader.DefaultContext=true"}
     })
     if cookie_probe and cookie_probe.body and cookie_probe.body:match("class%.module") then
-      table.insert(findings, {path = "/ (via Cookie)", method = "GET", status = cookie_probe.status, detail = "Cookie-based injection reflected"})
+      insert(findings, {path = "/ (via Cookie)", method = "GET", status = cookie_probe.status, detail = "Cookie-based injection reflected"})
     end
 
     if #findings > 0 then
-      local result = stdnse.output_table()
+      local result = output_table()
       result.cve = "CVE-2022-22965"
       result.severity = "CRITICAL"
       result.vulnerable = true
@@ -88,7 +141,7 @@ action = function(host, port)
       return result
     end
 
-    local result = stdnse.output_table()
+    local result = output_table()
     result.cve = "CVE-2022-22965"
     result.severity = "LOW"
     result.vulnerable = false
@@ -97,7 +150,7 @@ action = function(host, port)
     return result
   end)
   if not ok then
-    local result = stdnse.output_table()
+    local result = output_table()
     result.cve = "CVE-2022-22965"
     result.severity = "MEDIUM"
     result.vulnerable = false

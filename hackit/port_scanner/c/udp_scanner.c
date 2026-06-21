@@ -19,6 +19,9 @@
 #include <netinet/udp.h>
 #include <netinet/ip_icmp.h>
 #include <netdb.h>
+#include <poll.h>
+
+#include "optimize.h"
 
 #define MAX_PORTS        131072
 #define MAX_BANNER       4096
@@ -98,7 +101,7 @@ static int parse_ports(const char* spec, int* ports, int max) {
     buf[sizeof(buf) - 1] = 0;
     if (strcmp(buf, "top100") == 0) {
         int top[] = {53,67,68,69,123,137,138,161,162,389,500,514,520,631,1194,1701,1900,4500,5351,5353,5683,3702,0};
-        for (int i = 0; top[i] && count < max; i++) ports[count++] = top[i];
+        for (int i = 0; top[i] && count < max; ++i) ports[count++] = top[i];
         return count;
     }
     if (strcmp(buf, "all") == 0) {
@@ -126,7 +129,7 @@ static int send_udp_probe(int sock, uint32_t ip, int port) {
     to.sin_addr.s_addr = ip;
     const char* probe = "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
     int plen = 16;
-    for (int i = 0; PROBES[i].port; i++) {
+    for (int i = 0; PROBES[i].port; ++i) {
         if (PROBES[i].port == port) {
             if (PROBES[i].len > 0) { probe = PROBES[i].probe; plen = PROBES[i].len; }
             break;
@@ -145,27 +148,33 @@ static int create_icmp_listener(void) {
 }
 
 static void listen_icmp_unreach(UDPContext* ctx, long long deadline) {
-    char buf[4096];
-    struct sockaddr_in from;
-    socklen_t from_len = sizeof(from);
+    char bufs[8][4096];
+    struct sockaddr_in from[8];
+    socklen_t from_len[8];
     while (now_ms() < deadline) {
-        int n = recvfrom(ctx->icmp_sock, buf, sizeof(buf), MSG_DONTWAIT, (struct sockaddr*)&from, &from_len);
-        if (n <= 0) { usleep(500); continue; }
-        if (n < (int)sizeof(struct icmphdr)) continue;
-        struct iphdr* outer_ip = (struct iphdr*)buf;
-        if (outer_ip->protocol != IPPROTO_ICMP) continue;
-        int icmp_hdr_start = outer_ip->ihl * 4;
-        struct icmphdr* icmp = (struct icmphdr*)(buf + icmp_hdr_start);
-        if (icmp->type == 3) {
+        struct pollfd pfd = { .fd = ctx->icmp_sock, .events = POLLIN };
+        int pr = poll(&pfd, 1, 50);
+        if (pr <= 0) continue;
+        int batch_count = 0;
+        for (int b = 0; b < 8; b++) {
+            from_len[b] = sizeof(from[b]);
+            int n = recvfrom(ctx->icmp_sock, bufs[b], sizeof(bufs[b]), MSG_DONTWAIT, (struct sockaddr*)&from[b], &from_len[b]);
+            if (n <= 0) break;
+            if (n < (int)sizeof(struct icmphdr)) continue;
+            struct iphdr* outer_ip = (struct iphdr*)bufs[b];
+            if (outer_ip->protocol != IPPROTO_ICMP) continue;
+            int icmp_hdr_start = outer_ip->ihl * 4;
+            struct icmphdr* icmp = (struct icmphdr*)(bufs[b] + icmp_hdr_start);
+            if (icmp->type != 3) continue;
             int inner_ip_start = icmp_hdr_start + 8;
             if (inner_ip_start + (int)sizeof(struct iphdr) >= n) continue;
-            struct iphdr* inner_ip = (struct iphdr*)(buf + inner_ip_start);
+            struct iphdr* inner_ip = (struct iphdr*)(bufs[b] + inner_ip_start);
             if (inner_ip->protocol != IPPROTO_UDP) continue;
             int inner_udp_start = inner_ip_start + inner_ip->ihl * 4;
             if (inner_udp_start + 2 >= n) continue;
-            uint16_t dst_port = ntohs(*(uint16_t*)(buf + inner_udp_start + 2));
+            uint16_t dst_port = ntohs(*(uint16_t*)(bufs[b] + inner_udp_start + 2));
             pthread_mutex_lock(&ctx->lock);
-            for (int i = 0; i < ctx->result_count; i++) {
+            for (int i = 0; i < ctx->result_count; ++i) {
                 if (ctx->results[i].port == (int)dst_port) {
                     ctx->results[i].state = 0;
                     ctx->results[i].icmp_unreachable = true;
@@ -173,7 +182,9 @@ static void listen_icmp_unreach(UDPContext* ctx, long long deadline) {
                 }
             }
             pthread_mutex_unlock(&ctx->lock);
+            batch_count++;
         }
+        if (batch_count == 0) poll(NULL, 0, 1);
     }
 }
 
@@ -217,7 +228,7 @@ static void* udp_worker(void* arg) {
                 got_response = true;
                 break;
             }
-            usleep(1000);
+            poll(NULL, 0, 1);
         }
         if (!got_response) {
             printf("RESULT:{\"port\":%d,\"state\":0,\"rtt_ms\":%d}\n", port, ctx->timeout_ms);
@@ -256,11 +267,11 @@ int main(int argc, char** argv) {
         ctx.hostname, inet_ntoa(ia), port_count, ctx.timeout_ms, ctx.workers);
     ctx.start_time = now_ms();
     pthread_t threads[MAX_WORKERS];
-    for (int i = 0; i < ctx.workers; i++)
+    for (int i = 0; i < ctx.workers; ++i)
         pthread_create(&threads[i], NULL, udp_worker, &ctx);
     long long icmp_deadline = ctx.start_time + ctx.timeout_ms + 1000;
     listen_icmp_unreach(&ctx, icmp_deadline);
-    for (int i = 0; i < ctx.workers; i++)
+    for (int i = 0; i < ctx.workers; ++i)
         pthread_join(threads[i], NULL);
     long long elapsed = now_ms() - ctx.start_time;
     if (ctx.icmp_sock >= 0) close(ctx.icmp_sock);
@@ -268,3 +279,4 @@ int main(int argc, char** argv) {
         ctx.hostname, port_count, ctx.open_count, elapsed);
     return 0;
 }
+// vim: ts=4 sw=4 et tw=80

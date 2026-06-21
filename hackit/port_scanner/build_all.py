@@ -1,150 +1,220 @@
-import os
-import subprocess
-import shutil
-import sys
+#!/usr/bin/env python3
+"""
+HackIT PortStorm — Build System v3.0 (MAX PERFORMANCE)
+Parallel compilation · PGO-ready · LTO · Auto CPU
+"""
 
-def colored(text, color_code):
-    return f"\033[{color_code}m{text}\033[0m"
+import os, subprocess, shutil, sys, time, multiprocessing
 
-GREEN = "32"
-RED = "31"
-BLUE = "34"
-CYAN = "36"
-YELLOW = "33"
+C = {'OK':32,'FAIL':31,'WARN':33,'INFO':34,'HDR':36}
+_BASE=os.path.dirname(os.path.abspath(__file__))
+_BIN=os.path.join(_BASE,'bin')
+_CPU=multiprocessing.cpu_count()
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-BIN_DIR = os.path.join(BASE_DIR, "bin")
+def clr(t,c): return f'\033[{c}m{t}\033[0m'
+def run(c,cwd=None,timeout=300):
+    return subprocess.run(c,cwd=cwd,capture_output=1,text=1,timeout=timeout)
 
-def ensure_bin_dir():
-    os.makedirs(BIN_DIR, exist_ok=True)
-
-def build_go():
-    print(colored("[*] Building Go Engine...", BLUE))
-    go_dir = os.path.join(BASE_DIR, "go")
+# ── CPU & arch auto-detect ──────────────────────────────────────────
+def _arch_flags():
+    """Auto-detect best arch flags for this CPU."""
     try:
-        subprocess.check_call(["go", "build", "-o", os.path.join(go_dir, "port_scanner"), "."], cwd=go_dir)
-        shutil.copy(os.path.join(go_dir, "port_scanner"), os.path.join(BIN_DIR, "port_scanner"))
-        print(colored("[+] Go Engine compiled successfully!", GREEN))
-    except Exception as e:
-        print(colored(f"[!] Go build failed: {e}", RED))
-    try:
-        subprocess.check_call(["go", "build", "-o", os.path.join(go_dir, "syn_scan"), "-tags=syn", "syn_scan.go", "worker_pool.go"], cwd=go_dir)
-        shutil.copy(os.path.join(go_dir, "syn_scan"), os.path.join(BIN_DIR, "syn_scan"))
-        print(colored("[+] Go SYN Scanner compiled!", GREEN))
-    except Exception as e:
-        print(colored(f"[!] Go SYN Scanner build failed (libpcap may be needed): {e}", YELLOW))
+        import platform
+        m=platform.machine()
+        if m in ('x86_64','amd64'):
+            r=run(['gcc','-march=native','-E','-v','-'],cwd=_BASE)
+            out=r.stderr.lower()
+            if 'znver' in out: return '-march=znver4 -mtune=znver4'
+            if 'haswell' in out or 'broadwell' in out: return '-march=haswell -mtune=haswell'
+            if 'skylake' in out or 'cascadelake' in out: return '-march=skylake -mtune=cascadelake'
+            return '-march=native -mtune=native'
+        elif m in ('aarch64','arm64'): return '-march=armv8-a+simd -mtune=native'
+        return '-march=native -mtune=native'
+    except: return '-march=native -mtune=native'
 
-def build_rust():
-    print(colored("[*] Building Rust Engines (merged workspace)...", BLUE))
-    rust_dir = os.path.join(BASE_DIR, "go", "rust_engine")
-    if not os.path.exists(rust_dir):
-        print(colored("[!] Rust engine directory not found!", RED))
-        return
-    try:
-        targets = ["hyper_scan", "syn_scanner", "os_detect", "dns_detect", "web_fingerprint", "kernel_detect"]
-        for target in targets:
-            try:
-                subprocess.check_call(["cargo", "build", "--release", "--bin", target], cwd=rust_dir)
-                src = os.path.join(rust_dir, "target", "release", target)
-                bin_name = f"rust_{target}" if target == "syn_scanner" else target
-                if os.path.exists(src):
-                    shutil.copy2(src, os.path.join(BIN_DIR, bin_name))
-                    print(colored(f"[+] Rust {target} compiled!", GREEN))
-            except Exception as e:
-                print(colored(f"[!] Rust {target} build failed: {e}", YELLOW))
-        # Also build the cdylib for Go CGo
-        try:
-            subprocess.check_call(["cargo", "build", "--release"], cwd=rust_dir)
-            lib_src = os.path.join(rust_dir, "target", "release", "librust_port_scanner.so")
-            if os.path.exists(lib_src):
-                shutil.copy2(lib_src, os.path.join(BIN_DIR, "librust_port_scanner.so"))
-                print(colored("[+] Rust cdylib compiled!", GREEN))
-        except Exception as e:
-            print(colored(f"[!] Rust cdylib build failed: {e}", YELLOW))
-        print(colored("[+] All Rust Engines processed!", GREEN))
-    except Exception as e:
-        print(colored(f"[!] Rust build failed: {e}", RED))
+_ARCH=_arch_flags()
+_CFLAGS=f'-O3 {_ARCH} -flto=1 -fomit-frame-pointer -funroll-loops -fmerge-all-constants -pthread'
+_CXXFLAGS=f'-O3 {_ARCH} -flto=1 -fomit-frame-pointer -funroll-loops -fmerge-all-constants -pthread -std=c++17'
+_LDFLAGS='-fuse-linker-plugin'
 
-def build_c():
-    print(colored("[*] Building C Engines...", BLUE))
-    c_dir = os.path.join(BASE_DIR, "c")
-    ensure_bin_dir()
-    opts = "-O3 -march=native -mtune=native -flto -pthread"
-    targets = [
-        ("syn_scanner.c", "syn_scanner"),
-        ("mass_tcp_scanner.c", "mass_tcp_scanner"),
-        ("udp_scanner.c", "udp_scanner"),
-        ("os_fingerprint.c", "os_fingerprint"),
-        ("advanced_scanner.c", "advanced_scanner"),
-    ]
-    for src, name in targets:
-        try:
-            subprocess.check_call(f"gcc {opts} -o {name} {src} -lpthread", shell=True, cwd=c_dir)
-            shutil.copy(os.path.join(c_dir, name), os.path.join(BIN_DIR, name))
-            print(colored(f"[+] C {name} compiled!", GREEN))
-        except Exception as e:
-            print(colored(f"[!] C {name} build failed: {e}", RED))
+# ── Build Go ────────────────────────────────────────────────────────
+def _go():
+    print(clr('[  GO   ]','\033[1;34m'))
+    gd=os.path.join(_BASE,'go')
+    t=time.time()
+    r=run(['go','build','-ldflags=-s -w','-o','port_scanner','.'],cwd=gd)
+    if r.returncode==0:
+        shutil.copy(os.path.join(gd,'port_scanner'),os.path.join(_BIN,'port_scanner'))
+        sz=os.path.getsize(os.path.join(_BIN,'port_scanner'))
+        print(clr(f'  \u2713 port_scanner  {sz//1024}KB','92'))
+    else: print(clr(f'  \u2717 port_scanner  {r.stderr[:150]}','91'))
+    for h in ['dns_resolver','geo_enricher','output_formatter']:
+        s=os.path.join(gd,'cmd',h,'main.go')
+        if not os.path.exists(s): continue
+        r=run(['go','build','-ldflags=-s -w','-o',os.path.join(_BIN,h),s],cwd=gd)
+        if r.returncode==0:
+            sz=os.path.getsize(os.path.join(_BIN,h))
+            print(clr(f'  \u2713 {h}  {sz//1024}KB','92'))
+        else: print(clr(f'  \u2717 {h}  {r.stderr[:100]}','91'))
+    print(clr(f'  \u2192 {time.time()-t:.1f}s','90'))
 
-def build_cpp():
-    print(colored("[*] Building C++ Engines...", BLUE))
-    cpp_dir = os.path.join(BASE_DIR, "cpp")
-    ensure_bin_dir()
-    opts = "-O3 -march=native -mtune=native -flto -pthread -std=c++17"
-    targets = [
-        ("tls_scanner.cpp", "tls_scanner"),
-        ("vuln_matcher.cpp", "vuln_matcher"),
-        ("advanced_scanner.cpp", "advanced_scanner"),
-    ]
-    for src, name in targets:
-        try:
-            subprocess.check_call(f"g++ {opts} -o {name} {src} -lpthread", shell=True, cwd=cpp_dir)
-            shutil.copy(os.path.join(cpp_dir, name), os.path.join(BIN_DIR, name))
-            print(colored(f"[+] C++ {name} compiled!", GREEN))
-        except Exception as e:
-            print(colored(f"[!] C++ {name} build failed: {e}", RED))
+# ── Build Rust ──────────────────────────────────────────────────────
+def _rust():
+    print(clr('[ RUST  ]','\033[1;32m'))
+    rd=os.path.join(_BASE,'go','rust_engine')
+    if not os.path.exists(rd): return
+    tgts=['tcp_scanner','udp_scanner','service_detect','os_fingerprint',
+          'dns_enum','vuln_scan','mass_scan',
+          'hyper_parallel_tcp','smart_service_detect','dns_over_https',
+          'vuln_priority_scanner','real_time_monitor']
+    t=time.time()
+    # Add RUSTFLAGS for max perf
+    env=os.environ.copy()
+    env['RUSTFLAGS']='-C target-cpu=native -C opt-level=3 -C lto=fat -C codegen-units=1'
+    r=run(['cargo','build','--release']+[f'--bin={t}' for t in tgts],
+          cwd=rd,timeout=600)
+    if r.returncode==0:
+        for tgt in tgts:
+            s=os.path.join(rd,'target','release',tgt)
+            if os.path.exists(s):
+                shutil.copy2(s,os.path.join(_BIN,f'rust_{tgt}'))
+                sz=os.path.getsize(os.path.join(_BIN,f'rust_{tgt}'))
+                print(clr(f'  \u2713 rust_{tgt}  {sz//1024}KB','92'))
+        print(clr(f'  \u2192 {time.time()-t:.1f}s','90'))
+    else: print(clr(f'  \u2717 Rust: {r.stderr[:200]}','91'))
 
-def validate_lua():
-    print(colored("[*] Validating Lua plugins...", BLUE))
-    lua_dir = os.path.join(BASE_DIR, "lua")
-    if not os.path.exists(lua_dir):
-        print(colored("[!] Lua directory not found!", YELLOW))
-        return
-    files = sorted([f for f in os.listdir(lua_dir) if f.endswith(".lua")])
-    print(colored(f"  Found {len(files)} Lua plugins: {', '.join(files)}", CYAN))
+# ── Build C (sequential, avoids LTO race) ─────────────────────────────
+C_TARGETS=[
+    ('scanner.c','c_scanner',''),
+    ('syn_scanner.c','c_syn_scanner',''),
+    ('syn_scanner_v2.c','c_syn_scanner_v2',''),
+    ('mass_tcp_scanner.c','c_mass_tcp_scanner',''),
+    ('udp_scanner.c','c_udp_scanner',''),
+    ('udp_prober.c','c_udp_prober',''),
+    ('tcp_prober.c','c_tcp_prober',''),
+    ('banner_grabber.c','c_banner_grabber','-lssl -lcrypto'),
+    ('os_fingerprint.c','c_os_fingerprint',''),
+    ('os_fingerprint_v2.c','c_os_fingerprint_v2',''),
+    ('os_detect.c','c_os_detect.so','-shared -fPIC -lssl -lcrypto'),
+    ('service_prober.c','c_service_prober',''),
+    ('icmp_discovery.c','c_icmp_discovery',''),
+    ('tls_prober.c','c_tls_prober','-lssl -lcrypto'),
+    ('packet_crafter.c','c_packet_crafter',''),
+    ('network_path.c','c_network_path',''),
+    ('network_topology.c','c_network_topology',''),
+    ('network_oracle.c','c_network_oracle',''),
+    ('stealth_evasion.c','c_stealth_evasion',''),
+    ('c_evasion.c','c_c_evasion',''),
+    ('epoll_scanner.c','c_epoll_scanner',''),
+    ('advanced_scanner.c','c_advanced_scanner',''),
+    ('full_system_scanner.c','c_full_system_scanner',''),
+    ('deep_packet_analysis.c','c_deep_packet_analysis',''),
+    ('service_exploiter.c','c_service_exploiter',''),
+    ('credential_harvester.c','c_credential_harvester',''),
+    ('performance_bench.c','c_performance_bench',''),
+    ('ssl_deep_scan.c','c_ssl_deep_scan',''),
+    ('web_app_fingerprint.c','c_web_app_fingerprint',''),
+    ('database_scanner.c','c_database_scanner',''),
+    ('iot_scanner.c','c_iot_scanner',''),
+    # New expert engines
+    ('syn_flood_optimized.c','c_syn_flood',''),
+    ('dns_burst_resolver.c','c_dns_burst',''),
+    ('service_fingerprinter.c','c_service_fp',''),
+    ('mass_port_scanner.c','c_mass_scan',''),
+    ('cve_matcher.c','c_cve_match',''),
+    ('packet_inspector.c','c_packet_inspect',''),
+    ('network_discovery.c','c_net_discover',''),
+]
 
-def validate_ruby():
-    print(colored("[*] Validating Ruby plugins...", BLUE))
-    ruby_dir = os.path.join(BASE_DIR, "ruby")
-    if not os.path.exists(ruby_dir):
-        print(colored("[!] Ruby directory not found!", YELLOW))
-        return
-    files = sorted([f for f in os.listdir(ruby_dir) if f.endswith(".rb")])
-    print(colored(f"  Found {len(files)} Ruby plugins: {', '.join(files)}", CYAN))
+def _c():
+    print(clr('[   C   ] sequential (avoids LTO race)','\033[1;33m'))
+    cd=os.path.join(_BASE,'c')
+    os.makedirs(_BIN,exist_ok=1)
+    ok=[]; fail=[]; t=time.time()
+    for src,out,libs in C_TARGETS:
+        cmd=['gcc',*_CFLAGS.split(),'-o',out,src]
+        if libs: cmd.extend(libs.split())
+        r=run(cmd,cwd=cd)
+        fp=os.path.join(cd,out)
+        if r.returncode==0 and os.path.exists(fp):
+            shutil.copy(fp,os.path.join(_BIN,out))
+            sz=os.path.getsize(os.path.join(_BIN,out))
+            ok.append((out,sz))
+            print(clr(f'  \u2713 {out}  {sz//1024}KB','92'))
+        else:
+            err=r.stderr.strip()[:120] if r.stderr else '?'
+            fail.append((out,err))
+            print(clr(f'  \u2717 {out}','91'))
+    print(clr(f'  \u2192 {len(ok)} built, {len(fail)} skipped ({time.time()-t:.1f}s)','90'))
+    if fail:
+        print(clr('  Skipped:','93'))
+        for n,e in fail: print(clr(f'    {n}: {e}','91'))
 
-def validate_binaries():
-    print(colored("[*] Deployed binaries:", BLUE))
-    if os.path.exists(BIN_DIR):
-        for f in sorted(os.listdir(BIN_DIR)):
-            fpath = os.path.join(BIN_DIR, f)
-            size = os.path.getsize(fpath)
-            print(colored(f"  {f:40s} {size:>8,} bytes", CYAN))
-    else:
-        print(colored("  (none yet)", YELLOW))
+# ── Build C++ (parallel) ───────────────────────────────────────────
+CPP_TARGETS=[
+    ('service_scanner.cpp','cpp_service_scanner',''),
+    ('os_detect.cpp','cpp_os_detect',''),
+    ('vuln_matcher.cpp','cpp_vuln_matcher',''),
+    ('vuln_matcher_v2.cpp','cpp_vuln_matcher_v2',''),
+    ('results_correlator.cpp','cpp_results_correlator',''),
+    ('anomaly_detector.cpp','cpp_anomaly_detector',''),
+    ('ai_pattern_analyzer.cpp','cpp_ai_pattern_analyzer',''),
+    ('correlation_engine.cpp','cpp_correlation_engine',''),
+    ('service_classifier.cpp','cpp_service_classifier',''),
+    ('stack_fingerprinter.cpp','cpp_stack_fingerprinter',''),
+    ('risk_calculator.cpp','cpp_risk_calculator',''),
+    ('report_generator.cpp','cpp_report_generator',''),
+    ('tls_scanner.cpp','cpp_tls_scanner','-lssl -lcrypto'),
+    # New expert engines
+    ('deep_learning_analyzer.cpp','cpp_dl_analyzer',''),
+    ('tls_forensic_analyzer.cpp','cpp_tls_forensic','-lssl -lcrypto'),
+    ('exploit_detection_engine.cpp','cpp_exploit_detect',''),
+]
 
-if __name__ == "__main__":
-    print(colored("══════════════════════════════════════════", CYAN))
-    print(colored("     HACKIT PORT SCANNER BUILD SYSTEM    ", CYAN))
-    print(colored("     Multi-Engine Fusion (C/C++/Go/Rust) ", CYAN))
-    print(colored("     20 Plugins (10 Lua + 10 Ruby)       ", CYAN))
-    print(colored("══════════════════════════════════════════", CYAN))
-    ensure_bin_dir()
-    build_rust()
-    build_go()
-    build_c()
-    build_cpp()
-    validate_lua()
-    validate_ruby()
-    validate_binaries()
-    print(colored("══════════════════════════════════════════", CYAN))
-    print(colored("     BUILD COMPLETE                      ", CYAN))
-    print(colored("═" * 46, CYAN))
+def _cpp():
+    print(clr('[  C++  ] sequential (avoids LTO race)','\033[1;35m'))
+    cppd=os.path.join(_BASE,'cpp')
+    ok=[]; fail=[]; t=time.time()
+    for src,out,libs in CPP_TARGETS:
+        cmd=['g++',*_CXXFLAGS.split(),'-o',out,src]
+        if libs: cmd.extend(libs.split())
+        r=run(cmd,cwd=cppd)
+        fp=os.path.join(cppd,out)
+        if r.returncode==0 and os.path.exists(fp):
+            shutil.copy(fp,os.path.join(_BIN,out))
+            sz=os.path.getsize(os.path.join(_BIN,out))
+            ok.append((out,sz))
+            print(clr(f'  \u2713 {out}  {sz//1024}KB','92'))
+        else:
+            err=r.stderr.strip()[:120] if r.stderr else '?'
+            fail.append((out,err))
+            print(clr(f'  \u2717 {out}','91'))
+    print(clr(f'  \u2192 {len(ok)} OK, {len(fail)} fail ({time.time()-t:.1f}s)','90'))
+    if fail:
+        for n,e in fail: print(clr(f'    {n}: {e}','91'))
+
+# ── Validate ────────────────────────────────────────────────────────
+def _validate():
+    print(clr(f'\n{"="*55}','90'))
+    print(clr('  DEPLOYED BINARIES','96'))
+    print(clr(f'{"="*55}','90'))
+    if not os.path.exists(_BIN): return
+    total=0
+    for f in sorted(os.listdir(_BIN)):
+        fp=os.path.join(_BIN,f)
+        if not os.path.isfile(fp) or os.path.islink(fp): continue
+        sz=os.path.getsize(fp)
+        total+=sz
+        print(clr(f'  {f:42s} {sz:>8,} bytes','36'))
+    mb=total/(1024*1024)
+    print(clr(f'  {"─"*55}','90'))
+    print(clr(f'  {len(os.listdir(_BIN)):42} {mb:.1f} MB','92'))
+
+if __name__=='__main__':
+    os.makedirs(_BIN,exist_ok=1)
+    t0=time.time()
+    print(clr(f'  Build System v3 — {_CPU} cores — {_ARCH}','96'))
+    print(clr(f'  C flags: {_CFLAGS}','90'))
+    print(clr(f'  C++ flags: {_CXXFLAGS}','90'))
+    _go(); _rust(); _c(); _cpp(); _validate()
+    print(clr(f'\n  \u2713 Total: {time.time()-t0:.1f}s','92'))

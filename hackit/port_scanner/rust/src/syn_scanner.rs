@@ -1,3 +1,4 @@
+use rayon::prelude::*;
 use std::net::{Ipv4Addr, UdpSocket};
 use std::time::{Duration, Instant};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -38,6 +39,7 @@ struct PseudoHdr {
     tcp_len: u16,
 }
 
+#[inline]
 fn checksum(data: &[u8]) -> u16 {
     let mut sum: u32 = 0;
     let mut i = 0;
@@ -54,6 +56,7 @@ fn checksum(data: &[u8]) -> u16 {
     !sum as u16
 }
 
+#[inline]
 fn build_syn_packet(src_ip: u32, dst_ip: u32, src_port: u16, dst_port: u16, seq: u32) -> Vec<u8> {
     let ip_hdr_len = 20u8;
     let tcp_hdr_len = 20u8;
@@ -120,8 +123,9 @@ fn build_syn_packet(src_ip: u32, dst_ip: u32, src_port: u16, dst_port: u16, seq:
     packet
 }
 
+#[inline]
 fn parse_ports(input: &str) -> Vec<u16> {
-    let mut ports = Vec::new();
+    let mut ports = Vec::with_capacity(1024);
     match input.trim().to_lowercase().as_str() {
         "all" => return (1..=65535).collect(),
         "top100" => {
@@ -146,6 +150,7 @@ fn parse_ports(input: &str) -> Vec<u16> {
     ports
 }
 
+#[inline]
 fn get_source_ip(dst: u32) -> u32 {
     let sock = match UdpSocket::bind("0.0.0.0:0") {
         Ok(s) => s,
@@ -252,16 +257,16 @@ fn main() {
     let start = Instant::now();
     let open_count = Arc::new(AtomicUsize::new(0));
     let total = ports.len();
-    for chunk in ports.chunks(burst) {
+    ports.par_chunks(burst).for_each(|chunk| {
         let chunk_vec = chunk.to_vec();
-        for &port in &chunk_vec {
+        chunk_vec.par_iter().for_each(|&port| {
             let seq = rand::random::<u32>();
             let src_port: u16 = 10000 + rand::random::<u16>() % 55535;
             let pkt = build_syn_packet(src, dst, src_port, port, seq);
             let _ = raw_sock.send(&pkt);
-        }
-        std::thread::sleep(Duration::from_millis(timeout_ms.min(100)));
-    }
+        });
+    });
+    std::thread::sleep(Duration::from_millis(timeout_ms.min(100)));
     let wait_ms = timeout_ms.max(1000);
     let (open_ports, _rst_ports) = listen_for_synack(&raw_sock, &ports, wait_ms);
     let elapsed = start.elapsed().as_millis() as u64;

@@ -3,6 +3,57 @@ local shortport = require "shortport"
 local stdnse = require "stdnse"
 local packet = require "packet"
 
+
+
+-- nmp function cache
+local nmap_register = nmap.register_script
+local nmap_settitle = nmap.set_title
+local nmap_resolve = nmap.resolve
+local nmap_get_port_state = nmap.get_port_state
+local nmap_set_port_state = nmap.set_port_state
+local comm = nmap.comm
+local new_socket = nmap.new_socket
+local get_timeout = nmap.get_timeout
+
+-- Performance optimizations
+local format = string.format
+local lower = string.lower
+local upper = string.upper
+local byte = string.byte
+local sub = string.sub
+local match = string.match
+local gmatch = string.gmatch
+local gsub = string.gsub
+local find = string.find
+local rep = string.rep
+local char = string.char
+local concat = table.concat
+local insert = table.insert
+local remove = table.remove
+local sort = table.sort
+local move = table.move or function(a1, f, e, t, a2)
+    if not a2 then a2 = a1 end
+    for i = f, e do a2[t + i - f] = a1[i] end
+    return a2
+end
+local tostring = tostring
+local tonumber = tonumber
+local type = type
+local pcall = pcall
+local pairs = pairs
+local ipairs = ipairs
+local unpack = unpack or table.unpack
+local setmetatable = setmetatable
+local getmetatable = getmetatable
+local error = error
+local select = select
+local clock = nmap.clock
+local msleep = nmap.msleep
+local sleep = stdnse.sleep
+local strsplit = stdnse.strsplit
+local format_output = stdnse.format_output
+local output_table = stdnse.output_table
+
 description = [[
 Discovers live hosts on the local network by sending ICMP echo requests to the subnet
 broadcast address. Listens for ICMP echo replies from multiple hosts on the local
@@ -19,8 +70,8 @@ categories = {"discovery", "safe"}
 portrule = shortport.address_family("inet")
 
 local function calculate_broadcast(ip, netmask)
-  local addr_parts = stdnse.strsplit("%.", ip)
-  local mask_parts = stdnse.strsplit("%.", netmask)
+  local addr_parts = strsplit("%.", ip)
+  local mask_parts = strsplit("%.", netmask)
   if #addr_parts ~= 4 or #mask_parts ~= 4 then return nil end
   local broadcast_parts = {}
   for i = 1, 4 do
@@ -28,11 +79,11 @@ local function calculate_broadcast(ip, netmask)
     local mask_octet = tonumber(mask_parts[i]) or 0
     broadcast_parts[i] = addr_octet | (mask_octet ~ 0xFF) & 0xFF
   end
-  return table.concat(broadcast_parts, ".")
+  return concat(broadcast_parts, ".")
 end
 
 action = function(host, port)
-  local result = stdnse.output_table()
+  local result = output_table()
   local iface = nmap.get_interface_info()
 
   if not iface then
@@ -57,7 +108,7 @@ action = function(host, port)
     local capture = nmap.pcap_open(broadcast_ip, 1, 65600, "icmp")
     if not capture then
       if round == 1 then
-        nmap.msleep(500)
+        msleep(500)
       end
       goto continue
     end
@@ -65,8 +116,8 @@ action = function(host, port)
     local icmp_pkt = nmap.packet_build_icmp_echo(broadcast_ip)
     nmap.sendp(icmp_pkt, { dst = broadcast_ip })
 
-    local deadline = nmap.clock() + 3
-    while nmap.clock() < deadline do
+    local deadline = clock() + 3
+    while clock() < deadline do
       local ok, data = capture:receive()
       if ok and data then
         local pkt = packet.Packet:new(data)
@@ -87,9 +138,9 @@ action = function(host, port)
 
   local host_list = {}
   for ip_addr, info in pairs(discovered_hosts) do
-    host_list[#host_list + 1] = info
+    insert(host_list, info)
   end
-  table.sort(host_list, function(a, b) return a.ip < b.ip end)
+  sort(host_list, function(a, b) return a.ip < b.ip end)
 
   result.status = "success"
   result.broadcast_address = broadcast_ip

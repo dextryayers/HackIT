@@ -1,6 +1,58 @@
 local stdnse = require "stdnse"
 local nmap = require "nmap"
 local os = require "os"
+local shortport = require "shortport"
+
+
+
+-- nmp function cache
+local nmap_register = nmap.register_script
+local nmap_settitle = nmap.set_title
+local nmap_resolve = nmap.resolve
+local nmap_get_port_state = nmap.get_port_state
+local nmap_set_port_state = nmap.set_port_state
+local comm = nmap.comm
+local new_socket = nmap.new_socket
+local get_timeout = nmap.get_timeout
+
+-- Performance optimizations
+local format = string.format
+local lower = string.lower
+local upper = string.upper
+local byte = string.byte
+local sub = string.sub
+local match = string.match
+local gmatch = string.gmatch
+local gsub = string.gsub
+local find = string.find
+local rep = string.rep
+local char = string.char
+local concat = table.concat
+local insert = table.insert
+local remove = table.remove
+local sort = table.sort
+local move = table.move or function(a1, f, e, t, a2)
+    if not a2 then a2 = a1 end
+    for i = f, e do a2[t + i - f] = a1[i] end
+    return a2
+end
+local tostring = tostring
+local tonumber = tonumber
+local type = type
+local pcall = pcall
+local pairs = pairs
+local ipairs = ipairs
+local unpack = unpack or table.unpack
+local setmetatable = setmetatable
+local getmetatable = getmetatable
+local error = error
+local select = select
+local clock = nmap.clock
+local msleep = nmap.msleep
+local sleep = stdnse.sleep
+local strsplit = stdnse.strsplit
+local format_output = stdnse.format_output
+local output_table = stdnse.output_table
 
 description = [[Attempts to brute-force Telnet credentials using user-provided credential lists.]]
 author = "HackIT Framework"
@@ -15,8 +67,8 @@ local function load_list(arg_names, default)
     local lines = {}
     for line in f:lines() do
       line = line:gsub("^%s+", ""):gsub("%s+$", "")
-      if line ~= "" and line:sub(1, 1) ~= "#" then
-        lines[#lines + 1] = line
+      if line ~= "" and line:byte() ~= 35 then
+        insert(lines, line)
       end
     end
     f:close()
@@ -25,18 +77,18 @@ local function load_list(arg_names, default)
   local items = {}
   for item in val:gmatch("[^,]+") do
     item = item:gsub("^%s+", ""):gsub("%s+$", "")
-    if item ~= "" then items[#items + 1] = item end
+    if item ~= "" then insert(items, item) end
   end
   return items
 end
 
-local IAC = string.char(255)
-local WILL = string.char(251)
-local WONT = string.char(252)
-local DO = string.char(253)
-local DONT = string.char(254)
-local SB = string.char(250)
-local SE = string.char(240)
+local IAC = char(255)
+local WILL = char(251)
+local WONT = char(252)
+local DO = char(253)
+local DONT = char(254)
+local SB = char(250)
+local SE = char(240)
 
 local function telnet_negotiate(socket)
   local data = ""
@@ -48,15 +100,15 @@ local function telnet_negotiate(socket)
     while #buf >= 2 and buf:byte(1) == 255 do
       local cmd = buf:byte(2)
       if cmd == 255 then
-        data = data .. string.char(255)
+        data = data .. char(255)
         buf = buf:sub(3)
       elseif cmd == 251 or cmd == 253 then
         local opt = #buf >= 3 and buf:byte(3) or 0
         if #buf >= 3 then
           if cmd == 251 then
-            socket:send(IAC .. WONT .. string.char(opt))
+            socket:send(IAC .. WONT .. char(opt))
           else
-            socket:send(IAC .. DONT .. string.char(opt))
+            socket:send(IAC .. DONT .. char(opt))
           end
           buf = buf:sub(4)
         else
@@ -111,7 +163,7 @@ action = function(host, port)
     if stop then break end
     for _, p in ipairs(passes) do
       if stop or attempts >= max_attempts then break end
-      local socket = nmap.new_socket()
+      local socket = new_socket()
       socket:set_timeout(timeout * 1000)
       local ok, result = pcall(function()
         local status, err = socket:connect(host, port)
@@ -145,16 +197,16 @@ action = function(host, port)
       end
       if result then
         success_count = success_count + 1
-        found[#found + 1] = {user = u, password = p}
+        insert(found, {user = u, password = p})
         if stop_on_first then stop = true end
       end
       attempts = attempts + 1
-      if delay > 0 and not stop then stdnse.sleep(delay / 1000) end
+      if delay > 0 and not stop then sleep(delay / 1000) end
     end
   end
 
   local elapsed = os.time() - start_time
-  local out = stdnse.output_table()
+  local out = output_table()
   out.service = "Telnet"
   out.port = port.number
   out.attempts = attempts

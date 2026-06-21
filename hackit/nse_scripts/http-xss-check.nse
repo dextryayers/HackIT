@@ -1,5 +1,58 @@
 local http = require "http"
 local stdnse = require "stdnse"
+local nmap = require "nmap"
+local shortport = require "shortport"
+
+
+
+-- nmp function cache
+local nmap_register = nmap.register_script
+local nmap_settitle = nmap.set_title
+local nmap_resolve = nmap.resolve
+local nmap_get_port_state = nmap.get_port_state
+local nmap_set_port_state = nmap.set_port_state
+local comm = nmap.comm
+local new_socket = nmap.new_socket
+local get_timeout = nmap.get_timeout
+
+-- Performance optimizations
+local format = string.format
+local lower = string.lower
+local upper = string.upper
+local byte = string.byte
+local sub = string.sub
+local match = string.match
+local gmatch = string.gmatch
+local gsub = string.gsub
+local find = string.find
+local rep = string.rep
+local char = string.char
+local concat = table.concat
+local insert = table.insert
+local remove = table.remove
+local sort = table.sort
+local move = table.move or function(a1, f, e, t, a2)
+    if not a2 then a2 = a1 end
+    for i = f, e do a2[t + i - f] = a1[i] end
+    return a2
+end
+local tostring = tostring
+local tonumber = tonumber
+local type = type
+local pcall = pcall
+local pairs = pairs
+local ipairs = ipairs
+local unpack = unpack or table.unpack
+local setmetatable = setmetatable
+local getmetatable = getmetatable
+local error = error
+local select = select
+local clock = nmap.clock
+local msleep = nmap.msleep
+local sleep = stdnse.sleep
+local strsplit = stdnse.strsplit
+local format_output = stdnse.format_output
+local output_table = stdnse.output_table
 
 description = [[Injects a basic XSS payload into query parameters and checks if it is reflected unsanitized in the response.]]
 author = "HackIT Framework"
@@ -17,7 +70,7 @@ action = function(host, port)
         local response = http.get(host, port, url)
         if response and response.body then
             if response.body:find(payload, 1, true) then
-                results[#results + 1] = "Reflected in " .. param .. " parameter"
+                insert(results, "Reflected in " .. param .. " parameter")
             end
         end
     end
@@ -25,11 +78,11 @@ action = function(host, port)
         local post_body = "q=" .. payload
         local post_resp = http.post(host, port, "/", {header = {["Content-Type"] = "application/x-www-form-urlencoded"}}, nil, post_body)
         if post_resp and post_resp.body and post_resp.body:find(payload, 1, true) then
-            results[#results + 1] = "Reflected in POST body"
+            insert(results, "Reflected in POST body")
         end
     end
     if #results == 0 then
-        return stdnse.format_output(false, "No XSS reflection detected in basic test")
+        return format_output(false, "No XSS reflection detected in basic test")
     end
-    return stdnse.format_output(true, "Potential XSS: " .. table.concat(results, ", "))
+    return format_output(true, "Potential XSS: " .. concat(results, ", "))
 end

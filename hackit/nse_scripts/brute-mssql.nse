@@ -1,6 +1,58 @@
 local stdnse = require "stdnse"
 local nmap = require "nmap"
 local os = require "os"
+local shortport = require "shortport"
+
+
+
+-- nmp function cache
+local nmap_register = nmap.register_script
+local nmap_settitle = nmap.set_title
+local nmap_resolve = nmap.resolve
+local nmap_get_port_state = nmap.get_port_state
+local nmap_set_port_state = nmap.set_port_state
+local comm = nmap.comm
+local new_socket = nmap.new_socket
+local get_timeout = nmap.get_timeout
+
+-- Performance optimizations
+local format = string.format
+local lower = string.lower
+local upper = string.upper
+local byte = string.byte
+local sub = string.sub
+local match = string.match
+local gmatch = string.gmatch
+local gsub = string.gsub
+local find = string.find
+local rep = string.rep
+local char = string.char
+local concat = table.concat
+local insert = table.insert
+local remove = table.remove
+local sort = table.sort
+local move = table.move or function(a1, f, e, t, a2)
+    if not a2 then a2 = a1 end
+    for i = f, e do a2[t + i - f] = a1[i] end
+    return a2
+end
+local tostring = tostring
+local tonumber = tonumber
+local type = type
+local pcall = pcall
+local pairs = pairs
+local ipairs = ipairs
+local unpack = unpack or table.unpack
+local setmetatable = setmetatable
+local getmetatable = getmetatable
+local error = error
+local select = select
+local clock = nmap.clock
+local msleep = nmap.msleep
+local sleep = stdnse.sleep
+local strsplit = stdnse.strsplit
+local format_output = stdnse.format_output
+local output_table = stdnse.output_table
 
 description = [[Attempts to brute-force Microsoft SQL Server credentials using TDS login authentication.]]
 author = "HackIT Framework"
@@ -10,13 +62,13 @@ categories = {"brute", "intrusive"}
 local function load_list(arg_names)
   local val = stdnse.get_script_args(arg_names)
   if not val or val == "" then return {} end
-  if val:sub(1, 1) == "/" then
+  if val:byte() == 47 then
     local f, err = io.open(val, "r")
     if f then
       local lines = {}
       for line in f:lines() do
         line = line:gsub("^%s+", ""):gsub("%s+$", "")
-        if line ~= "" and line:sub(1, 1) ~= "#" then lines[#lines + 1] = line end
+        if line ~= "" and line:byte() ~= 35 then insert(lines, line end)
       end
       f:close()
       return lines
@@ -25,21 +77,21 @@ local function load_list(arg_names)
     local lines = {}
     for line in val:gmatch("[^\n]+") do
       line = line:gsub("^%s+", ""):gsub("%s+$", "")
-      if line ~= "" and line:sub(1, 1) ~= "#" then lines[#lines + 1] = line end
+      if line ~= "" and line:byte() ~= 35 then insert(lines, line end)
     end
     return lines
   end
   local items = {}
   for item in val:gmatch("[^,]+") do
     item = item:gsub("^%s+", ""):gsub("%s+$", "")
-    if item ~= "" then items[#items + 1] = item end
+    if item ~= "" then insert(items, item) end
   end
   return items
 end
 
 local function build_prelogin()
-  local data = string.char(0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00)
-  local hdr = string.char(
+  local data = char(0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00)
+  local hdr = char(
     0x02, 0x01, 0x00, 0x2e, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -68,9 +120,9 @@ local function build_login7(user, pass, hostname)
   local total_len = var_offset + 4
   local tds_pkt_len = 8 + total_len
 
-  local function le16(n) return string.char(n % 256, math.floor(n / 256) % 256) end
+  local function le16(n) return char(n % 256, math.floor(n / 256) % 256) end
   local function le32(n)
-    return string.char(n % 256, math.floor(n / 256) % 256, math.floor(n / 65536) % 256, math.floor(n / 16777216) % 256)
+    return char(n % 256, math.floor(n / 256) % 256, math.floor(n / 65536) % 256, math.floor(n / 16777216) % 256)
   end
 
   local hdr = {}
@@ -80,7 +132,7 @@ local function build_login7(user, pass, hostname)
   hdr[4] = le32(0)
   hdr[5] = le32(0)
   hdr[6] = le32(0)
-  hdr[7] = string.char(0x00, 0x00, 0x00, 0x00)
+  hdr[7] = char(0x00, 0x00, 0x00, 0x00)
   hdr[8] = le32(0)
   hdr[9] = le32(0)
   hdr[10] = le16(host_off) .. le16(host_len)
@@ -88,7 +140,7 @@ local function build_login7(user, pass, hostname)
   hdr[12] = le16(pass_off) .. le16(pass_len)
   hdr[13] = le16(app_off) .. le16(app_len)
   hdr[14] = le16(srv_off) .. le16(srv_len)
-  hdr[15] = string.rep(string.char(0), 44)
+  hdr[15] = rep(char(0), 44)
   hdr[16] = le16(0) .. le16(0)
   hdr[17] = le16(0) .. le16(0)
   hdr[18] = le16(0) .. le16(0)
@@ -104,9 +156,9 @@ local function build_login7(user, pass, hostname)
   local var_data = {}
   local function add_uni(str)
     for i = 1, #str do
-      var_data[#var_data + 1] = string.char(str:byte(i), 0)
+      insert(var_data, char(str:byte(i), 0))
     end
-    var_data[#var_data + 1] = string.char(0, 0)
+    insert(var_data, char(0, 0))
   end
   add_uni(hostname)
   add_uni(user)
@@ -114,8 +166,8 @@ local function build_login7(user, pass, hostname)
   if app_len > 0 then add_uni("") end
   if srv_len > 0 then add_uni("") end
 
-  local body = table.concat(hdr) .. table.concat(var_data)
-  local tds_hdr = string.char(0x10, 0x01) .. le16(tds_pkt_len) .. le16(0) .. string.char(0x00, 0x00)
+  local body = concat(hdr) .. concat(var_data)
+  local tds_hdr = char(0x10, 0x01) .. le16(tds_pkt_len) .. le16(0) .. char(0x00, 0x00)
   return tds_hdr .. body
 end
 
@@ -132,7 +184,7 @@ action = function(host, port)
   else stop_on_first = (stop_on_first:lower() == "true" or stop_on_first == "1") end
 
   if #users == 0 or #passes == 0 then
-    return stdnse.format_output(false, "No credentials provided. Use brute-mssql.users and brute-mssql.passwords script args")
+    return format_output(false, "No credentials provided. Use brute-mssql.users and brute-mssql.passwords script args")
   end
 
   local start_time = os.time()
@@ -146,7 +198,7 @@ action = function(host, port)
     if stop then break end
     for _, p in ipairs(passes) do
       if stop or attempts >= max_attempts then break end
-      local socket = nmap.new_socket()
+      local socket = new_socket()
       socket:set_timeout(timeout * 1000)
       local ok, result = pcall(function()
         local status, err = socket:connect(host, port)
@@ -169,7 +221,7 @@ action = function(host, port)
           elseif login_resp:byte(8) == 0x04 or login_resp:byte(8) == 0x05 then
             return true
           end
-          local ad_pos = login_resp:find(string.char(0xAD))
+          local ad_pos = login_resp:find(char(0xAD))
           if ad_pos and ad_pos + 4 <= #login_resp then
             if login_resp:byte(ad_pos + 4) == 0 then return true end
           end
@@ -181,16 +233,16 @@ action = function(host, port)
         errors = errors + 1
       elseif result then
         success_count = success_count + 1
-        found[#found + 1] = {user = u, password = p}
+        insert(found, {user = u, password = p})
         if stop_on_first then stop = true end
       end
       attempts = attempts + 1
-      if delay > 0 and not stop then stdnse.sleep(delay / 1000) end
+      if delay > 0 and not stop then sleep(delay / 1000) end
     end
   end
 
   local elapsed = os.time() - start_time
-  local out = stdnse.output_table()
+  local out = output_table()
   out.service = "MSSQL"
   out.port = port.number
   out.attempts = attempts

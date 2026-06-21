@@ -24,6 +24,32 @@
 #include <cmath>
 #include <cstdint>
 #include <iomanip>
+#include <string_view>
+#include <memory>
+#include <unordered_map>
+
+
+// === Deep Performance Optimizations ===
+#ifndef OPTIMIZE_H
+#define likely(x)   __builtin_expect(!!(x), 1)
+#define unlikely(x) __builtin_expect(!!(x), 0)
+#endif
+#ifndef FORCE_INLINE
+#define FORCE_INLINE __attribute__((always_inline)) inline
+#endif
+#ifndef HOT_FUNC
+#define HOT_FUNC    __attribute__((hot))
+#endif
+#ifndef COLD_FUNC
+#define COLD_FUNC   __attribute__((cold))
+#endif
+#ifndef LIKELY
+#define LIKELY(x)   __builtin_expect(!!(x), 1)
+#endif
+#ifndef UNLIKELY
+#define UNLIKELY(x) __builtin_expect(!!(x), 0)
+#endif
+
 
 #ifdef _WIN32
   #define WIN32_LEAN_AND_MEAN
@@ -59,14 +85,30 @@
   #include <openssl/x509v3.h>
   #include <openssl/pem.h>
   #include <openssl/bio.h>
+
+struct SSLDeleter {
+    void operator()(SSL* s) const noexcept { if (s) SSL_free(s); }
+};
+struct SSLCTXDeleter {
+    void operator()(SSL_CTX* c) const noexcept { if (c) SSL_CTX_free(c); }
+};
+struct X509Deleter {
+    void operator()(X509* x) const noexcept { if (x) X509_free(x); }
+};
+
+using UniqueSSL       = std::unique_ptr<SSL, SSLDeleter>;
+using UniqueSSLCTX    = std::unique_ptr<SSL_CTX, SSLCTXDeleter>;
+using UniqueX509      = std::unique_ptr<X509, X509Deleter>;
+
+
 #endif
 
 using namespace std;
 using namespace chrono;
 
-const int DEFAULT_TIMEOUT_MS = 1500;
-const int MAX_BANNER = 16384;
-const int MAX_WORKERS = 32;
+constexpr int DEFAULT_TIMEOUT_MS = 1500;
+constexpr int MAX_BANNER = 16384;
+constexpr int MAX_WORKERS = 32;
 
 struct CipherSuite {
     string iana_name;
@@ -159,7 +201,7 @@ static long long now_ms() {
     return duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
 }
 
-static void init_openssl() {
+static void init_openssl() noexcept {
 #ifndef _WIN32
     SSL_load_error_strings();
     OpenSSL_add_ssl_algorithms();
@@ -224,12 +266,17 @@ static bool probe_tls_version(const string& host, int port, int timeout_ms, cons
     char buf[16384];
     int total = 0;
     long long deadline = now_ms() + timeout_ms;
+    set_nonblocking(s, true);
     while (now_ms() < deadline && total < (int)sizeof(buf)) {
+        struct pollfd pfd = {s, POLLIN, 0};
+        int prc = poll(&pfd, 1, std::max(1, (int)(deadline - now_ms())));
+        if (prc <= 0) break;
         int n = recv(s, buf + total, sizeof(buf) - total, 0);
         if (n > 0) total += n;
         else break;
         if (total >= 5 && (buf[0] == 0x15 || buf[0] == 0x16)) break;
     }
+    set_nonblocking(s, false);
     CLOSE_SOCKET(s);
     max_recv = total;
     server_hello = string(buf, total);
@@ -237,34 +284,44 @@ static bool probe_tls_version(const string& host, int port, int timeout_ms, cons
 }
 
 #ifndef _WIN32
-static X509* get_certificate_openssl(const string& host, int port, int timeout_ms) {
+static SSL_CTX* get_cached_ssl_ctx() noexcept {
+    static SSL_CTX* ctx = nullptr;
+    if (!ctx) {
+        ctx = SSL_CTX_new(SSLv23_client_method());
+        if (ctx) {
+            SSL_CTX_set_options(ctx, SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3);
+            SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, NULL);
+        }
+    }
+    return ctx;
+}
+
+static X509* get_certificate_openssl(const string& host, int port, int timeout_ms) noexcept {
     SOCKET s = tcp_connect(host, port, timeout_ms);
     if (IS_INVALID(s)) return nullptr;
 
-    SSL_CTX* ctx = SSL_CTX_new(SSLv23_client_method());
+    SSL_CTX* ctx = get_cached_ssl_ctx();
     if (!ctx) { CLOSE_SOCKET(s); return nullptr; }
 
-    SSL_CTX_set_options(ctx, SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3);
-    SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, NULL);
     SSL_CTX_set_timeout(ctx, timeout_ms / 1000);
 
-    SSL* ssl = SSL_new(ctx);
-    if (!ssl) { SSL_CTX_free(ctx); CLOSE_SOCKET(s); return nullptr; }
+    UniqueSSL ssl(SSL_new(ctx));
+    if (!ssl) { CLOSE_SOCKET(s); return nullptr; }
 
-    SSL_set_fd(ssl, (int)s);
-    SSL_set_connect_state(ssl);
+    SSL_set_fd(ssl.get(), (int)s);
+    SSL_set_connect_state(ssl.get());
+    SSL_set_mode(ssl.get(), SSL_MODE_ENABLE_PARTIAL_WRITE | SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER);
 
     // Set SNI
-    SSL_set_tlsext_host_name(ssl, host.c_str());
+    SSL_set_tlsext_host_name(ssl.get(), host.c_str());
 
-    int ret = SSL_connect(ssl);
+    int ret = SSL_connect(ssl.get());
     X509* cert = nullptr;
     if (ret == 1) {
-        cert = SSL_get_peer_certificate(ssl);
+        cert = SSL_get_peer_certificate(ssl.get());
     }
 
-    SSL_free(ssl);
-    SSL_CTX_free(ctx);
+    ssl.reset();
     CLOSE_SOCKET(s);
 
     return cert;
@@ -338,14 +395,14 @@ static string extract_cert_info(X509* cert, TLSResult& r) {
         for (int i = 0; i < sk_GENERAL_NAME_num(names); i++) {
             GENERAL_NAME* name = sk_GENERAL_NAME_value(names, i);
             if (name->type == GEN_DNS) {
-                r.san_dns.push_back(string((const char*)ASN1_STRING_get0_data(name->d.dNSName),
+                r.san_dns.emplace_back(string((const char*)ASN1_STRING_get0_data(name->d.dNSName),
                                            ASN1_STRING_length(name->d.dNSName)));
             } else if (name->type == GEN_IPADD) {
                 char ip[INET6_ADDRSTRLEN];
                 const unsigned char* d = ASN1_STRING_get0_data(name->d.iPAddress);
                 if (ASN1_STRING_length(name->d.iPAddress) == 4) {
                     snprintf(ip, sizeof(ip), "%d.%d.%d.%d", d[0], d[1], d[2], d[3]);
-                    r.san_ip.push_back(ip);
+                    r.san_ip.emplace_back(ip);
                 }
             }
         }
@@ -375,7 +432,7 @@ static string extract_cert_info(X509* cert, TLSResult& r) {
 }
 #endif
 
-static double grade_tls(TLSResult& r) {
+static double grade_tls(TLSResult& r) noexcept {
     double score = 100;
     if (r.rc4_used || r.null_cipher || r.anon_cipher) score -= 40;
     if (r.des_used) score -= 20;
@@ -429,7 +486,7 @@ static TLSResult scan_tls(const string& host, int port, int timeout_ms) {
             cs.id = CIPHER_IDS[i];
             cs.iana_name = CIPHER_NAMES[i] ? CIPHER_NAMES[i] : "unknown";
             cs.severity = CIPHER_SEVERITY[i] ? CIPHER_SEVERITY[i] : "UNKNOWN";
-            r.ciphers.push_back(cs);
+            r.ciphers.emplace_back(cs);
         }
 
         // Extract certificate via OpenSSL
@@ -446,7 +503,7 @@ static TLSResult scan_tls(const string& host, int port, int timeout_ms) {
     return r;
 }
 
-static void print_json(const TLSResult& r) {
+static void print_json(const TLSResult& r) noexcept {
     printf("RESULT:{"
            "\"port\":%d,"
            "\"tls\":%s,"
@@ -511,7 +568,7 @@ int main(int argc, char* argv[]) {
     vector<int> ports;
     if (argc > 2) {
         char* p = strtok(argv[2], ",");
-        while (p) { ports.push_back(atoi(p)); p = strtok(NULL, ","); }
+        while (p) { ports.emplace_back(atoi(p)); p = strtok(NULL, ","); }
     }
     if (ports.empty()) {
         ports = {443, 8443, 465, 993, 995, 636, 990, 992, 853, 587, 2083};

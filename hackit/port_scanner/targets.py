@@ -2,9 +2,11 @@
 import ipaddress
 import os
 import re
+import functools
 
 HOST_PATTERN = re.compile(r"^[a-zA-Z0-9\-\.]+$")
 
+@functools.lru_cache(maxsize=128)
 def parse_targets(targets):
     items = []
     if not targets:
@@ -66,6 +68,7 @@ def parse_targets(targets):
             seen.add(x)
             out.append(x)
     return out
+@functools.lru_cache(maxsize=128)
 def parse_ports(ports=None, port_range=None, popular=False, full_range=False, top_n=None):
     if full_range:
         return "1-65535"

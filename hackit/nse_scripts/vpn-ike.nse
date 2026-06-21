@@ -4,6 +4,58 @@ local bin = require "bin"
 local string = require "string"
 local math = require "math"
 local bit = require "bit"
+local shortport = require "shortport"
+
+
+
+-- nmp function cache
+local nmap_register = nmap.register_script
+local nmap_settitle = nmap.set_title
+local nmap_resolve = nmap.resolve
+local nmap_get_port_state = nmap.get_port_state
+local nmap_set_port_state = nmap.set_port_state
+local comm = nmap.comm
+local new_socket = nmap.new_socket
+local get_timeout = nmap.get_timeout
+
+-- Performance optimizations
+local format = string.format
+local lower = string.lower
+local upper = string.upper
+local byte = string.byte
+local sub = string.sub
+local match = string.match
+local gmatch = string.gmatch
+local gsub = string.gsub
+local find = string.find
+local rep = string.rep
+local char = string.char
+local concat = table.concat
+local insert = table.insert
+local remove = table.remove
+local sort = table.sort
+local move = table.move or function(a1, f, e, t, a2)
+    if not a2 then a2 = a1 end
+    for i = f, e do a2[t + i - f] = a1[i] end
+    return a2
+end
+local tostring = tostring
+local tonumber = tonumber
+local type = type
+local pcall = pcall
+local pairs = pairs
+local ipairs = ipairs
+local unpack = unpack or table.unpack
+local setmetatable = setmetatable
+local getmetatable = getmetatable
+local error = error
+local select = select
+local clock = nmap.clock
+local msleep = nmap.msleep
+local sleep = stdnse.sleep
+local strsplit = stdnse.strsplit
+local format_output = stdnse.format_output
+local output_table = stdnse.output_table
 
 description = [[Detects IKE/IPsec VPN services by sending ISAKMP initiator cookies with multiple transforms. Extracts IKE version, exchange type, SA payload details, and proposal information from responses.]]
 author = "HackIT Framework"
@@ -17,31 +69,31 @@ end
 local function random_cookie_string(length)
   local result = ""
   for i = 1, length do
-    result = result .. string.char(math.random(0, 255))
+    result = result .. char(math.random(0, 255))
   end
   return result
 end
 
 local function build_isakmp_packet(transform_params)
   local init_cookie = transform_params and transform_params.cookie or random_cookie_string(8)
-  local resp_cookie = string.rep("\x00", 8)
+  local resp_cookie = rep("\x00", 8)
   local next_payload = transform_params and transform_params.next_payload or 5
-  local version = string.char(0x10)
+  local version = char(0x10)
   local exchange_type = transform_params and transform_params.exchange_type or 2
-  local flags = transform_params and transform_params.flags or string.char(0x00)
-  local message_id = string.rep("\x00", 4)
+  local flags = transform_params and transform_params.flags or char(0x00)
+  local message_id = rep("\x00", 4)
 
-  local isakmp_header = init_cookie .. resp_cookie .. string.char(next_payload) ..
-                        version .. string.char(exchange_type) .. flags .. message_id
+  local isakmp_header = init_cookie .. resp_cookie .. char(next_payload) ..
+                        version .. char(exchange_type) .. flags .. message_id
 
-  local sa_payload = string.char(next_payload == 5 and 0 or 0, 0x00, 0x00, 0x00, 0x00,
+  local sa_payload = char(next_payload == 5 and 0 or 0, 0x00, 0x00, 0x00, 0x00,
                     0x00, 0x01, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00)
 
   local proposal_num = 1
-  local proposal_payload = string.char(0x00, 0x00, 0x00, proposal_num, 0x01, 0x00, 0x00, 0x04)
+  local proposal_payload = char(0x00, 0x00, 0x00, proposal_num, 0x01, 0x00, 0x00, 0x04)
 
   local transform_id = transform_params and transform_params.transform_id or 1
-  local transform_payload = string.char(0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x04)
+  local transform_payload = char(0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x04)
 
   local payload = sa_payload .. proposal_payload .. transform_payload
   local total_length = #isakmp_header + #payload
@@ -81,19 +133,19 @@ local function parse_ike_response(response)
     [0] = "None", [1] = "Base", [2] = "Identity Protection",
     [3] = "Auth Only", [4] = "Aggressive", [5] = "Informational",
   }
-  info.exchange_type_name = exchange_types[info.exchange_type] or string.format("Unknown (%d)", info.exchange_type)
+  info.exchange_type_name = exchange_types[info.exchange_type] or format("Unknown (%d)", info.exchange_type)
 
   return info
 end
 
 action = function(host, port)
-  local result = stdnse.output_table()
-  local socket = nmap.new_socket("udp")
+  local result = output_table()
+  local socket = new_socket("udp")
   socket:set_timeout(8000)
 
   local ok, err = pcall(socket.connect, socket, host.ip, port.number)
   if not ok then
-    return stdnse.format_output(false, "Could not connect: " .. tostring(err))
+    return format_output(false, "Could not connect: " .. tostring(err))
   end
 
   local cookie = random_cookie_string(8)
@@ -101,19 +153,19 @@ action = function(host, port)
   local ok2, serr = pcall(socket.send, socket, packet)
   if not ok2 then
     socket:close()
-    return stdnse.format_output(false, "Send failed: " .. tostring(serr))
+    return format_output(false, "Send failed: " .. tostring(serr))
   end
 
   local ok3, response = pcall(socket.receive_from, 10)
   socket:close()
 
   if not ok3 or not response or #response < 28 then
-    return stdnse.format_output(false, "No IKE response received (VPN may be filtering)")
+    return format_output(false, "No IKE response received (VPN may be filtering)")
   end
 
   local ike_info = parse_ike_response(response)
   result.ike_detected = true
-  result.ike_version = string.format("%d.%d", ike_info.major_version, ike_info.minor_version)
+  result.ike_version = format("%d.%d", ike_info.major_version, ike_info.minor_version)
   result.major_version = ike_info.major_version
   result.minor_version = ike_info.minor_version
   result.exchange_type = ike_info.exchange_type
@@ -121,9 +173,9 @@ action = function(host, port)
   result.encryption_bit_set = ike_info.encryption_flag
   result.response_size = #response
 
-  if ike_info.responder_cookie and ike_info.responder_cookie ~= string.rep("\x00", 8) then
+  if ike_info.responder_cookie and ike_info.responder_cookie ~= rep("\x00", 8) then
     result.responder_cookie_present = true
   end
 
-  return stdnse.format_output(true, result)
+  return format_output(true, result)
 end

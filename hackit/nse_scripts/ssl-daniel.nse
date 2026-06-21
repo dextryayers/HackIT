@@ -1,5 +1,58 @@
 local stdnse = require "stdnse"
 local tls = require "tls"
+local nmap = require "nmap"
+local shortport = require "shortport"
+
+
+
+-- nmp function cache
+local nmap_register = nmap.register_script
+local nmap_settitle = nmap.set_title
+local nmap_resolve = nmap.resolve
+local nmap_get_port_state = nmap.get_port_state
+local nmap_set_port_state = nmap.set_port_state
+local comm = nmap.comm
+local new_socket = nmap.new_socket
+local get_timeout = nmap.get_timeout
+
+-- Performance optimizations
+local format = string.format
+local lower = string.lower
+local upper = string.upper
+local byte = string.byte
+local sub = string.sub
+local match = string.match
+local gmatch = string.gmatch
+local gsub = string.gsub
+local find = string.find
+local rep = string.rep
+local char = string.char
+local concat = table.concat
+local insert = table.insert
+local remove = table.remove
+local sort = table.sort
+local move = table.move or function(a1, f, e, t, a2)
+    if not a2 then a2 = a1 end
+    for i = f, e do a2[t + i - f] = a1[i] end
+    return a2
+end
+local tostring = tostring
+local tonumber = tonumber
+local type = type
+local pcall = pcall
+local pairs = pairs
+local ipairs = ipairs
+local unpack = unpack or table.unpack
+local setmetatable = setmetatable
+local getmetatable = getmetatable
+local error = error
+local select = select
+local clock = nmap.clock
+local msleep = nmap.msleep
+local sleep = stdnse.sleep
+local strsplit = stdnse.strsplit
+local format_output = stdnse.format_output
+local output_table = stdnse.output_table
 
 description = [[Detects DROWN / SSLv2 enabled on the SSL/TLS service (CVE-2016-0800, CVE-2016-0703).]]
 author = "HackIT Framework"
@@ -11,9 +64,9 @@ portrule = function(host, port) return port.protocol == "tcp" and port.state == 
 local function build_sslv2_hello(ciphers)
   local ciph_bytes = {}
   for _, c in ipairs(ciphers) do
-    ciph_bytes[#ciph_bytes + 1] = string.char(0x00, c)
+    insert(ciph_bytes, char(0x00, c))
   end
-  local cipher_spec = table.concat(ciph_bytes)
+  local cipher_spec = concat(ciph_bytes)
   local cipher_len = #cipher_spec
 
   local session_id = ""
@@ -21,27 +74,27 @@ local function build_sslv2_hello(ciphers)
 
   local length = 2 + 2 + 2 + 2 + cipher_len + #session_id + #challenge
   if length > 127 then
-    local packet = string.char(0x80, 0x80 + math.floor(length / 256), length % 256)
+    local packet = char(0x80, 0x80 + math.floor(length / 256), length % 256)
   else
-    local packet = string.char(0x80, length)
+    local packet = char(0x80, length)
   end
 
-  packet = packet .. string.char(0x01)
-  packet = packet .. string.char(0x00, cipher_len / 2)
-  packet = packet .. string.char(#session_id)
-  packet = packet .. string.char(#challenge)
+  packet = packet .. char(0x01)
+  packet = packet .. char(0x00, cipher_len / 2)
+  packet = packet .. char(#session_id)
+  packet = packet .. char(#challenge)
   packet = packet .. cipher_spec
   packet = packet .. session_id
   packet = packet .. challenge
 
-  packet = packet .. string.char(0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  packet = packet .. char(0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00)
 
   return packet
 end
 
 local function test_sslv2(host, port_num)
-  local sock = nmap.new_socket()
+  local sock = new_socket()
   sock:set_timeout(10000)
   local status = sock:connect(host.ip, port_num)
   if not status then return nil, "connect failed" end
@@ -77,13 +130,13 @@ action = function(host, port)
       if (first_byte == 0x80 or first_byte == 0x04) and second_byte < 0x80 then
         local error_code = rcv:byte(3) or 0
         if error_code == 0 then
-          table.insert(findings, {check = "SSLv2 server hello", detail = "SSLv2 ServerHello received - server supports SSLv2", severity = "CRITICAL"})
+          insert(findings, {check = "SSLv2 server hello", detail = "SSLv2 ServerHello received - server supports SSLv2", severity = "CRITICAL"})
         end
       end
 
       if #rcv > 10 then
         local session_id_hit = rcv:sub(3, 3)
-        if session_id_hit == string.char(0x00) then
+        if session_id_hit == char(0x00) then
           local cert_len = rcv:byte(4) * 256 + (rcv:byte(5) or 0)
           local cipher_len = rcv:byte(6) * 256 + (rcv:byte(7) or 0)
           if cipher_len > 0 then
@@ -91,28 +144,28 @@ action = function(host, port)
             local ciphers_received = {}
             for i = 1, cipher_len, 3 do
               if offset + i + 2 <= #rcv then
-                ciphers_received[#ciphers_received + 1] = rcv:byte(offset + i) * 256 + rcv:byte(offset + i + 1)
+                insert(ciphers_received, rcv:byte(offset + i) * 256 + rcv:byte(offset + i + 1))
               end
             end
-            table.insert(findings, {check = "SSLv2 ciphers", detail = ("Server offered %d SSLv2 cipher suites - DROWN attack possible"):format(#ciphers_received), severity = "CRITICAL"})
+            insert(findings, {check = "SSLv2 ciphers", detail = ("Server offered %d SSLv2 cipher suites - DROWN attack possible"):format(#ciphers_received), severity = "CRITICAL"})
           end
         end
       end
 
       local sslv2_signature = (first_byte == 0x80 or first_byte == 0x04)
       if sslv2_signature and not findings[1] then
-        table.insert(findings, {check = "SSLv2 response", detail = "SSLv2 response format detected", severity = "HIGH"})
+        insert(findings, {check = "SSLv2 response", detail = "SSLv2 response format detected", severity = "HIGH"})
       end
     elseif err and not err:match("TIMEOUT") then
-      table.insert(findings, {check = "SSLv2 test", detail = ("No SSLv2 response: %s"):format(tostring(err)), severity = "LOW"})
+      insert(findings, {check = "SSLv2 test", detail = ("No SSLv2 response: %s"):format(tostring(err)), severity = "LOW"})
     end
 
     if rcv and #rcv > 2 and rcv:match("SSLv2") then
-      table.insert(findings, {check = "SSLv2 banner", detail = "SSLv2 reference found in response", severity = "HIGH"})
+      insert(findings, {check = "SSLv2 banner", detail = "SSLv2 reference found in response", severity = "HIGH"})
     end
 
     if #findings == 0 then
-      table.insert(findings, {check = "SSLv2 test", detail = "No SSLv2 response - DROWN likely not exploitable", severity = "LOW"})
+      insert(findings, {check = "SSLv2 test", detail = "No SSLv2 response - DROWN likely not exploitable", severity = "LOW"})
     end
 
     local max_severity = "LOW"
@@ -123,7 +176,7 @@ action = function(host, port)
       end
     end
 
-    local result = stdnse.output_table()
+    local result = output_table()
     result.cve = "CVE-2016-0800 (DROWN), CVE-2016-0703"
     result.severity = max_severity
     result.vulnerable = max_severity ~= "LOW" and max_severity ~= "INFO"
@@ -135,7 +188,7 @@ action = function(host, port)
     return result
   end)
   if not ok then
-    local result = stdnse.output_table()
+    local result = output_table()
     result.cve = "CVE-2016-0800"
     result.severity = "MEDIUM"
     result.vulnerable = false

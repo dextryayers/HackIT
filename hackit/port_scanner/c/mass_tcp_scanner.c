@@ -17,11 +17,14 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <netdb.h>
+#include <poll.h>
+
+#include "optimize.h"
 
 #define MAX_PORTS        131072
 #define MAX_CONCURRENT   65536
 #define MAX_BANNER       4096
-#define BATCH_SIZE       1024
+#define BATCH_SIZE       256
 #define TIMEOUT_MS       1500
 #define MAX_WORKERS      32
 
@@ -57,7 +60,7 @@ typedef struct {
     pthread_mutex_t lock;
 } MassContext;
 
-static long long now_ms(void) {
+static ALWAYS_INLINE long long now_ms(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
@@ -83,7 +86,7 @@ static int parse_ports(const char* spec, int* ports, int max) {
     }
     if (strcmp(buf, "top100") == 0 || strcmp(buf, "top:100") == 0) {
         int top[] = {21,22,23,25,53,80,110,111,135,139,143,161,179,389,443,445,465,514,587,636,873,990,992,993,995,1080,1194,1352,1433,1521,1723,2049,2375,2376,2379,3128,3306,3389,3690,4369,5432,5672,5900,5984,5985,6379,6443,8080,8443,8500,9090,9092,9200,9418,10250,11211,15672,25565,27017,32400,0};
-        for (int i = 0; top[i] && count < max; i++) ports[count++] = top[i];
+        for (int i = 0; top[i] && count < max; ++i) ports[count++] = top[i];
         return count;
     }
     char* token = strtok(buf, ",");
@@ -140,7 +143,7 @@ static void* worker_poll(void* arg) {
         if (remaining <= 0) break;
         int n = epoll_wait(ctx->epfd, events, 4096, 100);
         if (n < 0) { if (errno == EINTR) continue; break; }
-        for (int i = 0; i < n; i++) {
+        for (int i = 0; i < n; ++i) {
             int fd = events[i].data.fd;
             int port = (int)events[i].data.u32;
             uint32_t events_occured = events[i].events;
@@ -164,7 +167,8 @@ static void* worker_poll(void* arg) {
                 if (total == 0 && (port == 80 || port == 8080 || port == 443 || port == 8443)) {
                     const char* req = "GET / HTTP/1.0\r\nHost: hackit\r\n\r\n";
                     write(fd, req, strlen(req));
-                    usleep(80000);
+                    struct pollfd pf = { .fd = fd, .events = POLLIN };
+                    poll(&pf, 1, 80);
                     total = (int)read(fd, banner_buf, MAX_BANNER - 1);
                     if (total < 0) total = 0;
                 }
@@ -215,13 +219,13 @@ static void* worker_connect(void* arg) {
         if (start + batch > ctx->port_count) batch = ctx->port_count - start;
         pthread_mutex_unlock(&ctx->lock);
         if (batch <= 0) break;
-        for (int i = 0; i < batch; i++) {
+        for (int i = 0; i < batch; ++i) {
             int idx = start + i;
             if (idx >= ctx->port_count) break;
             int fd = prepare_connect(ctx->epfd, ctx->ip, ctx->ports[idx], ctx->timeout_ms);
             if (fd < 0) continue;
         }
-        usleep(ctx->timeout_ms * 1000 + 100000);
+        poll(NULL, 0, ctx->timeout_ms + 100);
     }
     close(pipe_fds[0]);
     close(pipe_fds[1]);
@@ -235,10 +239,10 @@ static void run_mass_scan(MassContext* ctx) {
     int n_workers = ctx->workers;
     if (n_workers > MAX_WORKERS) n_workers = MAX_WORKERS;
     pthread_create(&workers[0], NULL, worker_connect, ctx);
-    for (int i = 0; i < n_workers; i++)
+    for (int i = 0; i < n_workers; ++i)
         pthread_create(&workers[1 + i], NULL, worker_poll, ctx);
     pthread_join(workers[0], NULL);
-    for (int i = 0; i < n_workers; i++)
+    for (int i = 0; i < n_workers; ++i)
         pthread_join(workers[1 + i], NULL);
     close(ctx->epfd);
 }
@@ -250,42 +254,55 @@ static const SvcEntry SVC_DB[] = {
 };
 
 static const char* get_service(int port) {
-    for (int i = 0; SVC_DB[i].name; i++)
+    for (int i = 0; SVC_DB[i].name; ++i)
         if (SVC_DB[i].port == port) return SVC_DB[i].name;
     return "unknown";
 }
 
-int main(int argc, char** argv) {
+static int fast_atoi(const char *s) {
+    int n = 0;
+    while (*s >= '0' && *s <= '9')
+        n = n * 10 + (*s++ - '0');
+    return n;
+}
+
+HOT int main(int argc, char** argv) {
+    int port_count;
+    long long elapsed;
+    int ports[MAX_PORTS];
+    MassContext ctx;
+    struct in_addr ia;
+
     signal(SIGPIPE, SIG_IGN);
-    if (argc < 3) {
+    if (unlikely(argc < 3)) {
         fprintf(stderr, "Usage: %s <host> <ports> [timeout_ms] [workers] [batch_size]\n", argv[0]);
         fprintf(stderr, "Example: %s 192.168.1.1 1-65535 1000 16 1024\n", argv[0]);
         return 1;
     }
-    MassContext ctx;
     memset(&ctx, 0, sizeof(ctx));
     ctx.hostname = argv[1];
     ctx.ip = resolve_ip(ctx.hostname);
-    if (ctx.ip == 0) { fprintf(stderr, "Failed to resolve\n"); return 1; }
-    int ports[MAX_PORTS];
-    int port_count = parse_ports(argv[2], ports, MAX_PORTS);
-    if (port_count <= 0) { fprintf(stderr, "No valid ports\n"); return 1; }
+    if (unlikely(ctx.ip == 0)) { fprintf(stderr, "Failed to resolve\n"); return 1; }
+    port_count = parse_ports(argv[2], ports, MAX_PORTS);
+    if (unlikely(port_count <= 0)) { fprintf(stderr, "No valid ports\n"); return 1; }
     ctx.ports = ports;
     ctx.port_count = port_count;
-    ctx.timeout_ms = argc > 3 ? atoi(argv[3]) : TIMEOUT_MS;
-    ctx.workers = argc > 4 ? atoi(argv[4]) : 8;
-    ctx.batch_size = argc > 5 ? atoi(argv[5]) : BATCH_SIZE;
+    ctx.timeout_ms = argc > 3 ? fast_atoi(argv[3]) : TIMEOUT_MS;
+    ctx.workers = argc > 4 ? fast_atoi(argv[4]) : 8;
+    ctx.batch_size = argc > 5 ? fast_atoi(argv[5]) : BATCH_SIZE;
     if (ctx.workers < 1) ctx.workers = 1;
     if (ctx.workers > MAX_WORKERS) ctx.workers = MAX_WORKERS;
     if (ctx.batch_size < 64) ctx.batch_size = 64;
     pthread_mutex_init(&ctx.lock, NULL);
-    struct in_addr ia; ia.s_addr = ctx.ip;
+    ia.s_addr = ctx.ip;
     fprintf(stderr, "MASS_SCANNER target=%s ip=%s ports=%d timeout=%dms workers=%d batch=%d\n",
         ctx.hostname, inet_ntoa(ia), port_count, ctx.timeout_ms, ctx.workers, ctx.batch_size);
     ctx.start_time = now_ms();
     run_mass_scan(&ctx);
-    long long elapsed = now_ms() - ctx.start_time;
+    elapsed = now_ms() - ctx.start_time;
     fprintf(stderr, "FINAL:{\"target\":\"%s\",\"total\":%d,\"open\":%d,\"elapsed_ms\":%lld}\n",
         ctx.hostname, port_count, ctx.open_count, elapsed);
     return 0;
 }
+
+// vim: ts=4 sw=4 et tw=80

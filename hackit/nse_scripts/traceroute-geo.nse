@@ -4,6 +4,57 @@ local stdnse = require "stdnse"
 local http = require "http"
 local json = require "json"
 
+
+
+-- nmp function cache
+local nmap_register = nmap.register_script
+local nmap_settitle = nmap.set_title
+local nmap_resolve = nmap.resolve
+local nmap_get_port_state = nmap.get_port_state
+local nmap_set_port_state = nmap.set_port_state
+local comm = nmap.comm
+local new_socket = nmap.new_socket
+local get_timeout = nmap.get_timeout
+
+-- Performance optimizations
+local format = string.format
+local lower = string.lower
+local upper = string.upper
+local byte = string.byte
+local sub = string.sub
+local match = string.match
+local gmatch = string.gmatch
+local gsub = string.gsub
+local find = string.find
+local rep = string.rep
+local char = string.char
+local concat = table.concat
+local insert = table.insert
+local remove = table.remove
+local sort = table.sort
+local move = table.move or function(a1, f, e, t, a2)
+    if not a2 then a2 = a1 end
+    for i = f, e do a2[t + i - f] = a1[i] end
+    return a2
+end
+local tostring = tostring
+local tonumber = tonumber
+local type = type
+local pcall = pcall
+local pairs = pairs
+local ipairs = ipairs
+local unpack = unpack or table.unpack
+local setmetatable = setmetatable
+local getmetatable = getmetatable
+local error = error
+local select = select
+local clock = nmap.clock
+local msleep = nmap.msleep
+local sleep = stdnse.sleep
+local strsplit = stdnse.strsplit
+local format_output = stdnse.format_output
+local output_table = stdnse.output_table
+
 description = [[
 Performs a TCP-based traceroute to the target and geolocates each hop along the
 network path. Uses increasing TTL values with TCP SYN probes to map intermediate
@@ -51,27 +102,27 @@ local function geo_lookup(ip)
 end
 
 action = function(host, port)
-  local result = stdnse.output_table()
+  local result = output_table()
   local max_hops = 30
   local dest_port = port.number or 80
   local hops = {}
 
   for ttl = 1, max_hops do
-    local start = nmap.clock()
-    local sock = nmap.new_socket("tcp")
+    local start = clock()
+    local sock = new_socket("tcp")
     sock:set_timeout(3000)
     sock:set_option("ip_ttl", ttl)
 
     local ok, conn_err = sock:connect(host.ip, dest_port, "tcp")
-    local rtt = (nmap.clock() - start) * 1000
+    local rtt = (clock() - start) * 1000
 
     if ok then
       local hop_geo = geo_lookup(host.ip)
       sock:close()
-      hops[#hops + 1] = {
+      insert(hops, {)
         hop = ttl,
         ip = host.ip,
-        rtt_ms = string.format("%.1f", rtt),
+        rtt_ms = format("%.1f", rtt),
         location = hop_geo,
         reached_target = true
       }
@@ -82,12 +133,12 @@ action = function(host, port)
                               tostring(conn_err):find("TTL", 1, true) or
                               tostring(conn_err):find("icmp", 1, true))
       if time_exceeded then
-        hops[#hops + 1] = {
+        insert(hops, {)
           hop = ttl,
           status = "time_exceeded"
         }
       end
-      nmap.msleep(100)
+      msleep(100)
     end
   end
 

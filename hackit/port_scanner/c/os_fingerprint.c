@@ -20,6 +20,8 @@
 #include <netinet/ip_icmp.h>
 #include <netdb.h>
 
+#include "optimize.h"
+
 #define MAX_BANNER 8192
 
 typedef struct {
@@ -77,7 +79,7 @@ static uint32_t resolve_ip(const char* host) {
     return addr.s_addr;
 }
 
-typedef struct {
+typedef struct PACKED {
     uint32_t saddr;
     uint32_t daddr;
     uint8_t  zero;
@@ -87,7 +89,7 @@ typedef struct {
 
 static uint16_t checksum(uint16_t* buf, int len) {
     uint32_t sum = 0;
-    for (int i = 0; i < len / 2; i++) sum += buf[i];
+    for (int i = 0; i < len / 2; ++i) sum += buf[i];
     if (len & 1) sum += (uint16_t)((unsigned char*)buf)[len - 1];
     while (sum >> 16) sum = (sum & 0xFFFF) + (sum >> 16);
     return (uint16_t)~sum;
@@ -212,8 +214,8 @@ static int connect_and_probe(const char* host, uint32_t ip, int port, int timeou
     else if (port == 21)
         send(sock, "SYST\r\n", 6, 0);
 
-    usleep(200000);
-    for (int i = 0; i < 3; i++) {
+    { struct timespec ts = {0, 200000000}; nanosleep(&ts, NULL); }
+    for (int i = 0; i < 3; ++i) {
         n = (int)read(sock, buf + total, sizeof(buf) - 1 - total);
         if (n > 0) total += n;
         else break;
@@ -258,7 +260,7 @@ static void fingerprint_os(OSContext* ctx) {
     OSFingerprint* fp = &ctx->fp;
     TCPProbeResult results[16];
     int valid_results = 0;
-    for (int i = 0; i < ctx->port_count && i < 16; i++) {
+    for (int i = 0; i < ctx->port_count && i < 16; ++i) {
         TCPProbeResult r;
         int rc = connect_and_probe(ctx->hostname, ctx->ip, ctx->ports[i], ctx->timeout_ms, &r);
         if (rc >= 0) {
@@ -273,7 +275,7 @@ static void fingerprint_os(OSContext* ctx) {
     int sum_ttl = 0, sum_win = 0, sum_mss = 0, sum_wscale = 0;
     int ttl_count = 0, win_count = 0, mss_count = 0, wscale_count = 0;
     bool df_aggr = true, ts_aggr = true, sack_aggr = true;
-    for (int i = 0; i < valid_results; i++) {
+    for (int i = 0; i < valid_results; ++i) {
         if (results[i].ttl > 0) { sum_ttl += results[i].ttl; ttl_count++; }
         if (results[i].window > 0) { sum_win += results[i].window; win_count++; }
         if (results[i].mss > 0) { sum_mss += results[i].mss; mss_count++; }
@@ -296,7 +298,7 @@ static void fingerprint_os(OSContext* ctx) {
     const char* os_ver = "";
     float conf = 0;
 
-    for (int i = 0; i < valid_results; i++) {
+    for (int i = 0; i < valid_results; ++i) {
         const char* b = results[i].banner;
         if (!b || !b[0]) continue;
         if (strstr(b, "SSH-2.0-OpenSSH")) {

@@ -2,6 +2,58 @@ local stdnse = require "stdnse"
 local nmap = require "nmap"
 local string = require "string"
 local math = require "math"
+local shortport = require "shortport"
+
+
+
+-- nmp function cache
+local nmap_register = nmap.register_script
+local nmap_settitle = nmap.set_title
+local nmap_resolve = nmap.resolve
+local nmap_get_port_state = nmap.get_port_state
+local nmap_set_port_state = nmap.set_port_state
+local comm = nmap.comm
+local new_socket = nmap.new_socket
+local get_timeout = nmap.get_timeout
+
+-- Performance optimizations
+local format = string.format
+local lower = string.lower
+local upper = string.upper
+local byte = string.byte
+local sub = string.sub
+local match = string.match
+local gmatch = string.gmatch
+local gsub = string.gsub
+local find = string.find
+local rep = string.rep
+local char = string.char
+local concat = table.concat
+local insert = table.insert
+local remove = table.remove
+local sort = table.sort
+local move = table.move or function(a1, f, e, t, a2)
+    if not a2 then a2 = a1 end
+    for i = f, e do a2[t + i - f] = a1[i] end
+    return a2
+end
+local tostring = tostring
+local tonumber = tonumber
+local type = type
+local pcall = pcall
+local pairs = pairs
+local ipairs = ipairs
+local unpack = unpack or table.unpack
+local setmetatable = setmetatable
+local getmetatable = getmetatable
+local error = error
+local select = select
+local clock = nmap.clock
+local msleep = nmap.msleep
+local sleep = stdnse.sleep
+local strsplit = stdnse.strsplit
+local format_output = stdnse.format_output
+local output_table = stdnse.output_table
 
 description = [[Performs LDAP anonymous search against common base DNs. Attempts to enumerate users, groups, computers, OUs, and other directory objects via anonymous or null binds.]]
 author = "HackIT Framework"
@@ -27,41 +79,41 @@ local search_configs = {
 
 local function ber_integer(val)
     if val < 128 then
-        return string.char(0x02, val)
+        return char(0x02, val)
     end
     local bytes = {}
     while val > 0 do
-        table.insert(bytes, 1, string.char(val % 256))
+        insert(bytes, 1, char(val % 256))
         val = math.floor(val / 256)
     end
-    return string.char(0x02, #bytes) .. table.concat(bytes)
+    return char(0x02, #bytes) .. concat(bytes)
 end
 
 local function ber_string(s)
-    return string.char(0x04, #s) .. s
+    return char(0x04, #s) .. s
 end
 
 local function ber_sequence(contents)
-    return string.char(0x30, #contents) .. contents
+    return char(0x30, #contents) .. contents
 end
 
 local function build_search_request(base_dn, filter_str, scope_val)
     local msg_id = ber_integer(1)
     local base_obj = ber_string(base_dn)
-    local scope = string.char(0x0a, 0x01, scope_val or 2)
-    local deref = string.char(0x0a, 0x01, 0x00)
+    local scope = char(0x0a, 0x01, scope_val or 2)
+    local deref = char(0x0a, 0x01, 0x00)
     local size_limit = ber_integer(0)
     local time_limit = ber_integer(0)
-    local types_only = string.char(0x01, 0x01, 0x00)
+    local types_only = char(0x01, 0x01, 0x00)
 
     local filter
     if filter_str == "(objectClass=*)" then
-        filter = ber_sequence(string.char(0x05, 0x00))
+        filter = ber_sequence(char(0x05, 0x00))
     elseif filter_str:match("objectClass=(%w+)") then
         local oc = filter_str:match("objectClass=(%w+)")
-        filter = ber_sequence(string.char(0x04, #oc) .. oc)
+        filter = ber_sequence(char(0x04, #oc) .. oc)
     else
-        filter = ber_sequence(string.char(0x05, 0x00))
+        filter = ber_sequence(char(0x05, 0x00))
     end
 
     local attrs = ber_sequence(
@@ -84,7 +136,7 @@ local function build_search_request(base_dn, filter_str, scope_val)
     )
 
     local search_body = base_obj .. scope .. deref .. size_limit .. time_limit .. types_only .. filter .. attrs
-    local search_req = ber_sequence(string.char(0x63, #search_body) .. search_body)
+    local search_req = ber_sequence(char(0x63, #search_body) .. search_body)
     return ber_sequence(msg_id .. search_req)
 end
 
@@ -109,11 +161,11 @@ local function count_entries(response)
 end
 
 action = function(host, port)
-    local result = stdnse.output_table()
+    local result = output_table()
     local found_bases = {}
 
     for _, cfg in ipairs(search_configs) do
-        local socket = nmap.new_socket()
+        local socket = new_socket()
         socket:set_timeout(5000)
 
         local ok, err = pcall(socket.connect, socket, host.ip, port.number)
@@ -155,16 +207,16 @@ action = function(host, port)
                 base_entry.has_email = true
             end
 
-            table.insert(found_bases, base_entry)
+            insert(found_bases, base_entry)
         end
     end
 
     if #found_bases == 0 then
-        return stdnse.format_output(false, "No anonymous LDAP search results")
+        return format_output(false, "No anonymous LDAP search results")
     end
 
     result.searchable_base_dns = found_bases
     result.searchable_count = #found_bases
 
-    return stdnse.format_output(true, result)
+    return format_output(true, result)
 end

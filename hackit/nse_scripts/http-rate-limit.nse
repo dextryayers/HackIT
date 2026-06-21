@@ -3,6 +3,59 @@ local http = require "http"
 local string = require "string"
 local os = require "os"
 local math = require "math"
+local nmap = require "nmap"
+local shortport = require "shortport"
+
+
+
+-- nmp function cache
+local nmap_register = nmap.register_script
+local nmap_settitle = nmap.set_title
+local nmap_resolve = nmap.resolve
+local nmap_get_port_state = nmap.get_port_state
+local nmap_set_port_state = nmap.set_port_state
+local comm = nmap.comm
+local new_socket = nmap.new_socket
+local get_timeout = nmap.get_timeout
+
+-- Performance optimizations
+local format = string.format
+local lower = string.lower
+local upper = string.upper
+local byte = string.byte
+local sub = string.sub
+local match = string.match
+local gmatch = string.gmatch
+local gsub = string.gsub
+local find = string.find
+local rep = string.rep
+local char = string.char
+local concat = table.concat
+local insert = table.insert
+local remove = table.remove
+local sort = table.sort
+local move = table.move or function(a1, f, e, t, a2)
+    if not a2 then a2 = a1 end
+    for i = f, e do a2[t + i - f] = a1[i] end
+    return a2
+end
+local tostring = tostring
+local tonumber = tonumber
+local type = type
+local pcall = pcall
+local pairs = pairs
+local ipairs = ipairs
+local unpack = unpack or table.unpack
+local setmetatable = setmetatable
+local getmetatable = getmetatable
+local error = error
+local select = select
+local clock = nmap.clock
+local msleep = nmap.msleep
+local sleep = stdnse.sleep
+local strsplit = stdnse.strsplit
+local format_output = stdnse.format_output
+local output_table = stdnse.output_table
 
 description = [[Detects HTTP rate limiting by sending rapid successive requests. Analyzes response codes, Retry-After headers, and response time patterns to identify rate limiting, WAF blocking, and request throttling.]]
 author = "HackIT Framework"
@@ -26,7 +79,7 @@ local limit_response_codes = {
 }
 
 action = function(host, port)
-    local result = stdnse.output_table()
+    local result = output_table()
     local all_tests = {}
 
     for _, count in ipairs(request_counts) do
@@ -40,8 +93,8 @@ action = function(host, port)
                 local req_start = os.clock()
                 local ok, response = pcall(http.get, host, port, "/", { timeout = 5000 })
                 if ok and response and response.status then
-                    table.insert(statuses, response.status)
-                    table.insert(resp_times, os.clock() - req_start)
+                    insert(statuses, response.status)
+                    insert(resp_times, os.clock() - req_start)
 
                     if not retry_after and response.header and response.header["retry-after"] then
                         retry_after = response.header["retry-after"]
@@ -63,7 +116,7 @@ action = function(host, port)
             for code, desc in pairs(limit_response_codes) do
                 if status_counts[code] then
                     limited = true
-                    table.insert(limit_info, {
+                    insert(limit_info, {
                         code = code,
                         description = desc,
                         count = status_counts[code],
@@ -82,7 +135,7 @@ action = function(host, port)
                 end
                 if not stable then
                     limited = true
-                    table.insert(limit_info, {
+                    insert(limit_info, {
                         code = 0,
                         description = "Varying status codes (possible conditional limiting)",
                     })
@@ -98,7 +151,7 @@ action = function(host, port)
                 avg_resp_time = total / #resp_times
             end
 
-            table.insert(all_tests, {
+            insert(all_tests, {
                 request_count = count,
                 delay_ms = delay,
                 duration_seconds = total_time,
@@ -134,5 +187,5 @@ action = function(host, port)
         result.min_requests_to_trigger = min_trigger
     end
 
-    return stdnse.format_output(true, result)
+    return format_output(true, result)
 end

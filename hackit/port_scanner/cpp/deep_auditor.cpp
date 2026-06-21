@@ -7,6 +7,32 @@
 #include <string>
 #include <vector>
 #include <sstream>
+#include <string_view>
+#include <memory>
+#include <unordered_map>
+
+
+// === Deep Performance Optimizations ===
+#ifndef OPTIMIZE_H
+#define likely(x)   __builtin_expect(!!(x), 1)
+#define unlikely(x) __builtin_expect(!!(x), 0)
+#endif
+#ifndef FORCE_INLINE
+#define FORCE_INLINE __attribute__((always_inline)) inline
+#endif
+#ifndef HOT_FUNC
+#define HOT_FUNC    __attribute__((hot))
+#endif
+#ifndef COLD_FUNC
+#define COLD_FUNC   __attribute__((cold))
+#endif
+#ifndef LIKELY
+#define LIKELY(x)   __builtin_expect(!!(x), 1)
+#endif
+#ifndef UNLIKELY
+#define UNLIKELY(x) __builtin_expect(!!(x), 0)
+#endif
+
 
 using namespace std;
 

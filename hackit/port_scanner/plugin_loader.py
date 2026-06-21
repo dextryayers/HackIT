@@ -2,6 +2,7 @@ import json
 import os
 import subprocess
 import sys
+import functools
 from pathlib import Path
 
 PLUGIN_DIRS = {
@@ -11,6 +12,7 @@ PLUGIN_DIRS = {
 
 BIN_DIR = os.path.join(os.path.dirname(__file__), "bin")
 
+@functools.lru_cache(maxsize=16)
 def discover_plugins(engine="lua"):
     d = PLUGIN_DIRS.get(engine)
     if not d or not os.path.exists(d):

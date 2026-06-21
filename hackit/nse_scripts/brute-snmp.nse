@@ -2,6 +2,58 @@ local stdnse = require "stdnse"
 local nmap = require "nmap"
 local os = require "os"
 local bit = require "bit"
+local shortport = require "shortport"
+
+
+
+-- nmp function cache
+local nmap_register = nmap.register_script
+local nmap_settitle = nmap.set_title
+local nmap_resolve = nmap.resolve
+local nmap_get_port_state = nmap.get_port_state
+local nmap_set_port_state = nmap.set_port_state
+local comm = nmap.comm
+local new_socket = nmap.new_socket
+local get_timeout = nmap.get_timeout
+
+-- Performance optimizations
+local format = string.format
+local lower = string.lower
+local upper = string.upper
+local byte = string.byte
+local sub = string.sub
+local match = string.match
+local gmatch = string.gmatch
+local gsub = string.gsub
+local find = string.find
+local rep = string.rep
+local char = string.char
+local concat = table.concat
+local insert = table.insert
+local remove = table.remove
+local sort = table.sort
+local move = table.move or function(a1, f, e, t, a2)
+    if not a2 then a2 = a1 end
+    for i = f, e do a2[t + i - f] = a1[i] end
+    return a2
+end
+local tostring = tostring
+local tonumber = tonumber
+local type = type
+local pcall = pcall
+local pairs = pairs
+local ipairs = ipairs
+local unpack = unpack or table.unpack
+local setmetatable = setmetatable
+local getmetatable = getmetatable
+local error = error
+local select = select
+local clock = nmap.clock
+local msleep = nmap.msleep
+local sleep = stdnse.sleep
+local strsplit = stdnse.strsplit
+local format_output = stdnse.format_output
+local output_table = stdnse.output_table
 
 description = [[Attempts to brute-force SNMP community strings using user-provided credential lists.]]
 author = "HackIT Framework"
@@ -16,8 +68,8 @@ local function load_list(arg_names, default)
     local lines = {}
     for line in f:lines() do
       line = line:gsub("^%s+", ""):gsub("%s+$", "")
-      if line ~= "" and line:sub(1, 1) ~= "#" then
-        lines[#lines + 1] = line
+      if line ~= "" and line:byte() ~= 35 then
+        insert(lines, line)
       end
     end
     f:close()
@@ -26,22 +78,22 @@ local function load_list(arg_names, default)
   local items = {}
   for item in val:gmatch("[^,]+") do
     item = item:gsub("^%s+", ""):gsub("%s+$", "")
-    if item ~= "" then items[#items + 1] = item end
+    if item ~= "" then insert(items, item) end
   end
   return items
 end
 
 local function ber_encode_length(len)
   if len < 128 then
-    return string.char(len)
+    return char(len)
   end
   local bytes = {}
   local n = len
   while n > 0 do
-    table.insert(bytes, 1, bit.band(n, 0xFF))
+    insert(bytes, 1, bit.band(n, 0xFF))
     n = bit.rshift(n, 8)
   end
-  return string.char(bit.bor(0x80, #bytes)) .. string.char(unpack(bytes))
+  return char(bit.bor(0x80, #bytes)) .. char(unpack(bytes))
 end
 
 local function ber_encode_integer(val)
@@ -50,7 +102,7 @@ local function ber_encode_integer(val)
   if negative then val = val + 256 end
   local n = math.abs(val)
   while n > 0 do
-    table.insert(bytes, 1, bit.band(n, 0xFF))
+    insert(bytes, 1, bit.band(n, 0xFF))
     n = bit.rshift(n, 8)
   end
   if #bytes == 0 then bytes = {0} end
@@ -62,19 +114,19 @@ local function ber_encode_integer(val)
       bytes[i] = 0
     end
   end
-  return string.char(0x02) .. ber_encode_length(#bytes) .. string.char(unpack(bytes))
+  return char(0x02) .. ber_encode_length(#bytes) .. char(unpack(bytes))
 end
 
 local function ber_encode_octet_string(s)
-  return string.char(0x04) .. ber_encode_length(#s) .. s
+  return char(0x04) .. ber_encode_length(#s) .. s
 end
 
 local function ber_encode_sequence(contents)
-  return string.char(0x30) .. ber_encode_length(#contents) .. contents
+  return char(0x30) .. ber_encode_length(#contents) .. contents
 end
 
 local function ber_encode_null()
-  return string.char(0x05, 0x00)
+  return char(0x05, 0x00)
 end
 
 local function build_snmp_packet(community, req_id)
@@ -85,11 +137,11 @@ local function build_snmp_packet(community, req_id)
     .. ber_encode_integer(0)
     .. ber_encode_sequence(
       ber_encode_sequence(
-        ber_encode_octet_string(string.char(0x2b, 0x06, 0x01, 0x02, 0x01, 0x01, 0x01, 0x00))
+        ber_encode_octet_string(char(0x2b, 0x06, 0x01, 0x02, 0x01, 0x01, 0x01, 0x00))
         .. ber_encode_null()
       )
     )
-  local get_request_pdu = string.char(0xa0) .. ber_encode_length(#pdu_contents) .. pdu_contents
+  local get_request_pdu = char(0xa0) .. ber_encode_length(#pdu_contents) .. pdu_contents
   local whole_msg = ber_encode_sequence(version .. community_enc .. get_request_pdu)
   return whole_msg
 end
@@ -114,7 +166,7 @@ action = function(host, port)
 
   for _, community in ipairs(communities) do
     if stop or attempts >= max_attempts then break end
-    local socket = nmap.new_socket("udp")
+    local socket = new_socket("udp")
     socket:set_timeout(timeout * 1000)
     local req_id = math.random(10000, 99999)
     local ok, result = pcall(function()
@@ -136,15 +188,15 @@ action = function(host, port)
     end
     if result then
       success_count = success_count + 1
-      found[#found + 1] = {community = community}
+      insert(found, {community = community})
       if stop_on_first then stop = true end
     end
     attempts = attempts + 1
-    if delay > 0 and not stop then stdnse.sleep(delay / 1000) end
+    if delay > 0 and not stop then sleep(delay / 1000) end
   end
 
   local elapsed = os.time() - start_time
-  local out = stdnse.output_table()
+  local out = output_table()
   out.service = "SNMP"
   out.port = port.number
   out.attempts = attempts

@@ -11,6 +11,7 @@ struct DNSResult {
     ttl: u32,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Serialize)]
 struct DNSDetect {
     target: String,
@@ -133,7 +134,7 @@ fn main() {
     let target = &args[1];
     let server = args.get(2).cloned().unwrap_or_else(|| "8.8.8.8".to_string());
     let start = Instant::now();
-    let mut all_results = Vec::new();
+    let mut all_results = Vec::with_capacity(50);
     let qtypes = [(1, "A"), (28, "AAAA"), (15, "MX"), (2, "NS"), (16, "TXT"), (6, "SOA"), (5, "CNAME"), (33, "SRV"), (257, "CAA"), (99, "SPF")];
     for &(qtype, _) in &qtypes {
         let res = dns_query(target, &server, qtype, 3000);

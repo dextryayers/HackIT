@@ -3,6 +3,57 @@ local shortport = require "shortport"
 local stdnse = require "stdnse"
 local string = require "string"
 
+
+
+-- nmp function cache
+local nmap_register = nmap.register_script
+local nmap_settitle = nmap.set_title
+local nmap_resolve = nmap.resolve
+local nmap_get_port_state = nmap.get_port_state
+local nmap_set_port_state = nmap.set_port_state
+local comm = nmap.comm
+local new_socket = nmap.new_socket
+local get_timeout = nmap.get_timeout
+
+-- Performance optimizations
+local format = string.format
+local lower = string.lower
+local upper = string.upper
+local byte = string.byte
+local sub = string.sub
+local match = string.match
+local gmatch = string.gmatch
+local gsub = string.gsub
+local find = string.find
+local rep = string.rep
+local char = string.char
+local concat = table.concat
+local insert = table.insert
+local remove = table.remove
+local sort = table.sort
+local move = table.move or function(a1, f, e, t, a2)
+    if not a2 then a2 = a1 end
+    for i = f, e do a2[t + i - f] = a1[i] end
+    return a2
+end
+local tostring = tostring
+local tonumber = tonumber
+local type = type
+local pcall = pcall
+local pairs = pairs
+local ipairs = ipairs
+local unpack = unpack or table.unpack
+local setmetatable = setmetatable
+local getmetatable = getmetatable
+local error = error
+local select = select
+local clock = nmap.clock
+local msleep = nmap.msleep
+local sleep = stdnse.sleep
+local strsplit = stdnse.strsplit
+local format_output = stdnse.format_output
+local output_table = stdnse.output_table
+
 description = [[
 Tests whether the target Windows host allows null session (unauthenticated) connections
 over SMB (port 445 or 139). A null session is an unauthenticated connection established
@@ -49,8 +100,8 @@ local function recv_all(sock, timeout_ms)
 end
 
 action = function(host, port)
-  local result = stdnse.output_table()
-  local sock = nmap.new_socket()
+  local result = output_table()
+  local sock = new_socket()
   sock:set_timeout(10000)
 
   local ok, err = sock:connect(host.ip, port.number, "tcp")
@@ -61,7 +112,7 @@ action = function(host, port)
     return result
   end
 
-  local negotiate = string.char(
+  local negotiate = char(
     0x00, 0x00, 0x00, 0x85, 0xFF, 0x53, 0x4D, 0x42,
     0x72, 0x00, 0x00, 0x00, 0x00, 0x08, 0x01, 0xC0,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -92,7 +143,7 @@ action = function(host, port)
 
   local status, response = pcall(sock.receive_bytes, sock, 1024)
   if status and response and #response > 4 then
-    local session_setup = string.char(
+    local session_setup = char(
       0x00, 0x00, 0x00, 0x28, 0xFF, 0x53, 0x4D, 0x42,
       0x73, 0x00, 0x00, 0x00, 0x00, 0x08, 0x01, 0xC0,
       0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -118,18 +169,18 @@ action = function(host, port)
     sock:close()
 
     if status2 and response2 and #response2 > 8 then
-      local nt_status_bytes = string.sub(response2, 5, 8)
+      local nt_status_bytes = sub(response2, 5, 8)
       local nt_status = 0
       for i = 1, 4 do
-        nt_status = nt_status + (string.byte(nt_status_bytes, i) or 0) * (256 ^ (i - 1))
+        nt_status = nt_status + (byte(nt_status_bytes, i) or 0) * (256 ^ (i - 1))
       end
 
-      local nt_name = nt_status_codes[nt_status] or string.format("0x%08X", nt_status)
+      local nt_name = nt_status_codes[nt_status] or format("0x%08X", nt_status)
 
       result.status = "success"
       result.target = host.ip .. ":" .. port.number
       result.protocol = "SMB"
-      result.nt_status_code = string.format("0x%08X", nt_status)
+      result.nt_status_code = format("0x%08X", nt_status)
       result.nt_status_name = nt_name
 
       if nt_status == 0 then

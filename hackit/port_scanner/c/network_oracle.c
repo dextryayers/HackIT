@@ -1,4 +1,5 @@
 /*
+#define _GNU_SOURCE
  * HackIT Network Oracle (C)
  * Deep Network Intelligence, WHOIS Parsing, and Registrar Analysis.
  */
@@ -10,6 +11,8 @@
 #ifdef _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
+
+#include "optimize.h"
 #pragma comment(lib, "ws2_32.lib")
 #endif
 
@@ -52,3 +55,5 @@ int main(int argc, char* argv[]) {
     return 0;
 }
 #endif
+
+// vim: ts=4 sw=4 et tw=80

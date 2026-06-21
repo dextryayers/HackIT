@@ -1,5 +1,58 @@
 local http = require "http"
 local stdnse = require "stdnse"
+local nmap = require "nmap"
+local shortport = require "shortport"
+
+
+
+-- nmp function cache
+local nmap_register = nmap.register_script
+local nmap_settitle = nmap.set_title
+local nmap_resolve = nmap.resolve
+local nmap_get_port_state = nmap.get_port_state
+local nmap_set_port_state = nmap.set_port_state
+local comm = nmap.comm
+local new_socket = nmap.new_socket
+local get_timeout = nmap.get_timeout
+
+-- Performance optimizations
+local format = string.format
+local lower = string.lower
+local upper = string.upper
+local byte = string.byte
+local sub = string.sub
+local match = string.match
+local gmatch = string.gmatch
+local gsub = string.gsub
+local find = string.find
+local rep = string.rep
+local char = string.char
+local concat = table.concat
+local insert = table.insert
+local remove = table.remove
+local sort = table.sort
+local move = table.move or function(a1, f, e, t, a2)
+    if not a2 then a2 = a1 end
+    for i = f, e do a2[t + i - f] = a1[i] end
+    return a2
+end
+local tostring = tostring
+local tonumber = tonumber
+local type = type
+local pcall = pcall
+local pairs = pairs
+local ipairs = ipairs
+local unpack = unpack or table.unpack
+local setmetatable = setmetatable
+local getmetatable = getmetatable
+local error = error
+local select = select
+local clock = nmap.clock
+local msleep = nmap.msleep
+local sleep = stdnse.sleep
+local strsplit = stdnse.strsplit
+local format_output = stdnse.format_output
+local output_table = stdnse.output_table
 
 description = [[Detects Drupalgeddon 2 (CVE-2018-7600) and Drupalgeddon 3 (CVE-2018-7602) remote code execution.]]
 author = "HackIT Framework"
@@ -56,10 +109,10 @@ action = function(host, port)
         local body = req.body
         if body:match("HackIT_RCE_Test") or body:match("uid=") or body:match("www%-data") or body:match("nobody") or body:match("root") then
           local excerpt = body:sub(1, 100):gsub("\n", " "):gsub("\r", "")
-          table.insert(findings, {label = payload.label, excerpt = excerpt, status = req.status, severity = "CRITICAL"})
+          insert(findings, {label = payload.label, excerpt = excerpt, status = req.status, severity = "CRITICAL"})
         end
         if body:match("built") and body:match("lazy") and body:match("render") then
-          table.insert(findings, {label = payload.label .. " (lazy builder triggered)", excerpt = body:sub(1, 80), status = req.status, severity = "CRITICAL"})
+          insert(findings, {label = payload.label .. " (lazy builder triggered)", excerpt = body:sub(1, 80), status = req.status, severity = "CRITICAL"})
         end
       end
     end
@@ -74,7 +127,7 @@ action = function(host, port)
       data = drupalgeddon3_payload.data:format("RCE3")
     })
     if req3 and req3.body and (req3.body:match("HackIT_RCE3_Test") or req3.body:match("Cancel")) then
-      table.insert(findings, {label = "CVE-2018-7602 via JSON API", excerpt = req3.body:sub(1, 80), status = req3.status, severity = "CRITICAL"})
+      insert(findings, {label = "CVE-2018-7602 via JSON API", excerpt = req3.body:sub(1, 80), status = req3.status, severity = "CRITICAL"})
     end
 
     if not is_drupal then
@@ -93,7 +146,7 @@ action = function(host, port)
     end
 
     if #findings > 0 then
-      local result = stdnse.output_table()
+      local result = output_table()
       result.cve = "CVE-2018-7600, CVE-2018-7602"
       result.severity = "CRITICAL"
       result.vulnerable = true
@@ -105,7 +158,7 @@ action = function(host, port)
       end
       if drupal_version then
         local parts = {}
-        for v in drupal_version:gmatch("%d+") do table.insert(parts, tonumber(v)) end
+        for v in drupal_version:gmatch("%d+") do insert(parts, tonumber(v)) end
         if #parts >= 2 then
           local num = parts[1] * 100 + parts[2]
           if (num >= 700 and num < 759) or (num >= 800 and num < 806) then
@@ -116,7 +169,7 @@ action = function(host, port)
       return result
     end
 
-    local result = stdnse.output_table()
+    local result = output_table()
     result.cve = "CVE-2018-7600, CVE-2018-7602"
     result.severity = is_drupal and "MEDIUM" or "LOW"
     result.vulnerable = false
@@ -126,7 +179,7 @@ action = function(host, port)
     return result
   end)
   if not ok then
-    local result = stdnse.output_table()
+    local result = output_table()
     result.cve = "CVE-2018-7600"
     result.severity = "MEDIUM"
     result.vulnerable = false

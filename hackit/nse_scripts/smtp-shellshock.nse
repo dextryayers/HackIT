@@ -1,4 +1,57 @@
 local stdnse = require "stdnse"
+local nmap = require "nmap"
+local shortport = require "shortport"
+
+
+
+-- nmp function cache
+local nmap_register = nmap.register_script
+local nmap_settitle = nmap.set_title
+local nmap_resolve = nmap.resolve
+local nmap_get_port_state = nmap.get_port_state
+local nmap_set_port_state = nmap.set_port_state
+local comm = nmap.comm
+local new_socket = nmap.new_socket
+local get_timeout = nmap.get_timeout
+
+-- Performance optimizations
+local format = string.format
+local lower = string.lower
+local upper = string.upper
+local byte = string.byte
+local sub = string.sub
+local match = string.match
+local gmatch = string.gmatch
+local gsub = string.gsub
+local find = string.find
+local rep = string.rep
+local char = string.char
+local concat = table.concat
+local insert = table.insert
+local remove = table.remove
+local sort = table.sort
+local move = table.move or function(a1, f, e, t, a2)
+    if not a2 then a2 = a1 end
+    for i = f, e do a2[t + i - f] = a1[i] end
+    return a2
+end
+local tostring = tostring
+local tonumber = tonumber
+local type = type
+local pcall = pcall
+local pairs = pairs
+local ipairs = ipairs
+local unpack = unpack or table.unpack
+local setmetatable = setmetatable
+local getmetatable = getmetatable
+local error = error
+local select = select
+local clock = nmap.clock
+local msleep = nmap.msleep
+local sleep = stdnse.sleep
+local strsplit = stdnse.strsplit
+local format_output = stdnse.format_output
+local output_table = stdnse.output_table
 
 description = [[Detects Shellshock in SMTP servers via crafted EHLO/MAIL FROM/RCPT TO headers (CVE-2014-6271).]]
 author = "HackIT Framework"
@@ -26,11 +79,11 @@ action = function(host, port)
     local banner_str = ""
     local smtp_version = nil
 
-    local sock = nmap.new_socket()
+    local sock = new_socket()
     sock:set_timeout(10000)
     local status = sock:connect(host.ip, port.number)
     if not status then
-      local result = stdnse.output_table()
+      local result = output_table()
       result.cve = "CVE-2014-6271 (Shellshock SMTP)"
       result.severity = "MEDIUM"
       result.vulnerable = false
@@ -41,7 +94,7 @@ action = function(host, port)
 
     local banner, banner_err = sock:receive_buf("\n", 3)
     if not banner then sock:close()
-      local result = stdnse.output_table()
+      local result = output_table()
       result.cve = "CVE-2014-6271"
       result.severity = "MEDIUM"
       result.vulnerable = false
@@ -54,13 +107,13 @@ action = function(host, port)
     local banner_check = banner_str:match("^220")
 
     if not banner_check then
-      table.insert(findings, {check = "SMTP banner", detail = ("Unexpected banner format: %s"):format(banner_str), severity = "INFO"})
+      insert(findings, {check = "SMTP banner", detail = ("Unexpected banner format: %s"):format(banner_str), severity = "INFO"})
     else
-      table.insert(findings, {check = "SMTP banner", detail = banner_str, severity = "INFO"})
+      insert(findings, {check = "SMTP banner", detail = banner_str, severity = "INFO"})
     end
 
     for _, payload in ipairs(shellshock_payloads) do
-      local test_sock = nmap.new_socket()
+      local test_sock = new_socket()
       test_sock:set_timeout(10000)
       local ok_sock = test_sock:connect(host.ip, port.number)
       if ok_sock then
@@ -73,7 +126,7 @@ action = function(host, port)
           if rcv then
             if rcv:match("HackIT") or rcv:match("Shellshock") or rcv:match("Marker") then
               local excerpt = rcv:gsub("\r?\n", ""):gsub("%s+$", "")
-              table.insert(findings, {
+              insert(findings, {
                 check = ("Shellshock via %s"):format(sc.cmd),
                 detail = ("Injection reflected in SMTP response: %s"):format(excerpt),
                 severity = "CRITICAL",
@@ -88,7 +141,7 @@ action = function(host, port)
         test_sock:send(data_payload)
         local rcv_data = test_sock:receive_buf("\n", 3)
         if rcv_data and (rcv_data:match("HackIT") or rcv_data:match("Shellshock")) then
-          table.insert(findings, {
+          insert(findings, {
             check = "Shellshock via DATA subject",
             detail = ("Injection reflected in DATA response: %s"):format(rcv_data:gsub("\r?\n", "")),
             severity = "CRITICAL",
@@ -104,7 +157,7 @@ action = function(host, port)
     sock:close()
 
     if #findings > 0 then
-      local result = stdnse.output_table()
+      local result = output_table()
       result.cve = "CVE-2014-6271 (Shellshock SMTP)"
       result.severity = "CRITICAL"
       result.vulnerable = true
@@ -117,7 +170,7 @@ action = function(host, port)
       return result
     end
 
-    local result = stdnse.output_table()
+    local result = output_table()
     result.cve = "CVE-2014-6271"
     result.severity = "LOW"
     result.vulnerable = false
@@ -127,7 +180,7 @@ action = function(host, port)
     return result
   end)
   if not ok then
-    local result = stdnse.output_table()
+    local result = output_table()
     result.cve = "CVE-2014-6271"
     result.severity = "MEDIUM"
     result.vulnerable = false

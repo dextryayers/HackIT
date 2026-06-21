@@ -3,6 +3,57 @@ local shortport = require "shortport"
 local stdnse = require "stdnse"
 local dns = require "dns"
 
+
+
+-- nmp function cache
+local nmap_register = nmap.register_script
+local nmap_settitle = nmap.set_title
+local nmap_resolve = nmap.resolve
+local nmap_get_port_state = nmap.get_port_state
+local nmap_set_port_state = nmap.set_port_state
+local comm = nmap.comm
+local new_socket = nmap.new_socket
+local get_timeout = nmap.get_timeout
+
+-- Performance optimizations
+local format = string.format
+local lower = string.lower
+local upper = string.upper
+local byte = string.byte
+local sub = string.sub
+local match = string.match
+local gmatch = string.gmatch
+local gsub = string.gsub
+local find = string.find
+local rep = string.rep
+local char = string.char
+local concat = table.concat
+local insert = table.insert
+local remove = table.remove
+local sort = table.sort
+local move = table.move or function(a1, f, e, t, a2)
+    if not a2 then a2 = a1 end
+    for i = f, e do a2[t + i - f] = a1[i] end
+    return a2
+end
+local tostring = tostring
+local tonumber = tonumber
+local type = type
+local pcall = pcall
+local pairs = pairs
+local ipairs = ipairs
+local unpack = unpack or table.unpack
+local setmetatable = setmetatable
+local getmetatable = getmetatable
+local error = error
+local select = select
+local clock = nmap.clock
+local msleep = nmap.msleep
+local sleep = stdnse.sleep
+local strsplit = stdnse.strsplit
+local format_output = stdnse.format_output
+local output_table = stdnse.output_table
+
 description = [[
 Retrieves and analyzes the Start of Authority (SOA) record from the target DNS server
 for the specified domain. The SOA record contains essential zone configuration
@@ -22,7 +73,7 @@ categories = {"discovery", "safe"}
 portrule = shortport.port_or_service(53, "domain")
 
 action = function(host, port)
-  local result = stdnse.output_table()
+  local result = output_table()
   local domain = host.targetname
 
   if not domain or #domain == 0 then
@@ -72,8 +123,8 @@ action = function(host, port)
     local at_count = 0
     for c in rname:gmatch("@") do at_count = at_count + 1 end
     if at_count > 1 then
-      local parts = stdnse.strsplit("@", rname)
-      rname = parts[1] .. "@" .. table.concat(parts, ".", 2)
+      local parts = strsplit("@", rname)
+      rname = parts[1] .. "@" .. concat(parts, ".", 2)
     end
   end
 
@@ -91,21 +142,21 @@ action = function(host, port)
   local issues = {}
 
   if tonumber(refresh) and tonumber(refresh) < 3600 then
-    issues[#issues + 1] = "Refresh interval too short (" .. refresh .. "s)"
+    insert(issues, "Refresh interval too short (" .. refresh .. "s)")
   elseif tonumber(refresh) and tonumber(refresh) > 86400 then
-    issues[#issues + 1] = "Refresh interval too long (" .. refresh .. "s)"
+    insert(issues, "Refresh interval too long (" .. refresh .. "s)")
   end
 
   if tonumber(retry) and tonumber(refresh) and tonumber(retry) >= tonumber(refresh) then
-    issues[#issues + 1] = "Retry interval should be less than refresh interval"
+    insert(issues, "Retry interval should be less than refresh interval")
   end
 
   if tonumber(expire) and tonumber(expire) < 604800 then
-    issues[#issues + 1] = "Expire time too short (" .. expire .. "s < 7 days)"
+    insert(issues, "Expire time too short (" .. expire .. "s < 7 days)")
   end
 
   if tonumber(minimum) and tonumber(minimum) > 86400 then
-    issues[#issues + 1] = "Minimum TTL too long (" .. minimum .. "s)"
+    insert(issues, "Minimum TTL too long (" .. minimum .. "s)")
   end
 
   result.soa_found = true
@@ -118,10 +169,10 @@ action = function(host, port)
   result.expire_seconds = tonumber(expire) or 0
   result.minimum_ttl_seconds = tonumber(minimum) or 0
 
-  result.refresh_hours = tonumber(refresh) and string.format("%.1f", tonumber(refresh) / 3600) or "0"
-  result.retry_hours = tonumber(retry) and string.format("%.1f", tonumber(retry) / 3600) or "0"
-  result.expire_days = tonumber(expire) and string.format("%.1f", tonumber(expire) / 86400) or "0"
-  result.minimum_ttl_hours = tonumber(minimum) and string.format("%.1f", tonumber(minimum) / 3600) or "0"
+  result.refresh_hours = tonumber(refresh) and format("%.1f", tonumber(refresh) / 3600) or "0"
+  result.retry_hours = tonumber(retry) and format("%.1f", tonumber(retry) / 3600) or "0"
+  result.expire_days = tonumber(expire) and format("%.1f", tonumber(expire) / 86400) or "0"
+  result.minimum_ttl_hours = tonumber(minimum) and format("%.1f", tonumber(minimum) / 3600) or "0"
 
   if #issues > 0 then
     result.issues = issues

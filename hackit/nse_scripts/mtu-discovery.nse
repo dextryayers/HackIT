@@ -4,6 +4,57 @@ local stdnse = require "stdnse"
 local packet = require "packet"
 local string = require "string"
 
+
+
+-- nmp function cache
+local nmap_register = nmap.register_script
+local nmap_settitle = nmap.set_title
+local nmap_resolve = nmap.resolve
+local nmap_get_port_state = nmap.get_port_state
+local nmap_set_port_state = nmap.set_port_state
+local comm = nmap.comm
+local new_socket = nmap.new_socket
+local get_timeout = nmap.get_timeout
+
+-- Performance optimizations
+local format = string.format
+local lower = string.lower
+local upper = string.upper
+local byte = string.byte
+local sub = string.sub
+local match = string.match
+local gmatch = string.gmatch
+local gsub = string.gsub
+local find = string.find
+local rep = string.rep
+local char = string.char
+local concat = table.concat
+local insert = table.insert
+local remove = table.remove
+local sort = table.sort
+local move = table.move or function(a1, f, e, t, a2)
+    if not a2 then a2 = a1 end
+    for i = f, e do a2[t + i - f] = a1[i] end
+    return a2
+end
+local tostring = tostring
+local tonumber = tonumber
+local type = type
+local pcall = pcall
+local pairs = pairs
+local ipairs = ipairs
+local unpack = unpack or table.unpack
+local setmetatable = setmetatable
+local getmetatable = getmetatable
+local error = error
+local select = select
+local clock = nmap.clock
+local msleep = nmap.msleep
+local sleep = stdnse.sleep
+local strsplit = stdnse.strsplit
+local format_output = stdnse.format_output
+local output_table = stdnse.output_table
+
 description = [[
 Discovers the Path MTU (Maximum Transmission Unit) between the scanning host and the
 target by sending ICMP echo requests with the Don't Fragment (DF) flag set and
@@ -22,8 +73,8 @@ categories = {"discovery", "safe"}
 portrule = shortport.address_family("inet")
 
 action = function(host, port)
-  local result = stdnse.output_table()
-  local probe_socket = nmap.new_socket("raw", "icmp")
+  local result = output_table()
+  local probe_socket = new_socket("raw", "icmp")
   if not probe_socket then
     result.status = "error"
     result.reason = "Could not create raw ICMP socket"
@@ -48,19 +99,19 @@ action = function(host, port)
     local payload_size = mid - 28
     if payload_size < 0 then break end
 
-    local payload = string.rep("A", payload_size)
+    local payload = rep("A", payload_size)
     local icmp_pkt = nmap.packet_build_icmp_echo(host.ip, nil, nil, payload)
     local sent = nmap.sendp(icmp_pkt, { dst = host.ip, df = true })
 
     if not sent then
       high = mid - 1
-      nmap.msleep(100)
+      msleep(100)
       goto continue
     end
 
     local responded = false
-    local deadline = nmap.clock() + 2
-    while nmap.clock() < deadline do
+    local deadline = clock() + 2
+    while clock() < deadline do
       local ok, data = capture_socket:receive()
       if ok and data then
         local reply = packet.Packet:new(data)

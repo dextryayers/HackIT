@@ -4,6 +4,57 @@ local stdnse = require "stdnse"
 local string = require "string"
 local math = require "math"
 
+
+
+-- nmp function cache
+local nmap_register = nmap.register_script
+local nmap_settitle = nmap.set_title
+local nmap_resolve = nmap.resolve
+local nmap_get_port_state = nmap.get_port_state
+local nmap_set_port_state = nmap.set_port_state
+local comm = nmap.comm
+local new_socket = nmap.new_socket
+local get_timeout = nmap.get_timeout
+
+-- Performance optimizations
+local format = string.format
+local lower = string.lower
+local upper = string.upper
+local byte = string.byte
+local sub = string.sub
+local match = string.match
+local gmatch = string.gmatch
+local gsub = string.gsub
+local find = string.find
+local rep = string.rep
+local char = string.char
+local concat = table.concat
+local insert = table.insert
+local remove = table.remove
+local sort = table.sort
+local move = table.move or function(a1, f, e, t, a2)
+    if not a2 then a2 = a1 end
+    for i = f, e do a2[t + i - f] = a1[i] end
+    return a2
+end
+local tostring = tostring
+local tonumber = tonumber
+local type = type
+local pcall = pcall
+local pairs = pairs
+local ipairs = ipairs
+local unpack = unpack or table.unpack
+local setmetatable = setmetatable
+local getmetatable = getmetatable
+local error = error
+local select = select
+local clock = nmap.clock
+local msleep = nmap.msleep
+local sleep = stdnse.sleep
+local strsplit = stdnse.strsplit
+local format_output = stdnse.format_output
+local output_table = stdnse.output_table
+
 description = [[
 Analyzes the IP ID (Identification field) sequence generation of the target host by
 sending a series of TCP SYN probes and observing the IP identification values in
@@ -24,13 +75,13 @@ portrule = function(host, port)
 end
 
 action = function(host, port)
-  local result = stdnse.output_table()
+  local result = output_table()
   local probes = 8
   local intervals = {}
   local prev_id = nil
 
   for i = 1, probes do
-    local sock = nmap.new_socket("tcp")
+    local sock = new_socket("tcp")
     sock:set_timeout(3000)
     local ok, err = sock:connect(host.ip, port.number, "tcp")
     if ok then
@@ -42,7 +93,7 @@ action = function(host, port)
           if prev_id then
             local diff = current_id - prev_id
             if diff < 0 then diff = diff + 65536 end
-            intervals[#intervals + 1] = diff
+            insert(intervals, diff)
           end
           prev_id = current_id
         end
@@ -50,7 +101,7 @@ action = function(host, port)
     else
       sock:close()
     end
-    nmap.msleep(100)
+    msleep(100)
   end
 
   if #intervals < 2 then
@@ -109,8 +160,8 @@ action = function(host, port)
   result.samples_collected = #intervals
   result.min_increment = min_diff
   result.max_increment = max_diff
-  result.avg_increment = string.format("%.2f", avg_diff)
-  result.standard_deviation = string.format("%.2f", std_dev)
+  result.avg_increment = format("%.2f", avg_diff)
+  result.standard_deviation = format("%.2f", std_dev)
   result.classification = classification
   result.idle_scan_usable = (score <= 1)
   result.intervals = intervals

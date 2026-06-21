@@ -1,5 +1,57 @@
 local stdnse = require "stdnse"
 local nmap = require "nmap"
+local shortport = require "shortport"
+
+
+
+-- nmp function cache
+local nmap_register = nmap.register_script
+local nmap_settitle = nmap.set_title
+local nmap_resolve = nmap.resolve
+local nmap_get_port_state = nmap.get_port_state
+local nmap_set_port_state = nmap.set_port_state
+local comm = nmap.comm
+local new_socket = nmap.new_socket
+local get_timeout = nmap.get_timeout
+
+-- Performance optimizations
+local format = string.format
+local lower = string.lower
+local upper = string.upper
+local byte = string.byte
+local sub = string.sub
+local match = string.match
+local gmatch = string.gmatch
+local gsub = string.gsub
+local find = string.find
+local rep = string.rep
+local char = string.char
+local concat = table.concat
+local insert = table.insert
+local remove = table.remove
+local sort = table.sort
+local move = table.move or function(a1, f, e, t, a2)
+    if not a2 then a2 = a1 end
+    for i = f, e do a2[t + i - f] = a1[i] end
+    return a2
+end
+local tostring = tostring
+local tonumber = tonumber
+local type = type
+local pcall = pcall
+local pairs = pairs
+local ipairs = ipairs
+local unpack = unpack or table.unpack
+local setmetatable = setmetatable
+local getmetatable = getmetatable
+local error = error
+local select = select
+local clock = nmap.clock
+local msleep = nmap.msleep
+local sleep = stdnse.sleep
+local strsplit = stdnse.strsplit
+local format_output = stdnse.format_output
+local output_table = stdnse.output_table
 
 description = [[Discovers DHCPv6 servers and prefixes on the local network.]]
 author = "HackIT Framework"
@@ -10,25 +62,25 @@ local all_dhcp_servers = "ff02::1:2"
 
 local function dhcpv6_solicit(timeout)
     timeout = timeout or 5000
-    local socket = nmap.new_socket("raw")
+    local socket = new_socket("raw")
     socket:set_timeout(timeout)
     local ok, resp = pcall(function()
-        local msg_type = string.char(0x01)
-        local transaction_id = string.char(math.random(0, 255), math.random(0, 255), math.random(0, 255))
+        local msg_type = char(0x01)
+        local transaction_id = char(math.random(0, 255), math.random(0, 255), math.random(0, 255))
         local dhcpv6 = msg_type .. transaction_id
-        local option_code = string.char(0x00, 0x01)
-        local option_len = string.char(0x00, 0x04)
-        local iaid = string.char(0x00, 0x00, 0x00, 0x01)
-        local t1 = string.char(0x00, 0x00, 0x00, 0x00)
-        local t2 = string.char(0x00, 0x00, 0x00, 0x00)
+        local option_code = char(0x00, 0x01)
+        local option_len = char(0x00, 0x04)
+        local iaid = char(0x00, 0x00, 0x00, 0x01)
+        local t1 = char(0x00, 0x00, 0x00, 0x00)
+        local t2 = char(0x00, 0x00, 0x00, 0x00)
         local ia_na = option_code .. option_len .. iaid .. t1 .. t2
-        local elapsed_code = string.char(0x00, 0x08)
-        local elapsed_len = string.char(0x00, 0x02)
-        local elapsed_time = string.char(0x00, 0x00)
+        local elapsed_code = char(0x00, 0x08)
+        local elapsed_len = char(0x00, 0x02)
+        local elapsed_time = char(0x00, 0x00)
         dhcpv6 = dhcpv6 .. ia_na .. elapsed_code .. elapsed_len .. elapsed_time
-        local opt_req_code = string.char(0x00, 0x06)
-        local opt_req_len = string.char(0x00, 0x02)
-        local dns_opt = string.char(0x00, 0x17)
+        local opt_req_code = char(0x00, 0x06)
+        local opt_req_len = char(0x00, 0x02)
+        local dns_opt = char(0x00, 0x17)
         dhcpv6 = dhcpv6 .. opt_req_code .. opt_req_len .. dns_opt
         socket:send(dhcpv6)
         local _, r = socket:receive_bytes(1024)
@@ -71,7 +123,7 @@ end
 portrule = function(host, port) return port.protocol == "udp" and port.state == "open" and port.number == 547 end
 
 action = function(host, port)
-    local out = stdnse.output_table()
+    local out = output_table()
     out.service = "DHCPv6"
     out.multicast_group = all_dhcp_servers
     local result = dhcpv6_solicit(5000)

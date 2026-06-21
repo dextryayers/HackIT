@@ -24,6 +24,8 @@
 #include <netdb.h>
 #include <ifaddrs.h>
 
+#include "optimize.h"
+
 #define MAX_PORTS         131072
 #define MAX_BANNER        8192
 #define MAX_WORKERS       128
@@ -91,11 +93,11 @@ static const char* scan_mode_names[] = {
     "ack","window","maimon","protocol-sweep","idle-zombie","anon-self"
 };
 
-typedef struct { uint32_t saddr; uint32_t daddr; uint8_t zero; uint8_t protocol; uint16_t tcp_len; } PseudoHeader;
+typedef struct PACKED { uint32_t saddr; uint32_t daddr; uint8_t zero; uint8_t protocol; uint16_t tcp_len; } PseudoHeader;
 
 static uint16_t checksum(uint16_t* buf, int len) {
     uint32_t sum = 0;
-    for (int i = 0; i < len / 2; i++) sum += buf[i];
+    for (int i = 0; i < len / 2; ++i) sum += buf[i];
     if (len & 1) sum += (uint16_t)((unsigned char*)buf)[len - 1];
     while (sum >> 16) sum = (sum & 0xFFFF) + (sum >> 16);
     return (uint16_t)~sum;
@@ -241,7 +243,7 @@ static void listen_responses(int raw_sock, int icmp_sock, ScanContext* ctx, int 
     long long deadline = now_ms() + tout_ms;
     typedef struct { int port; bool sa, rst, icmp; int ws, ttl; } PR;
     PR resp[131072]; memset(resp, 0, sizeof(PR) * ctx->port_count);
-    for (int i = 0; i < ctx->port_count; i++) resp[i].port = ctx->ports[i];
+    for (int i = 0; i < ctx->port_count; ++i) resp[i].port = ctx->ports[i];
 
     while (now_ms() < deadline) {
         fd_set rfds; FD_ZERO(&rfds); int mfd = raw_sock;
@@ -257,7 +259,7 @@ static void listen_responses(int raw_sock, int icmp_sock, ScanContext* ctx, int 
                     int iphl = ip->ihl * 4;
                     struct tcphdr* tcp = (struct tcphdr*)(buf + iphl);
                     int dport = ntohs(tcp->dest);
-                    for (int i = 0; i < ctx->port_count; i++) {
+                    for (int i = 0; i < ctx->port_count; ++i) {
                         if (resp[i].port == dport) {
                             if (tcp->syn && tcp->ack) { resp[i].sa = true; resp[i].ws = ntohs(tcp->window); resp[i].ttl = ip->ttl; }
                             if (tcp->rst) { resp[i].rst = true; if (!resp[i].sa) resp[i].ws = ntohs(tcp->window); }
@@ -278,13 +280,13 @@ static void listen_responses(int raw_sock, int icmp_sock, ScanContext* ctx, int 
                         struct iphdr* iip = (struct iphdr*)(buf + iphl + 8);
                         struct tcphdr* itcp = (struct tcphdr*)((char*)iip + iip->ihl*4);
                         int dport = ntohs(itcp->dest);
-                        for (int i = 0; i < ctx->port_count; i++) if (resp[i].port == dport) { resp[i].icmp = true; break; }
+                        for (int i = 0; i < ctx->port_count; ++i) if (resp[i].port == dport) { resp[i].icmp = true; break; }
                     }
                 }
             }
         }
     }
-    for (int i = 0; i < ctx->port_count; i++) {
+    for (int i = 0; i < ctx->port_count; ++i) {
         if (resp[i].port <= 0) continue;
         int state = classify_state(ctx->scan_mode, resp[i].sa, resp[i].rst, resp[i].icmp, resp[i].ws);
         int idx = atomic_fetch_add(&ctx->result_count, 1);
@@ -366,7 +368,7 @@ static int connect_port(uint32_t ip, int port, int timeout_ms, char* banner, int
         }
         if (total > 0) {
             tmp[total] = 0; int out = 0;
-            for (int i = 0; i < total && out < bs-1; i++) {
+            for (int i = 0; i < total && out < bs-1; ++i) {
                 char c = tmp[i]; if (c == '\r') continue;
                 if (c == '\n') { if (out>0 && banner[out-1]!=' ') banner[out++]=' '; continue; }
                 if (c >= 32 && c < 127) banner[out++] = c;
@@ -401,7 +403,7 @@ static void* connect_scan_worker(void* arg) {
 static void* protocol_sweep_worker(void* arg) {
     ScanContext* ctx = (ScanContext*)arg;
     int proto_ports[] = {1,6,17,47,50,51,88,89,132,161,162,179,500,514,520,521,546,547,636,669,989,990,1194,1293,1701,1723,1812,1813,2368,2746,33434,0};
-    for (int i = 0; i < ctx->port_count && proto_ports[i]; i++) {
+    for (int i = 0; i < ctx->port_count && proto_ports[i]; ++i) {
         char b[8192]={0};
         int s = connect_port(ctx->ip, ctx->ports[i], ctx->timeout_ms, b, sizeof(b), ctx->src_port, ctx->ttl_value);
         int ri = atomic_fetch_add(&ctx->result_count, 1);
@@ -421,7 +423,7 @@ static void* idle_zombie_worker(void* arg) {
     if (ctx->decoy_count == 0) return NULL;
     uint32_t zombie_ip = ctx->decoys[0];
     int rs = create_raw_socket(); if (rs < 0) return NULL;
-    for (int i = 0; i < ctx->port_count; i++) {
+    for (int i = 0; i < ctx->port_count; ++i) {
         char pkt[sizeof(struct iphdr)+sizeof(struct tcphdr)]; int len;
         build_tcp_packet(pkt, &len, zombie_ip, ctx->ip, 30000+(rand()%10000), ctx->ports[i], 64, 0x4000, true, false, false, false, false, false);
         send_raw_pkt(rs, ctx->ip, pkt, len);
@@ -432,7 +434,7 @@ static void* idle_zombie_worker(void* arg) {
 
 static void* anon_self_worker(void* arg) {
     ScanContext* ctx = (ScanContext*)arg;
-    for (int i = 0; i < ctx->port_count; i++) {
+    for (int i = 0; i < ctx->port_count; ++i) {
         int port = ctx->ports[i];
         int sock = socket(AF_INET, SOCK_STREAM, 0); if (sock < 0) continue;
         struct sockaddr_in addr; memset(&addr,0,sizeof(addr));
@@ -463,8 +465,8 @@ static int run_scan(ScanContext* ctx) {
         case SCAN_ANON_SELF: wf = anon_self_worker; nt = 1; break;
         default: wf = syn_scan_worker; break;
     }
-    for (int i = 0; i < nt; i++) pthread_create(&threads[i], NULL, wf, ctx);
-    for (int i = 0; i < nt; i++) pthread_join(threads[i], NULL);
+    for (int i = 0; i < nt; ++i) pthread_create(&threads[i], NULL, wf, ctx);
+    for (int i = 0; i < nt; ++i) pthread_join(threads[i], NULL);
     return atomic_load(&ctx->result_count);
 }
 
@@ -475,7 +477,7 @@ static const SvcEntry SVC_DB[] = {
 };
 
 static const char* get_service(int port) {
-    for (int i = 0; SVC_DB[i].name; i++)
+    for (int i = 0; SVC_DB[i].name; ++i)
         if (SVC_DB[i].port == port) return SVC_DB[i].name;
     return "unknown";
 }
@@ -522,7 +524,7 @@ int main(int argc, char** argv) {
         ctx.hostname, inet_ntoa(ia), port_count, ctx.timeout_ms, ctx.thread_count, scan_mode_names[ctx.scan_mode]);
     int rc = run_scan(&ctx);
     long long elapsed = now_ms() - ctx.start_time;
-    for (int i = 0; i < rc; i++)
+    for (int i = 0; i < rc; ++i)
         if (ctx.results[i].state == 1 || ctx.results[i].state == 3)
             print_json(&ctx.results[i]);
     fprintf(stderr,"FINAL:{\"target\":\"%s\",\"total\":%d,\"open\":%d,\"closed\":%d,\"filtered\":%d,\"elapsed_ms\":%lld}\n",
@@ -531,3 +533,4 @@ int main(int argc, char** argv) {
         atomic_load(&ctx.filtered_count), elapsed);
     return 0;
 }
+// vim: ts=4 sw=4 et tw=80

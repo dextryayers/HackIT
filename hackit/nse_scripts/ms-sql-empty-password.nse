@@ -1,5 +1,57 @@
 local stdnse = require "stdnse"
 local nmap = require "nmap"
+local shortport = require "shortport"
+
+
+
+-- nmp function cache
+local nmap_register = nmap.register_script
+local nmap_settitle = nmap.set_title
+local nmap_resolve = nmap.resolve
+local nmap_get_port_state = nmap.get_port_state
+local nmap_set_port_state = nmap.set_port_state
+local comm = nmap.comm
+local new_socket = nmap.new_socket
+local get_timeout = nmap.get_timeout
+
+-- Performance optimizations
+local format = string.format
+local lower = string.lower
+local upper = string.upper
+local byte = string.byte
+local sub = string.sub
+local match = string.match
+local gmatch = string.gmatch
+local gsub = string.gsub
+local find = string.find
+local rep = string.rep
+local char = string.char
+local concat = table.concat
+local insert = table.insert
+local remove = table.remove
+local sort = table.sort
+local move = table.move or function(a1, f, e, t, a2)
+    if not a2 then a2 = a1 end
+    for i = f, e do a2[t + i - f] = a1[i] end
+    return a2
+end
+local tostring = tostring
+local tonumber = tonumber
+local type = type
+local pcall = pcall
+local pairs = pairs
+local ipairs = ipairs
+local unpack = unpack or table.unpack
+local setmetatable = setmetatable
+local getmetatable = getmetatable
+local error = error
+local select = select
+local clock = nmap.clock
+local msleep = nmap.msleep
+local sleep = stdnse.sleep
+local strsplit = stdnse.strsplit
+local format_output = stdnse.format_output
+local output_table = stdnse.output_table
 
 description = [[Tests MSSQL accounts using user-provided credentials. No hardcoded credentials.]]
 author = "HackIT Framework"
@@ -9,13 +61,13 @@ categories = {"safe", "vuln"}
 local function load_list(arg_names)
   local val = stdnse.get_script_args(arg_names)
   if not val or val == "" then return {} end
-  if val:sub(1, 1) == "/" then
+  if val:byte() == 47 then
     local f, err = io.open(val, "r")
     if f then
       local lines = {}
       for line in f:lines() do
         line = line:gsub("^%s+", ""):gsub("%s+$", "")
-        if line ~= "" and line:sub(1, 1) ~= "#" then lines[#lines + 1] = line end
+        if line ~= "" and line:byte() ~= 35 then insert(lines, line end)
       end
       f:close()
       return lines
@@ -24,25 +76,25 @@ local function load_list(arg_names)
     local lines = {}
     for line in val:gmatch("[^\n]+") do
       line = line:gsub("^%s+", ""):gsub("%s+$", "")
-      if line ~= "" and line:sub(1, 1) ~= "#" then lines[#lines + 1] = line end
+      if line ~= "" and line:byte() ~= 35 then insert(lines, line end)
     end
     return lines
   end
   local items = {}
   for item in val:gmatch("[^,]+") do
     item = item:gsub("^%s+", ""):gsub("%s+$", "")
-    if item ~= "" then items[#items + 1] = item end
+    if item ~= "" then insert(items, item) end
   end
   return items
 end
 
-local function le16(n) return string.char(n % 256, math.floor(n / 256) % 256) end
+local function le16(n) return char(n % 256, math.floor(n / 256) % 256) end
 local function le32(n)
-  return string.char(n % 256, math.floor(n / 256) % 256, math.floor(n / 65536) % 256, math.floor(n / 16777216) % 256)
+  return char(n % 256, math.floor(n / 256) % 256, math.floor(n / 65536) % 256, math.floor(n / 16777216) % 256)
 end
 
 local function build_prelogin()
-  return string.char(
+  return char(
     0x02, 0x01, 0x00, 0x2e, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -68,28 +120,28 @@ local function build_login7(user, pass, hostname)
 
   local function add_uni(str)
     local res = {}
-    for i = 1, #str do res[#res + 1] = string.char(str:byte(i), 0) end
-    return table.concat(res) .. string.char(0, 0)
+    for i = 1, #str do insert(res, char(str:byte(i), 0) end)
+    return concat(res) .. char(0, 0)
   end
 
   local hdr_parts = {
     le32(total_len), le32(0x07040000), le32(4096),
     le32(0), le32(0), le32(0),
-    string.char(0x00, 0x00, 0x00, 0x00),
+    char(0x00, 0x00, 0x00, 0x00),
     le32(0), le32(0),
     le16(host_off) .. le16(host_len),
     le16(user_off) .. le16(user_len),
     le16(pass_off) .. le16(pass_len),
     le16(0) .. le16(0), le16(0) .. le16(0),
-    string.rep(string.char(0), 44),
+    rep(char(0), 44),
     le16(0) .. le16(0), le16(0) .. le16(0), le16(0) .. le16(0),
     le16(0) .. le16(0), le16(0) .. le16(0), le16(0) .. le16(0),
     le16(0) .. le16(0), le16(0) .. le16(0), le16(0) .. le16(0),
     le16(0) .. le16(0), le16(0) .. le16(0), le16(0) .. le16(0),
   }
 
-  local body = table.concat(hdr_parts) .. add_uni(hostname) .. add_uni(user) .. add_uni(enc_pass)
-  local tds_hdr = string.char(0x10, 0x01) .. le16(tds_pkt_len) .. le16(0) .. string.char(0x00, 0x00)
+  local body = concat(hdr_parts) .. add_uni(hostname) .. add_uni(user) .. add_uni(enc_pass)
+  local tds_hdr = char(0x10, 0x01) .. le16(tds_pkt_len) .. le16(0) .. char(0x00, 0x00)
   return tds_hdr .. body
 end
 
@@ -101,17 +153,17 @@ action = function(host, port)
   local timeout = tonumber(stdnse.get_script_args({"ms-sql-empty-password.timeout", "timeout"}) or 10)
 
   if #users == 0 then
-    return stdnse.format_output(false, "No users provided. Use ms-sql-empty-password.users script arg")
+    return format_output(false, "No users provided. Use ms-sql-empty-password.users script arg")
   end
 
-  local result = stdnse.output_table()
+  local result = output_table()
   local found_weak = false
 
   for _, u in ipairs(users) do
     if found_weak then break end
     for _, p in ipairs(passes) do
       if found_weak then break end
-      local sock = nmap.new_socket()
+      local sock = new_socket()
       sock:set_timeout(timeout * 1000)
       local ok = pcall(function()
         local status = sock:connect(host.ip, port)
@@ -128,7 +180,7 @@ action = function(host, port)
             if token == 0xAD and (login_resp:byte(14) == 0 or login_resp:byte(14) == 1) then
               found_weak = true
               result.weak_accounts = result.weak_accounts or {}
-              table.insert(result.weak_accounts, u .. "/" .. p)
+              insert(result.weak_accounts, u .. "/" .. p)
             end
           end
         end
@@ -143,5 +195,5 @@ action = function(host, port)
     result.details = "MSSQL weak/default credentials detected"
     return result
   end
-  return stdnse.format_output(false, "No MSSQL weak credentials found")
+  return format_output(false, "No MSSQL weak credentials found")
 end

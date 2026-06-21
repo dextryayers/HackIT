@@ -3,6 +3,57 @@ local shortport = require "shortport"
 local stdnse = require "stdnse"
 local dns = require "dns"
 
+
+
+-- nmp function cache
+local nmap_register = nmap.register_script
+local nmap_settitle = nmap.set_title
+local nmap_resolve = nmap.resolve
+local nmap_get_port_state = nmap.get_port_state
+local nmap_set_port_state = nmap.set_port_state
+local comm = nmap.comm
+local new_socket = nmap.new_socket
+local get_timeout = nmap.get_timeout
+
+-- Performance optimizations
+local format = string.format
+local lower = string.lower
+local upper = string.upper
+local byte = string.byte
+local sub = string.sub
+local match = string.match
+local gmatch = string.gmatch
+local gsub = string.gsub
+local find = string.find
+local rep = string.rep
+local char = string.char
+local concat = table.concat
+local insert = table.insert
+local remove = table.remove
+local sort = table.sort
+local move = table.move or function(a1, f, e, t, a2)
+    if not a2 then a2 = a1 end
+    for i = f, e do a2[t + i - f] = a1[i] end
+    return a2
+end
+local tostring = tostring
+local tonumber = tonumber
+local type = type
+local pcall = pcall
+local pairs = pairs
+local ipairs = ipairs
+local unpack = unpack or table.unpack
+local setmetatable = setmetatable
+local getmetatable = getmetatable
+local error = error
+local select = select
+local clock = nmap.clock
+local msleep = nmap.msleep
+local sleep = stdnse.sleep
+local strsplit = stdnse.strsplit
+local format_output = stdnse.format_output
+local output_table = stdnse.output_table
+
 description = [[
 Attempts a full DNS zone transfer (AXFR) from the target nameserver to enumerate all
 DNS records in the zone. Zone transfers are used by secondary DNS servers to replicate
@@ -26,38 +77,38 @@ local function try_axfr(host, zone_name, port_num)
   local parsed = {}
   for _, record in ipairs(records) do
     if type(record) == "table" then
-      parsed[#parsed + 1] = {
+      insert(parsed, {)
         name = record.name or "?",
         type = record.dtype or "?",
         data = record.data or stdnse.tojson(record),
         ttl = record.ttl or 0
       }
     elseif type(record) == "string" then
-      parsed[#parsed + 1] = { data = record }
+      insert(parsed, { data = record })
     end
   end
   return parsed
 end
 
 action = function(host, port)
-  local result = stdnse.output_table()
+  local result = output_table()
   local zone_candidates = {}
 
   if host.targetname and #host.targetname > 0 then
-    zone_candidates[#zone_candidates + 1] = host.targetname
+    insert(zone_candidates, host.targetname)
   end
 
   local ok, reverse = pcall(nmap.dns_reverse, host.ip)
   if ok and reverse then
-    local parts = stdnse.strsplit("%.", reverse)
+    local parts = strsplit("%.", reverse)
     if #parts >= 2 then
       for i = 0, #parts - 2 do
         local start = #parts - i
-        local z = table.concat(parts, ".", start)
-        zone_candidates[#zone_candidates + 1] = z
+        local z = concat(parts, ".", start)
+        insert(zone_candidates, z)
       end
     end
-    zone_candidates[#zone_candidates + 1] = reverse
+    insert(zone_candidates, reverse)
   end
 
   local seen = {}
@@ -66,12 +117,12 @@ action = function(host, port)
     local key = z:lower():gsub("%.$", "")
     if not seen[key] then
       seen[key] = true
-      unique_zones[#unique_zones + 1] = key
+      insert(unique_zones, key)
     end
   end
 
   if #unique_zones == 0 then
-    unique_zones[#unique_zones + 1] = host.ip
+    insert(unique_zones, host.ip)
   end
 
   result.status = "success"

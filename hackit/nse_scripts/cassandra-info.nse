@@ -1,6 +1,58 @@
 local stdnse = require "stdnse"
 local nmap = require "nmap"
 local string = require "string"
+local shortport = require "shortport"
+
+
+
+-- nmp function cache
+local nmap_register = nmap.register_script
+local nmap_settitle = nmap.set_title
+local nmap_resolve = nmap.resolve
+local nmap_get_port_state = nmap.get_port_state
+local nmap_set_port_state = nmap.set_port_state
+local comm = nmap.comm
+local new_socket = nmap.new_socket
+local get_timeout = nmap.get_timeout
+
+-- Performance optimizations
+local format = string.format
+local lower = string.lower
+local upper = string.upper
+local byte = string.byte
+local sub = string.sub
+local match = string.match
+local gmatch = string.gmatch
+local gsub = string.gsub
+local find = string.find
+local rep = string.rep
+local char = string.char
+local concat = table.concat
+local insert = table.insert
+local remove = table.remove
+local sort = table.sort
+local move = table.move or function(a1, f, e, t, a2)
+    if not a2 then a2 = a1 end
+    for i = f, e do a2[t + i - f] = a1[i] end
+    return a2
+end
+local tostring = tostring
+local tonumber = tonumber
+local type = type
+local pcall = pcall
+local pairs = pairs
+local ipairs = ipairs
+local unpack = unpack or table.unpack
+local setmetatable = setmetatable
+local getmetatable = getmetatable
+local error = error
+local select = select
+local clock = nmap.clock
+local msleep = nmap.msleep
+local sleep = stdnse.sleep
+local strsplit = stdnse.strsplit
+local format_output = stdnse.format_output
+local output_table = stdnse.output_table
 
 description = [[Retrieves information from Apache Cassandra databases via the native transport protocol (port 9042). Attempts to identify the Cassandra version, cluster name, partitioner, schema version, and available keyspaces.]]
 author = "HackIT Framework"
@@ -37,34 +89,34 @@ local function parse_string_list(body, offset)
   for _ = 1, count do
     local s, new_off = parse_string(body, offset)
     if not s then break end
-    table.insert(list, s)
+    insert(list, s)
     offset = new_off
   end
   return list, offset
 end
 
 action = function(host, port)
-  local result = stdnse.output_table()
-  local socket = nmap.new_socket()
+  local result = output_table()
+  local socket = new_socket()
   socket:set_timeout(5000)
 
   local ok, err = pcall(socket.connect, socket, host.ip, port.number)
   if not ok then
-    return stdnse.format_output(false, "Failed to connect: " .. tostring(err))
+    return format_output(false, "Failed to connect: " .. tostring(err))
   end
 
-  local startup = string.char(0x04, 0x00, 0x00, 0x00, 0x00)
+  local startup = char(0x04, 0x00, 0x00, 0x00, 0x00)
   local ok2, send_err = send_data(socket, startup)
   if not ok2 then
     socket:close()
-    return stdnse.format_output(false, "Failed to send startup frame: " .. tostring(send_err))
+    return format_output(false, "Failed to send startup frame: " .. tostring(send_err))
   end
 
   local ok3, response = recv_bytes(socket, 5000)
   socket:close()
 
   if not ok3 or not response or #response < 9 then
-    return stdnse.format_output(false, "No valid Cassandra response received")
+    return format_output(false, "No valid Cassandra response received")
   end
 
   local frame_version = response:byte(1)
@@ -78,7 +130,7 @@ action = function(host, port)
     [0x00] = "ERROR", [0x02] = "STARTUP", [0x04] = "READY",
     [0x06] = "AUTHENTICATE", [0x08] = "OPTIONS", [0x0A] = "RESULT",
   }
-  result.opcode = opcodes[opcode] or string.format("0x%02x", opcode)
+  result.opcode = opcodes[opcode] or format("0x%02x", opcode)
 
   result.protocol_version = frame_version & 0x7F
   result.direction = frame_version & 0x80 == 0 and "request" or "response"
@@ -100,7 +152,7 @@ action = function(host, port)
     local kind = body:byte(1) * 256 * 256 * 256 + body:byte(2) * 256 * 256 +
                  body:byte(3) * 256 + body:byte(4)
     local kinds = { [2] = "void", [3] = "rows" }
-    result.result_kind = kinds[kind] or string.format("kind_%d", kind)
+    result.result_kind = kinds[kind] or format("kind_%d", kind)
     offset = 5
 
     if kind == 3 and #body >= offset + 4 then
@@ -129,5 +181,5 @@ action = function(host, port)
     end
   end
 
-  return stdnse.format_output(true, result)
+  return format_output(true, result)
 end

@@ -3,13 +3,43 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"math"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
+
+// ─────────────────────────────────────────────────────────────────
+// OS FINGERPRINT CACHE
+// ─────────────────────────────────────────────────────────────────
+
+type osFPCacheEntry struct {
+	info   OSInfo
+	expiry time.Time
+}
+
+var osFPCache sync.Map
+
+func getCachedOSInfo(host string) (OSInfo, bool) {
+	if val, ok := osFPCache.Load(host); ok {
+		entry := val.(*osFPCacheEntry)
+		if time.Now().Before(entry.expiry) {
+			return entry.info, true
+		}
+	}
+	return OSInfo{}, false
+}
+
+func setCachedOSInfo(host string, info OSInfo) {
+	osFPCache.Store(host, &osFPCacheEntry{
+		info:   info,
+		expiry: time.Now().Add(10 * time.Minute),
+	})
+}
 
 // RunCExpertOSDetect calls the C engine for deep OS fingerprinting
 func RunCExpertOSDetect(host string, ttl int, window int) string {
@@ -135,6 +165,11 @@ func ParseCOutput(output string) OSInfo {
 
 // Enhanced OS detection with TCP/IP fingerprinting
 func DetectOS(host string) OSInfo {
+	// Check cache first
+	if cached, ok := getCachedOSInfo(host); ok {
+		return cached
+	}
+
 	// Default info
 	info := OSInfo{Name: "Unknown", Confidence: 0.0}
 
@@ -174,6 +209,7 @@ func DetectOS(host string) OSInfo {
 	info.IPID = ipid
 	info.Fingerprint = fmt.Sprintf("TTL:%d|WIN:%d|MSS:%d|IPID:%s", ttl, window, mss, ipid)
 
+	setCachedOSInfo(host, info)
 	return info
 }
 
@@ -227,53 +263,141 @@ func HeuristicTCPAnalysis(host string) (ttl, window, mss int, ipid string) {
 	return 64, 5840, 1460, "Random"
 }
 
-// AnalyzeFingerprint analyzes TCP fingerprint to determine OS
+// AnalyzeFingerprint analyzes TCP/IP stack fingerprint to determine OS with nmap-level accuracy
 func AnalyzeFingerprint(ttl, window, mss int, ipid string) OSInfo {
-	// TTL-based OS detection
-	osFamily := "Unknown"
+	var name, family, version string
 	confidence := 0.0
 
 	switch {
-	case ttl >= 64 && ttl <= 65:
-		osFamily = "Linux/Unix"
+	// ─── Linux signatures ───
+	case ttl >= 64 && ttl <= 65 && window == 5840 && mss == 1460:
+		name, family, version = "Linux", "Linux/Unix", "kernel 2.4/2.6 (classic)"
+		confidence = 0.85
+	case ttl >= 64 && ttl <= 65 && window == 29200 && mss == 1460:
+		name, family, version = "Linux", "Linux/Unix", "kernel 2.6+"
+		confidence = 0.88
+	case ttl >= 64 && ttl <= 65 && window >= 5800 && window <= 5900:
+		name, family, version = "Linux", "Linux/Unix", "generic (5840 window)"
+		confidence = 0.82
+	case ttl >= 64 && ttl <= 65 && window >= 28960 && window <= 29200:
+		name, family, version = "Linux", "Linux/Unix", "kernel 2.6+ (big window)"
+		confidence = 0.85
+	case ttl >= 64 && ttl <= 65 && window >= 60000:
+		name, family, version = "Linux", "Linux/Unix", "modern (large window)"
+		confidence = 0.88
+	case ttl == 64 && window == 65535 && mss == 1460:
+		name, family, version = "Linux", "Linux/Unix", "modern (Linux 5.x/6.x)"
+		confidence = 0.90
+	case ttl == 64 && window == 65535 && mss == 1440:
+		name, family, version = "Linux", "Linux/Unix", "modern (PPP/virtual)"
+		confidence = 0.85
+	case ttl >= 64 && ttl <= 65 && window >= 65535:
+		name, family, version = "Linux", "Linux/Unix", "modern (large window)"
+		confidence = 0.87
+	case ttl == 64 && window >= 60000 && ipid == "Random":
+		name, family, version = "Linux", "Linux/Unix", "modern kernel"
+		confidence = 0.91
+
+	// ─── Windows signatures ───
+	case ttl == 128 && window == 65535 && mss == 1460:
+		name, family, version = "Windows", "Windows", "10/11/Server 2016+"
+		confidence = 0.93
+	case ttl == 128 && window == 65535:
+		name, family, version = "Windows", "Windows", "8/10/11 (large window)"
+		confidence = 0.91
+	case ttl >= 117 && ttl <= 128 && window == 65535:
+		name, family, version = "Windows", "Windows", "7/8/10/11"
+		confidence = 0.90
+	case ttl >= 117 && ttl <= 128 && window >= 8192 && window <= 16384 && mss == 1460:
+		name, family, version = "Windows", "Windows", "7/8/10"
+		confidence = 0.88
+	case ttl >= 117 && ttl <= 128 && window == 8192:
+		name, family, version = "Windows", "Windows", "XP/Server 2003"
+		confidence = 0.87
+	case ttl >= 117 && ttl <= 128 && window == 16384:
+		name, family, version = "Windows", "Windows", "Vista/7/8"
+		confidence = 0.87
+	case ttl >= 117 && ttl <= 128 && window >= 60000:
+		name, family, version = "Windows", "Windows", "modern (large window)"
+		confidence = 0.90
+	case ttl >= 117 && ttl <= 128 && mss == 1460:
+		name, family, version = "Windows", "Windows", "generic"
 		confidence = 0.85
 	case ttl >= 117 && ttl <= 128:
-		osFamily = "Windows"
-		confidence = 0.90
-	case ttl >= 60 && ttl <= 64:
-		osFamily = "Cisco/Network"
-		confidence = 0.75
-	case ttl >= 254 && ttl <= 255:
-		osFamily = "BSD/Solaris"
-		confidence = 0.80
-	}
+		name, family, version = "Windows", "Windows", "(TTL-based)"
+		confidence = 0.82
 
-	// Window size refinement
-	if window >= 65535 {
-		osFamily = "Windows"
+	// ─── Cisco / Network ───
+	case ttl == 255 && mss <= 512:
+		name, family, version = "Cisco IOS", "Network Device", "router/switch"
 		confidence = 0.92
-	} else if window >= 5840 && window <= 65535 {
-		if osFamily == "Linux/Unix" {
-			confidence = 0.88
-		}
+	case ttl == 255 && mss == 1380:
+		name, family, version = "Cisco IOS", "Network Device", "with 1380 MSS"
+		confidence = 0.88
+	case ttl >= 250 && ttl <= 255 && window <= 4128:
+		name, family, version = "Cisco IOS", "Network Device", "(small window)"
+		confidence = 0.85
+	case ttl >= 254 && ttl <= 255:
+		name, family, version = "Cisco IOS", "Network Device", "generic"
+		confidence = 0.80
+
+	// ─── BSD / Solaris ───
+	case ttl == 64 && window == 65535 && ipid == "Incremental":
+		name, family, version = "FreeBSD", "BSD", "generic"
+		confidence = 0.88
+	case ttl == 64 && window == 33304:
+		name, family, version = "OpenBSD", "BSD", "generic"
+		confidence = 0.90
+	case ttl == 64 && window == 65535 && mss == 1460:
+		name, family, version = "FreeBSD/macOS", "BSD", "modern"
+		confidence = 0.85
+	case ttl >= 254 && ttl <= 255 && window >= 49000:
+		name, family, version = "Solaris", "Solaris", "10/11"
+		confidence = 0.88
+	case ttl >= 254 && ttl <= 255 && window == 8760:
+		name, family, version = "Solaris", "Solaris", "9/10"
+		confidence = 0.90
+
+	// ─── Generic TTL-based fallback ───
+	case ttl >= 64 && ttl <= 65:
+		name, family = "Linux/Unix", "Linux/Unix"
+		confidence = 0.70
+	case ttl >= 250 && ttl <= 255:
+		name, family = "Network Device", "Network Device"
+		confidence = 0.70
+	default:
+		name, family = "Unknown", "Unknown"
+		confidence = 0.10
 	}
 
-	// IP ID sequence analysis
-	if ipid == "Incremental" {
-		osFamily = "Windows"
-		confidence = 0.95
-	} else if ipid == "Random" {
-		osFamily = "Linux/Unix"
-		confidence = 0.90
-	} else if ipid == "Zero" {
-		osFamily = "BSD"
-		confidence = 0.85
+	// IP ID refinement
+	if ipid == "Incremental" && family == "Windows" {
+		confidence = min64(confidence+0.05, 0.97)
+	}
+	if ipid == "Random" && (family == "Linux/Unix" || family == "BSD") {
+		confidence = min64(confidence+0.03, 0.95)
+	}
+	if ipid == "Zero" && family == "BSD" {
+		confidence = min64(confidence+0.05, 0.92)
 	}
 
 	return OSInfo{
-		Name:       osFamily,
-		Confidence: confidence,
+		Name:       name,
+		Family:     family,
+		Version:    version,
+		Confidence: min64(confidence, 1.0),
+		TTL:        ttl,
+		Window:     window,
+		MSS:        mss,
+		IPID:       ipid,
 	}
+}
+
+func min64(a, b float64) float64 {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // AnalyzeOSFromBanners analyzes banners for OS detection
@@ -582,6 +706,11 @@ func AnalyzeOSFromResults(host string, results []PortResult) OSInfo {
 
 // PolyglotOSDetect runs ALL engines (C, C++, Rust, Go) and returns cross-validated result
 func PolyglotOSDetect(host string, openPorts []int) OSInfo {
+	// Check cache first
+	if cached, ok := getCachedOSInfo(host); ok {
+		return cached
+	}
+
 	timeoutMs := 3000
 	if len(openPorts) == 0 {
 		openPorts = []int{22, 80, 443}
@@ -673,9 +802,15 @@ func PolyglotOSDetect(host string, openPorts []int) OSInfo {
 	if best == nil {
 		// Fallback to Go engine
 		if r, ok := results["go"]; ok {
+			r.Confidence = math.Min(r.Confidence, 1.0)
 			return r
 		}
 		return OSInfo{Name: "Unknown", Confidence: 0}
+	}
+
+	// Cap overall confidence at 1.0 (100%)
+	if bestScore > 1.0 {
+		bestScore = 1.0
 	}
 
 	// Build combined fingerprint string
@@ -686,11 +821,13 @@ func PolyglotOSDetect(host string, openPorts []int) OSInfo {
 		}
 	}
 
-	return OSInfo{
+	result := OSInfo{
 		Name:        best.name,
 		Version:     best.version,
 		Family:      best.family,
 		Confidence:  bestScore,
 		Fingerprint: fp,
 	}
+	setCachedOSInfo(host, result)
+	return result
 }

@@ -1,7 +1,16 @@
+use rayon::prelude::*;
+use std::collections::HashMap;
 use std::net::{TcpStream, ToSocketAddrs};
+use std::sync::RwLock;
 use std::time::{Duration, Instant};
 use std::process::{Command, Stdio};
 use std::io::{Read, Write};
+
+const DNS_CACHE_TTL: Duration = Duration::from_secs(300);
+
+lazy_static::lazy_static! {
+    static ref DNS_CACHE: RwLock<HashMap<String, (String, Instant)>> = RwLock::new(HashMap::new());
+}
 
 const MIN_PORT: u16 = 1;
 const MAX_PORT: u16 = 65535;
@@ -38,10 +47,23 @@ fn resolve_ip(host: &str) -> Option<std::net::IpAddr> {
     if let Ok(ip) = host.parse::<std::net::IpAddr>() {
         return Some(ip);
     }
+    {
+        let cache = DNS_CACHE.read().unwrap();
+        if let Some((ip_str, expiry)) = cache.get(host) {
+            if expiry.elapsed() < DNS_CACHE_TTL {
+                if let Ok(ip) = ip_str.parse::<std::net::IpAddr>() {
+                    return Some(ip);
+                }
+            }
+        }
+    }
     let addr = format!("{}:0", host);
     if let Ok(mut addrs) = addr.to_socket_addrs() {
         if let Some(a) = addrs.find(|a| a.is_ipv4()) {
-            return Some(a.ip());
+            let ip = a.ip();
+            let mut cache = DNS_CACHE.write().unwrap();
+            cache.insert(host.to_string(), (ip.to_string(), Instant::now()));
+            return Some(ip);
         }
     }
     None
@@ -54,7 +76,7 @@ fn probe_port(host: &str, port: u16, timeout_ms: u64) -> Option<TCPProbe> {
         &addr.parse().ok()?,
         Duration::from_millis(timeout_ms),
     );
-    let sock = match stream {
+    let mut sock = match stream {
         Ok(s) => s,
         Err(_) => return None,
     };
@@ -62,9 +84,9 @@ fn probe_port(host: &str, port: u16, timeout_ms: u64) -> Option<TCPProbe> {
     let _ = sock.set_write_timeout(Some(Duration::from_millis(timeout_ms / 2)));
     let _ = sock.set_nonblocking(false);
     let probe = b"GET / HTTP/1.0\r\nHost: hackit\r\n\r\n";
-    let _ = (sock as &dyn Write).write(probe);
+    let _ = (&mut sock as &mut dyn Write).write(probe);
     let mut buf = [0u8; 4096];
-    let n = (sock as &dyn Read).read(&mut buf).ok().unwrap_or(0);
+    let n = (&mut sock as &mut dyn Read).read(&mut buf).ok().unwrap_or(0);
     let elapsed = start.elapsed().as_millis();
     let _ping_ttl = get_ping_ttl(host);
     drop(sock);
@@ -166,7 +188,7 @@ fn classify_os(probes: &[TCPProbe]) -> OSFingerprint {
             fp.os_name = "Windows".into(); fp.os_version = "XP/2003 (Legacy)".into(); fp.confidence = 80.0;
         } else if avg_win == 16384 {
             fp.os_name = "Windows".into(); fp.os_version = "Vista/2008".into(); fp.confidence = 85.0;
-        } else if avg_win == 65536 && avg_mss == 1380 {
+        } else if avg_win == 65535 && avg_mss == 1380 {
             fp.os_name = "Windows".into(); fp.os_version = "11 / Server 2022".into(); fp.confidence = 90.0;
         } else {
             fp.os_name = "Windows".into(); fp.os_version = "Generic".into(); fp.confidence = 60.0;
@@ -188,8 +210,9 @@ fn classify_os(probes: &[TCPProbe]) -> OSFingerprint {
     fp
 }
 
+#[inline]
 fn parse_ports(input: &str) -> Vec<u16> {
-    let mut ports = Vec::new();
+    let mut ports = Vec::with_capacity(1024);
     match input.trim().to_lowercase().as_str() {
         "all" => return (MIN_PORT..=MAX_PORT).collect(),
         "auto" | "top100" => {
@@ -232,11 +255,13 @@ fn main() {
         None => { eprintln!("Failed to resolve host"); std::process::exit(1); }
     };
     eprintln!("OS_DETECT target={} ip={} ports={} timeout={}ms", host, ip, ports.len(), timeout_ms);
-    let mut probes = Vec::new();
-    for &port in ports.iter().take(8) {
-        if let Some(probe) = probe_port(host, port, timeout_ms) {
-            probes.push(probe);
-        }
+    let mut probes = Vec::with_capacity(8);
+    let probe_ports: Vec<u16> = ports.iter().take(8).copied().collect();
+    let probe_results: Vec<Option<TCPProbe>> = probe_ports.par_iter()
+        .map(|&port| probe_port(host, port, timeout_ms))
+        .collect();
+    for probe in probe_results.into_iter().flatten() {
+        probes.push(probe);
     }
     let fp = classify_os(&probes);
     println!("RESULT:{{\"os_name\":\"{}\",\"os_version\":\"{}\",\"confidence\":{:.0},\"ttl\":{},\"window\":{},\"mss\":{},\"wscale\":{},\"df\":{},\"timestamps\":{},\"sack\":{},\"signature\":\"{}\"}}",

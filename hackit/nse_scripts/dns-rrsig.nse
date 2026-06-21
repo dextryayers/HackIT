@@ -3,6 +3,57 @@ local shortport = require "shortport"
 local stdnse = require "stdnse"
 local dns = require "dns"
 
+
+
+-- nmp function cache
+local nmap_register = nmap.register_script
+local nmap_settitle = nmap.set_title
+local nmap_resolve = nmap.resolve
+local nmap_get_port_state = nmap.get_port_state
+local nmap_set_port_state = nmap.set_port_state
+local comm = nmap.comm
+local new_socket = nmap.new_socket
+local get_timeout = nmap.get_timeout
+
+-- Performance optimizations
+local format = string.format
+local lower = string.lower
+local upper = string.upper
+local byte = string.byte
+local sub = string.sub
+local match = string.match
+local gmatch = string.gmatch
+local gsub = string.gsub
+local find = string.find
+local rep = string.rep
+local char = string.char
+local concat = table.concat
+local insert = table.insert
+local remove = table.remove
+local sort = table.sort
+local move = table.move or function(a1, f, e, t, a2)
+    if not a2 then a2 = a1 end
+    for i = f, e do a2[t + i - f] = a1[i] end
+    return a2
+end
+local tostring = tostring
+local tonumber = tonumber
+local type = type
+local pcall = pcall
+local pairs = pairs
+local ipairs = ipairs
+local unpack = unpack or table.unpack
+local setmetatable = setmetatable
+local getmetatable = getmetatable
+local error = error
+local select = select
+local clock = nmap.clock
+local msleep = nmap.msleep
+local sleep = stdnse.sleep
+local strsplit = stdnse.strsplit
+local format_output = stdnse.format_output
+local output_table = stdnse.output_table
+
 description = [[
 Retrieves and analyzes RRSIG (Resource Record Signature) records for the target domain
 to assess DNSSEC signature configuration and health. RRSIG records contain
@@ -29,7 +80,7 @@ local algorithm_names = {
 }
 
 action = function(host, port)
-  local result = stdnse.output_table()
+  local result = output_table()
   local domain = host.targetname
 
   if not domain or #domain == 0 then
@@ -71,7 +122,7 @@ action = function(host, port)
 
     local sig_str
     if type(sig_data) == "string" then
-      sig_str = nmap.base64 and nmap.base64(sig_data) or string.sub(sig_data, 1, 20)
+      sig_str = nmap.base64 and nmap.base64(sig_data) or sub(sig_data, 1, 20)
     else
       sig_str = tostring(sig_data)
     end
@@ -100,12 +151,12 @@ action = function(host, port)
       signer = signer,
       inception = os.date("%Y-%m-%d %H:%M:%S", sig_inc),
       expiration = os.date("%Y-%m-%d %H:%M:%S", sig_exp),
-      validity_days = string.format("%.1f", (sig_exp - sig_inc) / 86400),
+      validity_days = format("%.1f", (sig_exp - sig_inc) / 86400),
       status = signature_validity,
-      signature_preview = sig_str and (string.sub(sig_str, 1, 40) .. "...") or "N/A"
+      signature_preview = sig_str and (sub(sig_str, 1, 40) .. "...") or "N/A"
     }
 
-    signatures[#signatures + 1] = sig_entry
+    insert(signatures, sig_entry)
   end
 
   result.rrsig_records_found = true
@@ -135,7 +186,7 @@ action = function(host, port)
     total = #signatures,
     valid = valid_count,
     expired = expired_count,
-    valid_percentage = string.format("%.1f%%", (valid_count / #signatures) * 100)
+    valid_percentage = format("%.1f%%", (valid_count / #signatures) * 100)
   }
 
   return result

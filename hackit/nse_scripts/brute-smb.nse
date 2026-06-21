@@ -3,6 +3,58 @@ local nmap = require "nmap"
 local openssl = require "openssl"
 local os = require "os"
 local bit = require "bit"
+local shortport = require "shortport"
+
+
+
+-- nmp function cache
+local nmap_register = nmap.register_script
+local nmap_settitle = nmap.set_title
+local nmap_resolve = nmap.resolve
+local nmap_get_port_state = nmap.get_port_state
+local nmap_set_port_state = nmap.set_port_state
+local comm = nmap.comm
+local new_socket = nmap.new_socket
+local get_timeout = nmap.get_timeout
+
+-- Performance optimizations
+local format = string.format
+local lower = string.lower
+local upper = string.upper
+local byte = string.byte
+local sub = string.sub
+local match = string.match
+local gmatch = string.gmatch
+local gsub = string.gsub
+local find = string.find
+local rep = string.rep
+local char = string.char
+local concat = table.concat
+local insert = table.insert
+local remove = table.remove
+local sort = table.sort
+local move = table.move or function(a1, f, e, t, a2)
+    if not a2 then a2 = a1 end
+    for i = f, e do a2[t + i - f] = a1[i] end
+    return a2
+end
+local tostring = tostring
+local tonumber = tonumber
+local type = type
+local pcall = pcall
+local pairs = pairs
+local ipairs = ipairs
+local unpack = unpack or table.unpack
+local setmetatable = setmetatable
+local getmetatable = getmetatable
+local error = error
+local select = select
+local clock = nmap.clock
+local msleep = nmap.msleep
+local sleep = stdnse.sleep
+local strsplit = stdnse.strsplit
+local format_output = stdnse.format_output
+local output_table = stdnse.output_table
 
 description = [[Attempts to brute-force SMB credentials using NTLMSSP authentication.]]
 author = "HackIT Framework"
@@ -12,13 +64,13 @@ categories = {"brute", "intrusive"}
 local function load_list(arg_names)
   local val = stdnse.get_script_args(arg_names)
   if not val or val == "" then return {} end
-  if val:sub(1, 1) == "/" then
+  if val:byte() == 47 then
     local f, err = io.open(val, "r")
     if f then
       local lines = {}
       for line in f:lines() do
         line = line:gsub("^%s+", ""):gsub("%s+$", "")
-        if line ~= "" and line:sub(1, 1) ~= "#" then lines[#lines + 1] = line end
+        if line ~= "" and line:byte() ~= 35 then insert(lines, line end)
       end
       f:close()
       return lines
@@ -27,27 +79,27 @@ local function load_list(arg_names)
     local lines = {}
     for line in val:gmatch("[^\n]+") do
       line = line:gsub("^%s+", ""):gsub("%s+$", "")
-      if line ~= "" and line:sub(1, 1) ~= "#" then lines[#lines + 1] = line end
+      if line ~= "" and line:byte() ~= 35 then insert(lines, line end)
     end
     return lines
   end
   local items = {}
   for item in val:gmatch("[^,]+") do
     item = item:gsub("^%s+", ""):gsub("%s+$", "")
-    if item ~= "" then items[#items + 1] = item end
+    if item ~= "" then insert(items, item) end
   end
   return items
 end
 
-local function le16(n) return string.char(n % 256, math.floor(n / 256) % 256) end
+local function le16(n) return char(n % 256, math.floor(n / 256) % 256) end
 local function le32(n)
-  return string.char(n % 256, math.floor(n / 256) % 256, math.floor(n / 65536) % 256, math.floor(n / 16777216) % 256)
+  return char(n % 256, math.floor(n / 256) % 256, math.floor(n / 65536) % 256, math.floor(n / 16777216) % 256)
 end
 
 local function utf16le(s)
   local res = {}
-  for i = 1, #s do res[#res + 1] = string.char(s:byte(i), 0) end
-  return table.concat(res)
+  for i = 1, #s do insert(res, char(s:byte(i), 0) end)
+  return concat(res)
 end
 
 local function lrot(x, n)
@@ -61,7 +113,7 @@ local function md4(message)
   while (#padded % 64) ~= 56 do
     padded = padded .. "\x00"
   end
-  padded = padded .. string.char(bits % 256, math.floor(bits / 256) % 256,
+  padded = padded .. char(bits % 256, math.floor(bits / 256) % 256,
     math.floor(bits / 65536) % 256, math.floor(bits / 16777216) % 256, 0, 0, 0, 0)
 
   local a, b, c, d = 0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476
@@ -74,8 +126,8 @@ local function md4(message)
     local X = {}
     for j = 0, 15 do
       local o = j * 4 + 1
-      X[j] = string.byte(block, o) + string.byte(block, o + 1) * 256
-        + string.byte(block, o + 2) * 65536 + string.byte(block, o + 3) * 16777216
+      X[j] = byte(block, o) + byte(block, o + 1) * 256
+        + byte(block, o + 2) * 65536 + byte(block, o + 3) * 16777216
     end
     local aa, bb, cc, dd = a, b, c, d
     local function r1(va, vb, vc, vd, k, s) return lrot(bit.band(va + F(vb, vc, vd) + X[k], 0xFFFFFFFF), s) end
@@ -97,7 +149,7 @@ local function md4(message)
     a = bit.band(a + aa, 0xFFFFFFFF); b = bit.band(b + bb, 0xFFFFFFFF)
     c = bit.band(c + cc, 0xFFFFFFFF); d = bit.band(d + dd, 0xFFFFFFFF)
   end
-  return string.char(a % 256, math.floor(a / 256) % 256, math.floor(a / 65536) % 256, math.floor(a / 16777216) % 256,
+  return char(a % 256, math.floor(a / 256) % 256, math.floor(a / 65536) % 256, math.floor(a / 16777216) % 256,
     b % 256, math.floor(b / 256) % 256, math.floor(b / 65536) % 256, math.floor(b / 16777216) % 256,
     c % 256, math.floor(c / 256) % 256, math.floor(c / 65536) % 256, math.floor(c / 16777216) % 256,
     d % 256, math.floor(d / 256) % 256, math.floor(d / 65536) % 256, math.floor(d / 16777216) % 256)
@@ -106,7 +158,7 @@ end
 local function hmac_md5_raw(key, data)
   local h = openssl.hmac("md5", key, data)
   if #h == 16 then return h end
-  return (h:gsub("..", function(cc) return string.char(tonumber(cc, 16)) end))
+  return (h:gsub("..", function(cc) return char(tonumber(cc, 16)) end))
 end
 
 local function ntlm_hash(password)
@@ -114,13 +166,13 @@ local function ntlm_hash(password)
 end
 
 local function ntlmv2_response(nt_hash, server_challenge, user, domain)
-  local client_challenge = le32(os.time()) .. string.rep(string.char(0x00), 4)
-  local timestamp_data = string.char(0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00)
+  local client_challenge = le32(os.time()) .. rep(char(0x00), 4)
+  local timestamp_data = char(0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00)
 
-  local blob = string.char(0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00)
+  local blob = char(0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00)
     .. timestamp_data .. client_challenge
-    .. string.char(0x00, 0x00, 0x00, 0x00)
-    .. string.rep(string.char(0x00), 4)
+    .. char(0x00, 0x00, 0x00, 0x00)
+    .. rep(char(0x00), 4)
 
   local nt_proof = hmac_md5_raw(nt_hash, server_challenge .. blob)
   local nt_resp = nt_proof .. blob
@@ -131,7 +183,7 @@ local function ntlmv2_response(nt_hash, server_challenge, user, domain)
   local domain_uni = utf16le(domain)
   local user_uni = utf16le(user)
   local target_uni = ""
-  local session_key = string.rep(string.char(0x00), 16)
+  local session_key = rep(char(0x00), 16)
 
   local hdr_size = 64
   local off = hdr_size
@@ -142,7 +194,7 @@ local function ntlmv2_response(nt_hash, server_challenge, user, domain)
   local tgt_off, tgt_len = off, #target_uni; off = off + tgt_len
   local ses_off, ses_len = off, 16; off = off + ses_len
 
-  local msg = "NTLMSSP\x00" .. string.char(0x03)
+  local msg = "NTLMSSP\x00" .. char(0x03)
     .. le16(lm_len) .. le16(lm_len) .. le32(lm_off)
     .. le16(nt_len) .. le16(nt_len) .. le32(nt_off)
     .. le16(dom_len) .. le16(dom_len) .. le32(dom_off)
@@ -168,7 +220,7 @@ action = function(host, port)
   else stop_on_first = (stop_on_first:lower() == "true" or stop_on_first == "1") end
 
   if #users == 0 or #passes == 0 then
-    return stdnse.format_output(false, "No credentials provided. Use brute-smb.users and brute-smb.passwords script args")
+    return format_output(false, "No credentials provided. Use brute-smb.users and brute-smb.passwords script args")
   end
 
   local start_time = os.time()
@@ -184,23 +236,23 @@ action = function(host, port)
     local sec_blob_len = #ntlmssp
 
     local smb_hdr = "\xffSMB"
-      .. string.char(0x73) -- SMB_COM_SESSION_SETUP_ANDX
-      .. string.char(0x00, 0x00, 0x00, 0x00) -- status
-      .. string.char(0x18) -- flags
-      .. string.char(0x01, 0x20) -- flags2
-      .. string.char(0x00, 0x00) -- pid high
-      .. string.rep(string.char(0x00), 8) -- signature
-      .. string.char(0x00, 0x00) -- reserved
-      .. string.char(0x00, 0x00) -- tid
-      .. string.char(0x00, 0x00) -- pid low
-      .. string.char(0x00, 0x00) -- uid
-      .. string.char(0x00, 0x00) -- mid
+      .. char(0x73) -- SMB_COM_SESSION_SETUP_ANDX
+      .. char(0x00, 0x00, 0x00, 0x00) -- status
+      .. char(0x18) -- flags
+      .. char(0x01, 0x20) -- flags2
+      .. char(0x00, 0x00) -- pid high
+      .. rep(char(0x00), 8) -- signature
+      .. char(0x00, 0x00) -- reserved
+      .. char(0x00, 0x00) -- tid
+      .. char(0x00, 0x00) -- pid low
+      .. char(0x00, 0x00) -- uid
+      .. char(0x00, 0x00) -- mid
 
     local andx_offset = 4 + 32 + 2 + 2 + 2 + sec_blob_len
 
-    local body = string.char(0x0c) -- word count (12)
-      .. string.char(0xff) -- no andx
-      .. string.char(0x00, 0x00) -- reserved
+    local body = char(0x0c) -- word count (12)
+      .. char(0xff) -- no andx
+      .. char(0x00, 0x00) -- reserved
       .. le16(andx_offset) -- andx offset
       .. le16(65535) -- max buffer size
       .. le16(2) -- max mpx count
@@ -212,33 +264,33 @@ action = function(host, port)
 
     local pkt = smb_hdr .. body
     local len = #pkt
-    return string.char(0x00, math.floor(len / 65536) % 256, math.floor(len / 256) % 256, len % 256) .. pkt
+    return char(0x00, math.floor(len / 65536) % 256, math.floor(len / 256) % 256, len % 256) .. pkt
   end
 
   for _, u in ipairs(users) do
     if stop then break end
     for _, p in ipairs(passes) do
       if stop or attempts >= max_attempts then break end
-      local socket = nmap.new_socket()
+      local socket = new_socket()
       socket:set_timeout(timeout * 1000)
       local ok, result = pcall(function()
         local status, err = socket:connect(host, port)
         if not status then errors = errors + 1; return false end
 
-        local neg_pkt = string.char(0x00, 0x00, 0x00, 0x24)
-          .. "\xffSMB" .. string.char(0x72)
-          .. string.char(0x00, 0x00, 0x00, 0x00)
-          .. string.char(0x18)
-          .. string.char(0x01, 0x20)
-          .. string.char(0x00, 0x00)
-          .. string.rep(string.char(0x00), 8)
-          .. string.char(0x00, 0x00)
-          .. string.char(0x00, 0x00)
-          .. string.char(0x00, 0x00)
-          .. string.char(0x00, 0x00)
-          .. string.char(0x00, 0x00)
-          .. string.char(0x00) -- word count
-          .. string.char(0x00, 0x00) -- byte count
+        local neg_pkt = char(0x00, 0x00, 0x00, 0x24)
+          .. "\xffSMB" .. char(0x72)
+          .. char(0x00, 0x00, 0x00, 0x00)
+          .. char(0x18)
+          .. char(0x01, 0x20)
+          .. char(0x00, 0x00)
+          .. rep(char(0x00), 8)
+          .. char(0x00, 0x00)
+          .. char(0x00, 0x00)
+          .. char(0x00, 0x00)
+          .. char(0x00, 0x00)
+          .. char(0x00, 0x00)
+          .. char(0x00) -- word count
+          .. char(0x00, 0x00) -- byte count
         socket:send(neg_pkt)
 
         local neg_resp = socket:receive_bytes(256)
@@ -262,8 +314,8 @@ action = function(host, port)
           if ss2 then
             local hdr = ses_resp:sub(ss2, ss2 + 31)
             if #hdr >= 9 then
-              local status_code = string.byte(hdr, 6) + string.byte(hdr, 7) * 256
-                + string.byte(hdr, 8) * 65536 + string.byte(hdr, 9) * 16777216
+              local status_code = byte(hdr, 6) + byte(hdr, 7) * 256
+                + byte(hdr, 8) * 65536 + byte(hdr, 9) * 16777216
               if status_code == 0 then return true end
             end
           end
@@ -275,16 +327,16 @@ action = function(host, port)
         errors = errors + 1
       elseif result then
         success_count = success_count + 1
-        found[#found + 1] = {user = u, password = p}
+        insert(found, {user = u, password = p})
         if stop_on_first then stop = true end
       end
       attempts = attempts + 1
-      if delay > 0 and not stop then stdnse.sleep(delay / 1000) end
+      if delay > 0 and not stop then sleep(delay / 1000) end
     end
   end
 
   local elapsed = os.time() - start_time
-  local out = stdnse.output_table()
+  local out = output_table()
   out.service = "SMB"
   out.port = port.number
   out.attempts = attempts

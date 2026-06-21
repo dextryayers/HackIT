@@ -65,6 +65,32 @@
 #include <cwchar>
 #include <cstdint>
 #include <iomanip>
+#include <string_view>
+#include <memory>
+#include <unordered_map>
+
+
+// === Deep Performance Optimizations ===
+#ifndef OPTIMIZE_H
+#define likely(x)   __builtin_expect(!!(x), 1)
+#define unlikely(x) __builtin_expect(!!(x), 0)
+#endif
+#ifndef FORCE_INLINE
+#define FORCE_INLINE __attribute__((always_inline)) inline
+#endif
+#ifndef HOT_FUNC
+#define HOT_FUNC    __attribute__((hot))
+#endif
+#ifndef COLD_FUNC
+#define COLD_FUNC   __attribute__((cold))
+#endif
+#ifndef LIKELY
+#define LIKELY(x)   __builtin_expect(!!(x), 1)
+#endif
+#ifndef UNLIKELY
+#define UNLIKELY(x) __builtin_expect(!!(x), 0)
+#endif
+
 
 using namespace std;
 using namespace chrono;
@@ -72,9 +98,9 @@ using namespace chrono;
 /* ─────────────────────────────────────────────────────────────────
  * CONSTANTS
  * ───────────────────────────────────────────────────────────────── */
-const int DEFAULT_TIMEOUT_MS = 1500;
-const int MAX_BANNER_SIZE    = 8192;
-const int THREAD_POOL_SIZE   = 32;
+constexpr int DEFAULT_TIMEOUT_MS = 1500;
+constexpr int MAX_BANNER_SIZE    = 8192;
+constexpr int THREAD_POOL_SIZE   = 32;
 
 /* ─────────────────────────────────────────────────────────────────
  * DATA STRUCTURES
@@ -585,7 +611,7 @@ static void cleanup_sockets() {
 #endif
 }
 
-static int resolve_host(const string& host, struct sockaddr_in& addr) {
+static int resolve_host(const string& host, struct sockaddr_in& addr) noexcept {
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
 
@@ -631,13 +657,10 @@ static bool connect_with_timeout(SOCKET s, const struct sockaddr* addr, socklen_
     if (errno != EINPROGRESS) { set_nonblocking(s, false); return false; }
 #endif
 
-    fd_set fdset;
-    FD_ZERO(&fdset);
-    FD_SET(s, &fdset);
-    struct timeval tv;
-    tv.tv_sec = timeout_ms / 1000;
-    tv.tv_usec = (timeout_ms % 1000) * 1000;
-    res = select((int)s + 1, nullptr, &fdset, nullptr, &tv);
+    struct pollfd pfd;
+    pfd.fd = s;
+    pfd.events = POLLOUT;
+    res = poll(&pfd, 1, timeout_ms);
     if (res <= 0) { set_nonblocking(s, false); return false; }
 
     int so_error;
@@ -652,31 +675,67 @@ static bool connect_with_timeout(SOCKET s, const struct sockaddr* addr, socklen_
 }
 
 static int recv_with_timeout(SOCKET s, char* buf, int bufsize, int timeout_ms) {
-    fd_set fdset;
-    FD_ZERO(&fdset);
-    FD_SET(s, &fdset);
-    struct timeval tv;
-    tv.tv_sec = timeout_ms / 1000;
-    tv.tv_usec = (timeout_ms % 1000) * 1000;
-
-    int res = select((int)s + 1, &fdset, nullptr, nullptr, &tv);
+    struct pollfd pfd;
+    pfd.fd = s;
+    pfd.events = POLLIN;
+    int res = poll(&pfd, 1, timeout_ms);
     if (res <= 0) return -1;
 
     return recv(s, buf, bufsize, 0);
 }
 
 static int send_with_timeout(SOCKET s, const char* data, int len, int timeout_ms) {
-    fd_set fdset;
-    FD_ZERO(&fdset);
-    FD_SET(s, &fdset);
-    struct timeval tv;
-    tv.tv_sec = timeout_ms / 1000;
-    tv.tv_usec = (timeout_ms % 1000) * 1000;
-
-    int res = select((int)s + 1, nullptr, &fdset, nullptr, &tv);
+    struct pollfd pfd;
+    pfd.fd = s;
+    pfd.events = POLLOUT;
+    int res = poll(&pfd, 1, timeout_ms);
     if (res <= 0) return -1;
 
     return send(s, data, len, 0);
+}
+
+static SOCKET create_tcp_socket();
+
+static std::regex get_cached_regex(std::string_view pattern) {
+    static std::unordered_map<std::string, std::regex> cache;
+    auto it = cache.find(std::string(pattern));
+    if (it != cache.end()) return it->second;
+    std::regex re(std::string(pattern), std::regex_constants::icase);
+    cache[std::string(pattern)] = re;
+    return re;
+}
+
+static SOCKET cached_sock = INVALID_SOCKET;
+static std::string cached_sock_host;
+static int cached_sock_port = -1;
+
+static SOCKET get_or_create_socket(std::string_view host, int port, int timeout_ms) {
+    if (cached_sock != INVALID_SOCKET && cached_sock_host == host && cached_sock_port == port) {
+        return cached_sock;
+    }
+    if (cached_sock != INVALID_SOCKET) {
+        CLOSE_SOCKET(cached_sock);
+        cached_sock = INVALID_SOCKET;
+    }
+    cached_sock = create_tcp_socket();
+    if (IS_INVALID(cached_sock)) return INVALID_SOCKET;
+    struct sockaddr_in addr;
+    std::string h(host);
+    if (resolve_host(h, addr) != 0) { CLOSE_SOCKET(cached_sock); cached_sock = INVALID_SOCKET; return INVALID_SOCKET; }
+    addr.sin_port = htons((uint16_t)port);
+    if (!connect_with_timeout(cached_sock, (struct sockaddr*)&addr, sizeof(addr), timeout_ms)) {
+        CLOSE_SOCKET(cached_sock); cached_sock = INVALID_SOCKET; return INVALID_SOCKET;
+    }
+    cached_sock_host = h;
+    cached_sock_port = port;
+    return cached_sock;
+}
+
+static void flush_socket_cache() {
+    if (cached_sock != INVALID_SOCKET) {
+        CLOSE_SOCKET(cached_sock);
+        cached_sock = INVALID_SOCKET;
+    }
 }
 
 static SOCKET create_tcp_socket() {
@@ -704,67 +763,43 @@ static string sanitize_banner(const char* buf, int n) {
 }
 
 string probeHTTP(const string& host, int port, int timeout_ms) {
-    SOCKET s = create_tcp_socket();
+    SOCKET s = get_or_create_socket(host, port, timeout_ms);
     if (IS_INVALID(s)) return "";
-
-    struct sockaddr_in addr;
-    if (resolve_host(host, addr) != 0) { CLOSE_SOCKET(s); return ""; }
-    addr.sin_port = htons((uint16_t)port);
-
-    if (!connect_with_timeout(s, (struct sockaddr*)&addr, sizeof(addr), timeout_ms)) {
-        CLOSE_SOCKET(s); return "";
-    }
 
     string req = "GET / HTTP/1.1\r\nHost: " + host + "\r\nUser-Agent: HackIT-CPP/4.1\r\nAccept: */*\r\nConnection: close\r\n\r\n";
     send_with_timeout(s, req.c_str(), (int)req.size(), timeout_ms);
 
     char buf[MAX_BANNER_SIZE] = {};
     int n = recv_with_timeout(s, buf, sizeof(buf)-1, timeout_ms);
-    CLOSE_SOCKET(s);
+    flush_socket_cache();
 
     if (n <= 0) return "";
     return sanitize_banner(buf, n);
 }
 
 string probeSSH(const string& host, int port, int timeout_ms) {
-    SOCKET s = create_tcp_socket();
+    SOCKET s = get_or_create_socket(host, port, timeout_ms);
     if (IS_INVALID(s)) return "";
-
-    struct sockaddr_in addr;
-    if (resolve_host(host, addr) != 0) { CLOSE_SOCKET(s); return ""; }
-    addr.sin_port = htons((uint16_t)port);
-
-    if (!connect_with_timeout(s, (struct sockaddr*)&addr, sizeof(addr), timeout_ms)) {
-        CLOSE_SOCKET(s); return "";
-    }
 
     char buf[MAX_BANNER_SIZE] = {};
     int n = recv_with_timeout(s, buf, sizeof(buf)-1, timeout_ms);
-    CLOSE_SOCKET(s);
 
-    if (n <= 0) return "";
+    if (n <= 0) { flush_socket_cache(); return ""; }
     string raw = sanitize_banner(buf, n);
 
     istringstream iss(raw);
     string line;
     getline(iss, line);
     if (!line.empty() && line.back() == '\r') line.pop_back();
+    flush_socket_cache();
     if (line.find("SSH-") != string::npos) return line;
 
     return raw;
 }
 
 string probeSMTP(const string& host, int port, int timeout_ms) {
-    SOCKET s = create_tcp_socket();
+    SOCKET s = get_or_create_socket(host, port, timeout_ms);
     if (IS_INVALID(s)) return "";
-
-    struct sockaddr_in addr;
-    if (resolve_host(host, addr) != 0) { CLOSE_SOCKET(s); return ""; }
-    addr.sin_port = htons((uint16_t)port);
-
-    if (!connect_with_timeout(s, (struct sockaddr*)&addr, sizeof(addr), timeout_ms)) {
-        CLOSE_SOCKET(s); return "";
-    }
 
     char buf[MAX_BANNER_SIZE] = {};
     int n = recv_with_timeout(s, buf, sizeof(buf)-1, timeout_ms);
@@ -774,7 +809,7 @@ string probeSMTP(const string& host, int port, int timeout_ms) {
 
     char buf2[4096] = {};
     int n2 = recv_with_timeout(s, buf2, sizeof(buf2)-1, timeout_ms);
-    CLOSE_SOCKET(s);
+    flush_socket_cache();
 
     string result;
     if (n > 0) result += sanitize_banner(buf, n);
@@ -785,16 +820,8 @@ string probeSMTP(const string& host, int port, int timeout_ms) {
 }
 
 string probeFTP(const string& host, int port, int timeout_ms) {
-    SOCKET s = create_tcp_socket();
+    SOCKET s = get_or_create_socket(host, port, timeout_ms);
     if (IS_INVALID(s)) return "";
-
-    struct sockaddr_in addr;
-    if (resolve_host(host, addr) != 0) { CLOSE_SOCKET(s); return ""; }
-    addr.sin_port = htons((uint16_t)port);
-
-    if (!connect_with_timeout(s, (struct sockaddr*)&addr, sizeof(addr), timeout_ms)) {
-        CLOSE_SOCKET(s); return "";
-    }
 
     char buf[MAX_BANNER_SIZE] = {};
     int n = recv_with_timeout(s, buf, sizeof(buf)-1, timeout_ms);
@@ -805,7 +832,7 @@ string probeFTP(const string& host, int port, int timeout_ms) {
         char buf2[4096] = {};
         recv_with_timeout(s, buf2, sizeof(buf2)-1, timeout_ms);
     }
-    CLOSE_SOCKET(s);
+    flush_socket_cache();
 
     if (n <= 0) return "";
     string raw = sanitize_banner(buf, n);
@@ -820,16 +847,8 @@ string probeFTP(const string& host, int port, int timeout_ms) {
 }
 
 string probePOP3(const string& host, int port, int timeout_ms) {
-    SOCKET s = create_tcp_socket();
+    SOCKET s = get_or_create_socket(host, port, timeout_ms);
     if (IS_INVALID(s)) return "";
-
-    struct sockaddr_in addr;
-    if (resolve_host(host, addr) != 0) { CLOSE_SOCKET(s); return ""; }
-    addr.sin_port = htons((uint16_t)port);
-
-    if (!connect_with_timeout(s, (struct sockaddr*)&addr, sizeof(addr), timeout_ms)) {
-        CLOSE_SOCKET(s); return "";
-    }
 
     char buf[MAX_BANNER_SIZE] = {};
     int n = recv_with_timeout(s, buf, sizeof(buf)-1, timeout_ms);
@@ -840,7 +859,7 @@ string probePOP3(const string& host, int port, int timeout_ms) {
         char buf2[4096] = {};
         recv_with_timeout(s, buf2, sizeof(buf2)-1, timeout_ms);
     }
-    CLOSE_SOCKET(s);
+    flush_socket_cache();
 
     if (n <= 0) return "";
     string raw = sanitize_banner(buf, n);
@@ -855,16 +874,8 @@ string probePOP3(const string& host, int port, int timeout_ms) {
 }
 
 string probeIMAP(const string& host, int port, int timeout_ms) {
-    SOCKET s = create_tcp_socket();
+    SOCKET s = get_or_create_socket(host, port, timeout_ms);
     if (IS_INVALID(s)) return "";
-
-    struct sockaddr_in addr;
-    if (resolve_host(host, addr) != 0) { CLOSE_SOCKET(s); return ""; }
-    addr.sin_port = htons((uint16_t)port);
-
-    if (!connect_with_timeout(s, (struct sockaddr*)&addr, sizeof(addr), timeout_ms)) {
-        CLOSE_SOCKET(s); return "";
-    }
 
     char buf[MAX_BANNER_SIZE] = {};
     int n = recv_with_timeout(s, buf, sizeof(buf)-1, timeout_ms);
@@ -875,7 +886,7 @@ string probeIMAP(const string& host, int port, int timeout_ms) {
         char buf2[4096] = {};
         recv_with_timeout(s, buf2, sizeof(buf2)-1, timeout_ms);
     }
-    CLOSE_SOCKET(s);
+    flush_socket_cache();
 
     if (n <= 0) return "";
     string raw = sanitize_banner(buf, n);
@@ -890,22 +901,13 @@ string probeIMAP(const string& host, int port, int timeout_ms) {
 }
 
 string probeMySQL(const string& host, int port, int timeout_ms) {
-    SOCKET s = create_tcp_socket();
+    SOCKET s = get_or_create_socket(host, port, timeout_ms);
     if (IS_INVALID(s)) return "";
-
-    struct sockaddr_in addr;
-    if (resolve_host(host, addr) != 0) { CLOSE_SOCKET(s); return ""; }
-    addr.sin_port = htons((uint16_t)port);
-
-    if (!connect_with_timeout(s, (struct sockaddr*)&addr, sizeof(addr), timeout_ms)) {
-        CLOSE_SOCKET(s); return "";
-    }
 
     char buf[MAX_BANNER_SIZE] = {};
     int n = recv_with_timeout(s, buf, sizeof(buf)-1, timeout_ms);
-    CLOSE_SOCKET(s);
 
-    if (n <= 0) return "";
+    if (n <= 0) { flush_socket_cache(); return ""; }
     string result = sanitize_banner(buf, n);
 
     if (n > 4) {
@@ -920,20 +922,13 @@ string probeMySQL(const string& host, int port, int timeout_ms) {
         }
     }
 
+    flush_socket_cache();
     return result;
 }
 
 string probeHTTPS(const string& host, int port, int timeout_ms) {
-    SOCKET s = create_tcp_socket();
+    SOCKET s = get_or_create_socket(host, port, timeout_ms);
     if (IS_INVALID(s)) return "";
-
-    struct sockaddr_in addr;
-    if (resolve_host(host, addr) != 0) { CLOSE_SOCKET(s); return ""; }
-    addr.sin_port = htons((uint16_t)port);
-
-    if (!connect_with_timeout(s, (struct sockaddr*)&addr, sizeof(addr), timeout_ms)) {
-        CLOSE_SOCKET(s); return "";
-    }
 
     uint8_t client_hello[] = {
         0x16, 0x03, 0x01, 0x00, 0x31,
@@ -956,7 +951,6 @@ string probeHTTPS(const string& host, int port, int timeout_ms) {
     if (n > 0 && (uint8_t)buf[0] == 0x16) {
         char buf2[4096] = {};
         int n2 = recv_with_timeout(s, buf2, sizeof(buf2)-1, 500);
-        CLOSE_SOCKET(s);
 
         string combined;
         combined.append(sanitize_banner(buf, n));
@@ -981,10 +975,11 @@ string probeHTTPS(const string& host, int port, int timeout_ms) {
             }
         }
 
+        flush_socket_cache();
         return tls_info + " | cert-hints: " + cert_info.substr(0, 80);
     }
 
-    CLOSE_SOCKET(s);
+    flush_socket_cache();
 
     if (n <= 0) return "";
     string raw = sanitize_banner(buf, n);
@@ -996,7 +991,7 @@ string probeHTTPS(const string& host, int port, int timeout_ms) {
  * OS DETECTION ENGINE
  * ───────────────────────────────────────────────────────────────── */
 
-static int detect_ttl(const string& host) {
+static int detect_ttl(const string& host) noexcept {
     (void)host;
     return -1;
 }
@@ -1010,13 +1005,13 @@ static OsFingerprint detect_os_from_banner(const string& banner, const vector<Os
 
     for (const auto& entry : db) {
         try {
-            regex re(entry.pattern, regex_constants::icase);
+            regex re = get_cached_regex(entry.pattern);
             if (regex_search(banner, re)) {
                 if (entry.confidence > result.confidence) {
                     result.os_name = entry.os_name;
                     result.os_version = entry.os_version;
                     result.confidence = entry.confidence;
-                    result.clues.push_back("banner matched: " + entry.pattern);
+                    result.clues.emplace_back("banner matched: " + entry.pattern);
                 }
             }
         } catch (...) {}
@@ -1025,8 +1020,8 @@ static OsFingerprint detect_os_from_banner(const string& banner, const vector<Os
     return result;
 }
 
-static OsFingerprint combine_os_detection(const string& banner, int ttl_value) {
-    auto db = build_os_db();
+static OsFingerprint combine_os_detection(const string& banner, int ttl_value) noexcept {
+    static auto db = build_os_db();
     OsFingerprint result = detect_os_from_banner(banner, db);
 
     if (ttl_value > 0) {
@@ -1039,7 +1034,7 @@ static OsFingerprint combine_os_detection(const string& banner, int ttl_value) {
             ttl_os = "Network Device";
         }
 
-        result.clues.push_back("TTL=" + to_string(ttl_value) + " suggests " + ttl_os);
+        result.clues.emplace_back("TTL=" + to_string(ttl_value) + " suggests " + ttl_os);
 
         if (result.confidence < 0.3f) {
             result.os_name = ttl_os;
@@ -1054,7 +1049,7 @@ static OsFingerprint combine_os_detection(const string& banner, int ttl_value) {
  * PORT-TO-SERVICE MAPPING
  * ───────────────────────────────────────────────────────────────── */
 
-static string get_port_service(int port) {
+static string get_port_service(int port) noexcept {
     static const map<int,string> port_svc = {
         {21,"FTP"},{22,"SSH"},{23,"Telnet"},{25,"SMTP"},{53,"DNS"},
         {80,"HTTP"},{110,"POP3"},{135,"RPC"},{139,"NetBIOS"},{143,"IMAP"},
@@ -1137,11 +1132,11 @@ struct VersionMatch {
 
 static vector<VersionMatch> match_version_patterns(const string& banner) {
     vector<VersionMatch> matches;
-    auto patterns = build_version_patterns();
+    static auto patterns = build_version_patterns();
 
     for (const auto& p : patterns) {
         try {
-            regex re(p.pattern, regex_constants::icase);
+            regex re = get_cached_regex(p.pattern);
             smatch m;
             if (regex_search(banner, m, re)) {
                 VersionMatch vm;
@@ -1159,7 +1154,7 @@ static vector<VersionMatch> match_version_patterns(const string& banner) {
                     }
                 }
 
-                matches.push_back(vm);
+                matches.emplace_back(vm);
             }
         } catch (...) {}
     }
@@ -1171,7 +1166,7 @@ static vector<VersionMatch> match_version_patterns(const string& banner) {
  * CVE CHECKING ENGINE
  * ───────────────────────────────────────────────────────────────── */
 
-static bool version_lte(const string& v1, const string& v2) {
+static bool version_lte(const string& v1, const string& v2) noexcept {
     auto parse = [](const string& v) -> vector<int> {
         vector<int> parts;
         stringstream ss(v);
@@ -1182,8 +1177,8 @@ static bool version_lte(const string& v1, const string& v2) {
                 if (isdigit(c)) num += c;
                 else break;
             }
-            try { parts.push_back(stoi(num)); }
-            catch (...) { parts.push_back(0); }
+            try { parts.emplace_back(stoi(num)); }
+            catch (...) { parts.emplace_back(0); }
         }
         return parts;
     };
@@ -1202,7 +1197,7 @@ static bool version_lte(const string& v1, const string& v2) {
 
 static vector<string> check_vulnerabilities(const string& product, const string& version) {
     vector<string> vulns;
-    auto cve_db = build_cve_db();
+    static auto cve_db = build_cve_db();
 
     for (const auto& cve : cve_db) {
         string sl = product, pl = cve.service_pattern;
@@ -1218,7 +1213,7 @@ static vector<string> check_vulnerabilities(const string& product, const string&
                 snprintf(buf, sizeof(buf), " (CVSS:%.1f)", cve.cvss);
                 v += buf;
             }
-            vulns.push_back(v);
+            vulns.emplace_back(v);
             continue;
         }
 
@@ -1228,7 +1223,7 @@ static vector<string> check_vulnerabilities(const string& product, const string&
                 char buf[32];
                 snprintf(buf, sizeof(buf), " (CVSS:%.1f)", cve.cvss);
                 v += buf;
-                vulns.push_back(v);
+                vulns.emplace_back(v);
             }
         }
     }
@@ -1240,7 +1235,7 @@ static vector<string> check_vulnerabilities(const string& product, const string&
  * SERVICE SCANNER
  * ───────────────────────────────────────────────────────────────── */
 
-static void set_port_state(ScanResult& result, bool open) {
+static void set_port_state(ScanResult& result, bool open) noexcept {
     result.state = open ? "OPEN" : "CLOSED/FILTERED";
 }
 
@@ -1294,26 +1289,19 @@ ScanResult scan_service(const string& host, int port, int timeout_ms) {
         default: {
             banner = probeHTTP(host, probe_port, timeout_ms);
             if (banner.empty()) {
-                SOCKET s = create_tcp_socket();
+                SOCKET s = get_or_create_socket(host, probe_port, timeout_ms);
                 if (!IS_INVALID(s)) {
-                    struct sockaddr_in addr;
-                    if (resolve_host(host, addr) == 0) {
-                        addr.sin_port = htons((uint16_t)port);
-                        if (connect_with_timeout(s, (struct sockaddr*)&addr, sizeof(addr), timeout_ms)) {
-                            char buf[MAX_BANNER_SIZE] = {};
-                            int n = recv_with_timeout(s, buf, sizeof(buf)-1, timeout_ms);
-                            if (n > 0) {
-                                banner = sanitize_banner(buf, n);
-                                istringstream iss(banner);
-                                string line;
-                                getline(iss, line);
-                                if (!line.empty() && line.back() == '\r') line.pop_back();
-                                if (line.size() > 2) banner = line;
-                                else banner = banner.substr(0, 200);
-                            }
-                        }
+                    char buf[MAX_BANNER_SIZE] = {};
+                    int n = recv_with_timeout(s, buf, sizeof(buf)-1, timeout_ms);
+                    if (n > 0) {
+                        banner = sanitize_banner(buf, n);
+                        istringstream iss(banner);
+                        string line;
+                        getline(iss, line);
+                        if (!line.empty() && line.back() == '\r') line.pop_back();
+                        if (line.size() > 2) banner = line;
+                        else banner = banner.substr(0, 200);
                     }
-                    CLOSE_SOCKET(s);
                 }
 
                 if (banner.empty()) {
@@ -1357,7 +1345,7 @@ ScanResult scan_service(const string& host, int port, int timeout_ms) {
             cpe += prod_lower;
             if (!m.version.empty()) cpe += ":" + m.version;
             result.cpe = cpe;
-            result.cpe_list.push_back(cpe);
+            result.cpe_list.emplace_back(cpe);
         }
     }
 
@@ -1388,6 +1376,38 @@ ScanResult scan_service(const string& host, int port, int timeout_ms) {
         transform(bl.begin(), bl.end(), bl.begin(), ::tolower);
         if (bl.find("openssh 5") != string::npos || bl.find("openssh 6") != string::npos ||
             bl.find("apache/2.2") != string::npos || bl.find("openssl/1.0") != string::npos ||
+
+struct SSLDeleter {
+    void operator()(SSL* s) const noexcept { if (s) SSL_free(s); }
+};
+struct SSLCTXDeleter {
+    void operator()(SSL_CTX* c) const noexcept { if (c) SSL_CTX_free(c); }
+};
+struct X509Deleter {
+    void operator()(X509* x) const noexcept { if (x) X509_free(x); }
+};
+struct BIODeleter {
+    void operator()(BIO* b) const noexcept { if (b) BIO_free(b); }
+};
+struct EVP_PKEYDeleter {
+    void operator()(EVP_PKEY* k) const noexcept { if (k) EVP_PKEY_free(k); }
+};
+struct BNDeleter {
+    void operator()(BIGNUM* bn) const noexcept { if (bn) BN_free(bn); }
+};
+struct GENERALNAMESDeleter {
+    void operator()(GENERAL_NAMES* n) const noexcept { if (n) GENERAL_NAMES_free(n); }
+};
+
+using UniqueSSL       = std::unique_ptr<SSL, SSLDeleter>;
+using UniqueSSLCTX    = std::unique_ptr<SSL_CTX, SSLCTXDeleter>;
+using UniqueX509      = std::unique_ptr<X509, X509Deleter>;
+using UniqueBIO       = std::unique_ptr<BIO, BIODeleter>;
+using UniqueEVP_PKEY  = std::unique_ptr<EVP_PKEY, EVP_PKEYDeleter>;
+using UniqueBN        = std::unique_ptr<BIGNUM, BNDeleter>;
+using UniqueGeneralNames = std::unique_ptr<GENERAL_NAMES, GENERALNAMESDeleter>;
+
+
             bl.find("ssl 3") != string::npos || bl.find("tls 1.0") != string::npos ||
             bl.find("exim 4.9") != string::npos || bl.find("pure-ftpd 1.0") != string::npos) {
             score += 25.0;
@@ -1414,6 +1434,7 @@ ScanResult scan_service(const string& host, int port, int timeout_ms) {
         else result.risk_level = "LOW";
     }
 
+    flush_socket_cache();
     return result;
 }
 
@@ -1442,7 +1463,7 @@ public:
     }
 
     template<class F>
-    void enqueue(F&& f) {
+    void enqueue(F&& f) noexcept {
         {
             lock_guard<mutex> lock(queue_mutex);
             tasks.emplace(forward<F>(f));
@@ -1496,7 +1517,7 @@ static string escape_json(const string& s) {
     return out;
 }
 
-static void print_scan_json(const ScanResult& r) {
+static void print_scan_json(const ScanResult& r) noexcept {
     printf("{\"port\":%d,\"state\":\"%s\",\"service\":\"%s\",\"product\":\"%s\","
            "\"version\":\"%s\",\"os_hint\":\"%s\",\"confidence\":%.2f,"
            "\"risk_score\":%.1f,\"risk_level\":\"%s\",\"ssl\":%s,\"cpe\":\"%s\","
@@ -1523,7 +1544,7 @@ static void print_scan_json(const ScanResult& r) {
     printf("]}\n");
 }
 
-static void print_scan_text(const ScanResult& r) {
+static void print_scan_text(const ScanResult& r) noexcept {
     const char* risk_color =
         r.risk_level == "CRITICAL" ? "\033[1;31m" :
         r.risk_level == "HIGH"     ? "\033[33m"   :
@@ -1547,7 +1568,7 @@ static void print_scan_text(const ScanResult& r) {
  * MAIN PROGRAM
  * ───────────────────────────────────────────────────────────────── */
 
-static void print_banner() {
+static void print_banner() noexcept {
     printf("\n\033[1;35m");
     printf("  +====================================================+\n");
     printf("  |  \xe2\x9a\xa1 HackIT PortStorm v4.1  \xe2\x80\x94  C++ Scanner Engine      |\n");
@@ -1577,8 +1598,8 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    const char* host      = argv[1];
-    const char* port_spec = argv[2];
+    constexpr char* host      = argv[1];
+    constexpr char* port_spec = argv[2];
     int timeout_ms        = DEFAULT_TIMEOUT_MS;
     bool json_mode        = false;
     int thread_count      = THREAD_POOL_SIZE;
@@ -1620,9 +1641,9 @@ int main(int argc, char* argv[]) {
             int start = stoi(token.substr(0, dash));
             int end   = stoi(token.substr(dash + 1));
             if (start > end) swap(start, end);
-            for (int p = start; p <= end; p++) ports.push_back(p);
+            for (int p = start; p <= end; p++) ports.emplace_back(p);
         } else {
-            try { ports.push_back(stoi(token)); }
+            try { ports.emplace_back(stoi(token)); }
             catch (...) {}
         }
     }
@@ -1659,7 +1680,7 @@ int main(int argc, char* argv[]) {
                 ScanResult r = scan_service(host, port, timeout_ms);
                 {
                     lock_guard<mutex> lock(results_mutex);
-                    results.push_back(r);
+                    results.emplace_back(r);
                 }
                 completed++;
             });

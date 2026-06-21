@@ -1,6 +1,59 @@
 local stdnse = require "stdnse"
 local http = require "http"
 local json = require "json"
+local nmap = require "nmap"
+local shortport = require "shortport"
+
+
+
+-- nmp function cache
+local nmap_register = nmap.register_script
+local nmap_settitle = nmap.set_title
+local nmap_resolve = nmap.resolve
+local nmap_get_port_state = nmap.get_port_state
+local nmap_set_port_state = nmap.set_port_state
+local comm = nmap.comm
+local new_socket = nmap.new_socket
+local get_timeout = nmap.get_timeout
+
+-- Performance optimizations
+local format = string.format
+local lower = string.lower
+local upper = string.upper
+local byte = string.byte
+local sub = string.sub
+local match = string.match
+local gmatch = string.gmatch
+local gsub = string.gsub
+local find = string.find
+local rep = string.rep
+local char = string.char
+local concat = table.concat
+local insert = table.insert
+local remove = table.remove
+local sort = table.sort
+local move = table.move or function(a1, f, e, t, a2)
+    if not a2 then a2 = a1 end
+    for i = f, e do a2[t + i - f] = a1[i] end
+    return a2
+end
+local tostring = tostring
+local tonumber = tonumber
+local type = type
+local pcall = pcall
+local pairs = pairs
+local ipairs = ipairs
+local unpack = unpack or table.unpack
+local setmetatable = setmetatable
+local getmetatable = getmetatable
+local error = error
+local select = select
+local clock = nmap.clock
+local msleep = nmap.msleep
+local sleep = stdnse.sleep
+local strsplit = stdnse.strsplit
+local format_output = stdnse.format_output
+local output_table = stdnse.output_table
 
 description = [[Retrieves information from InfluxDB instances via the HTTP API (port 8086). Returns version, status, available databases, retention policies, continuous queries, users, and diagnostic data. Supports both InfluxDB 1.x and 2.x.]]
 author = "HackIT Framework"
@@ -31,11 +84,11 @@ local influx_paths = {
 }
 
 action = function(host, port)
-  local result = stdnse.output_table()
+  local result = output_table()
 
   local ok, ping_resp = pcall(http.get, host.ip, port.number, "/ping", { timeout = 5000 })
   if not ok or not ping_resp then
-    return stdnse.format_output(false, "InfluxDB not detected")
+    return format_output(false, "InfluxDB not detected")
   end
 
   if ping_resp.status == 204 then
@@ -71,7 +124,7 @@ action = function(host, port)
             if r.series and r.series[1] and r.series[1].values then
               local values = {}
               for _, row in ipairs(r.series[1].values) do
-                table.insert(values, row[1])
+                insert(values, row[1])
               end
               if path:find("SHOW+DATABASES") then
                 result.databases = values
@@ -120,5 +173,5 @@ action = function(host, port)
     end
   end
 
-  return stdnse.format_output(true, result)
+  return format_output(true, result)
 end

@@ -50,6 +50,7 @@
 #include <fcntl.h>
 #include <signal.h>
 #include <poll.h>
+#include <string_view>
 
 // ---------------------------------------------------------------------------
 // TCP option kinds (RFC 793, 2018, 1323)
@@ -331,46 +332,61 @@ static const std::vector<OSSignature> kSignatures = {
 };
 
 // ---------------------------------------------------------------------------
-// Signal-safe flag for alarm
+// DNS cache
+// ---------------------------------------------------------------------------
+static std::string g_last_host;
+static struct sockaddr_in g_last_addr;
+static bool g_last_resolved = false;
+
+// ---------------------------------------------------------------------------
+// Signal-safe flag for alarm (kept for backward compat, no longer used)
 // ---------------------------------------------------------------------------
 static volatile bool g_timedout = false;
-static void sig_alarm(int) { g_timedout = true; }
+static void sig_alarm(int) noexcept { g_timedout = true; }
 
 // ---------------------------------------------------------------------------
 // Utilities
 // ---------------------------------------------------------------------------
-static std::string trim(const std::string& s) {
+static std::string trim(std::string_view s) {
     size_t l = s.find_first_not_of(" \t\r\n");
     size_t r = s.find_last_not_of(" \t\r\n");
-    return (l == std::string::npos) ? "" : s.substr(l, r - l + 1);
+    return ((l == std::string::npos) ? std::string() : std::string(s.substr(l, r - l + 1)));
 }
 
-static std::vector<std::string> split(const std::string& s, char d) {
+static std::vector<std::string> split(std::string_view s, char d) {
     std::vector<std::string> out;
-    std::istringstream ss(s);
+    std::string _ss_tmp(s); std::istringstream ss(_ss_tmp);
     std::string item;
     while (std::getline(ss, item, d))
-        out.push_back(trim(item));
+        out.emplace_back(trim(item));
     return out;
 }
 
-static bool is_root() { return geteuid() == 0; }
+static bool is_root() noexcept { return geteuid() == 0; }
 
 // ---------------------------------------------------------------------------
 // Network helpers
 // ---------------------------------------------------------------------------
-static bool resolve_host(const std::string& host, struct sockaddr_in* addr) {
+static bool resolve_host(std::string_view host, struct sockaddr_in* addr) noexcept {
+    if (g_last_resolved && host == g_last_host) {
+        *addr = g_last_addr;
+        return true;
+    }
     struct addrinfo hints{}, *res = nullptr;
     hints.ai_family = AF_INET;
     hints.ai_socktype = SOCK_STREAM;
-    int r = getaddrinfo(host.c_str(), nullptr, &hints, &res);
+    std::string h(host);
+    int r = getaddrinfo(h.c_str(), nullptr, &hints, &res);
     if (r != 0 || !res) return false;
     *addr = *reinterpret_cast<struct sockaddr_in*>(res->ai_addr);
+    g_last_addr = *addr;
+    g_last_host = host;
+    g_last_resolved = true;
     freeaddrinfo(res);
     return true;
 }
 
-static uint16_t checksum(void* buf, int len) {
+static uint16_t checksum(void* buf, int len) noexcept {
     uint32_t sum = 0;
     uint16_t* ptr = (uint16_t*)buf;
     while (len > 1) { sum += *ptr++; len -= 2; }
@@ -379,7 +395,7 @@ static uint16_t checksum(void* buf, int len) {
     return ~(uint16_t)sum;
 }
 
-static uint16_t tcp_checksum(struct iphdr* ip, struct tcphdr* tcp, int tcp_len) {
+static uint16_t tcp_checksum(struct iphdr* ip, struct tcphdr* tcp, int tcp_len) noexcept {
     PseudoHeader ph;
     ph.src   = ip->saddr;
     ph.dst   = ip->daddr;
@@ -397,7 +413,7 @@ static uint16_t tcp_checksum(struct iphdr* ip, struct tcphdr* tcp, int tcp_len) 
 // ---------------------------------------------------------------------------
 // Set socket non-blocking
 // ---------------------------------------------------------------------------
-static bool set_nonblock(int fd, bool nb) {
+static bool set_nonblock(int fd, bool nb) noexcept {
     int fl = fcntl(fd, F_GETFL, 0);
     if (fl < 0) return false;
     fcntl(fd, F_SETFL, nb ? (fl | O_NONBLOCK) : (fl & ~O_NONBLOCK));
@@ -513,12 +529,10 @@ static bool syn_probe(const struct sockaddr_in& dst, int dport,
     // We'll just ignore packets that aren't what we want
 
     while (std::chrono::steady_clock::now() < deadline) {
-        fd_set fds;
-        FD_ZERO(&fds);
-        FD_SET(raw, &fds);
-        struct timeval tv{0, 200000}; // 200ms
-
-        int rv = select(raw + 1, &fds, nullptr, nullptr, &tv);
+        struct pollfd pfd;
+        pfd.fd = raw;
+        pfd.events = POLLIN;
+        int rv = poll(&pfd, 1, 200);
         if (rv <= 0) {
             if (rv < 0 && errno != EINTR) break;
             continue;
@@ -614,18 +628,24 @@ static bool connect_probe(const struct sockaddr_in& dst, int dport,
     struct sockaddr_in d = dst;
     d.sin_port = htons(dport);
 
-    g_timedout = false;
-    signal(SIGALRM, sig_alarm);
-    alarm(std::max(1, timeout_ms / 1000));
-
-    bool ok = (connect(fd, (struct sockaddr*)&d, sizeof(d)) == 0);
-    alarm(0);
-    signal(SIGALRM, SIG_DFL);
-
-    if (!ok) {
+    set_nonblock(fd, true);
+    int rc = connect(fd, (struct sockaddr*)&d, sizeof(d));
+    if (rc < 0 && errno != EINPROGRESS) {
         close(fd);
         return false;
     }
+    if (rc != 0) {
+        struct pollfd pfd;
+        pfd.fd = fd;
+        pfd.events = POLLOUT;
+        rc = poll(&pfd, 1, timeout_ms);
+        if (rc <= 0) { close(fd); return false; }
+        int so_err = 0;
+        socklen_t err_len = sizeof(so_err);
+        getsockopt(fd, SOL_SOCKET, SO_ERROR, (char*)&so_err, &err_len);
+        if (so_err != 0) { close(fd); return false; }
+    }
+    set_nonblock(fd, false);
 
     out.connected = true;
 
@@ -675,16 +695,22 @@ static bool connect_probe(const struct sockaddr_in& dst, int dport,
     }
 
     if (!probe.empty()) {
-        // Send probe
-        g_timedout = false;
-        signal(SIGALRM, sig_alarm);
-        alarm(std::max(1, timeout_ms / 1000));
-        send(fd, probe.data(), probe.size(), 0);
-        alarm(0);
+        // Send probe with poll
+        struct pollfd pfd;
+        pfd.fd = fd;
+        pfd.events = POLLOUT;
+        int prc = poll(&pfd, 1, timeout_ms);
+        if (prc > 0) send(fd, probe.data(), probe.size(), 0);
 
-        // Read response (first 2KB)
+        // Read response (first 2KB) with poll
+        pfd.fd = fd;
+        pfd.events = POLLIN;
+        prc = poll(&pfd, 1, timeout_ms);
         char buf[2048];
-        ssize_t n = recv(fd, buf, sizeof(buf) - 1, 0);
+        ssize_t n = 0;
+        if (prc > 0) {
+            n = recv(fd, buf, sizeof(buf) - 1, 0);
+        }
         if (n > 0) {
             buf[n] = 0;
             banner = std::string(buf, n);
@@ -711,12 +737,16 @@ static bool connect_probe(const struct sockaddr_in& dst, int dport,
             0x04, 0x01, 0x04, 0x02, 0x04, 0x03, 0x03, 0x01, 0x03, 0x02, 0x03,
             0x03, 0x02, 0x01, 0x02, 0x02, 0x02, 0x03
         };
-        g_timedout = false;
-        signal(SIGALRM, sig_alarm);
-        alarm(std::max(1, timeout_ms / 1000));
-        send(fd, tls_ch, sizeof(tls_ch), 0);
-        ssize_t n = recv(fd, ch, sizeof(ch) - 1, 0);
-        alarm(0);
+        struct pollfd pfd;
+        pfd.fd = fd;
+        pfd.events = POLLOUT;
+        int prc = poll(&pfd, 1, timeout_ms);
+        if (prc > 0) send(fd, tls_ch, sizeof(tls_ch), 0);
+        pfd.fd = fd;
+        pfd.events = POLLIN;
+        prc = poll(&pfd, 1, timeout_ms);
+        ssize_t n = 0;
+        if (prc > 0) n = recv(fd, ch, sizeof(ch) - 1, 0);
         if (n > 0) {
             ch[n] = 0;
             banner = std::string(ch, n);
@@ -739,7 +769,7 @@ static bool connect_probe(const struct sockaddr_in& dst, int dport,
 // ---------------------------------------------------------------------------
 // ICMP ping for TTL guess (raw socket for root, system ping fallback)
 // ---------------------------------------------------------------------------
-static int ping_ttl(const struct sockaddr_in& dst, int timeout_ms) {
+static int ping_ttl(const struct sockaddr_in& dst, int timeout_ms) noexcept {
     if (is_root()) {
         int fd = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
         if (fd >= 0) {
@@ -762,11 +792,10 @@ static int ping_ttl(const struct sockaddr_in& dst, int timeout_ms) {
 
             auto deadline = start + std::chrono::milliseconds(timeout_ms);
             while (std::chrono::steady_clock::now() < deadline) {
-                fd_set fds;
-                FD_ZERO(&fds);
-                FD_SET(fd, &fds);
-                struct timeval tv{0, 200000};
-                if (select(fd + 1, &fds, nullptr, nullptr, &tv) <= 0) continue;
+                struct pollfd pfd;
+                pfd.fd = fd;
+                pfd.events = POLLIN;
+                if (poll(&pfd, 1, 200) <= 0) continue;
                 fromlen = sizeof(from);
                 int n = recvfrom(fd, buf, sizeof(buf), 0,
                                  (struct sockaddr*)&from, &fromlen);
@@ -803,7 +832,7 @@ static int ping_ttl(const struct sockaddr_in& dst, int timeout_ms) {
 // ---------------------------------------------------------------------------
 // Extract meaningful strings from banner
 // ---------------------------------------------------------------------------
-static std::string extract_banner_info(const std::string& raw) {
+static std::string extract_banner_info(std::string_view raw) {
     std::string out;
     for (unsigned char c : raw) {
         if (c >= 32 && c < 127) out += c;
@@ -823,7 +852,7 @@ static std::string extract_banner_info(const std::string& raw) {
 // Score a signature against probe results
 // ---------------------------------------------------------------------------
 static int score_signature(const OSSignature& sig, const ProbeResult& pr,
-                           const std::map<std::string,std::string>& banners)
+                           const std::unordered_map<std::string,std::string>& banners)
 {
     int score = 0;
     int max_possible = 0;
@@ -934,7 +963,7 @@ static int score_signature(const OSSignature& sig, const ProbeResult& pr,
 // ---------------------------------------------------------------------------
 // Main detection logic
 // ---------------------------------------------------------------------------
-static Fingerprint detect_os(const std::string& host,
+static Fingerprint detect_os(std::string_view host,
                              const std::vector<int>& ports,
                              int timeout_ms)
 {
@@ -953,18 +982,20 @@ static Fingerprint detect_os(const std::string& host,
 
     // Phase 2: SYN probes for TCP fingerprinting (requires root)
     std::vector<ProbeResult> syn_results;
+    syn_results.reserve(256);
     for (int port : ports) {
         ProbeResult pr;
         if (syn_probe(dst, port, pr, timeout_ms)) {
             pr.connected = true;
-            syn_results.push_back(pr);
+            syn_results.emplace_back(pr);
         }
     }
 
     // Phase 3: Connect + banner grab
-    std::map<int, std::string> raw_banners;
-    std::map<std::string, std::string> banners_by_service;
+    std::unordered_map<int, std::string> raw_banners;
+    std::unordered_map<std::string, std::string> banners_by_service;
     std::vector<ProbeResult> connect_results;
+    connect_results.reserve(256);
     for (int port : ports) {
         ProbeResult pr;
         std::string b;
@@ -990,7 +1021,7 @@ static Fingerprint detect_os(const std::string& host,
             if (!merged && ping_ttl_val > 0 && pr.ttl == 0)
                 pr.ttl = ping_ttl_val;
 
-            connect_results.push_back(pr);
+            connect_results.emplace_back(pr);
             if (!b.empty()) {
                 raw_banners[port] = b;
                 std::string cleaned = extract_banner_info(b);
@@ -1043,11 +1074,13 @@ static Fingerprint detect_os(const std::string& host,
     if (best_probe.ttl == 0 && ping_ttl_val > 0)
         best_probe.ttl = ping_ttl_val;
 
-    // Phase 5: Signature matching
+    // Phase 5: Signature matching (using cached static DB)
+    (void)kSignatures;
+    static const std::vector<OSSignature>* cached_sigs = &kSignatures;
     std::vector<std::pair<int, const OSSignature*>> scored;
     int best_score = 0;
 
-    for (auto& sig : kSignatures) {
+    for (auto& sig : *cached_sigs) {
         int s = score_signature(sig, best_probe, banners_by_service);
         if (s > 0) {
             scored.emplace_back(s, &sig);
@@ -1096,7 +1129,7 @@ static Fingerprint detect_os(const std::string& host,
 
         // Banner-based fallback
         for (auto& [svc, bnr] : banners_by_service) {
-            std::string b = bnr;
+            std::string b = std::string(bnr);
             std::transform(b.begin(), b.end(), b.begin(), ::tolower);
             int pconf = result.confidence;
             if (b.find("ubuntu") != std::string::npos)
@@ -1183,7 +1216,7 @@ static Fingerprint detect_os(const std::string& host,
     // Collected open ports
     for (int p : ports) {
         if (raw_banners.count(p))
-            result.open_ports.push_back(p);
+            result.open_ports.emplace_back(p);
     }
 
     return result;
@@ -1192,7 +1225,7 @@ static Fingerprint detect_os(const std::string& host,
 // ---------------------------------------------------------------------------
 // JSON output
 // ---------------------------------------------------------------------------
-static std::string json_escape(const std::string& s) {
+static std::string json_escape(std::string_view s) {
     std::string out;
     out.reserve(s.size() + 4);
     for (unsigned char c : s) {
@@ -1208,7 +1241,7 @@ static std::string json_escape(const std::string& s) {
     return out;
 }
 
-static std::string to_json(const Fingerprint& fp, const std::string& target,
+static std::string to_json(const Fingerprint& fp, std::string_view target,
                            const std::vector<int>& ports, int timeout)
 {
     std::ostringstream j;
@@ -1258,7 +1291,7 @@ int main(int argc, char* argv[]) {
         std::string pstr = argv[2];
         ports.clear();
         for (auto& s : split(pstr, ',')) {
-            if (!s.empty()) ports.push_back(std::stoi(s));
+            if (!s.empty()) ports.emplace_back(std::stoi(s));
         }
         if (ports.empty()) ports = {22, 80, 443, 21, 25, 8080};
     }
@@ -1278,7 +1311,7 @@ int main(int argc, char* argv[]) {
     Fingerprint fp = detect_os(host, ports, timeout);
 
     // Output JSON
-    std::cout << to_json(fp, host, ports, timeout) << std::endl;
+    std::cout << to_json(fp, host, ports, timeout) << '\n';
 
     return 0;
 }

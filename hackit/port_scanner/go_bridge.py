@@ -141,6 +141,12 @@ class GoEngine:
             cmd.extend(['-resolve', str(kwargs.get('resolve'))])
         if kwargs.get('dns_server'):
             cmd.extend(['-dns-server', str(kwargs.get('dns_server'))])
+
+        # Pipeline & Profile
+        if kwargs.get('pipeline'):
+            cmd.extend(['-pipeline', str(kwargs.get('pipeline'))])
+        if kwargs.get('profile'):
+            cmd.extend(['-profile', str(kwargs.get('profile'))])
             
         # HackIT Aliases (sS, sV, O, A, etc.)
         if kwargs.get('scan_syn') or kwargs.get('sS'):

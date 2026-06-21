@@ -3,6 +3,57 @@ local shortport = require "shortport"
 local stdnse = require "stdnse"
 local math = require "math"
 
+
+
+-- nmp function cache
+local nmap_register = nmap.register_script
+local nmap_settitle = nmap.set_title
+local nmap_resolve = nmap.resolve
+local nmap_get_port_state = nmap.get_port_state
+local nmap_set_port_state = nmap.set_port_state
+local comm = nmap.comm
+local new_socket = nmap.new_socket
+local get_timeout = nmap.get_timeout
+
+-- Performance optimizations
+local format = string.format
+local lower = string.lower
+local upper = string.upper
+local byte = string.byte
+local sub = string.sub
+local match = string.match
+local gmatch = string.gmatch
+local gsub = string.gsub
+local find = string.find
+local rep = string.rep
+local char = string.char
+local concat = table.concat
+local insert = table.insert
+local remove = table.remove
+local sort = table.sort
+local move = table.move or function(a1, f, e, t, a2)
+    if not a2 then a2 = a1 end
+    for i = f, e do a2[t + i - f] = a1[i] end
+    return a2
+end
+local tostring = tostring
+local tonumber = tonumber
+local type = type
+local pcall = pcall
+local pairs = pairs
+local ipairs = ipairs
+local unpack = unpack or table.unpack
+local setmetatable = setmetatable
+local getmetatable = getmetatable
+local error = error
+local select = select
+local clock = nmap.clock
+local msleep = nmap.msleep
+local sleep = stdnse.sleep
+local strsplit = stdnse.strsplit
+local format_output = stdnse.format_output
+local output_table = stdnse.output_table
+
 description = [[
 Estimates the target system's uptime by analyzing TCP timestamp options (RFC 1323)
 from SYN/ACK responses. The script establishes TCP connections to multiple open ports
@@ -34,23 +85,23 @@ local os_clock_frequencies = {
 }
 
 action = function(host, port)
-  local result = stdnse.output_table()
+  local result = output_table()
   local samples = {}
 
   for i = 1, 4 do
-    local sock = nmap.new_socket()
+    local sock = new_socket()
     sock:set_timeout(5000)
     local ok, conn_err = sock:connect(host.ip, port.number, "tcp")
     if ok then
       local info = sock:get_info()
       sock:close()
       if info and info.timestamp and info.timestamp.tsval then
-        samples[#samples + 1] = tonumber(info.timestamp.tsval) or 0
+        insert(samples, tonumber(info.timestamp.tsval) or 0)
       end
     else
       sock:close()
     end
-    nmap.msleep(300)
+    msleep(300)
   end
 
   if #samples == 0 then
@@ -71,7 +122,7 @@ action = function(host, port)
     local uptime_secs = ts_val / entry.freq
     local uptime_days = uptime_secs / 86400
     if uptime_days >= 0 and uptime_days < 5000 then
-      estimates[#estimates + 1] = {
+      insert(estimates, {)
         os_hint = entry.os,
         freq = entry.freq .. " Hz",
         uptime_seconds = math.floor(uptime_secs),
@@ -87,7 +138,7 @@ action = function(host, port)
   if #estimates > 0 then
     local best = estimates[1]
     result.best_estimate = best
-    result.uptime_human = string.format("%d days, %d hours, %d minutes",
+    result.uptime_human = format("%d days, %d hours, %d minutes",
       best.uptime_days, best.uptime_hours, best.uptime_minutes)
     result.likely_os = best.os_hint
   end

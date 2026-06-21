@@ -2,6 +2,57 @@ local nmap = require "nmap"
 local shortport = require "shortport"
 local stdnse = require "stdnse"
 
+
+
+-- nmp function cache
+local nmap_register = nmap.register_script
+local nmap_settitle = nmap.set_title
+local nmap_resolve = nmap.resolve
+local nmap_get_port_state = nmap.get_port_state
+local nmap_set_port_state = nmap.set_port_state
+local comm = nmap.comm
+local new_socket = nmap.new_socket
+local get_timeout = nmap.get_timeout
+
+-- Performance optimizations
+local format = string.format
+local lower = string.lower
+local upper = string.upper
+local byte = string.byte
+local sub = string.sub
+local match = string.match
+local gmatch = string.gmatch
+local gsub = string.gsub
+local find = string.find
+local rep = string.rep
+local char = string.char
+local concat = table.concat
+local insert = table.insert
+local remove = table.remove
+local sort = table.sort
+local move = table.move or function(a1, f, e, t, a2)
+    if not a2 then a2 = a1 end
+    for i = f, e do a2[t + i - f] = a1[i] end
+    return a2
+end
+local tostring = tostring
+local tonumber = tonumber
+local type = type
+local pcall = pcall
+local pairs = pairs
+local ipairs = ipairs
+local unpack = unpack or table.unpack
+local setmetatable = setmetatable
+local getmetatable = getmetatable
+local error = error
+local select = select
+local clock = nmap.clock
+local msleep = nmap.msleep
+local sleep = stdnse.sleep
+local strsplit = stdnse.strsplit
+local format_output = stdnse.format_output
+local output_table = stdnse.output_table
+
 description = [[
 Analyzes the local system's routing table to identify the network path to the target
 host. Parses /proc/net/route on Linux systems to extract routing entries, default
@@ -22,14 +73,14 @@ local function hex_to_ip(hex)
   if not hex or #hex ~= 8 then return nil end
   local octets = {}
   for i = 0, 3 do
-    local byte_str = string.sub(hex, i * 2 + 1, i * 2 + 2)
-    octets[#octets + 1] = tostring(tonumber(byte_str, 16) or 0)
+    local byte_str = sub(hex, i * 2 + 1, i * 2 + 2)
+    insert(octets, tostring(tonumber(byte_str, 16) or 0))
   end
-  return table.concat(octets, ".")
+  return concat(octets, ".")
 end
 
 local function ip_to_num(ip)
-  local octets = stdnse.strsplit("%.", ip)
+  local octets = strsplit("%.", ip)
   if #octets ~= 4 then return nil end
   local num = 0
   for i = 1, 4 do
@@ -46,7 +97,7 @@ local function get_route_metrics()
   local header = f:read("*l")
   for line in f:lines() do
     if line and #line > 0 then
-      local fields = stdnse.strsplit("\t", line)
+      local fields = strsplit("\t", line)
       if #fields >= 11 then
         local iface = fields[0] or fields[1]
         local dest_hex = (fields[1] or ""):gsub("%s+", "")
@@ -65,19 +116,19 @@ local function get_route_metrics()
 
         if destination and gateway then
           local flag_names = {}
-          if flags & 0x1 ~= 0 then flag_names[#flag_names + 1] = "UP" end
-          if flags & 0x2 ~= 0 then flag_names[#flag_names + 1] = "GATEWAY" end
-          if flags & 0x8 ~= 0 then flag_names[#flag_names + 1] = "HOST" end
-          if flags & 0x10 ~= 0 then flag_names[#flag_names + 1] = "REJECT" end
-          if flags & 0x20 ~= 0 then flag_names[#flag_names + 1] = "DEFAULT" end
+          if flags & 0x1 ~= 0 then insert(flag_names, "UP" end)
+          if flags & 0x2 ~= 0 then insert(flag_names, "GATEWAY" end)
+          if flags & 0x8 ~= 0 then insert(flag_names, "HOST" end)
+          if flags & 0x10 ~= 0 then insert(flag_names, "REJECT" end)
+          if flags & 0x20 ~= 0 then insert(flag_names, "DEFAULT" end)
 
-          routes[#routes + 1] = {
+          insert(routes, {)
             interface = iface,
             destination = destination,
             gateway = gateway,
             netmask = netmask or "255.255.255.255",
             metric = metric,
-            flags_hex = string.format("0x%04X", flags),
+            flags_hex = format("0x%04X", flags),
             flags = flag_names,
             ref_count = ref_count,
             use_count = use_count,
@@ -93,7 +144,7 @@ local function get_route_metrics()
 end
 
 action = function(host, port)
-  local result = stdnse.output_table()
+  local result = output_table()
   local interface_info = nmap.get_interface_info()
 
   local routes = get_route_metrics()
@@ -180,9 +231,9 @@ action = function(host, port)
   end
   local iface_list = {}
   for iface_name, _ in pairs(interfaces) do
-    iface_list[#iface_list + 1] = iface_name
+    insert(iface_list, iface_name)
   end
-  table.sort(iface_list)
+  sort(iface_list)
   result.interfaces = iface_list
 
   result.all_routes = routes

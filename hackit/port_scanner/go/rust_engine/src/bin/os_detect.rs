@@ -1,10 +1,7 @@
-use std::net::{TcpStream, ToSocketAddrs};
-use std::time::{Duration, Instant};
-use std::process::{Command, Stdio};
+use rust_port_scanner::*;
 use std::io::{Read, Write};
-
-const MIN_PORT: u16 = 1;
-const MAX_PORT: u16 = 65535;
+use std::net::TcpStream;
+use std::time::{Duration, Instant};
 
 #[derive(Debug)]
 struct TCPProbe {
@@ -34,19 +31,6 @@ struct OSFingerprint {
     signature: String,
 }
 
-fn resolve_ip(host: &str) -> Option<std::net::IpAddr> {
-    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
-        return Some(ip);
-    }
-    let addr = format!("{}:0", host);
-    if let Ok(mut addrs) = addr.to_socket_addrs() {
-        if let Some(a) = addrs.find(|a| a.is_ipv4()) {
-            return Some(a.ip());
-        }
-    }
-    None
-}
-
 fn probe_port(host: &str, port: u16, timeout_ms: u64) -> Option<TCPProbe> {
     let start = Instant::now();
     let addr = format!("{}:{}", host, port);
@@ -65,7 +49,7 @@ fn probe_port(host: &str, port: u16, timeout_ms: u64) -> Option<TCPProbe> {
     let _ = (&mut sock as &mut dyn Write).write(probe);
     let mut buf = [0u8; 4096];
     let n = (&mut sock as &mut dyn Read).read(&mut buf).ok().unwrap_or(0);
-    let elapsed = start.elapsed().as_millis();
+    let _ = start.elapsed().as_millis();
     let _ping_ttl = get_ping_ttl(host);
     drop(sock);
     Some(TCPProbe {
@@ -79,29 +63,6 @@ fn probe_port(host: &str, port: u16, timeout_ms: u64) -> Option<TCPProbe> {
         port,
         connected: n > 0,
     })
-}
-
-fn get_ping_ttl(host: &str) -> i32 {
-    if let Ok(out) = Command::new("ping")
-        .args(&["-c", "1", "-W", "2", host])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .output()
-    {
-        let s = String::from_utf8_lossy(&out.stdout);
-        for line in s.lines() {
-            if line.contains("ttl=") {
-                if let Some(pos) = line.find("ttl=") {
-                    let rest = &line[pos + 4..];
-                    let ttl_str: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-                    if let Ok(ttl) = ttl_str.parse::<i32>() {
-                        return ttl;
-                    }
-                }
-            }
-        }
-    }
-    0
 }
 
 fn classify_os(probes: &[TCPProbe]) -> OSFingerprint {
@@ -188,28 +149,6 @@ fn classify_os(probes: &[TCPProbe]) -> OSFingerprint {
     fp
 }
 
-fn parse_ports(input: &str) -> Vec<u16> {
-    let mut ports = Vec::new();
-    match input.trim().to_lowercase().as_str() {
-        "all" => return (MIN_PORT..=MAX_PORT).collect(),
-        "auto" | "top100" => {
-            return vec![22,80,443,21,25,3389,110,445,139,143,53,135,3306,8080,587,993,995,465,23,8443,8000,8888,3000,9200,6379,27017,5432,2375,11211,1433,1521,5672,9090,6443,10250,2379,5985,2376,5900,4369,50000,9042,28015,7001,8500,8200];
-        }
-        _ => {}
-    }
-    for part in input.split(',') {
-        let part = part.trim();
-        if let Some((start, end)) = part.split_once('-') {
-            let s: u16 = start.parse().unwrap_or(MIN_PORT);
-            let e: u16 = end.parse().unwrap_or(MAX_PORT);
-            for p in s..=e { ports.push(p); }
-        } else if let Ok(p) = part.parse::<u16>() {
-            ports.push(p);
-        }
-    }
-    ports.sort(); ports.dedup(); ports
-}
-
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
@@ -232,7 +171,7 @@ fn main() {
         None => { eprintln!("Failed to resolve host"); std::process::exit(1); }
     };
     eprintln!("OS_DETECT target={} ip={} ports={} timeout={}ms", host, ip, ports.len(), timeout_ms);
-    let mut probes = Vec::new();
+    let mut probes = Vec::with_capacity(ports.len().min(8));
     for &port in ports.iter().take(8) {
         if let Some(probe) = probe_port(host, port, timeout_ms) {
             probes.push(probe);

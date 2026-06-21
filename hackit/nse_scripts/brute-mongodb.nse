@@ -2,6 +2,58 @@ local stdnse = require "stdnse"
 local nmap = require "nmap"
 local openssl = require "openssl"
 local os = require "os"
+local shortport = require "shortport"
+
+
+
+-- nmp function cache
+local nmap_register = nmap.register_script
+local nmap_settitle = nmap.set_title
+local nmap_resolve = nmap.resolve
+local nmap_get_port_state = nmap.get_port_state
+local nmap_set_port_state = nmap.set_port_state
+local comm = nmap.comm
+local new_socket = nmap.new_socket
+local get_timeout = nmap.get_timeout
+
+-- Performance optimizations
+local format = string.format
+local lower = string.lower
+local upper = string.upper
+local byte = string.byte
+local sub = string.sub
+local match = string.match
+local gmatch = string.gmatch
+local gsub = string.gsub
+local find = string.find
+local rep = string.rep
+local char = string.char
+local concat = table.concat
+local insert = table.insert
+local remove = table.remove
+local sort = table.sort
+local move = table.move or function(a1, f, e, t, a2)
+    if not a2 then a2 = a1 end
+    for i = f, e do a2[t + i - f] = a1[i] end
+    return a2
+end
+local tostring = tostring
+local tonumber = tonumber
+local type = type
+local pcall = pcall
+local pairs = pairs
+local ipairs = ipairs
+local unpack = unpack or table.unpack
+local setmetatable = setmetatable
+local getmetatable = getmetatable
+local error = error
+local select = select
+local clock = nmap.clock
+local msleep = nmap.msleep
+local sleep = stdnse.sleep
+local strsplit = stdnse.strsplit
+local format_output = stdnse.format_output
+local output_table = stdnse.output_table
 
 description = [[Attempts to brute-force MongoDB credentials using SCRAM-SHA-1 SASL authentication.]]
 author = "HackIT Framework"
@@ -17,14 +69,14 @@ local function base64_encode(data)
     local n = (a or 0) * 65536 + (b or 0) * 256 + (c or 0)
     for j = 1, 4 do
       local idx = math.floor(n / (64 ^ (4 - j))) % 64
-      result[#result + 1] = b64chars:sub(idx + 1, idx + 1)
+      insert(result, b64chars:sub(idx + 1, idx + 1))
     end
   end
   local pad = (3 - #data % 3) % 3
   for i = 1, pad do
     result[#result - i + 1] = "="
   end
-  return table.concat(result)
+  return concat(result)
 end
 
 local function base64_decode(s)
@@ -40,27 +92,27 @@ local function base64_decode(s)
     bits = bits + 6
     if bits >= 8 then
       bits = bits - 8
-      result[#result + 1] = string.char(math.floor(buffer / (2 ^ bits)) % 256)
+      insert(result, char(math.floor(buffer / (2 ^ bits)) % 256))
       buffer = buffer % (2 ^ bits)
     end
   end
-  return table.concat(result)
+  return concat(result)
 end
 
 local function hex_to_bin(s)
-  return (s:gsub("..", function(cc) return string.char(tonumber(cc, 16)) end))
+  return (s:gsub("..", function(cc) return char(tonumber(cc, 16)) end))
 end
 
 local function load_list(arg_names)
   local val = stdnse.get_script_args(arg_names)
   if not val or val == "" then return {} end
-  if val:sub(1, 1) == "/" then
+  if val:byte() == 47 then
     local f, err = io.open(val, "r")
     if f then
       local lines = {}
       for line in f:lines() do
         line = line:gsub("^%s+", ""):gsub("%s+$", "")
-        if line ~= "" and line:sub(1, 1) ~= "#" then lines[#lines + 1] = line end
+        if line ~= "" and line:byte() ~= 35 then insert(lines, line end)
       end
       f:close()
       return lines
@@ -69,29 +121,29 @@ local function load_list(arg_names)
     local lines = {}
     for line in val:gmatch("[^\n]+") do
       line = line:gsub("^%s+", ""):gsub("%s+$", "")
-      if line ~= "" and line:sub(1, 1) ~= "#" then lines[#lines + 1] = line end
+      if line ~= "" and line:byte() ~= 35 then insert(lines, line end)
     end
     return lines
   end
   local items = {}
   for item in val:gmatch("[^,]+") do
     item = item:gsub("^%s+", ""):gsub("%s+$", "")
-    if item ~= "" then items[#items + 1] = item end
+    if item ~= "" then insert(items, item) end
   end
   return items
 end
 
 local function le32(n)
-  return string.char(n % 256, math.floor(n / 256) % 256, math.floor(n / 65536) % 256, math.floor(n / 16777216) % 256)
+  return char(n % 256, math.floor(n / 256) % 256, math.floor(n / 65536) % 256, math.floor(n / 16777216) % 256)
 end
 
 local function xor_bytes(a, b)
   local len = math.min(#a, #b)
   local res = {}
   for i = 1, len do
-    res[i] = string.char(string.byte(a, i) ~ string.byte(b, i))
+    res[i] = char(byte(a, i) ~ byte(b, i))
   end
-  return table.concat(res)
+  return concat(res)
 end
 
 local function hmac_sha1_raw(key, data)
@@ -102,7 +154,7 @@ end
 
 local function pbkdf2_hmac_sha1(password, salt, iterations, dkLen)
   local function int_be(n)
-    return string.char(
+    return char(
       math.floor(n / 16777216) % 256, math.floor(n / 65536) % 256,
       math.floor(n / 256) % 256, n % 256)
   end
@@ -117,29 +169,29 @@ local function pbkdf2_hmac_sha1(password, salt, iterations, dkLen)
     end
     result[b] = t
   end
-  return table.concat(result):sub(1, dkLen)
+  return concat(result):sub(1, dkLen)
 end
 
 local function bson_enc_str(val)
-  local d = val .. string.char(0)
+  local d = val .. char(0)
   return le32(#d) .. d
 end
 
 local function bson_doc(elems)
-  local body = table.concat(elems)
-  return le32(4 + #body + 1) .. body .. string.char(0)
+  local body = concat(elems)
+  return le32(4 + #body + 1) .. body .. char(0)
 end
 
 local function bson_elem_int(name, val)
-  return string.char(0x10) .. name .. string.char(0) .. le32(val)
+  return char(0x10) .. name .. char(0) .. le32(val)
 end
 
 local function bson_elem_str(name, val)
-  return string.char(0x02) .. name .. string.char(0) .. bson_enc_str(val)
+  return char(0x02) .. name .. char(0) .. bson_enc_str(val)
 end
 
 local function bson_elem_bool(name, val)
-  return string.char(0x08) .. name .. string.char(0) .. string.char(val and 1 or 0)
+  return char(0x08) .. name .. char(0) .. char(val and 1 or 0)
 end
 
 local function bson_get_val(doc, key)
@@ -153,19 +205,19 @@ local function bson_get_val(doc, key)
     while pos <= doc_len do
       local b = doc:byte(pos)
       if b == 0 then pos = pos + 1; break end
-      n = n .. string.char(b)
+      n = n .. char(b)
       pos = pos + 1
     end
     if n == key then
       if etype == 0x02 then
-        local sl = string.byte(doc, pos) + string.byte(doc, pos + 1) * 256 + string.byte(doc, pos + 2) * 65536 + string.byte(doc, pos + 3) * 16777216
+        local sl = byte(doc, pos) + byte(doc, pos + 1) * 256 + byte(doc, pos + 2) * 65536 + byte(doc, pos + 3) * 16777216
         return doc:sub(pos + 4, pos + sl - 2)
       elseif etype == 0x10 then
-        return string.byte(doc, pos) + string.byte(doc, pos + 1) * 256 + string.byte(doc, pos + 2) * 65536 + string.byte(doc, pos + 3) * 16777216
+        return byte(doc, pos) + byte(doc, pos + 1) * 256 + byte(doc, pos + 2) * 65536 + byte(doc, pos + 3) * 16777216
       elseif etype == 0x08 then
         return doc:byte(pos) == 1
       elseif etype == 0x03 then
-        local sl = string.byte(doc, pos) + string.byte(doc, pos + 1) * 256 + string.byte(doc, pos + 2) * 65536 + string.byte(doc, pos + 3) * 16777216
+        local sl = byte(doc, pos) + byte(doc, pos + 1) * 256 + byte(doc, pos + 2) * 65536 + byte(doc, pos + 3) * 16777216
         return doc:sub(pos + 4, pos + sl - 2)
       end
       return nil
@@ -173,10 +225,10 @@ local function bson_get_val(doc, key)
     if etype == 0x10 then pos = pos + 4
     elseif etype == 0x01 then pos = pos + 8
     elseif etype == 0x02 or etype == 0x03 or etype == 0x04 then
-      local sl = string.byte(doc, pos) + string.byte(doc, pos + 1) * 256 + string.byte(doc, pos + 2) * 65536 + string.byte(doc, pos + 3) * 16777216
+      local sl = byte(doc, pos) + byte(doc, pos + 1) * 256 + byte(doc, pos + 2) * 65536 + byte(doc, pos + 3) * 16777216
       pos = pos + sl
     elseif etype == 0x05 then
-      local bl = string.byte(doc, pos) + string.byte(doc, pos + 1) * 256 + string.byte(doc, pos + 2) * 65536 + string.byte(doc, pos + 3) * 16777216
+      local bl = byte(doc, pos) + byte(doc, pos + 1) * 256 + byte(doc, pos + 2) * 65536 + byte(doc, pos + 3) * 16777216
       pos = pos + 5 + bl
     elseif etype == 0x07 then pos = pos + 12
     elseif etype == 0x08 then pos = pos + 1
@@ -189,20 +241,20 @@ local function bson_get_val(doc, key)
 end
 
 local function mongo_query(coll, query)
-  local body = string.char(0, 0, 0, 0) .. coll .. string.char(0) .. string.char(0, 0, 0, 0) .. string.char(255, 255, 255, 255) .. query
+  local body = char(0, 0, 0, 0) .. coll .. char(0) .. char(0, 0, 0, 0) .. char(255, 255, 255, 255) .. query
   return le32(16 + #body) .. le32(1) .. le32(0) .. le32(2004) .. body
 end
 
 local function mongo_recv(socket)
   local hdr = socket:receive_bytes(4)
   if not hdr or #hdr < 4 then return nil end
-  local len = string.byte(hdr, 1) + string.byte(hdr, 2) * 256 + string.byte(hdr, 3) * 65536 + string.byte(hdr, 4) * 16777216
+  local len = byte(hdr, 1) + byte(hdr, 2) * 256 + byte(hdr, 3) * 65536 + byte(hdr, 4) * 16777216
   if len < 4 then return nil end
   local rest = socket:receive_bytes(len - 4)
   if not rest then return nil end
   local data = hdr .. rest
   if #data < 36 then return nil end
-  local num = string.byte(data, 29) + string.byte(data, 30) * 256 + string.byte(data, 31) * 65536 + string.byte(data, 32) * 16777216
+  local num = byte(data, 29) + byte(data, 30) * 256 + byte(data, 31) * 65536 + byte(data, 32) * 16777216
   if num == 0 or #data < 37 then return nil end
   return data:sub(37)
 end
@@ -220,7 +272,7 @@ action = function(host, port)
   else stop_on_first = (stop_on_first:lower() == "true" or stop_on_first == "1") end
 
   if #users == 0 or #passes == 0 then
-    return stdnse.format_output(false, "No credentials provided. Use brute-mongodb.users and brute-mongodb.passwords script args")
+    return format_output(false, "No credentials provided. Use brute-mongodb.users and brute-mongodb.passwords script args")
   end
 
   local start_time = os.time()
@@ -234,13 +286,13 @@ action = function(host, port)
     if stop then break end
     for _, p in ipairs(passes) do
       if stop or attempts >= max_attempts then break end
-      local socket = nmap.new_socket()
+      local socket = new_socket()
       socket:set_timeout(timeout * 1000)
       local ok, result = pcall(function()
         local status, err = socket:connect(host, port)
         if not status then errors = errors + 1; return false end
 
-        local nonce = string.format("%.0f", os.time() * 1000000)
+        local nonce = format("%.0f", os.time() * 1000000)
         local nonce_b64 = base64_encode(nonce)
         local client_first_bare = "n=" .. u .. ",r=" .. nonce_b64
         local client_first_msg = "n,," .. client_first_bare
@@ -305,16 +357,16 @@ action = function(host, port)
         errors = errors + 1
       elseif result then
         success_count = success_count + 1
-        found[#found + 1] = {user = u, password = p}
+        insert(found, {user = u, password = p})
         if stop_on_first then stop = true end
       end
       attempts = attempts + 1
-      if delay > 0 and not stop then stdnse.sleep(delay / 1000) end
+      if delay > 0 and not stop then sleep(delay / 1000) end
     end
   end
 
   local elapsed = os.time() - start_time
-  local out = stdnse.output_table()
+  local out = output_table()
   out.service = "MongoDB"
   out.port = port.number
   out.attempts = attempts

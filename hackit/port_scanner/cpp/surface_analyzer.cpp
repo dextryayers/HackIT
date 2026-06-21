@@ -8,6 +8,32 @@
 #include <vector>
 #include <map>
 #include <algorithm>
+#include <string_view>
+#include <memory>
+#include <unordered_map>
+
+
+// === Deep Performance Optimizations ===
+#ifndef OPTIMIZE_H
+#define likely(x)   __builtin_expect(!!(x), 1)
+#define unlikely(x) __builtin_expect(!!(x), 0)
+#endif
+#ifndef FORCE_INLINE
+#define FORCE_INLINE __attribute__((always_inline)) inline
+#endif
+#ifndef HOT_FUNC
+#define HOT_FUNC    __attribute__((hot))
+#endif
+#ifndef COLD_FUNC
+#define COLD_FUNC   __attribute__((cold))
+#endif
+#ifndef LIKELY
+#define LIKELY(x)   __builtin_expect(!!(x), 1)
+#endif
+#ifndef UNLIKELY
+#define UNLIKELY(x) __builtin_expect(!!(x), 0)
+#endif
+
 
 using namespace std;
 
@@ -32,14 +58,14 @@ public:
         for(auto &c : s_lower) c = tolower(c);
 
         if (s_lower.find("http") != string::npos) {
-            actions.push_back("Directory brute-force (HTTP)");
-            actions.push_back("Vulnerability scan for " + service);
+            actions.emplace_back("Directory brute-force (HTTP)");
+            actions.emplace_back("Vulnerability scan for " + service);
         } else if (s_lower.find("ssh") != string::npos) {
-            actions.push_back("SSH credential testing (Brute-force check)");
+            actions.emplace_back("SSH credential testing (Brute-force check)");
         } else if (s_lower.find("ftp") != string::npos) {
-            actions.push_back("Anonymous FTP access verification");
+            actions.emplace_back("Anonymous FTP access verification");
         } else if (s_lower.find("mysql") != string::npos || s_lower.find("postgresql") != string::npos) {
-            actions.push_back("Database remote access security audit");
+            actions.emplace_back("Database remote access security audit");
         }
         
         return actions;
@@ -50,7 +76,7 @@ extern "C" {
     #ifdef _WIN32
     __declspec(dllexport)
     #endif
-    const char* get_surface_intelligence(int open_ports, int vuln_count, const char* services_csv) {
+    const char* get_surface_intelligence(int open_ports, int vuln_count, const char* services_csv) noexcept {
         static string result;
         SurfaceAnalyzer analyzer;
         

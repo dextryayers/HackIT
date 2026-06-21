@@ -1,5 +1,58 @@
 local http = require "http"
 local stdnse = require "stdnse"
+local nmap = require "nmap"
+local shortport = require "shortport"
+
+
+
+-- nmp function cache
+local nmap_register = nmap.register_script
+local nmap_settitle = nmap.set_title
+local nmap_resolve = nmap.resolve
+local nmap_get_port_state = nmap.get_port_state
+local nmap_set_port_state = nmap.set_port_state
+local comm = nmap.comm
+local new_socket = nmap.new_socket
+local get_timeout = nmap.get_timeout
+
+-- Performance optimizations
+local format = string.format
+local lower = string.lower
+local upper = string.upper
+local byte = string.byte
+local sub = string.sub
+local match = string.match
+local gmatch = string.gmatch
+local gsub = string.gsub
+local find = string.find
+local rep = string.rep
+local char = string.char
+local concat = table.concat
+local insert = table.insert
+local remove = table.remove
+local sort = table.sort
+local move = table.move or function(a1, f, e, t, a2)
+    if not a2 then a2 = a1 end
+    for i = f, e do a2[t + i - f] = a1[i] end
+    return a2
+end
+local tostring = tostring
+local tonumber = tonumber
+local type = type
+local pcall = pcall
+local pairs = pairs
+local ipairs = ipairs
+local unpack = unpack or table.unpack
+local setmetatable = setmetatable
+local getmetatable = getmetatable
+local error = error
+local select = select
+local clock = nmap.clock
+local msleep = nmap.msleep
+local sleep = stdnse.sleep
+local strsplit = stdnse.strsplit
+local format_output = stdnse.format_output
+local output_table = stdnse.output_table
 
 description = [[Detects JBoss Java deserialization vulnerability via JMX console, HTTP invoker, and JMXInvokerServlet (CVE-2015-7501, CVE-2017-12149).]]
 author = "HackIT Framework"
@@ -35,7 +88,7 @@ local function check_endpoint(host, port, ep)
     end
   elseif req.status == 302 or req.status == 301 then
     local loc = req.headers and req.headers["location"]
-    local loc_str = type(loc) == "table" and table.concat(loc, " ") or tostring(loc or "")
+    local loc_str = type(loc) == "table" and concat(loc, " ") or tostring(loc or "")
     if loc_str:match("jboss") or loc_str:match("admin") then
       result.found = true
       result.indicator = ("redirects to %s"):format(loc_str:sub(1, 60))
@@ -79,7 +132,7 @@ action = function(host, port)
     for _, ep in ipairs(jboss_endpoints) do
       local chk = check_endpoint(host, port, ep)
       if chk and chk.found then
-        table.insert(findings, {
+        insert(findings, {
           path = chk.path,
           name = chk.name,
           status = chk.status,
@@ -88,7 +141,7 @@ action = function(host, port)
           severity = "HIGH",
         })
       elseif chk and chk.found_server then
-        table.insert(findings, {
+        insert(findings, {
           path = chk.path,
           name = chk.name,
           status = chk.status,
@@ -108,7 +161,7 @@ action = function(host, port)
     end
 
     if #findings > 0 then
-      local result = stdnse.output_table()
+      local result = output_table()
       result.cve = "CVE-2015-7501, CVE-2017-12149"
       result.severity = "CRITICAL"
       result.vulnerable = true
@@ -120,7 +173,7 @@ action = function(host, port)
       end
       if jboss_version then
         local parts = {}
-        for v in jboss_version:gmatch("%d+") do table.insert(parts, tonumber(v)) end
+        for v in jboss_version:gmatch("%d+") do insert(parts, tonumber(v)) end
         if #parts >= 2 then
           if (parts[1] == 4 and parts[2] < 22) or (parts[1] == 5 and parts[2] < 2) or (parts[1] == 6) then
             result.version_note = ("JBoss %s is within vulnerable range"):format(jboss_version)
@@ -130,7 +183,7 @@ action = function(host, port)
       return result
     end
 
-    local result = stdnse.output_table()
+    local result = output_table()
     result.cve = "CVE-2015-7501, CVE-2017-12149"
     result.severity = (server_banner:match("JBoss") or server_banner:match("WildFly")) and "MEDIUM" or "LOW"
     result.vulnerable = false
@@ -140,7 +193,7 @@ action = function(host, port)
     return result
   end)
   if not ok then
-    local result = stdnse.output_table()
+    local result = output_table()
     result.cve = "CVE-2015-7501"
     result.severity = "MEDIUM"
     result.vulnerable = false

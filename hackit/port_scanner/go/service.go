@@ -1,660 +1,130 @@
 package main
 
 import (
-	"fmt"
-	"regexp"
 	"strings"
 )
 
-// commonPorts is now globally defined in ports.go to ensure synchronization across engines.
-
-func DetectService(port int, banner string, host string) (string, string) {
-	// 0. Try Rust fingerprinting (High Power) — skip if empty or UNKNOWN
-	rustService := RustFingerprintService(banner)
-	version := RustExtractVersion(banner, rustService)
-
-	rus := strings.ToUpper(rustService)
-	if rus != "UNKNOWN" && rus != "" {
-		return rustService, version
-	}
-
-	// 1. Normalize banner
-	bannerLower := strings.ToLower(banner)
-	bannerLower = strings.ReplaceAll(bannerLower, "[ssl]: ", "")
-	bannerLower = strings.ReplaceAll(bannerLower, "[ssl] ", "")
-	bannerLower = strings.ReplaceAll(bannerLower, "[heuristic]: ", "")
-	bannerLower = strings.ReplaceAll(bannerLower, "[cert:", "")
-
-	// ── PORT-BASED PRECISE MAPPING (before banner content checks) ──
-	// These guarantee correct service names even when banners are short or generic
-	switch port {
-	case 21:
-		ver := ExtractFTPVersion(banner)
-		if ver != "" {
-			return "pure-ftpd", ver
-		}
-		return "ftp", ver
-	case 22:
-		ver := ExtractSSHVersion(banner)
-		return "ssh", ver
-	case 25:
-		ver := ExtractSMTPVersion(banner)
-		if strings.Contains(bannerLower, "exim") {
-			return "exim", ver
-		}
-		return "smtp", ver
-	case 80:
-		ver := ExtractHTTPVersion(banner)
-		if strings.Contains(bannerLower, "litespeed") {
-			return "litespeed", ver
-		}
-		return "http", ver
-	case 110:
-		ver := ExtractPOP3Version(banner)
-		if strings.Contains(bannerLower, "dovecot") {
-			return "dovecot", ver
-		}
-		return "pop3", ver
-	case 143:
-		ver := ExtractIMAPVersion(banner)
-		if strings.Contains(bannerLower, "dovecot") {
-			return "dovecot", ver
-		}
-		return "imap", ver
-	case 443:
-		ver := ExtractHTTPVersion(banner)
-		if strings.Contains(bannerLower, "litespeed") {
-			return "litespeed", ver
-		}
-		return "https", ver
-	case 465:
-		return "smtps", ExtractSMTPVersion(banner)
-	case 587:
-		return "smtp", ExtractSMTPVersion(banner)
-	case 993:
-		return "imaps", ExtractIMAPVersion(banner)
-	case 995:
-		return "pop3s", ExtractPOP3Version(banner)
-	case 2083:
-		ver := ExtractHTTPVersion(banner)
-		if ver == "" {
-			ver = "cPanel/WHM"
-		}
-		return "cpanel", ver
-	case 3306:
-		return "mysql", ExtractMySQLVersion(banner)
-	}
-
-	// ── BANNER CONTENT DETECTION ──
-
-	// SSH — check banner content first
-	if strings.Contains(bannerLower, "ssh") || strings.Contains(bannerLower, "ssh-") {
-		version = ExtractSSHVersion(banner)
-		if strings.Contains(bannerLower, "openssh") {
-			return "openssh", version
-		}
-		return "ssh", version
-	}
-
-	// FTP — handle both "220 " and "220-" banner formats
-	if strings.Contains(bannerLower, "ftp") || strings.Contains(bannerLower, " 220 ") || strings.HasPrefix(bannerLower, "220-") || strings.HasPrefix(bannerLower, "220 ") {
-		version = ExtractFTPVersion(banner)
-		if strings.Contains(bannerLower, "pure-ftpd") {
-			return "pure-ftpd", version
-		}
-		if strings.Contains(bannerLower, "proftpd") {
-			return "proftpd", version
-		}
-		if strings.Contains(bannerLower, "vsftpd") {
-			return "vsftpd", version
-		}
-		if strings.Contains(bannerLower, "filezilla") {
-			return "filezilla", version
-		}
-		return "ftp", version
-	}
-
-	// SMTP — detect Exim, Postfix, Sendmail
-	if strings.Contains(bannerLower, "smtp") || strings.Contains(bannerLower, "esmtp") || strings.Contains(bannerLower, "postfix") || strings.Contains(bannerLower, "sendmail") || strings.Contains(bannerLower, "exim") || strings.Contains(bannerLower, " 220 ") {
-		version = ExtractSMTPVersion(banner)
-		if strings.Contains(bannerLower, "exim") {
-			return "exim", version
-		}
-		if strings.Contains(bannerLower, "postfix") {
-			return "postfix", version
-		}
-		if strings.Contains(bannerLower, "sendmail") {
-			return "sendmail", version
-		}
-		if strings.Contains(bannerLower, "dovecot") {
-			return "dovecot", version
-		}
-		return "smtp", version
-	}
-
-	// HTTP / HTTPS
-	if strings.Contains(bannerLower, "http/") || strings.Contains(bannerLower, "html") || strings.Contains(bannerLower, "server:") {
-		version = ExtractHTTPVersion(banner)
-		if strings.Contains(bannerLower, "litespeed") {
-			return "litespeed", version
-		}
-		if strings.Contains(bannerLower, "openresty") {
-			return "openresty", version
-		}
-		if strings.Contains(bannerLower, "cloudflare") {
-			return "cloudflare", version
-		}
-		if strings.Contains(bannerLower, "caddy") {
-			return "caddy", version
-		}
-		if strings.Contains(bannerLower, "gws") || strings.Contains(bannerLower, "google") {
-			return "gws", version
-		}
-		if port == 443 || port == 8443 || port == 9443 {
-			return "https", version
-		}
-		return "http", version
-	}
-
-	// POP3
-	if strings.Contains(bannerLower, "pop3") || strings.Contains(bannerLower, "pop3d") || strings.HasPrefix(bannerLower, "+ok") {
-		version = ExtractPOP3Version(banner)
-		if strings.Contains(bannerLower, "dovecot") {
-			return "dovecot", version
-		}
-		return "pop3", version
-	}
-
-	// IMAP
-	if strings.Contains(bannerLower, "imap") || strings.Contains(bannerLower, "imapd") || strings.HasPrefix(bannerLower, "* ok") {
-		version = ExtractIMAPVersion(banner)
-		if strings.Contains(bannerLower, "dovecot") {
-			return "dovecot", version
-		}
-		return "imap", version
-	}
-
-	// MySQL
-	if strings.Contains(bannerLower, "mysql") || strings.Contains(bannerLower, "mariadb") || (len(banner) > 0 && (banner[0] == 0x0a || banner[0] == 0x09 || banner[0] == 0x08)) {
-		return "mysql", ExtractMySQLVersion(banner)
-	}
-
-	// PostgreSQL
-	if strings.Contains(bannerLower, "postgresql") || strings.Contains(bannerLower, "psql") {
-		return "postgresql", ExtractPostgreSQLVersion(banner)
-	}
-
-	// MSSQL
-	if strings.Contains(bannerLower, "mssql") || strings.Contains(bannerLower, "sql server") {
-		return "mssql", ExtractMSSQLVersion(banner)
-	}
-
-	// Oracle
-	if strings.Contains(bannerLower, "oracle") {
-		return "oracle", ExtractOracleVersion(banner)
-	}
-
-	// Redis
-	if strings.Contains(bannerLower, "redis") {
-		return "redis", ExtractRedisVersion(banner)
-	}
-
-	// MongoDB
-	if strings.Contains(bannerLower, "mongodb") {
-		return "mongodb", ExtractMongoDBVersion(banner)
-	}
-
-	// Telnet
-	if strings.Contains(bannerLower, "telnet") {
-		return "telnet", ExtractTelnetVersion(banner)
-	}
-
-	// VNC
-	if strings.Contains(bannerLower, "rfb") || strings.Contains(bannerLower, "vnc") {
-		return "vnc", ExtractVNCVersion(banner)
-	}
-
-	// RDP
-	if strings.Contains(bannerLower, "mstsc") || strings.Contains(bannerLower, "rdp") {
-		return "rdp", ExtractRDPVersion(banner)
-	}
-
-	// Control Panels
-	if strings.Contains(bannerLower, "cpanel") || strings.Contains(bannerLower, "whm") {
-		return "cpanel", "cPanel/WHM"
-	}
-	if strings.Contains(bannerLower, "plesk") {
-		return "plesk", "Plesk"
-	}
-
-	// Specific Web Servers (fallback after HTTP block)
-	if strings.Contains(bannerLower, "litespeed") {
-		return "litespeed", ExtractHTTPVersion(banner)
-	}
-	if strings.Contains(bannerLower, "openresty") {
-		return "openresty", ExtractHTTPVersion(banner)
-	}
-	if strings.Contains(bannerLower, "cloudflare") {
-		return "cloudflare", "Cloudflare"
-	}
-	if strings.Contains(bannerLower, "caddy") {
-		return "caddy", ExtractHTTPVersion(banner)
-	}
-	if strings.Contains(bannerLower, "gws") {
-		return "gws", "Google Web Server"
-	}
-
-	// 2. Fallback to Common Ports (Medium Confidence)
-	if name, ok := commonPorts[port]; ok {
-		return name, version
-	}
-
-	if name := GetIANAService(port); name != "" {
-		return name, version
-	}
-
-	return fmt.Sprintf("unassigned/%d", port), version
-}
-
-// IdentifyService is an alias for DetectService for backward compatibility
 func IdentifyService(port int, banner string, host string) (string, string) {
 	return DetectService(port, banner, host)
 }
 
-// ExtractSSHVersion extracts SSH version from banner
-func ExtractSSHVersion(banner string) string {
-	// Format: SSH-2.0-OpenSSH_8.2p1 Ubuntu-4ubuntu0.5
-	re := regexp.MustCompile(`SSH-([\d.]+)-([\w._-]+)[\s/]*([\w._-]+)?`)
-	matches := re.FindStringSubmatch(banner)
-	if len(matches) > 2 {
-		ver := matches[2]
-		if len(matches) > 3 && matches[3] != "" {
-			ver += " (" + matches[3] + ")"
-		}
-		return ver
-	}
-	return "Standard SSH"
-}
-
-// ExtractFTPVersion extracts FTP version from banner
-func ExtractFTPVersion(banner string) string {
-	bannerLower := strings.ToLower(banner)
-
-	// Try various FTP server formats
-	// Pure-FTPd: "220---------- Welcome to Pure-FTPd [privsep] ..."
-	if strings.Contains(bannerLower, "pure-ftpd") {
-		re := regexp.MustCompile(`[Pp]ure-[Ff][Tt][Pp]d[\s\[]*([\d.]+)?`)
-		matches := re.FindStringSubmatch(banner)
-		if len(matches) > 1 && matches[1] != "" {
-			return "Pure-FTPd " + matches[1]
-		}
-		return "Pure-FTPd"
-	}
-
-	// ProFTPD: "220 ProFTPD 1.3.5 Server"
-	if strings.Contains(bannerLower, "proftpd") {
-		re := regexp.MustCompile(`[Pp]ro[Ff][Tt][Pp][Dd][\s/]*([\d.]+)?`)
-		matches := re.FindStringSubmatch(banner)
-		if len(matches) > 1 && matches[1] != "" {
-			return "ProFTPD " + matches[1]
-		}
-		return "ProFTPD"
-	}
-
-	// vsftpd: "220 (vsFTPd 3.0.3)"
-	if strings.Contains(bannerLower, "vsftpd") {
-		re := regexp.MustCompile(`[Vv][Ss][Ff][Tt][Pp][Dd][\s/]*([\d.]+)?`)
-		matches := re.FindStringSubmatch(banner)
-		if len(matches) > 1 && matches[1] != "" {
-			return "vsftpd " + matches[1]
-		}
-		return "vsftpd"
-	}
-
-	// FileZilla: "220-FileZilla Server 1.5.1"
-	if strings.Contains(bannerLower, "filezilla") {
-		re := regexp.MustCompile(`[Ff]ile[Zz]illa[\s\-]*[Ss]erver?[\s/]*([\d.]+)?`)
-		matches := re.FindStringSubmatch(banner)
-		if len(matches) > 1 && matches[1] != "" {
-			return "FileZilla " + matches[1]
-		}
-		return "FileZilla"
-	}
-
-	// Generic: "220 ServerName 1.2.3"
-	re := regexp.MustCompile(`220[\s\-]+([A-Za-z][A-Za-z0-9\-_]+)[\s/]*([\d.]+)?`)
-	matches := re.FindStringSubmatch(banner)
-	if len(matches) > 1 {
-		if len(matches) > 2 && matches[2] != "" {
-			return matches[1] + " " + matches[2]
-		}
-		return matches[1]
-	}
-
-	return ""
-}
-
-// ExtractSMTPVersion extracts SMTP version from banner
-func ExtractSMTPVersion(banner string) string {
-	bannerLower := strings.ToLower(banner)
-
-	// Postfix: "220 mail.example.com ESMTP Postfix 3.4.13"
-	if strings.Contains(bannerLower, "postfix") {
-		re := regexp.MustCompile(`[Pp]ostfix[^0-9]*([0-9._-]+)`)
-		matches := re.FindStringSubmatch(banner)
-		if len(matches) > 1 && matches[1] != "" {
-			return "Postfix " + matches[1]
-		}
-		return "Postfix"
-	}
-
-	// Exim: "220 mail.example.com ESMTP Exim 4.95"
-	if strings.Contains(bannerLower, "exim") {
-		re := regexp.MustCompile(`[Ee]xim[^0-9]*([0-9._-]+)`)
-		matches := re.FindStringSubmatch(banner)
-		if len(matches) > 1 && matches[1] != "" {
-			return "Exim " + matches[1]
-		}
-		return "Exim"
-	}
-
-	// Sendmail: "220 mail.example.com ESMTP Sendmail 8.17.1"
-	if strings.Contains(bannerLower, "sendmail") {
-		re := regexp.MustCompile(`[Ss]endmail[^0-9]*([0-9._-]+)`)
-		matches := re.FindStringSubmatch(banner)
-		if len(matches) > 1 && matches[1] != "" {
-			return "Sendmail " + matches[1]
-		}
-		return "Sendmail"
-	}
-
-	// Dovecot: "220 mail.example.com ESMTP Dovecot"
-	if strings.Contains(bannerLower, "dovecot") {
-		re := regexp.MustCompile(`[Dd]ovecot[^0-9]*([0-9._-]+)`)
-		matches := re.FindStringSubmatch(banner)
-		if len(matches) > 1 && matches[1] != "" {
-			return "Dovecot " + matches[1]
-		}
-		return "Dovecot"
-	}
-
-	// Courier: "220 mail.example.com ESMTP Courier 1.0.16"
-	if strings.Contains(bannerLower, "courier") {
-		re := regexp.MustCompile(`[Cc]ourier[^0-9]*([0-9._-]+)`)
-		matches := re.FindStringSubmatch(banner)
-		if len(matches) > 1 && matches[1] != "" {
-			return "Courier " + matches[1]
-		}
-		return "Courier"
-	}
-
-	// Microsoft ESMTP: "220 mail.example.com Microsoft ESMTP MAIL Service"
-	if strings.Contains(bannerLower, "microsoft") || strings.Contains(bannerLower, "exchange") {
-		re := regexp.MustCompile(`[Mm]icrosoft.*[Ee][Ss][Mm][Tt][Pp][^0-9]*([0-9._-]+)?`)
-		matches := re.FindStringSubmatch(banner)
-		if len(matches) > 1 && matches[1] != "" {
-			return "Microsoft ESMTP " + matches[1]
-		}
-		return "Microsoft ESMTP"
-	}
-
-	// Generic ESMTP: "220 mail.example.com ESMTP Service 1.2.3"
-	re := regexp.MustCompile(`220[^\n]*esmtp[^\n]*([A-Za-z][A-Za-z0-9_-]+)[^0-9]*([0-9._-]+)?`)
-	matches := re.FindStringSubmatch(banner)
-	if len(matches) > 1 {
-		if len(matches) > 2 && matches[2] != "" {
-			return matches[1] + " " + matches[2]
-		}
-		return matches[1]
-	}
-
-	// Just extract the first word after 220
-	re2 := regexp.MustCompile(`220\s+([\w.-]+)`)
-	matches2 := re2.FindStringSubmatch(banner)
-	if len(matches2) > 1 {
-		return matches2[1]
-	}
-
-	return ""
-}
-
-// ExtractHTTPVersion extracts HTTP server version from banner
-func ExtractHTTPVersion(banner string) string {
-	// Try multiple formats: Server: nginx/1.18.0, Server: Apache/2.4
-	re := regexp.MustCompile(`Server:\s*([\w/_-]+)\s*/?([\d.]+)?`)
-	matches := re.FindStringSubmatch(banner)
-	if len(matches) > 1 {
-		if len(matches) > 2 && matches[2] != "" {
-			return fmt.Sprintf("%s %s", matches[1], matches[2])
-		}
-		return matches[1]
-	}
-	// Try without Server: prefix
-	re2 := regexp.MustCompile(`(nginx|apache|iis|lighttpd|cloudflare|openresty|caddy)/([\d.]+)`)
-	matches2 := re2.FindStringSubmatch(strings.ToLower(banner))
-	if len(matches2) > 2 {
-		return fmt.Sprintf("%s %s", strings.Title(matches2[1]), matches2[2])
-	}
-	// Check for specific server strings
-	if strings.Contains(strings.ToLower(banner), "nginx") {
-		return "nginx"
-	}
-	if strings.Contains(strings.ToLower(banner), "apache") {
-		return "Apache"
-	}
-	if strings.Contains(strings.ToLower(banner), "cloudflare") {
-		return "Cloudflare"
-	}
-	return ""
-}
-
-// ExtractMySQLVersion extracts MySQL version from banner
-func ExtractMySQLVersion(banner string) string {
-	if len(banner) == 0 {
-		return ""
-	}
-
-	// Handle binary MySQL handshake packet
-	// First byte is protocol version:
-	// 0x0a (10) = MySQL 4.1+
-	// 0x09 (9) = MySQL 4.0
-	// 0x08 (8) = MySQL 3.23
-	protocolVer := byte(banner[0])
-
-	// If this looks like a MySQL handshake packet
-	if protocolVer == 0x0a || protocolVer == 0x09 || protocolVer == 0x08 {
-		// Binary handshake - extract version string after protocol byte
-		// The format is: [protocol_version:1 byte] [server_version:null_terminated_string] ...
-		if len(banner) > 1 {
-			// Find null terminator (0x00) for server version
-			for i := 1; i < len(banner) && i < 100; i++ {
-				if banner[i] == 0x00 {
-					version := strings.TrimSpace(banner[1:i])
-					if version != "" {
-						return version
-					}
-					break
-				}
-			}
-		}
-	}
-
-	// Try text-based version patterns (for text-based banners)
-	bannerLower := strings.ToLower(banner)
-
-	// Try multiple formats: 5.7.33, mysql 5.7.33, MariaDB
-	re := regexp.MustCompile(`mysql[\s_-]*([\d.]+)`)
-	matches := re.FindStringSubmatch(bannerLower)
-	if len(matches) > 1 {
-		return matches[1]
-	}
-
-	// Try MariaDB
-	re2 := regexp.MustCompile(`mariadb[\s_-]*([\d.]+)`)
-	matches2 := re2.FindStringSubmatch(bannerLower)
-	if len(matches2) > 1 {
-		return matches2[1]
-	}
-
-	// Try to find version pattern (look for patterns like 5.7.xx or 8.0.xx)
-	re3 := regexp.MustCompile(`([5-9]\.[0-9]+(?:\.[0-9]+)?)`)
-	matches3 := re3.FindStringSubmatch(banner)
-	if len(matches3) > 1 {
-		return matches3[1]
-	}
-
-	return ""
-}
-
-// ExtractPostgreSQLVersion extracts PostgreSQL version from banner
-func ExtractPostgreSQLVersion(banner string) string {
-	// Format: PostgreSQL 13.4
-	re := regexp.MustCompile(`PostgreSQL\s+([\d.]+)`)
-	matches := re.FindStringSubmatch(banner)
-	if len(matches) > 1 {
-		return matches[1]
-	}
-	return ""
-}
-
-// ExtractMSSQLVersion extracts MSSQL version from banner
-func ExtractMSSQLVersion(banner string) string {
-	// Format: Microsoft SQL Server 2019
-	re := regexp.MustCompile(`SQL Server\s+(\d+)`)
-	matches := re.FindStringSubmatch(banner)
-	if len(matches) > 1 {
-		return matches[1]
-	}
-	return ""
-}
-
-// ExtractOracleVersion extracts Oracle version from banner
-func ExtractOracleVersion(banner string) string {
-	// Format: Oracle Database 19c
-	re := regexp.MustCompile(`Oracle\s+Database\s+(\w+)`)
-	matches := re.FindStringSubmatch(banner)
-	if len(matches) > 1 {
-		return matches[1]
-	}
-	return ""
-}
-
-// ExtractRedisVersion extracts Redis version from banner
-func ExtractRedisVersion(banner string) string {
-	// Format: redis_version:6.2.6
-	re := regexp.MustCompile(`redis_version:([\d.]+)`)
-	matches := re.FindStringSubmatch(banner)
-	if len(matches) > 1 {
-		return matches[1]
-	}
-	return ""
-}
-
-// ExtractMongoDBVersion extracts MongoDB version from banner
-func ExtractMongoDBVersion(banner string) string {
-	// Format: 5.0.3
-	re := regexp.MustCompile(`([\d.]+)`)
-	matches := re.FindStringSubmatch(banner)
-	if len(matches) > 1 {
-		return matches[1]
-	}
-	return ""
-}
-
-// ExtractPOP3Version extracts POP3 version from banner
-func ExtractPOP3Version(banner string) string {
-	// Format: Dovecot pop3d
-	re := regexp.MustCompile(`([\w]+)\s+pop3d`)
-	matches := re.FindStringSubmatch(banner)
-	if len(matches) > 1 {
-		return matches[1]
-	}
-	return ""
-}
-
-// ExtractIMAPVersion extracts IMAP version from banner
-func ExtractIMAPVersion(banner string) string {
-	// Format: Dovecot imapd
-	re := regexp.MustCompile(`([\w]+)\s+imapd`)
-	matches := re.FindStringSubmatch(banner)
-	if len(matches) > 1 {
-		return matches[1]
-	}
-	return ""
-}
-
-// ExtractTelnetVersion extracts Telnet version from banner
-func ExtractTelnetVersion(banner string) string {
-	// Format: Debian-10+deb10u9
-	re := regexp.MustCompile(`([\w.-]+)`)
-	matches := re.FindStringSubmatch(banner)
-	if len(matches) > 1 {
-		return matches[1]
-	}
-	return ""
-}
-
-// ExtractVNCVersion extracts VNC version from banner
-func ExtractVNCVersion(banner string) string {
-	// Format: RFB 003.008
-	re := regexp.MustCompile(`RFB\s+([\d.]+)`)
-	matches := re.FindStringSubmatch(banner)
-	if len(matches) > 1 {
-		return matches[1]
-	}
-	return ""
-}
-
-// ExtractRDPVersion extracts RDP version from banner
-func ExtractRDPVersion(banner string) string {
-	// Format: Windows Server 2019
-	re := regexp.MustCompile(`Windows\s+Server\s+(\d+)`)
-	matches := re.FindStringSubmatch(banner)
-	if len(matches) > 1 {
-		return matches[1]
-	}
-	return ""
-}
-// ExtractVersion is a generic router to extract version from banner based on service name
 func ExtractVersion(service string, banner string) string {
-	if banner == "" {
+	switch strings.ToLower(service) {
+	case "ssh":
+		return ExtractSSHVersion(banner)
+	case "http", "nginx", "apache", "iis":
+		return ExtractHTTPVersion(banner)
+	case "ftp":
+		return ExtractFTPVersion(banner)
+	case "smtp":
+		return ExtractSMTPVersion(banner)
+	case "mysql":
+		return ExtractMySQLVersion(banner)
+	case "redis":
+		return ExtractRedisVersion(banner)
+	}
+	return ""
+}
+
+func matchServiceFromBanner(banner string) (string, string) {
+	sig := MatchServiceSignatures(0, banner)
+	if sig != nil {
+		return sig.Product, sig.Version
+	}
+	return "", ""
+}
+
+func DetectService(port int, banner string, host string) (string, string) {
+	return DetectServiceV2(port, banner, host)
+}
+
+func ExtractFTPVersion(banner string) string {
+	if strings.Contains(banner, "vsFTPd") {
+		return extractBetween(banner, "vsFTPd", " ")
+	}
+	if strings.Contains(banner, "ProFTPD") {
+		return extractBetween(banner, "ProFTPD", " ")
+	}
+	if strings.Contains(banner, "pure-ftpd") {
+		idx := strings.Index(banner, "pure-ftpd")
+		rest := banner[idx+9:]
+		parts := strings.Fields(rest)
+		if len(parts) > 0 {
+			return strings.TrimRight(parts[0], ")")
+		}
+	}
+	return ""
+}
+
+func ExtractSSHVersion(banner string) string {
+	idx := strings.Index(banner, "OpenSSH_")
+	if idx >= 0 {
+		rest := banner[idx+8:]
+		parts := strings.SplitN(rest, " ", 2)
+		if len(parts) > 0 {
+			return strings.TrimRight(parts[0], " ")
+		}
+	}
+	return ""
+}
+
+func ExtractHTTPVersion(banner string) string {
+	lower := strings.ToLower(banner)
+	if strings.Contains(lower, "nginx/") {
+		return extractBetween(banner, "nginx/", " ")
+	}
+	if strings.Contains(lower, "apache/") {
+		return extractBetween(banner, "Apache/", " ")
+	}
+	if strings.Contains(lower, "microsoft-iis/") || strings.Contains(lower, "iis/") {
+		return extractBetween(strings.ToLower(banner), "iis/", " ")
+	}
+	return ""
+}
+
+func ExtractSMTPVersion(banner string) string {
+	if strings.Contains(banner, "Postfix") {
+		return extractBetween(banner, "Postfix", " ")
+	}
+	if strings.Contains(banner, "Exim") {
+		return extractBetween(banner, "Exim", " ")
+	}
+	return ""
+}
+
+func ExtractMySQLVersion(banner string) string {
+	return extractBetween(banner, "mysql", " ")
+}
+
+func ExtractRedisVersion(banner string) string {
+	idx := strings.Index(banner, "redis_version:")
+	if idx >= 0 {
+		rest := banner[idx+14:]
+		parts := strings.Fields(rest)
+		if len(parts) > 0 {
+			return strings.TrimRight(parts[0], "\r\n")
+		}
+	}
+	return ""
+}
+
+func extractBetween(s, prefix, suffix string) string {
+	idx := strings.Index(s, prefix)
+	if idx < 0 {
 		return ""
 	}
-
-	serviceLower := strings.ToLower(service)
-
-	switch {
-	case strings.Contains(serviceLower, "ssh"):
-		return ExtractSSHVersion(banner)
-	case strings.Contains(serviceLower, "ftp"):
-		return ExtractFTPVersion(banner)
-	case strings.Contains(serviceLower, "smtp"):
-		return ExtractSMTPVersion(banner)
-	case strings.Contains(serviceLower, "http"):
-		return ExtractHTTPVersion(banner)
-	case strings.Contains(serviceLower, "mysql"):
-		return ExtractMySQLVersion(banner)
-	case strings.Contains(serviceLower, "postgresql"):
-		return ExtractPostgreSQLVersion(banner)
-	case strings.Contains(serviceLower, "mssql"):
-		return ExtractMSSQLVersion(banner)
-	case strings.Contains(serviceLower, "oracle"):
-		return ExtractOracleVersion(banner)
-	case strings.Contains(serviceLower, "redis"):
-		return ExtractRedisVersion(banner)
-	case strings.Contains(serviceLower, "mongodb"):
-		return ExtractMongoDBVersion(banner)
-	case strings.Contains(serviceLower, "pop3"):
-		return ExtractPOP3Version(banner)
-	case strings.Contains(serviceLower, "imap"):
-		return ExtractIMAPVersion(banner)
-	case strings.Contains(serviceLower, "telnet"):
-		return ExtractTelnetVersion(banner)
-	case strings.Contains(serviceLower, "vnc"):
-		return ExtractVNCVersion(banner)
-	case strings.Contains(serviceLower, "rdp"):
-		return ExtractRDPVersion(banner)
+	start := idx + len(prefix)
+	rest := s[start:]
+	if suffix == " " {
+		parts := strings.Fields(rest)
+		if len(parts) > 0 {
+			return strings.TrimRight(parts[0], "\r\n,;")
+		}
+		return ""
 	}
-
-	return ""
+	end := strings.Index(rest, suffix)
+	if end < 0 {
+		return strings.TrimSpace(rest)
+	}
+	return strings.TrimSpace(rest[:end])
 }

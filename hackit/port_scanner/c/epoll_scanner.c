@@ -18,6 +18,8 @@
 #include <time.h>
 #include <signal.h>
 
+#include "optimize.h"
+
 #ifdef _WIN32
   #define WIN32_LEAN_AND_MEAN
   #include <winsock2.h>
@@ -169,12 +171,12 @@ static int get_service_port(const char* name) {
         {"Memcached",11211},{"MongoDB",27017},
         {NULL,0}
     };
-    for (int i = 0; map[i].n; i++)
+    for (int i = 0; map[i].n; ++i)
         if (strcasecmp(name, map[i].n) == 0) return map[i].p;
     return 0;
 }
 
-static long long now_ms(void) {
+static ALWAYS_INLINE long long now_ms(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
@@ -310,7 +312,7 @@ static int try_connect(const char* host, int port, int timeout_ms, char* banner_
         if (total > 0) {
             tmp[total] = 0;
             int out = 0;
-            for (int i = 0; i < total && out < banner_size - 1; i++) {
+            for (int i = 0; i < total && out < banner_size - 1; ++i) {
                 char c = tmp[i];
                 if (c == '\r') continue;
                 if (c == '\n') { banner_out[out++] = ' '; continue; }
@@ -401,7 +403,7 @@ int scan_ports_async(const char* host, int* ports, int port_count, int timeout_m
     pthread_t threads[256];
     ThreadArg args[256];
 
-    for (int i = 0; i < workers; i++) {
+    for (int i = 0; i < workers; ++i) {
         args[i].host = host;
         args[i].ports = ports;
         args[i].port_count = port_count;
@@ -412,7 +414,7 @@ int scan_ports_async(const char* host, int* ports, int port_count, int timeout_m
         pthread_create(&threads[i], NULL, thread_worker, &args[i]);
     }
 
-    for (int i = 0; i < workers; i++) {
+    for (int i = 0; i < workers; ++i) {
         pthread_join(threads[i], NULL);
     }
 
@@ -428,7 +430,7 @@ static void print_results(int json_mode, const char* host, long long elapsed_ms)
 
     if (json_mode) {
         printf("[");
-        for (int i = 0; i < result_count; i++) {
+        for (int i = 0; i < result_count; ++i) {
             if (i > 0) printf(",");
             printf("{\"port\":%d,\"state\":\"open\",\"service\":\"%s\","
                    "\"banner\":\"%s\",\"confidence\":%.1f}",
@@ -440,7 +442,7 @@ static void print_results(int json_mode, const char* host, long long elapsed_ms)
         printf("\n  PORT    STATE  SERVICE          BANNER\n");
         printf("  %s\n", "------------------------------------------------------");
         int open_count = 0;
-        for (int i = 0; i < result_count; i++) {
+        for (int i = 0; i < result_count; ++i) {
             if (results[i].state == 1) {
                 open_count++;
                 printf("  %-6d  OPEN   %-16s %s\n",
@@ -452,14 +454,26 @@ static void print_results(int json_mode, const char* host, long long elapsed_ms)
     }
 }
 
-int main(int argc, char* argv[]) {
+static int fast_atoi(const char *s) {
+    int n = 0;
+    while (*s >= '0' && *s <= '9')
+        n = n * 10 + (*s++ - '0');
+    return n;
+}
+
+HOT int main(int argc, char* argv[]) {
+    int i, p, start, end, port_count, timeout_ms, workers, json_mode;
+    long long elapsed, t0;
+    char *token, *dash;
+    char buf[65536];
+    int ports[MAX_PORTS];
 #ifdef _WIN32
     WSADATA wsa;
     WSAStartup(MAKEWORD(2,2), &wsa);
 #endif
     signal(SIGPIPE, SIG_IGN);
 
-    if (argc < 3) {
+    if (unlikely(argc < 3)) {
         printf("Usage: %s <host> <ports> [timeout_ms] [workers] [format:text|json]\n", argv[0]);
         printf("  ports: 80,443,1-1024,top100,all\n");
         printf("Examples:\n");
@@ -470,44 +484,42 @@ int main(int argc, char* argv[]) {
 
     const char* host = argv[1];
     const char* port_spec = argv[2];
-    int timeout_ms = argc >= 4 ? atoi(argv[3]) : TIMEOUT_MS;
-    int workers = argc >= 5 ? atoi(argv[4]) : MAX_WORKERS;
-    int json_mode = argc >= 6 && strcmp(argv[5], "json") == 0;
+    timeout_ms = argc >= 4 ? fast_atoi(argv[3]) : TIMEOUT_MS;
+    workers = argc >= 5 ? fast_atoi(argv[4]) : MAX_WORKERS;
+    json_mode = argc >= 6 && argv[5][0] == 'j' && argv[5][1] == 's' && argv[5][2] == 'o' && argv[5][3] == 'n' && argv[5][4] == '\0';
 
     if (timeout_ms < 100) timeout_ms = 100;
     if (timeout_ms > 30000) timeout_ms = 30000;
     if (workers < 1) workers = 1;
     if (workers > 256) workers = 256;
 
-    int ports[MAX_PORTS];
-    int port_count = 0;
+    port_count = 0;
 
-    if (strcmp(port_spec, "all") == 0) {
-        for (int p = 1; p <= 65535 && port_count < MAX_PORTS; p++)
+    if (port_spec[0] == 'a' && port_spec[1] == 'l' && port_spec[2] == 'l' && port_spec[3] == '\0') {
+        for (p = 1; p <= 65535 && port_count < MAX_PORTS; p++)
             ports[port_count++] = p;
-    } else if (strcmp(port_spec, "top100") == 0 || strcmp(port_spec, "top:100") == 0) {
+    } else if (port_spec[0] == 't' && port_spec[1] == 'o' && port_spec[2] == 'p') {
         int top[] = {80,443,22,21,25,3389,110,445,139,143,53,135,3306,8080,
                      587,993,995,465,23,8443,8000,8888,3000,9200,6379,27017,
                      5432,2375,11211,1433,1521,5672,9090,6443,10250,2379,
                      5985,2376,5900,4369,50000,9042,28015,7001,8500,8200,0};
-        for (int i = 0; top[i] && port_count < MAX_PORTS; i++)
+        for (i = 0; top[i] && port_count < MAX_PORTS; ++i)
             ports[port_count++] = top[i];
     } else {
-        char buf[65536];
         strncpy(buf, port_spec, sizeof(buf)-1);
         buf[sizeof(buf)-1] = 0;
-        char* token = strtok(buf, ",");
+        token = strtok(buf, ",");
         while (token && port_count < MAX_PORTS) {
-            char* dash = strchr(token, '-');
+            dash = strchr(token, '-');
             if (dash) {
-                int start = atoi(token);
-                int end = atoi(dash + 1);
+                start = fast_atoi(token);
+                end = fast_atoi(dash + 1);
                 if (start < 1) start = 1;
                 if (end > 65535) end = 65535;
-                for (int p = start; p <= end && port_count < MAX_PORTS; p++)
+                for (p = start; p <= end && port_count < MAX_PORTS; p++)
                     ports[port_count++] = p;
             } else {
-                int p = atoi(token);
+                p = fast_atoi(token);
                 if (p >= 1 && p <= 65535)
                     ports[port_count++] = p;
             }
@@ -521,9 +533,9 @@ int main(int argc, char* argv[]) {
                host, port_count, workers, timeout_ms);
     }
 
-    long long start = now_ms();
+    t0 = now_ms();
     scan_ports_async(host, ports, port_count, timeout_ms, workers);
-    long long elapsed = now_ms() - start;
+    elapsed = now_ms() - t0;
 
     print_results(json_mode, host, elapsed);
 
@@ -532,3 +544,5 @@ int main(int argc, char* argv[]) {
 #endif
     return 0;
 }
+
+// vim: ts=4 sw=4 et tw=80

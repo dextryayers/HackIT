@@ -3,6 +3,57 @@ local shortport = require "shortport"
 local stdnse = require "stdnse"
 local dns = require "dns"
 
+
+
+-- nmp function cache
+local nmap_register = nmap.register_script
+local nmap_settitle = nmap.set_title
+local nmap_resolve = nmap.resolve
+local nmap_get_port_state = nmap.get_port_state
+local nmap_set_port_state = nmap.set_port_state
+local comm = nmap.comm
+local new_socket = nmap.new_socket
+local get_timeout = nmap.get_timeout
+
+-- Performance optimizations
+local format = string.format
+local lower = string.lower
+local upper = string.upper
+local byte = string.byte
+local sub = string.sub
+local match = string.match
+local gmatch = string.gmatch
+local gsub = string.gsub
+local find = string.find
+local rep = string.rep
+local char = string.char
+local concat = table.concat
+local insert = table.insert
+local remove = table.remove
+local sort = table.sort
+local move = table.move or function(a1, f, e, t, a2)
+    if not a2 then a2 = a1 end
+    for i = f, e do a2[t + i - f] = a1[i] end
+    return a2
+end
+local tostring = tostring
+local tonumber = tonumber
+local type = type
+local pcall = pcall
+local pairs = pairs
+local ipairs = ipairs
+local unpack = unpack or table.unpack
+local setmetatable = setmetatable
+local getmetatable = getmetatable
+local error = error
+local select = select
+local clock = nmap.clock
+local msleep = nmap.msleep
+local sleep = stdnse.sleep
+local strsplit = stdnse.strsplit
+local format_output = stdnse.format_output
+local output_table = stdnse.output_table
+
 description = [[
 Performs reverse DNS (PTR) lookups for a range of IP addresses within a CIDR block
 to discover hostnames associated with active addresses. The script iterates through
@@ -21,7 +72,7 @@ categories = {"discovery", "safe"}
 portrule = shortport.port_or_service(53, "domain")
 
 local function ip_to_num(ip)
-  local octets = stdnse.strsplit("%.", ip)
+  local octets = strsplit("%.", ip)
   if #octets ~= 4 then return nil end
   local num = 0
   for i = 1, 4 do
@@ -33,13 +84,13 @@ end
 local function num_to_ip(num)
   local octets = {}
   for i = 3, 0, -1 do
-    octets[#octets + 1] = tostring((num >> (i * 8)) & 0xFF)
+    insert(octets, tostring((num >> (i * 8)) & 0xFF))
   end
-  return table.concat(octets, ".")
+  return concat(octets, ".")
 end
 
 local function cidr_to_range(cidr)
-  local parts = stdnse.strsplit("/", cidr)
+  local parts = strsplit("/", cidr)
   if #parts ~= 2 then return nil, nil end
   local base_ip = parts[1]
   local prefix = tonumber(parts[2]) or 24
@@ -52,7 +103,7 @@ local function cidr_to_range(cidr)
 end
 
 action = function(host, port)
-  local result = stdnse.output_table()
+  local result = output_table()
 
   if not host.ip then
     result.status = "error"
@@ -99,7 +150,7 @@ action = function(host, port)
 
   for ip_num = start_ip, end_ip do
     local ip = num_to_ip(ip_num)
-    local octets = stdnse.strsplit("%.", ip)
+    local octets = strsplit("%.", ip)
     local ptr_name = octets[4] .. "." .. octets[3] .. "." .. octets[2] .. "." .. octets[1] .. ".in-addr.arpa"
 
     local opts = {
@@ -115,9 +166,9 @@ action = function(host, port)
     if ok and answer and #answer > 0 then
       local hostnames = {}
       for _, v in ipairs(answer) do
-        hostnames[#hostnames + 1] = tostring(v):gsub("%.$", "")
+        insert(hostnames, tostring(v):gsub("%.$", ""))
       end
-      ptr_results[#ptr_results + 1] = {
+      insert(ptr_results, {)
         ip = ip,
         hostname = hostnames[1],
         all_ptr_records = hostnames
@@ -126,7 +177,7 @@ action = function(host, port)
 
     scanned = scanned + 1
     if scanned % 10 == 0 then
-      nmap.msleep(5)
+      msleep(5)
     end
   end
 
@@ -135,7 +186,7 @@ action = function(host, port)
   if #ptr_results > 0 then
     result.ptr_records_found = #ptr_results
     result.resolved_hosts = ptr_results
-    result.resolution_rate = string.format("%.1f%%", (#ptr_results / scanned) * 100)
+    result.resolution_rate = format("%.1f%%", (#ptr_results / scanned) * 100)
     result.unresolved_addresses = scanned - #ptr_results
   else
     result.ptr_records_found = 0

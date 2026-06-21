@@ -131,8 +131,8 @@ fn http_request(host: &str, port: u16, tls: bool, timeout_ms: u64) -> Option<Res
     let mut lines = s.split("\r\n");
     let status_line = lines.next().unwrap_or("");
     let status = status_line.split(' ').nth(1).and_then(|s| s.parse().ok()).unwrap_or(0);
-    let mut headers = HashMap::new();
-    let mut cookies = Vec::new();
+    let mut headers = HashMap::with_capacity(32);
+    let mut cookies = Vec::with_capacity(8);
     let body_start = s.find("\r\n\r\n").map(|p| p + 4).unwrap_or(s.len());
     for line in s.lines().take(100) {
         if let Some(pos) = line.find(':') {

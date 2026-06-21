@@ -2,6 +2,58 @@ local stdnse = require "stdnse"
 local nmap = require "nmap"
 local http = require "http"
 local string = require "string"
+local shortport = require "shortport"
+
+
+
+-- nmp function cache
+local nmap_register = nmap.register_script
+local nmap_settitle = nmap.set_title
+local nmap_resolve = nmap.resolve
+local nmap_get_port_state = nmap.get_port_state
+local nmap_set_port_state = nmap.set_port_state
+local comm = nmap.comm
+local new_socket = nmap.new_socket
+local get_timeout = nmap.get_timeout
+
+-- Performance optimizations
+local format = string.format
+local lower = string.lower
+local upper = string.upper
+local byte = string.byte
+local sub = string.sub
+local match = string.match
+local gmatch = string.gmatch
+local gsub = string.gsub
+local find = string.find
+local rep = string.rep
+local char = string.char
+local concat = table.concat
+local insert = table.insert
+local remove = table.remove
+local sort = table.sort
+local move = table.move or function(a1, f, e, t, a2)
+    if not a2 then a2 = a1 end
+    for i = f, e do a2[t + i - f] = a1[i] end
+    return a2
+end
+local tostring = tostring
+local tonumber = tonumber
+local type = type
+local pcall = pcall
+local pairs = pairs
+local ipairs = ipairs
+local unpack = unpack or table.unpack
+local setmetatable = setmetatable
+local getmetatable = getmetatable
+local error = error
+local select = select
+local clock = nmap.clock
+local msleep = nmap.msleep
+local sleep = stdnse.sleep
+local strsplit = stdnse.strsplit
+local format_output = stdnse.format_output
+local output_table = stdnse.output_table
 
 description = [[Detects Windows Management Instrumentation (WMI) service via RPC endpoint mapper and HTTP probes. Extracts RPC endpoint details and service availability for WBEM/CIMOM.]]
 author = "HackIT Framework"
@@ -14,7 +66,7 @@ portrule = function(host, port)
 end
 
 local function check_rpc_wmi(host, port_number)
-    local socket = nmap.new_socket()
+    local socket = new_socket()
     socket:set_timeout(5000)
 
     local ok, err = pcall(socket.connect, socket, host.ip, port_number)
@@ -23,7 +75,7 @@ local function check_rpc_wmi(host, port_number)
         return nil
     end
 
-    local rpc_bind = string.char(
+    local rpc_bind = char(
         0x05, 0x00, 0x0b, 0x03, 0x10, 0x00, 0x00, 0x00,
         0x48, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
         0xb8, 0x10, 0xb8, 0x10, 0x00, 0x00, 0x00, 0x00,
@@ -84,15 +136,15 @@ local function probe_epm_endpoints(host, port_number)
     }
 
     for _, pr in ipairs(probe_uuids) do
-        local socket = nmap.new_socket()
+        local socket = new_socket()
         socket:set_timeout(3000)
         local ok, err = pcall(socket.connect, socket, host.ip, port_number)
         if ok then
-            local ok2 = pcall(socket.send, socket, rpc_bind or string.rep("\x00", 40))
+            local ok2 = pcall(socket.send, socket, rpc_bind or rep("\x00", 40))
             if ok2 then
                 local ok3, resp = pcall(socket.receive_buf, socket, "\x05", 3)
                 if ok3 and resp then
-                    table.insert(endpoints, pr.name)
+                    insert(endpoints, pr.name)
                 end
             end
         end
@@ -102,7 +154,7 @@ local function probe_epm_endpoints(host, port_number)
 end
 
 action = function(host, port)
-    local result = stdnse.output_table()
+    local result = output_table()
     local services = {}
     local details = {}
 
@@ -111,10 +163,10 @@ action = function(host, port)
         local wmi_status = check_rpc_wmi(host, port.number)
         if wmi_status then
             if wmi_status == "WMI_RPC" then
-                table.insert(services, "WMI accessible via RPC endpoint mapper")
+                insert(services, "WMI accessible via RPC endpoint mapper")
                 details.wmi_rpc = true
             else
-                table.insert(services, "RPC endpoint mapper reachable on port 135")
+                insert(services, "RPC endpoint mapper reachable on port 135")
                 details.rpc_reachable = true
             end
         end
@@ -123,7 +175,7 @@ action = function(host, port)
         if #epm_endpoints > 0 then
             details.epm_endpoints = epm_endpoints
             for _, ep in ipairs(epm_endpoints) do
-                table.insert(services, "RPC endpoint: " .. ep)
+                insert(services, "RPC endpoint: " .. ep)
             end
         end
     end
@@ -133,17 +185,17 @@ action = function(host, port)
         local http_status = check_http_wmi(host, port.number)
         if http_status then
             if http_status == "WMI_WinRM" then
-                table.insert(services, "WMI/WinRM service on port " .. port.number)
+                insert(services, "WMI/WinRM service on port " .. port.number)
                 details.wmi_winrm = true
             elseif http_status == "WMI_WinRM_authed" then
-                table.insert(services, "WMI/WinRM service (authenticated) on port " .. port.number)
+                insert(services, "WMI/WinRM service (authenticated) on port " .. port.number)
                 details.wmi_winrm_authed = true
             end
         end
     end
 
     if #services == 0 then
-        return stdnse.format_output(false, "WMI service not detected")
+        return format_output(false, "WMI service not detected")
     end
 
     result.services = services
@@ -153,5 +205,5 @@ action = function(host, port)
         result[k] = v
     end
 
-    return stdnse.format_output(true, result)
+    return format_output(true, result)
 end

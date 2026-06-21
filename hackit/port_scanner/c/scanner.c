@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -26,13 +27,18 @@ typedef int socklen_t;
 #include <unistd.h>
 #include <sys/socket.h>
 #include <sys/select.h>
+#include <sys/epoll.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <pthread.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <signal.h>
+
+#include "optimize.h"
+
 #define INVALID_SOCKET -1
 #define SOCKET_ERROR -1
 #define SOCKET int
@@ -1483,16 +1489,34 @@ static const scan_sig_t SIGNATURES[] = {
     ,{NULL,NULL,NULL,NULL}
 };
 
+static char dns_cache_host[256] = {0};
+static struct in_addr dns_cache_addr;
+static int dns_cached = 0;
+
+static int resolve_cached(const char* host, struct in_addr* out) {
+    if (dns_cached && strcmp(host, dns_cache_host) == 0) {
+        *out = dns_cache_addr;
+        return 1;
+    }
+    struct hostent* he = gethostbyname(host);
+    if (!he || !he->h_addr_list[0]) return 0;
+    memcpy(&dns_cache_addr, he->h_addr_list[0], he->h_length);
+    strncpy(dns_cache_host, host, sizeof(dns_cache_host) - 1);
+    dns_cache_host[sizeof(dns_cache_host) - 1] = 0;
+    dns_cached = 1;
+    *out = dns_cache_addr;
+    return 1;
+}
+
 int scan_port(const char* host, int port, int timeout_ms, char* banner, int banner_size) {
     SOCKET s = INVALID_SOCKET;
     struct sockaddr_in addr;
-    struct hostent* he;
     int result = 0;
 
     if (banner) banner[0] = 0;
 
-    he = gethostbyname(host);
-    if (!he) return 0;
+    struct in_addr cached_addr;
+    if (!resolve_cached(host, &cached_addr)) return 0;
 
     s = socket(AF_INET, SOCK_STREAM, 0);
     if (s == INVALID_SOCKET) return 0;
@@ -1500,7 +1524,7 @@ int scan_port(const char* host, int port, int timeout_ms, char* banner, int bann
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
     addr.sin_port = htons((unsigned short)port);
-    memcpy(&addr.sin_addr, he->h_addr_list[0], he->h_length);
+    addr.sin_addr = cached_addr;
 
 #ifdef _WIN32
     u_long mode = 1;
@@ -1512,6 +1536,7 @@ int scan_port(const char* host, int port, int timeout_ms, char* banner, int bann
 
     connect(s, (struct sockaddr*)&addr, sizeof(addr));
 
+#ifdef _WIN32
     {
         fd_set fdw, fde;
         struct timeval tv;
@@ -1519,15 +1544,31 @@ int scan_port(const char* host, int port, int timeout_ms, char* banner, int bann
         FD_SET(s, &fdw); FD_SET(s, &fde);
         tv.tv_sec = timeout_ms / 1000;
         tv.tv_usec = (timeout_ms % 1000) * 1000;
-#ifdef _WIN32
         int sel = select(0, NULL, &fdw, &fde, &tv);
-#else
-        int sel = select(s + 1, NULL, &fdw, &fde, &tv);
-#endif
         if (sel > 0 && FD_ISSET(s, &fdw) && !FD_ISSET(s, &fde)) {
             result = 1;
         }
     }
+#else
+    {
+        int epfd = epoll_create1(0);
+        if (epfd >= 0) {
+            struct epoll_event ev;
+            ev.data.fd = s;
+            ev.events = EPOLLOUT | EPOLLERR;
+            epoll_ctl(epfd, EPOLL_CTL_ADD, s, &ev);
+            struct epoll_event events[1];
+            int n = epoll_wait(epfd, events, 1, timeout_ms);
+            if (n > 0 && (events[0].events & EPOLLOUT)) {
+                int so_err = 0;
+                socklen_t err_len = sizeof(so_err);
+                getsockopt(s, SOL_SOCKET, SO_ERROR, &so_err, &err_len);
+                if (so_err == 0) result = 1;
+            }
+            close(epfd);
+        }
+    }
+#endif
 
     if (result && banner && banner_size > 0) {
 #ifdef _WIN32
@@ -1577,8 +1618,9 @@ int scan_port(const char* host, int port, int timeout_ms, char* banner, int bann
         else
             send(s, "\r\n\r\n", 4, 0);
 
-        SLEEP_MS(200);
-        for (int i = 0; i < 3; i++) {
+        struct pollfd pfd = { .fd = s, .events = POLLIN };
+        poll(&pfd, 1, 200);
+        for (int i = 0; i < 3; ++i) {
             n = (int)recv(s, tmp + total, sizeof(tmp) - 1 - total, 0);
             if (n > 0) total += n;
             else break;
@@ -1608,7 +1650,7 @@ void detect_version(const char* banner, const char* service, char* product_out, 
     if (product_out) product_out[0] = 0;
     if (version_out) version_out[0] = 0;
 
-    for (int i = 0; SIGNATURES[i].pattern; i++) {
+    for (int i = 0; SIGNATURES[i].pattern; ++i) {
         if (SIGNATURES[i].service && service && strcmp(SIGNATURES[i].service, service) != 0) continue;
         const char* m = strstr(banner, SIGNATURES[i].pattern);
         if (!m) continue;
@@ -1771,7 +1813,7 @@ int scan_ports_full(const char* host, const int* ports, int port_count, int time
     scan_thread_arg_t args[MAX_THREADS];
     int created = 0;
 
-    for (int i = 0; i < threads; i++) {
+    for (int i = 0; i < threads; ++i) {
         args[i].shared = &shared;
         args[i].tid = i;
         if (THREAD_CREATE(handles[i], thread_worker, &args[i]))
@@ -1780,7 +1822,7 @@ int scan_ports_full(const char* host, const int* ports, int port_count, int time
             break;
     }
 
-    for (int i = 0; i < created; i++) {
+    for (int i = 0; i < created; ++i) {
         THREAD_JOIN(handles[i]);
         THREAD_CLOSE(handles[i]);
     }
@@ -1850,4 +1892,5 @@ int main(int argc, char* argv[]) {
 #endif
     return 0;
 }
+// vim: ts=4 sw=4 et tw=80
 

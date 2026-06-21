@@ -1,4 +1,57 @@
 local stdnse = require "stdnse"
+local nmap = require "nmap"
+local shortport = require "shortport"
+
+
+
+-- nmp function cache
+local nmap_register = nmap.register_script
+local nmap_settitle = nmap.set_title
+local nmap_resolve = nmap.resolve
+local nmap_get_port_state = nmap.get_port_state
+local nmap_set_port_state = nmap.set_port_state
+local comm = nmap.comm
+local new_socket = nmap.new_socket
+local get_timeout = nmap.get_timeout
+
+-- Performance optimizations
+local format = string.format
+local lower = string.lower
+local upper = string.upper
+local byte = string.byte
+local sub = string.sub
+local match = string.match
+local gmatch = string.gmatch
+local gsub = string.gsub
+local find = string.find
+local rep = string.rep
+local char = string.char
+local concat = table.concat
+local insert = table.insert
+local remove = table.remove
+local sort = table.sort
+local move = table.move or function(a1, f, e, t, a2)
+    if not a2 then a2 = a1 end
+    for i = f, e do a2[t + i - f] = a1[i] end
+    return a2
+end
+local tostring = tostring
+local tonumber = tonumber
+local type = type
+local pcall = pcall
+local pairs = pairs
+local ipairs = ipairs
+local unpack = unpack or table.unpack
+local setmetatable = setmetatable
+local getmetatable = getmetatable
+local error = error
+local select = select
+local clock = nmap.clock
+local msleep = nmap.msleep
+local sleep = stdnse.sleep
+local strsplit = stdnse.strsplit
+local format_output = stdnse.format_output
+local output_table = stdnse.output_table
 
 description = [[Detects ProFTPD 1.3.3b backdoor (CVE-2010-4221) via crafted ACCT command and version fingerprinting.]]
 author = "HackIT Framework"
@@ -20,11 +73,11 @@ action = function(host, port)
     local banner_str = ""
     local ftpd_version = nil
 
-    local sock = nmap.new_socket()
+    local sock = new_socket()
     sock:set_timeout(8000)
     local status = sock:connect(host.ip, port.number)
     if not status then
-      local result = stdnse.output_table()
+      local result = output_table()
       result.cve = "CVE-2010-4221 (ProFTPD Backdoor)"
       result.severity = "MEDIUM"
       result.vulnerable = false
@@ -35,7 +88,7 @@ action = function(host, port)
 
     local banner, banner_err = sock:receive_buf("\n", 3)
     if not banner then sock:close()
-      local result = stdnse.output_table()
+      local result = output_table()
       result.cve = "CVE-2010-4221"
       result.severity = "MEDIUM"
       result.vulnerable = false
@@ -56,22 +109,22 @@ action = function(host, port)
       server_type = "vsFTPd"
     end
 
-    table.insert(findings, {check = "FTP banner", detail = banner_str, severity = "INFO"})
+    insert(findings, {check = "FTP banner", detail = banner_str, severity = "INFO"})
 
     sock:send("USER anonymous\r\n")
     local rcv = sock:receive_buf("\n", 3)
     if rcv and rcv:match("331") then
-      table.insert(findings, {check = "Anonymous login", detail = "Anonymous login allowed", severity = "MEDIUM"})
+      insert(findings, {check = "Anonymous login", detail = "Anonymous login allowed", severity = "MEDIUM"})
     end
 
     sock:send("PASS test@test.com\r\n")
     rcv = sock:receive_buf("\n", 3)
 
     if rcv and (rcv:match("230") or rcv:match("202")) then
-      table.insert(findings, {check = "Login success", detail = "Authenticated successfully", severity = "INFO"})
+      insert(findings, {check = "Login success", detail = "Authenticated successfully", severity = "INFO"})
 
       for _, cmd in ipairs(backdoor_commands) do
-        local cmd_sock = nmap.new_socket()
+        local cmd_sock = new_socket()
         cmd_sock:set_timeout(8000)
         local ok_cmd = cmd_sock:connect(host.ip, port.number)
         if ok_cmd then
@@ -85,14 +138,14 @@ action = function(host, port)
           if cmd_rcv then
             local resp = cmd_rcv:gsub("\r?\n", "")
             if resp:match("HackIT") or resp:match("uid=") or resp:match("root") or resp:match("nobody") then
-              table.insert(findings, {
+              insert(findings, {
                 check = ("Backdoor via %s"):format(cmd),
                 detail = ("Command executed: %s"):format(resp),
                 severity = "CRITICAL",
               })
             elseif resp:match("211") or resp:match("230") or resp:match("202") then
               if cmd:match("ACCT") then
-                table.insert(findings, {
+                insert(findings, {
                   check = ("ACCT command response"),
                   detail = ("ACCT accepted: %s"):format(resp),
                   severity = "HIGH",
@@ -109,7 +162,7 @@ action = function(host, port)
     sock:send("SYST\r\n")
     rcv = sock:receive_buf("\n", 3)
     if rcv then
-      table.insert(findings, {check = "SYST response", detail = rcv:gsub("\r?\n", ""), severity = "INFO"})
+      insert(findings, {check = "SYST response", detail = rcv:gsub("\r?\n", ""), severity = "INFO"})
     end
 
     sock:send("QUIT\r\n")
@@ -120,7 +173,7 @@ action = function(host, port)
       if major and minor and patch then
         local full_ver = tonumber(major) * 10000 + tonumber(minor) * 100 + tonumber(patch) + (({b = 0, c = 1, d = 2})[patch or ""] or 0)
         if full_ver <= 10303 then
-          table.insert(findings, {check = "ProFTPD version", detail = ("ProFTPD %s - known vulnerable version (CVE-2010-4221)"):format(ftpd_version), severity = "CRITICAL"})
+          insert(findings, {check = "ProFTPD version", detail = ("ProFTPD %s - known vulnerable version (CVE-2010-4221)"):format(ftpd_version), severity = "CRITICAL"})
         end
       end
     end
@@ -133,7 +186,7 @@ action = function(host, port)
       end
     end
 
-    local result = stdnse.output_table()
+    local result = output_table()
     result.cve = "CVE-2010-4221 (ProFTPD Backdoor)"
     result.severity = max_severity
     result.vulnerable = max_severity ~= "LOW" and max_severity ~= "INFO"
@@ -147,7 +200,7 @@ action = function(host, port)
     return result
   end)
   if not ok then
-    local result = stdnse.output_table()
+    local result = output_table()
     result.cve = "CVE-2010-4221"
     result.severity = "MEDIUM"
     result.vulnerable = false

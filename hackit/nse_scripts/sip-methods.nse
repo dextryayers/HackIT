@@ -1,6 +1,58 @@
 local stdnse = require "stdnse"
 local nmap = require "nmap"
 local string = require "string"
+local shortport = require "shortport"
+
+
+
+-- nmp function cache
+local nmap_register = nmap.register_script
+local nmap_settitle = nmap.set_title
+local nmap_resolve = nmap.resolve
+local nmap_get_port_state = nmap.get_port_state
+local nmap_set_port_state = nmap.set_port_state
+local comm = nmap.comm
+local new_socket = nmap.new_socket
+local get_timeout = nmap.get_timeout
+
+-- Performance optimizations
+local format = string.format
+local lower = string.lower
+local upper = string.upper
+local byte = string.byte
+local sub = string.sub
+local match = string.match
+local gmatch = string.gmatch
+local gsub = string.gsub
+local find = string.find
+local rep = string.rep
+local char = string.char
+local concat = table.concat
+local insert = table.insert
+local remove = table.remove
+local sort = table.sort
+local move = table.move or function(a1, f, e, t, a2)
+    if not a2 then a2 = a1 end
+    for i = f, e do a2[t + i - f] = a1[i] end
+    return a2
+end
+local tostring = tostring
+local tonumber = tonumber
+local type = type
+local pcall = pcall
+local pairs = pairs
+local ipairs = ipairs
+local unpack = unpack or table.unpack
+local setmetatable = setmetatable
+local getmetatable = getmetatable
+local error = error
+local select = select
+local clock = nmap.clock
+local msleep = nmap.msleep
+local sleep = stdnse.sleep
+local strsplit = stdnse.strsplit
+local format_output = stdnse.format_output
+local output_table = stdnse.output_table
 
 description = [[Enumerates supported SIP methods by sending an OPTIONS request and analyzing the Allow header. Also tests common SIP methods (REGISTER, INVITE, etc.) against the target to identify allowed operations. Handles both TCP and UDP transport.]]
 author = "HackIT Framework"
@@ -66,7 +118,7 @@ local function parse_sip_response(response)
   if allow then
     info.allowed = {}
     for m in allow:gmatch("[^,%s]+") do
-      table.insert(info.allowed, m)
+      insert(info.allowed, m)
     end
   end
 
@@ -84,13 +136,13 @@ local function parse_sip_response(response)
 end
 
 action = function(host, port)
-  local result = stdnse.output_table()
-  local socket = nmap.new_socket()
+  local result = output_table()
+  local socket = new_socket()
   socket:set_timeout(5000)
 
   local ok, err = pcall(socket.connect, socket, host.ip, port.number)
   if not ok then
-    return stdnse.format_output(false, "Failed to connect: " .. tostring(err))
+    return format_output(false, "Failed to connect: " .. tostring(err))
   end
 
   local branch = math.random(100000, 999999)
@@ -101,13 +153,13 @@ action = function(host, port)
   local ok2, send_err = pcall(socket.send, socket, opts_req)
   if not ok2 then
     socket:close()
-    return stdnse.format_output(false, "Failed to send SIP OPTIONS: " .. tostring(send_err))
+    return format_output(false, "Failed to send SIP OPTIONS: " .. tostring(send_err))
   end
 
   local ok3, response = pcall(socket.receive_buf, socket, 4096, true)
   if not ok3 or not response then
     socket:close()
-    return stdnse.format_output(false, "No SIP response received")
+    return format_output(false, "No SIP response received")
   end
 
   local opts_info = parse_sip_response(response)
@@ -142,7 +194,7 @@ action = function(host, port)
   local tested_methods = {}
   for _, method in ipairs(sip_methods_to_test) do
     if method ~= "OPTIONS" and not allowed_set[method] then
-      local sock2 = nmap.new_socket()
+      local sock2 = new_socket()
       sock2:set_timeout(3000)
       local ok4, err4 = pcall(sock2.connect, sock2, host.ip, port.number)
       if ok4 then
@@ -152,7 +204,7 @@ action = function(host, port)
           local ok6, resp2 = pcall(sock2.receive_buf, sock2, 1024, false)
           if ok6 and resp2 then
             local method_info = parse_sip_response(resp2)
-            table.insert(tested_methods, {
+            insert(tested_methods, {
               method = method,
               code = method_info.code,
               text = method_info.text,
@@ -169,5 +221,5 @@ action = function(host, port)
   end
 
   socket:close()
-  return stdnse.format_output(true, result)
+  return format_output(true, result)
 end

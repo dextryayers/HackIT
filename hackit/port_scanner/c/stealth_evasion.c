@@ -1,4 +1,5 @@
 /*
+#define _GNU_SOURCE
  * HackIT Stealth Evasion Module (C)
  * Dedicated to low-level firewall bypass, packet fragmentation, and decoy generation.
  */
@@ -17,6 +18,8 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
+
+#include "optimize.h"
 #endif
 
 // Stealth Techniques
@@ -40,7 +43,7 @@ typedef struct {
  */
 void generate_decoys(const char* target_ip, char decoys[][16], int count) {
     srand(time(NULL));
-    for (int i = 0; i < count; i++) {
+    for (int i = 0; i < count; ++i) {
         sprintf(decoys[i], "%d.%d.%d.%d", 
                 rand() % 223 + 1, 
                 rand() % 255, 
@@ -100,3 +103,4 @@ int main(int argc, char* argv[]) {
     return 0;
 }
 #endif
+// vim: ts=4 sw=4 et tw=80

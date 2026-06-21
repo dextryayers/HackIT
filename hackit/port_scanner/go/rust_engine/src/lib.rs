@@ -1,3 +1,7 @@
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
+mod shared;
 mod fast_scanner;
 mod os_fingerprint;
 mod advanced_modules;
@@ -12,6 +16,7 @@ mod secret_mapper;
 mod evasion;
 mod scanner_core;
 
+pub use shared::*;
 pub use fast_scanner::*;
 pub use os_fingerprint::*;
 pub use advanced_modules::*;
@@ -28,7 +33,7 @@ pub use scanner_core::*;
 
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
-use std::net::{ToSocketAddrs, TcpStream, IpAddr, Ipv4Addr};
+use std::net::{ToSocketAddrs, TcpStream};
 use std::time::Duration;
 use regex::Regex;
 use lazy_static::lazy_static;

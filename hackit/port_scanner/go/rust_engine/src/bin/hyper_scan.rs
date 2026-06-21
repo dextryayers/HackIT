@@ -1,11 +1,10 @@
+use rust_port_scanner::*;
 use futures::stream::{self, StreamExt};
 use serde::Serialize;
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio::sync::Mutex;
 use tokio::time::timeout;
 
 const MAX_BANNER: usize = 8192;
@@ -67,57 +66,6 @@ struct FinalOutput {
     results: Vec<ScanResult>,
 }
 
-fn parse_ports(input: &str) -> Vec<u16> {
-    let mut ports = Vec::new();
-    match input.trim().to_lowercase().as_str() {
-        "all" => return (1..=65535).collect(),
-        "top100" => {
-            return vec![7,9,13,21,22,23,25,26,37,53,79,80,81,88,106,110,111,113,119,
-                135,139,143,144,179,199,389,427,443,444,445,465,513,514,515,543,544,548,
-                554,587,631,646,873,990,993,995,1025,1026,1027,1028,1029,1110,1433,1720,
-                1723,1755,1900,2000,2001,2049,2121,2717,3000,3128,3306,3389,3986,4000,
-                4001,4662,4899,5000,5001,5050,5060,5101,5190,5357,5432,5555,5631,5666,
-                5800,5900,6000,6001,6646,7070,8000,8008,8009,8080,8081,8443,8888,9100,
-                9999,10000,32768,49152,49154];
-        }
-        _ => {}
-    }
-    for part in input.split(',') {
-        let part = part.trim();
-        if let Some((start, end)) = part.split_once('-') {
-            let s: u16 = start.parse().unwrap_or(1);
-            let e: u16 = end.parse().unwrap_or(65535);
-            for p in s..=e { ports.push(p); }
-        } else if let Ok(p) = part.parse::<u16>() {
-            ports.push(p);
-        }
-    }
-    ports.sort();
-    ports.dedup();
-    ports
-}
-
-fn service_name(port: u16) -> Option<String> {
-    let svc = match port {
-        21 => "FTP", 22 => "SSH", 23 => "Telnet", 25 => "SMTP", 53 => "DNS",
-        80 => "HTTP", 110 => "POP3", 111 => "RPC", 135 => "MSRPC", 139 => "NetBIOS",
-        143 => "IMAP", 161 => "SNMP", 179 => "BGP", 389 => "LDAP", 443 => "HTTPS",
-        445 => "SMB", 465 => "SMTPS", 514 => "Syslog", 587 => "SMTP-MSA",
-        636 => "LDAPS", 873 => "RSYNC", 990 => "FTPS", 993 => "IMAPS",
-        995 => "POP3S", 1080 => "SOCKS", 1194 => "OpenVPN", 1433 => "MSSQL",
-        1521 => "Oracle", 1723 => "PPTP", 2049 => "NFS", 2375 => "Docker",
-        2376 => "Docker-TLS", 2379 => "etcd", 3128 => "Squid", 3306 => "MySQL",
-        3389 => "RDP", 3690 => "SVN", 4369 => "EPMD", 5432 => "PostgreSQL",
-        5672 => "AMQP", 5900 => "VNC", 5984 => "CouchDB", 5985 => "WinRM",
-        6379 => "Redis", 6443 => "K8s-API", 8080 => "HTTP-Proxy",
-        8443 => "HTTPS-Alt", 8500 => "Consul", 9090 => "Prometheus",
-        9092 => "Kafka", 9200 => "Elasticsearch", 10250 => "Kubelet",
-        11211 => "Memcached", 15672 => "RabbitMQ", 25565 => "Minecraft",
-        27017 => "MongoDB", 32400 => "Plex", _ => return None,
-    };
-    Some(svc.to_string())
-}
-
 async fn connect_with_retry(host: &str, port: u16, timeout_ms: u64) -> Result<TcpStream, String> {
     let addr = format!("{}:{}", host, port);
     match timeout(Duration::from_millis(timeout_ms), TcpStream::connect(&addr)).await {
@@ -153,32 +101,8 @@ async fn grab_banner(host: &str, port: u16, timeout_ms: u64) -> (String, u64) {
     (banner, elapsed)
 }
 
-fn sanitize_banner(raw: &str) -> String {
-    let mut out = String::with_capacity(raw.len());
-    for c in raw.chars() {
-        match c {
-            '\r' => {},
-            '\n' => { if !out.ends_with(' ') { out.push(' '); } },
-            c if c.is_ascii_graphic() || c == ' ' => out.push(c),
-            _ => {}
-        }
-    }
-    if out.len() > 500 {
-        out.truncate(500);
-        out.push_str("...");
-    }
-    out
-}
-
-fn detect_tls(host: &str, port: u16, timeout_ms: u64) -> bool {
-    let stream = std::net::TcpStream::connect_timeout(
-        &format!("{}:{}", host, port).parse().unwrap(),
-        Duration::from_millis(timeout_ms),
-    );
-    if stream.is_err() { return false; }
-    let mut s = stream.unwrap();
-    s.set_read_timeout(Some(Duration::from_millis(timeout_ms))).ok();
-    s.set_write_timeout(Some(Duration::from_millis(timeout_ms))).ok();
+async fn detect_tls(host: &str, port: u16, timeout_ms: u64) -> bool {
+    let addr = format!("{}:{}", host, port);
     let ch: &[u8] = &[
         0x16, 0x03, 0x01, 0x00, 0x31,
         0x01, 0x00, 0x00, 0x2d, 0x03, 0x03,
@@ -190,13 +114,15 @@ fn detect_tls(host: &str, port: u16, timeout_ms: u64) -> bool {
         0x00, 0x2f, 0x00, 0x35,
         0x01, 0x00,
     ];
-    use std::io::Write;
-    let _ = s.set_nonblocking(false);
-    let _ = (&mut s as &mut dyn Write).write(ch);
-    let mut resp = [0u8; 1024];
-    use std::io::Read;
-    match (&mut s as &mut dyn Read).read(&mut resp) {
-        Ok(n) if n > 0 && resp[0] == 0x16 => true,
+    match timeout(Duration::from_millis(timeout_ms), TcpStream::connect(&addr)).await {
+        Ok(Ok(mut s)) => {
+            let _ = tokio::io::AsyncWriteExt::write_all(&mut s, ch).await;
+            let mut resp = [0u8; 1024];
+            match timeout(Duration::from_millis(timeout_ms), s.read(&mut resp)).await {
+                Ok(Ok(n)) if n > 0 && resp[0] == 0x16 => true,
+                _ => false,
+            }
+        }
         _ => false,
     }
 }
@@ -292,12 +218,12 @@ async fn scan_port(host: &str, port: u16, timeout_ms: u64) -> Option<ScanResult>
     let (banner, _banner_ms) = grab_banner(host, port, timeout_ms).await;
     let sanitized = sanitize_banner(&banner);
     let tls = if port == 443 || port == 8443 || port == 993 || port == 995 || port == 636 {
-        detect_tls(host, port, timeout_ms)
+        detect_tls(host, port, timeout_ms).await
     } else { false };
     let (service, product, version) = if !sanitized.is_empty() {
         match_signature(port, &sanitized)
     } else {
-        (service_name(port.clone()), None, None)
+        (service_name(port), None, None)
     };
     let os_hint = None;
     Some(ScanResult {
@@ -320,24 +246,25 @@ async fn scan_target(
     timeout_ms: u64,
     concurrency: usize,
 ) -> Vec<ScanResult> {
-    let results = Arc::new(Mutex::new(Vec::new()));
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     stream::iter(ports.iter().copied())
-        .map(|port| {
+        .for_each_concurrent(concurrency, |port| {
             let host = host.to_string();
-            let results = Arc::clone(&results);
+            let tx = tx.clone();
             async move {
                 if let Some(r) = scan_port(&host, port, timeout_ms).await {
-                    let mut guard = results.lock().await;
-                    guard.push(r);
+                    let _ = tx.send(r);
                 }
             }
         })
-        .buffer_unordered(concurrency)
-        .collect::<Vec<()>>()
         .await;
-    let mut guard = results.lock().await;
-    guard.sort_by(|a, b| a.port.cmp(&b.port));
-    guard.clone()
+    drop(tx);
+    let mut results: Vec<ScanResult> = Vec::with_capacity(ports.len().min(1000));
+    while let Some(r) = rx.recv().await {
+        results.push(r);
+    }
+    results.sort_by(|a, b| a.port.cmp(&b.port));
+    results
 }
 
 #[tokio::main]
@@ -353,7 +280,6 @@ async fn main() {
     let ports = parse_ports(&args[2]);
     let mut timeout_ms: u64 = DEFAULT_TIMEOUT_MS;
     let mut concurrency: usize = DEFAULT_CONCURRENCY;
-    let mut output_format = "text";
     for arg in &args[3..] {
         if let Ok(ms) = arg.parse::<u64>() {
             timeout_ms = ms;
@@ -361,8 +287,6 @@ async fn main() {
             if let Ok(c) = n.parse::<usize>() {
                 concurrency = c.max(1).min(10000);
             }
-        } else {
-            output_format = arg;
         }
     }
     if ports.is_empty() {

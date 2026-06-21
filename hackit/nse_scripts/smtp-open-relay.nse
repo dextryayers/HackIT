@@ -1,4 +1,57 @@
 local stdnse = require "stdnse"
+local nmap = require "nmap"
+local shortport = require "shortport"
+
+
+
+-- nmp function cache
+local nmap_register = nmap.register_script
+local nmap_settitle = nmap.set_title
+local nmap_resolve = nmap.resolve
+local nmap_get_port_state = nmap.get_port_state
+local nmap_set_port_state = nmap.set_port_state
+local comm = nmap.comm
+local new_socket = nmap.new_socket
+local get_timeout = nmap.get_timeout
+
+-- Performance optimizations
+local format = string.format
+local lower = string.lower
+local upper = string.upper
+local byte = string.byte
+local sub = string.sub
+local match = string.match
+local gmatch = string.gmatch
+local gsub = string.gsub
+local find = string.find
+local rep = string.rep
+local char = string.char
+local concat = table.concat
+local insert = table.insert
+local remove = table.remove
+local sort = table.sort
+local move = table.move or function(a1, f, e, t, a2)
+    if not a2 then a2 = a1 end
+    for i = f, e do a2[t + i - f] = a1[i] end
+    return a2
+end
+local tostring = tostring
+local tonumber = tonumber
+local type = type
+local pcall = pcall
+local pairs = pairs
+local ipairs = ipairs
+local unpack = unpack or table.unpack
+local setmetatable = setmetatable
+local getmetatable = getmetatable
+local error = error
+local select = select
+local clock = nmap.clock
+local msleep = nmap.msleep
+local sleep = stdnse.sleep
+local strsplit = stdnse.strsplit
+local format_output = stdnse.format_output
+local output_table = stdnse.output_table
 
 description = [[Tests if the SMTP server is an open relay by attempting to send an email through the server to an external address without authentication. Uses structured output with detailed SMTP dialog.]]
 author = "HackIT Framework"
@@ -14,24 +67,24 @@ action = function(host, port)
     local dialog = {}
     for _, domain in ipairs(test_domains) do
         if relay_found then break end
-        local sock = nmap.new_socket()
+        local sock = new_socket()
         sock:set_timeout(15000)
         local ok = pcall(function()
             local status = sock:connect(host.ip, port)
             if not status then return end
             local banner = sock:receive_buf("\n", 5000)
-            table.insert(dialog, "BANNER: " .. (banner:match("([^\r\n]+)") or banner))
+            insert(dialog, "BANNER: " .. (banner:match("([^\r\n]+)") or banner))
             sock:send("EHLO hackit.local\r\n")
             local ehlo = sock:receive_buf("\n", 5000)
-            table.insert(dialog, "EHLO: +OK")
+            insert(dialog, "EHLO: +OK")
             if ehlo then
                 sock:send("MAIL FROM:<test@hackit.local>\r\n")
                 local mf = sock:receive_buf("\n", 5000)
-                table.insert(dialog, "MAIL FROM: " .. (mf:match("([^\r\n]+)") or mf))
+                insert(dialog, "MAIL FROM: " .. (mf:match("([^\r\n]+)") or mf))
                 if mf and (mf:match("^250 ") or mf:match("^251 ")) then
                     sock:send("RCPT TO:<relay-test@" .. domain .. ">\r\n")
                     local rcpt = sock:receive_buf("\n", 5000)
-                    table.insert(dialog, "RCPT TO: " .. (rcpt:match("([^\r\n]+)") or rcpt))
+                    insert(dialog, "RCPT TO: " .. (rcpt:match("([^\r\n]+)") or rcpt))
                     if rcpt and (rcpt:match("^250 ") or rcpt:match("^251 ")) then
                         relay_found = true
                     end
@@ -45,7 +98,7 @@ action = function(host, port)
         end
     end
     if relay_found then
-        local result = stdnse.output_table()
+        local result = output_table()
         result.vulnerability = true
         result.name = "SMTP Open Relay"
         result.severity = "HIGH"
@@ -53,5 +106,5 @@ action = function(host, port)
         result.dialog = dialog
         return result
     end
-    return stdnse.format_output(false, "Not an open relay")
+    return format_output(false, "Not an open relay")
 end

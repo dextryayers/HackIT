@@ -6,7 +6,8 @@
 """
 import socket
 import threading
-from concurrent.futures import ThreadPoolExecutor
+import signal
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import click
 import json
 import os
@@ -16,6 +17,14 @@ import time as _time
 import re as _re
 from datetime import datetime
 from hackit.ui import display_tool_banner, _colored, GREEN, YELLOW, RED, BLUE, CYAN, PURPLE, B_GREEN, B_CYAN, B_WHITE, B_RED, B_YELLOW, DIM
+
+HAS_RICH = False
+try:
+    from rich.console import Console as _RichConsole
+    from rich.progress import Progress as _RichProgress, BarColumn as _RichBar, TextColumn as _RichText, TimeRemainingColumn as _RichTimeRem, SpinnerColumn as _RichSpinner
+    HAS_RICH = True
+except ImportError:
+    pass
 from .go_bridge import get_engine
 from .targets import parse_targets, parse_ports
 from .plugin_loader import discover_plugins, run_lua_plugin, run_ruby_plugin, run_rust_engine, run_c_engine
@@ -24,6 +33,51 @@ from hackit.subdomain.go_bridge import get_engine as get_sub_engine
 # ─────────────────────────────────────────────────────────────────
 # UTILITY HELPERS
 # ─────────────────────────────────────────────────────────────────
+
+class TimeoutException(Exception): pass
+
+def timeout_handler(signum, frame):
+    raise TimeoutException("Operation timed out")
+
+def with_timeout(seconds, func, *args, **kwargs):
+    """Run a function with a timeout using SIGALRM (Unix only)."""
+    if not hasattr(signal, 'SIGALRM'):
+        return func(*args, **kwargs)
+    old = signal.signal(signal.SIGALRM, timeout_handler)
+    signal.alarm(seconds)
+    try:
+        result = func(*args, **kwargs)
+        signal.alarm(0)
+        return result
+    except TimeoutException:
+        signal.alarm(0)
+        raise
+    finally:
+        signal.signal(signal.SIGALRM, old)
+
+def create_progress_bar(desc="Scanning", total=100, transient=True):
+    """Create a progress bar using rich (if available) or simple ASCII."""
+    if HAS_RICH:
+        console = _RichConsole()
+        progress = _RichProgress(
+            _RichSpinner(),
+            _RichText("[progress.description]{task.description}"),
+            _RichBar(),
+            _RichText("[progress.percentage]{task.percentage:>3.0f}%"),
+            _RichTimeRem(),
+            console=console,
+            transient=transient,
+        )
+        progress.start()
+        task = progress.add_task(desc, total=total)
+        return progress, task, lambda: progress.stop()
+    return None, None, lambda: None
+
+def update_progress(progress, task, advance=1, desc=None):
+    if progress:
+        if desc:
+            progress.update(task, description=desc)
+        progress.update(task, advance=advance)
 
 def pad_v(text, width, fill=' '):
     """Pad text to visible width, ignoring ANSI codes."""
@@ -47,38 +101,48 @@ def _vis_len(text):
 # PREMIUM BANNER
 # ─────────────────────────────────────────────────────────────────
 
-def print_portstorm_banner():
-    """Print the ultra-premium HackIT PortStorm banner."""
-    W  = '\x1b[0m'
-    B  = '\x1b[1m'
-    C  = '\x1b[38;5;51m'    # Electric Cyan
-    M  = '\x1b[38;5;201m'   # Neon Magenta
-    G  = '\x1b[38;5;46m'    # Matrix Green
-    Y  = '\x1b[38;5;226m'   # Vivid Yellow
-    R  = '\x1b[38;5;196m'   # Bright Red
-    P  = '\x1b[38;5;141m'   # Soft Purple
-    DM = '\x1b[2m'           # Dim
-    BW = '\x1b[1;97m'       # Bold White
-    BC = '\x1b[1;36m'       # Bold Cyan
+def print_portstorm_banner(target="", iface="", gw="", uptime=""):
+    """Print the HackIT PortStorm ASCII banner."""
+    C = '\x1b[36m'
+    B = '\x1b[1m'
+    W = '\x1b[0m'
+    import subprocess as _sp
 
-    banner = f"""
-{C}{B}  ██████╗  ██████╗ ██████╗ ████████╗███████╗████████╗ ██████╗ ██████╗ ███╗   ███╗{W}
-{C}{B}  ██╔══██╗██╔═══██╗██╔══██╗╚══██╔══╝██╔════╝╚══██╔══╝██╔═══██╗██╔══██╗████╗ ████║{W}
-{C}{B}  ██████╔╝██║   ██║██████╔╝   ██║   ███████╗   ██║   ██║   ██║██████╔╝██╔████╔██║{W}
-{P}{B}  ██╔═══╝ ██║   ██║██╔══██╗   ██║   ╚════██║   ██║   ██║   ██║██╔══██╗██║╚██╔╝██║{W}
-{M}{B}  ██║     ╚██████╔╝██║  ██║   ██║   ███████║   ██║   ╚██████╔╝██║  ██║██║ ╚═╝ ██║{W}
-{M}{B}  ╚═╝      ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚══════╝   ╚═╝    ╚═════╝ ╚═╝  ╚═╝╚═╝     ╚═╝{W}
+    if not iface:
+        try:
+            r = _sp.run(['ip', '-4', 'route', 'show', 'default'], capture_output=True, text=True)
+            parts = r.stdout.strip().split()
+            if len(parts) >= 5:
+                iface = parts[4]
+                gw = parts[2]
+        except:
+            iface = iface or "eth0"
+            gw = gw or "0.0.0.0"
+    if not uptime:
+        try:
+            with open('/proc/uptime') as f:
+                secs = float(f.read().split()[0])
+                h, m = divmod(int(secs), 3600)
+                m //= 60
+                uptime = f"{h}h {m}m"
+        except:
+            uptime = "0h 0m"
+    status = "Active"
+
+    title = f"""
+{C}┌─────────────────────────────────────────────────┐
+│ ┌───┐ ┌───┐ ┌───┐ ┌───┐ ┌───┐ ┌───┐ ┌───┐ ┌───┐ │
+│ │ P │ │ O │ │ R │ │ T │ │ S │ │ C │ │ A │ │ N │ │
+│ └───┘ └───┘ └───┘ └───┘ └───┘ └───┘ └───┘ └───┘ │
+├─────────────────────────────────────────────────┤{W}
 """
-    subtitle = f"  {DM}┌{'─'*70}┐{W}"
-    engine_line = f"  {DM}│{W}  {G}Engines:{W} {BW}Go{W} {DM}·{W} {R}Rust{W} {DM}·{W} {Y}C{W} {DM}·{W} {M}C++{W} {DM}·{W} {C}Lua{W}  {DM}│ {Y}Ultra-Power Polyglot Engine v3.0{W}"
-    tag_line    = f"  {DM}│{W}  {P}Modes:{W} SYN·TCP·UDP·ACK·FIN·XMAS·NULL·IDLE·WINDOW·MAIMON·SWEEP  {DM}│{W}"
-    sep_line    = f"  {DM}└{'─'*70}┘{W}"
+    info = f"│  {B}Interface :{W} {iface:<8}  {B}Gateway :{W} {gw:<12}   │\n"
+    info += f"│  {B}Status    :{W} {status:<8}  {B}Uptime  :{W} {uptime:<12}   │\n"
+    info += f"{C}└─────────────────────────────────────────────────┘{W}\n"
 
-    sys.stdout.write(banner)
-    sys.stdout.write(subtitle + "\n")
-    sys.stdout.write(engine_line + "\n")
-    sys.stdout.write(tag_line + "\n")
-    sys.stdout.write(sep_line + "\n\n")
+    sys.stdout.write('\033[2J\033[H')
+    sys.stdout.write(title)
+    sys.stdout.write(info)
     sys.stdout.flush()
 
 
@@ -166,7 +230,7 @@ TOP_100_PORTS = [
 # ─────────────────────────────────────────────────────────────────
 
 def fast_port_scan(target, port_range="1-1024", workers=200, timeout=1.5):
-    """High-performance pure-Python fallback scanner."""
+    """High-performance pure-Python fallback scanner — deduplicated."""
     try:
         if '-' in port_range:
             start_port, end_port = map(int, port_range.split('-'))
@@ -181,78 +245,70 @@ def fast_port_scan(target, port_range="1-1024", workers=200, timeout=1.5):
     results = []
     lock = threading.Lock()
 
-    PROBES = {
+    PROBE_CACHE = {
         21: b"SYST\r\n",
-        22: b"",
         25: b"HELO hackit.local\r\n",
-        80: b"GET / HTTP/1.0\r\n\r\n",
+        80: lambda h: f"GET / HTTP/1.0\r\nHost: {h}\r\n\r\n".encode(),
         110: b"CAPA\r\n",
         143: b"A1 CAPABILITY\r\n",
         443: b"",
+        587: b"EHLO hackit\r\n",
         3306: b"",
-        6379: b"INFO\r\n",
         5432: bytes([0,0,0,8,4,210,22,47]),
-        27017: bytes([0x3f,0x00,0x00,0x00,0x01,0x00,0x00,0x00]),
+        6379: b"INFO\r\n",
+        8080: lambda h: f"GET / HTTP/1.0\r\nHost: {h}\r\n\r\n".encode(),
+        8443: b"",
         11211: b"stats\r\n",
+        27017: bytes([0x3f,0x00,0x00,0x00,0x01,0x00,0x00,0x00]),
     }
+    import ssl
 
-    def grab_banner(s, port, target_host):
-        import ssl
+    resolved = target
+    try:
+        resolved = socket.getaddrinfo(target, 0, socket.AF_INET, socket.SOCK_STREAM)[0][4][0]
+    except Exception:
+        pass
+
+    def grab_banner(s, port):
+        nonlocal resolved
         try:
             s.settimeout(max(timeout, 2.0))
-            
-            # Deep SSL/TLS Probe
             if port in (443, 8443, 9443, 2083, 2087, 2096, 7443) or str(port).endswith('443'):
                 try:
                     ctx = ssl.create_default_context()
                     ctx.check_hostname = False
                     ctx.verify_mode = ssl.CERT_NONE
-                    ss = ctx.wrap_socket(s, server_hostname=target_host)
-                    cert = ss.getpeercert(binary_form=False)
+                    ss = ctx.wrap_socket(s, server_hostname=resolved)
+                    req = f"GET / HTTP/1.1\r\nHost: {resolved}\r\nConnection: close\r\n\r\n"
+                    ss.send(req.encode())
+                    banner = ss.recv(4096).decode(errors='replace')
                     cn = ""
-                    if cert and 'subject' in cert:
+                    if 'subject' in (cert := ss.getpeercert(binary_form=False) or {}):
                         for item in cert['subject']:
                             if item[0][0] == 'commonName':
                                 cn = item[0][1]
-                    
-                    req = f"GET / HTTP/1.1\r\nHost: {target_host}\r\nUser-Agent: curl/8.7.1\r\nConnection: close\r\n\r\n"
-                    ss.send(req.encode())
-                    banner = ss.recv(4096).decode(errors='replace')
-                    
                     for line in banner.split('\n'):
                         ll = line.lower()
                         if ll.startswith('server:') or ll.startswith('x-powered-by:'):
                             return f"[SSL: {cn}] {line.strip()}"
-                    
                     if banner.upper().startswith("HTTP/"):
-                        first_line = banner.split('\n')[0].strip()
-                        return f"[SSL: {cn}] {first_line}"
-                    
+                        return f"[SSL: {cn}] {banner.split(chr(10))[0].strip()}"
                     return f"[SSL: {cn}]" if cn else "(SSL connected)"
                 except Exception:
-                    return "(SSL Handshake failed)"
+                    return "(SSL)"
 
-            # Pre-read for greeting protocols (FTP, SSH, SMTP, POP3, IMAP)
             if port in (21, 22, 25, 110, 143, 587, 3306, 5432):
                 s.settimeout(0.5)
                 try:
                     greet = s.recv(1024).decode(errors='ignore').strip()
-                    if greet:
-                        return greet.split('\n')[0].strip()
-                except socket.timeout:
-                    pass
+                    if greet: return greet.split('\n')[0].strip()
+                except: pass
                 s.settimeout(max(timeout, 2.0))
 
-            # Active Probing
-            probe = b""
-            if port in (80, 8080, 8000, 8888, 5000):
-                probe = f"GET / HTTP/1.1\r\nHost: {target_host}\r\nUser-Agent: curl/8.7.1\r\nConnection: close\r\n\r\n".encode()
-            else:
-                probe = PROBES.get(port, b"")
-
-            if probe:
-                s.send(probe)
-
+            probe = PROBE_CACHE.get(port, b"")
+            probe_bytes = probe(resolved) if callable(probe) else probe
+            if probe_bytes:
+                s.send(probe_bytes)
             banner = b""
             try:
                 for _ in range(2):
@@ -260,26 +316,17 @@ def fast_port_scan(target, port_range="1-1024", workers=200, timeout=1.5):
                     if not chunk: break
                     banner += chunk
                     if b"\n" in chunk: break
-            except socket.timeout:
-                pass
-
-            if not banner and not probe:
+            except: pass
+            if not banner and not probe_bytes:
                 s.send(b"\r\n\r\n")
-                try:
-                    banner = s.recv(1024)
-                except:
-                    pass
-
-            if not banner:
-                return ""
-
+                try: banner = s.recv(1024)
+                except: pass
+            if not banner: return ""
             b_str = banner.decode(errors='replace').strip()
-            
             if "HTTP/" in b_str.upper():
-                svrs = [ln.strip() for ln in b_str.split('\n') if ln.lower().startswith('server:') or ln.lower().startswith('x-powered-by:')]
-                if svrs: return " | ".join(svrs)
-                return b_str.split('\n')[0].strip()
-
+                svrs = [ln.strip() for ln in b_str.split('\n')
+                        if ln.lower().startswith('server:') or ln.lower().startswith('x-powered-by:')]
+                return " | ".join(svrs) if svrs else b_str.split('\n')[0].strip()
             for line in b_str.split('\n'):
                 line = line.strip()
                 if len(line) > 3 and any(c.isalnum() for c in line):
@@ -292,26 +339,28 @@ def fast_port_scan(target, port_range="1-1024", workers=200, timeout=1.5):
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             s.settimeout(timeout)
-            result = s.connect_ex((target, port))
-            if result == 0:
+            if s.connect_ex((resolved, port)) == 0:
                 service = COMMON_PORTS.get(port, 'UNKNOWN')
-                banner = grab_banner(s, port, target)
+                banner = grab_banner(s, port)
                 with lock:
-                    results.append({
-                        "port": port,
-                        "service": service,
-                        "version": banner,
-                        "banner": banner,
-                        "status": "open",
-                        "col": "green"
-                    })
+                    results.append({"port": port, "service": service,
+                                    "version": banner, "banner": banner,
+                                    "status": "open", "col": "green"})
             s.close()
         except Exception:
             pass
 
-    ports = range(start_port, end_port + 1)
+    ports = list(range(start_port, end_port + 1))
+    total = len(ports)
+    progress, task, stop_progress = create_progress_bar("Port scan", total, transient=True)
+    completed = 0
     with ThreadPoolExecutor(max_workers=workers) as executor:
-        executor.map(scan_port, ports)
+        futures = {executor.submit(scan_port, p): p for p in ports}
+        for f in as_completed(futures):
+            completed += 1
+            if progress:
+                update_progress(progress, task)
+    stop_progress()
     return sorted(results, key=lambda x: x['port'])
 
 
@@ -486,28 +535,33 @@ def render_intel_grid(ip_addr, host_name, dns_enum, intel, os_info, mode, scan_m
 @click.command()
 @click.argument('target_arg', required=False)
 # [ CORE TARGETING ]
-@click.option('-t', '--target', 'host', help='Target IP, hostname, or CIDR range')
+@click.option('-t', '--target', 'host', envvar='HACKIT_TARGET', help='Target IP, hostname, or CIDR range')
 @click.option('-i', '--input', 'host_file', type=click.Path(exists=True), help='Input target list from file')
-@click.option('-p', '--ports', help='Ports: 1-1000, 80,443,8080, top:100, all')
+@click.option('-p', '--ports', envvar='HACKIT_PORTS', help='Ports: 1-1000, 80,443,8080, top:100, all')
 
 # [ STRATEGY & PERFORMANCE ]
 @click.option('-m', '--mode', type=click.Choice([
     'syn-stealth', 'tcp-connect', 'udp-spray', 'ack-firewalk', 'fin-silent',
     'xmas-party', 'null-mystery', 'maimon-ghost', 'window-spy', 'idle-zombie',
     'protocol-sweep', 'anon-self'
-]), default='tcp-connect', help='Scanning strategy')
+]), default='tcp-connect', envvar='HACKIT_MODE', help='Scanning strategy')
 @click.option('--tp', '--tempo', type=click.Choice(['shadow', 'whisper', 'gait', 'normal', 'rush', 'blitz']),
-              default='normal', help='Speed template')
-@click.option('--workers', type=int, help='Number of concurrent workers')
+              default='normal', envvar='HACKIT_TEMPO', help='Speed template')
+@click.option('--workers', type=int, envvar='HACKIT_WORKERS', help='Number of concurrent workers')
 @click.option('--adaptive', is_flag=True, help='Auto-tunes timing based on latency + packet loss')
 @click.option('--quantum', is_flag=True, help='Quantum port ordering: most-likely-open ports scanned first')
 
 # [ OUTPUT & VERBOSITY ]
-@click.option('-o', '--output', help='Output filename (without extension)')
+@click.option('-o', '--output', envvar='HACKIT_OUTPUT', help='Output filename (without extension)')
 @click.option('-F', '--format', 'output_format',
-              type=click.Choice(['text', 'json', 'xml', 'html', 'grafana']), default='text', help='Output format')
+              type=click.Choice(['text', 'json', 'xml', 'html', 'grafana', 'csv']), default='text',
+              envvar='HACKIT_FORMAT', help='Output format')
+@click.option('--json-output', is_flag=True, help='Machine-parseable JSON output to stdout (overrides --format)')
 @click.option('-v', '--verbose', count=True, help='Verbosity level (-v, -vv, -vvv)')
+@click.option('-q', '--quiet', is_flag=True, help='Minimal output mode')
+@click.option('--no-color', is_flag=True, help='Disable colored output')
 @click.option('--open-only', is_flag=True, help='Show only open ports')
+@click.option('--timeout', 'host_timeout_sec', type=int, default=0, envvar='HACKIT_TIMEOUT', help='Per-host timeout in seconds (0=disabled)')
 
 # [ STEALTH & EVASION ]
 @click.option('--ghost-protocol', is_flag=True, help='Max stealth: SYN+frag+decoys+delays')
@@ -547,27 +601,114 @@ def render_intel_grid(ip_addr, host_name, dns_enum, intel, os_info, mode, scan_m
 @click.option('--show-version', is_flag=True, help='Display scanner version')
 @click.option('--risk', is_flag=True, help='Show risk score per port')
 
+# [ NEW: Profiles & Pipeline ]
+@click.option('--profile', type=click.Choice(['quick', 'stealth', 'full', 'web', 'lan', 'comprehensive']),
+              envvar='HACKIT_PROFILE', help='Scan profile (overrides ports/mode/workers)')
+@click.option('--pipeline', envvar='HACKIT_PIPELINE', help='Pipeline stages: tcp,service,os,vuln (comma-separated)')
+@click.option('--all-engines', is_flag=True, help='Run Rust+C+C++ in parallel and correlate')
+@click.option('--dashboard', is_flag=True, help='Show real-time live dashboard')
+
 def scan_ports(**kwargs):
     """
     ⚡ HackIT PortStorm v3.0 — Ultra-Power Polyglot Port Scanner.
 
-    Engines: Go (Orchestrator) · Rust (Mass Scan) · C (Raw Socket)
-             C++ (Deep Fingerprint) · Lua (Script Engine)
+    Engines: Go (Orchestrator) · Rust (Mass Scan) · C (Raw Socket) · C++ (Deep Fingerprint) · Lua (Script Engine)
+
+    Use 'gui' to launch the desktop GUI.
 
     Examples:
+
+      scan gui
+
       scan example.com -p top:100 --deep --os
+
       scan 10.0.0.0/24 -p 22,80,443,3389 --tempo blitz
-      scan 192.168.1.1 --ghost-protocol --chaos -p 1-65535
-      scan target.com --deep --script vuln --risk
+
+      scan 192.168.1.1 --profile full --all-engines
     """
+    # ── No-color mode ───────────────────────────────────────────
+    if kwargs.get('no_color'):
+        import hackit.ui as _hackit_ui
+        _hackit_ui._colored = lambda text, *args, **kwargs: str(text)
+
+    # ── Quiet mode ──────────────────────────────────────────────
+    _quiet = kwargs.get('quiet', False)
+    if _quiet:
+        kwargs['verbose'] = 0
+
     # ── Version display ──────────────────────────────────────────
     if kwargs.get('show_version'):
         click.echo(f"\n  {_colored('HackIT PortStorm', B_CYAN, bold=True)} {_colored('v3.0.0', B_WHITE)}")
         click.echo(f"  Engines: {_colored('Go+Rust+C+C+++Lua', B_GREEN)}\n")
         return
 
+    # ── GUI launcher ──────────────────────────────────────────────
+    target_arg = kwargs.get('target_arg', '')
+    if target_arg and target_arg.lower() == 'gui':
+        try:
+            from .gui import GUI as PortStormGUI
+            gui = PortStormGUI()
+            gui.run()
+        except SystemExit:
+            raise
+        except Exception as e:
+            click.echo(_colored(f'  [!] GUI: {e}', YELLOW))
+            click.echo('  Run: python3 hackit/port_scanner/gui.py')
+        return
+
     # ── Print premium banner ─────────────────────────────────────
-    print_portstorm_banner()
+    target_raw = target_arg or kwargs.get('host') or ''
+    if not _quiet:
+        print_portstorm_banner(target=target_raw)
+
+    # ── Profile override ─────────────────────────────────────────
+    profile_name = kwargs.get('profile')
+    if profile_name:
+        try:
+            from .engine_profiles import get_profile
+            prof = get_profile(profile_name)
+            if not kwargs.get('ports'):
+                kwargs['ports'] = prof.port_spec
+            if not kwargs.get('workers'):
+                kwargs['workers'] = prof.workers
+            if not kwargs.get('mode'):
+                kwargs['mode'] = prof.mode
+            click.echo(_colored(f"  [PROFILE] {prof.name}: {prof.description}", B_CYAN))
+        except ImportError:
+            click.echo(_colored("  [!] engine_profiles module not available", YELLOW))
+
+    # ── Multi-engine mode (Rust + C + C++ in parallel) ──────────
+    if kwargs.get('all_engines'):
+        try:
+            from .engine_orchestrator import PortOrchestrator
+            from .engine_discovery import discover_engines
+            engines = discover_engines()
+            click.echo(_colored(f"  [ENGINES] Found {len(engines)} available engine(s)", B_GREEN))
+            orchestrator = PortOrchestrator()
+            target_raw = kwargs.get('target_arg') or kwargs.get('host')
+            ports_str = kwargs.get('ports') or 'top:100'
+            stages = kwargs.get('pipeline', '').split(',') if kwargs.get('pipeline') else ['tcp', 'service', 'os', 'vuln']
+
+            if kwargs.get('dashboard'):
+                from .live_dashboard import Dashboard
+                dash = Dashboard()
+                dash.start()
+                try:
+                    results = orchestrator.run_scan(target_raw, ports_str, profile_name or 'quick',
+                                                     engines=list(engines.keys()), stages=stages,
+                                                     callback=dash.update)
+                finally:
+                    dash.stop()
+            else:
+                results = orchestrator.run_scan(target_raw, ports_str, profile_name or 'quick',
+                                                 engines=list(engines.keys()), stages=stages)
+            if results:
+                open_ports = [p for p in results.get('ports', []) if p.get('status') == 'open']
+                render_port_table(open_ports, show_risk=kwargs.get('risk', False))
+            return
+        except ImportError as e:
+            click.echo(_colored(f"  [!] Multi-engine mode unavailable: {e}", YELLOW))
+            click.echo(_colored("  [*] Falling back to Go engine...", DIM))
 
     # ── Engine initialization ────────────────────────────────────
     engine = get_engine()
@@ -692,36 +833,49 @@ def scan_ports(**kwargs):
     grand_open = 0
     grand_total = 0
 
+    _scan_start_time = _time.time()
+    _scan_count = 0
     def scan_callback(cb_type, data):
         """Real-time callback for Go engine events."""
+        nonlocal _scan_count, _scan_start_time
         if cb_type == "status":
             msg = data.get('message', '')
-            if msg and kwargs.get('verbose', 0) >= 1:
-                sys.stdout.write(_colored(f"\r  ◈ {msg}..." + " " * 10, DIM))
+            if msg and kwargs.get('verbose', 0) >= 1 and not _quiet:
+                sys.stdout.write(_colored(f"\r  \u25c8 {msg}..." + " " * 10, DIM))
                 sys.stdout.flush()
         elif cb_type == "result":
-            port   = data.get('port', 0)
             status = data.get('status', 'unknown')
-            if status == 'open' and port > 0:
-                service = data.get('service', 'unknown')
-                banner  = data.get('banner', data.get('version', ''))
+            if status == 'open':
+                port = data.get('port', 0)
+                if port > 0:
+                    service = data.get('service', 'unknown')
+                    banner  = data.get('banner', data.get('version', ''))
+                    _scan_count += 1
 
-                # Build live intel line
-                p_str = _colored(f"{port:<5}", B_WHITE, bold=True)
-                s_str = _colored("OPEN", B_GREEN, bold=True)
-                v_str = _colored(f"{service[:16]:<16}", B_CYAN)
-                b_str = _colored(str(banner)[:35].replace('\n', ' ') if banner else "(probing...)", DIM)
-
-                sys.stdout.write(f"\r  {_colored('▶', B_GREEN)} {p_str} {s_str} {v_str} {b_str}\n")
+                    if not _quiet:
+                        p_str = _colored(f"{port:<5}", B_WHITE, bold=True)
+                        s_str = _colored("OPEN", B_GREEN, bold=True)
+                        v_str = _colored(f"{service[:16]:<16}", B_CYAN)
+                        b_str = _colored(str(banner)[:35].replace('\n', ' ') if banner else "(probing...)", DIM)
+                        sys.stdout.write(f"\r  {_colored('\u25b6', B_GREEN)} {p_str} {s_str} {v_str} {b_str}\n")
+                        sys.stdout.flush()
+        elif cb_type == "progress":
+            pct = data.get('percent', 0)
+            _scan_count = data.get('scanned', _scan_count)
+            if not _quiet and pct > 0:
+                elapsed = _time.time() - _scan_start_time
+                rate = _scan_count / elapsed if elapsed > 0 else 0
+                sys.stdout.write(_colored(f"\r  Progress: {pct:.0f}%  |  {_scan_count} ports  |  {rate:.0f} p/s  |  {elapsed:.1f}s  ", DIM))
                 sys.stdout.flush()
 
     for t in target_list:
         # ── Target header ──────────────────────────────────────
-        click.echo(_colored("  ┌─────────────────────────────────────────────────────────────────────────────┐", B_CYAN))
-        click.echo(_colored("  │", B_CYAN) + pad_v(
-            f" {_colored('⚡ SCANNING', YELLOW)}  {_colored(t, B_WHITE, bold=True)}", 77
-        ) + _colored("│", B_CYAN))
-        click.echo(_colored("  └─────────────────────────────────────────────────────────────────────────────┘", B_CYAN))
+        if not _quiet:
+            click.echo(_colored("  ┌─────────────────────────────────────────────────────────────────────────────┐", B_CYAN))
+            click.echo(_colored("  │", B_CYAN) + pad_v(
+                f" {_colored('\u26a1 SCANNING', YELLOW)}  {_colored(t, B_WHITE, bold=True)}", 77
+            ) + _colored("│", B_CYAN))
+            click.echo(_colored("  └─────────────────────────────────────────────────────────────────────────────┘", B_CYAN))
 
         results_cache = []
 
@@ -926,6 +1080,20 @@ def scan_ports(**kwargs):
         click.echo(f"  Total Elapsed : {_colored(str(total_elapsed).split('.')[0], B_YELLOW)}")
         click.echo(_colored("═" * 80, B_WHITE) + "\n")
 
+    # ── JSON output mode (machine-parseable stdout) ────────────
+    if kwargs.get('json_output'):
+        json_out = {
+            "scanner": "HackIT PortStorm v3.0",
+            "scan_time": datetime.now().isoformat(),
+            "targets": target_list,
+            "total_hosts": len(target_list),
+            "total_open": grand_open,
+            "total_probed": grand_total,
+            "elapsed": str(datetime.now() - start_time),
+            "results": all_results,
+        }
+        click.echo(json.dumps(json_out, indent=2, default=str))
+
 
 # ─────────────────────────────────────────────────────────────────
 # OUTPUT FORMATTERS
@@ -1036,6 +1204,18 @@ def save_results(filename, fmt, host, ip, port_results, open_ports, intel, os_in
         with open(path, 'w', encoding='utf-8') as f:
             json.dump(grafana_data, f, indent=2)
         click.echo(_colored(f"\n  [+] Grafana data saved → {path}", B_GREEN))
+
+    elif fmt == 'csv':
+        path = f"{base}.csv"
+        import csv as _csv
+        with open(path, 'w', newline='', encoding='utf-8') as f:
+            w = _csv.writer(f)
+            w.writerow(['port', 'state', 'service', 'banner', 'version'])
+            for p in open_ports:
+                w.writerow([p.get('port', ''), p.get('status', '').upper(),
+                           p.get('service', ''), p.get('banner', ''),
+                           p.get('version', '')])
+        click.echo(_colored(f"\n  [+] Results saved → {path}", B_GREEN))
 
     else:
         # Plain text

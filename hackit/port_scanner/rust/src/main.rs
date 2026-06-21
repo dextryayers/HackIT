@@ -3,13 +3,18 @@ use lazy_static::lazy_static;
 use regex::Regex;
 use serde::Serialize;
 use std::collections::HashMap;
-use std::time::Duration;
+use std::net::ToSocketAddrs;
+use std::sync::RwLock;
+use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio::time::timeout;
 
+const DNS_CACHE_TTL: Duration = Duration::from_secs(300);
+
 lazy_static! {
+    static ref DNS_CACHE: RwLock<HashMap<String, (String, Instant)>> = RwLock::new(HashMap::new());
     static ref PROTOCOL_PROBES: HashMap<u16, Vec<u8>> = {
         let mut m = HashMap::new();
         m.insert(21, b"SYST\r\n".to_vec());
@@ -291,8 +296,29 @@ struct JsonOutput {
     results: Vec<ScanResult>,
 }
 
+fn resolve_host(host: &str) -> Option<String> {
+    {
+        let cache = DNS_CACHE.read().unwrap();
+        if let Some((ip, expiry)) = cache.get(host) {
+            if expiry.elapsed() < DNS_CACHE_TTL {
+                return Some(ip.clone());
+            }
+        }
+    }
+    let addr = format!("{}:0", host);
+    if let Some(ok) = addr.to_socket_addrs().ok()?.find(|a| a.is_ipv4()) {
+        let ip = ok.ip().to_string();
+        let mut cache = DNS_CACHE.write().unwrap();
+        cache.insert(host.to_string(), (ip.clone(), Instant::now()));
+        Some(ip)
+    } else {
+        None
+    }
+}
+
+#[inline]
 fn parse_ports(input: &str) -> Vec<u16> {
-    let mut ports = Vec::new();
+    let mut ports = Vec::with_capacity(1024);
 
     match input.trim().to_lowercase().as_str() {
         "all" => return (1..=65535).collect(),
@@ -331,8 +357,10 @@ fn parse_ports(input: &str) -> Vec<u16> {
     ports
 }
 
+#[inline]
 async fn connect_with_timeout(host: &str, port: u16, timeout_ms: u64) -> Result<TcpStream, String> {
-    let addr = format!("{}:{}", host, port);
+    let ip = resolve_host(host).unwrap_or_else(|| host.to_string());
+    let addr = format!("{}:{}", ip, port);
     match timeout(Duration::from_millis(timeout_ms), TcpStream::connect(&addr)).await {
         Ok(Ok(stream)) => Ok(stream),
         Ok(Err(e)) => Err(format!("{}", e)),
@@ -363,10 +391,12 @@ async fn grab_banner(host: &str, port: u16, timeout_ms: u64) -> String {
     }
 }
 
+#[inline]
 fn compile_regex(pattern: &str) -> Regex {
     Regex::new(pattern).unwrap()
 }
 
+#[inline]
 fn match_service_signatures(port: u16, banner: &str) -> Vec<(&'static str, &'static str, &'static str, &'static str, Option<String>)> {
     let mut matched = Vec::new();
     for &(pattern, proto, product, os_hint, sig_port) in SERVICE_SIGNATURES.iter() {
@@ -382,6 +412,7 @@ fn match_service_signatures(port: u16, banner: &str) -> Vec<(&'static str, &'sta
     matched
 }
 
+#[inline]
 fn detect_os(banner: &str) -> (String, f64) {
     for &(pattern, os, confidence) in OS_PATTERNS.iter() {
         let re = compile_regex(pattern);

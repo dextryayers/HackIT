@@ -8,7 +8,9 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"runtime/pprof"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -35,7 +37,6 @@ func main() {
 	outputFile := flag.String("output", "", "Output filename")
 	openOnly := flag.Bool("open-only", false, "Show only open ports")
 	quietJSON := flag.Bool("quiet-json", false, "Suppress human output")
-
 	// Stealth & Evasion flags
 	ghostProtocol := flag.Bool("ghost-protocol", false, "Enable Ghost Protocol")
 	chaos := flag.Bool("chaos", false, "Enable Chaos Mode")
@@ -57,6 +58,10 @@ func main() {
 	script := flag.String("script", "", "Run script modules")
 	scriptArgs := flag.String("script-args", "", "Arguments for scripts")
 
+	// Pipeline & Multi-Engine flags
+	pipeline := flag.String("pipeline", "", "Pipeline stages: tcp,service,os,vuln (comma-separated)")
+	allEngines := flag.Bool("all-engines", false, "Run ALL engines and correlate results")
+
 	// Timing & Performance flags
 	adaptive := flag.Bool("adaptive", false, "Adaptive timing")
 	quantum := flag.Bool("quantum", false, "Quantum port ordering")
@@ -74,40 +79,66 @@ func main() {
 	resolvePolicy := flag.String("resolve", "all", "DNS resolution policy")
 	dnsServer := flag.String("dns-server", "", "Custom DNS server")
 
+	// Profiling flags
+	cpuProfile := flag.String("cpuprofile", "", "Write CPU profile to file")
+	memProfile := flag.String("memprofile", "", "Write memory profile to file")
+
 	flag.Parse()
+
+	if *cpuProfile != "" {
+		f, err := os.Create(*cpuProfile)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error creating CPU profile: %v\n", err)
+			return
+		}
+		pprof.StartCPUProfile(f)
+		defer func() {
+			pprof.StopCPUProfile()
+			f.Close()
+		}()
+	}
+	defer func() {
+		if *memProfile != "" {
+			f, err := os.Create(*memProfile)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error creating mem profile: %v\n", err)
+				return
+			}
+			pprof.WriteHeapProfile(f)
+			f.Close()
+		}
+	}()
 
 	if *target == "" {
 		fmt.Println(`ERROR:{"type":"error","error":"Target is required"}`)
 		return
 	}
 
-	// Apply Profile Settings
-	switch *profile {
-	case "fast":
-		*timeout = 500
-		*concurrency = 200
-		*scanMode = "syn"
-	case "stealth":
-		*timeout = 2000
-		*concurrency = 20
-		*stealth = true
-		*scanMode = "syn"
-	case "full":
-		*timeout = 1500
-		*concurrency = 150
-		*scanMode = "syn"
-		if *ports == "" {
+	// Apply Profile Settings using profiles.go
+	p := GetProfile(*profile)
+	if *profile != "default" {
+		*timeout = p.TimeoutMs
+		*concurrency = p.Workers
+		*scanMode = p.ScanMode
+		*stealth = p.Stealth
+		*deep = p.Deep
+		*osDetect = p.OSDetect
+		*adaptive = p.Adaptive
+		*quantum = p.Quantum
+		*minRate = p.MinRate
+		*maxRate = p.MaxRate
+		*maxRetries = p.MaxRetries
+		*hostTimeout = p.HostTimeout
+		*noPing = p.NoPing
+		if len(p.Ports) > 0 {
+			ps := make([]string, len(p.Ports))
+			for i, v := range p.Ports {
+				ps[i] = fmt.Sprintf("%d", v)
+			}
+			*ports = strings.Join(ps, ",")
+		} else if p.Name == "Full" && *ports == "" {
 			*ports = "1-65535"
 		}
-	case "web":
-		*timeout = 1000
-		*concurrency = 100
-		if *ports == "" {
-			*ports = "80,443,8080,8443,8000,8888,21,22,25,53,110,143,3306,5432,6379,27017,3389,5900"
-		}
-	case "lan":
-		*timeout = 300
-		*concurrency = 300
 	}
 
 	// Parse Ports
@@ -127,9 +158,16 @@ func main() {
 	allResults := make([]ScanResult, 0)
 	startTime := time.Now()
 
+	// Print ASCII banner
+	if !(reporter.SuppressHuman) {
+		if len(targets) > 0 {
+			PrintBanner(targets[0])
+		} else {
+			PrintBanner(*target)
+		}
+	}
+
 	for _, host := range targets {
-		reporter.PrintStatus(host, 0)
-		// Resolve IP early (prefer IPv4 to avoid NAT64 issues)
 		targetIP, _ := resolveHost(host)
 
 		engine := NewScanEngine(targetIP, portList, *concurrency, *timeout, *stealth, *scanMode, reporter)
@@ -172,6 +210,12 @@ func main() {
 		engine.HostTimeout = *hostTimeout
 		engine.ScanDelay = *scanDelay
 
+		// Pipeline & Multi-Engine mapping
+		if *pipeline != "" {
+			engine.PipelineStages = strings.Split(*pipeline, ",")
+		}
+		engine.AllEngines = *allEngines
+
 		// Network & Discovery Mapping
 		engine.RandomizeTargets = *randomizeTargets
 		engine.RandomizePorts = *randomizePorts
@@ -208,14 +252,33 @@ func main() {
 		}
 	}
 
+	// Run results through C++ correlator for cross-validation
+	if *allEngines || *deep {
+		for i := range allResults {
+			corr := GetCppBridge().Correlate(allResults[i].Host, allResults[i].Results)
+			if corr != "" {
+				allResults[i].Intelligence = corr
+			}
+		}
+	}
+
 	// Print the final comprehensive HackIT-style summary
 	if *format != "json" {
 		reporter.PrintHackITStyleSummary(*target, startTime, len(portList), *osDetect)
 	}
 
+	// Collect engine metadata
+	engineMeta := map[string]interface{}{
+		"go":      true,
+		"rust":    true,
+		"c":       true,
+		"cpp":     true,
+		"python":  *enrich,
+	}
+
 	// Machine-readable final payload for Python bridge
 	finalPayload := map[string]any{
-		"schema_version":    "1",
+		"schema_version":    "2",
 		"os_schema_version": "1",
 		"scanner":           "hackit-port-scanner",
 		"format":            *format,
@@ -224,6 +287,10 @@ func main() {
 		"elapsed_ms":        int(time.Since(startTime).Milliseconds()),
 		"notes":             "os.fingerprint may contain evidence details when available",
 		"results":           allResults,
+		"profile":           *profile,
+		"pipeline":          *pipeline,
+		"all_engines":       *allEngines,
+		"engines":           engineMeta,
 	}
 	if b, err := json.Marshal(finalPayload); err == nil {
 		fmt.Printf("FINAL:%s\n", string(b))

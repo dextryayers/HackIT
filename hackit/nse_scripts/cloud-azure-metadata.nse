@@ -1,92 +1,109 @@
+local nmap = require "nmap"
 local stdnse = require "stdnse"
+local shortport = require "shortport"
 local http = require "http"
-local json = require "json"
 
-description = [[Attempts to retrieve instance metadata from the Azure IMDS endpoint (169.254.169.254). Returns VM name, resource group, location, subscription ID, and other metadata if accessible. Tests multiple API versions and endpoints.]]
-author = "HackIT Framework"
-license = "HackIT Framework — Internal Use Only"
-categories = {"safe", "discovery", "cloud"}
 
-portrule = function(host, port)
-  return port.protocol == "tcp" and port.state == "open"
+
+-- nmp function cache
+local nmap_register = nmap.register_script
+local nmap_settitle = nmap.set_title
+local nmap_resolve = nmap.resolve
+local nmap_get_port_state = nmap.get_port_state
+local nmap_set_port_state = nmap.set_port_state
+local comm = nmap.comm
+local new_socket = nmap.new_socket
+local get_timeout = nmap.get_timeout
+
+-- Performance optimizations
+local format = string.format
+local lower = string.lower
+local upper = string.upper
+local byte = string.byte
+local sub = string.sub
+local match = string.match
+local gmatch = string.gmatch
+local gsub = string.gsub
+local find = string.find
+local rep = string.rep
+local char = string.char
+local concat = table.concat
+local insert = table.insert
+local remove = table.remove
+local sort = table.sort
+local move = table.move or function(a1, f, e, t, a2)
+    if not a2 then a2 = a1 end
+    for i = f, e do a2[t + i - f] = a1[i] end
+    return a2
 end
+local tostring = tostring
+local tonumber = tonumber
+local type = type
+local pcall = pcall
+local pairs = pairs
+local ipairs = ipairs
+local unpack = unpack or table.unpack
+local setmetatable = setmetatable
+local getmetatable = getmetatable
+local error = error
+local select = select
+local clock = nmap.clock
+local msleep = nmap.msleep
+local sleep = stdnse.sleep
+local strsplit = stdnse.strsplit
+local format_output = stdnse.format_output
+local output_table = stdnse.output_table
 
-local api_versions = {
-  "2021-02-01", "2020-09-01", "2020-06-01", "2020-04-30",
-  "2019-11-01", "2019-08-15", "2019-06-04", "2019-04-30",
-  "2019-03-11", "2018-10-01", "2018-04-02", "2017-12-01",
-  "2017-08-01", "2017-04-02", "2017-03-01",
-}
+description = [[
+Queries the Azure Instance Metadata Service (IMDS) at 169.254.169.254 to
+retrieve information about the Azure VM instance including compute metadata,
+network configuration, and scheduled events.
+]]
 
-local metadata_endpoints = {
-  "instance?api-version=",
-  "identity/oauth2/token?api-version=2018-02-01&resource=https://management.azure.com/",
-}
+author = "HackIT"
+license = "Same as Nmap--See https://nmap.org/book/man-legal.html"
+categories = {"safe", "discovery"}
+
+portrule = shortport.port_or_service(80, "http")
 
 action = function(host, port)
-  local result = stdnse.output_table()
-  local headers = { ["Metadata"] = "true" }
-
-  if host.ip ~= "169.254.169.254" then
-    return nil
-  end
-
-  local best_api = api_versions[1]
-
-  for _, ver in ipairs(api_versions) do
-    local ok, resp = pcall(http.get, "169.254.169.254", 80, "/metadata/instance?api-version=" .. ver, { timeout = 3000, header = headers })
-    if ok and resp and resp.status == 200 then
-      best_api = ver
-      break
+    local result = {}
+    local meta_host = "169.254.169.254"
+    local socket = new_socket()
+    socket:set_timeout(3000)
+    local status, err = socket:connect(meta_host, 80)
+    if not status then
+        return format_output(false, "Azure IMDS not accessible: " .. tostring(err))
     end
-  end
-
-  local ok, response = pcall(http.get, "169.254.169.254", 80, "/metadata/instance?api-version=" .. best_api, { timeout = 3000, header = headers })
-  if not ok or not response or response.status ~= 200 then
-    return stdnse.format_output(false, "Azure metadata endpoint not accessible")
-  end
-
-  result.api_version = best_api
-
-  local ok2, data = pcall(json.parse, response.body)
-  if not ok2 or not data then
-    return stdnse.format_output(false, "Failed to parse Azure metadata response")
-  end
-
-  if data.compute then
-    for k, v in pairs(data.compute) do
-      local key = k:gsub("([A-Z])", "_%1"):lower():gsub("^_", "")
-      result[key] = v
+    local headers = "Metadata: true\r\n"
+    local api_endpoints = {
+        "/metadata/instance?api-version=2021-02-01",
+        "/metadata/instance/compute?api-version=2021-02-01",
+        "/metadata/instance/network?api-version=2021-02-01",
+        "/metadata/scheduledevents?api-version=2020-07-01",
+    }
+    for _, path in ipairs(api_endpoints) do
+        socket:send("GET " .. path .. " HTTP/1.1\r\nHost: metadata\r\n" .. headers .. "Connection: close\r\n\r\n")
+        local status, response = socket:receive_bytes(1)
+        if status and response then
+            local body = response:match("\r\n\r\n(.*)")
+            if body and #body > 0 and not body:match("error") and not body:match("404") then
+                if body:match("compute") or body:match("vmId") or body:match("name") then
+                    insert(result, ("Azure IMDS accessible via %s"):format(path))
+                    local fields = {"name", "location", "vmId", "subscriptionId", "resourceGroupName"}
+                    for _, f in ipairs(fields) do
+                        local val = body:match('"' .. f .. '"%s*:%s*"([^"]+)"')
+                        if val then
+                            insert(result, ("  %s: %s"):format(f, val))
+                        end
+                    end
+                end
+            end
+        end
     end
-  end
-
-  if data.network then
-    result.network_interface_count = #data.network.interface
-    local interfaces = {}
-    for i, iface in ipairs(data.network.interface) do
-      local if_info = {}
-      for k, v in pairs(iface) do
-        if_info[k:gsub("([A-Z])", "_%1"):lower():gsub("^_", "")] = v
-      end
-      interfaces["interface_" .. i] = if_info
+    socket:close()
+    if #result == 0 then
+        insert(result, "Azure IMDS not available or inaccessible")
     end
-    result.network_interfaces = interfaces
-  end
-
-  local ok3, identity_resp = pcall(http.get, "169.254.169.254", 80, "/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https://management.azure.com/", { timeout = 3000, header = headers })
-  if ok3 and identity_resp and identity_resp.status == 200 then
-    local ok4, token_data = pcall(json.parse, identity_resp.body)
-    if ok4 and token_data then
-      result.managed_identity_present = true
-      result.identity_access_token_present = token_data.access_token and true or nil
-      result.identity_expiry = token_data.expires_on
-    end
-  end
-
-  local ok5, lb_resp = pcall(http.get, "169.254.169.254", 80, "/metadata/loadbalancer?api-version=2020-10-01", { timeout = 2000, header = headers })
-  if ok5 and lb_resp and lb_resp.status == 200 then
-    result.load_balancer_metadata = true
-  end
-
-  return stdnse.format_output(true, result)
+    return format_output(true, result)
 end

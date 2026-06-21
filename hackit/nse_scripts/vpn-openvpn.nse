@@ -5,6 +5,58 @@ local string = require "string"
 local math = require "math"
 local bit = require "bit"
 local os = require "os"
+local shortport = require "shortport"
+
+
+
+-- nmp function cache
+local nmap_register = nmap.register_script
+local nmap_settitle = nmap.set_title
+local nmap_resolve = nmap.resolve
+local nmap_get_port_state = nmap.get_port_state
+local nmap_set_port_state = nmap.set_port_state
+local comm = nmap.comm
+local new_socket = nmap.new_socket
+local get_timeout = nmap.get_timeout
+
+-- Performance optimizations
+local format = string.format
+local lower = string.lower
+local upper = string.upper
+local byte = string.byte
+local sub = string.sub
+local match = string.match
+local gmatch = string.gmatch
+local gsub = string.gsub
+local find = string.find
+local rep = string.rep
+local char = string.char
+local concat = table.concat
+local insert = table.insert
+local remove = table.remove
+local sort = table.sort
+local move = table.move or function(a1, f, e, t, a2)
+    if not a2 then a2 = a1 end
+    for i = f, e do a2[t + i - f] = a1[i] end
+    return a2
+end
+local tostring = tostring
+local tonumber = tonumber
+local type = type
+local pcall = pcall
+local pairs = pairs
+local ipairs = ipairs
+local unpack = unpack or table.unpack
+local setmetatable = setmetatable
+local getmetatable = getmetatable
+local error = error
+local select = select
+local clock = nmap.clock
+local msleep = nmap.msleep
+local sleep = stdnse.sleep
+local strsplit = stdnse.strsplit
+local format_output = stdnse.format_output
+local output_table = stdnse.output_table
 
 description = [[Detects OpenVPN services by probing the default port and parsing the handshake. Sends control channel packets and identifies OpenVPN version, opcodes, and data channel support from responses.]]
 author = "HackIT Framework"
@@ -17,16 +69,16 @@ portrule = function(host, port)
 end
 
 local function build_openvpn_packet(opcode_val)
-  local opcode = string.char(bit.lshift(opcode_val, 3))
-  local peer_id = string.rep("\x00", 3)
-  local hmac = string.rep("\x00", 20)
+  local opcode = char(bit.lshift(opcode_val, 3))
+  local peer_id = rep("\x00", 3)
+  local hmac = rep("\x00", 20)
   local session_id = ""
   for i = 1, 8 do
-    session_id = session_id .. string.char(math.random(0, 255))
+    session_id = session_id .. char(math.random(0, 255))
   end
-  local packet_id = string.rep("\x00", 8)
+  local packet_id = rep("\x00", 8)
   local timestamp = bin.pack(">I", os.time())
-  local payload = string.rep("\x00", 16)
+  local payload = rep("\x00", 16)
 
   return opcode .. peer_id .. hmac .. session_id .. packet_id .. timestamp .. payload
 end
@@ -55,7 +107,7 @@ local function parse_openvpn_response(response)
   local first_byte = response:byte(1)
   info.opcode = bit.rshift(first_byte, 3)
   info.key_id = bit.band(first_byte, 0x07)
-  info.opcode_name = openvpn_opcodes[info.opcode] or string.format("Unknown (%d)", info.opcode)
+  info.opcode_name = openvpn_opcodes[info.opcode] or format("Unknown (%d)", info.opcode)
   info.packet_size = #response
 
   if #response >= 48 then
@@ -70,7 +122,7 @@ local function parse_openvpn_response(response)
 end
 
 action = function(host, port)
-  local result = stdnse.output_table()
+  local result = output_table()
 
   local opcodes_to_test = {
     { name = "P_CONTROL_HARD_RESET_CLIENT_V1", opcode = 1 },
@@ -79,14 +131,14 @@ action = function(host, port)
   }
 
   for _, test in ipairs(opcodes_to_test) do
-    local socket = nmap.new_socket("udp")
+    local socket = new_socket("udp")
     socket:set_timeout(5000)
 
     local ok, err = pcall(socket.connect, socket, host.ip, port.number)
     if not ok then
       pcall(socket.close, socket)
       if _ == 1 then
-        return stdnse.format_output(false, "Could not connect: " .. tostring(err))
+        return format_output(false, "Could not connect: " .. tostring(err))
       end
       break
     end
@@ -121,9 +173,9 @@ action = function(host, port)
         result.hard_reset_negotiation = true
       end
 
-      return stdnse.format_output(true, result)
+      return format_output(true, result)
     end
   end
 
-  return stdnse.format_output(false, "OpenVPN service not detected")
+  return format_output(false, "OpenVPN service not detected")
 end

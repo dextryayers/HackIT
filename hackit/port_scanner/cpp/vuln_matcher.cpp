@@ -20,6 +20,32 @@
 #include <cctype>
 #include <cmath>
 #include <cstdint>
+#include <string_view>
+#include <memory>
+#include <unordered_map>
+
+
+// === Deep Performance Optimizations ===
+#ifndef OPTIMIZE_H
+#define likely(x)   __builtin_expect(!!(x), 1)
+#define unlikely(x) __builtin_expect(!!(x), 0)
+#endif
+#ifndef FORCE_INLINE
+#define FORCE_INLINE __attribute__((always_inline)) inline
+#endif
+#ifndef HOT_FUNC
+#define HOT_FUNC    __attribute__((hot))
+#endif
+#ifndef COLD_FUNC
+#define COLD_FUNC   __attribute__((cold))
+#endif
+#ifndef LIKELY
+#define LIKELY(x)   __builtin_expect(!!(x), 1)
+#endif
+#ifndef UNLIKELY
+#define UNLIKELY(x) __builtin_expect(!!(x), 0)
+#endif
+
 
 using namespace std;
 using namespace chrono;
@@ -221,23 +247,23 @@ static vector<int> parse_ports(const string& spec) {
         char* dash = strchr(tok, '-');
         if (dash) {
             int s = atoi(tok), e = atoi(dash+1);
-            for (int p = s; p <= e; p++) ports.push_back(p);
-        } else ports.push_back(atoi(tok));
+            for (int p = s; p <= e; p++) ports.emplace_back(p);
+        } else ports.emplace_back(atoi(tok));
         tok = strtok(NULL, ",");
     }
     return ports;
 }
 
-static bool version_less_than(const string& v1, const string& v2) {
+static bool version_less_than(const string& v1, const string& v2) noexcept {
     if (v1.empty() || v2.empty()) return false;
     if (v1 == "0") return true;
     if (v2 == "0") return false;
     vector<int> p1, p2;
     string s1 = v1, s2 = v2;
     char* t1 = strtok(&s1[0], ".");
-    while (t1) { p1.push_back(atoi(t1)); t1 = strtok(NULL, "."); }
+    while (t1) { p1.emplace_back(atoi(t1)); t1 = strtok(NULL, "."); }
     char* t2 = strtok(&s2[0], ".");
-    while (t2) { p2.push_back(atoi(t2)); t2 = strtok(NULL, "."); }
+    while (t2) { p2.emplace_back(atoi(t2)); t2 = strtok(NULL, "."); }
     size_t n = max(p1.size(), p2.size());
     p1.resize(n, 0); p2.resize(n, 0);
     for (size_t i = 0; i < n; i++) {
@@ -263,7 +289,7 @@ static VulnResult scan_vulns(int port, const string& product, const string& vers
             affected_lower.find(prod_lower) == string::npos) continue;
         if (!cve.fixed_version.empty() && !version.empty() && version != "0") {
             if (version_less_than(version, cve.fixed_version)) {
-                r.matches.push_back(cve);
+                r.matches.emplace_back(cve);
                 r.total_cves++;
                 if (cve.cvss_score >= 9.0) r.critical_count++;
                 else if (cve.cvss_score >= 7.0) r.high_count++;
@@ -273,7 +299,7 @@ static VulnResult scan_vulns(int port, const string& product, const string& vers
             }
         } else if (!cve.affected_version.empty() && cve.affected_version != "0") {
             if (version == cve.affected_version) {
-                r.matches.push_back(cve);
+                r.matches.emplace_back(cve);
                 r.total_cves++;
                 if (cve.cvss_score >= 9.0) r.critical_count++;
                 else if (cve.cvss_score >= 7.0) r.high_count++;
@@ -282,7 +308,7 @@ static VulnResult scan_vulns(int port, const string& product, const string& vers
                 if (cve.cvss_score > r.max_cvss) r.max_cvss = cve.cvss_score;
             }
         } else {
-            r.matches.push_back(cve);
+            r.matches.emplace_back(cve);
             r.total_cves++;
             if (cve.cvss_score >= 9.0) r.critical_count++;
             else if (cve.cvss_score >= 7.0) r.high_count++;

@@ -233,11 +233,9 @@ func (ts *TargetSpec) applyExclusions() {
 
 // randomizeTargets randomizes the target order
 func (ts *TargetSpec) randomizeTargets() {
-	rand.Seed(time.Now().UnixNano())
-	for i := len(ts.ResolvedIPs) - 1; i > 0; i-- {
-		j := rand.Intn(i + 1)
+	rand.Shuffle(len(ts.ResolvedIPs), func(i, j int) {
 		ts.ResolvedIPs[i], ts.ResolvedIPs[j] = ts.ResolvedIPs[j], ts.ResolvedIPs[i]
-	}
+	})
 }
 
 // GetTargets returns all resolved target IPs

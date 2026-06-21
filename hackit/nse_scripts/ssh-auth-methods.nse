@@ -1,5 +1,57 @@
 local stdnse = require "stdnse"
 local nmap = require "nmap"
+local shortport = require "shortport"
+
+
+
+-- nmp function cache
+local nmap_register = nmap.register_script
+local nmap_settitle = nmap.set_title
+local nmap_resolve = nmap.resolve
+local nmap_get_port_state = nmap.get_port_state
+local nmap_set_port_state = nmap.set_port_state
+local comm = nmap.comm
+local new_socket = nmap.new_socket
+local get_timeout = nmap.get_timeout
+
+-- Performance optimizations
+local format = string.format
+local lower = string.lower
+local upper = string.upper
+local byte = string.byte
+local sub = string.sub
+local match = string.match
+local gmatch = string.gmatch
+local gsub = string.gsub
+local find = string.find
+local rep = string.rep
+local char = string.char
+local concat = table.concat
+local insert = table.insert
+local remove = table.remove
+local sort = table.sort
+local move = table.move or function(a1, f, e, t, a2)
+    if not a2 then a2 = a1 end
+    for i = f, e do a2[t + i - f] = a1[i] end
+    return a2
+end
+local tostring = tostring
+local tonumber = tonumber
+local type = type
+local pcall = pcall
+local pairs = pairs
+local ipairs = ipairs
+local unpack = unpack or table.unpack
+local setmetatable = setmetatable
+local getmetatable = getmetatable
+local error = error
+local select = select
+local clock = nmap.clock
+local msleep = nmap.msleep
+local sleep = stdnse.sleep
+local strsplit = stdnse.strsplit
+local format_output = stdnse.format_output
+local output_table = stdnse.output_table
 
 description = [[Connects to an SSH server and enumerates supported authentication methods by sending an authentication request with the "none" method and parsing the response for supported methods.]]
 author = "HackIT Framework"
@@ -9,7 +61,7 @@ categories = {"safe", "discovery"}
 portrule = function(host, port) return port.protocol == "tcp" and port.state == "open" and (port.number == 22 or port.service == "ssh") end
 
 action = function(host, port)
-    local sock = nmap.new_socket()
+    local sock = new_socket()
     sock:set_timeout(10000)
     local ok, result = pcall(function()
         local status = sock:connect(host.ip, port)
@@ -19,19 +71,19 @@ action = function(host, port)
         sock:send("SSH-2.0-HackIT\r\n")
         local kex = sock:receive_buf("\n", 5000)
         if not kex then sock:close(); return end
-        local ssh_packet = string.char(0x05, 0x00, 0x00, 0x00, 0x0c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00)
+        local ssh_packet = char(0x05, 0x00, 0x00, 0x00, 0x0c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00)
         sock:send(ssh_packet)
         local _, resp = sock:receive_buf("\n", 5000)
         sock:close()
         if resp then
             local methods = {}
-            if resp:match("publickey") then table.insert(methods, "publickey") end
-            if resp:match("password") then table.insert(methods, "password") end
-            if resp:match("keyboard%-interactive") then table.insert(methods, "keyboard-interactive") end
-            if resp:match("hostbased") then table.insert(methods, "hostbased") end
-            if resp:match("gssapi") then table.insert(methods, "gssapi-with-mic") end
-            if resp:match("none") then table.insert(methods, "none") end
-            local res = stdnse.output_table()
+            if resp:match("publickey") then insert(methods, "publickey") end
+            if resp:match("password") then insert(methods, "password") end
+            if resp:match("keyboard%-interactive") then insert(methods, "keyboard-interactive") end
+            if resp:match("hostbased") then insert(methods, "hostbased") end
+            if resp:match("gssapi") then insert(methods, "gssapi-with-mic") end
+            if resp:match("none") then insert(methods, "none") end
+            local res = output_table()
             res.supported_auth_methods = methods
             res.banner = banner:match("([^\r\n]+)")
             res.ssh_version = banner:match("SSH%-(%S+)")
@@ -43,7 +95,7 @@ action = function(host, port)
         pcall(function() sock:close() end)
     end
     if not result then
-        return stdnse.format_output(false, "Could not enumerate auth methods")
+        return format_output(false, "Could not enumerate auth methods")
     end
     return result
 end

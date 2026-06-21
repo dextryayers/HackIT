@@ -1,5 +1,58 @@
 local http = require "http"
 local stdnse = require "stdnse"
+local nmap = require "nmap"
+local shortport = require "shortport"
+
+
+
+-- nmp function cache
+local nmap_register = nmap.register_script
+local nmap_settitle = nmap.set_title
+local nmap_resolve = nmap.resolve
+local nmap_get_port_state = nmap.get_port_state
+local nmap_set_port_state = nmap.set_port_state
+local comm = nmap.comm
+local new_socket = nmap.new_socket
+local get_timeout = nmap.get_timeout
+
+-- Performance optimizations
+local format = string.format
+local lower = string.lower
+local upper = string.upper
+local byte = string.byte
+local sub = string.sub
+local match = string.match
+local gmatch = string.gmatch
+local gsub = string.gsub
+local find = string.find
+local rep = string.rep
+local char = string.char
+local concat = table.concat
+local insert = table.insert
+local remove = table.remove
+local sort = table.sort
+local move = table.move or function(a1, f, e, t, a2)
+    if not a2 then a2 = a1 end
+    for i = f, e do a2[t + i - f] = a1[i] end
+    return a2
+end
+local tostring = tostring
+local tonumber = tonumber
+local type = type
+local pcall = pcall
+local pairs = pairs
+local ipairs = ipairs
+local unpack = unpack or table.unpack
+local setmetatable = setmetatable
+local getmetatable = getmetatable
+local error = error
+local select = select
+local clock = nmap.clock
+local msleep = nmap.msleep
+local sleep = stdnse.sleep
+local strsplit = stdnse.strsplit
+local format_output = stdnse.format_output
+local output_table = stdnse.output_table
 
 description = [[Detects Log4Shell (CVE-2021-44228) via JNDI injection in headers, parameters, and body with multiple callback patterns.]]
 author = "HackIT Framework"
@@ -51,15 +104,15 @@ action = function(host, port)
         for _, cb in ipairs(jndi_payloads) do
           local escaped = cb:lower():gsub("%$", "%%$"):gsub("%{", "%%{"):gsub("%}", "%%}"):gsub("%.", "%%."):gsub("%:", "%%:")
           if body_lower:match(escaped) or body_lower:match("jndi") then
-            table.insert(findings, {vector = ("%s header: %s"):format(vec.header ~= "" and vec.header or "query param", cb), path = vec.path, status = req.status})
+            insert(findings, {vector = ("%s header: %s"):format(vec.header ~= "" and vec.header or "query param", cb), path = vec.path, status = req.status})
             break
           end
         end
         local headers_out = req.headers or {}
         for hname, hval in pairs(headers_out) do
-          local hstr = type(hval) == "table" and table.concat(hval, " ") or tostring(hval)
+          local hstr = type(hval) == "table" and concat(hval, " ") or tostring(hval)
           if hstr:lower():match("jndi") or hstr:match("%$%{jndi") then
-            table.insert(findings, {vector = ("response header %s: %s"):format(hname, hstr:sub(1, 80)), path = vec.path, status = req.status})
+            insert(findings, {vector = ("response header %s: %s"):format(hname, hstr:sub(1, 80)), path = vec.path, status = req.status})
             break
           end
         end
@@ -79,13 +132,13 @@ action = function(host, port)
       if req and req.body then
         local body = req.body:lower()
         if body:match("jndi") then
-          table.insert(findings, {vector = ("POST %s"):format(pp.path), path = pp.path, status = req.status})
+          insert(findings, {vector = ("POST %s"):format(pp.path), path = pp.path, status = req.status})
         end
       end
     end
 
     if #findings > 0 then
-      local result = stdnse.output_table()
+      local result = output_table()
       result.cve = "CVE-2021-44228, CVE-2021-45046, CVE-2021-45105"
       result.severity = "CRITICAL"
       result.vulnerable = true
@@ -97,7 +150,7 @@ action = function(host, port)
       return result
     end
 
-    local result = stdnse.output_table()
+    local result = output_table()
     result.cve = "CVE-2021-44228"
     result.severity = "LOW"
     result.vulnerable = false
@@ -106,7 +159,7 @@ action = function(host, port)
     return result
   end)
   if not ok then
-    local result = stdnse.output_table()
+    local result = output_table()
     result.cve = "CVE-2021-44228"
     result.severity = "MEDIUM"
     result.vulnerable = false

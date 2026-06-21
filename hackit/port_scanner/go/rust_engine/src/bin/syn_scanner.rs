@@ -1,7 +1,7 @@
+use rust_port_scanner::*;
 use std::net::{Ipv4Addr, UdpSocket};
 use std::time::{Duration, Instant};
-use std::sync::atomic::AtomicUsize;
-use std::sync::Arc;
+
 
 #[repr(C, packed)]
 struct IpHdr {
@@ -38,6 +38,7 @@ struct PseudoHdr {
     tcp_len: u16,
 }
 
+#[inline]
 fn checksum(data: &[u8]) -> u16 {
     let mut sum: u32 = 0;
     let mut i = 0;
@@ -120,32 +121,6 @@ fn build_syn_packet(src_ip: u32, dst_ip: u32, src_port: u16, dst_port: u16, seq:
     packet
 }
 
-fn parse_ports(input: &str) -> Vec<u16> {
-    let mut ports = Vec::new();
-    match input.trim().to_lowercase().as_str() {
-        "all" => return (1..=65535).collect(),
-        "top100" => {
-            return vec![7,9,13,21,22,23,25,26,37,53,79,80,81,88,106,110,111,113,119,135,139,143,144,179,199,389,427,443,444,445,465,513,514,515,543,544,548,554,587,631,646,873,990,993,995,1025,1026,1027,1028,1029,1110,1433,1720,1723,1755,1900,2000,2001,2049,2121,2717,3000,3128,3306,3389,3986,4000,4001,4662,4899,5000,5001,5050,5060,5101,5190,5357,5432,5555,5631,5666,5800,5900,6000,6001,6646,7070,8000,8008,8009,8080,8081,8443,8888,9100,9999,10000,32768,49152,49154];
-        }
-        _ => {}
-    }
-    for part in input.split(',') {
-        let part = part.trim();
-        if let Some((start, end)) = part.split_once('-') {
-            let s: u16 = start.parse().unwrap_or(1);
-            let e: u16 = end.parse().unwrap_or(65535);
-            for p in s..=e {
-                ports.push(p);
-            }
-        } else if let Ok(p) = part.parse::<u16>() {
-            ports.push(p);
-        }
-    }
-    ports.sort();
-    ports.dedup();
-    ports
-}
-
 fn get_source_ip(dst: u32) -> u32 {
     let sock = match UdpSocket::bind("0.0.0.0:0") {
         Ok(s) => s,
@@ -167,8 +142,8 @@ fn get_source_ip(dst: u32) -> u32 {
 }
 
 fn listen_for_synack(raw_sock: &UdpSocket, target_ports: &[u16], timeout_ms: u64) -> (Vec<u16>, Vec<u16>) {
-    let mut open_ports = Vec::new();
-    let mut rst_ports = Vec::new();
+    let mut open_ports = Vec::with_capacity(target_ports.len());
+    let mut rst_ports = Vec::with_capacity(target_ports.len());
     let start = Instant::now();
     let deadline = Duration::from_millis(timeout_ms);
     let mut buf = vec![0u8; 65536];
@@ -250,7 +225,6 @@ fn main() {
         }
     };
     let start = Instant::now();
-    let open_count = Arc::new(AtomicUsize::new(0));
     let total = ports.len();
     for chunk in ports.chunks(burst) {
         let chunk_vec = chunk.to_vec();

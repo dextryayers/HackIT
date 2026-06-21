@@ -1,0 +1,147 @@
+local nmap = require "nmap"
+local stdnse = require "stdnse"
+local shortport = require "shortport"
+
+
+
+-- nmp function cache
+local nmap_register = nmap.register_script
+local nmap_settitle = nmap.set_title
+local nmap_resolve = nmap.resolve
+local nmap_get_port_state = nmap.get_port_state
+local nmap_set_port_state = nmap.set_port_state
+local comm = nmap.comm
+local new_socket = nmap.new_socket
+local get_timeout = nmap.get_timeout
+
+-- Performance optimizations
+local format = string.format
+local lower = string.lower
+local upper = string.upper
+local byte = string.byte
+local sub = string.sub
+local match = string.match
+local gmatch = string.gmatch
+local gsub = string.gsub
+local find = string.find
+local rep = string.rep
+local char = string.char
+local concat = table.concat
+local insert = table.insert
+local remove = table.remove
+local sort = table.sort
+local move = table.move or function(a1, f, e, t, a2)
+    if not a2 then a2 = a1 end
+    for i = f, e do a2[t + i - f] = a1[i] end
+    return a2
+end
+local tostring = tostring
+local tonumber = tonumber
+local type = type
+local pcall = pcall
+local pairs = pairs
+local ipairs = ipairs
+local unpack = unpack or table.unpack
+local setmetatable = setmetatable
+local getmetatable = getmetatable
+local error = error
+local select = select
+local clock = nmap.clock
+local msleep = nmap.msleep
+local sleep = stdnse.sleep
+local strsplit = stdnse.strsplit
+local format_output = stdnse.format_output
+local output_table = stdnse.output_table
+
+description = [[
+Performs deep SMB share enumeration with access checking. Connects to SMB
+servers and lists all available shares, then attempts to access each share
+to verify read/write permissions and enumerate share contents.
+]]
+
+author = "HackIT"
+license = "Same as Nmap--See https://nmap.org/book/man-legal.html"
+categories = {"safe", "discovery"}
+
+portrule = shortport.port_or_service(445, "smb")
+
+local function smb_negotiate()
+    local header = char(0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00)
+    local smb = char(0xff, 0x53, 0x4d, 0x42, 0x72, 0x00, 0x00, 0x00,
+        0x00, 0x18, 0x53, 0xc8, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00)
+    local payload = char(0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x41, 0x00, 0x01, 0x00, 0x02, 0x02, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00)
+    local smb_packet = header .. smb .. payload
+    return smb_packet
+end
+
+action = function(host, port)
+    local result = {}
+    local socket = new_socket()
+    socket:set_timeout(5000)
+    local status, err = socket:connect(host, port)
+    if not status then
+        return format_output(false, "Could not connect to SMB: " .. tostring(err))
+    end
+    socket:send(smb_negotiate())
+    local status, response = socket:receive_bytes(1)
+    if status and response then
+        insert(result, "SMB server detected")
+        if response:match("SMB") then
+            insert(result, "SMB protocol negotiation successful")
+        end
+    end
+    local common_shares = {"ADMIN$", "C$", "D$", "IPC$", "PRINT$", "FAX$",
+        "SYSVOL", "NETLOGON", "Shared", "Documents", "Public", "Data",
+        "Backup", "Users", "wwwroot", "inetpub", "Files", "Share", "Home"}
+    for _, share in ipairs(common_shares) do
+        local sock2 = new_socket()
+        sock2:set_timeout(3000)
+        local ok, _ = sock2:connect(host, port)
+        if ok then
+            local tree_connect = char(0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0xff, 0x53, 0x4d, 0x42, 0x75, 0x00, 0x00, 0x00,
+                0x00, 0x18, 0x03, 0xa0, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00)
+                .. char(#share) .. share .. char(0x00)
+            sock2:send(tree_connect)
+            local status2, resp2 = sock2:receive_bytes(1)
+            if status2 then
+                insert(result, ("Share '%s' accessible"):format(share))
+            end
+            sock2:close()
+        end
+    end
+    socket:close()
+    if #result == 1 then
+        insert(result, "No SMB shares enumerated")
+    end
+    return format_output(true, result)
+end

@@ -1,7 +1,9 @@
 use futures::stream::{self, StreamExt};
 use serde::Serialize;
 use std::collections::HashMap;
+use std::net::ToSocketAddrs;
 use std::sync::Arc;
+use std::sync::RwLock;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -11,8 +13,10 @@ use tokio::time::timeout;
 const MAX_BANNER: usize = 8192;
 const DEFAULT_TIMEOUT_MS: u64 = 1500;
 const DEFAULT_CONCURRENCY: usize = 500;
+const DNS_CACHE_TTL: Duration = Duration::from_secs(300);
 
 lazy_static::lazy_static! {
+    static ref DNS_CACHE: RwLock<HashMap<String, (String, Instant)>> = RwLock::new(HashMap::new());
     static ref PROBES: HashMap<u16, Vec<u8>> = {
         let mut m = HashMap::new();
         m.insert(21, b"SYST\r\n".to_vec());
@@ -67,8 +71,29 @@ struct FinalOutput {
     results: Vec<ScanResult>,
 }
 
+fn resolve_host(host: &str) -> Option<String> {
+    {
+        let cache = DNS_CACHE.read().unwrap();
+        if let Some((ip, expiry)) = cache.get(host) {
+            if expiry.elapsed() < DNS_CACHE_TTL {
+                return Some(ip.clone());
+            }
+        }
+    }
+    let addr = format!("{}:0", host);
+    if let Some(ok) = addr.to_socket_addrs().ok()?.find(|a| a.is_ipv4()) {
+        let ip = ok.ip().to_string();
+        let mut cache = DNS_CACHE.write().unwrap();
+        cache.insert(host.to_string(), (ip.clone(), Instant::now()));
+        Some(ip)
+    } else {
+        None
+    }
+}
+
+#[inline]
 fn parse_ports(input: &str) -> Vec<u16> {
-    let mut ports = Vec::new();
+    let mut ports = Vec::with_capacity(1024);
     match input.trim().to_lowercase().as_str() {
         "all" => return (1..=65535).collect(),
         "top100" => {
@@ -97,6 +122,7 @@ fn parse_ports(input: &str) -> Vec<u16> {
     ports
 }
 
+#[inline]
 fn service_name(port: u16) -> Option<String> {
     let svc = match port {
         21 => "FTP", 22 => "SSH", 23 => "Telnet", 25 => "SMTP", 53 => "DNS",
@@ -118,8 +144,10 @@ fn service_name(port: u16) -> Option<String> {
     Some(svc.to_string())
 }
 
+#[inline]
 async fn connect_with_retry(host: &str, port: u16, timeout_ms: u64) -> Result<TcpStream, String> {
-    let addr = format!("{}:{}", host, port);
+    let ip = resolve_host(host).unwrap_or_else(|| host.to_string());
+    let addr = format!("{}:{}", ip, port);
     match timeout(Duration::from_millis(timeout_ms), TcpStream::connect(&addr)).await {
         Ok(Ok(stream)) => Ok(stream),
         Ok(Err(e)) => Err(format!("{}", e)),
@@ -131,7 +159,7 @@ async fn grab_banner(host: &str, port: u16, timeout_ms: u64) -> (String, u64) {
     let start = Instant::now();
     let stream = match connect_with_retry(host, port, timeout_ms).await {
         Ok(s) => s,
-        Err(_) => return (String::new(), start.elapsed().as_millis()),
+        Err(_) => return (String::new(), start.elapsed().as_millis() as u64),
     };
     let (mut reader, mut writer) = stream.into_split();
     let probe = PROBES.get(&port).cloned().unwrap_or_else(|| b"\r\n".to_vec());
@@ -149,10 +177,11 @@ async fn grab_banner(host: &str, port: u16, timeout_ms: u64) -> (String, u64) {
         }
         _ => String::new(),
     };
-    let elapsed = start.elapsed().as_millis();
+    let elapsed = start.elapsed().as_millis() as u64;
     (banner, elapsed)
 }
 
+#[inline]
 fn sanitize_banner(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
     for c in raw.chars() {
@@ -176,7 +205,7 @@ fn detect_tls(host: &str, port: u16, timeout_ms: u64) -> bool {
         Duration::from_millis(timeout_ms),
     );
     if stream.is_err() { return false; }
-    let s = stream.unwrap();
+    let mut s = stream.unwrap();
     s.set_read_timeout(Some(Duration::from_millis(timeout_ms))).ok();
     s.set_write_timeout(Some(Duration::from_millis(timeout_ms))).ok();
     let ch: &[u8] = &[
@@ -192,15 +221,16 @@ fn detect_tls(host: &str, port: u16, timeout_ms: u64) -> bool {
     ];
     use std::io::Write;
     let _ = s.set_nonblocking(false);
-    let _ = (s as &dyn Write).write(ch);
+    let _ = (&mut s as &mut dyn Write).write(ch);
     let mut resp = [0u8; 1024];
     use std::io::Read;
-    match (s as &dyn Read).read(&mut resp) {
+    match (&mut s as &mut dyn Read).read(&mut resp) {
         Ok(n) if n > 0 && resp[0] == 0x16 => true,
         _ => false,
     }
 }
 
+#[inline]
 fn match_signature(port: u16, banner: &str) -> (Option<String>, Option<String>, Option<String>) {
     let b = banner.to_lowercase();
     let patterns: Vec<(u16, &[&str], &str, &str)> = vec![
@@ -255,6 +285,7 @@ fn match_signature(port: u16, banner: &str) -> (Option<String>, Option<String>, 
     (None, None, None)
 }
 
+#[inline]
 fn parse_version(banner: &str, product: &str) -> Option<String> {
     let b = banner.to_lowercase();
     let markers: Vec<&str> = match product {

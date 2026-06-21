@@ -14,6 +14,15 @@ import (
 // PORTSTORM SCAN ENGINE v3.0 — Polyglot Orchestrator
 // ─────────────────────────────────────────────────────────────────
 
+var portResultPool = sync.Pool{
+	New: func() interface{} { return &PortResult{} },
+}
+
+// resultChanPool provides buffered result channels with work stealing
+var resultChanPool = sync.Pool{
+	New: func() interface{} { return make(chan PortResult, 1) },
+}
+
 type PortResult struct {
 	Port            int      `json:"port"`
 	State           string   `json:"status"`
@@ -120,6 +129,15 @@ type ScanEngine struct {
 	DefeatIcmpRateLimit bool
 	NsockEngine         string
 
+	// Pipeline & Scheduler
+	PipelineStages []string
+	AllEngines     bool
+	UseScheduler   bool
+	Scheduler      *Scheduler
+
+	// Orchestrator (lazy-init)
+	orchestrator *Orchestrator
+
 	// Counters (atomic for thread-safety)
 	totalScanned  int64
 	totalOpen     int64
@@ -141,8 +159,14 @@ func (e *ScanEngine) Run() []PortResult {
 		return nil
 	}
 
-	// 1. Quantum Port Ordering (scan high-value ports first)
-	if e.Quantum {
+	// 1. Scheduler-based port ordering
+	if e.UseScheduler && e.Scheduler != nil {
+		jobs := e.Scheduler.Schedule(e.Host, ports, "normal")
+		ports = make([]int, len(jobs))
+		for i, j := range jobs {
+			ports[i] = j.Port
+		}
+	} else if e.Quantum {
 		ports = quantumSort(ports)
 	}
 
@@ -349,7 +373,60 @@ func (e *ScanEngine) Run() []PortResult {
 		return results[i].Port < results[j].Port
 	})
 
+	// Deep mode: run full pipeline via Orchestrator for enrichment + cross-validation
+	if e.Deep || e.AllEngines {
+		orch := e.getOrchestrator()
+		stages := e.PipelineStages
+		if len(stages) == 0 {
+			stages = []string{"service_detect", "os_detect", "vuln_scan", "enrich"}
+		}
+		pipelineResult := orch.RunPipeline(e.Hostname, ports, stages)
+		if len(pipelineResult.Results) > 0 {
+			if e.AllEngines {
+				results = MergeResults(
+					[]string{"go"},
+					results, pipelineResult.Results,
+				)
+			} else {
+				for i, r := range results {
+					for _, pr := range pipelineResult.Results {
+						if pr.Port == r.Port {
+							if pr.Service != "" && pr.Service != "unknown" {
+								results[i].Service = pr.Service
+							}
+							if pr.Version != "" {
+								results[i].Version = pr.Version
+							}
+							if len(pr.Vulnerabilities) > 0 {
+								results[i].Vulnerabilities = append(results[i].Vulnerabilities, pr.Vulnerabilities...)
+							}
+							if pr.RiskScore > results[i].RiskScore {
+								results[i].RiskScore = pr.RiskScore
+							}
+							if len(pr.CPEList) > 0 {
+								results[i].CPEList = append(results[i].CPEList, pr.CPEList...)
+							}
+							break
+						}
+					}
+				}
+			}
+		}
+	}
+
 	return results
+}
+
+func (e *ScanEngine) getOrchestrator() *Orchestrator {
+	if e.orchestrator == nil {
+		e.orchestrator = NewOrchestrator(e)
+	}
+	return e.orchestrator
+}
+
+func (e *ScanEngine) RunWithOrchestrator() ScanResult {
+	orch := e.getOrchestrator()
+	return orch.RunPipeline(e.Hostname, e.Ports, e.PipelineStages)
 }
 
 // ─────────────────────────────────────────────────────────────────

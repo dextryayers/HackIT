@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 )
 
 // ─────────────────────────────────────────────────────────────────
@@ -28,15 +29,17 @@ type OSFingerprint struct {
 	ExpectedTTL int
 }
 
-var serviceSignatures []ServiceSignature
-var osFingerprints []OSFingerprint
-var sigInitOnce bool
+var (
+	serviceSignatures  []ServiceSignature
+	osFingerprints    []OSFingerprint
+	initSigsOnce      sync.Once
+	initOSOnce        sync.Once
+	portSignatureIndex [65536][]*ServiceSignature
+	portIndexOnce     sync.Once
+)
 
 func initSignatures() {
-	if sigInitOnce {
-		return
-	}
-	sigInitOnce = true
+	initSigsOnce.Do(func() {
 
 	// ─── SSH ───
 	addSig(22, "SSH", `SSH-2\.0-OpenSSH_([\d.]+p?\d*)`, "OpenSSH", "Unix/Linux", 0.95)
@@ -332,7 +335,8 @@ func initSignatures() {
 	addSig(80, "HTTP", `Microsoft-IIS`, "Microsoft IIS", "Windows Server", 0.95)
 	addSig(443, "HTTPS", `Microsoft-IIS`, "Microsoft IIS SSL", "Windows Server", 0.90)
 	addSig(80, "HTTP", `Apache-Coyote`, "Apache Tomcat", "Generic", 0.85)
-	addSig(8009, "AJP", `Apache.*Tomcat`, "Apache Tomcat AJP", "Generic", 0.85)
+			addSig(8009, "AJP", `Apache.*Tomcat`, "Apache Tomcat AJP", "Generic", 0.85)
+	})
 }
 
 func addSig(port int, protocol, pattern, product, osHint string, confidence float64) {
@@ -351,48 +355,267 @@ func addSig(port int, protocol, pattern, product, osHint string, confidence floa
 }
 
 func initOSFingerprints() {
-	osFingerprints = []OSFingerprint{
-		{regexp.MustCompile(`Windows NT 10\.0`), "Windows", "10/Server 2016/2019", 0.85, 128},
-		{regexp.MustCompile(`Windows NT 6\.3`), "Windows", "8.1/Server 2012 R2", 0.85, 128},
-		{regexp.MustCompile(`Windows NT 6\.2`), "Windows", "8/Server 2012", 0.85, 128},
-		{regexp.MustCompile(`Windows NT 6\.1`), "Windows", "7/Server 2008 R2", 0.85, 128},
-		{regexp.MustCompile(`Windows NT 6\.0`), "Windows", "Vista/Server 2008", 0.85, 128},
-		{regexp.MustCompile(`Windows NT 5\.`), "Windows", "XP/Server 2003", 0.85, 128},
-		{regexp.MustCompile(`Ubuntu|ubuntu`), "Ubuntu Linux", "24.04/22.04", 0.80, 64},
-		{regexp.MustCompile(`Debian|debian`), "Debian Linux", "12/11", 0.80, 64},
-		{regexp.MustCompile(`CentOS|centos`), "CentOS Linux", "9/8/7", 0.80, 64},
-		{regexp.MustCompile(`Red Hat|redhat|Red\.Hat`), "Red Hat Linux", "9/8/7", 0.80, 64},
-		{regexp.MustCompile(`Fedora|fedora`), "Fedora Linux", "Latest", 0.80, 64},
-		{regexp.MustCompile(`SUSE|suse|openSUSE`), "SUSE Linux", "openSUSE", 0.80, 64},
-		{regexp.MustCompile(`FreeBSD|freebsd`), "FreeBSD", "Latest", 0.85, 64},
-		{regexp.MustCompile(`OpenBSD|openbsd`), "OpenBSD", "Latest", 0.85, 64},
-		{regexp.MustCompile(`NetBSD|netbsd`), "NetBSD", "Latest", 0.80, 64},
-		{regexp.MustCompile(`Darwin|darwin`), "macOS", "Sonoma/Ventura", 0.80, 64},
-		{regexp.MustCompile(`Cisco IOS`), "Cisco IOS", "Latest", 0.90, 255},
-		{regexp.MustCompile(`Cisco ASA`), "Cisco ASA", "Latest", 0.85, 255},
-		{regexp.MustCompile(`Juniper|junos`), "Juniper JunOS", "Latest", 0.85, 255},
-		{regexp.MustCompile(`MikroTik|RouterOS`), "MikroTik", "RouterOS", 0.85, 64},
-		{regexp.MustCompile(`Ubiquiti|EdgeOS`), "Ubiquiti", "EdgeOS", 0.80, 64},
-		{regexp.MustCompile(`Palo Alto`), "Palo Alto", "PAN-OS", 0.80, 255},
-		{regexp.MustCompile(`FortiGate|Fortinet`), "Fortinet", "FortiGate", 0.85, 255},
-		{regexp.MustCompile(`OpenWrt|openwrt`), "OpenWrt", "Latest", 0.85, 64},
-		{regexp.MustCompile(`DD-WRT|dd-wrt`), "DD-WRT", "Latest", 0.85, 64},
-		{regexp.MustCompile(`pfSense|pfsense`), "pfSense", "Latest", 0.85, 64},
-		{regexp.MustCompile(`OPNsense|opnsense`), "OPNsense", "Latest", 0.80, 64},
-		{regexp.MustCompile(`Synology|synology`), "Synology DSM", "Latest", 0.80, 64},
-		{regexp.MustCompile(`QNAP|qnap`), "QNAP QTS", "Latest", 0.80, 64},
-		{regexp.MustCompile(`VMware|vmware|ESXi`), "VMware ESXi", "Latest", 0.90, 64},
-		{regexp.MustCompile(`Proxmox|proxmox`), "Proxmox VE", "Latest", 0.80, 64},
-		{regexp.MustCompile(`Raspberry Pi|raspberry`), "Raspberry Pi OS", "Latest", 0.70, 64},
+	initOSOnce.Do(func() {
+		osFingerprints = []OSFingerprint{
+		// ─── Windows Desktop ───
+		{regexp.MustCompile(`Windows NT 10\.0; Win64|Windows NT 10\.0; WOW64`), "Windows", "11/10 (64-bit)", 0.92, 128},
+		{regexp.MustCompile(`Windows NT 10\.0;`), "Windows", "10/11", 0.88, 128},
+		{regexp.MustCompile(`Windows NT 6\.3;`), "Windows", "8.1", 0.88, 128},
+		{regexp.MustCompile(`Windows NT 6\.2;`), "Windows", "8", 0.88, 128},
+		{regexp.MustCompile(`Windows NT 6\.1;`), "Windows", "7/Server 2008 R2", 0.88, 128},
+		{regexp.MustCompile(`Windows NT 6\.0;`), "Windows", "Vista/Server 2008", 0.85, 128},
+		{regexp.MustCompile(`Windows NT 5\.2`), "Windows", "Server 2003/XP 64-bit", 0.85, 128},
+		{regexp.MustCompile(`Windows NT 5\.1`), "Windows", "XP (32-bit)", 0.85, 128},
+		{regexp.MustCompile(`Windows NT 5\.0`), "Windows", "2000", 0.80, 128},
+		{regexp.MustCompile(`Windows 11|Windows11`), "Windows", "11", 0.90, 128},
+		{regexp.MustCompile(`Windows 10|Windows10`), "Windows", "10", 0.90, 128},
+		{regexp.MustCompile(`Windows 8\b|Windows8\b`), "Windows", "8", 0.85, 128},
+		{regexp.MustCompile(`Windows 7\b|Windows7\b`), "Windows", "7", 0.85, 128},
+		{regexp.MustCompile(`Windows Vista|WindowsVista`), "Windows", "Vista", 0.85, 128},
+		{regexp.MustCompile(`Windows XP|WindowsXP`), "Windows", "XP", 0.85, 128},
+
+		// ─── Windows Server ───
+		{regexp.MustCompile(`Windows Server 2022|Server2022`), "Windows Server", "2022", 0.92, 128},
+		{regexp.MustCompile(`Windows Server 2019|Server2019`), "Windows Server", "2019", 0.92, 128},
+		{regexp.MustCompile(`Windows Server 2016|Server2016`), "Windows Server", "2016", 0.92, 128},
+		{regexp.MustCompile(`Windows Server 2012 R2|Server2012R2`), "Windows Server", "2012 R2", 0.90, 128},
+		{regexp.MustCompile(`Windows Server 2012`), "Windows Server", "2012", 0.90, 128},
+		{regexp.MustCompile(`Windows Server 2008 R2|Server2008R2`), "Windows Server", "2008 R2", 0.85, 128},
+		{regexp.MustCompile(`Windows Server 2008|Server2008`), "Windows Server", "2008", 0.85, 128},
+		{regexp.MustCompile(`Windows Server 2003 R2|Server2003R2`), "Windows Server", "2003 R2", 0.80, 128},
+		{regexp.MustCompile(`Windows Server 2003`), "Windows Server", "2003", 0.80, 128},
+		{regexp.MustCompile(`Microsoft-HTTPAPI/2\.0`), "Windows Server", "Server Core (HTTPAPI)", 0.85, 128},
+		{regexp.MustCompile(`Win32|Win64|Windows_NT`), "Windows", "(generic)", 0.75, 128},
+
+		// ─── Microsoft IIS versions → Windows Server version ───
+		{regexp.MustCompile(`Microsoft-IIS/10\.0`), "Windows Server", "2016/2019/2022 (IIS 10)", 0.90, 128},
+		{regexp.MustCompile(`Microsoft-IIS/8\.5`), "Windows Server", "2012 R2 (IIS 8.5)", 0.90, 128},
+		{regexp.MustCompile(`Microsoft-IIS/8\.0`), "Windows Server", "2012 (IIS 8.0)", 0.90, 128},
+		{regexp.MustCompile(`Microsoft-IIS/7\.5`), "Windows Server", "2008 R2 (IIS 7.5)", 0.90, 128},
+		{regexp.MustCompile(`Microsoft-IIS/7\.0`), "Windows Server", "2008 (IIS 7.0)", 0.85, 128},
+		{regexp.MustCompile(`Microsoft-IIS/6\.0`), "Windows Server", "2003 (IIS 6.0)", 0.85, 128},
+		{regexp.MustCompile(`Microsoft-IIS/5\.0`), "Windows Server", "2000 (IIS 5.0)", 0.80, 128},
+
+		// ─── Windows-specific services ───
+		{regexp.MustCompile(`Microsoft ESMTP|MS Exchange|ExchangeServer`), "Windows Server", "Exchange", 0.85, 128},
+		{regexp.MustCompile(`Microsoft Terminal Services|TermService`), "Windows Server", "RDP", 0.85, 128},
+
+		// ─── Ubuntu / Debian based ───
+		{regexp.MustCompile(`Ubuntu 24\.04|noble`), "Ubuntu Linux", "24.04 LTS (Noble)", 0.92, 64},
+		{regexp.MustCompile(`Ubuntu 22\.04|jammy`), "Ubuntu Linux", "22.04 LTS (Jammy)", 0.92, 64},
+		{regexp.MustCompile(`Ubuntu 20\.04|focal`), "Ubuntu Linux", "20.04 LTS (Focal)", 0.92, 64},
+		{regexp.MustCompile(`Ubuntu 18\.04|bionic`), "Ubuntu Linux", "18.04 LTS (Bionic)", 0.90, 64},
+		{regexp.MustCompile(`Ubuntu 16\.04|xenial`), "Ubuntu Linux", "16.04 LTS (Xenial)", 0.88, 64},
+		{regexp.MustCompile(`Ubuntu 14\.04|trusty`), "Ubuntu Linux", "14.04 LTS (Trusty)", 0.85, 64},
+		{regexp.MustCompile(`Ubuntu|ubuntu|UBUNTU`), "Ubuntu Linux", "(generic)", 0.80, 64},
+		{regexp.MustCompile(`Debian GNU/Linux 12|bookworm`), "Debian Linux", "12 (Bookworm)", 0.92, 64},
+		{regexp.MustCompile(`Debian GNU/Linux 11|bullseye`), "Debian Linux", "11 (Bullseye)", 0.92, 64},
+		{regexp.MustCompile(`Debian GNU/Linux 10|buster`), "Debian Linux", "10 (Buster)", 0.90, 64},
+		{regexp.MustCompile(`Debian GNU/Linux 9|stretch`), "Debian Linux", "9 (Stretch)", 0.88, 64},
+		{regexp.MustCompile(`Debian|debian|DEBIAN`), "Debian Linux", "(generic)", 0.80, 64},
+		{regexp.MustCompile(`Raspbian|raspbian`), "Raspberry Pi OS", "(Raspbian)", 0.75, 64},
+
+		// ─── RHEL / CentOS / Fedora ───
+		{regexp.MustCompile(`CentOS Stream|CentOSStream`), "CentOS", "Stream", 0.90, 64},
+		{regexp.MustCompile(`CentOS release 9|CentOS 9|el9`), "CentOS", "9", 0.92, 64},
+		{regexp.MustCompile(`CentOS release 8|CentOS 8|el8`), "CentOS", "8", 0.92, 64},
+		{regexp.MustCompile(`CentOS release 7|CentOS 7|el7`), "CentOS", "7", 0.92, 64},
+		{regexp.MustCompile(`CentOS release 6|CentOS 6|el6`), "CentOS", "6", 0.85, 64},
+		{regexp.MustCompile(`CentOS|centos|CENTOS`), "CentOS", "(generic)", 0.80, 64},
+		{regexp.MustCompile(`Red Hat Enterprise Linux 9|RHEL 9|rhel9`), "Red Hat Enterprise Linux", "9", 0.92, 64},
+		{regexp.MustCompile(`Red Hat Enterprise Linux 8|RHEL 8|rhel8`), "Red Hat Enterprise Linux", "8", 0.92, 64},
+		{regexp.MustCompile(`Red Hat Enterprise Linux 7|RHEL 7|rhel7`), "Red Hat Enterprise Linux", "7", 0.90, 64},
+		{regexp.MustCompile(`Red Hat Enterprise Linux 6|RHEL 6|rhel6`), "Red Hat Enterprise Linux", "6", 0.85, 64},
+		{regexp.MustCompile(`Red Hat|redhat|Red\.Hat`), "Red Hat Enterprise Linux", "(generic)", 0.80, 64},
+		{regexp.MustCompile(`Fedora release \d+`), "Fedora Linux", "Version-specific", 0.85, 64},
+		{regexp.MustCompile(`Fedora|fedora|FEDORA`), "Fedora Linux", "(generic)", 0.80, 64},
+		{regexp.MustCompile(`Amazon Linux|amzn`), "Amazon Linux", "AWS", 0.85, 64},
+
+		// ─── SUSE / OpenSUSE ───
+		{regexp.MustCompile(`SUSE Linux Enterprise 15|SLES 15|sles15`), "SUSE Linux Enterprise", "15", 0.92, 64},
+		{regexp.MustCompile(`SUSE Linux Enterprise 12|SLES 12|sles12`), "SUSE Linux Enterprise", "12", 0.90, 64},
+		{regexp.MustCompile(`openSUSE Leap 15`), "openSUSE", "Leap 15", 0.88, 64},
+		{regexp.MustCompile(`openSUSE Tumbleweed`), "openSUSE", "Tumbleweed", 0.85, 64},
+		{regexp.MustCompile(`SUSE|suse|openSUSE`), "SUSE Linux", "(generic)", 0.75, 64},
+
+		// ─── Alpine / Arch / Other Linux ───
+		{regexp.MustCompile(`Alpine Linux v?(\d+\.\d+)`), "Alpine Linux", "Version-matched", 0.90, 64},
+		{regexp.MustCompile(`Alpine|alpine`), "Alpine Linux", "(generic)", 0.85, 64},
+		{regexp.MustCompile(`Arch Linux|archlinux|Arch`), "Arch Linux", "Rolling", 0.88, 64},
+		{regexp.MustCompile(`Manjaro|manjaro`), "Manjaro Linux", "Rolling", 0.85, 64},
+		{regexp.MustCompile(`Kali Linux|Kali|kali`), "Kali Linux", "Rolling", 0.85, 64},
+		{regexp.MustCompile(`Parrot OS|ParrotSec`), "Parrot OS", "Security", 0.85, 64},
+		{regexp.MustCompile(`Linux Mint|linuxmint`), "Linux Mint", "(generic)", 0.85, 64},
+		{regexp.MustCompile(`Linux 2\.6\.`), "Linux Kernel", "2.6 (legacy)", 0.75, 64},
+
+		// ─── Generic Linux with kernel hints ───
+		{regexp.MustCompile(`Linux \d+\.\d+\.\d+-\d+-\w+`), "Linux", "Custom/Distro (kernel)", 0.70, 64},
+		{regexp.MustCompile(`linux|UNIX|unix|Linux`), "Linux/Unix", "(generic)", 0.50, 64},
+
+		// ─── Alpine-specific SSH ───
+		{regexp.MustCompile(`dropbear`), "Linux", "Embedded/Lightweight (Dropbear)", 0.70, 64},
+
+		// ─── Solaris / SunOS ───
+		{regexp.MustCompile(`SunOS 5\.11|Solaris 11`), "Solaris", "11", 0.90, 255},
+		{regexp.MustCompile(`SunOS 5\.10|Solaris 10`), "Solaris", "10", 0.90, 255},
+		{regexp.MustCompile(`SunOS 5\.9|Solaris 9`), "Solaris", "9", 0.85, 255},
+		{regexp.MustCompile(`SunOS|solaris|Solaris`), "Solaris", "(generic)", 0.80, 255},
+		{regexp.MustCompile(`OpenIndiana|oi_`), "OpenIndiana", "Solaris-derived", 0.75, 255},
+
+		// ─── BSD Family ───
+		{regexp.MustCompile(`FreeBSD 14\.`), "FreeBSD", "14", 0.92, 64},
+		{regexp.MustCompile(`FreeBSD 13\.`), "FreeBSD", "13", 0.92, 64},
+		{regexp.MustCompile(`FreeBSD 12\.`), "FreeBSD", "12", 0.90, 64},
+		{regexp.MustCompile(`FreeBSD 11\.`), "FreeBSD", "11", 0.88, 64},
+		{regexp.MustCompile(`FreeBSD|freebsd`), "FreeBSD", "(generic)", 0.80, 64},
+		{regexp.MustCompile(`OpenBSD 7\.`), "OpenBSD", "7", 0.92, 64},
+		{regexp.MustCompile(`OpenBSD 6\.`), "OpenBSD", "6", 0.88, 64},
+		{regexp.MustCompile(`OpenBSD|openbsd`), "OpenBSD", "(generic)", 0.85, 64},
+		{regexp.MustCompile(`NetBSD 9\.|NetBSD 10\.`), "NetBSD", "9/10", 0.85, 64},
+		{regexp.MustCompile(`NetBSD|netbsd`), "NetBSD", "(generic)", 0.80, 64},
+		{regexp.MustCompile(`DragonFly|DragonFlyBSD`), "DragonFly BSD", "(generic)", 0.80, 64},
+
+		// ─── macOS ───
+		{regexp.MustCompile(`Darwin Kernel Version 2[3-9]`), "macOS", "Sonoma (14.x)", 0.88, 64},
+		{regexp.MustCompile(`Darwin Kernel Version 2[0-2]`), "macOS", "Ventura (13.x)", 0.88, 64},
+		{regexp.MustCompile(`Darwin Kernel Version 19`), "macOS", "Catalina (10.15)", 0.85, 64},
+		{regexp.MustCompile(`Darwin Kernel Version 18`), "macOS", "Mojave (10.14)", 0.85, 64},
+		{regexp.MustCompile(`Darwin Kernel Version 17`), "macOS", "High Sierra (10.13)", 0.85, 64},
+		{regexp.MustCompile(`Darwin|darwin`), "macOS", "(generic)", 0.80, 64},
+		{regexp.MustCompile(`Mac OS X|MacOS|macOS`), "macOS", "(generic)", 0.80, 64},
+
+		// ─── iOS / Apple TV ───
+		{regexp.MustCompile(`Darwin\/?1[5-9]\.\d+\.\d+.*iPhone|CFNetwork.*iOS`), "iOS", "Mobile (Darwin)", 0.85, 64},
+		{regexp.MustCompile(`AppleTV|Apple TV`), "Apple tvOS", "(generic)", 0.80, 64},
+
+		// ─── Cisco ───
+		{regexp.MustCompile(`Cisco IOS XE`), "Cisco IOS", "XE", 0.92, 255},
+		{regexp.MustCompile(`Cisco IOS Software.*Version 1[5-9]\.`), "Cisco IOS", "15.x+", 0.90, 255},
+		{regexp.MustCompile(`Cisco IOS.*Version 12\.`), "Cisco IOS", "12.x (legacy)", 0.85, 255},
+		{regexp.MustCompile(`Cisco IOS`), "Cisco IOS", "(generic)", 0.88, 255},
+		{regexp.MustCompile(`Cisco ASA\|Cisco Adaptive Security`), "Cisco ASA", "(generic)", 0.85, 255},
+		{regexp.MustCompile(`Cisco Nexus|NX-OS`), "Cisco NX-OS", "", 0.85, 255},
+		{regexp.MustCompile(`Cisco Catalyst|c2950|c2960|c3750|c3850`), "Cisco Catalyst", "Switch", 0.85, 255},
+		{regexp.MustCompile(`Cisco Ios|Ciso`), "Cisco", "(generic)", 0.80, 255},
+
+		// ─── Juniper ───
+		{regexp.MustCompile(`Juniper JunOS.*2[1-9]\.`), "Juniper JunOS", "21.x+", 0.90, 255},
+		{regexp.MustCompile(`Juniper JunOS.*1[5-9]\.`), "Juniper JunOS", "15.x-19.x", 0.88, 255},
+		{regexp.MustCompile(`Juniper|junos`), "Juniper JunOS", "(generic)", 0.85, 255},
+		{regexp.MustCompile(`JunOS|junOS`), "Juniper JunOS", "", 0.83, 255},
+		{regexp.MustCompile(`Juniper SRX`), "Juniper SRX", "Firewall", 0.85, 255},
+
+		// ─── MikroTik ───
+		{regexp.MustCompile(`MikroTik RouterOS 7\.`), "MikroTik RouterOS", "7.x", 0.90, 64},
+		{regexp.MustCompile(`MikroTik RouterOS 6\.`), "MikroTik RouterOS", "6.x", 0.88, 64},
+		{regexp.MustCompile(`MikroTik|RouterOS`), "MikroTik RouterOS", "(generic)", 0.85, 64},
+
+		// ─── Ubiquiti ───
+		{regexp.MustCompile(`Ubiquiti UniFi|UniFi Security Gateway`), "Ubiquiti", "UniFi", 0.85, 64},
+		{regexp.MustCompile(`EdgeOS|EdgeRouter`), "Ubiquiti", "EdgeOS", 0.83, 64},
+		{regexp.MustCompile(`Ubiquiti|EdgeOS`), "Ubiquiti", "(generic)", 0.80, 64},
+		{regexp.MustCompile(`airOS|AirOS`), "Ubiquiti", "airOS (wireless)", 0.80, 64},
+
+		// ─── Palo Alto ───
+		{regexp.MustCompile(`Palo Alto Networks PAN-OS 1[0-1]\.`), "Palo Alto PAN-OS", "10.x-11.x", 0.90, 255},
+		{regexp.MustCompile(`Palo Alto Networks PAN-OS 9\.`), "Palo Alto PAN-OS", "9.x", 0.88, 255},
+		{regexp.MustCompile(`Palo Alto`), "Palo Alto PAN-OS", "(generic)", 0.80, 255},
+
+		// ─── Fortinet ───
+		{regexp.MustCompile(`FortiGate 7\.`), "Fortinet FortiGate", "7.x (7.0/7.2/7.4)", 0.90, 255},
+		{regexp.MustCompile(`FortiGate 6\.`), "Fortinet FortiGate", "6.x", 0.88, 255},
+		{regexp.MustCompile(`FortiGate|Fortinet|FGT_`), "Fortinet FortiGate", "(generic)", 0.85, 255},
+
+		// ─── OpenWrt / DD-WRT / Tomato ───
+		{regexp.MustCompile(`OpenWrt 2[0-3]\.|OpenWrt 1[0-9]\.`), "OpenWrt", "19.x-23.x", 0.88, 64},
+		{regexp.MustCompile(`OpenWrt|openwrt|OpenWRT`), "OpenWrt", "(generic)", 0.85, 64},
+		{regexp.MustCompile(`DD-WRT|dd-wrt|DDWRT`), "DD-WRT", "(generic)", 0.85, 64},
+		{regexp.MustCompile(`TomatoUSB|Toastman|Shibby`), "Tomato", "USB (Shibby/Toastman)", 0.85, 64},
+
+		// ─── pfSense / OPNsense ───
+		{regexp.MustCompile(`pfSense 2\.7|pfSense 2\.6`), "pfSense", "2.6/2.7", 0.88, 64},
+		{regexp.MustCompile(`pfSense|pfsense`), "pfSense", "(generic)", 0.85, 64},
+		{regexp.MustCompile(`OPNsense 2[34]\.`), "OPNsense", "23.x/24.x", 0.85, 64},
+		{regexp.MustCompile(`OPNsense|opnsense`), "OPNsense", "(generic)", 0.80, 64},
+
+		// ─── NAS / Storage ───
+		{regexp.MustCompile(`Synology DSM 7\.`), "Synology DSM", "7.x", 0.88, 64},
+		{regexp.MustCompile(`Synology DSM 6\.`), "Synology DSM", "6.x", 0.85, 64},
+		{regexp.MustCompile(`Synology|synology`), "Synology DSM", "(generic)", 0.80, 64},
+		{regexp.MustCompile(`QNAP QTS 5\.`), "QNAP QTS", "5.x (hero/c2)", 0.85, 64},
+		{regexp.MustCompile(`QNAP QTS 4\.`), "QNAP QTS", "4.x", 0.83, 64},
+		{regexp.MustCompile(`QNAP|qnap`), "QNAP QTS", "(generic)", 0.80, 64},
+		{regexp.MustCompile(`TrueNAS|truenas|FreeNAS|freenas`), "TrueNAS", "(FreeNAS/Scale)", 0.85, 64},
+		{regexp.MustCompile(`Unraid|unRAID`), "Unraid", "(generic)", 0.85, 64},
+
+		// ─── Virtualization / Cloud ───
+		{regexp.MustCompile(`VMware ESXi 8\.|ESXi 8\b`), "VMware ESXi", "8.x", 0.92, 64},
+		{regexp.MustCompile(`VMware ESXi 7\.|ESXi 7\b`), "VMware ESXi", "7.x", 0.90, 64},
+		{regexp.MustCompile(`VMware ESXi 6\.|ESXi 6\b`), "VMware ESXi", "6.x", 0.88, 64},
+		{regexp.MustCompile(`VMware|vmware|ESXi`), "VMware ESXi", "(generic)", 0.85, 64},
+		{regexp.MustCompile(`vCenter|vsphere`), "VMware vCenter", "(generic)", 0.85, 64},
+		{regexp.MustCompile(`Proxmox|proxmox|PVE`), "Proxmox VE", "(generic)", 0.80, 64},
+		{regexp.MustCompile(`Hyper-V|hyperv|WindowsHyperV`), "Microsoft Hyper-V", "(generic)", 0.85, 128},
+		{regexp.MustCompile(`XenServer|xenserver|XCP-ng|xcp-ng`), "XCP-ng / XenServer", "(generic)", 0.85, 64},
+		{regexp.MustCompile(`QEMU|KVM|kvm|qemu|qemu-`), "QEMU/KVM", "Virtual Machine", 0.85, 64},
+
+		// ─── Container / Orchestration ───
+		{regexp.MustCompile(`Docker Container|docker.*linuxkit`), "Docker", "(LinuxKit)", 0.85, 64},
+		{regexp.MustCompile(`Kubernetes|k8s|kubelet`), "Kubernetes", "(generic)", 0.85, 64},
+		{regexp.MustCompile(`LXC|lxc|LXD|lxd`), "LXC/LXD", "Container", 0.80, 64},
+
+		// ─── IoT / Embedded ───
+		{regexp.MustCompile(`Raspberry Pi|raspberry|rpi\b`), "Raspberry Pi OS", "(generic)", 0.75, 64},
+		{regexp.MustCompile(`Arduino|arduino`), "Arduino", "Embedded", 0.70, 64},
+		{regexp.MustCompile(`ESP8266|ESP32|espressif`), "ESP/Espressif", "IoT (ESP8266/32)", 0.80, 64},
+
+		// ─── Load Balancers / Reverse Proxies ───
+		{regexp.MustCompile(`F5 BIG-IP|BIG-IP|f5\b`), "F5 BIG-IP", "(generic)", 0.90, 255},
+		{regexp.MustCompile(`Citrix ADC|NetScaler|nsca`), "Citrix ADC (NetScaler)", "(generic)", 0.85, 64},
+		{regexp.MustCompile(`A10 Networks|a10\b`), "A10 Networks", "(generic)", 0.80, 255},
+		{regexp.MustCompile(`HAProxy|haproxy`), "HAProxy", "(generic)", 0.70, 64},
+
+		// ─── Other Network ───
+		{regexp.MustCompile(`SonicWall|sonicwall`), "SonicWall", "(generic)", 0.85, 255},
+		{regexp.MustCompile(`Check Point|checkpoint|CP-`), "Check Point", "Gaia/Security Gateway", 0.85, 255},
+		{regexp.MustCompile(`WatchGuard|watchguard`), "WatchGuard", "Firebox", 0.85, 255},
+		{regexp.MustCompile(`ZyXEL|zyxel|Zyxel`), "ZyXEL", "(generic)", 0.80, 64},
+		{regexp.MustCompile(`TP-Link|tplink|TP-LINK`), "TP-Link", "(generic)", 0.80, 64},
+		{regexp.MustCompile(`D-Link|dlink`), "D-Link", "(generic)", 0.80, 64},
+		{regexp.MustCompile(`Netgear|netgear`), "Netgear", "(generic)", 0.80, 64},
+
+		// ─── Printers ───
+		{regexp.MustCompile(`HP LaserJet|HP Color LaserJet|HP OfficeJet`), "HP", "Printer (LaserJet/OfficeJet)", 0.85, 64},
+		{regexp.MustCompile(`Brother.*Printer|Brother.*MFC`), "Brother", "Printer (MFC/HL)", 0.80, 64},
+		{regexp.MustCompile(`Canon.*Printer|Canon.*iR`), "Canon", "Printer (iR/MG)", 0.80, 64},
+		{regexp.MustCompile(`Epson.*Printer|Epson.*WorkForce`), "Epson", "Printer (WorkForce)", 0.80, 64},
+
+		// ─── Mobile / Tablet ───
+		{regexp.MustCompile(`Android \d+\.\d+;.*Build/`), "Android", "Mobile (generic)", 0.80, 64},
 	}
+	})
 }
+
 
 // ─────────────────────────────────────────────────────────────────
 // SIGNATURE MATCHING ENGINE
 // ─────────────────────────────────────────────────────────────────
 
+func buildPortIndex() {
+	portIndexOnce.Do(func() {
+		initSignatures()
+		for i := range serviceSignatures {
+			sig := &serviceSignatures[i]
+			p := sig.Port
+			if p > 0 && p < 65536 {
+				portSignatureIndex[p] = append(portSignatureIndex[p], sig)
+			}
+		}
+	})
+}
+
 func MatchServiceSignatures(port int, banner string) *ServiceSignature {
-	initSignatures()
+	buildPortIndex()
 
 	if banner == "" {
 		return nil
@@ -402,15 +625,12 @@ func MatchServiceSignatures(port int, banner string) *ServiceSignature {
 	var bestConfidence float64
 	bannerLower := strings.ToLower(banner)
 
-	for i := range serviceSignatures {
-		sig := &serviceSignatures[i]
-		if sig.Port != 0 && sig.Port != port {
-			continue
-		}
+	sigs := portSignatureIndex[port]
+
+	for _, sig := range sigs {
 		matches := sig.Pattern.FindStringSubmatch(banner)
 		if matches != nil {
 			conf := sig.Confidence
-			// Confidence boost: matching on exact product name in banner adds weight
 			productLower := strings.ToLower(sig.Product)
 			if strings.Contains(bannerLower, productLower) {
 				conf += 0.05

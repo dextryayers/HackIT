@@ -539,13 +539,6 @@ func (r *Reporter) ReportStatus(status string, progress float64) {
 		return
 	}
 
-	// Only show at start (0%) and end (100%) for clean output
-	if progress == 0 {
-		fmt.Printf("\n[*] Scanning %s...\n\n", status)
-		r.lastProgress = 0
-		return
-	}
-
 	if progress >= 100 {
 		fmt.Printf("\n[*] Scan complete!\n")
 		r.lastProgress = 100
