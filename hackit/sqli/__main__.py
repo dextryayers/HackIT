@@ -1,2 +1,5 @@
-from .__init__ import test_sqli
-test_sqli()
+"""SQLi Engine entry point"""
+from . import interactive_shell
+
+if __name__ == "__main__":
+    interactive_shell()

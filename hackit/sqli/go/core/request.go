@@ -32,18 +32,61 @@ func (e *Engine) Request(payload string, param string) (string, int, http.Header
 	} else if e.Opts.Delay > 0 {
 		time.Sleep(time.Duration(e.Opts.Delay) * time.Millisecond)
 	}
+
+	// Retry loop
+	maxRetries := e.Opts.Retry
+	if maxRetries <= 0 {
+		maxRetries = 3
+	}
+
+	var lastErr error
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			backoff := time.Duration(attempt*500) * time.Millisecond
+			time.Sleep(backoff)
+		}
+
+		bodyStr, blen, headers, err := e.doRequest(payload, param)
+		if err == nil {
+			return bodyStr, blen, headers, nil
+		}
+		lastErr = err
+
+		// Don't retry on certain errors
+		if isFatalError(err) {
+			break
+		}
+	}
+
+	return "", 0, nil, lastErr
+}
+
+func isFatalError(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "invalid URL") ||
+		strings.Contains(msg, "unsupported protocol")
+}
+
+func (e *Engine) doRequest(payload string, param string) (string, int, http.Header, error) {
 	var body io.Reader
 	u, err := url.Parse(e.Opts.URL)
 	if err != nil {
 		return "", 0, nil, err
 	}
 
-	// Smart parameter injection — APPEND payload to existing value, NEVER replace
+	// Multi-parameter injection support
 	if e.Opts.Method == "GET" || e.Opts.Method == "" {
 		q := u.Query()
 		if param != "" {
 			existing := q.Get(param)
 			q.Set(param, existing+payload)
+		} else {
+			// Try all params
+			for p := range q {
+				existing := q.Get(p)
+				q.Set(p, existing+payload)
+				break
+			}
 		}
 		u.RawQuery = q.Encode()
 	} else {
@@ -74,9 +117,7 @@ func (e *Engine) Request(payload string, param string) (string, int, http.Header
 	if e.Opts.Agent != "" {
 		req.Header.Set("User-Agent", e.Opts.Agent)
 	} else if e.Opts.Stealth {
-		// Rotate User-Agent in stealth mode
 		req.Header.Set("User-Agent", userAgents[rand.Intn(len(userAgents))])
-		// Add fake headers to look more like a browser
 		req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
 		req.Header.Set("Accept-Language", "en-US,en;q=0.9")
 		req.Header.Set("Sec-Ch-Ua", "\"Google Chrome\";v=\"119\", \"Chromium\";v=\"119\", \"Not?A_Brand\";v=\"24\"")

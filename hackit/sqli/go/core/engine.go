@@ -10,59 +10,97 @@ import (
 	"time"
 )
 
-// Engine Options
+// Engine Options - Complete configuration
 type Options struct {
-	URL            string
-	Data           string
-	Cookie         string
-	Header         []string
-	Agent          string
-	Referer        string
-	Method         string
-	Timeout        int
-	Proxy          string
-	FollowRedirect bool
+	URL            string   `json:"url"`
+	Data           string   `json:"data,omitempty"`
+	Cookie         string   `json:"cookie,omitempty"`
+	Header         []string `json:"header,omitempty"`
+	Agent          string   `json:"agent,omitempty"`
+	Referer        string   `json:"referer,omitempty"`
+	Method         string   `json:"method,omitempty"`
+	Timeout        int      `json:"timeout,omitempty"`
+	Proxy          string   `json:"proxy,omitempty"`
+	FollowRedirect bool     `json:"follow_redirect,omitempty"`
 
-	Mode       string
-	RiskLevel  int
-	Depth      int
-	Threads    int
-	Delay      int
-	RandomCase bool
-	Tamper     []string
-	Encode     string
-	BypassWAF  bool
-	Stealth    bool
+	Mode       string   `json:"mode,omitempty"`
+	RiskLevel  int      `json:"risk_level,omitempty"`
+	Depth      int      `json:"depth,omitempty"`
+	Threads    int      `json:"threads,omitempty"`
+	Delay      int      `json:"delay,omitempty"`
+	RandomCase bool     `json:"random_case,omitempty"`
+	Tamper     []string `json:"tamper,omitempty"`
+	Encode     string   `json:"encode,omitempty"`
+	BypassWAF  bool     `json:"bypass_waf,omitempty"`
+	Stealth    bool     `json:"stealth,omitempty"`
 
-	Fingerprint bool
-	BannerGrab  bool
-	OSDetect    bool
-	WAFDetect   bool
-	SmartDiff   bool
-	Baseline    bool
-	TechDetect  bool
+	Fingerprint bool `json:"fingerprint,omitempty"`
+	BannerGrab  bool `json:"banner_grab,omitempty"`
+	OSDetect    bool `json:"os_detect,omitempty"`
+	WAFDetect   bool `json:"waf_detect,omitempty"`
+	SmartDiff   bool `json:"smart_diff,omitempty"`
+	Baseline    bool `json:"baseline,omitempty"`
+	TechDetect  bool `json:"tech_detect,omitempty"`
 
-	ListDBs     bool
-	ListTables  bool
-	ListColumns bool
-	Database    string
-	Table       string
-	Column      string
-	Schema      bool
-	CountRows   bool
-	Search      string
+	ListDBs     bool   `json:"list_dbs,omitempty"`
+	ListTables  bool   `json:"list_tables,omitempty"`
+	ListColumns bool   `json:"list_columns,omitempty"`
+	Database    string `json:"database,omitempty"`
+	Table       string `json:"table,omitempty"`
+	Column      string `json:"column,omitempty"`
+	Schema      bool   `json:"schema,omitempty"`
+	CountRows   bool   `json:"count_rows,omitempty"`
+	Search      string `json:"search,omitempty"`
 
-	DumpTable string
-	DumpAll   bool
+	DumpTable string `json:"dump_table,omitempty"`
+	DumpAll   bool   `json:"dump_all,omitempty"`
 
-	PrivEsc  bool
-	OSAccess bool
-	ExfilDNS  bool
-	ExfilHTTP bool
-	NoColor   bool
+	PrivEsc  bool `json:"priv_esc,omitempty"`
+	OSAccess bool `json:"os_access,omitempty"`
+	ExfilDNS  bool `json:"exfil_dns,omitempty"`
+	ExfilHTTP bool `json:"exfil_http,omitempty"`
+	NoColor   bool `json:"no_color,omitempty"`
 
-	Verbose int
-	Retry   int
+	Verbose int `json:"verbose,omitempty"`
+	Retry   int `json:"retry,omitempty"`
+
+	// === CRAWL EXTENSION ===
+	CrawlMode      string `json:"crawl_mode,omitempty"`      // full, schema, sensitive, system
+	CrawlDepth     int    `json:"crawl_depth,omitempty"`     // 1-5
+	CrawlThreads   int    `json:"crawl_threads,omitempty"`   // parallel workers
+	CrawlExtract   bool   `json:"crawl_extract,omitempty"`   // extract data
+	CrawlSensitive bool   `json:"crawl_sensitive,omitempty"` // scan sensitive
+	CrawlProcs     bool   `json:"crawl_procs,omitempty"`     // extract procs
+	CrawlViews     bool   `json:"crawl_views,omitempty"`     // extract views
+	CrawlIndexes   bool   `json:"crawl_indexes,omitempty"`   // extract indexes
+	CrawlSystem    bool   `json:"crawl_system,omitempty"`    // extract system info
+	CrawlOutput    string `json:"crawl_output,omitempty"`    // output dir
+	CrawlReport    string `json:"crawl_report,omitempty"`    // report format
+
+	// === ADVANCED EXTRACTION ===
+	ExtractTechnique string `json:"extract_technique,omitempty"` // auto, union, error, blind, time
+	ExtractCharset   string `json:"extract_charset,omitempty"`   // charset for blind
+	ExtractWorkers   int    `json:"extract_workers,omitempty"`   // parallel extraction
+	ExtractBatchSize int    `json:"extract_batch_size,omitempty"`
+
+	// === NETWORK SCAN ===
+	NetworkScan bool   `json:"network_scan,omitempty"`
+	ScanTarget  string `json:"scan_target,omitempty"`
+	ScanPorts   string `json:"scan_ports,omitempty"` // comma separated
+
+	// === AUTH BYPASS ===
+	AuthBypass bool   `json:"auth_bypass,omitempty"`
+	AuthUser   string `json:"auth_user,omitempty"`
+	AuthPass   string `json:"auth_pass,omitempty"`
+
+	// === FILE OPERATIONS ===
+	FileRead  string `json:"file_read,omitempty"`
+	FileWrite string `json:"file_write,omitempty"`
+	FileExec  string `json:"file_exec,omitempty"`
+
+	// === OOB ===
+	OOBChannel string `json:"oob_channel,omitempty"` // dns, http, smb
+	OOBDomain  string `json:"oob_domain,omitempty"`
 }
 
 type Engine struct {

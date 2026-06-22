@@ -9,7 +9,7 @@ import re
 import shlex
 from datetime import datetime
 from .go_bridge import GoEngine
-from hackit.ui import _colored, BLUE, CYAN, YELLOW, RESET, MAGENTA, GREEN, RED, BOLD, WHITE
+from hackit.ui import _colored, BLUE, CYAN, YELLOW, RESET, MAGENTA, GREEN, RED, BOLD, WHITE, DIM
 
 if sys.platform == 'win32':
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
@@ -479,6 +479,9 @@ HELP_TEXT = f"""{CYAN}SQLi Interactive Shell - Commands:{RESET}
   {YELLOW}exit{RESET} / {YELLOW}quit{RESET}              Exit
   {YELLOW}clear{RESET}                       Clear screen
 
+{RED}SPECIAL COMMAND:{RESET}
+  {YELLOW}gui{RESET}                         Launch GUI dashboard  {DIM}(tkinter){RESET}
+
 {WHITE}Examples:{RESET}
   Input Target : https://example.com/index.php?id=1
   Input Target : https://example.com/index.php?id=1 database information_schema
@@ -518,6 +521,17 @@ def interactive_shell():
             click.echo(HELP_TEXT)
             continue
 
+        if raw == 'gui':
+            try:
+                from hackit.sqli.gui import launch_gui
+                launch_gui()
+            except ImportError as e:
+                _log("CROSS", "CRITICAL", f"GUI unavailable: {e}")
+                _log("PLUS", "INFO", "Install tkinter: sudo apt install python3-tk")
+            except Exception as e:
+                _log("CROSS", "CRITICAL", f"GUI error: {e}")
+            continue
+
         parts = shlex.split(raw)
         url = parts[0]
 
@@ -536,12 +550,265 @@ def interactive_shell():
             _log("PLUS", "INFO", "Type 'help' for available commands")
 
 
-@click.command(context_settings=dict(help_option_names=['-h', '--help']))
+# ── Click-based CLI Interface ───────────────────────────────────
+
+@click.group(context_settings=dict(help_option_names=['-h', '--help']), invoke_without_command=True)
+@click.option('--url', '-u', default=None, help='Target URL')
+@click.option('--proxy', default=None, help='Proxy URL')
+@click.option('--timeout', default=30, help='Request timeout')
+@click.option('--threads', default=30, help='Concurrent threads')
+@click.option('--verbose', '-v', count=True, help='Verbose output')
 @click.pass_context
-def test_sqli(ctx):
-    """SQLi Penetration Engine - Interactive Shell"""
-    interactive_shell()
+def test_sqli(ctx, url, proxy, timeout, threads, verbose):
+    """SQLi Engine — Advanced SQL Injection Testing Framework"""
+    ctx.ensure_object(dict)
+    ctx.obj['url'] = url
+    ctx.obj['proxy'] = proxy
+    ctx.obj['timeout'] = timeout
+    ctx.obj['threads'] = threads
+    ctx.obj['verbose'] = verbose
+    if ctx.invoked_subcommand is None:
+        if url:
+            click.echo(f"{GREEN}Usage: hackit vuln sqli [OPTIONS] COMMAND [ARGS]...{RESET}")
+            click.echo(f"  Example: {CYAN}hackit vuln sqli -u \"{url}\" scan{RESET}")
+            click.echo(f"  Or:      {CYAN}hackit vuln sqli -u \"{url}\" dump mydb users{RESET}")
+            click.echo(f"  Run {YELLOW}sqli --help{RESET} for full command list")
+            return
+        interactive_shell()
+
+
+@test_sqli.command()
+@click.pass_context
+def scan(ctx):
+    """Full scan — fingerprint, enumerate, extract"""
+    url = ctx.obj['url']
+    if not url:
+        click.echo("Error: --url required")
+        return
+    _cmd_scan(url, [])
+
+
+@test_sqli.command()
+@click.argument('database', required=True)
+@click.pass_context
+def tables(ctx, database):
+    """List tables in database"""
+    url = ctx.obj['url']
+    if not url:
+        click.echo("Error: --url required")
+        return
+    _cmd_tables(url, [database])
+
+
+@test_sqli.command()
+@click.argument('database', required=True)
+@click.argument('table', required=True)
+@click.pass_context
+def columns(ctx, database, table):
+    """List columns in table"""
+    url = ctx.obj['url']
+    if not url:
+        click.echo("Error: --url required")
+        return
+    _cmd_columns(url, [database, table])
+
+
+@test_sqli.command()
+@click.argument('database', required=True)
+@click.argument('table', required=True)
+@click.pass_context
+def dump(ctx, database, table):
+    """Dump table data"""
+    url = ctx.obj['url']
+    if not url:
+        click.echo("Error: --url required")
+        return
+    _cmd_dump(url, [database, table])
+
+
+@test_sqli.command()
+@click.option('--mode', default='full', type=click.Choice(['full', 'schema', 'sensitive', 'system', 'procs', 'views']))
+@click.option('--depth', default=5, help='Crawl depth')
+@click.option('--workers', default=10, help='Crawl workers')
+@click.option('--output', default='crawl_output', help='Output directory')
+@click.pass_context
+def crawl(ctx, mode, depth, workers, output):
+    """Deep crawl entire database"""
+    url = ctx.obj['url']
+    if not url:
+        click.echo("Error: --url required")
+        return
+    from .go_bridge import GoEngine
+    engine = GoEngine()
+    params = {
+        'crawl': mode, 'crawl_depth': depth,
+        'crawl_threads': workers, 'crawl_output': output,
+    }
+    if ctx.obj['proxy']:
+        params['proxy'] = ctx.obj['proxy']
+    results = engine.run(url, **params)
+    if results:
+        from .report import print_console
+        print_console(results, "Crawl Results")
+
+
+@test_sqli.command()
+@click.option('--technique', default='auto', type=click.Choice(['auto', 'union', 'error', 'blind', 'time']))
+@click.option('--charset', default='common', help='Charset for blind extraction')
+@click.option('--workers', default=5, help='Extraction workers')
+@click.pass_context
+def extract(ctx, technique, charset, workers):
+    """Extract data with advanced techniques"""
+    url = ctx.obj['url']
+    if not url:
+        click.echo("Error: --url required")
+        return
+    from .go_bridge import GoEngine
+    engine = GoEngine()
+    params = {
+        'extract_technique': technique,
+        'extract_charset': charset,
+        'extract_workers': workers,
+    }
+    results = engine.run(url, **params)
+    if results:
+        for r in results:
+            click.echo(f"  {r}")
+
+
+@test_sqli.command()
+@click.option('--target', required=True, help='Target IP/domain')
+@click.option('--ports', default='80,443,3306,8080', help='Ports to scan')
+@click.pass_context
+def network(ctx, target, ports):
+    """Network scan via SQLi"""
+    url = ctx.obj['url']
+    if not url:
+        click.echo("Error: --url required")
+        return
+    from .go_bridge import GoEngine
+    engine = GoEngine()
+    results = engine.network_scan(target, ports)
+    if results:
+        for r in results:
+            click.echo(f"  {r}")
+
+
+@test_sqli.command()
+@click.option('--file', required=True, help='File path to read')
+@click.pass_context
+def readfile(ctx, file):
+    """Read file from database server"""
+    url = ctx.obj['url']
+    if not url:
+        click.echo("Error: --url required")
+        return
+    from .go_bridge import GoEngine
+    engine = GoEngine()
+    results = engine.file_operation(url, 'read', file)
+    if results:
+        for r in results:
+            click.echo(f"  {r}")
+
+
+@test_sqli.command()
+@click.option('--cmd', required=True, help='Command to execute')
+@click.pass_context
+def exec(ctx, cmd):
+    """Execute OS command via SQLi"""
+    url = ctx.obj['url']
+    if not url:
+        click.echo("Error: --url required")
+        return
+    from .go_bridge import GoEngine
+    engine = GoEngine()
+    results = engine.file_operation(url, 'exec', cmd)
+    if results:
+        for r in results:
+            click.echo(f"  {r}")
+
+
+@test_sqli.command()
+@click.option('--user', default='admin', help='Username')
+@click.option('--passwd', default='password', help='Password')
+@click.pass_context
+def bypass(ctx, user, passwd):
+    """Auth bypass testing"""
+    url = ctx.obj['url']
+    if not url:
+        click.echo("Error: --url required")
+        return
+    from .go_bridge import GoEngine
+    engine = GoEngine()
+    results = engine.auth_bypass(url, user, passwd)
+    if results:
+        for r in results:
+            click.echo(f"  {r}")
+
+
+@test_sqli.command()
+@click.option('--dbms', default='MySQL', help='Database type')
+@click.pass_context
+def priv(ctx, dbms):
+    """Privilege escalation"""
+    url = ctx.obj['url']
+    if not url:
+        click.echo("Error: --url required")
+        return
+    from .go_bridge import GoEngine
+    engine = GoEngine()
+    params = {'priv_esc': True}
+    if dbms:
+        params['fingerprint'] = True
+    results = engine.run(url, **params)
+    if results:
+        for r in results:
+            click.echo(f"  {r}")
+
+
+@test_sqli.command()
+@click.option('--channel', default='dns', type=click.Choice(['dns', 'http', 'smb']))
+@click.option('--domain', default='', help='OOB domain')
+@click.pass_context
+def oob(ctx, channel, domain):
+    """Out-of-band exfiltration"""
+    url = ctx.obj['url']
+    if not url:
+        click.echo("Error: --url required")
+        return
+    from .go_bridge import GoEngine
+    engine = GoEngine()
+    params = {'oob_channel': channel}
+    if domain:
+        params['oob_domain'] = domain
+    results = engine.run(url, **params)
+    if results:
+        for r in results:
+            click.echo(f"  {r}")
+
+
+@test_sqli.command()
+@click.option('--format', 'output_format', default='html', type=click.Choice(['html', 'json', 'csv', 'txt']))
+@click.option('--output', default='sqli_report', help='Output base filename')
+@click.pass_context
+def report(ctx, output_format, output):
+    """Generate scan report"""
+    url = ctx.obj['url']
+    if not url:
+        click.echo("Error: --url required, run scan first")
+        return
+    click.echo(f"Report generation not yet implemented via CLI. Use GUI or Python API.")
+
+
+@test_sqli.command()
+def gui():
+    """Launch GUI dashboard"""
+    from .gui import launch_gui
+    launch_gui()
 
 
 if __name__ == "__main__":
-    test_sqli()
+    if len(sys.argv) > 1:
+        test_sqli()
+    else:
+        interactive_shell()
