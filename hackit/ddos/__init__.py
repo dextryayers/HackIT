@@ -37,6 +37,20 @@ PYTHON_DIR = ENGINE_DIR / "python_support"
 def _vis(s):
     return re.sub(r'\x1b\[[0-9;]*m', '', s)
 
+def _vis_w(s):
+    """Visual width accounting for double-width characters."""
+    s = _vis(s)
+    w = 0
+    for ch in s:
+        cp = ord(ch)
+        if 0x1F000 <= cp <= 0x1FFFF:
+            w += 2
+        elif 0x2E80 <= cp <= 0x9FFF:
+            w += 2
+        else:
+            w += 1
+    return w
+
 def _make_box(title, lines, color=B_WHITE, title_color=B_CYAN, width=70):
     t = color
     out = f'\n  {t}┌{"─"*width}┐{DIM}'
@@ -44,8 +58,8 @@ def _make_box(title, lines, color=B_WHITE, title_color=B_CYAN, width=70):
     out += f'\n  {t}│{title_color}{ct:^{width}}{t}│{DIM}'
     out += f'\n  {t}├{"─"*width}┤{DIM}'
     for line in lines:
-        v = _vis(line)
-        pad = width - len(v)
+        v = _vis_w(line)
+        pad = width - v
         if pad < 0:
             line = _vis(line)[:width]
             pad = 0
@@ -80,63 +94,66 @@ HELP_TEXT = _make_box(
     [
         "",
         f"  {B_RED}TARGET SETUP{DIM}",
-        f"    {GREEN}target{DIM} <ip/domain>         Target IP or domain",
-        f"    {GREEN}p{DIM} <port>                  Port  {DIM}(default: 80){DIM}",
+        f"    {GREEN}target{DIM} <ip/domain>     Target IP or domain",
+        f"    {GREEN}p{DIM} <port>              Port  {DIM}(default: 80){DIM}",
         "",
         f"  {B_RED}ATTACK MODES — LAYER 3 (NETWORK){DIM}",
-        f"    {GREEN}mode syn{DIM}                  SYN flood  {DIM}(TCP handshake saturate){DIM}",
-        f"    {GREEN}mode udp{DIM}                  UDP flood  {DIM}(random payload ×65000 bytes){DIM}",
-        f"    {GREEN}mode icmp{DIM}                 ICMP echo flood  {DIM}(ping of death){DIM}",
-        f"    {GREEN}mode ack{DIM}                  ACK flood  {DIM}(bypass stateful firewall){DIM}",
-        f"    {GREEN}mode rst{DIM}                  RST flood  {DIM}(kill existing connections){DIM}",
-        f"    {GREEN}mode land{DIM}                 LAND attack  {DIM}(src=dst loopback crash){DIM}",
+        f"    {GREEN}mode syn{DIM}              SYN flood  {DIM}(TCP handshake saturate){DIM}",
+        f"    {GREEN}mode udp{DIM}              UDP flood  {DIM}(random payload ×65000){DIM}",
+        f"    {GREEN}mode icmp{DIM}             ICMP echo flood  {DIM}(ping of death){DIM}",
+        f"    {GREEN}mode ack{DIM}              ACK flood  {DIM}(bypass stateful firewall){DIM}",
+        f"    {GREEN}mode rst{DIM}              RST flood  {DIM}(kill existing connections){DIM}",
+        f"    {GREEN}mode land{DIM}             LAND attack  {DIM}(src=dst loopback crash){DIM}",
         "",
         f"  {B_RED}ATTACK MODES — LAYER 4 (TRANSPORT){DIM}",
-        f"    {GREEN}mode dns{DIM}                  DNS amplification  {DIM}(×70 ANY query){DIM}",
-        f"    {GREEN}mode ntp{DIM}                  NTP amplification  {DIM}(×5560 monlist){DIM}",
-        f"    {GREEN}mode amp{DIM}                  Multi-amp  {DIM}(DNS+NTP+Memcached ×50000){DIM}",
+        f"    {GREEN}mode dns{DIM}              DNS amplification  {DIM}(×70 ANY query){DIM}",
+        f"    {GREEN}mode ntp{DIM}              NTP amplification  {DIM}(×5560 monlist){DIM}",
+        f"    {GREEN}mode amp{DIM}              Multi-amp  {DIM}(DNS+NTP+Memcached){DIM}",
         "",
         f"  {B_RED}ATTACK MODES — LAYER 7 (APPLICATION){DIM}",
-        f"    {GREEN}mode http{DIM}                 HTTP GET/POST flood  {DIM}(proxy rotation){DIM}",
-        f"    {GREEN}mode https{DIM}                HTTPS flood  {DIM}(TLS renegotiation){DIM}",
-        f"    {GREEN}mode h2{DIM}                   HTTP/2 Rapid Reset  {DIM}(CVE-2023-44487){DIM}",
-        f"    {GREEN}mode slowloris{DIM}            Slowloris  {DIM}(hold connections open){DIM}",
-        f"    {GREEN}mode bypass{DIM}               Stateful bypass  {DIM}(TCP handshake flood){DIM}",
+        f"    {GREEN}mode http{DIM}             HTTP GET/POST flood  {DIM}(proxy rotation){DIM}",
+        f"    {GREEN}mode https{DIM}            HTTPS flood  {DIM}(TLS renegotiation){DIM}",
+        f"    {GREEN}mode h2{DIM}               HTTP/2 Rapid Reset  {DIM}(CVE-2023-44487){DIM}",
+        f"    {GREEN}mode slowloris{DIM}        Slowloris  {DIM}(hold connections open){DIM}",
+        f"    {GREEN}mode bypass{DIM}           Stateful bypass  {DIM}(TCP handshake flood){DIM}",
         "",
         f"  {B_RED}ATTACK MODES — MASSIVE{DIM}",
-        f"    {GREEN}mode all{DIM}                  ALL L3+L4+L7  {DIM}(14 vectors simultaneous){DIM}",
-        f"    {GREEN}mode kill{DIM}                 KILL MODE  {DIM}(max destruction + pattern){DIM}",
-        f"    {GREEN}mode mix{DIM}                  Custom ratio  {DIM}(use mix command){DIM}",
+        f"    {GREEN}mode all{DIM}              ALL L3+L4+L7  {DIM}(14 vectors simultaneous){DIM}",
+        f"    {GREEN}mode kill{DIM}             KILL MODE  {DIM}(max destruction + pattern){DIM}",
+        f"    {GREEN}mode mix{DIM}              Custom ratio  {DIM}(use mix command){DIM}",
         "",
         f"  {B_YELLOW}ATTACK PARAMETERS{DIM}",
-        f"    {GREEN}time{DIM} <sec>                Duration  {DIM}(default: 30){DIM}",
-        f"    {GREEN}rate{DIM} <pps>                Packets/sec  {DIM}(default: 100000){DIM}",
-        f"    {GREEN}threads{DIM} <n>                Worker count  {DIM}(default: 50, max: 64){DIM}",
-        f"    {GREEN}jitter{DIM} <us>               Inter-packet delay  {DIM}(0=no limit){DIM}",
-        f"    {GREEN}size{DIM} <bytes>              UDP payload size  {DIM}(max 65000){DIM}",
-        f"    {GREEN}mix{DIM} U:S:H:A               Mix ratio  {DIM}(UDP:SYN:HTTP:AMP){DIM}",
-        f"    {GREEN}pattern{DIM} <type>             Attack pattern  {DIM}(square/sawtooth/random){DIM}",
-        f"    {GREEN}recon{DIM} on/off              Pre-attack port scan  {DIM}(off){DIM}",
+        f"    {GREEN}time{DIM} <sec>            Duration  {DIM}(default: 30){DIM}",
+        f"    {GREEN}rate{DIM} <pps>            Packets/sec  {DIM}(default: 100000){DIM}",
+        f"    {GREEN}threads{DIM} <n>           Worker count  {DIM}(default: 50, max: 64){DIM}",
+        f"    {GREEN}jitter{DIM} <us>           Inter-packet delay  {DIM}(0=no limit){DIM}",
+        f"    {GREEN}size{DIM} <bytes>          UDP payload size  {DIM}(max 65000){DIM}",
+        f"    {GREEN}mix{DIM} U:S:H:A           Mix ratio  {DIM}(UDP:SYN:HTTP:AMP){DIM}",
+        f"    {GREEN}pattern{DIM} <type>        Attack pattern  {DIM}(square/sawtooth/random){DIM}",
+        f"    {GREEN}recon{DIM} on/off          Pre-attack port scan  {DIM}(off){DIM}",
         "",
         f"  {B_YELLOW}MASKING & ANONYMITY{DIM}",
-        f"    {GREEN}mask{DIM} on/off               Proxy rotation  {DIM}(auto-fetch 200+ proxies){DIM}",
-        f"    {GREEN}spoof{DIM} on/off              IP spoofing  {DIM}(raw socket, needs root){DIM}",
-        f"    {GREEN}proxy{DIM} <url>               Custom proxy  {DIM}(socks5://...){DIM}",
-        f"    {GREEN}tor{DIM}                       TOR network  {DIM}(identity rotation){DIM}",
-        f"    {GREEN}profile{DIM}                   WAF + ports detection",
+        f"    {GREEN}mask{DIM} on/off           Proxy rotation  {DIM}(auto-fetch 200+ proxies){DIM}",
+        f"    {GREEN}spoof{DIM} on/off          IP spoofing  {DIM}(raw socket, needs root){DIM}",
+        f"    {GREEN}proxy{DIM} <url>           Custom proxy  {DIM}(socks5://...){DIM}",
+        f"    {GREEN}tor{DIM}                   TOR network  {DIM}(identity rotation){DIM}",
+        f"    {GREEN}profile{DIM}               WAF + ports detection",
         "",
         f"  {B_YELLOW}ADVANCED{DIM}",
-        f"    {GREEN}h2-streams{DIM} <n>             H2 concurrent streams  {DIM}(default: 500){DIM}",
-        f"    {GREEN}interfaces{DIM} <ifs>           Multi-NIC bond  {DIM}(eth0,eth1){DIM}",
-        f"    {GREEN}core-pin{DIM}                  Pin to CPU cores",
-        f"    {GREEN}output{DIM} <dir>               Save attack report",
+        f"    {GREEN}h2-streams{DIM} <n>        H2 concurrent streams  {DIM}(default: 500){DIM}",
+        f"    {GREEN}interfaces{DIM} <ifs>      Multi-NIC bond  {DIM}(eth0,eth1){DIM}",
+        f"    {GREEN}core-pin{DIM}              Pin to CPU cores",
+        f"    {GREEN}output{DIM} <dir>          Save attack report",
         "",
         f"  {B_YELLOW}ACTIONS{DIM}",
-        f"    {GREEN}run{DIM}                       EXECUTE ATTACK",
-        f"    {GREEN}show{DIM}                      Show current config",
-        f"    {GREEN}clear{DIM}                     Clear terminal",
-        f"    {GREEN}help{DIM}                      This reference",
-        f"    {GREEN}exit{DIM}                      Quit",
+        f"    {GREEN}run{DIM}                   EXECUTE ATTACK",
+        f"    {GREEN}show{DIM}                  Show current config",
+        f"    {GREEN}clear{DIM}                 Clear terminal",
+        f"    {GREEN}help{DIM}                  This reference",
+        f"    {GREEN}exit{DIM}                  Quit",
+        "",
+        f"  {B_RED}SPECIAL COMMAND{DIM}",
+        f"    {GREEN}gui{DIM}                   Open GUI dashboard  {DIM}(tkinter){DIM}",
         "",
         f"  {B_GREEN}EXAMPLES{DIM}",
         f"    {DIM}> target 192.168.1.100 mode kill mask on spoof on time 3600 threads 64 run{DIM}",
@@ -258,7 +275,7 @@ PROMPT = f"  {B_YELLOW}Input Target:{DIM} "
 def print_banner():
     print(BANNER)
     print()
-    print(f"  {DIM}[example]{DIM} > {GREEN}target{DIM} {CYAN}domain/ip{DIM} [{DIM}command{DIM}]")
+    print(f"  {DIM}[example]{DIM} > {GREEN}target{DIM} {CYAN}domain/ip{DIM} {DIM}[command]{DIM}  or  {GREEN}gui{DIM}  for dashboard")
     print(f"  {DIM}[type '{CYAN}help{DIM}' for help]{DIM}")
     print()
 
@@ -268,7 +285,7 @@ _CHAIN_CMDS = [
     "jitter", "size", "mask", "spoof", "verbose", "proxy", "tor",
     "profile", "adaptive", "core-pin", "switch", "interfaces",
     "h2-streams", "dpdk", "xdp", "output", "mix", "pattern", "recon",
-    "run", "start", "go", "show", "help", "clear", "exit", "banner",
+    "run", "start", "go", "show", "help", "gui", "clear", "exit", "banner",
 ]
 
 def _chain_parse(line):
@@ -437,6 +454,15 @@ def _exec_one(cfg, action, arg):
     elif action == "recon":
         cfg.recon = not cfg.recon
         print(f"  {GREEN}Pre-attack recon {GREEN+'ON' if cfg.recon else RED+'OFF'}{DIM}")
+    elif action == "gui":
+        try:
+            from hackit.ddos.gui import launch_gui
+            launch_gui()
+        except ImportError as e:
+            print(f"  {RED}[!] GUI unavailable: {e}{DIM}")
+            print(f"  {YELLOW}[!] Install tkinter: sudo apt install python3-tk{DIM}")
+        except Exception as e:
+            print(f"  {RED}[!] GUI error: {e}{DIM}")
     elif action in ("run", "start", "go"):
         valid, msg = cfg.validate()
         if not valid:
