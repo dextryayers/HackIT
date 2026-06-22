@@ -72,7 +72,7 @@ action = function(host, port)
         local resp = sock:receive_buf("\n", 5000)
         local all_extensions = {}
         if resp then
-            local lines = resp:gmatch("250[%- ]([^\r\n]+)")
+            local lines = gmatch(resp, "250[%- ]([^\r\n]+)")
             for line in lines do
                 insert(all_extensions, line)
             end
@@ -81,13 +81,13 @@ action = function(host, port)
         local helo_resp = sock:receive_buf("\n", 3000)
         sock:close()
         local res = output_table()
-        res.banner = banner:match("220[%s-]([^\r\n]+)") or banner:match("220([^\r\n]+)")
+        res.banner = match(banner, "220[%s-]([^\r\n]+)") or match(banner, "220([^\r\n]+)")
         if #all_extensions > 0 then
             res.esmtp_extensions = all_extensions
         end
         local commands = {}
         for _, ext in ipairs(all_extensions) do
-            local name = ext:match("^(%w+)")
+            local name = match(ext, "^(%w+)")
             if name then
                 commands[name] = true
             end
@@ -96,7 +96,7 @@ action = function(host, port)
         for k in pairs(commands) do
             insert(res.command_summary, k)
         end
-        local ver = banner:match("([%d%.]+)") or (resp and resp:match("([%d%.]+)"))
+        local ver = match(banner, "([%d%.]+)") or (resp and match(resp, "([%d%.]+)"))
         if ver then res.version = ver end
         return res
     end)

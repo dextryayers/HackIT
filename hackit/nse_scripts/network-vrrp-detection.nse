@@ -84,8 +84,8 @@ action = function(host, port)
       if status and response then
           insert(result, "VRRP/HSRP response received")
           if #response >= 4 then
-              local vrrp_type = response:byte(1)
-              local vrid = response:byte(2)
+              local vrrp_type = byte(response, 1)
+              local vrid = byte(response, 2)
               if vrrp_type == 0x21 then
                   insert(result, "VRRPv2 advertisement detected")
                   insert(result, ("VRRP Virtual Router ID: %d"):format(vrid))

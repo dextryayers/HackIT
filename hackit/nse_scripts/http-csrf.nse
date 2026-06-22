@@ -67,7 +67,7 @@ action = function(host, port)
         return format_output(false, "No response body")
     end
     local forms = {}
-    for form in response.body:gmatch("<form.-</form>") do
+    for form in response.gmatch(body, "<form.-</form>") do
         insert(forms, form)
     end
     if #forms == 0 then
@@ -75,16 +75,16 @@ action = function(host, port)
     end
     local results = {}
     for i, form in ipairs(forms) do
-        local action_attr = form:match('action%s*=%s*["\'](.-)["\']') or "(no action)"
+        local action_attr = match(form, 'action%s*=%s*["\'](.-)["\']') or "(no action)"
         local has_csrf = false
         for token_pattern in pairs({["csrf"] = true, ["token"] = true, ["_token"] = true, ["csrf_token"] = true, ["authenticity_token"] = true, ["__csrf"] = true, ["nonce"] = true}) do
-            if form:match('type%s*=%s*["\']hidden["\']') and (form:match('name%s*=%s*["\'].-csrf') or form:match('name%s*=%s*["\'].-token') or form:match('name%s*=%s*["\'].-nonce')) then
+            if match(form, 'type%s*=%s*["\']hidden["\']') and (match(form, 'name%s*=%s*["\'].-csrf') or match(form, 'name%s*=%s*["\'].-token') or match(form, 'name%s*=%s*["\'].-nonce')) then
                 has_csrf = true
                 break
             end
         end
         if not has_csrf then
-            has_csrf = form:match('name%s*=%s*["\']_csrf') and true
+            has_csrf = match(form, 'name%s*=%s*["\']_csrf') and true
         end
         local status = has_csrf and "CSRF token present" or "NO CSRF token"
         insert(results, "Form #" .. i .. " (action=" .. action_attr .. "): " .. status)

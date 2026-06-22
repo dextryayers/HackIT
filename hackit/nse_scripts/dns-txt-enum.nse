@@ -111,12 +111,12 @@ action = function(host, port)
     if ok and answer and #answer > 0 then
       for _, record in ipairs(answer) do
         local txt_string = tostring(record):gsub('"', "")
-        insert(all_records, {)
+        insert(all_records, {
           query = query.name,
           description = query.desc,
           category = query.category,
           value = txt_string
-        }
+        })
       end
     end
   end
@@ -128,12 +128,12 @@ action = function(host, port)
     if ok and answer and #answer > 0 then
       for _, record in ipairs(answer) do
         local txt_string = tostring(record):gsub('"', "")
-        insert(all_records, {)
+        insert(all_records, {
           query = query_name,
           description = "DKIM (" .. sel .. ")",
           category = "dkim",
           value = txt_string
-        }
+        })
       end
     end
   end
@@ -157,14 +157,14 @@ action = function(host, port)
     local dkim_records = {}
     local dmarc_records = {}
     for _, r in ipairs(all_records) do
-      local val_lower = r.value:lower()
-      if val_lower:find("v=spf1") then
+      local val_lower = r.lower(value)
+      if find(val_lower, "v=spf1") then
         insert(spf_records, r)
       end
-      if val_lower:find("v=dkim1") or val_lower:find("p=") and r.category == "dkim" then
+      if find(val_lower, "v=dkim1") or find(val_lower, "p=") and r.category == "dkim" then
         insert(dkim_records, r)
       end
-      if val_lower:find("v=dmarc1") then
+      if find(val_lower, "v=dmarc1") then
         insert(dmarc_records, r)
       end
     end

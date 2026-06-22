@@ -62,28 +62,28 @@ categories = {"brute", "intrusive"}
 local function load_list(arg_names)
   local val = stdnse.get_script_args(arg_names)
   if not val or val == "" then return {} end
-  if val:byte() == 47 then
+  if byte(val) == 47 then
     local f, err = io.open(val, "r")
     if f then
       local lines = {}
       for line in f:lines() do
-        line = line:gsub("^%s+", ""):gsub("%s+$", "")
-        if line ~= "" and line:byte() ~= 35 then insert(lines, line end)
+        line = gsub(line, "^%s+", ""):gsub("%s+$", "")
+        if line ~= "" and byte(line) ~= 35 then insert(lines, line) end
       end
       f:close()
       return lines
     end
-  elseif val:find("\n") then
+  elseif find(val, "\n") then
     local lines = {}
-    for line in val:gmatch("[^\n]+") do
-      line = line:gsub("^%s+", ""):gsub("%s+$", "")
-      if line ~= "" and line:byte() ~= 35 then insert(lines, line end)
+    for line in gmatch(val, "[^\n]+") do
+      line = gsub(line, "^%s+", ""):gsub("%s+$", "")
+      if line ~= "" and byte(line) ~= 35 then insert(lines, line) end
     end
     return lines
   end
   local items = {}
-  for item in val:gmatch("[^,]+") do
-    item = item:gsub("^%s+", ""):gsub("%s+$", "")
+  for item in gmatch(val, "[^,]+") do
+    item = gsub(item, "^%s+", ""):gsub("%s+$", "")
     if item ~= "" then insert(items, item) end
   end
   return items
@@ -156,7 +156,7 @@ local function build_login7(user, pass, hostname)
   local var_data = {}
   local function add_uni(str)
     for i = 1, #str do
-      insert(var_data, char(str:byte(i), 0))
+      insert(var_data, char(byte(str, i), 0))
     end
     insert(var_data, char(0, 0))
   end
@@ -181,7 +181,7 @@ action = function(host, port)
   local timeout = tonumber(stdnse.get_script_args({"brute-mssql.timeout", "timeout"}) or 10)
   local stop_on_first = stdnse.get_script_args({"brute-mssql.stop_on_first", "stop_on_first"})
   if stop_on_first == nil or stop_on_first == "" then stop_on_first = true
-  else stop_on_first = (stop_on_first:lower() == "true" or stop_on_first == "1") end
+  else stop_on_first = (lower(stop_on_first) == "true" or stop_on_first == "1") end
 
   if #users == 0 or #passes == 0 then
     return format_output(false, "No credentials provided. Use brute-mssql.users and brute-mssql.passwords script args")
@@ -211,19 +211,19 @@ action = function(host, port)
         local _, login_resp = socket:receive_buf("", 5000)
         socket:close()
         if login_resp and #login_resp > 9 then
-          if login_resp:byte(9) == 0x01 then
-            local token = login_resp:byte(10)
+          if byte(login_resp, 9) == 0x01 then
+            local token = byte(login_resp, 10)
             if token == 0xAD then
-              if login_resp:byte(14) == 0 or login_resp:byte(14) == 1 then
+              if byte(login_resp, 14) == 0 or byte(login_resp, 14) == 1 then
                 return true
               end
             end
-          elseif login_resp:byte(8) == 0x04 or login_resp:byte(8) == 0x05 then
+          elseif byte(login_resp, 8) == 0x04 or byte(login_resp, 8) == 0x05 then
             return true
           end
-          local ad_pos = login_resp:find(char(0xAD))
+          local ad_pos = find(login_resp, char(0xAD))
           if ad_pos and ad_pos + 4 <= #login_resp then
-            if login_resp:byte(ad_pos + 4) == 0 then return true end
+            if byte(login_resp, ad_pos + 4) == 0 then return true end
           end
         end
         return false

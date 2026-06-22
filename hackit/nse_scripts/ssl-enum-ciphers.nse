@@ -73,7 +73,7 @@ local function test_cipher(host, port, protocol, cipher)
         sock:send(hello)
         local _, data = sock:receive_buf(tls.server_hello_done, 5000)
         sock:close()
-        if data and (data:match("server_hello") or data:match("handshake")) then
+        if data and (match(data, "server_hello") or match(data, "handshake")) then
             return true
         end
         return false
@@ -121,7 +121,7 @@ action = function(host, port)
         sock:send(hello)
         local _, data = sock:receive_buf(tls.server_hello_done, 3000)
         if data then
-            local ver = data:match("version[%s=]+([%d%.]+)") or data:match("TLS([%d%.]+)")
+            local ver = match(data, "version[%s=]+([%d%.]+)") or match(data, "TLS([%d%.]+)")
             if ver then result.server_version = ver end
         end
         sock:close()

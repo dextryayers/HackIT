@@ -156,9 +156,9 @@ local function check_swagger_json(body)
 end
 
 local function check_swagger_html(body)
-    local lbody = body:lower()
+    local lbody = lower(body)
     for _, indicator in ipairs(swagger_indicators) do
-        if lbody:find(indicator:lower()) then
+        if find(lbody, indicator:lower()) then
             return true
         end
     end
@@ -174,7 +174,7 @@ action = function(host, port)
         if ok and response and response.status == 200 and response.body then
             local ep_info = { path = path, status = 200 }
 
-            if path:match("%.json$") or path:match("api%-docs") then
+            if match(path, "%.json$") or match(path, "api%-docs") then
                 local spec_info = check_swagger_json(response.body)
                 if spec_info then
                     ep_info.swagger_detected = true

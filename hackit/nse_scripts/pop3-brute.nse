@@ -80,8 +80,8 @@ action = function(host, port)
         socket:close()
         return format_output(false, "No banner received")
     end
-    if banner:match("POP") then
-        insert(result, "POP3 server: " .. (banner:match("[^\r\n]+") or ""))
+    if match(banner, "POP") then
+        insert(result, "POP3 server: " .. (match(banner, "[^\r\n]+") or ""))
     end
     socket:close()
     for _, user in ipairs(users) do
@@ -93,10 +93,10 @@ action = function(host, port)
                 s:receive_lines(1)
                 s:send("USER " .. user .. "\r\n")
                 local status, resp = s:receive_lines(1)
-                if status and resp:match("+OK") then
+                if status and match(resp, "+OK") then
                     s:send("PASS " .. pass .. "\r\n")
                     status, resp = s:receive_lines(1)
-                    if status and resp:match("+OK") then
+                    if status and match(resp, "+OK") then
                         insert(result, ("Valid POP3 credentials: %s / %s"):format(user, pass))
                     end
                 end

@@ -70,20 +70,20 @@ action = function(host, port)
         local _, resp = sock:receive_buf("\r\n", 5000)
         if not resp then sock:close(); return end
         local res = output_table()
-        if resp:match("%$") then
-            local len = resp:match("%$(%d+)")
+        if match(resp, "%$") then
+            local len = match(resp, "%$(%d+)")
             if len then
                 local _, data = sock:receive_buf("\r\n", 5000)
                 sock:close()
                 if data then
                     local current_section = "general"
-                    for line in data:gmatch("([^\r\n]+)") do
-                        local section = line:match("^# (.+)$")
+                    for line in gmatch(data, "([^\r\n]+)") do
+                        local section = match(line, "^# (.+)$")
                         if section then
-                            current_section = section:lower():gsub("%s+", "_")
+                            current_section = lower(section):gsub("%s+", "_")
                             res[current_section] = res[current_section] or {}
                         else
-                            local key, val = line:match("^([^:]+):(.+)$")
+                            local key, val = match(line, "^([^:]+):(.+)$")
                             if key and val then
                                 if current_section == "general" then
                                     res[key] = val

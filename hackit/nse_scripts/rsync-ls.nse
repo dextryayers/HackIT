@@ -66,13 +66,13 @@ end
 
 local function parse_rsync_banner(banner)
   local info = {}
-  banner = banner:gsub("%s+$", "")
+  banner = gsub(banner, "%s+$", "")
 
-  if banner:match("^@RSYNC") then
+  if match(banner, "^@RSYNC") then
     info.rsync_detected = true
-    info.protocol_version = banner:match("@RSYNC:(%d+)")
+    info.protocol_version = match(banner, "@RSYNC:(%d+)")
     if not info.protocol_version then
-      info.protocol_version = banner:match("@RSYNC: (%d+)")
+      info.protocol_version = match(banner, "@RSYNC: (%d+)")
     end
     return info
   end
@@ -82,19 +82,19 @@ local function parse_rsync_banner(banner)
 end
 
 local function parse_module_line(line)
-  line = line:gsub("\r", "")
-  if line == "" or line:match("^@") then return nil end
+  line = gsub(line, "\r", "")
+  if line == "" or match(line, "^@") then return nil end
 
-  local name, comment = line:match("^([%w][%w_%-%.]*)%s+(.+)$")
+  local name, comment = match(line, "^([%w][%w_%-%.]*)%s+(.+)$")
   if not name then
-    name = line:match("^([%w][%w_%-%.]*)")
+    name = match(line, "^([%w][%w_%-%.]*)")
   end
 
   if name then
-    name = name:gsub("%s+$", "")
+    name = gsub(name, "%s+$", "")
     local entry = { name = name }
     if comment then
-      entry.comment = comment:gsub("^%s+", ""):gsub("%s+$", "")
+      entry.comment = gsub(comment, "^%s+", ""):gsub("%s+$", "")
     end
     return entry
   end
@@ -141,7 +141,7 @@ action = function(host, port)
   end
 
   local modules = {}
-  for line in response:gmatch("([^\n]+)") do
+  for line in gmatch(response, "([^\n]+)") do
     local module_entry = parse_module_line(line)
     if module_entry then
       insert(modules, module_entry)

@@ -66,8 +66,8 @@ local function load_list(arg_names, default)
   if f then
     local lines = {}
     for line in f:lines() do
-      line = line:gsub("^%s+", ""):gsub("%s+$", "")
-      if line ~= "" and line:byte() ~= 35 then
+      line = gsub(line, "^%s+", ""):gsub("%s+$", "")
+      if line ~= "" and byte(line) ~= 35 then
         insert(lines, line)
       end
     end
@@ -75,8 +75,8 @@ local function load_list(arg_names, default)
     return lines
   end
   local items = {}
-  for item in val:gmatch("[^,]+") do
-    item = item:gsub("^%s+", ""):gsub("%s+$", "")
+  for item in gmatch(val, "[^,]+") do
+    item = gsub(item, "^%s+", ""):gsub("%s+$", "")
     if item ~= "" then insert(items, item) end
   end
   return items
@@ -92,7 +92,7 @@ action = function(host, port)
   local timeout = tonumber(stdnse.get_script_args({"brute-http-form.timeout", "timeout"}) or 10)
   local stop_on_first = stdnse.get_script_args({"brute-http-form.stop_on_first", "stop_on_first"})
   if stop_on_first == nil or stop_on_first == "" then stop_on_first = true
-  else stop_on_first = (stop_on_first:lower() == "true" or stop_on_first == "1") end
+  else stop_on_first = (lower(stop_on_first) == "true" or stop_on_first == "1") end
   local login_path = stdnse.get_script_args({"brute-http-form.path", "path"}) or "/login"
   local user_field = stdnse.get_script_args({"brute-http-form.user_field", "user_field"}) or "username"
   local pass_field = stdnse.get_script_args({"brute-http-form.pass_field", "pass_field"}) or "password"
@@ -121,19 +121,19 @@ action = function(host, port)
         local resp = socket:receive_bytes(2048)
         socket:close()
         if resp then
-          local status_code = resp:match("HTTP/%d%.%d (%d+)")
+          local status_code = match(resp, "HTTP/%d%.%d (%d+)")
           local sc = status_code and tonumber(status_code) or 0
-          local resp_lower = resp:lower()
-          if success_string ~= "" and resp_lower:find(success_string:lower()) then
+          local resp_lower = lower(resp)
+          if success_string ~= "" and find(resp_lower, success_string:lower()) then
             return true
           end
-          if fail_string ~= "" and resp_lower:find(fail_string:lower()) then
+          if fail_string ~= "" and find(resp_lower, fail_string:lower()) then
             return false
           end
           if sc == 302 then
             return true
           end
-          if sc == 200 and not resp_lower:find("login", 1, true) then
+          if sc == 200 and not find(resp_lower, "login", 1, true) then
             return true
           end
           if sc == 401 or sc == 403 then

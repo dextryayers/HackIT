@@ -71,7 +71,7 @@ local function mqtt_connect()
     local payload = char(0x00, 0x04) .. protocol
         .. char(0x04, 0x02, 0x00, 0x3c)
         .. char(0x00, 0x07) .. "nmap_nse"
-    payload = char(0x10, #payload) .. payload:sub(2)
+    payload = char(0x10, #payload) .. sub(payload, 2)
     return payload
 end
 
@@ -81,7 +81,7 @@ local function mqtt_subscribe(topic, id)
         .. char(0x00, id)
         .. topic_enc
         .. char(0x00)
-    payload = char(0x82, #payload - 1) .. payload:sub(2)
+    payload = char(0x82, #payload - 1) .. sub(payload, 2)
     return payload
 end
 
@@ -99,9 +99,9 @@ action = function(host, port)
         socket:close()
         return format_output(false, "No CONNACK response")
     end
-    if response:byte(1) == 0x20 then
+    if byte(response, 1) == 0x20 then
         insert(result, "MQTT broker connection established")
-        local return_code = response:byte(5)
+        local return_code = byte(response, 5)
         if return_code == 0 then
             insert(result, "Connection accepted (no auth required)")
         else
@@ -115,13 +115,13 @@ action = function(host, port)
     for i, topic in ipairs(sys_topics) do
         socket:send(mqtt_subscribe(topic, i))
         local status, suback = socket:receive_bytes(1)
-        if status and suback:byte(1) == 0x90 then
+        if status and byte(suback, 1) == 0x90 then
             insert(result, ("Subscribed to %s"):format(topic))
             local status, pub = socket:receive_bytes(1)
-            if status and pub:byte(1) == 0x30 then
-                local tlen = pub:byte(3) * 256 + pub:byte(4)
-                local topic_name = pub:sub(5, 4 + tlen)
-                local payload = pub:sub(5 + tlen)
+            if status and byte(pub, 1) == 0x30 then
+                local tlen = byte(pub, 3) * 256 + byte(pub, 4)
+                local topic_name = sub(pub, 5, 4 + tlen)
+                local payload = sub(pub, 5 + tlen)
                 insert(result, ("  %s: %s"):format(topic_name, payload))
             end
         end

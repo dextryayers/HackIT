@@ -84,7 +84,7 @@ local function igmp_probe(timeout)
             result = {}
             result.received = true
             result.length = #r
-            local rtype = r:byte(1) or 0
+            local rtype = byte(r, 1) or 0
             result.igmp_type = rtype
             result.igmp_type_name = igmp_types[rtype] or ("Unknown (0x" .. format("%02x", rtype) .. ")")
             if #r >= 8 then
@@ -92,7 +92,7 @@ local function igmp_probe(timeout)
                 result.group_address = group_addr
             end
             if rtype == 0x22 and #r > 12 then
-                result.sources = (r:byte(11) or 0) * 256 + (r:byte(12) or 0)
+                result.sources = (byte(r, 11) or 0) * 256 + (byte(r, 12) or 0)
             end
         end
         return result
@@ -116,7 +116,7 @@ local function pim_probe(timeout)
             result = {}
             result.received = true
             result.length = #r
-            local ver_type = r:byte(1) or 0
+            local ver_type = byte(r, 1) or 0
             local pim_ver = (ver_type >> 4) & 0x0F
             result.pim_version = pim_ver
         end

@@ -98,13 +98,13 @@ action = function(host, port)
         if resp then
             for _, indicator in ipairs(policy_indicators) do
                 for _, pat in ipairs(indicator.patterns) do
-                    if resp:lower():find(pat) then
+                    if lower(resp):find(pat) then
                         local already = false
                         for _, f in ipairs(findings) do
                             if f.category == indicator.category then already = true end
                         end
                         if not already then
-                            insert(findings, {category = indicator.category, severity = indicator.severity, evidence = resp:sub(1, 80):gsub("[\r\n]", " ")})
+                            insert(findings, {category = indicator.category, severity = indicator.severity, evidence = sub(resp, 1, 80):gsub("[\r\n]", " ")})
                         end
                     end
                 end

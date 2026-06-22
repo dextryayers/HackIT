@@ -89,8 +89,8 @@ action = function(host, port)
         if not ok then pcall(socket.close, socket) end
         if resp then
             for _, pat_entry in ipairs(phone_patterns) do
-                for match in resp:gmatch(pat_entry.pattern) do
-                    local clean = match:gsub("[%s%(%)]", "")
+                for match in gmatch(resp, pat_entry.pattern) do
+                    local clean = gsub(match, "[%s%(%)]", "")
                     if #clean >= 10 then
                         local already = false
                         for _, p in ipairs(all_phones) do

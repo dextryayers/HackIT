@@ -146,12 +146,12 @@ local function parse_ldap_response(response)
     }
 
     for key, pattern in pairs(patterns) do
-        local _, epos = response:find(pattern .. "\x04")
+        local _, epos = find(response, pattern .. "\x04")
         if epos then
-            local remaining = response:sub(epos + 1)
+            local remaining = sub(response, epos + 1)
             local len = byte(remaining, 1)
             if len then
-                local val = remaining:sub(2, 1 + len)
+                local val = sub(remaining, 2, 1 + len)
                 if val and #val > 0 then
                     results[key] = val
                 end
@@ -159,12 +159,12 @@ local function parse_ldap_response(response)
         end
     end
 
-    local _, cpos = response:find("currentTime\x04")
+    local _, cpos = find(response, "currentTime\x04")
     if cpos then
-        local remaining = response:sub(cpos + 1)
+        local remaining = sub(response, cpos + 1)
         local len = byte(remaining, 1)
         if len then
-            results.currentTime = remaining:sub(2, 1 + len)
+            results.currentTime = sub(remaining, 2, 1 + len)
         end
     end
 
@@ -200,7 +200,7 @@ action = function(host, port)
     if not root_dse or not next(root_dse) then
         local has_low = false
         for _, attr in ipairs(requested_attributes) do
-            if response:find(attr) then
+            if find(response, attr) then
                 has_low = true
                 break
             end
@@ -213,7 +213,7 @@ action = function(host, port)
     end
 
     for k, v in pairs(root_dse) do
-        local key = k:gsub("([A-Z])", "_%1"):lower():gsub("^_", "")
+        local key = gsub(k, "([A-Z])", "_%1"):lower():gsub("^_", "")
         result[key] = v
     end
 

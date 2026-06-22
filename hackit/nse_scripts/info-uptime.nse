@@ -106,7 +106,7 @@ local function extract_uptime(text)
         "([%d]+)h",
     }
     for _, pat in ipairs(patterns) do
-        local m = text:match(pat)
+        local m = match(text, pat)
         if m then return m end
     end
     return nil
@@ -124,16 +124,16 @@ action = function(host, port)
     if port.number == 25 or port.number == 587 then
         local r = probe_smtp_uptime(host, port)
         if r then
-            responses["SMTP"] = r:sub(1, 100)
+            responses["SMTP"] = sub(r, 1, 100)
             uptime_str = extract_uptime(r)
         end
     end
     if port.number == 80 or port.number == 8080 or port.number == 443 then
         local r = probe_http_uptime(host, port)
         if r then
-            responses["HTTP"] = r:sub(1, 100)
+            responses["HTTP"] = sub(r, 1, 100)
             uptime_str = uptime_str or extract_uptime(r)
-            local age = r:match("Age: (%d+)")
+            local age = match(r, "Age: (%d+)")
             if age then
                 out.http_age_seconds = tonumber(age)
             end
@@ -152,7 +152,7 @@ action = function(host, port)
         end)
         if not ok then pcall(socket.close, socket) end
         if r then
-            responses["Generic"] = r:sub(1, 100)
+            responses["Generic"] = sub(r, 1, 100)
             uptime_str = uptime_str or extract_uptime(r)
         end
     end

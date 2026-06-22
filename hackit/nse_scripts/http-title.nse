@@ -66,9 +66,9 @@ action = function(host, port)
     if not response or not response.body then
         return format_output(false, "No response from server")
     end
-    local title = response.body:match("<title>(.-)</title>")
+    local title = response.match(body, "<title>(.-)</title>")
     if title then
-        return format_output(true, "Page title: " .. title:gsub("%s+", " "):sub(1, 200))
+        return format_output(true, "Page title: " .. gsub(title, "%s+", " "):sub(1, 200))
     end
     return format_output(false, "No <title> tag found")
 end

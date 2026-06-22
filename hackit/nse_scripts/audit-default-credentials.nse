@@ -62,28 +62,28 @@ categories = {"safe", "audit"}
 local function load_list(arg_names)
   local val = stdnse.get_script_args(arg_names)
   if not val or val == "" then return {} end
-  if val:byte() == 47 then
+  if byte(val) == 47 then
     local f, err = io.open(val, "r")
     if f then
       local lines = {}
       for line in f:lines() do
-        line = line:gsub("^%s+", ""):gsub("%s+$", "")
-        if line ~= "" and line:byte() ~= 35 then insert(lines, line end)
+        line = gsub(line, "^%s+", ""):gsub("%s+$", "")
+        if line ~= "" and byte(line) ~= 35 then insert(lines, line) end
       end
       f:close()
       return lines
     end
-  elseif val:find("\n") then
+  elseif find(val, "\n") then
     local lines = {}
-    for line in val:gmatch("[^\n]+") do
-      line = line:gsub("^%s+", ""):gsub("%s+$", "")
-      if line ~= "" and line:byte() ~= 35 then insert(lines, line end)
+    for line in gmatch(val, "[^\n]+") do
+      line = gsub(line, "^%s+", ""):gsub("%s+$", "")
+      if line ~= "" and byte(line) ~= 35 then insert(lines, line) end
     end
     return lines
   end
   local items = {}
-  for item in val:gmatch("[^,]+") do
-    item = item:gsub("^%s+", ""):gsub("%s+$", "")
+  for item in gmatch(val, "[^,]+") do
+    item = gsub(item, "^%s+", ""):gsub("%s+$", "")
     if item ~= "" then insert(items, item) end
   end
   return items
@@ -109,18 +109,18 @@ action = function(host, port)
   local entries = load_list({"audit-default-credentials.credentials", "credentials"})
   for _, entry in ipairs(entries) do
     local parts = {}
-    for p in entry:gmatch("[^:]+") do
+    for p in gmatch(entry, "[^:]+") do
       insert(parts, p)
     end
     if #parts >= 3 then
       local eport = tonumber(parts[1])
       if eport == port.number then
-        insert(matches, {)
+        insert(matches, {
           service = parts[4] or "Unknown",
           vendor = parts[5] or "Generic",
           username = parts[2],
           password = parts[3],
-        }
+        })
       end
     end
   end

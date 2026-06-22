@@ -138,9 +138,9 @@ action = function(host, port)
     end
 
     if #rcv >= 5 then
-      local content_type = rcv:byte(1)
-      local ver_major = rcv:byte(2)
-      local ver_minor = rcv:byte(3)
+      local content_type = byte(rcv, 1)
+      local ver_major = byte(rcv, 2)
+      local ver_minor = byte(rcv, 3)
       server_banner = ("TLS %d.%d"):format(ver_major, ver_minor)
       if content_type == 22 then
         insert(findings, {check = "TLS handshake", detail = ("Server hello received (TLS %d.%d)"):format(ver_major, ver_minor), severity = "INFO"})
@@ -162,22 +162,22 @@ action = function(host, port)
     sock:close()
 
     if not rcv2 and err2 then
-      if err2:match("TIMEOUT") then
+      if match(err2, "TIMEOUT") then
         insert(findings, {check = "CCS injection", detail = "Server hung after CCS packet - vulnerable to CVE-2014-0224", severity = "CRITICAL"})
       else
         insert(findings, {check = "CCS injection", detail = ("CCS response error: %s"):format(err2), severity = "MEDIUM"})
       end
     elseif rcv2 then
       if #rcv2 >= 5 then
-        local ct = rcv2:byte(1)
+        local ct = byte(rcv2, 1)
         if ct == 21 then
-          local alert_desc = rcv2:byte(6) or 0
+          local alert_desc = byte(rcv2, 6) or 0
           if alert_desc == 40 or alert_desc == 20 then
             insert(findings, {check = "CCS injection", detail = ("Server sent TLS alert (%d) - not vulnerable (properly rejects CCS)"):format(alert_desc), severity = "LOW"})
           else
             insert(findings, {check = "CCS injection", detail = ("Server sent TLS alert %d - not vulnerable"):format(alert_desc), severity = "LOW"})
           end
-        elseif ct == 22 and rcv2:match("finished") then
+        elseif ct == 22 and match(rcv2, "finished") then
           insert(findings, {check = "CCS injection", detail = "Server accepted CCS and sent Finished - not vulnerable", severity = "LOW"})
         else
           insert(findings, {check = "CCS injection", detail = ("Unexpected response type %d after CCS injection"):format(ct), severity = "MEDIUM"})

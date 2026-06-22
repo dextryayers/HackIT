@@ -73,14 +73,14 @@ local function detect_form_fields(host, port, path)
         return nil, "No response body"
     end
     local username_field, password_field, form_action
-    for field in response.body:gmatch('input[^>]*name="([^"]+)"[^>]*type="([^"]*)"') do
-        if field:match("user") or field:match("login") or field:match("email") then
+    for field in response.gmatch(body, 'input[^>]*name="([^"]+)"[^>]*type="([^"]*)"') do
+        if match(field, "user") or match(field, "login") or match(field, "email") then
             username_field = field
-        elseif field:match("pass") or field:match("pwd") then
+        elseif match(field, "pass") or match(field, "pwd") then
             password_field = field
         end
     end
-    local action = response.body:match('action="([^"]+)"')
+    local action = response.match(body, 'action="([^"]+)"')
     if action then
         form_action = action
     end
@@ -101,7 +101,7 @@ local function try_login(host, port, path, fields, username, password)
     if response.status == 302 or response.status == 301 then
         return true
     end
-    if response.body and not response.body:match("invalid") and not response.body:match("error") and not response.body:match("incorrect") then
+    if response.body and not response.match(body, "invalid") and not response.match(body, "error") and not response.match(body, "incorrect") then
         return true
     end
     return false

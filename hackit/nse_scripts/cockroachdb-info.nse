@@ -92,7 +92,7 @@ action = function(host, port)
     if path ~= "/health" then
       local ok3, resp = pcall(http.get, host.ip, port.number, path, { timeout = 5000 })
       if ok3 and resp and resp.status == 200 and resp.body then
-        local path_key = path:gsub("^/", ""):gsub("[?=]", "_"):gsub("/", "_"):gsub("^_", "")
+        local path_key = gsub(path, "^/", ""):gsub("[?=]", "_"):gsub("/", "_"):gsub("^_", "")
         local ok4, pd = pcall(json.parse, resp.body)
         if ok4 and pd then
           if path == "/_status/nodes" and pd.nodes and #pd.nodes > 0 then

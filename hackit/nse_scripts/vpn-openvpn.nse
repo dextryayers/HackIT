@@ -104,7 +104,7 @@ local function parse_openvpn_response(response)
   local info = {}
   if #response < 2 then return info end
 
-  local first_byte = response:byte(1)
+  local first_byte = byte(response, 1)
   info.opcode = bit.rshift(first_byte, 3)
   info.key_id = bit.band(first_byte, 0x07)
   info.opcode_name = openvpn_opcodes[info.opcode] or format("Unknown (%d)", info.opcode)

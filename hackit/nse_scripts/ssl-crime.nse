@@ -77,7 +77,7 @@ local function test_compression(host, port, proto, method)
         pcall(function() sock:close() end)
         return false
     end
-    if data and (data:match(method) or data:match("compression")) then
+    if data and (match(data, method) or match(data, "compression")) then
         return true
     end
     return false

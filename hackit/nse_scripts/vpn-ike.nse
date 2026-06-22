@@ -98,7 +98,7 @@ local function build_isakmp_packet(transform_params)
   local payload = sa_payload .. proposal_payload .. transform_payload
   local total_length = #isakmp_header + #payload
   local len_bytes = bin.pack(">I", total_length):sub(1, 4)
-  isakmp_header = isakmp_header:sub(1, 24) .. len_bytes
+  isakmp_header = sub(isakmp_header, 1, 24) .. len_bytes
 
   return isakmp_header .. payload
 end
@@ -107,15 +107,15 @@ local function parse_ike_response(response)
   local info = {}
   if #response < 28 then return info end
 
-  info.initiator_cookie = response:sub(1, 8)
-  info.responder_cookie = response:sub(9, 16)
-  info.next_payload = response:byte(17)
-  local ver_byte = response:byte(18)
+  info.initiator_cookie = sub(response, 1, 8)
+  info.responder_cookie = sub(response, 9, 16)
+  info.next_payload = byte(response, 17)
+  local ver_byte = byte(response, 18)
   info.major_version = bit.rshift(bit.band(ver_byte, 0xF0), 4)
   info.minor_version = bit.band(ver_byte, 0x0F)
-  info.exchange_type = response:byte(20)
+  info.exchange_type = byte(response, 20)
 
-  local flags = response:byte(21)
+  local flags = byte(response, 21)
   info.encryption_flag = bit.band(flags, 0x04) ~= 0
   info.commit_flag = bit.band(flags, 0x08) ~= 0
   info.authentication_flag = bit.band(flags, 0x10) ~= 0

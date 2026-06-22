@@ -122,14 +122,14 @@ action = function(host, port)
     local uptime_secs = ts_val / entry.freq
     local uptime_days = uptime_secs / 86400
     if uptime_days >= 0 and uptime_days < 5000 then
-      insert(estimates, {)
+      insert(estimates, {
         os_hint = entry.os,
         freq = entry.freq .. " Hz",
         uptime_seconds = math.floor(uptime_secs),
         uptime_days = math.floor(uptime_days),
         uptime_hours = math.floor((uptime_secs % 86400) / 3600),
         uptime_minutes = math.floor((uptime_secs % 3600) / 60)
-      }
+      })
     end
   end
 

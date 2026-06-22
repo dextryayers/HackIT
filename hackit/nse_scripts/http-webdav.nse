@@ -76,7 +76,7 @@ action = function(host, port)
         local options_resp = http.generic_request(host, port, "OPTIONS", path)
         if options_resp and options_resp.header and options_resp.header["allow"] then
             local allow = options_resp.header["allow"]
-            if allow:find("PROPFIND") or allow:find("MKCOL") or allow:find("MOVE") or allow:find("COPY") then
+            if find(allow, "PROPFIND") or find(allow, "MKCOL") or find(allow, "MOVE") or find(allow, "COPY") then
                 insert(results, "WebDAV methods at " .. path .. ": " .. allow)
             end
         end

@@ -86,14 +86,14 @@ local function vnc_handshake(host, port)
             result = {}
             result.response_received = true
             result.length = #banner
-            result.protocol_version = banner:sub(0, 11):gsub("[\r\n]", "")
-            local auth_count = banner:byte(12) or 0
+            result.protocol_version = sub(banner, 0, 11):gsub("[\r\n]", "")
+            local auth_count = byte(banner, 12) or 0
             result.auth_schemes = {}
             result.auth_count = auth_count
             local pos = 13
             for i = 1, auth_count do
                 if pos > #banner then break end
-                local auth_type = banner:byte(pos) or 0
+                local auth_type = byte(banner, pos) or 0
                 result.auth_schemes[#result.auth_schemes + 1] = {
                     code = auth_type,
                     name = auth_type_names[auth_type] or ("Unknown (" .. auth_type .. ")")

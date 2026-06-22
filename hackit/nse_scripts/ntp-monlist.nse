@@ -89,7 +89,7 @@ local function parse_ntp_monlist(response)
 
   if #response < 48 then return info end
 
-  local resp_mode = bit.band(response:byte(1), 0x07)
+  local resp_mode = bit.band(byte(response, 1), 0x07)
   info.mode = resp_mode
   local modes = { [4] = "server", [5] = "broadcast", [6] = "client", [7] = "control" }
   info.mode_name = modes[resp_mode] or format("Mode %d", resp_mode)
@@ -103,8 +103,8 @@ local function parse_ntp_monlist(response)
     for i = 0, entry_count - 1 do
       local offset = 49 + i * 24
       if offset + 24 <= #response then
-        local addr_bytes = { response:byte(offset + 8), response:byte(offset + 9),
-                            response:byte(offset + 10), response:byte(offset + 11) }
+        local addr_bytes = { byte(response, offset + 8), byte(response, offset + 9),
+                            byte(response, offset + 10), byte(response, offset + 11) }
         local ip = format("%d.%d.%d.%d", addr_bytes[1], addr_bytes[2], addr_bytes[3], addr_bytes[4])
         insert(clients, ip)
       end
@@ -114,7 +114,7 @@ local function parse_ntp_monlist(response)
     info.amplification_factor = math.floor(#response / 48)
     info.amplification_risk = info.amplification_factor > 10 and "HIGH" or "MEDIUM"
 
-    local version_byte = response:byte(1)
+    local version_byte = byte(response, 1)
     info.version = bit.rshift(bit.band(version_byte, 0x38), 3)
   end
 

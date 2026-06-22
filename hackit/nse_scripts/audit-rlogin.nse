@@ -82,21 +82,21 @@ local function rlogin_connect(host, port, remote_user, local_user, terminal)
             result.length = #resp
             result.remote_user = remote_user
             result.local_user = local_user
-            if resp:byte(1) == 0 then
+            if byte(resp, 1) == 0 then
                 result.auth_status = "TRUSTED"
                 result.trust_relationship = true
-            elseif resp:find("Password") or resp:find("password") then
+            elseif find(resp, "Password") or find(resp, "password") then
                 result.auth_status = "PASSWORD_REQUIRED"
                 result.trust_relationship = false
-            elseif resp:find("denied") or resp:find("refused") or resp:find("sorry") then
+            elseif find(resp, "denied") or find(resp, "refused") or find(resp, "sorry") then
                 result.auth_status = "DENIED"
                 result.trust_relationship = false
-            elseif resp:find("#") or resp:find("$") or resp:find(">") then
+            elseif find(resp, "#") or find(resp, "$") or find(resp, ">") then
                 result.auth_status = "TRUSTED_SHELL"
                 result.trust_relationship = true
             else
                 result.auth_status = "UNKNOWN"
-                result.raw_prefix = resp:sub(1, 20):gsub("[\r\n]", " ")
+                result.raw_prefix = sub(resp, 1, 20):gsub("[\r\n]", " ")
             end
         end
         return result

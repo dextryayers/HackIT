@@ -76,13 +76,13 @@ action = function(host, port)
             local issues = {}
             if cache_control then
                 line = line .. " CC:" .. cache_control
-                if cache_control:find("no%-store") then
-                elseif cache_control:find("private") then
+                if find(cache_control, "no%-store") then
+                elseif find(cache_control, "private") then
                     insert(issues, "Private cache (may contain sensitive data)")
-                elseif cache_control:find("public") and (path == "/login" or path == "/admin") then
+                elseif find(cache_control, "public") and (path == "/login" or path == "/admin") then
                     insert(issues, "Sensitive path publicly cacheable")
                 end
-                if not cache_control:find("no%-store") and not cache_control:find("no%-cache") and not cache_control:find("private") then
+                if not find(cache_control, "no%-store") and not find(cache_control, "no%-cache") and not find(cache_control, "private") then
                     if path ~= "/" then
                         insert(issues, "No cache restriction directive")
                     end

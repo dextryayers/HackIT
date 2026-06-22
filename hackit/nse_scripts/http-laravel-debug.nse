@@ -73,7 +73,7 @@ action = function(host, port)
         return format_output(false, "No HTTP response")
     end
     local body = response.body or ""
-    if body:match("Laravel") or body:match("csrf%-token") then
+    if match(body, "Laravel") or match(body, "csrf%-token") then
         insert(result, "Laravel framework detected")
         local debug_endpoints = {
             {"/_debugbar/", "Debugbar"},

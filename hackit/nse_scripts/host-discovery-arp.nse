@@ -85,8 +85,8 @@ action = function(host, port)
 
   local reply = probe_arp(host.ip, 3)
   if reply and reply.mac_addr then
-    local mac = reply.mac_addr:upper()
-    local oui = mac:match("^([%x][%x]:[%x][%x]:[%x][%x])")
+    local mac = reply.upper(mac_addr)
+    local oui = match(mac, "^([%x][%x]:[%x][%x]:[%x][%x])")
     result.status = "alive"
     result.ip = host.ip
     result.mac = mac

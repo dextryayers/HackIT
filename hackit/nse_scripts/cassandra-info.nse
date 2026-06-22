@@ -76,14 +76,14 @@ end
 
 local function parse_string(body, offset)
   if #body < offset + 1 then return nil, offset end
-  local len = body:byte(offset) * 256 + body:byte(offset + 1)
+  local len = byte(body, offset) * 256 + byte(body, offset + 1)
   if #body < offset + 2 + len then return nil, offset end
-  return body:sub(offset + 2, offset + 1 + len), offset + 2 + len
+  return sub(body, offset + 2, offset + 1 + len), offset + 2 + len
 end
 
 local function parse_string_list(body, offset)
   if #body < offset + 1 then return nil, offset end
-  local count = body:byte(offset) * 256 + body:byte(offset + 1)
+  local count = byte(body, offset) * 256 + byte(body, offset + 1)
   offset = offset + 2
   local list = {}
   for _ = 1, count do
@@ -119,12 +119,12 @@ action = function(host, port)
     return format_output(false, "No valid Cassandra response received")
   end
 
-  local frame_version = response:byte(1)
-  local frame_flags = response:byte(2)
-  local stream_id = response:byte(3) + response:byte(4)
-  local opcode = response:byte(5)
-  local body_len = response:byte(6) * 256 * 256 * 256 + response:byte(7) * 256 * 256 +
-                   response:byte(8) * 256 + response:byte(9)
+  local frame_version = byte(response, 1)
+  local frame_flags = byte(response, 2)
+  local stream_id = byte(response, 3) + byte(response, 4)
+  local opcode = byte(response, 5)
+  local body_len = byte(response, 6) * 256 * 256 * 256 + byte(response, 7) * 256 * 256 +
+                   byte(response, 8) * 256 + byte(response, 9)
 
   local opcodes = {
     [0x00] = "ERROR", [0x02] = "STARTUP", [0x04] = "READY",
@@ -135,7 +135,7 @@ action = function(host, port)
   result.protocol_version = frame_version & 0x7F
   result.direction = frame_version & 0x80 == 0 and "request" or "response"
 
-  local body = response:sub(10)
+  local body = sub(response, 10)
   local offset = 1
 
   if opcode == 0x02 then
@@ -149,19 +149,19 @@ action = function(host, port)
       result.authenticator = authenticator
     end
   elseif opcode == 0x0A and #body >= 4 then
-    local kind = body:byte(1) * 256 * 256 * 256 + body:byte(2) * 256 * 256 +
-                 body:byte(3) * 256 + body:byte(4)
+    local kind = byte(body, 1) * 256 * 256 * 256 + byte(body, 2) * 256 * 256 +
+                 byte(body, 3) * 256 + byte(body, 4)
     local kinds = { [2] = "void", [3] = "rows" }
     result.result_kind = kinds[kind] or format("kind_%d", kind)
     offset = 5
 
     if kind == 3 and #body >= offset + 4 then
-      local col_count = body:byte(offset) * 256 * 256 * 256 + body:byte(offset + 1) * 256 * 256 +
-                        body:byte(offset + 2) * 256 + body:byte(offset + 3)
+      local col_count = byte(body, offset) * 256 * 256 * 256 + byte(body, offset + 1) * 256 * 256 +
+                        byte(body, offset + 2) * 256 + byte(body, offset + 3)
       result.column_count = col_count
       offset = offset + 4
 
-      local pkey = body:byte(offset) * 256 + body:byte(offset + 1)
+      local pkey = byte(body, offset) * 256 + byte(body, offset + 1)
       offset = offset + 2
       local cluster_name, new_off = parse_string(body, offset + 2)
       if cluster_name then

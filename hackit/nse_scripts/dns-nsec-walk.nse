@@ -126,8 +126,8 @@ action = function(host, port)
       break
     end
 
-    local normalized_next = next_owner:lower():gsub("%.$", "")
-    local normalized_current = current_owner:lower():gsub("%.$", "")
+    local normalized_next = lower(next_owner):gsub("%.$", "")
+    local normalized_current = lower(current_owner):gsub("%.$", "")
 
     if not discovered[normalized_current] then
       discovered[normalized_current] = {

@@ -81,10 +81,10 @@ action = function(host, port)
                 insert(result, ("Potential GraphQL endpoint: %s (status %d)"):format(path, response.status))
                 local post_resp = http.post(host, port, path, nil, nil, introspection_query)
                 if post_resp and post_resp.status == 200 and post_resp.body then
-                    if post_resp.body:match("__schema") or post_resp.body:match("types") then
+                    if post_resp.match(body, "__schema") or post_resp.match(body, "types") then
                         insert(result, "  GraphQL confirmed - introspection query succeeded")
                         local type_names = {}
-                        for type_name in post_resp.body:gmatch('"name"%s*:%s*"([A-Z][^"]+)"') do
+                        for type_name in post_resp.gmatch(body, '"name"%s*:%s*"([A-Z][^"]+)"') do
                             if not type_names[type_name] then
                                 type_names[type_name] = true
                                 insert(result, "  Type: " .. type_name)

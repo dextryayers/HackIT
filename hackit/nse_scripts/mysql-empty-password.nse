@@ -69,10 +69,10 @@ local function mysql_handshake(socket)
     local status, data = socket:receive_bytes(1)
     if not status then return nil end
     if #data < 4 then return nil end
-    local protocol_version = data:byte(5)
-    local server_end = data:find("\0", 6)
+    local protocol_version = byte(data, 5)
+    local server_end = find(data, "\0", 6)
     if not server_end then return nil end
-    local auth_plugin_data = data:sub(server_end + 1, server_end + 8)
+    local auth_plugin_data = sub(data, server_end + 1, server_end + 8)
     return auth_plugin_data
 end
 

@@ -71,7 +71,7 @@ action = function(host, port)
     if banner_req and banner_req.headers and banner_req.headers["server"] then
       local sv = banner_req.headers["server"]
       server_banner = type(sv) == "table" and sv[1] or sv
-      server_version = server_banner:match("nginx/([%d%.]+)")
+      server_version = match(server_banner, "nginx/([%d%.]+)")
     end
 
     local payloads = {
@@ -90,14 +90,14 @@ action = function(host, port)
       if req and req.status and req.status >= 200 and req.status < 400 then
         local body = req.body or ""
         for _, check in ipairs(p.checks) do
-          if body:match(check) then
-            local excerpt = body:sub(1, 80):gsub("\n", " "):gsub("\r", "")
+          if match(body, check) then
+            local excerpt = sub(body, 1, 80):gsub("\n", " "):gsub("\r", "")
             insert(findings, {path = p.path, label = p.label, check = check, excerpt = excerpt, status = req.status})
             break
           end
         end
-        if p.path:match("etc/passwd") and req.status == 200 and #body > 50 and not body:match("<html") and not body:match("<HTML") then
-          local excerpt = body:sub(1, 80):gsub("\n", " "):gsub("\r", "")
+        if p.match(path, "etc/passwd") and req.status == 200 and #body > 50 and not match(body, "<html") and not match(body, "<HTML") then
+          local excerpt = sub(body, 1, 80):gsub("\n", " "):gsub("\r", "")
           insert(findings, {path = p.path, label = p.label, check = "raw file content", excerpt = excerpt, status = req.status})
         end
       end
@@ -115,7 +115,7 @@ action = function(host, port)
         result[("vector_%d"):format(i)] = ("%s (%s) -> status %d, matched: %s"):format(f.path, f.label, f.status, f.check)
       end
       if server_version then
-        local maj, min, pat = server_version:match("(%d+)%.(%d+)%.(%d+)")
+        local maj, min, pat = match(server_version, "(%d+)%.(%d+)%.(%d+)")
         if maj and min then
           local num = tonumber(maj) * 10000 + tonumber(min) * 100 + tonumber(pat or 0)
           if num < 10400 then

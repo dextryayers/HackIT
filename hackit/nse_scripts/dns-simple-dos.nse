@@ -62,7 +62,7 @@ portrule = function(host, port) return port.protocol == "tcp" and port.state == 
 
 local function create_dns_query(id, qtype, name)
   local name_bytes = {}
-  for part in name:gmatch("[^.]+") do
+  for part in gmatch(name, "[^.]+") do
     insert(name_bytes, char(#part) .. part)
   end
   insert(name_bytes, char(0x00))
@@ -117,8 +117,8 @@ action = function(host, port)
           local response_size = #rcv
           local amplification_factor = response_size / math.max(query_size, 1)
 
-          local query_id = rcv:byte(1) * 256 + rcv:byte(2)
-          local response_flags = rcv:byte(3) * 256 + rcv:byte(4)
+          local query_id = byte(rcv, 1) * 256 + byte(rcv, 2)
+          local response_flags = byte(rcv, 3) * 256 + byte(rcv, 4)
 
           if response_flags > 0 then
             local tc_bit = (response_flags & 0x0200) > 0

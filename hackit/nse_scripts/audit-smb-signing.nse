@@ -84,7 +84,7 @@ local function negotiate_smb(host, port, smb_version)
             local result = {}
             result.protocol = smb_version
             result.negotiated = true
-            local signing_byte = resp:sub(47, 47)
+            local signing_byte = sub(resp, 47, 47)
             local byte_val = byte(signing_byte or "\x00")
             result.security_mode_byte = byte_val
             if byte_val then
@@ -94,12 +94,12 @@ local function negotiate_smb(host, port, smb_version)
             if #resp >= 40 then
                 local dialects = {}
                 for i = 40, #resp - 1 do
-                    local d = resp:sub(i, i+1)
-                    if d == "\x02\x02" then insert(dialects, "SMB 2.0.2" end)
-                    if d == "\x02\x10" then insert(dialects, "SMB 2.1" end)
-                    if d == "\x03\x00" then insert(dialects, "SMB 3.0" end)
-                    if d == "\x03\x02" then insert(dialects, "SMB 3.0.2" end)
-                    if d == "\x03\x11" then insert(dialects, "SMB 3.1.1" end)
+                    local d = sub(resp, i, i+1)
+                    if d == "\x02\x02" then insert(dialects, "SMB 2.0.2") end
+                    if d == "\x02\x10" then insert(dialects, "SMB 2.1") end
+                    if d == "\x03\x00" then insert(dialects, "SMB 3.0") end
+                    if d == "\x03\x02" then insert(dialects, "SMB 3.0.2") end
+                    if d == "\x03\x11" then insert(dialects, "SMB 3.1.1") end
                 end
                 if #dialects > 0 then result.negotiated_dialects = dialects end
             end

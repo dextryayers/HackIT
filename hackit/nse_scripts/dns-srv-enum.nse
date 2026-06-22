@@ -153,17 +153,17 @@ action = function(host, port)
     local categories = {}
     for _, s in ipairs(found_services) do
       local cat = "other"
-      if s.service:match("_sip") or s.service:match("_xmpp") or s.service:match("_stun") then
+      if s.match(service, "_sip") or s.match(service, "_xmpp") or s.match(service, "_stun") then
         cat = "communication"
-      elseif s.service:match("_ldap") or s.service:match("_kerberos") then
+      elseif s.match(service, "_ldap") or s.match(service, "_kerberos") then
         cat = "authentication"
-      elseif s.service:match("_imap") or s.service:match("_pop3") or s.service:match("_smtp") or s.service:match("_submission") then
+      elseif s.match(service, "_imap") or s.match(service, "_pop3") or s.match(service, "_smtp") or s.match(service, "_submission") then
         cat = "mail"
-      elseif s.service:match("_mysql") or s.service:match("_postgresql") or s.service:match("_mongodb") or s.service:match("_redis") or s.service:match("_elastic") or s.service:match("_memcache") then
+      elseif s.match(service, "_mysql") or s.match(service, "_postgresql") or s.match(service, "_mongodb") or s.match(service, "_redis") or s.match(service, "_elastic") or s.match(service, "_memcache") then
         cat = "database"
-      elseif s.service:match("_http") or s.service:match("_https") then
+      elseif s.match(service, "_http") or s.match(service, "_https") then
         cat = "web"
-      elseif s.service:match("_docker") or s.service:match("_etcd") or s.service:match("_consul") or s.service:match("_vault") or s.service:match("_prometheus") or s.service:match("_grafana") or s.service:match("_jenkins") then
+      elseif s.match(service, "_docker") or s.match(service, "_etcd") or s.match(service, "_consul") or s.match(service, "_vault") or s.match(service, "_prometheus") or s.match(service, "_grafana") or s.match(service, "_jenkins") then
         cat = "infrastructure"
       end
       if not categories[cat] then categories[cat] = {} end

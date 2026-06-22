@@ -76,8 +76,8 @@ action = function(host, port)
                 s:send("VRFY " .. user .. "\r\n")
                 local _, resp = s:receive_buf("\n", 3000)
                 s:close()
-                if resp and (resp:match("^250 ") or resp:match("^252 ")) then
-                    local detail = resp:match("250[%- ]([^\r\n]+)")
+                if resp and (match(resp, "^250 ") or match(resp, "^252 ")) then
+                    local detail = match(resp, "250[%- ]([^\r\n]+)")
                     insert(found, {user = user, response = detail or user})
                 end
             else

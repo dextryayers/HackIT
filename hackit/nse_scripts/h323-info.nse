@@ -130,35 +130,35 @@ action = function(host, port)
         result.message_type = msg_types[msg_type] or format("Unknown (0x%02x)", msg_type)
       end
 
-      local vendor = response:match("H323%-[%w%-]+") or
-                     response:match("[%w]+%-Gatekeeper") or
-                     response:match("([%w]+)[^%w]Gatekeeper") or
-                     response:match("Cisco") or
-                     response:match("Avaya") or
-                     response:match("Radvision") or
-                     response:match("Polycom") or
-                     response:match("Vidyo")
+      local vendor = match(response, "H323%-[%w%-]+") or
+                     match(response, "[%w]+%-Gatekeeper") or
+                     match(response, "([%w]+)[^%w]Gatekeeper") or
+                     match(response, "Cisco") or
+                     match(response, "Avaya") or
+                     match(response, "Radvision") or
+                     match(response, "Polycom") or
+                     match(response, "Vidyo")
       if vendor then
         result.vendor = vendor
       end
 
-      local version = response:match("%d+%.%d+%.%d+%.%d+") or response:match("%d+%.%d+%.%d+")
+      local version = match(response, "%d+%.%d+%.%d+%.%d+") or match(response, "%d+%.%d+%.%d+")
       if version then
         result.version = version
       end
 
-      local prefix = response:match("(%d+%*?)") or response:match("(%d+%.%d+)")
+      local prefix = match(response, "(%d+%*?)") or match(response, "(%d+%.%d+)")
       if prefix then
         result.prefix_hint = prefix
       end
 
-      if response:find("Cisco") then
+      if find(response, "Cisco") then
         result.vendor_hint = "Cisco"
-      elseif response:find("Avaya") then
+      elseif find(response, "Avaya") then
         result.vendor_hint = "Avaya"
-      elseif response:find("Polycom") then
+      elseif find(response, "Polycom") then
         result.vendor_hint = "Polycom"
-      elseif response:find("Radvision") then
+      elseif find(response, "Radvision") then
         result.vendor_hint = "Radvision"
       end
 

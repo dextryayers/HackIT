@@ -80,14 +80,14 @@ local function dhcp_discover(timeout)
         if r and #r > 0 then
             result.response_received = true
             result.response_size = #r
-            if r:byte(2) == 2 then result.message_type = "DHCPOFFER" end
-            if r:byte(2) == 4 then result.message_type = "DHCPACK" end
+            if byte(r, 2) == 2 then result.message_type = "DHCPOFFER" end
+            if byte(r, 2) == 4 then result.message_type = "DHCPACK" end
             if #r >= 20 then
                 local yiaddr = byte(r, 16) .. "." .. byte(r, 17) .. "." .. byte(r, 18) .. "." .. byte(r, 19)
                 result.offered_ip = yiaddr
             end
             for i = 1, #r - 3 do
-                if r:byte(i) == 0x36 and r:byte(i+1) == 0x04 then
+                if byte(r, i) == 0x36 and byte(r, i+1) == 0x04 then
                     local sip = byte(r, i+2) .. "." .. byte(r, i+3) .. "." .. byte(r, i+4) .. "." .. byte(r, i+5)
                     result.dhcp_server_ip = sip
                 end

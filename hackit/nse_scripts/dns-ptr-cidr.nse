@@ -113,12 +113,12 @@ action = function(host, port)
 
   local cidr = host.ip
   if host.targetname and #host.targetname > 0 then
-    if host.targetname:match("/") then
+    if host.match(targetname, "/") then
       cidr = host.targetname
     end
   end
 
-  if not cidr:match("/") then
+  if not match(cidr, "/") then
     cidr = cidr .. "/24"
   end
 
@@ -168,11 +168,11 @@ action = function(host, port)
       for _, v in ipairs(answer) do
         insert(hostnames, tostring(v):gsub("%.$", ""))
       end
-      insert(ptr_results, {)
+      insert(ptr_results, {
         ip = ip,
         hostname = hostnames[1],
         all_ptr_records = hostnames
-      }
+      })
     end
 
     scanned = scanned + 1

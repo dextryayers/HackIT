@@ -88,7 +88,7 @@ local function parse_ntp_response(response)
   local info = {}
   if #response < 48 then return info end
 
-  local first_byte = response:byte(1)
+  local first_byte = byte(response, 1)
   info.leap_indicator_raw = bit.rshift(first_byte, 6)
   local leap_descs = { "No warning", "Last minute has 61 seconds", "Last minute has 59 seconds", "Alarm (not synchronized)" }
   info.leap_indicator = leap_descs[info.leap_indicator_raw + 1] or "Unknown"
@@ -97,7 +97,7 @@ local function parse_ntp_response(response)
   info.mode = bit.band(first_byte, 0x07)
   info.mode_name = info.mode == 4 and "server" or format("mode_%d", info.mode)
 
-  info.stratum = response:byte(2)
+  info.stratum = byte(response, 2)
   if info.stratum == 0 then
     info.stratum_desc = "unspecified or invalid"
   elseif info.stratum == 1 then
@@ -108,15 +108,15 @@ local function parse_ntp_response(response)
     info.stratum_desc = "unsynchronized"
   end
 
-  info.poll_interval = response:byte(3)
+  info.poll_interval = byte(response, 3)
   info.poll_seconds = 2 ^ info.poll_interval
-  info.precision = response:byte(4)
-  info.root_delay_raw = response:byte(5) * 256 + response:byte(6)
+  info.precision = byte(response, 4)
+  info.root_delay_raw = byte(response, 5) * 256 + byte(response, 6)
   info.root_delay_seconds = info.root_delay_raw / 65536
-  info.root_dispersion_raw = response:byte(7) * 256 + response:byte(8)
+  info.root_dispersion_raw = byte(response, 7) * 256 + byte(response, 8)
   info.root_dispersion_seconds = info.root_dispersion_raw / 65536
 
-  local ref_id_bytes = { response:byte(13), response:byte(14), response:byte(15), response:byte(16) }
+  local ref_id_bytes = { byte(response, 13), byte(response, 14), byte(response, 15), byte(response, 16) }
   if info.stratum == 0 or info.stratum == 1 then
     local ref_chars = char(ref_id_bytes[1], ref_id_bytes[2], ref_id_bytes[3], ref_id_bytes[4])
     local ref_ids = {
@@ -135,10 +135,10 @@ local function parse_ntp_response(response)
 
   local function ts_to_seconds(offset)
     if #response >= offset + 7 then
-      local int_part = response:byte(offset) * 256 * 256 * 256 +
-                       response:byte(offset + 1) * 256 * 256 +
-                       response:byte(offset + 2) * 256 +
-                       response:byte(offset + 3)
+      local int_part = byte(response, offset) * 256 * 256 * 256 +
+                       byte(response, offset + 1) * 256 * 256 +
+                       byte(response, offset + 2) * 256 +
+                       byte(response, offset + 3)
       return int_part
     end
     return nil

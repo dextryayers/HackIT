@@ -81,7 +81,7 @@ action = function(host, port)
     local aspnet_resp = http.get(host, port, "/")
     if aspnet_resp and aspnet_resp.header then
         local server = aspnet_resp.header["server"] or ""
-        if server:find("IIS") then
+        if find(server, "IIS") then
             insert(results, "IIS server detected: " .. server)
         end
         local x_aspnet = aspnet_resp.header["x-aspnet-version"]

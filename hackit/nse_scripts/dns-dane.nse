@@ -133,7 +133,7 @@ action = function(host, port)
           cert_str = sub(cert_str, 1, 50) .. "..."
         end
 
-        insert(found, {)
+        insert(found, {
           service_port = svc_port,
           query = qname,
           usage = usage,
@@ -145,7 +145,7 @@ action = function(host, port)
           match_type = match_type,
           match_name = match_names[match_type] or ("Unknown (" .. match_type .. ")"),
           certificate_data = cert_str
-        }
+        })
       end
     end
   end

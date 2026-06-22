@@ -169,11 +169,11 @@ action = function(host, port)
       for _, v in ipairs(answer) do
         insert(ips, tostring(v))
       end
-      insert(found, {)
+      insert(found, {
         subdomain = fqdn,
         ip_addresses = ips,
         type = "A"
-      }
+      })
     end
 
     local aaaa_opts = {}
@@ -185,11 +185,11 @@ action = function(host, port)
       for _, v in ipairs(aaaa_answer) do
         insert(ips6, tostring(v))
       end
-      insert(found, {)
+      insert(found, {
         subdomain = fqdn,
         ip_addresses = ips6,
         type = "AAAA"
-      }
+      })
     end
 
     if i % 30 == 0 then

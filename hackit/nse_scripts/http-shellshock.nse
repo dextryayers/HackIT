@@ -69,7 +69,7 @@ action = function(host, port)
         local options = {header = {["User-Agent"] = test_payload}}
         local resp = http.get(host, port, path, options)
         if resp and resp.body then
-            if resp.body:find("vulnerable") then
+            if resp.find(body, "vulnerable") then
                 insert(results, "Shellshock vulnerability confirmed at " .. path)
             elseif resp.status and resp.status < 400 then
                 insert(results, "CGI endpoint at " .. path .. " (status " .. resp.status .. ")")

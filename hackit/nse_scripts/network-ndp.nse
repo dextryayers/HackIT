@@ -77,14 +77,14 @@ local function probe_ndp_raw(timeout)
             result = {}
             result.received = true
             result.length = #r
-            result.icmpv6_type = r:byte(1)
-            if r:byte(1) == 0x88 then result.message_type = "Neighbor Advertisement (NA)" end
-            if r:byte(1) == 0x87 then result.message_type = "Neighbor Solicitation (NS)" end
-            if r:byte(1) == 0x86 then result.message_type = "Router Solicitation (RS)" end
-            if r:byte(1) == 0x85 then result.message_type = "Router Advertisement (RA)" end
+            result.icmpv6_type = byte(r, 1)
+            if byte(r, 1) == 0x88 then result.message_type = "Neighbor Advertisement (NA)" end
+            if byte(r, 1) == 0x87 then result.message_type = "Neighbor Solicitation (NS)" end
+            if byte(r, 1) == 0x86 then result.message_type = "Router Solicitation (RS)" end
+            if byte(r, 1) == 0x85 then result.message_type = "Router Advertisement (RA)" end
             if #r >= 24 then
                 local target_addr = ""
-                for i = 9, 24 do target_addr = target_addr .. format("%02x", r:byte(i)) if i % 2 == 0 and i < 24 then target_addr = target_addr .. ":" end end
+                for i = 9, 24 do target_addr = target_addr .. format("%02x", byte(r, i)) if i % 2 == 0 and i < 24 then target_addr = target_addr .. ":" end end
                 result.target_address = target_addr
             end
         end
@@ -100,7 +100,7 @@ action = function(host, port)
     local out = output_table()
     out.service = "NDP Detection"
     out.target = host.ip
-    out.ipv6_present = (host.ip and host.ip:match(":")) ~= nil
+    out.ipv6_present = (host.ip and host.match(ip, ":")) ~= nil
     local result = probe_ndp_raw(5000)
     if result and result.received then
         out.status = "NDP_ACTIVE"

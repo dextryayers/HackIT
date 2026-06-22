@@ -65,11 +65,11 @@ local b64chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789
 local function base64_encode(data)
   local result = {}
   for i = 1, #data, 3 do
-    local a, b, c = data:byte(i, i + 2)
+    local a, b, c = byte(data, i, i + 2)
     local n = (a or 0) * 65536 + (b or 0) * 256 + (c or 0)
     for j = 1, 4 do
       local idx = math.floor(n / (64 ^ (4 - j))) % 64
-      insert(result, b64chars:sub(idx + 1, idx + 1))
+      insert(result, sub(b64chars, idx + 1, idx + 1))
     end
   end
   local pad = (3 - #data % 3) % 3
@@ -80,12 +80,12 @@ local function base64_encode(data)
 end
 
 local function base64_decode(s)
-  s = s:gsub("=+$", "")
+  s = gsub(s, "=+$", "")
   local result = {}
   local buffer = 0
   local bits = 0
   for i = 1, #s do
-    local idx = b64chars:find(s:sub(i, i), 1, true)
+    local idx = find(b64chars, s:sub(i, i), 1, true)
     if not idx then break end
     idx = idx - 1
     buffer = buffer * 64 + idx
@@ -100,34 +100,34 @@ local function base64_decode(s)
 end
 
 local function hex_to_bin(s)
-  return (s:gsub("..", function(cc) return char(tonumber(cc, 16)) end))
+  return (gsub(s, "..", function(cc) return char(tonumber(cc, 16)) end))
 end
 
 local function load_list(arg_names)
   local val = stdnse.get_script_args(arg_names)
   if not val or val == "" then return {} end
-  if val:byte() == 47 then
+  if byte(val) == 47 then
     local f, err = io.open(val, "r")
     if f then
       local lines = {}
       for line in f:lines() do
-        line = line:gsub("^%s+", ""):gsub("%s+$", "")
-        if line ~= "" and line:byte() ~= 35 then insert(lines, line end)
+        line = gsub(line, "^%s+", ""):gsub("%s+$", "")
+        if line ~= "" and byte(line) ~= 35 then insert(lines, line) end
       end
       f:close()
       return lines
     end
-  elseif val:find("\n") then
+  elseif find(val, "\n") then
     local lines = {}
-    for line in val:gmatch("[^\n]+") do
-      line = line:gsub("^%s+", ""):gsub("%s+$", "")
-      if line ~= "" and line:byte() ~= 35 then insert(lines, line end)
+    for line in gmatch(val, "[^\n]+") do
+      line = gsub(line, "^%s+", ""):gsub("%s+$", "")
+      if line ~= "" and byte(line) ~= 35 then insert(lines, line) end
     end
     return lines
   end
   local items = {}
-  for item in val:gmatch("[^,]+") do
-    item = item:gsub("^%s+", ""):gsub("%s+$", "")
+  for item in gmatch(val, "[^,]+") do
+    item = gsub(item, "^%s+", ""):gsub("%s+$", "")
     if item ~= "" then insert(items, item) end
   end
   return items
@@ -149,7 +149,7 @@ end
 local function hmac_sha1_raw(key, data)
   local h = openssl.hmac("sha1", key, data)
   if #h == 20 then return h end
-  return hex_to_bin(h:lower())
+  return hex_to_bin(lower(h))
 end
 
 local function pbkdf2_hmac_sha1(password, salt, iterations, dkLen)
@@ -198,12 +198,12 @@ local function bson_get_val(doc, key)
   local pos = 5
   local doc_len = #doc
   while pos < doc_len do
-    local etype = doc:byte(pos)
+    local etype = byte(doc, pos)
     if not etype then break end
     pos = pos + 1
     local n = ""
     while pos <= doc_len do
-      local b = doc:byte(pos)
+      local b = byte(doc, pos)
       if b == 0 then pos = pos + 1; break end
       n = n .. char(b)
       pos = pos + 1
@@ -211,14 +211,14 @@ local function bson_get_val(doc, key)
     if n == key then
       if etype == 0x02 then
         local sl = byte(doc, pos) + byte(doc, pos + 1) * 256 + byte(doc, pos + 2) * 65536 + byte(doc, pos + 3) * 16777216
-        return doc:sub(pos + 4, pos + sl - 2)
+        return sub(doc, pos + 4, pos + sl - 2)
       elseif etype == 0x10 then
         return byte(doc, pos) + byte(doc, pos + 1) * 256 + byte(doc, pos + 2) * 65536 + byte(doc, pos + 3) * 16777216
       elseif etype == 0x08 then
-        return doc:byte(pos) == 1
+        return byte(doc, pos) == 1
       elseif etype == 0x03 then
         local sl = byte(doc, pos) + byte(doc, pos + 1) * 256 + byte(doc, pos + 2) * 65536 + byte(doc, pos + 3) * 16777216
-        return doc:sub(pos + 4, pos + sl - 2)
+        return sub(doc, pos + 4, pos + sl - 2)
       end
       return nil
     end
@@ -256,7 +256,7 @@ local function mongo_recv(socket)
   if #data < 36 then return nil end
   local num = byte(data, 29) + byte(data, 30) * 256 + byte(data, 31) * 65536 + byte(data, 32) * 16777216
   if num == 0 or #data < 37 then return nil end
-  return data:sub(37)
+  return sub(data, 37)
 end
 
 portrule = function(host, port) return port.protocol == "tcp" and port.state == "open" and port.number == 27017 end
@@ -269,7 +269,7 @@ action = function(host, port)
   local timeout = tonumber(stdnse.get_script_args({"brute-mongodb.timeout", "timeout"}) or 10)
   local stop_on_first = stdnse.get_script_args({"brute-mongodb.stop_on_first", "stop_on_first"})
   if stop_on_first == nil or stop_on_first == "" then stop_on_first = true
-  else stop_on_first = (stop_on_first:lower() == "true" or stop_on_first == "1") end
+  else stop_on_first = (lower(stop_on_first) == "true" or stop_on_first == "1") end
 
   if #users == 0 or #passes == 0 then
     return format_output(false, "No credentials provided. Use brute-mongodb.users and brute-mongodb.passwords script args")
@@ -317,9 +317,9 @@ action = function(host, port)
         if not payload_b64 then socket:close(); return false end
 
         local server_first = base64_decode(payload_b64)
-        local r_nonce = server_first:match("r=([^,]+)")
-        local salt_b64 = server_first:match("s=([^,]+)")
-        local iterations = tonumber(server_first:match("i=([^,]+)"))
+        local r_nonce = match(server_first, "r=([^,]+)")
+        local salt_b64 = match(server_first, "s=([^,]+)")
+        local iterations = tonumber(match(server_first, "i=([^,]+)"))
         if not r_nonce or not salt_b64 or not iterations then
           socket:close(); return false
         end
@@ -328,7 +328,7 @@ action = function(host, port)
         local salted_pass = pbkdf2_hmac_sha1(p, salt_raw, iterations, 20)
         local client_key = hmac_sha1_raw(salted_pass, "Client Key")
         local stored_key_hex = openssl.sha1(client_key)
-        local stored_key = hex_to_bin(stored_key_hex:lower())
+        local stored_key = hex_to_bin(lower(stored_key_hex))
 
         local client_final_wo = "c=biws,r=" .. r_nonce
         local auth_msg = client_first_bare .. "," .. server_first .. "," .. client_final_wo

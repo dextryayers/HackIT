@@ -88,12 +88,12 @@ action = function(host, port)
       if status and response then
           insert(result, ("BGP response received (%d bytes)"):format(#response))
           if #response >= 16 then
-              local marker = response:sub(1, 16)
+              local marker = sub(response, 1, 16)
               if marker == char(0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
                   0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff) then
                   insert(result, "Valid BGP OPEN message received")
                   if #response >= 19 then
-                      local type_byte = response:byte(19)
+                      local type_byte = byte(response, 19)
                       if type_byte == 2 then
                           insert(result, "BGP OPEN message type confirmed")
                       end

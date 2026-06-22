@@ -117,9 +117,9 @@ action = function(host, port)
             end
         else
             local err_msg = tostring(smbstate3)
-            if err_msg:find("ACCESS_DENIED") or err_msg:find("STATUS_LOGON_FAILURE") then
+            if find(err_msg, "ACCESS_DENIED") or find(err_msg, "STATUS_LOGON_FAILURE") then
                 entry.status = "access_denied"
-            elseif err_msg:find("invalid") then
+            elseif find(err_msg, "invalid") then
                 entry.status = "invalid_credentials"
             else
                 entry.status = "failed: " .. err_msg

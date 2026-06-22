@@ -103,14 +103,14 @@ local function extract_version(banner, name)
         ["Jetty"] = "Jetty/([%d.]+)",
     }
     if patterns[name] then
-        local v = banner:match(patterns[name])
+        local v = match(banner, patterns[name])
         if v then return v end
     end
     if name == "Redis" then
-        local v = banner:match("redis_version:([%d.]+)")
+        local v = match(banner, "redis_version:([%d.]+)")
         if v then return v end
     end
-    return banner:match("([%d]+%.[%d]+%.[%d]+)") or banner:match("([%d]+%.[%d]+)")
+    return match(banner, "([%d]+%.[%d]+%.[%d]+)") or match(banner, "([%d]+%.[%d]+)")
 end
 
 portrule = function(host, port) return port.protocol == "tcp" and port.state == "open" end
@@ -132,7 +132,7 @@ action = function(host, port)
         end
         socket:close()
         if b then
-            return b:gsub("[\r\n]+", " "):sub(1, 300)
+            return gsub(b, "[\r\n]+", " "):sub(1, 300)
         end
         return nil
     end)
@@ -142,7 +142,7 @@ action = function(host, port)
         local matched = nil
         local version = nil
         for _, entry in ipairs(version_map) do
-            if banner:find(entry.sig, 1, true) then
+            if find(banner, entry.sig, 1, true) then
                 matched = entry
                 version = extract_version(banner, entry.name)
                 break

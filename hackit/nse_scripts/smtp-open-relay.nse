@@ -73,19 +73,19 @@ action = function(host, port)
             local status = sock:connect(host.ip, port)
             if not status then return end
             local banner = sock:receive_buf("\n", 5000)
-            insert(dialog, "BANNER: " .. (banner:match("([^\r\n]+)") or banner))
+            insert(dialog, "BANNER: " .. (match(banner, "([^\r\n]+)") or banner))
             sock:send("EHLO hackit.local\r\n")
             local ehlo = sock:receive_buf("\n", 5000)
             insert(dialog, "EHLO: +OK")
             if ehlo then
                 sock:send("MAIL FROM:<test@hackit.local>\r\n")
                 local mf = sock:receive_buf("\n", 5000)
-                insert(dialog, "MAIL FROM: " .. (mf:match("([^\r\n]+)") or mf))
-                if mf and (mf:match("^250 ") or mf:match("^251 ")) then
+                insert(dialog, "MAIL FROM: " .. (match(mf, "([^\r\n]+)") or mf))
+                if mf and (match(mf, "^250 ") or match(mf, "^251 ")) then
                     sock:send("RCPT TO:<relay-test@" .. domain .. ">\r\n")
                     local rcpt = sock:receive_buf("\n", 5000)
-                    insert(dialog, "RCPT TO: " .. (rcpt:match("([^\r\n]+)") or rcpt))
-                    if rcpt and (rcpt:match("^250 ") or rcpt:match("^251 ")) then
+                    insert(dialog, "RCPT TO: " .. (match(rcpt, "([^\r\n]+)") or rcpt))
+                    if rcpt and (match(rcpt, "^250 ") or match(rcpt, "^251 ")) then
                         relay_found = true
                     end
                 end

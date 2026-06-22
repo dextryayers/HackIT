@@ -73,21 +73,21 @@ local function probe_x11_auth(host, port)
             result = {}
             result.response_received = true
             result.length = #resp
-            result.success_byte = resp:byte(1)
-            result.protocol_major = resp:byte(3) or 0
-            result.protocol_minor = resp:byte(5) or 0
-            if resp:byte(1) == 1 then
+            result.success_byte = byte(resp, 1)
+            result.protocol_major = byte(resp, 3) or 0
+            result.protocol_minor = byte(resp, 5) or 0
+            if byte(resp, 1) == 1 then
                 result.auth_required = false
                 result.open_access = true
                 if #resp >= 8 then
-                    result.vendor = resp:sub(7, 8)
+                    result.vendor = sub(resp, 7, 8)
                 end
-            elseif resp:byte(1) == 0 then
+            elseif byte(resp, 1) == 0 then
                 result.auth_required = true
                 result.open_access = false
-                result.reason_length = (resp:byte(7) or 0) * 256 + (resp:byte(8) or 0)
+                result.reason_length = (byte(resp, 7) or 0) * 256 + (byte(resp, 8) or 0)
                 if result.reason_length > 0 and #resp >= 8 + result.reason_length then
-                    result.reason = resp:sub(9, 8 + result.reason_length)
+                    result.reason = sub(resp, 9, 8 + result.reason_length)
                 end
             end
         end

@@ -94,9 +94,9 @@ action = function(host, port)
 
       if response.headers then
         for hname, hvalue in pairs(response.headers) do
-          local lname = hname:lower()
+          local lname = lower(hname)
           for _, pattern in ipairs(heroku_indicators.headers) do
-            if lname:find(pattern:lower()) then
+            if find(lname, pattern:lower()) then
               found = true
               result["header_" .. lname] = hvalue
               insert(indicators, "header:" .. hname)
@@ -104,7 +104,7 @@ action = function(host, port)
           end
           if type(hvalue) == "string" then
             for _, val_pattern in ipairs(heroku_indicators.header_values) do
-              if hvalue:lower():find(val_pattern:lower()) then
+              if lower(hvalue):find(lower(val_pattern)) then
                 found = true
                 result["header_" .. lname] = hvalue
                 insert(indicators, "header_val:" .. lname)
@@ -116,7 +116,7 @@ action = function(host, port)
 
       if response.body then
         for _, pattern in ipairs(heroku_indicators.body_patterns) do
-          if response.body:find(pattern) then
+          if response.find(body, pattern) then
             found = true
             insert(indicators, "body:" .. pattern)
           end

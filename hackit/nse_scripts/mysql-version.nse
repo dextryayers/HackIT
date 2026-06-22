@@ -69,11 +69,11 @@ action = function(host, port)
         local banner = sock:receive_buf("", 5000)
         sock:close()
         if not banner or #banner < 5 then return end
-        local protocol_version = banner:byte(5)
+        local protocol_version = byte(banner, 5)
         local server_version = ""
         local pos = 6
         while pos <= #banner do
-            local byte = banner:byte(pos)
+            local byte = byte(banner, pos)
             if byte == 0 then break end
             server_version = server_version .. char(byte)
             pos = pos + 1
@@ -83,7 +83,7 @@ action = function(host, port)
             pos = pos + 1
             for i = 1, 4 do
                 if pos <= #banner then
-                    connection_id_bytes = connection_id_bytes .. char(banner:byte(pos))
+                    connection_id_bytes = connection_id_bytes .. char(byte(banner, pos))
                     pos = pos + 1
                 end
             end
@@ -91,10 +91,10 @@ action = function(host, port)
         local res = output_table()
         res.protocol_version = protocol_version
         res.server_version = server_version
-        local ver_num = server_version:match("([%d]+%.?[%d]*%.?[%d]*)")
+        local ver_num = match(server_version, "([%d]+%.?[%d]*%.?[%d]*)")
         if ver_num then
             res.version = ver_num
-            local major, minor, patch = server_version:match("(%d+)%.(%d+)%.(%d+)")
+            local major, minor, patch = match(server_version, "(%d+)%.(%d+)%.(%d+)")
             if major then
                 res.version_major = tonumber(major)
                 res.version_minor = tonumber(minor)
@@ -104,7 +104,7 @@ action = function(host, port)
         if connection_id_bytes ~= "" then
             res.connection_id = connection_id_bytes
         end
-        local auth_plugin = banner:match("caching_sha2_password") or banner:match("mysql_native_password") or banner:match("sha256_password")
+        local auth_plugin = match(banner, "caching_sha2_password") or match(banner, "mysql_native_password") or match(banner, "sha256_password")
         if auth_plugin then
             res.auth_plugin = auth_plugin
         end

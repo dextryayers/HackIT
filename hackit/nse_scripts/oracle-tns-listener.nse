@@ -76,9 +76,9 @@ local function build_tns_packet(connect_data)
     "(" .. connect_data .. ")"
 
   local total_len = #header + #payload
-  header = header:sub(1, 24) .. char(0x00, 0x00) ..
+  header = sub(header, 1, 24) .. char(0x00, 0x00) ..
            char(bit.rshift(total_len, 8), bit.band(total_len, 0xFF)) ..
-           header:sub(29)
+           sub(header, 29)
 
   return header .. payload
 end
@@ -121,25 +121,25 @@ action = function(host, port)
     if ok3 and response and #response > 4 then
       all_data = all_data .. response
 
-      if response:match("Oracle") or response:match("TNS") then
+      if match(response, "Oracle") or match(response, "TNS") then
         result.listener_detected = true
       end
 
-      local version_match = response:match("TNSLSNR.-%d+%.%d+%.%d+%.%d+")
-        or response:match("Version.-%d+%.%d+%.%d+%.%d+")
-        or response:match("(%d+%.%d+%.%d+%.%d+%.%d+)")
+      local version_match = match(response, "TNSLSNR.-%d+%.%d+%.%d+%.%d+")
+        or match(response, "Version.-%d+%.%d+%.%d+%.%d+")
+        or match(response, "(%d+%.%d+%.%d+%.%d+%.%d+)")
       if version_match and not result.version then
         result.version = version_match
       end
 
-      local product = response:match("PRODUCT%s*=%s*([%w%s]+)") or response:match("PRODUCT:([%w%s]+)")
+      local product = match(response, "PRODUCT%s*=%s*([%w%s]+)") or match(response, "PRODUCT:([%w%s]+)")
       if product and not result.product then
-        result.product = product:gsub("%s+$", "")
+        result.product = gsub(product, "%s+$", "")
       end
 
       local services = {}
       for svc in response:gmatch("%(([A-Z][A-Z_]+)%s*=") do
-        if not result[svc:lower()] then
+        if not result[lower(svc)] then
           insert(services, svc)
         end
       end
@@ -147,18 +147,18 @@ action = function(host, port)
         result.service_parameters = services
       end
 
-      local instance = response:match("INSTANCE_NAME%s*=%s*([%w_]+)")
-        or response:match("INST_NAME%s*=%s*([%w_]+)")
+      local instance = match(response, "INSTANCE_NAME%s*=%s*([%w_]+)")
+        or match(response, "INST_NAME%s*=%s*([%w_]+)")
       if instance and not result.instance_name then
         result.instance_name = instance
       end
 
-      local host_name = response:match("HOST_NAME%s*=%s*([%w_%.%-]+)")
+      local host_name = match(response, "HOST_NAME%s*=%s*([%w_%.%-]+)")
       if host_name and not result.host_name then
         result.host_name = host_name
       end
 
-      local sec = response:match("SECURITY[^)]*") or response:match("SEC_PROTOCOL[^)]*")
+      local sec = match(response, "SECURITY[^)]*") or match(response, "SEC_PROTOCOL[^)]*")
       if sec and not result.security then
         result.security = sec
       end

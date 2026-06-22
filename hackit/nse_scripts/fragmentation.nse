@@ -135,13 +135,13 @@ action = function(host, port)
     end
     capture:close()
 
-    insert(all_tests, {)
+    insert(all_tests, {
       fragment_size = frag_size,
       fragments_sent = num_frags,
       payload_total = #payload,
       responses_count = #responses,
       reassembly_status = (#responses > 0) and "successful" or "no_response"
-    }
+    })
     ::next_size::
   end
 

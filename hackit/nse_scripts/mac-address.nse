@@ -74,8 +74,8 @@ local function read_arp_cache(target_ip)
   local content = f:read("*a")
   f:close()
 
-  for line in content:gmatch("[^\r\n]+") do
-    if line:find(target_ip) then
+  for line in gmatch(content, "[^\r\n]+") do
+    if find(line, target_ip) then
       local fields = strsplit(" ", line)
       if #fields >= 4 and fields[3] and fields[3] ~= "00:00:00:00:00:00" and fields[2] == "0x1" then
         return {
@@ -101,7 +101,7 @@ local function probe_arp_retry(target_ip, retries)
 end
 
 local function oui_lookup(mac)
-  local oui = mac:match("^([%x][%x]:[%x][%x]:[%x][%x])")
+  local oui = match(mac, "^([%x][%x]:[%x][%x]:[%x][%x])")
   if not oui then return nil end
   local oui_db = {
     ["00:00:0C"] = "Cisco", ["00:1A:A0"] = "Dell", ["00:1B:21"] = "HP",
@@ -125,7 +125,7 @@ local function oui_lookup(mac)
     ["30:05:5C"] = "Raspberry Pi", ["B8:27:EB"] = "Raspberry Pi",
     ["DC:A6:32"] = "Raspberry Pi"
   }
-  return oui_db[oui:upper()] or nil
+  return oui_db[upper(oui)] or nil
 end
 
 action = function(host, port)
@@ -133,7 +133,7 @@ action = function(host, port)
 
   local reply = probe_arp_retry(host.ip, 3)
   if reply and reply.mac_addr then
-    local mac = reply.mac_addr:upper()
+    local mac = reply.upper(mac_addr)
     result.status = "success"
     result.ip = host.ip
     result.mac = mac

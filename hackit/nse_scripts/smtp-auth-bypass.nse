@@ -79,14 +79,14 @@ action = function(host, port)
         socket:close()
         return format_output(false, "No banner received")
     end
-    insert(result, "SMTP banner: " .. (banner:match("^[^\r\n]+") or "unknown"))
+    insert(result, "SMTP banner: " .. (match(banner, "^[^\r\n]+") or "unknown"))
     socket:send("EHLO scanner\r\n")
     status, banner = socket:receive_lines(1)
     if not status then
         socket:close()
         return format_output(false, "No EHLO response")
     end
-    if banner:match("AUTH") then
+    if match(banner, "AUTH") then
         insert(result, "SMTP AUTH supported")
     else
         insert(result, "SMTP AUTH not supported")
@@ -112,7 +112,7 @@ action = function(host, port)
             if status then
                 s:send(stdnse.tohex(c[2]) .. "\r\n")
                 status, resp = s:receive_lines(1)
-                if status and resp:match("235") then
+                if status and match(resp, "235") then
                     insert(result, ("Valid credentials: %s / %s"):format(c[1], c[2]))
                 end
             end

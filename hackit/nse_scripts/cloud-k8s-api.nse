@@ -107,7 +107,7 @@ action = function(host, port)
   for _, path in ipairs(k8s_paths) do
     local ok3, resp = pcall(http.get, endpoint, port.number, path, { timeout = 5000 })
     if ok3 and resp and resp.status == 200 then
-      local key = path:gsub("^/", ""):gsub("/", "_"):gsub("-", "_")
+      local key = gsub(path, "^/", ""):gsub("/", "_"):gsub("-", "_")
       if resp.body then
         local ok4, data = pcall(json.parse, resp.body)
         if ok4 and data then

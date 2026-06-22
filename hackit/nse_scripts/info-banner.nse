@@ -98,7 +98,7 @@ local function send_greeting(host, port)
         end
         socket:close()
         if b then
-            return b:gsub("[\r\n]+", " | "):sub(1, 300)
+            return gsub(b, "[\r\n]+", " | "):sub(1, 300)
         end
         return nil
     end)
@@ -120,7 +120,7 @@ action = function(host, port)
         out.banner = banner
         out.banner_length = #banner
         out.status = "BANNER_RECEIVED"
-        if expected and banner:find(expected:match("%S+"), 1, true) then
+        if expected and find(banner, expected:match("%S+"), 1, true) then
             out.banner_matches_expected = true
         end
     else

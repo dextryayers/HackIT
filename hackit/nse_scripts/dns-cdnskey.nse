@@ -125,14 +125,14 @@ action = function(host, port)
       pk_str = sub(pk_str, 1, 60) .. "..."
     end
 
-    insert(records, {)
+    insert(records, {
       key_type = key_type,
       flags = flags,
       protocol = protocol,
       algorithm = algorithm,
       algorithm_name = algo_name,
       public_key_preview = pk_str or "N/A"
-    }
+    })
   end
 
   result.cdnskey_records_found = true

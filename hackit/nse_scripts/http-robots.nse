@@ -73,13 +73,13 @@ action = function(host, port)
     local disallowed = {}
     local sitemaps = {}
     local user_agents = {}
-    for line in body:gmatch("[^\r\n]+") do
-        local la = line:match("^Disallow:%s*(.*)$")
-        if la then insert(disallowed, la end)
-        local sm = line:match("^Sitemap:%s*(.*)$")
-        if sm then insert(sitemaps, sm end)
-        local ua = line:match("^User%-agent:%s*(.*)$")
-        if ua then insert(user_agents, ua end)
+    for line in gmatch(body, "[^\r\n]+") do
+        local la = match(line, "^Disallow:%s*(.*)$")
+        if la then insert(disallowed, la) end
+        local sm = match(line, "^Sitemap:%s*(.*)$")
+        if sm then insert(sitemaps, sm) end
+        local ua = match(line, "^User%-agent:%s*(.*)$")
+        if ua then insert(user_agents, ua) end
     end
     local result = "robots.txt found"
     if #disallowed > 0 then

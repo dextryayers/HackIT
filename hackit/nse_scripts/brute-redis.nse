@@ -62,28 +62,28 @@ categories = {"brute", "intrusive"}
 local function load_list(arg_names)
   local val = stdnse.get_script_args(arg_names)
   if not val or val == "" then return {} end
-  if val:byte() == 47 then
+  if byte(val) == 47 then
     local f, err = io.open(val, "r")
     if f then
       local lines = {}
       for line in f:lines() do
-        line = line:gsub("^%s+", ""):gsub("%s+$", "")
-        if line ~= "" and line:byte() ~= 35 then insert(lines, line end)
+        line = gsub(line, "^%s+", ""):gsub("%s+$", "")
+        if line ~= "" and byte(line) ~= 35 then insert(lines, line) end
       end
       f:close()
       return lines
     end
-  elseif val:find("\n") then
+  elseif find(val, "\n") then
     local lines = {}
-    for line in val:gmatch("[^\n]+") do
-      line = line:gsub("^%s+", ""):gsub("%s+$", "")
-      if line ~= "" and line:byte() ~= 35 then insert(lines, line end)
+    for line in gmatch(val, "[^\n]+") do
+      line = gsub(line, "^%s+", ""):gsub("%s+$", "")
+      if line ~= "" and byte(line) ~= 35 then insert(lines, line) end
     end
     return lines
   end
   local items = {}
-  for item in val:gmatch("[^,]+") do
-    item = item:gsub("^%s+", ""):gsub("%s+$", "")
+  for item in gmatch(val, "[^,]+") do
+    item = gsub(item, "^%s+", ""):gsub("%s+$", "")
     if item ~= "" then insert(items, item) end
   end
   return items
@@ -98,7 +98,7 @@ action = function(host, port)
   local timeout = tonumber(stdnse.get_script_args({"brute-redis.timeout", "timeout"}) or 10)
   local stop_on_first = stdnse.get_script_args({"brute-redis.stop_on_first", "stop_on_first"})
   if stop_on_first == nil or stop_on_first == "" then stop_on_first = true
-  else stop_on_first = (stop_on_first:lower() == "true" or stop_on_first == "1") end
+  else stop_on_first = (lower(stop_on_first) == "true" or stop_on_first == "1") end
 
   if #passes == 0 then
     return format_output(false, "No credentials provided. Use brute-redis.passwords or brute-redis.users script args")
@@ -122,9 +122,9 @@ action = function(host, port)
       local resp = socket:receive_bytes(10)
       socket:close()
       if resp then
-        if resp:find("+OK") then return true end
-        if resp:find("-NOAUTH") then return false end
-        if resp:find("-ERR") then return false end
+        if find(resp, "+OK") then return true end
+        if find(resp, "-NOAUTH") then return false end
+        if find(resp, "-ERR") then return false end
       end
       return false
     end)
@@ -143,8 +143,8 @@ action = function(host, port)
         socket:send("PING\r\n")
         local pong = socket:receive_bytes(10)
         socket:close()
-        if not resp:find("-NOAUTH") and not resp:find("-ERR") then return true end
-        if pong and pong:find("+PONG") then return true end
+        if not find(resp, "-NOAUTH") and not find(resp, "-ERR") then return true end
+        if pong and find(pong, "+PONG") then return true end
       end
       socket:close()
       return false

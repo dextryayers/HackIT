@@ -96,7 +96,7 @@ local function check_host_header(host, port, payload)
     end
 
     local indicators = {}
-    local body_lower = response.body and response.body:lower() or ""
+    local body_lower = response.body and response.lower(body) or ""
 
     local injection_patterns = {
         { pattern = "evil%.com", desc = "Host value reflected in body" },
@@ -110,14 +110,14 @@ local function check_host_header(host, port, payload)
     }
 
     for _, ip in ipairs(injection_patterns) do
-        if body_lower:find(ip.pattern) then
+        if find(body_lower, ip.pattern) then
             insert(indicators, ip.desc)
         end
     end
 
     if response.status == 302 or response.status == 301 then
         local location = (response.header and response.header["location"]) or ""
-        local loc_lower = location:lower()
+        local loc_lower = lower(location)
         local redirect_indicators = {
             { pattern = "evil%.com", desc = "Redirect to attacker host" },
             { pattern = "127%.0%.0%.1", desc = "Redirect to localhost" },
@@ -125,7 +125,7 @@ local function check_host_header(host, port, payload)
             { pattern = "attacker%.com", desc = "Redirect to attacker" },
         }
         for _, ri in ipairs(redirect_indicators) do
-            if loc_lower:find(ri.pattern) then
+            if find(loc_lower, ri.pattern) then
                 insert(indicators, ri.desc)
             end
         end
@@ -134,11 +134,11 @@ local function check_host_header(host, port, payload)
     if response.status == 200 or response.status == 302 or response.status == 301 then
         if response.header then
             for k, v in pairs(response.header) do
-                local kl = k:lower()
+                local kl = lower(k)
                 local vl = tostring(v):lower()
                 if kl ~= "host" and kl ~= "x-forwarded-host" then
                     if kl == "location" and vl ~= "" then
-                        if vl:find(payload.host:lower()) then
+                        if find(vl, payload.host:lower()) then
                             insert(indicators, "Host injected into Location header")
                         end
                     end

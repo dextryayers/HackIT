@@ -97,8 +97,8 @@ action = function(host, port)
         if not status then break end
         local status, response = socket:receive_bytes(1)
         if status and #response >= 9 then
-            local resp_uid = response:byte(7)
-            local resp_func = response:byte(8)
+            local resp_uid = byte(response, 7)
+            local resp_func = byte(response, 8)
             if resp_func == 0x03 then
                 insert(result, ("Unit ID %d: Responds to Modbus (function 0x03)"):format(unit_id))
                 found_devices = found_devices + 1

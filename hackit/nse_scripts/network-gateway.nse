@@ -109,7 +109,7 @@ action = function(host, port)
     end
     local addr_octets = {}
     if host.ip then
-        for octet in host.ip:gmatch("(%d+)") do
+        for octet in host.gmatch(ip, "(%d+)") do
             insert(addr_octets, tonumber(octet))
         end
         if #addr_octets == 4 then
@@ -126,7 +126,7 @@ action = function(host, port)
     local trace_result = probe_traceroute(host, port)
     if trace_result then
         out.traceroute_response = true
-        local gateway_match = trace_result:match("([%d%.]+)")
+        local gateway_match = match(trace_result, "([%d%.]+)")
         if gateway_match then out.traceroute_gateway = gateway_match end
     end
     return out

@@ -78,7 +78,7 @@ action = function(host, port)
             local response = http.get(host, port, url)
             if response and response.body then
                 for _, pattern in ipairs(error_patterns) do
-                    if response.body:find(pattern) then
+                    if response.find(body, pattern) then
                         insert(results, "SQL error via " .. param .. " with payload: " .. payload)
                         break
                     end

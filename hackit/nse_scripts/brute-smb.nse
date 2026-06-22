@@ -64,28 +64,28 @@ categories = {"brute", "intrusive"}
 local function load_list(arg_names)
   local val = stdnse.get_script_args(arg_names)
   if not val or val == "" then return {} end
-  if val:byte() == 47 then
+  if byte(val) == 47 then
     local f, err = io.open(val, "r")
     if f then
       local lines = {}
       for line in f:lines() do
-        line = line:gsub("^%s+", ""):gsub("%s+$", "")
-        if line ~= "" and line:byte() ~= 35 then insert(lines, line end)
+        line = gsub(line, "^%s+", ""):gsub("%s+$", "")
+        if line ~= "" and byte(line) ~= 35 then insert(lines, line) end
       end
       f:close()
       return lines
     end
-  elseif val:find("\n") then
+  elseif find(val, "\n") then
     local lines = {}
-    for line in val:gmatch("[^\n]+") do
-      line = line:gsub("^%s+", ""):gsub("%s+$", "")
-      if line ~= "" and line:byte() ~= 35 then insert(lines, line end)
+    for line in gmatch(val, "[^\n]+") do
+      line = gsub(line, "^%s+", ""):gsub("%s+$", "")
+      if line ~= "" and byte(line) ~= 35 then insert(lines, line) end
     end
     return lines
   end
   local items = {}
-  for item in val:gmatch("[^,]+") do
-    item = item:gsub("^%s+", ""):gsub("%s+$", "")
+  for item in gmatch(val, "[^,]+") do
+    item = gsub(item, "^%s+", ""):gsub("%s+$", "")
     if item ~= "" then insert(items, item) end
   end
   return items
@@ -98,7 +98,7 @@ end
 
 local function utf16le(s)
   local res = {}
-  for i = 1, #s do insert(res, char(s:byte(i), 0) end)
+  for i = 1, #s do insert(res, char(byte(s, i), 0)) end
   return concat(res)
 end
 
@@ -122,7 +122,7 @@ local function md4(message)
   local function H(x, y, z) return bit.bxor(x, bit.bxor(y, z)) end
 
   for i = 1, #padded, 64 do
-    local block = padded:sub(i, i + 63)
+    local block = sub(padded, i, i + 63)
     local X = {}
     for j = 0, 15 do
       local o = j * 4 + 1
@@ -158,7 +158,7 @@ end
 local function hmac_md5_raw(key, data)
   local h = openssl.hmac("md5", key, data)
   if #h == 16 then return h end
-  return (h:gsub("..", function(cc) return char(tonumber(cc, 16)) end))
+  return (gsub(h, "..", function(cc) return char(tonumber(cc, 16)) end))
 end
 
 local function ntlm_hash(password)
@@ -217,7 +217,7 @@ action = function(host, port)
   local timeout = tonumber(stdnse.get_script_args({"brute-smb.timeout", "timeout"}) or 10)
   local stop_on_first = stdnse.get_script_args({"brute-smb.stop_on_first", "stop_on_first"})
   if stop_on_first == nil or stop_on_first == "" then stop_on_first = true
-  else stop_on_first = (stop_on_first:lower() == "true" or stop_on_first == "1") end
+  else stop_on_first = (lower(stop_on_first) == "true" or stop_on_first == "1") end
 
   if #users == 0 or #passes == 0 then
     return format_output(false, "No credentials provided. Use brute-smb.users and brute-smb.passwords script args")
@@ -296,13 +296,13 @@ action = function(host, port)
         local neg_resp = socket:receive_bytes(256)
         if not neg_resp then socket:close(); return false end
 
-        local ss = neg_resp:find("\xffSMB")
+        local ss = find(neg_resp, "\xffSMB")
         if not ss then socket:close(); return false end
-        local smb = neg_resp:sub(ss)
+        local smb = sub(neg_resp, ss)
 
-        local chal_pos = smb:find("NTLMSSP")
+        local chal_pos = find(smb, "NTLMSSP")
         if not chal_pos then socket:close(); return false end
-        local challenge = smb:sub(chal_pos + 24, chal_pos + 31)
+        local challenge = sub(smb, chal_pos + 24, chal_pos + 31)
         if #challenge < 8 then socket:close(); return false end
 
         socket:send(build_session_setup(u, p, "WORKGROUP", challenge))
@@ -310,9 +310,9 @@ action = function(host, port)
         socket:close()
 
         if ses_resp then
-          local ss2 = ses_resp:find("\xffSMB")
+          local ss2 = find(ses_resp, "\xffSMB")
           if ss2 then
-            local hdr = ses_resp:sub(ss2, ss2 + 31)
+            local hdr = sub(ses_resp, ss2, ss2 + 31)
             if #hdr >= 9 then
               local status_code = byte(hdr, 6) + byte(hdr, 7) * 256
                 + byte(hdr, 8) * 65536 + byte(hdr, 9) * 16777216

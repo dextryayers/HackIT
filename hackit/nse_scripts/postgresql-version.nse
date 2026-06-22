@@ -77,18 +77,18 @@ action = function(host, port)
             sock:close()
             if resp and #resp >= 5 then
                 local res = output_table()
-                local error_severity = resp:match("([A-Z]+)")
+                local error_severity = match(resp, "([A-Z]+)")
                 if error_severity and (error_severity == "FATAL" or error_severity == "ERROR") then
-                    local msg = resp:match("([^\x00]+)")
+                    local msg = match(resp, "([^\x00]+)")
                     res.error = msg or "authentication error"
-                    local v = resp:match("version%s+([%d%.]+)") or resp:match("PostgreSQL%s+([%d%.]+)")
+                    local v = match(resp, "version%s+([%d%.]+)") or match(resp, "PostgreSQL%s+([%d%.]+)")
                     if v then
                         res.version = v
-                        local major = v:match("^(%d+)")
+                        local major = match(v, "^(%d+)")
                         if major then res.version_major = tonumber(major) end
                     end
                 end
-                local auth_type = resp:byte(5)
+                local auth_type = byte(resp, 5)
                 if auth_type == 0x00 then
                     res.authentication = "trust (no password required)"
                 elseif auth_type == 0x03 then
@@ -100,10 +100,10 @@ action = function(host, port)
                 else
                     res.authentication = "type " .. tostring(auth_type)
                 end
-                local v2 = resp:match("server_version[^\x00]*([%d%.]+)")
+                local v2 = match(resp, "server_version[^\x00]*([%d%.]+)")
                 if v2 then
                     res.version = v2
-                    local major = v2:match("^(%d+)")
+                    local major = match(v2, "^(%d+)")
                     if major then res.version_major = tonumber(major) end
                 end
                 if next(res) then return res end

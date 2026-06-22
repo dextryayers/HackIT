@@ -72,7 +72,7 @@ action = function(host, port)
     end
     local results = {}
     insert(results, "HSTS: " .. hsts)
-    local max_age = hsts:match("max%-age=(%d+)")
+    local max_age = match(hsts, "max%-age=(%d+)")
     if max_age then
         local ma = tonumber(max_age)
         if ma then
@@ -84,12 +84,12 @@ action = function(host, port)
     else
         insert(results, "WARNING: No max-age directive")
     end
-    if hsts:find("includeSubDomains") then
+    if find(hsts, "includeSubDomains") then
         insert(results, "includeSubDomains: YES")
     else
         insert(results, "includeSubDomains: NO (subdomains not covered)")
     end
-    if hsts:find("preload") then
+    if find(hsts, "preload") then
         insert(results, "preload: YES (eligible for browser preload lists)")
     end
     return format_output(true, concat(results, "\n"))

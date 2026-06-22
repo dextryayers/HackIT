@@ -91,9 +91,9 @@ action = function(host, port)
 
       if response.headers then
         for hname, hvalue in pairs(response.headers) do
-          local lname = hname:lower()
+          local lname = lower(hname)
           for _, pattern in ipairs(beanstalk_headers) do
-            if lname:find(pattern) then
+            if find(lname, pattern) then
               found = true
               result[hname] = hvalue
               insert(found_indicators, "header:" .. hname)
@@ -103,9 +103,9 @@ action = function(host, port)
       end
 
       if response.body then
-        local lbody = response.body:lower()
+        local lbody = response.lower(body)
         for _, pattern in ipairs(beanstalk_body_patterns) do
-          if lbody:find(pattern:lower()) then
+          if find(lbody, pattern:lower()) then
             found = true
             insert(found_indicators, "body:" .. pattern)
           end

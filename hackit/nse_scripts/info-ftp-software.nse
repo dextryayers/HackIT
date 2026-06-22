@@ -73,7 +73,7 @@ action = function(host, port)
         local b = socket:receive_bytes(256)
         socket:close()
         if b then
-            return b:gsub("[\r\n]+", ""):sub(1, 200)
+            return gsub(b, "[\r\n]+", ""):sub(1, 200)
         end
         return nil
     end)
@@ -81,33 +81,33 @@ action = function(host, port)
     if banner then
         out.banner = banner
         local software = "Unknown"
-        if banner:find("vsFTPd") then
+        if find(banner, "vsFTPd") then
             software = "vsFTPd"
-            local ver = banner:match("vsFTPd ([%d.]+)")
+            local ver = match(banner, "vsFTPd ([%d.]+)")
             if ver then out.software_version = ver end
-        elseif banner:find("ProFTPD") then
+        elseif find(banner, "ProFTPD") then
             software = "ProFTPD"
-            local ver = banner:match("ProFTPD ([%d.]+)")
+            local ver = match(banner, "ProFTPD ([%d.]+)")
             if ver then out.software_version = ver end
-        elseif banner:find("FileZilla") then
+        elseif find(banner, "FileZilla") then
             software = "FileZilla Server"
-            local ver = banner:match("FileZilla Server ([%d.]+)")
+            local ver = match(banner, "FileZilla Server ([%d.]+)")
             if ver then out.software_version = ver end
-        elseif banner:find("Pure%-FTPd") then
+        elseif find(banner, "Pure%-FTPd") then
             software = "Pure-FTPd"
-            local ver = banner:match("Pure%-FTPd ([%d.]+)")
+            local ver = match(banner, "Pure%-FTPd ([%d.]+)")
             if ver then out.software_version = ver end
-        elseif banner:find("Microsoft FTP") or banner:find("IIS") then
+        elseif find(banner, "Microsoft FTP") or find(banner, "IIS") then
             software = "Microsoft IIS FTP"
-            local ver = banner:match("Microsoft%-FTP%-Service/([%d.]+)")
+            local ver = match(banner, "Microsoft%-FTP%-Service/([%d.]+)")
             if ver then out.software_version = ver end
-        elseif banner:find("wu%-ftpd") then
+        elseif find(banner, "wu%-ftpd") then
             software = "WU-FTPD"
-            local ver = banner:match("wu%-(%d[%d.]+)")
+            local ver = match(banner, "wu%-(%d[%d.]+)")
             if ver then out.software_version = ver end
-        elseif banner:find("Serv%-U") then
+        elseif find(banner, "Serv%-U") then
             software = "Serv-U"
-            local ver = banner:match("Serv%-U ([%d.]+)")
+            local ver = match(banner, "Serv%-U ([%d.]+)")
             if ver then out.software_version = ver end
         end
         out.software = software

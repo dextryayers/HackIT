@@ -66,8 +66,8 @@ local function load_list(arg_names, default)
   if f then
     local lines = {}
     for line in f:lines() do
-      line = line:gsub("^%s+", ""):gsub("%s+$", "")
-      if line ~= "" and line:byte() ~= 35 then
+      line = gsub(line, "^%s+", ""):gsub("%s+$", "")
+      if line ~= "" and byte(line) ~= 35 then
         insert(lines, line)
       end
     end
@@ -75,8 +75,8 @@ local function load_list(arg_names, default)
     return lines
   end
   local items = {}
-  for item in val:gmatch("[^,]+") do
-    item = item:gsub("^%s+", ""):gsub("%s+$", "")
+  for item in gmatch(val, "[^,]+") do
+    item = gsub(item, "^%s+", ""):gsub("%s+$", "")
     if item ~= "" then insert(items, item) end
   end
   return items
@@ -92,7 +92,7 @@ action = function(host, port)
   local timeout = tonumber(stdnse.get_script_args({"brute-http-basic.timeout", "timeout"}) or 10)
   local stop_on_first = stdnse.get_script_args({"brute-http-basic.stop_on_first", "stop_on_first"})
   if stop_on_first == nil or stop_on_first == "" then stop_on_first = true
-  else stop_on_first = (stop_on_first:lower() == "true" or stop_on_first == "1") end
+  else stop_on_first = (lower(stop_on_first) == "true" or stop_on_first == "1") end
   local path = stdnse.get_script_args({"brute-http-basic.path", "path"}) or "/"
 
   local start_time = os.time()
@@ -118,7 +118,7 @@ action = function(host, port)
         local resp = socket:receive_bytes(512)
         socket:close()
         if resp then
-          local status_code = resp:match("HTTP/%d%.%d (%d+)")
+          local status_code = match(resp, "HTTP/%d%.%d (%d+)")
           if status_code then
             local sc = tonumber(status_code)
             if sc == 200 or sc == 204 or sc == 301 or sc == 302 then

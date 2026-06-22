@@ -88,13 +88,13 @@ action = function(host, port)
     }
     local results = {}
     for _, fw in ipairs(frameworks) do
-        if body:find(fw[2]) then
+        if find(body, fw[2]) then
             insert(results, fw[1])
         end
     end
-    for script_src in body:gmatch('<script[^>]-src="([^"]-)"') do
+    for script_src in gmatch(body, '<script[^>]-src="([^"]-)"') do
         for _, fw in ipairs(frameworks) do
-            if script_src:find(fw[2]) then
+            if find(script_src, fw[2]) then
                 insert(results, fw[1] .. " (in " .. script_src .. ")")
                 break
             end

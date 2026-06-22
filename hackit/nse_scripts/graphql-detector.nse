@@ -120,9 +120,9 @@ local function probe_graphql(host, port, path)
     })
     if ok5 and simple_get and simple_get.status == 200 and simple_get.body then
         local body = simple_get.body
-        if body:find("__schema") or body:find("GraphQL") or
-           body:find("\"data\"") or body:find("queryType") or
-           body:find("mutationType") then
+        if find(body, "__schema") or find(body, "GraphQL") or
+           find(body, "\"data\"") or find(body, "queryType") or
+           find(body, "mutationType") then
             return { method = "GET", hint = "body signature" }
         end
     end

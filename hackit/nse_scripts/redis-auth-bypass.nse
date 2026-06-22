@@ -84,13 +84,13 @@ action = function(host, port)
           socket:close()
           return format_output(false, "No response from Redis")
       end
-      if response:match("+OK") or response:match("redis_version") or response:match("# Server") then
+      if match(response, "+OK") or match(response, "redis_version") or match(response, "# Server") then
           insert(result, "Redis authentication is DISABLED - full access available")
-          if response:match("redis_version:([%d.]+)") then
-              insert(result, "Redis version: " .. response:match("redis_version:([%d.]+)"))
+          if match(response, "redis_version:([%d.]+)") then
+              insert(result, "Redis version: " .. match(response, "redis_version:([%d.]+)"))
           end
-          if response:match("os:([^\r\n]+)") then
-              insert(result, "OS: " .. response:match("os:([^\r\n]+)"))
+          if match(response, "os:([^\r\n]+)") then
+              insert(result, "OS: " .. match(response, "os:([^\r\n]+)"))
           end
       else
           insert(result, "Redis requires authentication (AUTH required)")

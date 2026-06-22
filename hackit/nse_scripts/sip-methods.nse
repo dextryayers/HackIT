@@ -85,7 +85,7 @@ end
 local function parse_sip_response(response)
   local info = {}
 
-  local status_line = response:match("SIP/2%.0 (%d+)")
+  local status_line = match(response, "SIP/2%.0 (%d+)")
   if status_line then
     info.code = tonumber(status_line)
     local texts = {
@@ -114,23 +114,23 @@ local function parse_sip_response(response)
     info.text = texts[tonumber(status_line)] or "Unknown"
   end
 
-  local allow = response:match("Allow: ([^\r\n]+)")
+  local allow = match(response, "Allow: ([^\r\n]+)")
   if allow then
     info.allowed = {}
-    for m in allow:gmatch("[^,%s]+") do
+    for m in gmatch(allow, "[^,%s]+") do
       insert(info.allowed, m)
     end
   end
 
-  info.supported = response:match("Supported: ([^\r\n]+)")
-  info.server = response:match("Server: ([^\r\n]+)")
-  info.user_agent = response:match("User%-Agent: ([^\r\n]+)")
-  info.accept = response:match("Accept: ([^\r\n]+)")
-  info.content_type = response:match("Content%-Type: ([^\r\n]+)")
-  info.www_authenticate = response:match("WWW%-Authenticate: ([^\r\n]+)")
-  info.proxy_authenticate = response:match("Proxy%-Authenticate: ([^\r\n]+)")
-  info.contact = response:match("Contact: ([^\r\n]+)")
-  info.expires = response:match("Expires: (%d+)")
+  info.supported = match(response, "Supported: ([^\r\n]+)")
+  info.server = match(response, "Server: ([^\r\n]+)")
+  info.user_agent = match(response, "User%-Agent: ([^\r\n]+)")
+  info.accept = match(response, "Accept: ([^\r\n]+)")
+  info.content_type = match(response, "Content%-Type: ([^\r\n]+)")
+  info.www_authenticate = match(response, "WWW%-Authenticate: ([^\r\n]+)")
+  info.proxy_authenticate = match(response, "Proxy%-Authenticate: ([^\r\n]+)")
+  info.contact = match(response, "Contact: ([^\r\n]+)")
+  info.expires = match(response, "Expires: (%d+)")
 
   return info
 end

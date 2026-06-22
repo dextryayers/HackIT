@@ -77,16 +77,16 @@ action = function(host, port)
         sock:close()
         if resp then
             local methods = {}
-            if resp:match("publickey") then insert(methods, "publickey") end
-            if resp:match("password") then insert(methods, "password") end
-            if resp:match("keyboard%-interactive") then insert(methods, "keyboard-interactive") end
-            if resp:match("hostbased") then insert(methods, "hostbased") end
-            if resp:match("gssapi") then insert(methods, "gssapi-with-mic") end
-            if resp:match("none") then insert(methods, "none") end
+            if match(resp, "publickey") then insert(methods, "publickey") end
+            if match(resp, "password") then insert(methods, "password") end
+            if match(resp, "keyboard%-interactive") then insert(methods, "keyboard-interactive") end
+            if match(resp, "hostbased") then insert(methods, "hostbased") end
+            if match(resp, "gssapi") then insert(methods, "gssapi-with-mic") end
+            if match(resp, "none") then insert(methods, "none") end
             local res = output_table()
             res.supported_auth_methods = methods
-            res.banner = banner:match("([^\r\n]+)")
-            res.ssh_version = banner:match("SSH%-(%S+)")
+            res.banner = match(banner, "([^\r\n]+)")
+            res.ssh_version = match(banner, "SSH%-(%S+)")
             return res
         end
         return nil

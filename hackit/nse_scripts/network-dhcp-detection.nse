@@ -101,10 +101,10 @@ action = function(host, port)
       repeat
           local status, data, rhost, rport = socket:receive()
           if status and data then
-              local msg_type = data:byte(242)
+              local msg_type = byte(data, 242)
               if msg_type == 2 then
-                  local server_id = ("%d.%d.%d.%d"):format(data:byte(244), data:byte(245), data:byte(246), data:byte(247))
-                  local yiaddr = ("%d.%d.%d.%d"):format(data:byte(16), data:byte(17), data:byte(18), data:byte(19))
+                  local server_id = ("%d.%d.%d.%d"):format(byte(data, 244), byte(data, 245), byte(data, 246), byte(data, 247))
+                  local yiaddr = ("%d.%d.%d.%d"):format(byte(data, 16), byte(data, 17), byte(data, 18), byte(data, 19))
                   insert(result, ("DHCP OFFER from %s (server ID: %s, offered IP: %s)"):format(rhost, server_id, yiaddr))
               end
           end

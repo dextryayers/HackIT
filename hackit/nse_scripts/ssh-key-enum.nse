@@ -79,15 +79,15 @@ action = function(host, port)
         socket:close()
         return format_output(false, "Could not receive banner")
     end
-    if banner:match("SSH") then
-        insert(result, "SSH banner: " .. banner:match("[^\r\n]+"))
+    if match(banner, "SSH") then
+        insert(result, "SSH banner: " .. match(banner, "[^\r\n]+"))
     end
     socket:send("SSH-2.0-OpenSSH_9.0\r\n")
     status, banner = socket:receive_lines(1)
-    if status and banner:match("SSH") then
+    if status and match(banner, "SSH") then
         local key_types = {"ssh-rsa", "ssh-dss", "ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521", "ssh-ed25519"}
         for _, kt in ipairs(key_types) do
-            if banner:match(kt) then
+            if match(banner, kt) then
                 insert(result, "Supported key type: " .. kt)
             end
         end

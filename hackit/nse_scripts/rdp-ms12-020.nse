@@ -112,8 +112,8 @@ action = function(host, port)
     end
 
     if rcv:len() >= 4 then
-      local proto = rcv:byte(3) or 0
-      local vers = rcv:byte(2) or 0
+      local proto = byte(rcv, 3) or 0
+      local vers = byte(rcv, 2) or 0
       rdp_banner = ("RDP proto=%d ver=%d"):format(proto, vers)
       if vers == 3 then
         insert(findings, {check = "RDP protocol", detail = ("RDP %d.%d detected"):format(vers, proto), severity = "INFO"})
@@ -131,17 +131,17 @@ action = function(host, port)
       return result
     end
 
-    local selected_proto = rcv2:byte(13) or 255
+    local selected_proto = byte(rcv2, 13) or 255
     insert(findings, {check = "RDP security", detail = (selected_proto == 0) and "RDP Security (no NLA)" or "NLA/CredSSP enabled", severity = selected_proto == 0 and "HIGH" or "LOW"})
 
     sock:send(create_ms12_channel_pdu())
     local rcv3, err3 = sock:receive_buf("\x00", 3)
     sock:close()
 
-    if not rcv3 and err3 and err3:match("TIMEOUT") then
+    if not rcv3 and err3 and match(err3, "TIMEOUT") then
       insert(findings, {check = "MS12-020 channel request", detail = "Server hung after channel request - MS12-020 DoS likely", severity = "CRITICAL"})
     elseif rcv3 and #rcv3 >= 4 then
-      local resp_type = rcv3:byte(2) or 0
+      local resp_type = byte(rcv3, 2) or 0
       if resp_type == 0x03 then
         insert(findings, {check = "MS12-020 channel request", detail = "Server responded normally (not vulnerable to this test vector)", severity = "LOW"})
       end

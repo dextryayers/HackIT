@@ -96,10 +96,10 @@ action = function(host, port)
       return result
     end
 
-    banner_str = banner:gsub("\r?\n", ""):gsub("%s+$", "")
-    ftpd_version = banner_str:match("ProFTPD ([%d%.]+[a-z]*)")
-    local pureftpd = banner_str:match("Pure%-FTPD")
-    local vsftpd = banner_str:match("vsFTPd")
+    banner_str = gsub(banner, "\r?\n", ""):gsub("%s+$", "")
+    ftpd_version = match(banner_str, "ProFTPD ([%d%.]+[a-z]*)")
+    local pureftpd = match(banner_str, "Pure%-FTPD")
+    local vsftpd = match(banner_str, "vsFTPd")
     local server_type = "unknown"
     if ftpd_version then
       server_type = "ProFTPD " .. ftpd_version
@@ -113,14 +113,14 @@ action = function(host, port)
 
     sock:send("USER anonymous\r\n")
     local rcv = sock:receive_buf("\n", 3)
-    if rcv and rcv:match("331") then
+    if rcv and match(rcv, "331") then
       insert(findings, {check = "Anonymous login", detail = "Anonymous login allowed", severity = "MEDIUM"})
     end
 
     sock:send("PASS test@test.com\r\n")
     rcv = sock:receive_buf("\n", 3)
 
-    if rcv and (rcv:match("230") or rcv:match("202")) then
+    if rcv and (match(rcv, "230") or match(rcv, "202")) then
       insert(findings, {check = "Login success", detail = "Authenticated successfully", severity = "INFO"})
 
       for _, cmd in ipairs(backdoor_commands) do
@@ -136,15 +136,15 @@ action = function(host, port)
           cmd_sock:send(cmd .. "\r\n")
           local cmd_rcv, cmd_err = cmd_sock:receive_buf("\n", 3)
           if cmd_rcv then
-            local resp = cmd_rcv:gsub("\r?\n", "")
-            if resp:match("HackIT") or resp:match("uid=") or resp:match("root") or resp:match("nobody") then
+            local resp = gsub(cmd_rcv, "\r?\n", "")
+            if match(resp, "HackIT") or match(resp, "uid=") or match(resp, "root") or match(resp, "nobody") then
               insert(findings, {
                 check = ("Backdoor via %s"):format(cmd),
                 detail = ("Command executed: %s"):format(resp),
                 severity = "CRITICAL",
               })
-            elseif resp:match("211") or resp:match("230") or resp:match("202") then
-              if cmd:match("ACCT") then
+            elseif match(resp, "211") or match(resp, "230") or match(resp, "202") then
+              if match(cmd, "ACCT") then
                 insert(findings, {
                   check = ("ACCT command response"),
                   detail = ("ACCT accepted: %s"):format(resp),
@@ -162,14 +162,14 @@ action = function(host, port)
     sock:send("SYST\r\n")
     rcv = sock:receive_buf("\n", 3)
     if rcv then
-      insert(findings, {check = "SYST response", detail = rcv:gsub("\r?\n", ""), severity = "INFO"})
+      insert(findings, {check = "SYST response", detail = gsub(rcv, "\r?\n", ""), severity = "INFO"})
     end
 
     sock:send("QUIT\r\n")
     sock:close()
 
     if ftpd_version then
-      local major, minor, patch = ftpd_version:match("(%d+)%.(%d+)%.(%d+)([a-z]*)")
+      local major, minor, patch = match(ftpd_version, "(%d+)%.(%d+)%.(%d+)([a-z]*)")
       if major and minor and patch then
         local full_ver = tonumber(major) * 10000 + tonumber(minor) * 100 + tonumber(patch) + (({b = 0, c = 1, d = 2})[patch or ""] or 0)
         if full_ver <= 10303 then

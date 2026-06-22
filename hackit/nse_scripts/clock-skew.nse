@@ -88,10 +88,10 @@ action = function(host, port)
       local info = sock:get_info()
       sock:close()
       if info and info.timestamp and info.timestamp.tsval then
-        insert(samples, {)
+        insert(samples, {
           remote_ts = tonumber(info.timestamp.tsval) or 0,
           local_ts = (local_before + local_after) / 2
-        }
+        })
       end
     else
       sock:close()

@@ -157,7 +157,7 @@ action = function(host, port)
 
   for _, ns in ipairs(ns_entries) do
     for pattern, provider in pairs(providers) do
-      if ns.hostname:lower():find(pattern, 1, true) then
+      if ns.lower(hostname):find(pattern, 1, true) then
         ns.provider = provider
         break
       end

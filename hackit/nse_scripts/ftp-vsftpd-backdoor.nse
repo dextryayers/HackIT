@@ -68,9 +68,9 @@ action = function(host, port)
         if not status then return end
         local banner = sock:receive_buf("\n", 5000)
         if not banner then sock:close(); return end
-        local ver = banner:match("vsFTP[d]%s+([%d%.]+)")
+        local ver = match(banner, "vsFTP[d]%s+([%d%.]+)")
         local backdoor_detected = false
-        if banner:match("vsFTP[d]%s+2%.3%.4") then
+        if match(banner, "vsFTP[d]%s+2%.3%.4") then
             local s2 = new_socket()
             s2:set_timeout(5000)
             local ok2 = s2:connect(host.ip, port)
@@ -81,7 +81,7 @@ action = function(host, port)
                 s2:send("PASS test\r\n")
                 local _, r = s2:receive_buf("\n", 3000)
                 s2:close()
-                if r and (r:match("230 ") or r:match("successful") or r:match("login")) then
+                if r and (match(r, "230 ") or match(r, "successful") or match(r, "login")) then
                     local s3 = new_socket()
                     s3:set_timeout(5000)
                     local ok3 = s3:connect(host.ip, 6200)

@@ -110,10 +110,10 @@ action = function(host, port)
       return result
     end
 
-    local msrpc_version = rcv:byte(2) or 0
-    local protocol = rcv:byte(3) or 0
-    local rdp_neg_type = rcv:byte(11) or 0
-    local rdp_version = rcv:byte(13) or 0
+    local msrpc_version = byte(rcv, 2) or 0
+    local protocol = byte(rcv, 3) or 0
+    local rdp_neg_type = byte(rcv, 11) or 0
+    local rdp_version = byte(rcv, 13) or 0
 
     rdp_info = ("RDP v%d.%d type=%d proto=%d"):format(msrpc_version, protocol, rdp_neg_type, rdp_version)
 
@@ -133,12 +133,12 @@ action = function(host, port)
       sock:send(create_rdp_connect_init())
       local rcv2, err2 = sock:receive_buf("\x00", 3)
       if rcv2 and #rcv2 >= 13 then
-        local selected_proto = rcv2:byte(13) or 0
+        local selected_proto = byte(rcv2, 13) or 0
         if selected_proto == 0 then
           local rdp_ver_check = create_bluekeep_channel_pdu()
           sock:send(rdp_ver_check)
           local rcv3, err3 = sock:receive_buf("\x00", 3)
-          if not rcv3 and err3 and err3:match("TIMEOUT") then
+          if not rcv3 and err3 and match(err3, "TIMEOUT") then
             insert(findings, {check = "BlueKeep channel request", detail = "Connection hang after channel request - BlueKeep vulnerability likely (CVE-2019-0708)", severity = "CRITICAL"})
           elseif rcv3 then
             insert(findings, {check = "BlueKeep channel request", detail = "Server responded - not vulnerable via this vector", severity = "LOW"})

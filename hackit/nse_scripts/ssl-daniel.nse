@@ -124,27 +124,27 @@ action = function(host, port)
 
     local rcv, err = test_sslv2(host, port.number)
     if rcv and #rcv >= 2 then
-      local first_byte = rcv:byte(1)
-      local second_byte = rcv:byte(2)
+      local first_byte = byte(rcv, 1)
+      local second_byte = byte(rcv, 2)
 
       if (first_byte == 0x80 or first_byte == 0x04) and second_byte < 0x80 then
-        local error_code = rcv:byte(3) or 0
+        local error_code = byte(rcv, 3) or 0
         if error_code == 0 then
           insert(findings, {check = "SSLv2 server hello", detail = "SSLv2 ServerHello received - server supports SSLv2", severity = "CRITICAL"})
         end
       end
 
       if #rcv > 10 then
-        local session_id_hit = rcv:sub(3, 3)
+        local session_id_hit = sub(rcv, 3, 3)
         if session_id_hit == char(0x00) then
-          local cert_len = rcv:byte(4) * 256 + (rcv:byte(5) or 0)
-          local cipher_len = rcv:byte(6) * 256 + (rcv:byte(7) or 0)
+          local cert_len = byte(rcv, 4) * 256 + (byte(rcv, 5) or 0)
+          local cipher_len = byte(rcv, 6) * 256 + (byte(rcv, 7) or 0)
           if cipher_len > 0 then
             local offset = 8 + cert_len
             local ciphers_received = {}
             for i = 1, cipher_len, 3 do
               if offset + i + 2 <= #rcv then
-                insert(ciphers_received, rcv:byte(offset + i) * 256 + rcv:byte(offset + i + 1))
+                insert(ciphers_received, byte(rcv, offset + i) * 256 + byte(rcv, offset + i + 1))
               end
             end
             insert(findings, {check = "SSLv2 ciphers", detail = ("Server offered %d SSLv2 cipher suites - DROWN attack possible"):format(#ciphers_received), severity = "CRITICAL"})
@@ -156,11 +156,11 @@ action = function(host, port)
       if sslv2_signature and not findings[1] then
         insert(findings, {check = "SSLv2 response", detail = "SSLv2 response format detected", severity = "HIGH"})
       end
-    elseif err and not err:match("TIMEOUT") then
+    elseif err and not match(err, "TIMEOUT") then
       insert(findings, {check = "SSLv2 test", detail = ("No SSLv2 response: %s"):format(tostring(err)), severity = "LOW"})
     end
 
-    if rcv and #rcv > 2 and rcv:match("SSLv2") then
+    if rcv and #rcv > 2 and match(rcv, "SSLv2") then
       insert(findings, {check = "SSLv2 banner", detail = "SSLv2 reference found in response", severity = "HIGH"})
     end
 

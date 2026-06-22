@@ -123,8 +123,8 @@ action = function(host, port)
       return result
     end
 
-    local os_major = rcv_neg:byte(41) or 0
-    local os_minor = rcv_neg:byte(42) or 0
+    local os_major = byte(rcv_neg, 41) or 0
+    local os_minor = byte(rcv_neg, 42) or 0
     if os_major > 0 then
       os_info = ("Windows %d.%d"):format(os_major, os_minor)
     end
@@ -146,7 +146,7 @@ action = function(host, port)
             insert(findings, {cmd = trans_cmd, status_byte = trans_status, pid = pid, signature = signature, detail = "DoublePulsar ping response signature matched", severity = "CRITICAL"})
           elseif trans_status == 0 and mpid == 0x80 then
             insert(findings, {cmd = trans_cmd, status_byte = trans_status, mpid = mpid, detail = "DoublePulsar alternative signature matched", severity = "CRITICAL"})
-          elseif trans_status == 0 and #rcv_ping >= 80 and rcv_ping:byte(77) ~= 0 then
+          elseif trans_status == 0 and #rcv_ping >= 80 and byte(rcv_ping, 77) ~= 0 then
             insert(findings, {cmd = trans_cmd, status_byte = trans_status, detail = "Unusual trans2 response - potential DoublePulsar", severity = "HIGH"})
           end
         end

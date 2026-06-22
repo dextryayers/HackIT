@@ -70,16 +70,16 @@ action = function(host, port)
             return http.get(host, port, path)
         end)
         if ok and response and response.body then
-            local body = response.body:lower()
+            local body = response.lower(body)
             local indicators = {
-                {"password field", body:find('type="password"')},
-                {"login form", body:find('action="[^"]*login') or body:find("action='[^']*login")},
-                {"username field", body:find('name="username"') or body:find('name="user"') or body:find('name="login"')},
-                {"login keyword in title", body:find("<title>.*login.*</title>")},
-                {"sign-in", body:find("sign.?in")},
-                {"logon", body:find("logon")},
-                {"auth", body:find("authenticate") or body:find("authorization")},
-                {"form", body:find("<form")},
+                {"password field", find(body, 'type="password"')},
+                {"login form", find(body, 'action="[^"]*login') or find(body, "action='[^']*login")},
+                {"username field", find(body, 'name="username"') or find(body, 'name="user"') or find(body, 'name="login"')},
+                {"login keyword in title", find(body, "<title>.*login.*</title>")},
+                {"sign-in", find(body, "sign.?in")},
+                {"logon", find(body, "logon")},
+                {"auth", find(body, "authenticate") or find(body, "authorization")},
+                {"form", find(body, "<form")},
             }
             for _, ind in ipairs(indicators) do
                 if ind[2] then

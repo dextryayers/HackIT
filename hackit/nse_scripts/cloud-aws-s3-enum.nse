@@ -71,7 +71,7 @@ local function check_bucket(host, port, bucket_name)
     local response = http.get(host, port, url)
     if not response then return nil end
     if response.status == 200 then
-        local listing = response.body:match("<ListBucketResult") and true or false
+        local listing = response.match(body, "<ListBucketResult") and true or false
         return {accessible = true, listing = listing, status = response.status}
     elseif response.status == 403 then
         return {accessible = true, listing = false, status = response.status}

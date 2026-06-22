@@ -90,7 +90,7 @@ action = function(host, port)
                 insert(result, ("Spring Actuator: %s (HTTP %d)"):format(path, response.status))
                 if response.headers and response.headers["content-type"] then
                     local ct = response.headers["content-type"]
-                    if ct:match("application/vnd.spring") or ct:match("application/json") then
+                    if match(ct, "application/vnd.spring") or match(ct, "application/json") then
                         insert(result, "  Content-Type: " .. ct)
                     end
                 end

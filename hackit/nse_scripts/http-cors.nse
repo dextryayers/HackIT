@@ -74,7 +74,7 @@ action = function(host, port)
         insert(results, "Access-Control-Allow-Origin: " .. acao)
         if acao == "*" then
             insert(results, "WARNING: Wildcard origin detected")
-        elseif acao:find("evil%.com") then
+        elseif find(acao, "evil%.com") then
             insert(results, "WARNING: Origin reflection detected (misconfiguration)")
         end
     end

@@ -70,7 +70,7 @@ local function create_smb_packet(cmd, data)
   )
   local frame = body .. data
   local len = #frame - 4
-  frame = char(0x00, 0x00, 0x00, len) .. frame:sub(5)
+  frame = char(0x00, 0x00, 0x00, len) .. sub(frame, 5)
   return frame
 end
 
@@ -120,16 +120,16 @@ action = function(host, port)
       return result
     end
 
-    local os_major = rcv:byte(41) or 0
-    local os_minor = rcv:byte(42) or 0
+    local os_major = byte(rcv, 41) or 0
+    local os_minor = byte(rcv, 42) or 0
     local os_build = 0
     if #rcv >= 47 then
-      os_build = rcv:byte(47) * 256 + (rcv:byte(48) or 0)
+      os_build = byte(rcv, 47) * 256 + (byte(rcv, 48) or 0)
     end
 
     local native_os = ""
     if #rcv >= 60 then
-      native_os = rcv:sub(60):match("([%a%d%s%.]+)%z") or ""
+      native_os = sub(rcv, 60):match("([%a%d%s%.]+)%z") or ""
     end
 
     if os_major > 0 then
@@ -182,9 +182,9 @@ action = function(host, port)
       if ok2 then
         local rcv2 = sock2:receive_buf("\x00", 3)
         if rcv2 and #rcv2 >= 8 then
-          local status_byte = rcv2:byte(9) or 0
+          local status_byte = byte(rcv2, 9) or 0
           if status_byte == 0 then
-            local nq = rcv2:byte(45) or 0
+            local nq = byte(rcv2, 45) or 0
             if nq > 0 then
               insert(findings, {check = "SMBv1 dialect", detail = "SMBv1 active with NT Status 0x0000 - vulnerable to EternalBlue", severity = "CRITICAL"})
             end

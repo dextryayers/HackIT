@@ -109,8 +109,8 @@ local function build_search_request(base_dn, filter_str, scope_val)
     local filter
     if filter_str == "(objectClass=*)" then
         filter = ber_sequence(char(0x05, 0x00))
-    elseif filter_str:match("objectClass=(%w+)") then
-        local oc = filter_str:match("objectClass=(%w+)")
+    elseif match(filter_str, "objectClass=(%w+)") then
+        local oc = match(filter_str, "objectClass=(%w+)")
         filter = ber_sequence(char(0x04, #oc) .. oc)
     else
         filter = ber_sequence(char(0x05, 0x00))
@@ -143,18 +143,18 @@ end
 local function count_entries(response)
     if not response or #response < 10 then return 0 end
     local count = 0
-    local search_done = response:find("SearchResultDone") or
-                        response:find("LDAPResult") or
-                        response:find("\x30\x0c\x02\x01\x02\x65\x07\x0a\x01\x00\x04\x00\x04\x00")
+    local search_done = find(response, "SearchResultDone") or
+                        find(response, "LDAPResult") or
+                        find(response, "\x30\x0c\x02\x01\x02\x65\x07\x0a\x01\x00\x04\x00\x04\x00")
     local pos = 1
     while true do
-        local s, e = response:find("\x64\x04\x02\x01", pos)
+        local s, e = find(response, "\x64\x04\x02\x01", pos)
         if not s then break end
         count = count + 1
         pos = e + 1
     end
 
-    for dn in response:gmatch("\x04..([^\x00]+)") do
+    for dn in gmatch(response, "\x04..([^\x00]+)") do
         count = count + 1
     end
     return count
@@ -194,16 +194,16 @@ action = function(host, port)
                 response_size = #response,
             }
 
-            if response:find("sAMAccountName") then
+            if find(response, "sAMAccountName") then
                 base_entry.has_sam_account = true
             end
-            if response:find("userPrincipalName") then
+            if find(response, "userPrincipalName") then
                 base_entry.has_upn = true
             end
-            if response:find("objectSid") then
+            if find(response, "objectSid") then
                 base_entry.has_sid = true
             end
-            if response:find("mail@") or response:find("MAIL@") then
+            if find(response, "mail@") or find(response, "MAIL@") then
                 base_entry.has_email = true
             end
 

@@ -74,14 +74,14 @@ local function check_endpoint(host, port, ep)
 
   if req.status < 400 then
     for _, ind in ipairs(ep.indicators) do
-      if body:match(ind) then
+      if match(body, ind) then
         result.found = true
         result.indicator = ind
-        result.body_preview = body:sub(1, 100):gsub("\n", " "):gsub("\r", "")
+        result.body_preview = sub(body, 1, 100):gsub("\n", " "):gsub("\r", "")
         return result
       end
     end
-    if server_header:match("JBoss") or server_header:match("WildFly") then
+    if match(server_header, "JBoss") or match(server_header, "WildFly") then
       result.found = true
       result.indicator = ("server header: %s"):format(server_header)
       return result
@@ -89,14 +89,14 @@ local function check_endpoint(host, port, ep)
   elseif req.status == 302 or req.status == 301 then
     local loc = req.headers and req.headers["location"]
     local loc_str = type(loc) == "table" and concat(loc, " ") or tostring(loc or "")
-    if loc_str:match("jboss") or loc_str:match("admin") then
+    if match(loc_str, "jboss") or match(loc_str, "admin") then
       result.found = true
-      result.indicator = ("redirects to %s"):format(loc_str:sub(1, 60))
+      result.indicator = ("redirects to %s"):format(sub(loc_str, 1, 60))
       return result
     end
   end
 
-  if server_header:match("JBoss") or server_header:match("WildFly") then
+  if match(server_header, "JBoss") or match(server_header, "WildFly") then
     result.found_server = true
     result.server_info = server_header
     return result
@@ -152,11 +152,11 @@ action = function(host, port)
       end
     end
 
-    local jboss_version = server_banner:match("JBoss[^/]*/([%d%.]+)") or server_banner:match("WildFly/([%d%.]+)")
+    local jboss_version = match(server_banner, "JBoss[^/]*/([%d%.]+)") or match(server_banner, "WildFly/([%d%.]+)")
     if not jboss_version then
       local jmx_req = http.get(host, port, "/jmx-console/")
       if jmx_req and jmx_req.body then
-        jboss_version = jmx_req.body:match("JBoss/([%d%.]+)")
+        jboss_version = jmx_req.match(body, "JBoss/([%d%.]+)")
       end
     end
 
@@ -173,7 +173,7 @@ action = function(host, port)
       end
       if jboss_version then
         local parts = {}
-        for v in jboss_version:gmatch("%d+") do insert(parts, tonumber(v)) end
+        for v in gmatch(jboss_version, "%d+") do insert(parts, tonumber(v)) end
         if #parts >= 2 then
           if (parts[1] == 4 and parts[2] < 22) or (parts[1] == 5 and parts[2] < 2) or (parts[1] == 6) then
             result.version_note = ("JBoss %s is within vulnerable range"):format(jboss_version)
@@ -185,11 +185,11 @@ action = function(host, port)
 
     local result = output_table()
     result.cve = "CVE-2015-7501, CVE-2017-12149"
-    result.severity = (server_banner:match("JBoss") or server_banner:match("WildFly")) and "MEDIUM" or "LOW"
+    result.severity = (match(server_banner, "JBoss") or match(server_banner, "WildFly")) and "MEDIUM" or "LOW"
     result.vulnerable = false
     result.server = server_banner
     result.version = jboss_version or "unknown"
-    result.detail = (server_banner:match("JBoss") or server_banner:match("WildFly")) and "JBoss/WildFly detected but no exposed deserialization endpoints found" or "No JBoss detected"
+    result.detail = (match(server_banner, "JBoss") or match(server_banner, "WildFly")) and "JBoss/WildFly detected but no exposed deserialization endpoints found" or "No JBoss detected"
     return result
   end)
   if not ok then

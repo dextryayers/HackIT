@@ -112,7 +112,7 @@ action = function(host, port)
         result.subject_alt_names = cert.san
     end
     if cert.validTo then
-        local year = cert.validTo:match("(%d%d%d%d)")
+        local year = cert.match(validTo, "(%d%d%d%d)")
         result.expiry_year = year
     end
     return result

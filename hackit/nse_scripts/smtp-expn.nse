@@ -76,8 +76,8 @@ action = function(host, port)
                 sock:send("EXPN " .. alias .. "\r\n")
                 local _, resp = sock:receive_buf("\n", 3000)
                 sock:close()
-                if resp and (resp:match("^250 ") or resp:match("^252 ")) then
-                    local expand = resp:match("250[%- ]([^\r\n]+)")
+                if resp and (match(resp, "^250 ") or match(resp, "^252 ")) then
+                    local expand = match(resp, "250[%- ]([^\r\n]+)")
                     insert(found, {alias = alias, expands_to = expand or alias})
                 end
             else

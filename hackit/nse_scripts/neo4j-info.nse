@@ -96,7 +96,7 @@ action = function(host, port)
   for _, path in ipairs(neo4j_paths) do
     local ok3, resp = pcall(http.get, host.ip, port.number, path, { timeout = 5000 })
     if ok3 and resp and resp.status == 200 and resp.body then
-      local path_key = path:gsub("^/", ""):gsub("/", "_"):gsub("db_", ""):gsub("manage_", "")
+      local path_key = gsub(path, "^/", ""):gsub("/", "_"):gsub("db_", ""):gsub("manage_", "")
       local ok4, pd = pcall(json.parse, resp.body)
       if ok4 and pd then
         if path == "/db/data/" then

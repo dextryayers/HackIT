@@ -121,7 +121,7 @@ action = function(host, port)
     local algo_num = tonumber(record.algorithm) or 0
     local info = algorithm_info[algo_num] or { name = "Unknown (" .. algo_num .. ")", bits = "?", strength = "unknown" }
 
-    insert(keys, {)
+    insert(keys, {
       key_type = key_type,
       flags = flags,
       protocol = record.protocol or 3,
@@ -131,7 +131,7 @@ action = function(host, port)
       key_size = info.bits,
       key_tag = record.key_tag or "?",
       public_key = record.public_key or "?"
-    }
+    })
   end
 
   result.dnskey_records_found = true

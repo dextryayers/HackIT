@@ -119,13 +119,13 @@ action = function(host, port)
     if ok then
       local hop_geo = geo_lookup(host.ip)
       sock:close()
-      insert(hops, {)
+      insert(hops, {
         hop = ttl,
         ip = host.ip,
         rtt_ms = format("%.1f", rtt),
         location = hop_geo,
         reached_target = true
-      }
+      })
       break
     else
       sock:close()
@@ -133,10 +133,10 @@ action = function(host, port)
                               tostring(conn_err):find("TTL", 1, true) or
                               tostring(conn_err):find("icmp", 1, true))
       if time_exceeded then
-        insert(hops, {)
+        insert(hops, {
           hop = ttl,
           status = "time_exceeded"
-        }
+        })
       end
       msleep(100)
     end

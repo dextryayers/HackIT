@@ -89,12 +89,12 @@ action = function(host, port)
             break
         end
         if loc then
-            local new_host, new_port, new_path = loc:match("http[s]?://([^:/]+):?(%d*)(.*)")
+            local new_host, new_port, new_path = match(loc, "http[s]?://([^:/]+):?(%d*)(.*)")
             if new_host then
                 current_url.host = new_host
-                current_url.port = tonumber(new_port) or (loc:find("https") and 443 or 80)
+                current_url.port = tonumber(new_port) or (find(loc, "https") and 443 or 80)
                 current_url.path = new_path ~= "" and new_path or "/"
-                scheme = loc:find("https") and "https" or "http"
+                scheme = find(loc, "https") and "https" or "http"
             else
                 current_url.path = loc
             end

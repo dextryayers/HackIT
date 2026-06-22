@@ -117,8 +117,8 @@ action = function(host, port)
   for _, ep in ipairs(metadata_endpoints) do
     local ok3, resp = pcall(http.get, "169.254.169.254", 80, "/computeMetadata/v1/" .. ep, { timeout = 3000, header = headers })
     if ok3 and resp and resp.status == 200 and resp.body and #resp.body > 0 then
-      local key = ep:gsub("/", "_"):gsub("-", "_"):gsub("^instance_", "")
-      result[key] = resp.body:gsub("%s+$", "")
+      local key = gsub(ep, "/", "_"):gsub("-", "_"):gsub("^instance_", "")
+      result[key] = resp.gsub(body, "%s+$", "")
     end
   end
 

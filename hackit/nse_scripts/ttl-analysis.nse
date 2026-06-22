@@ -127,12 +127,12 @@ action = function(host, port)
   for _, entry in ipairs(common_initial_ttls) do
     if most_common_ttl <= entry.ttl and most_common_ttl > entry.ttl - 64 then
       local estimated_hops = entry.ttl - most_common_ttl
-      insert(os_guesses, {)
+      insert(os_guesses, {
         os_family = entry.os,
         initial_ttl = entry.ttl,
         estimated_hops = estimated_hops,
         confidence = entry.confidence
-      }
+      })
     end
   end
 

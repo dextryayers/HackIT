@@ -116,14 +116,14 @@ local function parse_tftp_response(response)
     }
     info.error_message = error_msgs[info.error_code] or "Unknown"
     if #response > 7 then
-      local msg = response:sub(7):match("^([^\x00]+)")
+      local msg = sub(response, 7):match("^([^\x00]+)")
       if msg then
         info.error_detail = msg
       end
     end
   elseif opcode == 6 then
     info.oack = true
-    info.options = response:sub(5)
+    info.options = sub(response, 5)
   end
 
   return info

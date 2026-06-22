@@ -74,12 +74,12 @@ action = function(host, port)
     for _, path in ipairs(login_paths) do
         local resp = http.get(host, port, path)
         if resp and resp.status and resp.status < 400 then
-            if resp.body:match("<input.-[Tt]ype=[\"']password[\"']") or resp.body:match("<form.-[Pp]assword") then
+            if resp.match(body, "<input.-[Tt]ype=[\"']password[\"']") or resp.match(body, "<form.-[Pp]assword") then
                 insert(findings, "Login form at " .. path)
             end
         end
     end
-    if response.body:match("<input.-[Tt]ype=[\"']password[\"']") then
+    if response.match(body, "<input.-[Tt]ype=[\"']password[\"']") then
         insert(findings, "Password field found on /")
     end
     if #findings == 0 then

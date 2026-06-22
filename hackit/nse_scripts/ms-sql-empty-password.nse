@@ -61,28 +61,28 @@ categories = {"safe", "vuln"}
 local function load_list(arg_names)
   local val = stdnse.get_script_args(arg_names)
   if not val or val == "" then return {} end
-  if val:byte() == 47 then
+  if byte(val) == 47 then
     local f, err = io.open(val, "r")
     if f then
       local lines = {}
       for line in f:lines() do
-        line = line:gsub("^%s+", ""):gsub("%s+$", "")
-        if line ~= "" and line:byte() ~= 35 then insert(lines, line end)
+        line = gsub(line, "^%s+", ""):gsub("%s+$", "")
+        if line ~= "" and byte(line) ~= 35 then insert(lines, line) end
       end
       f:close()
       return lines
     end
-  elseif val:find("\n") then
+  elseif find(val, "\n") then
     local lines = {}
-    for line in val:gmatch("[^\n]+") do
-      line = line:gsub("^%s+", ""):gsub("%s+$", "")
-      if line ~= "" and line:byte() ~= 35 then insert(lines, line end)
+    for line in gmatch(val, "[^\n]+") do
+      line = gsub(line, "^%s+", ""):gsub("%s+$", "")
+      if line ~= "" and byte(line) ~= 35 then insert(lines, line) end
     end
     return lines
   end
   local items = {}
-  for item in val:gmatch("[^,]+") do
-    item = item:gsub("^%s+", ""):gsub("%s+$", "")
+  for item in gmatch(val, "[^,]+") do
+    item = gsub(item, "^%s+", ""):gsub("%s+$", "")
     if item ~= "" then insert(items, item) end
   end
   return items
@@ -120,7 +120,7 @@ local function build_login7(user, pass, hostname)
 
   local function add_uni(str)
     local res = {}
-    for i = 1, #str do insert(res, char(str:byte(i), 0) end)
+    for i = 1, #str do insert(res, char(byte(str, i), 0)) end
     return concat(res) .. char(0, 0)
   end
 
@@ -175,9 +175,9 @@ action = function(host, port)
         local _, login_resp = sock:receive_buf("", 5000)
         sock:close()
         if login_resp and #login_resp > 9 then
-          if login_resp:byte(9) == 0x01 then
-            local token = login_resp:byte(10)
-            if token == 0xAD and (login_resp:byte(14) == 0 or login_resp:byte(14) == 1) then
+          if byte(login_resp, 9) == 0x01 then
+            local token = byte(login_resp, 10)
+            if token == 0xAD and (byte(login_resp, 14) == 0 or byte(login_resp, 14) == 1) then
               found_weak = true
               result.weak_accounts = result.weak_accounts or {}
               insert(result.weak_accounts, u .. "/" .. p)

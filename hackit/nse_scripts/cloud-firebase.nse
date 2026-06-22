@@ -89,11 +89,11 @@ action = function(host, port)
   local is_firebase = false
   local firebase_type
   for _, p in ipairs(firebase_patterns) do
-    if hostname:match(p) then
+    if match(hostname, p) then
       is_firebase = true
-      if p:find("firebaseio") then
+      if find(p, "firebaseio") then
         firebase_type = "realtime-database"
-      elseif p:find("firestore") then
+      elseif find(p, "firestore") then
         firebase_type = "firestore"
       else
         firebase_type = "firebase"
@@ -113,7 +113,7 @@ action = function(host, port)
     for _, path in ipairs(firebase_paths) do
       local ok, resp = pcall(http.get, hostname, port.number, path, { timeout = 5000 })
       if ok and resp then
-        local path_key = path:gsub("^/", ""):gsub("/", "_"):gsub("%.", "_"):gsub("?", "_")
+        local path_key = gsub(path, "^/", ""):gsub("/", "_"):gsub("%.", "_"):gsub("?", "_")
         if resp.status == 200 then
           if path == "/.json" then
             result.open_database = true
@@ -126,7 +126,7 @@ action = function(host, port)
             end
           else
             result[path_key .. "_accessible"] = true
-            if path:find("rules") then
+            if find(path, "rules") then
               result.rules_accessible = true
             end
           end

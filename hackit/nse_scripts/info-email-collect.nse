@@ -79,13 +79,13 @@ action = function(host, port)
             socket:receive_bytes(128)
             socket:send("EHLO collector\r\n")
             local ehlo = socket:receive_bytes(512)
-            local has_vrfy = ehlo and ehlo:find("VRFY")
-            local has_expn = ehlo and ehlo:find("EXPN")
+            local has_vrfy = ehlo and find(ehlo, "VRFY")
+            local has_expn = ehlo and find(ehlo, "EXPN")
             if has_vrfy then
                 for _, addr in ipairs(common_accounts) do
                     socket:send("VRFY " .. addr .. "\r\n")
                     local _, resp = socket:receive_bytes(128)
-                    if resp and (resp:find("250") or resp:find("252") or resp:find("2.1.5") or resp:find("2.0.0")) then
+                    if resp and (find(resp, "250") or find(resp, "252") or find(resp, "2.1.5") or find(resp, "2.0.0")) then
                         insert(emails, {address = addr .. "@" .. (host.name or host.ip), method = "VRFY"})
                     end
                 end
@@ -94,8 +94,8 @@ action = function(host, port)
                 for _, addr in ipairs(common_accounts) do
                     socket:send("EXPN " .. addr .. "\r\n")
                     local _, resp = socket:receive_bytes(128)
-                    if resp and (resp:find("250") or resp:find("252")) then
-                        local expanded = resp:match("<([^>]+)>")
+                    if resp and (find(resp, "250") or find(resp, "252")) then
+                        local expanded = match(resp, "<([^>]+)>")
                         if expanded then
                             insert(emails, {address = expanded, method = "EXPN"})
                         end
@@ -107,7 +107,7 @@ action = function(host, port)
                 socket:receive_bytes(128)
                 socket:send("RCPT TO:<" .. addr .. "@" .. (host.name or "test.local") .. ">\r\n")
                 local _, resp = socket:receive_bytes(128)
-                if resp and (resp:find("250") or resp:find("2.1.5")) then
+                if resp and (find(resp, "250") or find(resp, "2.1.5")) then
                     insert(emails, {address = addr .. "@" .. (host.name or host.ip), method = "RCPT TO"})
                 end
                 socket:send("RSET\r\n")
@@ -130,7 +130,7 @@ action = function(host, port)
                 local _, resp = socket:receive_bytes(8192)
                 socket:close()
                 if resp then
-                    for match in resp:gmatch(email_pattern) do
+                    for match in gmatch(resp, email_pattern) do
                         local already = false
                         for _, e in ipairs(emails) do
                             if e.address == match then already = true end

@@ -68,7 +68,7 @@ action = function(host, port)
         return format_output(false, "No response to TRACE request")
     end
     if resp.status == 200 then
-        if resp.body:find("X-Custom-Test") and resp.body:find("xst%-test%-value") then
+        if resp.find(body, "X-Custom-Test") and resp.find(body, "xst%-test%-value") then
             return format_output(true, "TRACE method is ENABLED - XST vulnerability may exist (request echoed back)")
         end
         return format_output(true, "TRACE method responded with 200 but did not echo headers (may be limited)")

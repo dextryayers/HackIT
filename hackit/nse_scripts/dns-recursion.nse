@@ -92,11 +92,11 @@ action = function(host, port)
   for _, domain in ipairs(test_domains) do
     local ok, answer = pcall(dns.query, domain, base_opts)
     if ok and answer and #answer > 0 then
-      insert(domain_answers, {)
+      insert(domain_answers, {
         domain = domain,
         answers = answer,
         count = #answer
-      }
+      })
     end
   end
 

@@ -82,7 +82,7 @@ action = function(host, port)
         end
         if data then
             for _, npn in ipairs(npn_protocols) do
-                if data:match(npn) then
+                if match(data, npn) then
                     all_negotiated[npn] = true
                 end
             end

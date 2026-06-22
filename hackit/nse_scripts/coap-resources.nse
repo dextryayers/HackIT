@@ -75,7 +75,7 @@ local function coap_discover()
     local options = ""
     local payload = ""
     local ver_type_tkl = char((version << 6) | (ttype << 4) | tkl)
-    local first_byte = char(ver_type_tkl:byte(1), code)
+    local first_byte = char(byte(ver_type_tkl, 1), code)
     local packet = first_byte .. char(0x00, msgid) .. token .. options .. payload
     return packet
 end
@@ -100,7 +100,7 @@ action = function(host, port)
         return format_output(false, "No CoAP response received")
     end
     if #response >= 4 then
-        local code_val = response:byte(3)
+        local code_val = byte(response, 3)
         local code_class = code_val >> 5
         local code_detail = code_val & 0x1f
         insert(result, ("CoAP response code: %d.%02d"):format(code_class, code_detail))
@@ -109,15 +109,15 @@ action = function(host, port)
         end
         local payload_start = 0
         for i = 1, #response do
-            if response:byte(i) == 0xff then
+            if byte(response, i) == 0xff then
                 payload_start = i + 1
                 break
             end
         end
         if payload_start > 0 then
-            local payload = response:sub(payload_start)
+            local payload = sub(response, payload_start)
             if payload ~= "" then
-                for resource in payload:gmatch("</?([^>]+)>") do
+                for resource in gmatch(payload, "</?([^>]+)>") do
                     insert(result, ("Resource: %s"):format(resource))
                 end
             end

@@ -83,7 +83,7 @@ action = function(host, port)
             local ehlo = socket:receive_bytes(512)
             socket:close()
             if ehlo then
-                if ehlo:find(func) then
+                if find(ehlo, func) then
                     insert(supported_cmds, func)
                 end
             end
@@ -107,15 +107,15 @@ action = function(host, port)
             socket:receive_bytes(512)
             for _, u in ipairs(common_users) do
                 local query = func
-                if func:find("RCPT TO") then
+                if find(func, "RCPT TO") then
                     query = "RCPT TO:<" .. u .. "@test.local>"
                 else
                     query = func .. " " .. u
                 end
                 socket:send(query .. "\r\n")
                 local _, resp = socket:receive_bytes(128)
-                if resp and (resp:find("252") or resp:find("250") or resp:find("2.1.5")) then
-                    insert(enumerated, {user = u, method = func:gsub("%%.*", "")})
+                if resp and (find(resp, "252") or find(resp, "250") or find(resp, "2.1.5")) then
+                    insert(enumerated, {user = u, method = gsub(func, "%%.*", "")})
                 end
             end
             socket:send("QUIT\r\n")

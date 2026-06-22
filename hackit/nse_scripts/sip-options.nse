@@ -137,7 +137,7 @@ action = function(host, port)
     return format_output(false, "No response received")
   end
 
-  local sip_version = response:match("(SIP/2%.0)")
+  local sip_version = match(response, "(SIP/2%.0)")
   if not sip_version then
     return format_output(false, "Not a SIP server")
   end
@@ -145,28 +145,28 @@ action = function(host, port)
   result.sip_detected = true
   result.sip_version = sip_version
 
-  local code = response:match("SIP/2%.0 (%d+)")
+  local code = match(response, "SIP/2%.0 (%d+)")
   if code then
     result.status = tonumber(code)
     result.reason = status_reasons[tonumber(code)] or "Unknown"
   end
 
-  result.accepts_sdp = response:match("application/sdp") and true or nil
-  result.accepts_isup = response:match("application/isup") and true or nil
+  result.accepts_sdp = match(response, "application/sdp") and true or nil
+  result.accepts_isup = match(response, "application/isup") and true or nil
 
-  result.accept_header = response:match("Accept: ([^\r\n]+)")
-  result.user_agent = response:match("User%-Agent: ([^\r\n]+)")
-  result.server = response:match("Server: ([^\r\n]+)")
-  result.allow = response:match("Allow: ([^\r\n]+)")
-  result.supported = response:match("Supported: ([^\r\n]+)")
-  result.contact = response:match("Contact: ([^\r\n]+)")
-  result.www_auth = response:match("WWW%-Authenticate: ([^\r\n]+)")
-  result.proxy_auth = response:match("Proxy%-Authenticate: ([^\r\n]+)")
-  result.content_length = response:match("Content%-Length: (%d+)")
-  result.expires = response:match("Expires: (%d+)")
+  result.accept_header = match(response, "Accept: ([^\r\n]+)")
+  result.user_agent = match(response, "User%-Agent: ([^\r\n]+)")
+  result.server = match(response, "Server: ([^\r\n]+)")
+  result.allow = match(response, "Allow: ([^\r\n]+)")
+  result.supported = match(response, "Supported: ([^\r\n]+)")
+  result.contact = match(response, "Contact: ([^\r\n]+)")
+  result.www_auth = match(response, "WWW%-Authenticate: ([^\r\n]+)")
+  result.proxy_auth = match(response, "Proxy%-Authenticate: ([^\r\n]+)")
+  result.content_length = match(response, "Content%-Length: (%d+)")
+  result.expires = match(response, "Expires: (%d+)")
 
   for _, mt in ipairs(media_types) do
-    if response:find(mt) then
+    if find(response, mt) then
       if not result.supported_media then result.supported_media = {} end
       insert(result.supported_media, mt)
     end
@@ -176,10 +176,10 @@ action = function(host, port)
     result.authentication_required = true
   end
 
-  local body_match = response:match("\r\n\r\n(.+)")
+  local body_match = match(response, "\r\n\r\n(.+)")
   if body_match and #body_match > 0 then
     result.response_body = "present (" .. #body_match .. " bytes)"
-    if body_match:find("v=0") then
+    if find(body_match, "v=0") then
       result.sdp_present = true
     end
   end

@@ -76,9 +76,9 @@ action = function(host, port)
     local drupal_version = nil
     if banner_req and banner_req.body then
       local body = banner_req.body
-      if body:match("Drupal") or body:match("drupal") or body:match("Sites") then
+      if match(body, "Drupal") or match(body, "drupal") or match(body, "Sites") then
         is_drupal = true
-        drupal_version = body:match("Drupal%s+([%d%.]+)") or body:match("drupal%-settings") and "unknown"
+        drupal_version = match(body, "Drupal%s+([%d%.]+)") or match(body, "drupal%-settings") and "unknown"
       end
     end
 
@@ -107,12 +107,12 @@ action = function(host, port)
       })
       if req and req.body then
         local body = req.body
-        if body:match("HackIT_RCE_Test") or body:match("uid=") or body:match("www%-data") or body:match("nobody") or body:match("root") then
-          local excerpt = body:sub(1, 100):gsub("\n", " "):gsub("\r", "")
+        if match(body, "HackIT_RCE_Test") or match(body, "uid=") or match(body, "www%-data") or match(body, "nobody") or match(body, "root") then
+          local excerpt = sub(body, 1, 100):gsub("\n", " "):gsub("\r", "")
           insert(findings, {label = payload.label, excerpt = excerpt, status = req.status, severity = "CRITICAL"})
         end
-        if body:match("built") and body:match("lazy") and body:match("render") then
-          insert(findings, {label = payload.label .. " (lazy builder triggered)", excerpt = body:sub(1, 80), status = req.status, severity = "CRITICAL"})
+        if match(body, "built") and match(body, "lazy") and match(body, "render") then
+          insert(findings, {label = payload.label .. " (lazy builder triggered)", excerpt = sub(body, 1, 80), status = req.status, severity = "CRITICAL"})
         end
       end
     end
@@ -124,10 +124,10 @@ action = function(host, port)
 
     local req3 = http.post(host, port, drupalgeddon3_payload.path, {
       header = {["Content-Type"] = "application/json"},
-      data = drupalgeddon3_payload.data:format("RCE3")
+      data = drupalgeddon3_payload.format(data, "RCE3")
     })
-    if req3 and req3.body and (req3.body:match("HackIT_RCE3_Test") or req3.body:match("Cancel")) then
-      insert(findings, {label = "CVE-2018-7602 via JSON API", excerpt = req3.body:sub(1, 80), status = req3.status, severity = "CRITICAL"})
+    if req3 and req3.body and (req3.match(body, "HackIT_RCE3_Test") or req3.match(body, "Cancel")) then
+      insert(findings, {label = "CVE-2018-7602 via JSON API", excerpt = req3.sub(body, 1, 80), status = req3.status, severity = "CRITICAL"})
     end
 
     if not is_drupal then
@@ -136,9 +136,9 @@ action = function(host, port)
         local req = http.get(host, port, p)
         if req and req.status == 200 then
           local body = req.body or ""
-          if body:match("Drupal") or body:match("drupal") or body:match("user%-login") or body:match("Sites") then
+          if match(body, "Drupal") or match(body, "drupal") or match(body, "user%-login") or match(body, "Sites") then
             is_drupal = true
-            drupal_version = body:match("Drupal%s+([%d%.]+)") or drupal_version
+            drupal_version = match(body, "Drupal%s+([%d%.]+)") or drupal_version
             break
           end
         end
@@ -158,7 +158,7 @@ action = function(host, port)
       end
       if drupal_version then
         local parts = {}
-        for v in drupal_version:gmatch("%d+") do insert(parts, tonumber(v)) end
+        for v in gmatch(drupal_version, "%d+") do insert(parts, tonumber(v)) end
         if #parts >= 2 then
           local num = parts[1] * 100 + parts[2]
           if (num >= 700 and num < 759) or (num >= 800 and num < 806) then

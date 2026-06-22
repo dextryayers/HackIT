@@ -73,8 +73,8 @@ local function ldap_anonymous_bind(host, port)
             result = {}
             result.response_received = true
             result.length = #resp
-            if resp:byte(13) == 0x0a then
-                local result_code = resp:byte(14) or 0
+            if byte(resp, 13) == 0x0a then
+                local result_code = byte(resp, 14) or 0
                 result.result_code = result_code
                 if result_code == 0 then
                     result.success = true
@@ -82,8 +82,8 @@ local function ldap_anonymous_bind(host, port)
                     result.success = false
                 end
             end
-            local diag = resp:match("([%w%s]+)")
-            if diag then result.diagnostic = diag:sub(1, 60) end
+            local diag = match(resp, "([%w%s]+)")
+            if diag then result.diagnostic = sub(diag, 1, 60) end
         end
         return result
     end)

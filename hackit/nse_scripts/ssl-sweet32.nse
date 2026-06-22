@@ -71,7 +71,7 @@ local function test_64bit_cipher(host, port, protocol, cipher)
         sock:send(hello)
         local _, data = sock:receive_buf(tls.server_hello_done, 5000)
         sock:close()
-        if data and (data:match("server_hello") or data:match("handshake")) then
+        if data and (match(data, "server_hello") or match(data, "handshake")) then
             return true
         end
         return false

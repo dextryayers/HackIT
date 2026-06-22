@@ -79,7 +79,7 @@ action = function(host, port)
             end
             if not ct then
                 line = line .. " [WARNING: No Content-Type]"
-            elseif ct:find("text/plain") and (path:find("%.html?$") or path == "/") then
+            elseif find(ct, "text/plain") and (find(path, "%.html?$") or path == "/") then
                 line = line .. " [NOTE: HTML served as text/plain]"
             end
             insert(results, line)

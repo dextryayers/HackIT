@@ -71,20 +71,20 @@ local function parse_mysql_greeting(greeting, result)
   result.protocol_version = protocol_version
 
   if #greeting > 5 then
-    local null_pos = greeting:find("\x00", 6)
+    local null_pos = find(greeting, "\x00", 6)
     if null_pos then
-      local version = greeting:sub(6, null_pos - 1)
+      local version = sub(greeting, 6, null_pos - 1)
       result.server_version = version
 
-      if version:lower():find("mariadb") then
+      if lower(version):find("mariadb") then
         result.db_type = "MariaDB"
-        local ver_num = version:match("%d+%.%d+%.%d+")
+        local ver_num = match(version, "%d+%.%d+%.%d+")
         if ver_num then
           result.version_number = ver_num
         end
-      elseif version:lower():find("mysql") then
+      elseif lower(version):find("mysql") then
         result.db_type = "MySQL"
-      elseif version:lower():find("percona") then
+      elseif lower(version):find("percona") then
         result.db_type = "Percona Server"
       else
         result.db_type = "MySQL-compatible"
@@ -101,7 +101,7 @@ local function parse_mysql_greeting(greeting, result)
   end
 
   if #greeting >= 9 then
-    local auth_plugin_data = greeting:sub(9, 9 + 7)
+    local auth_plugin_data = sub(greeting, 9, 9 + 7)
     result.auth_plugin_data_present = #auth_plugin_data > 0
   end
 
@@ -142,11 +142,11 @@ local function parse_mysql_greeting(greeting, result)
 
   if #greeting > 35 then
     local auth_plugin_name
-    local auth_start = greeting:find("\x00", 36)
+    local auth_start = find(greeting, "\x00", 36)
     if auth_start then
-      local len_check = greeting:find("\x00", auth_start + 1)
+      local len_check = find(greeting, "\x00", auth_start + 1)
       if len_check then
-        auth_plugin_name = greeting:sub(auth_start + 1, len_check - 1)
+        auth_plugin_name = sub(greeting, auth_start + 1, len_check - 1)
         if auth_plugin_name and #auth_plugin_name > 0 then
           result.auth_plugin = auth_plugin_name
         end

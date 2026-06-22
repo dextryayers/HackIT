@@ -113,10 +113,10 @@ action = function(host, port)
 
     local ok, answer = pcall(dns.query, domain, opts)
     if ok and answer and #answer > 0 then
-      insert(supported, {)
+      insert(supported, {
         type = qtype,
         response_count = #answer
-      }
+      })
     elseif ok and answer then
       insert(no_data, qtype)
     else

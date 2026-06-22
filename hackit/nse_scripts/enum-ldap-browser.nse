@@ -111,12 +111,12 @@ action = function(host, port)
         local status, search_resp = socket:receive_bytes(1)
         if status and search_resp then
             local entry_count = 0
-            for _ in search_resp:gmatch("0x30") do
+            for _ in gmatch(search_resp, "0x30") do
                 entry_count = entry_count + 1
             end
             if entry_count > 0 then
                 insert(result, ("LDAP entries under '%s': %d+"):format(base, entry_count))
-                for dn in search_resp:gmatch("dn[%s:]+([^\n\r]+)") do
+                for dn in gmatch(search_resp, "dn[%s:]+([^\n\r]+)") do
                     insert(result, ("  DN: %s"):format(dn))
                 end
             end

@@ -86,7 +86,7 @@ action = function(host, port)
                 local _, r = s:receive_buf("\n", 3000)
                 s:close()
                 if r then
-                    local code = r:match("^(%d%d%d)")
+                    local code = match(r, "^(%d%d%d)")
                     if code == "200" then
                         vulnerable = true
                         last_code = code

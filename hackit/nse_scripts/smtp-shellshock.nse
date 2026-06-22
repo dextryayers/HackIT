@@ -102,9 +102,9 @@ action = function(host, port)
       return result
     end
 
-    banner_str = banner:gsub("\r?\n", ""):gsub("%s+$", "")
-    smtp_version = banner_str:match("([%d%.]+)")
-    local banner_check = banner_str:match("^220")
+    banner_str = gsub(banner, "\r?\n", ""):gsub("%s+$", "")
+    smtp_version = match(banner_str, "([%d%.]+)")
+    local banner_check = match(banner_str, "^220")
 
     if not banner_check then
       insert(findings, {check = "SMTP banner", detail = ("Unexpected banner format: %s"):format(banner_str), severity = "INFO"})
@@ -120,17 +120,17 @@ action = function(host, port)
         test_sock:receive_buf("\n", 3)
 
         for _, sc in ipairs(smtp_commands) do
-          local cmd_data = sc.format:format(payload)
+          local cmd_data = sc.format(format, payload)
           test_sock:send(cmd_data)
           local rcv, rcv_err = test_sock:receive_buf("\n", 3)
           if rcv then
-            if rcv:match("HackIT") or rcv:match("Shellshock") or rcv:match("Marker") then
-              local excerpt = rcv:gsub("\r?\n", ""):gsub("%s+$", "")
+            if match(rcv, "HackIT") or match(rcv, "Shellshock") or match(rcv, "Marker") then
+              local excerpt = gsub(rcv, "\r?\n", ""):gsub("%s+$", "")
               insert(findings, {
                 check = ("Shellshock via %s"):format(sc.cmd),
                 detail = ("Injection reflected in SMTP response: %s"):format(excerpt),
                 severity = "CRITICAL",
-                payload = payload:sub(1, 40),
+                payload = sub(payload, 1, 40),
               })
               break
             end
@@ -140,12 +140,12 @@ action = function(host, port)
         local data_payload = ("DATA\r\nSubject: %s\r\n\r\nTest\r\n.\r\n"):format(payload)
         test_sock:send(data_payload)
         local rcv_data = test_sock:receive_buf("\n", 3)
-        if rcv_data and (rcv_data:match("HackIT") or rcv_data:match("Shellshock")) then
+        if rcv_data and (match(rcv_data, "HackIT") or match(rcv_data, "Shellshock")) then
           insert(findings, {
             check = "Shellshock via DATA subject",
-            detail = ("Injection reflected in DATA response: %s"):format(rcv_data:gsub("\r?\n", "")),
+            detail = ("Injection reflected in DATA response: %s"):format(gsub(rcv_data, "\r?\n", "")),
             severity = "CRITICAL",
-            payload = payload:sub(1, 40),
+            payload = sub(payload, 1, 40),
           })
         end
 

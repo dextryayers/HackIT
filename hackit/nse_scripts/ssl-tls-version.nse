@@ -77,7 +77,7 @@ local function test_protocol(host, port, protocol)
         local status2, d = sock:receive_buf(tls.server_hello_done, 5000)
         sock:close()
         if status2 and d then
-            local ver = d:match("version[%s:=]+([%d%.]+)") or d:match("(%u+)%-(%d%.?%d*)") or d:match("([%d%.]+)[%s]*-[%s]*server")
+            local ver = match(d, "version[%s:=]+([%d%.]+)") or match(d, "(%u+)%-(%d%.?%d*)") or match(d, "([%d%.]+)[%s]*-[%s]*server")
             return true, ver
         end
         return false, nil

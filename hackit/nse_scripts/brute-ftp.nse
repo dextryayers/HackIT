@@ -66,8 +66,8 @@ local function load_list(arg_names, default)
   if f then
     local lines = {}
     for line in f:lines() do
-      line = line:gsub("^%s+", ""):gsub("%s+$", "")
-      if line ~= "" and line:byte() ~= 35 then
+      line = gsub(line, "^%s+", ""):gsub("%s+$", "")
+      if line ~= "" and byte(line) ~= 35 then
         insert(lines, line)
       end
     end
@@ -75,8 +75,8 @@ local function load_list(arg_names, default)
     return lines
   end
   local items = {}
-  for item in val:gmatch("[^,]+") do
-    item = item:gsub("^%s+", ""):gsub("%s+$", "")
+  for item in gmatch(val, "[^,]+") do
+    item = gsub(item, "^%s+", ""):gsub("%s+$", "")
     if item ~= "" then insert(items, item) end
   end
   return items
@@ -92,7 +92,7 @@ action = function(host, port)
   local timeout = tonumber(stdnse.get_script_args({"brute-ftp.timeout", "timeout"}) or 10)
   local stop_on_first = stdnse.get_script_args({"brute-ftp.stop_on_first", "stop_on_first"})
   if stop_on_first == nil or stop_on_first == "" then stop_on_first = true
-  else stop_on_first = (stop_on_first:lower() == "true" or stop_on_first == "1") end
+  else stop_on_first = (lower(stop_on_first) == "true" or stop_on_first == "1") end
 
   local start_time = os.time()
   local found = {}
@@ -113,11 +113,11 @@ action = function(host, port)
         socket:receive_bytes(128)
         socket:send("USER " .. u .. "\r\n")
         local user_resp = socket:receive_bytes(128)
-        if user_resp and (user_resp:find("331") or user_resp:find("230")) then
+        if user_resp and (find(user_resp, "331") or find(user_resp, "230")) then
           socket:send("PASS " .. p .. "\r\n")
           local pass_resp = socket:receive_bytes(128)
           socket:close()
-          if pass_resp and pass_resp:find("230") and not pass_resp:find("530") then
+          if pass_resp and find(pass_resp, "230") and not find(pass_resp, "530") then
             return true
           end
           return false

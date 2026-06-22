@@ -82,34 +82,34 @@ local function build_drda_probe()
 end
 
 local function parse_drda_response(response, result)
-  if response:match("DB2") or response:match("DRDA") then
+  if match(response, "DB2") or match(response, "DRDA") then
     result.db2_detected = true
     result.protocol = "DRDA"
   end
 
-  local ver_full = response:match("(%d+%.%d+%.%d+%.%d+)")
-    or response:match("(%d+%.%d+%.%d+)")
+  local ver_full = match(response, "(%d+%.%d+%.%d+%.%d+)")
+    or match(response, "(%d+%.%d+%.%d+)")
   if ver_full then
     result.server_version = ver_full
-    local major = ver_full:match("^(%d+)")
+    local major = match(ver_full, "^(%d+)")
     if major then
       result.version_major = tonumber(major)
     end
   end
 
-  local svrnm = response:match("SRVNAM[^\x00]*") or response:match("SRVCLSN[^\x00]*")
+  local svrnm = match(response, "SRVNAM[^\x00]*") or match(response, "SRVCLSN[^\x00]*")
   if svrnm then
-    result.server_name = svrnm:gsub("%z", ""):match("=(.+)") or svrnm:gsub("%z", ""):gsub("^%w+", "")
+    result.server_name = gsub(svrnm, "%z", ""):match("=(.+)") or gsub(svrnm, "%z", ""):gsub("^%w+", "")
   end
 
-  local inst = response:match("INSTNAME[^\x00]*")
+  local inst = match(response, "INSTNAME[^\x00]*")
   if inst then
-    result.instance_name = inst:gsub("%z", ""):match("=(.+)") or inst:gsub("%z", ""):gsub("^%w+", "")
+    result.instance_name = gsub(inst, "%z", ""):match("=(.+)") or gsub(inst, "%z", ""):gsub("^%w+", "")
   end
 
-  local platform = response:match("PLATFORM[^\x00]*") or response:match("PLAT[^\x00]*")
+  local platform = match(response, "PLATFORM[^\x00]*") or match(response, "PLAT[^\x00]*")
   if platform then
-    local pval = platform:gsub("%z", ""):match("%d+")
+    local pval = gsub(platform, "%z", ""):match("%d+")
     local platforms = {
       ["0"] = "Unknown",
       ["1"] = "OS/2",
@@ -131,21 +131,21 @@ local function parse_drda_response(response, result)
     result.platform = platforms[pval] or pval
   end
 
-  local rel = response:match("REL[^\x00]*") or response:match("RLS[^\x00]*")
+  local rel = match(response, "REL[^\x00]*") or match(response, "RLS[^\x00]*")
   if rel then
-    result.release = rel:gsub("%z", ""):gsub("^%w+%s*=%s*", "")
+    result.release = gsub(rel, "%z", ""):gsub("^%w+%s*=%s*", "")
   end
 
   result.response_length = #response
 
-  local security = response:match("SECMEC[^\x00]*")
+  local security = match(response, "SECMEC[^\x00]*")
   if security then
-    result.security_mechanism = security:gsub("%z", "")
+    result.security_mechanism = gsub(security, "%z", "")
   end
 
-  local codepage = response:match("CCSID[^\x00]*")
+  local codepage = match(response, "CCSID[^\x00]*")
   if codepage then
-    result.codepage = codepage:gsub("%z", ""):match("%d+")
+    result.codepage = gsub(codepage, "%z", ""):match("%d+")
   end
 end
 

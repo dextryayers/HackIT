@@ -71,7 +71,7 @@ categories = {"discovery", "safe"}
 portrule = shortport.port_or_service(53, "domain")
 
 local function build_ptr_name(ip)
-  if ip:match(":") then
+  if match(ip, ":") then
     local ok, expanded = pcall(nmap.get_huge_addr, ip)
     if not ok or not expanded then return nil end
     local nibbles = ""

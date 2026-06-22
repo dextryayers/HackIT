@@ -74,7 +74,7 @@ local coap_resource_paths = {
 
 local function build_coap_get(path, message_id, token)
   local path_bytes = {}
-  for segment in path:gmatch("[^/]+") do
+  for segment in gmatch(path, "[^/]+") do
     insert(path_bytes, segment)
   end
 
@@ -138,20 +138,20 @@ local function parse_coap_response(response)
   info.code_name = code_names[code_class + code_detail / 100] or format("%d.%02d", code_class, code_detail)
 
   local payload_start = 4 + info.tkl
-  if response:byte(payload_start) == 0xFF then
+  if byte(response, payload_start) == 0xFF then
     payload_start = payload_start + 1
   end
 
   if payload_start <= #response then
-    local payload = response:sub(payload_start)
+    local payload = sub(response, payload_start)
     info.payload_size = #payload
-    if payload:find("<") or payload:find("</") then
+    if find(payload, "<") or find(payload, "</") then
       info.resources = {}
-      for res in payload:gmatch("<([^>]+)>") do
+      for res in gmatch(payload, "<([^>]+)>") do
         insert(info.resources, res)
       end
       if #info.resources == 1 then
-        local attrs = payload:match("<[^>]+>%s*(.*)")
+        local attrs = match(payload, "<[^>]+>%s*(.*)")
         if attrs then
           info.resource_attributes = attrs
         end

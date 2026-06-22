@@ -90,16 +90,16 @@ action = function(host, port)
         end
     end
     if body then
-        if body:match("shopify") or body:match("Shopify") then
+        if match(body, "shopify") or match(body, "Shopify") then
             insert(indicators, "Shopify reference in HTML")
         end
-        if body:match("myshopify%.com") then
+        if match(body, "myshopify%.com") then
             insert(indicators, "myshopify.com domain reference")
         end
-        if body:match("cdn%.shopify%.com") then
+        if match(body, "cdn%.shopify%.com") then
             insert(indicators, "Shopify CDN asset detected")
         end
-        if body:match("/cart%.js") or body:match("/collections/") then
+        if match(body, "/cart%.js") or match(body, "/collections/") then
             insert(indicators, "Shopify URL patterns detected")
         end
     end

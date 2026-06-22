@@ -168,7 +168,7 @@ action = function(host, port)
                     "scopes_supported", "redirect_uri",
                 }
                 for _, term in ipairs(oauth_terms) do
-                    if body:find(term) then
+                    if find(body, term) then
                         insert(indicators, term)
                         if #indicators >= 3 then break end
                     end
@@ -180,14 +180,14 @@ action = function(host, port)
                     insert(endpoints, ep_info)
                 elseif response.status == 401 or response.status == 302 then
                     local www_auth = (response.header and response.header["www-authenticate"]) or ""
-                    if www_auth:find("Bearer") or www_auth:find("OAuth") then
+                    if find(www_auth, "Bearer") or find(www_auth, "OAuth") then
                         ep_info.oauth_detected = true
                         ep_info.auth_header = www_auth
                         insert(endpoints, ep_info)
                     end
                 else
                     for _, term in ipairs(oauth_terms) do
-                        if body:find(term) and #indicators >= 1 then
+                        if find(body, term) and #indicators >= 1 then
                             ep_info.oauth_hint = true
                             ep_info.indicators = indicators
                             insert(endpoints, ep_info)

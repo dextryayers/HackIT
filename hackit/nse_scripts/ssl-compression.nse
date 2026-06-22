@@ -86,7 +86,7 @@ action = function(host, port)
     for _, method in ipairs(methods) do
         local data = test_compression_method(host, port, method)
         if data then
-            if data:match(method) then
+            if match(data, method) then
                 detected = method
                 break
             end

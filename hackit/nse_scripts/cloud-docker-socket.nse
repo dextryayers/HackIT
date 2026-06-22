@@ -136,7 +136,7 @@ action = function(host, port)
       local container_list = {}
       for _, c in ipairs(containers) do
         insert(container_list, {
-          id = c.Id and c.Id:sub(1, 12),
+          id = c.Id and c.sub(Id, 1, 12),
           image = c.Image,
           state = c.State,
           status = c.Status,
@@ -157,7 +157,7 @@ action = function(host, port)
       local image_list = {}
       for _, img in ipairs(images) do
         insert(image_list, {
-          id = img.Id and img.Id:sub(1, 12),
+          id = img.Id and img.sub(Id, 1, 12),
           tags = img.RepoTags,
           size = img.Size,
           created = img.Created,
@@ -186,7 +186,7 @@ action = function(host, port)
     if networks and #networks > 0 then
       result.networks = {}
       for _, n in ipairs(networks) do
-        insert(result.networks, { id = n.Id and n.Id:sub(1, 12), name = n.Name, driver = n.Driver, scope = n.Scope })
+        insert(result.networks, { id = n.Id and n.sub(Id, 1, 12), name = n.Name, driver = n.Driver, scope = n.Scope })
       end
       result.networks_count = #networks
     end

@@ -91,10 +91,10 @@ local function check_ajp(host, port_num, path)
   if rcv and (#rcv > 20) then
     local data = {}
     for i = 1, math.min(#rcv, 500) do
-      data[i] = char(rcv:byte(i))
+      data[i] = char(byte(rcv, i))
     end
     local body = concat(data)
-    if body:match("web%-app") or body:match("<%?xml") or body:match("<!DOCTYPE") or body:match("<web-app") or body:match("context%-param") or body:match("Welcome") then
+    if match(body, "web%-app") or match(body, "<%?xml") or match(body, "<!DOCTYPE") or match(body, "<web-app") or match(body, "context%-param") or match(body, "Welcome") then
       return body
     end
   end
@@ -108,8 +108,8 @@ local function check_http_version(host, port)
   if req.headers and req.headers["server"] then
     server = type(req.headers["server"]) == "table" and req.headers["server"][1] or req.headers["server"]
   end
-  if server:match("[Tt]omcat") or server:match("[Cc]oyote") or server:match("[Jj]etty") then
-    local ver = server:match("([%d%.]+)")
+  if match(server, "[Tt]omcat") or match(server, "[Cc]oyote") or match(server, "[Jj]etty") then
+    local ver = match(server, "([%d%.]+)")
     return server, ver
   end
   return server, nil
@@ -127,7 +127,7 @@ action = function(host, port)
       for _, tpath in ipairs(targets) do
         local content = check_ajp(host, p, tpath)
         if content then
-          insert(findings, {port = p, path = tpath, length = #content, preview = content:sub(1, 120)})
+          insert(findings, {port = p, path = tpath, length = #content, preview = sub(content, 1, 120)})
         end
       end
     end

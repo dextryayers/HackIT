@@ -75,7 +75,7 @@ local function get_mac_vendor(mac)
         ["00:25:90"] = "HP",
     }
     if mac then
-        local prefix = mac:sub(1, 8)
+        local prefix = sub(mac, 1, 8)
         return vendors[prefix] or "Unknown"
     end
     return nil

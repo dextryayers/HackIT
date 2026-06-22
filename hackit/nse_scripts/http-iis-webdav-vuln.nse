@@ -96,12 +96,12 @@ action = function(host, port)
       end
       if req and req.status then
         local body = req.body or ""
-        if vec.method == "PROPFIND" and (req.status == 207 or (req.status < 300 and body:match("DAV:"))) then
+        if vec.method == "PROPFIND" and (req.status == 207 or (req.status < 300 and match(body, "DAV:"))) then
           insert(findings, {vector = ("%s %s"):format(vec.method, vec.path), status = req.status, detail = "WebDAV PROPFIND succeeded"})
         elseif vec.method == "OPTIONS" then
           local allow = (req.headers and req.headers["allow"]) or ""
           local all = type(allow) == "table" and concat(allow, ", ") or allow
-          if all:match("PROPFIND") or all:match("MKCOL") or all:match("MOVE") then
+          if match(all, "PROPFIND") or match(all, "MKCOL") or match(all, "MOVE") then
             insert(findings, {vector = "OPTIONS /", status = req.status, detail = ("WebDAV methods allowed: %s"):format(all)})
           end
         elseif vec.method == "PUT" and req.status == 201 then
@@ -117,10 +117,10 @@ action = function(host, port)
     if #findings > 0 then
       local vuln_version = false
       if server_banner then
-        local ver = server_banner:match("Microsoft%-IIS/([%d%.]+)")
+        local ver = match(server_banner, "Microsoft%-IIS/([%d%.]+)")
         if ver then
           local parts = {}
-          for v in ver:gmatch("%d+") do insert(parts, tonumber(v)) end
+          for v in gmatch(ver, "%d+") do insert(parts, tonumber(v)) end
           if #parts >= 2 then
             if (parts[1] == 6 and parts[2] < 1) or (parts[1] == 7 and parts[2] < 5) or (parts[1] == 8) then
               vuln_version = true
@@ -140,7 +140,7 @@ action = function(host, port)
         result[f.vector] = ("HTTP %d - %s"):format(f.status, f.detail)
       end
       if vuln_version then
-        result.version_note = ("IIS %s is known vulnerable to WebDAV-related RCE"):format(server_banner:match("Microsoft%-IIS/([%d%.]+)") or "unknown")
+        result.version_note = ("IIS %s is known vulnerable to WebDAV-related RCE"):format(match(server_banner, "Microsoft%-IIS/([%d%.]+)") or "unknown")
       end
       return result
     end

@@ -77,7 +77,7 @@ action = function(host, port)
     local found_wp = false
     local response = http.get(host, port, "/")
     if response and response.body then
-        if response.body:match("wp%-content") or response.body:match("wordpress") or response.body:match("WordPress") then
+        if response.match(body, "wp%-content") or response.match(body, "wordpress") or response.match(body, "WordPress") then
             found_wp = true
             insert(result, "WordPress detected")
         end
@@ -89,14 +89,14 @@ action = function(host, port)
         local resp = http.get(host, port, endpoint)
         if resp and resp.status and resp.status == 200 and resp.body then
             local users_found = 0
-            for uid, uname, dname in resp.body:gmatch('"id"%s*:%s*(%d+).-"name"%s*:%s*"([^"]+)".-"slug"%s*:%s*"([^"]+)"') do
+            for uid, uname, dname in resp.gmatch(body, '"id"%s*:%s*(%d+).-"name"%s*:%s*"([^"]+)".-"slug"%s*:%s*"([^"]+)"') do
                 insert(result, ("  User #%s: %s (slug: %s)"):format(uid, dname, uname))
                 users_found = users_found + 1
             end
             if users_found > 0 then
                 insert(result, ("User enumeration via %s: %d users found"):format(endpoint, users_found))
             else
-                local single_match = resp.body:match('"slug"%s*:%s*"([^"]+)"')
+                local single_match = resp.match(body, '"slug"%s*:%s*"([^"]+)"')
                 if single_match then
                     insert(result, ("  User found (slug): %s"):format(single_match))
                 end

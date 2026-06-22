@@ -83,7 +83,7 @@ action = function(host, port)
             local auth_payload = char(0x85, 0xa2, 0x1e, 0x00, 0x00, 0x00, 0x00, 0x40, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00) .. auth_suffix
             sock:send(auth_payload)
             local _, auth_resp = sock:receive_buf("", 5000)
-            if not auth_resp or auth_resp:byte(5) ~= 0x00 then
+            if not auth_resp or byte(auth_resp, 5) ~= 0x00 then
                 sock:close()
                 return
             end
@@ -97,10 +97,10 @@ action = function(host, port)
                 local dbs = {}
                 local skip = 5
                 while skip < #data do
-                    local col_len = data:byte(skip + 1)
+                    local col_len = byte(data, skip + 1)
                     if col_len == 0 or col_len > 64 then break end
-                    local db_name = data:sub(skip + 2, skip + 1 + col_len)
-                    if db_name and #db_name > 0 and not db_name:match("[%z%c]") then
+                    local db_name = sub(data, skip + 2, skip + 1 + col_len)
+                    if db_name and #db_name > 0 and not match(db_name, "[%z%c]") then
                         insert(dbs, db_name)
                     end
                     skip = skip + 1 + col_len + 1

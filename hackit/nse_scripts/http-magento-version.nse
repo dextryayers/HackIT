@@ -73,7 +73,7 @@ action = function(host, port)
         return format_output(false, "No response")
     end
     local body = response.body or ""
-    local is_magento = body:match("Magento") or body:match("mage") or body:match("mage/") or false
+    local is_magento = match(body, "Magento") or match(body, "mage") or match(body, "mage/") or false
     if not is_magento then
         local static_resp = http.get(host, port, "/static/version/")
         if static_resp and static_resp.status and static_resp.status < 500 then
@@ -94,17 +94,17 @@ action = function(host, port)
     for _, path in ipairs(ver_paths) do
         local resp2 = http.get(host, port, path)
         if resp2 and resp2.status == 200 and resp2.body then
-            local ver = resp2.body:match("Magento[^%d]*([%d.]+)")
-                or resp2.body:match("([%d]%.[%d]%.[%d])")
+            local ver = resp2.match(body, "Magento[^%d]*([%d.]+)")
+                or resp2.match(body, "([%d]%.[%d]%.[%d])")
             if ver then
                 insert(result, ("Version: %s (from %s)"):format(ver, path))
             end
         end
     end
-    local gen_tag = body:match('<meta name="generator" content="([^"]*Magento[^"]*)"')
+    local gen_tag = match(body, '<meta name="generator" content="([^"]*Magento[^"]*)"')
     if gen_tag then
         insert(result, "Generator: " .. gen_tag)
-        local ver = gen_tag:match("[%d]%.[%d]%.[%d]+")
+        local ver = match(gen_tag, "[%d]%.[%d]%.[%d]+")
         if ver then
             insert(result, "Magento version: " .. ver)
         end

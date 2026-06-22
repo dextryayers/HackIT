@@ -121,14 +121,14 @@ action = function(host, port)
       digest_hex = sub(digest_hex, 1, 40) .. "..."
     end
 
-    insert(records, {)
+    insert(records, {
       key_tag = tonumber(key_tag),
       algorithm = algorithm,
       algorithm_name = algorithm_names[algorithm] or ("Unknown (" .. algorithm .. ")"),
       digest_type = digest_type,
       digest_name = digest_names[digest_type] or ("Unknown (" .. digest_type .. ")"),
       digest = digest_hex
-    }
+    })
   end
 
   result.cds_records_found = true

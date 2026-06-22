@@ -61,34 +61,34 @@ license = "HackIT Framework — Internal Use Only"
 categories = {"brute", "intrusive"}
 
 local function hex_to_bin(s)
-  return (s:gsub("..", function(cc) return char(tonumber(cc, 16)) end))
+  return (gsub(s, "..", function(cc) return char(tonumber(cc, 16)) end))
 end
 
 local function load_list(arg_names)
   local val = stdnse.get_script_args(arg_names)
   if not val or val == "" then return {} end
-  if val:byte() == 47 then
+  if byte(val) == 47 then
     local f, err = io.open(val, "r")
     if f then
       local lines = {}
       for line in f:lines() do
-        line = line:gsub("^%s+", ""):gsub("%s+$", "")
-        if line ~= "" and line:byte() ~= 35 then insert(lines, line end)
+        line = gsub(line, "^%s+", ""):gsub("%s+$", "")
+        if line ~= "" and byte(line) ~= 35 then insert(lines, line) end
       end
       f:close()
       return lines
     end
-  elseif val:find("\n") then
+  elseif find(val, "\n") then
     local lines = {}
-    for line in val:gmatch("[^\n]+") do
-      line = line:gsub("^%s+", ""):gsub("%s+$", "")
-      if line ~= "" and line:byte() ~= 35 then insert(lines, line end)
+    for line in gmatch(val, "[^\n]+") do
+      line = gsub(line, "^%s+", ""):gsub("%s+$", "")
+      if line ~= "" and byte(line) ~= 35 then insert(lines, line) end
     end
     return lines
   end
   local items = {}
-  for item in val:gmatch("[^,]+") do
-    item = item:gsub("^%s+", ""):gsub("%s+$", "")
+  for item in gmatch(val, "[^,]+") do
+    item = gsub(item, "^%s+", ""):gsub("%s+$", "")
     if item ~= "" then insert(items, item) end
   end
   return items
@@ -96,11 +96,11 @@ end
 
 local function mysql_native_hash(password, salt)
   local stage1_hex = openssl.sha1(password)
-  local stage1 = hex_to_bin(stage1_hex:lower())
+  local stage1 = hex_to_bin(lower(stage1_hex))
   local stage2_hex = openssl.sha1(stage1)
-  local stage2 = hex_to_bin(stage2_hex:lower())
+  local stage2 = hex_to_bin(lower(stage2_hex))
   local stage3_hex = openssl.sha1(salt .. stage2)
-  local stage3 = hex_to_bin(stage3_hex:lower())
+  local stage3 = hex_to_bin(lower(stage3_hex))
   local result = {}
   for i = 1, 20 do
     result[i] = char(byte(stage1, i) ~ byte(stage3, i))
@@ -118,7 +118,7 @@ action = function(host, port)
   local timeout = tonumber(stdnse.get_script_args({"brute-mysql.timeout", "timeout"}) or 10)
   local stop_on_first = stdnse.get_script_args({"brute-mysql.stop_on_first", "stop_on_first"})
   if stop_on_first == nil or stop_on_first == "" then stop_on_first = true
-  else stop_on_first = (stop_on_first:lower() == "true" or stop_on_first == "1") end
+  else stop_on_first = (lower(stop_on_first) == "true" or stop_on_first == "1") end
 
   if #users == 0 or #passes == 0 then
     return format_output(false, "No credentials provided. Use brute-mysql.users and brute-mysql.passwords script args")
@@ -147,24 +147,24 @@ action = function(host, port)
         local pos = 2
         local sv = ""
         while pos <= #hb do
-          local b = hb:byte(pos)
+          local b = byte(hb, pos)
           if b == 0 then pos = pos + 1; break end
           sv = sv .. char(b)
           pos = pos + 1
         end
         if not server_version then server_version = sv end
         pos = pos + 4
-        local part1 = hb:sub(pos, pos + 7); pos = pos + 8
+        local part1 = sub(hb, pos, pos + 7); pos = pos + 8
         pos = pos + 1
         pos = pos + 2
         pos = pos + 1
         pos = pos + 2
         pos = pos + 2
-        local auth_plugin_data_len = hb:byte(pos); pos = pos + 1
+        local auth_plugin_data_len = byte(hb, pos); pos = pos + 1
         pos = pos + 10
         local part2_len = auth_plugin_data_len - 8
         if part2_len < 0 then part2_len = 12 end
-        local part2 = hb:sub(pos, pos + part2_len - 1)
+        local part2 = sub(hb, pos, pos + part2_len - 1)
         local salt = part1 .. part2
         local auth_response = mysql_native_hash(p, salt)
         local client_caps = 0x0a285
@@ -193,7 +193,7 @@ action = function(host, port)
           if rest then resp_body = rest else socket:close(); return false end
         end
         socket:close()
-        if #resp_body >= 1 and resp_body:byte(1) == 0x00 then return true end
+        if #resp_body >= 1 and byte(resp_body, 1) == 0x00 then return true end
         return false
       end)
       if not ok then

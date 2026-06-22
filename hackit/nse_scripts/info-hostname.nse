@@ -105,11 +105,11 @@ action = function(host, port)
     if port.number == 25 or port.number == 587 then
         local resp = probe_smtp(host, port)
         if resp then
-            local ehlo_host = resp:match("([%w._-]+[%.][%a][%a]+)")
+            local ehlo_host = match(resp, "([%w._-]+[%.][%a][%a]+)")
             if ehlo_host then
-                insert(hostnames, {source = "SMTP EHLO", hostname = ehlo_host:gsub("^[\r\n%s]+", "")})
+                insert(hostnames, {source = "SMTP EHLO", hostname = gsub(ehlo_host, "^[\r\n%s]+", "")})
             end
-            local banner_host = resp:match("ESMTP ([%w._-]+)")
+            local banner_host = match(resp, "ESMTP ([%w._-]+)")
             if banner_host then
                 insert(hostnames, {source = "SMTP Banner", hostname = banner_host})
             end
@@ -118,14 +118,14 @@ action = function(host, port)
     if port.number == 80 or port.number == 8080 or port.number == 443 then
         local resp = probe_http(host, port)
         if resp then
-            local server = resp:match("Server: ([^\r\n]+)")
+            local server = match(resp, "Server: ([^\r\n]+)")
             if server then
-                local host_part = server:match("[%w._-]+%.[%a][%a]+")
+                local host_part = match(server, "[%w._-]+%.[%a][%a]+")
                 if host_part then
                     insert(hostnames, {source = "HTTP Server Header", hostname = host_part})
                 end
             end
-            local host_hdr = resp:match("^Host: ([^\r\n]+)")
+            local host_hdr = match(resp, "^Host: ([^\r\n]+)")
             if host_hdr then
                 insert(hostnames, {source = "HTTP Host Header", hostname = host_hdr})
             end

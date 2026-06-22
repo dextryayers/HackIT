@@ -69,7 +69,7 @@ local function nfs_showmount(host, port)
         local _, r = socket:receive_bytes(256)
         local mount_port = 2049
         if r and #r > 20 then
-            mount_port = r:byte(23) * 256 + r:byte(24)
+            mount_port = byte(r, 23) * 256 + byte(r, 24)
         end
         socket:close()
         local mount_sock = new_socket()
@@ -88,9 +88,9 @@ local function nfs_showmount(host, port)
             result.exports = {}
             local pos = 25
             while pos < #dump_resp - 3 do
-                local entry_len = (dump_resp:byte(pos) or 0) * 256^3 + (dump_resp:byte(pos+1) or 0) * 256^2 + (dump_resp:byte(pos+2) or 0) * 256 + (dump_resp:byte(pos+3) or 0)
+                local entry_len = (byte(dump_resp, pos) or 0) * 256^3 + (byte(dump_resp, pos+1) or 0) * 256^2 + (byte(dump_resp, pos+2) or 0) * 256 + (byte(dump_resp, pos+3) or 0)
                 if entry_len < 1 or pos + 4 + entry_len > #dump_resp then break end
-                local export = dump_resp:sub(pos + 4, pos + 4 + entry_len - 1):gsub("%z", "")
+                local export = sub(dump_resp, pos + 4, pos + 4 + entry_len - 1):gsub("%z", "")
                 if #export > 0 then
                     result.exports[#result.exports + 1] = export
                 end
@@ -120,7 +120,7 @@ action = function(host, port)
             out.export_count = #result.exports
             local world_readable = {}
             for _, e in ipairs(result.exports) do
-                if e:find("*") or e:find("everyone") or e:find("world") then
+                if find(e, "*") or find(e, "everyone") or find(e, "world") then
                     insert(world_readable, e)
                 end
             end

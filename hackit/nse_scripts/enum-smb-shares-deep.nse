@@ -109,7 +109,7 @@ action = function(host, port)
     local status, response = socket:receive_bytes(1)
     if status and response then
         insert(result, "SMB server detected")
-        if response:match("SMB") then
+        if match(response, "SMB") then
             insert(result, "SMB protocol negotiation successful")
         end
     end

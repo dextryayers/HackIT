@@ -84,7 +84,7 @@ action = function(host, port)
       end
       local status, response = socket:receive_bytes(1)
       if status and response then
-          local router_id = response:match("....")
+          local router_id = match(response, "....")
           if router_id then
               insert(result, "OSPF router detected")
               insert(result, "Router ID raw bytes received")

@@ -66,8 +66,8 @@ local function load_list(arg_names, default)
   if f then
     local lines = {}
     for line in f:lines() do
-      line = line:gsub("^%s+", ""):gsub("%s+$", "")
-      if line ~= "" and line:byte() ~= 35 then
+      line = gsub(line, "^%s+", ""):gsub("%s+$", "")
+      if line ~= "" and byte(line) ~= 35 then
         insert(lines, line)
       end
     end
@@ -75,8 +75,8 @@ local function load_list(arg_names, default)
     return lines
   end
   local items = {}
-  for item in val:gmatch("[^,]+") do
-    item = item:gsub("^%s+", ""):gsub("%s+$", "")
+  for item in gmatch(val, "[^,]+") do
+    item = gsub(item, "^%s+", ""):gsub("%s+$", "")
     if item ~= "" then insert(items, item) end
   end
   return items
@@ -97,43 +97,43 @@ local function telnet_negotiate(socket)
     local status, chunk = socket:receive_bytes(1)
     if not status then return data end
     buf = buf .. chunk
-    while #buf >= 2 and buf:byte(1) == 255 do
-      local cmd = buf:byte(2)
+    while #buf >= 2 and byte(buf, 1) == 255 do
+      local cmd = byte(buf, 2)
       if cmd == 255 then
         data = data .. char(255)
-        buf = buf:sub(3)
+        buf = sub(buf, 3)
       elseif cmd == 251 or cmd == 253 then
-        local opt = #buf >= 3 and buf:byte(3) or 0
+        local opt = #buf >= 3 and byte(buf, 3) or 0
         if #buf >= 3 then
           if cmd == 251 then
             socket:send(IAC .. WONT .. char(opt))
           else
             socket:send(IAC .. DONT .. char(opt))
           end
-          buf = buf:sub(4)
+          buf = sub(buf, 4)
         else
           break
         end
       elseif cmd == 252 or cmd == 254 then
-        buf = #buf >= 3 and buf:sub(4) or ""
+        buf = #buf >= 3 and sub(buf, 4) or ""
       elseif cmd == 250 then
-        local se_idx = buf:find(IAC .. SE, 1, true)
+        local se_idx = find(buf, IAC .. SE, 1, true)
         if se_idx then
-          buf = buf:sub(se_idx + 2)
+          buf = sub(buf, se_idx + 2)
         else
           break
         end
       elseif cmd == 240 then
-        buf = buf:sub(3)
+        buf = sub(buf, 3)
       else
-        buf = buf:sub(3)
+        buf = sub(buf, 3)
       end
     end
-    if #buf > 0 and buf:byte(1) ~= 255 then
-      data = data .. buf:sub(1, 1)
-      buf = buf:sub(2)
+    if #buf > 0 and byte(buf, 1) ~= 255 then
+      data = data .. sub(buf, 1, 1)
+      buf = sub(buf, 2)
     end
-    if #data > 0 and (data:find("login") or data:find("Password") or data:find("#") or data:find("$") or data:find(">")) then
+    if #data > 0 and (find(data, "login") or find(data, "Password") or find(data, "#") or find(data, "$") or find(data, ">")) then
       break
     end
   end
@@ -150,7 +150,7 @@ action = function(host, port)
   local timeout = tonumber(stdnse.get_script_args({"brute-telnet.timeout", "timeout"}) or 10)
   local stop_on_first = stdnse.get_script_args({"brute-telnet.stop_on_first", "stop_on_first"})
   if stop_on_first == nil or stop_on_first == "" then stop_on_first = true
-  else stop_on_first = (stop_on_first:lower() == "true" or stop_on_first == "1") end
+  else stop_on_first = (lower(stop_on_first) == "true" or stop_on_first == "1") end
 
   local start_time = os.time()
   local found = {}
@@ -169,19 +169,19 @@ action = function(host, port)
         local status, err = socket:connect(host, port)
         if not status then errors = errors + 1; return false end
         local banner = telnet_negotiate(socket)
-        if not banner:find("login") then
+        if not find(banner, "login") then
           socket:send("\r\n")
           local extra = telnet_negotiate(socket)
           banner = banner .. extra
         end
-        if banner:find("login") then
+        if find(banner, "login") then
           socket:send(u .. "\r\n")
           local pass_prompt = telnet_negotiate(socket)
-          if pass_prompt:find("Password") then
+          if find(pass_prompt, "Password") then
             socket:send(p .. "\r\n")
             local shell_resp = telnet_negotiate(socket)
             socket:close()
-            if shell_resp:find("#") or shell_resp:find("$") or shell_resp:find(">") or shell_resp:find("Last login") then
+            if find(shell_resp, "#") or find(shell_resp, "$") or find(shell_resp, ">") or find(shell_resp, "Last login") then
               return true
             end
             return false

@@ -114,10 +114,10 @@ action = function(host, port)
     if path ~= "/ping" then
       local ok3, resp = pcall(http.get, host.ip, port.number, path, { timeout = 5000 })
       if ok3 and resp and resp.status == 200 and resp.body then
-        local path_key = path:gsub("^/", ""):gsub("[?=]", "_"):gsub("/", "_")
-        path_key = path_key:gsub("SHOW_", ""):gsub("api_v2_", "v2_"):lower()
+        local path_key = gsub(path, "^/", ""):gsub("[?=]", "_"):gsub("/", "_")
+        path_key = gsub(path_key, "SHOW_", ""):gsub("api_v2_", "v2_"):lower()
 
-        if path:find("query") then
+        if find(path, "query") then
           local ok4, pd = pcall(json.parse, resp.body)
           if ok4 and pd and pd.results and pd.results[1] then
             local r = pd.results[1]
@@ -126,15 +126,15 @@ action = function(host, port)
               for _, row in ipairs(r.series[1].values) do
                 insert(values, row[1])
               end
-              if path:find("SHOW+DATABASES") then
+              if find(path, "SHOW+DATABASES") then
                 result.databases = values
                 result.database_count = #values
-              elseif path:find("SHOW+USERS") then
+              elseif find(path, "SHOW+USERS") then
                 result.users = values
                 result.user_count = #values
-              elseif path:find("SHOW+RETENTION") then
+              elseif find(path, "SHOW+RETENTION") then
                 result.retention_policies = values
-              elseif path:find("SHOW+MEASUREMENTS") then
+              elseif find(path, "SHOW+MEASUREMENTS") then
                 result.measurements = values
                 result.measurement_count = #values
               else
@@ -154,7 +154,7 @@ action = function(host, port)
           end
         elseif path == "/debug/vars" then
           result.debug_vars_accessible = true
-        elseif path:find("api/v2") then
+        elseif find(path, "api/v2") then
           local ok6, pd2 = pcall(json.parse, resp.body)
           if ok6 and pd2 then
             if pd2.buckets then

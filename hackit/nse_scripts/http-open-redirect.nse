@@ -71,7 +71,7 @@ action = function(host, port)
         if response then
             if response.header and response.header["location"] then
                 local loc = response.header["location"]
-                if loc:find("evil%.com") then
+                if find(loc, "evil%.com") then
                     insert(results, "Open redirect via " .. param .. " -> " .. loc)
                 end
             end

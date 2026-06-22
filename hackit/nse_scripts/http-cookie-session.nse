@@ -75,40 +75,40 @@ action = function(host, port)
     end
     local results = {}
     for _, cookie in ipairs(cookies) do
-        local name = cookie:match("^([^=]+)")
-        local value = cookie:match("^[^=]+=([^;]+)")
+        local name = match(cookie, "^([^=]+)")
+        local value = match(cookie, "^[^=]+=([^;]+)")
         local analysis = {}
         if name then
-            if name:find("[Ss]ession") or name:find("PHPSESSID") or name:find("JSESSIONID") or name:find("ASP%.NET") or name:find("laravel") then
+            if find(name, "[Ss]ession") or find(name, "PHPSESSID") or find(name, "JSESSIONID") or find(name, "ASP%.NET") or find(name, "laravel") then
                 insert(analysis, "Session cookie detected")
             end
         end
         if value then
             insert(analysis, "Length: " .. #value .. " chars")
             local entropy = 0
-            for c in value:gmatch(".") do
-                if c:find("[a-z]") then entropy = entropy + 1 end
-                if c:find("[A-Z]") then entropy = entropy + 1 end
-                if c:find("[0-9]") then entropy = entropy + 2 end
+            for c in gmatch(value, ".") do
+                if find(c, "[a-z]") then entropy = entropy + 1 end
+                if find(c, "[A-Z]") then entropy = entropy + 1 end
+                if find(c, "[0-9]") then entropy = entropy + 2 end
             end
             if entropy < #value * 0.5 then
                 insert(analysis, "Low entropy (possible predictability)")
             end
-            if value:match("^%d+$") then
+            if match(value, "^%d+$") then
                 insert(analysis, "WARNING: Numeric only (predictable)")
             end
         end
-        if cookie:find("HttpOnly") then
+        if find(cookie, "HttpOnly") then
             insert(analysis, "HttpOnly: Yes")
         else
             insert(analysis, "HttpOnly: No")
         end
-        if cookie:find("Secure") then
+        if find(cookie, "Secure") then
             insert(analysis, "Secure: Yes")
         else
             insert(analysis, "Secure: No")
         end
-        local max_age = cookie:match("Max%-Age=(%d+)")
+        local max_age = match(cookie, "Max%-Age=(%d+)")
         if max_age then
             insert(analysis, "Max-Age: " .. max_age .. "s")
         end

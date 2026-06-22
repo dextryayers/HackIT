@@ -78,15 +78,15 @@ action = function(host, port)
             if response.status == 200 then
                 insert(result, (ep[2] .. " accessible (status %d)"):format(response.status))
                 if ep[1] == "/v2/_catalog" and response.body then
-                    local repos = response.body:match('"repositories"%s*:%s*%[([^]]+)%]')
+                    local repos = response.match(body, '"repositories"%s*:%s*%[([^]]+)%]')
                     if repos then
-                        for repo in repos:gmatch('"([^"]+)"') do
+                        for repo in gmatch(repos, '"([^"]+)"') do
                             insert(result, "  Repository: " .. repo)
                             local tag_resp = http.get(host, port, "/v2/" .. repo .. "/tags/list")
                             if tag_resp and tag_resp.status == 200 and tag_resp.body then
-                                local tags = tag_resp.body:match('"tags"%s*:%s*%[([^]]+)%]')
+                                local tags = tag_resp.match(body, '"tags"%s*:%s*%[([^]]+)%]')
                                 if tags then
-                                    for tag in tags:gmatch('"([^"]+)"') do
+                                    for tag in gmatch(tags, '"([^"]+)"') do
                                         insert(result, "    Tag: " .. tag)
                                     end
                                 end

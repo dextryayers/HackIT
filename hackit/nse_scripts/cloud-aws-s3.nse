@@ -85,9 +85,9 @@ action = function(host, port)
   local bucket_name
   local s3_region
 
-  bucket_name = bucket_host:match("^(.-)%.s3[.-]")
+  bucket_name = match(bucket_host, "^(.-)%.s3[.-]")
   if not bucket_name then
-    bucket_name = bucket_host:match("^(.-)%.s3%.amazonaws%.com$")
+    bucket_name = match(bucket_host, "^(.-)%.s3%.amazonaws%.com$")
   end
   if not bucket_name then
     for _, ep in ipairs(s3_endpoints) do
@@ -109,21 +109,21 @@ action = function(host, port)
     local path = "/" .. q
     local ok, resp = pcall(http.get, bucket_host, port.number, path, { timeout = 5000 })
     if ok and resp then
-      local query_key = q == "" and "list" or q:gsub("^%?", ""):gsub("=.*", "")
+      local query_key = q == "" and "list" or gsub(q, "^%?", ""):gsub("=.*", "")
       if resp.status == 200 then
         result[query_key .. "_accessible"] = true
         if q == "" then
           result.publicly_listable = true
           if resp.body then
             local file_count = 0
-            for _ in resp.body:gmatch("<Key>([^<]+)</Key>") do
+            for _ in resp.gmatch(body, "<Key>([^<]+)</Key>") do
               file_count = file_count + 1
             end
             if file_count > 0 then
               result.objects_count = file_count
             end
             local prefixes = {}
-            for prefix in resp.body:gmatch("<CommonPrefixes><Prefix>([^<]+)</Prefix></CommonPrefixes>") do
+            for prefix in resp.gmatch(body, "<CommonPrefixes><Prefix>([^<]+)</Prefix></CommonPrefixes>") do
               insert(prefixes, prefix)
             end
             if #prefixes > 0 then
@@ -132,8 +132,8 @@ action = function(host, port)
           end
         elseif q == "?acl" and resp.body then
           local grants = {}
-          for grant in resp.body:gmatch("<Grant>.-</Grant>") do
-            if grant:match("AllUsers") or grant:match("AuthenticatedUsers") then
+          for grant in resp.gmatch(body, "<Grant>.-</Grant>") do
+            if match(grant, "AllUsers") or match(grant, "AuthenticatedUsers") then
               insert(grants, "public")
             end
           end

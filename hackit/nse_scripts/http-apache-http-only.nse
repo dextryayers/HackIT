@@ -98,10 +98,10 @@ action = function(host, port)
         end
 
         for _, c in ipairs(set_cookies) do
-          local cookie_name = c:match("^([^=]+)")
-          local has_httponly = c:match("HttpOnly")
-          local has_secure = c:match("Secure")
-          local has_samesite = c:match("SameSite")
+          local cookie_name = match(c, "^([^=]+)")
+          local has_httponly = match(c, "HttpOnly")
+          local has_secure = match(c, "Secure")
+          local has_samesite = match(c, "SameSite")
 
           if not has_httponly then
             insert(findings, {
@@ -157,11 +157,11 @@ action = function(host, port)
           cookies = {raw}
         end
         for _, c in ipairs(cookies) do
-          if c:match("TEST") then
+          if match(c, "TEST") then
             insert(findings, {
               path = vec.path,
               label = vec.label,
-              cookie = c:sub(1, 60),
+              cookie = sub(c, 1, 60),
               detail = ("CRLF injection via %s - Set-Cookie reflected"):format(vec.label),
               severity = "CRITICAL",
             })

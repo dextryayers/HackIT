@@ -73,13 +73,13 @@ action = function(host, port)
             sock:send(cmd)
             local _, resp = sock:receive_buf("\r\n", 5000)
             if resp then
-                for line in resp:gmatch("([^\r\n]+)") do
+                for line in gmatch(resp, "([^\r\n]+)") do
                     if cmd == "version\r\n" then
-                        local ver = line:match("VERSION ([^\r\n]+)")
+                        local ver = match(line, "VERSION ([^\r\n]+)")
                         if ver then result.version = ver end
                     else
                         local parts = {}
-                        for part in line:gmatch("%S+") do
+                        for part in gmatch(line, "%S+") do
                             insert(parts, part)
                         end
                         if parts[1] == "STAT" and #parts >= 3 then

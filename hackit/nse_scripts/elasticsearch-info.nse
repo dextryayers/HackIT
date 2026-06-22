@@ -113,7 +113,7 @@ action = function(host, port)
   for _, path in ipairs(es_paths) do
     local ok3, resp = pcall(http.get, host.ip, port.number, path, { timeout = 5000 })
     if ok3 and resp and resp.status == 200 and resp.body then
-      local path_key = path:gsub("^/", ""):gsub("[%?=]", "_"):gsub("/", "_"):gsub("^_", ""):gsub("_", "_")
+      local path_key = gsub(path, "^/", ""):gsub("[%?=]", "_"):gsub("/", "_"):gsub("^_", ""):gsub("_", "_")
       local ok4, pd = pcall(json.parse, resp.body)
       if ok4 and pd then
         if path == "/_cluster/health" then

@@ -87,26 +87,26 @@ action = function(host, port)
             local _, resp = sock:receive_buf("", 5000)
             sock:close()
             if resp and #resp > 10 then
-                local version = resp:match("version\\?\"?([%d%.]+)")
+                local version = match(resp, "version\\?\"?([%d%.]+)")
                 if version then
                     result.version = version
                     local parts = {}
-                    for v in version:gmatch("%d+") do
+                    for v in gmatch(version, "%d+") do
                         insert(parts, tonumber(v))
                     end
                     if #parts >= 1 then result.version_major = parts[1] end
                     if #parts >= 2 then result.version_minor = parts[2] end
                 end
-                local max_bson = resp:match("maxBsonObjectSize\"?[^%d]*(%d+)")
+                local max_bson = match(resp, "maxBsonObjectSize\"?[^%d]*(%d+)")
                 if max_bson then result.max_bson_object_size = tonumber(max_bson) end
-                local max_msg = resp:match("maxMessageSizeBytes\"?[^%d]*(%d+)")
+                local max_msg = match(resp, "maxMessageSizeBytes\"?[^%d]*(%d+)")
                 if max_msg then result.max_message_size_bytes = tonumber(max_msg) end
-                local max_wire = resp:match("maxWireVersion\"?[^%d]*(%d+)")
+                local max_wire = match(resp, "maxWireVersion\"?[^%d]*(%d+)")
                 if max_wire then result.max_wire_version = tonumber(max_wire) end
-                if resp:match("setName") or resp:match("SetName") then
+                if match(resp, "setName") or match(resp, "SetName") then
                     result.replica_set = true
                 end
-                local me = resp:match("me\"?[^%w]*\"([^\"]+)\"")
+                local me = match(resp, "me\"?[^%w]*\"([^\"]+)\"")
                 if me then result.me = me end
             end
         end)

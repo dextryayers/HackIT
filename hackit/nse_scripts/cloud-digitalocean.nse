@@ -93,15 +93,15 @@ action = function(host, port)
   local ok2, data = pcall(json.parse, response.body)
   if ok2 and data then
     for k, v in pairs(data) do
-      result[k:gsub("-", "_")] = v
+      result[gsub(k, "-", "_")] = v
     end
   end
 
   for _, path in ipairs(metadata_paths) do
     local ok3, resp = pcall(http.get, "169.254.169.254", 80, "/metadata/v1/" .. path, { timeout = 2000 })
     if ok3 and resp and resp.status == 200 and resp.body and #resp.body > 0 then
-      local key = path:gsub("/", "_"):gsub("-", "_")
-      result[key] = resp.body:gsub("%s+$", "")
+      local key = gsub(path, "/", "_"):gsub("-", "_")
+      result[key] = resp.gsub(body, "%s+$", "")
     end
   end
 

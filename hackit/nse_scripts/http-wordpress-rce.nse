@@ -76,9 +76,9 @@ action = function(host, port)
     local is_wp = false
     if banner_req and banner_req.body then
       local body = banner_req.body
-      if body:match("wordpress") or body:match("WordPress") or body:match("wp%-content") or body:match("wp%-admin") then
+      if match(body, "wordpress") or match(body, "WordPress") or match(body, "wp%-content") or match(body, "wp%-admin") then
         is_wp = true
-        wp_version = body:match("WordPress%s+([%d%.]+)") or body:match("ver=([%d%.]+)") or body:match("wp%-includes")
+        wp_version = match(body, "WordPress%s+([%d%.]+)") or match(body, "ver=([%d%.]+)") or match(body, "wp%-includes")
       end
     end
 
@@ -104,20 +104,20 @@ action = function(host, port)
       if req and req.status == 200 then
         local body = req.body or ""
         for _, check in ipairs(cp.checks) do
-          if body:match(check) then
-            local excerpt = body:sub(1, 100):gsub("\n", " "):gsub("\r", "")
+          if match(body, check) then
+            local excerpt = sub(body, 1, 100):gsub("\n", " "):gsub("\r", "")
             insert(findings, {path = cp.path, check = check, excerpt = excerpt, status = req.status, severity = cp.severity})
             break
           end
         end
-        if cp.path:match("wp%-config") and body:match("define") and body:match("%$table_prefix") then
-          insert(findings, {path = cp.path, check = "wp-config signature", excerpt = body:sub(1, 120), status = req.status, severity = "CRITICAL"})
+        if cp.match(path, "wp%-config") and match(body, "define") and match(body, "%$table_prefix") then
+          insert(findings, {path = cp.path, check = "wp-config signature", excerpt = sub(body, 1, 120), status = req.status, severity = "CRITICAL"})
         end
       elseif req and req.status ~= 404 then
-        if cp.path:match("wp%-json") and req.status == 200 then
+        if cp.match(path, "wp%-json") and req.status == 200 then
           local body = req.body or ""
-          if body:match("%[") then
-            insert(findings, {path = cp.path, check = "REST API exposed", excerpt = body:sub(1, 80), status = req.status, severity = "MEDIUM"})
+          if match(body, "%[") then
+            insert(findings, {path = cp.path, check = "REST API exposed", excerpt = sub(body, 1, 80), status = req.status, severity = "MEDIUM"})
           end
         end
       end
@@ -140,8 +140,8 @@ action = function(host, port)
       end
       if req and req.status and req.status < 400 then
         local body = req.body or ""
-        if body:match("HackIT") or body:match("revslider") or body:match("temp") then
-          insert(findings, {path = rt.path, check = "RCE vector", excerpt = body:sub(1, 60), status = req.status, severity = rt.severity})
+        if match(body, "HackIT") or match(body, "revslider") or match(body, "temp") then
+          insert(findings, {path = rt.path, check = "RCE vector", excerpt = sub(body, 1, 60), status = req.status, severity = rt.severity})
         end
       end
     end

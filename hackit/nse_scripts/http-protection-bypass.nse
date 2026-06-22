@@ -131,9 +131,9 @@ action = function(host, port)
             end
 
             if response.body and #response.body > 0 then
-                local body_lower = response.body:lower()
+                local body_lower = response.lower(body)
                 for _, sp in ipairs(success_patterns) do
-                    if body_lower:find(sp.pattern) then
+                    if find(body_lower, sp.pattern) then
                         finding.bypass_successful = true
                         finding.signature = sp.desc
                         break

@@ -111,18 +111,18 @@ action = function(host, port)
           socket:close()
           return format_output(false, "No AMQP response")
       end
-      if response:sub(1, 4) == "AMQP" then
+      if sub(response, 1, 4) == "AMQP" then
           insert(result, "AMQP broker detected")
       end
       if #response >= 7 then
-          local proto = response:sub(5, 7)
-          insert(result, ("Protocol version: %d.%d.%d"):format(proto:byte(1), proto:byte(2), proto:byte(3)))
+          local proto = sub(response, 5, 7)
+          insert(result, ("Protocol version: %d.%d.%d"):format(byte(proto, 1), byte(proto, 2), byte(proto, 3)))
       end
       socket:send(amqp_start_ok())
       status, response = socket:receive_bytes(1)
       if status and #response > 0 then
           insert(result, ("AMQP connection established (%d bytes)"):format(#response))
-          local properties = response:match("product[^\x00]*")
+          local properties = match(response, "product[^\x00]*")
           if properties then
               insert(result, "Server product info present")
           end

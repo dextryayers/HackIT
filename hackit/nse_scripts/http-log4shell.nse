@@ -100,10 +100,10 @@ action = function(host, port)
       local req = http.get(host, port, vec.path, {header = headers})
       if req and req.status then
         local body = req.body or ""
-        local body_lower = body:lower()
+        local body_lower = lower(body)
         for _, cb in ipairs(jndi_payloads) do
-          local escaped = cb:lower():gsub("%$", "%%$"):gsub("%{", "%%{"):gsub("%}", "%%}"):gsub("%.", "%%."):gsub("%:", "%%:")
-          if body_lower:match(escaped) or body_lower:match("jndi") then
+          local escaped = lower(cb):gsub("%$", "%%$"):gsub("%{", "%%{"):gsub("%}", "%%}"):gsub("%.", "%%."):gsub("%:", "%%:")
+          if match(body_lower, escaped) or match(body_lower, "jndi") then
             insert(findings, {vector = ("%s header: %s"):format(vec.header ~= "" and vec.header or "query param", cb), path = vec.path, status = req.status})
             break
           end
@@ -111,8 +111,8 @@ action = function(host, port)
         local headers_out = req.headers or {}
         for hname, hval in pairs(headers_out) do
           local hstr = type(hval) == "table" and concat(hval, " ") or tostring(hval)
-          if hstr:lower():match("jndi") or hstr:match("%$%{jndi") then
-            insert(findings, {vector = ("response header %s: %s"):format(hname, hstr:sub(1, 80)), path = vec.path, status = req.status})
+          if lower(hstr):match("jndi") or match(hstr, "%$%{jndi") then
+            insert(findings, {vector = ("response header %s: %s"):format(hname, sub(hstr, 1, 80)), path = vec.path, status = req.status})
             break
           end
         end
@@ -130,8 +130,8 @@ action = function(host, port)
         data = pp.data
       })
       if req and req.body then
-        local body = req.body:lower()
-        if body:match("jndi") then
+        local body = req.lower(body)
+        if match(body, "jndi") then
           insert(findings, {vector = ("POST %s"):format(pp.path), path = pp.path, status = req.status})
         end
       end

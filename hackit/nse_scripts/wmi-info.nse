@@ -97,7 +97,7 @@ local function check_rpc_wmi(host, port_number)
     pcall(socket.close, socket)
 
     if ok3 and response and #response >= 4 then
-        if response:byte(2) == 0x02 or response:byte(3) == 0x02 then
+        if byte(response, 2) == 0x02 or byte(response, 3) == 0x02 then
             return "WMI_RPC"
         end
         return "RPC_unknown"
@@ -111,15 +111,15 @@ local function check_http_wmi(host, port_number)
         local server = (response.header and response.header["server"]) or ""
         local content_type = (response.header and response.header["content-type"]) or ""
 
-        if server:lower():find("microsoft") or
-           content_type:find("application/soap") or
-           content_type:find("wsman") then
+        if lower(server):find("microsoft") or
+           find(content_type, "application/soap") or
+           find(content_type, "wsman") then
             return "WMI_WinRM"
         end
 
         if response.status == 401 then
             local auth = (response.header and response.header["www-authenticate"]) or ""
-            if auth:find("Negotiate") or auth:find("NTLM") or auth:find("Kerberos") then
+            if find(auth, "Negotiate") or find(auth, "NTLM") or find(auth, "Kerberos") then
                 return "WMI_WinRM_authed"
             end
         end

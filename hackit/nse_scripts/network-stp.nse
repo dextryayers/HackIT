@@ -75,14 +75,14 @@ local function capture_bpdu_frame(timeout)
             result = {}
             result.received = true
             result.length = #r
-            result.bpdu_type = (r:byte(20) == 0x00) and "Configuration BPDU" or "TCN BPDU"
+            result.bpdu_type = (byte(r, 20) == 0x00) and "Configuration BPDU" or "TCN BPDU"
             if #r >= 22 then
                 local root_id = ""
-                for i = 23, 30 do root_id = root_id .. format("%02x", r:byte(i)) end
+                for i = 23, 30 do root_id = root_id .. format("%02x", byte(r, i)) end
                 result.root_bridge_id = root_id
             end
             if #r >= 36 then
-                result.root_path_cost = r:byte(36)
+                result.root_path_cost = byte(r, 36)
             end
         end
         return result

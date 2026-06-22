@@ -89,9 +89,9 @@ action = function(host, port)
         meta_socket:send("GET " .. path .. " HTTP/1.1\r\nHost: metadata\r\nConnection: close\r\n\r\n")
         local status, response = meta_socket:receive_bytes(1)
         if status and response then
-            local body = response:match("\r\n\r\n(.*)")
-            if body and #body > 0 and not body:match("404") and not body:match("Not Found") then
-                insert(result, ("DigitalOcean metadata: %s = %s"):format(path, (body:gsub("%s+", " "):sub(1, 100))))
+            local body = match(response, "\r\n\r\n(.*)")
+            if body and #body > 0 and not match(body, "404") and not match(body, "Not Found") then
+                insert(result, ("DigitalOcean metadata: %s = %s"):format(path, (gsub(body, "%s+", " "):sub(1, 100))))
             end
         end
     end

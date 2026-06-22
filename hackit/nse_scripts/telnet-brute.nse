@@ -93,7 +93,7 @@ action = function(host, port)
                     if resp2 then
                         s:send(pass .. "\r\n")
                         local _, resp3 = s:receive_bytes(1)
-                        if resp3 and (resp3:match("Last login") or resp3:match("#") or resp3:match("$") or resp3:match(">")) then
+                        if resp3 and (match(resp3, "Last login") or match(resp3, "#") or match(resp3, "$") or match(resp3, ">")) then
                             insert(result, ("Valid Telnet credentials: %s / %s"):format(user, pass))
                         end
                     end

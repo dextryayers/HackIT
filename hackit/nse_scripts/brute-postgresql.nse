@@ -63,28 +63,28 @@ categories = {"brute", "intrusive"}
 local function load_list(arg_names)
   local val = stdnse.get_script_args(arg_names)
   if not val or val == "" then return {} end
-  if val:byte() == 47 then
+  if byte(val) == 47 then
     local f, err = io.open(val, "r")
     if f then
       local lines = {}
       for line in f:lines() do
-        line = line:gsub("^%s+", ""):gsub("%s+$", "")
-        if line ~= "" and line:byte() ~= 35 then insert(lines, line end)
+        line = gsub(line, "^%s+", ""):gsub("%s+$", "")
+        if line ~= "" and byte(line) ~= 35 then insert(lines, line) end
       end
       f:close()
       return lines
     end
-  elseif val:find("\n") then
+  elseif find(val, "\n") then
     local lines = {}
-    for line in val:gmatch("[^\n]+") do
-      line = line:gsub("^%s+", ""):gsub("%s+$", "")
-      if line ~= "" and line:byte() ~= 35 then insert(lines, line end)
+    for line in gmatch(val, "[^\n]+") do
+      line = gsub(line, "^%s+", ""):gsub("%s+$", "")
+      if line ~= "" and byte(line) ~= 35 then insert(lines, line) end
     end
     return lines
   end
   local items = {}
-  for item in val:gmatch("[^,]+") do
-    item = item:gsub("^%s+", ""):gsub("%s+$", "")
+  for item in gmatch(val, "[^,]+") do
+    item = gsub(item, "^%s+", ""):gsub("%s+$", "")
     if item ~= "" then insert(items, item) end
   end
   return items
@@ -96,10 +96,10 @@ end
 
 local function pg_md5_hash(user, password, salt)
   local inner = openssl.md5(password .. user)
-  local inner_lc = inner:lower()
+  local inner_lc = lower(inner)
   local combined = inner_lc .. salt
   local outer = openssl.md5(combined)
-  return "md5" .. outer:lower()
+  return "md5" .. lower(outer)
 end
 
 portrule = function(host, port) return port.protocol == "tcp" and port.state == "open" and port.number == 5432 end
@@ -112,7 +112,7 @@ action = function(host, port)
   local timeout = tonumber(stdnse.get_script_args({"brute-postgresql.timeout", "timeout"}) or 10)
   local stop_on_first = stdnse.get_script_args({"brute-postgresql.stop_on_first", "stop_on_first"})
   if stop_on_first == nil or stop_on_first == "" then stop_on_first = true
-  else stop_on_first = (stop_on_first:lower() == "true" or stop_on_first == "1") end
+  else stop_on_first = (lower(stop_on_first) == "true" or stop_on_first == "1") end
 
   if #users == 0 or #passes == 0 then
     return format_output(false, "No credentials provided. Use brute-postgresql.users and brute-postgresql.passwords script args")
@@ -147,14 +147,14 @@ action = function(host, port)
         local auth_resp = socket:receive_bytes(9)
         if not auth_resp then socket:close(); return false end
 
-        if auth_resp:byte(1) == 0x52 then
+        if byte(auth_resp, 1) == 0x52 then
           local auth_type = byte(auth_resp, 6) + byte(auth_resp, 7) * 256
             + byte(auth_resp, 8) * 65536 + byte(auth_resp, 9) * 16777216
           if auth_type == 0 then
             socket:close()
             return true
           elseif auth_type == 3 then
-            local salt = auth_resp:sub(10, 13)
+            local salt = sub(auth_resp, 10, 13)
             if #salt < 4 then
               local rest = socket:receive_bytes(4 - #salt)
               if rest then salt = salt .. rest end
@@ -165,7 +165,7 @@ action = function(host, port)
             local resp = socket:receive_bytes(5)
             socket:close()
             if resp and #resp >= 5 then
-              if resp:byte(1) == 0x52 then
+              if byte(resp, 1) == 0x52 then
                 local code = byte(resp, 6) + byte(resp, 7) * 256
                   + byte(resp, 8) * 65536 + byte(resp, 9) * 16777216
                 if code == 0 then return true end
@@ -177,17 +177,17 @@ action = function(host, port)
             socket:send(pkt)
             local resp = socket:receive_bytes(5)
             socket:close()
-            if resp and #resp >= 5 and resp:byte(1) == 0x52 then
+            if resp and #resp >= 5 and byte(resp, 1) == 0x52 then
               local code = byte(resp, 6) + byte(resp, 7) * 256
                 + byte(resp, 8) * 65536 + byte(resp, 9) * 16777216
               if code == 0 then return true end
             end
             return false
           end
-        elseif auth_resp:byte(1) == 0x45 then
+        elseif byte(auth_resp, 1) == 0x45 then
           socket:close()
           return false
-        elseif auth_resp:byte(1) == 0x4e then
+        elseif byte(auth_resp, 1) == 0x4e then
           socket:close()
           return false
         end

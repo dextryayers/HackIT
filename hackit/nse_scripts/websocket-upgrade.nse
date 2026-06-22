@@ -96,14 +96,14 @@ local function base64_encode(data)
     local b64chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
     local result = {}
     for i = 1, #data, 3 do
-        local b1 = data:byte(i) or 0
-        local b2 = data:byte(i + 1) or 0
-        local b3 = data:byte(i + 2) or 0
+        local b1 = byte(data, i) or 0
+        local b2 = byte(data, i + 1) or 0
+        local b3 = byte(data, i + 2) or 0
         local triple = b1 * 65536 + b2 * 256 + b3
-        insert(result, b64chars:sub(math.floor(triple / 262144) % 64 + 1, math.floor(triple / 262144) % 64 + 1))
-        insert(result, b64chars:sub(math.floor(triple / 4096) % 64 + 1, math.floor(triple / 4096) % 64 + 1))
-        insert(result, b64chars:sub(math.floor(triple / 64) % 64 + 1, math.floor(triple / 64) % 64 + 1))
-        insert(result, b64chars:sub(triple % 64 + 1, triple % 64 + 1))
+        insert(result, sub(b64chars, math.floor(triple / 262144) % 64 + 1, math.floor(triple / 262144) % 64 + 1))
+        insert(result, sub(b64chars, math.floor(triple / 4096) % 64 + 1, math.floor(triple / 4096) % 64 + 1))
+        insert(result, sub(b64chars, math.floor(triple / 64) % 64 + 1, math.floor(triple / 64) % 64 + 1))
+        insert(result, sub(b64chars, triple % 64 + 1, triple % 64 + 1))
     end
     return concat(result)
 end
@@ -146,7 +146,7 @@ action = function(host, port)
                 local ws_extensions = (request.header and request.header["sec-websocket-extensions"]) or ""
                 local server = (request.header and request.header["server"]) or ""
 
-                if upgrade:lower() == "websocket" and accept ~= "" then
+                if lower(upgrade) == "websocket" and accept ~= "" then
                     ep_info.upgrade_success = true
                     ep_info.accept_key = accept
                     ep_info.selected_protocol = protocol

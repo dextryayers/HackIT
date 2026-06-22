@@ -69,7 +69,7 @@ action = function(host, port)
         local url = "/?" .. param .. "=" .. val
         local response = http.get(host, port, url)
         if response and response.body then
-            if response.body:find(payload, 1, true) then
+            if response.find(body, payload, 1, true) then
                 insert(results, "Reflected in " .. param .. " parameter")
             end
         end
@@ -77,7 +77,7 @@ action = function(host, port)
     if #results == 0 then
         local post_body = "q=" .. payload
         local post_resp = http.post(host, port, "/", {header = {["Content-Type"] = "application/x-www-form-urlencoded"}}, nil, post_body)
-        if post_resp and post_resp.body and post_resp.body:find(payload, 1, true) then
+        if post_resp and post_resp.body and post_resp.find(body, payload, 1, true) then
             insert(results, "Reflected in POST body")
         end
     end

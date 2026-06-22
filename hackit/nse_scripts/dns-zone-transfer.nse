@@ -77,12 +77,12 @@ local function try_axfr(host, zone_name, port_num)
   local parsed = {}
   for _, record in ipairs(records) do
     if type(record) == "table" then
-      insert(parsed, {)
+      insert(parsed, {
         name = record.name or "?",
         type = record.dtype or "?",
         data = record.data or stdnse.tojson(record),
         ttl = record.ttl or 0
-      }
+      })
     elseif type(record) == "string" then
       insert(parsed, { data = record })
     end
@@ -114,7 +114,7 @@ action = function(host, port)
   local seen = {}
   local unique_zones = {}
   for _, z in ipairs(zone_candidates) do
-    local key = z:lower():gsub("%.$", "")
+    local key = lower(z):gsub("%.$", "")
     if not seen[key] then
       seen[key] = true
       insert(unique_zones, key)

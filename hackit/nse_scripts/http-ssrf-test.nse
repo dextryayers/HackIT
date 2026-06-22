@@ -128,7 +128,7 @@ action = function(host, port)
     for _, path in ipairs(test_paths) do
         for _, param in ipairs(ssrf_params) do
             for _, payload in ipairs(ssrf_payloads) do
-                local encoded_url = payload.url:gsub(":", "%%3A"):gsub("/", "%%2F")
+                local encoded_url = payload.gsub(url, ":", "%%3A"):gsub("/", "%%2F")
                 local query = path .. "?" .. param .. "=" .. payload.url
                 local query_encoded = path .. "?" .. param .. "=" .. encoded_url
                 local queries = { query, query_encoded }
@@ -139,7 +139,7 @@ action = function(host, port)
                         params_tested = params_tested + 1
 
                         for _, sig in ipairs(ssrf_signatures) do
-                            if response.body:find(sig.pattern) then
+                            if response.find(body, sig.pattern) then
                                 local finding = {
                                     param = param,
                                     payload = payload.name,

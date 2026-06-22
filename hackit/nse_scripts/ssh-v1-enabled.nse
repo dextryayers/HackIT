@@ -70,12 +70,12 @@ action = function(host, port)
         local status2, resp = sock:receive_buf("\n", 5000)
         sock:close()
         if status2 and resp then
-            if resp:find("SSH") and (resp:find("1%.5") or resp:find("1%.99")) then
+            if find(resp, "SSH") and (find(resp, "1%.5") or find(resp, "1%.99")) then
                 return true
-            elseif resp:find("Protocol mismatch") or resp:find("SSH%-2") then
+            elseif find(resp, "Protocol mismatch") or find(resp, "SSH%-2") then
                 return false
             end
-            if not resp:find("SSH%-2") then
+            if not find(resp, "SSH%-2") then
                 return true
             end
             return false

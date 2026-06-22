@@ -70,8 +70,8 @@ local function load_list(arg_names, default)
   if f then
     local lines = {}
     for line in f:lines() do
-      line = line:gsub("^%s+", ""):gsub("%s+$", "")
-      if line ~= "" and line:byte() ~= 35 then
+      line = gsub(line, "^%s+", ""):gsub("%s+$", "")
+      if line ~= "" and byte(line) ~= 35 then
         insert(lines, line)
       end
     end
@@ -79,8 +79,8 @@ local function load_list(arg_names, default)
     return lines
   end
   local items = {}
-  for item in val:gmatch("[^,]+") do
-    item = item:gsub("^%s+", ""):gsub("%s+$", "")
+  for item in gmatch(val, "[^,]+") do
+    item = gsub(item, "^%s+", ""):gsub("%s+$", "")
     if item ~= "" then insert(items, item) end
   end
   return items
@@ -89,15 +89,15 @@ end
 local function ssh_read_packet(socket)
   local status, len_bytes = socket:receive_bytes(4)
   if not status then return nil end
-  local pkt_len = len_bytes:byte(1) * 256 * 256 * 256 + len_bytes:byte(2) * 256 * 256 + len_bytes:byte(3) * 256 + len_bytes:byte(4)
+  local pkt_len = byte(len_bytes, 1) * 256 * 256 * 256 + byte(len_bytes, 2) * 256 * 256 + byte(len_bytes, 3) * 256 + byte(len_bytes, 4)
   if pkt_len < 1 or pkt_len > 65536 then return nil end
   local status, rest = socket:receive_bytes(pkt_len)
   if not status then return nil end
-  local padding_len = rest:byte(1)
+  local padding_len = byte(rest, 1)
   local payload_len = pkt_len - padding_len - 1
   if payload_len < 1 then return nil end
-  local pkt_type = rest:byte(2)
-  local payload = rest:sub(3, 2 + payload_len - 1)
+  local pkt_type = byte(rest, 2)
+  local payload = sub(rest, 3, 2 + payload_len - 1)
   return pkt_type, payload
 end
 
@@ -128,7 +128,7 @@ action = function(host, port)
   local timeout = tonumber(stdnse.get_script_args({"brute-ssh.timeout", "timeout"}) or 10)
   local stop_on_first = stdnse.get_script_args({"brute-ssh.stop_on_first", "stop_on_first"})
   if stop_on_first == nil or stop_on_first == "" then stop_on_first = true
-  else stop_on_first = (stop_on_first:lower() == "true" or stop_on_first == "1") end
+  else stop_on_first = (lower(stop_on_first) == "true" or stop_on_first == "1") end
 
   local start_time = os.time()
   local found = {}
@@ -153,7 +153,7 @@ action = function(host, port)
         if not status then errors = errors + 1; return false end
 
         local server_banner = socket:receive_bytes(128)
-        if not server_banner or not server_banner:find("SSH") then
+        if not server_banner or not find(server_banner, "SSH") then
           socket:close()
           return false
         end

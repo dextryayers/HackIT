@@ -72,34 +72,34 @@ local function ssl_connect_and_grab(host, port)
         local result = {}
         if resp then
             result.response = resp
-            local cert_raw = resp:match("-----BEGIN CERTIFICATE-----%s*(.-)%s*-----END CERTIFICATE-----")
+            local cert_raw = match(resp, "-----BEGIN CERTIFICATE-----%s*(.-)%s*-----END CERTIFICATE-----")
             if cert_raw then
                 result.certificate_found = true
-                local subject = resp:match("subject=([^\r\n]+)")
+                local subject = match(resp, "subject=([^\r\n]+)")
                 if subject then result.subject = subject end
-                local issuer = resp:match("issuer=([^\r\n]+)")
+                local issuer = match(resp, "issuer=([^\r\n]+)")
                 if issuer then result.issuer = issuer end
-                local not_before = resp:match("notBefore=([^\r\n]+)")
+                local not_before = match(resp, "notBefore=([^\r\n]+)")
                 if not_before then result.not_before = not_before end
-                local not_after = resp:match("notAfter=([^\r\n]+)")
+                local not_after = match(resp, "notAfter=([^\r\n]+)")
                 if not_after then result.not_after = not_after end
-                local serial = resp:match("serial=([^\r\n]+)")
+                local serial = match(resp, "serial=([^\r\n]+)")
                 if serial then result.serial = serial end
-                local san_match = resp:match("subjectAltName=([^\r\n]+)")
+                local san_match = match(resp, "subjectAltName=([^\r\n]+)")
                 if san_match then
                     result.san = {}
-                    for san in san_match:gmatch("[%w%.%*]+%.%a+") do
+                    for san in gmatch(san_match, "[%w%.%*]+%.%a+") do
                         result.san[#result.san + 1] = san
                     end
                     if #result.san == 0 then
                         result.san_str = san_match
                     end
                 end
-                local alg = resp:match("Public Key Algorithm: ([^\r\n]+)")
+                local alg = match(resp, "Public Key Algorithm: ([^\r\n]+)")
                 if alg then result.public_key_algorithm = alg end
-                local sig_alg = resp:match("Signature Algorithm: ([^\r\n]+)")
+                local sig_alg = match(resp, "Signature Algorithm: ([^\r\n]+)")
                 if sig_alg then result.signature_algorithm = sig_alg end
-                local version = resp:match("Version: (%d)")
+                local version = match(resp, "Version: (%d)")
                 if version then result.version = tonumber(version) end
             end
         end

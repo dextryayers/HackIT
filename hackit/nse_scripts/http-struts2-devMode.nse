@@ -91,7 +91,7 @@ action = function(host, port)
         if req.status == 200 then
           local devmode_indicators = {"DevMode", "devMode", "ValueStack", "struts", "OGNL", "ognl", "Debugging", "WebConsole"}
           for _, ind in ipairs(devmode_indicators) do
-            if body:match(ind) then
+            if match(body, ind) then
               insert(findings, {path = ep, status = req.status, indicator = ind})
               break
             end
@@ -99,7 +99,7 @@ action = function(host, port)
         elseif req.status == 302 then
           local loc = req.headers and req.headers["location"]
           local location_str = type(loc) == "table" and concat(loc, " ") or tostring(loc or "")
-          if location_str:match("devmode") or location_str:match("struts") then
+          if match(location_str, "devmode") or match(location_str, "struts") then
             insert(findings, {path = ep, status = req.status, indicator = "redirect to struts"})
           end
         end
@@ -116,8 +116,8 @@ action = function(host, port)
       for i, f in ipairs(findings) do
         result[("endpoint_%d"):format(i)] = ("%s -> HTTP %d (matched: %s)"):format(f.path, f.status, f.indicator)
       end
-      if server_banner:match("Struts") or server_banner:match("Tomcat") then
-        local ver = server_banner:match("([%d%.]+)")
+      if match(server_banner, "Struts") or match(server_banner, "Tomcat") then
+        local ver = match(server_banner, "([%d%.]+)")
         if ver then result.version = ver end
       end
       return result

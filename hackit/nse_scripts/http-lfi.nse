@@ -76,7 +76,7 @@ action = function(host, port)
             local url = "/?" .. param .. "=" .. payload[1]
             local response = http.get(host, port, url)
             if response and response.body then
-                if response.body:find(payload[2]) then
+                if response.find(body, payload[2]) then
                     insert(results, "LFI via " .. param .. ": " .. payload[1])
                     break
                 end

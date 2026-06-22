@@ -90,15 +90,15 @@ local function dhcpv6_solicit(timeout)
             result = {}
             result.received = true
             result.length = #r
-            result.msg_type = r:byte(1)
-            if r:byte(1) == 2 then result.message = "DHCPv6 ADVERTISE" end
-            if r:byte(1) == 7 then result.message = "DHCPv6 REPLY" end
+            result.msg_type = byte(r, 1)
+            if byte(r, 1) == 2 then result.message = "DHCPv6 ADVERTISE" end
+            if byte(r, 1) == 7 then result.message = "DHCPv6 REPLY" end
             local pos = 5
             while pos < #r - 3 do
-                local opt = (r:byte(pos) or 0) * 256 + (r:byte(pos + 1) or 0)
-                local optlen = (r:byte(pos + 2) or 0) * 256 + (r:byte(pos + 3) or 0)
+                local opt = (byte(r, pos) or 0) * 256 + (byte(r, pos + 1) or 0)
+                local optlen = (byte(r, pos + 2) or 0) * 256 + (byte(r, pos + 3) or 0)
                 if optlen < 1 or optlen > #r - pos + 1 then break end
-                local val = r:sub(pos + 4, pos + optlen - 1)
+                local val = sub(r, pos + 4, pos + optlen - 1)
                 if opt == 23 then
                     result.dns_servers = result.dns_servers or {}
                     result.dns_servers[#result.dns_servers + 1] = val
@@ -108,8 +108,8 @@ local function dhcpv6_solicit(timeout)
                     result.ntp_servers[#result.ntp_servers + 1] = val
                 end
                 if opt == 7 then
-                    result.preferred_lifetime = (r:byte(pos + 4) or 0) * 256^3 + (r:byte(pos + 5) or 0) * 256^2 + (r:byte(pos + 6) or 0) * 256 + (r:byte(pos + 7) or 0)
-                    result.valid_lifetime = (r:byte(pos + 8) or 0) * 256^3 + (r:byte(pos + 9) or 0) * 256^2 + (r:byte(pos + 10) or 0) * 256 + (r:byte(pos + 11) or 0)
+                    result.preferred_lifetime = (byte(r, pos + 4) or 0) * 256^3 + (byte(r, pos + 5) or 0) * 256^2 + (byte(r, pos + 6) or 0) * 256 + (byte(r, pos + 7) or 0)
+                    result.valid_lifetime = (byte(r, pos + 8) or 0) * 256^3 + (byte(r, pos + 9) or 0) * 256^2 + (byte(r, pos + 10) or 0) * 256 + (byte(r, pos + 11) or 0)
                 end
                 pos = pos + optlen
             end

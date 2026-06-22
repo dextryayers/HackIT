@@ -75,7 +75,7 @@ local function listen_bpdu_frame(timeout)
             result = {}
             result.received = true
             result.length = #r
-            local flags_byte = r:byte(20) or 0
+            local flags_byte = byte(r, 20) or 0
             if flags_byte == 0x00 then
                 result.frame_type = "Configuration BPDU"
             elseif flags_byte == 0x80 then
@@ -85,15 +85,15 @@ local function listen_bpdu_frame(timeout)
             end
             if #r >= 22 then
                 local root_id = ""
-                for i = 23, 30 do root_id = root_id .. format("%02x", r:byte(i)) end
+                for i = 23, 30 do root_id = root_id .. format("%02x", byte(r, i)) end
                 result.root_bridge_id = root_id
             end
             if #r >= 36 then
-                result.root_path_cost = r:byte(36)
+                result.root_path_cost = byte(r, 36)
             end
             if #r >= 31 then
                 local bridge_id = ""
-                for i = 31, 38 do bridge_id = bridge_id .. format("%02x", r:byte(i)) end
+                for i = 31, 38 do bridge_id = bridge_id .. format("%02x", byte(r, i)) end
                 result.bridge_id = bridge_id
             end
         end

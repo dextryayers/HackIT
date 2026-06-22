@@ -1,0 +1,60 @@
+CC = gcc
+LD = ld
+CFLAGS = -O3 -march=native -mtune=native -flto -fomit-frame-pointer -fvisibility=hidden -Wall -Wextra -Wpedantic -std=c11
+LDFLAGS = -flto -s
+BPF_CFLAGS = -O2 -target bpf -Wall -Wextra
+DPDK_CFLAGS = $(shell pkg-config --cflags libdpdk 2>/dev/null || echo '-I/usr/include/dpdk -I/usr/local/include/dpdk')
+DPDK_LIBS = $(shell pkg-config --libs libdpdk 2>/dev/null || echo '-ldpdk -lrte_eal -lrte_mempool -lrte_mbuf -lrte_ethdev')
+LIBBPF_CFLAGS = $(shell pkg-config --cflags libbpf 2>/dev/null || echo '-I/usr/include/bpf -I/usr/local/include/bpf')
+LIBBPF_LIBS = $(shell pkg-config --libs libbpf 2>/dev/null || echo '-lbpf -lelf -lz')
+
+SRC_DIR = src
+INC_DIR = include
+BUILD_DIR = build
+
+SRCS = $(wildcard $(SRC_DIR)/*.c)
+OBJS = $(SRCS:$(SRC_DIR)/%.c=$(BUILD_DIR)/%.o)
+TARGET = libpacket_sakti.so
+XDP_OBJ = xdp_kern.o
+
+.PHONY: all clean dpdk xdp bpf
+
+all: $(TARGET)
+
+$(BUILD_DIR):
+	mkdir -p $(BUILD_DIR)
+
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c $(INC_DIR)/engine.h $(INC_DIR)/protocol_morph.h $(INC_DIR)/dpi_evader.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(DPDK_CFLAGS) $(LIBBPF_CFLAGS) -I$(INC_DIR) -fPIC -c -o $@ $<
+
+$(TARGET): $(OBJS)
+	$(CC) $(CFLAGS) -fPIC -shared $(LDFLAGS) $(DPDK_LIBS) $(LIBBPF_LIBS) -o $@ $(OBJS) -lpcap -lpthread -lm
+
+# XDP/eBPF kernel program
+xdp: $(BUILD_DIR)/$(XDP_OBJ)
+
+$(BUILD_DIR)/$(XDP_OBJ): $(SRC_DIR)/xdp_kern.c $(INC_DIR)/xdp_kern.h | $(BUILD_DIR)
+	clang $(BPF_CFLAGS) -I$(INC_DIR) -c -o $@ $<
+	llvm-strip -g $@
+
+# DPDK standalone test
+dpdk: CFLAGS += $(DPDK_CFLAGS)
+dpdk: $(BUILD_DIR)/dpdk_test
+	@echo "DPDK test binary built"
+
+$(BUILD_DIR)/dpdk_test: $(SRC_DIR)/dpdk_engine.c $(INC_DIR)/dpdk_handler.h | $(BUILD_DIR)
+	$(CC) -O3 $(DPDK_CFLAGS) -I$(INC_DIR) -o $@ $< $(DPDK_LIBS) -lpthread -lm
+
+# eBPF standalone verification
+bpf: $(BUILD_DIR)/$(XDP_OBJ)
+	@echo "Verifying BPF program..."
+	bpftool prog load $(BUILD_DIR)/$(XDP_OBJ) /sys/fs/bpf/xdp_ddos 2>/dev/null || echo "BPF verification skipped (no bpftool)"
+
+clean:
+	rm -rf $(BUILD_DIR) $(TARGET) libpacket*.so
+
+install: $(TARGET)
+	cp $(TARGET) /usr/local/lib/
+	ldconfig
+
+.PHONY: all clean dpdk xdp bpf install

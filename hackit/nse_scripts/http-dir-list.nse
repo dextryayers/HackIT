@@ -74,7 +74,7 @@ action = function(host, port)
         if resp and resp.body then
             local is_listing = false
             for _, pattern in ipairs(listing_patterns) do
-                if resp.body:find(pattern) then
+                if resp.find(body, pattern) then
                     is_listing = true
                     break
                 end

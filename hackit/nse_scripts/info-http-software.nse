@@ -90,27 +90,27 @@ action = function(host, port)
         end)
         if not ok then pcall(socket.close, socket) end
         if resp then
-            local server = resp:match("Server: ([^\r\n]+)")
+            local server = match(resp, "Server: ([^\r\n]+)")
             if server and not headers_seen[server] then
                 headers_seen[server] = true
                 insert(versions_seen, {header = "Server", value = server, request = req.desc})
             end
-            local powered = resp:match("X%-Powered%-By: ([^\r\n]+)")
+            local powered = match(resp, "X%-Powered%-By: ([^\r\n]+)")
             if powered and not headers_seen["X-Powered-By: " .. powered] then
                 headers_seen["X-Powered-By: " .. powered] = true
                 insert(versions_seen, {header = "X-Powered-By", value = powered, request = req.desc})
             end
-            local asp = resp:match("X%-AspNet%-Version: ([^\r\n]+)")
+            local asp = match(resp, "X%-AspNet%-Version: ([^\r\n]+)")
             if asp and not headers_seen["X-AspNet-Version: " .. asp] then
                 headers_seen["X-AspNet-Version: " .. asp] = true
                 insert(versions_seen, {header = "X-AspNet-Version", value = asp, request = req.desc})
             end
-            local runtime = resp:match("X%-AspNetMvc%-Version: ([^\r\n]+)")
+            local runtime = match(resp, "X%-AspNetMvc%-Version: ([^\r\n]+)")
             if runtime and not headers_seen["X-AspNetMvc-Version: " .. runtime] then
                 headers_seen["X-AspNetMvc-Version: " .. runtime] = true
                 insert(versions_seen, {header = "X-AspNetMvc-Version", value = runtime, request = req.desc})
             end
-            local cf = resp:match("CF%-RAY: ([^\r\n]+)")
+            local cf = match(resp, "CF%-RAY: ([^\r\n]+)")
             if cf then out.cloudflare_ray = cf end
         end
     end

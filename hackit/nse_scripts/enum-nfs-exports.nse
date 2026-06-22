@@ -105,8 +105,8 @@ action = function(host, port)
         local status, export_resp = socket:receive_bytes(1)
         if status and export_resp then
             insert(result, ("NFS MOUNT export response received (%d bytes)"):format(#export_resp))
-            for export in export_resp:gmatch("([%w/_-]+)") do
-                if export:match("^/") then
+            for export in gmatch(export_resp, "([%w/_-]+)") do
+                if match(export, "^/") then
                     insert(result, ("Export: %s"):format(export))
                 end
             end

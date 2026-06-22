@@ -86,13 +86,13 @@ action = function(host, port)
         socket:send("GET " .. path .. " HTTP/1.1\r\nHost: metadata\r\n" .. headers .. "Connection: close\r\n\r\n")
         local status, response = socket:receive_bytes(1)
         if status and response then
-            local body = response:match("\r\n\r\n(.*)")
-            if body and #body > 0 and not body:match("error") and not body:match("404") then
-                if body:match("compute") or body:match("vmId") or body:match("name") then
+            local body = match(response, "\r\n\r\n(.*)")
+            if body and #body > 0 and not match(body, "error") and not match(body, "404") then
+                if match(body, "compute") or match(body, "vmId") or match(body, "name") then
                     insert(result, ("Azure IMDS accessible via %s"):format(path))
                     local fields = {"name", "location", "vmId", "subscriptionId", "resourceGroupName"}
                     for _, f in ipairs(fields) do
-                        local val = body:match('"' .. f .. '"%s*:%s*"([^"]+)"')
+                        local val = match(body, '"' .. f .. '"%s*:%s*"([^"]+)"')
                         if val then
                             insert(result, ("  %s: %s"):format(f, val))
                         end

@@ -73,7 +73,7 @@ action = function(host, port)
         return format_output(false, "No response from server")
     end
     local body = response.body or ""
-    if body:match("joomla") or body:match("Joomla") or body:match("com_content") then
+    if match(body, "joomla") or match(body, "Joomla") or match(body, "com_content") then
         insert(result, "Joomla CMS detected")
     else
         insert(result, "Not identified as Joomla")
@@ -90,16 +90,16 @@ action = function(host, port)
     for _, vp in ipairs(version_paths) do
         local resp2 = http.get(host, port, vp[1])
         if resp2 and resp2.status == 200 and resp2.body then
-            local ver = resp2.body:match('version%s*=%s*"([%d.]+)') or resp2.body:match('version="([%d.]+)"')
+            local ver = resp2.match(body, 'version%s*=%s*"([%d.]+)') or resp2.match(body, 'version="([%d.]+)"')
             if ver then
                 insert(result, ("Version (%s): %s"):format(vp[2], ver))
             end
         end
     end
-    local gen_tag = body:match('<meta name="generator" content="Joomla!?%s*([^"]+)"')
+    local gen_tag = match(body, '<meta name="generator" content="Joomla!?%s*([^"]+)"')
     if gen_tag then
         insert(result, "Generator tag: " .. gen_tag)
-        local ver = gen_tag:match("[%d.]+")
+        local ver = match(gen_tag, "[%d.]+")
         if ver then
             insert(result, "Joomla version: " .. ver)
         end

@@ -66,8 +66,8 @@ local function load_list(arg_names, default)
   if f then
     local lines = {}
     for line in f:lines() do
-      line = line:gsub("^%s+", ""):gsub("%s+$", "")
-      if line ~= "" and line:byte() ~= 35 then
+      line = gsub(line, "^%s+", ""):gsub("%s+$", "")
+      if line ~= "" and byte(line) ~= 35 then
         insert(lines, line)
       end
     end
@@ -75,8 +75,8 @@ local function load_list(arg_names, default)
     return lines
   end
   local items = {}
-  for item in val:gmatch("[^,]+") do
-    item = item:gsub("^%s+", ""):gsub("%s+$", "")
+  for item in gmatch(val, "[^,]+") do
+    item = gsub(item, "^%s+", ""):gsub("%s+$", "")
     if item ~= "" then insert(items, item) end
   end
   return items
@@ -92,7 +92,7 @@ action = function(host, port)
   local timeout = tonumber(stdnse.get_script_args({"brute-smtp.timeout", "timeout"}) or 10)
   local stop_on_first = stdnse.get_script_args({"brute-smtp.stop_on_first", "stop_on_first"})
   if stop_on_first == nil or stop_on_first == "" then stop_on_first = true
-  else stop_on_first = (stop_on_first:lower() == "true" or stop_on_first == "1") end
+  else stop_on_first = (lower(stop_on_first) == "true" or stop_on_first == "1") end
 
   local start_time = os.time()
   local found = {}
@@ -113,7 +113,7 @@ action = function(host, port)
         socket:receive_bytes(128)
         socket:send("EHLO hackit\r\n")
         local resp = socket:receive_bytes(512)
-        if not resp or not resp:find("AUTH") then
+        if not resp or not find(resp, "AUTH") then
           socket:close()
           return false
         end
@@ -121,20 +121,20 @@ action = function(host, port)
         local b64p = nmap.base64_encode(p)
         socket:send("AUTH LOGIN\r\n")
         local auth_resp = socket:receive_bytes(128)
-        if not auth_resp or not auth_resp:find("334") then
+        if not auth_resp or not find(auth_resp, "334") then
           socket:close()
           return false
         end
         socket:send(b64u .. "\r\n")
         local user_resp = socket:receive_bytes(128)
-        if not user_resp or not user_resp:find("334") then
+        if not user_resp or not find(user_resp, "334") then
           socket:close()
           return false
         end
         socket:send(b64p .. "\r\n")
         local pass_resp = socket:receive_bytes(128)
         socket:close()
-        if pass_resp and pass_resp:find("235") then
+        if pass_resp and find(pass_resp, "235") then
           return true
         end
         return false

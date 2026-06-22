@@ -97,13 +97,13 @@ local function classify_api(response, path)
         content_type = (response.header and response.header["content-type"]) or "",
     }
 
-    if info.content_type:find("json") then
+    if info.find(content_type, "json") then
         info.format = "JSON"
-    elseif info.content_type:find("xml") then
+    elseif info.find(content_type, "xml") then
         info.format = "XML"
-    elseif info.content_type:find("text") then
+    elseif info.find(content_type, "text") then
         info.format = "Text"
-    elseif info.content_type:find("octet") then
+    elseif info.find(content_type, "octet") then
         info.format = "Binary"
     else
         info.format = "Unknown"
@@ -113,7 +113,7 @@ local function classify_api(response, path)
         info.access = "Open"
         if response.body and #response.body > 0 then
             info.body_size = #response.body
-            if info.content_type:find("json") or response.body:byte() == 123 then
+            if info.find(content_type, "json") or response.byte(body) == 123 then
                 local ok, data = pcall(json.parse, response.body)
                 if ok and data then
                     info.parsed_json = true

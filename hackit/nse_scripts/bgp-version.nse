@@ -86,29 +86,29 @@ end
 local function parse_bgp_open(response)
   local info = {}
   if #response >= 19 then
-    local type_byte = response:byte(19)
+    local type_byte = byte(response, 19)
     info.message_type = type_byte
     local msg_types = { [1] = "OPEN", [2] = "OPEN", [3] = "NOTIFICATION", [4] = "KEEPALIVE" }
     info.message_name = msg_types[type_byte] or format("Unknown (%d)", type_byte)
 
     if type_byte == 2 and #response >= 29 then
-      info.bgp_version = response:byte(20)
-      info.remote_as = response:byte(21) * 256 + response:byte(22)
-      info.hold_time = response:byte(23) * 256 + response:byte(24)
+      info.bgp_version = byte(response, 20)
+      info.remote_as = byte(response, 21) * 256 + byte(response, 22)
+      info.hold_time = byte(response, 23) * 256 + byte(response, 24)
 
-      if response:byte(25) and response:byte(26) and response:byte(27) and response:byte(28) then
-        info.router_id = format("%d.%d.%d.%d", response:byte(25), response:byte(26), response:byte(27), response:byte(28))
+      if byte(response, 25) and byte(response, 26) and byte(response, 27) and byte(response, 28) then
+        info.router_id = format("%d.%d.%d.%d", byte(response, 25), byte(response, 26), byte(response, 27), byte(response, 28))
       end
 
-      local opt_len = response:byte(29)
+      local opt_len = byte(response, 29)
       if opt_len and opt_len > 0 and #response >= 29 + opt_len then
         info.optional_parameters_present = true
         info.optional_parameters_length = opt_len
       end
 
     elseif type_byte == 3 and #response >= 21 then
-      info.error_code = response:byte(20)
-      info.error_subcode = response:byte(21)
+      info.error_code = byte(response, 20)
+      info.error_subcode = byte(response, 21)
       local error_codes = {
         [1] = "Message Header Error",
         [2] = "OPEN Message Error",

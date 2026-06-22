@@ -91,13 +91,13 @@ action = function(host, port)
         if r then
             result.response = r
             for _, hdr in ipairs(firewall_headers) do
-                if r:find(hdr, 1, true) then
+                if find(r, hdr, 1, true) then
                     insert(indicators, hdr .. " header present")
                 end
             end
-            local server = r:match("Server: ([^\r\n]+)")
+            local server = match(r, "Server: ([^\r\n]+)")
             if server then result.server = server end
-            local status_code = r:match("HTTP/%d%.%d (%d+)")
+            local status_code = match(r, "HTTP/%d%.%d (%d+)")
             if status_code then result.status_code = tonumber(status_code) end
         end
         return result

@@ -61,28 +61,28 @@ categories = {"safe", "vuln"}
 local function load_list(arg_names)
   local val = stdnse.get_script_args(arg_names)
   if not val or val == "" then return {} end
-  if val:byte() == 47 then
+  if byte(val) == 47 then
     local f, err = io.open(val, "r")
     if f then
       local lines = {}
       for line in f:lines() do
-        line = line:gsub("^%s+", ""):gsub("%s+$", "")
-        if line ~= "" and line:byte() ~= 35 then insert(lines, line end)
+        line = gsub(line, "^%s+", ""):gsub("%s+$", "")
+        if line ~= "" and byte(line) ~= 35 then insert(lines, line) end
       end
       f:close()
       return lines
     end
-  elseif val:find("\n") then
+  elseif find(val, "\n") then
     local lines = {}
-    for line in val:gmatch("[^\n]+") do
-      line = line:gsub("^%s+", ""):gsub("%s+$", "")
-      if line ~= "" and line:byte() ~= 35 then insert(lines, line end)
+    for line in gmatch(val, "[^\n]+") do
+      line = gsub(line, "^%s+", ""):gsub("%s+$", "")
+      if line ~= "" and byte(line) ~= 35 then insert(lines, line) end
     end
     return lines
   end
   local items = {}
-  for item in val:gmatch("[^,]+") do
-    item = item:gsub("^%s+", ""):gsub("%s+$", "")
+  for item in gmatch(val, "[^,]+") do
+    item = gsub(item, "^%s+", ""):gsub("%s+$", "")
     if item ~= "" then insert(items, item) end
   end
   return items
@@ -103,7 +103,7 @@ action = function(host, port)
       sock:send("AUTH " .. pass .. "\r\n")
       local resp = sock:receive_bytes(10)
       sock:close()
-      if resp and resp:find("+OK") then return true end
+      if resp and find(resp, "+OK") then return true end
       return false
     end)
     if not ok then pcall(function() sock:close() end) end
@@ -119,10 +119,10 @@ action = function(host, port)
       sock:send("INFO\r\n")
       local resp = sock:receive_buf("\r\n", 5000)
       sock:close()
-      if resp and (resp:match("# Server") or resp:match("redis_version")) then
+      if resp and (match(resp, "# Server") or match(resp, "redis_version")) then
         return {vulnerability = true, severity = "CRITICAL", details = "Redis has no password configured"}
       end
-      if resp and (resp:match("NOAUTH") or resp:match("Authentication required")) then
+      if resp and (match(resp, "NOAUTH") or match(resp, "Authentication required")) then
         return {vulnerability = false}
       end
       return false
@@ -142,7 +142,7 @@ action = function(host, port)
         if sock:connect(host.ip, port) then
           sock:send("INFO\r\n")
           local resp = sock:receive_buf("\r\n", 5000)
-          ver = resp and resp:match("redis_version:([^\r\n]+)")
+          ver = resp and match(resp, "redis_version:([^\r\n]+)")
           sock:close()
         end
       end)

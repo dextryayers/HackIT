@@ -135,12 +135,12 @@ action = function(host, port)
 
     if ok and answer and #answer > 0 then
       if elapsed < dynamic_threshold then
-        insert(cached_domains, {)
+        insert(cached_domains, {
           domain = entry.name,
           category = entry.category,
           response_time_ms = math.floor(elapsed),
           threshold_used = math.floor(dynamic_threshold)
-        }
+        })
       end
     end
 

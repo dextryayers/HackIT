@@ -80,8 +80,8 @@ action = function(host, port)
         socket:close()
         return format_output(false, "No banner received")
     end
-    if banner:match("IMAP") or banner:match("OK") then
-        insert(result, "IMAP server: " .. (banner:match("[^\r\n]+") or ""))
+    if match(banner, "IMAP") or match(banner, "OK") then
+        insert(result, "IMAP server: " .. (match(banner, "[^\r\n]+") or ""))
     end
     socket:close()
     for _, user in ipairs(users) do
@@ -93,7 +93,7 @@ action = function(host, port)
                 s:receive_lines(1)
                 s:send("a001 LOGIN " .. user .. " " .. pass .. "\r\n")
                 local status, resp = s:receive_lines(1)
-                if status and resp:match("OK") then
+                if status and match(resp, "OK") then
                     insert(result, ("Valid IMAP credentials: %s / %s"):format(user, pass))
                 end
                 s:send("a002 LOGOUT\r\n")

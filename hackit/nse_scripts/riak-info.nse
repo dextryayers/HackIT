@@ -117,7 +117,7 @@ action = function(host, port)
     if path ~= "/ping" and path ~= "/stats" then
       local ok4, resp = pcall(http.get, host.ip, port.number, path, { timeout = 5000 })
       if ok4 and resp and resp.status == 200 and resp.body then
-        local path_key = path:gsub("^/", ""):gsub("[?=]", "_"):gsub("/", "_")
+        local path_key = gsub(path, "^/", ""):gsub("[?=]", "_"):gsub("/", "_")
         local ok5, pd = pcall(json.parse, resp.body)
         if ok5 and pd then
           if path == "/buckets?buckets=true" and pd.buckets then

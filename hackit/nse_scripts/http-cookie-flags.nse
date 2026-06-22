@@ -75,13 +75,13 @@ action = function(host, port)
     end
     local results = {}
     for _, cookie in ipairs(cookies) do
-        local name = cookie:match("^([^=]+)")
+        local name = match(cookie, "^([^=]+)")
         local flags = {}
-        if cookie:find("HttpOnly") then insert(flags, "HttpOnly" end)
-        if cookie:find("Secure") then insert(flags, "Secure" end)
-        if cookie:find("SameSite") then insert(flags, "SameSite" end)
-        if not cookie:find("HttpOnly") then insert(flags, "MISSING HttpOnly" end)
-        if not cookie:find("Secure") then insert(flags, "MISSING Secure" end)
+        if find(cookie, "HttpOnly") then insert(flags, "HttpOnly") end
+        if find(cookie, "Secure") then insert(flags, "Secure") end
+        if find(cookie, "SameSite") then insert(flags, "SameSite") end
+        if not find(cookie, "HttpOnly") then insert(flags, "MISSING HttpOnly") end
+        if not find(cookie, "Secure") then insert(flags, "MISSING Secure") end
         insert(results, name .. " [" .. concat(flags, ", ") .. "]")
     end
     return format_output(true, concat(results, "\n"))

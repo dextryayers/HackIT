@@ -88,7 +88,7 @@ action = function(host, port)
                 s:send("PASS " .. cred[2] .. "\r\n")
                 local _, r = s:receive_buf("\n", 3000)
                 s:close()
-                if r and (r:match("230 ") or r:match("User logged in")) then
+                if r and (match(r, "230 ") or match(r, "User logged in")) then
                     found_access = true
                     last_msg = r
                     break
@@ -97,13 +97,13 @@ action = function(host, port)
         end
         sock:close()
         local res = output_table()
-        res.banner = banner:match("220[%s-]([^\r\n]+)") or banner:match("220([^\r\n]+)")
+        res.banner = match(banner, "220[%s-]([^\r\n]+)") or match(banner, "220([^\r\n]+)")
         res.anonymous_access = found_access
-        local ver = banner:match("([%d%.]+)[%s_]?ftp") or banner:match("FTP%s+version%s+([%d%.]+)") or banner:match("vsFTP[d]%s+([%d%.]+)")
+        local ver = match(banner, "([%d%.]+)[%s_]?ftp") or match(banner, "FTP%s+version%s+([%d%.]+)") or match(banner, "vsFTP[d]%s+([%d%.]+)")
         if ver then res.version = ver end
         if found_access then
             if last_msg then
-                res.message = last_msg:match("%d%d%d ([^\r\n]+)")
+                res.message = match(last_msg, "%d%d%d ([^\r\n]+)")
             end
         end
         return res

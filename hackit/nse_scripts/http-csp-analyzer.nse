@@ -71,28 +71,28 @@ action = function(host, port)
         return format_output(false, "CSP header not found")
     end
     local results = {}
-    insert(results, "CSP: " .. csp:sub(1, 200))
-    if csp:find("unsafe%-inline") then
+    insert(results, "CSP: " .. sub(csp, 1, 200))
+    if find(csp, "unsafe%-inline") then
         insert(results, "WARNING: 'unsafe-inline' detected (XSS risk)")
     end
-    if csp:find("unsafe%-eval") then
+    if find(csp, "unsafe%-eval") then
         insert(results, "WARNING: 'unsafe-eval' detected")
     end
-    if csp:find("%*%s") or csp:find(":%s*%*") then
+    if find(csp, "%*%s") or find(csp, ":%s*%*") then
         insert(results, "WARNING: Wildcard (*) source detected in directives")
     end
-    if csp:find("http://") then
+    if find(csp, "http://") then
         insert(results, "WARNING: HTTP protocol allowed in CSP")
     end
-    if not csp:find("default%-src") then
+    if not find(csp, "default%-src") then
         insert(results, "NOTE: No default-src directive (falls back to no restriction)")
     end
-    if not csp:find("script%-src") then
+    if not find(csp, "script%-src") then
         insert(results, "NOTE: No script-src directive")
     end
     local directives = {}
-    for d in csp:gmatch("([^;]+)") do
-        insert(directives, d:match("^%s*(.-)%s*$"))
+    for d in gmatch(csp, "([^;]+)") do
+        insert(directives, match(d, "^%s*(.-)%s*$"))
     end
     insert(results, "Directives found: " .. #directives)
     return format_output(true, concat(results, "\n"))

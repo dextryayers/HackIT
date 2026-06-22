@@ -90,15 +90,15 @@ local function is_json_response(response)
     if not response or not response.status then return false end
 
     local content_type = (response.header and response.header["content-type"]) or ""
-    if content_type:find("application/json") or content_type:find("application/hal") or
-       content_type:find("application/vnd%.api") or content_type:find("text/json") or
-       content_type:find("application/json-patch") or content_type:find("application/problem+json") then
+    if find(content_type, "application/json") or find(content_type, "application/hal") or
+       find(content_type, "application/vnd%.api") or find(content_type, "text/json") or
+       find(content_type, "application/json-patch") or find(content_type, "application/problem+json") then
         return true, content_type
     end
 
     if response.body and #response.body > 0 then
-        local trimmed = response.body:match("^%s*(.-)%s*$") or response.body
-        if trimmed:byte() == 123 or trimmed:byte() == 91 then
+        local trimmed = response.match(body, "^%s*(.-)%s*$") or response.body
+        if byte(trimmed) == 123 or byte(trimmed) == 91 then
             local ok, parsed = pcall(json.parse, trimmed)
             if ok then
                 return true, "application/parse-json"
@@ -154,7 +154,7 @@ local function probe_json(host, port, path)
 
     if response.status == 401 then
         local ct = (response.header and response.header["content-type"]) or ""
-        if ct:find("json") then
+        if find(ct, "json") then
             info.format = "JSON (auth required)"
             info.auth_type = response.header["www-authenticate"]
             return info
@@ -163,7 +163,7 @@ local function probe_json(host, port, path)
 
     if response.status == 403 then
         local ct = (response.header and response.header["content-type"]) or ""
-        if ct:find("json") then
+        if find(ct, "json") then
             info.format = "JSON (forbidden)"
             return info
         end
@@ -171,7 +171,7 @@ local function probe_json(host, port, path)
 
     if response.status == 400 or response.status == 422 then
         local ct = (response.header and response.header["content-type"]) or ""
-        if ct:find("json") or ct:find("problem") then
+        if find(ct, "json") or find(ct, "problem") then
             info.format = "JSON (validation error)"
             return info
         end

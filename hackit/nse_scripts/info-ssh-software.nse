@@ -73,27 +73,27 @@ action = function(host, port)
         local b = socket:receive_bytes(256)
         socket:close()
         if b then
-            return b:gsub("[\r\n]+", ""):sub(1, 200)
+            return gsub(b, "[\r\n]+", ""):sub(1, 200)
         end
         return nil
     end)
     if not ok then pcall(socket.close, socket) end
     if banner then
         out.banner = banner
-        out.version = banner:match("SSH%-(%d%.%d)")
-        if not out.version then out.version = banner:match("([%d]+%.[%d]+)") end
+        out.version = match(banner, "SSH%-(%d%.%d)")
+        if not out.version then out.version = match(banner, "([%d]+%.[%d]+)") end
         local software = "Unknown"
-        if banner:find("OpenSSH") then
+        if find(banner, "OpenSSH") then
             software = "OpenSSH"
-            local ver = banner:match("OpenSSH[ _]([%d.]+p?[%d]*)")
+            local ver = match(banner, "OpenSSH[ _]([%d.]+p?[%d]*)")
             if ver then out.software_version = ver end
-        elseif banner:find("Dropbear") then
+        elseif find(banner, "Dropbear") then
             software = "Dropbear"
-            local ver = banner:match("Dropbear_([%d.]+)")
+            local ver = match(banner, "Dropbear_([%d.]+)")
             if ver then out.software_version = ver end
-        elseif banner:find("libssh") then
+        elseif find(banner, "libssh") then
             software = "libssh"
-        elseif banner:find("SSH") then
+        elseif find(banner, "SSH") then
             software = "Generic SSH"
         end
         out.software = software

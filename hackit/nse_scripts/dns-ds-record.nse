@@ -140,7 +140,7 @@ action = function(host, port)
 
     algorithms_used[algo_name] = (algorithms_used[algo_name] or 0) + 1
 
-    insert(records, {)
+    insert(records, {
       key_tag = tostring(key_tag),
       algorithm_number = algorithm,
       algorithm_name = algo_name,
@@ -148,7 +148,7 @@ action = function(host, port)
       digest_name = digest_name,
       digest_strength = strength,
       digest = digest_hex
-    }
+    })
   end
 
   result.ds_records_found = true
@@ -162,11 +162,11 @@ action = function(host, port)
     for _, ds in ipairs(records) do
       for _, dk in ipairs(dnskey_result) do
         if tonumber(ds.key_tag) == tonumber(dk.key_tag) then
-          insert(matching, {)
+          insert(matching, {
             ds_key_tag = ds.key_tag,
             dnskey_key_tag = dk.key_tag,
             match = true
-          }
+          })
           break
         end
       end

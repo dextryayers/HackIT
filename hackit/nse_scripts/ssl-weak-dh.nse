@@ -72,7 +72,7 @@ local function extract_dh_params(data)
         {hex = char(0x00, 0x30), bits = 384},
     }
     for _, pat in ipairs(patterns) do
-        if data:find(pat.hex, 1, true) then
+        if find(data, pat.hex, 1, true) then
             return pat.bits
         end
     end

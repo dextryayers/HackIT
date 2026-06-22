@@ -141,10 +141,10 @@ action = function(host, port)
   for _, proto in ipairs(test_protocols) do
     local ok, status = pcall(probe_protocol, host, proto)
     if ok and status then
-      insert(supported, {)
+      insert(supported, {
         number = proto,
         name = protocol_names[proto] or ("Proto-" .. proto)
-      }
+      })
     end
   end
 

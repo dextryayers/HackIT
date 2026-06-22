@@ -116,13 +116,13 @@ local function get_route_metrics()
 
         if destination and gateway then
           local flag_names = {}
-          if flags & 0x1 ~= 0 then insert(flag_names, "UP" end)
-          if flags & 0x2 ~= 0 then insert(flag_names, "GATEWAY" end)
-          if flags & 0x8 ~= 0 then insert(flag_names, "HOST" end)
-          if flags & 0x10 ~= 0 then insert(flag_names, "REJECT" end)
-          if flags & 0x20 ~= 0 then insert(flag_names, "DEFAULT" end)
+          if flags & 0x1 ~= 0 then insert(flag_names, "UP") end
+          if flags & 0x2 ~= 0 then insert(flag_names, "GATEWAY") end
+          if flags & 0x8 ~= 0 then insert(flag_names, "HOST") end
+          if flags & 0x10 ~= 0 then insert(flag_names, "REJECT") end
+          if flags & 0x20 ~= 0 then insert(flag_names, "DEFAULT") end
 
-          insert(routes, {)
+          insert(routes, {
             interface = iface,
             destination = destination,
             gateway = gateway,
@@ -134,7 +134,7 @@ local function get_route_metrics()
             use_count = use_count,
             window = window,
             irtt = irtt
-          }
+          })
         end
       end
     end

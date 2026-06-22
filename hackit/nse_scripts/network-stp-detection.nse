@@ -88,8 +88,8 @@ action = function(host, port)
       if status and response then
           insert(result, "STP BPDU response received")
           if #response >= 35 then
-              local protocol_id = (response:byte(1) * 256) + response:byte(2)
-              local bpdu_type = response:byte(20)
+              local protocol_id = (byte(response, 1) * 256) + byte(response, 2)
+              local bpdu_type = byte(response, 20)
               if protocol_id == 0 then
                   insert(result, "IEEE 802.1D STP BPDU detected")
                   if bpdu_type == 0x00 then
@@ -98,9 +98,9 @@ action = function(host, port)
                       insert(result, "TCN BPDU")
                   end
                   local root_id = ("%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x"):format(
-                      response:byte(21), response:byte(22), response:byte(23),
-                      response:byte(24), response:byte(25), response:byte(26),
-                      response:byte(27), response:byte(28))
+                      byte(response, 21), byte(response, 22), byte(response, 23),
+                      byte(response, 24), byte(response, 25), byte(response, 26),
+                      byte(response, 27), byte(response, 28))
                   insert(result, "Root bridge ID: " .. root_id)
               end
           end

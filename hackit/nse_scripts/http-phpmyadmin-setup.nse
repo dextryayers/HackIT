@@ -92,26 +92,26 @@ action = function(host, port)
         if req.status == 200 then
           local pma_indicators = {"phpMyAdmin", "pma_password", "AllowNoPassword", "$cfg%[", "blowfish_secret", "setup", "phpmyadmin%-setup"}
           for _, ind in ipairs(pma_indicators) do
-            if body:match(ind) then
-              local excerpt = body:sub(1, 100):gsub("\n", " "):gsub("\r", "")
+            if match(body, ind) then
+              local excerpt = sub(body, 1, 100):gsub("\n", " "):gsub("\r", "")
               insert(findings, {path = s.path, label = s.label, status = req.status, indicator = ind, excerpt = excerpt})
               break
             end
           end
-          if body:match("username") and body:match("password") and body:match("server") then
+          if match(body, "username") and match(body, "password") and match(body, "server") then
             insert(findings, {path = s.path, label = s.label .. " (installer form)", status = req.status, indicator = "installer form", excerpt = "username/password/server fields present"})
           end
-          if body:match("setup") and (body:match("Configure") or body:match("Install")) then
-            insert(findings, {path = s.path, label = s.label, status = req.status, indicator = "setup page", excerpt = body:sub(1, 80)})
+          if match(body, "setup") and (match(body, "Configure") or match(body, "Install")) then
+            insert(findings, {path = s.path, label = s.label, status = req.status, indicator = "setup page", excerpt = sub(body, 1, 80)})
           end
-          if s.path:match("etc/passwd") and body:match("root:.*:0:0:") then
-            insert(findings, {path = s.path, label = "CVE-2018-12613 file inclusion", status = req.status, indicator = "LFI", excerpt = body:sub(1, 80)})
+          if s.match(path, "etc/passwd") and match(body, "root:.*:0:0:") then
+            insert(findings, {path = s.path, label = "CVE-2018-12613 file inclusion", status = req.status, indicator = "LFI", excerpt = sub(body, 1, 80)})
           end
         elseif req.status == 302 then
           local loc = req.headers and req.headers["location"]
           local loc_str = type(loc) == "table" and concat(loc, " ") or tostring(loc or "")
-          if loc_str:match("setup") or loc_str:match("phpmyadmin") then
-            insert(findings, {path = s.path, label = s.label, status = req.status, indicator = ("redirects to %s"):format(loc_str:sub(1, 60))})
+          if match(loc_str, "setup") or match(loc_str, "phpmyadmin") then
+            insert(findings, {path = s.path, label = s.label, status = req.status, indicator = ("redirects to %s"):format(sub(loc_str, 1, 60))})
           end
         end
       end

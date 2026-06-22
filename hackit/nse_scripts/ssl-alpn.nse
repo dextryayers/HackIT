@@ -95,11 +95,11 @@ action = function(host, port)
         local data = try_alpn(host, port, proto)
         if data then
             for _, alpn in ipairs(alpn_protocols) do
-                if data:match(alpn) then
+                if match(data, alpn) then
                     supported[alpn] = true
                 end
             end
-            local sel = data:match("alpn[^%w]*(%S+)") or data:match("selected[%s_]+protocol[%s:=]+([%w%./-]+)")
+            local sel = match(data, "alpn[^%w]*(%S+)") or match(data, "selected[%s_]+protocol[%s:=]+([%w%./-]+)")
             if sel then
                 selected[sel] = true
             end

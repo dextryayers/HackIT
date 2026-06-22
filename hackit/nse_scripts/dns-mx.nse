@@ -161,7 +161,7 @@ action = function(host, port)
 
   if primary.ipv4 then
     for _, v in ipairs(primary.ipv4) do
-      if v:match("^127%.") or v:match("^10%.") or v:match("^172%.") or v:match("^192%.") then
+      if match(v, "^127%.") or match(v, "^10%.") or match(v, "^172%.") or match(v, "^192%.") then
         result.primary_mx_private_ip = true
         break
       end

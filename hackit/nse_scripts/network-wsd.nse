@@ -94,12 +94,12 @@ local function probe_wsd(timeout)
             result = {}
             result.received = true
             result.length = #r
-            result.has_xml = (r:find("<?xml") or r:find("<soap:")) ~= nil
-            local xaddrs = r:match("http%s*://([^<]+)")
+            result.has_xml = (find(r, "<?xml") or find(r, "<soap:")) ~= nil
+            local xaddrs = match(r, "http%s*://([^<]+)")
             if xaddrs then result.xaddrs = xaddrs end
-            local types = r:match("<wsd:Types>([^<]+)</wsd:Types>")
+            local types = match(r, "<wsd:Types>([^<]+)</wsd:Types>")
             if types then result.types = types end
-            local metadata = r:match("<wsd:MetadataVersion>([^<]+)</wsd:MetadataVersion>")
+            local metadata = match(r, "<wsd:MetadataVersion>([^<]+)</wsd:MetadataVersion>")
             if metadata then result.metadata_version = tonumber(metadata) end
         end
         return result

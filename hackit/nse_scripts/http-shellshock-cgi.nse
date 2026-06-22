@@ -110,23 +110,23 @@ action = function(host, port)
           local resp_headers = req.headers or {}
 
           for _, variant in ipairs(shellshock_variants) do
-            if body:match("HackIT_Shellshock") or body:match("bash") and body:match("echo") then
-              local excerpt = body:sub(1, 100):gsub("\n", " "):gsub("\r", "")
-              insert(findings, {cgi = cgi, header = sh.header, excerpt = excerpt, status = req.status, variant = variant:sub(1, 40)})
+            if match(body, "HackIT_Shellshock") or match(body, "bash") and match(body, "echo") then
+              local excerpt = sub(body, 1, 100):gsub("\n", " "):gsub("\r", "")
+              insert(findings, {cgi = cgi, header = sh.header, excerpt = excerpt, status = req.status, variant = sub(variant, 1, 40)})
               break
             end
           end
 
           for hname, hval in pairs(resp_headers) do
             local hstr = type(hval) == "table" and concat(hval, " ") or tostring(hval)
-            if hstr:match("HackIT") then
-              insert(findings, {cgi = cgi, header = sh.header, excerpt = ("response header %s: %s"):format(hname, hstr:sub(1, 60)), status = req.status, variant = "header reflection"})
+            if match(hstr, "HackIT") then
+              insert(findings, {cgi = cgi, header = sh.header, excerpt = ("response header %s: %s"):format(hname, sub(hstr, 1, 60)), status = req.status, variant = "header reflection"})
               break
             end
           end
 
-          if body:match("HackIT") and not findings[#findings] then
-            insert(findings, {cgi = cgi, header = sh.header, excerpt = body:sub(1, 80), status = req.status, variant = "body reflection"})
+          if match(body, "HackIT") and not findings[#findings] then
+            insert(findings, {cgi = cgi, header = sh.header, excerpt = sub(body, 1, 80), status = req.status, variant = "body reflection"})
           end
         end
       end

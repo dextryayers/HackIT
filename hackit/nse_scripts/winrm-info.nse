@@ -92,9 +92,9 @@ action = function(host, port)
             }
 
             if response.status == 200 or response.status == 201 then
-                if server:lower():find("microsoft") or server:lower():find("winrm") or
-                   content_type:find("application/soap") or content_type:find("wsman") or
-                   content_type:find("application/wsman") then
+                if lower(server):find("microsoft") or lower(server):find("winrm") or
+                   find(content_type, "application/soap") or find(content_type, "wsman") or
+                   find(content_type, "application/wsman") then
                     ep_info.detected = "WinRM"
                     ep_info.confidence = "high"
                 end
@@ -103,15 +103,15 @@ action = function(host, port)
                 if www_auth ~= "" then
                     ep_info.auth_methods = www_auth
                     local methods = {}
-                    for m in www_auth:gmatch("[^, ]+") do
+                    for m in gmatch(www_auth, "[^, ]+") do
                         insert(methods, m)
                     end
                     ep_info.auth_types = methods
                 end
-                if server:lower():find("microsoft") or server:lower():find("winrm") then
+                if lower(server):find("microsoft") or lower(server):find("winrm") then
                     ep_info.detected = "WinRM (with auth)"
                     ep_info.confidence = "high"
-                elseif www_auth:find("Negotiate") or www_auth:find("Kerberos") or www_auth:find("NTLM") then
+                elseif find(www_auth, "Negotiate") or find(www_auth, "Kerberos") or find(www_auth, "NTLM") then
                     ep_info.detected = "WinRM (Windows auth)"
                     ep_info.confidence = "medium"
                 end

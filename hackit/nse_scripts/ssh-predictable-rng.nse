@@ -157,9 +157,9 @@ action = function(host, port)
       return result
     end
 
-    banner_str = banner_raw:gsub("\r?\n", ""):gsub("%s+$", "")
-    ssh_version = banner_str:match("SSH%-([%d%.]+)")
-    local software = banner_str:match("SSH%-[%d%.]+%-(.+)")
+    banner_str = gsub(banner_raw, "\r?\n", ""):gsub("%s+$", "")
+    ssh_version = match(banner_str, "SSH%-([%d%.]+)")
+    local software = match(banner_str, "SSH%-[%d%.]+%-(.+)")
 
     insert(findings, {check = "SSH banner", detail = banner_str, severity = "INFO"})
 
@@ -192,23 +192,23 @@ action = function(host, port)
     local weak_mac_found = {}
 
     for _, wk in ipairs(weak_kex) do
-      local match = response_str:match(wk)
+      local match = match(response_str, wk)
       if match then
-        insert(weak_kex_found, match:gsub("%%", ""))
+        insert(weak_kex_found, gsub(match, "%%", ""))
       end
     end
 
     for _, wc in ipairs(weak_ciphers) do
-      local match = response_str:match(wc)
+      local match = match(response_str, wc)
       if match then
-        insert(weak_enc_found, match:gsub("%%", ""))
+        insert(weak_enc_found, gsub(match, "%%", ""))
       end
     end
 
     for _, wm in ipairs(weak_macs) do
-      local match = response_str:match(wm)
+      local match = match(response_str, wm)
       if match then
-        insert(weak_mac_found, match:gsub("%%", ""))
+        insert(weak_mac_found, gsub(match, "%%", ""))
       end
     end
 

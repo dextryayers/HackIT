@@ -64,12 +64,12 @@ portrule = function(host, port) return port.protocol == "tcp" and port.state == 
 
 local function parse_date(date_str)
     if not date_str then return nil end
-    local y, m, d = date_str:match("(%d%d%d%d)-(%d%d)-(%d%d)")
+    local y, m, d = match(date_str, "(%d%d%d%d)-(%d%d)-(%d%d)")
     if y and m and d then
         local ok, t = pcall(os.time, {year = tonumber(y), month = tonumber(m), day = tonumber(d)})
         if ok then return t end
     end
-    local y2, m2, d2 = date_str:match("(%d%d%d%d)/(%d+)/(%d+)")
+    local y2, m2, d2 = match(date_str, "(%d%d%d%d)/(%d+)/(%d+)")
     if y2 and m2 and d2 then
         local ok, t = pcall(os.time, {year = tonumber(y2), month = tonumber(m2), day = tonumber(d2)})
         if ok then return t end
@@ -115,7 +115,7 @@ action = function(host, port)
         result.pubkey_algorithm = cert.pubkey.algorithm
         result.pubkey_bits = cert.pubkey.bits
     end
-    local ver = cert.validFrom:match("(%d%d%d%d)") or ""
+    local ver = cert.match(validFrom, "(%d%d%d%d)") or ""
     if ver ~= "" then
         result.certificate_year = ver
     end

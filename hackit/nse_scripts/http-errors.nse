@@ -75,25 +75,25 @@ action = function(host, port)
         local resp = http.get(host, port, path)
         if resp and resp.body and resp.body ~= "" then
             local info = {}
-            if resp.body:find("stack trace", 1, true) or resp.body:find("Stack Trace", 1, true) then
+            if resp.find(body, "stack trace", 1, true) or resp.find(body, "Stack Trace", 1, true) then
                 insert(info, "Stack trace")
             end
-            if resp.body:find("Warning:", 1, true) or resp.body:find("Fatal error", 1, true) then
+            if resp.find(body, "Warning:", 1, true) or resp.find(body, "Fatal error", 1, true) then
                 insert(info, "PHP error")
             end
-            if resp.body:find("Exception", 1, true) then
+            if resp.find(body, "Exception", 1, true) then
                 insert(info, "Exception details")
             end
-            if resp.body:find("Server Error", 1, true) then
+            if resp.find(body, "Server Error", 1, true) then
                 insert(info, "ASP.NET error")
             end
-            if resp.body:find("root:", 1, true) or resp.body:find("jetty", 1, true) then
+            if resp.find(body, "root:", 1, true) or resp.find(body, "jetty", 1, true) then
                 insert(info, "Java stack trace")
             end
-            if resp.body:find("File not found", 1, true) or resp.body:find("No such file", 1, true) then
+            if resp.find(body, "File not found", 1, true) or resp.find(body, "No such file", 1, true) then
                 insert(info, "Path disclosure")
             end
-            local path_info = resp.body:match("in (%S+%.php)")
+            local path_info = resp.match(body, "in (%S+%.php)")
             if path_info then
                 insert(info, "Path disclosed: " .. path_info)
             end

@@ -93,7 +93,7 @@ action = function(host, port)
         if status and data then
             insert(result, ("BACnet device discovered (%d bytes received)"):format(#data))
             if #data >= 8 then
-                local device_info = data:match("BACnetDevice")
+                local device_info = match(data, "BACnetDevice")
                 if device_info then
                     insert(result, "Device: " .. device_info)
                 end

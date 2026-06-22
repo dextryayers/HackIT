@@ -71,12 +71,12 @@ action = function(host, port)
     if banner_req and banner_req.headers and banner_req.headers["server"] then
       local sv = banner_req.headers["server"]
       server_banner = type(sv) == "table" and sv[1] or sv
-      php_version = server_banner:match("PHP/([%d%.]+)")
+      php_version = match(server_banner, "PHP/([%d%.]+)")
       if not php_version then
         local xpowered = banner_req.headers["x-powered-by"]
         if xpowered then
           local xp = type(xpowered) == "table" and xpowered[1] or xpowered
-          php_version = xp:match("PHP/([%d%.]+)")
+          php_version = match(xp, "PHP/([%d%.]+)")
         end
       end
     end
@@ -101,14 +101,14 @@ action = function(host, port)
         if req.status < 400 then
           local indicators = {"<?php", "PHP Credits", "phpinfo", "allow_url_include", "safe_mode", "root:.*:0:0:", "daemon:", "HTTP_HOST"}
           for _, ind in ipairs(indicators) do
-            if body:match(ind) then
-              local excerpt = body:sub(1, 100):gsub("\n", " "):gsub("\r", "")
+            if match(body, ind) then
+              local excerpt = sub(body, 1, 100):gsub("\n", " "):gsub("\r", "")
               insert(findings, {path = cgi.path, label = cgi.label, status = req.status, indicator = ind, excerpt = excerpt})
               break
             end
           end
-          if cgi.path:match("%-s") and (body:match("<?php") or body:match("echo") or body:match("\\$") or body:match("highlight")) then
-            insert(findings, {path = cgi.path, label = cgi.label, status = req.status, indicator = "source disclosure", excerpt = body:sub(1, 80)})
+          if cgi.match(path, "%-s") and (match(body, "<?php") or match(body, "echo") or match(body, "\\$") or match(body, "highlight")) then
+            insert(findings, {path = cgi.path, label = cgi.label, status = req.status, indicator = "source disclosure", excerpt = sub(body, 1, 80)})
           end
         end
       end
@@ -125,7 +125,7 @@ action = function(host, port)
       for i, f in ipairs(findings) do
         result[("vector_%d"):format(i)] = ("%s (%s) -> HTTP %d, %s: %s"):format(f.path, f.label, f.status, f.indicator, f.excerpt)
       end
-      if php_version and (php_version:match("5%.[34]") or php_version:match("5%.2")) then
+      if php_version and (match(php_version, "5%.[34]") or match(php_version, "5%.2")) then
         result.version_note = ("PHP %s is known vulnerable to CGI argument injection"):format(php_version)
       end
       return result

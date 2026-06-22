@@ -77,13 +77,13 @@ local function capture_cdp_frame(timeout)
             result.length = #r
             local pos = 15
             while pos < #r - 3 do
-                local tlv_type = (r:byte(pos) or 0) * 256 + (r:byte(pos + 1) or 0)
-                local tlv_len = (r:byte(pos + 2) or 0) * 256 + (r:byte(pos + 3) or 0)
+                local tlv_type = (byte(r, pos) or 0) * 256 + (byte(r, pos + 1) or 0)
+                local tlv_len = (byte(r, pos + 2) or 0) * 256 + (byte(r, pos + 3) or 0)
                 if tlv_len < 4 then break end
-                local value = r:sub(pos + 4, pos + tlv_len - 1)
-                if tlv_type == 1 then result.device_id = value:gsub("[\r\n]", "") end
-                if tlv_type == 4 then result.platform = value:gsub("[\r\n]", "") end
-                if tlv_type == 5 then result.capabilities = value:gsub("[\r\n]", "") end
+                local value = sub(r, pos + 4, pos + tlv_len - 1)
+                if tlv_type == 1 then result.device_id = gsub(value, "[\r\n]", "") end
+                if tlv_type == 4 then result.platform = gsub(value, "[\r\n]", "") end
+                if tlv_type == 5 then result.capabilities = gsub(value, "[\r\n]", "") end
                 pos = pos + tlv_len
             end
         end

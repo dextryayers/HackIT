@@ -81,7 +81,7 @@ action = function(host, port)
 
     if smbstate.os then
         result.operating_system = smbstate.os
-        if smbstate.os:match("Windows") then
+        if smbstate.match(os, "Windows") then
             result.os_family = "Windows"
             local versions = {
                 ["10.0"] = "Windows 10/Server 2016/2019/2022",
@@ -94,12 +94,12 @@ action = function(host, port)
                 ["5.0"] = "Windows 2000",
             }
             for ver, name in pairs(versions) do
-                if smbstate.os:find(ver) then
+                if smbstate.find(os, ver) then
                     result.os_version_hint = name
                     break
                 end
             end
-        elseif smbstate.os:match("Unix") or smbstate.os:match("Linux") or smbstate.os:match("Samba") then
+        elseif smbstate.match(os, "Unix") or smbstate.match(os, "Linux") or smbstate.match(os, "Samba") then
             result.os_family = "Unix/Linux (Samba)"
         end
     end

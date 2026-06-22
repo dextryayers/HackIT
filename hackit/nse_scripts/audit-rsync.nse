@@ -67,7 +67,7 @@ local function rsync_list_modules(host, port)
         local banner = socket:receive_bytes(256)
         local server_version = nil
         if banner then
-            server_version = banner:match("@RSYNCD: ([%d.]+)")
+            server_version = match(banner, "@RSYNCD: ([%d.]+)")
         end
         socket:send("@RSYNCD: 31.0\n")
         socket:receive_bytes(256)
@@ -82,12 +82,12 @@ local function rsync_list_modules(host, port)
             result.length = #resp
             result.server_version = server_version
             result.modules = {}
-            for line in resp:gmatch("([^\r\n]+)") do
-                if line:find("@RSYNCD:") then
+            for line in gmatch(resp, "([^\r\n]+)") do
+                if find(line, "@RSYNCD:") then
                     result.protocol_line = line
-                elseif #line > 0 and not line:find("^%s*$") then
-                    local mod_name = line:match("^([%w._-]+)")
-                    local mod_comment = line:match("%s+(.+)$")
+                elseif #line > 0 and not find(line, "^%s*$") then
+                    local mod_name = match(line, "^([%w._-]+)")
+                    local mod_comment = match(line, "%s+(.+)$")
                     result.modules[#result.modules + 1] = {name = mod_name, comment = mod_comment or ""}
                 end
             end

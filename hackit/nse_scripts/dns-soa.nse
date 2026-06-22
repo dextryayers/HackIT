@@ -119,9 +119,9 @@ action = function(host, port)
   local minimum = soa.minimum or (type(soa) == "table" and soa[7]) or 0
 
   if type(rname) == "string" then
-    rname = rname:gsub("%.", "@")
+    rname = gsub(rname, "%.", "@")
     local at_count = 0
-    for c in rname:gmatch("@") do at_count = at_count + 1 end
+    for c in gmatch(rname, "@") do at_count = at_count + 1 end
     if at_count > 1 then
       local parts = strsplit("@", rname)
       rname = parts[1] .. "@" .. concat(parts, ".", 2)
@@ -130,11 +130,11 @@ action = function(host, port)
 
   local serial_str = tostring(serial)
   local serial_format = "unknown"
-  if #serial_str >= 10 and serial_str:match("^%d%d%d%d%d%d%d%d%d+$") then
-    local date_part = serial_str:sub(1, 8)
-    local rev_part = serial_str:sub(9)
+  if #serial_str >= 10 and match(serial_str, "^%d%d%d%d%d%d%d%d%d+$") then
+    local date_part = sub(serial_str, 1, 8)
+    local rev_part = sub(serial_str, 9)
     serial_format = "date-based (YYYYMMDD" .. (rev_part and ("+" .. rev_part) or "") .. ")"
-  elseif serial_str:match("^%d+$") then
+  elseif match(serial_str, "^%d+$") then
     serial_format = "increment-only"
   end
 

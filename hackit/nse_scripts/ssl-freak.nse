@@ -72,7 +72,7 @@ local function test_export_cipher(host, port, cipher)
         local _, data = sock:receive_buf(tls.server_hello_done, 5000)
         sock:close()
         if data then
-            if data:match("handshake_failure") or data:match("insufficient_security") then
+            if match(data, "handshake_failure") or match(data, "insufficient_security") then
                 return false
             end
             return true

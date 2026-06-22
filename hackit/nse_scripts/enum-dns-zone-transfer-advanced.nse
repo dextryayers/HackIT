@@ -75,7 +75,7 @@ local function dns_axfr_query(domain)
     local qtype = 0x00fc
     local qclass = 0x0001
     local qname = {}
-    for label in domain:gmatch("[^.]+") do
+    for label in gmatch(domain, "[^.]+") do
         insert(qname, char(#label) .. label)
     end
     insert(qname, char(0x00))
@@ -110,14 +110,14 @@ action = function(host, port)
                 local records = 0
                 local pos = 13
                 while pos < #response - 10 do
-                    if response:byte(pos) == 0xc0 then
+                    if byte(response, pos) == 0xc0 then
                         pos = pos + 2
                     end
                     if pos + 10 <= #response then
-                        local rtype = (response:byte(pos) << 8) + response:byte(pos + 1)
+                        local rtype = (byte(response, pos) << 8) + byte(response, pos + 1)
                         pos = pos + 10
                         if pos <= #response then
-                            local rdlength = (response:byte(pos) << 8) + response:byte(pos + 1)
+                            local rdlength = (byte(response, pos) << 8) + byte(response, pos + 1)
                             pos = pos + 2
                             records = records + 1
                             pos = pos + rdlength

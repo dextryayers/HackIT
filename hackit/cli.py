@@ -23,6 +23,7 @@ from hackit.js import analyze_js
 from hackit.cve import check_cve
 from hackit.osint import osint as osint_console
 from hackit.agent import agent
+from hackit.ddos import ddos as ddos_attack
 from hackit.ui import display_banner, _colored, YELLOW, GREEN, B_GREEN, B_CYAN, B_WHITE, DIM, RED, MAGENTA, BLUE, CYAN, B_MAGENTA, B_RED, B_BLUE, B_YELLOW, WHITE, BG_BLUE, BG_CYAN, BG_MAGENTA
 from hackit.config import load_config, save_config, set_theme, DEFAULT_CONFIG
 
@@ -141,6 +142,9 @@ def ssl():
 ssl.add_command(analyze_ssl, name='check')
 
 
+# DDoS Tools
+cli.add_command(ddos_attack, name='ddos')
+
 # Utility Tools
 @cli.group()
 def util():
@@ -207,6 +211,7 @@ def examples():
     • Vuln:     $ hackit vuln atomix -u "https://example.com" --severity critical
     • CVE:      $ hackit util cve --software apache --version 2.4.49
     • Wireless: $ hackit wireless sniff -i wlan0 --monitor
+    • DDoS:     $ hackit ddos
     """
     click.echo(examples_text)
 
@@ -383,6 +388,7 @@ def help_tools():
     • util cve      - Vulnerability lookup
     • wireless sniff- Monitor mode sniffing & PCAP
     • wireless crack- High-speed dictionary attack
+    • ddos         - DDoS stress testing (SYN/UDP/ACK/RST/ICMP/DNS/NTP)
     """
     click.echo(tools_text)
 

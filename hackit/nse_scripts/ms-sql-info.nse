@@ -86,24 +86,24 @@ action = function(host, port)
         sock:close()
         if resp and #resp > 20 then
             local res = output_table()
-            if resp:find("Microsoft") or resp:find("MS") or resp:find("SQL Server") then
+            if find(resp, "Microsoft") or find(resp, "MS") or find(resp, "SQL Server") then
                 res.server = "Microsoft SQL Server"
             end
-            local version_bytes = resp:sub(37, 40)
+            local version_bytes = sub(resp, 37, 40)
             local parts = {}
             for i = 1, #version_bytes do
                 insert(parts, tostring(byte(version_bytes, i)))
             end
             res.version_raw = concat(parts, ".")
-            local ver_str = resp:match("version[%s:=]+([%d%.]+)") or resp:match("SQL Server (%d%d%d%d)")
+            local ver_str = match(resp, "version[%s:=]+([%d%.]+)") or match(resp, "SQL Server (%d%d%d%d)")
             if ver_str then
                 res.version = ver_str
-                local major = ver_str:match("^(%d+)")
+                local major = match(ver_str, "^(%d+)")
                 if major then res.version_major = tonumber(major) end
             end
-            local instance = resp:match("InstanceName[^\x00]*[\x00]([^\x00]+)")
+            local instance = match(resp, "InstanceName[^\x00]*[\x00]([^\x00]+)")
             if instance then res.instance_name = instance end
-            local server_name = resp:match("ServerName[^\x00]*[\x00]([^\x00]+)")
+            local server_name = match(resp, "ServerName[^\x00]*[\x00]([^\x00]+)")
             if server_name then res.server_name = server_name end
             return res
         end

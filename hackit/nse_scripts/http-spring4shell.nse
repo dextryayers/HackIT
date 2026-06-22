@@ -91,11 +91,11 @@ action = function(host, port)
       end
       if req and req.status then
         local body = req.body or ""
-        local body_upper = body:upper()
-        if body_upper:match("CLASS%.MODULE") or body_upper:match("CLASS%.CLASSLOADER") then
+        local body_upper = upper(body)
+        if match(body_upper, "CLASS%.MODULE") or match(body_upper, "CLASS%.CLASSLOADER") then
           insert(findings, {path = probe.path, method = probe.method, status = req.status, detail = "class.module reflection in response body"})
         end
-        if body:match("org%.springframework") or body:match("java%.lang%.Class") then
+        if match(body, "org%.springframework") or match(body, "java%.lang%.Class") then
           insert(findings, {path = probe.path, method = probe.method, status = req.status, detail = "Java class name disclosed"})
         end
       end
@@ -112,7 +112,7 @@ action = function(host, port)
       local req = http.get(host, port, "/", {header = headers})
       if req and req.body then
         local body = req.body
-        if body:match("class%.module") or body:match("DefaultContext") or body:match("classLoader") then
+        if match(body, "class%.module") or match(body, "DefaultContext") or match(body, "classLoader") then
           insert(findings, {path = "/ (via " .. hp.header .. ")", method = "GET", status = req.status, detail = "Header-based injection reflected"})
         end
       end
@@ -121,7 +121,7 @@ action = function(host, port)
     local cookie_probe = http.get(host, port, "/", {
       header = {["Cookie"] = "class.module.classLoader.DefaultContext=true"}
     })
-    if cookie_probe and cookie_probe.body and cookie_probe.body:match("class%.module") then
+    if cookie_probe and cookie_probe.body and cookie_probe.match(body, "class%.module") then
       insert(findings, {path = "/ (via Cookie)", method = "GET", status = cookie_probe.status, detail = "Cookie-based injection reflected"})
     end
 
@@ -135,7 +135,7 @@ action = function(host, port)
       for i, f in ipairs(findings) do
         result[("vector_%d"):format(i)] = ("%s -> HTTP %d: %s"):format(f.path, f.status, f.detail)
       end
-      if server_banner:match("Apache%-Tomcat") or server_banner:match("Spring") then
+      if match(server_banner, "Apache%-Tomcat") or match(server_banner, "Spring") then
         result.version_note = "Spring/Tomcat stack detected - verify Spring version < 5.3.18, 5.2.20"
       end
       return result

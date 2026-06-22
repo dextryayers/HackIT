@@ -68,27 +68,27 @@ action = function(host, port)
         if not status then return end
         local banner = sock:receive_buf("\n", 5000)
         if not banner then sock:close(); return end
-        local version = banner:match("SSH%-(%d)%.(%d)")
+        local version = match(banner, "SSH%-(%d)%.(%d)")
         local version_str
-        if version then version_str = version .. "." .. select(2, banner:match("SSH%-(%d)%.(%d)")) end
+        if version then version_str = version .. "." .. select(2, match(banner, "SSH%-(%d)%.(%d)")) end
         sock:send("SSH-2.0-HackIT\r\n")
         local kex = sock:receive_buf("\n", 5000)
         sock:close()
         local res = output_table()
-        res.server_banner = banner:match("([^\r\n]+)")
-        res.ssh_version = banner:match("SSH%-(%S+)")
+        res.server_banner = match(banner, "([^\r\n]+)")
+        res.ssh_version = match(banner, "SSH%-(%S+)")
         if kex then
-            local hostkey_algo = kex:match("(%S-)_key_blob") or kex:match("(%S-)_host_key")
+            local hostkey_algo = match(kex, "(%S-)_key_blob") or match(kex, "(%S-)_host_key")
             if not hostkey_algo then
                 for _, algo in ipairs({"ssh-rsa", "ssh-dss", "ecdsa-sha2-nistp256", "ssh-ed25519", "rsa-sha2-256", "rsa-sha2-512"}) do
-                    if kex:match(algo) then
+                    if match(kex, algo) then
                         hostkey_algo = algo
                         break
                     end
                 end
             end
             res.hostkey_algorithm = hostkey_algo or "unknown"
-            local sw = kex:match("software%s+(%S+)") or kex:match("server%s+version%s+(%S+)"):gsub("[%c]", "")
+            local sw = match(kex, "software%s+(%S+)") or match(kex, "server%s+version%s+(%S+)"):gsub("[%c]", "")
             if sw then res.server_software = sw end
         end
         return res
