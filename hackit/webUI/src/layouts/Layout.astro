@@ -206,4 +206,40 @@ const { title } = Astro.props;
 	/* Fallback if not using .dark class on html but using .light */
 	html:not(.light) .dark\:hidden { display: none !important; }
 	html:not(.light) .dark\:block { display: block !important; }
+
+	/* Global Animations */
+	@keyframes fadeSlideIn {
+		from { opacity: 0; transform: translateY(10px); }
+		to { opacity: 1; transform: translateY(0); }
+	}
+	@keyframes pulse-glow {
+		0%, 100% { box-shadow: 0 0 5px currentColor; }
+		50% { box-shadow: 0 0 20px currentColor; }
+	}
+	.animate-fade-in {
+		animation: fadeSlideIn 0.4s ease-out forwards;
+	}
+	.glass-card {
+		background: rgba(17, 17, 17, 0.8);
+		backdrop-filter: blur(12px);
+		border: 1px solid rgba(255, 255, 255, 0.05);
+	}
+	.glass-card:hover {
+		border-color: rgba(255, 255, 255, 0.15);
+	}
+	.gradient-border {
+		position: relative;
+	}
+	.gradient-border::before {
+		content: '';
+		position: absolute;
+		inset: 0;
+		border-radius: inherit;
+		padding: 1px;
+		background: linear-gradient(135deg, rgba(56, 189, 248, 0.3), rgba(99, 102, 241, 0.3));
+		-webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+		-webkit-mask-composite: xor;
+		mask-composite: exclude;
+		pointer-events: none;
+	}
 </style>

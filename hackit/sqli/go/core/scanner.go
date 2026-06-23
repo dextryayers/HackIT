@@ -62,13 +62,13 @@ func (e *Engine) Start() []Result {
 	u, err := url.Parse(e.Opts.URL)
 	if err != nil {
 		e.Log.Warning(fmt.Sprintf("could not parse target URL '%s'", e.Opts.URL))
-		return allResults
+		return []Result{{Parameter: "error", Type: "fatal", Payload: fmt.Sprintf("Invalid URL: %s", e.Opts.URL), DBMS: "", Confidence: 1.0, Details: "URL parse error"}}
 	}
 
 	params := u.Query()
 	if len(params) == 0 && e.Opts.Data == "" {
 		e.Log.Warning("no parameters found in URL or POST data")
-		return allResults
+		return []Result{{Parameter: "error", Type: "fatal", Payload: "No parameters found in URL or POST data", DBMS: "", Confidence: 1.0, Details: "The target URL has no query parameters and no POST data"}}
 	}
 
 	// ── Connection Phase ──
@@ -116,7 +116,7 @@ func (e *Engine) Start() []Result {
 		e.Log.Info("try: verifying the target URL is reachable from your network")
 		e.Log.Info("try: using --proxy if behind a corporate firewall")
 		e.Log.Info("try: increasing --timeout for slow connections")
-		return allResults
+		return []Result{{Parameter: "error", Type: "fatal", Payload: "Connection timed out", DBMS: "", Confidence: 1.0, Details: "Target URL is unreachable — check network, proxy, or increase timeout"}}
 	}
 
 	avgBaseTime := avgDuration(baselineSamples)

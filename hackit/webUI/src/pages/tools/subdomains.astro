@@ -105,7 +105,7 @@ import Layout from "../../layouts/Layout.astro";
 
   <script is:inline>
     let chart;
-    const API_PORT = 5050;
+    const API_PORT = 8080;
     const API_PATHS = [`http://127.0.0.1:${API_PORT}`, `http://localhost:${API_PORT}`];
 
     function initChart() {
@@ -135,7 +135,7 @@ import Layout from "../../layouts/Layout.astro";
       const statusBtn = document.getElementById("bridge-link");
       for (const path of API_PATHS) {
         try {
-          const res = await fetch(`${path}/api/ping`, { mode: "cors" });
+          const res = await fetch(`${path}/api/ping`, { mode: "cors", signal: AbortSignal.timeout(3000) });
           if (res.ok) {
             statusBtn.innerHTML = "BRIDGE LINK: ACTIVE";
             statusBtn.className = "text-[9px] text-green-500 font-bold";
@@ -148,12 +148,23 @@ import Layout from "../../layouts/Layout.astro";
       return null;
     }
 
+    function animateCounter(target) {
+      const el = document.getElementById("count-display");
+      let current = 0;
+      const step = Math.max(1, Math.floor(target / 30));
+      const interval = setInterval(() => {
+        current = Math.min(current + step, target);
+        el.textContent = current;
+        if (current >= target) clearInterval(interval);
+      }, 50);
+    }
+
     async function runScan() {
       const domain = document.getElementById("target-domain").value.trim();
       if (!domain) return alert("Enter target domain");
 
       const activePath = await checkBridge();
-      if (!activePath) return alert('API Bridge is offline. Restart "py main.py run" in your terminal.');
+      if (!activePath) return alert('API Bridge is offline. Start backend on port 8080.');
 
       const btn = document.getElementById("start-btn");
       const badge = document.getElementById("status-badge");
@@ -161,9 +172,9 @@ import Layout from "../../layouts/Layout.astro";
       const countDisp = document.getElementById("count-display");
 
       btn.disabled = true;
-      btn.textContent = "ENUMERATING...";
+      btn.textContent = "⧗ ENUMERATING...";
       badge.classList.remove("hidden");
-      tbody.innerHTML = '<tr><td colspan="4" class="px-6 py-10 text-center text-magenta-400 animate-pulse">PROBING TARGET INFRASTRUCTURE... PLEASE WAIT</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="4" class="px-6 py-10 text-center"><div class="flex items-center justify-center gap-3"><div class="w-5 h-5 border-2 border-magenta-500/30 border-t-magenta-500 rounded-full animate-spin"></div><span class="text-magenta-400 font-bold text-xs uppercase tracking-widest">Probing Target Infrastructure...</span></div></td></tr>';
       countDisp.textContent = "0";
       if (chart) {
         chart.data.labels = [];
@@ -172,10 +183,11 @@ import Layout from "../../layouts/Layout.astro";
       }
 
       try {
-        const response = await fetch(`${activePath}/api/subdomains?domain=${domain}`, {
+        const response = await fetch(`${activePath}/api/domain/subdomains?domain=${domain}`, {
           method: "GET",
           headers: { Accept: "application/json" },
           mode: "cors",
+          signal: AbortSignal.timeout(60000),
         });
 
         if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
@@ -183,26 +195,28 @@ import Layout from "../../layouts/Layout.astro";
 
         if (data.error) throw new Error(data.error);
 
-        countDisp.textContent = data.length;
+        const subdomains = data.subdomains || [];
+
+        animateCounter(subdomains.length);
         tbody.innerHTML = '';
 
-        if (data.length === 0) {
+        if (subdomains.length === 0) {
           tbody.innerHTML = '<tr><td colspan="4" class="px-6 py-10 text-center text-white/20 italic">No subdomains found.</td></tr>';
         } else {
-          data.forEach((item, index) => {
+          subdomains.forEach((item, index) => {
             const row = document.createElement("tr");
             row.className = "border-b border-white/5 hover:bg-white/5 transition-colors";
-            
-            const scColor = item.sc === '200' ? 'text-green-500' : (item.sc === 'OFF' ? 'text-white/20' : 'text-yellow-500');
+            row.style.animation = `fadeSlideIn 0.3s ease-out ${index * 0.03}s forwards`;
+            row.style.opacity = '0';
             
             row.innerHTML = `
-              <td class="px-6 py-4 font-bold text-white/80">${item.sub}</td>
+              <td class="px-6 py-4 font-bold text-white/80">${item.subdomain}</td>
               <td class="px-6 py-4 text-center">
-                <span class="${scColor} font-bold">${item.sc}</span>
+                <span class="text-green-500 font-bold">OK</span>
               </td>
-              <td class="px-6 py-4 text-white/40 font-mono">${item.ip}</td>
+              <td class="px-6 py-4 text-white/40 font-mono">${item.resolution || 'N/A'}</td>
               <td class="px-6 py-4">
-                <span class="bg-magenta-500/10 text-magenta-500 px-2 py-0.5 rounded text-[10px] font-bold uppercase">${item.mode}</span>
+                <span class="bg-magenta-500/10 text-magenta-500 px-2 py-0.5 rounded text-[10px] font-bold uppercase">${item.source}</span>
               </td>
             `;
             tbody.appendChild(row);
@@ -228,4 +242,13 @@ import Layout from "../../layouts/Layout.astro";
       document.getElementById("start-btn").addEventListener("click", runScan);
     });
   </script>
+
+  <style>
+    @keyframes fadeSlideIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    #table-body::-webkit-scrollbar { width: 4px; }
+    #table-body::-webkit-scrollbar-thumb { background: rgba(217, 70, 239, 0.2); border-radius: 10px; }
+  </style>
 </Layout>
