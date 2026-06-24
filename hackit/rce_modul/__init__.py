@@ -10,28 +10,20 @@ from typing import Optional
 sys.path.insert(0, os.path.dirname(__file__))
 
 from go_bridge import GoEngine
-from rust_bridge import RustEngine
-from cpp_bridge import CPPEngine
-from c_bridge import CEngine
 
 console = Console()
 
 BANNER = """
 [bold red]
-   ███████╗ ██████╗███████╗    ███████╗██╗  ██╗███████╗
-   ██╔════╝██╔════╝██╔════╝    ██╔════╝╚██╗██╔╝██╔════╝
-   █████╗  ██║     █████╗      █████╗   ╚███╔╝ █████╗  
-   ██╔══╝  ██║     ██╔══╝      ██╔══╝   ██╔██╗ ██╔══╝  
-   ██║     ╚██████╗███████╗    ███████╗██╔╝ ██╗███████╗
-   ╚═╝      ╚═════╝╚══════╝    ╚══════╝╚═╝  ╚═╝╚══════╝
-   ┌───────────────────────────────────────────────────┐
-   │  [yellow][🔪] CHAINSAW ACTIVATED. CUTTING THROUGH FIREWALL[/yellow]│
-   │  [red][💀] RCE.EXE — SLASH. EXECUTE. DESTROY.[/red]            │
-   │  [cyan][X]  HackIT V2.1 - By AniipID[/cyan]                    │
-   │  [green][+] 4 Engines: Go | Rust | C++ | C[/green]                │
-   │  [green][+] 150+ Payloads · 12 Techniques[/green]                 │
-   │  [green][+] WAF Bypass · OOB · Blind · SSTI[/green]               │
-   └───────────────────────────────────────────────────┘
+      ██████████████████████████████████████████
+      █  [yellow]☢  RCE  NUCLEAR  ☢[/yellow]                   █
+      █    [white]── exploit core ──[/white]                  █
+      █   ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄    █
+      █   █ HackIT RCE Tools V2.1         █    █
+      █   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀    █
+      █         [white]BY : AniipID[/white]                   █
+      ██████████████████████████████████████████
+[yellow]      ☢  payload armed  ☢  waiting for trigger[/yellow]
 [/bold red]"""
 
 def _colored(msg, color=None):
@@ -41,15 +33,10 @@ def _colored(msg, color=None):
 
 def display_banner():
     console.print(BANNER)
-    console.print("[dim]Advanced RCE detection with 4-engine correlation[/dim]\n")
+    console.print("[dim]Advanced RCE detection with Go correlation engine[/dim]\n")
 
 def pick_engine(preferred: str = "go"):
-    engines = {
-        "go": GoEngine(),
-        "rust": RustEngine(),
-        "cpp": CPPEngine(),
-        "c": CEngine(),
-    }
+    engines = {"go": GoEngine()}
     if preferred in engines:
         return engines[preferred]
     return engines["go"]
@@ -98,21 +85,19 @@ def display_results(results: list, show_raw: bool = False):
         table.add_column("Parameter", style="yellow")
         table.add_column("Technique", style="magenta")
         table.add_column("Confidence", justify="center")
-        table.add_column("Engine(s)", justify="center")
-        table.add_column("Output", style="dim")
+        table.add_column("Payload", style="dim", width=50)
+        table.add_column("Output", style="dim", width=40)
 
         for r in vuln_results:
-            engines = r.get('engine', '?')
-            if r.get('correlation_count', 1) > 1:
-                engines += f" (+{r['correlation_count']-1})"
             conf_str = f"{r.get('confidence', 0)*100:.0f}%"
-            output = r.get('output', '')[:80]
+            payload = r.get('payload', r.get('technique', ''))[:48]
+            output = r.get('output', '')[:38]
             table.add_row(
-                r.get('url', '')[:50],
+                r.get('url', '')[:45],
                 r.get('parameter', '?'),
                 r.get('technique', '?'),
                 conf_str,
-                engines,
+                payload,
                 output
             )
         console.print(table)
@@ -124,7 +109,7 @@ def display_results(results: list, show_raw: bool = False):
                     output_text = output_text[:500] + "..."
                 console.print(Panel(
                     f"[bold green]Command:[/bold green] {r['command']}\n\n[dim]{output_text}[/dim]",
-                    title=f"Exploit Output [{r.get('engine','?')}]",
+                    title=f"Exploit Output",
                     border_style="green",
                     box=box.ROUNDED
                 ))
@@ -181,14 +166,14 @@ def scan_rce(
     data: Optional[str] = None,
     param: Optional[str] = None,
     method: str = "GET",
-    timeout: int = 10,
+    timeout: int = 15,
     proxy: Optional[str] = None,
     cookie: Optional[str] = None,
     ua: Optional[str] = None,
     blind: bool = False,
     all_params: bool = False,
-    threads: int = 10,
-    engines: str = "go,rust,cpp",
+    threads: int = 20,
+    engines: str = "go",
     exploit: bool = False,
     detect: bool = True,
     verbose: bool = False
@@ -196,12 +181,7 @@ def scan_rce(
     selected_engines = [e.strip().lower() for e in engines.split(',') if e.strip()]
     all_results = []
 
-    engine_map = {
-        'go': ('Go', GoEngine()),
-        'rust': ('Rust', RustEngine()),
-        'cpp': ('C++', CPPEngine()),
-        'c': ('C', CEngine()),
-    }
+    engine_map = {'go': ('Go', GoEngine())}
 
     with Progress(
         SpinnerColumn(),
@@ -267,7 +247,7 @@ def scan_rce_api(
     url: str,
     cmd: Optional[str] = None,
     method: str = "GET",
-    timeout: int = 10,
+    timeout: int = 15,
     proxy: Optional[str] = None,
     cookie: Optional[str] = None,
     engines: str = "go"
@@ -286,24 +266,24 @@ def scan_rce_api(
 @click.option('-d', '--data', help='POST data body')
 @click.option('-p', '--param', help='Specific parameter to test')
 @click.option('-m', '--method', default='GET', help='HTTP method (GET/POST), default: GET')
-@click.option('--timeout', default=10, type=int, help='Request timeout in seconds')
+@click.option('--timeout', default=15, type=int, help='Request timeout in seconds')
 @click.option('--proxy', help='HTTP proxy (e.g. http://127.0.0.1:8080)')
 @click.option('--cookie', help='Cookie header value')
 @click.option('--ua', help='Custom User-Agent')
 @click.option('--blind', is_flag=True, help='Use blind/time-based detection')
 @click.option('--all-params', is_flag=True, help='Test all URL/body parameters')
-@click.option('--threads', default=10, type=int, help='Concurrent threads (Go engine)')
-@click.option('--engines', default='go,rust,cpp,c', help='Engines to use: go,rust,cpp,c (comma-separated)')
+@click.option('--threads', default=20, type=int, help='Concurrent goroutines')
+@click.option('--engines', default='go', help='Engine to use: go (only option)')
 @click.option('--exploit', is_flag=True, help='Force exploit mode')
 @click.option('--detect', is_flag=True, help='Force detection mode')
 @click.option('--output', help='Save results to JSON file')
 @click.option('--find', is_flag=True, help='Discover & test all parameters from page for RCE')
 @click.option('--verbose', is_flag=True, help='Verbose output')
 def rce_command(url, cmd, data, param, method, timeout, proxy, cookie, ua, blind, all_params, threads, engines, exploit, detect, output, verbose, find):
-    """Advanced RCE Detection & Exploitation Engine (Go · Rust · C++ · C)
+    """Advanced RCE Detection & Exploitation Engine (Go)
 
-    Detects Remote Code Execution vulnerabilities using multi-engine correlation.
-    Supports time-based, output-based, error-based, and blind boolean techniques.
+    Detects Remote Code Execution vulnerabilities using multi-technique scanning.
+    Supports time-based, output-based, error-based, blind boolean, SSTI, and OOB.
     """
     display_banner()
 
@@ -318,12 +298,7 @@ def rce_command(url, cmd, data, param, method, timeout, proxy, cookie, ua, blind
         console.print(f"[green][+] Testing {len(params)} unique parameters[/green]\n")
 
         selected = [e.strip().lower() for e in engines.split(',') if e.strip()]
-        engine_map = {
-            'go': ('Phase 1', GoEngine()),
-            'rust': ('Phase 2', RustEngine()),
-            'cpp': ('Phase 3', CPPEngine()),
-            'c': ('Phase 4', CEngine()),
-        }
+        engine_map = {'go': ('Go', GoEngine())}
 
         total = len(params) * len(selected)
         count = 0
@@ -340,16 +315,13 @@ def rce_command(url, cmd, data, param, method, timeout, proxy, cookie, ua, blind
             eng_bins[eng_name] = (label, eng.binary_path)
 
         for param_name in params:
-            procs = []
             for eng_name, (label, bin_path) in eng_bins.items():
                 count += 1
-                console.print(f"\r[cyan][*] Testing parameter [bold]{param_name}[/bold] on {label} ({count}/{total})...[/cyan]", end="")
-                cmd = [bin_path, '-u', url, '-p', param_name, '--detect', '--json',
+                console.print(f"\r[cyan][*] Testing parameter [bold]{param_name}[/bold] ({count}/{total})...[/cyan]", end="")
+                cmd_args = [bin_path, '-u', url, '-p', param_name, '--detect', '--json',
                        '--timeout', str(timeout)]
-                p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
-                procs.append((eng_name, p, label))
+                p = subprocess.Popen(cmd_args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
                 sys.stdout.flush()
-            for eng_name, p, label in procs:
                 try:
                     stdout, _ = p.communicate(timeout=timeout + 15)
                     if stdout:

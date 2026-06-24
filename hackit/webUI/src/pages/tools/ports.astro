@@ -117,9 +117,8 @@ import Layout from "../../layouts/Layout.astro";
   <script is:inline>
     let chart;
     let scanResults = [];
-    const API_PORT = 8080;
+    const API_PORT = 5050;
     const API_PATHS = [`http://127.0.0.1:${API_PORT}`, `http://localhost:${API_PORT}`];
-    let scanAbort = null;
 
     function initChart(open = 0, total = 100) {
       const ctx = document.getElementById("portChart").getContext("2d");
@@ -154,7 +153,7 @@ import Layout from "../../layouts/Layout.astro";
       const dot = document.getElementById("bridge-dot");
       for (const path of API_PATHS) {
         try {
-          const res = await fetch(`${path}/api/ping`, { mode: "cors", signal: AbortSignal.timeout(3000) });
+          const res = await fetch(`${path}/api/ping`, { mode: "cors" });
           if (res.ok) {
             statusBtn.innerHTML = "BRIDGE LINK: ACTIVE";
             statusBtn.className = "text-[9px] text-green-500 font-black uppercase tracking-tighter";
@@ -169,24 +168,13 @@ import Layout from "../../layouts/Layout.astro";
       return null;
     }
 
-    function animateCounter(target) {
-      const el = document.getElementById("total-found");
-      let current = 0;
-      const step = Math.max(1, Math.floor(target / 30));
-      const interval = setInterval(() => {
-        current = Math.min(current + step, target);
-        el.textContent = current;
-        if (current >= target) clearInterval(interval);
-      }, 50);
-    }
-
     async function runPortScan() {
       const target = document.getElementById("target-host").value.trim();
       const prange = document.getElementById("port-range").value.trim() || "1-1024";
       if (!target) return alert("Enter target host");
 
       const activePath = await checkBridge();
-      if (!activePath) return alert('API Bridge Offline. Start backend on port 8080.');
+      if (!activePath) return alert('API Bridge Offline. Check terminal for [NEURAL BRIDGE ENGINE] status.');
 
       const btn = document.getElementById("start-btn");
       const badge = document.getElementById("status-badge");
@@ -195,9 +183,9 @@ import Layout from "../../layouts/Layout.astro";
       const timerDisp = document.getElementById("scan-time");
 
       btn.disabled = true;
-      btn.innerHTML = '<span class="animate-pulse">⧗ SYNCHRONIZING...</span>';
+      btn.innerHTML = '<span class="animate-pulse">SYNCHRONIZING...</span>';
       badge.classList.remove("hidden");
-      container.innerHTML = '<div class="col-span-full py-32 flex flex-col items-center justify-center gap-4"><div class="w-12 h-12 border-2 border-yellow-500/30 border-t-yellow-500 rounded-full animate-spin"></div><span class="text-yellow-500/50 font-black uppercase tracking-[0.3em] text-xs">Initializing Penta-Engine Probes...</span></div>';
+      container.innerHTML = '<div class="col-span-full py-32 text-center text-yellow-500/50 animate-pulse font-black uppercase tracking-[0.5em]">Initializing Penta-Engine Probes...</div>';
       countDisp.textContent = "0";
       
       const startTime = Date.now();
@@ -206,29 +194,27 @@ import Layout from "../../layouts/Layout.astro";
         timerDisp.textContent = `Elapsed Time: ${elapsed.toFixed(2)}s`;
       }, 50);
 
-      scanAbort = new AbortController();
       try {
-        const response = await fetch(`${activePath}/api/port/scan?target=${target}&ports=${prange}`, {
+        const response = await fetch(`${activePath}/api/portscan?target=${target}&range=${prange}`, {
           method: "GET",
           headers: { Accept: "application/json" },
           mode: "cors",
-          signal: scanAbort.signal,
         });
 
         if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
         const data = await response.json();
-        scanResults = data.open_ports || [];
+        scanResults = data;
 
         if (data.error) throw new Error(data.error);
 
         container.innerHTML = "";
-        animateCounter(scanResults.length);
+        countDisp.textContent = data.length;
         
-        if (scanResults.length === 0) {
+        if (data.length === 0) {
           container.innerHTML = '<div class="col-span-full py-32 text-center text-white/20 italic bg-white/[0.01] border border-white/5 rounded-3xl">No open ports discovered in target range.</div>';
           initChart(0, 100);
         } else {
-          scanResults.forEach((p, idx) => {
+          data.forEach((p, idx) => {
             const card = document.createElement("div");
             card.className = "group bg-dark-800 border border-white/10 p-6 rounded-2xl hover:border-yellow-500/50 hover:bg-yellow-500/[0.02] transition-all relative overflow-hidden";
             card.style.animation = `fadeSlideIn 0.5s ease-out forwards ${idx * 0.05}s`;
@@ -258,19 +244,18 @@ import Layout from "../../layouts/Layout.astro";
               <div class="mt-4 pt-4 border-t border-white/5">
                 <div class="text-[8px] text-white/20 font-black uppercase mb-1 tracking-widest">Fingerprint / Version</div>
                 <div class="text-[10px] text-white/60 font-mono break-all bg-black/40 p-2 rounded-lg border border-white/5 group-hover:border-yellow-500/20 transition-colors">
-                  ${p.state || 'open'}
+                  ${p.version || 'No banner response detected'}
                 </div>
               </div>
             `;
             container.appendChild(card);
           });
-          initChart(scanResults.length, parseInt(prange.split('-')[1]) - parseInt(prange.split('-')[0]) + 1 || 100);
+          initChart(data.length, parseInt(prange.split('-')[1]) - parseInt(prange.split('-')[0]) + 1 || 100);
         }
       } catch (err) {
         container.innerHTML = `<div class="col-span-full py-32 text-center text-red-500 font-black uppercase tracking-widest">[!] PROBE FAILED: ${err.message}</div>`;
       } finally {
         clearInterval(timerInterval);
-        if (scanAbort) scanAbort = null;
         btn.disabled = false;
         btn.innerHTML = '<span class="relative z-10">INITIALIZE PROBE</span>';
         badge.classList.add("hidden");
@@ -299,7 +284,5 @@ import Layout from "../../layouts/Layout.astro";
       from { opacity: 0; transform: translateY(10px); }
       to { opacity: 1; transform: translateY(0); }
     }
-    #results-container::-webkit-scrollbar { width: 4px; }
-    #results-container::-webkit-scrollbar-thumb { background: rgba(234, 179, 8, 0.2); border-radius: 10px; }
   </style>
 </Layout>

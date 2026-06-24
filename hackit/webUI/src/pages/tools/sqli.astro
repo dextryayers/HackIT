@@ -165,8 +165,7 @@ import Layout from "../../layouts/Layout.astro";
 
   <script is:inline>
     let chart;
-    let scanInterval;
-    const API_PORT = 8080;
+    const API_PORT = 5050;
     const API_PATHS = [`http://127.0.0.1:${API_PORT}`, `http://localhost:${API_PORT}`];
 
     function initChart(dataMap = {}) {
@@ -180,16 +179,12 @@ import Layout from "../../layouts/Layout.astro";
           labels: labels,
           datasets: [{
             data: values,
-            backgroundColor: ["#ef4444", "#3b82f6", "#10b981", "#6366f1", "#f59e0b"],
+            backgroundColor: ["#ef4444", "#3b82f6", "#10b981", "#6366f1"],
             borderWidth: 0,
             cutout: '80%'
           }],
         },
-        options: {
-          plugins: { legend: { display: false } },
-          animation: { duration: 1000 },
-          transitions: { active: { animation: { duration: 300 } } }
-        },
+        options: { plugins: { legend: { display: false } }, animation: { duration: 1000 } },
       });
     }
 
@@ -198,7 +193,7 @@ import Layout from "../../layouts/Layout.astro";
       const dot = document.getElementById("bridge-dot");
       for (const path of API_PATHS) {
         try {
-          const res = await fetch(`${path}/api/ping`, { mode: "cors", signal: AbortSignal.timeout(3000) });
+          const res = await fetch(`${path}/api/ping`, { mode: "cors" });
           if (res.ok) {
             statusBtn.innerHTML = "BRIDGE LINKED";
             statusBtn.className = "text-[9px] text-green-500 font-black";
@@ -207,20 +202,16 @@ import Layout from "../../layouts/Layout.astro";
           }
         } catch (e) {}
       }
-      statusBtn.innerHTML = "BRIDGE OFFLINE";
-      statusBtn.className = "text-[9px] text-red-500 font-black";
-      dot.className = "w-1.5 h-1.5 rounded-full bg-red-500";
       return null;
     }
 
     function addLog(msg, color = 'text-white/40') {
-      const el = document.getElementById('console-output');
+      const console = document.getElementById('console-output');
       const div = document.createElement('div');
-      div.className = `${color} leading-relaxed`;
-      div.style.animation = 'fadeSlideIn 0.3s ease-out';
+      div.className = `${color} leading-relaxed animate-in fade-in slide-in-from-left-2 duration-300`;
       div.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
-      el.appendChild(div);
-      el.scrollTop = el.scrollHeight;
+      console.appendChild(div);
+      console.scrollTop = console.scrollHeight;
     }
 
     // Tab Logic
@@ -239,37 +230,16 @@ import Layout from "../../layouts/Layout.astro";
       });
     });
 
-    function simulateProgress() {
-      const msgs = [
-        ['SCANNING: Probing parameter reflection...', 'text-white/60'],
-        ['SCANNING: Testing error-based injection vectors...', 'text-white/60'],
-        ['SCANNING: Checking blind SQL patterns...', 'text-white/60'],
-        ['SCANNING: Analyzing response differentials...', 'text-white/60'],
-        ['SCANNING: Attempting UNION-based extraction...', 'text-yellow-500'],
-        ['SCANNING: Fingerprinting database backend...', 'text-white/60'],
-        ['SCANNING: Extracting table schemas...', 'text-white/60'],
-      ];
-      let i = 0;
-      scanInterval = setInterval(() => {
-        if (i < msgs.length) {
-          addLog(msgs[i][0], msgs[i][1]);
-          i++;
-        } else {
-          clearInterval(scanInterval);
-        }
-      }, 600);
-    }
-
     async function runSqliScan() {
       const url = document.getElementById("target-url").value.trim();
       if (!url) return alert("Enter target URL");
 
       const activePath = await checkBridge();
-      if (!activePath) return alert('API Bridge Offline. Start backend on port 8080.');
+      if (!activePath) return alert('API Bridge Offline.');
 
       const btn = document.getElementById("start-btn");
       const badge = document.getElementById("status-badge");
-      const consoleEl = document.getElementById("console-output");
+      const console = document.getElementById("console-output");
       
       const dbList = document.getElementById("db-list");
       const tableList = document.getElementById("table-list");
@@ -277,25 +247,22 @@ import Layout from "../../layouts/Layout.astro";
       const tableBody = document.getElementById("table-body");
 
       btn.disabled = true;
-      btn.innerHTML = '<span class="animate-pulse">⚡ ATTACKING...</span>';
+      btn.textContent = "ATTACKING...";
       badge.classList.remove("hidden");
-      consoleEl.innerHTML = '';
+      console.innerHTML = '';
       dbList.innerHTML = '<span class="text-white/20 italic text-[10px]">Exfiltrating databases...</span>';
       tableList.innerHTML = '<span class="text-white/20 italic text-[10px]">Awaiting schema...</span>';
 
       addLog(`Initializing Autonomous Penetration for: ${url}`, 'text-red-500 font-black');
       addLog("PHASE 1: Identifying injection vectors...");
-      simulateProgress();
 
       try {
         const response = await fetch(`${activePath}/api/sqli?url=${encodeURIComponent(url)}`, {
           method: "GET",
           headers: { Accept: "application/json" },
           mode: "cors",
-          signal: AbortSignal.timeout(30000),
         });
 
-        clearInterval(scanInterval);
         const data = await response.json();
         if (data.error) throw new Error(data.error);
 
@@ -311,25 +278,23 @@ import Layout from "../../layouts/Layout.astro";
 
           addLog(`PHASE 2: Auto-Exfiltrating database schema...`, "text-yellow-500 font-bold");
           
+          // Render Databases
           dbList.innerHTML = '';
-          data.explorer.databases.forEach((db, i) => {
+          data.explorer.databases.forEach(db => {
             const span = document.createElement('span');
             span.className = "px-3 py-1 bg-red-500/10 border border-red-500/20 text-red-500 text-[10px] font-black rounded-lg uppercase cursor-pointer hover:bg-red-500 hover:text-black transition-all";
-            span.style.animation = `fadeSlideIn 0.3s ease-out ${i * 0.1}s forwards`;
-            span.style.opacity = '0';
             span.textContent = db;
             dbList.appendChild(span);
           });
           addLog(`Discovered ${data.explorer.databases.length} databases.`, "text-white/60");
 
+          // Render Tables
           tableList.innerHTML = '';
           const firstDb = data.explorer.databases[0];
           if (data.explorer.tables[firstDb]) {
-            data.explorer.tables[firstDb].forEach((table, i) => {
+            data.explorer.tables[firstDb].forEach(table => {
               const span = document.createElement('span');
               span.className = "px-3 py-1 bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 text-[10px] font-black rounded-lg uppercase cursor-pointer hover:bg-cyan-400 hover:text-black transition-all";
-              span.style.animation = `fadeSlideIn 0.3s ease-out ${i * 0.08}s forwards`;
-              span.style.opacity = '0';
               span.textContent = table;
               tableList.appendChild(span);
             });
@@ -338,12 +303,13 @@ import Layout from "../../layouts/Layout.astro";
 
           addLog(`PHASE 3: Dumping sample data records...`, "text-green-500 font-black");
           
+          // Render Excel-like Table
           const sample = data.explorer.sample_data;
           if (sample.length > 0) {
             const headers = Object.keys(sample[0]);
             tableHead.innerHTML = `<tr>${headers.map(h => `<th class="px-6 py-4 text-[10px] font-black text-white/40 uppercase tracking-widest">${h}</th>`).join('')}</tr>`;
-            tableBody.innerHTML = sample.map((row, i) => `
-              <tr class="hover:bg-white/[0.02] transition-colors group" style="animation:fadeSlideIn 0.3s ease-out ${i * 0.05}s forwards;opacity:0">
+            tableBody.innerHTML = sample.map(row => `
+              <tr class="hover:bg-white/[0.02] transition-colors group">
                 ${headers.map(h => `<td class="px-6 py-4 text-[10px] text-white/60 font-mono group-hover:text-white transition-colors">${row[h]}</td>`).join('')}
               </tr>
             `).join('');
@@ -357,11 +323,10 @@ import Layout from "../../layouts/Layout.astro";
           document.getElementById('stat-vuln').className = "text-xs font-black text-green-500";
         }
       } catch (err) {
-        clearInterval(scanInterval);
         addLog(`ERROR: ${err.message}`, "text-red-500 font-bold");
       } finally {
         btn.disabled = false;
-        btn.innerHTML = '<span class="relative z-10">INITIALIZE ATTACK</span>';
+        btn.textContent = "INITIALIZE ATTACK";
         badge.classList.add("hidden");
       }
     }
@@ -379,9 +344,5 @@ import Layout from "../../layouts/Layout.astro";
     }
     #console-output::-webkit-scrollbar { width: 4px; }
     #console-output::-webkit-scrollbar-thumb { background: rgba(239, 68, 68, 0.2); border-radius: 10px; }
-    @keyframes fadeSlideIn {
-      from { opacity: 0; transform: translateY(8px); }
-      to { opacity: 1; transform: translateY(0); }
-    }
   </style>
 </Layout>

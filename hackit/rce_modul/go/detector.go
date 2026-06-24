@@ -32,9 +32,13 @@ type CommonOptions struct {
 
 type Detector struct {
 	CommonOptions
-	Client     *http.Client
-	Params     []string
-	Techniques []string
+	Client            *http.Client
+	Params            []string
+	BaselineBody      string
+	BaselineTime      time.Duration
+	BaselineCode      int
+	baselineObtained  bool
+	baselineMu        sync.Mutex
 }
 
 func NewDetector(opts CommonOptions) *Detector {
@@ -51,28 +55,24 @@ func NewDetector(opts CommonOptions) *Detector {
 	}
 	d.Client = &http.Client{
 		Transport: transport,
-		Timeout:   time.Duration(opts.Timeout+10) * time.Second,
+		Timeout:   time.Duration(opts.Timeout+20) * time.Second,
 	}
 	d.Params = d.extractParams()
-	d.Techniques = d.selectTechniques()
 	return d
 }
 
 func (d *Detector) buildRequest(param, payload string) (*http.Request, error) {
 	baseURL := d.URL
-	method := d.Method
-
 	parsed, err := url.Parse(baseURL)
 	if err != nil {
 		parsed, _ = url.Parse("http://" + baseURL)
 	}
-
 	query := parsed.Query()
 	query.Set(param, payload)
 	parsed.RawQuery = query.Encode()
 
 	var body io.Reader
-	method = "GET"
+	method := "GET"
 	if d.Data != "" || strings.ToUpper(d.Method) == "POST" {
 		method = "POST"
 		formData := d.Data
@@ -99,7 +99,6 @@ func (d *Detector) buildRequest(param, payload string) (*http.Request, error) {
 	if method == "POST" {
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}
-
 	return req, nil
 }
 
@@ -122,22 +121,45 @@ func (d *Detector) sendPayload(param, payload string) (string, time.Duration, in
 	return string(body), elapsed, resp.StatusCode, nil
 }
 
-func (d *Detector) testBaseline(param string) (string, time.Duration, int) {
+func (d *Detector) ensureBaseline(param string) {
+	d.baselineMu.Lock()
+	defer d.baselineMu.Unlock()
+	if d.baselineObtained {
+		return
+	}
 	body, elapsed, code, err := d.sendPayload(param, "HACKIT_BASELINE_1749")
 	if err != nil {
-		return "", 0, 0
+		return
 	}
-	return body, elapsed, code
+	d.BaselineBody = body
+	d.BaselineTime = elapsed
+	d.BaselineCode = code
+	d.baselineObtained = true
+	if d.Verbose {
+		fmt.Fprintf(os.Stderr, "[baseline] time=%v size=%d code=%d\n", elapsed, len(body), code)
+	}
 }
 
-func (d *Detector) testTimePayload(param string, p RCEPayload) (bool, float64) {
+func (d *Detector) testTimePayload(param string, p RCEPayload, baselineTime time.Duration) (bool, float64) {
 	payload := fmt.Sprintf(p.Payload, p.SleepTime)
 	for r := 0; r < d.Retries; r++ {
 		_, elapsed, _, err := d.sendPayload(param, payload)
-		if err == nil {
+		if err == nil && p.SleepTime > 0 {
 			minDur := time.Duration(p.SleepTime) * time.Second
-			if elapsed >= minDur && p.SleepTime > 0 {
-				return true, 0.85
+			ratio := float64(elapsed) / float64(minDur)
+			baselineRatio := float64(elapsed) / float64(baselineTime+time.Millisecond)
+			if elapsed >= minDur && ratio >= 0.8 {
+				conf := 0.85
+				if baselineRatio > 3 {
+					conf = 0.95
+				}
+				if elapsed >= minDur*2 {
+					conf = 0.98
+				}
+				return true, conf
+			}
+			if elapsed >= minDur/2 && baselineRatio > 5 {
+				return true, 0.75
 			}
 		}
 		if d.Delay > 0 {
@@ -149,6 +171,8 @@ func (d *Detector) testTimePayload(param string, p RCEPayload) (bool, float64) {
 
 func (d *Detector) testOutputPayload(param string, p RCEPayload) (bool, float64) {
 	payload := fmt.Sprintf(p.Payload, ECHO_MARKER)
+	baseline := d.BaselineBody
+
 	for r := 0; r < d.Retries; r++ {
 		body, _, _, err := d.sendPayload(param, payload)
 		if err != nil {
@@ -157,13 +181,14 @@ func (d *Detector) testOutputPayload(param string, p RCEPayload) (bool, float64)
 			}
 			continue
 		}
-		baseline, _, _ := d.testBaseline(param)
-
 		if strings.Contains(body, p.EchoStr) {
-			isInBaseline := strings.Contains(baseline, p.EchoStr)
+			inBaseline := strings.Contains(baseline, p.EchoStr)
 			conf := 0.90
-			if !isInBaseline {
+			if !inBaseline {
 				conf = 0.97
+			}
+			if p.EchoStr == ECHO_MARKER {
+				conf = 0.99
 			}
 			return true, conf
 		}
@@ -176,7 +201,7 @@ func (d *Detector) testOutputPayload(param string, p RCEPayload) (bool, float64)
 
 func (d *Detector) testErrorPayload(param string, p RCEPayload) (bool, float64) {
 	payload := p.Payload
-	baseline, _, _ := d.testBaseline(param)
+	baseline := d.BaselineBody
 
 	body, _, _, err := d.sendPayload(param, payload)
 	if err != nil || body == baseline {
@@ -188,7 +213,8 @@ func (d *Detector) testErrorPayload(param string, p RCEPayload) (bool, float64) 
 		"warning", "error", "unexpected", "not found", "command not found",
 		"stack trace", "fatal error", "exception", "traceback", "parse error",
 		"syntax error", "undefined", "permission denied", "cannot execute",
-		"500", "internal server error",
+		"500", "internal server error", "division by zero", "index out of",
+		"nil pointer", "invalid memory", "segmentation fault",
 	}
 
 	hits := 0
@@ -198,9 +224,9 @@ func (d *Detector) testErrorPayload(param string, p RCEPayload) (bool, float64) 
 		}
 	}
 	if hits > 0 {
-		conf := 0.60 + float64(hits)*0.05
-		if conf > 0.90 {
-			conf = 0.90
+		conf := 0.60 + float64(hits)*0.06
+		if conf > 0.92 {
+			conf = 0.92
 		}
 		return true, conf
 	}
@@ -208,15 +234,15 @@ func (d *Detector) testErrorPayload(param string, p RCEPayload) (bool, float64) 
 }
 
 func (d *Detector) testBlindPayload(param string, p RCEPayload) (bool, float64) {
+	baseline := d.BaselineBody
 	for r := 0; r < d.Retries; r++ {
 		payload := fmt.Sprintf(p.Payload, ECHO_MARKER, ECHO_MARKER)
-		baseline, _, _ := d.testBaseline(param)
 		body, _, _, err := d.sendPayload(param, payload)
 		if err != nil {
 			continue
 		}
 		if strings.Contains(body, p.EchoStr) && !strings.Contains(baseline, p.EchoStr) {
-			return true, 0.90
+			return true, 0.92
 		}
 		if d.Delay > 0 {
 			time.Sleep(time.Duration(d.Delay) * time.Millisecond)
@@ -226,68 +252,69 @@ func (d *Detector) testBlindPayload(param string, p RCEPayload) (bool, float64) 
 }
 
 func (d *Detector) testOOBPayload(param string, payload string) {
+	if d.OOB == "" {
+		return
+	}
 	parsedPayload := fmt.Sprintf(payload, d.OOB)
 	d.sendPayload(param, parsedPayload)
 	d.sendPayload(param, strings.ReplaceAll(parsedPayload, ";", "|"))
 }
 
 func (d *Detector) detectParam(param string) *Result {
-	allPayloads := getAllPayloads("all")
+	d.ensureBaseline(param)
+	timeMultiplier := 1.0
+	if d.BaselineTime > 0 {
+		timeMultiplier = float64(d.BaselineTime) / float64(time.Second)
+		if timeMultiplier < 0.1 {
+			timeMultiplier = 1.0
+		}
+	}
 
+	maxConf := 0.0
+	var bestResult *Result
+
+	allPayloads := getAllPayloads("all")
 	for _, p := range allPayloads {
 		var vuln bool
 		var conf float64
 
-		switch p.Technique {
-		case "time", "time-waf":
-			vuln, conf = d.testTimePayload(param, p)
-			if vuln {
-				return &Result{
-					Vulnerable: true, URL: d.URL, Parameter: param,
-					Method: d.Method, Technique: "time-based",
-					Confidence: conf, Engine: "go",
-					Output: fmt.Sprintf("Time delay: %ds", p.SleepTime),
-				}
-			}
-		case "output", "output-waf", "output-perl", "output-python3", "output-python",
-			"output-ruby", "output-php", "output-node", "output-lua", "output-awk",
-			"output-bash", "output-sh":
+		switch {
+		case strings.HasPrefix(p.Technique, "time"):
+			vuln, conf = d.testTimePayload(param, p, d.BaselineTime)
+		case strings.HasPrefix(p.Technique, "output") || strings.HasPrefix(p.Technique, "output-"):
 			vuln, conf = d.testOutputPayload(param, p)
-			if vuln {
-				return &Result{
-					Vulnerable: true, URL: d.URL, Parameter: param,
-					Method: d.Method, Technique: p.Technique,
-					Confidence: conf, Engine: "go",
-					Output: fmt.Sprintf("Output-based RCE (%s)", p.Category),
-				}
-			}
-		case "error":
+		case p.Technique == "error":
 			vuln, conf = d.testErrorPayload(param, p)
-			if vuln {
-				return &Result{
-					Vulnerable: true, URL: d.URL, Parameter: param,
-					Method: d.Method, Technique: "error-based",
-					Confidence: conf, Engine: "go",
-					Output: "Error-based RCE detected",
-				}
+		case p.Technique == "blind":
+			vuln, conf = d.testBlindPayload(param, p)
+		case strings.HasPrefix(p.Technique, "oob"):
+			d.testOOBPayload(param, p.Payload)
+			continue
+		}
+
+		if vuln && conf > maxConf {
+			maxConf = conf
+			payloadStr := strings.Split(p.Payload, ECHO_MARKER)[0]
+			if len(payloadStr) > 60 {
+				payloadStr = payloadStr[:60]
 			}
-		case "blind":
-			if d.Blind {
-				vuln, conf = d.testBlindPayload(param, p)
-				if vuln {
-					return &Result{
-						Vulnerable: true, URL: d.URL, Parameter: param,
-						Method: d.Method, Technique: "blind-boolean",
-						Confidence: conf, Engine: "go",
-						Output: "Blind boolean RCE",
-					}
-				}
-			}
-		case "oob-http", "oob-dns":
-			if d.OOB != "" {
-				d.testOOBPayload(param, p.Payload)
+			bestResult = &Result{
+				Vulnerable: true,
+				URL:        d.URL,
+				Parameter:  param,
+				Method:     d.Method,
+				Payload:    payloadStr,
+				Confidence: conf,
+				Engine:     "go",
+				Technique:  p.Technique,
+				Output:     fmt.Sprintf("%s RCE via %s", p.Category, p.Technique),
 			}
 		}
+	}
+
+	if bestResult != nil {
+		bestResult.Confidence = maxConf
+		return bestResult
 	}
 	return nil
 }
@@ -336,13 +363,6 @@ func (d *Detector) extractParams() []string {
 		params = append(params, k)
 	}
 	return params
-}
-
-func (d *Detector) selectTechniques() []string {
-	if d.Blind {
-		return []string{"blind", "time", "output"}
-	}
-	return []string{"output", "output-waf", "time", "error", "blind", "oob"}
 }
 
 func (d *Detector) Scan() []Result {

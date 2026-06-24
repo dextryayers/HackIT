@@ -20,7 +20,7 @@ usage() {
     echo -e "  -m, --method <method>  HTTP method (GET|POST) [default: GET]"
     echo -e ""
     echo -e "${C}Engine:${N}"
-    echo -e "  -e, --engine <e>       Engine: go, rust, cpp, c, all [default: all]"
+    echo -e "  -e, --engine <e>       Engine: go [default: go]"
     echo -e ""
     echo -e "${C}Detection:${N}"
     echo -e "  --blind                Blind/time-based only"
@@ -121,7 +121,7 @@ if [[ "$SUPER" == true ]]; then
     $BLIND && BLIND_FLAG="--blind"
     OOB_FLAG=""
     [[ -n "$OOB" ]] && OOB_FLAG="--oob $OOB"
-    ENG_FLAG="${ENGINE:-go,rust,cpp,c}"
+    ENG_FLAG="${ENGINE:-go}"
 
     echo -e "${R}[!] RCE SUPERPOWER MODE ACTIVATED${N}" >&2
     echo -e "${R}[!] Target: $URL | Depth: $DEPTH | Pages: $PAGES${N}" >&2
@@ -188,11 +188,9 @@ PYEOF
 
     declare -A ENG_BINS
     ENG_BINS[go]="$DIR/go/bin/rce_engine"
-    ENG_BINS[rust]="$DIR/rust/target/release/rce_engine"
-    ENG_BINS[cpp]="$DIR/cpp/bin/rce_engine"
-    ENG_BINS[c]="$DIR/c/bin/rce_engine"
 
-    SELECTED=(go rust cpp c)
+
+    SELECTED=(go)
     TOTAL=$(( ${#PARAMS[@]} * ${#SELECTED[@]} ))
     COUNT=0
 
@@ -267,9 +265,6 @@ fi
 
 declare -A ENG_BINS
 ENG_BINS[go]="$DIR/go/bin/rce_engine"
-ENG_BINS[rust]="$DIR/rust/target/release/rce_engine"
-ENG_BINS[cpp]="$DIR/cpp/bin/rce_engine"
-ENG_BINS[c]="$DIR/c/bin/rce_engine"
 
 run_engine() {
     local name="$1" bin="$2"
@@ -298,13 +293,7 @@ run_engine() {
         else args+=("--exploit" "-c" "$CMD"); fi
     else args+=("--detect"); fi
 
-    case $name in
-        go)   phase="Phase 1" ;;
-        rust) phase="Phase 2" ;;
-        cpp)  phase="Phase 3" ;;
-        c)    phase="Phase 4" ;;
-    esac
-    echo -e "${C}[*] Running $phase engine...${N}" >&2
+    echo -e "${C}[*] Running Go engine...${N}" >&2
     "$bin" "${args[@]}" 2>/dev/null
 }
 
@@ -312,7 +301,7 @@ RESULTS_DIR="/tmp/hackit_rce_$$"
 mkdir -p "$RESULTS_DIR"
 
 if [[ -n "$ENGINE" && "$ENGINE" != "all" ]]; then SELECTED=("$ENGINE")
-else SELECTED=(go rust cpp c); fi
+else SELECTED=(go); fi
 
 ENG_NAMES=()
 for eng in "${SELECTED[@]}"; do
