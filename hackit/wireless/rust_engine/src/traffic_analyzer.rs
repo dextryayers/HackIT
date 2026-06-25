@@ -60,10 +60,10 @@ impl TrafficAnalyzer {
                 aps.insert(
                     bssid.clone(),
                     APRecord {
-                        ssid: "<Pending>".to_string(), // Hook C++ FFI for real SSID later
+                        ssid: String::new(),
                         bssid: bssid.clone(),
                         channel: 0,
-                        rssi: -100, // Hook C++ DSP logic for real RSSI later
+                        rssi: 0,
                         crypto: "Unknown".to_string(),
                         first_seen: 0,
                         last_seen: 0,

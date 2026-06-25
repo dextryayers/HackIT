@@ -1,0 +1,12 @@
+/home/aniipid/HackIT/hackit/wireless/hackitwireless-cs/obj/Debug/net6.0/HackItWireless.csproj.AssemblyReference.cache
+/home/aniipid/HackIT/hackit/wireless/hackitwireless-cs/obj/Debug/net6.0/HackItWireless.GeneratedMSBuildEditorConfig.editorconfig
+/home/aniipid/HackIT/hackit/wireless/hackitwireless-cs/obj/Debug/net6.0/HackItWireless.AssemblyInfoInputs.cache
+/home/aniipid/HackIT/hackit/wireless/hackitwireless-cs/obj/Debug/net6.0/HackItWireless.AssemblyInfo.cs
+/home/aniipid/HackIT/hackit/wireless/hackitwireless-cs/obj/Debug/net6.0/HackItWireless.csproj.CoreCompileInputs.cache
+/home/aniipid/HackIT/hackit/wireless/hackitwireless-cs/bin/Debug/net6.0/HackItWireless.deps.json
+/home/aniipid/HackIT/hackit/wireless/hackitwireless-cs/bin/Debug/net6.0/HackItWireless.dll
+/home/aniipid/HackIT/hackit/wireless/hackitwireless-cs/bin/Debug/net6.0/HackItWireless.pdb
+/home/aniipid/HackIT/hackit/wireless/hackitwireless-cs/obj/Debug/net6.0/HackItWireless.dll
+/home/aniipid/HackIT/hackit/wireless/hackitwireless-cs/obj/Debug/net6.0/refint/HackItWireless.dll
+/home/aniipid/HackIT/hackit/wireless/hackitwireless-cs/obj/Debug/net6.0/HackItWireless.pdb
+/home/aniipid/HackIT/hackit/wireless/hackitwireless-cs/obj/Debug/net6.0/ref/HackItWireless.dll

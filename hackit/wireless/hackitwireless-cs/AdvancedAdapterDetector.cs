@@ -66,7 +66,7 @@ namespace HackITWireless.Cs
             wlan_interface_state_connected = 1,
             wlan_interface_state_authenticating = 2,
             wlan_interface_state_auth_certifying = 3,
-            wlan_interface_state_ associating = 4,
+            wlan_interface_state_associating = 4,
             wlan_interface_state_discovering = 5,
             wlan_interface_state_bss_type_infrastructure = 6,
             wlan_interface_state_bss_type_ibss = 7
@@ -163,9 +163,9 @@ namespace HackITWireless.Cs
                 string iwOutput = ExecuteCommand("iw dev");
                 var current = new WirelessAdapterInfo();
                 
-                foreach (var line in iwOutput.Split('\n'))
+                foreach (var rawLine in iwOutput.Split('\n'))
                 {
-                    line = line.Trim();
+                    var line = rawLine.Trim();
                     if (line.StartsWith("Interface"))
                     {
                         if (current.Name != null)
@@ -268,7 +268,7 @@ namespace HackITWireless.Cs
                         var guids = GetInterfaceGuid(adapter);
                         if (guids.Contains(interfaceGuid))
                         {
-                            return string.Join(":", adapter.GetPhysicalAddress().Select(b => b.ToString("X2")));
+                            return string.Join(":", adapter.GetPhysicalAddress().GetAddressBytes().Select(b => b.ToString("X2")));
                         }
                     }
                 }

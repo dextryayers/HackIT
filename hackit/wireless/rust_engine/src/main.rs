@@ -15,6 +15,7 @@ mod adapter_manager;
 mod interface_control;
 mod traffic_analyzer;
 mod capture_engine;
+mod airodump;
 mod network_recon;
 mod pcap_wrapper;
 mod wpa3_engine;
@@ -31,6 +32,7 @@ use clap::{Parser, Subcommand};
 use std::ffi::CString;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 
@@ -462,6 +464,26 @@ enum Commands {
         /// Number of probe requests to send
         #[arg(short = 'c', long = "count", default_value_t = 100)]
         count: u32,
+    },
+
+    /// Airodump-ng style — real-time AP and station discovery with signal bars
+    #[command(name = "airodump")]
+    Airodump {
+        /// Wireless interface in monitor mode
+        #[arg(short = 'i', long = "interface", required = true)]
+        interface: String,
+        /// Dwell time per channel in ms (0 = lock channel)
+        #[arg(short = 'd', long = "dwell", default_value_t = 0)]
+        dwell_ms: u64,
+        /// Include 5GHz channels
+        #[arg(short = '5', long = "5ghz", default_value_t = false)]
+        band_5ghz: bool,
+        /// Channel to lock to (omit to scan all)
+        #[arg(short = 'c', long = "channel")]
+        channel: Option<u8>,
+        /// Number of channels to hop (default: 14 for 2.4GHz)
+        #[arg(short = 'n', long = "count", default_value_t = 14)]
+        channel_count: u8,
     },
 }
 
@@ -976,6 +998,47 @@ async fn main() {
             section!("Probe request flood: {} frames on {}", count, interface);
             let _ = aggressive_scanner::probe_request_flood(interface, "HackIT", *count);
             ok!("Probe flood complete");
+        }
+        Commands::Airodump { interface, dwell_ms, band_5ghz, channel, channel_count } => {
+            section!("Airodump-ng style capture on {} — Ctrl+C to stop", interface);
+            let mut dump = airodump::AirodumpCapture::new();
+            match pcap_wrapper::open_capture(interface) {
+                Ok(mut session) => {
+                    pcap_wrapper::set_filter(&mut session, "type mgt subtype beacon or type mgt subtype probe-req or type mgt subtype probe-resp or type mgt subtype disassoc or type mgt subtype deauth or wlan type data");
+                    let ch_list: Vec<u8> = if let Some(ch) = channel {
+                        vec![*ch]
+                    } else if *band_5ghz {
+                        (1u8..=14).chain((36u8..=64).step_by(4)).chain((100u8..=144).step_by(4)).chain((149u8..=165).step_by(4)).take(*channel_count as usize).collect()
+                    } else {
+                        (1u8..=14).take(*channel_count as usize).collect()
+                    };
+                    let start = Instant::now();
+                    let mut last_display = Instant::now();
+                    let mut ch_idx = 0usize;
+                    let mut current_ch = 1u8;
+                    if !ch_list.is_empty() { current_ch = ch_list[0]; }
+                    let dwell = if *dwell_ms > 0 { *dwell_ms } else { 200u64 };
+                    let mut last_ch_switch = Instant::now();
+                    while running.load(Ordering::SeqCst) {
+                        if let Some(data) = pcap_wrapper::next_packet(&mut session) {
+                            dump.process_frame(&data);
+                        }
+                        if last_ch_switch.elapsed().as_millis() > dwell as u128 && ch_list.len() > 1 {
+                            ch_idx = (ch_idx + 1) % ch_list.len();
+                            current_ch = ch_list[ch_idx];
+                            let c_iface = CString::new(interface.as_str()).expect("CString failed");
+                            unsafe { c_bindings::hackit_wifi_set_channel(c_iface.as_ptr(), current_ch as i32); }
+                            last_ch_switch = Instant::now();
+                        }
+                        if last_display.elapsed().as_millis() > 500 {
+                            dump.print_table(current_ch, start.elapsed());
+                            last_display = Instant::now();
+                        }
+                    }
+                }
+                Err(e) => err!("Failed to open {}: {}", interface, e),
+            }
+            info_log!("Airodump stopped.");
         }
     }
 }

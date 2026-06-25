@@ -6,6 +6,16 @@ import (
 	"strings"
 )
 
+var wpsChecksumTab = [7][10]int{
+	{0, 3, 6, 9, 12, 15, 18, 21, 24, 27},
+	{0, 1, 2, 3, 4, 5, 6, 7, 8, 9},
+	{0, 3, 6, 9, 12, 15, 18, 21, 24, 27},
+	{0, 1, 2, 3, 4, 5, 6, 7, 8, 9},
+	{0, 3, 6, 9, 12, 15, 18, 21, 24, 27},
+	{0, 1, 2, 3, 4, 5, 6, 7, 8, 9},
+	{0, 3, 6, 9, 12, 15, 18, 21, 24, 27},
+}
+
 func ComputeWpsPin(bssid string) (string, error) {
 	bssid = strings.TrimSpace(bssid)
 	parts := strings.Split(bssid, ":")
@@ -24,12 +34,7 @@ func ComputeWpsPin(bssid string) (string, error) {
 	accum := 0
 	tmp := pin
 	for i := 0; i < 7; i++ {
-		digit := tmp % 10
-		if i%2 == 0 {
-			accum += digit * 3
-		} else {
-			accum += digit
-		}
+		accum += wpsChecksumTab[i][tmp%10]
 		tmp /= 10
 	}
 	checksum := (10 - (accum % 10)) % 10
@@ -51,12 +56,7 @@ func ValidateWpsPin(pin string) bool {
 
 	accum := 0
 	for i := 0; i < 7; i++ {
-		digit := int(pin[i] - '0')
-		if i%2 == 0 {
-			accum += digit * 3
-		} else {
-			accum += digit
-		}
+		accum += wpsChecksumTab[i][pin[i]-'0']
 	}
 	checksum := (10 - (accum % 10)) % 10
 	return checksum == int(pin[7]-'0')

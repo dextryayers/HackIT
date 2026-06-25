@@ -41,11 +41,15 @@ func hexToBytes(hex string) ([]byte, error) {
 
 func bytesToHex(data []byte) string {
 	var sb strings.Builder
+	sb.Grow(len(data) * 2)
 	for _, b := range data {
-		sb.WriteString(fmt.Sprintf("%02X", b))
+		sb.WriteByte(hexChars[b>>4])
+		sb.WriteByte(hexChars[b&0x0f])
 	}
 	return sb.String()
 }
+
+const hexChars = "0123456789ABCDEF"
 
 func bytesToMac(data []byte) string {
 	if len(data) != 6 {

@@ -117,15 +117,15 @@ namespace HackITWireless.Cs
         private async Task SendArpReplyAsync(string targetIp, string gatewayIp, string interfaceName)
         {
             // Create raw socket for ARP packet sending
-            using var socket = new Socket(AddressFamily.InterNetwork, SocketType.Raw, ProtocolType.Arpa);
-            socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.Broadcast, 1);
+            using var socket = new System.Net.Sockets.Socket(System.Net.Sockets.AddressFamily.InterNetwork, System.Net.Sockets.SocketType.Raw, System.Net.Sockets.ProtocolType.Raw);
+            socket.SetSocketOption(System.Net.Sockets.SocketOptionLevel.Socket, System.Net.Sockets.SocketOptionName.Broadcast, 1);
             
             // Build ARP reply packet
             byte[] arpPacket = BuildArpReply(targetIp, gatewayIp, interfaceName);
             
             // Send to target
             var targetEndPoint = new IPEndPoint(IPAddress.Parse(targetIp), 0);
-            await socket.SendToAsync(arpPacket, targetEndPoint);
+            await socket.SendToAsync(arpPacket, System.Net.Sockets.SocketFlags.None, targetEndPoint);
         }
         
         private byte[] BuildArpReply(string targetIp, string gatewayIp, string interfaceName)
@@ -139,7 +139,7 @@ namespace HackITWireless.Cs
             buffer[4] = 0xFF; buffer[5] = 0xFF;
             
             // Get source MAC from interface
-            var adapter = _adapterDetector.DetectAllAdapters()
+            var adapter = AdvancedAdapterDetector.DetectAllAdapters()
                 .FirstOrDefault(a => a.Name == interfaceName);
             if (adapter != null)
             {

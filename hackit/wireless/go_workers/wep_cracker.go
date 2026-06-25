@@ -14,11 +14,14 @@ type IvPacket struct {
 }
 
 type WepCracker struct {
-	mu       sync.Mutex
-	ivs      []IvPacket
-	pcapPath string
-	key      []byte
-	ready    bool
+	mu         sync.Mutex
+	ivs        []IvPacket
+	pcapPath   string
+	key        []byte
+	ready      bool
+	residual   [256]byte
+	korekVotes [13][256]int
+	ptwVotes   [13][256]float64
 }
 
 func NewWepCracker() *WepCracker {
@@ -96,8 +99,8 @@ func (w *WepCracker) FmsAttack() (string, error) {
 		return "", fmt.Errorf("no pcap loaded, call LoadPcap first")
 	}
 
-	residual := make([]byte, 256)
-	for i := 0; i < 256; i++ {
+	residual := w.residual[:]
+	for i := range residual {
 		residual[i] = byte(i)
 	}
 
@@ -160,9 +163,11 @@ func (w *WepCracker) KorekAttack() (string, error) {
 		return "", fmt.Errorf("no pcap loaded, call LoadPcap first")
 	}
 
-	votes := make([]map[int]int, 13)
+	votes := &w.korekVotes
 	for i := range votes {
-		votes[i] = make(map[int]int)
+		for j := range votes[i] {
+			votes[i][j] = 0
+		}
 	}
 
 	for _, iv := range w.ivs {
@@ -215,9 +220,11 @@ func (w *WepCracker) PtwAttack() (string, error) {
 		return "", fmt.Errorf("no pcap loaded, call LoadPcap first")
 	}
 
-	votes := make([]map[int]float64, 13)
+	votes := &w.ptwVotes
 	for i := range votes {
-		votes[i] = make(map[int]float64)
+		for j := range votes[i] {
+			votes[i][j] = 0
+		}
 	}
 
 	for _, iv := range w.ivs {

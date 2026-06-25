@@ -187,7 +187,9 @@ namespace HackItWireless
             }
 
             _hopping = true;
-            _hopCts = cancellationToken ?? new CancellationTokenSource();
+            _hopCts = cancellationToken.HasValue
+                ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken.Value)
+                : new CancellationTokenSource();
 
             try
             {
@@ -233,7 +235,9 @@ namespace HackItWireless
         {
             var results = new Dictionary<int, List<string>>();
             var channelList = GetAvailableChannels();
-            var cts = cancellationToken ?? new CancellationTokenSource();
+            var cts = cancellationToken.HasValue
+                ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken.Value)
+                : new CancellationTokenSource();
 
             string airodump = airodumpPath ?? (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
                 ? "airodump-ng"

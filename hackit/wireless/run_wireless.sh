@@ -1,15 +1,10 @@
 #!/bin/bash
-# HackIT Tool Wrapper
-
-TOOL_DIR="$(basename "$PWD")"
-GLOBAL_WRAPPER="../../hackit.sh"
-
-echo -e "\033[0;36m[+] Launching $TOOL_DIR module via HackIT Swarm...\033[0m"
-
-if [ -f "$GLOBAL_WRAPPER" ]; then
-    $GLOBAL_WRAPPER -mode $TOOL_DIR "$@"
+# HackIT Wireless Launcher
+cd "$(dirname "$0")"
+if [ "$1" = "--cli" ] || [ "$1" = "-c" ]; then
+    exec python3 console.py "${@:2}"
+elif [ "$1" = "--web" ] || [ "$1" = "-w" ]; then
+    cd weblocal && python3 -m uvicorn main:app --host 0.0.0.0 --port 8081 --reload 2>/dev/null || python3 main.py
 else
-    echo -e "\033[0;31m[X] Global HackIT Wrapper not found. Please run from root directory.\033[0m"
-    exit 1
+    cd weblocal && python3 gui.py
 fi
-

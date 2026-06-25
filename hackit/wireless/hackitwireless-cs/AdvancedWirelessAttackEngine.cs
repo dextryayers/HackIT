@@ -199,7 +199,7 @@ namespace HackITWireless.Cs
             
             // Step 2: Select target WPS AP
             var targetAp = wpsAps.FirstOrDefault(ap => ap.Bssid == targetBssid) ?? wpsAps.First();
-            Console.WriteLine($"[CS-WORKFLOW] Selected target: {targetAp.Ssid} ({targetAp.Bssid})");
+            Console.WriteLine($"[CS-WORKFLOW] Selected target: {targetAp.Essid} ({targetAp.Bssid})");
             
             // Step 3: Perform WPS PixieDust
             await PerformWpsPixieDustAsync(interfaceName, targetAp.Bssid, null);
@@ -232,7 +232,7 @@ namespace HackITWireless.Cs
                         aps.Add(new WpsAccessPoint
                         {
                             Bssid = parts[0],
-                            Essid = parts[2].Replace('"', ""),
+                            Essid = parts[2].Trim('"'),
                             Signal = parts[3],
                             Channel = parts[4],
                             WPS = true
@@ -327,13 +327,6 @@ namespace HackITWireless.Cs
                 return string.Empty;
             }
         }
-    }
-    
-    public class OSDetector
-    {
-        public static bool IsWindows => System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows);
-        public static bool IsLinux => System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Linux);
-        public static bool IsMacOS => System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.OSX);
     }
     
     public class WpsAccessPoint

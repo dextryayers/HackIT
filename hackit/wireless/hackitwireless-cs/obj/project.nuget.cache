@@ -1,0 +1,11 @@
+{
+  "version": 2,
+  "dgSpecHash": "na9FKJQVUymyy88rWX8ew03+tZHFUPW3v+9ckBImaG//9K7EPmx4fd0UejxnZVDpLSN6nm07q6PNBupXjY4kGQ==",
+  "success": true,
+  "projectFilePath": "/home/aniipid/HackIT/hackit/wireless/hackitwireless-cs/HackItWireless.csproj",
+  "expectedPackageFiles": [
+    "/home/aniipid/.nuget/packages/microsoft.netcore.app.ref/6.0.8/microsoft.netcore.app.ref.6.0.8.nupkg.sha512",
+    "/home/aniipid/.nuget/packages/microsoft.aspnetcore.app.ref/6.0.8/microsoft.aspnetcore.app.ref.6.0.8.nupkg.sha512"
+  ],
+  "logs": []
+}

@@ -17,4 +17,9 @@ bool hackit_inject_deauth(const char* iface, const uint8_t* bssid, const uint8_t
 bool hackit_inject_beacon(const char* iface, const char* ssid, const uint8_t* bssid, uint8_t channel);
 bool hackit_inject_proberesp(const char* iface, const char* ssid, const uint8_t* bssid, uint8_t channel);
 
+/* Cached pcap handle API — reuse handles across frame injections */
+void hackit_pcap_cache_init(void);
+void hackit_pcap_cache_cleanup(void);
+int  hackit_pcap_cache_inject(const char* iface, const uint8_t* frame, int len, int timeout_ms);
+
 #endif // HACKIT_PACKET_INJECTOR_H

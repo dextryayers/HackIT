@@ -24,7 +24,7 @@ class EngineBridge:
         self._go_bin = self._find_go_worker()
         self._rust_bin = self._find_rust_engine()
         self._c_lib = self._find_clib("libhackit_wireless_c")
-        self._cxx_lib = self._find_clib("libhackit_wireless_cxx")
+        self._cxx_lib = self._c_lib  # C++ compiled into same shared lib
         self._cs_bin = self._find_csharp()
 
     def _find_go_worker(self) -> Optional[str]:
@@ -52,20 +52,21 @@ class EngineBridge:
         return None
 
     def _find_clib(self, name: str) -> Optional[str]:
-        for ext, d in [(".so", "build"), (".a", "build"), (".dylib", "build"), (".dll", "build")]:
-            p = BASE / "c_core" / d / "lib" / f"{name}{ext}"
-            if p.exists():
-                return str(p)
-            p = BASE / "c_core" / d / f"{name}{ext}"
-            if p.exists():
-                return str(p)
+        for d in [BASE / "c_core", BASE / "c_core/build", BASE / "c_core/build/lib"]:
+            for ext in [".so", ".a", ".dylib", ".dll"]:
+                p = d / f"{name}{ext}"
+                if p.exists():
+                    return str(p)
         return None
 
     def _find_csharp(self) -> Optional[str]:
         for name in ["HackItWireless.exe", "HackItWireless.dll"]:
-            p = BASE / "hackitwireless-cs" / "bin" / "Release" / name
-            if p.exists():
-                return str(p)
+            for sub in ["net6.0", "net8.0", "net9.0", ""]:
+                d = BASE / "hackitwireless-cs" / "bin" / "Release"
+                if sub: d = d / sub
+                p = d / name
+                if p.exists():
+                    return str(p)
         return None
 
     def engine_health(self) -> dict:

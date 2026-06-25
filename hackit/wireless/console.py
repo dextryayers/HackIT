@@ -1644,125 +1644,18 @@ Flags: --json | --check-updates"""
         return True
 
     def do_run(self, arg):
-        """Start the Wireless Web GUI (Astro + FastAPI).
-Usage: run [--dev] [--port <port>] [--no-open]"""
-        pos, flags = _parse_flags(arg.split(), {"--dev", "--no-open"}, {"--port": int})
-        port = flags.get("--port", 8081)
-        weblocal = BASE / "weblocal"
-        dev = "--dev" in flags
-        PROJECT_ROOT = HACKIT.parent  # package parent = project root for imports
-
-        # ── Check Node.js ──
-        if shutil.which("node") is None:
-            UI.print_error("Node.js is required. Install from https://nodejs.org")
+        """Launch the HackIT Wireless GUI (tkinter).
+Usage: run"""
+        gui_script = BASE / "weblocal" / "gui.py"
+        if not gui_script.exists():
+            UI.print_error(f"GUI script not found: {gui_script}")
             return
-
-        # ── Install npm deps ──
-        if not (weblocal / "node_modules").exists():
-            UI.print_info("Installing npm dependencies...")
-            r = subprocess.run(["npm", "install"], cwd=str(weblocal),
-                               capture_output=True, text=True)
-            if r.returncode != 0:
-                UI.print_error("npm install failed:")
-                for line in (r.stderr or "").splitlines():
-                    UI.print_error(f"  {line}")
-                return
-
-        # ── Detect stale dist ──
-        dist = weblocal / "dist"
-        need_build = False
-        if not dist.exists() or not any(dist.iterdir()):
-            need_build = True
-        else:
-            src_mtime = 0
-            for src in weblocal.rglob("*.astro"):
-                if src.is_file():
-                    src_mtime = max(src_mtime, src.stat().st_mtime)
-            dist_mtime = 0
-            for df in dist.rglob("*"):
-                if df.is_file():
-                    dist_mtime = max(dist_mtime, df.stat().st_mtime)
-            if src_mtime > dist_mtime:
-                need_build = True
-
-        # ── Build or dev ──
-        if dev:
-            api_port = port + 1
-            UI.print_info(f"Starting Astro dev server on http://127.0.0.1:{port} ...")
-            astro_proc = subprocess.Popen(
-                ["npx", "astro", "dev", "--port", str(port), "--host", "127.0.0.1"],
-                cwd=str(weblocal), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-            )
-        else:
-            api_port = port
-            if need_build:
-                UI.print_info("Building frontend...")
-                r = subprocess.run(["npm", "run", "build"], cwd=str(weblocal),
-                                   capture_output=True, text=True)
-                if r.returncode != 0:
-                    UI.print_error("Frontend build failed:")
-                    for line in (r.stderr or "").splitlines():
-                        UI.print_error(f"  {line}")
-                    return
-            astro_proc = None
-
-        # ── Start Python backend ──
-        env = os.environ.copy()
-        env["HACKIT_WEB_PORT"] = str(api_port)
-        env["PYTHONPATH"] = str(PROJECT_ROOT) + ":" + env.get("PYTHONPATH", "")
-        UI.print_info(f"Starting API backend on port {api_port} ...")
-
-        # write stderr to a temp file so we can read it on failure
-        import tempfile
-        stderr_tmp = tempfile.NamedTemporaryFile(prefix="hackit_be_", suffix=".log",
-                                                  delete=False)
-        stderr_path = stderr_tmp.name
-        python_proc = subprocess.Popen(
-            [sys.executable, str(weblocal / "python" / "main.py")],
-            env=env, stdout=subprocess.DEVNULL, stderr=stderr_tmp
+        UI.print_info("Launching HackIT Wireless GUI...")
+        subprocess.Popen(
+            [sys.executable, str(gui_script)],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
         )
-        stderr_tmp.close()
-
-        # ── Wait for backend ──
-        import time as _time
-        for i in range(30):
-            try:
-                import urllib.request
-                urllib.request.urlopen(f"http://127.0.0.1:{api_port}/api/ping", timeout=2)
-                break
-            except Exception:
-                _time.sleep(1)
-        else:
-            UI.print_error("Backend failed to start — stderr log follows:")
-            try:
-                with open(stderr_path) as f:
-                    for line in f:
-                        UI.print_error(f"  {line.rstrip()}")
-            except OSError:
-                UI.print_error("  (could not read stderr log)")
-            os.unlink(stderr_path)
-            python_proc.kill()
-            if astro_proc:
-                astro_proc.kill()
-            return
-
-        os.unlink(stderr_path)
-
-        if "--no-open" not in flags:
-            import webbrowser
-            webbrowser.open(f"http://127.0.0.1:{port}")
-
-        UI.print_success(f"Web GUI running at http://127.0.0.1:{port}")
-        UI.print_info("Press Ctrl+C to stop")
-
-        try:
-            python_proc.wait()
-        except KeyboardInterrupt:
-            UI.print_info("Shutting down...")
-            python_proc.kill()
-            if astro_proc:
-                astro_proc.kill()
-        UI.print_info("Web GUI stopped.")
+        UI.print_success("GUI launched in background.")
 
     def do_quit(self, arg):
         return self.do_exit(arg)

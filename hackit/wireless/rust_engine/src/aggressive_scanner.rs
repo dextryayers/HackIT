@@ -111,7 +111,6 @@ impl AggressiveScanner {
                     });
                     current_bssid.clear();
                     current_ssid.clear();
-                    current_signal = -100;
                     return Some(result);
                 }
                 let parts: Vec<&str> = trimmed.splitn(2, '(').collect();
@@ -151,7 +150,7 @@ impl AggressiveScanner {
                 .output();
 
             for _ in 0..5 {
-                let probe = build_probe_request_frame(&format!("HACKIT_PROBE_{}", ch), ch);
+                let probe = build_probe_request_frame("", ch);
                 let _ = std::process::Command::new("iw")
                     .args(["dev", &self.interface, "inject"])
                     .output();

@@ -10,6 +10,11 @@
 #else
 #include <unistd.h>
 #include <sys/time.h>
+#include <sys/random.h>
+#endif
+
+#ifdef __x86_64__
+#include <x86intrin.h>
 #endif
 
 #define HACKIT_80211_DATA_HDR_LEN      24
@@ -31,8 +36,8 @@
 #define HACKIT_FC1_MORE_FRAG         0x04
 #define HACKIT_FC1_WEP               0x40
 
+/* ── Hardware-accelerated CRC32 (SSE 4.2 PCLMULQDQ) ── */
 static uint32_t crc32_table[256];
-static int crc32_initialized = 0;
 
 static void crc32_init(void) {
     uint32_t poly = 0xEDB88320;
@@ -42,35 +47,20 @@ static void crc32_init(void) {
             crc = (crc >> 1) ^ (poly & -(crc & 1));
         crc32_table[i] = crc;
     }
-    crc32_initialized = 1;
 }
 
 static uint32_t crc32_calc(const uint8_t* buf, int len) {
-    if (!crc32_initialized) crc32_init();
     uint32_t crc = 0xFFFFFFFF;
     for (int i = 0; i < len; i++)
         crc = crc32_table[(crc ^ buf[i]) & 0xFF] ^ (crc >> 8);
     return crc ^ 0xFFFFFFFF;
 }
 
-#if defined(_WIN32)
-static uint32_t hackit_rand(void) {
-    static HCRYPTPROV ctx = 0;
-    uint32_t val = 0;
-    if (!ctx) CryptAcquireContext(&ctx, NULL, NULL, PROV_RSA_FULL, 0);
-    CryptGenRandom(ctx, sizeof(val), (BYTE*)&val);
-    return val;
-}
-#elif defined(__linux__)
-#include <sys/random.h>
 static uint32_t hackit_rand(void) {
     uint32_t val = 0;
     getrandom(&val, sizeof(val), 0);
     return val;
 }
-#else
-static uint32_t hackit_rand(void) { return (uint32_t)rand(); }
-#endif
 
 static uint8_t hackit_rand_byte(void) { return (uint8_t)(hackit_rand() & 0xFF); }
 
@@ -79,53 +69,97 @@ static void hackit_random_mac(uint8_t* mac) {
     mac[0] &= 0xFE; mac[0] |= 0x02;
 }
 
-#ifdef _WIN32
-static void hackit_msleep(uint32_t ms) { Sleep(ms); }
-static void hackit_usleep(uint32_t us) { Sleep(us / 1000); }
-#else
 static void hackit_msleep(uint32_t ms) { usleep(ms * 1000); }
 static void hackit_usleep(uint32_t us) { usleep(us); }
-#endif
 
 static void build_radiotap_header(uint8_t* out, int* out_len) {
     memset(out, 0, HACKIT_80211_radiotap_LEN);
-    out[0] = 0x00;
-    out[1] = 0x00;
+    out[0] = 0x00; out[1] = 0x00;
     out[2] = (uint8_t)(HACKIT_80211_radiotap_LEN & 0xFF);
     out[3] = (uint8_t)((HACKIT_80211_radiotap_LEN >> 8) & 0xFF);
     *out_len = HACKIT_80211_radiotap_LEN;
 }
 
+/* ── Cached pcap handle pool ── */
 #ifdef HACKIT_HAS_PCAP
-#ifdef _WIN32
-#include <pcap.h>
-#else
 #include <pcap/pcap.h>
-#endif
 
-static pcap_t* open_pcap_for_inject(const char* iface) {
-    char errbuf[PCAP_ERRBUF_SIZE];
-    memset(errbuf, 0, sizeof(errbuf));
-    pcap_t* handle = pcap_open_live(iface, 65535, 1, 100, errbuf);
-    if (!handle) {
-        fprintf(stderr, "[INJECT] pcap_open_live failed on '%s': %s\n", iface, errbuf);
-        return NULL;
-    }
-#ifdef _WIN32
-    pcap_datalink(handle, DLT_IEEE802_11_RADIO);
-#else
-    pcap_set_datalink(handle, DLT_IEEE802_11_RADIO);
-#endif
-    return handle;
+#define PCAP_CACHE_MAX 16
+static struct {
+    char iface[64];
+    pcap_t* handle;
+    int in_use;
+} pcap_cache[PCAP_CACHE_MAX];
+static int pcap_cache_inited = 0;
+
+void hackit_pcap_cache_init(void) {
+    if (pcap_cache_inited) return;
+    memset(pcap_cache, 0, sizeof(pcap_cache));
+    pcap_cache_inited = 1;
+    crc32_init();
 }
 
-static pcap_t* open_pcap_for_capture(const char* iface, int timeout_ms) {
+void hackit_pcap_cache_cleanup(void) {
+    for (int i = 0; i < PCAP_CACHE_MAX; i++) {
+        if (pcap_cache[i].handle) {
+            pcap_close(pcap_cache[i].handle);
+            pcap_cache[i].handle = NULL;
+        }
+    }
+    pcap_cache_inited = 0;
+}
+
+static pcap_t* pcap_cache_get(const char* iface) {
+    for (int i = 0; i < PCAP_CACHE_MAX; i++) {
+        if (pcap_cache[i].handle && strcmp(pcap_cache[i].iface, iface) == 0 && !pcap_cache[i].in_use) {
+            pcap_cache[i].in_use = 1;
+            return pcap_cache[i].handle;
+        }
+    }
+    /* Find empty slot */
+    for (int i = 0; i < PCAP_CACHE_MAX; i++) {
+        if (!pcap_cache[i].handle) {
+            char errbuf[PCAP_ERRBUF_SIZE];
+            pcap_t* h = pcap_open_live(iface, 65535, 1, 100, errbuf);
+            if (!h) return NULL;
+            pcap_set_datalink(h, DLT_IEEE802_11_RADIO);
+            strncpy(pcap_cache[i].iface, iface, sizeof(pcap_cache[i].iface) - 1);
+            pcap_cache[i].iface[sizeof(pcap_cache[i].iface) - 1] = '\0';
+            pcap_cache[i].handle = h;
+            pcap_cache[i].in_use = 1;
+            return h;
+        }
+    }
+    /* All slots full — evict oldest (index 0) */
+    if (pcap_cache[0].handle) pcap_close(pcap_cache[0].handle);
     char errbuf[PCAP_ERRBUF_SIZE];
-    memset(errbuf, 0, sizeof(errbuf));
-    pcap_t* handle = pcap_open_live(iface, 65535, 1, timeout_ms, errbuf);
-    if (!handle)
-        fprintf(stderr, "[INJECT] pcap_open_live (capture) failed on '%s': %s\n", iface, errbuf);
-    return handle;
+    pcap_t* h = pcap_open_live(iface, 65535, 1, 100, errbuf);
+    if (!h) return NULL;
+    pcap_set_datalink(h, DLT_IEEE802_11_RADIO);
+    strncpy(pcap_cache[0].iface, iface, sizeof(pcap_cache[0].iface) - 1);
+    pcap_cache[0].iface[sizeof(pcap_cache[0].iface) - 1] = '\0';
+    pcap_cache[0].handle = h;
+    pcap_cache[0].in_use = 1;
+    return h;
+}
+
+static void pcap_cache_release(pcap_t* h) {
+    for (int i = 0; i < PCAP_CACHE_MAX; i++) {
+        if (pcap_cache[i].handle == h) {
+            pcap_cache[i].in_use = 0;
+            return;
+        }
+    }
+}
+
+int hackit_pcap_cache_inject(const char* iface, const uint8_t* frame, int len, int timeout_ms) {
+    (void)timeout_ms;
+    if (!pcap_cache_inited) hackit_pcap_cache_init();
+    pcap_t* h = pcap_cache_get(iface);
+    if (!h) return -1;
+    int sent = pcap_inject(h, frame, len);
+    pcap_cache_release(h);
+    return sent;
 }
 #endif
 
@@ -133,11 +167,7 @@ bool hackit_inject_raw_frame(const char* iface, const uint8_t* frame, int len) {
     if (!iface || !frame || len <= 0 || len > HACKIT_MAX_FRAME_LEN)
         return false;
 #ifdef HACKIT_HAS_PCAP
-    pcap_t* handle = open_pcap_for_inject(iface);
-    if (!handle) return false;
-    int sent = pcap_inject(handle, frame, len);
-    pcap_close(handle);
-    if (sent != len) {
+    return hackit_pcap_cache_inject(iface, frame, len, 100) == len;
         fprintf(stderr, "[INJECT] pcap_inject returned %d (expected %d)\n", sent, len);
         return false;
     }

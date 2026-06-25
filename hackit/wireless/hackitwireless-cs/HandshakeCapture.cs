@@ -78,7 +78,7 @@ namespace HackItWireless
         }
     }
 
-    public readonly struct HandshakeResult
+    public class HandshakeResult
     {
         public bool IsValid { get; }
         public string? Message { get; }

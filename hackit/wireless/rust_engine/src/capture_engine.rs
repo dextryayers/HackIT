@@ -180,7 +180,7 @@ pub fn extract_rsn(data: &[u8]) -> Option<RsnInfo> {
         return None;
     }
     let fixed_params_end = 36;
-    for (id, len, start) in ie_iter(data, fixed_params_end) {
+    for (id, _len, start) in ie_iter(data, fixed_params_end) {
         if id != 48 && id != 0xDD {
             continue;
         }

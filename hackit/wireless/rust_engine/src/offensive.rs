@@ -104,7 +104,7 @@ impl KarmaAttack {
 
     pub fn execute(&self) -> Result<String, String> {
         let ssid = if self.response_ssid.is_empty() {
-            "HackIT-Free-WiFi"
+            ""
         } else {
             &self.response_ssid
         };

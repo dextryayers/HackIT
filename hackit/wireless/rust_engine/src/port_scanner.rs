@@ -124,7 +124,7 @@ pub fn run_scan(config: ScanConfig) -> ScanResult {
     let open_ports = Arc::new(Mutex::new(Vec::new()));
     let completed = Arc::new(AtomicU32::new(0));
     let start_time = Arc::new(start);
-    let mut rtt_samples: Vec<f64> = Vec::new();
+    let rtt_samples: Vec<f64> = Vec::new();
 
     let mut handles = Vec::new();
     let chunk_size = (total + config.threads - 1) / config.threads;
@@ -139,11 +139,11 @@ pub fn run_scan(config: ScanConfig) -> ScanResult {
         let retries = config.retries;
         let grab_banners = config.grab_banners;
         let scan_type = config.scan_type.clone();
-        let total_ports = total;
+        let _total_ports = total;
 
         let handle = thread::spawn(move || {
             for &port in &chunk_owned {
-                let (is_open, is_filtered) = match scan_type {
+                let (is_open, _is_filtered) = match scan_type {
                     ScanType::SynStealth => {
                         syn_scan_port(&host_clone, port, timeout)
                     }
@@ -168,7 +168,7 @@ pub fn run_scan(config: ScanConfig) -> ScanResult {
                         }
                     }
 
-                    let elapsed = start_time_clone.elapsed().as_secs_f64() * 1000.0;
+                    let _elapsed = start_time_clone.elapsed().as_secs_f64() * 1000.0;
 
                     let svc = ServiceInfo {
                         port,
@@ -384,7 +384,7 @@ fn raw_syn_scan(host: &str, port: u16, timeout_ms: u64) -> Result<(bool, bool), 
         }
 
         let tcp_offset = ip_hdr_len;
-        let tcphdr_src_port = u16::from_be_bytes([buf[tcp_offset], buf[tcp_offset + 1]]);
+        let _tcphdr_src_port = u16::from_be_bytes([buf[tcp_offset], buf[tcp_offset + 1]]);
         let tcphdr_dst_port = u16::from_be_bytes([buf[tcp_offset + 2], buf[tcp_offset + 3]]);
 
         if tcphdr_dst_port != src_port {
@@ -453,7 +453,7 @@ fn get_local_ipv4() -> Option<Ipv4Addr> {
         return None;
     }
 
-    let ip_u32 = u32::from_be(unsafe { local_addr.sin_addr.s_addr });
+    let ip_u32 = u32::from_be(local_addr.sin_addr.s_addr);
     Some(Ipv4Addr::from(ip_u32))
 }
 
@@ -640,10 +640,10 @@ fn grab_banner_with_timeout(host: &str, port: u16, timeout_ms: u64) -> Option<St
     let mut tmp = [0u8; 256];
 
     let common_banner_ports: &[u16] = &[21, 22, 25, 80, 110, 143, 443, 445, 993, 995, 1433, 3306, 3389, 5900, 8080, 8443];
-    let mut sent_probe = false;
+    let _sent_probe = false;
 
     if common_banner_ports.contains(&port) {
-        let mut probe = || -> Option<String> {
+        let probe = || -> Option<String> {
             let mut s = TcpStream::connect_timeout(&addr, Duration::from_millis(timeout_ms)).ok()?;
             let _ = s.set_read_timeout(Some(Duration::from_millis(2000)));
             let _ = s.set_write_timeout(Some(Duration::from_millis(2000)));
