@@ -151,7 +151,7 @@ begin
        auxiliary/dos/wifi/wifi_deauth
        auxiliary/dos/wifi/wifi_ap_dos].each do |mod|
       begin
-        r = msf.module_execute('auxiliary', mod, { 'RHOSTS' => '192.168.1.1',
+        r = msf.module_execute('auxiliary', mod, { 'RHOSTS' => '10.0.0.1',
           'INTERFACE' => 'wlan0mon', 'TIMEOUT' => 30 })
         puts JSON.generate({ event: 'msf_module', iface: '', bssid: '', ssid: '', channel: 0,
           data: { module: mod, result: r }, timestamp: Time.now.iso8601 })

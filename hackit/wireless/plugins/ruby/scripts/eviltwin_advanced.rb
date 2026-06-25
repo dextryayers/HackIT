@@ -9,7 +9,7 @@ begin
   iface = ARGV[0]
   ssid = ARGV[1] || 'FreeWiFi'
   channel = (ARGV[2] || 6).to_i
-  bssid = ARGV[3] || '00:11:22:33:44:55'
+  bssid = ARGV[3] || 'AA:BB:CC:DD:EE:FF'
   portal_port = (ARGV[4] || 8080).to_i
   hop_interval = (ARGV[5] || 0).to_i
 
@@ -36,17 +36,17 @@ begin
   sleep(2)
 
   system('ifconfig at0 up 2>/dev/null')
-  system('ifconfig at0 192.168.1.1 netmask 255.255.255.0 2>/dev/null')
+  system('ifconfig at0 10.0.0.1 netmask 255.255.255.0 2>/dev/null')
   puts JSON.generate({ event: 'interface_ready', iface: iface,
-    data: { interface: 'at0', ip: '192.168.1.1' },
+    data: { interface: 'at0', ip: '10.0.0.1' },
     timestamp: Time.now.iso8601 })
   $stdout.flush
 
   dnsmasq_conf = <<~CONF
     interface=at0
-    dhcp-range=192.168.1.2,192.168.1.100,255.255.255.0,12h
-    dhcp-option=3,192.168.1.1
-    dhcp-option=6,192.168.1.1
+    dhcp-range=10.0.0.2,10.0.0.100,255.255.255.0,12h
+    dhcp-option=3,10.0.0.1
+    dhcp-option=6,10.0.0.1
     server=8.8.8.8
     log-queries
     log-dhcp
@@ -99,7 +99,7 @@ begin
   File.write('/tmp/portal_server.rb', server_script)
   system('ruby /tmp/portal_server.rb &')
   puts JSON.generate({ event: 'portal_start', iface: iface,
-    data: { port: portal_port, url: "http://192.168.1.1:#{portal_port}" },
+    data: { port: portal_port, url: "http://10.0.0.1:#{portal_port}" },
     timestamp: Time.now.iso8601 })
   $stdout.flush
 

@@ -1,4 +1,4 @@
-import json, re, os
+import json, re, os, subprocess
 from typing import Optional, Any
 
 
@@ -306,6 +306,30 @@ class DataParser:
             return int(signal_str)
         except (ValueError, TypeError):
             return -100
+
+    @staticmethod
+    def freq_to_channel(freq_mhz: int) -> int:
+        if 2412 <= freq_mhz <= 2484: return (freq_mhz - 2412) // 5 + 1
+        if 5180 <= freq_mhz <= 5825: return (freq_mhz - 5180) // 5 + 36
+        if freq_mhz == 2484: return 14
+        return 0
+
+    @staticmethod
+    def bssid_to_ch(iface: str, bssid: str) -> int:
+        try:
+            raw = subprocess.check_output(["iw", "dev", iface, "scan", "-u"], text=True, stderr=subprocess.DEVNULL, timeout=10)
+            found_ch = 0
+            curr_bssid = ""
+            for line in raw.splitlines():
+                ls = line.strip()
+                if ls.startswith("BSS "):
+                    curr_bssid = ls[4:].split()[0].replace("(on","").replace(")","").strip().upper()
+                elif "freq:" in ls and curr_bssid == bssid.upper():
+                    freq = ls.split()[-1]
+                    if freq.isdigit(): found_ch = DataParser.freq_to_channel(int(freq))
+            return found_ch
+        except Exception:
+            return 0
 
     @staticmethod
     def json_pretty(data: Any) -> str:

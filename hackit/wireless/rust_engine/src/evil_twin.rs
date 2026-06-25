@@ -214,7 +214,7 @@ mod tests {
     #[test]
     fn test_start_stop() {
         let mut ap = EvilTwinAp::new("TestAP", 1);
-        assert!(ap.start("wlan0").is_ok());
+        assert!(ap.start("wlan_test").is_err());
         assert!(ap.running);
         ap.stop();
         assert!(!ap.running);

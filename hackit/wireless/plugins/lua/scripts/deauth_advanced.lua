@@ -102,7 +102,7 @@ end
 if arg[1] == "--help" then
   print("Usage: deauth_advanced.lua <interface> <bssid> [station] [count] [rate] [mode]")
   print("Advanced deauth with rate control. Modes: targeted, broadcast, evacuation")
-  print("Example: deauth_advanced.lua wlan0 00:11:22:33:44:55 ff:ff:ff:ff:ff:ff 10 200 targeted")
+  print("Example: deauth_advanced.lua wlan0 AA:BB:CC:DD:EE:FF ff:ff:ff:ff:ff:ff 10 200 targeted")
   os.exit(0)
 end
 

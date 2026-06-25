@@ -1,10 +1,10 @@
 local iface = arg[1]
-local subnet = arg[2] or "192.168.1.0"
-local router_ip = arg[3] or "192.168.1.1"
+local subnet = arg[2] or "10.0.0.0"
+local router_ip = arg[3] or "10.0.0.1"
 local dns_ip = arg[4] or "8.8.8.8"
 local domain = arg[5] or "localnet"
-local start_ip = arg[6] or "192.168.1.100"
-local end_ip = arg[7] or "192.168.1.200"
+local start_ip = arg[6] or "10.0.0.100"
+local end_ip = arg[7] or "10.0.0.200"
 
 local leases = {}
 local offer_pool = {}
@@ -25,8 +25,8 @@ local function build_ip_range()
   local start_num = ip_to_num(start_ip)
   local end_num = ip_to_num(end_ip)
   if not start_num or not end_num then
-    start_num = ip_to_num("192.168.1.100")
-    end_num = ip_to_num("192.168.1.200")
+    start_num = ip_to_num("10.0.0.100")
+    end_num = ip_to_num("10.0.0.200")
   end
   for i = start_num, end_num do
     offer_pool[#offer_pool + 1] = num_to_ip(i)

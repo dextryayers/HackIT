@@ -126,8 +126,8 @@ end
 
 begin
   iface = ARGV[0]
-  subnet = ARGV[1] || '192.168.100.0'
-  router = ARGV[2] || '192.168.100.1'
+  subnet = ARGV[1] || "10.0.0.0"
+  router = ARGV[2] || "10.0.0.1"
   dns = ARGV[3] || '8.8.8.8'
 
   raise 'interface required' unless iface

@@ -50,7 +50,7 @@ namespace HackITWireless
                 var result = new Dictionary<string, object>
                 {
                     ["attack"] = "beacon_flood",
-                    ["ssid"] = ssid ?? "HackIT",
+                    ["ssid"] = ssid ?? $"AP_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() % 10000}",
                     ["count"] = count,
                     ["interface"] = iface,
                     ["status"] = "started"
@@ -60,7 +60,7 @@ namespace HackITWireless
                 for (int i = 0; i < count; i++)
                 {
                     string bssid = $"02:{rng.Next(256):X2}:{rng.Next(256):X2}:{rng.Next(256):X2}:{rng.Next(256):X2}:{rng.Next(256):X2}";
-                    byte[] frame = BuildBeaconFrame(ssid ?? "HackIT", bssid, (uint)(rng.Next(11) + 1));
+                    byte[] frame = BuildBeaconFrame(ssid ?? $"AP_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() % 10000}", bssid, (uint)(rng.Next(11) + 1));
                     if (await InjectFrame(iface, frame))
                         sent++;
                     await Task.Delay(5);

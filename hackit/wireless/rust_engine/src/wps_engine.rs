@@ -151,7 +151,7 @@ mod tests {
 
     #[test]
     fn test_compute_pin_from_bssid() {
-        let pin = WpsPinGenerator::compute_pin_from_bssid("00:11:22:33:44:55");
+        let pin = WpsPinGenerator::compute_pin_from_bssid("AA:BB:CC:DD:EE:FF");
         assert!(pin.is_some());
         let pin_str = pin.unwrap();
         assert_eq!(pin_str.len(), 8);

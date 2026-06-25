@@ -317,7 +317,7 @@ class EngineBridge:
     def go_wep_crack(self, pcap: str):
         return self._go_run("wep-crack", pcap)
 
-    def go_packet_gen(self, iface: str, frame_type: str, ssid: str = "HackIT"):
+    def go_packet_gen(self, iface: str, frame_type: str, ssid: Optional[str] = None):
         cmd = ["packet-gen", iface, frame_type]
         if ssid:
             cmd.append(ssid)
@@ -378,3 +378,63 @@ class EngineBridge:
             cmd, capture_output=True, text=True,
             timeout=timeout, creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
         )
+
+    # ── OUI / Vendor Lookup (native engines) ────────────────────
+
+    def oui_lookup_go(self, mac: str) -> Optional[str]:
+        if self._go_bin:
+            try:
+                r = subprocess.run([self._go_bin, "vendor", mac], capture_output=True, text=True, timeout=5)
+                out = r.stdout.strip()
+                return out if out else None
+            except Exception:
+                return None
+        return None
+
+    def oui_lookup_rust(self, mac: str) -> Optional[str]:
+        if self._rust_bin:
+            try:
+                r = subprocess.run([self._rust_bin, "oui-lookup", "-m", mac], capture_output=True, text=True, timeout=5)
+                out = r.stdout.strip()
+                if out:
+                    parts = out.split(None, 1)
+                    return parts[-1] if len(parts) > 1 else None
+                return None
+            except Exception:
+                return None
+        return None
+
+    def oui_lookup_c(self, mac: str) -> Optional[str]:
+        if self._c_lib and self._c_lib.endswith(".so"):
+            try:
+                import ctypes
+                lib = ctypes.CDLL(self._c_lib)
+                lib.web_oui_lookup.argtypes = [ctypes.c_char_p]
+                lib.web_oui_lookup.restype = ctypes.c_char_p
+                result = lib.web_oui_lookup(mac.encode())
+                return result.decode() if result else None
+            except Exception:
+                return None
+        return None
+
+    def oui_lookup_csharp(self, mac: str) -> Optional[str]:
+        if self._cs_bin:
+            try:
+                dll = Path(self._cs_bin) / "HackItWireless.dll"
+                if dll.exists():
+                    import clr
+                    clr.AddReference(str(dll.with_suffix("")))
+                    from HackItWireless import OuiLookup
+                    return OuiLookup.Lookup(mac)
+            except ImportError:
+                # pythonnet not installed — fall through
+                pass
+        return None
+
+    def oui_lookup_all(self, mac: str) -> dict[str, Optional[str]]:
+        return {
+            "go": self.oui_lookup_go(mac),
+            "rust": self.oui_lookup_rust(mac),
+            "c": self.oui_lookup_c(mac),
+            "csharp": self.oui_lookup_csharp(mac),
+        }

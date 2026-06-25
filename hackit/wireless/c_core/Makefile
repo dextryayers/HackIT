@@ -19,7 +19,9 @@ C_SOURCES = \
 	src/beacon_flood.c \
 	src/client_probe.c \
 	src/channel_hopper.c \
-	src/banner_grabber.c
+	src/banner_grabber.c \
+	src/oui_lookup.c \
+	src/web_bridge_impl.c
 
 CXX_SOURCES = \
 	src/signal_processing.cpp \

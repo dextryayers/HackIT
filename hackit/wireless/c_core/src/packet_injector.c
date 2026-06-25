@@ -7,10 +7,16 @@
 #ifdef _WIN32
 #include <windows.h>
 #include <wincrypt.h>
+#include <winsock2.h>
 #else
 #include <unistd.h>
 #include <sys/time.h>
 #include <sys/random.h>
+#include <sys/socket.h>
+#include <sys/ioctl.h>
+#include <net/if.h>
+#include <netinet/if_ether.h>
+#include <netpacket/packet.h>
 #endif
 
 #ifdef __x86_64__
@@ -77,14 +83,56 @@ static void build_radiotap_header(uint8_t* out, int* out_len) {
     out[0] = 0x00; out[1] = 0x00;
     out[2] = (uint8_t)(HACKIT_80211_radiotap_LEN & 0xFF);
     out[3] = (uint8_t)((HACKIT_80211_radiotap_LEN >> 8) & 0xFF);
+    out[4] = 0x02; out[5] = 0x00; out[6] = 0x00; out[7] = 0x00;
+    out[8] = 0x14;
     *out_len = HACKIT_80211_radiotap_LEN;
 }
 
 /* ── Cached pcap handle pool ── */
+#ifdef __linux__
+#include <sys/socket.h>
+#include <sys/ioctl.h>
+#include <net/if.h>
+#include <netpacket/packet.h>
+#include <netinet/if_ether.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+
+static int afpacket_socket = -1;
+static char afpacket_iface[64] = "";
+
+static int _afpacket_open(const char* iface) {
+    if (afpacket_socket >= 0 && strcmp(afpacket_iface, iface) == 0)
+        return afpacket_socket;
+    if (afpacket_socket >= 0) { close(afpacket_socket); afpacket_socket = -1; }
+    int fd = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
+    if (fd < 0) return -1;
+    struct ifreq ifr;
+    memset(&ifr, 0, sizeof(ifr));
+    strncpy(ifr.ifr_name, iface, IFNAMSIZ - 1);
+    if (ioctl(fd, SIOCGIFINDEX, &ifr) < 0) { close(fd); return -1; }
+    struct sockaddr_ll sll;
+    memset(&sll, 0, sizeof(sll));
+    sll.sll_family = AF_PACKET;
+    sll.sll_protocol = htons(ETH_P_ALL);
+    sll.sll_ifindex = ifr.ifr_ifindex;
+    if (bind(fd, (struct sockaddr*)&sll, sizeof(sll)) < 0) { close(fd); return -1; }
+    afpacket_socket = fd;
+    strncpy(afpacket_iface, iface, sizeof(afpacket_iface) - 1);
+    return fd;
+}
+
+static int _afpacket_inject(const char* iface, const uint8_t* frame, int len) {
+    int fd = _afpacket_open(iface);
+    if (fd < 0) return -1;
+    return (int)send(fd, frame, len, 0);
+}
+#endif
+
 #ifdef HACKIT_HAS_PCAP
 #include <pcap/pcap.h>
 
-#define PCAP_CACHE_MAX 16
+#define PCAP_CACHE_MAX 4
 static struct {
     char iface[64];
     pcap_t* handle;
@@ -116,7 +164,6 @@ static pcap_t* pcap_cache_get(const char* iface) {
             return pcap_cache[i].handle;
         }
     }
-    /* Find empty slot */
     for (int i = 0; i < PCAP_CACHE_MAX; i++) {
         if (!pcap_cache[i].handle) {
             char errbuf[PCAP_ERRBUF_SIZE];
@@ -124,20 +171,17 @@ static pcap_t* pcap_cache_get(const char* iface) {
             if (!h) return NULL;
             pcap_set_datalink(h, DLT_IEEE802_11_RADIO);
             strncpy(pcap_cache[i].iface, iface, sizeof(pcap_cache[i].iface) - 1);
-            pcap_cache[i].iface[sizeof(pcap_cache[i].iface) - 1] = '\0';
             pcap_cache[i].handle = h;
             pcap_cache[i].in_use = 1;
             return h;
         }
     }
-    /* All slots full — evict oldest (index 0) */
     if (pcap_cache[0].handle) pcap_close(pcap_cache[0].handle);
     char errbuf[PCAP_ERRBUF_SIZE];
     pcap_t* h = pcap_open_live(iface, 65535, 1, 100, errbuf);
     if (!h) return NULL;
     pcap_set_datalink(h, DLT_IEEE802_11_RADIO);
     strncpy(pcap_cache[0].iface, iface, sizeof(pcap_cache[0].iface) - 1);
-    pcap_cache[0].iface[sizeof(pcap_cache[0].iface) - 1] = '\0';
     pcap_cache[0].handle = h;
     pcap_cache[0].in_use = 1;
     return h;
@@ -166,14 +210,14 @@ int hackit_pcap_cache_inject(const char* iface, const uint8_t* frame, int len, i
 bool hackit_inject_raw_frame(const char* iface, const uint8_t* frame, int len) {
     if (!iface || !frame || len <= 0 || len > HACKIT_MAX_FRAME_LEN)
         return false;
+#ifdef __linux__
+    int r = _afpacket_inject(iface, frame, len);
+    if (r > 0) return true;
+#endif
 #ifdef HACKIT_HAS_PCAP
     return hackit_pcap_cache_inject(iface, frame, len, 100) == len;
-        fprintf(stderr, "[INJECT] pcap_inject returned %d (expected %d)\n", sent, len);
-        return false;
-    }
-    return true;
 #else
-    fprintf(stderr, "[INJECT] pcap not available. Install libpcap/Npcap for frame injection.\n");
+    (void)iface; (void)frame; (void)len;
     return false;
 #endif
 }

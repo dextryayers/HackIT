@@ -117,7 +117,7 @@ end
 if arg[1] == "--help" then
   print("Usage: handshake_sniffer.lua <interface> [bssid] [channel] [output_dir] [timeout]")
   print("Captures WPA/WPA2 handshakes with PMKID extraction")
-  print("Example: handshake_sniffer.lua wlan0 00:11:22:33:44:55 6 /tmp/hs 120")
+  print("Example: handshake_sniffer.lua wlan0 AA:BB:CC:DD:EE:FF 6 /tmp/hs 120")
   os.exit(0)
 end
 

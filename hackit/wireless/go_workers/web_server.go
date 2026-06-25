@@ -7,11 +7,29 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
 )
+
+func detectIface() string {
+	cmd := exec.Command("iw", "dev")
+	out, err := cmd.Output()
+	if err == nil {
+		for _, line := range strings.Split(string(out), "\n") {
+			if strings.Contains(line, "Interface") {
+				parts := strings.Fields(line)
+				if len(parts) > 0 {
+					return parts[len(parts)-1]
+				}
+			}
+		}
+	}
+	return ""
+}
 
 type WebServer struct {
 	Server   *http.Server
@@ -48,7 +66,7 @@ type APIResponse struct {
 func NewWebServer(port int) *WebServer {
 	return &WebServer{
 		Port:    port,
-		scanner: NewAggressiveScanner("wlan0"),
+		scanner: NewAggressiveScanner(detectIface()),
 		attack:  NewRealAttack(),
 		cracker: NewCrackEngine(),
 	}

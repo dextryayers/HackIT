@@ -1,6 +1,6 @@
 local iface = arg[1]
 local bssid = arg[2]
-local client_mac = arg[3] or "00:11:22:33:44:55"
+local client_mac = arg[3] or "AA:BB:CC:DD:EE:FF"
 local num_auths = tonumber(arg[4]) or 3
 
 local function json_escape(s)

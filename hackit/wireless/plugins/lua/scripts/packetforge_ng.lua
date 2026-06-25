@@ -1,6 +1,6 @@
 local output_file = arg[1] or "/tmp/crafted_packets.pcap"
 local frame_type = arg[2] or "arp"
-local src_mac = arg[3] or "00:11:22:33:44:55"
+local src_mac = arg[3] or "AA:BB:CC:DD:EE:FF"
 local dst_mac = arg[4] or "ff:ff:ff:ff:ff:ff"
 local bssid = arg[5] or src_mac
 local payload = arg[6] or ""

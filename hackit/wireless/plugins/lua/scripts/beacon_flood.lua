@@ -1,8 +1,8 @@
 local iface = arg[1]
 local channel = arg[2]
 local count = tonumber(arg[3]) or 100
-local ssid = arg[4] or "FreeWiFi"
-local bssid = arg[5] or "00:11:22:33:44:55"
+local ssid = arg[4] or ("AP_" .. tostring(math.floor(os.time() * 1000 % 10000)))
+local bssid = arg[5] or "AA:BB:CC:DD:EE:FF"
 
 local function json_escape(s)
   return '"' .. tostring(s):gsub('\\', '\\\\'):gsub('"', '\\"'):gsub('\n', '\\n'):gsub('\r', '\\r') .. '"'

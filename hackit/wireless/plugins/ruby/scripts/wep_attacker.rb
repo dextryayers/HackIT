@@ -54,7 +54,7 @@ begin
 
   case method
   when 'chopchop'
-    stdout, stderr, status = Open3.capture3("aireplay-ng -4 -b #{bssid} -h 00:11:22:33:44:55 #{iface} 2>/dev/null")
+    stdout, stderr, status = Open3.capture3("aireplay-ng -4 -b #{bssid} -h AA:BB:CC:DD:EE:FF #{iface} 2>/dev/null")
     stdout.each_line do |line|
       if (pct = line[/Progress: (\d+)/, 1])
         puts JSON.generate({ event: 'chopchop_progress', iface: iface, bssid: bssid,
@@ -68,7 +68,7 @@ begin
       end
     end
   when 'fragmentation'
-    stdout, stderr, status = Open3.capture3("aireplay-ng -5 -b #{bssid} -h 00:11:22:33:44:55 #{iface} 2>/dev/null")
+    stdout, stderr, status = Open3.capture3("aireplay-ng -5 -b #{bssid} -h AA:BB:CC:DD:EE:FF #{iface} 2>/dev/null")
     packets = 0
     stdout.each_line do |line|
       if line.include?('Fragment') || line.include?('packet')
@@ -79,7 +79,7 @@ begin
       end
     end
   else
-    stdout, stderr, status = Open3.capture3("aireplay-ng -3 -b #{bssid} -h 00:11:22:33:44:55 #{iface} 2>/dev/null")
+    stdout, stderr, status = Open3.capture3("aireplay-ng -3 -b #{bssid} -h AA:BB:CC:DD:EE:FF #{iface} 2>/dev/null")
     packets = 0
     stdout.each_line do |line|
       if line.include?('ARP') || line.include?('packet')

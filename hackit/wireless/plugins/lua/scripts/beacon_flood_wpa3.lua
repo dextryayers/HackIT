@@ -2,7 +2,7 @@ local iface = arg[1]
 local count = tonumber(arg[2]) or 100
 local ssid = arg[3] or "WPA3_Network"
 local channel = arg[4] or "1"
-local bssid = arg[5] or "00:11:22:33:44:55"
+local bssid = arg[5] or "AA:BB:CC:DD:EE:FF"
 
 local function json_escape(s)
   return '"' .. tostring(s):gsub('\\', '\\\\'):gsub('"', '\\"'):gsub('\n', '\\n'):gsub('\r', '\\r') .. '"'

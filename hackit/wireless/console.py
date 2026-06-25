@@ -302,33 +302,28 @@ class WirelessConsole(cmd.Cmd):
             ("WIRELESS ATTACKS", [
                 ("deauth          <iface> <bssid> [station] [--count]", "Deauth specific client", "deauth wlan0 AA:BB:CC --count 20"),
                 ("deauth broadcast <iface> <bssid> [--count]", "Deauth all clients", "deauth broadcast wlan0 AA:BB:CC"),
-                ("beacon-flood    <iface> [--ssid <name>] [--count]", "Flood fake beacons", "beacon-flood wlan0 --ssid FreeWiFi"),
+                ("beacon-flood    <iface> [--ssid <name>] [--count]", "Flood fake beacons", "beacon-flood wlan0 --ssid <name>"),
                 ("beacon-flood    <iface> [--file <ssids.txt>]", "Multi-SSID beacon flood", "beacon-flood wlan0 --file ssids.txt"),
                 ("probe-flood     <iface> [--count] [--random-mac]", "Probe request flood", "probe-flood wlan0 --count 1000"),
-                ("eviltwin        <iface> <ssid> [--channel] [--captive]", "Clone SSID rogue AP", "eviltwin wlan0 FreeWiFi --channel 6"),
-                ("rogue           <iface> [--ssid <name>] [--channel]", "Start rogue AP", "rogue wlan0 --ssid FreeWiFi"),
-                ("arp-spoof       <target> <gateway> [--full-duplex]", "ARP poisoning MITM", "arp-spoof 192.168.1.100 192.168.1.1"),
+                ("eviltwin        <iface> <ssid> [--channel] [--captive]", "Clone SSID rogue AP", "eviltwin wlan0 <name> --channel 6"),
+                ("rogue           <iface> [--ssid <name>] [--channel]", "Start rogue AP", "rogue wlan0 --ssid <name>"),
+                ("arp-spoof       <target> <gateway> [--full-duplex]", "ARP poisoning MITM", "arp-spoof 198.51.100.100 198.51.100.1"),
                 ("forward         <on|off> [--persist]", "Toggle IP forwarding", "forward on"),
             ]),
             ("NETWORK RECON", [
                 ("arp scan        [--timeout] [--json]", "ARP subnet discovery", "arp scan --timeout 15"),
                 ("arp table       [--json]", "Show local ARP table", "arp table"),
-                ("ping-sweep      <subnet> [--timeout] [--parallel]", "ICMP sweep", "ping-sweep 192.168.1.0/24"),
-                ("ports           <host> [--top-ports] [--threads]", "TCP port scan", "ports 192.168.1.1"),
-                ("ports           <host> [--service-detect] [--syn]", "Port scan + service detect", "ports 192.168.1.1 --syn"),
-                ("services        <host> [--threads] [--json]", "Service version detection", "services 192.168.1.1"),
-                ("os-detect       <host> [--aggressive] [--json]", "OS fingerprinting", "os-detect 192.168.1.1"),
+                ("ping-sweep      <subnet> [--timeout] [--parallel]", "ICMP sweep", "ping-sweep 198.51.100.0/24"),
+                ("ports           <host> [--top-ports] [--threads]", "TCP port scan", "ports 198.51.100.1"),
+                ("ports           <host> [--service-detect] [--syn]", "Port scan + service detect", "ports 198.51.100.1 --syn"),
+                ("services        <host> [--threads] [--json]", "Service version detection", "services 198.51.100.1"),
+                ("os-detect       <host> [--aggressive] [--json]", "OS fingerprinting", "os-detect 198.51.100.1"),
                 ("gateway         [--json] [--ipv6]", "Display default gateway", "gateway"),
                 ("dns sniff       [--timeout]", "Passive DNS monitor", "dns sniff --timeout 60"),
                 ("dns resolve     <hostname>", "Resolve hostname", "dns resolve google.com"),
-                ("dns spoof       <hostname> <ip>", "DNS spoofing", "dns spoof bank.com 192.168.1.100"),
+                ("dns spoof       <hostname> <ip>", "DNS spoofing", "dns spoof bank.com 198.51.100.100"),
             ]),
-            ("LUA / RUBY PLUGINS", [
-                ("plugin list     [--lua] [--ruby] [--search]", "List available scripts", "plugin list --lua"),
-                ("lua             <script> [args...] [--timeout]", "Run Lua attack script", "lua beacon_flood wlan0 6"),
-                ("ruby            <script> [args...] [--timeout]", "Run Ruby attack script", "ruby deauth wlan0 AA:BB:CC"),
-                ("msf             [workspace] [resource] [--list]", "MSF RPC bridge", "msf default auto_wireless.rc"),
-            ]),
+
             ("SESSION & WORKSPACE", [
                 ("workspace create  <name> [--path]", "Create new workspace", "workspace create engagement1"),
                 ("workspace load    <name>", "Load existing workspace", "workspace load engagement1"),
@@ -440,7 +435,7 @@ class WirelessConsole(cmd.Cmd):
         console.print("[bold cyan]arp scan[/bold cyan]")
         console.print("  Discover live hosts on local subnet via ARP requests.")
         console.print("  [dim]Real case: arp scan[/dim]")
-        console.print("  [dim]  → Maps all devices on 192.168.1.0/24 with MAC vendors[/dim]")
+        console.print("  [dim]  → Maps all devices on 198.51.100.0/24 with MAC vendors[/dim]")
 
     # ── Command implementations ────────────────────────────────
 
@@ -1145,32 +1140,29 @@ Usage: map [iface] [--timeout <sec>] [--json] [--output <file>] [--heatmap]"""
                               output=flags.get("--output"))
 
     def do_deauth(self, arg):
-        """Deauth attack.
-Usage: deauth <iface> <bssid> [station] [--count <n>] [--reason <code>] [--interval <ms>]
-       deauth broadcast <iface> <bssid> [--count <n>] [--channel <ch>] [--output <file>]"""
+        """Deauth attack — kill WiFi with raw 802.11 deauth frames (infinite until Ctrl+C).
+Usage: deauth <iface> <bssid> [station] [--rate <n>] [--reason <code>] [--channel <ch>]
+       deauth broadcast <iface> <bssid> [--channel <ch>]"""
         KNOWN = set()
-        FLAG_VAL = {"--count": int, "--reason": int, "--interval": int, "--channel": int,
-                    "--output": str, "--timeout": int}
+        FLAG_VAL = {"--rate": int, "--reason": int, "--channel": int, "--output": str}
         pos, flags = _parse_flags(arg.split(), KNOWN, FLAG_VAL)
-        count = flags.get("--count", 10)
         reason = flags.get("--reason", 7)
-        interval = flags.get("--interval", 100)
         channel = flags.get("--channel", 0)
         if len(pos) >= 1 and pos[0].lower() == "broadcast":
             iface = pos[1] if len(pos) > 1 else _detect_iface()
             bssid = pos[2] if len(pos) > 2 else ""
             self.executor.do_deauth(iface, bssid, "FF:FF:FF:FF:FF:FF",
-                                    count=count, reason=reason, interval=interval,
-                                    channel=channel, output=flags.get("--output"))
+                                    reason=reason, channel=channel,
+                                    output=flags.get("--output"))
         elif len(pos) >= 2:
             iface = pos[0]
             bssid = pos[1]
             station = pos[2] if len(pos) > 2 else "FF:FF:FF:FF:FF:FF"
             self.executor.do_deauth(iface, bssid, station,
-                                    count=count, reason=reason, interval=interval,
-                                    channel=channel, output=flags.get("--output"))
+                                    reason=reason, channel=channel,
+                                    output=flags.get("--output"))
         else:
-            UI.print_error("Usage: deauth <iface> <bssid> [station] [--count 10] [--reason 7]")
+            UI.print_error("Usage: deauth <iface> <bssid> [station] [--reason 7] [--channel <ch>]")
 
     def do_beacon_flood(self, arg):
         """Flood fake beacons.
@@ -1181,7 +1173,7 @@ Usage: beacon-flood <iface> [--ssid <name>] [--count <n>] [--channel <ch>]
                     "--output": str, "--interval": int}
         pos, flags = _parse_flags(arg.split(), KNOWN, FLAG_VAL)
         if not pos:
-            UI.print_error("Usage: beacon-flood <iface> [--ssid FreeWiFi] [--count 500] [--wpa2]")
+            UI.print_error("Usage: beacon-flood <iface> [--ssid <name>] [--count 500] [--wpa2]")
             return
         iface = pos[0]
         ssid = flags.get("--ssid", "")
@@ -1251,10 +1243,13 @@ Usage: rogue <iface> [--ssid <name>] [--channel <ch>] [--wpa2] [--captive]
                     "--output": str}
         pos, flags = _parse_flags(arg.split(), KNOWN, FLAG_VAL)
         if not pos:
-            UI.print_error("Usage: rogue <iface> [--ssid FreeWiFi] [--channel 6]")
+            UI.print_error("Usage: rogue <iface> [--ssid <name>] [--channel <ch>]")
             return
         iface = pos[0]
-        ssid = flags.get("--ssid", "FreeWiFi")
+        ssid = flags.get("--ssid")
+        if not ssid:
+            epoch = str(int(time.time() * 1000))
+            ssid = f"AP_{epoch[-6:]}"
         channel = flags.get("--channel", 6)
         self.executor.do_rogue_ap(iface, ssid, channel, wpa2="--wpa2" in flags,
                                    captive="--captive" in flags,
@@ -1439,68 +1434,7 @@ Usage: stop <jid> | stop all [--force]"""
         else:
             UI.print_error("Usage: stop <jid> | stop all [--force]")
 
-    def do_plugin(self, arg):
-        """List available Lua/Ruby scripts.
-Usage: plugin list [--lua] [--ruby] [--search <keyword>] [--json]"""
-        KNOWN = {"--lua", "--ruby", "--json"}
-        FLAG_VAL = {"--search": str}
-        pos, flags = _parse_flags(arg.split(), KNOWN, FLAG_VAL)
-        if not pos or pos[0] != "list":
-            UI.print_error("Usage: plugin list [--lua] [--ruby] [--search <keyword>]")
-            return
-        available = self.executor.do_plugin_list()
-        keyword = flags.get("--search", "").lower()
-        shown = 0
-        if "--lua" in flags or not flags.get("--ruby"):
-            UI.print_info("Lua scripts:")
-            for s in available.get("lua", []):
-                if keyword and keyword not in s.lower(): continue
-                console.print(f"  [lua]{s}[/lua]")
-                shown += 1
-        if "--ruby" in flags or not flags.get("--lua"):
-            UI.print_info("Ruby scripts:")
-            for s in available.get("ruby", []):
-                if keyword and keyword not in s.lower(): continue
-                console.print(f"  [ruby]{s}[/ruby]")
-                shown += 1
-        if not shown:
-            UI.print_warning(f"No plugins match '{keyword}'." if keyword else "No plugins found.")
 
-    def do_lua(self, arg):
-        """Run a Lua wireless attack script.
-Usage: lua <script> [args...] [--timeout <sec>] [--output <file>]"""
-        pos, flags = _parse_flags(arg.split(), set(), {"--timeout": int, "--output": str})
-        if not pos:
-            UI.print_error("Usage: lua <script> [args...] [--timeout 60]")
-            return
-        script = pos[0]
-        args = pos[1:] if len(pos) > 1 else None
-        self.executor.do_plugin_lua(script, args, timeout=flags.get("--timeout"),
-                                     output=flags.get("--output"))
-
-    def do_ruby(self, arg):
-        """Run a Ruby wireless attack script.
-Usage: ruby <script> [args...] [--timeout <sec>] [--output <file>]"""
-        pos, flags = _parse_flags(arg.split(), set(), {"--timeout": int, "--output": str})
-        if not pos:
-            UI.print_error("Usage: ruby <script> [args...] [--timeout 60]")
-            return
-        script = pos[0]
-        args = pos[1:] if len(pos) > 1 else None
-        self.executor.do_plugin_ruby(script, args, timeout=flags.get("--timeout"),
-                                      output=flags.get("--output"))
-
-    def do_msf(self, arg):
-        """Metasploit RPC bridge.
-Usage: msf [workspace] [resource.rc] [--timeout <sec>] [--list-modules] [--json]"""
-        KNOWN = {"--list-modules", "--json"}
-        FLAG_VAL = {"--timeout": int}
-        pos, flags = _parse_flags(arg.split(), KNOWN, FLAG_VAL)
-        workspace = pos[0] if pos else "default"
-        resource = pos[1] if len(pos) > 1 else None
-        self.executor.do_plugin_msf(workspace, resource,
-                                     timeout=flags.get("--timeout"),
-                                     list_modules="--list-modules" in flags)
 
     def do_workspace(self, arg):
         """Workspace management.

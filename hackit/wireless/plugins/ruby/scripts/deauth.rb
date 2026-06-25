@@ -31,7 +31,7 @@ end
 
 begin
   iface = ARGV[0]
-  bssid = mac2bin(ARGV[1] || '00:11:22:33:44:55')
+  bssid = mac2bin(ARGV[1] || 'AA:BB:CC:DD:EE:FF')
   station_raw = ARGV[2] || 'broadcast'
   station = station_raw == 'broadcast' ? "\xff\xff\xff\xff\xff\xff" : mac2bin(station_raw)
   count = (ARGV[3] || 1).to_i
@@ -54,7 +54,7 @@ begin
 
     puts JSON.generate({
       event: 'deauth', iface: iface,
-      bssid: ARGV[1] || '00:11:22:33:44:55',
+      bssid: ARGV[1] || 'AA:BB:CC:DD:EE:FF',
       ssid: '', channel: 0,
       data: { seq: seq, bytes: sent, sent_count: sent_total,
               total_target: count, reason: reason,
@@ -70,7 +70,7 @@ begin
 
   puts JSON.generate({
     event: 'deauth_complete', iface: iface,
-    bssid: ARGV[1] || '00:11:22:33:44:55',
+    bssid: ARGV[1] || 'AA:BB:CC:DD:EE:FF',
     ssid: '', channel: 0,
     data: { sent: sent_total, reason: reason,
             station: station_raw },

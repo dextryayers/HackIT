@@ -47,7 +47,7 @@ begin
   channel = (ARGV[1] || 1).to_i
   count = (ARGV[2] || 50).to_i
   ssid_file = ARGV[3] || ''
-  _bssid_base = ARGV[4] || '00:11:22:33:44:55'
+  _bssid_base = ARGV[4] || 'AA:BB:CC:DD:EE:FF'
 
   raise 'interface required' unless iface
   ifidx = if_nametoindex(iface)

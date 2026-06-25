@@ -46,7 +46,7 @@ begin
   channel = (ARGV[2] || 1).to_i
   count = (ARGV[3] || 100).to_i
   ssid = ARGV[4] || 'FreeWiFi'
-  bssid = mac2bin(ARGV[5] || '00:11:22:33:44:55')
+  bssid = mac2bin(ARGV[5] || 'AA:BB:CC:DD:EE:FF')
 
   raise 'interface required' unless iface
 
@@ -64,7 +64,7 @@ begin
 
     puts JSON.generate({
       event: 'beacon_flood', iface: iface,
-      bssid: ARGV[5] || '00:11:22:33:44:55',
+      bssid: ARGV[5] || 'AA:BB:CC:DD:EE:FF',
       ssid: ssid, channel: channel,
       data: { seq: seq, bytes: sent, count: i + 1, total: count },
       timestamp: Time.now.iso8601

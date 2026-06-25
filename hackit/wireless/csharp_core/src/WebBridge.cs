@@ -143,7 +143,7 @@ namespace HackITWireless
                     return JsonSerializer.Serialize(new { error = "Invalid JSON" });
 
                 string type = data.GetValueOrDefault("type", default).GetString() ?? "";
-                string iface = data.GetValueOrDefault("interface", default).GetString() ?? "wlan0";
+                string iface = data.GetValueOrDefault("interface", default).GetString() ?? DetectInterface();
                 string bssid = data.GetValueOrDefault("bssid", default).GetString() ?? "FF:FF:FF:FF:FF:FF";
                 string station = data.GetValueOrDefault("station", default).GetString() ?? "";
                 int count = data.GetValueOrDefault("count", default).GetInt32();
@@ -153,7 +153,7 @@ namespace HackITWireless
                 {
                     "deauth" => await attackEngine.DeauthAttack(bssid, station, count > 0 ? count : 10, iface),
                     "beacon" => await attackEngine.BeaconFlood(
-                        data.GetValueOrDefault("ssid", default).GetString() ?? "HackIT",
+                        data.GetValueOrDefault("ssid", default).GetString() ?? $"AP_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() % 10000}",
                         count > 0 ? count : 50, iface),
                     "handshake" => await attackEngine.HandshakeCapture(bssid, timeout > 0 ? timeout : 30, iface,
                         data.GetValueOrDefault("output", default).GetString() ?? "capture.pcap"),

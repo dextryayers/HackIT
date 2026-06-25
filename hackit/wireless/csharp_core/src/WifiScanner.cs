@@ -114,7 +114,7 @@ namespace HackITWireless
                 result.Add(new Dictionary<string, object>
                 {
                     ["ssid"] = "MockNetwork",
-                    ["bssid"] = "00:11:22:33:44:55",
+                    ["bssid"] = "AA:BB:CC:DD:EE:FF",
                     ["signal"] = 85,
                     ["channel"] = 6,
                     ["security"] = "WPA2",

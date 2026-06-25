@@ -88,7 +88,7 @@ begin
       client_mac = `ifconfig #{iface} 2>/dev/null | grep -oE '([a-fA-F0-9]{2}:){5}[a-fA-F0-9]{2}' | head -1`.strip
     end
     if client_mac.empty?
-      client_mac = '00:11:22:33:44:55'
+      client_mac = 'AA:BB:CC:DD:EE:FF'
     end
   end
 

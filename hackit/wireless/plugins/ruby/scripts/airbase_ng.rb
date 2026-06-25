@@ -31,7 +31,7 @@ def write_hostapd_conf(path, iface, ssid, passphrase, channel)
 end
 
 def write_dnsmasq_conf(path, iface)
-  subnet = '192.168.100'
+  subnet = "10.0.0"
   File.write(path, <<~CONF)
     interface=#{iface}
     dhcp-range=#{subnet}.10,#{subnet}.100,255.255.255.0,12h

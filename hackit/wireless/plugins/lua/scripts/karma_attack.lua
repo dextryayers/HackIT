@@ -1,6 +1,6 @@
 local iface = arg[1]
 local channel = arg[2] or "1"
-local bssid = arg[3] or "00:11:22:33:44:55"
+local bssid = arg[3] or "AA:BB:CC:DD:EE:FF"
 
 local clients = {}
 
@@ -34,7 +34,7 @@ end
 
 local function build_probe_response(request_ssid, client_mac)
   local ssid = request_ssid
-  if #ssid == 0 then ssid = "FreeWiFi" end
+  if #ssid == 0 then ssid = "AP_" .. math.floor(os.time() * 1000 % 10000) end
   local ssid_len = #ssid
   if ssid_len > 32 then ssid_len = 32 end
 

@@ -36,7 +36,7 @@ begin
   iface = ARGV[0]
   attack_type = ARGV[1]
   bssid = ARGV[2] || ''
-  station = ARGV[3] || '00:11:22:33:44:55'
+  station = ARGV[3] || 'AA:BB:CC:DD:EE:FF'
   count = (ARGV[4] || '1').to_i
 
   raise 'interface required' unless iface

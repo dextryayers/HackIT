@@ -286,7 +286,7 @@ pub fn arp_scan_subnet(subnet: &str) {
     let base = if let Some(ip_part) = parts.first() {
         ip_part.to_string()
     } else {
-        "192.168.1.0".into()
+        "10.0.0.0".into()
     };
     let octets: Vec<&str> = base.split('.').collect();
     if octets.len() == 4 {

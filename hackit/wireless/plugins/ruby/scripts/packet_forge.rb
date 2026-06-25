@@ -96,8 +96,8 @@ end
 begin
   iface = ARGV[0]
   type = (ARGV[1] || 'auth').downcase
-  bssid = mac2bin(ARGV[2] || '00:11:22:33:44:55')
-  station = mac2bin(ARGV[3] || '00:11:22:33:44:55')
+  bssid = mac2bin(ARGV[2] || 'AA:BB:CC:DD:EE:FF')
+  station = mac2bin(ARGV[3] || 'AA:BB:CC:DD:EE:FF')
   ssid = ARGV[4] || ''
   payload_hex = ARGV[5] || ''
 
@@ -130,9 +130,9 @@ begin
       data: { seq: seq },
       timestamp: Time.now.iso8601 })
   when 'arp'
-    smac = mac2bin(ARGV[3] || '00:11:22:33:44:55')
-    sip = ARGV[4] || '192.168.1.100'
-    tip = ARGV[5] || '192.168.1.1'
+    smac = mac2bin(ARGV[3] || 'AA:BB:CC:DD:EE:FF')
+    sip = ARGV[4] || '10.0.0.100'
+    tip = ARGV[5] || '10.0.0.1'
     frame = build_data_arp(station, bssid, bssid, seq, smac,
                            ip2bin(sip), station, ip2bin(tip), 1)
     puts JSON.generate({ event: 'forge_arp', iface: iface, bssid: ARGV[2],
@@ -150,7 +150,7 @@ begin
     sport = (ARGV[4] || 12345).to_i
     dport = (ARGV[5] || 53).to_i
     payload = [payload_hex].pack('H*')
-    ip_pkt = build_udp(bssid, '192.168.1.100', sport, '192.168.1.1', dport, payload)
+    ip_pkt = build_udp(bssid, '10.0.0.100', sport, '10.0.0.1', dport, payload)
     frame = build_data_ip(station, bssid, bssid, seq, ip_pkt)
     puts JSON.generate({ event: 'forge_udp', iface: iface, bssid: ARGV[2],
       ssid: ssid, channel: 0,

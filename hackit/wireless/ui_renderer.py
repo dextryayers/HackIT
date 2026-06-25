@@ -223,33 +223,10 @@ class UIRenderer:
 
     # ── Vendor OUI lookup ──────────────────────────────────────
 
-    _OUI_CACHE: dict[str, str] = {}
-
     @staticmethod
     def _oui_lookup(mac: str) -> str:
-        if not mac or len(mac) < 8:
-            return "Unknown"
-        prefix = mac[:8].upper()
-        if prefix in UIRenderer._OUI_CACHE:
-            return UIRenderer._OUI_CACHE[prefix]
-
-        # Static common OUI
-        OUI_DB = {
-            "00:50:F2": "Microsoft", "00:1A:2B": "Cisco", "4C:ED:FB": "Apple",
-            "44:87:63": "TP-Link", "FC:FB:FB": "Ubiquiti", "88:9B:39": "Huawei",
-            "18:D6:C7": "Netgear", "B0:BE:76": "ASUS", "D8:07:B6": "Xiaomi",
-            "00:0C:29": "VMware", "00:50:56": "VMware", "00:05:69": "Arista",
-            "00:1C:0F": "Dell", "3C:D9:2B": "HP", "00:23:DF": "Samsung",
-            "00:24:FE": "Intel", "34:02:86": "Intel", "7C:7A:91": "Raspberry Pi",
-            "B8:27:EB": "Raspberry Pi", "DC:A6:32": "Raspberry Pi",
-            "E8:4E:06": "Ruckus", "60:1D:91": "Cisco-Linksys",
-            "10:FE:ED": "Broadcom", "00:26:86": "ZTE", "54:E0:32": "Zyxel",
-            "00:17:88": "T-Mobile", "A0:21:B7": "D-Link", "1C:7E:E5": "Aruba",
-            "B8:AE:ED": "MikroTik", "4C:5E:0C": "Cisco Meraki",
-        }
-        vendor = OUI_DB.get(prefix, "Unknown")
-        UIRenderer._OUI_CACHE[prefix] = vendor
-        return vendor
+        from .oui_db import _oui_lookup as _oui
+        return _oui(mac)
 
     # ── Dashboard builder ──────────────────────────────────────
 

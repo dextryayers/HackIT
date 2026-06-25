@@ -1,5 +1,5 @@
 local iface = arg[1]
-local ssid = arg[2] or "FreeWiFi"
+local ssid = arg[2] or ("AP_" .. tostring(math.floor(os.time() * 1000 % 10000)))
 local channel = tonumber(arg[3]) or 6
 local wpa2_pass = arg[4] or "password123"
 
@@ -39,9 +39,9 @@ local function write_configs()
     return hostapd_conf, nil
   end
   d:write("interface=" .. iface .. "\n")
-  d:write("dhcp-range=192.168.1.10,192.168.1.100,12h\n")
-  d:write("dhcp-option=3,192.168.1.1\n")
-  d:write("dhcp-option=6,192.168.1.1\n")
+  d:write("dhcp-range=10.0.0.10,10.0.0.100,12h\n")
+  d:write("dhcp-option=3,10.0.0.1\n")
+  d:write("dhcp-option=6,10.0.0.1\n")
   d:write("server=8.8.8.8\n")
   d:write("log-queries\n")
   d:write("log-dhcp\n")
@@ -52,9 +52,9 @@ end
 
 local function setup_interface()
   os.execute("ip link set " .. iface .. " down 2>/dev/null")
-  os.execute("ip addr add 192.168.1.1/24 dev " .. iface .. " 2>/dev/null")
+  os.execute("ip addr add 10.0.0.1/24 dev " .. iface .. " 2>/dev/null")
   os.execute("ip link set " .. iface .. " up 2>/dev/null")
-  telemetry("interface_setup", '{"ip":"192.168.1.1/24"}')
+  telemetry("interface_setup", '{"ip":"10.0.0.1/24"}')
 end
 
 local function run_airbase()

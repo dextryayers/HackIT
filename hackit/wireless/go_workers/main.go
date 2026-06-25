@@ -376,11 +376,16 @@ var packetGenCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		iface := args[0]
 		frameType := args[1]
-		ssid := "HackIT"
+		ssid := fmt.Sprintf("AP_%d", time.Now().UnixMilli()%10000)
 		if len(args) > 2 {
 			ssid = args[2]
 		}
-		bssid := []byte{0x02, 0x00, 0x01, 0x02, 0x03, 0x04}
+		bssid := make([]byte, 6)
+		t := time.Now().UnixNano()
+		for i := range bssid {
+			bssid[i] = byte(t >> (i * 8))
+		}
+		bssid[0] = 0x02
 		sta := []byte{0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}
 		var frame []byte
 		switch frameType {
@@ -439,6 +444,18 @@ var sessionCreateCmd = &cobra.Command{
 	},
 }
 
+var vendorCmd = &cobra.Command{
+	Use:   "vendor <mac>",
+	Short: "Look up vendor by MAC address OUI",
+	Long:  "Resolve the manufacturer/vendor name from the first 3 octets (OUI) of a MAC address",
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		mac := args[0]
+		vendor := GlobalOUI.LookupVendor(mac)
+		fmt.Printf("%s  %s\n", mac, vendor)
+	},
+}
+
 func init() {
 	rootCmd.AddCommand(crackCmd)
 	rootCmd.AddCommand(modeCmd)
@@ -456,6 +473,7 @@ func init() {
 	rootCmd.AddCommand(packetGenCmd)
 	rootCmd.AddCommand(sessionCmd)
 	rootCmd.AddCommand(sessionCreateCmd)
+	rootCmd.AddCommand(vendorCmd)
 }
 
 func main() {

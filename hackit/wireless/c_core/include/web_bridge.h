@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <net/if.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -50,12 +51,13 @@ int web_get_scan_results(ScanResults* out);
 int web_get_attack_result(AttackResult* out);
 int web_scan_all_channels(const char* interface, int* channels, int num_channels, int dwell_ms);
 int web_set_channel(const char* interface, int channel);
-int web_send_deauth(const char* interface, const char* bssid, const char* station, int count);
 int web_flood_beacon(const char* interface, const char* ssid, int count);
 int web_capture_handshake(const char* interface, const char* bssid, int timeout, const char* output);
 int web_get_interface_list(char ifaces[][IFNAMSIZ], int* count);
 int web_set_monitor_mode(const char* interface, int enable);
 int web_get_channel(const char* interface, int* channel);
+const char* web_oui_lookup(const char* mac_str);
+int web_send_deauth(const char* iface, const char* bssid, const char* station, int count, int reason);
 
 #ifdef __cplusplus
 }

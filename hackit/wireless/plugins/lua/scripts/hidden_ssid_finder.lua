@@ -30,7 +30,7 @@ local function set_channel(ch)
 end
 
 local function send_null_probe()
-  local bssid = "00:11:22:33:44:55"
+  local bssid = "AA:BB:CC:DD:EE:FF"
   local frame = string.char(0x40, 0x00, 0x00, 0x00)
   frame = frame .. string.char(0xff, 0xff, 0xff, 0xff, 0xff, 0xff)
   for b in bssid:gmatch("(%x%x)") do frame = frame .. string.char(tonumber(b, 16)) end
@@ -41,7 +41,7 @@ local function send_null_probe()
 end
 
 local function send_ssid_probe(ssid)
-  local bssid = "00:11:22:33:44:55"
+  local bssid = "AA:BB:CC:DD:EE:FF"
   local ssid_len = #ssid
   if ssid_len > 32 then ssid_len = 32 end
   local frame = string.char(0x40, 0x00, 0x00, 0x00)

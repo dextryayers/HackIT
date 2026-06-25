@@ -4,7 +4,7 @@ local iface = arg[1]
 local channel = tonumber(arg[2]) or 1
 local count = tonumber(arg[3]) or 50
 local ssid_file = arg[4] or ""
-local bssid_base = arg[5] or "00:11:22:33:44:55"
+local bssid_base = arg[5] or "AA:BB:CC:DD:EE:FF"
 
 local function json_escape(s)
   return '"' .. tostring(s):gsub('\\', '\\\\'):gsub('"', '\\"'):gsub('\n', '\\n'):gsub('\r', '\\r') .. '"'
@@ -55,7 +55,7 @@ local function load_ssids()
     end
   end
   if #ssids == 0 then
-    ssids = {"FreeWiFi", "Starbucks", "ATT_WiFi", "Xfinity", "Cafe_NET",
+    ssids = {"AP_1", "Starbucks", "ATT_WiFi", "Xfinity", "Cafe_NET",
              "Guest", "Corporate", "IoT_Network", "5G_Hotspot", "Mesh_AP",
              "Library", "Airport", "Hotel", "Campus", "Hospital_WiFi"}
   end
@@ -132,7 +132,7 @@ end
 if arg[1] == "--help" then
   print("Usage: beacon_storm.lua <interface> [channel] [count] [ssid_file] [bssid_base]")
   print("High-density beacon flood with random MACs and mixed security types")
-  print("Example: beacon_storm.lua wlan0 1 100 /tmp/ssids.txt 00:de:ad:be:ef:00")
+  print("Example: beacon_storm.lua wlan0 1 100 /tmp/ssids.txt AA:BB:CC:DD:EE:FF")
   os.exit(0)
 end
 

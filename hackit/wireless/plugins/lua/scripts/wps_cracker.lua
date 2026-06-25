@@ -130,7 +130,7 @@ if arg[1] == "--help" then
   print("Usage: wps_cracker.lua <interface> [bssid] [pin] [channel] [timeout] [method]")
   print("WPS cracking with PixieDust and PIN brute-force")
   print("Methods: pixiedust, pin_brute, bully")
-  print("Example: wps_cracker.lua wlan0 00:11:22:33:44:55 '' 6 120 pixiedust")
+  print("Example: wps_cracker.lua wlan0 AA:BB:CC:DD:EE:FF '' 6 120 pixiedust")
   os.exit(0)
 end
 
