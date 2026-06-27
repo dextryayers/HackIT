@@ -57,7 +57,17 @@ int web_get_interface_list(char ifaces[][IFNAMSIZ], int* count);
 int web_set_monitor_mode(const char* interface, int enable);
 int web_get_channel(const char* interface, int* channel);
 const char* web_oui_lookup(const char* mac_str);
-int web_send_deauth(const char* iface, const char* bssid, const char* station, int count, int reason);
+int web_send_deauth(const char* iface, const char* bssid, const char* station, int reason);
+
+// New V1 engine: batched sendmmsg
+int web_deauth_v1_start(const char* iface, const char* bssid, const char* station, int reason);
+void web_deauth_v1_stop(void);
+long long web_deauth_v1_sent(void);
+
+// New V2 engine: multi-interface
+int web_deauth_v2_start(const char* ifaces[], int count, const char* bssid, const char* station, int reason);
+void web_deauth_v2_stop(void);
+long long web_deauth_v2_total(void);
 
 #ifdef __cplusplus
 }

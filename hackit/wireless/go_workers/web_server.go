@@ -261,19 +261,15 @@ func (w *WebServer) handleDeauth(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Count <= 0 {
-		req.Count = 64
-	}
-
 	go func() {
-		if err := w.attack.Deauth(req.Iface, req.BSSID, req.Station, req.Count); err != nil {
+		if err := w.attack.Deauth(req.Iface, req.BSSID, req.Station); err != nil {
 			fmt.Printf("[GO-WEB] Deauth error: %v\n", err)
 		}
 	}()
 
 	w.writeJSON(rw, http.StatusAccepted, APIResponse{
 		Status:  "deauth_started",
-		Message: fmt.Sprintf("Deauth %s -> %s (%d packets)", req.BSSID, req.Station, req.Count),
+		Message: fmt.Sprintf("Deauth %s -> %s (infinite)", req.BSSID, req.Station),
 	})
 }
 

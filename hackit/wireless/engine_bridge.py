@@ -200,8 +200,8 @@ class EngineBridge:
             cmd.extend(["--output", output])
         return self._popen(cmd)
 
-    def rust_deauth(self, iface: str, bssid: str, station: str = "", count: int = 10, reason: int = 7):
-        cmd = [self._ensure_rust(), "deauth", "--interface", iface, "--bssid", bssid, "--count", str(count)]
+    def rust_deauth(self, iface: str, bssid: str, station: str = "", reason: int = 7):
+        cmd = [self._ensure_rust(), "deauth", "--interface", iface, "--bssid", bssid]
         if station:
             cmd.extend(["--station", station])
         return self._popen(cmd)
@@ -334,10 +334,10 @@ class EngineBridge:
 
     # ── C/C++ native calls ─────────────────────────────────────
 
-    def c_deauth(self, iface: str, bssid: str, station: str, count: int):
+    def c_deauth(self, iface: str, bssid: str, station: str):
         if not self._c_lib:
             raise EngineBuildError("C library not built.")
-        return self._popen([self._c_lib, "deauth", iface, bssid, station or "FF:FF:FF:FF:FF:FF", str(count)])
+        return self._popen([self._c_lib, "deauth", iface, bssid, station or "FF:FF:FF:FF:FF:FF"])
 
     def c_frame_inject(self, iface: str, frame_type: str, payload: str = ""):
         if not self._c_lib:

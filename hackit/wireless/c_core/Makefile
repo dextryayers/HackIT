@@ -14,9 +14,14 @@ C_SOURCES = \
 	src/interface_control.c \
 	src/packet_injector.c \
 	src/deauth_engine.c \
+	src/deauth_engine_v1.c \
+	src/deauth_engine_v2.c \
 	src/pmkid_harvest.c \
 	src/wpa3_sae.c \
 	src/beacon_flood.c \
+	src/eviltwin_v1.c \
+	src/eviltwin_v2.c \
+	src/eviltwin_v3.c \
 	src/client_probe.c \
 	src/channel_hopper.c \
 	src/banner_grabber.c \
@@ -32,7 +37,12 @@ CXX_SOURCES = \
 	src/wep_cracker.cpp \
 	src/packet_forge.cpp \
 	src/key_manager.cpp \
-	src/offensive_plus.cpp
+	src/offensive_plus.cpp \
+	src/cpp_deauth_engine.cpp \
+	src/cpp_deauth_ultra.cpp \
+	src/eviltwin_cpp_v1.cpp \
+	src/eviltwin_cpp_v2.cpp \
+	src/eviltwin_cpp_v3.cpp
 
 C_OBJ = $(C_SOURCES:.c=.o)
 CXX_OBJ = $(CXX_SOURCES:.cpp=.o)
@@ -57,5 +67,13 @@ static: $(OBJ)
 shared: $(OBJ)
 	$(CXX) $(LDFLAGS) -o $(LIB_SHARED) $(OBJ)
 
+eviltwin-inject: eviltwin_inject.c
+	$(CC) -std=gnu11 -O2 -static -pthread -o $@ $<
+	$(info [BUILD] eviltwin-inject ready)
+
+deauth-inject: deauth_inject.c
+	$(CC) -std=gnu11 -O2 -static -o $@ $<
+	$(info [BUILD] deauth-inject ready)
+
 clean:
-	rm -f $(OBJ) $(LIB_STATIC) $(LIB_SHARED)
+	rm -f $(OBJ) $(LIB_STATIC) $(LIB_SHARED) eviltwin-inject deauth-inject

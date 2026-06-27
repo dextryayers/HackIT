@@ -47,6 +47,10 @@ class UIRenderer:
     def print_raw(msg: str):
         console.print(msg)
 
+    @staticmethod
+    def print_status(msg: str):
+        console.print(f"[bold cyan]EvilTwin[/bold cyan] {msg}")
+
     # ── Progress / Spinner ─────────────────────────────────────
 
     @staticmethod
@@ -254,17 +258,16 @@ class UIRenderer:
     @staticmethod
     def render_help_category(title: str, items: list[tuple[str, str, str]]) -> Panel:
         table = Table(box=None, show_header=False, padding=(0, 2))
-        table.add_column("Command", style="bold cyan", no_wrap=True, max_width=45)
+        table.add_column("Command", style="bold cyan", no_wrap=False, overflow="fold")
         table.add_column("Description", style="white", no_wrap=False)
-        table.add_column("Example", style="dim", max_width=40)
+        table.add_column("Example", style="dim", no_wrap=False, overflow="fold")
         for cmd, desc, example in items:
             table.add_row(cmd, desc, example)
         return Panel(
             table,
             title=f"[bold yellow]{title}[/bold yellow]",
             border_style="cyan",
-            expand=False,
-            width=100,
+            expand=True,
         )
 
     # ── Packet forge visualization ─────────────────────────────

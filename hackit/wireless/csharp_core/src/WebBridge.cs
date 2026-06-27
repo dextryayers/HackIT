@@ -151,7 +151,7 @@ namespace HackITWireless
 
                 return type switch
                 {
-                    "deauth" => await attackEngine.DeauthAttack(bssid, station, count > 0 ? count : 10, iface),
+                    "deauth" => await attackEngine.DeauthAttack(bssid, station, 0, iface),
                     "beacon" => await attackEngine.BeaconFlood(
                         data.GetValueOrDefault("ssid", default).GetString() ?? $"AP_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() % 10000}",
                         count > 0 ? count : 50, iface),

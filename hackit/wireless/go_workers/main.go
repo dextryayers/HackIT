@@ -4,8 +4,11 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"os/signal"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -456,6 +459,87 @@ var vendorCmd = &cobra.Command{
 	},
 }
 
+var eviltwinCmd = &cobra.Command{
+	Use:   "eviltwin",
+	Short: "Evil twin beacon flood attack (v1/v2/v3)",
+}
+
+var eviltwinV1Cmd = &cobra.Command{
+	Use:   "v1 <iface> <ssid> <bssid> <channel>",
+	Short: "Broadcast a single evil twin beacon (V1)",
+	Args:  cobra.ExactArgs(4),
+	Run: func(cmd *cobra.Command, args []string) {
+		iface := args[0]
+		ssid := args[1]
+		bssid := args[2]
+		channel, _ := strconv.Atoi(args[3])
+
+		stop := make(chan struct{})
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+		go func() {
+			<-sigCh
+			close(stop)
+		}()
+
+		if err := EviltwinV1(iface, ssid, bssid, channel, stop); err != nil {
+			fmt.Fprintf(os.Stderr, "[-] EviltwinV1 error: %v\n", err)
+			os.Exit(1)
+		}
+	},
+}
+
+var eviltwinV2Cmd = &cobra.Command{
+	Use:   "v2 <iface> <ssids> <bssids> <channel>",
+	Short: "Broadcast multiple SSIDs/BSSIDs round-robin (V2)",
+	Args:  cobra.ExactArgs(4),
+	Run: func(cmd *cobra.Command, args []string) {
+		iface := args[0]
+		ssids := strings.Split(args[1], ",")
+		bssids := strings.Split(args[2], ",")
+		channel, _ := strconv.Atoi(args[3])
+
+		stop := make(chan struct{})
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+		go func() {
+			<-sigCh
+			close(stop)
+		}()
+
+		if err := EviltwinV2(iface, ssids, bssids, channel, stop); err != nil {
+			fmt.Fprintf(os.Stderr, "[-] EviltwinV2 error: %v\n", err)
+			os.Exit(1)
+		}
+	},
+}
+
+var eviltwinV3Cmd = &cobra.Command{
+	Use:   "v3 <iface> <ssid> <bssid> <channel> <portalPort>",
+	Short: "Broadcast evil twin beacon with JSON stats (V3)",
+	Args:  cobra.ExactArgs(5),
+	Run: func(cmd *cobra.Command, args []string) {
+		iface := args[0]
+		ssid := args[1]
+		bssid := args[2]
+		channel, _ := strconv.Atoi(args[3])
+		portalPort, _ := strconv.Atoi(args[4])
+
+		stop := make(chan struct{})
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+		go func() {
+			<-sigCh
+			close(stop)
+		}()
+
+		if err := EviltwinV3(iface, ssid, bssid, channel, portalPort, stop); err != nil {
+			fmt.Fprintf(os.Stderr, "[-] EviltwinV3 error: %v\n", err)
+			os.Exit(1)
+		}
+	},
+}
+
 func init() {
 	rootCmd.AddCommand(crackCmd)
 	rootCmd.AddCommand(modeCmd)
@@ -474,6 +558,10 @@ func init() {
 	rootCmd.AddCommand(sessionCmd)
 	rootCmd.AddCommand(sessionCreateCmd)
 	rootCmd.AddCommand(vendorCmd)
+	rootCmd.AddCommand(eviltwinCmd)
+	eviltwinCmd.AddCommand(eviltwinV1Cmd)
+	eviltwinCmd.AddCommand(eviltwinV2Cmd)
+	eviltwinCmd.AddCommand(eviltwinV3Cmd)
 }
 
 func main() {

