@@ -17,12 +17,13 @@
 
 static char g_amp_err[256] = {0};
 
+static __thread unsigned int amp_seed = 0;
+
 static unsigned int amp_rand(void)
 {
-    static unsigned int seed = 0;
-    if (seed == 0) seed = (unsigned int)(time(NULL) ^ (uintptr_t)&seed);
-    seed = seed * 1103515245U + 12345U;
-    return seed;
+    if (amp_seed == 0) amp_seed = (unsigned int)(time(NULL) ^ (uintptr_t)&amp_seed);
+    amp_seed = amp_seed * 1103515245U + 12345U;
+    return amp_seed;
 }
 
 static void dns_encode_name(unsigned char *dst, int *off, const char *name)

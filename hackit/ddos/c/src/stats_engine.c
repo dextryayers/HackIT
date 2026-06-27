@@ -7,11 +7,6 @@
 
 #define MAX_STATS_THREADS 256
 
-struct thread_stats {
-    uint64_t sent;
-    uint64_t bytes;
-    uint64_t errors;
-};
 
 static struct thread_stats *g_stats_table = NULL;
 static int g_stats_num_threads = 0;

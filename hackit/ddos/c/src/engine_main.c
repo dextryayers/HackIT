@@ -1,56 +1,54 @@
 #include "engine.h"
 
+volatile int g_engine_kill_flag = 0;
 extern int g_sock;
 
-static int g_running = 0;
-static uint64_t g_packets = 0;
-static attack_config_t g_cfg;
-
 EXPORT int engine_init(const attack_config_t *cfg) {
-    if (cfg) g_cfg = *cfg;
+    g_engine_kill_flag = 0;
+    if (cfg) {
+        (void)cfg;
+    }
     return init_raw_socket();
 }
 
 EXPORT void engine_shutdown(void) {
-    g_running = 0;
+    g_engine_kill_flag = 1;
     close_raw_socket();
 }
 
 EXPORT int engine_start(void) {
     if (g_sock < 0) return -1;
-    g_running = 1;
-    g_packets = 0;
+    g_engine_kill_flag = 0;
     return 0;
 }
 
 EXPORT int engine_stop(void) {
-    g_running = 0;
+    g_engine_kill_flag = 1;
     return 0;
 }
 
 EXPORT int engine_pause(void) {
-    g_running = 0;
+    g_engine_kill_flag = 1;
     return 0;
 }
 
 EXPORT int engine_resume(void) {
-    g_running = 1;
+    g_engine_kill_flag = 0;
     return 0;
 }
 
 EXPORT int engine_status(int *running, uint64_t *packets_sent) {
-    if (running) *running = g_running;
-    if (packets_sent) *packets_sent = g_packets;
+    if (running) *running = !g_engine_kill_flag;
+    if (packets_sent) *packets_sent = batch_flood_sent();
     return 0;
 }
 
 EXPORT int engine_stats_reset(void) {
-    g_packets = 0;
     return 0;
 }
 
 EXPORT int engine_reload(const attack_config_t *cfg) {
-    if (cfg) g_cfg = *cfg;
+    (void)cfg;
     return 0;
 }
 

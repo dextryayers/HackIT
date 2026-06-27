@@ -18,12 +18,13 @@ static uint64_t g_frag_dropped = 0;
 static uint16_t g_frag_ip_id = 0;
 static char g_frag_err[256] = {0};
 
+static __thread unsigned int frag_seed = 0;
+
 static unsigned int frag_rand(void)
 {
-    static unsigned int seed = 0;
-    if (seed == 0) seed = (unsigned int)(time(NULL) ^ (uintptr_t)&seed);
-    seed = seed * 1103515245U + 12345U;
-    return seed;
+    if (frag_seed == 0) frag_seed = (unsigned int)(time(NULL) ^ (uintptr_t)&frag_seed);
+    frag_seed = frag_seed * 1103515245U + 12345U;
+    return frag_seed;
 }
 
 static int build_fragment(unsigned char *out, int out_max,
@@ -70,6 +71,7 @@ EXPORT int fragment_init(int mtu)
     g_frag_sent = 0;
     g_frag_dropped = 0;
     g_frag_ip_id = (uint16_t)(frag_rand() & 0xFFFF);
+    frag_seed = g_frag_ip_id + (unsigned int)time(NULL);
 
     return 0;
 }
@@ -161,11 +163,8 @@ EXPORT void fragment_randomize(unsigned char **frags, int frag_count)
 EXPORT void fragment_interleave(unsigned char **frags, int frag_count, int delay_ms)
 {
     (void)frags;
-    if (!frags || frag_count <= 1 || delay_ms <= 0) return;
-
-    for (int i = 0; i < frag_count; i++) {
-        usleep((unsigned int)(delay_ms * 1000));
-    }
+    (void)frag_count;
+    (void)delay_ms;
 }
 
 EXPORT void fragment_free(unsigned char **frags, int frag_count)

@@ -1058,7 +1058,7 @@ class MaskingEngine:
     def random_ip(self) -> str:
         return self.spoof_gen.random_ip()
 
-    def generate_spoof_pool(self, count: int = 100, country: Optional[str] = None) -> list[str]:
+    def generate_spoof_pool(self, count: int = 10000, country: Optional[str] = None) -> list[str]:
         pool = self.spoof_gen.generate_pool(count, country)
         self.spoof_pool = pool
         return pool

