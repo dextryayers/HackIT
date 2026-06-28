@@ -115,7 +115,6 @@ func main() {
 
 	if tamperList != "" {
 		opts.Tamper = strings.Split(tamperList, ",")
-		opts.Header = strings.Split(tamperList, ",")
 	}
 
 	if opts.URL == "" && !opts.NetworkScan {

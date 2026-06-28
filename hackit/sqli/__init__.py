@@ -133,34 +133,32 @@ INTERESTING_TABLES = [
 
 
 def _run_engine(url, **overrides):
-    engine = GoEngine()
-    if not engine.available:
-        _log("CROSS", "CRITICAL", "Go is not installed.")
-        return None
-    opts = {
-        'url': url,
-        'risk_level': 5,
-        'bypass_waf': True,
-        'threads': 30,
-        'timeout': 30,
-        'depth': 5,
-        'verbose': 2,
-        'follow_redirect': True,
-        'fingerprint': True,
-        'banner_grab': True,
-        'os_detect': True,
-        'waf_detect': True,
-        'tech_detect': True,
-        'smart_diff': True,
-        'list_dbs': True,
-        'dump_all': True,
-    }
-    opts.update(overrides)
-    results = engine.run(**opts)
-    if results and isinstance(results, list) and len(results) > 0 and 'error' in results[0]:
-        _log("CROSS", "CRITICAL", f"Engine error: {results[0]['error']}")
-        return None
-    return results
+	engine = GoEngine()
+	if not engine.available:
+		_log("CROSS", "CRITICAL", "Go is not installed.")
+		return None
+	opts = {
+		'url': url,
+		'risk_level': 5,
+		'bypass_waf': True,
+		'threads': 30,
+		'timeout': 30,
+		'depth': 5,
+		'verbose': 2,
+		'follow_redirect': True,
+		'fingerprint': True,
+		'banner_grab': True,
+		'os_detect': True,
+		'waf_detect': True,
+		'tech_detect': True,
+		'smart_diff': True,
+	}
+	opts.update(overrides)
+	results = engine.run(**opts)
+	if results and isinstance(results, list) and len(results) > 0 and 'error' in results[0]:
+		_log("CROSS", "CRITICAL", f"Engine error: {results[0]['error']}")
+		return None
+	return results
 
 
 def _parse_enum(items_str):
@@ -260,50 +258,50 @@ def _auto_explore(url, findings, enums):
 
 
 def _cmd_scan(url, args):
-    _log("PLUS", "INFO", f"target URL: {url}")
-    _log("PLUS", "INFO", "starting full scan with max aggression ...")
-    click.echo()
+	_log("PLUS", "INFO", f"target URL: {url}")
+	_log("PLUS", "INFO", "starting full scan with max aggression ...")
+	click.echo()
 
-    results = _run_engine(url)
-    if results is None:
-        return
+	results = _run_engine(url, list_dbs=True)
+	if results is None:
+		return
 
-    findings = [r for r in results if r.get('parameter') != "enumeration"]
-    enums = [r for r in results if r.get('parameter') == "enumeration"]
+	findings = [r for r in results if r.get('parameter') != "enumeration"]
+	enums = [r for r in results if r.get('parameter') == "enumeration"]
 
-    if findings:
-        _show_vuln_report(findings)
-        click.echo()
-        for e in enums:
-            if e.get('type') == 'list-dbs':
-                items = _parse_enum(e.get('payload', ''))
-                click.echo()
-                for x in items:
-                    _log("ARROW", "LIST DB", f"{GREEN}{x}{RESET}")
-                click.echo()
-            elif e.get('type') == 'list-tables':
-                items = _parse_enum(e.get('payload', ''))
-                click.echo(f"\n{GREEN}Tables in {e.get('details','?')} [{len(items)}]:{RESET}")
-                for t in items:
-                    click.echo(f"      [+] {t}")
-                click.echo()
-            elif e.get('type') == 'list-columns':
-                items = _parse_enum(e.get('payload', ''))
-                click.echo(f"    Columns ({e.get('details','?')}): {', '.join(items)}")
-            elif e.get('type') == 'dump-table':
-                payload = e.get('payload', '[]')
-                detail = e.get('details', 'table')
-                try:
-                    data = json.loads(payload)
-                    if data and isinstance(data, list):
-                        click.echo(f"\n{GREEN}Data in {detail} ({len(data)} rows):{RESET}")
-                        for row in data:
-                            click.echo(f"      [+] {row[:200]}")
-                except (json.JSONDecodeError, TypeError):
-                    click.echo(f"      [+] {payload[:200]}")
-    else:
-        _log("PLUS", "INFO", "no SQL injection vulnerabilities detected")
-        _log("MINUS", "WARNING", "try a different parameter or URL")
+	if findings:
+		_show_vuln_report(findings)
+		click.echo()
+		for e in enums:
+			if e.get('type') == 'list-dbs':
+				items = _parse_enum(e.get('payload', ''))
+				click.echo()
+				for x in items:
+					_log("ARROW", "LIST DB", f"{GREEN}{x}{RESET}")
+				click.echo()
+			elif e.get('type') == 'list-tables':
+				items = _parse_enum(e.get('payload', ''))
+				click.echo(f"\n{GREEN}Tables in {e.get('details','?')} [{len(items)}]:{RESET}")
+				for t in items:
+					click.echo(f"      [+] {t}")
+				click.echo()
+			elif e.get('type') == 'list-columns':
+				items = _parse_enum(e.get('payload', ''))
+				click.echo(f"    Columns ({e.get('details','?')}): {', '.join(items)}")
+			elif e.get('type') == 'dump-table':
+				payload = e.get('payload', '[]')
+				detail = e.get('details', 'table')
+				try:
+					data = json.loads(payload)
+					if data and isinstance(data, list):
+						click.echo(f"\n{GREEN}Data in {detail} ({len(data)} rows):{RESET}")
+						for row in data:
+							click.echo(f"      [+] {row[:200]}")
+				except (json.JSONDecodeError, TypeError):
+					click.echo(f"      [+] {payload[:200]}")
+	else:
+		_log("PLUS", "INFO", "no SQL injection vulnerabilities detected")
+		_log("MINUS", "WARNING", "try a different parameter or URL")
 
 
 def _cmd_dbs(url, args):

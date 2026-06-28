@@ -639,7 +639,12 @@ func (e *Engine) postScan(results []Result, params url.Values) {
 	enum := modules.NewEnumerator(e)
 
 	var dbs []string
-	// Always fetch databases on vuln detection
+	doDBs := e.Opts.ListDBs || e.Opts.DumpAll || e.Opts.ListTables || e.Opts.ListColumns || e.Opts.Search != "" || e.Opts.Schema || e.Opts.DumpTable != ""
+	if !doDBs {
+		e.logInfo("skipping database enumeration (use --list-dbs or --dump-all to enable)")
+		return
+	}
+
 	e.logInfo("fetching database names")
 	var err error
 	dbs, err = enum.ListDatabases(param, dbms)
@@ -661,7 +666,7 @@ func (e *Engine) postScan(results []Result, params url.Values) {
 		dbs = []string{getValue(params, param)}
 	}
 
-	// Always list tables for non-system databases
+	// List tables for non-system databases
 	if len(dbs) > 0 {
 		for _, db := range dbs {
 			if isSystemDB(db) && e.Opts.RiskLevel < 3 {

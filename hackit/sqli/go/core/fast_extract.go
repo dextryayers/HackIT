@@ -203,13 +203,15 @@ func (e *Engine) FastBlindExtract(param string, queryTemplate string, maxLen int
 
 func (e *Engine) FastBlindExtractWithOracle(param string, queryTemplate string, maxLen int, oracle *ExtractOracle) string {
 	var wg sync.WaitGroup
-	ch := make(chan CharResult, maxLen)
+	ch := make(chan CharResult, maxLen*2)
 	sem := make(chan struct{}, 15)
 	timeout := time.After(8 * time.Minute)
 	done := make(chan struct{})
 
+	var mu sync.Mutex
 	posChars := make(map[int]byte)
 	nullRun := 0
+	var nullMu sync.Mutex
 	maxNullRun := 8
 
 	go func() {
@@ -236,15 +238,22 @@ func (e *Engine) FastBlindExtractWithOracle(param string, queryTemplate string, 
 	go func() {
 		for res := range ch {
 			if res.Found {
+				mu.Lock()
 				posChars[res.Pos] = res.Char
+				mu.Unlock()
 				e.Log.Debug(fmt.Sprintf("char %d: '%c' (0x%02x)", res.Pos, res.Char, res.Char))
+				nullMu.Lock()
 				nullRun = 0
+				nullMu.Unlock()
 			} else if res.Err == nil {
+				nullMu.Lock()
 				nullRun++
 				if nullRun >= maxNullRun {
+					nullMu.Unlock()
 					close(done)
 					break
 				}
+				nullMu.Unlock()
 			}
 		}
 		close(collectDone)
@@ -256,6 +265,8 @@ func (e *Engine) FastBlindExtractWithOracle(param string, queryTemplate string, 
 		e.Log.Warning("blind extraction timed out, using partial results")
 	}
 
+	mu.Lock()
+	defer mu.Unlock()
 	var result strings.Builder
 	for i := 1; i <= maxLen; i++ {
 		if c, ok := posChars[i]; ok {
