@@ -8,8 +8,9 @@ import subprocess
 from hackit.ui import display_tool_banner, _colored, GREEN, YELLOW, RED, CYAN, BLUE
 
 @click.command()
+@click.argument('mode', required=False)
 # TARGET OPTIONS
-@click.option('-u', '--url', required=True, help='Target URL')
+@click.option('-u', '--url', help='Target URL')
 @click.option('-l', '--list', 'wordlist', help='Wordlist file')
 @click.option('--stdin', is_flag=True, help='Read wordlist from STDIN')
 @click.option('--method', default='GET', type=click.Choice(['GET', 'POST', 'HEAD']), help='HTTP method (default: GET)')
@@ -85,11 +86,21 @@ from hackit.ui import display_tool_banner, _colored, GREEN, YELLOW, RED, CYAN, B
 @click.option('--save-session', is_flag=True, help='Save scan session')
 @click.option('--resume', is_flag=True, help='Resume previous session')
 
-def dirfinder(**kwargs):
+@click.pass_context
+def dirfinder(ctx, mode, **kwargs):
     """
     Powerful Directory Finder (Expert Rust + Go Engine).
     Designed for speed, stealth, and deep reconnaissance.
     """
+    if mode == 'gui':
+        from hackit.dir_finder.gui import DirFinderGUI
+        DirFinderGUI().run()
+        return
+
+    if not kwargs.get('url'):
+        click.echo(ctx.get_help())
+        return
+
     display_tool_banner('Dir Finder (Expert Engine)')
     
     url = kwargs['url']
@@ -110,7 +121,7 @@ def dirfinder(**kwargs):
     
     # Path to Go binary
     base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    go_bin = os.path.join(base_dir, 'hackit', 'dir_finder', 'go', 'dir_finder.exe')
+    go_bin = os.path.join(base_dir, 'hackit', 'dir_finder', 'go', 'dir_finder')
 
     if not os.path.exists(go_bin):
         click.echo(_colored("[!] Go binary not found. Please compile it first.", RED))

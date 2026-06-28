@@ -335,7 +335,8 @@ class HackItConsole:
                     pass
                 except Exception as e:
                     from hackit.ui import RED
-                    print(_colored(f"  [!] Execution error: {e}", RED))
+                    msg = str(e) if str(e) else "Unknown error"
+                    print(_colored(f"  [!] Execution error: {msg}", RED))
 
             except (EOFError, KeyboardInterrupt):
                 print()
