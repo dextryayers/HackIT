@@ -176,6 +176,9 @@ EXPORT int  bypass_init_handshake(uint32_t target_ip, uint16_t target_port, uint
 EXPORT int  bypass_send_flood(uint32_t target_ip, uint16_t target_port, uint32_t spoof_ip, uint32_t seq, uint16_t src_port, int count, int delay);
 EXPORT int  bypass_session_count(void);
 
+/* Batch C API — zero cgo overhead per packet */
+EXPORT int  multi_send(uint32_t target_ip, uint16_t target_port, int method, int count);
+
 /* H2 Rapid Reset */
 EXPORT int  h2_build_settings_frame(uint8_t *buf, int max_streams);
 EXPORT int  h2_build_rst_stream_frame(uint8_t *buf, uint32_t stream_id, uint32_t error_code);

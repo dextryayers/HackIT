@@ -58,6 +58,7 @@ func warnf(format string, args ...interface{}) {
 
 func infof(format string, args ...interface{}) {
 	fmt.Fprintf(os.Stdout, format, args...)
+	os.Stdout.Sync()
 }
 
 func main() {

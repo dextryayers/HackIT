@@ -55,6 +55,7 @@ func (t *TLSRenegFlooder) Run(done chan struct{}) {
 				if err := tlsConn.Handshake(); err != nil {
 					tcpConn.Close()
 					t.errors.Add(1)
+					time.Sleep(10 * time.Millisecond)
 					continue
 				}
 				t.sent.Add(1)
@@ -67,6 +68,7 @@ func (t *TLSRenegFlooder) Run(done chan struct{}) {
 				}
 				tlsConn.Close()
 				tcpConn.Close()
+				time.Sleep(time.Microsecond)
 			}
 		}()
 	}

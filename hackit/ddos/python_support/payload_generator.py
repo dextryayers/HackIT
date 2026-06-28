@@ -7,6 +7,7 @@ cache-busting, and multipart form-data payloads for realistic traffic generation
 import hashlib
 import io
 import json
+import os
 import random
 import struct
 import uuid
@@ -20,7 +21,7 @@ class PayloadGenerator:
     # ── Raw Byte Payloads ──────────────────────────────────────────
 
     def random_bytes(self, size: int = 1400) -> bytes:
-        return bytes(random.randint(0, 255) for _ in range(size))
+        return os.urandom(size)
 
     def pattern_bytes(self, size: int, pattern: str = "0xDEAD") -> bytes:
         val = int(pattern, 16) if pattern.startswith("0x") else ord(pattern[0])

