@@ -19,11 +19,16 @@ func findBinary(name string) string {
 	exe, _ := os.Executable()
 	base := filepath.Dir(exe)
 	candidates := []string{
+		filepath.Join(base, "..", "bin", name),
 		filepath.Join(base, "bin", name),
-		filepath.Join(base, "..", "c", name),
-		filepath.Join(base, "..", "cpp", name),
-		filepath.Join(base, "..", "rust", "target", "release", name),
+		filepath.Join(base, "csrc", name),
+		filepath.Join(base, "cxxsrc", name),
+		filepath.Join(base, "rustsrc", "target", "release", name),
+		filepath.Join(base, "rust_engine", "target", "release", name),
+		filepath.Join(base, "..", "csrc", name),
+		filepath.Join(base, "..", "cxxsrc", name),
 	}
+	candidates = append(candidates, filepath.Join(base, "..", "..", "bin", name))
 	for _, c := range candidates {
 		if _, err := os.Stat(c); err == nil {
 			return c
@@ -80,12 +85,16 @@ func parseRESULTLineFromMap(raw map[string]interface{}) (port int, state string)
 func RustFastScan(host string, port int, timeoutMs int, stealth bool) PortResult {
 	binary := findBinary("hyper_scan")
 	if _, err := os.Stat(binary); os.IsNotExist(err) {
+		binary = findBinary("rust_tcp_scanner")
+	}
+	if _, err := os.Stat(binary); os.IsNotExist(err) {
 		binary = findBinary("syn_scanner")
 	}
 	if _, err := os.Stat(binary); os.IsNotExist(err) {
 		return PortResult{Port: port, State: "error"}
 	}
-	output, err := runBinary(binary, host, fmt.Sprintf("%d", port), fmt.Sprintf("%d", timeoutMs))
+	// Use shorter timeout for per-port invocations
+	output, err := runBinaryTimeout(binary, 5, host, fmt.Sprintf("%d", port), fmt.Sprintf("%d", timeoutMs))
 	if err != nil {
 		return PortResult{Port: port, State: "error"}
 	}
@@ -253,11 +262,6 @@ func COsFingerprint(host string, ports []int, timeoutMs int) OSInfo {
 // CppOsDetect calls the C++ os_detect binary for deep signature-matching OS detection
 func CppOsDetect(host string, ports []int, timeoutMs int) OSInfo {
 	binary := findBinary("os_detect")
-	// Try cpp directory first, then bin
-	cppBin := filepath.Join(filepath.Dir(filepath.Dir(findBinary("os_fingerprint"))), "cpp", "os_detect")
-	if _, err := os.Stat(cppBin); err == nil {
-		binary = cppBin
-	}
 	if _, err := os.Stat(binary); os.IsNotExist(err) {
 		return OSInfo{Name: "Unknown", Confidence: 0}
 	}
@@ -343,9 +347,21 @@ func RustPerformDeepScan(host string, port int, banner string) string {
 func RustBatchScan(host string, startPort int, endPort int, timeout int, concurrency int) string {
 	binary := findBinary("hyper_scan")
 	if _, err := os.Stat(binary); os.IsNotExist(err) {
+		binary = findBinary("rust_tcp_scanner")
+	}
+	if _, err := os.Stat(binary); os.IsNotExist(err) {
 		return ""
 	}
-	output, err := runBinary(binary, host, fmt.Sprintf("%d-%d", startPort, endPort), fmt.Sprintf("%d", timeout), fmt.Sprintf("%d", concurrency))
+	// Scale timeout: 60s for 65k ports, 30s for 10k, 15s for 2k
+	binTimeout := 60
+	if endPort-startPort < 10000 {
+		binTimeout = 30
+	}
+	if endPort-startPort < 2000 {
+		binTimeout = 15
+	}
+	args := []string{host, fmt.Sprintf("%d-%d", startPort, endPort), fmt.Sprintf("%d", timeout), fmt.Sprintf("concurrency:%d", concurrency), "json"}
+	output, err := runBinaryTimeout(binary, binTimeout, args...)
 	if err != nil {
 		return ""
 	}
@@ -408,23 +424,50 @@ func CppScanService(host string, port int, timeoutMs int) PortResult {
 
 // CScannerScan calls the C TCP scanner binary and returns results
 func CScannerScan(host string, ports []int, timeoutMs int, threads int) []PortResult {
-	binary := findBinary("scanner")
+	binary := findBinary("c_scanner")
+	if _, err := os.Stat(binary); os.IsNotExist(err) {
+		binary = findBinary("scanner")
+	}
+	if _, err := os.Stat(binary); os.IsNotExist(err) {
+		binary = findBinary("c_advanced_scanner")
+	}
 	if _, err := os.Stat(binary); os.IsNotExist(err) {
 		return nil
 	}
-	// Calculate timeout for binary (max 60s, min 5s)
-	binTimeout := (timeoutMs * len(ports)) / 1000 / threads
-	if binTimeout < 5 {
-		binTimeout = 5
+	// Calculate timeout for binary (max 120s, min 15s)
+	binTimeout := ((timeoutMs + 100) * len(ports)) / 1000 / threads
+	if binTimeout < 15 {
+		binTimeout = 15
 	}
-	if binTimeout > 60 {
-		binTimeout = 60
+	if binTimeout > 120 {
+		binTimeout = 120
 	}
-	portStr := make([]string, len(ports))
-	for i, p := range ports {
-		portStr[i] = strconv.Itoa(p)
+	// Use compact range format for dense port sets (much shorter command line)
+	var portArg string
+	if len(ports) > 100 {
+		minP, maxP := ports[0], ports[0]
+		for _, p := range ports {
+			if p < minP { minP = p }
+			if p > maxP { maxP = p }
+		}
+		// If range covers most ports (dense), use range format
+		if (maxP - minP + 1) <= len(ports)*3/2 {
+			portArg = fmt.Sprintf("%d-%d", minP, maxP)
+		} else {
+			portStr := make([]string, len(ports))
+			for i, p := range ports {
+				portStr[i] = strconv.Itoa(p)
+			}
+			portArg = strings.Join(portStr, ",")
+		}
+	} else {
+		portStr := make([]string, len(ports))
+		for i, p := range ports {
+			portStr[i] = strconv.Itoa(p)
+		}
+		portArg = strings.Join(portStr, ",")
 	}
-	output, err := runBinaryTimeout(binary, binTimeout, host, strings.Join(portStr, ","), fmt.Sprintf("%d", timeoutMs), fmt.Sprintf("%d", threads))
+	output, err := runBinaryTimeout(binary, binTimeout, host, portArg, fmt.Sprintf("%d", timeoutMs), fmt.Sprintf("%d", threads))
 	if err != nil {
 		return nil
 	}
@@ -463,6 +506,8 @@ func CScannerScan(host string, ports []int, timeoutMs int, threads int) []PortRe
 			goState := "closed"
 			if state == "open" {
 				goState = "open"
+			} else if state == "filtered" {
+				goState = "filtered"
 			}
 			svc := service
 			if svc == "" || svc == "unknown" {
@@ -482,7 +527,10 @@ func CScannerScan(host string, ports []int, timeoutMs int, threads int) []PortRe
 
 // CppServiceScanner calls the C++ advanced service scanner for deep detection
 func CppServiceScanner(host string, port int, timeoutMs int) PortResult {
-	binary := findBinary("service_scanner")
+	binary := findBinary("cpp_service_scanner")
+	if _, err := os.Stat(binary); err != nil {
+		binary = findBinary("service_scanner")
+	}
 	if _, err := os.Stat(binary); err != nil {
 		return PortResult{Port: port, State: "error"}
 	}

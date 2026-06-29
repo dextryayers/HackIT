@@ -36,14 +36,11 @@ class GoEngine:
                 if needs_compile: break
 
         if needs_compile:
-            print(_colored("[*] Compiling Go Port Scanner Engine...", BLUE))
             try:
                 cmd = ['go', 'build', '-o', self.binary_path, '.']
-                subprocess.check_call(cmd, cwd=self.go_dir)
-                print(_colored("[+] Engine compiled successfully!", GREEN))
+                subprocess.check_call(cmd, cwd=self.go_dir, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 return True
-            except subprocess.CalledProcessError as e:
-                print(_colored(f"[!] Compilation failed: {e}", RED))
+            except subprocess.CalledProcessError:
                 return False
         return True
 

@@ -709,6 +709,27 @@ func DetectServiceV2(port int, banner string, host string) (string, string) {
 	}
 
 	bannerLower := strings.ToLower(banner)
+	// Port-specific priority (check common service ports first)
+	if port == 25 || port == 465 || port == 587 || port == 2525 {
+		if strings.Contains(bannerLower, "smtp") || strings.Contains(bannerLower, "esmtp") || strings.Contains(bannerLower, "220 ") {
+			return "SMTP", ExtractSMTPVersion(banner)
+		}
+	}
+	if port == 21 || port == 990 {
+		if strings.Contains(bannerLower, "ftp") || strings.Contains(bannerLower, "220 ") {
+			return "FTP", ExtractFTPVersion(banner)
+		}
+	}
+	if port == 110 || port == 995 {
+		if strings.Contains(bannerLower, "pop3") || strings.Contains(bannerLower, "+ok") {
+			return "POP3", ""
+		}
+	}
+	if port == 143 || port == 993 {
+		if strings.Contains(bannerLower, "imap") || strings.Contains(bannerLower, "dovecot") || strings.Contains(bannerLower, "ok ") {
+			return "IMAP", ""
+		}
+	}
 	if strings.Contains(bannerLower, "ssh") || strings.Contains(bannerLower, "ssh-") {
 		return "SSH", ExtractSSHVersion(banner)
 	}
@@ -716,11 +737,11 @@ func DetectServiceV2(port int, banner string, host string) (string, string) {
 		ver := ExtractHTTPVersion(banner)
 		return "HTTP", ver
 	}
-	if strings.Contains(bannerLower, "ftp") || strings.Contains(bannerLower, "220 ") {
-		return "FTP", ExtractFTPVersion(banner)
-	}
 	if strings.Contains(bannerLower, "smtp") || strings.Contains(bannerLower, "esmtp") {
 		return "SMTP", ExtractSMTPVersion(banner)
+	}
+	if strings.Contains(bannerLower, "ftp") || strings.Contains(bannerLower, "220 ") {
+		return "FTP", ExtractFTPVersion(banner)
 	}
 	if strings.Contains(bannerLower, "mysql") {
 		return "MySQL", ExtractMySQLVersion(banner)

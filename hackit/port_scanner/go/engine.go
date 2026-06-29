@@ -159,6 +159,52 @@ func (e *ScanEngine) Run() []PortResult {
 		return nil
 	}
 
+	// Auto-optimize for mass scans (e.g. -p all = 65535 ports)
+	if len(ports) > 2000 {
+		if e.TimeoutMs > 300 || e.TimeoutMs == 0 {
+			e.TimeoutMs = 300
+		}
+		if len(ports) > 10000 && e.TimeoutMs > 200 {
+			e.TimeoutMs = 200
+		}
+		if len(ports) > 30000 && e.TimeoutMs > 150 {
+			e.TimeoutMs = 150
+		}
+
+		// For mass scans, bypass MultiEngineOrchestrator which spawns
+		// a subprocess per port (65535 subprocesses = hang).
+		// Switch to direct connect scan instead.
+		if e.ScanMode == "syn" || e.ScanMode == "c-turbo" {
+			e.ScanMode = "connect"
+		}
+
+		// Thread scaling: only boost for raw-socket modes (syn, c-turbo, etc.)
+		// where many in-flight SYNs don't consume local ports.
+		// For connect mode, too many concurrent TCP connections to a single
+		// host exhausts local ephemeral ports and kernel SYN backlog,
+		// causing all connections to time out.
+		if e.ScanMode == "connect" || e.ScanMode == "" {
+			// Keep user's thread setting — don't override for connect scans
+			if e.Threads > 300 {
+				e.Threads = 300
+			}
+			if e.Threads < 1 {
+				e.Threads = 50
+			}
+		} else if e.Threads < 500 || e.Threads < len(ports)/10 {
+			maxThreads := 2000
+			if len(ports) > 10000 { maxThreads = 4000 }
+			if len(ports) > 30000 { maxThreads = 8000 }
+			e.Threads = min2(maxThreads, len(ports))
+		}
+
+		// Disable heavy features during mass scan
+		e.Deep = false
+		e.SmartProbe = false
+		e.VulnScan = false
+		e.UltraDeep = false
+	}
+
 	// 1. Scheduler-based port ordering
 	if e.UseScheduler && e.Scheduler != nil {
 		jobs := e.Scheduler.Schedule(e.Host, ports, "normal")
@@ -181,24 +227,12 @@ func (e *ScanEngine) Run() []PortResult {
 		e.AdaptiveEngine = NewAdaptiveTiming(tmpl)
 	}
 
-	// 4. Determine which fast-path engine to use for initial discovery
-	// Rust handles massive port ranges (>2000 ports, open-only mode)
-	if !e.IncludeClosed && len(ports) > 2000 && (e.ScanMode == "syn" || e.ScanMode == "connect") {
-		if e.Reporter != nil {
-			e.Reporter.ReportStatus("Engaging Rust Turbo Engine for mass scan", 5)
-		}
-		min, max := ports[0], ports[0]
-		for _, p := range ports {
-			if p < min { min = p }
-			if p > max { max = p }
-		}
-		// Dense range: use Rust batch scan as initial filter
-		if (max-min) < len(ports)*3 {
-			openStr := RustBatchScan(e.Host, min, max, e.TimeoutMs, e.Threads)
-			if openStr != "" {
-				return e.enrichRustResults(openStr, ports)
-			}
-		}
+	// 4. MASS SCAN FAST PATH: For >2000 ports, use Go goroutine pool directly
+	// Pure Go approach — no external binaries needed, works without root.
+	// Uses QuickScanPort (single attempt, no retry, fast timeout) for all ports,
+	// then enriches open ports with banner grabbing.
+	if len(ports) > 2000 && (e.ScanMode == "connect" || e.ScanMode == "syn" || e.ScanMode == "") {
+		return e.massScanAll(ports)
 	}
 
 	// 5. Concurrent scan pipeline
@@ -208,8 +242,6 @@ func (e *ScanEngine) Run() []PortResult {
 		results = make([]PortResult, 0, len(ports)/4)
 	)
 
-	portsChan := make(chan int, min2(e.Threads*2, len(ports)))
-
 	workerCount := e.Threads
 	if workerCount > len(ports) {
 		workerCount = len(ports)
@@ -217,6 +249,9 @@ func (e *ScanEngine) Run() []PortResult {
 	if workerCount < 1 {
 		workerCount = 1
 	}
+
+	// For mass scans, batch ports per worker to reduce channel/scheduling overhead
+	useBatching := len(ports) > 5000
 
 	// 6. Rate limiter for max-rate control
 	var rateLimiter *time.Ticker
@@ -226,129 +261,134 @@ func (e *ScanEngine) Run() []PortResult {
 		defer rateLimiter.Stop()
 	}
 
-	// 7. Worker pool
-	for i := 0; i < workerCount; i++ {
-		wg.Add(1)
+	// 7. Worker pool — batch ports for mass scans
+	if useBatching {
+		chunkSize := (len(ports) + workerCount - 1) / workerCount
+		for i := 0; i < workerCount; i++ {
+			start := i * chunkSize
+			end := start + chunkSize
+			if end > len(ports) { end = len(ports) }
+			if start >= end { break }
+			chunk := ports[start:end]
+
+			wg.Add(1)
+			go func(batch []int) {
+				defer wg.Done()
+				for _, port := range batch {
+					if port <= 0 || port > 65535 { continue }
+					if e.MinRate > 0 { time.Sleep(time.Second / time.Duration(e.MinRate)) }
+					if e.Stealth || e.GhostProtocol { jitterSleep(5, 80) }
+					if e.AdaptiveEngine != nil { time.Sleep(e.AdaptiveEngine.GetRecommendedDelay()) }
+					if e.ScanDelay > 0 { time.Sleep(time.Duration(e.ScanDelay) * time.Millisecond) }
+
+					var res PortResult
+					var isOpen bool
+					switch e.ScanMode {
+					case "udp": res, isOpen = ScanUDP(e.Host, port, e.TimeoutMs)
+					case "syn":
+						res = e.MultiEngineOrchestrator(port)
+						if res.State == "error" { res, isOpen = ScanPort(e.Host, port, e.TimeoutMs) } else { isOpen = res.State == "open" }
+					case "ack": res, isOpen = ScanACK(e.Host, port, e.TimeoutMs)
+					case "fin": res, isOpen = ScanFIN(e.Host, port, e.TimeoutMs)
+					case "xmas": res, isOpen = ScanXMAS(e.Host, port, e.TimeoutMs)
+					case "null": res, isOpen = ScanNULL(e.Host, port, e.TimeoutMs)
+					case "window": res, isOpen = ScanWindow(e.Host, port, e.TimeoutMs)
+					case "maimon": res, isOpen = ScanMaimon(e.Host, port, e.TimeoutMs)
+					case "idle":
+						if e.Zombie != "" { res, isOpen = ScanIdle(e.Host, port, e.Zombie, e.TimeoutMs) } else { res, isOpen = ScanPort(e.Host, port, e.TimeoutMs) }
+					case "protocol": res, isOpen = ScanProtocol(e.Host, port, e.TimeoutMs)
+					case "c-turbo":
+						res = e.CrossCheckOrchestrator(port); isOpen = res.State == "open"
+						if isOpen { cOS := CExpertDetectOs(e.Host, fmt.Sprintf("%d", port), 64, 29200); res.DeepAnalysis = cOS }
+					case "anon-self":
+						res, isOpen = ScanPort(e.Host, port, e.TimeoutMs)
+						if isOpen && e.GhostProtocol { res.State = "self-listening" }
+					default:
+						res, isOpen = ScanPort(e.Host, port, e.TimeoutMs)
+					}
+
+					if e.AdaptiveEngine != nil { e.AdaptiveEngine.AdjustTiming(isOpen, time.Duration(e.TimeoutMs)*time.Millisecond) }
+
+					n := atomic.AddInt64(&e.totalScanned, 1)
+					if isOpen { atomic.AddInt64(&e.totalOpen, 1) }
+					if e.Reporter != nil && n%100 == 0 {
+						e.Reporter.ReportStatus(fmt.Sprintf("Probing %d/%d | Open: %d", n, len(ports), atomic.LoadInt64(&e.totalOpen)), float64(n)/float64(len(ports))*100)
+					}
+
+					e.enrichPort(&res, port, isOpen)
+					mutex.Lock()
+					results = append(results, res)
+					mutex.Unlock()
+					if e.Reporter != nil { e.Reporter.ReportResult(res) }
+				}
+			}(chunk)
+		}
+	} else {
+		portsChan := make(chan int, min2(e.Threads*2, len(ports)))
+
+		for i := 0; i < workerCount; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for port := range portsChan {
+					if port <= 0 || port > 65535 { continue }
+					if e.MinRate > 0 { time.Sleep(time.Second / time.Duration(e.MinRate)) }
+					if e.Stealth || e.GhostProtocol { jitterSleep(5, 80) }
+					if e.AdaptiveEngine != nil { time.Sleep(e.AdaptiveEngine.GetRecommendedDelay()) }
+					if e.ScanDelay > 0 { time.Sleep(time.Duration(e.ScanDelay) * time.Millisecond) }
+
+					var res PortResult
+					var isOpen bool
+					switch e.ScanMode {
+					case "udp": res, isOpen = ScanUDP(e.Host, port, e.TimeoutMs)
+					case "syn":
+						res = e.MultiEngineOrchestrator(port)
+						if res.State == "error" { res, isOpen = ScanPort(e.Host, port, e.TimeoutMs) } else { isOpen = res.State == "open" }
+					case "ack": res, isOpen = ScanACK(e.Host, port, e.TimeoutMs)
+					case "fin": res, isOpen = ScanFIN(e.Host, port, e.TimeoutMs)
+					case "xmas": res, isOpen = ScanXMAS(e.Host, port, e.TimeoutMs)
+					case "null": res, isOpen = ScanNULL(e.Host, port, e.TimeoutMs)
+					case "window": res, isOpen = ScanWindow(e.Host, port, e.TimeoutMs)
+					case "maimon": res, isOpen = ScanMaimon(e.Host, port, e.TimeoutMs)
+					case "idle":
+						if e.Zombie != "" { res, isOpen = ScanIdle(e.Host, port, e.Zombie, e.TimeoutMs) } else { res, isOpen = ScanPort(e.Host, port, e.TimeoutMs) }
+					case "protocol": res, isOpen = ScanProtocol(e.Host, port, e.TimeoutMs)
+					case "c-turbo":
+						res = e.CrossCheckOrchestrator(port); isOpen = res.State == "open"
+						if isOpen { cOS := CExpertDetectOs(e.Host, fmt.Sprintf("%d", port), 64, 29200); res.DeepAnalysis = cOS }
+					case "anon-self":
+						res, isOpen = ScanPort(e.Host, port, e.TimeoutMs)
+						if isOpen && e.GhostProtocol { res.State = "self-listening" }
+					default:
+						res, isOpen = ScanPort(e.Host, port, e.TimeoutMs)
+					}
+
+					if e.AdaptiveEngine != nil { e.AdaptiveEngine.AdjustTiming(isOpen, time.Duration(e.TimeoutMs)*time.Millisecond) }
+
+					n := atomic.AddInt64(&e.totalScanned, 1)
+					if isOpen { atomic.AddInt64(&e.totalOpen, 1) }
+					if e.Reporter != nil && n%100 == 0 {
+						e.Reporter.ReportStatus(fmt.Sprintf("Probing %d/%d | Open: %d", n, len(ports), atomic.LoadInt64(&e.totalOpen)), float64(n)/float64(len(ports))*100)
+					}
+
+					e.enrichPort(&res, port, isOpen)
+					mutex.Lock()
+					results = append(results, res)
+					mutex.Unlock()
+					if e.Reporter != nil { e.Reporter.ReportResult(res) }
+				}
+			}()
+		}
+
+		// Feed ports to workers
 		go func() {
-			defer wg.Done()
-			for port := range portsChan {
-				if port <= 0 || port > 65535 {
-					continue
-				}
-
-				// Min-rate enforcement
-				if e.MinRate > 0 {
-					time.Sleep(time.Second / time.Duration(e.MinRate))
-				}
-
-				// Stealth jitter
-				if e.Stealth || e.GhostProtocol {
-					jitterSleep(5, 80)
-				}
-
-				// Adaptive timing delay
-				if e.AdaptiveEngine != nil {
-					time.Sleep(e.AdaptiveEngine.GetRecommendedDelay())
-				}
-
-				// Scan delay
-				if e.ScanDelay > 0 {
-					time.Sleep(time.Duration(e.ScanDelay) * time.Millisecond)
-				}
-
-				// Phase 1: Port discovery with multi-engine cross-check
-				var res PortResult
-				var isOpen bool
-
-				switch e.ScanMode {
-				case "udp":
-					res, isOpen = ScanUDP(e.Host, port, e.TimeoutMs)
-				case "syn":
-					res = e.MultiEngineOrchestrator(port)
-					if res.State == "error" {
-						res, isOpen = ScanPort(e.Host, port, e.TimeoutMs)
-					} else {
-						isOpen = res.State == "open"
-					}
-				case "ack":
-					res, isOpen = ScanACK(e.Host, port, e.TimeoutMs)
-				case "fin":
-					res, isOpen = ScanFIN(e.Host, port, e.TimeoutMs)
-				case "xmas":
-					res, isOpen = ScanXMAS(e.Host, port, e.TimeoutMs)
-				case "null":
-					res, isOpen = ScanNULL(e.Host, port, e.TimeoutMs)
-				case "window":
-					res, isOpen = ScanWindow(e.Host, port, e.TimeoutMs)
-				case "maimon":
-					res, isOpen = ScanMaimon(e.Host, port, e.TimeoutMs)
-				case "idle":
-					if e.Zombie != "" {
-						res, isOpen = ScanIdle(e.Host, port, e.Zombie, e.TimeoutMs)
-					} else {
-						res, isOpen = ScanPort(e.Host, port, e.TimeoutMs)
-					}
-				case "protocol":
-					res, isOpen = ScanProtocol(e.Host, port, e.TimeoutMs)
-				case "c-turbo":
-					res = e.CrossCheckOrchestrator(port)
-					isOpen = res.State == "open"
-					if isOpen {
-						cOS := CExpertDetectOs(e.Host, fmt.Sprintf("%d", port), 64, 29200)
-						res.DeepAnalysis = cOS
-					}
-				case "anon-self":
-					res, isOpen = ScanPort(e.Host, port, e.TimeoutMs)
-					if isOpen && e.GhostProtocol {
-						res.State = "self-listening"
-					}
-				default: // "connect" — standard TCP connect scan
-					res, isOpen = ScanPort(e.Host, port, e.TimeoutMs)
-				}
-
-				// Update adaptive engine
-				if e.AdaptiveEngine != nil {
-					e.AdaptiveEngine.AdjustTiming(isOpen, time.Duration(e.TimeoutMs)*time.Millisecond)
-				}
-
-				// Progress tracking
-				n := atomic.AddInt64(&e.totalScanned, 1)
-				if isOpen {
-					atomic.AddInt64(&e.totalOpen, 1)
-				}
-				if e.Reporter != nil {
-					progress := float64(n) / float64(len(ports)) * 100
-					e.Reporter.ReportStatus(
-						fmt.Sprintf("Probing %d/%d ports | Open: %d",
-							n, len(ports), atomic.LoadInt64(&e.totalOpen)),
-						progress,
-					)
-				}
-
-				// Phase 2: Always include all scanned ports so Python CLI can display counts
-				e.enrichPort(&res, port, isOpen)
-
-				mutex.Lock()
-				results = append(results, res)
-				mutex.Unlock()
-
-				if e.Reporter != nil {
-					e.Reporter.ReportResult(res)
-				}
+			for _, p := range ports {
+				if rateLimiter != nil { <-rateLimiter.C }
+				portsChan <- p
 			}
+			close(portsChan)
 		}()
 	}
-
-	// Feed ports to workers
-	go func() {
-		for _, p := range ports {
-			if rateLimiter != nil {
-				<-rateLimiter.C
-			}
-			portsChan <- p
-		}
-		close(portsChan)
-	}()
 
 	// Wait with watchdog timeout
 	done := make(chan struct{})
@@ -438,42 +478,46 @@ func (e *ScanEngine) enrichPort(res *PortResult, port int, isOpen bool) {
 		return
 	}
 
-	timer := time.NewTimer(5 * time.Second)
+	// Fast path: non-deep mode — just detect service from banner, no goroutine
+	if !e.Deep && !e.SmartProbe && !e.VulnScan && !e.UltraDeep && e.Script == "" {
+		if res.Service == "" && res.Banner != "" {
+			res.Service, res.Version = DetectService(port, res.Banner, e.Host)
+		}
+		if res.Service == "" {
+			if name, ok := commonPorts[port]; ok {
+				res.Service = name
+			}
+		}
+		return
+	}
+
+	timer := time.NewTimer(time.Duration(e.TimeoutMs) * time.Millisecond)
 	done := make(chan struct{}, 1)
 
 	go func() {
 		defer func() {
-			if r := recover(); r != nil {
-			}
+			recover()
 			done <- struct{}{}
 		}()
 
-		// 1. Banner grab if missing
 		if res.Banner == "" && (e.SmartProbe || e.Deep) {
 			res.Banner = GrabBannerByHost(e.Host, port, e.TimeoutMs)
 		}
 
-		// 2. Detection Chain: Go baseline → Rust → C++ override
-		// Always run Go DetectService first to get baseline service
 		goService, goVersion := DetectService(port, res.Banner, e.Host)
 
-		// 2a. Rust Fingerprinting — override if confident
 		if res.Banner != "" {
-			rustSvc := RustFingerprintService(res.Banner)
-			rus := strings.ToUpper(rustSvc)
-			if rus != "" && rus != "UNKNOWN" {
+			if rustSvc := RustFingerprintService(res.Banner); rustSvc != "" && strings.ToUpper(rustSvc) != "UNKNOWN" {
 				res.Service = rustSvc
 				res.Version = RustExtractVersion(res.Banner, rustSvc)
 			}
 		}
 
-		// 2b. C++ Deep Fingerprint — override if service still unknown
 		if res.Service == "" || res.Service == "unknown" || res.Version == "" {
-			cppRes := CppScanService(e.Host, port, 800)
-			if cppRes.Banner != "" && res.Banner == "" {
+			if cppRes := CppScanService(e.Host, port, min2(e.TimeoutMs, 800)); cppRes.Banner != "" && res.Banner == "" {
 				res.Banner = cppRes.Banner
 			}
-			if cppRes.Service != "" && cppRes.Service != "UNKNOWN" {
+			if cppRes := CppScanService(e.Host, port, min2(e.TimeoutMs, 800)); cppRes.Service != "" && cppRes.Service != "UNKNOWN" {
 				res.Service = cppRes.Service
 				if cppRes.Version != "" {
 					res.Version = cppRes.Version
@@ -481,7 +525,6 @@ func (e *ScanEngine) enrichPort(res *PortResult, port int, isOpen bool) {
 			}
 		}
 
-		// 2c. Go baseline fallback — fill in if Rust/C++ returned nothing
 		if res.Service == "" || res.Service == "unknown" {
 			res.Service = goService
 			res.Version = goVersion
@@ -489,43 +532,35 @@ func (e *ScanEngine) enrichPort(res *PortResult, port int, isOpen bool) {
 			res.Version = goVersion
 		}
 
-		// 3. Lua script engine
-		if e.Lua == nil {
-			e.Lua = NewLuaEngine()
-		}
-		luaResults := e.Lua.RunScripts(e.Host, port, res.Service, res.Banner)
-		if len(luaResults) > 0 {
-			res.Scripts = append(res.Scripts, luaResults...)
-		}
-
-		// 4. Vulnerability analysis
-		if e.Deep || e.Script != "" || e.VulnScan {
-			vulns := e.AnalyzeVulnerabilities(*res)
-			if len(vulns) > 0 {
-				res.Vulnerabilities = append(res.Vulnerabilities, vulns...)
+		if e.Script != "" {
+			if e.Lua == nil {
+				e.Lua = NewLuaEngine()
+			}
+			if scripts := e.Lua.RunScripts(e.Host, port, res.Service, res.Banner); len(scripts) > 0 {
+				res.Scripts = append(res.Scripts, scripts...)
 			}
 		}
 
-		// 5. Deep analysis (UltraDeep)
-		if e.UltraDeep && isOpen {
-			deepResult := RustPerformDeepScan(e.Host, port, res.Banner)
-			if deepResult != "" {
-				res.DeepAnalysis += "[RUST-DEEP]: " + deepResult
+		if e.Deep || e.VulnScan {
+			if vulns := e.AnalyzeVulnerabilities(*res); len(vulns) > 0 {
+				res.Vulnerabilities = vulns
 			}
 		}
 
-		// 6. CPE generation
+		if e.UltraDeep {
+			if deepResult := RustPerformDeepScan(e.Host, port, res.Banner); deepResult != "" {
+				res.DeepAnalysis = "[RUST-DEEP]: " + deepResult
+			}
+		}
+
 		if res.Service != "" && res.Version != "" {
-			cpe := generateCPE(res.Service, res.Version)
-			if cpe != "" {
+			if cpe := generateCPE(res.Service, res.Version); cpe != "" {
 				res.CPEList = []string{cpe}
 			}
 		}
 
-		// 7. Risk scoring
 		res.RiskScore = calculateRiskScore(port, res.Service, res.Banner, res.Vulnerabilities)
 
-		// 8. Final safety net: ensure Service is never empty if banner exists
 		if res.Service == "" && res.Banner != "" {
 			res.Service, res.Version = DetectService(port, res.Banner, e.Host)
 		}
@@ -540,8 +575,8 @@ func (e *ScanEngine) enrichPort(res *PortResult, port int, isOpen bool) {
 	case <-done:
 		timer.Stop()
 	case <-timer.C:
-		if res.Service == "" && res.Banner != "" {
-			res.Service, res.Version = DetectService(port, res.Banner, e.Host)
+		if res.Banner == "" {
+			res.Banner = GrabBannerByHost(e.Host, port, e.TimeoutMs/2)
 		}
 		if res.Service == "" {
 			if name, ok := commonPorts[port]; ok {
@@ -825,11 +860,16 @@ func (e *ScanEngine) CrossCheckOrchestrator(port int) PortResult {
 		results[r.name] = r.res
 	}
 
-	// Consensus: open count vs filtered count
+	// Count results: open, closed, filtered, error/unavailable
 	openCount := 0
+	closedCount := 0
+	filteredCount := 0
+	errorCount := 0
 	var best PortResult
+
 	for _, r := range results {
-		if r.State == "open" {
+		switch r.State {
+		case "open":
 			openCount++
 			if best.State == "" || best.State == "error" {
 				best = r
@@ -843,26 +883,52 @@ func (e *ScanEngine) CrossCheckOrchestrator(port int) PortResult {
 			if r.Version != "" && best.Version == "" {
 				best.Version = r.Version
 			}
-		} else if best.State == "" || best.State == "error" {
-			if r.State != "" {
+		case "closed":
+			closedCount++
+			if best.State == "" || best.State == "error" {
 				best = r
 			}
+		case "filtered":
+			filteredCount++
+			if best.State == "" || best.State == "error" {
+				best = r
+			}
+		default:
+			errorCount++
 		}
 	}
 
 	if best.State == "" || best.State == "error" {
-		// Use Go result as default
 		if r, ok := results["go"]; ok {
 			best = r
 		}
 	}
 
-	// If at least 2 engines agree it's open, mark as open
-	if openCount >= 2 {
+	// Consensus voting:
+	// - If any engine says open AND no engine says filtered → open
+	// - If 2+ engines agree on same state → use that
+	// - If only Go is available (others error) → trust Go
+	totalEngines := openCount + closedCount + filteredCount
+	if openCount > 0 && filteredCount == 0 {
 		best.State = "open"
-	} else if best.State == "open" && openCount < 2 {
-		// Only one engine says open — mark as filtered
+	} else if openCount >= 2 {
+		best.State = "open"
+	} else if best.State == "open" && openCount == 1 && totalEngines <= 1 {
+		// Only Go is available and it says open → trust it
+		best.State = "open"
+	} else if closedCount >= 2 {
+		best.State = "closed"
+	} else if filteredCount >= 2 {
 		best.State = "filtered"
+	} else if openCount > closedCount && openCount > filteredCount {
+		best.State = "open"
+	} else if closedCount > openCount && closedCount > filteredCount {
+		best.State = "closed"
+	} else if filteredCount > openCount && filteredCount > closedCount {
+		best.State = "filtered"
+	} else if best.State == "open" && openCount > 0 && errorCount > 0 {
+		// Go says open, others unavailable → keep open
+		best.State = "open"
 	}
 
 	best.Port = port
@@ -889,6 +955,175 @@ func (e *ScanEngine) enrichRustResults(openPortsStr string, allPorts []int) []Po
 		res := PortResult{Port: p, State: "open", Protocol: "tcp"}
 		e.enrichPort(&res, p, true)
 		results = append(results, res)
+	}
+
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Port < results[j].Port
+	})
+
+	return results
+}
+
+// ─────────────────────────────────────────────────────────────────
+// MASS SCAN — TWO-PHASE ARCHITECTURE for 1–65535 ports
+// ─────────────────────────────────────────────────────────────────
+
+// massScanAll — Multi-strategy mass scan for 1-65535 ports
+// Tries C scanner (TCP connect, epoll) first, falls back to Go goroutines.
+func (e *ScanEngine) massScanAll(allPorts []int) []PortResult {
+	total := len(allPorts)
+
+	// Phase 1: Quick scan all ports with C scanner or Go goroutines
+	var results []PortResult
+	var scannedSet map[int]bool
+
+	// Strategy 1: Try C scanner (fast, epoll-based TCP connect)
+	if binary := findBinary("c_scanner"); binary != "c_scanner" {
+		if e.Reporter != nil {
+			e.Reporter.ReportStatus(fmt.Sprintf("Mass scan: %d ports via C epoll engine", total), 2)
+		}
+		threads := 300
+		if threads > total {
+			threads = total
+		}
+		timeoutMs := e.TimeoutMs
+		if timeoutMs < 300 {
+			timeoutMs = 300
+		}
+		if timeoutMs > 1000 {
+			timeoutMs = 500
+		}
+		results = CScannerScan(e.Host, allPorts, timeoutMs, threads)
+		if len(results) > 0 {
+			if e.Reporter != nil {
+				e.Reporter.ReportStatus(fmt.Sprintf("C engine done: %d/%d results", len(results), total), 40)
+			}
+			scannedSet = make(map[int]bool)
+			for _, r := range results {
+				scannedSet[r.Port] = true
+			}
+		} else {
+			if e.Reporter != nil {
+				e.Reporter.ReportStatus("C scanner returned no results, falling back to Go", 10)
+			}
+			results = nil
+		}
+	}
+
+	// Strategy 2: Pure-Go goroutine pool for any ports not covered by C scanner
+	missingPorts := make([]int, 0)
+	if results == nil {
+		missingPorts = allPorts
+	} else {
+		for _, p := range allPorts {
+			if !scannedSet[p] {
+				missingPorts = append(missingPorts, p)
+			}
+		}
+	}
+
+	if len(missingPorts) > 0 {
+		if e.Reporter != nil {
+			e.Reporter.ReportStatus(fmt.Sprintf("Mass scan: %d ports via Go engine", len(missingPorts)), 45)
+		}
+		workers := 150
+		if workers > len(missingPorts) {
+			workers = len(missingPorts)
+		}
+		timeout := e.TimeoutMs
+		if timeout < 300 {
+			timeout = 300
+		}
+		if timeout > 500 {
+			timeout = 500
+		}
+
+		var (
+			mu       sync.Mutex
+			goResults []PortResult
+			openSet   = make(map[int]bool)
+		)
+		var wg sync.WaitGroup
+		portCh := make(chan int, len(missingPorts))
+
+		for i := 0; i < workers; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for port := range portCh {
+					res := QuickScanPort(e.Host, port, timeout)
+					mu.Lock()
+					if res.State == "open" {
+						openSet[port] = true
+					}
+					goResults = append(goResults, res)
+					mu.Unlock()
+				}
+			}()
+		}
+		for _, p := range missingPorts {
+			portCh <- p
+		}
+		close(portCh)
+		wg.Wait()
+
+		if results == nil {
+			results = goResults
+			scannedSet = make(map[int]bool)
+			for _, r := range results {
+				scannedSet[r.Port] = true
+			}
+		} else {
+			results = append(results, goResults...)
+		}
+	}
+
+	// ── Phase 2: Enrich open ports ──
+	openList := make([]int, 0)
+	for _, r := range results {
+		if r.State == "open" {
+			openList = append(openList, r.Port)
+		}
+	}
+	sort.Ints(openList)
+
+	if len(openList) > 0 {
+		if e.Reporter != nil {
+			e.Reporter.ReportStatus(fmt.Sprintf("Mass scan: Enriching %d open ports", len(openList)), 90)
+		}
+		enrichWorkers := 30
+		if len(openList) < enrichWorkers {
+			enrichWorkers = len(openList)
+		}
+		var wgEnrich sync.WaitGroup
+		enrichCh := make(chan int, len(openList))
+		enriched := make(map[int]PortResult)
+		var enrichMu sync.Mutex
+
+		for i := 0; i < enrichWorkers; i++ {
+			wgEnrich.Add(1)
+			go func() {
+				defer wgEnrich.Done()
+				for port := range enrichCh {
+					res := PortResult{Port: port, State: "open", Protocol: "tcp"}
+					e.enrichPort(&res, port, true)
+					enrichMu.Lock()
+					enriched[port] = res
+					enrichMu.Unlock()
+				}
+			}()
+		}
+		for _, p := range openList {
+			enrichCh <- p
+		}
+		close(enrichCh)
+		wgEnrich.Wait()
+
+		for i, r := range results {
+			if er, ok := enriched[r.Port]; ok {
+				results[i] = er
+			}
+		}
 	}
 
 	sort.Slice(results, func(i, j int) bool {

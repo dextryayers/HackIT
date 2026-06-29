@@ -1,9 +1,13 @@
 import os
 import subprocess
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 BIN_DIR = os.path.join(BASE_DIR, 'bin')
+GO_DIR = os.path.join(BASE_DIR, 'go')
+GO_BIN_DIR = os.path.join(GO_DIR, 'bin')
+RUST_DIR = os.path.join(GO_DIR, 'rustsrc', 'target', 'release')
 
 _cache = {}
 _last_mtime = 0
@@ -106,13 +110,45 @@ _NEEDS_ROOT = {
 }
 
 
-def _get_version(bin_path):
-    for flag in ('--version', '-version', '-v'):
+_MAIN_BINS = {
+    'port_scanner':      ('go',   'Main Go orchestrator'),
+    'hyper_scan':        ('rust', 'Mass TCP scanner (Rust)'),
+    'os_detect':         ('rust', 'OS detection (Rust)'),
+    'mass_tcp_scanner':  ('c',    'Mass TCP scanner (C)'),
+    'tls_scanner':       ('cpp',  'TLS scanner (C++)'),
+}
+
+_BIN_LOCATIONS = {
+    'port_scanner':     None,
+    'hyper_scan':       None,
+    'os_detect':        None,
+    'mass_tcp_scanner': None,
+    'tls_scanner':      None,
+}
+
+
+def _locate_bins():
+    dirs_to_check = [BIN_DIR, GO_BIN_DIR, RUST_DIR]
+    for name in _BIN_LOCATIONS:
+        _BIN_LOCATIONS[name] = None
+        for d in dirs_to_check:
+            if not d:
+                continue
+            p = os.path.join(d, name)
+            if os.path.isfile(p) and os.access(p, os.X_OK):
+                _BIN_LOCATIONS[name] = p
+                break
+
+
+def _check_version(bin_path):
+    if not bin_path:
+        return 'unknown'
+    for flag in ('--version', '-version', '-v', '--help'):
         try:
-            r = subprocess.run([bin_path, flag], capture_output=True, text=True, timeout=5)
+            r = subprocess.run([bin_path, flag], capture_output=True, text=True, timeout=1)
             if r.returncode == 0:
-                v = (r.stdout.strip() or r.stderr.strip())[:60]
-                if v:
+                v = (r.stdout.strip() or r.stderr.strip())[:80]
+                if v and 'RESULT:' not in v and 'Usage:' not in v and 'flag provided' not in v:
                     return v
         except:
             pass
@@ -128,23 +164,53 @@ def discover_engines(force=False):
     elif not force and _cache:
         return dict(_cache)
 
+    _locate_bins()
+
     result = {}
+    versions = {}
+
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        fut_map = {}
+        for name, bin_path in _BIN_LOCATIONS.items():
+            if bin_path:
+                fut = ex.submit(_check_version, bin_path)
+                fut_map[fut] = name
+        for fut in as_completed(fut_map):
+            versions[fut_map[fut]] = fut.result()
+
+    for name, bin_path in _BIN_LOCATIONS.items():
+        info = _MAIN_BINS.get(name)
+        if info and bin_path:
+            lang, desc = info
+            result[name] = {
+                'name': name,
+                'binary': bin_path,
+                'language': lang,
+                'description': desc,
+                'version': versions.get(name, 'unknown'),
+                'available': True,
+                'needs_root': name in _NEEDS_ROOT,
+            }
+
     if os.path.isdir(BIN_DIR):
         for name in sorted(os.listdir(BIN_DIR)):
             bin_path = os.path.join(BIN_DIR, name)
-            if os.path.isfile(bin_path) and os.access(bin_path, os.X_OK):
-                if name.endswith('.so') or name.endswith('.dll') or name.endswith('.dylib'):
-                    continue
-                lang, desc = _KNOWN_MAP.get(name, ('unknown', f'Binary ({name})'))
-                result[name] = {
-                    'name': name,
-                    'binary': bin_path,
-                    'language': lang,
-                    'description': desc,
-                    'version': _get_version(bin_path),
-                    'available': True,
-                    'needs_root': name in _NEEDS_ROOT,
-                }
+            if not (os.path.isfile(bin_path) and os.access(bin_path, os.X_OK)):
+                continue
+            if name.endswith(('.so', '.dll', '.dylib')):
+                continue
+            if name in result:
+                continue
+            lang, desc = _KNOWN_MAP.get(name, ('unknown', f'Binary ({name})'))
+            result[name] = {
+                'name': name,
+                'binary': bin_path,
+                'language': lang,
+                'description': desc,
+                'version': 'unknown',
+                'available': True,
+                'needs_root': name in _NEEDS_ROOT,
+            }
 
     _cache.clear()
     _cache.update(result)

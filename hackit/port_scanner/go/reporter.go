@@ -285,7 +285,7 @@ func (r *Reporter) PrintTacticalSummary(host string, startTime time.Time, totalP
 		fmt.Printf(" - %s\n", action)
 	}
 
-	fmt.Println("\n" + ColorGreen + "[+] Analysis complete. Tactical data cached for intelligence layer." + ColorReset + "\n")
+	fmt.Println(ColorGreen + "[+] Analysis complete. Tactical data cached for intelligence layer." + ColorReset)
 }
 
 // PrintHackITStyleSummary is now deprecated

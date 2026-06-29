@@ -49,34 +49,40 @@ func NewLuaEngine() *LuaEngine {
 	}
 }
 
+// NSE scripts to run (in order) for each open port
+var nseScripts = []string{
+	"banner_grab.lua",
+	"dns_enum.lua",
+	"exploit_check.lua",
+	"firewall_detect.lua",
+	"os_fingerprint.lua",
+	"precision_probe.lua",
+	"realtime_audit.lua",
+	"service_probe.lua",
+	"ssl_analyzer.lua",
+	"subdomain_scan.lua",
+	"tactical_exploit.lua",
+	"tactical_vuln.lua",
+	"vuln_scanner.lua",
+	"web_tech_detect.lua",
+}
+
 // RunScripts runs all applicable Lua scripts for the given port/service
 func (e *LuaEngine) RunScripts(host string, port int, service string, banner string) []string {
 	var results []string
 
-	// 1. Run tactical vuln scanner (primary)
-	vulnScript := filepath.Join(e.LuaDir, "tactical_vuln.lua")
-	if _, err := os.Stat(vulnScript); err == nil {
-		res, err := e.executeLuaVulnScan(vulnScript, host, port, service, banner)
+	for _, script := range nseScripts {
+		scriptPath := filepath.Join(e.LuaDir, script)
+		if _, err := os.Stat(scriptPath); err != nil {
+			continue
+		}
+		res, err := e.executeScript(scriptPath, host, port, service, banner)
 		if err == nil && res != "" {
-			for _, line := range strings.Split(res, "\n") {
-				line = strings.TrimSpace(line)
-				if line != "" {
-					results = append(results, line)
-				}
-			}
+			results = append(results, fmt.Sprintf("[%s] %s", script, res))
 		}
 	}
 
-	// 2. Run precision probe
-	probeScript := filepath.Join(e.LuaDir, "precision_probe.lua")
-	if _, err := os.Stat(probeScript); err == nil {
-		svc, ver := e.executePrecisionProbe(probeScript, host, port, banner)
-		if svc != "" {
-			results = append(results, fmt.Sprintf("[LUA-PROBE] Identified: %s %s", svc, ver))
-		}
-	}
-
-	// 3. Run user-defined scripts from scripts dir
+	// Run user-defined scripts from scripts dir
 	files, err := os.ReadDir(e.ScriptsDir)
 	if err == nil {
 		for _, file := range files {
@@ -92,6 +98,20 @@ func (e *LuaEngine) RunScripts(host string, port int, service string, banner str
 	}
 
 	return results
+}
+
+// Real-time callback when a port is found open — runs all Lua scripts immediately
+func (e *LuaEngine) OnPortOpen(host string, port int, service string) chan string {
+	out := make(chan string, 64)
+	go func() {
+		defer close(out)
+		banner := GrabBannerByHost(host, port, 1500)
+		results := e.RunScripts(host, port, service, banner)
+		for _, r := range results {
+			out <- r
+		}
+	}()
+	return out
 }
 
 // LuaRunTactical is a legacy compatibility wrapper
@@ -217,7 +237,15 @@ func (e *LuaEngine) executeScript(path, host string, port int, service, banner s
 		return "", err
 	}
 
-	fn := L.GetGlobal("action")
+	// Try multiple entry point names
+	fnNames := []string{"action", "run_lua_vuln_scan", "run_audit", "run_precision_probe", "run_nse"}
+	var fn lua.LValue
+	for _, name := range fnNames {
+		fn = L.GetGlobal(name)
+		if fn.Type() != lua.LTNil {
+			break
+		}
+	}
 	if fn.Type() == lua.LTNil {
 		return "", nil
 	}

@@ -1,0 +1,7 @@
+#!/usr/bin/env python3
+"""Shortcut to run port scan: scan -t <target>"""
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from hackit.port_scanner import scan_ports
+if __name__ == '__main__':
+    scan_ports()

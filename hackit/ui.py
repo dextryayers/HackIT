@@ -308,8 +308,13 @@ def _colored(text: str, color: str, bold: bool = False) -> str:
     return f"{color}{text}{RESET}"
 
 
+_ip_cache = None
+
 def get_ip_info():
     """Fetch public IP and Geo location with multi-layered fallback for maximum accuracy."""
+    global _ip_cache
+    if _ip_cache is not None:
+        return _ip_cache
     providers = [
         ("http://ip-api.com/json/?fields=status,country,city,query", lambda d: (d.get('query'), f"{d.get('city')}, {d.get('country')}")),
         ("https://ipinfo.io/json", lambda d: (d.get('ip'), f"{d.get('city')}, {d.get('country')}")),
@@ -319,16 +324,18 @@ def get_ip_info():
 
     for url, parser in providers:
         try:
-            with urllib.request.urlopen(url, timeout=3) as response:
+            with urllib.request.urlopen(url, timeout=1) as response:
                 data = json.loads(response.read().decode())
                 ip, geo = parser(data)
                 if ip and geo and 'None' not in geo and '?' not in geo:
                     geo = geo.replace(', None', '').replace('Unknown, ', '')
-                    return {'ip': ip, 'geo': geo}
+                    _ip_cache = {'ip': ip, 'geo': geo}
+                    return _ip_cache
         except Exception:
             continue
 
-    return {'ip': 'Offline/VPN', 'geo': 'Unknown Location'}
+    _ip_cache = {'ip': 'Offline/VPN', 'geo': 'Unknown Location'}
+    return _ip_cache
 
 
 def detect_wifi_adapter():

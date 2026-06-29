@@ -31,6 +31,18 @@ var (
 	}
 )
 
+func preferIPv4(ips []net.IP) net.IP {
+	for _, ip := range ips {
+		if ip.To4() != nil {
+			return ip
+		}
+	}
+	if len(ips) > 0 {
+		return ips[0]
+	}
+	return nil
+}
+
 func resolveHostCached(host string) (string, error) {
 	if ip := net.ParseIP(host); ip != nil {
 		return host, nil
@@ -38,21 +50,33 @@ func resolveHostCached(host string) (string, error) {
 	if val, ok := dnsCache.Load(host); ok {
 		entry := val.(*dnsCacheEntry)
 		if time.Now().Before(entry.expiry) {
-			if len(entry.ips) > 0 {
-				return entry.ips[0].String(), nil
+			ip := preferIPv4(entry.ips)
+			if ip != nil {
+				return ip.String(), nil
 			}
 		}
 	}
-	ips, err := net.LookupIP(host)
-	if err != nil || len(ips) == 0 {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	r := &net.Resolver{PreferGo: false}
+	ipas, err := r.LookupIPAddr(ctx, host)
+	if err != nil || len(ipas) == 0 {
 		dnsCache.Store(host, &dnsCacheEntry{expiry: time.Now().Add(30 * time.Second)})
 		return host, err
 	}
+	ipList := make([]net.IP, len(ipas))
+	for i, ipa := range ipas {
+		ipList[i] = ipa.IP
+	}
 	dnsCache.Store(host, &dnsCacheEntry{
-		ips:    ips,
+		ips:    ipList,
 		expiry: time.Now().Add(5 * time.Minute),
 	})
-	return ips[0].String(), nil
+	ip := preferIPv4(ipList)
+	if ip != nil {
+		return ip.String(), nil
+	}
+	return ipList[0].String(), nil
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -103,22 +127,91 @@ func classifyDialError(err error) string {
 	if err == nil {
 		return "open"
 	}
-	if ne, ok := err.(net.Error); ok && ne.Timeout() {
-		return "filtered"
-	}
 	msg := strings.ToLower(err.Error())
-	if strings.Contains(msg, "refused") || strings.Contains(msg, "actively refused") ||
-		strings.Contains(msg, "connection reset") {
+
+	// ── CLOSED: Port actively refuses connection ──
+	if strings.Contains(msg, "refused") || strings.Contains(msg, "actively refused") {
 		return "closed"
 	}
+
+	// ── CLOSED: Connection reset by peer (port is up but service crashed/closed) ──
+	if strings.Contains(msg, "connection reset") || strings.Contains(msg, "reset by peer") ||
+		strings.Contains(msg, "broken pipe") {
+		// Double-check with a quick timeout: if it resets fast, it's closed
+		return "closed"
+	}
+
+	// ── FILTERED: Firewall dropped/discarded packet (timeout) ──
+	if ne, ok := err.(net.Error); ok && ne.Timeout() {
+		// Timeout strongly suggests firewall silently dropping
+		return "filtered"
+	}
+
+	// ── FILTERED: No route to host / network unreachable ──
 	if strings.Contains(msg, "no route") || strings.Contains(msg, "unreachable") ||
 		strings.Contains(msg, "host is down") || strings.Contains(msg, "network unreachable") {
 		return "filtered"
 	}
-	if strings.Contains(msg, "icmp") {
-		return "closed"
+
+	// ── FILTERED: ICMP admin-prohibited ──
+	if strings.Contains(msg, "icmp") && (strings.Contains(msg, "prohibited") ||
+		strings.Contains(msg, "admin") || strings.Contains(msg, "filter")) {
+		return "filtered"
 	}
+
+	// ── FILTERED: i/o timeout (general network issue) ──
+	if strings.Contains(msg, "i/o timeout") {
+		return "filtered"
+	}
+
+	// Default: closed (conservative — assume closed unless clear filtering evidence)
 	return "closed"
+}
+
+// QuickScanPort — Ultra-fast single-pass TCP scan (no retry)
+// Used for mass scan remaining ports. Distinguishes:
+//   - OPEN: connect succeeds
+//   - CLOSED: RST received fast (< 50ms elapsed)
+//   - FILTERED: timeout or ICMP unreachable
+func QuickScanPort(host string, port int, timeoutMs int) PortResult {
+	if timeoutMs < 50 {
+		timeoutMs = 80
+	}
+	if timeoutMs > 500 {
+		timeoutMs = 150
+	}
+	ip, err := resolveHostCached(host)
+	if err != nil {
+		return PortResult{Port: port, State: "filtered", Protocol: "tcp"}
+	}
+	address := net.JoinHostPort(ip, fmt.Sprintf("%d", port))
+	start := time.Now()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutMs)*time.Millisecond)
+	defer cancel()
+	dialer := getDialer(time.Duration(timeoutMs) * time.Millisecond)
+	conn, err := dialer.DialContext(ctx, "tcp", address)
+	elapsed := time.Since(start)
+	if err == nil {
+		conn.Close()
+		banner := GrabBannerByHost(host, port, timeoutMs/2)
+		service, version := IdentifyService(port, banner, host)
+		return PortResult{
+			Port: port, State: "open", Protocol: "tcp",
+			Service: service, Banner: banner, Version: version,
+		}
+	}
+	state := classifyDialError(err)
+	// Correction: if connection reset very fast (< 5ms), it's definitely closed
+	// If the error was a timeout but elapsed is very short, still filtered
+	if state == "filtered" && elapsed < 50*time.Millisecond {
+		// Fast failure with timeout error could be kernel-level rejection
+		// Check if it's specifically a refused error
+		msg := strings.ToLower(err.Error())
+		if strings.Contains(msg, "refused") || strings.Contains(msg, "connection reset") {
+			return PortResult{Port: port, State: "closed", Protocol: "tcp", Reason: "fast-refused"}
+		}
+	}
+	return PortResult{Port: port, State: state, Protocol: "tcp", Reason: fmt.Sprintf("%s-in-%v", state, elapsed.Round(time.Millisecond))}
 }
 
 // ScanPort — TCP connect scan with full banner + service detection
@@ -134,38 +227,81 @@ func scanPortWithContext(ctx context.Context, host string, port int, timeoutMs i
 		return PortResult{Port: port, State: "filtered", Protocol: "tcp"}, false
 	}
 	address := net.JoinHostPort(ip, fmt.Sprintf("%d", port))
+
+	// ── Try 1: Standard dial ──
 	dialer := getDialer(time.Duration(timeoutMs) * time.Millisecond)
 	conn, err := dialer.DialContext(ctx, "tcp", address)
-	if err != nil {
-		state := classifyDialError(err)
-		if state == "filtered" && timeoutMs > 500 {
-			dialer2 := getDialer(time.Duration(timeoutMs/2) * time.Millisecond)
-			conn2, err2 := dialer2.DialContext(ctx, "tcp", address)
-			if err2 == nil {
-				conn2.Close()
-				return PortResult{Port: port, State: "open", Protocol: "tcp"}, true
-			}
-			state = classifyDialError(err2)
+	if err == nil {
+		// Connected → OPEN
+		defer conn.Close()
+		banner := GrabBanner(conn, timeoutMs, port, host)
+		service, version := IdentifyService(port, banner, host)
+		if version == "" && banner != "" {
+			version = ExtractVersion(service, banner)
 		}
-		return PortResult{Port: port, State: state, Protocol: "tcp", Reason: classifyDialError(err)}, false
-	}
-	defer conn.Close()
-
-	banner := GrabBanner(conn, timeoutMs, port, host)
-	service, version := IdentifyService(port, banner, host)
-
-	if version == "" && banner != "" {
-		version = ExtractVersion(service, banner)
+		return PortResult{
+			Port: port, State: "open", Protocol: "tcp",
+			Service: service, Banner: banner, Version: version,
+		}, true
 	}
 
-	return PortResult{
-		Port:     port,
-		State:    "open",
-		Protocol: "tcp",
-		Service:  service,
-		Banner:   banner,
-		Version:  version,
-	}, true
+	firstState := classifyDialError(err)
+
+	// ── Try 2: Quick retry with shorter timeout to confirm ──
+	// If first attempt timed out (filtered), a quick retry helps distinguish
+	// actual firewall drop from transient network delay
+	if firstState == "filtered" {
+		quickTimeout := timeoutMs / 3
+		if quickTimeout < 200 {
+			quickTimeout = 200
+		}
+		quickCtx, quickCancel := context.WithTimeout(context.Background(), time.Duration(quickTimeout)*time.Millisecond)
+		defer quickCancel()
+		dialer2 := getDialer(time.Duration(quickTimeout) * time.Millisecond)
+		conn2, err2 := dialer2.DialContext(quickCtx, "tcp", address)
+		if err2 == nil {
+			conn2.Close()
+			// Connected on retry → OPEN
+			banner := GrabBannerByHost(host, port, quickTimeout)
+			service, version := IdentifyService(port, banner, host)
+			return PortResult{
+				Port: port, State: "open", Protocol: "tcp",
+				Service: service, Banner: banner, Version: version,
+			}, true
+		}
+		retryState := classifyDialError(err2)
+		if retryState == "closed" {
+			// Second attempt got refused — first was just slow, port is closed
+			return PortResult{Port: port, State: "closed", Protocol: "tcp", Reason: "refused-on-retry"}, false
+		}
+		// Both attempts timed out → confirmed filtered
+		return PortResult{Port: port, State: "filtered", Protocol: "tcp", Reason: "timeout-x2"}, false
+	}
+
+	// ── Try 3: If first said closed, do one more quick check ──
+	if firstState == "closed" {
+		quickTimeout := timeoutMs / 2
+		if quickTimeout < 150 {
+			quickTimeout = 150
+		}
+		quickCtx, quickCancel := context.WithTimeout(context.Background(), time.Duration(quickTimeout)*time.Millisecond)
+		defer quickCancel()
+		dialer3 := getDialer(time.Duration(quickTimeout) * time.Millisecond)
+		conn3, err3 := dialer3.DialContext(quickCtx, "tcp", address)
+		if err3 == nil {
+			conn3.Close()
+			banner := GrabBannerByHost(host, port, quickTimeout)
+			service, version := IdentifyService(port, banner, host)
+			return PortResult{
+				Port: port, State: "open", Protocol: "tcp",
+				Service: service, Banner: banner, Version: version,
+			}, true
+		}
+		// Confirmed closed
+		return PortResult{Port: port, State: "closed", Protocol: "tcp", Reason: classifyDialError(err3)}, false
+	}
+
+	return PortResult{Port: port, State: firstState, Protocol: "tcp", Reason: firstState}, false
 }
 
 // ScanUDP — UDP port scanner with ICMP error analysis
@@ -400,6 +536,13 @@ func GrabBanner(conn net.Conn, timeoutMs int, port int, host string) string {
 		n, err := conn.Read(buffer)
 		if err == nil && n > 0 {
 			return cleanBanner(string(buffer[:n]))
+		}
+	}
+
+	// SSL ports: skip TCP probe, go direct to TLS handshake
+	if isSSLPort(port) {
+		if sslBanner := grabSSLBanner(host, port, timeoutMs); sslBanner != "" {
+			return "[SSL]: " + sslBanner
 		}
 	}
 
@@ -944,29 +1087,19 @@ func GrabBanner(conn net.Conn, timeoutMs int, port int, host string) string {
 		return cleanBanner(string(buffer[:n]))
 	}
 
-	// ── PHASE 3: Second read with small delay ─────────────────────
-	time.Sleep(150 * time.Millisecond)
-	conn.SetReadDeadline(time.Now().Add(time.Duration(readMs/2) * time.Millisecond))
+	// ── PHASE 3: Extended read (no fixed sleep) ──────────────────
+	conn.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
 	n, err = conn.Read(buffer)
 	if err == nil && n > 0 {
 		return cleanBanner(string(buffer[:n]))
 	}
 
-	// ── PHASE 4: Heuristic CRLF kick ─────────────────────────────
+	// ── PHASE 4: Heuristic CRLF kick + quick read ────────────────
 	conn.Write([]byte("\r\n\r\n"))
-	time.Sleep(200 * time.Millisecond)
-	conn.SetReadDeadline(time.Now().Add(1 * time.Second))
+	conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
 	n, err = conn.Read(buffer)
 	if err == nil && n > 0 {
 		return "[HEURISTIC]: " + cleanBanner(string(buffer[:n]))
-	}
-
-	// ── PHASE 5: TLS/SSL deep probe ──────────────────────────────
-	if isSSLPort(port) {
-		sslBanner := grabSSLBanner(host, port, timeoutMs)
-		if sslBanner != "" {
-			return "[SSL]: " + sslBanner
-		}
 	}
 
 	return ""

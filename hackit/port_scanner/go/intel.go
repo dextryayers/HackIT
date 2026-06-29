@@ -34,28 +34,15 @@ func GetNetworkIntel(host string) IntelInfo {
 		ASN:     "N/A",
 	}
 
-	// 1. Multi-Source DNS Resolution (Prefer IPv4)
-	ips, err := net.LookupIP(host)
+	// 1. Multi-Source DNS Resolution (Prefer IPv4, CGO resolver, 3s timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	r := &net.Resolver{PreferGo: false}
+	ips, err := r.LookupHost(ctx, host)
 	if err == nil {
-		// Add IPv4 first, then IPv6
 		for _, ip := range ips {
-			if ip.To4() != nil {
-				intel.DNS = append(intel.DNS, ip.String())
-			}
-		}
-		for _, ip := range ips {
-			if ip.To4() == nil {
-				intel.DNS = append(intel.DNS, ip.String())
-			}
-		}
-	} else {
-		// Fallback: system-level resolution using net.DefaultResolver
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		ipAddrs, err := net.DefaultResolver.LookupIPAddr(ctx, host)
-		if err == nil {
-			for _, addr := range ipAddrs {
-				intel.DNS = append(intel.DNS, addr.IP.String())
+			if net.ParseIP(ip) != nil {
+				intel.DNS = append(intel.DNS, ip)
 			}
 		}
 	}
@@ -80,7 +67,7 @@ func GetNetworkIntel(host string) IntelInfo {
 		// Use ip-api.com for GeoIP and ASN (Fast and No-Auth required for basic info)
 		url := fmt.Sprintf("http://ip-api.com/json/%s?fields=status,message,country,countryCode,regionName,city,zip,isp,org,as,query", ip)
 
-		client := &http.Client{Timeout: 3 * time.Second}
+		client := &http.Client{Timeout: 1 * time.Second}
 		resp, err := client.Get(url)
 		if err == nil {
 			defer resp.Body.Close()

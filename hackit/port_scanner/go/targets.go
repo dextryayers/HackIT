@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"math/rand"
 	"net"
@@ -158,17 +159,22 @@ func resolveHost(host string) (string, error) {
 	if ip := net.ParseIP(host); ip != nil {
 		return host, nil
 	}
-	ips, err := net.LookupIP(host)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	r := &net.Resolver{PreferGo: false}
+	ips, err := r.LookupIPAddr(ctx, host)
 	if err != nil {
 		return host, err
 	}
-	for _, ip := range ips {
-		if ip.To4() != nil {
-			return ip.String(), nil
+	for _, ipa := range ips {
+		if ipa.IP.To4() != nil {
+			return ipa.IP.String(), nil
 		}
 	}
-	// Fallback to first IP (likely IPv6-only)
-	return ips[0].String(), nil
+	if len(ips) > 0 {
+		return ips[0].IP.String(), nil
+	}
+	return host, fmt.Errorf("no IP found for %s", host)
 }
 
 // ResolveTargets resolves all targets to IP addresses

@@ -50,10 +50,10 @@ def _init_profiles():
     _BUILTIN_PROFILES = {
         'quick': Profile(
             name='Quick',
-            description='Fast scan of top 100 common ports',
+            description='Fast scan of top 100 common ports (nmap-style)',
             workers=200,
-            timeout_ms=500,
-            scan_mode='syn',
+            timeout_ms=1000,
+            scan_mode='connect',
             stages=['tcp_scan', 'service_detect'],
             engines=['go'],
             adaptive=True,

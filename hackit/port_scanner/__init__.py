@@ -229,39 +229,185 @@ TOP_100_PORTS = [
 # QUICK FALLBACK SCANNER (pure Python, no Go required)
 # ─────────────────────────────────────────────────────────────────
 
+def _classify_timeout_err(err):
+    err_str = str(err).lower()
+    if 'refused' in err_str or 'actively refused' in err_str or 'connection reset' in err_str:
+        return "closed"
+    if 'timeout' in err_str or 'timed out' in err_str:
+        return "filtered"
+    if 'unreachable' in err_str or 'no route' in err_str or 'host is down' in err_str:
+        return "filtered"
+    if 'network is unreachable' in err_str:
+        return "filtered"
+    return "filtered"
+
+_GREETING_PORTS = {21, 22, 25, 110, 143, 587, 993, 995, 465, 3306, 5432, 6379, 27017,
+                   2222, 2223, 3389, 5900, 5901, 5902, 8443, 9443, 2083, 2087, 2096, 636, 853, 5986}
+_SSL_PORTS = {443, 8443, 9443, 2083, 2087, 2096, 7443, 993, 995, 465, 636, 853, 5986, 990}
+_HTTP_PORTS = {80, 8080, 8000, 8008, 8888, 3000, 4000, 5000, 9000,
+               8069, 9090, 8200, 8500, 10000, 5000, 3001, 8001, 8081,
+               3001, 4001, 7443, 9443, 4848, 9080, 9443}
+
+_PROBES = {
+    21: b"SYST\r\n",
+    25: b"EHLO hackit.local\r\n",
+    110: b"CAPA\r\n",
+    143: b"A1 CAPABILITY\r\n",
+    587: b"EHLO hackit\r\n",
+    6379: b"INFO server\r\n",
+    5432: bytes([0, 0, 0, 8, 4, 210, 22, 47]),
+    27017: bytes([0x3f, 0x00, 0x00, 0x00, 0x01]),
+    11211: b"stats\r\n",
+    22: b"SSH-2.0-hackit\r\n",
+    23: b"\r\n",
+    161: b"\x30\x26\x02\x01\x01\x04\x06public\xa0\x19\x02\x02\x1e\x0f\x02\x01\x00\x02\x01\x00\x30\x0b\x30\x09\x06\x05\x2b\x06\x01\x02\x01\x01\x05\x00",
+    123: b"\x1b\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00",
+    389: b"\x30\x0c\x02\x01\x01\x60\x07\x02\x01\x03\x04\x00\x80\x00",
+    3306: bytes([0x0a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]),
+    3389: b"\x03\x00\x00\x13\x0e\xe0\x00\x00\x00\x00\x00\x01\x00\x08\x00\x00\x00\x00\x00\x00\x00",
+    5900: b"RFB 003.003\n",
+    9200: b"",
+    8080: b"",
+    8443: b"",
+    3000: b"",
+}
+
+def _extract_banner_info(data, service_name=""):
+    """Extract server info, version, and service from raw banner."""
+    result = []
+    for line in data.split('\n')[:10]:
+        ll = line.lower().strip()
+        if ll.startswith('server:') or ll.startswith('x-powered-by:') or ll.startswith('www-authenticate:'):
+            result.append(line.strip())
+    if not result and data.strip():
+        first = data.split('\n')[0].strip()
+        if first:
+            result.append(first[:200])
+    return " | ".join(result) if result else data.strip()[:200]
+
+def _grab_banner_py(sock, port, host, timeout_val):
+    """Protocol-specific banner grabbing for Python fallback."""
+    import ssl
+    sock.settimeout(min(timeout_val + 0.5, 3.0))
+
+    # ── Greeting-first protocols ──
+    if port in _GREETING_PORTS and port not in _SSL_PORTS:
+        try:
+            sock.settimeout(1.0)
+            greet = sock.recv(4096)
+            if greet:
+                raw = greet.decode(errors='ignore').strip()[:200]
+                if port == 22 and raw:
+                    return raw
+                if port == 21 and raw:
+                    return raw
+                return raw
+        except:
+            pass
+        sock.settimeout(min(timeout_val + 0.5, 3.0))
+
+    # ── SSL/TLS ports ──
+    if port in _SSL_PORTS:
+        try:
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            ss = ctx.wrap_socket(sock, server_hostname=host)
+            ss.settimeout(2.0)
+            if port in (443, 8443, 9443, 2083, 2087, 2096, 7443, 3000, 5000, 8000, 8080, 9090):
+                req = f"GET / HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"
+            elif port in (993, 143):
+                req = b"A1 CAPABILITY\r\n"
+            elif port in (995, 110):
+                req = b"CAPA\r\n"
+            elif port in (465, 587):
+                req = f"EHLO {host}\r\n".encode()
+            elif port == 636:
+                req = b"\x30\x0c\x02\x01\x01\x60\x07\x02\x01\x03\x04\x00\x80\x00"
+            else:
+                req = b"\r\n\r\n"
+            ss.send(req if isinstance(req, bytes) else req.encode())
+            data = ss.recv(4096).decode(errors='replace')
+            info = []
+            cert = ss.getpeercert(binary_form=False) or {}
+            if 'subject' in cert:
+                for item in cert['subject']:
+                    if item[0][0] == 'commonName':
+                        info.append(f"CN={item[0][1]}")
+            if 'subjectAltName' in cert:
+                sans = [s[1] for s in cert['subjectAltName'] if s[0] == 'DNS'][:3]
+                if sans:
+                    info.append(f"SANs={','.join(sans)}")
+            if 'version' in cert:
+                info.append(f"TLSv1.{cert['version']-1}" if cert['version'] > 1 else "TLSv1")
+            if data.upper().startswith("HTTP/"):
+                info.append(data.split('\n')[0].strip())
+            for line in data.split('\n'):
+                ll = line.lower().strip()
+                if ll.startswith('server:') or ll.startswith('x-powered-by:'):
+                    info.append(line.strip())
+            return " | ".join(info) if info else "(SSL connected)"
+        except:
+            pass
+
+    # ── HTTP probes ──
+    if port in _HTTP_PORTS and port not in _SSL_PORTS:
+        try:
+            req = f"GET / HTTP/1.0\r\nHost: {host}\r\n\r\n"
+            sock.send(req.encode())
+            data = sock.recv(4096).decode(errors='replace')
+            return _extract_banner_info(data)
+        except:
+            pass
+
+    # ── Protocol-specific probes ──
+    if port in _PROBES:
+        probe = _PROBES[port]
+        if probe:
+            try:
+                sock.send(probe)
+            except:
+                pass
+        try:
+            sock.settimeout(max(timeout_val, 1.0))
+            data = sock.recv(4096)
+            if data:
+                raw = data.decode(errors='ignore').strip()
+                if raw:
+                    lines = [l.strip() for l in raw.split('\n') if l.strip()]
+                    return lines[0][:200]
+        except:
+            pass
+
+    # ── Generic probe ──
+    try:
+        sock.send(b"\r\n\r\n")
+        data = sock.recv(1024).decode(errors='ignore').strip()
+        if data:
+            return data[:200]
+    except:
+        pass
+
+    return ""
+
 def fast_port_scan(target, port_range="1-1024", workers=200, timeout=1.5):
-    """High-performance pure-Python fallback scanner — deduplicated."""
+    """High-performance pure-Python scanner — detects OPEN/CLOSED/FILTERED accurately."""
     try:
         if '-' in port_range:
             start_port, end_port = map(int, port_range.split('-'))
+            ports = list(range(start_port, end_port + 1))
         elif ',' in port_range:
-            ports = [int(p) for p in port_range.split(',')]
+            ports = sorted(set(int(p.strip()) for p in port_range.split(',') if p.strip()))
             start_port, end_port = min(ports), max(ports)
         else:
             start_port = end_port = int(port_range)
+            ports = [start_port]
     except Exception:
         start_port, end_port = 1, 1024
+        ports = list(range(1, 1025))
 
     results = []
     lock = threading.Lock()
-
-    PROBE_CACHE = {
-        21: b"SYST\r\n",
-        25: b"HELO hackit.local\r\n",
-        80: lambda h: f"GET / HTTP/1.0\r\nHost: {h}\r\n\r\n".encode(),
-        110: b"CAPA\r\n",
-        143: b"A1 CAPABILITY\r\n",
-        443: b"",
-        587: b"EHLO hackit\r\n",
-        3306: b"",
-        5432: bytes([0,0,0,8,4,210,22,47]),
-        6379: b"INFO\r\n",
-        8080: lambda h: f"GET / HTTP/1.0\r\nHost: {h}\r\n\r\n".encode(),
-        8443: b"",
-        11211: b"stats\r\n",
-        27017: bytes([0x3f,0x00,0x00,0x00,0x01,0x00,0x00,0x00]),
-    }
-    import ssl
 
     resolved = target
     try:
@@ -269,95 +415,75 @@ def fast_port_scan(target, port_range="1-1024", workers=200, timeout=1.5):
     except Exception:
         pass
 
-    def grab_banner(s, port):
-        nonlocal resolved
-        try:
-            s.settimeout(max(timeout, 2.0))
-            if port in (443, 8443, 9443, 2083, 2087, 2096, 7443) or str(port).endswith('443'):
-                try:
-                    ctx = ssl.create_default_context()
-                    ctx.check_hostname = False
-                    ctx.verify_mode = ssl.CERT_NONE
-                    ss = ctx.wrap_socket(s, server_hostname=resolved)
-                    req = f"GET / HTTP/1.1\r\nHost: {resolved}\r\nConnection: close\r\n\r\n"
-                    ss.send(req.encode())
-                    banner = ss.recv(4096).decode(errors='replace')
-                    cn = ""
-                    if 'subject' in (cert := ss.getpeercert(binary_form=False) or {}):
-                        for item in cert['subject']:
-                            if item[0][0] == 'commonName':
-                                cn = item[0][1]
-                    for line in banner.split('\n'):
-                        ll = line.lower()
-                        if ll.startswith('server:') or ll.startswith('x-powered-by:'):
-                            return f"[SSL: {cn}] {line.strip()}"
-                    if banner.upper().startswith("HTTP/"):
-                        return f"[SSL: {cn}] {banner.split(chr(10))[0].strip()}"
-                    return f"[SSL: {cn}]" if cn else "(SSL connected)"
-                except Exception:
-                    return "(SSL)"
-
-            if port in (21, 22, 25, 110, 143, 587, 3306, 5432):
-                s.settimeout(0.5)
-                try:
-                    greet = s.recv(1024).decode(errors='ignore').strip()
-                    if greet: return greet.split('\n')[0].strip()
-                except: pass
-                s.settimeout(max(timeout, 2.0))
-
-            probe = PROBE_CACHE.get(port, b"")
-            probe_bytes = probe(resolved) if callable(probe) else probe
-            if probe_bytes:
-                s.send(probe_bytes)
-            banner = b""
-            try:
-                for _ in range(2):
-                    chunk = s.recv(4096)
-                    if not chunk: break
-                    banner += chunk
-                    if b"\n" in chunk: break
-            except: pass
-            if not banner and not probe_bytes:
-                s.send(b"\r\n\r\n")
-                try: banner = s.recv(1024)
-                except: pass
-            if not banner: return ""
-            b_str = banner.decode(errors='replace').strip()
-            if "HTTP/" in b_str.upper():
-                svrs = [ln.strip() for ln in b_str.split('\n')
-                        if ln.lower().startswith('server:') or ln.lower().startswith('x-powered-by:')]
-                return " | ".join(svrs) if svrs else b_str.split('\n')[0].strip()
-            for line in b_str.split('\n'):
-                line = line.strip()
-                if len(line) > 3 and any(c.isalnum() for c in line):
-                    return line
-            return b_str[:80]
-        except Exception:
-            return ""
-
     def scan_port(port):
+        s = None
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             s.settimeout(timeout)
-            if s.connect_ex((resolved, port)) == 0:
-                service = COMMON_PORTS.get(port, 'UNKNOWN')
-                banner = grab_banner(s, port)
-                with lock:
-                    results.append({"port": port, "service": service,
-                                    "version": banner, "banner": banner,
-                                    "status": "open", "col": "green"})
-            s.close()
-        except Exception:
-            pass
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            start_t = _time.time()
+            err = s.connect_ex((resolved, port))
+            elapsed = _time.time() - start_t
 
-    ports = list(range(start_port, end_port + 1))
+            if err == 0:
+                service = COMMON_PORTS.get(port, 'UNKNOWN')
+                banner = _grab_banner_py(s, port, resolved, timeout)
+                version = banner[:100] if banner else ''
+                with lock:
+                    results.append({
+                        "port": port,
+                        "service": service,
+                        "version": version,
+                        "banner": banner,
+                        "status": "open",
+                    })
+            else:
+                errno_str = os.strerror(err) if err > 0 else str(err)
+                err_lower = errno_str.lower() if errno_str else ''
+
+                if err == 111 or err == 61 or 'refused' in err_lower:
+                    status = "closed"
+                elif err == 110 or err == 60 or 'timeout' in err_lower or elapsed >= timeout * 0.9:
+                    status = "filtered"
+                elif err == 113 or 'unreachable' in err_lower or 'no route' in err_lower:
+                    status = "filtered"
+                elif err == 101 or 'network is unreachable' in err_lower:
+                    status = "filtered"
+                elif err in (103, 104) or 'connection reset' in err_lower:
+                    status = "closed"
+                else:
+                    status = "filtered" if elapsed >= timeout * 0.7 else "closed"
+
+                service = COMMON_PORTS.get(port, 'UNKNOWN')
+                with lock:
+                    results.append({
+                        "port": port,
+                        "service": service,
+                        "status": status,
+                        "banner": "",
+                        "version": "",
+                    })
+        except Exception:
+            with lock:
+                results.append({
+                    "port": port,
+                    "service": COMMON_PORTS.get(port, 'UNKNOWN'),
+                    "status": "filtered",
+                    "banner": "",
+                    "version": "",
+                })
+        finally:
+            if s:
+                try:
+                    s.close()
+                except:
+                    pass
+
     total = len(ports)
     progress, task, stop_progress = create_progress_bar("Port scan", total, transient=True)
-    completed = 0
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {executor.submit(scan_port, p): p for p in ports}
         for f in as_completed(futures):
-            completed += 1
             if progress:
                 update_progress(progress, task)
     stop_progress()
@@ -419,72 +545,68 @@ def get_risk(port, service, banner):
 # SCAN RESULT OUTPUT ENGINE
 # ─────────────────────────────────────────────────────────────────
 
-def render_port_table(open_results, show_risk=False):
-    """Render a premium port results table with perfect alignment."""
-    if not open_results:
-        click.echo(_colored("\n  [!] No open ports detected.", YELLOW))
+def render_port_table(port_results, show_risk=False, timeline=None, open_only=False):
+    """Render port results in format: PORT : STATUS [color] : BANNER VERSION"""
+    if not port_results:
         return
 
-    # Header
-    click.echo("\n" + _colored("  ┌───────┬──────────┬───────────────┬───────────────────────────────────────────┐", B_WHITE))
-    if show_risk:
-        click.echo(_colored("  │ PORT  │  STATE   │ SERVICE       │ BANNER & RISK ANALYSIS                    │", B_WHITE))
-    else:
-        click.echo(_colored("  │ PORT  │  STATE   │ SERVICE       │ BANNER & VERSION DETECTED                 │", B_WHITE))
-    click.echo(_colored("  ├───────┼──────────┼───────────────┼───────────────────────────────────────────┤", B_WHITE))
+    click.echo()
+    header = _colored("  PORT NUMBER : STATUS [OPEN/CLOSED/FILTERED] : BANNER / VERSION", B_WHITE)
+    click.echo(header)
+    click.echo(_colored("  " + "─" * 70, DIM))
 
-    for p in sorted(open_results, key=lambda x: x.get('port', 0)):
+    for p in sorted(port_results, key=lambda x: x.get('port', 0)):
         port_num = p.get('port', 0)
         if port_num == 0:
             continue
 
         st = p.get('status', 'unknown').lower()
-        service = p.get('service', p.get('service', 'unknown'))
-        banner = p.get('banner', p.get('version', ''))
 
-        # State coloring (Exactly 8 visual chars to fit 10-char column with padding)
         if st == 'open':
-            state_str = "\x1b[32m🟢 open \x1b[0m"
-        elif st in ['filtered', 'forbidden']:
-            state_str = "\x1b[33m🟡 filt \x1b[0m"
+            state_colored = _colored("OPEN    ", B_GREEN, bold=True)
+        elif st in ('filtered', 'forbidden'):
+            state_colored = _colored("FILTERED", B_YELLOW, bold=True)
+        elif st == 'closed':
+            state_colored = _colored("CLOSED  ", B_RED, bold=True)
         else:
-            state_str = "\x1b[31m🔴 close\x1b[0m"
+            state_colored = _colored(f"{st:<8}", DIM)
 
-        # Risk calculation
-        if show_risk:
-            score, risk_level, _ = get_risk(port_num, service, banner)
-            raw_risk_len = _vis_len(risk_level)
-            risk_str = f"{risk_level} ({score})"
-            risk_vis_len = raw_risk_len + len(f" ({score})")
-            
-            avail = 41 - risk_vis_len - 3 # " | "
-            if banner and avail > 0:
-                clean_banner = str(banner).replace('\n', ' ').replace('\r', '').strip()
-                b_trunc = clean_banner[:avail]
-                if len(clean_banner) > avail:
-                    b_trunc = clean_banner[:avail-2] + ".."
-                info_str = f"{risk_str} | {_colored(b_trunc, DIM)}"
-            else:
-                info_str = risk_str
+        if open_only and st != 'open':
+            continue
+
+        banner = p.get('banner', p.get('version', ''))
+        service = p.get('service', p.get('service_probe', ''))
+        version = p.get('version', '')
+
+        banner_str = str(banner).replace('\n', ' ').replace('\r', '').strip() if banner else ''
+        # Build banner/version display
+        info_parts = []
+        if service and service not in ('unknown', 'UNKNOWN', ''):
+            info_parts.append(str(service))
+        if version:
+            info_parts.append(str(version))
+        if banner_str and banner_str not in info_parts:
+            info_parts.append(banner_str)
+
+        if info_parts:
+            info_display = _colored(" | ".join(info_parts), DIM)
         else:
-            if banner:
-                clean_banner = str(banner).replace('\n', ' ').replace('\r', '').strip()
-                b_trunc = clean_banner[:41]
-                if len(clean_banner) > 41:
-                    b_trunc = clean_banner[:39] + ".."
-                info_str = _colored(b_trunc, DIM)
-            else:
-                info_str = _colored("-", DIM)
+            info_display = _colored("-", DIM)
 
-        svc_trunc = str(service)[:13]
-        port_cell = pad_v(str(port_num), 5)
-        svc_cell  = pad_v(svc_trunc, 13)
-        inf_cell  = pad_v(info_str, 41)
-
-        line = f"  │ {port_cell} │ {state_str} │ {svc_cell} │ {inf_cell} │"
+        port_str = _colored(f"{port_num:<6}", B_WHITE, bold=True)
+        line = f"  {port_str} : {state_colored} : {info_display}"
         click.echo(line)
 
-    click.echo(_colored("  └───────┴──────────┴───────────────┴───────────────────────────────────────────┘", B_WHITE))
+    click.echo(_colored("  " + "─" * 70, DIM))
+    click.echo()
+
+    if timeline:
+        click.echo(_colored("\n  ╔═══ SCAN TIMELINE ═══════════════════════════════════════════════════════╗", B_CYAN))
+        for entry in timeline[-10:]:
+            ts = entry.get('time', '')
+            msg = entry.get('msg', '')
+            click.echo(_colored(f"  ║ {ts:<10} {msg:<58} ║", DIM))
+        click.echo(_colored("  ╚══════════════════════════════════════════════════════════════════════════╝", B_CYAN))
 
 
 def render_intel_grid(ip_addr, host_name, dns_enum, intel, os_info, mode, scan_mode, workers, tempo):
@@ -605,7 +727,7 @@ def render_intel_grid(ip_addr, host_name, dns_enum, intel, os_info, mode, scan_m
 @click.option('--profile', type=click.Choice(['quick', 'stealth', 'full', 'web', 'lan', 'comprehensive']),
               envvar='HACKIT_PROFILE', help='Scan profile (overrides ports/mode/workers)')
 @click.option('--pipeline', envvar='HACKIT_PIPELINE', help='Pipeline stages: tcp,service,os,vuln (comma-separated)')
-@click.option('--all-engines', is_flag=True, help='Run Rust+C+C++ in parallel and correlate')
+@click.option('--single-engine', is_flag=True, help='Run only Go engine (disable parallel multi-engine)')
 @click.option('--dashboard', is_flag=True, help='Show real-time live dashboard')
 
 def scan_ports(**kwargs):
@@ -624,7 +746,7 @@ def scan_ports(**kwargs):
 
       scan 10.0.0.0/24 -p 22,80,443,3389 --tempo blitz
 
-      scan 192.168.1.1 --profile full --all-engines
+      scan 192.168.1.1 --profile full
     """
     # ── No-color mode ───────────────────────────────────────────
     if kwargs.get('no_color'):
@@ -656,6 +778,13 @@ def scan_ports(**kwargs):
             click.echo('  Run: python3 hackit/port_scanner/gui.py')
         return
 
+    # ── Early target check ────────────────────────────────────────
+    target_raw = kwargs.get('target_arg') or kwargs.get('host')
+    if not target_raw and not kwargs.get('host_file') and not kwargs.get('single_engine'):
+        ctx = click.get_current_context()
+        click.echo(ctx.get_help())
+        return
+
     # ── Print premium banner ─────────────────────────────────────
     target_raw = target_arg or kwargs.get('host') or ''
     if not _quiet:
@@ -677,17 +806,21 @@ def scan_ports(**kwargs):
         except ImportError:
             click.echo(_colored("  [!] engine_profiles module not available", YELLOW))
 
-    # ── Multi-engine mode (Rust + C + C++ in parallel) ──────────
-    if kwargs.get('all_engines'):
+    # ── Multi-engine mode (ALL engines in parallel — DEFAULT) ────
+    if not kwargs.get('single_engine'):
         try:
             from .engine_orchestrator import PortOrchestrator
             from .engine_discovery import discover_engines
             engines = discover_engines()
-            click.echo(_colored(f"  [ENGINES] Found {len(engines)} available engine(s)", B_GREEN))
             orchestrator = PortOrchestrator()
-            target_raw = kwargs.get('target_arg') or kwargs.get('host')
-            ports_str = kwargs.get('ports') or 'top:100'
-            stages = kwargs.get('pipeline', '').split(',') if kwargs.get('pipeline') else ['tcp', 'service', 'os', 'vuln']
+            ports_str = kwargs.get('ports') or 'top100'
+            _STAGE_ALIASES = {
+                'tcp': 'tcp_scan', 'service': 'service_detect',
+                'os': 'os_detect', 'vuln': 'vuln_scan',
+                'discovery': 'discovery', 'enrich': 'enrich',
+            }
+            raw_stages = kwargs.get('pipeline', '').split(',') if kwargs.get('pipeline') else None
+            stages = [_STAGE_ALIASES.get(s.strip(), s.strip()) for s in raw_stages] if raw_stages else None
 
             if kwargs.get('dashboard'):
                 from .live_dashboard import Dashboard
@@ -695,22 +828,24 @@ def scan_ports(**kwargs):
                 dash.start()
                 try:
                     results = orchestrator.run_scan(target_raw, ports_str, profile_name or 'quick',
-                                                     engines=list(engines.keys()), stages=stages,
+                                                     engines=None, stages=stages,
                                                      callback=dash.update)
                 finally:
                     dash.stop()
             else:
                 results = orchestrator.run_scan(target_raw, ports_str, profile_name or 'quick',
-                                                 engines=list(engines.keys()), stages=stages)
+                                                 engines=None, stages=stages)
             if results:
-                open_ports = [p for p in results.get('ports', []) if p.get('status') == 'open']
-                render_port_table(open_ports, show_risk=kwargs.get('risk', False))
+                all_ports = results.get('results', [])
+                open_only_flag = kwargs.get('open_only', False)
+                display_ports = [p for p in all_ports if p.get('status','').lower() == 'open'] if open_only_flag else all_ports
+                render_port_table(display_ports, show_risk=kwargs.get('risk', False), open_only=open_only_flag)
             return
         except ImportError as e:
             click.echo(_colored(f"  [!] Multi-engine mode unavailable: {e}", YELLOW))
             click.echo(_colored("  [*] Falling back to Go engine...", DIM))
 
-    # ── Engine initialization ────────────────────────────────────
+    # ── Engine initialization (fallback when --single-engine) ────
     engine = get_engine()
     engine_ok = engine.available and engine.ensure_compiled()
 
@@ -835,9 +970,10 @@ def scan_ports(**kwargs):
 
     _scan_start_time = _time.time()
     _scan_count = 0
+    _scan_timeline = []
     def scan_callback(cb_type, data):
         """Real-time callback for Go engine events."""
-        nonlocal _scan_count, _scan_start_time
+        nonlocal _scan_count, _scan_start_time, _scan_timeline
         if cb_type == "status":
             msg = data.get('message', '')
             if msg and kwargs.get('verbose', 0) >= 1 and not _quiet:
@@ -851,6 +987,8 @@ def scan_ports(**kwargs):
                     service = data.get('service', 'unknown')
                     banner  = data.get('banner', data.get('version', ''))
                     _scan_count += 1
+                    elapsed_s = int(_time.time() - _scan_start_time)
+                    _scan_timeline.append({"time": f"+{elapsed_s}s", "msg": f"Port {port} open — {service}"})
 
                     if not _quiet:
                         p_str = _colored(f"{port:<5}", B_WHITE, bold=True)
@@ -955,8 +1093,9 @@ def scan_ports(**kwargs):
         grand_total += len(port_results)
 
         # ── Port table ─────────────────────────────────────────
-        display_ports = open_ports if kwargs.get('open_only') else open_ports
-        render_port_table(display_ports, show_risk=kwargs.get('risk', False))
+        open_only_flag = kwargs.get('open_only', False)
+        display_ports = open_ports if open_only_flag else port_results
+        render_port_table(display_ports, show_risk=kwargs.get('risk', False), timeline=_scan_timeline, open_only=open_only_flag)
 
         # ── Vulnerability/script results ───────────────────────
         vuln_count = 0
@@ -1049,6 +1188,14 @@ def scan_ports(**kwargs):
         click.echo(_colored("  │", B_GREEN) + pad_v(
             f"  Total Probed  : {_colored(str(len(port_results)), B_WHITE)}", 78
         ) + _colored("│", B_GREEN))
+        if kwargs.get('risk'):
+            high_risk_ports = [p for p in open_ports
+                               if get_risk(p.get('port', 0), p.get('service', ''), p.get('banner', ''))[0] >= 40]
+            if high_risk_ports:
+                risk_ports_str = ", ".join(str(p.get('port', '')) for p in high_risk_ports[:8])
+                click.echo(_colored("  │", B_GREEN) + pad_v(
+                    f"  High Risk     : {_colored(risk_ports_str, B_RED, bold=True)}", 78
+                ) + _colored("│", B_GREEN))
         if vuln_count > 0:
             click.echo(_colored("  │", B_GREEN) + pad_v(
                 f"  Vulnerabilities: {_colored(str(vuln_count), B_RED, bold=True)}", 78
@@ -1056,6 +1203,22 @@ def scan_ports(**kwargs):
         click.echo(_colored("  │", B_GREEN) + pad_v(
             f"  Elapsed       : {_colored(str(elapsed).split('.')[0], B_CYAN)}", 78
         ) + _colored("│", B_GREEN))
+
+        # Risk breakdown per port
+        if kwargs.get('risk') and open_ports:
+            click.echo(_colored("  │", B_GREEN) + pad_v(
+                f"  {'─' * 74}", 78
+            ) + _colored("│", B_GREEN))
+            for p in sorted(open_ports, key=lambda x: x.get('port', 0))[:10]:
+                port_num = p.get('port', 0)
+                service = p.get('service', '?')
+                score, level, reasons = get_risk(port_num, service, p.get('banner', ''))
+                if score > 0:
+                    reason_str = reasons[0] if reasons else ""
+                    click.echo(_colored("  │", B_GREEN) + pad_v(
+                        f"    {_colored(str(port_num), B_WHITE):>5}  {level:<12}  {_colored(reason_str[:53], DIM)}", 76
+                    ) + _colored("  │", B_GREEN))
+
         click.echo(_colored("  └" + "─" * 78 + "┘", B_GREEN))
 
         # ── Output file saving ─────────────────────────────────

@@ -23,6 +23,10 @@ type ScanResult struct {
 	Intelligence interface{}  `json:"intelligence,omitempty"`
 }
 
+func init() {
+	os.Setenv("GODEBUG", "netdns=cgo")
+}
+
 func main() {
 	target := flag.String("target", "", "Target Host or CIDR")
 	ports := flag.String("ports", "", "Ports (comma separated or range)")
@@ -79,11 +83,20 @@ func main() {
 	resolvePolicy := flag.String("resolve", "all", "DNS resolution policy")
 	dnsServer := flag.String("dns-server", "", "Custom DNS server")
 
-	// Profiling flags
+	// Control socket
+	controlSocket := flag.String("control-socket", "", "Unix socket path for GUI control commands")
+
+	// Version / Profiling flags
+	showVersion := flag.Bool("version", false, "Show version and exit")
 	cpuProfile := flag.String("cpuprofile", "", "Write CPU profile to file")
 	memProfile := flag.String("memprofile", "", "Write memory profile to file")
 
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Printf("HackIT PortStorm v3.0.0 (Go engine)\n")
+		return
+	}
 
 	if *cpuProfile != "" {
 		f, err := os.Create(*cpuProfile)
@@ -108,6 +121,34 @@ func main() {
 			f.Close()
 		}
 	}()
+
+	// Control socket listener for GUI commands
+	if *controlSocket != "" {
+		ctrlAddr := *controlSocket
+		go func() {
+			ln, err := net.Listen("unix", ctrlAddr)
+			if err != nil {
+				return
+			}
+			defer ln.Close()
+			for {
+				conn, err := ln.Accept()
+				if err != nil {
+					return
+				}
+				go func(c net.Conn) {
+					defer c.Close()
+					var cmd struct {
+						Command string `json:"command"`
+					}
+					json.NewDecoder(c).Decode(&cmd)
+					if cmd.Command == "stop" {
+						os.Exit(0)
+					}
+				}(conn)
+			}
+		}()
+	}
 
 	if *target == "" {
 		fmt.Println(`ERROR:{"type":"error","error":"Target is required"}`)
@@ -226,11 +267,38 @@ func main() {
 
 		results := engine.Run()
 
-		// High-Accuracy IP & Infrastructure Mapping (use resolved IPv4)
-		intelInfo := GetNetworkIntel(targetIP)
 		ipAddr := targetIP
 
-		osInfo := AnalyzeOSFromResults(host, results)
+		// High-Accuracy IP & Infrastructure Mapping (only in deep/os-detect/passive mode)
+		var intelInfo IntelInfo
+		if *deep || *osDetect || *passive {
+			intelInfo = GetNetworkIntel(targetIP)
+		}
+
+		// Passive intelligence (DNS SRV/MX, CT logs, cache snoop)
+		if *passive || *deep {
+			passiveInfo := RunPassiveScan(host)
+			if len(passiveInfo.SRVRecords) > 0 || len(passiveInfo.MXRecords) > 0 {
+				if reporter != nil && !reporter.SuppressHuman {
+					fmt.Printf("\n  [PASSIVE] DNS SRV: %d records, MX: %d records, CT: %d entries\n",
+						len(passiveInfo.SRVRecords), len(passiveInfo.MXRecords), len(passiveInfo.CTLogs))
+					for _, srv := range passiveInfo.SRVRecords {
+						fmt.Printf("    SRV _%s._%s → %s:%d\n", srv.Service, srv.Proto, srv.Target, srv.Port)
+					}
+					for _, mx := range passiveInfo.MXRecords {
+						fmt.Printf("    MX %s (pref %d)\n", mx.Host, mx.Preference)
+					}
+					if len(passiveInfo.Subdomains) > 0 {
+						fmt.Printf("    Subdomains found: %d\n", len(passiveInfo.Subdomains))
+					}
+				}
+			}
+		}
+
+		var osInfo OSInfo
+		if *osDetect || *deep {
+			osInfo = AnalyzeOSFromResults(host, results)
+		}
 
 		sort.Slice(results, func(i, j int) bool {
 			return results[i].Port < results[j].Port

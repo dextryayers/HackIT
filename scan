@@ -1,0 +1,7 @@
+#!/usr/bin/env python3
+"""Shortcut to run HackIT port scan."""
+import sys
+from hackit.cli import cli
+if __name__ == '__main__':
+    sys.argv = ['hackit', 'ports', 'scan'] + sys.argv[1:]
+    sys.exit(cli())

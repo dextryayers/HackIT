@@ -62,7 +62,7 @@ func (wp *WorkerPool) worker(id int) {
 
 func (wp *WorkerPool) scanPort(host string, port int) WorkerResult {
 	start := time.Now()
-	addr := fmt.Sprintf("%s:%d", host, port)
+	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
 	conn, err := net.DialTimeout("tcp", addr, wp.timeout)
 	latency := time.Since(start).Milliseconds()
 	if err != nil {
@@ -119,23 +119,200 @@ func (wp *WorkerPool) RunBatch(host string, ports []int) []WorkerResult {
 }
 
 type AdaptivePool struct {
-	WorkerPool
-	minWorkers int
-	maxWorkers int
+	mu             sync.Mutex
+	jobs           chan ScanJob
+	results        chan WorkerResult
+	quit           chan struct{}
+	workerQuit     chan struct{}
+	wg             sync.WaitGroup
+	managerWg      sync.WaitGroup
+	counter        int64
+	timeout        time.Duration
+	minWorkers     int
+	maxWorkers     int
 	currentWorkers int32
-	loadFactor float64
+	targetWorkers  int32
+	backlogHigh    int
+	backlogLow     int
+	lastScaleTime  time.Time
+	scaleCooldown  time.Duration
+	verbose        bool
 }
 
 func NewAdaptivePool(minW, maxW, timeoutMs int) *AdaptivePool {
 	ap := &AdaptivePool{
-		minWorkers:      minW,
-		maxWorkers:      maxW,
-		currentWorkers:  int32(minW),
-		loadFactor:      1.0,
+		jobs:          make(chan ScanJob, maxW*100),
+		results:       make(chan WorkerResult, maxW*100),
+		quit:          make(chan struct{}),
+		workerQuit:    make(chan struct{}, maxW*2),
+		minWorkers:    minW,
+		maxWorkers:    maxW,
+		currentWorkers: int32(minW),
+		targetWorkers:  int32(minW),
+		timeout:       time.Duration(timeoutMs) * time.Millisecond,
+		backlogHigh:   maxW * 10,
+		backlogLow:    maxW,
+		scaleCooldown: 2 * time.Second,
+		verbose:       false,
 	}
-	wp := NewWorkerPool(minW, maxW*100, timeoutMs, false)
-	ap.WorkerPool = *wp
+
+	for i := 0; i < minW; i++ {
+		ap.wg.Add(1)
+		go ap.worker(i)
+	}
+
+	ap.managerWg.Add(1)
+	go ap.manager()
+
 	return ap
+}
+
+func (ap *AdaptivePool) worker(id int) {
+	defer ap.wg.Done()
+	for {
+		select {
+		case job := <-ap.jobs:
+			result := ap.scanPort(job.Host, job.Port)
+			ap.results <- result
+			atomic.AddInt64(&ap.counter, 1)
+		case <-ap.workerQuit:
+			return
+		case <-ap.quit:
+			return
+		}
+	}
+}
+
+func (ap *AdaptivePool) manager() {
+	defer ap.managerWg.Done()
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			ap.adjustWorkers()
+		case <-ap.quit:
+			return
+		}
+	}
+}
+
+func (ap *AdaptivePool) adjustWorkers() {
+	ap.mu.Lock()
+	defer ap.mu.Unlock()
+
+	backlog := len(ap.jobs)
+	current := atomic.LoadInt32(&ap.currentWorkers)
+	target := current
+
+	if backlog > ap.backlogHigh && current < int32(ap.maxWorkers) {
+		scaleBy := (backlog / ap.backlogHigh) + 1
+		if scaleBy > 10 {
+			scaleBy = 10
+		}
+		target = current + int32(scaleBy)
+		if target > int32(ap.maxWorkers) {
+			target = int32(ap.maxWorkers)
+		}
+	} else if backlog < ap.backlogLow && current > int32(ap.minWorkers) {
+		if time.Since(ap.lastScaleTime) > ap.scaleCooldown {
+			target = current - 1
+			if target < int32(ap.minWorkers) {
+				target = int32(ap.minWorkers)
+			}
+		}
+	}
+
+	if target > current {
+		ap.lastScaleTime = time.Now()
+		atomic.StoreInt32(&ap.targetWorkers, target)
+		for i := current; i < target; i++ {
+			ap.wg.Add(1)
+			go ap.worker(int(i))
+		}
+		atomic.StoreInt32(&ap.currentWorkers, target)
+		if ap.verbose && target > current {
+			fmt.Fprintf(nil, "[adaptive] scaled up: %d → %d (backlog: %d)\n", current, target, backlog)
+		}
+	} else if target < current {
+		ap.lastScaleTime = time.Now()
+		shrink := current - target
+		for i := int32(0); i < shrink; i++ {
+			ap.workerQuit <- struct{}{}
+		}
+		atomic.StoreInt32(&ap.currentWorkers, target)
+		atomic.StoreInt32(&ap.targetWorkers, target)
+	}
+}
+
+func (ap *AdaptivePool) scanPort(host string, port int) WorkerResult {
+	start := time.Now()
+	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
+	conn, err := net.DialTimeout("tcp", addr, ap.timeout)
+	latency := time.Since(start).Milliseconds()
+	if err != nil {
+		return WorkerResult{
+			Port:      port,
+			State:     0,
+			LatencyMs: latency,
+		}
+	}
+	conn.SetDeadline(time.Now().Add(ap.timeout / 2))
+	conn.Close()
+	return WorkerResult{
+		Port:      port,
+		State:     1,
+		LatencyMs: latency,
+	}
+}
+
+func (ap *AdaptivePool) Submit(host string, port int) {
+	ap.jobs <- ScanJob{Port: port, Host: host}
+}
+
+func (ap *AdaptivePool) Results() chan WorkerResult {
+	return ap.results
+}
+
+func (ap *AdaptivePool) Completed() int64 {
+	return atomic.LoadInt64(&ap.counter)
+}
+
+func (ap *AdaptivePool) Stop() {
+	close(ap.quit)
+	ap.managerWg.Wait()
+	close(ap.workerQuit)
+	ap.wg.Wait()
+	close(ap.results)
+}
+
+func (ap *AdaptivePool) SubmitBatch(host string, ports []int) {
+	for _, port := range ports {
+		ap.Submit(host, port)
+	}
+}
+
+func (ap *AdaptivePool) RunBatch(host string, ports []int) []WorkerResult {
+	go ap.SubmitBatch(host, ports)
+	var results []WorkerResult
+	for i := 0; i < len(ports); i++ {
+		r := <-ap.results
+		results = append(results, r)
+	}
+	return results
+}
+
+func (ap *AdaptivePool) Backlog() int {
+	return len(ap.jobs)
+}
+
+func (ap *AdaptivePool) Workers() int {
+	return int(atomic.LoadInt32(&ap.currentWorkers))
+}
+
+func (ap *AdaptivePool) SetVerbose(v bool) {
+	ap.verbose = v
 }
 
 func ParsePorts(spec string) []int {

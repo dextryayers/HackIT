@@ -3,12 +3,13 @@
 
 import tkinter as tk
 from tkinter import ttk, filedialog, simpledialog, messagebox
-import subprocess, threading, json, os, sys, re, signal, time
+import subprocess, threading, json, os, sys, re, signal, time, socket
 from datetime import datetime
 from pathlib import Path
 from queue import Queue
 import tkinter.font as tkfont
 import tkinter.scrolledtext as scrolledtext
+import selectors, tempfile
 
 class C:
     BG1='#0d1117'; BG2='#0d1117'; CARD='#161b22'; BORD='#30363d'
@@ -1193,26 +1194,69 @@ class GUI:
 
     def _go(self,target):
         cmd=self._cmd(target)
+        sock_path = tempfile.mktemp(prefix='pstorm-', suffix='.sock', dir='/tmp')
+        cmd.extend(['--control-socket', sock_path])
         self._logf(f'$ {" ".join(cmd)}','cmd')
         self._logf(f'\u2192 Scanning {target} with all engines + NSE...')
         try:
+            self._control_sock = self._start_control_socket(sock_path)
             self.proc=subprocess.Popen(cmd,stdout=subprocess.PIPE,
                                        stderr=subprocess.PIPE,text=True,bufsize=1)
-            def _rd():
-                for line in iter(self.proc.stdout.readline,''):
-                    if not line: break
-                    line=line.strip()
-                    if line.startswith('RESULT:'): self._pr(line[7:])
-                    elif line.startswith('NSE:'): self._pn(line[4:])
-                    elif line.startswith('STATUS:'): self._ps(line[7:])
-                    elif line.startswith('ERROR:'): self._logf(f'[!] {line[6:]}','err')
-                    elif line and not line.startswith(('\x1b','\u250c','\u2502','\u251c','\u2514')): self._logf(line)
-            _rd()
-            err=self.proc.stderr.read()
-            if err.strip(): self._logf(f'[stderr] {err.strip()[:200]}','warn')
+            sel = selectors.DefaultSelector()
+            sel.register(self.proc.stdout, selectors.EVENT_READ)
+            sel.register(self.proc.stderr, selectors.EVENT_READ)
+            while self.proc.poll() is None:
+                for key, _ in sel.select(timeout=0.1):
+                    line = key.fileobj.readline()
+                    if not line:
+                        sel.unregister(key.fileobj)
+                        continue
+                    line = line.strip()
+                    if not line:
+                        continue
+                    if key.fileobj is self.proc.stdout:
+                        if line.startswith('RESULT:'): self._pr(line[7:])
+                        elif line.startswith('NSE:'): self._pn(line[4:])
+                        elif line.startswith('STATUS:'): self._ps(line[7:])
+                        elif line.startswith('ERROR:'): self._logf(f'[!] {line[6:]}','err')
+                        elif line and not line.startswith(('\x1b','\u250c','\u2502','\u251c','\u2514')): self._logf(line)
+                    else:
+                        if line.strip(): self._logf(f'[stderr] {line.strip()[:200]}','warn')
+            remaining_stdout = self.proc.stdout.read()
+            for line in remaining_stdout.split('\n'):
+                line = line.strip()
+                if line.startswith('RESULT:'): self._pr(line[7:])
             self.proc.wait()
-        except Exception as e: self._logf(f'[!] {e}','err')
+        except Exception as e:
+            self._logf(f'[!] {e}','err')
+        finally:
+            if hasattr(self, '_control_sock') and self._control_sock:
+                try: self._control_sock.close()
+                except: pass
+            try:
+                os.unlink(sock_path)
+            except: pass
         self._done()
+
+    def _start_control_socket(self, path):
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.bind(path)
+        s.listen(1)
+        s.settimeout(1.0)
+        return s
+
+    def _send_control(self, command):
+        if not hasattr(self, '_control_sock') or not self._control_sock:
+            return
+        try:
+            self._control_sock.settimeout(0.5)
+            conn, _ = self._control_sock.accept()
+            try:
+                conn.sendall((json.dumps({'command': command}) + '\n').encode())
+            finally:
+                conn.close()
+        except (socket.timeout, OSError):
+            pass
 
     def _fb(self,target):
         self._logf('[!] Go binary not found \u2014 Python engine','warn')
@@ -1269,6 +1313,7 @@ class GUI:
         except: pass
 
     def _stop(self):
+        self._send_control('stop')
         if self.proc: self.proc.terminate()
         self.running=0; self._logf('[!] Stopped by user','warn'); self._done()
 

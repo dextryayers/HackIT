@@ -123,6 +123,23 @@ func (cb *CBridge) SYCScan(host string, port int, timeoutMs int) PortResult {
 		return val.(PortResult)
 	}
 
+	// Prefer cgo direct call over subprocess
+	if cgo := GetCgoEngine(); cgo.IsCAvailable() {
+		args := []string{host, strconv.Itoa(port), strconv.Itoa(timeoutMs), "1", "1", "0", "0", "none", "0", "0"}
+		ret := cgo.CallCScanner("syn_scanner", args)
+		if ret == 0 {
+			result := PortResult{Port: port, State: "open"}
+			cb.cacheSet(cacheKey, result, 30*time.Second)
+			return result
+		}
+		if ret == 1 {
+			result := PortResult{Port: port, State: "closed"}
+			cb.cacheSet(cacheKey, result, 30*time.Second)
+			return result
+		}
+	}
+
+	// Fallback to subprocess
 	binary := cb.findBinary("syn_scanner")
 	if _, err := os.Stat(binary); os.IsNotExist(err) {
 		return PortResult{Port: port, State: "error", Reason: "c syn_scanner not found"}
@@ -177,6 +194,18 @@ func (cb *CBridge) TCPProbe(host string, port int, timeoutMs int) PortResult {
 		return val.(PortResult)
 	}
 
+	// Prefer cgo direct call over subprocess
+	if cgo := GetCgoEngine(); cgo.IsCAvailable() {
+		args := []string{host, strconv.Itoa(port), strconv.Itoa(timeoutMs), "1"}
+		ret := cgo.CallCScanner("scanner", args)
+		if ret == 0 {
+			result := PortResult{Port: port, State: "open"}
+			cb.cacheSet(cacheKey, result, 30*time.Second)
+			return result
+		}
+	}
+
+	// Fallback to subprocess
 	binary := cb.findBinary("scanner")
 	if _, err := os.Stat(binary); os.IsNotExist(err) {
 		return PortResult{Port: port, State: "error", Reason: "c scanner not found"}

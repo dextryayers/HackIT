@@ -75,12 +75,27 @@ func parsePorts(pStr string) []int {
 		}
 		return ports
 	}
-	if pStr == "top100" {
+	if strings.HasPrefix(pStr, "top100") {
 		count := 0
 		for k := range commonPorts {
 			ports = append(ports, k)
 			count++
 			if count >= 100 { break }
+		}
+		return unique(ports)
+	}
+	if strings.HasPrefix(pStr, "top") {
+		n := 100
+		if idx := strings.Index(pStr, ":"); idx > 0 {
+			if v, err := strconv.Atoi(pStr[idx+1:]); err == nil && v > 0 {
+				n = v
+			}
+		}
+		count := 0
+		for k := range commonPorts {
+			ports = append(ports, k)
+			count++
+			if count >= n { break }
 		}
 		return unique(ports)
 	}
