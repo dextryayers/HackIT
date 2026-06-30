@@ -1,5 +1,6 @@
 import httpx
 import json
+import re
 from models import IntelligenceFinding
 
 INTELX_BASE = "https://2.intelx.io"
@@ -17,6 +18,9 @@ SEARCH_TYPES = {
     8: "Paste",
     9: "Darknet",
     10: "PGP Key",
+    11: "Social Network",
+    12: "Credit Card",
+    13: "BTC Address",
 }
 
 LEAK_DATA_CLASSIFICATIONS = {
@@ -30,6 +34,8 @@ LEAK_DATA_CLASSIFICATIONS = {
     "paste": {"type": "Paste Leak", "severity": "High", "color": "red"},
     "darknet": {"type": "Darknet Listing", "severity": "Critical", "color": "red"},
     "domain": {"type": "Domain Info", "severity": "Medium", "color": "blue"},
+    "btc": {"type": "Cryptocurrency", "severity": "Medium", "color": "orange"},
+    "social": {"type": "Social Media", "severity": "Medium", "color": "orange"},
 }
 
 def classify_intelx_result(selector_value: str, selector_type: int) -> dict:
@@ -62,6 +68,16 @@ def classify_intelx_result(selector_value: str, selector_type: int) -> dict:
         classification["type"] = "Darknet Source"
         classification["severity"] = "Critical"
         classification["color"] = "red"
+    elif selector_type == 11:
+        classification["category"] = "social"
+        classification["type"] = "Social Network Profile"
+        classification["severity"] = "Medium"
+        classification["color"] = "orange"
+    elif selector_type == 13:
+        classification["category"] = "btc"
+        classification["type"] = "Bitcoin Address"
+        classification["severity"] = "Medium"
+        classification["color"] = "orange"
     return classification
 
 async def phonebook_search(target: str, client: httpx.AsyncClient) -> list:
@@ -148,6 +164,7 @@ async def pastebin_search(target: str, client: httpx.AsyncClient) -> list:
                 paste_title = paste.get("title", paste.get("name", ""))
                 paste_date = paste.get("date", paste.get("timestamp", ""))
                 paste_source = paste.get("source", "")
+                paste_content_preview = paste.get("content_preview", paste.get("snippet", ""))
                 if paste_id:
                     result = {
                         "value": f"{paste_title} ({paste_id[:16]})" if paste_title else paste_id[:16],
@@ -162,6 +179,8 @@ async def pastebin_search(target: str, client: httpx.AsyncClient) -> list:
                         result["value"] += f" [{paste_date}]"
                     if paste_source:
                         result["source_detail"] = paste_source
+                    if paste_content_preview:
+                        result["content"] = paste_content_preview[:200]
                     results.append(result)
             if data.get("pastes"):
                 results.append({
@@ -204,6 +223,7 @@ async def darknet_search(target: str, client: httpx.AsyncClient) -> list:
                 entry_title = item.get("title", item.get("name", ""))
                 entry_source = item.get("source", "")
                 entry_date = item.get("date", "")
+                entry_type = item.get("type", item.get("entry_type", ""))
                 if entry_id:
                     result = {
                         "value": f"{entry_title} ({entry_id[:16]})" if entry_title else entry_id[:16],
@@ -218,6 +238,8 @@ async def darknet_search(target: str, client: httpx.AsyncClient) -> list:
                         result["source_detail"] = entry_source
                     if entry_date:
                         result["value"] += f" [{entry_date}]"
+                    if entry_type:
+                        result["entry_type"] = entry_type
                     results.append(result)
             if data.get("entries"):
                 results.append({
@@ -241,7 +263,47 @@ async def darknet_search(target: str, client: httpx.AsyncClient) -> list:
                 })
     return results
 
-def score_source_diversity(pb_count: int, paste_count: int, darknet_count: int) -> str:
+async def intelligence_search(target: str, client: httpx.AsyncClient) -> list:
+    results = []
+    search_payloads = [
+        {"term": target, "maxresults": 50, "type": 2, "sort": 2},
+        {"term": target, "maxresults": 50, "type": 7},
+        {"term": target, "maxresults": 50, "type": 4},
+    ]
+    for payload in search_payloads:
+        try:
+            resp = await client.post(
+                f"{INTELX_BASE}/intelligent/search",
+                json=payload,
+                timeout=20.0,
+                headers={
+                    "User-Agent": UA,
+                    "x-key": INTELX_KEY,
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                },
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                for entry in data.get("records", data.get("selectors", []))[:20]:
+                    value = entry.get("value", entry.get("selectorvalue", entry.get("name", "")))
+                    entry_type = entry.get("type", 0)
+                    if value:
+                        classification = classify_intelx_result(str(value), int(entry_type) if entry_type else 2)
+                        results.append({
+                            "value": str(value)[:200],
+                            "type_name": classification.get("search_type", "IntelX Record"),
+                            "classification": classification["type"],
+                            "severity": classification["severity"],
+                            "color": classification["color"],
+                            "category": classification["category"],
+                            "source": "IntelX Intelligence",
+                        })
+        except Exception:
+            pass
+    return results
+
+def score_source_diversity(pb_count: int, paste_count: int, darknet_count: int, intel_count: int = 0) -> str:
     sources = 0
     if pb_count > 0:
         sources += 1
@@ -249,24 +311,28 @@ def score_source_diversity(pb_count: int, paste_count: int, darknet_count: int) 
         sources += 1
     if darknet_count > 0:
         sources += 1
-    total = pb_count + paste_count + darknet_count
-    if sources >= 3 and total > 50:
+    if intel_count > 0:
+        sources += 1
+    total = pb_count + paste_count + darknet_count + intel_count
+    if sources >= 4 and total > 60:
         return "Very High"
-    elif sources >= 2 or total > 30:
+    elif sources >= 3 or total > 40:
         return "High"
-    elif sources >= 1 or total > 10:
+    elif sources >= 2 or total > 20:
         return "Medium"
     return "Low"
 
 def categorize_threat(results: list) -> str:
     for r in results:
         cat = r.get("category", "")
-        if cat in ("darknet", "credential", "financial"):
+        if cat in ("darknet", "credential", "financial", "btc"):
             return "Critical"
         if cat == "paste":
             return "High"
         if cat == "email":
             return "Medium"
+        if cat in ("social", "domain"):
+            return "Low"
     return "Informational"
 
 async def crawl(target: str, client: httpx.AsyncClient):
@@ -279,12 +345,14 @@ async def crawl(target: str, client: httpx.AsyncClient):
     phonebook_results = await phonebook_search(domain, client)
     paste_results = await pastebin_search(domain, client)
     darknet_results = await darknet_search(domain, client)
+    intelligence_results = await intelligence_search(domain, client)
 
-    all_results = phonebook_results + paste_results + darknet_results
+    all_results = phonebook_results + paste_results + darknet_results + intelligence_results
 
-    pb_count = len([r for r in phonebook_results if r.get("category") != "error" and r.get("category") != "summary" and r.get("category") != "status"])
-    paste_count = len([r for r in paste_results if r.get("category") != "error" and r.get("category") != "summary"])
-    darknet_count = len([r for r in darknet_results if r.get("category") != "error" and r.get("category") != "summary"])
+    pb_count = len([r for r in phonebook_results if r.get("category") not in ("error", "summary", "status")])
+    paste_count = len([r for r in paste_results if r.get("category") not in ("error", "summary")])
+    darknet_count = len([r for r in darknet_results if r.get("category") not in ("error", "summary")])
+    intel_count = len([r for r in intelligence_results if r.get("category") not in ("error", "summary")])
 
     for result in all_results:
         try:
@@ -295,8 +363,12 @@ async def crawl(target: str, client: httpx.AsyncClient):
             if result.get("source_detail"):
                 tags.append(result["source_detail"].lower().replace(" ", "-"))
 
+            entity_text = result["value"][:200]
+            if result.get("type_name") in ("Paste", "Darknet Entry") and result.get("content"):
+                entity_text += f" | Content: {result['content'][:100]}"
+
             finding = IntelligenceFinding(
-                entity=result["value"][:200],
+                entity=entity_text,
                 type=result.get("classification", "IntelX Data"),
                 source=result.get("source", "IntelligenceX"),
                 confidence="Medium",
@@ -313,18 +385,18 @@ async def crawl(target: str, client: httpx.AsyncClient):
             continue
 
     if all_results:
-        diversity = score_source_diversity(pb_count, paste_count, darknet_count)
+        diversity = score_source_diversity(pb_count, paste_count, darknet_count, intel_count)
         overall_threat = categorize_threat(all_results)
         color_map = {"Critical": "red", "High": "orange", "Medium": "orange", "Low": "slate", "Informational": "emerald"}
         findings.append(IntelligenceFinding(
-            entity=f"IntelX summary: {pb_count} phonebook + {paste_count} paste + {darknet_count} darknet (threat: {overall_threat}, diversity: {diversity})",
+            entity=f"IntelX summary: {pb_count} phonebook + {paste_count} paste + {darknet_count} darknet + {intel_count} intel (threat: {overall_threat}, diversity: {diversity})",
             type="IntelX Intelligence Summary",
             source="IntelligenceX",
             confidence="High",
             color=color_map.get(overall_threat, "purple"),
             threat_level=overall_threat if overall_threat in ("Critical", "High", "Medium") else "Informational",
             status="Aggregated",
-            raw_data=f"Phonebook: {pb_count}, Pastes: {paste_count}, Darknet: {darknet_count}, Diversity: {diversity}",
+            raw_data=f"Phonebook: {pb_count}, Pastes: {paste_count}, Darknet: {darknet_count}, Intel: {intel_count}, Diversity: {diversity}",
             tags=["intelx-summary", f"threat-{overall_threat.lower().replace(' ', '-')}"],
         ))
 

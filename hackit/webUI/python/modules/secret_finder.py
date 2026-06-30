@@ -2,6 +2,8 @@ import httpx
 import re
 import asyncio
 import json
+import base64
+import math
 from urllib.parse import urljoin, urlparse
 from models import IntelligenceFinding
 
@@ -20,7 +22,8 @@ SECRET_PATTERNS = [
     (r'(?i)ghr_[0-9a-zA-Z]{36}', "GitHub Refresh Token", "Critical"),
     (r'(?i)glpat-[0-9A-Za-z\-_]{20,}', "GitLab Personal Access Token", "Critical"),
     (r'(?i)xox[abposr]-[0-9a-zA-Z\-]{10,}', "Slack Token", "Critical"),
-    (r'(?i)discord(?:_token|_webhook)\s*[=:]\s*["\']?([A-Za-z0-9_\-\.]{24,})["\']?', "Discord Token", "Critical"),
+    (r'(?i)xapp-[0-9A-Za-z\-]{10,}', "Slack App Token", "Critical"),
+    (r'(?i)discord_token\s*[=:]\s*["\']?([A-Za-z0-9_\-\.]{24,})["\']?', "Discord Bot Token", "Critical"),
     (r'(?:https?://)?discord(?:app)?\.com/api/webhooks/[^\s\'"]+', "Discord Webhook URL", "Critical"),
     (r'(?i)telegram_bot_token\s*[=:]\s*["\']?([0-9]+:[A-Za-z0-9_\-]+)["\']?', "Telegram Bot Token", "Critical"),
     (r'(?i)twilio_account_sid\s*[=:]\s*["\']?(AC[0-9a-f]{32})["\']?', "Twilio Account SID", "Critical"),
@@ -74,6 +77,62 @@ SECRET_PATTERNS = [
     (r'(?i)JWT_SECRET\s*[=:]\s*["\']?([^\s\'"]{16,})["\']?', "JWT Signing Secret", "Critical"),
     (r'(?i)SECRET_KEY\s*[=:]\s*["\']?([^\s\'"]{16,})["\']?', "Generic Secret Key", "Critical"),
     (r'(?i)PASSWORD\s*[=:]\s*["\']?([^\s\'"]{6,})["\']?', "Password Config Variable", "High"),
+    (r'(?i)slack_webhook_url\s*[=:]\s*["\']?(https://hooks\.slack\.com/[^\s\'"]+)["\']?', "Slack Webhook URL", "Critical"),
+    (r'(?i)npm.*token\s*[=:]\s*["\']?([A-Za-z0-9_\-]{20,})["\']?', "NPM Token", "Critical"),
+    (r'(?i)pypi.*password\s*[=:]\s*["\']?([A-Za-z0-9_\-]{10,})["\']?', "PyPI Password", "Critical"),
+    (r'(?i)sonar.*token\s*[=:]\s*["\']?([A-Za-z0-9_\-]{20,})["\']?', "SonarQube Token", "Critical"),
+    (r'(?i)jenkins.*password\s*[=:]\s*["\']?([A-Za-z0-9_\-]{10,})["\']?', "Jenkins Password", "Critical"),
+    (r'(?i)ansible.*vault.*password\s*[=:]\s*["\']?([A-Za-z0-9_\-]{10,})["\']?', "Ansible Vault Password", "Critical"),
+    (r'(?i)vault.*token\s*[=:]\s*["\']?([A-Za-z0-9_\-]{20,})["\']?', "Vault Token", "Critical"),
+    (r'(?i)consul.*token\s*[=:]\s*["\']?([A-Za-z0-9_\-]{20,})["\']?', "Consul Token", "Critical"),
+    (r'(?i)k8s.*token\s*[=:]\s*["\']?([A-Za-z0-9_\-]{20,})["\']?', "Kubernetes Token", "Critical"),
+    (r'(?i)kubernetes.*token\s*[=:]\s*["\']?([A-Za-z0-9_\-]{20,})["\']?', "Kubernetes Token", "Critical"),
+    (r'(?i)google_application_credentials\s*[=:]\s*["\']?([A-Za-z0-9_\-\.]+\.json)["\']?', "GCP Service Account", "Critical"),
+    (r'(?i)jira.*token\s*[=:]\s*["\']?([A-Za-z0-9_\-]{20,})["\']?', "JIRA Token", "Critical"),
+    (r'(?i)confluence.*password\s*[=:]\s*["\']?([A-Za-z0-9_\-]{10,})["\']?', "Confluence Password", "Critical"),
+    (r'(?i)circleci.*token\s*[=:]\s*["\']?([A-Za-z0-9_\-]{30,})["\']?', "CircleCI Token", "Critical"),
+    (r'(?i)travis.*token\s*[=:]\s*["\']?([A-Za-z0-9_\-]{20,})["\']?', "TravisCI Token", "Critical"),
+    (r'(?i)kube.*config\s*[=:]\s*["\']?([A-Za-z0-9_\-]{10,})["\']?', "Kubeconfig Token", "Critical"),
+    (r'(?i)grafana.*token\s*[=:]\s*["\']?([A-Za-z0-9_\-]{20,})["\']?', "Grafana Token", "Critical"),
+    (r'(?i)kibana.*password\s*[=:]\s*["\']?([A-Za-z0-9_\-]{10,})["\']?', "Kibana Password", "Critical"),
+    (r'(?i)elastic.*password\s*[=:]\s*["\']?([A-Za-z0-9_\-]{10,})["\']?', "Elasticsearch Password", "Critical"),
+    (r'(?i)databricks.*token\s*[=:]\s*["\']?([A-Za-z0-9_\-]{20,})["\']?', "Databricks Token", "Critical"),
+    (r'(?i)snowflake.*password\s*[=:]\s*["\']?([A-Za-z0-9_\-!@#$%^&*]{6,})["\']?', "Snowflake Password", "Critical"),
+    (r'(?i)db_password\s*[=:]\s*["\']?([^\s\'"]{6,})["\']?', "Database Password", "Critical"),
+    (r'(?i)connection_string\s*[=:]\s*["\']?([^\s\'"]+)["\']?', "Connection String", "Critical"),
+    (r'(?i)mysql://[^\s\'":]+:[^\s\'":]+@[^\s\'"]+', "MySQL Auth Connection", "Critical"),
+    (r'(?i)postgresql://[^\s\'":]+:[^\s\'":]+@[^\s\'"]+', "PostgreSQL Auth Connection", "Critical"),
+    (r'(?i)mongodb://[^\s\'":]+:[^\s\'":]+@[^\s\'"]+', "MongoDB Auth Connection", "Critical"),
+    (r'(?i)redis://[^\s\'":]+:[^\s\'":]+@[^\s\'"]+', "Redis Auth Connection", "Critical"),
+    (r'(?i)amqp://[^\s\'":]+:[^\s\'":]+@[^\s\'"]+', "AMQP Connection", "Critical"),
+    (r'(?i)rabbitmq://[^\s\'":]+:[^\s\'":]+@[^\s\'"]+', "RabbitMQ Connection", "Critical"),
+]
+
+ENDPOINT_PATTERNS = [
+    (r'https?://[^\s\'">]+\.[^\s\'">]{2,}(?::\d{2,5})?(?:/[^\s\'">]*)?', "Generic URL"),
+    (r'https?://[^\s\'">]*/api/[^\s\'">]*', "API URL"),
+    (r'https?://[^\s\'">]*/v[0-9]+/[^\s\'">]*', "Versioned API URL"),
+    (r'https?://[^\s\'">]*/graphql[^\s\'">]*', "GraphQL URL"),
+    (r'https?://[^\s\'">]*\.(?:js|json|xml|yaml|yml|env|conf|config)(?:[?#][^\s\'">]*)?', "Config/Data URL"),
+    (r'(?:http|https|ftp|s3|gs|wasb)://[^\s\'">]+', "Protocol URL"),
+    (r'(?:ws|wss)://[^\s\'">]+', "WebSocket URL"),
+]
+
+IP_PORT_PATTERNS = [
+    (r'\b(?:\d{1,3}\.){3}\d{1,3}:\d{2,5}\b', "IP:Port"),
+    (r'\b(?:\d{1,3}\.){3}\d{1,3}(?::\d{2,5})?\b', "IP Address"),
+]
+
+FILE_PATH_PATTERNS = [
+    (r'(?:/|[a-zA-Z]:\\|\\\\?[^\\]+\\).*\.(?:php|asp|aspx|jsp|py|rb|pl|sh|bat|cmd|ps1|yml|yaml|json|xml|conf|cfg|ini|env|log|txt|sql|db|bak|old|swp|swo|swn)\b', "File Path Disclosure"),
+    (r'(?:/home|/root|/var|/etc|/opt|/usr|/tmp|/data)/[^\s\'">]*', "Unix Path Disclosure"),
+    (r'[a-zA-Z]:\\(?:[^\\]+\\)*(?:[^\\]+\.\w+)', "Windows Path Disclosure"),
+    (r'\.\./[^\s\'">]+', "Relative Path Traversal"),
+    (r'~[a-zA-Z0-9_\-]+/[^\s\'">]*', "Home Directory Reference"),
+]
+
+B64_PATTERNS = [
+    (r'[A-Za-z0-9+/]{40,}={0,2}', "Base64 Potential Data"),
 ]
 
 CONTEXT_WINDOW = 40
@@ -102,6 +161,24 @@ SSN_PATTERNS = [
 CC_PATTERNS = [
     r'\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13}|6(?:011|5[0-9]{2})[0-9]{12})\b',
 ]
+
+FP_PATTERNS = [
+    r"node_modules", r"\.git", r"package\.json", r"yarn\.lock",
+    r"package-lock\.json", r"readme", r"example\.", r"your_key",
+    r"changeme", r"replaceme", r"TODO", r"FIXME", r"your-",
+    r"\.md$", r"\.txt$",
+]
+
+
+def _is_false_positive(match: str) -> bool:
+    for fp in FP_PATTERNS:
+        if re.search(fp, match, re.I):
+            return True
+    if re.match(r'^[\d\s]+$', match):
+        return True
+    if re.match(r'^[a-zA-Z]+$', match):
+        return True
+    return False
 
 
 def _score_severity(secret_type: str, severity: str) -> int:
@@ -159,6 +236,8 @@ async def _fetch_and_scan_js(js_url: str, base_url: str, domain: str, client: ht
         return findings
     for pattern, stype, severity in SECRET_PATTERNS:
         for m in re.finditer(pattern, js):
+            if _is_false_positive(m.group(0)):
+                continue
             matched = m.group(0)[:60]
             color_map = {"Critical": "red", "High": "orange", "Medium": "yellow"}
             threat_map = {"Critical": "Critical Risk", "High": "High Risk", "Medium": "Elevated Risk"}
@@ -172,6 +251,65 @@ async def _fetch_and_scan_js(js_url: str, base_url: str, domain: str, client: ht
                 tags=["secret", "javascript", stype.lower().replace(" ", "_")],
                 raw_data=f"JS URL: {js_url}\nMatch: {m.group(0)[:500]}",
             ))
+
+    for pattern, etype in ENDPOINT_PATTERNS:
+        for m in re.finditer(pattern, js):
+            endpoint = m.group(0)[:200]
+            findings.append(IntelligenceFinding(
+                entity=endpoint,
+                type=f"Endpoint Found: {etype}",
+                source="SecretFinder",
+                confidence="Low",
+                color="blue",
+                threat_level="Informational",
+                tags=["endpoint"],
+            ))
+
+    for pattern, ptype in IP_PORT_PATTERNS:
+        for m in re.finditer(pattern, js):
+            ip = m.group(0)[:40]
+            findings.append(IntelligenceFinding(
+                entity=ip,
+                type=f"Network: {ptype}",
+                source="SecretFinder",
+                confidence="Medium",
+                color="orange",
+                threat_level="Informational",
+                tags=["network", "ip"],
+            ))
+
+    for pattern, ftype in FILE_PATH_PATTERNS:
+        for m in re.finditer(pattern, js):
+            path = m.group(0)[:100]
+            findings.append(IntelligenceFinding(
+                entity=path,
+                type=f"File Path: {ftype}",
+                source="SecretFinder",
+                confidence="Medium",
+                color="orange",
+                threat_level="Elevated Risk",
+                tags=["path", "disclosure"],
+            ))
+
+    for bp in B64_PATTERNS:
+        for m in re.finditer(bp, js):
+            b64_str = m.group(0)
+            try:
+                decoded = base64.b64decode(b64_str)
+                decoded_text = decoded.decode("utf-8", errors="ignore")
+                if re.search(r'(?:password|secret|key|token|api|credential)', decoded_text, re.I):
+                    findings.append(IntelligenceFinding(
+                        entity=f"Base64 secret: {b64_str[:40]}...",
+                        type="Secret: Base64 Encoded Data",
+                        source="SecretFinder",
+                        confidence="Medium",
+                        color="orange",
+                        threat_level="High Risk",
+                        raw_data=f"Decoded: {decoded_text[:200]}",
+                        tags=["secret", "base64"],
+                    ))
+            except Exception:
+                pass
     return findings
 
 
@@ -181,6 +319,7 @@ def _scan_html_comments(html: str, page_url: str) -> list:
         "password", "secret", "token", "key", "credential", "api", "todo",
         "fixme", "hack", "debug", "remove", "FIXME", "TODO", "HACK",
         "admin", "login", "test", "dummy", "vulnerable", "backdoor",
+        "TODO", "FIXME", "HACK", "XXX", "NOTE",
     ]
     for cpat in COMMENT_PATTERNS:
         for m in re.finditer(cpat, html):
@@ -279,6 +418,29 @@ def _scan_pii(html: str, page_url: str) -> list:
     return findings
 
 
+def _scan_bas64(html: str, page_url: str) -> list:
+    findings = []
+    for m in re.finditer(r'[A-Za-z0-9+/]{50,}={0,2}', html):
+        b64_str = m.group(0)
+        try:
+            decoded = base64.b64decode(b64_str)
+            decoded_text = decoded.decode("utf-8", errors="ignore")
+            if re.search(r'(?:password|secret|key|token|api_key|credential|connection)', decoded_text, re.I):
+                findings.append(IntelligenceFinding(
+                    entity=f"Base64 secret in HTML: {b64_str[:40]}...",
+                    type="Secret: Base64 Data in HTML",
+                    source="SecretFinder",
+                    confidence="Low",
+                    color="yellow",
+                    threat_level="High Risk",
+                    raw_data=f"Decoded: {decoded_text[:300]}",
+                    tags=["secret", "base64", "html"],
+                ))
+        except Exception:
+            pass
+    return findings
+
+
 async def crawl(target: str, client: httpx.AsyncClient):
     findings = []
     domain = target.strip().lower()
@@ -310,12 +472,12 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     link = urljoin(base_url, link)
                 if domain in link and link not in pages_to_crawl:
                     pages_to_crawl.append(link)
-                if len(pages_to_crawl) >= 15:
+                if len(pages_to_crawl) >= 25:
                     break
     except Exception:
         return findings
 
-    page_tasks = [_crawl_page(p, client, domain) for p in pages_to_crawl[1:11]]
+    page_tasks = [_crawl_page(p, client, domain) for p in pages_to_crawl[1:21]]
     page_results = await asyncio.gather(*page_tasks, return_exceptions=True)
     for res in page_results:
         if isinstance(res, tuple) and isinstance(res[1], str) and res[1]:
@@ -325,6 +487,8 @@ async def crawl(target: str, client: httpx.AsyncClient):
         page_findings = []
         for pattern, secret_type, severity in SECRET_PATTERNS:
             for m in re.finditer(pattern, html):
+                if _is_false_positive(m.group(0)):
+                    continue
                 secret_text = m.group(0)[:60]
                 context = _extract_context(html, m.start(), m.end())
                 score = _score_severity(secret_type, severity)
@@ -343,10 +507,50 @@ async def crawl(target: str, client: httpx.AsyncClient):
         if page_findings:
             findings.extend(page_findings)
 
+        for pattern, etype in ENDPOINT_PATTERNS:
+            for m in re.finditer(pattern, html):
+                endpoint = m.group(0)[:200]
+                findings.append(IntelligenceFinding(
+                    entity=endpoint,
+                    type=f"Endpoint Found: {etype}",
+                    source="SecretFinder",
+                    confidence="Low",
+                    color="blue",
+                    threat_level="Informational",
+                    tags=["endpoint"],
+                ))
+
+        for pattern, ptype in IP_PORT_PATTERNS:
+            for m in re.finditer(pattern, html):
+                ip = m.group(0)[:40]
+                findings.append(IntelligenceFinding(
+                    entity=ip,
+                    type=f"Network: {ptype}",
+                    source="SecretFinder",
+                    confidence="Medium",
+                    color="orange",
+                    threat_level="Informational",
+                    tags=["network", "ip"],
+                ))
+
+        for pattern, ftype in FILE_PATH_PATTERNS:
+            for m in re.finditer(pattern, html):
+                path = m.group(0)[:100]
+                findings.append(IntelligenceFinding(
+                    entity=path,
+                    type=f"File Path: {ftype}",
+                    source="SecretFinder",
+                    confidence="Medium",
+                    color="orange",
+                    threat_level="Elevated Risk",
+                    tags=["path", "disclosure"],
+                ))
+
         findings.extend(_scan_html_comments(html, page_url))
         findings.extend(_scan_hidden_fields(html, page_url))
         findings.extend(_scan_sensitive_inputs(html, page_url))
         findings.extend(_scan_pii(html, page_url))
+        findings.extend(_scan_bas64(html, page_url))
 
     for page_url, html, headers in crawled_pages:
         pwd_like = re.findall(r'(?i)(?:password|passwd|pwd)\s*[=:]\s*["\']?([^"\';\s]{6,})["\']?', html)
@@ -412,6 +616,8 @@ async def crawl(target: str, client: httpx.AsyncClient):
     for page_url, script in inline_scripts:
         for pattern, stype, severity in SECRET_PATTERNS:
             for m in re.finditer(pattern, script):
+                if _is_false_positive(m.group(0)):
+                    continue
                 matched = m.group(0)[:60]
                 color_map = {"Critical": "red", "High": "orange", "Medium": "yellow"}
                 threat_map = {"Critical": "Critical Risk", "High": "High Risk", "Medium": "Elevated Risk"}

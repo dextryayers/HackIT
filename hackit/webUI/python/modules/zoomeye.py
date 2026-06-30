@@ -1,9 +1,33 @@
 import httpx
 import json
+import re
 from models import IntelligenceFinding
 
 ZOOMEYE_API = "https://api.zoomeye.org"
+ZOOMEYE_WEB = "https://www.zoomeye.org"
 USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+
+TECH_PATTERNS = {
+    "nginx": "Nginx", "apache": "Apache", "iis": "IIS", "cloudflare": "Cloudflare",
+    "wordpress": "WordPress", "drupal": "Drupal", "joomla": "Joomla",
+    "php": "PHP", "python": "Python", "java": "Java", "node.js": "Node.js",
+    "react": "React", "vue": "Vue.js", "angular": "Angular",
+    "express": "Express.js", "django": "Django", "flask": "Flask",
+    "tomcat": "Tomcat", "jetty": "Jetty", "jboss": "JBoss",
+    "jenkins": "Jenkins", "gitlab": "GitLab", "jira": "Jira",
+    "redis": "Redis", "mysql": "MySQL", "mongodb": "MongoDB",
+    "postgresql": "PostgreSQL", "elasticsearch": "Elasticsearch",
+    "rabbitmq": "RabbitMQ", "kafka": "Kafka",
+}
+
+PORT_PROTOCOLS = {
+    21: "FTP", 22: "SSH", 23: "Telnet", 25: "SMTP", 53: "DNS",
+    80: "HTTP", 110: "POP3", 143: "IMAP", 443: "HTTPS", 445: "SMB",
+    993: "IMAPS", 995: "POP3S", 1433: "MSSQL", 1521: "Oracle",
+    3306: "MySQL", 3389: "RDP", 5432: "PostgreSQL", 5900: "VNC",
+    6379: "Redis", 8080: "HTTP-Proxy", 8443: "HTTPS-Alt",
+    27017: "MongoDB", 9200: "Elasticsearch",
+}
 
 async def crawl(target: str, client: httpx.AsyncClient):
     findings = []
@@ -13,6 +37,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         domain = urlparse(domain).netloc
 
     resolved_ips = set()
+    all_services = set()
+    all_ports = set()
+    all_technologies = set()
 
     try:
         dns_resp = await client.get(
@@ -61,13 +88,14 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
             for match in matches[:20]:
                 ip = match.get("ip", "")
-                port = match.get("portinfo", {}).get("port", "")
-                protocol = match.get("portinfo", {}).get("protocol", "")
-                service = match.get("portinfo", {}).get("service", "")
-                app = match.get("portinfo", {}).get("app", "")
-                banner = match.get("portinfo", {}).get("banner", "")
-                os_name = match.get("portinfo", {}).get("os", "")
-                hostname = match.get("portinfo", {}).get("hostname", "")
+                portinfo = match.get("portinfo", {}) or {}
+                port = portinfo.get("port", "")
+                protocol = portinfo.get("protocol", "")
+                service = portinfo.get("service", "")
+                app = portinfo.get("app", "")
+                banner = portinfo.get("banner", "")
+                os_name = portinfo.get("os", "")
+                hostname = portinfo.get("hostname", "")
                 country = match.get("geoinfo", {}).get("country", {}).get("name", "")
                 city = match.get("geoinfo", {}).get("city", {}).get("name", "")
                 continent = match.get("geoinfo", {}).get("continent", {}).get("name", "")
@@ -76,6 +104,10 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
                 if ip:
                     resolved_ips.add(ip)
+                if port:
+                    all_ports.add(int(port))
+                if service:
+                    all_services.add(service)
 
                 if ip and port:
                     tags_list = ["zoomeye", "host"]
@@ -110,6 +142,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     ))
 
                 if app:
+                    all_technologies.add(app)
                     findings.append(IntelligenceFinding(
                         entity=f"{app} on {ip}:{port}",
                         type="Technology / Application",
@@ -276,6 +309,8 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 site_city = site.get("city", "")
                 site_asn = site.get("asn", "")
                 site_org = site.get("organization", "")
+                site_keywords = site.get("keywords", [])
+                site_description = site.get("description", "")
 
                 if site_ip:
                     resolved_ips.add(site_ip)
@@ -308,6 +343,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     ))
 
                 if site_server:
+                    all_technologies.add(site_server)
                     findings.append(IntelligenceFinding(
                         entity=site_server[:200],
                         type="Web Server (ZoomEye)",
@@ -318,6 +354,30 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         resolution=site_ip,
                         raw_data=f"Server: {site_server}",
                         tags=["web", "server"]
+                    ))
+
+                if site_keywords and isinstance(site_keywords, list):
+                    kw_str = ", ".join(site_keywords[:5])
+                    findings.append(IntelligenceFinding(
+                        entity=f"Keywords: {kw_str[:200]}",
+                        type="Web Page Keywords",
+                        source="ZoomEye",
+                        confidence="Medium",
+                        color="slate",
+                        threat_level="Informational",
+                        resolution=site_ip,
+                        tags=["web", "metadata"]
+                    ))
+
+                if site_description:
+                    findings.append(IntelligenceFinding(
+                        entity=f"Description: {site_description[:200]}",
+                        type="Web Page Description",
+                        source="ZoomEye",
+                        confidence="Medium",
+                        color="slate",
+                        threat_level="Informational",
+                        tags=["web", "metadata"]
                     ))
 
             if web_matches:
@@ -433,6 +493,57 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     ))
     except Exception:
         pass
+
+    try:
+        domain_search_params = {"query": f"domain:{domain}", "page": 1, "size": 20}
+        domain_resp = await client.get(
+            f"{ZOOMEYE_API}",
+            params=domain_search_params,
+            timeout=15.0,
+            headers={"User-Agent": USER_AGENT, "Accept": "application/json"}
+        )
+    except Exception:
+        pass
+
+    # Summary findings for port and technology distribution
+    if all_ports:
+        port_str = ", ".join(str(p) for p in sorted(all_ports)[:15])
+        findings.append(IntelligenceFinding(
+            entity=f"Port distribution: {port_str}",
+            type="ZoomEye Port Summary",
+            source="ZoomEye",
+            confidence="Medium",
+            color="slate",
+            threat_level="Informational",
+            raw_data=f"Total unique ports: {len(all_ports)}: {port_str}",
+            tags=["zoomeye", "port-summary"]
+        ))
+
+    if all_services:
+        svc_str = ", ".join(sorted(all_services)[:10])
+        findings.append(IntelligenceFinding(
+            entity=f"Service distribution: {svc_str}",
+            type="ZoomEye Service Summary",
+            source="ZoomEye",
+            confidence="Medium",
+            color="blue",
+            threat_level="Informational",
+            raw_data=f"Total services: {len(all_services)}: {svc_str}",
+            tags=["zoomeye", "service-summary"]
+        ))
+
+    if all_technologies:
+        tech_str = ", ".join(sorted(all_technologies)[:10])
+        findings.append(IntelligenceFinding(
+            entity=f"Technology stack: {tech_str}",
+            type="ZoomEye Technology Summary",
+            source="ZoomEye",
+            confidence="Medium",
+            color="orange",
+            threat_level="Informational",
+            raw_data=f"Technologies: {tech_str}",
+            tags=["zoomeye", "tech-summary"]
+        ))
 
     if not findings:
         findings.append(IntelligenceFinding(

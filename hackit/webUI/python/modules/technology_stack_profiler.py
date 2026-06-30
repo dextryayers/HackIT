@@ -4,6 +4,7 @@ import ssl
 import socket
 import asyncio
 from models import IntelligenceFinding
+from datetime import datetime
 
 HEADER_SIGNATURES = {
     "server": ("Web Server", "High"),
@@ -14,9 +15,11 @@ HEADER_SIGNATURES = {
     "x-varnish": ("Cache: Varnish", "High"),
     "x-cache": ("Cache System", "Medium"),
     "x-cache-hit": ("Cache: Hit", "Medium"),
+    "x-cache-hits": ("Cache: Hits", "Medium"),
     "cf-ray": ("CDN: Cloudflare", "High"),
     "x-amz-cf-id": ("CDN: CloudFront", "High"),
     "x-amz-request-id": ("AWS: S3/CloudFront", "High"),
+    "x-amz-cf-pop": ("CDN: CloudFront POP", "Medium"),
     "x-served-by": ("Proxy/Server", "Medium"),
     "x-aspnet-version": ("Tech: ASP.NET", "High"),
     "x-aspnetmvc-version": ("Tech: ASP.NET MVC", "High"),
@@ -40,6 +43,14 @@ HEADER_SIGNATURES = {
     "x-openresty": ("Tech: OpenResty", "High"),
     "x-debug-token": ("Debug: Symfony", "High"),
     "x-debug": ("Debug mode", "Medium"),
+    "x-turbo-charged-by": ("Tech: Turbo", "High"),
+    "x-varnish": ("Cache: Varnish", "High"),
+    "x-via": ("Proxy: Via", "Medium"),
+    "x-cache-status": ("Cache: Status", "Medium"),
+    "x-proxy-cache": ("Cache: Proxy", "Medium"),
+    "x-rack-cache": ("Cache: Rack", "Medium"),
+    "x-github-request-id": ("Platform: GitHub", "Medium"),
+    "x-gitlab-request-id": ("Platform: GitLab", "Medium"),
 }
 
 CMS_META_PATTERNS = {
@@ -61,6 +72,33 @@ CMS_META_PATTERNS = {
     "Wix": [
         (r'<meta[^>]+name=["\']generator["\'][^>]+content=["\']Wix\.com', "wix-static", "WixCode"),
     ],
+    "Ghost": [
+        (r'<meta[^>]+name=["\']generator["\'][^>]+content=["\']Ghost\s*([\d.]+)', "ghost"),
+    ],
+    "Squarespace": [
+        (r'<meta[^>]+name=["\']generator["\'][^>]+content=["\']Squarespace', "squarespace"),
+    ],
+    "Weebly": [
+        (r'<meta[^>]+name=["\']generator["\'][^>]+content=["\']Weebly', "weebly"),
+    ],
+    "Blogger": [
+        (r'<meta[^>]+name=["\']generator["\'][^>]+content=["\']Blogger', "blogger"),
+    ],
+    "TYPO3": [
+        (r'<meta[^>]+name=["\']generator["\'][^>]+content=["\']TYPO3\s*([\d.]+)', "typo3"),
+    ],
+    "PrestaShop": [
+        (r'<meta[^>]+name=["\']generator["\'][^>]+content=["\']PrestaShop', "prestashop"),
+    ],
+    "OpenCart": [
+        (r'<meta[^>]+name=["\']generator["\'][^>]+content=["\']OpenCart', "opencart"),
+    ],
+    "Django CMS": [
+        (r'<meta[^>]+name=["\']generator["\'][^>]+content=["\']Django CMS', "django-cms"),
+    ],
+    "Concrete CMS": [
+        (r'<meta[^>]+name=["\']generator["\'][^>]+content=["\']Concrete CMS', "concrete"),
+    ],
 }
 
 JS_FRAMEWORK_PATTERNS = {
@@ -79,6 +117,37 @@ JS_FRAMEWORK_PATTERNS = {
     "Foundation": [r"foundation\.js", r"foundation\.min\.js"],
     "Bulma": [r"bulma\.css", r"bulma\.min\.css"],
     "Materialize": [r"materialize\.css", r"materialize\.min\.css"],
+    "Semantic UI": [r"semantic\.css", r"semantic\.min\.css", r"semantic-ui"],
+    "UIKit": [r"uikit\.js", r"uikit\.min\.js"],
+    "PureCSS": [r"pure\.css", r"pure-min\.css"],
+    "Preact": [r"preact", r"preact/compat"],
+    "Lit": [r"lit-element", r"lit-html", r"@lit/"],
+    "Stencil": [r"stencil", r"@stencil/"],
+    "Ember": [r"ember\.js", r"Ember"],
+    "Backbone": [r"backbone\.js", r"Backbone"],
+    "Knockout": [r"knockout\.js", r"ko\."],
+    "Mithril": [r"mithril", r"m\."],
+    "Riot": [r"riot\.js", r"riot\("],
+    "Stimulus": [r"stimulus", r"data-controller"],
+    "Turbo": [r"turbo\.js", r"@hotwired/turbo"],
+    "Hotwire": [r"hotwire", r"@hotwired/"],
+    "Livewire": [r"livewire", r"@livewire/"],
+    "Inertia": [r"inertia", r"@inertiajs/"],
+    "Remix": [r"remix", r"@remix-run/"],
+    "Astro": [r"astro", r"__ASTRO__"],
+    "Solid": [r"solid-js", r"Solid"],
+    "Qwik": [r"qwik", r"@builder.io/qwik"],
+    "Marko": [r"marko", r"@marko/"],
+    "Meteor": [r"meteor", r"__meteor__"],
+    "Aurelia": [r"aurelia", r"au-"],
+    "Dojo": [r"dojo", r"dojo/"],
+    "Ext JS": [r"ext\.js", r"Ext\.", r"sencha"],
+    "YUI": [r"yui\.js", r"YUI"],
+    "Prototype": [r"prototype\.js", r"Prototype"],
+    "Script.aculo.us": [r"script\.aculo\.us", r"scriptaculous"],
+    "MooTools": [r"mootools", r"MooTools"],
+    "Polymer": [r"polymer", r"@polymer/"],
+    "Shoelace": [r"shoelace", r"@shoelace-style/"],
 }
 
 CSS_PATTERNS = {
@@ -87,6 +156,15 @@ CSS_PATTERNS = {
     "Tailwind": [r'class="[^"]*\b(?:flex|grid|container|mx-auto|px-\d|py-\d|text-\w+|bg-\w+)\b'],
     "Material UI": [r"Mui[A-Z]"],
     "Chakra UI": [r"css-\w{6}", r"chakra-"],
+    "Ant Design": [r"ant-", r"anticon"],
+    "PrimeFaces": [r"ui-widget", r"ui-state"],
+    "Fomantic UI": [r"fomantic", r"ui menu"],
+    "NES.css": [r"nes-"],
+    "98.css": [r"window", r"title-bar"],
+    "Water.css": [r"water\.css"],
+    "MVP.css": [r"mvp\.css"],
+    "Basscss": [r"basscss", r"flex"],
+    "Tachyons": [r"tachyons"],
 }
 
 PATH_SIGNATURES = {
@@ -128,6 +206,34 @@ PATH_SIGNATURES = {
     "/nginx.conf": "Nginx Config",
     "/robots.txt": "SEO: Robots.txt",
     "/sitemap.xml": "SEO: Sitemap",
+    "/Dockerfile": "Config: Docker",
+    "/docker-compose.yml": "Config: Docker Compose",
+    "/.helm/": "Config: Helm",
+    "/k8s/": "Config: Kubernetes",
+    "/terraform/": "Config: Terraform",
+    "/ansible/": "Config: Ansible",
+    "/.circleci/": "CI/CD: CircleCI",
+    "/.github/": "CI/CD: GitHub Actions",
+    "/.gitlab-ci.yml": "CI/CD: GitLab CI",
+    "/Jenkinsfile": "CI/CD: Jenkins Pipeline",
+    "/bitbucket-pipelines.yml": "CI/CD: Bitbucket",
+    "/cockpit/": "Monitoring: Cockpit",
+    "/netdata/": "Monitoring: Netdata",
+    "/portainer/": "DevOps: Portainer",
+    "/phpmyadmin/": "Tool: phpMyAdmin",
+    "/adminer.php": "Tool: Adminer",
+    "/pma/": "Tool: phpMyAdmin",
+    "/server-status": "Apache: Server Status",
+    "/server-info": "Apache: Server Info",
+    "/actuator/": "Spring: Actuator",
+    "/actuator/health": "Spring: Health",
+    "/actuator/env": "Spring: Env Leak",
+    "/actuator/beans": "Spring: Beans",
+    "/swagger-ui.html": "API: Swagger UI",
+    "/v2/api-docs": "API: Swagger Docs",
+    "/v3/api-docs": "API: OpenAPI Docs",
+    "/favicon.ico": "General: Favicon",
+    "/.well-known/": "General: Well-known",
 }
 
 CDN_PATTERNS = {
@@ -146,6 +252,15 @@ CDN_PATTERNS = {
     r"section\.io": "CDN: Section.io",
     r"belugacdn": "CDN: BelugaCDN",
     r"cdn\.ampproject": "CDN: AMP Project",
+    r"azurefd|azureedge": "CDN: Azure CDN",
+    r"gcpcdn|cdn\.google": "CDN: Google Cloud CDN",
+    r"edgecast": "CDN: EdgeCast",
+    r"cdn\.net": "CDN: CDN.net",
+    r"ovh\.net": "CDN: OVH CDN",
+    r"cdnvideo": "CDN: CDNvideo",
+    r"gcore": "CDN: G-Core",
+    r"quantil": "CDN: Quantil",
+    r"chinacache": "CDN: ChinaCache",
 }
 
 ANALYTICS_PATTERNS = {
@@ -171,6 +286,20 @@ ANALYTICS_PATTERNS = {
     r"newrelic": "Monitoring: New Relic",
     r"datadog": "Monitoring: Datadog",
     r"sentry": "Monitoring: Sentry",
+    r"logrocket": "Monitoring: LogRocket",
+    r"posthog": "Analytics: PostHog",
+    r"smartlook": "Analytics: SmartLook",
+    r"openreplay": "Monitoring: OpenReplay",
+    r"quantcast": "Analytics: Quantcast",
+    r"comscore": "Analytics: comScore",
+    r"chartbeat": "Analytics: Chartbeat",
+    r"parsely": "Analytics: Parse.ly",
+    r"branch\.io": "Analytics: Branch.io",
+    r"adjust\.com": "Analytics: Adjust",
+    r"appsflyer": "Analytics: AppsFlyer",
+    r"adobe.*analytics|adobedtm": "Analytics: Adobe Analytics",
+    r"yandex.*metrica|mc\.yandex": "Analytics: Yandex Metrica",
+    r"baidu.*tongji|hm\.baidu": "Analytics: Baidu Tongji",
 }
 
 SSL_ISSUER_SIGNATURES = {
@@ -187,6 +316,13 @@ SSL_ISSUER_SIGNATURES = {
     "cPanel": "Hosting: cPanel",
     "ZeroSSL": "SSL: ZeroSSL",
     "BuyPass": "SSL: BuyPass",
+    "Entrust": "SSL: Entrust",
+    "GeoTrust": "SSL: GeoTrust",
+    "Thawte": "SSL: Thawte",
+    "RapidSSL": "SSL: RapidSSL",
+    "VeriSign": "SSL: VeriSign",
+    "Certum": "SSL: Certum",
+    "IdenTrust": "SSL: IdenTrust",
 }
 
 PATH_PROBE_PATHS = [
@@ -200,6 +336,22 @@ PATH_PROBE_PATHS = [
     "/crossdomain.xml", "/client-access-policy.xml",
     "/Dockerfile", "/docker-compose.yml",
     "/nginx.conf", "/.htaccess", "/web.config",
+    "/actuator/", "/actuator/health", "/actuator/env",
+    "/swagger-ui.html", "/v2/api-docs", "/v3/api-docs",
+    "/jenkins/", "/jira/", "/confluence/", "/gitlab/",
+    "/grafana/", "/prometheus/", "/kibana/",
+    "/phpmyadmin/", "/pma/", "/adminer.php",
+    "/server-status", "/server-info",
+    "/metrics", "/debug/", "/debug.php",
+    "/info.php", "/phpinfo.php", "/test.php",
+    "/backup/", "/backups/", "/dump/", "/sql/",
+    "/.well-known/security.txt",
+    "/.well-known/openid-configuration",
+    "/.well-known/oauth-authorization-server",
+    "/.well-known/apple-app-site-association",
+    "/.well-known/assetlinks.json",
+    "/sitemap.xml", "/robots.txt",
+    "/security.txt", "/humans.txt",
 ]
 
 EXTENSION_PATTERNS = {
@@ -221,6 +373,82 @@ EXTENSION_PATTERNS = {
     ".tsx": "Tech: React TSX",
     ".go": "Tech: Go",
     ".java": "Tech: Java",
+    ".scala": "Tech: Scala",
+    ".kt": "Tech: Kotlin",
+    ".swift": "Tech: Swift",
+    ".rs": "Tech: Rust",
+    ".ex": "Tech: Elixir",
+    ".exs": "Tech: Elixir",
+    ".cr": "Tech: Crystal",
+    ".jl": "Tech: Julia",
+    ".clj": "Tech: Clojure",
+    ".erl": "Tech: Erlang",
+    ".hs": "Tech: Haskell",
+    ".lua": "Tech: Lua",
+    ".rkt": "Tech: Racket",
+    ".scm": "Tech: Scheme",
+    ".ml": "Tech: OCaml",
+    ".fs": "Tech: F#",
+    ".fsx": "Tech: F#",
+    ".dart": "Tech: Dart",
+    ".zig": "Tech: Zig",
+    ".nim": "Tech: Nim",
+    ".v": "Tech: V",
+    ".cbl": "Tech: COBOL",
+}
+
+TECHNOLOGY_TIMELINE = {
+    "jQuery": 2006,
+    "MooTools": 2006,
+    "Prototype": 2005,
+    "AngularJS": 2010,
+    "Backbone.js": 2010,
+    "Ember.js": 2011,
+    "React": 2013,
+    "Vue.js": 2014,
+    "Svelte": 2016,
+    "Next.js": 2016,
+    "Nuxt.js": 2016,
+    "Gatsby": 2015,
+    "Bootstrap": 2011,
+    "Tailwind CSS": 2017,
+    "Bulma": 2016,
+    "Foundation": 2012,
+    "WordPress": 2003,
+    "Drupal": 2001,
+    "Joomla": 2005,
+    "Magento": 2008,
+    "Shopify": 2006,
+    "Wix": 2006,
+    "Squarespace": 2003,
+    "Django": 2005,
+    "Flask": 2010,
+    "Laravel": 2011,
+    "Symfony": 2005,
+    "Ruby on Rails": 2005,
+    "Express.js": 2010,
+    "Spring": 2002,
+    "ASP.NET": 2002,
+    "Node.js": 2009,
+    "Deno": 2018,
+    "Bun": 2022,
+}
+
+PROXY_DB_PATTERNS = {
+    "mysql": r"mysql|mariadb",
+    "postgresql": r"postgresql|postgres|pgsql",
+    "mongodb": r"mongodb|mongo",
+    "redis": r"redis",
+    "elasticsearch": r"elasticsearch|elastic",
+    "cassandra": r"cassandra",
+    "couchdb": r"couchdb",
+    "sqlite": r"sqlite",
+    "mssql": r"mssql|sqlserver|sql server",
+    "oracle": r"oracle",
+    "firebase": r"firebase|firestore",
+    "supabase": r"supabase",
+    "dynamodb": r"dynamodb",
+    "neo4j": r"neo4j",
 }
 
 async def probe_path(host, path, client):
@@ -311,20 +539,23 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         for cms_name, version in cms_findings.items():
             entity = f"{cms_name} {version}" if version else cms_name
+            confidence = "High" if version else "Medium"
+            timeline_year = TECHNOLOGY_TIMELINE.get(cms_name, "Unknown")
             findings.append(IntelligenceFinding(
                 entity=entity,
                 type=f"CMS: {cms_name}",
                 source="TechStackProfiler",
-                confidence="High" if version else "Medium",
+                confidence=confidence,
                 color="blue",
                 threat_level="Informational",
-                raw_data=f"CMS: {cms_name} | Version: {version or 'unknown'} | Meta/Path indicators found",
+                raw_data=f"CMS: {cms_name} | Version: {version or 'unknown'} | Meta/Path indicators found | Released: {timeline_year}",
                 tags=["cms", cms_name.lower()]
             ))
 
         for fw_name, patterns in JS_FRAMEWORK_PATTERNS.items():
             for pat in patterns:
                 if re.search(pat, html, re.IGNORECASE):
+                    timeline_year = TECHNOLOGY_TIMELINE.get(fw_name, "Unknown")
                     findings.append(IntelligenceFinding(
                         entity=fw_name,
                         type="JavaScript Framework",
@@ -332,7 +563,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         confidence="Medium",
                         color="cyan",
                         threat_level="Informational",
-                        raw_data=f"Framework: {fw_name} | Pattern: {pat}",
+                        raw_data=f"Framework: {fw_name} | Pattern: {pat} | Released: {timeline_year}",
                         tags=["javascript", "framework", fw_name.lower().replace(".", "-").replace(" ", "-")]
                     ))
                     break
@@ -391,6 +622,18 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     threat_level="Informational",
                     raw_data=f"Analytics/Monitoring: {ftype}",
                     tags=["analytics", "monitoring", ftype.lower().replace(":", "").replace(" ", "-").replace("/", "-")]
+                ))
+
+        for db_name, db_pattern in PROXY_DB_PATTERNS.items():
+            if re.search(db_pattern, html_lower, re.IGNORECASE) or re.search(db_pattern, headers_str, re.IGNORECASE):
+                findings.append(IntelligenceFinding(
+                    entity=db_name.title(),
+                    type=f"Database: {db_name.title()}",
+                    source="TechStackProfiler",
+                    confidence="Low",
+                    color="slate",
+                    threat_level="Informational",
+                    tags=["database", db_name]
                 ))
 
         issuer_info = await get_cert_issuer_info(host)
@@ -462,6 +705,14 @@ async def crawl(target: str, client: httpx.AsyncClient):
             "windows": "OS: Microsoft Windows",
             "darwin": "OS: macOS",
             "alpine": "OS: Alpine Linux",
+            "fedora": "OS: Fedora Linux",
+            "suse": "OS: SUSE Linux",
+            "opensuse": "OS: OpenSUSE Linux",
+            "arch": "OS: Arch Linux",
+            "gentoo": "OS: Gentoo Linux",
+            "solaris": "OS: Solaris",
+            "aix": "OS: IBM AIX",
+            "hp-ux": "OS: HP-UX",
         }
         for os_sig, os_type in os_indicators.items():
             if os_sig in server_h:
@@ -477,24 +728,17 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 ))
                 break
 
-        tech_types = {}
-        for f in findings:
-            t = f.type.split(":")[0].strip() if ":" in f.type else "other"
-            if t not in tech_types:
-                tech_types[t] = 0
-            tech_types[t] += 1
-
-        total_techs = len(findings)
-        findings.append(IntelligenceFinding(
-            entity=f"{total_techs} technologies detected across {len(tech_types)} categories",
-            type="Technology Stack Summary",
-            source="TechStackProfiler",
-            confidence="High",
-            color="purple",
-            threat_level="Informational",
-            raw_data=f"Total techs: {total_techs} | Categories: {', '.join(f'{k}: {v}' for k, v in sorted(tech_types.items())[:10])}",
-            tags=["technology", "summary"]
-        ))
+        if findings:
+            findings.append(IntelligenceFinding(
+                entity=f"{len(findings)} technologies detected",
+                type="Technology Stack Summary",
+                source="TechStackProfiler",
+                confidence="High",
+                color="purple",
+                threat_level="Informational",
+                raw_data=f"Total techs: {len(findings)} | Host: {host}",
+                tags=["technology", "summary"]
+            ))
 
     except Exception as e:
         findings.append(IntelligenceFinding(

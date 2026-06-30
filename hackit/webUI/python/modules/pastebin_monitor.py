@@ -1,234 +1,207 @@
 import httpx
+import asyncio
 import re
-import hashlib
-from datetime import datetime, timezone
+import json
+from datetime import datetime
+from collections import defaultdict
+from typing import List
+from urllib.parse import quote
 from models import IntelligenceFinding
 
 PASTE_SITES = [
-    {
-        "name": "Pastebin",
-        "search_url": "https://pastebin.com/search?q={target}",
-        "raw_pattern": r'/raw/([a-zA-Z0-9]{8})',
-        "content_url": "https://pastebin.com/raw/{pid}",
-    },
-    {
-        "name": "Ghostbin",
-        "search_url": "https://ghostbin.com/search?q={target}",
-        "raw_pattern": r'/paste/([a-zA-Z0-9]+)',
-        "content_url": "https://ghostbin.com/paste/{pid}/raw",
-    },
-    {
-        "name": "dpaste",
-        "search_url": "https://dpaste.org/search?q={target}",
-        "raw_pattern": r'/dpaste/([a-zA-Z0-9]+)',
-        "content_url": "https://dpaste.org/{pid}/raw",
-    },
-    {
-        "name": "Paste.ee",
-        "search_url": "https://paste.ee/search?q={target}",
-        "raw_pattern": r'/paste\.ee/p/([a-zA-Z0-9]+)',
-        "content_url": "https://paste.ee/r/{pid}",
-    },
+    ("Pastebin", "https://pastebin.com/search?q={}"),
+    ("Ghostbin", "https://ghostbin.com/search?q={}"),
+    ("Rentry", "https://rentry.org/search?q={}"),
+    ("PasteCode", "https://pastecode.io/s/search?q={}"),
+    ("ControlC", "https://controlc.com/search.php?q={}"),
+    ("Codepad", "https://codepad.co/search?q={}"),
+    ("SlickPaste", "https://slickpaste.com/search?q={}"),
+    ("PSBDMP", "https://psbdmp.ws/api/search/{}"),
+    ("LeakIX", "https://leakix.net/search?scope=leak&q={}"),
+    ("PastebinPL", "https://pastebin.pl/search?q={}"),
+    ("Dpaste", "https://dpaste.org/search?q={}"),
+    ("CentOS Paste", "https://paste.centos.org/search?q={}"),
+    ("Ubuntu Paste", "https://paste.ubuntu.com/search?q={}"),
+    ("Debian Paste", "https://paste.debian.net/search?q={}"),
+    ("KDE Paste", "https://paste.kde.org/search?q={}"),
+    ("GitHub Gist", "https://gist.github.com/search?q={}"),
+    ("GitLab Snippet", "https://gitlab.com/search?search={}"),
+    ("BitBucket Snippet", "https://bitbucket.org/search?q={}"),
+    ("Hastebin", "https://hastebin.skyra.pw/search?q={}"),
+    ("Rentry Raw", "https://rentry.org/{}/raw"),
 ]
 
-SENSITIVE_PATTERNS = [
-    (r'-----BEGIN\s*(RSA\s*)?PRIVATE\s*KEY-----', 'Private Key', 'Critical'),
-    (r'-----BEGIN\s*CERTIFICATE-----', 'Certificate', 'Medium'),
-    (r'[\'\"](?:API[_-]?KEY|api[_-]?key|apikey)[\'\"].*[\'\"][A-Za-z0-9_\-]{16,}[\'"]', 'API Key Leak', 'High'),
-    (r'(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{36,}', 'GitHub Token', 'Critical'),
-    (r'(?:xox[abrps]?|xapp|xoxb)-[A-Za-z0-9\-]{40,}', 'Slack Token', 'Critical'),
-    (r'sk_live_[0-9a-z]{32}', 'Stripe Live Key', 'Critical'),
-    (r'pk_live_[0-9a-z]{32}', 'Stripe Live Publishable', 'High'),
-    (r'AKIA[0-9A-Z]{16}', 'AWS Access Key', 'Critical'),
-    (r'(?i)(?:password|passwd|pwd)\s*[=:]\s*[\'\"]?\S{8,}[\'\"]?', 'Password Leak', 'Critical'),
-    (r'(?i)(?:secret|token)\s*[=:]\s*[\'\"]?\S{8,}[\'\"]?', 'Secret Token', 'High'),
-    (r'[\'\"](?:username|user|login)[\'\"].*[\'\"][A-Za-z0-9_@.\-]{4,}[\'"]', 'Credential Pair', 'High'),
-    (r'\b(?:\d{4}[-\s]?){3}\d{4}\b', 'Credit Card Number', 'Critical'),
-    (r'\b(?:mongodb|postgresql|mysql|redis)://\S+:\S+@\S+\b', 'Database Connection String', 'Critical'),
-    (r'(?i)Authorization:\s*Bearer\s+\S+', 'Bearer Token', 'Critical'),
-    (r'(?i)connection.?string.*[=:].*', 'Connection String', 'High'),
-    (r'\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b', 'IP Address', 'Low'),
-    (r'(?:[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})', 'Email Address', 'Low'),
-]
+CREDENTIAL_PATTERN = re.compile(
+    r'(?P<email>[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,})\s*[:;|]\s*(?P<password>\S+)'
+)
+API_KEY_PATTERN = re.compile(
+    r'(?:sk_live|sk_test|pk_live|pk_test)_[0-9a-zA-Z]{24,}|'
+    r'AKIA[0-9A-Z]{16}|ghp_[0-9a-zA-Z]{36}|'
+    r'xox[baprs]-[0-9a-zA-Z\-]{24,}|'
+    r'AIza[0-9A-Za-z\-_]{35}|'
+    r'-----BEGIN\s?(RSA\s)?PRIVATE KEY-----'
+)
+EMAIL_PATTERN = re.compile(r'[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}')
+IP_PATTERN = re.compile(r'\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b')
+PHONE_PATTERN = re.compile(r'(?:\+?\d{1,3}[-.\s]?)?\(?\d{2,4}\)?[-.\s]?\d{3}[-.\s]?\d{4}')
+SSN_PATTERN = re.compile(r'\b\d{3}-\d{2}-\d{4}\b')
+CC_PATTERN = re.compile(r'\b(?:\d{4}[-\s]?){3}\d{4}\b')
 
-CATEGORY_KEYWORDS = {
-    "Credential Leak": ["password", "login", "credentials", "username", "admin", "root", "hash"],
-    "Configuration": ["config", "settings", "json", ".env", "database", "connection", "endpoint"],
-    "Source Code": ["function", "class", "import", "def ", "var ", "int ", "void "],
-    "Personal Data": ["ssn", "address", "phone", "dob", "birthday", "social security", "passport"],
-    "Malware/IOC": ["malware", "trojan", "ransomware", "exploit", "c2 ", "botnet", "shellcode", "payload"],
-    "Network Info": ["netstat", "ifconfig", "ip route", "traceroute", "dns ", "hostname"],
-    "API Documentation": ["endpoint", "api/v", "/v1/", "/v2/", "rest api", "swagger"],
+SECRET_PATTERNS = {
+    "password": r'\bpassword\s*[:=]\s*\S+',
+    "api_key": r'\b(?:api[_-]?key|apikey)\s*[:=]\s*\S+',
+    "secret": r'\bsecret\s*[:=]\s*\S+',
+    "token": r'\btoken\s*[:=]\s*\S+',
+    "access_key": r'\b(?:access[_-]?key|accesskey)\s*[:=]\s*\S+',
+    "database_url": r'\b(?:database[_-]?url|db[_-]?url|mongodb|postgresql|mysql)\s*[:=]\s*\S+',
 }
 
-async def _fetch_paste_ids(target: str, site: dict, client: httpx.AsyncClient):
+CONTENT_CATEGORIES = {
+    "credential_dump": ["password", "login", "email:password", "username:password", "combo"],
+    "source_code": ["source code", "repository", "git", "github", "gitlab", "bitbucket"],
+    "config_file": ["config", "configuration", "settings", ".env", "environment"],
+    "financial": ["credit card", "cvv", "bank", "paypal", "stripe", "bitcoin", "wire"],
+    "personal_data": ["ssn", "social security", "address", "phone", "passport", "driver license"],
+    "hacking_tools": ["exploit", "payload", "shell", "backdoor", "rat", "malware"],
+    "database_dump": ["sql dump", "database", "insert into", "create table", "mysql"],
+}
+
+async def check_paste_site(client: httpx.AsyncClient, site_name: str, url_template: str, target: str) -> list:
     results = []
     try:
-        search_url = site["search_url"].format(target=target)
-        search_resp = await client.get(search_url, timeout=12.0,
-            headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"})
-        if search_resp.status_code != 200:
-            return results
-        pids = set(re.findall(site["raw_pattern"], search_resp.text))
-        for pid in pids:
-            content_url = site["content_url"].format(pid=pid)
-            results.append((site["name"], pid, content_url))
-    except Exception:
+        url = url_template.format(quote(target))
+        resp = await client.get(url, timeout=10.0,
+            headers={"User-Agent": "Mozilla/5.0"})
+        if resp.status_code == 200 and len(resp.text) > 200:
+            results.append({"site": site_name, "url": url, "content_snippet": resp.text[:1000], "status": "accessible"})
+    except:
         pass
     return results
 
-async def _fetch_paste_content(content_url: str, client: httpx.AsyncClient) -> str:
-    try:
-        resp = await client.get(content_url, timeout=12.0,
-            headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"})
-        if resp.status_code == 200:
-            return resp.text[:50000]
-    except Exception:
-        pass
-    return ""
-
-def _score_sensitivity(matches: list) -> str:
-    levels = {"Critical": 4, "High": 3, "Medium": 2, "Low": 1}
-    max_score = 0
-    for _, _, severity in matches:
-        s = levels.get(severity, 0)
-        if s > max_score:
-            max_score = s
-    if max_score >= 4:
-        return "Critical"
-    if max_score >= 3:
-        return "High"
-    if max_score >= 2:
-        return "Medium"
-    return "Low"
-
-def _categorize_content(text: str) -> list:
+async def categorize_content(text: str) -> list:
     categories = []
-    for cat, keywords in CATEGORY_KEYWORDS.items():
+    text_lower = text.lower()
+    for cat, keywords in CONTENT_CATEGORIES.items():
         for kw in keywords:
-            if kw in text.lower():
+            if kw in text_lower:
                 categories.append(cat)
                 break
-    return categories if categories else ["Unknown"]
+    return categories
 
-async def crawl(target: str, client: httpx.AsyncClient):
+async def detect_secrets(text: str) -> list:
+    secrets = []
+    for name, pattern in SECRET_PATTERNS.items():
+        matches = re.findall(pattern, text, re.IGNORECASE)
+        if matches:
+            secrets.append({"type": name, "count": len(matches)})
+    return secrets
+
+async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFinding]:
     findings = []
-    domain = target.strip().lower()
-    if domain.startswith("http"):
-        from urllib.parse import urlparse
-        domain = urlparse(domain).netloc
-    seen_hashes = set()
-    seen_pids = set()
+    query = target.strip().lower()
 
-    for site in PASTE_SITES:
-        entries = await _fetch_paste_ids(domain, site, client)
-        for site_name, pid, content_url in entries:
-            if pid in seen_pids:
-                continue
-            seen_pids.add(pid)
-            content = await _fetch_paste_content(content_url, client)
-            if not content:
-                findings.append(IntelligenceFinding(
-                    entity=f"{site_name} paste found: {content_url}",
-                    type="Paste Hit",
-                    source="PastebinMonitor",
-                    confidence="Medium",
-                    color="orange",
-                    threat_level="Informational",
-                    status="Unreviewed",
-                    tags=["paste", site_name.lower(), domain.replace('.', '_')]
-                ))
-                continue
+    all_text = ""
 
-            content_hash = hashlib.sha256(content.encode()).hexdigest()[:16]
-            if content_hash in seen_hashes:
-                continue
-            seen_hashes.add(content_hash)
+    for site_name, url_template in PASTE_SITES:
+        results = await check_paste_site(client, site_name, url_template, query)
+        for r in results:
+            findings.append(IntelligenceFinding(
+                entity=f"Mention on {site_name}",
+                type="Paste Site Mention",
+                source=site_name,
+                confidence="Low",
+                color="orange",
+                threat_level="Elevated Risk",
+                status="Found",
+                resolution=query,
+                raw_data=f"URL: {r['url']}",
+                tags=["paste", "monitor", site_name.lower()]
+            ))
+            all_text += r.get("content_snippet", "") + "\n"
 
-            sensitive_matches = []
-            for pattern, label, severity in SENSITIVE_PATTERNS:
-                matches = re.findall(pattern, content)
-                if matches:
-                    match_text = matches[0][:80] if isinstance(matches[0], str) else str(matches[0])[:80]
-                    sensitive_matches.append((match_text, label, severity))
+    if all_text:
+        emails = EMAIL_PATTERN.findall(all_text)
+        if emails:
+            findings.append(IntelligenceFinding(
+                entity=f"{len(set(emails))} unique emails exposed",
+                type="Email Exposure",
+                source="PastebinMonitor",
+                confidence="Medium",
+                color="red",
+                threat_level="High Risk",
+                status="Exposed",
+                resolution=query,
+                tags=["email", "exposure", "paste"]
+            ))
 
-            sensitivity = _score_sensitivity(sensitivity_matches)
-            categories = _categorize_content(content)
-            target_mentions = len(re.findall(re.escape(domain), content, re.IGNORECASE))
+        ips = IP_PATTERN.findall(all_text)
+        if ips:
+            findings.append(IntelligenceFinding(
+                entity=f"{len(set(ips))} IP addresses exposed",
+                type="IP Exposure",
+                source="PastebinMonitor",
+                confidence="Medium",
+                color="orange",
+                threat_level="Elevated Risk",
+                status="Exposed",
+                resolution=query,
+                tags=["ip", "exposure", "paste"]
+            ))
 
-            color_map = {"Critical": "red", "High": "orange", "Medium": "yellow", "Low": "slate"}
-            threat_map = {"Critical": "Critical", "High": "High Risk", "Medium": "Elevated Risk", "Low": "Informational"}
+        api_keys = API_KEY_PATTERN.findall(all_text)
+        if api_keys:
+            findings.append(IntelligenceFinding(
+                entity=f"{len(set(api_keys))} API keys exposed",
+                type="API Key Exposure",
+                source="PastebinMonitor",
+                confidence="High",
+                color="red",
+                threat_level="Critical",
+                status="Secret Exposed",
+                resolution=query,
+                tags=["api-key", "secret", "critical"]
+            ))
 
-            for cat in categories[:3]:
-                cat_parts = cat.split("/")
-                findings.append(IntelligenceFinding(
-                    entity=f"{site_name} ({pid[:8]}...): Content categorized as {cat}",
-                    type=f"Paste: {cat}",
-                    source="PastebinMonitor",
-                    confidence="High" if sensitivity in ("Critical", "High") else "Medium",
-                    color=color_map.get(sensitivity, "slate"),
-                    threat_level=threat_map.get(sensitivity, "Informational"),
-                    status="Sensitive" if sensitivity in ("Critical", "High") else "Unreviewed",
-                    resolution=content_url,
-                    raw_data=f"Hash: {content_hash}, Sensitivity: {sensitivity}, Target mentions: {target_mentions}, Size: {len(content)} chars, Categories: {', '.join(categories)}",
-                    tags=["paste", site_name.lower(), domain.replace('.', '_'), sensitivity.lower()]
-                ))
+        secrets = await detect_secrets(all_text)
+        for secret in secrets:
+            findings.append(IntelligenceFinding(
+                entity=f"{secret['count']} {secret['type']} pattern(s) found",
+                type=f"Secret Detection: {secret['type'].title()}",
+                source="PastebinMonitor",
+                confidence="Medium",
+                color="red",
+                threat_level="High Risk",
+                status="Detected",
+                resolution=query,
+                tags=["secret", secret["type"]]
+            ))
 
-            for match_text, label, severity in sensitive_matches[:5]:
-                findings.append(IntelligenceFinding(
-                    entity=f"{label}: {match_text[:120]}",
-                    type="Sensitive Data",
-                    source="PastebinMonitor",
-                    confidence="High",
-                    color=color_map.get(severity, "orange"),
-                    threat_level=threat_map.get(severity, "High Risk"),
-                    status="Confirmed",
-                    resolution=content_url,
-                    raw_data=f"Pattern: {label}, Severity: {severity}, Match: {match_text[:300]}",
-                    tags=["sensitive", label.lower().replace(' ', '_'), severity.lower(), "paste"]
-                ))
-
-            if target_mentions > 1:
-                findings.append(IntelligenceFinding(
-                    entity=f"Target mentioned {target_mentions}x in paste {pid[:8]}...",
-                    type="Target Mention Count",
-                    source="PastebinMonitor",
-                    confidence="Medium",
-                    color="slate",
-                    threat_level="Elevated Risk" if target_mentions > 10 else "Informational",
-                    status="Analyzed",
-                    resolution=content_url,
-                    raw_data=f"Target mentions in paste: {target_mentions}",
-                    tags=["paste", "mention_count", domain.replace('.', '_')]
-                ))
+        categories = await categorize_content(all_text)
+        if categories:
+            cat_str = ", ".join(set(categories))
+            findings.append(IntelligenceFinding(
+                entity=f"Content categories: {cat_str}",
+                type="Paste Content Categorization",
+                source="PastebinMonitor",
+                confidence="Medium",
+                color="slate",
+                threat_level="Informational",
+                status="Categorized",
+                resolution=query,
+                tags=["content", "category"] + list(set(categories))
+            ))
 
     if not findings:
         findings.append(IntelligenceFinding(
-            entity=f"No recent paste mentions found for {domain}",
-            type="Paste Monitor Summary",
+            entity="No paste mentions found",
+            type="Paste Monitor Complete",
             source="PastebinMonitor",
-            confidence="Medium",
+            confidence="Low",
             color="emerald",
             threat_level="Informational",
             status="Clean",
-            tags=["clean", domain.replace('.', '_')]
-        ))
-    else:
-        sensitivity_levels = {}
-        for f in findings:
-            tl = f.threat_level or "Informational"
-            sensitivity_levels[tl] = sensitivity_levels.get(tl, 0) + 1
-        summary_parts = [f"{v} {k}" for k, v in sorted(sensitivity_levels.items())]
-        findings.append(IntelligenceFinding(
-            entity=f"Paste scan complete: {len(seen_pids)} unique pastes, {len(seen_hashes)} unique content blobs",
-            type="Paste Monitor Summary",
-            source="PastebinMonitor",
-            confidence="High",
-            color="red" if sensitivity_levels.get("Critical") or sensitivity_levels.get("High Risk") else "purple",
-            threat_level="Informational",
-            status="Complete",
-            raw_data=" | ".join(summary_parts),
-            tags=["summary", domain.replace('.', '_')]
+            resolution=query,
+            tags=["paste", "clean"]
         ))
 
     return findings

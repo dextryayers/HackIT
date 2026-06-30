@@ -1,5 +1,6 @@
 import httpx
 import re
+import hashlib
 from datetime import datetime
 from models import IntelligenceFinding
 
@@ -12,6 +13,13 @@ SESSION_COOKIE_NAMES = [
     "auth_token", "access_token", "refresh_token", "id_token",
     "jwt", "bearer", "api_key", "api-key",
     "_csrf", "csrf_token", "XSRF-TOKEN",
+    "remember_me", "remember_token", "rememberme",
+    "login_token", "logintoken", "user_token",
+    "auth", "authentication", "authenticate",
+    "ticket", "cas_ticket", "samlsession",
+    "oidc", "openid", "idp_session",
+    "aws_session", "amz_token", "cognito",
+    "firebase_token", "fbtoken",
 ]
 
 TRACKING_COOKIE_NAMES = [
@@ -21,11 +29,26 @@ TRACKING_COOKIE_NAMES = [
     "_uetvid", "_uacct", "_utm", "__utm", "__utma", "__utmb",
     "__utmc", "__utmt", "__utmz", "__gads", "__gpi", "__eoi",
     "__ar_v4", "__s", "AMP_TOKEN", "_dc_gtm",
+    "_fb", "_fbc", "_fsh", "_fss",
+    "_ym", "_ym_d", "_ym_isad", "_ym_uid",
+    "_ym_visorc", "_hstc", "_hssc", "_hssrc",
+    "__hstc", "__hssc", "__hssrc",
+    "hubspotutk", "__hs_opt_out",
+    "pardot", "lpt_h", "lpt_n",
+    "mkt_token", "mkt_data",
+    "_clck", "_clsk", "_clskref",
+    "ln_or", "li_sugr", "li_at",
+    "twitter_id", "twid", "auth_token",
+    "guest_id", "personalization_id",
 ]
 
 ANALYTICS_COOKIE_NAMES = [
     "_pk_id", "_pk_ses", "mtm_", "_pk_ref", "_pk_cvar",
     "_pk_hsr", "piwik_", "_pk_testcookie",
+    "pk_id", "pk_ses", "pk_ref", "pk_hsr",
+    "mtm_cookie", "matomo",
+    "_pa", "_pa_",
+    "sa_user_id", "sa_session_id",
 ]
 
 FRAMEWORK_COOKIE_PATTERNS = {
@@ -36,7 +59,20 @@ FRAMEWORK_COOKIE_PATTERNS = {
     "Python/Django": [r"sessionid", r"csrftoken", r"django"],
     "Python/Flask": [r"session"],
     "Ruby/Rails": [r"_session_id", r"_csrf_token", r"rails"],
+    "Go/Gin": [r"gin_session", r"go_session"],
 }
+
+THIRD_PARTY_COOKIE_DOMAINS = [
+    ".doubleclick.net", ".google.com", ".facebook.com", ".fbcdn.net",
+    ".adsrvr.org", ".adroll.com", ".criteo.com", ".criteo.net",
+    ".amazon-adsystem.com", ".adnxs.com", ".rubiconproject.com",
+    ".openx.net", ".pubmatic.com", ".casalemedia.com",
+    ".moatads.com", ".scorecardresearch.com", ".quantserve.com",
+    ".krxd.net", ".sharethis.com", ".addthis.com",
+    ".disqus.com", ".youtube.com", ".vimeo.com",
+    ".hotjar.com", ".fullstory.com", ".crazyegg.com",
+    ".optimizely.com", ".vwo.com", ".mouseflow.com",
+]
 
 def analyze_cookie_attributes(cookie_string):
     analysis = {}
@@ -65,7 +101,10 @@ def analyze_cookie_attributes(cookie_string):
     analysis["samesite"] = attrs.get("samesite", "none").lower()
     analysis["domain"] = attrs.get("domain", "")
     analysis["path"] = attrs.get("path", "/")
-    analysis["max_age"] = attrs.get("max-age", attrs.get("expires", ""))
+    analysis["max_age"] = attrs.get("max-age", "")
+    analysis["expires"] = attrs.get("expires", "")
+    analysis["same_site_strict"] = attrs.get("samesite", "").lower() == "strict"
+    analysis["same_site_lax"] = attrs.get("samesite", "").lower() == "lax"
 
     return analysis
 
@@ -88,6 +127,52 @@ def detect_framework_from_cookie(name):
             if re.match(pat, name, re.IGNORECASE):
                 return fw
     return None
+
+def is_third_party_cookie(domain):
+    for tp_domain in THIRD_PARTY_COOKIE_DOMAINS:
+        if domain.endswith(tp_domain) or domain == tp_domain:
+            return True
+    return False
+
+def is_encrypted_cookie(value):
+    indicators = 0
+    if len(value) > 20:
+        indicators += 1
+    if re.match(r'^[A-Za-z0-9+/=]+$', value):
+        indicators += 1
+    if re.match(r'^[A-Fa-f0-9]{32,}$', value):
+        indicators += 2
+    if re.match(r'^[A-Fa-f0-9]{40,}$', value):
+        indicators += 2
+    if re.match(r'^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$', value):
+        indicators += 3
+    return indicators >= 2
+
+def rate_cookie_security(c):
+    score = 100
+    if c.get("secure"):
+        score += 10
+    else:
+        score -= 25
+    if c.get("httponly"):
+        score += 10
+    else:
+        score -= 20
+    samesite = c.get("samesite", "none")
+    if samesite == "strict":
+        score += 15
+    elif samesite == "lax":
+        score += 5
+    else:
+        score -= 10
+    if c.get("domain"):
+        if c["domain"].startswith("."):
+            score -= 15
+        if len(c["domain"].split(".")) <= 2:
+            score -= 10
+    if c.get("path") and c["path"] == "/":
+        score -= 5
+    return max(0, min(100, score))
 
 async def crawl(target: str, client: httpx.AsyncClient):
     findings = []
@@ -122,7 +207,10 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     "domain": "",
                     "path": "/",
                     "max_age": "",
+                    "expires": "",
                     "attributes": {},
+                    "same_site_strict": False,
+                    "same_site_lax": False,
                 })
 
         for c in cookie_list:
@@ -139,6 +227,12 @@ async def crawl(target: str, client: httpx.AsyncClient):
             domain = c.get("domain", "")
             path = c.get("path", "/")
             max_age = c.get("max_age", "")
+            expires = c.get("expires", "")
+            value = c.get("value", "")
+
+            security_score = rate_cookie_security(c)
+            is_encrypted = is_encrypted_cookie(value)
+            is_tp_cookie = is_third_party_cookie(domain)
 
             issues = []
             if not secure:
@@ -149,18 +243,24 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 issues.append("SameSite=None (no CSRF protection)")
             if not domain:
                 issues.append("No Domain restriction")
+            if domain.startswith("."):
+                issues.append("Wildcard domain (all subdomains)")
+            if path == "/":
+                issues.append("Root path (all endpoints)")
+            if is_tp_cookie:
+                issues.append("Third-party cookie domain")
 
             color = "red" if issues else "emerald"
             threat = "Elevated Risk" if issues else "Informational"
 
             findings.append(IntelligenceFinding(
-                entity=f"{name}={c.get('value', '')[:30]}...",
+                entity=f"{name}={value[:30]}...",
                 type=f"Cookie: {cookie_class}",
                 source="WebCookieAnalyzer",
                 confidence="High",
                 color=color,
                 threat_level=threat if issues else "Informational",
-                raw_data=f"Name: {name} | Secure: {secure} | HttpOnly: {httponly} | SameSite: {samesite} | Domain: {domain} | Path: {path} | Max-Age: {max_age} | Issues: {', '.join(issues) if issues else 'None'}",
+                raw_data=f"Name: {name} | Secure: {secure} | HttpOnly: {httponly} | SameSite: {samesite} | Domain: {domain} | Path: {path} | Max-Age: {max_age} | Expires: {expires} | Score: {security_score}/100 | Encrypted: {is_encrypted} | Issues: {', '.join(issues) if issues else 'None'} | 3rd-party: {is_tp_cookie}",
                 tags=["cookie", cookie_class.lower(), name]
             ))
 
@@ -200,6 +300,50 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     tags=["cookie", "session", "secure-flag"]
                 ))
 
+            if domain and not domain.startswith("."):
+                findings.append(IntelligenceFinding(
+                    entity=f"Cookie domain restricted: {domain}",
+                    type="Cookie Scope: Domain",
+                    source="WebCookieAnalyzer",
+                    confidence="High",
+                    color="emerald",
+                    threat_level="Informational",
+                    tags=["cookie", "scope", "domain"]
+                ))
+
+            if is_tp_cookie:
+                findings.append(IntelligenceFinding(
+                    entity=f"Third-party cookie: {domain}{path} {name}",
+                    type="Third-Party Cookie",
+                    source="WebCookieAnalyzer",
+                    confidence="High",
+                    color="orange",
+                    threat_level="Elevated Risk",
+                    raw_data=f"Third-party cookie detected: domain={domain}, name={name}",
+                    tags=["cookie", "third-party", "tracking"]
+                ))
+
+            if is_encrypted and cookie_class == "Session":
+                findings.append(IntelligenceFinding(
+                    entity=f"Session cookie appears encrypted/hashed: {name}",
+                    type="Cookie Encryption Detected",
+                    source="WebCookieAnalyzer",
+                    confidence="Medium",
+                    color="emerald",
+                    threat_level="Informational",
+                    tags=["cookie", "security", "encryption"]
+                ))
+            elif cookie_class == "Session" and not is_encrypted and len(value) < 16:
+                findings.append(IntelligenceFinding(
+                    entity=f"Session cookie appears weak: {name}={value[:20]}",
+                    type="Weak Session Cookie",
+                    source="WebCookieAnalyzer",
+                    confidence="Medium",
+                    color="orange",
+                    threat_level="Elevated Risk",
+                    tags=["cookie", "weak-session"]
+                ))
+
         if len(cookie_list) > 15:
             findings.append(IntelligenceFinding(
                 entity=f"{len(cookie_list)} cookies set - possible cookie inflation",
@@ -212,17 +356,18 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 tags=["cookie", "inflation"]
             ))
 
-        persistent_cookies = [c for c in cookie_list if c.get("max_age")]
+        persistent_cookies = [c for c in cookie_list if c.get("max_age") or c.get("expires")]
         if persistent_cookies:
             for c in persistent_cookies[:3]:
+                persistence = c.get("max_age") or c.get("expires")
                 findings.append(IntelligenceFinding(
-                    entity=f"Persistent cookie: {c['name']} (max-age: {c['max_age']})",
+                    entity=f"Persistent cookie: {c['name']} (max-age: {persistence})",
                     type="Persistent Cookie",
                     source="WebCookieAnalyzer",
                     confidence="High",
                     color=("red" if "session" in c.get("name", "").lower() else "orange"),
                     threat_level="Elevated Risk" if "session" in c.get("name", "").lower() else "Informational",
-                    raw_data=f"Cookie {c['name']} persists: {c['max_age']}",
+                    raw_data=f"Cookie {c['name']} persists: {persistence}",
                     tags=["cookie", "persistent"]
                 ))
 
@@ -231,10 +376,14 @@ async def crawl(target: str, client: httpx.AsyncClient):
         analytics_count = sum(1 for c in cookie_list if classify_cookie(c.get("name", "")) == "Analytics")
         missing_secure = sum(1 for c in cookie_list if not c.get("secure"))
         missing_httponly = sum(1 for c in cookie_list if not c.get("httponly"))
+        third_party_count = sum(1 for c in cookie_list if is_third_party_cookie(c.get("domain", "")))
+        encrypted_count = sum(1 for c in cookie_list if is_encrypted_cookie(c.get("value", "")) and classify_cookie(c.get("name", "")) == "Session")
 
+        avg_security = sum(rate_cookie_security(c) for c in cookie_list) / max(len(cookie_list), 1)
         score = 100
         score -= missing_secure * 10
         score -= missing_httponly * 8
+        score -= third_party_count * 5
         if session_count > 0:
             all_secure = all(c.get("secure") for c in cookie_list if classify_cookie(c.get("name", "")) == "Session")
             all_httponly = all(c.get("httponly") for c in cookie_list if classify_cookie(c.get("name", "")) == "Session")
@@ -246,13 +395,13 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         color_score = "emerald" if score >= 80 else ("orange" if score >= 50 else "red")
         findings.append(IntelligenceFinding(
-            entity=f"Cookie Security Score: {score}/100 ({session_count} session, {tracking_count} tracking, {analytics_count} analytics)",
+            entity=f"Cookie Security Score: {score}/100 ({len(cookie_list)} cookies, {session_count} session, {tracking_count} tracking, {third_party_count} 3rd-party)",
             type="Cookie Security Summary",
             source="WebCookieAnalyzer",
             confidence="High",
             color=color_score,
             threat_level="Elevated Risk" if score < 80 else "Informational",
-            raw_data=f"Total: {len(cookie_list)} | Session: {session_count} | Tracking: {tracking_count} | Analytics: {analytics_count} | Missing Secure: {missing_secure} | Missing HttpOnly: {missing_httponly}",
+            raw_data=f"Total: {len(cookie_list)} | Session: {session_count} | Tracking: {tracking_count} | Analytics: {analytics_count} | 3rd-party: {third_party_count} | Missing Secure: {missing_secure} | Missing HttpOnly: {missing_httponly} | Encrypted: {encrypted_count} | Avg Security: {avg_security:.0f}/100",
             tags=["cookie", "summary", "security-score"]
         ))
 

@@ -1,0 +1,63 @@
+<!DOCTYPE html><html lang="en"> <head><meta charset="UTF-8"><meta name="description" content="Spiderfoot HX Clone Dashboard"><meta name="viewport" content="width=device-width"><link rel="icon" type="image/svg+xml" href="/favicon.svg"><meta name="generator" content="Astro v4.16.19"><title>HackIt | Scan History</title><!-- CDNs --><script src="https://cdn.tailwindcss.com"></script><script>
+			tailwind.config = {
+				darkMode: 'class',
+				theme: {
+					extend: {
+						colors: {
+							sf: {
+								blue: 'var(--color-bg-primary)',
+								lightbg: 'var(--color-bg-secondary)',
+								card: 'var(--color-bg-card)',
+								text: 'var(--color-text-primary)',
+								muted: 'var(--color-text-muted)',
+								border: 'var(--color-border)',
+								tabActive: '#38BDF8',
+								green: '#10B981',
+								accent: '#6366F1'
+							}
+						},
+						fontFamily: {
+							sans: ['Inter', 'Outfit', 'sans-serif'],
+						}
+					}
+				}
+			}
+
+			// Theme Initialization
+			if (localStorage.theme === 'light' || (!('theme' in localStorage) && window.matchMedia('(prefers-color-scheme: light)').matches)) {
+				document.documentElement.classList.add('light')
+			} else {
+				document.documentElement.classList.remove('light')
+			}
+		</script><!-- Chart.js --><script src="https://cdn.jsdelivr.net/npm/chart.js"></script><!-- Vis Network for Graphs --><script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet"><link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet"><link rel="stylesheet" href="/_astro/index.CxtM0yBT.css"></head> <body class="bg-sf-lightbg text-sf-text overflow-x-hidden font-sans text-sm h-screen flex flex-col transition-colors duration-300"> <!-- Top Navigation Bar (Industrial Clean Style) --> <header class="bg-sf-lightbg/90 backdrop-blur-md border-b border-sf-border text-sf-text z-50 sticky top-0"> <div class="px-8 h-16 flex items-center justify-between"> <!-- Left side --> <div class="flex items-center gap-10"> <div class="flex items-center gap-3"> <div class="p-1.5 bg-sf-card border border-sf-border rounded-md shadow-sm"> <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5 text-sf-text" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg> </div> <span class="text-lg font-semibold tracking-tight text-sf-text">HackIT <span class="font-normal text-sf-muted">OSINT</span></span> </div> <nav class="hidden lg:flex items-center gap-2"> <a href="/" class="px-4 py-2 hover:bg-sf-card rounded-full flex items-center gap-2 text-sm font-medium transition-all hover:text-sf-tabActive group"> <i class="fas fa-rocket opacity-70 group-hover:scale-110 transition-transform"></i> Launch Pad
+</a> <a href="/intelligence" class="px-4 py-2 hover:bg-sf-card rounded-full flex items-center gap-2 text-sm font-medium transition-all hover:text-sf-tabActive group"> <i class="fas fa-brain opacity-70 group-hover:scale-110 transition-transform"></i> Intelligence
+</a> <a href="/settings" class="px-4 py-2 hover:bg-sf-card rounded-full flex items-center gap-2 text-sm font-medium transition-all hover:text-sf-tabActive group"> <i class="fas fa-cog opacity-70 group-hover:scale-110 transition-transform"></i> Settings
+</a> </nav> </div> <!-- Right side --> <div class="flex items-center gap-4"> <!-- Theme Toggle --> <button id="theme-toggle" class="w-9 h-9 rounded-md border border-sf-border bg-sf-card flex items-center justify-center hover:border-sf-muted transition-all"> <i class="fas fa-moon dark:hidden"></i> <i class="fas fa-sun hidden dark:block text-yellow-500"></i> </button> <div class="h-8 w-px bg-sf-border mx-2"></div> <button class="px-4 py-2 bg-sf-card hover:bg-sf-border border border-sf-border rounded-lg flex items-center gap-2 text-sm font-medium transition-all shadow-sm"> <div class="w-2 h-2 rounded-full bg-sf-green animate-pulse"></div>
+Engine: Online
+</button> <button class="w-10 h-10 rounded-full bg-sf-accent/20 border border-sf-accent/30 flex items-center justify-center text-sf-accent hover:bg-sf-accent hover:text-white transition-all"> <i class="fas fa-user-secret"></i> </button> </div> </div> </header> <!-- Main Content Area --> <main class="flex-1 overflow-y-auto p-0">  <div class="p-8 lg:p-10 space-y-8"> <header> <h2 class="text-xl font-bold text-white tracking-tight">MISSION HISTORY</h2> <p class="text-slate-500 text-xs">Audit trail of all tactical reconnaissance and OSINT operations</p> </header> <div class="bg-[#0a0a0a] border border-white/5 rounded-2xl overflow-hidden shadow-2xl"> <table class="w-full text-left border-collapse"> <thead class="bg-white/[0.02] border-b border-white/5"> <tr> <th class="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">ID</th> <th class="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Target</th> <th class="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Profile</th> <th class="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Findings</th> <th class="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Duration</th> <th class="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Status</th> </tr> </thead> <tbody class="divide-y divide-white/5 text-xs"> <!-- Empty State: No mission history --> <tr> <td colspan="6" class="px-6 py-24 text-center"> <div class="flex flex-col items-center gap-3 opacity-20"> <div class="text-3xl">📜</div> <p class="text-[10px] font-bold tracking-[0.4em] uppercase text-slate-500">History Log Empty</p> <p class="text-[10px] text-slate-700">No tactical engagements recorded in this session</p> </div> </td> </tr> </tbody> </table> </div> </div>  </main> <!-- Copyright Footer --> <footer class="border-t border-sf-border bg-sf-lightbg/80 backdrop-blur-sm py-3 px-8 text-center"> <p class="text-[11px] text-sf-muted tracking-wider">
+&copy; 2026 <a href="https://haniipp.space" target="_blank" class="text-sf-tabActive hover:underline font-medium">Hanif Abdurrohim</a> &mdash; Built with experience, for the security community.
+</p> </footer> <!-- Cookie Consent Banner --> <div id="cookie-banner" class="fixed bottom-6 left-1/2 -translate-x-1/2 z-[999] max-w-2xl w-[90%] bg-sf-card border border-sf-border rounded-2xl shadow-2xl p-5 hidden transition-all duration-500"> <div class="flex items-start gap-4"> <div class="w-10 h-10 rounded-full bg-sf-tabActive/10 flex items-center justify-center flex-shrink-0"> <svg class="w-5 h-5 text-sf-tabActive" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg> </div> <div class="flex-1"> <p class="text-xs text-sf-text leading-relaxed"> <strong class="text-sf-tabActive">Hi, I am Hanif Abdurrohim</strong> as the developer. This tool is built legally based on hands-on experience and real-world cybersecurity expertise. Use responsibly and only on targets you own or have explicit permission to test.
+</p> </div> <button id="cookie-accept" class="flex-shrink-0 px-5 py-2 bg-sf-tabActive text-black text-xs font-bold rounded-lg hover:opacity-90 transition-all uppercase tracking-wider">
+Acknowledge
+</button> </div> </div> <script>
+			// Theme Toggle
+			const themeToggle = document.getElementById('theme-toggle');
+			themeToggle.addEventListener('click', () => {
+				document.documentElement.classList.toggle('light');
+				const isLight = document.documentElement.classList.contains('light');
+				localStorage.theme = isLight ? 'light' : 'dark';
+			});
+			// Cookie Banner
+			(function() {
+				const banner = document.getElementById('cookie-banner');
+				const acceptBtn = document.getElementById('cookie-accept');
+				if (!localStorage.getItem('hackit_cookie_consent')) {
+					setTimeout(() => banner.classList.remove('hidden'), 500);
+				}
+				acceptBtn.addEventListener('click', () => {
+					localStorage.setItem('hackit_cookie_consent', 'acknowledged');
+					banner.classList.add('opacity-0');
+					setTimeout(() => banner.classList.add('hidden'), 300);
+				});
+			})();
+		</script> </body> </html> 

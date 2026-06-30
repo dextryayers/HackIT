@@ -1,6 +1,9 @@
 import httpx
 import re
 import json
+import socket
+import asyncio
+from datetime import datetime
 from urllib.parse import urlparse
 from models import IntelligenceFinding
 
@@ -31,8 +34,60 @@ WHOIS_SOURCES = [
     },
 ]
 
+TLD_WHOIS_SERVERS = {
+    "com": "whois.verisign.com",
+    "net": "whois.verisign.com",
+    "org": "whois.pir.org",
+    "info": "whois.afilias.net",
+    "biz": "whois.neulevel.biz",
+    "io": "whois.nic.io",
+    "co": "whois.nic.co",
+    "app": "whois.nic.google",
+    "dev": "whois.nic.google",
+    "cloud": "whois.nic.cloud",
+    "xyz": "whois.nic.xyz",
+    "online": "whois.nic.online",
+    "site": "whois.nic.site",
+    "tech": "whois.nic.tech",
+    "store": "whois.nic.store",
+    "me": "whois.nic.me",
+    "tv": "whois.nic.tv",
+    "in": "whois.registry.in",
+    "eu": "whois.eu",
+    "uk": "whois.nic.uk",
+    "de": "whois.denic.de",
+    "fr": "whois.nic.fr",
+    "jp": "whois.jprs.jp",
+    "au": "whois.auda.org.au",
+    "ca": "whois.cira.ca",
+    "br": "whois.registro.br",
+    "cn": "whois.cnnic.cn",
+    "ru": "whois.tcinet.ru",
+}
+
 RDAP_BOOTSTRAP_URLS = [
     "https://rdap.verisign.com/com/v1/domain/{domain}",
+    "https://rdap.verisign.com/net/v1/domain/{domain}",
+    "https://rdap.pir.org/domain/{domain}",
+    "https://rdap.afilias.net/rdap/domain/{domain}",
+    "https://rdap.nic.google/domain/{domain}",
+    "https://rdap.nic.xyz/domain/{domain}",
+    "https://rdap.nic.cloud/domain/{domain}",
+    "https://rdap.nic.io/domain/{domain}",
+    "https://rdap.nic.co/domain/{domain}",
+    "https://rdap.registry.in/domain/{domain}",
+    "https://rdap.denic.de/domain/{domain}",
+    "https://rdap.nic.uk/domain/{domain}",
+    "https://rdap.auda.org.au/domain/{domain}",
+    "https://rdap.cira.ca/domain/{domain}",
+    "https://rdap.nic.fr/domain/{domain}",
+    "https://rdap.nic.eu/domain/{domain}",
+    "https://rdap.nic.tv/domain/{domain}",
+    "https://rdap.nic.store/domain/{domain}",
+    "https://rdap.nic.tech/domain/{domain}",
+    "https://rdap.nic.site/domain/{domain}",
+    "https://rdap.nic.online/domain/{domain}",
+    "https://rdap.nic.me/domain/{domain}",
 ]
 
 FIELDS_OF_INTEREST = {
@@ -68,8 +123,23 @@ FIELDS_OF_INTEREST = {
     "Domain Status": "Whois Domain Status",
     "Registrar Abuse Contact Email": "Whois Abuse Contact",
     "Registrar Abuse Contact Phone": "Whois Abuse Phone",
+    "Registrar URL": "Whois Registrar URL",
+    "Registrar IANA ID": "Whois IANA ID",
+    "Registrar Abuse Contact Email": "Whois Abuse Email",
+    "Registrar Abuse Contact Phone": "Whois Abuse Phone",
     "DNSSEC": "Whois DNSSEC",
     "Zone Email": "Whois Zone Email",
+    "OrgName": "Whois Org Name",
+    "OrgId": "Whois Org ID",
+    "Address": "Whois Address",
+    "OrgTechEmail": "Whois Tech Email",
+    "OrgTechPhone": "Whois Tech Phone",
+    "OrgAbuseEmail": "Whois Abuse Email",
+    "OrgAbusePhone": "Whois Abuse Phone",
+    "NetName": "Whois Net Name",
+    "NetRange": "Whois Net Range",
+    "CIDR": "Whois CIDR",
+    "Parent": "Whois Parent Range",
 }
 
 DOMAIN_STATUS_CODES = {
@@ -98,6 +168,8 @@ DOMAIN_STATUS_CODES = {
 
 IANA_ORG_PATTERN = re.compile(r'IANA ID:\s*(\d+)', re.IGNORECASE)
 
+REGISTRAR_ABUSE_KEYWORDS = ["abuse", "complaint", "report", "legal"]
+
 async def fetch_whois_text(domain: str, client: httpx.AsyncClient, source: dict) -> str | None:
     try:
         url = source["url"].format(domain=domain)
@@ -117,6 +189,40 @@ async def fetch_whois_text(domain: str, client: httpx.AsyncClient, source: dict)
             return None
         return text
     except Exception:
+        return None
+
+async def fetch_raw_whois_tcp(domain: str) -> str | None:
+    try:
+        import asyncio
+        tld = domain.split(".")[-1] if "." in domain else ""
+        whois_server = TLD_WHOIS_SERVERS.get(tld, "whois.verisign-grs.com")
+
+        loop = asyncio.get_event_loop()
+
+        def query():
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(10)
+                sock.connect((whois_server, 43))
+                sock.send(f"{domain}\r\n".encode())
+                data = b""
+                while True:
+                    chunk = sock.recv(4096)
+                    if not chunk:
+                        break
+                    data += chunk
+                    if b"%" in chunk:
+                        continue
+                    if len(data) > 65536:
+                        break
+                sock.close()
+                return data.decode("utf-8", errors="ignore")
+            except:
+                return None
+
+        result = await loop.run_in_executor(None, query)
+        return result
+    except:
         return None
 
 def parse_rdap(data: dict) -> dict:
@@ -219,6 +325,9 @@ def extract_abuse_contacts(parsed: dict) -> dict:
             abuse["email"] = value
         if "abuse" in lk and "phone" in lk:
             abuse["phone"] = value
+        if "abuse" in lk and "registrar" in lk:
+            if "@" in value:
+                abuse["email"] = value
     return abuse
 
 def extract_iana_info(parsed: dict) -> str | None:
@@ -229,6 +338,105 @@ def extract_iana_info(parsed: dict) -> str | None:
                 return m.group(1)
     return None
 
+def extract_organization_details(parsed: dict) -> dict:
+    org = {}
+    for raw_key, value in parsed.items():
+        lk = raw_key.lower()
+        if "org" in lk or "organization" in lk:
+            if value and len(value) < 200:
+                org[raw_key] = value
+    return org
+
+def extract_admin_tech_contacts(parsed: dict) -> dict:
+    contacts = {"admin": {}, "tech": {}, "billing": {}}
+    for raw_key, value in parsed.items():
+        lk = raw_key.lower()
+        if "admin" in lk:
+            subtype = lk.replace("admin", "").strip()
+            if subtype:
+                contacts["admin"][subtype] = value
+            else:
+                contacts["admin"]["name"] = value
+        if "tech" in lk:
+            subtype = lk.replace("tech", "").strip()
+            if subtype:
+                contacts["tech"][subtype] = value
+            else:
+                contacts["tech"]["name"] = value
+        if "billing" in lk:
+            subtype = lk.replace("billing", "").strip()
+            if subtype:
+                contacts["billing"][subtype] = value
+            else:
+                contacts["billing"]["name"] = value
+    return contacts
+
+def estimate_domain_value(parsed: dict) -> dict:
+    value_estimate = {
+        "estimated_value": "Unknown",
+        "factors": [],
+        "score": 0
+    }
+    score = 0
+    factors = []
+
+    for raw_key, value in parsed.items():
+        lk = raw_key.lower()
+        if "creation" in lk or "created" in lk:
+            try:
+                year = int(value[:4]) if value[:4].isdigit() else 0
+                age = datetime.now().year - year
+                if age > 15:
+                    score += 30
+                    factors.append(f"Domain age: {age} years (premium)")
+                elif age > 10:
+                    score += 20
+                    factors.append(f"Domain age: {age} years (valuable)")
+                elif age > 5:
+                    score += 10
+                    factors.append(f"Domain age: {age} years (established)")
+                else:
+                    score += 5
+                    factors.append(f"Domain age: {age} years (young)")
+            except:
+                pass
+
+        if "name server" in lk:
+            ns_value = value.lower()
+            if "cloudflare" in ns_value:
+                score += 5
+                factors.append("Uses Cloudflare DNS (active)")
+            elif "aws" in ns_value or "amazon" in ns_value:
+                score += 3
+                factors.append("Uses AWS DNS")
+
+    statuses = extract_domain_statuses(parsed)
+    for code, desc, raw_val in statuses:
+        if code in ("ok",):
+            score += 5
+            factors.append("Domain active (OK status)")
+        elif "prohibit" in code:
+            score += 10
+            factors.append(f"Domain locked ({code})")
+
+    for raw_key, value in parsed.items():
+        if "dnssec" in raw_key.lower():
+            if "signed" in value.lower():
+                score += 5
+                factors.append("DNSSEC signed")
+
+    if score >= 50:
+        value_estimate["estimated_value"] = "High ($500+)"
+    elif score >= 30:
+        value_estimate["estimated_value"] = "Medium ($100-$500)"
+    elif score >= 15:
+        value_estimate["estimated_value"] = "Low ($10-$100)"
+    else:
+        value_estimate["estimated_value"] = "Minimal (<$10)"
+
+    value_estimate["score"] = score
+    value_estimate["factors"] = factors
+    return value_estimate
 
 async def crawl(target: str, client: httpx.AsyncClient):
     findings = []
@@ -249,6 +457,13 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 best_source_name = source["name"]
                 best_type = source["type"]
                 break
+
+        if not best_text:
+            raw_whois = await fetch_raw_whois_tcp(domain)
+            if raw_whois and len(raw_whois) > 100:
+                best_text = raw_whois
+                best_source_name = f"Direct WHOIS (TCP 43)"
+                best_type = "text"
 
         rdap_text = None
         for rdap_url_tpl in RDAP_BOOTSTRAP_URLS:
@@ -441,6 +656,82 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 tags=["whois", "dates", "timeline"],
             ))
 
+        org_details = extract_organization_details(parsed)
+        if org_details:
+            for org_key, org_val in org_details.items():
+                findings.append(IntelligenceFinding(
+                    entity=org_val[:200],
+                    type=f"Whois Organization Detail",
+                    source="WHOIS",
+                    confidence="High",
+                    color="slate",
+                    threat_level="Informational",
+                    status="Extracted",
+                    raw_data=f"{org_key}: {org_val}",
+                    tags=["whois", "organization"],
+                ))
+
+        admin_tech = extract_admin_tech_contacts(parsed)
+        for contact_type, contact_data in admin_tech.items():
+            if contact_data:
+                for subtype, subvalue in contact_data.items():
+                    findings.append(IntelligenceFinding(
+                        entity=subvalue[:200],
+                        type=f"Whois {contact_type.title()} Contact: {subtype.title()}",
+                        source="WHOIS",
+                        confidence="High",
+                        color="slate",
+                        threat_level="Informational",
+                        status="Extracted",
+                        raw_data=f"{contact_type.title()} {subtype.title()}: {subvalue}",
+                        tags=["whois", "contact", contact_type],
+                    ))
+
+        value_estimate = estimate_domain_value(parsed)
+        findings.append(IntelligenceFinding(
+            entity=f"Estimated domain value: {value_estimate['estimated_value']} (score: {value_estimate['score']})",
+            type="Whois Domain Value Estimate",
+            source="WHOIS",
+            confidence="Low",
+            color="gold" if value_estimate['score'] >= 30 else "slate",
+            threat_level="Informational",
+            status="Estimated",
+            raw_data=f"Score: {value_estimate['score']}, Factors: {'; '.join(value_estimate['factors'][:5])}",
+            tags=["whois", "valuation"],
+        ))
+
+        registrar_url = None
+        for raw_key, value in parsed.items():
+            if "registrar url" in raw_key.lower():
+                registrar_url = value
+                break
+        if registrar_url:
+            findings.append(IntelligenceFinding(
+                entity=registrar_url[:200],
+                type="Whois Registrar URL",
+                source="WHOIS",
+                confidence="High",
+                color="slate",
+                threat_level="Informational",
+                tags=["whois", "registrar"],
+            ))
+
+        registrar_name = None
+        for raw_key, value in parsed.items():
+            if raw_key.lower() == "registrar":
+                registrar_name = value
+                break
+        if registrar_name:
+            findings.append(IntelligenceFinding(
+                entity=registrar_name[:200],
+                type="Whois Registrar Name",
+                source="WHOIS",
+                confidence="High",
+                color="slate",
+                threat_level="Informational",
+                tags=["whois", "registrar"],
+            ))
+
         if not findings:
             findings.append(IntelligenceFinding(
                 entity=domain,
@@ -455,7 +746,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ))
 
         findings.append(IntelligenceFinding(
-            entity=f"WHOIS analysis complete: {len(parsed)} fields extracted, {len(contacts)} contact fields, {len(statuses)} status codes",
+            entity=f"WHOIS analysis complete: {len(parsed)} fields extracted, {len(contacts)} contact fields, {len(statuses)} status codes, {len(nameservers)} nameservers",
             type="Whois Summary",
             source="WHOIS",
             confidence="High",

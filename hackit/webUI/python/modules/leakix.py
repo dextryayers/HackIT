@@ -14,6 +14,21 @@ LEAK_CLASSIFICATIONS = {
     "exposed_service": {"type": "Exposed Service", "severity": "Medium", "color": "orange"},
     "vulnerability": {"type": "Vulnerability", "severity": "Critical", "color": "red"},
     "data_breach": {"type": "Data Breach", "severity": "Critical", "color": "red"},
+    "code_repository": {"type": "Code Repository Leak", "severity": "High", "color": "red"},
+    "cloud_asset": {"type": "Cloud Asset Exposure", "severity": "Critical", "color": "red"},
+    "api_key_leak": {"type": "API Key Leak", "severity": "Critical", "color": "red"},
+}
+
+SERVICE_SPECIFIC_RISKS = {
+    "MONGODB": {"risk": "Critical", "desc": "Database tanpa autentikasi"},
+    "ELASTICSEARCH": {"risk": "Critical", "desc": "Database terbuka untuk publik"},
+    "REDIS": {"risk": "Critical", "desc": "Cache store tanpa autentikasi"},
+    "MYSQL": {"risk": "High", "desc": "Database MySQL terbuka"},
+    "MEMCACHED": {"risk": "High", "desc": "Cache store rentan DDoS amplifikasi"},
+    "FTP": {"risk": "High", "desc": "FTP anonymous atau kredensial lemah"},
+    "SMTP": {"risk": "Medium", "desc": "SMTP open relay"},
+    "HTTP": {"risk": "Low", "desc": "Web server standar"},
+    "HTTPS": {"risk": "Low", "desc": "Web server dengan SSL"},
 }
 
 def classify_leak_event(event: dict) -> dict:
@@ -38,6 +53,12 @@ def classify_leak_event(event: dict) -> dict:
         return {"type": "Vulnerability", "severity": "Critical", "color": "red", "category": "vulnerability"}
     if "leak" in leak_str or "breach" in leak_str:
         return {"type": "Data Leak", "severity": "High", "color": "red", "category": "leak"}
+    if "api" in leak_str and ("key" in leak_str or "token" in leak_str):
+        return {"type": "API Key Leak", "severity": "Critical", "color": "red", "category": "credentials"}
+    if "git" in leak_str or "github" in leak_str or "repository" in leak_str:
+        return {"type": "Code Repository Leak", "severity": "High", "color": "red", "category": "code"}
+    if "aws" in leak_str or "s3" in leak_str or "cloud" in leak_str:
+        return {"type": "Cloud Asset Exposure", "severity": "Critical", "color": "red", "category": "cloud"}
     return {"type": "Exposed Service", "severity": "Medium", "color": "orange", "category": "service"}
 
 def extract_service_from_event(event: dict) -> str:
@@ -47,7 +68,9 @@ def extract_service_from_event(event: dict) -> str:
         return service.upper()
     port_map = {21: "FTP", 22: "SSH", 25: "SMTP", 80: "HTTP", 443: "HTTPS", 3306: "MYSQL",
                 3389: "RDP", 5432: "POSTGRESQL", 6379: "REDIS", 8080: "HTTP", 8443: "HTTPS",
-                9200: "ELASTICSEARCH", 11211: "MEMCACHED", 27017: "MONGODB", 27018: "MONGODB"}
+                9200: "ELASTICSEARCH", 11211: "MEMCACHED", 27017: "MONGODB", 27018: "MONGODB",
+                1433: "MSSQL", 1521: "ORACLE", 5900: "VNC", 23: "TELNET", 110: "POP3",
+                993: "IMAPS", 995: "POP3S"}
     return port_map.get(int(port), f"PORT_{port}")
 
 def score_severity_distribution(events: list) -> dict:
@@ -104,6 +127,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
     leak_types = Counter()
     data_classification = Counter()
     timeline_events = []
+    service_risk_counts = Counter()
 
     for event in all_events:
         if not isinstance(event, dict):
@@ -161,6 +185,52 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 threat_level="Informational",
                 raw_data=event["description"][:1000],
                 tags=["details"],
+            ))
+
+        # Service-specific risk analysis
+        if service in SERVICE_SPECIFIC_RISKS:
+            risk_info = SERVICE_SPECIFIC_RISKS[service]
+            service_risk_counts[service] += 1
+            findings.append(IntelligenceFinding(
+                entity=f"{service} risk analysis: {risk_info['desc']}",
+                type=f"LeakIX: {service} Risk Analysis",
+                source="LeakIX",
+                confidence="High",
+                color="red" if risk_info["risk"] in ("Critical", "High") else "orange",
+                threat_level=risk_info["risk"],
+                resolution=ip,
+                raw_data=f"Service {service} teridentifikasi dengan risiko {risk_info['risk']}: {risk_info['desc']}",
+                tags=[f"service-{service.lower()}", "risk-analysis"],
+            ))
+
+        # Extract exposed credentials count if available
+        cred_count = event.get("credential_count", event.get("count", 0))
+        if isinstance(cred_count, int) and cred_count > 0:
+            findings.append(IntelligenceFinding(
+                entity=f"{cred_count} credentials exposed on {ip}:{port}",
+                type="LeakIX: Credential Count",
+                source="LeakIX",
+                confidence="Medium",
+                color="red",
+                threat_level="Critical",
+                resolution=ip,
+                raw_data=f"{cred_count} credentials ditemukan pada {entity}",
+                tags=["credentials", "exposed"],
+            ))
+
+        # CVSS/CVE details
+        cvss = event.get("cvss", event.get("cvss_score", None))
+        if cvss is not None:
+            findings.append(IntelligenceFinding(
+                entity=f"CVSS: {cvss} for {event_name}",
+                type="LeakIX: CVSS Score",
+                source="LeakIX",
+                confidence="High",
+                color="red" if float(cvss) >= 7 else "orange",
+                threat_level="Critical" if float(cvss) >= 9 else ("High" if float(cvss) >= 7 else "Medium"),
+                resolution=ip,
+                raw_data=f"CVSS score: {cvss}",
+                tags=["cvss"],
             ))
 
     for service, count in affected_services.most_common():

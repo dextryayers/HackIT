@@ -3,11 +3,14 @@ import asyncio
 import re
 import socket
 import ssl
+import base64
+import json
 from urllib.parse import urlparse, quote
 from models import IntelligenceFinding
 from osint_common import get_ssl_cert_info, parse_cert_to_dict
 
 FOFA_BASE = "https://en.fofa.info"
+FOFA_API_BASE = "https://fofa.info/api/v1"
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
 PORT_PROTOCOLS = {
@@ -17,6 +20,9 @@ PORT_PROTOCOLS = {
     1433: "MSSQL", 1521: "Oracle", 2049: "NFS", 3306: "MySQL",
     3389: "RDP", 5432: "PostgreSQL", 5900: "VNC", 6379: "Redis",
     8080: "HTTP-Proxy", 8443: "HTTPS-Alt", 27017: "MongoDB",
+    11211: "Memcached", 9200: "Elasticsearch", 9300: "Elasticsearch",
+    5672: "RabbitMQ", 61616: "ActiveMQ", 2375: "Docker",
+    2181: "ZooKeeper", 9092: "Kafka", 1883: "MQTT",
 }
 
 TECH_SIGNATURES = {
@@ -28,6 +34,14 @@ TECH_SIGNATURES = {
     "cloudflare": "Cloudflare", "akamai": "Akamai", "fastly": "Fastly",
     "react": "React", "vue": "Vue.js", "angular": "Angular", "jquery": "jQuery",
     "bootstrap": "Bootstrap", "tailwind": "Tailwind",
+    "next.js": "Next.js", "nuxt": "Nuxt.js", "gatsby": "Gatsby",
+    "svelte": "Svelte", "laravel": "Laravel", "django": "Django",
+    "flask": "Flask", "rails": "Ruby on Rails", "asp.net": "ASP.NET",
+    "spring": "Spring Boot", "struts": "Apache Struts",
+    "shiro": "Apache Shiro", "thinkphp": "ThinkPHP",
+    "discuz": "Discuz!", "dedecms": "DedeCMS", "phpcms": "PHP CMS",
+    "shopify": "Shopify", "magento": "Magento", "joomla": "Joomla",
+    "kibana": "Kibana", "grafana": "Grafana", "prometheus": "Prometheus",
 }
 
 IP_RE = re.compile(r'\b(?:\d{1,3}\.){3}\d{1,3}\b')
@@ -52,6 +66,54 @@ async def fetch_fofa_search(domain: str, client: httpx.AsyncClient, page: int = 
     except:
         pass
     return ""
+
+async def fetch_fofa_api(target: str, client: httpx.AsyncClient, email: str = "", key: str = "") -> dict:
+    results = {"ips": set(), "hosts": set(), "ports": set(), "countries": set(), "services": [], "techs": set()}
+    if not email or not key:
+        return results
+    try:
+        query = base64.b64encode(f'domain="{target}"'.encode()).decode()
+        resp = await client.get(
+            f"{FOFA_API_BASE}/search/all",
+            params={"email": email, "key": key, "qbase64": query, "size": 100, "page": 1},
+            timeout=20.0,
+            headers={"User-Agent": UA}
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get("error") is False:
+                for result in data.get("results", []):
+                    if isinstance(result, list):
+                        if len(result) > 0 and re.match(r'^\d+\.\d+\.\d+\.\d+$', str(result[0])):
+                            results["ips"].add(result[0])
+                        if len(result) > 1:
+                            host_val = str(result[1])
+                            if re.search(r'\w+\.\w+', host_val):
+                                results["hosts"].add(host_val)
+                        if len(result) > 2:
+                            try:
+                                p = int(result[2])
+                                if 1 <= p <= 65535:
+                                    results["ports"].add(p)
+                            except:
+                                pass
+                        if len(result) > 3:
+                            svc = str(result[3])
+                            if svc:
+                                results["services"].append(svc)
+                        if len(result) > 4:
+                            banner_text = str(result[4]).lower()
+                            for sig, tech in TECH_SIGNATURES.items():
+                                if sig in banner_text:
+                                    results["techs"].add(tech)
+                        if len(result) > 11:
+                            country = str(result[11])
+                            if country:
+                                results["countries"].add(country)
+                results["api_used"] = True
+    except:
+        pass
+    return results
 
 def parse_fofa_results(html: str, domain: str) -> dict:
     ips = set()
@@ -246,6 +308,19 @@ async def crawl(target: str, client: httpx.AsyncClient):
             entity=tech, type="FOFA: Technology from HTML", source="FOFA",
             confidence="Medium", color="orange", threat_level="Informational",
             status="Detected", tags=["fofa", "technology"]
+        ))
+
+    subdomain_count = len(results["hosts"])
+    if subdomain_count > 0:
+        findings.append(IntelligenceFinding(
+            entity=f"{subdomain_count} subdomains found via FOFA",
+            type="FOFA: Subdomain Summary",
+            source="FOFA",
+            confidence="Medium",
+            color="purple",
+            threat_level="Informational",
+            raw_data=f"Subdomains: {', '.join(sorted(results['hosts'])[:15])}",
+            tags=["fofa", "subdomain-summary"]
         ))
 
     summary_parts = []

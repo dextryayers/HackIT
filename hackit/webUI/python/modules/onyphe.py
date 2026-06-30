@@ -1,5 +1,6 @@
 import httpx
 import json
+import re
 from models import IntelligenceFinding
 
 ONYPHE_BASE = "https://www.onyphe.io/api/v2"
@@ -16,6 +17,11 @@ DATASCAN_TYPES = {
     "vulnerabilities": {"endpoint": "/simple/vulnerabilities/{target}", "description": "Vulnerability Scan"},
     "threatlist": {"endpoint": "/simple/threatlist/{target}", "description": "Threat List Check"},
     "geoloc": {"endpoint": "/simple/geoloc/{target}", "description": "Geolocation Data"},
+    "whois": {"endpoint": "/simple/whois/{target}", "description": "WHOIS Lookup"},
+    "inetnum": {"endpoint": "/simple/inetnum/{target}", "description": "IP Network Info"},
+    "resolver": {"endpoint": "/simple/resolver/{target}", "description": "DNS Resolver Check"},
+    "forward": {"endpoint": "/simple/forward/{target}", "description": "Forward DNS"},
+    "reverse": {"endpoint": "/simple/reverse/{target}", "description": "Reverse DNS"},
 }
 
 THREAT_CLASSIFICATIONS = {
@@ -28,6 +34,10 @@ THREAT_CLASSIFICATIONS = {
     "cve": {"type": "Vulnerable", "severity": "Critical", "color": "red"},
     "exploit": {"type": "Exploited", "severity": "Critical", "color": "red"},
     "paste": {"type": "Paste Leak", "severity": "High", "color": "red"},
+    "suspicious": {"type": "Suspicious Activity", "severity": "High", "color": "orange"},
+    "ddos": {"type": "DDoS Target", "severity": "Critical", "color": "red"},
+    "proxy": {"type": "Proxy/VPN", "severity": "Medium", "color": "orange"},
+    "tor": {"type": "Tor Exit Node", "severity": "Medium", "color": "orange"},
 }
 
 SERVICE_THREAT_MAP = {
@@ -44,6 +54,9 @@ SERVICE_THREAT_MAP = {
     "https": {"severity": "Low", "color": "slate", "description": "HTTPS Service"},
     "smtp": {"severity": "Medium", "color": "orange", "description": "SMTP Service"},
     "dns": {"severity": "Medium", "color": "orange", "description": "DNS Service"},
+    "vnc": {"severity": "High", "color": "red", "description": "VNC Service"},
+    "smb": {"severity": "High", "color": "red", "description": "SMB Service"},
+    "nfs": {"severity": "High", "color": "red", "description": "NFS Service"},
 }
 
 VULN_SEVERITY_MAP = {
@@ -118,12 +131,13 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
     all_results = []
     for scan_type, config in DATASCAN_TYPES.items():
-        results = await query_onyphe(ip_target if scan_type != "domain" else domain, scan_type, config, client)
+        results = await query_onyphe(ip_target if scan_type not in ("domain", "whois", "forward", "reverse", "resolver") else domain, scan_type, config, client)
         all_results.extend(results)
 
     seen_ips = set()
     seen_pastes = set()
     scanned_types = set()
+    threat_summary = {"Malware": 0, "Botnet": 0, "Scanner": 0, "Phishing": 0, "Paste": 0, "Other": 0}
 
     for result in all_results:
         if result["type"] == "summary":
@@ -167,15 +181,22 @@ async def crawl(target: str, client: httpx.AsyncClient):
         country = item.get("country", item.get("country_code", ""))
         city = item.get("city", "")
         org = item.get("org", item.get("organization", ""))
+        asn = item.get("asn", "")
+
+        # Track threat types for summary
+        cat_lower = category.lower()
+        for threat_key in threat_summary:
+            if threat_key.lower() in cat_lower:
+                threat_summary[threat_key] += 1
+                break
+        else:
+            if threat:
+                threat_summary["Other"] += 1
 
         dedup_key = f"{ip}:{port}"
         if dedup_key in seen_ips:
             continue
         seen_ips.add(dedup_key)
-
-        tls = item.get("tls", item.get("ssl", {}))
-        if isinstance(tls, dict):
-            pass
 
         if scan_type == "vulnerabilities":
             vuln_id = item.get("cve", item.get("vuln_id", item.get("id", "")))
@@ -237,19 +258,50 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ))
             continue
 
-        if scan_type == "synscan":
+        if scan_type == "synscan" or scan_type == "ports":
             open_ports = item.get("ports", item.get("open_ports", ""))
             if open_ports:
                 findings.append(IntelligenceFinding(
-                    entity=f"{ip}: Open ports via SYN scan: {open_ports}",
-                    type="Onyphe: SYN Scan",
+                    entity=f"{ip}: Open ports: {open_ports}",
+                    type="Onyphe: Port Scan",
                     source="Onyphe",
                     confidence="High",
                     color="orange",
                     threat_level="Elevated Risk",
                     resolution=ip,
                     raw_data=json.dumps(item)[:1000],
-                    tags=["synscan"],
+                    tags=["port-scan"],
+                ))
+            continue
+
+        if scan_type == "whois":
+            org_name = item.get("org", item.get("organization", ""))
+            abuse_email = item.get("abuse_email", "")
+            if org_name or abuse_email:
+                findings.append(IntelligenceFinding(
+                    entity=f"WHOIS: {org_name or domain}",
+                    type="Onyphe: WHOIS",
+                    source="Onyphe",
+                    confidence="High",
+                    color="slate",
+                    threat_level="Informational",
+                    raw_data=json.dumps(item)[:1000],
+                    tags=["whois"],
+                ))
+            continue
+
+        if scan_type == "resolver" or scan_type == "forward" or scan_type == "reverse":
+            hostname = item.get("hostname", item.get("forward", item.get("reverse", "")))
+            if hostname:
+                findings.append(IntelligenceFinding(
+                    entity=f"DNS: {hostname}",
+                    type="Onyphe: DNS Resolution",
+                    source="Onyphe",
+                    confidence="High",
+                    color="blue",
+                    threat_level="Informational",
+                    raw_data=json.dumps(item)[:500],
+                    tags=["dns"],
                 ))
             continue
 
@@ -273,28 +325,31 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 tags=[f"port-{port}", f"service-{service_name}" if service_name else "service"],
             ))
 
-            if country or city or org:
-                loc_parts = []
-                if city:
-                    loc_parts.append(city)
-                if country:
-                    loc_parts.append(country)
-                if org:
-                    loc_parts.append(f"({org})")
-                loc_str = " ".join(loc_parts)
-                findings.append(IntelligenceFinding(
-                    entity=loc_str[:200],
-                    type="Onyphe: Geolocation",
-                    source="Onyphe",
-                    confidence="High",
-                    color="slate",
-                    threat_level="Informational",
-                    resolution=ip,
-                    raw_data=f"Location for {ip}: {loc_str}",
-                    tags=["geolocation"],
-                ))
+        # Geolocation/ASN info
+        if any([country, city, org, asn]):
+            loc_parts = []
+            if city:
+                loc_parts.append(city)
+            if country:
+                loc_parts.append(country)
+            if asn:
+                loc_parts.append(f"AS{asn}")
+            if org:
+                loc_parts.append(f"({org})")
+            loc_str = " ".join(loc_parts)
+            findings.append(IntelligenceFinding(
+                entity=loc_str[:200],
+                type="Onyphe: Geolocation/ASN",
+                source="Onyphe",
+                confidence="High",
+                color="slate",
+                threat_level="Informational",
+                resolution=ip,
+                raw_data=f"Location for {ip}: {loc_str}",
+                tags=["geolocation"],
+            ))
 
-        if category and scan_type not in ("pastries", "threatlist", "vulnerabilities", "synscan"):
+        if category and scan_type not in ("pastries", "threatlist", "vulnerabilities", "synscan", "ports", "whois", "ip", "domain"):
             classification = classify_threat(item)
             findings.append(IntelligenceFinding(
                 entity=f"{ip}:{port} categorized as {category}",
@@ -307,6 +362,20 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 raw_data=json.dumps(item)[:1000],
                 tags=["category", f"onyphe-{scan_type}"],
             ))
+
+    # Threat intelligence summary
+    if any(threat_summary.values()):
+        threat_parts = [f"{k}: {v}" for k, v in threat_summary.items() if v > 0]
+        findings.append(IntelligenceFinding(
+            entity=f"Threat intelligence: {', '.join(threat_parts)}",
+            type="Onyphe: Threat Intelligence Summary",
+            source="Onyphe",
+            confidence="High",
+            color="red" if threat_summary.get("Malware", 0) or threat_summary.get("Botnet", 0) else "orange",
+            threat_level="High Risk" if threat_summary.get("Malware", 0) or threat_summary.get("Botnet", 0) else "Elevated Risk",
+            raw_data=json.dumps(threat_summary),
+            tags=["threat-intel"],
+        ))
 
     scan_type_names = [s for s in scanned_types]
     if scan_type_names:

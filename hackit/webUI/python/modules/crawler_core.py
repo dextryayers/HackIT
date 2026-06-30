@@ -20,6 +20,10 @@ SITEMAP_ATTR_RE = re.compile(r'<(?:lastmod|changefreq|priority)[^>]*>(.*?)</\w+>
 ROBOTS_SITEMAP_RE = re.compile(r'Sitemap:\s*(.*)', re.IGNORECASE)
 CRAWL_DELAY_RE = re.compile(r'Crawl-delay:\s*(\d+)', re.IGNORECASE)
 
+LOGIN_FORM_KEYWORDS = ["login", "signin", "sign-in", "log in", "log_in", "username", "password"]
+SEARCH_FORM_KEYWORDS = ["search", "q=", "query", "find"]
+CONTACT_FORM_KEYWORDS = ["contact", "feedback", "support", "inquiry"]
+
 HIDDEN_PARAM_NAMES = {"debug", "test", "dev", "admin", "mode", "source",
     "token", "api_key", "apikey", "key", "secret", "password", "passwd",
     "auth", "access", "bypass", "override", "config", "env", "environment"}
@@ -39,6 +43,123 @@ EXTENSION_PRIORITY = {
     ".env": "Environment Config",
     ".git": "Git Exposure",
 }
+
+CRAWL_PATHS = [
+    "/", "/index.html", "/index.php", "/index.asp", "/index.aspx", "/index.jsp",
+    "/home", "/home.html", "/home.php",
+    "/about", "/about.html", "/about.php", "/about-us", "/about_us",
+    "/contact", "/contact.html", "/contact.php", "/contact-us", "/contact_us",
+    "/services", "/service", "/products", "/product", "/portfolio",
+    "/blog", "/news", "/articles", "/posts", "/category", "/tags",
+    "/login", "/signin", "/register", "/signup", "/logout", "/forgot",
+    "/admin", "/administrator", "/dashboard", "/panel", "/cpanel",
+    "/search", "/results", "/search-results",
+    "/faq", "/help", "/support", "/tickets", "/knowledge-base",
+    "/terms", "/privacy", "/privacy-policy", "/cookie-policy",
+    "/sitemap", "/sitemap.xml", "/sitemap_index.xml", "/robots.txt",
+    "/api", "/api/", "/api/v1", "/api/v2", "/api/v3",
+    "/graphql", "/swagger", "/swagger-ui", "/docs",
+    "/health", "/healthz", "/status", "/info", "/version", "/ping",
+    ".env", "/.env", "/config", "/configuration",
+    "/backup", "/backups", "/backup.zip", "/backup.sql", "/dump.sql",
+    "/wp-admin", "/wp-content", "/wp-includes", "/wp-json", "/wp-login",
+    "/administrator", "/joomla", "/drupal",
+    "/css", "/css/", "/styles", "/stylesheets",
+    "/js", "/js/", "/javascript", "/scripts",
+    "/images", "/img", "/assets", "/static", "/public", "/uploads",
+    "/download", "/downloads", "/files", "/file",
+    "/fonts", "/font", "/webfonts",
+    "/favicon.ico", "/favicon.png", "/apple-touch-icon.png",
+    "/manifest.json", "/service-worker.js", "/sw.js",
+    "/.well-known/", "/.well-known/security.txt",
+    "/crossdomain.xml", "/clientaccesspolicy.xml",
+    "/robots.txt", "/humans.txt", "/security.txt",
+    "/404", "/500", "/error", "/error.html",
+    "/test", "/tests", "/testing", "/dev", "/development",
+    "/staging", "/stage", "/beta", "/alpha",
+    "/v1", "/v2", "/v3", "/v4",
+    "/external", "/internal", "/private", "/public",
+    "/archive", "/archives", "/old", "/temp", "/tmp",
+    "/cache", "/cached", "/cdn-cgi",
+    "/stats", "/statistics", "/analytics", "/metrics",
+    "/monitor", "/monitoring", "/status",
+    "/webhook", "/webhooks", "/callback", "/callbacks",
+    "/oauth", "/oauth2", "/oidc", "/saml",
+    "/sso", "/auth", "/authorize", "/authenticate",
+    "/session", "/sessions", "/token", "/tokens",
+    "/profile", "/profiles", "/account", "/accounts",
+    "/user", "/users", "/member", "/members",
+    "/group", "/groups", "/team", "/teams",
+    "/organization", "/organizations", "/org",
+    "/setting", "/settings", "/preference", "/preferences",
+    "/notification", "/notifications", "/notify",
+    "/message", "/messages", "/inbox", "/outbox",
+    "/comment", "/comments", "/review", "/reviews",
+    "/rating", "/ratings", "/vote", "/votes",
+    "/subscription", "/subscriptions", "/subscribe",
+    "/payment", "/payments", "/checkout", "/cart",
+    "/order", "/orders", "/invoice", "/invoices",
+    "/receipt", "/receipts", "/transaction", "/transactions",
+    "/shipping", "/tracking", "/delivery",
+    "/wishlist", "/favorite", "/favorites", "/like", "/likes",
+    "/follow", "/following", "/follower", "/followers",
+    "/share", "/shared", "/social",
+    "/upload", "/uploads", "/download", "/downloads",
+    "/import", "/exports", "/export",
+    "/report", "/reports", "/print", "/pdf",
+    "/calendar", "/event", "/events", "/schedule",
+    "/gallery", "/photo", "/photos", "/video", "/videos",
+    "/media", "/medias",
+    "/rss", "/feed", "/feeds", "/atom.xml", "/rss.xml",
+    "/sitemap.xml.gz", "/sitemap.gz", "/sitemapindex.xml",
+    "/amp", "/amp/", "/mobile", "/mobile/",
+    "/app", "/apps", "/api/app",
+    "/locale", "/locales", "/language", "/languages",
+    "/country", "/region", "/city", "/location",
+    "/map", "/maps", "/directions",
+    "/weather", "/time", "/date",
+    "/calculator", "/converter", "/tool", "/tools",
+    "/widget", "/widgets", "/embed",
+    "/banner", "/banners", "/ad", "/ads",
+    "/promo", "/promotions", "/coupon", "/coupons",
+    "/affiliate", "/referral", "/refer",
+    "/partner", "/partners", "/vendor", "/vendors",
+    "/career", "/careers", "/job", "/jobs",
+    "/internship", "/volunteer",
+    "/investor", "/investors", "/press", "/press-release",
+    "/legal", "/compliance", "/gdpr", "/ccpa",
+    "/accessibility", "/a11y", "/disability",
+    "/security", "/responsible-disclosure",
+    "/bug-bounty", "/hall-of-fame", "/credits",
+    "/changelog", "/release-notes", "/roadmap",
+    "/status", "/uptime", "/incident", "/incidents",
+    "/remote", "/remote-work", "/hybrid",
+    "/pricing", "/plans", "/enterprise", "/business",
+    "/startup", "/nonprofit", "/education", "/student",
+    "/demo", "/trial", "/free-trial", "/request-demo",
+    "/webinar", "/workshop", "/training", "/tutorial",
+    "/documentation", "/docs", "/wiki", "/knowledge",
+    "/manual", "/guide", "/handbook", "/playbook",
+    "/faq", "/questions", "/answers",
+    "/forum", "/forums", "/community", "/discuss",
+    "/chat", "/live-chat", "/messenger",
+    "/newsletter", "/newsletters", "/digest",
+    "/webmail", "/email", "/mail",
+    "/owa", "/exchange", "/outlook",
+    "/remote-desktop", "/rdp", "/vnc",
+    "/vpn", "/remote-access", "/ssh",
+    "/proxy", "/gateway", "/tunnel",
+    "/mysql", "/phpmyadmin", "/pma", "/adminer",
+    "/redis", "/memcached", "/rabbitmq",
+    "/elasticsearch", "/kibana", "/grafana",
+    "/prometheus", "/alertmanager",
+    "/jenkins", "/jira", "/confluence", "/gitlab",
+    "/sonarqube", "/nexus", "/artifactory",
+    "/k8s", "/kubernetes", "/docker", "/swarm",
+    "/rancher", "/openshift", "/nomad",
+    "/consul", "/vault", "/etcd",
+    "/terraform", "/ansible", "/puppet", "/chef",
+]
 
 async def fetch_url_with_fallback(client, url, timeout=10.0):
     for scheme in ["https", "http"]:
@@ -202,6 +323,21 @@ async def analyze_robots_txt(client, base_url):
                         status="Allowed",
                         tags=["robots", "allowed"]
                     ))
+
+            crawl_rules = re.findall(r"(User-agent|Disallow|Allow|Crawl-delay|Sitemap|Host|Clean-param):\s*(.*)", text)
+            if crawl_rules:
+                for rule_type, rule_val in crawl_rules:
+                    if rule_type.strip().lower() not in ("user-agent", "disallow", "allow"):
+                        findings.append(IntelligenceFinding(
+                            entity=f"{rule_type}: {rule_val.strip()[:100]}",
+                            type="Robots.txt Extra Directive",
+                            source="CrawlerCore",
+                            confidence="High",
+                            color="slate",
+                            category="Web Crawling & Content Discovery",
+                            threat_level="Informational",
+                            tags=["robots", "directive"]
+                        ))
     except:
         pass
     return findings, sitemaps_found
@@ -214,6 +350,19 @@ async def analyze_page(client, url, domain):
         if resp.status_code != 200:
             return findings
         html = resp.text
+
+        content_type = resp.headers.get("content-type", "")
+        if content_type:
+            findings.append(IntelligenceFinding(
+                entity=f"Content-Type: {content_type[:100]}",
+                type="Page Content Type",
+                source="CrawlerCore",
+                confidence="High",
+                color="slate",
+                category="Web Crawling & Content Discovery",
+                threat_level="Informational",
+                tags=["metadata", "content-type"]
+            ))
 
         links = LINK_RE.findall(html)
         internal_links = set()
@@ -278,8 +427,25 @@ async def analyze_page(client, url, domain):
 
         forms = FORM_RE.findall(html)
         if forms:
+            form_count = len(forms)
+            form_types = []
+            for form_action in forms:
+                form_tag_match = re.search(r'<form[^>]*action=["\']' + re.escape(form_action) + r'["\'][^>]*>', html[:30000], re.I)
+                if form_tag_match:
+                    form_html = form_tag_match.group(0).lower()
+                    if any(k in form_html for k in LOGIN_FORM_KEYWORDS):
+                        form_types.append("login")
+                    elif any(k in form_html for k in SEARCH_FORM_KEYWORDS):
+                        form_types.append("search")
+                    elif any(k in form_html for k in CONTACT_FORM_KEYWORDS):
+                        form_types.append("contact")
+                    else:
+                        form_types.append("generic")
+                else:
+                    form_types.append("generic")
+
             findings.append(IntelligenceFinding(
-                entity=f"{len(forms)} forms detected",
+                entity=f"{form_count} forms detected ({', '.join(set(form_types))})",
                 type="Form Discovery",
                 source="CrawlerCore",
                 confidence="High",
@@ -290,6 +456,32 @@ async def analyze_page(client, url, domain):
                 raw_data="\n".join(forms[:5]),
                 tags=["forms"]
             ))
+
+            if "login" in form_types:
+                findings.append(IntelligenceFinding(
+                    entity=f"Login form(s) detected on {url[:80]}",
+                    type="Login Form Discovery",
+                    source="CrawlerCore",
+                    confidence="High",
+                    color="red",
+                    category="Web Crawling & Content Discovery",
+                    threat_level="Elevated Risk",
+                    status="Login Form",
+                    tags=["forms", "login", "authentication"]
+                ))
+
+            if "search" in form_types:
+                findings.append(IntelligenceFinding(
+                    entity=f"Search form(s) detected on {url[:80]}",
+                    type="Search Form Discovery",
+                    source="CrawlerCore",
+                    confidence="High",
+                    color="slate",
+                    category="Web Crawling & Content Discovery",
+                    threat_level="Informational",
+                    status="Search Form",
+                    tags=["forms", "search"]
+                ))
 
             inputs = INPUT_RE.findall(html)
             hidden_inputs = [i for i in inputs if any(p in i.lower() for p in HIDDEN_PARAM_NAMES)]
@@ -322,7 +514,7 @@ async def analyze_page(client, url, domain):
 
         meta_tags = META_RE.findall(html)
         for name, content in meta_tags[:5]:
-            if name.lower() in ("description", "keywords", "robots", "author"):
+            if name.lower() in ("description", "keywords", "robots", "author", "viewport", "generator"):
                 findings.append(IntelligenceFinding(
                     entity=f"Meta {name}: {content[:200]}",
                     type="Meta Tag",
@@ -350,6 +542,73 @@ async def analyze_page(client, url, domain):
                     tags=["parameters"]
                 ))
 
+        css_files = re.findall(r'<link[^>]+href=["\']([^"\']*\.css[^"\']*)["\']', html, re.I)
+        if css_files:
+            findings.append(IntelligenceFinding(
+                entity=f"{len(css_files)} CSS files referenced",
+                type="CSS Discovery",
+                source="CrawlerCore",
+                confidence="High",
+                color="slate",
+                category="Web Crawling & Content Discovery",
+                threat_level="Informational",
+                tags=["css", "assets"]
+            ))
+
+        images = re.findall(r'<img[^>]+src=["\']([^"\']+)["\']', html, re.I)
+        if images:
+            findings.append(IntelligenceFinding(
+                entity=f"{len(images)} images found on {url[:80]}",
+                type="Image Discovery",
+                source="CrawlerCore",
+                confidence="High",
+                color="slate",
+                category="Web Crawling & Content Discovery",
+                threat_level="Informational",
+                tags=["images", "assets"]
+            ))
+
+        fonts = re.findall(r'url\(["\']?([^"\')]+\.(?:woff|woff2|ttf|eot|otf))["\']?\)', html, re.I)
+        font_links = re.findall(r'<link[^>]+href=["\']([^"\']*\.(?:woff|woff2|ttf|eot|otf)[^"\']*)["\']', html, re.I)
+        all_fonts = set(fonts + font_links)
+        if all_fonts:
+            findings.append(IntelligenceFinding(
+                entity=f"{len(all_fonts)} font resources found",
+                type="Font Discovery",
+                source="CrawlerCore",
+                confidence="Medium",
+                color="slate",
+                category="Web Crawling & Content Discovery",
+                threat_level="Informational",
+                tags=["fonts", "assets"]
+            ))
+
+        iframes = re.findall(r'<iframe[^>]+src=["\']([^"\']+)["\']', html, re.I)
+        if iframes:
+            findings.append(IntelligenceFinding(
+                entity=f"{len(iframes)} iframes found on {url[:80]}",
+                type="IFrame Discovery",
+                source="CrawlerCore",
+                confidence="High",
+                color="orange",
+                category="Web Crawling & Content Discovery",
+                threat_level="Informational",
+                tags=["iframes", "embedded"]
+            ))
+
+        structured_data = re.findall(r'<script[^>]+type=["\']application/ld\+json["\']>([\s\S]*?)</script>', html, re.I)
+        if structured_data:
+            findings.append(IntelligenceFinding(
+                entity=f"{len(structured_data)} JSON-LD structured data blocks",
+                type="Structured Data Discovery",
+                source="CrawlerCore",
+                confidence="Medium",
+                color="slate",
+                category="Web Crawling & Content Discovery",
+                threat_level="Informational",
+                tags=["structured-data", "seo"]
+            ))
+
     except:
         pass
     return findings
@@ -370,6 +629,8 @@ async def crawl(target: str, client: httpx.AsyncClient):
         f"{base_url}/sitemap_index.xml",
         f"{base_url}/sitemap1.xml",
         f"{base_url}/sitemapindex.xml",
+        f"{base_url}/sitemap.xml.gz",
+        f"{base_url}/sitemap_index.xml.gz",
     ])
 
     visited = set()
@@ -426,5 +687,11 @@ async def crawl(target: str, client: httpx.AsyncClient):
     else:
         page_results_initial = await analyze_page(client, base_url, domain)
         findings.extend(page_results_initial)
+
+    path_discovery_tasks = [analyze_page(client, urljoin(base_url, p), domain) for p in CRAWL_PATHS[:20]]
+    path_results = await asyncio.gather(*path_discovery_tasks, return_exceptions=True)
+    for pr in path_results:
+        if isinstance(pr, list):
+            findings.extend(pr)
 
     return findings

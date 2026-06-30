@@ -1,5 +1,6 @@
 import httpx
 import re
+from collections import defaultdict
 from urllib.parse import urlparse, urljoin
 from models import IntelligenceFinding
 
@@ -14,8 +15,166 @@ SOCIAL_DOMAINS = {
 }
 
 ASSET_EXTENSIONS = {".js", ".css", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp",
-                    ".woff", ".woff2", ".ttf", ".eot", ".ico", ".mp4", ".webm",
-                    ".pdf", ".zip", ".gz", ".json", ".xml", ".yaml", ".yml"}
+    ".woff", ".woff2", ".ttf", ".eot", ".ico", ".mp4", ".webm",
+    ".pdf", ".zip", ".gz", ".json", ".xml", ".yaml", ".yml"}
+
+PATH_PATTERNS = [
+    "/", "/api", "/api/", "/api/v1", "/api/v2", "/api/v3",
+    "/v1", "/v2", "/v3", "/v1/", "/v2/", "/v3/",
+    "/admin", "/admin/", "/administrator", "/administrator/",
+    "/manager", "/backend", "/dashboard", "/panel", "/cpanel",
+    "/login", "/login.php", "/signin", "/register",
+    "/logout", "/forgot", "/reset",
+    "/user", "/users", "/admin/user", "/admin/users",
+    "/profile", "/account", "/settings",
+    "/config", "/configuration", "/settings",
+    "/.env", "/env", "/environment",
+    "/robots.txt", "/sitemap.xml", "/sitemap_index.xml",
+    "/crossdomain.xml", "/clientaccesspolicy.xml",
+    "/security.txt", "/humans.txt", "/ads.txt",
+    "/well-known/", "/.well-known/security.txt",
+    "/swagger", "/swagger-ui", "/swagger.json",
+    "/openapi.json", "/api-docs", "/docs", "/redoc",
+    "/graphql", "/graphiql",
+    "/wp-admin", "/wp-content", "/wp-includes", "/wp-json",
+    "/wp-login.php", "/wp-config.php",
+    "/joomla", "/drupal", "/magento",
+    "/phpmyadmin", "/pma", "/adminer.php",
+    "/backup", "/backup.zip", "/backup.sql",
+    "/dump.sql", "/db.sql", "/database.sql",
+    "/error.log", "/access.log", "/debug.log",
+    "/log.txt", "/logs", "/log",
+    "/.git/config", "/.gitignore", "/.git/HEAD",
+    "/.svn/entries", "/.svn/wc.db",
+    "/.DS_Store", "/Thumbs.db",
+    "/.htaccess", "/.htpasswd",
+    "/id_rsa", "/id_rsa.pub",
+    "/.ssh/id_rsa", "/.ssh/id_rsa.pub",
+    "/.aws/credentials", "/.aws/config",
+    "/.azure/credentials", "/.azure/config",
+    "/.gcloud/credentials", "/.gcloud/config",
+    "/.npmrc", "/.dockercfg", "/.netrc",
+    "/Dockerfile", "/docker-compose.yml",
+    "/docker-compose.yaml",
+    "/Jenkinsfile", "/Makefile",
+    "/.github/workflows/", "/.gitlab-ci.yml",
+    "/.travis.yml", "/.circleci/config.yml",
+    "/bitbucket-pipelines.yml", "/azure-pipelines.yml",
+    "/requirements.txt", "/Pipfile", "/Gemfile",
+    "/composer.json", "/package.json",
+    "/yarn.lock", "/pnpm-lock.yaml",
+    "/webpack.config.js", "/vite.config.js",
+    "/tsconfig.json", "/babel.config.js",
+    "/.eslintrc", "/.prettierrc",
+    "/Procfile", "/runtime.txt",
+    "/Vagrantfile", "/terraform/",
+    "/ansible/", "/playbook.yml",
+    "/k8s/", "/kubernetes/",
+    "/helm/", "/Chart.yaml",
+    "/nginx.conf", "/httpd.conf", "/apache.conf",
+    "/pom.xml", "/build.gradle",
+    "/web.xml", "/application.properties",
+    "/application.yml", "/application.json",
+    "/logback.xml", "/log4j.properties",
+    "/appsettings.json", "/appsettings.Development.json",
+    "/.env.production", "/.env.development",
+    "/.env.local", "/.env.example",
+    "/index.php", "/index.html", "/index.asp", "/index.aspx",
+    "/default.aspx", "/default.asp",
+    "/phpinfo.php", "/info.php", "/test.php",
+    "/health", "/healthz", "/status",
+    "/metrics", "/prometheus",
+    "/actuator", "/actuator/health", "/actuator/info",
+    "/actuator/env", "/actuator/metrics",
+    "/actuator/beans", "/actuator/mappings",
+    "/actuator/threaddump", "/actuator/heapdump",
+    "/actuator/loggers", "/actuator/configprops",
+    "/actuator/gateway", "/actuator/refresh",
+    "/favicon.ico", "/apple-touch-icon.png",
+    "/apple-touch-icon-precomposed.png",
+    "/manifest.json", "/manifest.webmanifest",
+    "/service-worker.js", "/sw.js",
+    "/browserconfig.xml",
+    "/rss.xml", "/atom.xml", "/feed.xml",
+    "/opensearch.xml",
+    "/search", "/search/", "/search-results",
+    "/contact", "/contact-us", "/about", "/about-us",
+    "/faq", "/help", "/support",
+    "/terms", "/privacy", "/privacy-policy",
+    "/pricing", "/plans", "/enterprise",
+    "/blog", "/news", "/articles", "/posts",
+    "/careers", "/jobs", "/team",
+    "/portfolio", "/gallery", "/showcase",
+    "/services", "/features", "/solutions",
+    "/testimonials", "/reviews", "/case-studies",
+    "/partners", "/affiliates", "/referrals",
+    "/developers", "/api/docs", "/documentation",
+    "/status", "/uptime", "/changelog",
+    "/sitemap", "/sitemaps",
+    "/page-sitemap.xml", "/post-sitemap.xml",
+    "/category-sitemap.xml", "/tag-sitemap.xml",
+    "/amp", "/amp/", "/amp.html",
+    "/mobile", "/mobile/",
+    "/app", "/apps", "/app-download",
+    "/webapp", "/pwa",
+    "/cdn-cgi/", "/cdn-cgi/l/email-protection",
+    "/.well-known/acme-challenge/",
+    "/.well-known/pki-validation/",
+    "/.well-known/change-password",
+    "/.well-known/assetlinks.json",
+    "/google-services.json",
+    "/GoogleService-Info.plist",
+    "/.env.vault", "/env.vault",
+    "/sendgrid.env", "/mailgun.env",
+    "/.stripe.env", "/stripe.env",
+    "/.pgpass", "/pgpass",
+    "/my.cnf", "/.my.cnf",
+    "/.mylogin.cnf",
+    "/databases", "/database",
+    "/mongodb", "/redis", "/elasticsearch",
+    "/kibana", "/grafana", "/prometheus",
+    "/rabbitmq", "/beanstalkd", "/memcached",
+    "/jenkins", "/jira", "/confluence",
+    "/gitlab", "/gitea", "/gogs",
+    "/sonarqube", "/nexus", "/artifactory",
+    "/rancher", "/portainer", "/traefik",
+    "/minio", "/s3", "/storage",
+    "/webmail", "/roundcube", "/squirrelmail",
+    "/rainloop", "/snappymail",
+    "/mail", "/email",
+    "/owa", "/exchange", "/ecp",
+    "/remote", "/rdp", "/vnc",
+    "/vpn", "/openvpn", "/wireguard",
+    "/proxy", "/squid",
+    "/webdav", "/dav",
+]
+
+CT_CLASSIFICATION = {
+    "text/html": "HTML Document",
+    "text/plain": "Plain Text",
+    "text/css": "CSS Stylesheet",
+    "text/javascript": "JavaScript",
+    "application/javascript": "JavaScript",
+    "application/json": "JSON Data",
+    "application/xml": "XML Data",
+    "application/pdf": "PDF Document",
+    "application/zip": "ZIP Archive",
+    "application/gzip": "GZIP Archive",
+    "image/png": "PNG Image",
+    "image/jpeg": "JPEG Image",
+    "image/gif": "GIF Image",
+    "image/svg+xml": "SVG Image",
+    "image/webp": "WebP Image",
+    "image/x-icon": "Favicon",
+    "application/font-woff": "WOFF Font",
+    "application/font-woff2": "WOFF2 Font",
+    "font/ttf": "TTF Font",
+    "font/otf": "OTF Font",
+    "application/x-font-ttf": "TTF Font",
+    "application/x-font-otf": "OTF Font",
+    "application/vnd.ms-fontobject": "EOT Font",
+}
+
 
 async def crawl(target: str, client: httpx.AsyncClient):
     findings = []
@@ -41,12 +200,18 @@ async def crawl(target: str, client: httpx.AsyncClient):
         final_domain = final_parsed.netloc
 
         content_type = resp.headers.get("content-type", "")
-        content_length = resp.headers.get("content-length", "")
+        content_length = resp.headers.get("content-length", "0")
         js_detected = False
+
+        ct_class = "Unknown"
+        for ct_key, ct_label in CT_CLASSIFICATION.items():
+            if ct_key in content_type:
+                ct_class = ct_label
+                break
 
         if "text/html" not in content_type:
             findings.append(IntelligenceFinding(
-                entity=f"Content-Type: {content_type}",
+                entity=f"Content-Type: {content_type} ({ct_class})",
                 type="Non-HTML Response",
                 source="WebSurfaceMapper",
                 confidence="High",
@@ -125,6 +290,20 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     color="slate",
                     threat_level="Informational",
                     tags=["metadata"]
+                ))
+
+        meta_generator = re.search(r'<meta\s+[^>]*name=["\']generator["\'][^>]*content=["\']([^"\']*)["\']', html, re.IGNORECASE)
+        if meta_generator:
+            generator = meta_generator.group(1).strip()[:200]
+            if generator:
+                findings.append(IntelligenceFinding(
+                    entity=generator[:200],
+                    type="Generator Meta Tag",
+                    source="WebSurfaceMapper",
+                    confidence="High",
+                    color="slate",
+                    threat_level="Informational",
+                    tags=["metadata", "generator"]
                 ))
 
         favicon = re.search(r'<link[^>]*rel=["\'](?:shortcut )?icon["\'][^>]*href=["\']([^"\']+)["\']', html, re.IGNORECASE)
@@ -285,36 +464,18 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         tags=["font", "resource"]
                     ))
 
-        for m in re.finditer(r'<form[^>]*action=["\']([^"\']*)["\']', html, re.IGNORECASE):
-            action = m.group(1) or "(self)"
+        forms_found = re.findall(r'<form[^>]*action=["\']([^"\']*)["\']', html, re.IGNORECASE)
+        for form_action in forms_found[:10]:
+            action = form_action or "(self)"
             full_action = urljoin(final_url, action) if action != "(self)" else final_url
-            form_tag = m.group(0)
-            inputs = re.findall(r'<input[^>]+>', html[html.find(m.group(0)):html.find(m.group(0)) + 2000], re.IGNORECASE)
-            input_types = []
-            for inp in inputs[:10]:
-                itype = re.search(r'type=["\']([^"\']+)["\']', inp, re.IGNORECASE)
-                iname = re.search(r'name=["\']([^"\']+)["\']', inp, re.IGNORECASE)
-                part = ""
-                if iname:
-                    part = iname.group(1)
-                if itype:
-                    part = f"{itype.group(1)}" + (f":{part}" if part else "")
-                if part:
-                    input_types.append(part)
-            method_match = re.search(r'method=["\']([^"\']+)["\']', form_tag, re.IGNORECASE)
-            method = method_match.group(1).upper() if method_match else "GET"
-
-            sensitive_keywords = ["password", "passwd", "secret", "token", "key", "api", "auth", "login", "email", "credit", "card", "ssn", "dob"]
-            has_sensitive = any(k in m.group(0).lower() for k in sensitive_keywords)
             findings.append(IntelligenceFinding(
-                entity=f"{method} {full_action[:150]}",
-                type="Form Endpoint" if not has_sensitive else "Form Endpoint (Sensitive)",
+                entity=full_action[:150],
+                type="Form Endpoint",
                 source="WebSurfaceMapper",
                 confidence="High",
-                color="red" if has_sensitive else "orange",
-                threat_level="Elevated Risk" if has_sensitive else "Informational",
-                raw_data=f"Method: {method} | Fields: {', '.join(input_types[:8])}" if input_types else f"Method: {method}",
-                tags=["form"] + (["sensitive"] if has_sensitive else [])
+                color="orange",
+                threat_level="Informational",
+                tags=["form"]
             ))
 
         internal_links = set()
@@ -439,6 +600,33 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     tags=["api", "discovery"]
                 ))
 
+        file_type_dist = defaultdict(int)
+        for ext in ASSET_EXTENSIONS:
+            file_type_dist[ext] = html.lower().count(ext)
+        file_type_str = ", ".join(f"{k}:{v}" for k, v in sorted(file_type_dist.items(), key=lambda x: -x[1]) if v > 0)
+        if file_type_str:
+            findings.append(IntelligenceFinding(
+                entity=f"File type distribution: {file_type_str[:200]}",
+                type="File Type Distribution",
+                source="WebSurfaceMapper",
+                confidence="Medium",
+                color="slate",
+                threat_level="Informational",
+                tags=["summary", "files"]
+            ))
+
+        structured_data = re.findall(r'<script[^>]*type=["\']application/ld\+json["\']>([\s\S]*?)</script>', html, re.I)
+        if structured_data:
+            findings.append(IntelligenceFinding(
+                entity=f"{len(structured_data)} JSON-LD blocks detected",
+                type="Structured Data",
+                source="WebSurfaceMapper",
+                confidence="Medium",
+                color="slate",
+                threat_level="Informational",
+                tags=["seo", "structured-data"]
+            ))
+
         links_summary = f"Internal: {len(internal_links)} | External: {len(external_links)} | Social: {len(social_links)} | Assets: {len(asset_links)}"
         findings.append(IntelligenceFinding(
             entity=f"Link summary for {domain}: {links_summary}",
@@ -449,6 +637,18 @@ async def crawl(target: str, client: httpx.AsyncClient):
             threat_level="Informational",
             raw_data=links_summary,
             tags=["summary", "links"]
+        ))
+
+        content_type_classification = ct_class if ct_class != "Unknown" else content_type[:50]
+        findings.append(IntelligenceFinding(
+            entity=f"Content-Type: {content_type_classification}",
+            type="Content Type Classification",
+            source="WebSurfaceMapper",
+            confidence="High",
+            color="slate",
+            threat_level="Informational",
+            raw_data=f"CT: {content_type} | Length: {content_length}",
+            tags=["content-type", "classification"]
         ))
 
         if not js_detected and not inline_scripts:

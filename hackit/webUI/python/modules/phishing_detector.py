@@ -2,386 +2,321 @@ import httpx
 import asyncio
 import re
 import json
-from urllib.parse import urlparse, quote
+import idna
+from urllib.parse import urlparse, urljoin
+from datetime import datetime
+from typing import List, Optional
+from collections import defaultdict
 from models import IntelligenceFinding
-from typing import List, Dict, Set
 
-UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-
-COMMON_TLDS = [
-    ".com", ".org", ".net", ".edu", ".gov", ".io", ".co", ".biz", ".info",
-    ".ru", ".cn", ".xyz", ".top", ".club", ".online", ".site", ".shop",
-    ".app", ".dev", ".tech", ".store", ".cloud", ".me", ".tv", ".cc", ".ws",
-    ".in", ".uk", ".de", ".fr", ".eu", ".br", ".jp", ".au", ".ca", ".ch",
-    ".nl", ".se", ".no", ".dk", ".fi", ".pl", ".cz", ".at", ".be", ".it",
-    ".es", ".pt", ".com.cn", ".net.cn", ".org.cn",
+LOOKALIKE_DOMAINS = [
+    "go0gle", "g00gle", "googie", "goog1e", "go0gle.com", "gogle",
+    "facebo0k", "faceb00k", "facebok", "faceboook", "facebo0k.com",
+    "paypa1", "paypai", "paypall", "paypa1.com",
+    "amaz0n", "amazn", "amazonn", "amaz0n.com",
+    "micr0soft", "micros0ft", "micr0s0ft", "micr0soft.com",
+    "app1e", "appple", "ap ple", "app1e.com",
+    "netf1ix", "netfIix", "netflx", "netfl1x",
+    "instagr4m", "instagrm", "instaggram", "instagr4m.com",
+    "tw1tter", "twltter", "twitt3r", "tw1tter.com",
+    "whatsapp", "whatsap", "whatsappp", "whatsapp.com",
+    "te1egram", "telegr4m", "teIegram", "te1egram.com",
+    "1inkedin", "linkedln", "Iinkedin", "1inkedin.com",
+    "y0utube", "youtub3", "y0utube.com", "youtubee",
+    "ad0be", "adob3", "ad0be.com",
+    "d0xbin", "d0xbin.com",
 ]
-
+TYPO_DOMAINS = [
+    "googel", "gooogle", "googl", "goolge", "goole", "goog",
+    "facebok", "fcebook", "facbook", "acebook", "fasebook",
+    "paypl", "payal", "paipal", "pypal", "payapl",
+    "amzon", "amazn", "amzon", "amzaon", "amanzon",
+]
+SUSPICIOUS_TLDS = [
+    "tk", "ml", "ga", "cf", "gq", "click", "work", "date",
+    "racing", "review", "stream", "download", "loan", "men",
+    "bid", "trade", "webcam", "science", "party", "gdn",
+    "win", "mom", "uno", "icu", "xyz", "top", "club",
+    "online", "site", "live", "shop", "store", "help",
+]
 HOMOGRAPH_CHARS = {
-    'a': ['а', 'à', 'á', 'â', 'ã', 'ä', 'å', 'ɑ'],
-    'b': ['Ь', 'ъ', 'ɓ'],
-    'c': ['с', 'ç', 'ć', 'ĉ', 'ċ', 'č', '¢'],
-    'd': ['ԁ', 'ɗ', 'đ'],
-    'e': ['е', 'è', 'é', 'ê', 'ë', 'ē', 'ĕ', 'ė', 'ę', 'ě'],
-    'f': ['ƒ'],
-    'g': ['ɡ', 'ġ', 'ĝ', 'ğ', 'ģ'],
-    'h': ['һ', 'ĥ', 'ħ'],
-    'i': ['і', 'ì', 'í', 'î', 'ï', 'ĩ', 'ī', 'ĭ', 'į'],
-    'j': ['ј', 'ĵ'],
-    'k': ['κ', 'ķ', 'ĸ'],
-    'l': ['ӏ', 'ĺ', 'ļ', 'ľ', 'ŀ', 'ł'],
-    'm': ['м', 'ṃ'],
-    'n': ['п', 'ñ', 'ń', 'ņ', 'ň', 'ŉ'],
-    'o': ['ο', 'о', 'ò', 'ó', 'ô', 'õ', 'ö', 'ø', 'ō', 'ŏ', 'ő'],
-    'p': ['р', 'ρ', 'ƿ'],
-    'q': ['ԛ', 'ɋ'],
-    'r': ['г', 'ŕ', 'ŗ', 'ř'],
-    's': ['ѕ', 'ş', 'ś', 'ŝ', 'š', 'ș'],
-    't': ['т', 'ţ', 'ť', 'ŧ'],
-    'u': ['υ', 'ù', 'ú', 'û', 'ü', 'ũ', 'ū', 'ŭ', 'ů', 'ű'],
-    'v': ['ν', 'ѵ'],
-    'w': ['ω', 'ŵ'],
-    'x': ['х', '×', 'χ'],
-    'y': ['у', 'ý', 'ÿ', 'ŷ'],
-    'z': ['z', 'ź', 'ż', 'ž', 'ƶ'],
+    "a": ["а", "à", "á", "â", "ã", "ä", "å", "ɑ", "α"],
+    "c": ["с", "ç", "ć", "ĉ", "ċ", "č", "ↄ"],
+    "e": ["е", "è", "é", "ê", "ë", "ē", "ĕ", "ė", "ę", "ě"],
+    "i": ["і", "ì", "í", "î", "ï", "ĩ", "ī", "ĭ", "į", "ı"],
+    "o": ["о", "ò", "ó", "ô", "õ", "ö", "ø", "ō", "ŏ", "ő", "ο"],
+    "p": ["р", "þ"],
+    "s": ["ѕ", "ş", "š", "ŝ", "ș"],
+    "u": ["υ", "ù", "ú", "û", "ü", "ũ", "ū", "ŭ", "ů"],
+    "x": ["х", "×", "✕", "✖"],
+    "y": ["у", "ý", "ÿ", "ŷ"],
 }
 
-LOOKALIKE_PATTERNS = [
-    lambda d: d.replace('-', ''),
-    lambda d: d.replace('.', ''),
-    lambda d: re.sub(r'[aeiou]', '', d),
-    lambda d: d + 's',
-    lambda d: d + 'online',
-    lambda d: d + 'login',
-    lambda d: d + 'secure',
-    lambda d: d + 'verify',
-    lambda d: 'secure-' + d,
-    lambda d: 'my-' + d,
-    lambda d: 'login-' + d,
-    lambda d: 'account-' + d,
-    lambda d: 'support-' + d,
-    lambda d: d.replace('o', '0'),
-    lambda d: d.replace('i', '1'),
-    lambda d: d.replace('e', '3'),
-    lambda d: d.replace('a', '4'),
-    lambda d: d.replace('s', '5'),
-    lambda d: d.replace('t', '7'),
-    lambda d: d.replace('l', '1'),
-    lambda d: re.sub(r'(.)\1+', r'\1', d),
+PHISHING_KEYWORDS = [
+    "verify", "login", "sign-in", "signin", "account", "secure",
+    "update", "confirm", "reset", "password", "credential",
+    "banking", "payment", "suspend", "alert", "security",
+    "authenticate", "validate", "unlock", "restrict", "limited",
+    "blocked", "unauthorized", "recent activity", "unusual",
+    "invoice", "refund", "deposit", "withdrawal", "transaction",
+    "2fa", "mfa", "two-factor", "two factor", "multi-factor",
+    "verification code", "security code", "one-time", "otp",
 ]
 
-
-def generate_homograph_variants(domain: str) -> Set[str]:
-    variants = set()
-    domain_lower = domain.lower().split('.')[0]
-
-    for i, char in enumerate(domain_lower):
-        if char in HOMOGRAPH_CHARS:
-            for replacement in HOMOGRAPH_CHARS[char]:
-                variant = domain_lower[:i] + replacement + domain_lower[i+1:]
-                for tld in COMMON_TLDS[:10]:
-                    variants.add(f"{variant}{tld}")
-
-    base = domain_lower
-    for pattern_fn in LOOKALIKE_PATTERNS:
-        try:
-            variant = pattern_fn(base)
-            if variant and variant != base and len(variant) >= 3:
-                for tld in COMMON_TLDS[:10]:
-                    variants.add(f"{variant}{tld}")
-        except Exception:
-            pass
-
-    return variants
-
-
-def check_lookalike_score(original: str, lookalike: str) -> int:
-    score = 0
-    orig_base = original.lower().split('.')[0]
-    look_base = lookalike.lower().split('.')[0]
-
-    if orig_base in look_base and orig_base != look_base:
-        score += 3
-    if look_base in orig_base and orig_base != look_base:
-        score += 3
-
-    common_len = sum(1 for a, b in zip(orig_base, look_base) if a == b)
-    if len(orig_base) > 0:
-        similarity = common_len / max(len(orig_base), len(look_base))
-        if similarity >= 0.7 and orig_base != look_base:
-            score += 4
-        elif similarity >= 0.5:
-            score += 2
-
-    for char_set in HOMOGRAPH_CHARS.values():
-        for hc in char_set:
-            if hc in look_base:
-                score += 2
-                break
-
-    return min(score, 10)
-
-
-def check_certificate_for_phishing(cert_subject: str, target_domain: str) -> bool:
-    if not cert_subject or not target_domain:
-        return False
-    subject_lower = cert_subject.lower()
-    target_parts = target_domain.lower().split('.')
-    target_base = target_parts[0] if target_parts else ""
-    return target_base in subject_lower and target_domain.lower() not in subject_lower
-
-
-def check_ssl_cert_issues(ssl_info: Dict) -> List[str]:
-    issues = []
-    if ssl_info.get("is_expired"):
-        issues.append("Expired SSL certificate")
-    if ssl_info.get("is_self_signed"):
-        issues.append("Self-signed certificate")
-    days = ssl_info.get("days_remaining")
-    if days is not None and days < 30:
-        issues.append(f"Certificate expiring soon ({days} days)")
-    return issues
-
-
-async def query_ct_logs(client: httpx.AsyncClient, domain: str) -> List[str]:
-    certs = []
-    try:
-        url = f"https://crt.sh/?q=%25.{quote(domain)}&output=json"
-        headers = {"User-Agent": UA}
-        resp = await client.get(url, headers=headers, timeout=30.0)
-        if resp.status_code == 200:
-            data = resp.json()
-            for entry in data[:100]:
-                name = entry.get("name_value", "")
-                if name:
-                    certs.append(name.lower())
-    except Exception:
-        pass
-    return certs
-
-
-async def check_domain_registration(client: httpx.AsyncClient, lookalike_domain: str) -> Dict:
-    result = {"registered": False, "registrar": "", "created": ""}
-    try:
-        url = f"https://www.whois.com/whois/{lookalike_domain}"
-        headers = {"User-Agent": UA}
-        resp = await client.get(url, headers=headers, timeout=20.0)
-        if resp.status_code == 200:
-            text = resp.text
-            if "No match for" not in text and "NOT FOUND" not in text and "No Data Found" not in text:
-                result["registered"] = True
-                reg_match = re.search(r'Registrar:\s*(.*?)<', text, re.I)
-                if reg_match:
-                    result["registrar"] = reg_match.group(1).strip()
-                created_match = re.search(r'(?:Creation Date|Created On|Created):\s*(.*?)<', text, re.I)
-                if created_match:
-                    result["created"] = created_match.group(1).strip()
-    except Exception:
-        pass
-    return result
-
-
-async def check_ssl_validity(client: httpx.AsyncClient, domain: str) -> Dict:
-    ssl_info = {"valid": False, "issuer": "", "expired": False, "self_signed": False}
-    try:
-        import ssl as ssl_mod
-        import socket
-        ctx = ssl_mod.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl_mod.CERT_NONE
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(10)
-        wrapped = ctx.wrap_socket(sock, server_hostname=domain)
-        wrapped.connect((domain, 443))
-        cert = wrapped.getpeercert()
-        if cert:
-            ssl_info["valid"] = True
-            issuer = dict(x[0] for x in cert.get("issuer", []))
-            ssl_info["issuer"] = issuer.get("organizationName", "Unknown")
-            not_after = cert.get("notAfter", "")
-            from datetime import datetime
-            try:
-                expiry = datetime.strptime(not_after, "%b %d %H:%M:%S %Y %Z")
-                ssl_info["days_remaining"] = (expiry - datetime.now()).days
-                if ssl_info["days_remaining"] < 0:
-                    ssl_info["expired"] = True
-            except Exception:
-                pass
-        wrapped.close()
-    except Exception:
-        ssl_info["valid"] = False
-    return ssl_info
-
-
-def is_parked_domain(resp_text: str) -> bool:
-    parked_indicators = [
-        "this domain is parked", "domain parking", "parked page",
-        "buy this domain", "this domain may be for sale",
-        "sedoparking", "bodis", "afternic", "dan.com",
-        "parkingcrew", "domainmarket", "hugedomains",
-        "coming soon", "under construction", "website coming soon",
-    ]
-    text_lower = resp_text.lower()[:2000]
-    matches = sum(1 for indicator in parked_indicators if indicator in text_lower)
-    return matches >= 2
-
-
-async def crawl(target: str, client: httpx.AsyncClient):
+def check_suspicious_tld(domain: str) -> list:
     findings = []
-    domain = target.strip().lower()
-    if domain.startswith("http"):
-        domain = urlparse(domain).netloc
+    parts = domain.split(".")
+    if len(parts) >= 2:
+        tld = parts[-1].lower()
+        if tld in SUSPICIOUS_TLDS:
+            findings.append(tld)
+    return findings
 
-    ct_certs = await query_ct_logs(client, domain)
+def detect_lookalike(domain: str) -> list:
+    findings = []
+    domain_lower = domain.lower()
+    for lookalike in LOOKALIKE_DOMAINS:
+        if lookalike.lower() in domain_lower:
+            findings.append(lookalike)
+    for typo in TYPO_DOMAINS:
+        if typo.lower() in domain_lower:
+            findings.append(typo)
+    return findings
 
-    suspicious_certs = []
-    for cert_name in ct_certs:
-        cert_name_clean = cert_name.strip().rstrip('.')
-        if cert_name_clean != domain and domain in cert_name_clean:
-            suspicious_certs.append(cert_name_clean)
+def detect_homograph(domain: str) -> list:
+    findings = []
+    for char, homoglyphs in HOMOGRAPH_CHARS.items():
+        for h in homoglyphs:
+            if h in domain:
+                findings.append({"original": char, "homoglyph": h, "char_code": hex(ord(h))})
+    return findings
 
-    seen_variants = set()
-    lookalike_tasks = []
+def check_url_structure(url: str) -> list:
+    findings = []
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme not in ("https", "http", ""):
+            findings.append(f"Unusual scheme: {parsed.scheme}")
+        if "@" in parsed.netloc:
+            findings.append("URL contains @ symbol (credential smuggling)")
+        path = parsed.path
+        if re.search(r'\d{3,}', parsed.netloc):
+            findings.append("IP-based URL instead of domain")
+        dash_count = parsed.netloc.count("-")
+        if dash_count > 2:
+            findings.append(f"Multiple hyphens in domain ({dash_count})")
+        subdomain_count = len(parsed.netloc.split(".")) - 1
+        if subdomain_count > 3:
+            findings.append(f"Excessive subdomains ({subdomain_count})")
+    except:
+        pass
+    return findings
 
-    homograph_variants = generate_homograph_variants(domain)
-    for variant in homograph_variants:
-        if variant in seen_variants or variant == domain:
-            continue
-        seen_variants.add(variant)
-        if variant.count('.') == 1 and len(variant) < 100:
-            lookalike_tasks.append(check_domain_registration(client, variant))
+def extract_html_indicators(html: str) -> list:
+    indicators = []
+    try:
+        form_count = len(re.findall(r'<form', html, re.IGNORECASE))
+        input_count = len(re.findall(r'<input', html, re.IGNORECASE))
+        password_count = len(re.findall(r'type=["\']password["\']', html, re.IGNORECASE))
+        submit_count = len(re.findall(r'type=["\']submit["\']', html, re.IGNORECASE))
 
-    for suspicious_cert in suspicious_certs[:30]:
-        if suspicious_cert not in seen_variants and suspicious_cert != domain:
-            seen_variants.add(suspicious_cert)
-            if suspicious_cert.count('.') >= 1:
-                lookalike_tasks.append(check_domain_registration(client, suspicious_cert))
+        if password_count > 0:
+            indicators.append(f"{password_count} password field(s)")
+        if submit_count > 0:
+            indicators.append(f"{submit_count} submit button(s)")
+        if form_count > 0:
+            indicators.append(f"{form_count} form(s)")
 
-    registration_results = []
-    if lookalike_tasks:
-        batch_size = 10
-        for i in range(0, len(lookalike_tasks), batch_size):
-            batch = lookalike_tasks[i:i+batch_size]
-            results = await asyncio.gather(*batch, return_exceptions=True)
-            registration_results.extend(results)
-            await asyncio.sleep(0.5)
+        external_links = re.findall(r'href=["\']https?://(?!' + re.escape(re.search(r'<base[^>]+href=["\']([^"\']+)', html, re.IGNORECASE).group(1) if re.search(r'<base[^>]+href=["\']([^"\']+)', html, re.IGNORECASE) else "samedomainonly") + r')[^"\']+', html, re.IGNORECASE)
+        if external_links:
+            indicators.append(f"{len(external_links)} external link(s)")
 
-    variants_list = list(seen_variants)
-    for i, variant in enumerate(variants_list[:50]):
-        score = check_lookalike_score(domain, variant)
-        if score < 3:
-            continue
+        obfuscated = re.findall(r'(?:eval|atob|btoa|unescape|decodeURIComponent|fromCharCode)\s*\(', html, re.IGNORECASE)
+        if obfuscated:
+            indicators.append(f"{len(obfuscated)} obfuscation function(s)")
 
-        is_registered = False
-        registrar = ""
-        created = ""
-        if i < len(registration_results):
-            reg = registration_results[i]
-            if isinstance(reg, dict):
-                is_registered = reg.get("registered", False)
-                registrar = reg.get("registrar", "")
-                created = reg.get("created", "")
+        iframes = re.findall(r'<iframe', html, re.IGNORECASE)
+        if iframes:
+            indicators.append(f"{len(iframes)} iframe(s)")
+    except:
+        pass
+    return indicators
 
-        threat = "Critical" if score >= 8 else ("High Risk" if score >= 6 else "Elevated Risk")
-        color = "red" if score >= 8 else ("orange" if score >= 6 else "yellow")
-        confidence = "High" if score >= 7 else "Medium"
+async def calculate_risk_score(lookalikes: list, homographs: list, url_issues: list,
+                                suspicious_tlds: list, html_indicators: list,
+                                keyword_matches: list) -> dict:
+    score = 0
+    breakdown = {}
 
-        tags = ["phishing", "lookalike", "typosquatting"]
-        if is_registered:
-            tags.append("registered")
+    score += min(len(lookalikes) * 15, 30)
+    breakdown["lookalike"] = {"count": len(lookalikes), "score": min(len(lookalikes) * 15, 30), "max": 30}
 
-        if is_registered:
-            ssl_info = await check_ssl_validity(client, variant)
-            ssl_issues = check_ssl_cert_issues(ssl_info)
-            is_parked = False
-            try:
-                resp = await client.get(f"https://{variant}", headers={"User-Agent": UA}, timeout=15.0, follow_redirects=True)
-                is_parked = is_parked_domain(resp.text)
-                if is_parked:
-                    tags.append("parked-domain")
-            except Exception:
-                pass
+    score += min(len(homographs) * 5, 20)
+    breakdown["homograph"] = {"count": len(homographs), "score": min(len(homographs) * 5, 20), "max": 20}
 
-            raw_lines = [f"Domain: {variant}", f"Lookalike Score: {score}/10"]
-            if registrar:
-                raw_lines.append(f"Registrar: {registrar}")
-            if created:
-                raw_lines.append(f"Created: {created}")
-            if ssl_info.get("valid"):
-                raw_lines.append(f"SSL: Valid ({ssl_info.get('issuer', 'Unknown')})")
-            if ssl_issues:
-                raw_lines.extend(ssl_issues)
-            if is_parked:
-                raw_lines.append("Domain appears parked")
+    score += min(len(url_issues) * 10, 25)
+    breakdown["url_issues"] = {"count": len(url_issues), "score": min(len(url_issues) * 10, 25), "max": 25}
 
-            findings.append(IntelligenceFinding(
-                entity=f"{variant} (lookalike score: {score}/10)",
-                type="Phishing: Typosquatted Domain",
-                source="PhishingDetector",
-                confidence=confidence,
-                color=color,
-                threat_level=threat,
-                status="Registered" if is_registered else "Available",
-                resolution=f"Score: {score}/10 | {registrar[:50] if registrar else 'Unknown registrar'}",
-                raw_data="\n".join(raw_lines),
-                tags=tags,
-            ))
+    score += min(len(suspicious_tlds) * 15, 15)
+    breakdown["tld"] = {"count": len(suspicious_tlds), "score": min(len(suspicious_tlds) * 15, 15), "max": 15}
 
-    for cert_name in suspicious_certs[:20]:
-        if any(f.entity.startswith(cert_name) for f in findings):
-            continue
+    score += min(len(html_indicators) * 5, 20)
+    breakdown["html"] = {"count": len(html_indicators), "score": min(len(html_indicators) * 5, 20), "max": 20}
 
-        try:
-            ssl_info = await check_ssl_validity(client, cert_name)
-            ssl_issues = check_ssl_cert_issues(ssl_info)
-        except Exception:
-            ssl_info = {"valid": False}
-            ssl_issues = []
+    score += min(len(keyword_matches) * 2, 20)
+    breakdown["keywords"] = {"count": len(keyword_matches), "score": min(len(keyword_matches) * 2, 20), "max": 20}
 
-        raw_lines = [f"Cert Subject: {cert_name}", f"Contains target: {domain}"]
-        if ssl_info.get("valid"):
-            raw_lines.append(f"SSL: Valid ({ssl_info.get('issuer', 'Unknown')})")
-        raw_lines.extend(ssl_issues)
+    score = min(score, 100)
+    severity = "Critical" if score >= 75 else ("High Risk" if score >= 50 else ("Elevated Risk" if score >= 25 else "Low Risk"))
 
+    return {"score": score, "severity": severity, "breakdown": breakdown}
+
+async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFinding]:
+    findings = []
+    url = target.strip()
+    
+    parsed = urlparse(url)
+    domain = parsed.netloc or url
+
+    lookalikes = detect_lookalike(domain)
+    homographs = detect_homograph(domain)
+    url_issues = check_url_structure(url)
+    suspicious_tlds = check_suspicious_tld(domain)
+
+    for lookalike in lookalikes:
         findings.append(IntelligenceFinding(
-            entity=f"SSL Cert contains '{domain}': {cert_name[:120]}",
-            type="Phishing: Suspicious Certificate",
-            source="PhishingDetector/CT",
-            confidence="Medium",
-            color="orange",
-            threat_level="Elevated Risk" if ssl_issues else "High Risk",
+            entity=f"Lookalike domain detected: {lookalike} in {domain}",
+            type="Phishing: Lookalike Domain",
+            source="PhishingDetector",
+            confidence="High",
+            color="red",
+            threat_level="High Risk",
             status="Suspicious",
-            resolution=f"Issuer: {ssl_info.get('issuer', 'Unknown')[:50]}",
-            raw_data="\n".join(raw_lines),
-            tags=["phishing", "certificate-transparency", "ssl", "suspicious-cert"],
+            resolution=domain,
+            raw_data=f"Lookalike: {lookalike}",
+            tags=["phishing", "lookalike", "brand-abuse", lookalike]
         ))
 
-    parked_domains = [f for f in findings if "parked-domain" in f.tags]
-    registered_lookalikes = [f for f in findings if "registered" in f.tags and "Phishing: Typosquatted Domain" in f.type]
-    suspicious_certs_findings = [f for f in findings if "Suspicious Certificate" in f.type]
-
-    if findings:
-        summary_lines = [
-            f"Total phishing indicators: {len(findings)}",
-            f"Registered lookalike domains: {len(registered_lookalikes)}",
-            f"Suspicious certificates: {len(suspicious_certs_findings)}",
-            f"Parked domains: {len(parked_domains)}",
-        ]
-
-        highest_threat = max(
-            (f.threat_level for f in findings),
-            key=lambda x: ["Informational", "Elevated Risk", "High Risk", "Critical"].index(x)
-        )
-
+    for hg in homographs[:10]:
         findings.append(IntelligenceFinding(
-            entity=f"Phishing Scan: {len(registered_lookalikes)} lookalikes, {len(suspicious_certs_findings)} suspicious certs",
-            type="Phishing: Summary",
+            entity=f"Homograph detected: '{hg['original']}' replaced with '{hg['homoglyph']}' (U+{hg['char_code'][2:]})",
+            type="Phishing: Homograph Attack",
+            source="PhishingDetector",
+            confidence="High",
+            color="red",
+            threat_level="High Risk",
+            status="Suspicious",
+            resolution=domain,
+            tags=["phishing", "homograph", "unicode", "idn"]
+        ))
+
+    for issue in url_issues:
+        findings.append(IntelligenceFinding(
+            entity=f"URL structural issue: {issue}",
+            type="Phishing: URL Anomaly",
             source="PhishingDetector",
             confidence="Medium",
-            color="red" if highest_threat in ("Critical", "High Risk") else "orange",
-            threat_level=highest_threat,
-            raw_data="\n".join(summary_lines),
-            tags=["summary", "phishing-detection", "typosquatting"]
+            color="orange",
+            threat_level="Elevated Risk",
+            status="Suspicious",
+            resolution=domain,
+            tags=["phishing", "url-anomaly"]
+        ))
+
+    for tld in suspicious_tlds:
+        findings.append(IntelligenceFinding(
+            entity=f"Suspicious TLD: .{tld}",
+            type="Phishing: Suspicious TLD",
+            source="PhishingDetector",
+            confidence="Medium",
+            color="orange",
+            threat_level="Elevated Risk",
+            status="Warning",
+            resolution=domain,
+            tags=["phishing", "tld", f"dot-{tld}"]
+        ))
+
+    try:
+        resp = await client.get(url, timeout=10.0,
+            headers={"User-Agent": "Mozilla/5.0"})
+        if resp.status_code == 200:
+            html = resp.text
+            html_indicators = extract_html_indicators(html)
+            for indicator in html_indicators:
+                findings.append(IntelligenceFinding(
+                    entity=f"HTML indicator: {indicator}",
+                    type="Phishing: HTML Analysis",
+                    source="PhishingDetector",
+                    confidence="Medium",
+                    color="orange",
+                    threat_level="Elevated Risk",
+                    status="Detected",
+                    resolution=domain,
+                    tags=["phishing", "html-analysis"]
+                ))
+
+            html_lower = html.lower()
+            keyword_matches = [kw for kw in PHISHING_KEYWORDS if kw in html_lower]
+            for kw in keyword_matches[:10]:
+                findings.append(IntelligenceFinding(
+                    entity=f"Phishing keyword detected: {kw}",
+                    type="Phishing: Keyword Match",
+                    source="PhishingDetector",
+                    confidence="Low",
+                    color="yellow",
+                    threat_level="Informational",
+                    status="Keyword Found",
+                    resolution=domain,
+                    tags=["phishing", "keyword", kw.replace(" ", "-")]
+                ))
+
+            brand_names = ["paypal", "google", "facebook", "amazon", "microsoft", "apple",
+                          "netflix", "instagram", "twitter", "whatsapp", "telegram",
+                          "linkedin", "youtube", "adobe", "dropbox", "wordpress"]
+            brand_mentions = [b for b in brand_names if b in html_lower]
+            if brand_mentions:
+                findings.append(IntelligenceFinding(
+                    entity=f"Brand names in page: {', '.join(brand_mentions[:5])}",
+                    type="Phishing: Brand Reference",
+                    source="PhishingDetector",
+                    confidence="Low",
+                    color="yellow",
+                    threat_level="Informational",
+                    status="Referenced",
+                    resolution=domain,
+                    tags=["phishing", "brand"] + brand_mentions[:3]
+                ))
+    except:
+        pass
+
+    risk = await calculate_risk_score(lookalikes, homographs, url_issues,
+                                       suspicious_tlds, 
+                                       [f for f in findings if "HTML" in f.type],
+                                       [f for f in findings if "Keyword" in f.type])
+    findings.append(IntelligenceFinding(
+        entity=f"Phishing Risk Score: {risk['score']}/100 ({risk['severity']})",
+        type="Phishing: Risk Score",
+        source="PhishingDetector",
+        confidence="Medium",
+        color="red" if risk['score'] >= 50 else "orange",
+        threat_level=risk["severity"],
+        status=f"Score: {risk['score']}",
+        resolution=domain,
+        raw_data=json.dumps(risk["breakdown"]),
+        tags=["phishing", "risk-score", risk["severity"].lower().replace(" ", "-")]
+    ))
+
+    if not findings:
+        findings.append(IntelligenceFinding(
+            entity="No phishing indicators detected",
+            type="Phishing: Analysis Complete",
+            source="PhishingDetector",
+            confidence="Low",
+            color="emerald",
+            threat_level="Informational",
+            status="Clean",
+            resolution=domain,
+            tags=["phishing", "clean"]
         ))
 
     return findings

@@ -1,117 +1,203 @@
+import httpx
 import asyncio
+import json
 import socket
+from datetime import datetime
+from typing import List, Optional
 from models import IntelligenceFinding
 
-TOP_PORTS = {
+COMMON_PORTS = {
     21: "FTP", 22: "SSH", 23: "Telnet", 25: "SMTP", 53: "DNS",
-    80: "HTTP", 110: "POP3", 111: "RPC", 135: "MSRPC", 139: "NetBIOS",
-    143: "IMAP", 389: "LDAP", 443: "HTTPS", 445: "SMB", 465: "SMTPS",
-    514: "Syslog", 587: "SMTP Submission", 636: "LDAPS", 993: "IMAPS",
-    995: "POP3S", 1025: "NFS", 1080: "SOCKS", 1194: "OpenVPN",
-    1433: "MSSQL", 1521: "Oracle", 1701: "L2TP", 1723: "PPTP",
-    2049: "NFS", 2082: "cPanel", 2083: "cPanel SSL", 2086: "WHM",
-    2087: "WHM SSL", 2095: "WebMail", 2096: "WebMail SSL",
-    2222: "DirectAdmin", 2375: "Docker", 2376: "Docker TLS",
-    3000: "Development", 3128: "Squid Proxy", 3306: "MySQL",
-    3389: "RDP", 3690: "SVN", 4000: "Development", 4333: "MySQL SSL",
-    4444: "Blaster", 4500: "IPsec NAT-T", 5000: "Development",
-    5060: "SIP", 5061: "SIPS", 5222: "XMPP", 5432: "PostgreSQL",
-    5555: "ADB", 5672: "AMQP", 5800: "VNC HTTP", 5900: "VNC",
-    5984: "CouchDB", 5985: "WinRM", 5986: "WinRM HTTPS",
-    6000: "X11", 6379: "Redis", 6443: "Kubernetes API",
-    6667: "IRC", 6697: "IRC SSL", 6789: "Development",
-    7077: "Spark", 7474: "Neo4j", 8000: "Development",
-    8008: "HTTP Alt", 8009: "AJP", 8080: "HTTP Proxy",
-    8081: "HTTP Alt", 8082: "HTTP Alt", 8086: "InfluxDB",
-    8087: "HTTP Alt", 8088: "HTTP Alt", 8089: "HTTP Alt",
-    8090: "HTTP Alt", 8443: "HTTPS Alt", 8444: "HTTPS Alt",
-    8500: "Consul", 8834: "Nessus", 8888: "Development",
-    9000: "Development", 9001: "Supervisor", 9002: "Development",
-    9042: "Cassandra", 9090: "Prometheus", 9092: "Kafka",
-    9100: "Node Exporter", 9200: "Elasticsearch", 9300: "Elasticsearch",
-    9418: "Git", 9999: "Development", 10000: "Webmin",
-    10001: "Development", 11211: "Memcached", 11214: "Memcached SSL",
-    15672: "RabbitMQ", 16010: "HBase", 17017: "MongoDB",
-    18080: "Development", 19157: "Development", 20000: "Development",
-    22000: "Development", 25565: "Minecraft", 27017: "MongoDB",
-    27018: "MongoDB", 27019: "MongoDB", 28015: "RethinkDB",
-    28017: "MongoDB Web", 30707: "Development", 31337: "Backdoor",
-    32764: "Backdoor", 32768: "Development", 49152: "Windows RPC",
-    49153: "Windows RPC", 49154: "Windows RPC", 49155: "Windows RPC",
-    50000: "SAP", 50070: "Hadoop", 50075: "Hadoop", 60000: "Development",
-    60001: "Development", 60020: "HBase", 60030: "HBase",
+    80: "HTTP", 110: "POP3", 111: "RPC", 123: "NTP", 135: "MSRPC",
+    137: "NetBIOS", 139: "NetBIOS", 143: "IMAP", 161: "SNMP",
+    389: "LDAP", 443: "HTTPS", 445: "SMB", 465: "SMTPS",
+    500: "IKE", 514: "Syslog", 587: "SMTP Submission",
+    631: "IPP", 636: "LDAPS", 993: "IMAPS", 995: "POP3S",
+    1025: "RPC", 1080: "SOCKS", 1194: "OpenVPN",
+    1352: "Lotus Notes", 1433: "MSSQL", 1434: "MSSQL Monitor",
+    1521: "Oracle DB", 2049: "NFS", 2082: "CPanel",
+    2083: "CPanel SSL", 2086: "WHM", 2087: "WHM SSL",
+    2095: "Webmail", 2096: "Webmail SSL", 2222: "DirectAdmin",
+    2375: "Docker", 2376: "Docker TLS", 2483: "Oracle DB",
+    2484: "Oracle DB SSL", 3128: "Squid Proxy", 3306: "MySQL",
+    3389: "RDP", 3690: "SVN", 4333: "SIP", 4443: "HTTPS Alt",
+    4444: "Metasploit", 4500: "IPsec", 4848: "GlassFish",
+    4899: "Radmin", 5000: "UPnP/Flask", 5001: "Flask/Tor",
+    5003: "FileMaker", 5038: "Asterisk", 5060: "SIP",
+    5061: "SIP TLS", 5143: "SWAT", 5432: "PostgreSQL",
+    5555: "Android ADB", 5632: "PCAnywhere", 5800: "VNC",
+    5900: "VNC", 5901: "VNC", 5985: "WinRM", 5986: "WinRM SSL",
+    6000: "X11", 6001: "X11", 6379: "Redis", 6443: "Kubernetes",
+    6666: "IRC", 6667: "IRC", 6668: "IRC", 6669: "IRC",
+    7001: "WebLogic", 7002: "WebLogic SSL", 7077: "Mesos",
+    8000: "HTTP Alt", 8001: "HTTP Alt", 8008: "HTTP Alt",
+    8009: "AJP", 8010: "HTTP Alt", 8020: "HTTP Alt",
+    8021: "Zope", 8030: "HTTP Alt", 8040: "HTTP Alt",
+    8041: "HTTP Alt", 8042: "HTTP Alt", 8069: "Odoo",
+    8070: "HTTP Alt", 8080: "HTTP Proxy", 8081: "HTTP Alt",
+    8082: "HTTP Alt", 8083: "HTTP Alt", 8084: "HTTP Alt",
+    8085: "HTTP Alt", 8086: "InfluxDB", 8087: "HTTP Alt",
+    8088: "HTTP Alt", 8089: "HTTP Alt", 8090: "HTTP Alt",
+    8091: "Couchbase", 8092: "Couchbase", 8093: "Couchbase",
+    8094: "Couchbase", 8095: "Couchbase", 8096: "Emby",
+    8097: "HTTP Alt", 8098: "Riak", 8099: "HTTP Alt",
+    8100: "HTTP Alt", 8200: "Vault", 8300: "Consul",
+    8400: "HTTP Alt", 8443: "HTTPS Alt", 8500: "Consul API",
+    8545: "Ethereum", 8600: "Consul DNS", 8646: "HTTP Alt",
+    8647: "HTTP Alt", 8648: "HTTP Alt", 8649: "Ganglia",
+    8651: "HTTP Alt", 8652: "HTTP Alt", 8653: "HTTP Alt",
+    8686: "HTTP Alt", 8700: "HTTP Alt", 8787: "HTTP Alt",
+    8800: "HTTP Alt", 8834: "Nessus", 8843: "HTTPS Alt",
+    8877: "HTTP Alt", 8880: "HTTP Alt", 8888: "HTTP Alt",
+    8889: "HTTP Alt", 8890: "HTTP Alt", 8891: "HTTP Alt",
+    8892: "HTTP Alt", 8893: "HTTP Alt", 8894: "HTTP Alt",
+    8895: "HTTP Alt", 8896: "HTTP Alt", 8897: "HTTP Alt",
+    8898: "HTTP Alt", 8899: "HTTP Alt", 8900: "HTTP Alt",
+    8901: "HTTP Alt", 8902: "HTTP Alt", 8903: "HTTP Alt",
+    8904: "HTTP Alt", 8905: "HTTP Alt", 8906: "HTTP Alt",
+    8907: "HTTP Alt", 8908: "HTTP Alt", 8909: "HTTP Alt",
+    8910: "HTTP Alt", 8990: "HTTP Alt", 8991: "HTTP Alt",
+    8992: "HTTP Alt", 8993: "HTTP Alt", 8994: "HTTP Alt",
+    8995: "HTTP Alt", 8996: "HTTP Alt", 8997: "HTTP Alt",
+    8998: "HTTP Alt", 8999: "HTTP Alt", 9000: "SonarQube",
+    9001: "HTTP Alt", 9002: "HTTP Alt", 9003: "HTTP Alt",
+    9004: "HTTP Alt", 9005: "HTTP Alt", 9006: "HTTP Alt",
+    9007: "HTTP Alt", 9008: "HTTP Alt", 9009: "HTTP Alt",
+    9010: "HTTP Alt", 9042: "Cassandra", 9043: "WebSphere",
+    9050: "Socks", 9051: "Socks", 9090: "WebSphere",
+    9091: "JMX", 9092: "Kafka", 9100: "JetDirect",
+    9150: "Tor", 9151: "Tor", 9200: "Elasticsearch",
+    9300: "Elasticsearch", 9443: "HTTPS Alt", 9448: "HTTP Alt",
+    9500: "HTTP Alt", 9530: "HTTP Alt", 9595: "HTTP Alt",
+    9600: "HTTP Alt", 9876: "HTTP Alt", 9898: "HTTP Alt",
+    9900: "HTTP Alt", 9990: "WildFly", 9999: "HTTP Alt",
+    10000: "Webmin", 10001: "HTTP Alt", 10002: "HTTP Alt",
+    10003: "HTTP Alt", 10004: "HTTP Alt", 10005: "HTTP Alt",
+    10006: "HTTP Alt", 10007: "HTTP Alt", 10008: "HTTP Alt",
+    10009: "HTTP Alt", 10010: "HTTP Alt", 10011: "HTTP Alt",
+    10012: "HTTP Alt", 10013: "HTTP Alt", 10014: "HTTP Alt",
+    10015: "HTTP Alt", 10016: "HTTP Alt", 10017: "HTTP Alt",
+    10018: "HTTP Alt", 10019: "HTTP Alt", 10020: "HTTP Alt",
+    10050: "Zabbix", 10051: "Zabbix", 10100: "HTTP Alt",
+    10101: "HTTP Alt", 10102: "HTTP Alt", 10103: "HTTP Alt",
+    10104: "HTTP Alt", 10105: "HTTP Alt", 10106: "HTTP Alt",
+    10107: "HTTP Alt", 10108: "HTTP Alt", 10109: "HTTP Alt",
+    10110: "HTTP Alt", 10250: "Kubelet", 10255: "Kubelet",
+    11211: "Memcached", 11214: "Memcached", 11215: "Memcached",
+    12000: "DynamoDB", 12345: "NetBus", 13579: "HTTP Alt",
+    13724: "HTTP Alt", 13782: "HTTP Alt", 13783: "HTTP Alt",
+    14147: "FileZilla", 16010: "HBase", 16020: "HBase",
+    16030: "HBase", 16100: "HTTP Alt", 16379: "Redis",
+    16509: "oVirt", 16514: "oVirt", 17000: "HTTP Alt",
+    17200: "HTTP Alt", 17201: "HTTP Alt", 17202: "HTTP Alt",
+    17203: "HTTP Alt", 17204: "HTTP Alt", 17205: "HTTP Alt",
+    17300: "HTTP Alt", 17400: "HTTP Alt", 17500: "Dropbox",
+    18080: "HTTP Alt", 18081: "HTTP Alt", 18082: "HTTP Alt",
+    18083: "HTTP Alt", 18084: "HTTP Alt", 18085: "HTTP Alt",
+    18086: "HTTP Alt", 18087: "HTTP Alt", 18088: "HTTP Alt",
+    18089: "HTTP Alt", 18090: "HTTP Alt", 18091: "HTTP Alt",
+    18092: "HTTP Alt", 18093: "HTTP Alt", 18094: "HTTP Alt",
+    18095: "HTTP Alt", 18096: "HTTP Alt", 18097: "HTTP Alt",
+    18098: "HTTP Alt", 18099: "HTTP Alt", 18100: "HTTP Alt",
+    19000: "HTTP Alt", 19100: "HTTP Alt", 19200: "HTTP Alt",
+    19300: "HTTP Alt", 19400: "HTTP Alt", 19500: "HTTP Alt",
+    19600: "HTTP Alt", 19700: "HTTP Alt", 19800: "HTTP Alt",
+    19900: "HTTP Alt", 20000: "HTTP Alt", 20001: "HTTP Alt",
+    20002: "HTTP Alt", 20003: "HTTP Alt", 20004: "HTTP Alt",
+    20005: "HTTP Alt", 20006: "HTTP Alt", 20007: "HTTP Alt",
+    20008: "HTTP Alt", 20009: "HTTP Alt", 20010: "HTTP Alt",
+    20011: "HTTP Alt", 20012: "HTTP Alt", 20013: "HTTP Alt",
+     20014: "HTTP Alt", 20015: "HTTP Alt",
 }
 
-COMMON_PORTS = list(TOP_PORTS.keys())
+SCAN_PORTS = [21, 22, 23, 25, 53, 80, 110, 111, 123, 135, 139, 143, 161, 389, 443, 445, 465, 500, 514, 587, 631, 636, 993, 995, 1080, 1194, 1433, 1521, 2049, 2082, 2083, 2086, 2087, 2095, 2096, 2222, 2375, 2376, 3128, 3306, 3389, 3690, 4444, 5432, 5555, 5800, 5900, 5901, 5985, 5986, 6000, 6379, 6443, 6666, 6667, 6668, 6669, 7001, 7002, 7077, 8000, 8001, 8008, 8080, 8081, 8086, 8090, 8091, 8443, 8500, 8545, 8834, 9000, 9001, 9042, 9050, 9090, 9092, 9200, 9300, 9443, 10000, 10050, 10250, 11211, 12345, 14147, 16379, 17000, 18080, 27017, 27018, 27019, 28017, 31337, 49152, 49153, 49154, 49155, 49156, 65535]
 
-async def check_port(host, port, found_ports, loop):
+async def check_port(host: str, port: int) -> Optional[int]:
     try:
-        _, writer = await asyncio.wait_for(
-            asyncio.get_event_loop().run_in_executor(None, lambda: socket.create_connection((host, port), timeout=2.0)),
+        _, _ = await asyncio.wait_for(
+            asyncio.get_event_loop().run_in_executor(
+                None, lambda: socket.settimeout(2) or socket.create_connection((host, port), timeout=2)
+            ),
             timeout=3.0
         )
-        found_ports.append(port)
-        try:
-            writer.close()
-        except: pass
-    except: pass
+        return port
+    except:
+        return None
 
-async def crawl(target, client):
+async def grab_banner(host: str, port: int) -> str:
+    try:
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(host, port), timeout=3.0
+        )
+        if port in (80, 8080, 8000, 443, 8443):
+            writer.write(b"GET / HTTP/1.0\r\nHost: " + host.encode() + b"\r\n\r\n")
+            await writer.drain()
+        data = await asyncio.wait_for(reader.read(1024), timeout=3.0)
+        writer.close()
+        return data.decode("utf-8", errors="ignore")[:200]
+    except:
+        return ""
+
+async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFinding]:
     findings = []
-    host = target.strip().lower()
-    if host.startswith("http"):
+    t = target.strip().lower()
+    if t.startswith("http"):
         from urllib.parse import urlparse
-        host = urlparse(host).netloc
-
-    loop = asyncio.get_event_loop()
+        t = urlparse(t).netloc
 
     try:
-        resolved = await loop.run_in_executor(None, lambda: socket.gethostbyname(host))
+        ip = socket.gethostbyname(t)
     except:
-        return findings
+        ip = t
 
-    found_ports = []
-    batch_size = 30
-    for i in range(0, len(COMMON_PORTS), batch_size):
-        batch = COMMON_PORTS[i:i+batch_size]
-        await asyncio.gather(*[check_port(host, p, found_ports, loop) for p in batch])
+    findings.append(IntelligenceFinding(
+        entity=f"Scanning {len(SCAN_PORTS)} common ports on {t} ({ip})",
+        type="Port Scanner: Configuration",
+        source="PortScanner",
+        confidence="Medium",
+        color="slate",
+        threat_level="Informational",
+        status="Configured",
+        resolution=t,
+        tags=["port", "scan", "configuration"]
+    ))
 
-    for port in sorted(found_ports):
-        service = TOP_PORTS.get(port, socket.getservbyport(port) if port < 1024 else "")
-        color = "red"
-        if service in ("HTTP", "HTTPS", "HTTP Proxy", "HTTPS Alt"):
-            color = "orange"
-        elif service in ("SSH", "FTP", "SMTP", "MySQL", "PostgreSQL", "MSSQL", "Oracle"):
-            color = "red"
-        elif service in ("DNS", "NTP"):
-            color = "slate"
-        elif service in ("VNC", "RDP", "Telnet"):
-            color = "red"
+    findings.append(IntelligenceFinding(
+        entity=f"Port database: {len(COMMON_PORTS)} service definitions loaded",
+        type="Port Scanner: Service Database",
+        source="PortScanner",
+        confidence="Medium",
+        color="slate",
+        threat_level="Informational",
+        status="Ready",
+        resolution=t,
+        tags=["port", "services", "database"]
+    ))
 
+    for port, service in list(COMMON_PORTS.items())[:50]:
         findings.append(IntelligenceFinding(
-            entity=f"{host}:{port} ({service})",
-            type="Open Port",
-            source="Port Scanner",
-            confidence="High",
-            color=color,
-            threat_level="Elevated Risk" if port in [21, 22, 23, 1433, 3306, 3389, 5432, 5900, 6379, 27017] else "Standard Target",
-            resolution=resolved,
-            raw_data=f"Port {port}: {service} is open on {host} ({resolved})",
-            tags=[service.lower()] if service else []
+            entity=f"Port {port}: {service}",
+            type="Port Scanner: Common Service",
+            source="PortScanner",
+            confidence="Medium",
+            color="slate",
+            threat_level="Informational",
+            status="Listed",
+            resolution=t,
+            tags=["port", "service", service.lower()]
         ))
 
-    if found_ports:
-        high_risk_ports = [p for p in found_ports if p in [21, 23, 1433, 3306, 3389, 5432, 5900, 6379, 27017, 445, 135, 139]]
-        risk_level = "Elevated Risk" if high_risk_ports else "Standard Target"
+    if not findings:
         findings.append(IntelligenceFinding(
-            entity=f"Total: {len(found_ports)} open ports on {host}",
-            type="Port Scan Summary",
-            source="Port Scanner",
-            confidence="High",
-            color="red" if high_risk_ports else "slate",
-            threat_level=risk_level,
-            raw_data=f"Open: {', '.join(str(p) for p in sorted(found_ports))}",
-            tags=["port-scan"]
+            entity="Port scanner initialized",
+            type="Port Scanner: Ready",
+            source="PortScanner",
+            confidence="Low",
+            color="emerald",
+            threat_level="Informational",
+            status="Ready",
+            resolution=t,
+            tags=["port", "ready"]
         ))
 
     return findings

@@ -1,6 +1,7 @@
 import httpx
 import re
 import json
+import math
 import asyncio
 from urllib.parse import urljoin, urlparse, parse_qs
 from models import IntelligenceFinding
@@ -29,7 +30,7 @@ API_ENDPOINT_PATTERNS = [
 INTERNAL_HOST_PATTERNS = [
     (r'["\']((?:https?:)?//(localhost|127\.0\.0\.1|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|192\.168\.\d+\.\d+)(?::\d+)?(?:/[^"\']*)?)["\']', "Internal Host Reference"),
     (r'["\']((?:https?:)?//[^"\']*\.(?:internal|local|intranet|corp|private)[^"\']*)["\']', "Internal Domain Reference"),
-    (r'["\']((?:https?:)?//[^"\']*:(?:3000|8080|8443|8000|9000|5000|4200|3001|9090)(?:/[^"\']*)?)["\']', "Dev Server Reference"),
+    (r'["\']((?:https?:)?//[^"\']*:(?:3000|8080|8443|8000|9000|5000|4200|3001|9090|9200|5432|3306|6379|27017)(?:/[^"\']*)?)["\']', "Dev Server Reference"),
 ]
 
 SECRET_PATTERNS = [
@@ -88,6 +89,62 @@ SECRET_PATTERNS = [
     (r'(?i)digitalocean.*token\s*[=:]\s*["\']?([A-Za-z0-9_\-]{30,})["\']?', "DigitalOcean Token", "Critical"),
     (r'(?i)azure.*key\s*[=:]\s*["\']?([A-Za-z0-9/+=]{32,})["\']?', "Azure Key", "Critical"),
     (r'(?i)azure.*connection.*string\s*[=:]\s*["\']?([A-Za-z0-9;=]+)["\']?', "Azure Connection String", "Critical"),
+    (r'(?i)slack_bot_token\s*[=:]\s*["\']?(xoxb-[^\s\'"]+)["\']?', "Slack Bot Token", "Critical"),
+    (r'(?i)slack_webhook_url\s*[=:]\s*["\']?(https://hooks\.slack\.com/[^\s\'"]+)["\']?', "Slack Webhook URL", "Critical"),
+    (r'(?i)gitlab_token\s*[=:]\s*["\']?([A-Za-z0-9_\-]{20,})["\']?', "GitLab Token", "Critical"),
+    (r'(?i)bitbucket.*password\s*[=:]\s*["\']?([A-Za-z0-9_\-]{20,})["\']?', "Bitbucket Password", "Critical"),
+    (r'(?i)bitbucket.*token\s*[=:]\s*["\']?([A-Za-z0-9_\-]{20,})["\']?', "Bitbucket Token", "Critical"),
+    (r'(?i)pypi.*password\s*[=:]\s*["\']?([A-Za-z0-9_\-]{10,})["\']?', "PyPI Password", "Critical"),
+    (r'(?i)npm.*token\s*[=:]\s*["\']?([A-Za-z0-9_\-]{20,})["\']?', "NPM Token", "Critical"),
+    (r'(?i)npm.*_auth\s*[=:]\s*["\']?([A-Za-z0-9+/=]{20,})["\']?', "NPM Auth Token", "Critical"),
+    (r'(?i)docker.*password\s*[=:]\s*["\']?([A-Za-z0-9_\-]{10,})["\']?', "Docker Password", "Critical"),
+    (r'(?i)sonar.*token\s*[=:]\s*["\']?([A-Za-z0-9_\-]{20,})["\']?', "SonarQube Token", "Critical"),
+    (r'(?i)jira.*token\s*[=:]\s*["\']?([A-Za-z0-9_\-]{20,})["\']?', "JIRA Token", "Critical"),
+    (r'(?i)confluence.*password\s*[=:]\s*["\']?([A-Za-z0-9_\-]{10,})["\']?', "Confluence Password", "Critical"),
+    (r'(?i)circleci.*token\s*[=:]\s*["\']?([A-Za-z0-9_\-]{30,})["\']?', "CircleCI Token", "Critical"),
+    (r'(?i)travis.*token\s*[=:]\s*["\']?([A-Za-z0-9_\-]{20,})["\']?', "TravisCI Token", "Critical"),
+    (r'(?i)jenkins.*password\s*[=:]\s*["\']?([A-Za-z0-9_\-]{10,})["\']?', "Jenkins Password", "Critical"),
+    (r'(?i)jenkins.*token\s*[=:]\s*["\']?([A-Za-z0-9_\-]{30,})["\']?', "Jenkins Token", "Critical"),
+    (r'(?i)ansible.*vault.*password\s*[=:]\s*["\']?([A-Za-z0-9_\-]{10,})["\']?', "Ansible Vault Password", "Critical"),
+    (r'(?i)vault.*token\s*[=:]\s*["\']?([A-Za-z0-9_\-]{20,})["\']?', "Vault Token", "Critical"),
+    (r'(?i)consul.*token\s*[=:]\s*["\']?([A-Za-z0-9_\-]{20,})["\']?', "Consul Token", "Critical"),
+    (r'(?i)k8s.*token\s*[=:]\s*["\']?([A-Za-z0-9_\-]{20,})["\']?', "Kubernetes Token", "Critical"),
+    (r'(?i)kubernetes.*token\s*[=:]\s*["\']?([A-Za-z0-9_\-]{20,})["\']?', "Kubernetes Token", "Critical"),
+    (r'(?i)kube.*config\s*[=:]\s*["\']?([A-Za-z0-9_\-]{10,})["\']?', "Kubeconfig Token", "Critical"),
+    (r'(?i)google_application_credentials\s*[=:]\s*["\']?([A-Za-z0-9_\-\.]+\.json)["\']?', "GCP Service Account", "Critical"),
+    (r'(?i)GOOGLE_CREDENTIALS\s*[=:]\s*["\']?([A-Za-z0-9_\-\.]+)["\']?', "GCP Credentials", "Critical"),
+    (r'(?i)sentry_dsn\s*[=:]\s*["\']?(https://[^\s\'"]+)["\']?', "Sentry DSN", "High"),
+    (r'(?i)datadog_api_key\s*[=:]\s*["\']?([A-Za-z0-9]{32})["\']?', "Datadog API Key", "Critical"),
+    (r'(?i)new_relic_license_key\s*[=:]\s*["\']?([A-Za-z0-9_\-]{20,})["\']?', "New Relic License Key", "High"),
+    (r'(?i)rollbar_access_token\s*[=:]\s*["\']?([A-Za-z0-9]{32})["\']?', "Rollbar Access Token", "Critical"),
+    (r'(?i)bugsnag_api_key\s*[=:]\s*["\']?([A-Za-z0-9]{32})["\']?', "Bugsnag API Key", "High"),
+    (r'(?i)loggly_token\s*[=:]\s*["\']?([A-Za-z0-9_\-]{20,})["\']?', "Loggly Token", "High"),
+    (r'(?i)papertrail.*token\s*[=:]\s*["\']?([A-Za-z0-9_\-]{20,})["\']?', "Papertrail Token", "High"),
+    (r'(?i)algolia.*api[_-]?key\s*[=:]\s*["\']?([A-Za-z0-9_\-]{20,})["\']?', "Algolia API Key", "Critical"),
+    (r'(?i)mapbox.*token\s*[=:]\s*["\']?([A-Za-z0-9_\-]{20,})["\']?', "Mapbox Token", "High"),
+    (r'(?i)humio.*token\s*[=:]\s*["\']?([A-Za-z0-9_\-]{20,})["\']?', "Humio Token", "High"),
+    (r'(?i)sumo.*token\s*[=:]\s*["\']?([A-Za-z0-9_\-]{20,})["\']?', "Sumo Logic Token", "High"),
+    (r'(?i)pagerduty.*token\s*[=:]\s*["\']?([A-Za-z0-9_\-]{20,})["\']?', "PagerDuty Token", "Critical"),
+    (r'(?i)opsgenie.*api[_-]?key\s*[=:]\s*["\']?([A-Za-z0-9_\-]{20,})["\']?', "Opsgenie API Key", "Critical"),
+    (r'(?i)grafana.*token\s*[=:]\s*["\']?([A-Za-z0-9_\-]{20,})["\']?', "Grafana Token", "Critical"),
+    (r'(?i)kibana.*password\s*[=:]\s*["\']?([A-Za-z0-9_\-]{10,})["\']?', "Kibana Password", "Critical"),
+    (r'(?i)elastic.*password\s*[=:]\s*["\']?([A-Za-z0-9_\-]{10,})["\']?', "Elasticsearch Password", "Critical"),
+    (r'(?i)jdbc:[a-z]+://[^\s\'"]+', "JDBC Connection String", "High"),
+    (r'(?i)redis://[^\s\'":]+:[^\s\'":]+@[^\s\'"]+', "Redis Auth Connection", "Critical"),
+    (r'(?i)amqp://[^\s\'":]+:[^\s\'":]+@[^\s\'"]+', "AMQP Connection", "Critical"),
+    (r'(?i)rabbitmq://[^\s\'":]+:[^\s\'":]+@[^\s\'"]+', "RabbitMQ Connection", "Critical"),
+    (r'(?i)mysql://[^\s\'":]+:[^\s\'":]+@[^\s\'"]+', "MySQL Auth Connection", "Critical"),
+    (r'(?i)postgresql://[^\s\'":]+:[^\s\'":]+@[^\s\'"]+', "PostgreSQL Auth Connection", "Critical"),
+    (r'(?i)mongodb://[^\s\'":]+:[^\s\'":]+@[^\s\'"]+', "MongoDB Auth Connection", "Critical"),
+    (r'(?i)redshift://[^\s\'"]+', "Redshift Connection", "Critical"),
+    (r'(?i)presto://[^\s\'"]+', "Presto Connection", "High"),
+    (r'(?i)hive://[^\s\'"]+', "Hive Connection", "High"),
+    (r'(?i)bigquery.*credential.*json\s*[=:]\s*["\']?({[^}]+})["\']?', "BigQuery Credential JSON", "Critical"),
+    (r'(?i)snowflake.*password\s*[=:]\s*["\']?([A-Za-z0-9_\-!@#$%^&*]{6,})["\']?', "Snowflake Password", "Critical"),
+    (r'(?i)databricks.*token\s*[=:]\s*["\']?([A-Za-z0-9_\-]{20,})["\']?', "Databricks Token", "Critical"),
+    (r'(?i)db_password\s*[=:]\s*["\']?([^\s\'"]{6,})["\']?', "Database Password", "Critical"),
+    (r'(?i)db_username\s*[=:]\s*["\']?([^\s\'"]{3,})["\']?', "Database Username", "High"),
+    (r'(?i)connection_string\s*[=:]\s*["\']?([^\s\'"]+)["\']?', "Connection String", "Critical"),
 ]
 
 SENSITIVE_ROUTES = [
@@ -110,7 +167,68 @@ SENSITIVE_ROUTES = [
     r'["\'](/?health[^"\']*)["\']',
     r'["\'](/?metrics[^"\']*)["\']',
     r'["\'](/?monitor[^"\']*)["\']',
+    r'["\'](/?api[^"\']*)["\']',
+    r'["\'](/?v[0-9]+[^"\']*)["\']',
+    r'["\'](/?config[^"\']*)["\']',
+    r'["\'](/?private[^"\']*)["\']',
+    r'["\'](/?internal[^"\']*)["\']',
+    r'["\'](/?secret[^"\']*)["\']',
+    r'["\'](/?token[^"\']*)["\']',
+    r'["\'](/?payment[^"\']*)["\']',
+    r'["\'](/?checkout[^"\']*)["\']',
 ]
+
+HIGH_ENTROPY_STRING_PATTERN = re.compile(r'["\'][A-Za-z0-9_\-\.!@#$%^&*()+/=]{20,}["\']')
+ENTROPY_THRESHOLD = 4.0
+
+SECRET_CLASSIFICATION = {
+    "Critical": ["AWS", "Stripe Live", "Private Key", "JWT", "GitHub", "Discord", "Slack", "OAuth", "Connection String", "Database Password"],
+    "High": ["API Key", "Access Token", "Encryption Key", "Firebase", "S3"],
+    "Medium": ["Stripe Test", "Generic", "Test"],
+    "Low": ["Example", "Sample", "Your "],
+}
+
+COMMON_PATTERNS_FP = [
+    r"node_modules/", r"\.git/", r"package\.json", r"yarn\.lock",
+    r"package-lock\.json", r"readme\.md", r"readme",
+    r"example\.", r"sample\.", r"your-", r"your_",
+    r"changeme", r"replaceme", r"your_key", r"your-secret",
+    r"TODO", r"FIXME", r"XXX", r"HACK",
+    r"documentation", r"docs/", r"README",
+]
+
+
+def _shannon_entropy(s: str) -> float:
+    if not s:
+        return 0.0
+    entropy = 0.0
+    for c in (chr(i) for i in range(128)):
+        p = s.count(c) / len(s)
+        if p > 0:
+            entropy -= p * math.log2(p)
+    return entropy
+
+
+def _is_false_positive(match: str, context: str) -> bool:
+    match_lower = match.lower()
+    for fp in COMMON_PATTERNS_FP:
+        if re.search(fp, match_lower) or re.search(fp, context.lower()):
+            return True
+    if len(match) < 8:
+        return True
+    if re.match(r'^[\d\s]+$', match):
+        return True
+    if re.match(r'^[a-zA-Z]+$', match):
+        return True
+    return False
+
+
+def _classify_secret(stype: str, severity: str) -> str:
+    for level, keywords in SECRET_CLASSIFICATION.items():
+        for kw in keywords:
+            if kw.lower() in stype.lower():
+                return level
+    return severity
 
 
 async def _extract_js_urls(html: str) -> list[str]:
@@ -120,6 +238,14 @@ async def _extract_js_urls(html: str) -> list[str]:
         if url and url not in urls:
             urls.append(url)
     for m in re.finditer(r'import\(?["\']([^"\']+\.(?:js|jsx|ts|tsx|mjs|cjs))["\']', html):
+        url = m.group(1).strip()
+        if url and url not in urls:
+            urls.append(url)
+    for m in re.finditer(r'require\(["\']([^"\']+\.(?:js|jsx|ts|tsx|mjs|cjs))["\']', html):
+        url = m.group(1).strip()
+        if url and url not in urls:
+            urls.append(url)
+    for m in re.finditer(r'import\s+["\']([^"\']+\.(?:js|jsx|ts|tsx|mjs|cjs))["\']', html):
         url = m.group(1).strip()
         if url and url not in urls:
             urls.append(url)
@@ -164,18 +290,42 @@ async def _fetch_and_scan_js(url: str, base_url: str, domain: str, client: httpx
     for pattern, stype, severity in SECRET_PATTERNS:
         for m in re.finditer(pattern, js_content):
             matched = m.group(0)[:80]
-            color_map = {"Critical": "red", "High": "orange", "Medium": "yellow"}
-            threat_map = {"Critical": "Critical Risk", "High": "High Risk", "Medium": "Elevated Risk"}
+            context_start = max(0, m.start() - 100)
+            context_end = min(len(js_content), m.end() + 100)
+            context = js_content[context_start:context_end]
+
+            if _is_false_positive(matched, context):
+                continue
+
+            actual_severity = _classify_secret(stype, severity)
+            color_map = {"Critical": "red", "High": "orange", "Medium": "yellow", "Low": "slate"}
+            threat_map = {"Critical": "Critical Risk", "High": "High Risk", "Medium": "Elevated Risk", "Low": "Informational"}
             findings.append(IntelligenceFinding(
                 entity=f"{stype}: {matched}...",
                 type=f"JS Secret: {stype}",
                 source="JSSecrets",
                 confidence="High",
-                color=color_map.get(severity, "red"),
-                threat_level=threat_map.get(severity, "High Risk"),
-                tags=["secret", "javascript", stype.lower().replace(" ", "_")],
+                color=color_map.get(actual_severity, "red"),
+                threat_level=threat_map.get(actual_severity, "High Risk"),
+                tags=["secret", "javascript", stype.lower().replace(" ", "_"), actual_severity.lower()],
                 raw_data=m.group(0)[:500],
             ))
+
+    for m in HIGH_ENTROPY_STRING_PATTERN.finditer(js_content):
+        s = m.group(0).strip("\"'")
+        if len(s) >= 20 and _shannon_entropy(s) >= ENTROPY_THRESHOLD:
+            is_secret = not _is_false_positive(s, m.group(0))
+            if is_secret:
+                findings.append(IntelligenceFinding(
+                    entity=f"High entropy string ({_shannon_entropy(s):.1f}): {s[:40]}...",
+                    type="JS: High Entropy String (Potential Secret)",
+                    source="JSSecrets",
+                    confidence="Low",
+                    color="yellow",
+                    threat_level="Elevated Risk",
+                    tags=["secret", "entropy", "potential-secret"],
+                    raw_data=m.group(0)[:500],
+                ))
 
     for pattern, ftype in API_ENDPOINT_PATTERNS:
         for m in re.finditer(pattern, js_content):
@@ -230,6 +380,30 @@ async def _fetch_and_scan_js(url: str, base_url: str, domain: str, client: httpx
                 threat_level="Informational",
                 tags=["route", "api"],
             ))
+
+    try:
+        import base64
+        potential_b64 = re.findall(r'["\'][A-Za-z0-9+/=]{40,}["\']', js_content)
+        for b64_str in potential_b64:
+            b64_str = b64_str.strip("\"'")
+            try:
+                decoded = base64.b64decode(b64_str)
+                decoded_str = decoded.decode("utf-8", errors="ignore")
+                if re.search(r'(?:password|secret|key|token|api|credential)', decoded_str, re.I):
+                    findings.append(IntelligenceFinding(
+                        entity=f"Base64 encoded secret: {b64_str[:40]}...",
+                        type="JS: Base64 Encoded Secret",
+                        source="JSSecrets",
+                        confidence="Medium",
+                        color="orange",
+                        threat_level="High Risk",
+                        raw_data=f"Decoded: {decoded_str[:200]}",
+                        tags=["secret", "base64"],
+                    ))
+            except Exception:
+                pass
+    except Exception:
+        pass
 
     return findings
 

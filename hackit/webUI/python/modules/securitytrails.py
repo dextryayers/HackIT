@@ -15,6 +15,7 @@ ST_ASSOCIATED_ENDPOINT = f"{ST_API_BASE}/domain/{{domain}}/associated"
 ST_PING_ENDPOINT = f"{ST_API_BASE}/ping"
 ST_FEEDS_ENDPOINT = f"{ST_API_BASE}/feeds/domains"
 ST_USAGE_ENDPOINT = f"{ST_API_BASE}/account/usage"
+ST_HISTORY_ENDPOINT = f"{ST_API_BASE}/domain/{{domain}}/dns/history"
 
 USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
@@ -31,6 +32,22 @@ THREAT_KEYWORDS = {
     "scanning": "Scanning Activity",
 }
 
+SUBDOMAIN_CATEGORIES = {
+    r"\b(admin|administrator)\b": "Administrative",
+    r"\b(api|rest|graphql|endpoint|service)\b": "API",
+    r"\b(dev|develop|staging|stage|test|testing|qa|uat)\b": "Development",
+    r"\b(mail|email|webmail|smtp|imap|pop3|exchange|outlook)\b": "Email",
+    r"\b(cdn|static|assets|media|img|css|js|fonts|images|upload)\b": "CDN/Static",
+    r"\b(blog|news|press|media|article)\b": "Content",
+    r"\b(shop|store|cart|checkout|payment|billing|order)\b": "E-Commerce",
+    r"\b(forum|community|chat|support|helpdesk|help|ticket)\b": "Support",
+    r"\b(login|signin|register|auth|oauth|sso)\b": "Authentication",
+    r"\b(monitor|status|health|uptime|alerts|logs)\b": "Monitoring",
+    r"\b(vpn|remote|access|gateway|tunnel|proxy)\b": "Remote Access",
+    r"\b(files|docs|document|wiki|kb|knowledgebase)\b": "Documentation",
+}
+
+
 async def _st_api_get(endpoint: str, client: httpx.AsyncClient, params: dict = None) -> dict | None:
     try:
         resp = await client.get(endpoint, params=params, timeout=15.0,
@@ -41,11 +58,13 @@ async def _st_api_get(endpoint: str, client: httpx.AsyncClient, params: dict = N
         pass
     return None
 
+
 async def _resolve_ip(hostname: str) -> str | None:
     try:
         return socket.gethostbyname(hostname)
     except Exception:
         return None
+
 
 def _detect_threat_indicators(text: str, entity: str) -> list[tuple[str, str]]:
     indicators = []
@@ -53,6 +72,7 @@ def _detect_threat_indicators(text: str, entity: str) -> list[tuple[str, str]]:
         if keyword in text.lower() or keyword in entity.lower():
             indicators.append((keyword, label))
     return indicators
+
 
 def _extract_tags_domain(domain: str) -> list[str]:
     tags = []
@@ -67,6 +87,7 @@ def _extract_tags_domain(domain: str) -> list[str]:
         tags.append("deep_subdomain")
     return tags
 
+
 async def _enrich_whois(whois_data: dict, client: httpx.AsyncClient) -> dict:
     enriched = {}
     if isinstance(whois_data, dict):
@@ -77,6 +98,29 @@ async def _enrich_whois(whois_data: dict, client: httpx.AsyncClient) -> dict:
             if val:
                 enriched[key] = val
     return enriched
+
+
+def _classify_subdomain(subdomain: str) -> str:
+    sub_lower = subdomain.split(".")[0].lower()
+    for pattern, category in SUBDOMAIN_CATEGORIES.items():
+        if re.search(pattern, sub_lower):
+            return category
+    return "General/Uncategorized"
+
+
+async def _check_http_service(hostname: str, client: httpx.AsyncClient) -> tuple:
+    for proto in ["https", "http"]:
+        try:
+            resp = await client.get(f"{proto}://{hostname}", timeout=8.0,
+                headers={"User-Agent": USER_AGENT}, follow_redirects=False)
+            server = resp.headers.get("server", "")
+            title_m = re.search(r'<title[^>]*>(.*?)</title>', resp.text[:5000], re.DOTALL | re.IGNORECASE)
+            title = title_m.group(1).strip()[:100] if title_m else ""
+            return (resp.status_code, server, title)
+        except Exception:
+            continue
+    return (None, None, None)
+
 
 async def crawl(target: str, client: httpx.AsyncClient):
     findings = []
@@ -101,10 +145,13 @@ async def crawl(target: str, client: httpx.AsyncClient):
     subdomain_data = await _st_api_get(ST_SUBDOMAIN_ENDPOINT.format(domain=domain), client)
     if subdomain_data and isinstance(subdomain_data, dict):
         subs = subdomain_data.get("subdomains", [])
+        sub_classification = {}
         for sub in subs[:80]:
             full_domain = f"{sub}.{domain}" if not sub.endswith(f".{domain}") else sub
             ip = await _resolve_ip(full_domain)
             tags = _extract_tags_domain(full_domain)
+            sub_class = _classify_subdomain(full_domain)
+            sub_classification[sub_class] = sub_classification.get(sub_class, 0) + 1
             findings.append(IntelligenceFinding(
                 entity=full_domain,
                 type="SecurityTrails Subdomain",
@@ -128,6 +175,17 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 status="Complete",
                 raw_data=f"Subdomains found: {len(subs)}",
                 tags=["summary", "subdomain_count"]
+            ))
+        for cat, count in sorted(sub_classification.items(), key=lambda x: -x[1])[:5]:
+            findings.append(IntelligenceFinding(
+                entity=f"Category '{cat}': {count} subdomains",
+                type="Subdomain Category",
+                source="SecurityTrails",
+                confidence="Medium",
+                color="purple",
+                status="Classified",
+                raw_data=f"{cat}: {count}",
+                tags=["classification", cat.lower().replace(' ', '-')]
             ))
 
     dns_data = await _st_api_get(ST_DNS_ENDPOINT.format(domain=domain), client)
@@ -175,6 +233,8 @@ async def crawl(target: str, client: httpx.AsyncClient):
             "updated_date": ("WHOIS Updated Date", "slate"),
             "name_servers": ("WHOIS Nameservers", "blue"),
             "abuse_email": ("WHOIS Abuse Email", "orange"),
+            "contact_email": ("WHOIS Contact Email", "orange"),
+            "whois_server": ("WHOIS Server", "slate"),
             "status": ("WHOIS Domain Status", "slate"),
         }
         for key, (ftype, color) in whois_mappings.items():
@@ -248,6 +308,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 if isinstance(assoc, dict):
                     assoc_domain = assoc.get("domain", assoc.get("hostname", assoc.get("host", "")))
                     assoc_ip = assoc.get("ip", "")
+                    assoc_asn = assoc.get("asn", "")
                     if assoc_domain:
                         findings.append(IntelligenceFinding(
                             entity=str(assoc_domain)[:200],
@@ -258,9 +319,20 @@ async def crawl(target: str, client: httpx.AsyncClient):
                             threat_level="Informational",
                             status="Related",
                             resolution=str(assoc_ip)[:100] if assoc_ip else "",
-                            raw_data=f"Associated domain: {assoc_domain} related to {domain}",
+                            raw_data=f"Associated domain: {assoc_domain} related to {domain} (ASN: {assoc_asn})",
                             tags=["associated", "related", "domain"]
                         ))
+                        if assoc_asn:
+                            findings.append(IntelligenceFinding(
+                                entity=f"ASN: {assoc_asn}",
+                                type="SecurityTrails ASN Info",
+                                source="SecurityTrails",
+                                confidence="Medium",
+                                color="slate",
+                                status="Related",
+                                raw_data=f"Associated ASN: {assoc_asn} for {assoc_domain}",
+                                tags=["asn", "network", domain.replace('.', '_')]
+                            ))
 
     threat_indicators = _detect_threat_indicators(domain, domain)
     for keyword, label in threat_indicators:
@@ -275,6 +347,74 @@ async def crawl(target: str, client: httpx.AsyncClient):
             raw_data=f"Threat keyword '{keyword}' matched for {domain}",
             tags=["threat", keyword, "indicator"]
         ))
+
+    dns_history = await _st_api_get(ST_HISTORY_ENDPOINT.format(domain=domain), client)
+    if dns_history and isinstance(dns_history, dict):
+        history_types = dns_history.get("records", dns_history.get("history", {}))
+        if isinstance(history_types, dict):
+            for rtype, hrecords in history_types.items():
+                if isinstance(hrecords, list):
+                    findings.append(IntelligenceFinding(
+                        entity=f"{len(hrecords)} historical {rtype.upper()} records",
+                        type=f"DNS History - {rtype.upper()}",
+                        source="SecurityTrails (History)",
+                        confidence="High",
+                        color="blue",
+                        status="Historical",
+                        raw_data=f"{rtype.upper()} history: {len(hrecords)} entries",
+                        tags=["dns-history", rtype.lower(), "historical"]
+                    ))
+                    for hrec in hrecords[:5]:
+                        if isinstance(hrec, dict):
+                            hval = hrec.get("value", hrec.get("ip", hrec.get("data", "")))
+                            hdate = hrec.get("first_seen", hrec.get("date", hrec.get("last_seen", "")))
+                            if hval:
+                                findings.append(IntelligenceFinding(
+                                    entity=str(hval)[:200],
+                                    type=f"DNS History - {rtype.upper()} Change",
+                                    source="SecurityTrails (History)",
+                                    confidence="High",
+                                    color="orange",
+                                    status="Historical Change",
+                                    resolution=hdate[:10] if hdate else "",
+                                    raw_data=f"Historical {rtype.upper()}: {hval} ({hdate})",
+                                    tags=["dns-history", rtype.lower(), "change"]
+                                ))
+
+    sub_list_to_probe = [f"{sub}.{domain}" for sub in subs[:20]] if subs else []
+    for s_probe in sub_list_to_probe:
+        ip = await _resolve_ip(s_probe)
+        if ip:
+            try:
+                status_code, server, title = await _check_http_service(s_probe, client)
+                if status_code:
+                    sub_class = _classify_subdomain(s_probe)
+                    findings.append(IntelligenceFinding(
+                        entity=f"{s_probe}: HTTP {status_code}",
+                        type="SecurityTrails HTTP Probe",
+                        source="SecurityTrails",
+                        confidence="High",
+                        color="orange" if status_code < 400 else "slate",
+                        threat_level="Informational",
+                        status="Active" if status_code < 400 else "Inactive",
+                        resolution=ip,
+                        raw_data=f"HTTP {status_code} on {s_probe} (Server: {server or 'unknown'}, Title: {title or 'none'})",
+                        tags=["http-probe", sub_class.lower().replace(' ', '-'), domain.replace('.', '_')]
+                    ))
+                    if server:
+                        findings.append(IntelligenceFinding(
+                            entity=f"Server: {server}",
+                            type="SecurityTrails Server Banner",
+                            source="SecurityTrails",
+                            confidence="Medium",
+                            color="slate",
+                            status="Detected",
+                            resolution=ip,
+                            raw_data=f"Server header for {s_probe}: {server}",
+                            tags=["server", "banner", domain.replace('.', '_')]
+                        ))
+            except Exception:
+                pass
 
     if findings:
         type_dist = {}

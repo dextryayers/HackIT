@@ -3,7 +3,12 @@ import dns.resolver
 import dns.query
 import dns.zone
 import dns.name
+import dns.message
+import dns.rdatatype
+import dns.edns
 import time
+import random
+import struct
 from collections import defaultdict
 from models import IntelligenceFinding
 
@@ -15,9 +20,14 @@ ALL_RECORD_TYPES = [
 ]
 
 RESOLVERS_TO_TEST = [
-    "8.8.8.8", "1.1.1.1", "9.9.9.9", "208.67.222.222",
-    "8.8.4.4", "1.0.0.1", "149.112.112.112", "208.67.220.220",
-    "64.6.64.6", "77.88.8.8", "74.82.42.42",
+    ("Google", "8.8.8.8"),
+    ("Cloudflare", "1.1.1.1"),
+    ("Quad9", "9.9.9.9"),
+    ("OpenDNS", "208.67.222.222"),
+    ("Comodo", "8.26.56.26"),
+    ("Yandex", "77.88.8.8"),
+    ("Verisign", "64.6.64.6"),
+    ("AdGuard", "94.140.14.14"),
 ]
 
 RECORD_METADATA = {
@@ -30,13 +40,13 @@ RECORD_METADATA = {
     "SOA": {"color": "purple", "desc": "Start of Authority"},
     "SRV": {"color": "cyan", "desc": "Service Record"},
     "PTR": {"color": "blue", "desc": "Pointer Record"},
-    "CAA": {"color": "orange", "desc": "Certification Authority Authorization"},
+    "CAA": {"color": "orange", "desc": "CA Authorization"},
     "SSHFP": {"color": "orange", "desc": "SSH Fingerprint"},
     "DNSKEY": {"color": "emerald", "desc": "DNSSEC Public Key"},
     "DS": {"color": "emerald", "desc": "DNSSEC Delegation Signer"},
     "NSEC": {"color": "emerald", "desc": "Next Secure (DNSSEC)"},
     "NSEC3": {"color": "emerald", "desc": "NSEC3 (DNSSEC)"},
-    "RRSIG": {"color": "emerald", "desc": "Resource Record Signature (DNSSEC)"},
+    "RRSIG": {"color": "emerald", "desc": "Resource Record Signature"},
     "LOC": {"color": "orange", "desc": "Location Record"},
     "HINFO": {"color": "orange", "desc": "Host Information"},
     "RP": {"color": "slate", "desc": "Responsible Person"},
@@ -54,6 +64,54 @@ RECORD_METADATA = {
 
 SECURITY_RECORDS = {"CAA", "SSHFP", "DNSKEY", "DS", "NSEC", "NSEC3", "RRSIG", "TLSA", "SMIMEA", "OPENPGPKEY"}
 DNSSEC_RECORDS = {"DNSKEY", "DS", "NSEC", "NSEC3", "RRSIG"}
+
+BULK_SUBDOMAINS = [
+    "www", "mail", "ftp", "admin", "api", "dev", "staging", "vpn", "cdn",
+    "blog", "app", "webmail", "remote", "portal", "ssh", "git", "jenkins",
+    "jira", "confluence", "mysql", "db", "ns1", "ns2", "cloud", "test",
+    "stage", "demo", "beta", "nginx", "smtp", "imap", "pop3",
+    "autodiscover", "m", "mobile", "chat", "forum", "help", "support",
+    "docs", "wiki", "status", "tracker", "monitor", "dashboard",
+    "analytics", "metrics", "logs", "sync", "static", "assets",
+    "media", "img", "upload", "download", "files", "backup", "cpanel",
+    "whm", "server", "redis", "mongo", "postgres", "elastic",
+    "kibana", "grafana", "prometheus", "alertmanager", "consul",
+    "k8s", "kubernetes", "docker", "registry", "nexus", "artifactory",
+    "gitlab", "bitbucket", "npm", "lms", "erp", "crm", "hr",
+    "owa", "exchange", "lync", "skype", "teams", "zoom",
+    "radius", "ldap", "kerberos", "ntp", "dhcp", "dns",
+    "proxy", "squid", "webproxy", "gateway", "firewall",
+    "ws", "wss", "websocket", "socket", "stream",
+    "mx", "mail2", "mail1", "email", "sip", "voip",
+    "auth", "login", "signin", "register", "sso", "oauth",
+    "password", "reset", "account", "profile", "settings",
+    "admin-console", "admin-panel", "manage", "management",
+    "oracle", "sap", "salesforce", "zendesk", "servicenow",
+    "sharepoint", "slack", "discord", "office", "office365",
+    "outlook", "calendar", "drive", "hq", "headquarters",
+    "us", "uk", "eu", "asia", "china", "japan", "india",
+    "data", "database", "db1", "db2", "db3",
+    "search", "solr", "lucene", "sphinx", "algolia",
+    "notification", "notify", "alert", "alarm",
+    "streaming", "video", "audio", "media-server",
+    "load", "load-balancer", "lb", "balancer",
+    "health", "healthcheck", "heartbeat",
+    "monitoring", "watchdog", "sentry",
+    "inventory", "asset", "cmdb", "discovery",
+    "deploy", "deployment", "release", "rollback", "canary",
+    "blue", "green", "bluegreen", "feature", "flag",
+    "compliance", "audit", "risk", "control",
+    "version", "update", "upgrade", "migrate",
+    "batch", "job", "task", "worker", "scheduler",
+    "trigger", "hook", "webhook", "callback",
+    "cache", "varnish", "memcache",
+    "storage", "s3", "bucket", "minio",
+    "ssl", "tls", "cert", "certificate", "acme",
+    "firewall", "fw", "waf", "ids", "ips",
+    "openvpn", "wireguard", "ipsec", "rdp", "citrix",
+    "vdi", "vmware", "vcenter", "esxi", "openstack",
+    "iaas", "paas", "saas", "serverless", "lambda",
+]
 
 async def resolve_with_timeout(loop, domain, rtype, resolver=None, timeout_sec=5.0):
     start = time.monotonic()
@@ -103,13 +161,94 @@ async def check_any_query(loop, domain):
 
 async def benchmark_resolvers(loop, domain):
     bench_results = {}
-    for resolver_ip in RESOLVERS_TO_TEST[:5]:
+    for name, ip in RESOLVERS_TO_TEST[:6]:
         try:
-            _, elapsed = await resolve_with_timeout(loop, domain, "A", resolver=resolver_ip)
-            bench_results[resolver_ip] = round(elapsed, 3)
+            _, elapsed = await resolve_with_timeout(loop, domain, "A", resolver=ip)
+            bench_results[name] = {"ip": ip, "time": round(elapsed, 3) if elapsed else None}
         except:
-            bench_results[resolver_ip] = None
+            bench_results[name] = {"ip": ip, "time": None}
     return bench_results
+
+async def check_edns0_support(loop, domain) -> dict:
+    result = {"supported": False, "udp_size": 0, "extended_rcode": None, "dnssec_ok": False}
+    try:
+        res = dns.resolver.Resolver()
+        res.use_edns(0, dns.flags.DO, 4096)
+        res.timeout = 5.0
+        res.lifetime = 5.0
+        answers = await loop.run_in_executor(None, lambda: res.resolve(domain, 'A'))
+        if answers:
+            result["supported"] = True
+            result["udp_size"] = 4096
+            result["extended_rcode"] = 0
+            result["dnssec_ok"] = True
+    except:
+        try:
+            res = dns.resolver.Resolver()
+            res.use_edns(0, 0, 512)
+            res.timeout = 5.0
+            res.lifetime = 5.0
+            answers = await loop.run_in_executor(None, lambda: res.resolve(domain, 'A'))
+            if answers:
+                result["supported"] = True
+                result["udp_size"] = 512
+        except:
+            pass
+    return result
+
+async def check_dns_amplification(loop, domain) -> dict:
+    result = {"factor": 0, "request_size": 0, "response_size": 0, "amplifiable": False}
+    for rtype in ["ANY", "DNSSEC", "TXT", "NS"]:
+        try:
+            msg = dns.message.make_query(domain, dns.rdatatype.from_text(rtype if rtype != "DNSSEC" else "DNSKEY"))
+            wire = msg.to_wire()
+            req_size = len(wire)
+
+            res = dns.resolver.Resolver()
+            res.timeout = 5.0
+            res.lifetime = 5.0
+            answers = await loop.run_in_executor(None, lambda rt=rtype if rtype != "DNSSEC" else "DNSKEY": res.resolve(domain, rt))
+
+            resp = None
+            try:
+                resp = answers.response
+                resp_wire = resp.to_wire()
+                resp_size = len(resp_wire)
+            except:
+                resp_size = sum(len(str(r)) for r in answers) if answers else 0
+
+            if req_size > 0 and resp_size > req_size:
+                factor = resp_size / req_size
+                if factor > result["factor"]:
+                    result = {
+                        "factor": round(factor, 1),
+                        "request_size": req_size,
+                        "response_size": resp_size,
+                        "amplifiable": factor > 3,
+                        "record_type": rtype
+                    }
+        except:
+            pass
+    return result
+
+async def bulk_resolve(loop, domain, record_types, max_concurrent=20):
+    results = defaultdict(list)
+    sem = asyncio.Semaphore(max_concurrent)
+
+    async def resolve_one(sub):
+        async with sem:
+            for rtype in record_types:
+                try:
+                    answers, _ = await resolve_with_timeout(loop, f"{sub}.{domain}", rtype, timeout_sec=3.0)
+                    if answers:
+                        for r in answers:
+                            results[(sub, rtype)].append(str(r))
+                except:
+                    pass
+
+    tasks = [resolve_one(sub) for sub in BULK_SUBDOMAINS]
+    await asyncio.gather(*tasks)
+    return results
 
 async def crawl(target: str, client=None):
     findings = []
@@ -119,18 +258,26 @@ async def crawl(target: str, client=None):
         domain = urlparse(domain).netloc
     loop = asyncio.get_event_loop()
 
+    # 1. DNSSEC status
     dnssec_status = await check_dnssec(loop, domain)
 
+    # 2. Resolver benchmark
     resolver_bench = await benchmark_resolvers(loop, domain)
+
+    # 3. EDNS0 support check
+    edns0_status = await check_edns0_support(loop, domain)
+
+    # 4. DNS amplification factor
+    amp_result = await check_dns_amplification(loop, domain)
 
     security_records_found = set()
     all_records_found = set()
 
+    # 5. Standard record enumeration
     for rtype in ALL_RECORD_TYPES:
         try:
             result = await resolve_with_timeout(loop, domain, rtype)
             answers, elapsed = result
-
             if answers:
                 all_records_found.add(rtype)
                 values = [str(r) for r in answers]
@@ -143,7 +290,6 @@ async def crawl(target: str, client=None):
                     security_records_found.add(rtype)
                 if rtype in DNSSEC_RECORDS:
                     color = "emerald"
-                    threat_level = "Informational"
 
                 is_dnssec_rtype = rtype in DNSSEC_RECORDS
 
@@ -179,11 +325,10 @@ async def crawl(target: str, client=None):
                         source="DNS Resolver",
                         confidence="High",
                         color=color,
-                        category="DNS Intelligence",
                         threat_level=threat_level,
                         status=f"{rtype} Resolved",
                         resolution=f"{rtype} record for {domain}",
-                        raw_data=f"Type: {rtype} | Value: {value[:2000]}",
+                        raw_data=f"Type: {rtype} | Value: {value[:2000]} | Resolved in {elapsed:.3f}s" if elapsed else f"Type: {rtype} | Value: {value[:2000]}",
                         tags=["dns", rtype.lower(), "dnssec"] if is_dnssec_rtype else ["dns", rtype.lower()]
                     ))
 
@@ -194,15 +339,14 @@ async def crawl(target: str, client=None):
                         source="DNS Resolver",
                         confidence="High",
                         color=color,
-                        category="DNS Intelligence",
                         threat_level="Informational",
                         status=f"{len(values)} records",
                         tags=["dns", rtype.lower(), "count"]
                     ))
-
-        except Exception:
+        except:
             pass
 
+    # 6. Security records summary
     if security_records_found:
         findings.append(IntelligenceFinding(
             entity=f"Security records: {', '.join(sorted(security_records_found))}",
@@ -210,21 +354,30 @@ async def crawl(target: str, client=None):
             source="DNS Resolver",
             confidence="High",
             color="emerald",
-            category="DNS Intelligence",
             threat_level="Informational",
             status="Security Records Found",
             tags=["dns", "security"]
         ))
+    else:
+        findings.append(IntelligenceFinding(
+            entity=f"No DNS security records (CAA, SSHFP, DANE, DNSSEC) found for {domain}",
+            type="DNS Security Records Summary",
+            source="DNS Resolver",
+            confidence="Medium",
+            color="orange",
+            threat_level="Elevated Risk",
+            status="No Security Records",
+            tags=["dns", "security", "missing"]
+        ))
 
+    # 7. DNSSEC findings
     if dnssec_status["valid"]:
         findings.append(IntelligenceFinding(
-            entity=f"DNSSEC Validated | {dnssec_status['keys']} DNSKEY(s), "
-                   f"{dnssec_status['rrsigs']} RRSIG(s)",
+            entity=f"DNSSEC Validated | {dnssec_status['keys']} DNSKEY(s), {dnssec_status['rrsigs']} RRSIG(s)",
             type="DNSSEC Status",
             source="DNS Resolver",
             confidence="High",
             color="emerald",
-            category="DNS Intelligence",
             threat_level="Informational",
             status="DNSSEC Enabled",
             raw_data=f"Algorithm: {dnssec_status.get('algo', '?')}",
@@ -237,12 +390,53 @@ async def crawl(target: str, client=None):
             source="DNS Resolver",
             confidence="High",
             color="orange",
-            category="DNS Intelligence",
             threat_level="Elevated Risk",
             status="DNSSEC Missing",
             tags=["dns", "dnssec", "security"]
         ))
 
+    # 8. EDNS0 findings
+    if edns0_status["supported"]:
+        findings.append(IntelligenceFinding(
+            entity=f"EDNS0 supported (UDP size: {edns0_status['udp_size']}, DNSSEC OK: {edns0_status['dnssec_ok']})",
+            type="EDNS0 Support",
+            source="DNS Resolver",
+            confidence="High",
+            color="emerald",
+            threat_level="Informational",
+            status="EDNS0 Supported",
+            raw_data=f"EDNS0: udp_size={edns0_status['udp_size']}, extended_rcode={edns0_status['extended_rcode']}, do_bit={edns0_status['dnssec_ok']}",
+            tags=["dns", "edns0", "performance"]
+        ))
+    else:
+        findings.append(IntelligenceFinding(
+            entity=f"EDNS0 NOT supported by {domain}'s DNS servers",
+            type="EDNS0 Support",
+            source="DNS Resolver",
+            confidence="Medium",
+            color="orange",
+            threat_level="Informational",
+            status="No EDNS0",
+            tags=["dns", "edns0", "limitation"]
+        ))
+
+    # 9. DNS amplification findings
+    if amp_result["request_size"] > 0:
+        color_amp = "red" if amp_result["amplifiable"] else "green"
+        threat_amp = "Elevated Risk" if amp_result["amplifiable"] else "Informational"
+        findings.append(IntelligenceFinding(
+            entity=f"DNS amplification factor: {amp_result['factor']}x ({amp_result['record_type']})",
+            type="DNS Amplification Check",
+            source="DNS Resolver",
+            confidence="High",
+            color=color_amp,
+            threat_level=threat_amp,
+            status="Amplifiable" if amp_result["amplifiable"] else "Not Amplifiable",
+            raw_data=f"Request: {amp_result['request_size']}B | Response: {amp_result['response_size']}B | Factor: {amp_result['factor']}x via {amp_result.get('record_type', '?')}",
+            tags=["dns", "amplification", "dos-risk"]
+        ))
+
+    # 10. ANY query
     any_results = await check_any_query(loop, domain)
     if any_results:
         findings.append(IntelligenceFinding(
@@ -251,45 +445,125 @@ async def crawl(target: str, client=None):
             source="DNS Resolver",
             confidence="Medium",
             color="slate",
-            category="DNS Intelligence",
             threat_level="Informational",
             status="ANY Resolved",
             raw_data="\n".join(any_results[:5]),
             tags=["dns", "any-query"]
         ))
 
+    # 11. Resolver benchmark results
     if resolver_bench:
-        fastest = min((ip for ip, t in resolver_bench.items() if t is not None),
-                       key=lambda ip: resolver_bench[ip], default=None)
-        slowest = max((ip for ip, t in resolver_bench.items() if t is not None),
-                       key=lambda ip: resolver_bench[ip], default=None)
-        if fastest and slowest:
+        valid_bench = {k: v for k, v in resolver_bench.items() if v["time"] is not None}
+        if valid_bench:
+            fastest = min(valid_bench, key=lambda k: valid_bench[k]["time"])
+            slowest = max(valid_bench, key=lambda k: valid_bench[k]["time"])
+            avg_time = sum(v["time"] for v in valid_bench.values()) / len(valid_bench)
             findings.append(IntelligenceFinding(
-                entity=f"Fastest: {fastest} ({resolver_bench[fastest]}s) | "
-                       f"Slowest: {slowest} ({resolver_bench[slowest]}s)",
+                entity=f"Fastest: {fastest} ({valid_bench[fastest]['time']}s) | Slowest: {slowest} ({valid_bench[slowest]['time']}s) | Avg: {avg_time:.3f}s",
                 type="Resolver Speed Benchmark",
                 source="DNS Resolver",
                 confidence="High",
                 color="slate",
-                category="DNS Intelligence",
                 threat_level="Informational",
                 status="Benchmarked",
-                raw_data=str(resolver_bench),
-                tags=["dns", "benchmark"]
+                raw_data=str({k: v["time"] for k, v in valid_bench.items()}),
+                tags=["dns", "benchmark", "performance"]
             ))
 
+        for name, data in resolver_bench.items():
+            if data["time"] is not None:
+                findings.append(IntelligenceFinding(
+                    entity=f"{name} ({data['ip']}): {data['time']}s",
+                    type="Resolver Timing Detail",
+                    source="DNS Resolver",
+                    confidence="Medium",
+                    color="blue",
+                    threat_level="Informational",
+                    raw_data=f"Resolver {name} @ {data['ip']} responded in {data['time']}s",
+                    tags=["dns", "resolver", name.lower(), "timing"]
+                ))
+
+    # 12. Response timing analysis for all resolved records
+    timing_findings = []
+    for rtype in ["A", "AAAA", "MX", "NS", "TXT", "SOA"]:
+        try:
+            _, elapsed = await resolve_with_timeout(loop, domain, rtype)
+            if elapsed is not None:
+                timing_findings.append((rtype, elapsed))
+        except:
+            pass
+
+    if timing_findings:
+        fastest_rec = min(timing_findings, key=lambda x: x[1])
+        slowest_rec = max(timing_findings, key=lambda x: x[1])
+        findings.append(IntelligenceFinding(
+            entity=f"Fastest record type: {fastest_rec[0]} ({fastest_rec[1]:.3f}s), Slowest: {slowest_rec[0]} ({slowest_rec[1]:.3f}s)",
+            type="DNS Response Timing Analysis",
+            source="DNS Resolver",
+            confidence="High",
+            color="slate",
+            threat_level="Informational",
+            raw_data=f"Record type timings: {', '.join(f'{rt}: {t:.3f}s' for rt, t in timing_findings)}",
+            tags=["dns", "timing", "performance"]
+        ))
+
+    # 13. Bulk subdomain resolution
+    bulk_record_types = ["A", "AAAA", "CNAME", "MX", "TXT", "NS"]
+    bulk_results = await bulk_resolve(loop, domain, bulk_record_types)
+
+    # Group by subdomain
+    subdomain_data = defaultdict(lambda: defaultdict(list))
+    for (sub, rtype), values in bulk_results.items():
+        for v in values:
+            subdomain_data[sub][rtype].append(v)
+
+    if subdomain_data:
+        for sub, records in sorted(subdomain_data.items()):
+            record_types_found = list(records.keys())
+            ip_list = records.get("A", [])
+            ip = ip_list[0] if ip_list else ""
+            cname_list = records.get("CNAME", [])
+
+            raw_parts = [f"{rt}: {', '.join(recs[:2])}" for rt, recs in records.items()]
+            findings.append(IntelligenceFinding(
+                entity=f"{sub}.{domain}",
+                type="Bulk Resolved Subdomain",
+                source="DNS Resolver",
+                confidence="High",
+                color="emerald" if ip_list else "purple" if "AAAA" in records else "slate",
+                threat_level="Informational",
+                status=f"Resolved ({', '.join(record_types_found)})",
+                resolution=ip,
+                raw_data=" | ".join(raw_parts),
+                tags=["bulk", "subdomain", "dns"] + record_types_found
+            ))
+
+    if subdomain_data:
+        findings.append(IntelligenceFinding(
+            entity=f"Bulk resolved {len(subdomain_data)}/{len(BULK_SUBDOMAINS)} common subdomains for {domain}",
+            type="Bulk Resolution Summary",
+            source="DNS Resolver",
+            confidence="High",
+            color="blue",
+            threat_level="Informational",
+            raw_data=f"{len(subdomain_data)} subdomains resolved from {len(BULK_SUBDOMAINS)} common prefixes",
+            tags=["dns", "bulk", "summary"]
+        ))
+
+    # 14. Summary
+    total_records = len([f for f in findings if f.type.startswith("DNS ")])
     findings.append(IntelligenceFinding(
-        entity=f"{len(all_records_found)}/{len(ALL_RECORD_TYPES)} record types resolved for {domain}",
+        entity=f"{len(all_records_found)}/{len(ALL_RECORD_TYPES)} record types resolved | {total_records} total records",
         type="DNS Resolution Summary",
         source="DNS Resolver",
         confidence="High",
         color="blue",
-        category="DNS Intelligence",
         threat_level="Informational",
         status=f"{len(all_records_found)} types resolved",
         tags=["dns", "summary"]
     ))
 
+    # 15. DMARC/DKIM
     dmarc_selectors = ["_dmarc"]
     for sel in dmarc_selectors:
         try:
@@ -303,7 +577,6 @@ async def crawl(target: str, client=None):
                         source="DNS Resolver",
                         confidence="High",
                         color="emerald",
-                        category="DNS Intelligence",
                         threat_level="Informational",
                         resolution=f"{sel}.{domain}",
                         status="DMARC Found",
@@ -311,11 +584,21 @@ async def crawl(target: str, client=None):
                         tags=["dns", "dmarc", "email-security"]
                     ))
         except:
-            pass
+            findings.append(IntelligenceFinding(
+                entity=f"No DMARC record for {domain}",
+                type="DMARC Status",
+                source="DNS Resolver",
+                confidence="Medium",
+                color="orange",
+                threat_level="Elevated Risk",
+                status="No DMARC",
+                tags=["dns", "dmarc", "missing"]
+            ))
 
     for selector in ['default', 'google', 'mail', 'k1', 'dkim', 'mx',
                       'selector1', 'selector2', 'protonmail', 'zoho',
-                      'mailgun', 'sendgrid', 'mandrill', 'sparkpost']:
+                      'mailgun', 'sendgrid', 'mandrill', 'sparkpost',
+                      'postmark', 'amazonses', 'smtp', 'email']:
         try:
             answers = await resolve_with_timeout(loop, f"{selector}._domainkey.{domain}", "TXT")
             if answers[0]:
@@ -326,7 +609,6 @@ async def crawl(target: str, client=None):
                         source="DNS Resolver",
                         confidence="High",
                         color="emerald",
-                        category="DNS Intelligence",
                         threat_level="Informational",
                         resolution=str(rdata)[:300],
                         status="DKIM Found",
@@ -336,6 +618,7 @@ async def crawl(target: str, client=None):
         except:
             pass
 
+    # 16. Wildcard detection
     try:
         wild_val = f"wildcard-test-{abs(hash(domain)) % 100000}.{domain}"
         wild = await resolve_with_timeout(loop, wild_val, "A")
@@ -346,7 +629,6 @@ async def crawl(target: str, client=None):
                 source="DNS Resolver",
                 confidence="High",
                 color="orange",
-                category="DNS Intelligence",
                 threat_level="Elevated Risk",
                 status="Wildcard Active",
                 resolution=str(wild[0][0]),
@@ -356,6 +638,7 @@ async def crawl(target: str, client=None):
     except:
         pass
 
+    # 17. MX resolution
     try:
         mx_result = await resolve_with_timeout(loop, domain, "MX")
         if mx_result[0]:
@@ -371,7 +654,6 @@ async def crawl(target: str, client=None):
                                 source="DNS Resolver",
                                 confidence="High",
                                 color="slate",
-                                category="DNS Intelligence",
                                 threat_level="Informational",
                                 resolution=str(ip),
                                 status="MX IP Resolved",

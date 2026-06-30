@@ -1,5 +1,6 @@
 import httpx
 import json
+import re
 from models import IntelligenceFinding
 
 LEAKIX_BASE = "https://leakix.net"
@@ -18,6 +19,14 @@ SERVICE_QUERIES = {
     "POSTGRESQL": {"protocol": "postgresql", "ports": [5432], "severity": "Critical", "color": "red"},
     "SSH": {"protocol": "ssh", "ports": [22], "severity": "Medium", "color": "orange"},
     "RDP": {"protocol": "rdp", "ports": [3389], "severity": "High", "color": "red"},
+    "TELNET": {"protocol": "telnet", "ports": [23], "severity": "High", "color": "red"},
+    "VNC": {"protocol": "vnc", "ports": [5900, 5800], "severity": "High", "color": "red"},
+    "SMB": {"protocol": "smb", "ports": [445, 139], "severity": "High", "color": "red"},
+    "DNS": {"protocol": "dns", "ports": [53], "severity": "Medium", "color": "orange"},
+    "MSSQL": {"protocol": "mssql", "ports": [1433], "severity": "Critical", "color": "red"},
+    "ORACLEDB": {"protocol": "oracle", "ports": [1521], "severity": "High", "color": "red"},
+    "DOCKER": {"protocol": "docker", "ports": [2375, 2376], "severity": "Critical", "color": "red"},
+    "KIBANA": {"protocol": "kibana", "ports": [5601], "severity": "Medium", "color": "orange"},
 }
 
 LEAK_TYPES = {
@@ -27,6 +36,24 @@ LEAK_TYPES = {
     "misconfiguration": {"type": "Misconfiguration", "severity": "High", "color": "orange"},
     "vulnerability": {"type": "Vulnerability", "severity": "Critical", "color": "red"},
     "exposed_service": {"type": "Exposed Service", "severity": "High", "color": "orange"},
+    "api_key_leak": {"type": "API Key Leak", "severity": "Critical", "color": "red"},
+    "code_leak": {"type": "Code Leak", "severity": "High", "color": "red"},
+}
+
+RESPONSE_PATTERNS = {
+    r"password|passwd|pwd|secret|credential": "Credential Exposure",
+    r"mongodb|27017|no auth|unauthorized": "Open MongoDB",
+    r"elasticsearch|9200|cluster_name|indices": "Open Elasticsearch",
+    r"redis|6379|keyspace|\-server": "Open Redis",
+    r"mysql|3306|sql error|database error": "MySQL Exposure",
+    r"ftp|anonymous|login successful": "FTP Exposure",
+    r"smtp|helo|ehlo|mail from": "SMTP/Banner",
+    r"cve-\d{4}-\d+|vulnerability|exploit": "Vulnerability Mention",
+    r"api.?key|api.?secret|token|auth.?key": "API Key Exposure",
+    r"admin|root|administrator": "Privileged Access",
+    r"aws|s3\.amazonaws|amazonaws\.com": "AWS Exposure",
+    r"-----BEGIN.*PRIVATE KEY-----": "Private Key Exposure",
+    r"git:|github|gitlab|bitbucket": "Code Repository Leak",
 }
 
 def detect_leak_type(entry: dict) -> dict:
@@ -51,7 +78,23 @@ def detect_leak_type(entry: dict) -> dict:
         return {"type": "Vulnerability", "severity": "Critical", "color": "red"}
     if any(w in leak_str for w in ["leak", "breach", "exposed"]):
         return {"type": "Data Leak", "severity": "High", "color": "red"}
+    if any(w in leak_str for w in ["api", "key", "token", "secret"]):
+        return {"type": "API Key Leak", "severity": "Critical", "color": "red"}
+    if any(w in leak_str for w in ["docker", "2375", "2376", "container"]):
+        return {"type": "Open Docker API", "severity": "Critical", "color": "red"}
+    if any(w in leak_str for w in ["ssh", "22/tcp", "openssh"]):
+        return {"type": "SSH Exposure", "severity": "Medium", "color": "orange"}
+    if any(w in leak_str for w in ["rdp", "3389", "terminal"]):
+        return {"type": "RDP Exposure", "severity": "High", "color": "red"}
     return {"type": "Exposed Service", "severity": "Medium", "color": "orange"}
+
+def match_response_patterns(entry: dict) -> list:
+    matches = []
+    entry_str = json.dumps(entry)
+    for pattern, label in RESPONSE_PATTERNS.items():
+        if re.search(pattern, entry_str, re.IGNORECASE):
+            matches.append(label)
+    return matches
 
 def score_severity(entries: list) -> tuple:
     critical = 0
@@ -112,6 +155,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             service_counts[service] = len(leaks)
 
     seen_events = set()
+    leak_type_counter = {}
+    pattern_matches = []
+
     for leak in all_leaks:
         event = leak.get("event", "")
         ip = leak.get("ip", "")
@@ -134,6 +180,11 @@ async def crawl(target: str, client: httpx.AsyncClient):
         sev = detected["severity"] if not severity_val else severity_val
         color = detected["color"]
 
+        # Response pattern matching
+        patterns_found = match_response_patterns(leak)
+        if patterns_found:
+            pattern_matches.append({"leak_label": leak_label, "patterns": patterns_found, "ip": ip, "port": port})
+
         entity = f"{leak_label}"
         if event:
             entity = f"{event} ({leak_label})"
@@ -148,6 +199,8 @@ async def crawl(target: str, client: httpx.AsyncClient):
             tags.append("credential-leak")
         if "open" in leak_label.lower() or "unauthorized" in raw.lower():
             tags.append("open-access")
+        if "api" in leak_label.lower():
+            tags.append("api-key")
 
         findings.append(IntelligenceFinding(
             entity=entity[:200],
@@ -185,6 +238,41 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 raw_data=f"{count} records affected in {event or leak_label}",
                 tags=["impact"],
             ))
+
+        # Track leak types for classification summary
+        if leak_label not in leak_type_counter:
+            leak_type_counter[leak_label] = 0
+        leak_type_counter[leak_label] += 1
+
+    # Pattern match summaries
+    if pattern_matches:
+        all_patterns = set()
+        for pm in pattern_matches:
+            for p in pm["patterns"]:
+                all_patterns.add(p)
+        findings.append(IntelligenceFinding(
+            entity=f"Response pattern matches: {', '.join(sorted(all_patterns)[:10])}",
+            type="LeakIX: Response Pattern Analysis",
+            source="LeakIX Scanner",
+            confidence="Medium",
+            color="orange",
+            threat_level="Informational",
+            raw_data=f"Patterns detected: {all_patterns}",
+            tags=["pattern-analysis"],
+        ))
+
+    # Leak type classification breakdown
+    for lt, lcount in sorted(leak_type_counter.items(), key=lambda x: -x[1])[:10]:
+        findings.append(IntelligenceFinding(
+            entity=f"{lt}: {lcount} occurrence(s)",
+            type="LeakIX: Leak Type Classification",
+            source="LeakIX Scanner",
+            confidence="Medium",
+            color="red" if "Critical" in lt else "orange",
+            threat_level="Elevated Risk",
+            raw_data=f"Leak type '{lt}' ditemukan {lcount} kali",
+            tags=["leak-classification"],
+        ))
 
     for service, count in sorted(service_counts.items()):
         config = SERVICE_QUERIES.get(service, {})

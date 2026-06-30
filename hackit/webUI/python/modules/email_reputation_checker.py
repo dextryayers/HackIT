@@ -31,6 +31,22 @@ DNSBL_SERVERS = [
     "dnsbl.kempt.net",
     "dnsbl.justspam.org",
     "dnsbl.cyberlogic.net",
+    "truncate.gbudb.net",
+    "dnsbl.inps.de",
+    "bl.score.senderscore.com",
+    "dnsbl.spfbl.net",
+    "spam.dnsbl.sorbs.net",
+    "dnsbl.httpbl.net",
+    "hostkarma.junkemailfilter.com",
+    "no-more-funn.moensted.dk",
+    "korea.services.net",
+    "access.spamcop.net",
+    "web.dnsbl.sorbs.net",
+    "rbl.megarbl.net",
+    "ubl.unsubscore.com",
+    "dnsbl.cobion.com",
+    "spamrbl.imp.ch",
+    "rbl.talkactive.net",
 ]
 
 URIBL_SERVERS = [
@@ -60,6 +76,13 @@ SMTP_BANNER_PATTERNS = {
     "outlook": r"Outlook|Hotmail|microsoft",
     "protonmail": r"ProtonMail",
     "zoho": r"Zoho",
+    "iredmail": r"iredmail",
+    "zimbra": r"Zimbra",
+    "hmailserver": r"hmailserver",
+    "mailenable": r"MailEnable",
+    "kerio": r"Kerio",
+    "mailcow": r"mailcow",
+    "cyrus": r"Cyrus",
 }
 
 
@@ -298,6 +321,276 @@ async def get_ips_for_domain(domain: str) -> List[str]:
     return ips
 
 
+async def resolve_mx_to_ips(mx_host: str) -> List[str]:
+    ips = []
+    try:
+        resolver = dns.resolver.Resolver()
+        resolver.timeout = 5
+        resolver.lifetime = 5
+        answers = resolver.resolve(mx_host, "A")
+        for rdata in answers:
+            ips.append(str(rdata))
+    except Exception:
+        pass
+    return ips
+
+
+async def check_ip_quality(client: httpx.AsyncClient, ip: str) -> Dict:
+    result = {"score": None, "success": False, "source": "", "details": ""}
+    try:
+        resp = await client.get(
+            f"https://api.abuseipdb.com/api/v2/check",
+            params={"ipAddress": ip, "maxAgeInDays": "90"},
+            headers={"User-Agent": UA, "Accept": "application/json", "Key": ""},
+            timeout=10.0,
+        )
+        if resp.status_code == 200:
+            data = resp.json().get("data", {})
+            score = data.get("abuseConfidenceScore", 0)
+            result["score"] = score
+            result["success"] = True
+            result["source"] = "AbuseIPDB"
+            result["details"] = f"abuseConfidenceScore={score}, totalReports={data.get('totalReports', 0)}"
+            return result
+    except Exception:
+        pass
+    try:
+        resp = await client.get(
+            f"https://ipqualityscore.com/api/json/ip/{ip}",
+            headers={"User-Agent": UA},
+            timeout=10.0,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get("success"):
+                score = data.get("fraud_score", 0)
+                result["score"] = score
+                result["success"] = True
+                result["source"] = "IPQualityScore"
+                result["details"] = f"fraud_score={score}, proxy={data.get('proxy', False)}, vpn={data.get('vpn', False)}"
+                return result
+    except Exception:
+        pass
+    try:
+        resp = await client.get(f"http://ip-api.com/json/{ip}", timeout=10.0)
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get("status") == "success":
+                proxy = data.get("proxy", False)
+                hosting = data.get("hosting", False)
+                score = 50 if proxy or hosting else 0
+                result["score"] = score
+                result["success"] = True
+                result["source"] = "ip-api.com"
+                result["details"] = f"proxy={proxy}, hosting={hosting}, org={data.get('org', '')}"
+                return result
+    except Exception:
+        pass
+    return result
+
+
+async def url_safe_check(client: httpx.AsyncClient, domain: str) -> Dict:
+    result = {"malicious": False, "threats": [], "source": "GoogleSafeBrowsing", "success": False}
+    try:
+        payload = {
+            "client": {"clientId": "email-rep-checker", "clientVersion": "1.0.0"},
+            "threatInfo": {
+                "threatTypes": ["MALWARE", "SOCIAL_ENGINEERING", "UNWANTED_SOFTWARE", "POTENTIALLY_HARMFUL_APPLICATION"],
+                "platformTypes": ["ANY_PLATFORM"],
+                "threatEntryTypes": ["URL"],
+                "threatEntries": [{"url": f"https://{domain}"}],
+            },
+        }
+        resp = await client.post(
+            "https://safebrowsing.googleapis.com/v4/threatMatches:find?key=",
+            json=payload,
+            headers={"User-Agent": UA},
+            timeout=15.0,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            matches = data.get("matches", [])
+            if matches:
+                result["malicious"] = True
+                for m in matches:
+                    result["threats"].append(m.get("threatType", "Unknown"))
+            result["success"] = True
+            return result
+    except Exception:
+        pass
+    return result
+
+
+async def url_vt_check(client: httpx.AsyncClient, domain: str) -> Dict:
+    result = {"malicious": 0, "suspicious": 0, "harmless": 0, "undetected": 0, "source": "VirusTotal", "success": False}
+    try:
+        url_id = domain.encode("utf-8").hex()
+        resp = await client.get(
+            f"https://www.virustotal.com/api/v3/urls/{url_id}",
+            headers={"User-Agent": UA, "x-apikey": ""},
+            timeout=15.0,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            stats = data.get("data", {}).get("attributes", {}).get("last_analysis_stats", {})
+            result["malicious"] = stats.get("malicious", 0)
+            result["suspicious"] = stats.get("suspicious", 0)
+            result["harmless"] = stats.get("harmless", 0)
+            result["undetected"] = stats.get("undetected", 0)
+            result["success"] = True
+            return result
+    except Exception:
+        pass
+    try:
+        resp = await client.post(
+            "https://www.virustotal.com/api/v3/urls",
+            data={"url": f"https://{domain}"},
+            headers={"User-Agent": UA, "x-apikey": "", "Accept": "application/json"},
+            timeout=15.0,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            analysis_id = data.get("data", {}).get("id", "")
+            if analysis_id:
+                result["submitted"] = True
+                result["analysis_id"] = analysis_id
+    except Exception:
+        pass
+    return result
+
+
+async def spamassassin_rules_check(spf: Dict, dkim: Dict, dmarc: Dict, mx_info: Dict) -> Dict:
+    score = 0
+    rules = []
+    if not spf["has_spf"]:
+        score += 3.5
+        rules.append("NO_SPF_RECORD +3.5")
+    elif "+all" in spf.get("spf_record", ""):
+        score += 2.5
+        rules.append("SPF_ALLOW_ALL +2.5")
+    elif "~all" not in spf.get("spf_record", "") and "-all" not in spf.get("spf_record", ""):
+        score += 1.5
+        rules.append("SPF_NO_FAIL_MECHANISM +1.5")
+    if not dkim["has_dkim"]:
+        score += 3.0
+        rules.append("NO_DKIM_RECORD +3.0")
+    if not dmarc["has_dmarc"]:
+        score += 2.5
+        rules.append("NO_DMARC_RECORD +2.5")
+    elif dmarc["policy"] == "none":
+        score += 1.5
+        rules.append("DMARC_POLICY_NONE +1.5")
+    if not mx_info["has_mx"]:
+        score += 2.0
+        rules.append("NO_MX_RECORD +2.0")
+    if dmarc.get("issues") and any("rua" in i for i in dmarc["issues"]):
+        score += 0.5
+        rules.append("DMARC_NO_RUA +0.5")
+    return {"score": round(score, 1), "rules": rules, "verdict": "PASS" if score < 5 else ("PROBABLE_SPAM" if score < 8 else "SPAM")}
+
+
+async def compute_email_sending_score(spf: Dict, dkim: Dict, dmarc: Dict, dnsbl_data: Dict, ptr_data: Dict, mx_info: Dict) -> Dict:
+    score = 50
+    breakdown = []
+    if spf["has_spf"]:
+        if "-all" in spf.get("spf_record", ""):
+            score += 15
+            breakdown.append("SPF(hardfail)+15")
+        elif "~all" in spf.get("spf_record", ""):
+            score += 10
+            breakdown.append("SPF(softfail)+10")
+        else:
+            score += 5
+            breakdown.append("SPF(present)+5")
+    else:
+        score -= 20
+        breakdown.append("SPF(missing)-20")
+    if dkim["has_dkim"]:
+        score += 15
+        breakdown.append(f"DKIM({len(dkim['selectors'])}sel)+15")
+    else:
+        score -= 15
+        breakdown.append("DKIM(missing)-15")
+    if dmarc["has_dmarc"]:
+        if dmarc["policy"] == "reject":
+            score += 15
+            breakdown.append("DMARC(reject)+15")
+        elif dmarc["policy"] == "quarantine":
+            score += 10
+            breakdown.append("DMARC(quarantine)+10")
+        else:
+            score += 5
+            breakdown.append("DMARC(none)+5")
+    else:
+        score -= 15
+        breakdown.append("DMARC(missing)-15")
+    blacklisted_count = dnsbl_data.get("blacklisted_count", 0)
+    total_checked = dnsbl_data.get("total_checked", 1)
+    if total_checked > 0:
+        bl_ratio = blacklisted_count / total_checked
+        penalty = int(bl_ratio * 30)
+        score -= penalty
+        if penalty > 0:
+            breakdown.append(f"DNSBL({blacklisted_count}listed)-{penalty}")
+    has_ptr = ptr_data.get("has_ptr", False)
+    if has_ptr:
+        score += 5
+        breakdown.append("PTR(present)+5")
+    else:
+        score -= 5
+        breakdown.append("PTR(missing)-5")
+    if mx_info["has_mx"] and len(mx_info["mx_records"]) > 0:
+        score += 5
+        breakdown.append("MX(configured)+5")
+    else:
+        score -= 5
+        breakdown.append("MX(missing)-5")
+    score = max(0, min(100, score))
+    return {"score": score, "breakdown": breakdown}
+
+
+async def check_multi_mx_blacklist(client: httpx.AsyncClient, mx_info: Dict) -> List[Dict]:
+    results = []
+    if not mx_info["has_mx"]:
+        return results
+    for mx in mx_info["mx_records"]:
+        mx_host = mx["host"]
+        ips = await resolve_mx_to_ips(mx_host)
+        for ip in ips:
+            listed_servers = []
+            for dnsbl in DNSBL_SERVERS[:10]:
+                try:
+                    listed = await query_dnsbl(client, ip, dnsbl)
+                    if listed:
+                        listed_servers.append(dnsbl)
+                except Exception:
+                    continue
+            if listed_servers:
+                results.append({
+                    "mx_host": mx_host,
+                    "mx_ip": ip,
+                    "listed_servers": listed_servers,
+                    "listed_count": len(listed_servers),
+                })
+    return results
+
+
+async def check_rdns_consistency(ip: str, ptr_record: str, domain: str, mx_hosts: List[str]) -> Dict:
+    result = {"consistent": False, "hostname_match": "", "details": []}
+    if not ptr_record:
+        result["details"].append("No PTR record to verify")
+        return result
+    helo_candidates = [domain] + mx_hosts
+    for candidate in helo_candidates:
+        if candidate and candidate.lower() in ptr_record.lower():
+            result["consistent"] = True
+            result["hostname_match"] = candidate
+            result["details"].append(f"PTR matches: {candidate}")
+            return result
+    result["details"].append(f"PTR '{ptr_record}' does not match any known hostname")
+    return result
+
+
 async def crawl(target: str, client: httpx.AsyncClient):
     findings = []
     domain = target.strip().lower()
@@ -398,15 +691,132 @@ async def crawl(target: str, client: httpx.AsyncClient):
             tags=["email-security", "mx", "issue"]
         ))
 
+    try:
+        bimi_answers = dns.resolver.resolve(f"default._bimi.{domain}", "TXT")
+        for r in bimi_answers:
+            txt = str(r)
+            if "v=BIMI1" in txt:
+                findings.append(IntelligenceFinding(
+                    entity=f"BIMI record found for {domain}",
+                    type="Email: BIMI Record",
+                    source="EmailReputation",
+                    confidence="High",
+                    color="purple",
+                    threat_level="Informational",
+                    raw_data=txt[:500],
+                    tags=["email-security", "bimi"]
+                ))
+                logo_match = re.search(r"l=https?://\S+", txt)
+                if logo_match:
+                    findings.append(IntelligenceFinding(
+                        entity=f"BIMI Logo: {logo_match.group(0)[2:]}",
+                        type="Email: BIMI Logo",
+                        source="EmailReputation",
+                        confidence="High",
+                        color="purple",
+                        threat_level="Informational",
+                        tags=["email-security", "bimi"]
+                    ))
+                break
+    except:
+        pass
+
+    try:
+        mta_sts_answers = dns.resolver.resolve(f"_mta-sts.{domain}", "TXT")
+        for r in mta_sts_answers:
+            txt = str(r)
+            if "v=STSv1" in txt:
+                findings.append(IntelligenceFinding(
+                    entity=f"MTA-STS DNS record found for {domain}",
+                    type="Email: MTA-STS Record",
+                    source="EmailReputation",
+                    confidence="High",
+                    color="emerald",
+                    threat_level="Informational",
+                    raw_data=txt[:500],
+                    tags=["email-security", "mta-sts"]
+                ))
+                break
+    except:
+        pass
+
+    if dmarc["has_dmarc"]:
+        dmarc_check = dmarc.get("dmarc_record", "")
+        if dmarc_check:
+            aspf = re.search(r"aspf\s*=\s*([rs])", dmarc_check)
+            adkim = re.search(r"adkim\s*=\s*([rs])", dmarc_check)
+            if aspf:
+                findings.append(IntelligenceFinding(
+                    entity=f"DMARC SPF Alignment: {'Strict' if aspf.group(1) == 'r' else 'Relaxed'}",
+                    type="Email: DMARC SPF Alignment",
+                    source="EmailReputation",
+                    confidence="High",
+                    color="emerald" if aspf.group(1) == 'r' else "orange",
+                    threat_level="Informational" if aspf.group(1) == 'r' else "Elevated Risk",
+                    tags=["email-security", "dmarc", "alignment"]
+                ))
+            if adkim:
+                findings.append(IntelligenceFinding(
+                    entity=f"DMARC DKIM Alignment: {'Strict' if adkim.group(1) == 'r' else 'Relaxed'}",
+                    type="Email: DMARC DKIM Alignment",
+                    source="EmailReputation",
+                    confidence="High",
+                    color="emerald" if adkim.group(1) == 'r' else "orange",
+                    threat_level="Informational" if adkim.group(1) == 'r' else "Elevated Risk",
+                    tags=["email-security", "dmarc", "alignment"]
+                ))
+
+    try:
+        resolver = dns.resolver.Resolver()
+        resolver.timeout = 5
+        resolver.lifetime = 5
+        dnskey_answers = resolver.resolve(domain, "DNSKEY")
+        if dnskey_answers:
+            findings.append(IntelligenceFinding(
+                entity=f"DNSSEC enabled for {domain} ({len(dnskey_answers)} DNSKEY records)",
+                type="Email: DNSSEC Status",
+                source="EmailReputation",
+                confidence="High",
+                color="emerald",
+                threat_level="Informational",
+                raw_data=f"DNSKEY records: {len(dnskey_answers)}",
+                tags=["email-security", "dnssec"]
+            ))
+    except dns.resolver.NoAnswer:
+        pass
+    except:
+        pass
+
+    spamass = await spamassassin_rules_check(spf, dkim, dmarc, mx_info)
+    sa_color = "emerald" if spamass["verdict"] == "PASS" else ("orange" if spamass["verdict"] == "PROBABLE_SPAM" else "red")
+    sa_threat = "Informational" if spamass["verdict"] == "PASS" else ("Elevated Risk" if spamass["verdict"] == "PROBABLE_SPAM" else "High Risk")
+    findings.append(IntelligenceFinding(
+        entity=f"SpamAssassin Score: {spamass['score']} ({spamass['verdict']})",
+        type="Email: SpamAssassin Rules",
+        source="EmailReputation",
+        confidence="Medium",
+        color=sa_color,
+        threat_level=sa_threat,
+        raw_data=f"Score: {spamass['score']} | Verdict: {spamass['verdict']} | Rules: {'; '.join(spamass['rules'][:10])}",
+        tags=["email-security", "spamassassin"]
+    ))
+
     ips = await get_ips_for_domain(domain)
 
-    for ip in ips:
+    dnsbl_data = {"blacklisted_count": 0, "total_checked": 0}
+    ptr_global_data = {"has_ptr": False}
+
+    for idx, ip in enumerate(ips):
         ptr = await check_ptr_record(ip)
+        if ptr["has_ptr"]:
+            ptr_global_data["has_ptr"] = True
+        ptr_data = ptr
 
         if ptr["has_ptr"]:
             matches = domain in ptr["ptr_record"] or any(
                 mx["host"] in ptr["ptr_record"] for mx in mx_info.get("mx_records", [])
             )
+            ptr_global_data["ptr_record"] = ptr["ptr_record"]
             color = "emerald" if matches else "orange"
             findings.append(IntelligenceFinding(
                 entity=f"PTR: {ptr['ptr_record']}",
@@ -429,6 +839,18 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 threat_level="Elevated Risk",
                 tags=["email-security", "ptr", "missing"]
             ))
+
+        rdns_check = await check_rdns_consistency(ip, ptr.get("ptr_record", ""), domain, [mx["host"] for mx in mx_info.get("mx_records", [])])
+        findings.append(IntelligenceFinding(
+            entity=f"RDNS Consistency: {'Match' if rdns_check['consistent'] else 'Mismatch'}",
+            type="Email: RDNS Consistency",
+            source="EmailReputation",
+            confidence="Medium",
+            color="emerald" if rdns_check["consistent"] else "orange",
+            threat_level="Informational" if rdns_check["consistent"] else "Elevated Risk",
+            raw_data=f"IP {ip}: {'; '.join(rdns_check['details'][:3])}",
+            tags=["email-security", "rdns", "consistency"]
+        ))
 
         banner_info = await smtp_banner_grab(ip)
         if banner_info.get("banner"):
@@ -485,6 +907,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 listed_count += 1
                 listed_servers.append(dnsbl)
 
+        dnsbl_data["blacklisted_count"] += listed_count
+        dnsbl_data["total_checked"] += len(DNSBL_SERVERS)
+
         if listed_count > 0:
             findings.append(IntelligenceFinding(
                 entity=f"IP {ip} listed on {listed_count} DNSBL(s)",
@@ -508,6 +933,22 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 tags=["email-security", "blacklist", "clean"]
             ))
 
+        ip_quality = await check_ip_quality(client, ip)
+        if ip_quality["success"]:
+            qscore = ip_quality["score"]
+            qcolor = "emerald" if qscore == 0 else ("orange" if qscore < 50 else "red")
+            qthreat = "Informational" if qscore == 0 else ("Elevated Risk" if qscore < 50 else "High Risk")
+            findings.append(IntelligenceFinding(
+                entity=f"IP Quality Score: {qscore}/100 from {ip_quality['source']}",
+                type="Email: IP Reputation",
+                source="EmailReputation",
+                confidence="Medium",
+                color=qcolor,
+                threat_level=qthreat,
+                raw_data=ip_quality["details"],
+                tags=["email-security", "ip-reputation", "quality"]
+            ))
+
     mxtoolbox_results = await check_mxtoolbox_blacklist(client, domain)
     for entry in mxtoolbox_results:
         if entry.get("delisted") is False:
@@ -522,6 +963,83 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 tags=["email-security", "rbl", "mxtoolbox"]
             ))
 
+    multi_mx_issues = await check_multi_mx_blacklist(client, mx_info)
+    for mx_issue in multi_mx_issues:
+        findings.append(IntelligenceFinding(
+            entity=f"MX {mx_issue['mx_host']} ({mx_issue['mx_ip']}) listed on {mx_issue['listed_count']} DNSBL(s)",
+            type="Email: Multi-MX Blacklist",
+            source="EmailReputation",
+            confidence="Medium",
+            color="red",
+            threat_level="High Risk" if mx_issue['listed_count'] >= 3 else "Elevated Risk",
+            raw_data=f"Listed on: {', '.join(mx_issue['listed_servers'][:5])}",
+            tags=["email-security", "multi-mx", "blacklist"]
+        ))
+    if mx_info["has_mx"] and len(mx_info["mx_records"]) > 1 and not multi_mx_issues:
+        findings.append(IntelligenceFinding(
+            entity=f"All {len(mx_info['mx_records'])} MX servers clean on DNSBLs",
+            type="Email: Multi-MX Clean",
+            source="EmailReputation",
+            confidence="Low",
+            color="emerald",
+            threat_level="Informational",
+            tags=["email-security", "multi-mx", "clean"]
+        ))
+
+    sending_score = await compute_email_sending_score(spf, dkim, dmarc, dnsbl_data, ptr_global_data, mx_info)
+    s_score = sending_score["score"]
+    s_color = "emerald" if s_score >= 70 else ("orange" if s_score >= 40 else "red")
+    s_threat = "Informational" if s_score >= 70 else ("Elevated Risk" if s_score >= 40 else "High Risk")
+    findings.append(IntelligenceFinding(
+        entity=f"Email Sending Score: {s_score}/100",
+        type="Email: Sending Score",
+        source="EmailReputation",
+        confidence="High",
+        color=s_color,
+        threat_level=s_threat,
+        raw_data=f"Score: {s_score}/100 | Breakdown: {'; '.join(sending_score['breakdown'])}",
+        tags=["email-security", "sending-score", "composite"]
+    ))
+
+    url_sb = await url_safe_check(client, domain)
+    if url_sb["success"]:
+        if url_sb["malicious"]:
+            findings.append(IntelligenceFinding(
+                entity=f"Domain flagged by Google Safe Browsing: {', '.join(url_sb['threats'])}",
+                type="Email: URL Threat",
+                source="EmailReputation/GoogleSafeBrowsing",
+                confidence="High",
+                color="red",
+                threat_level="Critical",
+                raw_data=f"Threats: {', '.join(url_sb['threats'])}",
+                tags=["email-security", "url-scan", "google-safebrowsing"]
+            ))
+        else:
+            findings.append(IntelligenceFinding(
+                entity="Domain not flagged by Google Safe Browsing",
+                type="Email: URL Threat",
+                source="EmailReputation/GoogleSafeBrowsing",
+                confidence="Low",
+                color="emerald",
+                threat_level="Informational",
+                tags=["email-security", "url-scan", "google-safebrowsing"]
+            ))
+
+    url_vt = await url_vt_check(client, domain)
+    if url_vt["success"]:
+        vt_color = "red" if url_vt["malicious"] > 0 else ("orange" if url_vt["suspicious"] > 0 else "emerald")
+        vt_threat = "High Risk" if url_vt["malicious"] > 0 else ("Elevated Risk" if url_vt["suspicious"] > 0 else "Informational")
+        findings.append(IntelligenceFinding(
+            entity=f"VirusTotal: {url_vt['malicious']} malicious, {url_vt['suspicious']} suspicious, {url_vt['harmless']} harmless",
+            type="Email: VirusTotal Scan",
+            source="EmailReputation/VirusTotal",
+            confidence="Low",
+            color=vt_color,
+            threat_level=vt_threat,
+            raw_data=f"malicious={url_vt['malicious']} suspicious={url_vt['suspicious']} harmless={url_vt['harmless']} undetected={url_vt['undetected']}",
+            tags=["email-security", "url-scan", "virustotal"]
+        ))
+
     if findings:
         summary_lines = [
             f"Total email findings: {len(findings)}",
@@ -532,9 +1050,11 @@ async def crawl(target: str, client: httpx.AsyncClient):
         blacklisted_count = sum(1 for f in findings if "Blacklisted" in f.type or "RBL Listed" in f.type)
         if blacklisted_count:
             summary_lines.append(f"Blacklisted on {blacklisted_count} listing(s)")
+        summary_lines.append(f"Sending Score: {s_score}/100")
+        summary_lines.append(f"SpamAssassin: {spamass['score']} ({spamass['verdict']})")
 
         findings.append(IntelligenceFinding(
-            entity=f"Email Reputation: {len(findings)} checks | Blacklisted: {blacklisted_count > 0}",
+            entity=f"Email Reputation: {len(findings)} checks | Blacklisted: {blacklisted_count > 0} | Score: {s_score}/100",
             type="Email: Summary",
             source="EmailReputation",
             confidence="Medium",
@@ -542,6 +1062,51 @@ async def crawl(target: str, client: httpx.AsyncClient):
             threat_level="High Risk" if blacklisted_count > 0 else "Informational",
             raw_data="\n".join(summary_lines),
             tags=["summary", "email-reputation"]
+        ))
+
+        email_auth_ok = spf["has_spf"] and dkim["has_dkim"] and dmarc["has_dmarc"]
+        dmarc_good = dmarc["policy"] in ("reject", "quarantine")
+        has_ptr = ptr_global_data.get("has_ptr", False)
+        posture_issues = []
+        if not spf["has_spf"]:
+            posture_issues.append("SPF missing")
+        if not dkim["has_dkim"]:
+            posture_issues.append("DKIM missing")
+        if not dmarc["has_dmarc"]:
+            posture_issues.append("DMARC missing")
+        elif not dmarc_good:
+            posture_issues.append("DMARC policy not restrictive")
+        if not has_ptr:
+            posture_issues.append("No PTR records")
+        if blacklisted_count > 0:
+            posture_issues.append(f"Blacklisted on {blacklisted_count} lists")
+        if s_score < 50:
+            posture_issues.append(f"Low sending score ({s_score})")
+
+        if len(posture_issues) == 0:
+            posture = "Strong"
+            posture_color = "emerald"
+            posture_threat = "Informational"
+        elif len(posture_issues) <= 2:
+            posture = "Moderate"
+            posture_color = "orange"
+            posture_threat = "Elevated Risk"
+        else:
+            posture = "Weak"
+            posture_color = "red"
+            posture_threat = "High Risk"
+
+        posture_raw = f"Posture: {posture} | EmailAuth: {'OK' if email_auth_ok else 'Issues'} | DMARC: {dmarc['policy'] or 'none'} | Score: {s_score}/100 | SA: {spamass['score']} | Issues: {'; '.join(posture_issues) if posture_issues else 'None'}"
+        findings.append(IntelligenceFinding(
+            entity=f"Email Security Posture: {posture}",
+            type="Email: Security Posture Summary",
+            source="EmailReputation",
+            confidence="High",
+            color=posture_color,
+            threat_level=posture_threat,
+            status=posture,
+            raw_data=posture_raw,
+            tags=["email-security", "posture", "comprehensive"]
         ))
 
     return findings

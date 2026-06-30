@@ -38,173 +38,250 @@ async def crawl(target: str, client: httpx.AsyncClient):
         resolved_ip = ""
 
     try:
-        resp = await client.get(
+        search_urls = [
             f"{URLSCAN_API}/search/?q=domain:{domain}&size=100",
-            timeout=20.0,
-            headers={"User-Agent": USER_AGENT}
-        )
-        if resp.status_code == 200:
-            data = resp.json()
-            results = data.get("results", [])
-            total = data.get("total", len(results))
+            f"{URLSCAN_API}/search/?q=ip:{resolved_ip}&size=50",
+        ] if resolved_ip else [f"{URLSCAN_API}/search/?q=domain:{domain}&size=100"]
 
-            for r in results[:25]:
-                page = r.get("page", {}) or {}
-                task = r.get("task", {}) or {}
-                scan_result = r.get("result", "")
-                url = page.get("url", "")
-                ip = page.get("ip", "")
-                country = page.get("country", "")
-                server = page.get("server", "")
-                asn_name = page.get("asnname", "")
-                asn = page.get("asn", "")
-                domain_from_scan = page.get("domain", "")
+        for search_url in search_urls:
+            try:
+                resp = await client.get(search_url, timeout=20.0, headers={"User-Agent": USER_AGENT})
+                if resp.status_code != 200:
+                    continue
+                data = resp.json()
+                results = data.get("results", [])
+                total = data.get("total", len(results))
 
-                verdicts = r.get("verdicts", {}) or {}
-                overall = verdicts.get("overall", {}) or {}
-                malicious_score = overall.get("maliciousScore", 0)
-                benign_score = overall.get("benignScore", 0)
-                has_malicious = overall.get("hasMalicious", False)
-                has_phishing = verdicts.get("phishing", {}).get("hasPhishing", False)
+                for r in results[:25]:
+                    page = r.get("page", {}) or {}
+                    task = r.get("task", {}) or {}
+                    scan_result = r.get("result", "")
+                    screenshot_url = r.get("screenshot", "")
+                    url = page.get("url", "")
+                    ip = page.get("ip", "")
+                    country = page.get("country", "")
+                    server = page.get("server", "")
+                    asn_name = page.get("asnname", "")
+                    asn = page.get("asn", "")
+                    domain_from_scan = page.get("domain", "")
 
-                classification = "Benign"
-                threat_level = "Informational"
-                scan_color = "emerald"
-                if has_malicious or malicious_score > 50:
-                    classification = "Malicious"
-                    threat_level = "High Risk"
-                    scan_color = "red"
-                elif has_phishing:
-                    classification = "Phishing"
-                    threat_level = "Critical"
-                    scan_color = "red"
-                elif malicious_score > 20:
-                    classification = "Suspicious"
-                    threat_level = "Elevated Risk"
-                    scan_color = "orange"
+                    verdicts = r.get("verdicts", {}) or {}
+                    overall = verdicts.get("overall", {}) or {}
+                    malicious_score = overall.get("maliciousScore", 0)
+                    benign_score = overall.get("benignScore", 0)
+                    has_malicious = overall.get("hasMalicious", False)
+                    has_phishing = verdicts.get("phishing", {}).get("hasPhishing", False)
+                    has_malware = verdicts.get("malware", {}).get("hasMalware", False)
+                    has_spam = verdicts.get("spam", {}).get("hasSpam", False)
 
-                if ip:
-                    tags_list = ["urlscan"]
-                    if has_malicious:
-                        tags_list.append("malicious")
-                    if has_phishing:
-                        tags_list.append("phishing")
-                    if asn:
-                        tags_list.append(f"asn-{asn.replace(' ', '-')}")
+                    classification = "Benign"
+                    threat_level = "Informational"
+                    scan_color = "emerald"
+                    if has_malicious or malicious_score > 50:
+                        classification = "Malicious"
+                        threat_level = "High Risk"
+                        scan_color = "red"
+                    elif has_phishing:
+                        classification = "Phishing"
+                        threat_level = "Critical"
+                        scan_color = "red"
+                    elif has_malware:
+                        classification = "Malware"
+                        threat_level = "Critical"
+                        scan_color = "red"
+                    elif has_spam:
+                        classification = "Spam"
+                        threat_level = "Elevated Risk"
+                        scan_color = "orange"
+                    elif malicious_score > 20:
+                        classification = "Suspicious"
+                        threat_level = "Elevated Risk"
+                        scan_color = "orange"
 
-                    raw_parts = []
-                    if server:
-                        raw_parts.append(f"Server: {server}")
+                    if ip:
+                        tags_list = ["urlscan"]
+                        if has_malicious:
+                            tags_list.append("malicious")
+                        if has_phishing:
+                            tags_list.append("phishing")
+                        if has_malware:
+                            tags_list.append("malware")
+                        if asn:
+                            tags_list.append(f"asn-{asn.replace(' ', '-')}")
+
+                        raw_parts = []
+                        if server:
+                            raw_parts.append(f"Server: {server}")
+                        if country:
+                            raw_parts.append(f"Country: {country}")
+                        if asn_name:
+                            raw_parts.append(f"ASN: {asn_name}")
+                        if classification:
+                            raw_parts.append(f"Classification: {classification}")
+                        if scan_result:
+                            raw_parts.append(f"Result: {scan_result[:80]}")
+
+                        findings.append(IntelligenceFinding(
+                            entity=url[:200] if url else ip,
+                            type=f"urlscan.io {classification}",
+                            source="urlscan.io",
+                            confidence="High" if ip else "Medium",
+                            color=scan_color,
+                            threat_level=threat_level,
+                            status=classification,
+                            resolution=ip,
+                            raw_data=" | ".join(raw_parts) if raw_parts else json.dumps(page, default=str)[:500],
+                            tags=tags_list
+                        ))
+
+                    if screenshot_url:
+                        findings.append(IntelligenceFinding(
+                            entity=screenshot_url[:200],
+                            type="urlscan.io Screenshot",
+                            source="urlscan.io",
+                            confidence="Medium",
+                            color="slate",
+                            threat_level="Informational",
+                            resolution=ip,
+                            raw_data=f"Screenshot: {screenshot_url}",
+                            tags=["screenshot"]
+                        ))
+
+                    if scan_result:
+                        findings.append(IntelligenceFinding(
+                            entity=scan_result[:200],
+                            type="urlscan.io Result Link",
+                            source="urlscan.io",
+                            confidence="Medium",
+                            color="slate",
+                            threat_level="Informational",
+                            resolution=ip,
+                            raw_data=f"Result URL: {scan_result}",
+                            tags=["result"]
+                        ))
+
                     if country:
-                        raw_parts.append(f"Country: {country}")
-                    if asn_name:
-                        raw_parts.append(f"ASN: {asn_name}")
-                    if classification:
-                        raw_parts.append(f"Classification: {classification}")
+                        findings.append(IntelligenceFinding(
+                            entity=f"{ip or domain} ({country})",
+                            type="Host Country",
+                            source="urlscan.io",
+                            confidence="Medium",
+                            color="slate",
+                            threat_level="Informational",
+                            resolution=ip,
+                            raw_data=f"Country: {country}",
+                            tags=["geo", "country"]
+                        ))
 
-                    findings.append(IntelligenceFinding(
-                        entity=url[:200] if url else ip,
-                        type=f"urlscan.io {classification}",
-                        source="urlscan.io",
-                        confidence="High" if ip else "Medium",
-                        color=scan_color,
-                        threat_level=threat_level,
-                        status=classification,
-                        resolution=ip,
-                        raw_data=" | ".join(raw_parts) if raw_parts else json.dumps(page, default=str)[:500],
-                        tags=tags_list
-                    ))
+                    if asn_name or asn:
+                        entity = f"{asn_name} ({asn})" if asn_name and asn else (asn_name or asn)
+                        findings.append(IntelligenceFinding(
+                            entity=entity[:200],
+                            type="ASN / Organization",
+                            source="urlscan.io",
+                            confidence="Medium",
+                            color="purple",
+                            threat_level="Informational",
+                            resolution=ip,
+                            raw_data=f"ASN: {asn} | Org: {asn_name}",
+                            tags=["network", "asn"]
+                        ))
 
-                if country:
-                    findings.append(IntelligenceFinding(
-                        entity=f"{ip or domain} ({country})",
-                        type="Host Country",
-                        source="urlscan.io",
-                        confidence="Medium",
-                        color="slate",
-                        threat_level="Informational",
-                        resolution=ip,
-                        raw_data=f"Country: {country}",
-                        tags=["geo", "country"]
-                    ))
+                    if server:
+                        findings.append(IntelligenceFinding(
+                            entity=server[:200],
+                            type="Server / Technology",
+                            source="urlscan.io",
+                            confidence="High",
+                            color="orange",
+                            threat_level="Informational",
+                            resolution=ip,
+                            raw_data=f"Server: {server}",
+                            tags=["technology"]
+                        ))
 
-                if asn_name or asn:
-                    entity = f"{asn_name} ({asn})" if asn_name and asn else (asn_name or asn)
-                    findings.append(IntelligenceFinding(
-                        entity=entity[:200],
-                        type="ASN / Organization",
-                        source="urlscan.io",
-                        confidence="Medium",
-                        color="purple",
-                        threat_level="Informational",
-                        resolution=ip,
-                        raw_data=f"ASN: {asn} | Org: {asn_name}",
-                        tags=["network", "asn"]
-                    ))
+                    stats = r.get("stats", {}) or {}
+                    console_msgs = stats.get("consoleMsgs", 0)
+                    if console_msgs > 0:
+                        findings.append(IntelligenceFinding(
+                            entity=f"{console_msgs} console messages",
+                            type="Page Console Activity",
+                            source="urlscan.io",
+                            confidence="Low",
+                            color="slate",
+                            threat_level="Informational",
+                            raw_data=f"Console messages: {console_msgs}",
+                            tags=["page-stats"]
+                        ))
 
-                if server:
-                    findings.append(IntelligenceFinding(
-                        entity=server[:200],
-                        type="Server / Technology",
-                        source="urlscan.io",
-                        confidence="High",
-                        color="orange",
-                        threat_level="Informational",
-                        resolution=ip,
-                        raw_data=f"Server: {server}",
-                        tags=["technology"]
-                    ))
+                    domain_stats = stats.get("domainStats", [])
+                    if domain_stats:
+                        findings.append(IntelligenceFinding(
+                            entity=f"{len(domain_stats)} unique domains loaded",
+                            type="Page Domain Stats",
+                            source="urlscan.io",
+                            confidence="Low",
+                            color="slate",
+                            threat_level="Informational",
+                            tags=["page-stats"]
+                        ))
 
-                if scan_result:
-                    findings.append(IntelligenceFinding(
-                        entity=scan_result[:200],
-                        type="urlscan.io Screenshot / Result",
-                        source="urlscan.io",
-                        confidence="Medium",
-                        color="slate",
-                        threat_level="Informational",
-                        resolution=ip,
-                        raw_data=f"Result URL: {scan_result}",
-                        tags=["screenshot"]
-                    ))
+                    server_stats = stats.get("serverStats", [])
+                    if server_stats:
+                        findings.append(IntelligenceFinding(
+                            entity=f"{len(server_stats)} servers contacted",
+                            type="Page Server Stats",
+                            source="urlscan.io",
+                            confidence="Low",
+                            color="slate",
+                            threat_level="Informational",
+                            tags=["page-stats"]
+                        ))
 
-                stats = r.get("stats", {}) or {}
-                console_msgs = stats.get("consoleMsgs", 0)
-                if console_msgs > 0:
-                    findings.append(IntelligenceFinding(
-                        entity=f"{console_msgs} console messages",
-                        type="Page Console Activity",
-                        source="urlscan.io",
-                        confidence="Low",
-                        color="slate",
-                        threat_level="Informational",
-                        raw_data=f"Console messages: {console_msgs}",
-                        tags=["page-stats"]
-                    ))
+                    ip_stats = stats.get("ipStats", [])
+                    if ip_stats:
+                        findings.append(IntelligenceFinding(
+                            entity=f"{len(ip_stats)} unique IPs contacted",
+                            type="Page IP Stats",
+                            source="urlscan.io",
+                            confidence="Low",
+                            color="slate",
+                            threat_level="Informational",
+                            tags=["page-stats"]
+                        ))
 
-            malicious_count = sum(1 for r in results if (r.get("verdicts") or {}).get("overall", {}).get("hasMalicious", False))
-            phishing_count = sum(1 for r in results if (r.get("verdicts") or {}).get("phishing", {}).get("hasPhishing", False))
+                    malicious_count = sum(1 for r in results if (r.get("verdicts") or {}).get("overall", {}).get("hasMalicious", False))
+                    phishing_count = sum(1 for r in results if (r.get("verdicts") or {}).get("phishing", {}).get("hasPhishing", False))
+                    malware_count = sum(1 for r in results if (r.get("verdicts") or {}).get("malware", {}).get("hasMalware", False))
+            except Exception:
+                continue
 
-            if results:
-                summary_parts = []
-                if malicious_count:
-                    summary_parts.append(f"{malicious_count} malicious")
-                if phishing_count:
-                    summary_parts.append(f"{phishing_count} phishing")
-                if not summary_parts:
-                    summary_parts.append("all benign")
+        malicious_count = sum(1 for r in results if (r.get("verdicts") or {}).get("overall", {}).get("hasMalicious", False))
+        phishing_count = sum(1 for r in results if (r.get("verdicts") or {}).get("phishing", {}).get("hasPhishing", False))
+        malware_count = sum(1 for r in results if (r.get("verdicts") or {}).get("malware", {}).get("hasMalware", False))
 
-                findings.append(IntelligenceFinding(
-                    entity=f"{len(results)} urlscan results for {domain} ({', '.join(summary_parts)})",
-                    type="urlscan.io Summary",
-                    source="urlscan.io",
-                    confidence="High",
-                    color="purple",
-                    threat_level="Informational",
-                    status="Complete",
-                    raw_data=f"Total: {total} | Displayed: {len(results)} | Malicious: {malicious_count} | Phishing: {phishing_count}",
-                    tags=["summary", "urlscan"]
-                ))
+        if results:
+            summary_parts = []
+            if malicious_count:
+                summary_parts.append(f"{malicious_count} malicious")
+            if phishing_count:
+                summary_parts.append(f"{phishing_count} phishing")
+            if malware_count:
+                summary_parts.append(f"{malware_count} malware")
+            if not summary_parts:
+                summary_parts.append("all benign")
+
+            findings.append(IntelligenceFinding(
+                entity=f"{len(results)} urlscan results for {domain} ({', '.join(summary_parts)})",
+                type="urlscan.io Summary",
+                source="urlscan.io",
+                confidence="High",
+                color="purple",
+                threat_level="Informational",
+                status="Complete",
+                raw_data=f"Total: {total} | Displayed: {len(results)} | Malicious: {malicious_count} | Phishing: {phishing_count} | Malware: {malware_count}",
+                tags=["summary", "urlscan"]
+            ))
     except Exception as e:
         findings.append(IntelligenceFinding(
             entity=f"urlscan.io API error: {str(e)[:100]}",
@@ -322,6 +399,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         page_asnname = page_data.get("asnname", "")
                         page_country = page_data.get("country", "")
                         page_city = page_data.get("city", "")
+                        page_server = page_data.get("server", "")
 
                         if page_city and page_country:
                             findings.append(IntelligenceFinding(
@@ -335,6 +413,18 @@ async def crawl(target: str, client: httpx.AsyncClient):
                                 raw_data=f"City: {page_city} | Country: {page_country}",
                                 tags=["geo", "location"]
                             ))
+
+                        if page_server:
+                            findings.append(IntelligenceFinding(
+                                entity=page_server[:200],
+                                type="Server (Detailed)",
+                                source="urlscan.io",
+                                confidence="High",
+                                color="orange",
+                                threat_level="Informational",
+                                tags=["technology", "server"]
+                            ))
+
     except Exception:
         pass
 

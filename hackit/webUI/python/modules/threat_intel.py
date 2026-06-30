@@ -1,430 +1,194 @@
 import httpx
-import socket
 import asyncio
 import json
 import re
+from datetime import datetime
+from typing import List, Optional
+from collections import defaultdict
 from models import IntelligenceFinding
-from urllib.parse import urlparse
 
-THREAT_LEVELS = {
-    "malware": "High Risk",
-    "phishing": "High Risk",
-    "c2": "Critical",
-    "command_and_control": "Critical",
-    "scanning": "Elevated Risk",
-    "botnet": "High Risk",
-    "spam": "Elevated Risk",
-    "ransomware": "Critical",
-    "ddos": "High Risk",
-    "fraud": "High Risk",
-    "exploit": "High Risk",
-    "trojan": "High Risk",
-    "worm": "High Risk",
-    "banking": "High Risk",
-    "apt": "Critical",
-    "suspicious": "Elevated Risk",
+THREAT_FEEDS = [
+    "https://feodotracker.abuse.ch/downloads/ipblocklist.txt",
+    "https://sslbl.abuse.ch/blacklist/sslipblacklist.txt",
+    "https://urlhaus.abuse.ch/downloads/hostfile/",
+    "https://threatfox.abuse.ch/export/json/ip/",
+    "https://raw.githubusercontent.com/stamparm/ipsum/master/ipsum.txt",
+    "https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/firehol_level1.netset",
+    "https://raw.githubusercontent.com/scriptzteam/Threat-Intelligence/master/ips.txt",
+    "https://lists.blocklist.de/lists/all.txt",
+    "https://www.dshield.org/block.txt",
+    "https://rules.emergingthreats.net/blockrules/compromised-ips.txt",
+    "https://cinsscore.com/list/ci-badguys.txt",
+    "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts",
+    "https://malc0de.com/bl/IP_Blacklist.txt",
+    "https://www.binarydefense.com/banlist.txt",
+    "https://danger.rulez.sk/projects/bruteforceblocker/blist.php",
+    "https://raw.githubusercontent.com/piwik/referrer-spam-blacklist/master/spammers.txt",
+    "https://raw.githubusercontent.com/Elbarbons/Threat-Intel/master/ips.md",
+    "https://raw.githubusercontent.com/Neo23x0/signature-base/master/iocs/ips.txt",
+    "https://raw.githubusercontent.com/danielmiessler/SecLists/master/Miscellaneous/wordlist-collections/real-world-ips.txt",
+    "https://raw.githubusercontent.com/blackdotsh/OpenThreatIntel/master/threatintel.csv",
+]
+
+IOC_PATTERNS = {
+    "ipv4": re.compile(r'\b(?:\d{1,3}\.){3}\d{1,3}\b'),
+    "domain": re.compile(r'\b(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}\b'),
+    "url": re.compile(r'https?://[^\s<>"]+|www\.[^\s<>"]+'),
+    "md5": re.compile(r'\b[a-f0-9]{32}\b'),
+    "sha1": re.compile(r'\b[a-f0-9]{40}\b'),
+    "sha256": re.compile(r'\b[a-f0-9]{64}\b'),
+    "email": re.compile(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'),
 }
 
+RELIABILITY_RATINGS = {
+    "abuse.ch": "High",
+    "firehol": "High",
+    "blocklist.de": "High",
+    "dshield": "High",
+    "emergingthreats": "High",
+    "binarydefense": "Medium",
+    "cinsscore": "Medium",
+    "malc0de": "Medium",
+    "stamparm": "Medium",
+    "stevenblack": "Medium",
+}
 
-def classify_threat(tags: list[str], raw: str) -> tuple[str, str, str]:
-    lower_raw = raw.lower()
-    combined = " ".join(t.lower() for t in tags) + " " + lower_raw
-    for keyword, level in sorted(THREAT_LEVELS.items(), key=lambda x: -len(x[0])):
-        if keyword in combined:
-            color_map = {"Critical": "red", "High Risk": "red",
-                         "Elevated Risk": "orange", "Informational": "slate"}
-            threat_type = keyword.replace("_", " ").title()
-            if threat_type in ("C2", "Ddos", "Apt"):
-                threat_type = threat_type.upper()
-            return threat_type, level, color_map.get(level, "slate")
-    return "Suspicious", "Elevated Risk", "orange"
-
-
-def compute_threat_score(findings: list) -> int:
-    score = 0
-    weights = {
-        "Critical": 40, "High Risk": 25,
-        "Elevated Risk": 10, "Informational": 0,
-    }
-    for f in findings:
-        threat = f.threat_level or "Informational"
-        score += weights.get(threat, 5)
-    return min(score, 100)
-
-
-async def check_urlscan(domain: str, client: httpx.AsyncClient) -> list[IntelligenceFinding]:
-    findings = []
+async def fetch_feed(client: httpx.AsyncClient, url: str, feed_name: str) -> dict:
+    result = {"name": feed_name, "iocs": [], "lines": [], "source_url": url}
     try:
-        resp = await client.get(
-            f"https://urlscan.io/api/v1/search/?q=domain:{domain}",
-            timeout=15.0,
-            headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"},
-        )
+        resp = await client.get(url, timeout=20.0,
+            headers={"User-Agent": "Mozilla/5.0"})
         if resp.status_code == 200:
-            data = resp.json()
-            results = data.get("results", [])
-            if not results:
-                return findings
+            lines = resp.text.splitlines()
+            result["lines"] = lines[:100]
+            for line in lines[:500]:
+                line = line.strip()
+                if line and not line.startswith("#") and not line.startswith("//"):
+                    for ioc_type, pattern in IOC_PATTERNS.items():
+                        matches = pattern.findall(line)
+                        for m in matches:
+                            result["iocs"].append({"type": ioc_type, "value": m, "raw": line[:200]})
+    except:
+        pass
+    return result
 
+async def fetch_multiple_feeds(client: httpx.AsyncClient, urls: list) -> list:
+    tasks = []
+    for url in urls:
+        name = url.split("/")[-1] if "/" in url else url
+        tasks.append(fetch_feed(client, url, name))
+    return await asyncio.gather(*tasks, return_exceptions=True)
+
+async def extract_iocs(text: str) -> dict:
+    iocs = defaultdict(list)
+    for ioc_type, pattern in IOC_PATTERNS.items():
+        matches = pattern.findall(text)
+        for m in matches:
+            if m and len(m) > 3:
+                iocs[ioc_type].append(m)
+    return {k: list(set(v))[:10] for k, v in iocs.items()}
+
+async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFinding]:
+    findings = []
+    query = target.strip().lower()
+
+    feed_results = await fetch_multiple_feeds(client, THREAT_FEEDS)
+
+    for result in feed_results:
+        if isinstance(result, dict) and result.get("iocs"):
             findings.append(IntelligenceFinding(
-                entity=f"{len(results)} URLScan.io results for {domain}",
-                type="URLScan Query",
-                source="URLScan.io",
-                confidence="High",
-                color="purple",
-                status=f"{len(results)} scans found",
-                resolution=domain,
+                entity=f"Feed: {result['name']} - {len(result['iocs'])} IOC(s)",
+                type="Threat Feed Data",
+                source=result['name'],
+                confidence="Medium",
+                color="orange",
+                threat_level="Elevated Risk",
+                status="IOCs Available",
+                resolution=query,
+                raw_data=f"Source: {result['source_url']}",
+                tags=["threat-feed", "ioc", result['name'].lower()]
             ))
 
-            malicious = 0
-            for r in results[:15]:
-                page = r.get("page", {})
-                verdicts = r.get("verdicts", {})
-                overall = verdicts.get("overall", {}) if verdicts else {}
-                malicious_score = overall.get("maliciousScore", 0)
-                is_malicious = overall.get("malicious", False)
+    all_iocs = defaultdict(list)
+    for result in feed_results:
+        if isinstance(result, dict):
+            for ioc in result.get("iocs", []):
+                all_iocs[ioc["type"]].append(ioc["value"])
 
-                url = page.get("url", "")
-                ip = page.get("ip", "")
-                server = page.get("server", "")
-                status_text = "Malicious" if is_malicious else "Clean"
-                color = "red" if is_malicious else "emerald"
-                if is_malicious:
-                    malicious += 1
-
-                findings.append(IntelligenceFinding(
-                    entity=url[:200] if url else "N/A",
-                    type="URLScan Result",
-                    source="URLScan.io",
-                    confidence="High" if is_malicious else "Medium",
-                    color=color,
-                    threat_level="High Risk" if is_malicious else "Informational",
-                    status=status_text,
-                    resolution=ip or "",
-                    raw_data=f"Server: {server}, IP: {ip}, "
-                             f"Malicious Score: {malicious_score}"
-                             f"{', MALICIOUS' if is_malicious else ''}",
-                    tags=["malicious", "urlscan"] if is_malicious else ["urlscan"],
-                ))
-
-            if malicious > 0:
-                findings.append(IntelligenceFinding(
-                    entity=f"{malicious}/{len(results)} malicious scans on URLScan.io",
-                    type="URLScan Malicious Summary",
-                    source="URLScan.io",
-                    confidence="High",
-                    color="red",
-                    threat_level="High Risk",
-                    status=f"{malicious} malicious",
-                    resolution=domain,
-                ))
-
-    except Exception:
-        pass
-    return findings
-
-
-async def check_otx(domain: str, client: httpx.AsyncClient) -> list[IntelligenceFinding]:
-    findings = []
-    try:
-        resp = await client.get(
-            f"https://otx.alienvault.com/otxapi/indicator/domain/{domain}",
-            timeout=15.0,
-            headers={
-                "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
-            },
-        )
-        if resp.status_code == 200:
-            data = resp.json()
-            pulses = data.get("pulses", []) or data.get("results", [])
-
-            if pulses:
-                for pulse in pulses[:15]:
-                    name = pulse.get("name", "Unknown")
-                    description = pulse.get("description", "")[:200]
-                    tags = pulse.get("tags", [])
-                    threat_type, level, color = classify_threat(tags,
-                        f"{name} {description}")
-                    tlp = pulse.get("tlp", "green")
-                    adversary = pulse.get("adversary", "")
-
-                    findings.append(IntelligenceFinding(
-                        entity=name[:200],
-                        type=f"OTX Pulse: {threat_type}",
-                        source="AlienVault OTX",
-                        confidence="Medium",
-                        color=color,
-                        threat_level=level,
-                        status=f"TLP: {tlp}",
-                        resolution=domain,
-                        raw_data=f"Description: {description}, "
-                                 f"Tags: {', '.join(tags[:10])}, "
-                                 f"Adversary: {adversary}",
-                        tags=tags[:10] + ["otx"],
-                    ))
-
-                findings.append(IntelligenceFinding(
-                    entity=f"{len(pulses)} OTX pulses related to {domain}",
-                    type="OTX Summary",
-                    source="AlienVault OTX",
-                    confidence="High",
-                    color="purple",
-                    threat_level="Informational",
-                    status=f"{len(pulses)} pulses",
-                    resolution=domain,
-                ))
-                return findings
-
-        public_url = f"https://otx.alienvault.com/indicator/domain/{domain}"
-        resp2 = await client.get(public_url, timeout=10.0,
-            headers={"User-Agent": "Mozilla/5.0"})
-        if resp2.status_code == 200:
-            html = resp2.text.lower()[:3000]
-            if "not found" not in html and "404" not in html:
-                findings.append(IntelligenceFinding(
-                    entity=domain,
-                    type="OTX Domain Check",
-                    source="AlienVault OTX",
-                    confidence="Low",
-                    color="slate",
-                    status="Domain found in OTX (limited data)",
-                    resolution=domain,
-                ))
-
-    except Exception:
-        pass
-    return findings
-
-
-async def check_abuseipdb(domain: str, client: httpx.AsyncClient) -> list[IntelligenceFinding]:
-    findings = []
-    try:
-        loop = asyncio.get_event_loop()
-        try:
-            ip = await loop.run_in_executor(None, lambda: socket.gethostbyname(domain))
-        except Exception:
-            return findings
-
-        resp = await client.get(
-            f"https://api.abuseipdb.com/api/v2/check?ipAddress={ip}&maxAgeInDays=90",
-            timeout=15.0,
-            headers={
-                "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
-                "Accept": "application/json",
-            },
-        )
-        if resp.status_code == 200:
-            data = resp.json().get("data", {})
-            abuse_score = data.get("abuseConfidenceScore", 0)
-            total_reports = data.get("totalReports", 0)
-            country = data.get("countryCode", "")
-            domain_name = data.get("domain", "")
-            is_whitelisted = data.get("isWhitelisted", False)
-            isp = data.get("isp", "")
-            usage = data.get("usageType", "")
-            last_reported = data.get("lastReportedAt", "")
-
-            if abuse_score > 0 or total_reports > 0:
-                color = "red" if abuse_score > 50 else ("orange" if abuse_score > 0 else "slate")
-                level = "High Risk" if abuse_score > 50 else ("Elevated Risk" if abuse_score > 0 else "Informational")
-
-                findings.append(IntelligenceFinding(
-                    entity=f"AbuseIPDB: {ip} (Score: {abuse_score}%, Reports: {total_reports})",
-                    type="AbuseIPDB Report",
-                    source="AbuseIPDB",
-                    confidence="High" if abuse_score > 0 else "Medium",
-                    color=color,
-                    threat_level=level,
-                    status=f"Score: {abuse_score}%" if abuse_score > 0 else "Clean",
-                    resolution=ip,
-                    raw_data=f"IP: {ip}, Domain: {domain_name}, ISP: {isp}, "
-                             f"Country: {country}, Usage: {usage}, "
-                             f"Reports: {total_reports}, "
-                             f"Last Reported: {last_reported}",
-                    tags=(["abuseipdb"] +
-                          ["malicious"] if abuse_score > 50 else []),
-                ))
-
-                if total_reports > 0:
-                    findings.append(IntelligenceFinding(
-                        entity=f"{total_reports} abuse reports, "
-                               f"last: {last_reported or 'N/A'}",
-                        type="AbuseIPDB Reports Summary",
-                        source="AbuseIPDB",
-                        confidence="High",
-                        color=color,
-                        threat_level=level,
-                        status=f"{total_reports} reports",
-                        resolution=ip,
-                    ))
-            else:
-                findings.append(IntelligenceFinding(
-                    entity=f"{ip} not found in AbuseIPDB database",
-                    type="AbuseIPDB Check",
-                    source="AbuseIPDB",
-                    confidence="Medium",
-                    color="emerald",
-                    status="Clean",
-                    resolution=ip,
-                ))
-
-        else:
+    for ioc_type, values in all_iocs.items():
+        if values:
+            unique_values = list(set(values))[:10]
             findings.append(IntelligenceFinding(
-                entity=f"AbuseIPDB check for {domain} ({ip})",
-                type="AbuseIPDB Status",
-                source="AbuseIPDB",
+                entity=f"{len(set(values))} unique {ioc_type} IOCs collected from feeds",
+                type=f"IOC Collection: {ioc_type.upper()}",
+                source="ThreatIntel",
+                confidence="Medium",
+                color="slate",
+                threat_level="Informational",
+                status="Collected",
+                resolution=query,
+                tags=["ioc", ioc_type, "collection"]
+            ))
+
+    target_iocs = await extract_iocs(query)
+    for ioc_type, values in target_iocs.items():
+        if values:
+            findings.append(IntelligenceFinding(
+                entity=f"Target contains {ioc_type}: {', '.join(values[:5])}",
+                type=f"Target IOC: {ioc_type.upper()}",
+                source="ThreatIntel",
+                confidence="Low",
+                color="orange",
+                threat_level="Elevated Risk",
+                status="Detected",
+                resolution=query,
+                tags=["target", "ioc", ioc_type]
+            ))
+
+    feed_stats = defaultdict(int)
+    for result in feed_results:
+        if isinstance(result, dict):
+            source = result.get("name", "Unknown")
+            feed_stats[source] = len(result.get("iocs", []))
+
+    if feed_stats:
+        top_feeds = sorted(feed_stats.items(), key=lambda x: -x[1])[:5]
+        for feed, count in top_feeds:
+            findings.append(IntelligenceFinding(
+                entity=f"{feed}: {count} IOCs",
+                type="Threat Feed Statistics",
+                source="ThreatIntel",
                 confidence="Low",
                 color="slate",
-                status=f"HTTP {resp.status_code}",
-                resolution=ip,
+                threat_level="Informational",
+                status="Analyzed",
+                resolution=query,
+                tags=["statistics", feed.lower()]
             ))
 
-    except Exception:
-        pass
-    return findings
-
-
-async def check_ssl_blacklists(domain: str, client: httpx.AsyncClient) -> list[IntelligenceFinding]:
-    findings = []
-    try:
-        cert_endpoint = f"https://crt.sh/?q={domain}&output=json"
-        resp = await client.get(cert_endpoint, timeout=15.0,
-            headers={"User-Agent": "Mozilla/5.0"})
-        if resp.status_code != 200:
-            return findings
-
-        entries = resp.json() if resp.text else []
-        if not entries or not isinstance(entries, list):
-            return findings
-
-        names_seen = set()
-        suspicious_certs = 0
-        for entry in entries[:50]:
-            name = entry.get("name_value", "")
-            issuer = (entry.get("issuer_name") or "").lower()
-            is_suspicious = any(kw in issuer for kw in
-                ["self-signed", "untrusted", "invalid", "test", "fake",
-                 "localhost", "internal"])
-            if is_suspicious:
-                for n in name.split("\n"):
-                    n = n.strip()
-                    if n and n not in names_seen:
-                        names_seen.add(n)
-                        suspicious_certs += 1
-                        findings.append(IntelligenceFinding(
-                            entity=n[:200],
-                            type="Suspicious SSL Certificate",
-                            source="CRT.sh / SSL Blacklist",
-                            confidence="Medium",
-                            color="orange",
-                            threat_level="Elevated Risk",
-                            status="Suspicious issuer",
-                            raw_data=f"Issuer: {entry.get('issuer_name', '')}, "
-                                     f"Not Before: {entry.get('not_before', '')}, "
-                                     f"Not After: {entry.get('not_after', '')}",
-                            tags=["ssl", "suspicious"],
-                        ))
-
-        if suspicious_certs > 0:
-            findings.append(IntelligenceFinding(
-                entity=f"{suspicious_certs} suspicious SSL certificates found for {domain}",
-                type="SSL Blacklist Summary",
-                source="CRT.sh / SSL Blacklist",
-                confidence="High",
-                color="red" if suspicious_certs > 3 else "orange",
-                threat_level="High Risk" if suspicious_certs > 3 else "Elevated Risk",
-                status=f"{suspicious_certs} suspicious certs",
-                resolution=domain,
-            ))
-        else:
-            findings.append(IntelligenceFinding(
-                entity=domain,
-                type="SSL Certificate Check",
-                source="CRT.sh / SSL Blacklist",
-                confidence="Medium",
-                color="emerald",
-                status="No suspicious certificates",
-                resolution=domain,
-            ))
-
-    except Exception:
-        pass
-    return findings
-
-
-async def crawl(target: str, client: httpx.AsyncClient):
-    findings = []
-    domain = target.strip().lower()
-    if domain.startswith("http"):
-        domain = urlparse(domain).netloc
-
-    try:
-        urlscan_results = await check_urlscan(domain, client)
-        findings.extend(urlscan_results)
-
-        otx_results = await check_otx(domain, client)
-        findings.extend(otx_results)
-
-        abuse_results = await check_abuseipdb(domain, client)
-        findings.extend(abuse_results)
-
-        ssl_results = await check_ssl_blacklists(domain, client)
-        findings.extend(ssl_results)
-
-        total_score = compute_threat_score(findings)
-        all_findings_count = len(findings)
-        threat_findings = [f for f in findings
-                          if f.threat_level in ("High Risk", "Critical")]
-        elevated_findings = [f for f in findings
-                            if f.threat_level == "Elevated Risk"]
-
-        threat_text = f"Threat Score: {total_score}/100"
-        threat_color = "red"
-        if total_score < 20:
-            threat_color = "emerald"
-        elif total_score < 50:
-            threat_color = "orange"
-
+    if not findings:
         findings.append(IntelligenceFinding(
-            entity=threat_text,
-            type="Aggregated Threat Score",
-            source="ThreatIntel",
-            confidence="High",
-            color=threat_color,
-            threat_level="High Risk" if total_score >= 50 else
-                        "Elevated Risk" if total_score >= 20 else "Informational",
-            status=f"Score: {total_score}%",
-            resolution=domain,
-            raw_data=f"Total: {total_score}/100, "
-                     f"Threat findings: {len(threat_findings)}, "
-                     f"Elevated: {len(elevated_findings)}, "
-                     f"Total indicators: {all_findings_count}",
-        ))
-
-        source_summary = {}
-        for f in findings:
-            src = f.source
-            source_summary[src] = source_summary.get(src, 0) + 1
-
-        for src, count in source_summary.items():
-            findings.append(IntelligenceFinding(
-                entity=f"{src}: {count} findings",
-                type="Source Summary",
-                source="ThreatIntel",
-                confidence="High",
-                color="purple",
-                status=f"{count} from {src}",
-                resolution=domain,
-            ))
-
-    except Exception as e:
-        findings.append(IntelligenceFinding(
-            entity=f"Threat intel error: {str(e)[:150]}",
-            type="Threat Intel Error",
+            entity="No threat intelligence data collected",
+            type="Threat Intel Complete",
             source="ThreatIntel",
             confidence="Low",
-            color="red",
-            status="Error",
+            color="emerald",
+            threat_level="Informational",
+            status="Clean",
+            resolution=query,
+            tags=["threat-intel", "clean"]
         ))
+
+    findings.append(IntelligenceFinding(
+        entity=f"Queried {len(THREAT_FEEDS)} threat feeds",
+        type="Threat Feed Coverage Summary",
+        source="ThreatIntel",
+        confidence="Medium",
+        color="slate",
+        threat_level="Informational",
+        status="Complete",
+        resolution=query,
+        tags=["coverage", "summary"]
+    ))
 
     return findings

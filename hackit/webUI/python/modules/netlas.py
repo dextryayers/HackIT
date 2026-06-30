@@ -1,5 +1,6 @@
 import httpx
 import json
+import re
 from models import IntelligenceFinding
 
 NETLAS_BASE = "https://app.netlas.io/api"
@@ -11,6 +12,8 @@ QUERY_TYPES = {
     "host": {"endpoint": "/hosts/", "query_field": "q", "query_template": "host:{target}"},
     "ip": {"endpoint": "/hosts/", "query_field": "q", "query_template": "ip:{target}"},
     "cert": {"endpoint": "/certs/", "query_field": "q", "query_template": "domain:{target}"},
+    "response": {"endpoint": "/responses/", "query_field": "q", "query_template": "domain:{target}"},
+    "search": {"endpoint": "/search/", "query_field": "q", "query_template": "{target}"},
 }
 
 SERVICE_CATEGORIES = {
@@ -26,6 +29,14 @@ SERVICE_CATEGORIES = {
     "redis": "Cache Store",
     "elasticsearch": "Search Engine",
     "memcached": "Cache Store",
+    "rdp": "Remote Desktop",
+    "telnet": "Remote Access",
+    "sip": "VoIP",
+    "imap": "Email",
+    "pop3": "Email",
+    "smb": "File Sharing",
+    "nfs": "File Sharing",
+    "vnc": "Remote Desktop",
 }
 
 TECH_INDICATORS = {
@@ -49,6 +60,23 @@ TECH_INDICATORS = {
     "joomla": "Joomla",
     "tomcat": "Tomcat",
     "jetty": "Jetty",
+    "caddy": "Caddy",
+    "traefik": "Traefik",
+    "haproxy": "HAProxy",
+    "envoy": "Envoy",
+    "istio": "Istio",
+    "varnish": "Varnish",
+    "squid": "Squid Proxy",
+    "ruby/": "Ruby",
+    "perl/": "Perl",
+    "go/": "Go",
+    "rust/": "Rust",
+    "laravel": "Laravel",
+    "django": "Django",
+    "flask": "Flask",
+    "rails": "Ruby on Rails",
+    "asp.net": "ASP.NET",
+    "iis": "IIS",
 }
 
 async def netlas_search(target: str, query_type: str, config: dict, client: httpx.AsyncClient) -> list:
@@ -132,13 +160,33 @@ def detect_http_techs(item: dict) -> list:
         title = http_data.get("title", "")
         if title:
             techs.append(f"Title: {title}")
+        x_generator = http_data.get("x-generator", "")
+        if x_generator:
+            techs.append(f"Generator: {x_generator}")
     headers = item.get("headers", {})
     if isinstance(headers, dict):
-        for hdr in ["server", "x-powered-by", "x-generator"]:
+        for hdr in ["server", "x-powered-by", "x-generator", "x-aspnet-version", "x-aspnetmvc-version"]:
             val = headers.get(hdr, "")
             if val:
                 techs.append(f"{hdr}: {val}")
     return techs
+
+def extract_subdomains_from_cert(item: dict) -> list:
+    subs = []
+    try:
+        ssl_data = item.get("ssl", item.get("tls", {}))
+        if isinstance(ssl_data, dict):
+            cert = ssl_data.get("cert", ssl_data.get("certificate", {}))
+            if isinstance(cert, dict):
+                for key in ["subject_alt_name", "san", "subject_alt_names"]:
+                    val = cert.get(key, [])
+                    if isinstance(val, list):
+                        for v in val:
+                            if isinstance(v, str) and v.count(".") >= 1:
+                                subs.append(v.lower())
+    except:
+        pass
+    return subs
 
 async def crawl(target: str, client: httpx.AsyncClient):
     findings = []
@@ -155,6 +203,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         pass
 
     all_items = []
+    all_subdomains = set()
     for qtype, config in QUERY_TYPES.items():
         results = await netlas_search(domain, qtype, config, client)
         for res in results:
@@ -272,6 +321,20 @@ async def crawl(target: str, client: httpx.AsyncClient):
                             threat_level="Informational",
                             tags=["ssl", "san"],
                         ))
+                subs_from_cert = extract_subdomains_from_cert(item)
+                for sub in subs_from_cert:
+                    if sub not in all_subdomains:
+                        all_subdomains.add(sub)
+                        findings.append(IntelligenceFinding(
+                            entity=sub,
+                            type="Netlas: Subdomain from Certificate",
+                            source="Netlas",
+                            confidence="Medium",
+                            color="blue",
+                            threat_level="Informational",
+                            raw_data=f"Subdomain extracted from cert: {sub}",
+                            tags=["subdomain", "ssl"],
+                        ))
 
         http_resp = item.get("http", item.get("response", {}))
         if isinstance(http_resp, dict):
@@ -299,6 +362,18 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     raw_data=f"Redirects to: {location}",
                     tags=["http", "redirect"],
                 ))
+            content_type = http_resp.get("content_type", http_resp.get("mime_type", ""))
+            if content_type:
+                findings.append(IntelligenceFinding(
+                    entity=f"Content-Type: {content_type}",
+                    type="Netlas: HTTP Content Type",
+                    source="Netlas",
+                    confidence="Medium",
+                    color="slate",
+                    threat_level="Informational",
+                    raw_data=f"Content type on {entity}: {content_type}",
+                    tags=["http", "content-type"],
+                ))
 
         geo = item.get("geo", item.get("geolocation", {}))
         if isinstance(geo, dict):
@@ -323,6 +398,21 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     raw_data=f"Geo for {entity}: {loc_str}",
                     tags=["geolocation"],
                 ))
+
+    # Summary: endpoint coverage
+    endpoints_queried = list(QUERY_TYPES.keys())
+    total_items = len(all_items)
+    findings.append(IntelligenceFinding(
+        entity=f"Netlas scan: {total_items} items from {len(endpoints_queried)} endpoints",
+        type="Netlas: Scan Summary",
+        source="Netlas",
+        confidence="High",
+        color="purple",
+        threat_level="Informational",
+        status="Complete",
+        raw_data=f"Endpoints: {', '.join(endpoints_queried)}, Items: {total_items}, Subdomains: {len(all_subdomains)}",
+        tags=["netlas-summary"],
+    ))
 
     if not findings:
         findings.append(IntelligenceFinding(

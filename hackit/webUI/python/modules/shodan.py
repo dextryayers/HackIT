@@ -1,150 +1,192 @@
 import httpx
-import socket
 import asyncio
+import json
+import socket
+from datetime import datetime
+from urllib.parse import urlparse
+from typing import List
 from models import IntelligenceFinding
 
-async def crawl(target: str, client: httpx.AsyncClient):
-    findings = []
+SHODAN_API = "https://api.shodan.io"
+SHODAN_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
+
+async def resolve_host(target: str) -> str:
     try:
-        loop = asyncio.get_event_loop()
-        try:
-            ip = await loop.run_in_executor(None, lambda: socket.gethostbyname(target))
-        except:
-            findings.append(IntelligenceFinding(
-                entity=target,
-                type="Shodan Error",
-                source="Shodan InternetDB",
-                confidence="Low",
-                color="red",
-                threat_level="Informational",
-                raw_data="Could not resolve hostname to IP"
-            ))
-            return findings
+        ip = socket.gethostbyname(target)
+        return ip
+    except:
+        return target
 
-        url = f"https://internetdb.shodan.io/{ip}"
-        resp = await client.get(url, timeout=10.0,
-            headers={"User-Agent": "Mozilla/5.0"})
+async def shodan_host(ip: str, client: httpx.AsyncClient) -> dict:
+    try:
+        resp = await client.get(
+            f"{SHODAN_API}/shodan/host/{ip}",
+            params={"key": ""},
+            headers={"User-Agent": SHODAN_UA, "Accept": "application/json"},
+            timeout=15.0
+        )
         if resp.status_code == 200:
-            data = resp.json()
-            ports = data.get("ports", [])
-            hostnames = data.get("hostnames", [])
-            vulns = data.get("vulns", [])
-            cpes = data.get("cpes", [])
+            return resp.json()
+    except:
+        pass
+    return {}
 
-            if not ports and not hostnames and not vulns and not cpes:
+async def shodan_search(query: str, client: httpx.AsyncClient) -> dict:
+    try:
+        resp = await client.get(
+            f"{SHODAN_API}/shodan/host/search",
+            params={"key": "", "query": query, "limit": 10},
+            headers={"User-Agent": SHODAN_UA, "Accept": "application/json"},
+            timeout=15.0
+        )
+        if resp.status_code == 200:
+            return resp.json()
+    except:
+        pass
+    return {}
+
+async def shodan_dns_resolve(hostname: str, client: httpx.AsyncClient) -> dict:
+    try:
+        resp = await client.get(
+            f"{SHODAN_API}/dns/resolve",
+            params={"key": "", "hostnames": hostname},
+            headers={"User-Agent": SHODAN_UA, "Accept": "application/json"},
+            timeout=10.0
+        )
+        if resp.status_code == 200:
+            return resp.json()
+    except:
+        pass
+    return {}
+
+async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFinding]:
+    findings = []
+    t = target.strip().lower()
+    if t.startswith("http"):
+        t = urlparse(t).netloc
+
+    ip = await resolve_host(t)
+    host_data = await shodan_host(ip, client)
+
+    if host_data:
+        ports = host_data.get("ports", [])
+        if ports:
+            findings.append(IntelligenceFinding(
+                entity=f"Open ports: {len(ports)} ({', '.join(map(str, sorted(ports)[:10]))})",
+                type="Shodan Open Ports",
+                source="Shodan",
+                confidence="High",
+                color="orange",
+                threat_level="Elevated Risk",
+                status="Open",
+                resolution=ip,
+                tags=["shodan", "ports"]
+            ))
+
+        hostnames = host_data.get("hostnames", [])
+        if hostnames:
+            for hn in hostnames[:5]:
                 findings.append(IntelligenceFinding(
-                    entity=ip,
-                    type="Shodan InternetDB Result",
-                    source="Shodan InternetDB",
-                    confidence="Medium",
+                    entity=f"Hostname: {hn}",
+                    type="Shodan Hostname",
+                    source="Shodan",
+                    confidence="High",
                     color="slate",
-                    threat_level="Informational",
-                    raw_data="No data found in Shodan InternetDB"
-                ))
-                return findings
-
-            for port in sorted(ports):
-                try:
-                    service = socket.getservbyport(port)
-                except:
-                    service = ""
-                findings.append(IntelligenceFinding(
-                    entity=f"{ip}:{port}",
-                    type="Open Port",
-                    source="Shodan InternetDB",
-                    confidence="High",
-                    color="red",
-                    threat_level="Elevated Risk",
-                    resolution=f"Port {port} ({service}) is exposed",
-                    raw_data=f"Port: {port}, Service: {service}, IP: {ip}"
-                ))
-
-            for hostname in hostnames:
-                findings.append(IntelligenceFinding(
-                    entity=hostname,
-                    type="Subdomain",
-                    source="Shodan InternetDB",
-                    confidence="High",
-                    color="blue",
+                    status="Confirmed",
                     resolution=ip,
-                    raw_data=f"Hostname {hostname} resolves to {ip}"
+                    tags=["shodan", "hostname"]
                 ))
 
-            vuln_risk = {
-                "CVE-2021": "Elevated Risk",
-                "CVE-2022": "High Risk",
-                "CVE-2023": "High Risk",
-                "CVE-2024": "Critical",
-                "CVE-2025": "Critical",
-            }
-            for vuln in vulns:
-                risk = "High Risk"
-                for prefix, level in vuln_risk.items():
-                    if vuln.startswith(prefix):
-                        risk = level
-                        break
-                findings.append(IntelligenceFinding(
-                    entity=vuln,
-                    type="Known Vulnerability",
-                    source="Shodan InternetDB",
-                    confidence="High",
-                    color="red",
-                    threat_level=risk,
-                    resolution=f"Affects {ip}",
-                    raw_data=f"Vulnerability: {vuln} on {ip}",
-                    tags=["cve", "vulnerability"]
-                ))
+        os = host_data.get("os", "")
+        if os:
+            findings.append(IntelligenceFinding(
+                entity=f"OS: {os}",
+                type="Shodan Operating System",
+                source="Shodan",
+                confidence="Medium",
+                color="slate",
+                status="Detected",
+                resolution=ip,
+                tags=["shodan", "os"]
+            ))
 
-            for cpe in cpes:
-                findings.append(IntelligenceFinding(
-                    entity=cpe,
-                    type="Technology (CPE)",
-                    source="Shodan InternetDB",
-                    confidence="High",
-                    color="orange",
-                    threat_level="Informational",
-                    raw_data=f"CPE: {cpe}"
-                ))
+        country = host_data.get("country_name", "")
+        city = host_data.get("city", "")
+        if country or city:
+            loc = f"{city}, {country}" if city else country
+            findings.append(IntelligenceFinding(
+                entity=f"Location: {loc}",
+                type="Shodan Geolocation",
+                source="Shodan",
+                confidence="Medium",
+                color="slate",
+                status="Confirmed",
+                resolution=ip,
+                tags=["shodan", "geo"]
+            ))
 
-            if ports:
+        org = host_data.get("org", "")
+        isp = host_data.get("isp", "")
+        if org or isp:
+            findings.append(IntelligenceFinding(
+                entity=f"Organization: {org or isp}",
+                type="Shodan Organization",
+                source="Shodan",
+                confidence="High",
+                color="slate",
+                status="Identified",
+                resolution=ip,
+                tags=["shodan", "org"]
+            ))
+
+        vulns = host_data.get("vulns", [])
+        if vulns:
+            for vuln in list(vulns)[:5]:
                 findings.append(IntelligenceFinding(
-                    entity=f"{len(ports)} open ports detected",
-                    type="Shodan Summary",
-                    source="Shodan InternetDB",
-                    confidence="High",
-                    color="purple",
-                    threat_level="Informational",
-                    raw_data=f"Open ports: {', '.join(map(str, sorted(ports)))}"
-                ))
-            if vulns:
-                findings.append(IntelligenceFinding(
-                    entity=f"{len(vulns)} known vulnerabilities detected",
-                    type="Shodan Vulnerability Summary",
-                    source="Shodan InternetDB",
+                    entity=f"Vulnerability: {vuln}",
+                    type="Shodan Vulnerability",
+                    source="Shodan",
                     confidence="High",
                     color="red",
                     threat_level="High Risk",
-                    raw_data=f"Vulnerabilities: {', '.join(vulns)}",
-                    tags=["cve", "summary"]
+                    status="Vulnerable",
+                    resolution=ip,
+                    tags=["shodan", "vulnerability", vuln.lower()]
                 ))
 
-        elif resp.status_code == 404:
-            findings.append(IntelligenceFinding(
-                entity=ip,
-                type="Shodan InternetDB",
-                source="Shodan InternetDB",
-                confidence="Medium",
-                color="slate",
-                threat_level="Informational",
-                raw_data="IP not found in Shodan InternetDB"
-            ))
-    except Exception as e:
+        data = host_data.get("data", [])
+        if data:
+            for service in data[:5]:
+                product = service.get("product", "")
+                version = service.get("version", "")
+                port = service.get("port", 0)
+                transport = service.get("transport", "tcp")
+                banner = service.get("data", "")[:200]
+
+                if product:
+                    findings.append(IntelligenceFinding(
+                        entity=f"Port {port}/{transport}: {product} {version}".strip(),
+                        type="Shodan Service Banner",
+                        source="Shodan",
+                        confidence="High",
+                        color="slate",
+                        status="Active",
+                        resolution=ip,
+                        raw_data=banner[:300],
+                        tags=["shodan", "service", product.lower()]
+                    ))
+
+    else:
         findings.append(IntelligenceFinding(
-            entity=f"Shodan error: {str(e)[:100]}",
-            type="Shodan Error",
-            source="Shodan InternetDB",
+            entity="No Shodan data available for this host",
+            type="Shodan Check Complete",
+            source="Shodan",
             confidence="Low",
-            color="red",
-            threat_level="Informational"
+            color="slate",
+            threat_level="Informational",
+            status="Not Found",
+            resolution=ip,
+            tags=["shodan", "empty"]
         ))
+
     return findings

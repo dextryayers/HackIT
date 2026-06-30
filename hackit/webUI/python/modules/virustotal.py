@@ -1,158 +1,163 @@
 import httpx
 import asyncio
-import socket
+import json
+from datetime import datetime
+from typing import List
 from models import IntelligenceFinding
-from collections import defaultdict
 
-UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+VT_API = "https://www.virustotal.com/api/v3"
+VT_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
 
-async def crawl(target: str, client: httpx.AsyncClient):
-    findings = []
-    domain = target.strip().lower()
-    if domain.startswith("http"):
-        from urllib.parse import urlparse
-        domain = urlparse(domain).netloc
-
+async def vt_ip_report(ip: str, client: httpx.AsyncClient) -> dict:
     try:
-        headers = {
-            "User-Agent": UA,
-            "Accept": "application/json",
-        }
-
-        vt_domain_url = f"https://www.virustotal.com/api/v3/domains/{domain}"
-        resp = await client.get(vt_domain_url, headers=headers, timeout=15.0)
+        resp = await client.get(
+            f"{VT_API}/ip_addresses/{ip}",
+            headers={"User-Agent": VT_UA, "Accept": "application/json", "x-apikey": ""},
+            timeout=15.0
+        )
         if resp.status_code == 200:
-            data = resp.json()
-            attrs = data.get("data", {}).get("attributes", {})
+            return resp.json()
+    except:
+        pass
+    return {}
 
-            last_analysis = attrs.get("last_analysis_stats", {})
-            malicious = last_analysis.get("malicious", 0)
-            suspicious = last_analysis.get("suspicious", 0)
-            total = sum(last_analysis.values()) if last_analysis else 0
+async def vt_domain_report(domain: str, client: httpx.AsyncClient) -> dict:
+    try:
+        resp = await client.get(
+            f"{VT_API}/domains/{domain}",
+            headers={"User-Agent": VT_UA, "Accept": "application/json", "x-apikey": ""},
+            timeout=15.0
+        )
+        if resp.status_code == 200:
+            return resp.json()
+    except:
+        pass
+    return {}
 
-            if total > 0:
-                risk = "Elevated Risk" if malicious > 0 else "Standard Target"
-                findings.append(IntelligenceFinding(
-                    entity=f"{malicious} malicious / {suspicious} suspicious out of {total} engines",
-                    type="VirusTotal Reputation",
-                    source="VirusTotal",
-                    confidence="High",
-                    color="red" if malicious > 0 else "emerald",
-                    threat_level=risk,
-                    raw_data=f"VT Stats: {last_analysis}",
-                    tags=["threat-intel"]
-                ))
+async def vt_url_report(url: str, client: httpx.AsyncClient) -> dict:
+    try:
+        import base64
+        url_id = base64.urlsafe_b64encode(url.encode()).decode().rstrip("=")
+        resp = await client.get(
+            f"{VT_API}/urls/{url_id}",
+            headers={"User-Agent": VT_UA, "Accept": "application/json", "x-apikey": ""},
+            timeout=15.0
+        )
+        if resp.status_code == 200:
+            return resp.json()
+    except:
+        pass
+    return {}
 
-            categories = attrs.get("categories", {})
-            if isinstance(categories, dict):
-                seen_cats = set()
-                for engine, cat in categories.items():
-                    if cat and cat not in seen_cats:
-                        seen_cats.add(cat)
-                        findings.append(IntelligenceFinding(
-                            entity=f"{cat} (by {engine})",
-                            type="VT Category",
-                            source="VirusTotal",
-                            confidence="Medium",
-                            color="slate",
-                            threat_level="Informational",
-                            raw_data=f"Categorized as {cat} by {engine}"
-                        ))
+async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFinding]:
+    findings = []
+    t = target.strip().lower()
 
-            popularity = attrs.get("popularity_ranks", {})
-            if isinstance(popularity, dict):
-                for engine, rank_info in popularity.items():
-                    if isinstance(rank_info, dict) and rank_info.get("rank"):
-                        findings.append(IntelligenceFinding(
-                            entity=f"{engine}: rank #{rank_info['rank']}",
-                            type="VT Popularity Rank",
-                            source="VirusTotal",
-                            confidence="Medium",
-                            color="slate",
-                            threat_level="Informational",
-                        ))
-                        break
+    is_ip = False
+    try:
+        import socket
+        socket.inet_aton(t)
+        is_ip = True
+    except:
+        pass
 
-            rep = attrs.get("reputation", 0)
+    if is_ip:
+        data = await vt_ip_report(t, client)
+        endpoint_type = "IP"
+    else:
+        data = await vt_domain_report(t, client)
+        endpoint_type = "Domain"
+
+    if data:
+        attributes = data.get("data", {}).get("attributes", {})
+        last_analysis = attributes.get("last_analysis_stats", {})
+        malicious = last_analysis.get("malicious", 0)
+        suspicious = last_analysis.get("suspicious", 0)
+        harmless = last_analysis.get("harmless", 0)
+        undetected = last_analysis.get("undetected", 0)
+        total = malicious + suspicious + harmless + undetected
+
+        if total > 0:
             findings.append(IntelligenceFinding(
-                entity=f"Reputation score: {rep}",
-                type="VT Reputation Score",
+                entity=f"VT Detection: {malicious}/{total} malicious ({suspicious} suspicious)",
+                type=f"VirusTotal {endpoint_type} Report",
                 source="VirusTotal",
-                confidence="Medium",
-                color="emerald" if rep >= 0 else "red",
-                threat_level="Informational",
+                confidence="High",
+                color="red" if malicious > 0 else "emerald",
+                threat_level="High Risk" if malicious > 0 else ("Elevated Risk" if suspicious > 0 else "Informational"),
+                status="Malicious" if malicious > 0 else ("Suspicious" if suspicious > 0 else "Clean"),
+                resolution=t,
+                raw_data=json.dumps(last_analysis),
+                tags=["virustotal", endpoint_type.lower(), "detection"]
             ))
 
-        resp2 = await client.get(
-            f"https://www.virustotal.com/api/v3/domains/{domain}/subdomains?limit=40",
-            headers=headers, timeout=15.0
-        )
-        if resp2.status_code == 200:
-            data2 = resp2.json()
-            seen_subs = set()
-            for item in data2.get("data", []):
-                sub = item.get("id", "")
-                if sub and sub not in seen_subs:
-                    seen_subs.add(sub)
+            findings.append(IntelligenceFinding(
+                entity=f"Detection ratio: {malicious}/{total} (harmless: {harmless}, undetected: {undetected})",
+                type=f"VirusTotal Detection Breakdown",
+                source="VirusTotal",
+                confidence="High",
+                color="slate",
+                threat_level="Informational",
+                status="Analyzed",
+                resolution=t,
+                tags=["virustotal", "detection-breakdown"]
+            ))
+
+        categories = attributes.get("categories", {})
+        if categories:
+            for engine, cat in list(categories.items())[:5]:
+                findings.append(IntelligenceFinding(
+                    entity=f"{engine}: {cat}",
+                    type="VirusTotal Category",
+                    source="VirusTotal",
+                    confidence="Medium",
+                    color="slate",
+                    status="Categorized",
+                    resolution=t,
+                    tags=["virustotal", "category"]
+                ))
+
+        reputation = attributes.get("reputation", 0)
+        if reputation:
+            findings.append(IntelligenceFinding(
+                entity=f"VT Reputation: {reputation}",
+                type="VirusTotal Reputation",
+                source="VirusTotal",
+                confidence="Medium",
+                color="slate",
+                status="Scored",
+                resolution=t,
+                tags=["virustotal", "reputation"]
+            ))
+
+        last_analysis_results = attributes.get("last_analysis_results", {})
+        if last_analysis_results:
+            malicious_engines = {k: v for k, v in last_analysis_results.items() if v.get("category") == "malicious"}
+            if malicious_engines:
+                for engine, result in list(malicious_engines.items())[:5]:
                     findings.append(IntelligenceFinding(
-                        entity=sub,
-                        type="Subdomain (VT)",
+                        entity=f"{engine}: {result.get('result', 'malicious')}",
+                        type="VirusTotal Engine Detection",
                         source="VirusTotal",
                         confidence="High",
-                        color="blue",
-                        raw_data=f"Found via VT domain subdomains API"
+                        color="red",
+                        threat_level="High Risk",
+                        status="Detected",
+                        resolution=t,
+                        tags=["virustotal", "engine", engine.lower()]
                     ))
 
-        resp3 = await client.get(
-            f"https://www.virustotal.com/api/v3/domains/{domain}/resolutions?limit=20",
-            headers=headers, timeout=15.0
-        )
-        if resp3.status_code == 200:
-            data3 = resp3.json()
-            seen_ips = set()
-            for item in data3.get("data", []):
-                attrs3 = item.get("attributes", {})
-                ip = attrs3.get("ip_address", "") or attrs3.get("ip", "")
-                if ip and ip not in seen_ips:
-                    seen_ips.add(ip)
-                    findings.append(IntelligenceFinding(
-                        entity=ip,
-                        type="Historical IP Resolution",
-                        source="VirusTotal",
-                        confidence="High",
-                        color="slate",
-                        resolution=f"Resolved from {domain}",
-                        raw_data=f"IP {ip} historically associated with {domain}"
-                    ))
-
-        resp4 = await client.get(
-            f"https://www.virustotal.com/api/v3/domains/{domain}/urls?limit=20",
-            headers=headers, timeout=15.0
-        )
-        if resp4.status_code == 200:
-            data4 = resp4.json()
-            for item in data4.get("data", []):
-                url_attr = item.get("attributes", {})
-                url_str = url_attr.get("url", "")
-                if url_str:
-                    findings.append(IntelligenceFinding(
-                        entity=url_str[:200],
-                        type="VT Associated URL",
-                        source="VirusTotal",
-                        confidence="Medium",
-                        color="slate",
-                        threat_level="Standard Target",
-                        raw_data=url_str[:500]
-                    ))
-
-    except Exception as e:
+    else:
         findings.append(IntelligenceFinding(
-            entity=f"VT Error: {str(e)[:100]}",
-            type="VirusTotal Error",
+            entity="No VirusTotal data available",
+            type="VirusTotal Check Complete",
             source="VirusTotal",
             confidence="Low",
-            color="red",
-            threat_level="Informational"
+            color="emerald",
+            threat_level="Informational",
+            status="Not Found",
+            resolution=t,
+            tags=["virustotal", "empty"]
         ))
 
     return findings

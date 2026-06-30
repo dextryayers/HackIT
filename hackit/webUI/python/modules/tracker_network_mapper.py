@@ -1,6 +1,6 @@
 import re
 import httpx
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs
 from models import IntelligenceFinding
 
 TRACKER_PATTERNS = {
@@ -124,6 +124,90 @@ TRACKER_PATTERNS = {
         r"sentry\.io", r"browser\.sentry-cdn\.com", r"Sentry\.init",
         r"_sentry",
     ],
+    "Mouseflow": [r"mouseflow\.com", r"mouseflow", r"/mouseflow/"],
+    "Clicktale": [r"clicktale\.com", r"clicktale", r"/clicktale/"],
+    "SmartLook": [r"smartlook\.com", r"smartlook"],
+    "LogRocket": [r"logrocket\.com", r"logrocket"],
+    "PostHog": [r"posthog\.com", r"posthog"],
+    "Plausible": [r"plausible\.io", r"plausible"],
+    "Fathom": [r"usefathom\.com", r"fathom"],
+    "Simple Analytics": [r"simpleanalytics\.com", r"simpleanalytics"],
+    "Umami": [r"umami\.is", r"umami"],
+    "Matomo": [r"matomo\.org", r"piwik", r"matomo\.js"],
+    "OpenReplay": [r"openreplay\.com", r"openreplay"],
+    "RudderStack": [r"rudderstack\.com", r"rudderanalytics"],
+    "Snowplow": [r"snowplow\.io", r"snowplow"],
+    "Adobe Analytics": [r"adobe\.com/analytics", r"adobedtm", r"dpm\.demdex\.net", r"omtrdc\.net"],
+    "Yandex Metrica": [r"mc\.yandex\.ru", r"yandexmetrica", r"yandex\.com/metrika"],
+    "Baidu Tongji": [r"hm\.baidu\.com", r"tongji\.baidu"],
+    "Mailchimp": [r"mailchimp\.com", r"list-manage\.com"],
+    "ConvertKit": [r"convertkit\.com", r"convertkit"],
+    "ActiveCampaign": [r"activecampaign\.net", r"activecampaign"],
+    "SendGrid": [r"sendgrid\.net", r"sendgrid\.com"],
+    "Mailgun": [r"mailgun\.net", r"mailgun"],
+    "Postmark": [r"postmarkapp\.com", r"postmark"],
+    "Intercom": [r"intercom\.io", r"intercomcdn"],
+    "Drift": [r"drift\.com", r"drift"],
+    "Crisp": [r"crisp\.chat", r"crisp"],
+    "Tawk.to": [r"tawk\.to", r"tawk"],
+    "LiveChat": [r"livechat\.com", r"livechat"],
+    "Zendesk Chat": [r"zopim\.com", r"zendesk_chat", r"zendesk\.com/chat"],
+    "Freshchat": [r"freshchat\.com", r"freshchat"],
+    "Olark": [r"olark\.com", r"olark"],
+    "Qualaroo": [r"qualaroo\.com", r"qualaroo"],
+    "SurveyMonkey": [r"surveymonkey\.com", r"surveymonkey"],
+    "Typeform": [r"typeform\.com", r"typeform"],
+    "Google Tag Manager": [r"googletagmanager\.com", r"gtm\.js"],
+    "Google Optimize": [r"optimize\.googleapis\.com", r"googleoptimize"],
+    "Branch.io": [r"branch\.io", r"branchio"],
+    "Adjust": [r"adjust\.com", r"adjust"],
+    "AppsFlyer": [r"appsflyer\.com", r"appsflyer"],
+    "Firebase Analytics": [r"firebase\.google\.com", r"firebase-analytics"],
+    "AppDynamics": [r"appdynamics\.com", r"appdynamics"],
+    "Dynatrace": [r"dynatrace\.com", r"dtagent"],
+    "Akamai mPulse": [r"akamai\.com/mpulse", r"mpulse"],
+    "Pingdom": [r"pingdom\.com", r"pingdom"],
+    "StatusCake": [r"statuscake\.com", r"statuscake"],
+    "Better Uptime": [r"betteruptime\.com", r"better-uptime"],
+    "Ahrefs": [r"ahrefs\.com", r"ahrefs"],
+    "Moz": [r"moz\.com", r"moz"],
+    "Semrush": [r"semrush\.com", r"semrush"],
+    "SimilarWeb": [r"similarweb\.com", r"similarweb"],
+    "Alexa": [r"alexa\.com", r"alexa"],
+    "Quantcast": [r"quantcast\.com", r"quantcast"],
+    "comScore": [r"comscore\.com", r"comscore"],
+    "Nielsen": [r"nielsen\.com", r"nielsen"],
+    "Chartbeat": [r"chartbeat\.com", r"chartbeat"],
+    "Parse.ly": [r"parsely\.com", r"parsely"],
+    "CrowdTangle": [r"crowdtangle\.com", r"crowdtangle"],
+    "Talkwalker": [r"talkwalker\.com", r"talkwalker"],
+    "Brandwatch": [r"brandwatch\.com", r"brandwatch"],
+    "Meltwater": [r"meltwater\.com", r"meltwater"],
+    "Sprout Social": [r"sproutsocial\.com", r"sprout-social"],
+    "Hootsuite": [r"hootsuite\.com", r"hootsuite"],
+    "Buffer": [r"buffer\.com", r"buffer"],
+    "CoSchedule": [r"coschedule\.com", r"coschedule"],
+    "Proofpoint": [r"proofpoint\.com", r"proofpoint"],
+    "Mimecast": [r"mimecast\.com", r"mimecast"],
+    "CloudFlare SSL": [r"cloudflare\.com/ssl", r"cloudflare-ssl"],
+    "Cloudinary": [r"cloudinary\.com", r"res\.cloudinary"],
+    "Imgix": [r"imgix\.net", r"imgix"],
+    "Fastly Images": [r"fastly\.com/images", r"fastly-image"],
+    "Stripe": [r"stripe\.com", r"js\.stripe\.com"],
+    "PayPal": [r"paypal\.com", r"paypalobjects"],
+    "Braintree": [r"braintreegateway\.com", r"braintree"],
+    "Square": [r"square\.com", r"squareup\.com"],
+    "Shopify": [r"shopify\.com", r"myshopify\.com", r"cdn\.shopify"],
+    "WooCommerce": [r"woocommerce", r"woocommerce"],
+    "Magento": [r"magento", r"mage"],
+    "BigCommerce": [r"bigcommerce\.com", r"bigcommerce"],
+    "Squarespace": [r"squarespace\.com", r"static1\.squarespace"],
+    "Wix": [r"wix\.com", r"wixstatic"],
+    "Webflow": [r"webflow\.com", r"webflow"],
+    "Drupal": [r"drupal\.org", r"drupal"],
+    "WordPress": [r"wordpress\.org", r"wp-content", r"wp-includes"],
+    "Joomla": [r"joomla\.org", r"joomla"],
+    "phpMyAdmin": [r"phpmyadmin", r"phpmyadmin\.net"],
 }
 
 CMP_PATTERNS = [
@@ -141,6 +225,13 @@ CMP_PATTERNS = [
     (r"termly\.io", "Termly"),
     (r"consent\.trustarc\.com", "TrustArc"),
     (r"cmp\.usercentrics\.eu", "Usercentrics"),
+    (r"cookieinformation\.com", "CookieInformation"),
+    (r"consentmanager\.net", "ConsentManager"),
+    (r"cookieyes\.com", "CookieYes"),
+    (r"cookie-script\.com", "CookieScript"),
+    (r"cookiepro\.com", "CookiePro"),
+    (r"consentu\.com", "ConsentU"),
+    (r"enormo\.eu", "Enormo"),
 ]
 
 FINGERPRINTING_PATTERNS = [
@@ -163,6 +254,21 @@ FINGERPRINTING_PATTERNS = [
     (r"navigator\.permissions", "Permissions API Probing"),
     (r"navigator\.connection", "Network Connection Info"),
     (r"navigator\.storage", "Storage Probing"),
+    (r"navigator\.keyboard", "Keyboard Layout Detection"),
+    (r"navigator\.pdfViewerEnabled", "PDF Viewer Detection"),
+    (r"navigator\.bluetooth", "Bluetooth API Probing"),
+    (r"navigator\.usb", "USB API Probing"),
+    (r"navigator\.hid", "HID API Probing"),
+    (r"navigator\.serial", "Serial API Probing"),
+    (r"navigator\.wakeLock", "Wake Lock API Probing"),
+    (r"navigator\.xr", "WebXR Detection"),
+    (r"navigator\.credentials", "Credentials API Probing"),
+    (r"navigator\.clipboard", "Clipboard API Probing"),
+    (r"navigator\.presentation", "Presentation API Probing"),
+    (r"navigator\.mediaSession", "Media Session API Probing"),
+    (r"navigator\.geolocation", "Geolocation API Probing"),
+    (r"navigator\.vibrate", "Vibration API Probing"),
+    (r"navigator\.battery", "Battery API Probing"),
 ]
 
 BEACON_PATTERNS = [
@@ -175,12 +281,110 @@ BEACON_PATTERNS = [
     r"\/track",
     r"\/analytics",
     r"\/telemetry",
+    r"\/ingest",
+    r"\/logging",
+    r"\/events",
+    r"\/impression",
+    r"\/visit",
+    r"\/session",
+    r"\/activity",
+    r"\/count",
+    r"\/stat",
+    r"\/metrics",
+    r"\/monitor",
+    r"\/report",
+    r"\/pageview.gif",
+    r"\/pixel.gif",
+    r"\/tracking",
+    r"\/log",
+    r"\/audit",
 ]
+
+TRACKING_PARAM_PATTERNS = [
+    "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
+    "utm_id", "utm_cid", "utm_reader", "utm_viz_id", "utm_pubreferrer",
+    "fbclid", "gclid", "gclsrc", "dclid", "msclkid",
+    "twclid", "igshid", "mc_cid", "mc_eid",
+    "yclid", "wickedid", "_ga", "_gl",
+    "ref", "referrer", "source", "medium", "campaign",
+    "term", "content", "placement", "adgroup",
+    "adid", "device", "matchtype", "network",
+    "target", "keyword", "creative", "loc",
+    "url", "redirect_uri", "redirect_url",
+    "return_url", "return_to", "next", "return",
+    "track", "tracking", "trk", "trk_p",
+    "hsa_cam", "hsa_grp", "hsa_mt", "hsa_src", "hsa_ad", "hsa_acc",
+    "hsa_net", "hsa_ver", "hsa_la", "hsa_ol",
+    "s_kwcid", "ef_id", "s_cid",
+    "oly_anon_id", "oly_enc_id", "_openstat",
+    "mtm_source", "mtm_medium", "mtm_campaign", "mtm_keyword", "mtm_content",
+    "pk_source", "pk_medium", "pk_campaign", "pk_keyword", "pk_content",
+    "piwik_source", "piwik_medium", "piwik_campaign",
+    "wt_mc", "wt_zmc", "wt_zs", "wt_ni",
+    "vero_conv", "vero_id",
+    "mkt_tok", "imm_mid",
+    "cm_mmc", "cm_guid",
+    "as_cam", "as_chl", "as_chnl", "as_pt", "as_id",
+]
+
+THIRD_PARTY_CATEGORIES = {
+    "google-analytics.com": {"category": "Analytics", "company": "Google", "privacy_impact": 7},
+    "googletagmanager.com": {"category": "Analytics/Tag Manager", "company": "Google", "privacy_impact": 8},
+    "doubleclick.net": {"category": "Advertising", "company": "Google", "privacy_impact": 9},
+    "facebook.com": {"category": "Social/Tracking", "company": "Meta", "privacy_impact": 9},
+    "connect.facebook.net": {"category": "Social/Tracking", "company": "Meta", "privacy_impact": 8},
+    "fbcdn.net": {"category": "CDN", "company": "Meta", "privacy_impact": 5},
+    "ads-twitter.com": {"category": "Advertising", "company": "Twitter/X", "privacy_impact": 8},
+    "analytics.twitter.com": {"category": "Analytics", "company": "Twitter/X", "privacy_impact": 7},
+    "linkedin.com": {"category": "Social", "company": "LinkedIn", "privacy_impact": 7},
+    "ads.linkedin.com": {"category": "Advertising", "company": "LinkedIn", "privacy_impact": 8},
+    "bat.bing.com": {"category": "Advertising", "company": "Microsoft", "privacy_impact": 8},
+    "pinterest.com": {"category": "Social/Marketing", "company": "Pinterest", "privacy_impact": 7},
+    "reddit.com": {"category": "Social", "company": "Reddit", "privacy_impact": 7},
+    "snapchat.com": {"category": "Social", "company": "Snapchat", "privacy_impact": 7},
+    "tiktok.com": {"category": "Social", "company": "TikTok", "privacy_impact": 8},
+    "hotjar.com": {"category": "Analytics/Heatmap", "company": "Hotjar", "privacy_impact": 8},
+    "fullstory.com": {"category": "Analytics/Session Replay", "company": "FullStory", "privacy_impact": 9},
+    "amplitude.com": {"category": "Analytics", "company": "Amplitude", "privacy_impact": 7},
+    "mixpanel.com": {"category": "Analytics", "company": "Mixpanel", "privacy_impact": 7},
+    "segment.com": {"category": "Analytics/CDP", "company": "Segment", "privacy_impact": 8},
+    "cloudflare.com": {"category": "CDN/Security", "company": "Cloudflare", "privacy_impact": 4},
+    "cloudfront.net": {"category": "CDN", "company": "AWS", "privacy_impact": 3},
+    "akamai.com": {"category": "CDN", "company": "Akamai", "privacy_impact": 3},
+    "fastly.net": {"category": "CDN", "company": "Fastly", "privacy_impact": 3},
+    "jsdelivr.net": {"category": "CDN", "company": "jsDelivr", "privacy_impact": 2},
+    "cdnjs.cloudflare.com": {"category": "CDN", "company": "Cloudflare", "privacy_impact": 2},
+    "unpkg.com": {"category": "CDN", "company": "npm", "privacy_impact": 2},
+    "stripe.com": {"category": "Payment", "company": "Stripe", "privacy_impact": 6},
+    "paypal.com": {"category": "Payment", "company": "PayPal", "privacy_impact": 6},
+    "sentry.io": {"category": "Monitoring", "company": "Sentry", "privacy_impact": 6},
+    "newrelic.com": {"category": "Monitoring", "company": "New Relic", "privacy_impact": 6},
+    "datadoghq.com": {"category": "Monitoring", "company": "Datadog", "privacy_impact": 6},
+    "zendesk.com": {"category": "Support", "company": "Zendesk", "privacy_impact": 5},
+    "intercom.io": {"category": "Support/Chat", "company": "Intercom", "privacy_impact": 7},
+    "crisp.chat": {"category": "Support/Chat", "company": "Crisp", "privacy_impact": 6},
+    "tawk.to": {"category": "Support/Chat", "company": "Tawk.to", "privacy_impact": 6},
+    "livechat.com": {"category": "Support/Chat", "company": "LiveChat", "privacy_impact": 5},
+    "hubspot.com": {"category": "Marketing/CRM", "company": "HubSpot", "privacy_impact": 8},
+    "salesforce.com": {"category": "CRM", "company": "Salesforce", "privacy_impact": 7},
+    "mailchimp.com": {"category": "Email Marketing", "company": "Mailchimp", "privacy_impact": 6},
+    "sendgrid.net": {"category": "Email", "company": "SendGrid", "privacy_impact": 5},
+    "optimizely.com": {"category": "A/B Testing", "company": "Optimizely", "privacy_impact": 7},
+    "vwo.com": {"category": "A/B Testing", "company": "VWO", "privacy_impact": 7},
+    "mouseflow.com": {"category": "Session Replay", "company": "Mouseflow", "privacy_impact": 9},
+    "clicktale.com": {"category": "Session Replay", "company": "Clicktale", "privacy_impact": 8},
+    "smartlook.com": {"category": "Session Replay", "company": "Smartlook", "privacy_impact": 8},
+    "logrocket.com": {"category": "Session Replay", "company": "LogRocket", "privacy_impact": 9},
+    "posthog.com": {"category": "Analytics", "company": "PostHog", "privacy_impact": 6},
+    "plausible.io": {"category": "Analytics", "company": "Plausible", "privacy_impact": 2},
+    "matomo.org": {"category": "Analytics", "company": "Matomo", "privacy_impact": 3},
+}
 
 SCRIPT_SRC_REGEX = re.compile(r'<script[^>]+src=["\']([^"\']+)["\']', re.IGNORECASE)
 IFRAME_SRC_REGEX = re.compile(r'<iframe[^>]+src=["\']([^"\']+)["\']', re.IGNORECASE)
 IMG_SRC_REGEX = re.compile(r'<img[^>]+src=["\']([^"\']+)["\']', re.IGNORECASE)
-BEACON_REGEX = re.compile(r'<img[^>]+src=["\'][^"\']*?(?:collect|beacon|pixel|track|analytics|telemetry)[^"\']*["\']', re.IGNORECASE)
+LINK_HREF_REGEX = re.compile(r'<link[^>]+href=["\']([^"\']+)["\']', re.IGNORECASE)
+BEACON_REGEX = re.compile(r'<img[^>]+src=["\'][^"\']*?(?:collect|beacon|pixel|track|analytics|telemetry|ingest|logging|events|impression|visit|session|activity|count|stat|metrics|monitor|report|pageview|tracking|log|audit)[^"\']*["\']', re.IGNORECASE)
 INLINE_SCRIPT_REGEX = re.compile(r'<script[^>]*>(.*?)</script>', re.IGNORECASE | re.DOTALL)
 
 async def crawl(target: str, client: httpx.AsyncClient):
@@ -201,8 +405,12 @@ async def crawl(target: str, client: httpx.AsyncClient):
             all_third_party_srcs.append(m.group(1))
         for m in IMG_SRC_REGEX.finditer(html):
             all_third_party_srcs.append(m.group(1))
+        for m in LINK_HREF_REGEX.finditer(html):
+            if ".css" in m.group(1).lower() or "font" in m.group(1).lower():
+                all_third_party_srcs.append(m.group(1))
 
         trackers_found = {}
+        third_party_domains = set()
         for src in all_third_party_srcs:
             src_lower = src.lower()
             for tracker_name, patterns in TRACKER_PATTERNS.items():
@@ -214,7 +422,35 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         netloc = parsed.netloc or src.split("/")[0]
                         if netloc not in trackers_found[tracker_name]:
                             trackers_found[tracker_name].append(netloc)
+                            third_party_domains.add(netloc)
                         break
+                else:
+                    continue
+                break
+
+        for src in all_third_party_srcs:
+            parsed = urlparse(src if src.startswith("http") else "https:" + src)
+            netloc = parsed.netloc or src.split("/")[0]
+            if netloc and netloc != domain:
+                third_party_domains.add(netloc)
+
+        for domain_name in third_party_domains:
+            domain_lower = domain_name.lower()
+            for tp_domain, info in THIRD_PARTY_CATEGORIES.items():
+                if tp_domain in domain_lower:
+                    privacy_impact = info.get("privacy_impact", 5)
+                    color = "red" if privacy_impact >= 8 else ("orange" if privacy_impact >= 5 else "slate")
+                    findings.append(IntelligenceFinding(
+                        entity=f"{domain_name} - {info['category']} ({info['company']})",
+                        type=f"Third-Party: {info['category']}",
+                        source="TrackerNetworkMapper",
+                        confidence="High",
+                        color=color,
+                        threat_level="Elevated Risk" if privacy_impact >= 7 else "Informational",
+                        raw_data=f"Domain: {domain_name} | Category: {info['category']} | Company: {info['company']} | Privacy Impact: {privacy_impact}/10",
+                        tags=["third-party", info["category"].lower().replace(" ", "-").replace("/", "-"), info["company"].lower().replace(" ", "-")]
+                    ))
+                    break
 
         for tracker_name, domains_found in sorted(trackers_found.items()):
             for dom in domains_found[:3]:
@@ -292,19 +528,38 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     tags=["tracker", "cookie", "tracking-cookie"]
                 ))
 
+        url_params = parse_qs(urlparse(base_url).query)
+        for param in url_params:
+            for tp_param in TRACKING_PARAM_PATTERNS:
+                if param.lower() == tp_param:
+                    findings.append(IntelligenceFinding(
+                        entity=f"Tracking parameter in URL: {param}={url_params[param][0][:50]}",
+                        type="Tracking URL Parameter",
+                        source="TrackerNetworkMapper",
+                        confidence="High",
+                        color="orange",
+                        threat_level="Informational",
+                        tags=["tracker", "url-parameter", param]
+                    ))
+                    break
+
         tracker_count = len(trackers_found)
         fingerprint_count = sum(1 for f in findings if f.type == "Cookie-less Fingerprinting")
         beacon_count = sum(1 for f in findings if f.type == "Tracking Beacon")
+        third_party_count = len(third_party_domains)
+        high_privacy = sum(1 for f in findings if "Privacy Impact" in (f.raw_data or "") and "7" in (f.raw_data or ""))
+        privacy_score = max(0, 100 - (tracker_count * 5 + fingerprint_count * 8 + beacon_count * 3 + third_party_count * 4))
+        privacy_score = min(100, privacy_score)
 
         findings.append(IntelligenceFinding(
-            entity=f"{tracker_count} trackers ({len(all_third_party_srcs)} third-party requests), {fingerprint_count} fingerprinting methods, {beacon_count} beacons",
+            entity=f"{tracker_count} trackers, {third_party_count} 3rd-party domains, {fingerprint_count} fingerprints, {beacon_count} beacons [Privacy: {privacy_score}/100]",
             type="Tracker Network Summary",
             source="TrackerNetworkMapper",
             confidence="High",
-            color="purple",
-            threat_level="Elevated Risk" if tracker_count > 10 or fingerprint_count > 2 else "Informational",
-            raw_data=f"Trackers: {tracker_count} | 3rd-party requests: {len(all_third_party_srcs)} | Fingerprinting: {fingerprint_count} | Beacons: {beacon_count}",
-            tags=["tracker", "summary"]
+            color="red" if privacy_score < 50 else ("orange" if privacy_score < 70 else "purple"),
+            threat_level="High Risk" if privacy_score < 50 else ("Elevated Risk" if privacy_score < 70 else "Informational"),
+            raw_data=f"Trackers: {tracker_count} | 3rd-party requests: {third_party_count} | Fingerprinting: {fingerprint_count} | Beacons: {beacon_count} | Privacy Score: {privacy_score}/100",
+            tags=["tracker", "summary", "privacy"]
         ))
 
     except Exception as e:

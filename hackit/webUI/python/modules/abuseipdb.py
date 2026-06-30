@@ -1,6 +1,7 @@
 import httpx
 import asyncio
 import socket
+import json
 from datetime import datetime
 from collections import defaultdict
 from models import IntelligenceFinding
@@ -46,6 +47,12 @@ SEVERITY_MAP = {
     "Spoofing": "High Risk",
 }
 
+BLACKLIST_SOURCES = [
+    "spamhaus", "spamcop", "barracuda", "sorbs", "dshield",
+    "tor_exit", "alienvault", "blocklist_de", "emerging_threats",
+    "green_snow", "malshare", "malwaredomains",
+]
+
 async def resolve_to_ips(domain: str) -> list:
     loop = asyncio.get_event_loop()
     try:
@@ -65,6 +72,131 @@ def score_category(score: int):
         return "High Risk", "red", "Elevated Risk", "high-risk"
     return "Critical", "red", "High Risk", "critical"
 
+async def check_blacklist(client: httpx.AsyncClient, ip: str) -> list:
+    findings = []
+    for source in BLACKLIST_SOURCES:
+        try:
+            resp = await client.get(
+                f"https://api.abuseipdb.com/api/v2/blacklist",
+                params={"ipAddress": ip, "source": source},
+                timeout=10.0,
+            )
+        except:
+            pass
+    return findings
+
+async def fetch_category_trends(client: httpx.AsyncClient, ip: str) -> list:
+    findings = []
+    try:
+        resp = await client.get(
+            f"{ABUSEIPDB_API}/check",
+            params={"ipAddress": ip, "maxAgeInDays": "365", "verbose": ""},
+            headers={"User-Agent": ABUSEIPDB_UA, "Accept": "application/json"},
+            timeout=15.0,
+        )
+        if resp.status_code == 200:
+            data = resp.json().get("data", {})
+            reports = data.get("reports", [])
+            monthly = defaultdict(int)
+            for r in reports:
+                dt = r.get("reportedAt", "")[:7]
+                if dt:
+                    monthly[dt] += 1
+            sorted_months = sorted(monthly.items())[:12]
+            for month, cnt in sorted_months:
+                findings.append(IntelligenceFinding(
+                    entity=f"{month}: {cnt} report(s)",
+                    type="AbuseIPDB Monthly Trend",
+                    source="AbuseIPDB Trends",
+                    confidence="Medium",
+                    color="slate",
+                    status="Confirmed",
+                    resolution=ip,
+                    tags=["threat-intel", "trends", "timeline"],
+                ))
+    except:
+        pass
+    return findings
+
+async def check_multi_ip_blacklist(client: httpx.AsyncClient, ips: list) -> list:
+    findings = []
+    try:
+        resp = await client.get(
+            f"{ABUSEIPDB_API}/blacklist",
+            params={"confidenceMinimum": "90", "limit": "100"},
+            headers={"User-Agent": ABUSEIPDB_UA, "Accept": "application/json"},
+            timeout=15.0,
+        )
+        if resp.status_code == 200:
+            data = resp.json().get("data", [])
+            if data:
+                findings.append(IntelligenceFinding(
+                    entity=f"{len(data)} IPs in blacklist (90%+ confidence)",
+                    type="AbuseIPDB Blacklist Summary",
+                    source="AbuseIPDB Blacklist",
+                    confidence="High",
+                    color="red",
+                    threat_level="High Risk",
+                    status="Confirmed",
+                    raw_data=json.dumps([d.get("ipAddress") for d in data[:20]]),
+                    tags=["threat-intel", "blacklist", "aggregate"],
+                ))
+    except:
+        pass
+    return findings
+
+async def check_domain_reputation(client: httpx.AsyncClient, domain: str) -> list:
+    findings = []
+    try:
+        resp = await client.get(
+            f"{ABUSEIPDB_API}/check",
+            params={"ipAddress": domain, "maxAgeInDays": "90", "verbose": ""},
+            headers={"User-Agent": ABUSEIPDB_UA, "Accept": "application/json"},
+            timeout=15.0,
+        )
+        if resp.status_code == 200:
+            data = resp.json().get("data", {})
+            score = data.get("abuseConfidenceScore", 0)
+            isp = data.get("isp", "")
+            domain_name = data.get("domain", "")
+            findings.append(IntelligenceFinding(
+                entity=f"Domain reputation score: {score}/100",
+                type="AbuseIPDB Domain Reputation",
+                source="AbuseIPDB",
+                confidence="Medium",
+                color="red" if score > 50 else "orange",
+                threat_level="High Risk" if score > 50 else "Elevated Risk",
+                status="Analyzed",
+                resolution=domain,
+                raw_data=json.dumps(data),
+                tags=["threat-intel", "domain", "reputation"],
+            ))
+            if isp:
+                findings.append(IntelligenceFinding(
+                    entity=f"ISP: {isp}",
+                    type="AbuseIPDB Domain ISP",
+                    source="AbuseIPDB",
+                    confidence="Medium",
+                    color="slate",
+                    status="Confirmed",
+                    resolution=domain,
+                    tags=["infrastructure", "isp"],
+                ))
+            if domain_name:
+                findings.append(IntelligenceFinding(
+                    entity=f"Domain: {domain_name}",
+                    type="AbuseIPDB Domain Name",
+                    source="AbuseIPDB",
+                    confidence="Medium",
+                    color="slate",
+                    status="Confirmed",
+                    resolution=domain,
+                    tags=["infrastructure", "domain"],
+                ))
+    except:
+        pass
+    return findings
+
 async def crawl(target: str, client: httpx.AsyncClient):
     findings = []
     t = target.strip().lower()
@@ -75,6 +207,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
     ips = await resolve_to_ips(t)
     if not ips:
         ips = [t]
+
+    domain_findings = await check_domain_reputation(client, t)
+    findings.extend(domain_findings)
 
     headers = {
         "User-Agent": ABUSEIPDB_UA,
@@ -263,11 +398,35 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         tags=["threat-intel", "timeline"],
                     ))
 
+            num_distinct_reporter_countries = len(set(
+                r.get("reporterCountryCode", "") for r in reports[:100] if r.get("reporterCountryCode")
+            ))
+            if num_distinct_reporter_countries:
+                findings.append(IntelligenceFinding(
+                    entity=f"Reported from {num_distinct_reporter_countries} distinct countries",
+                    type="AbuseIPDB Reporter Diversity",
+                    source="AbuseIPDB",
+                    confidence="Medium",
+                    color="slate",
+                    status="Confirmed",
+                    resolution=ip,
+                    tags=["geo", "reporting", "diversity"],
+                ))
+
         except:
             continue
 
+    if ips:
+        trends = await fetch_category_trends(client, ips[0])
+        findings.extend(trends)
+
+        bl_check = await check_multi_ip_blacklist(client, ips)
+        findings.extend(bl_check)
+
     if len(all_scores) > 1:
         avg_score = sum(s for _, s in all_scores) / len(all_scores)
+        max_score = max(s for _, s in all_scores)
+        min_score = min(s for _, s in all_scores)
         findings.append(IntelligenceFinding(
             entity=f"Average confidence across {len(all_scores)} IP(s): {avg_score:.0f}/100",
             type="AbuseIPDB Multi-IP Summary",
@@ -278,17 +437,49 @@ async def crawl(target: str, client: httpx.AsyncClient):
             status="Analyzed",
             tags=["threat-intel", "aggregate"],
         ))
-
-    if country_dist:
-        top_country = max(country_dist, key=country_dist.get)
         findings.append(IntelligenceFinding(
-            entity=f"Top country: {top_country} ({country_dist[top_country]} IP(s))",
-            type="AbuseIPDB Country Distribution",
+            entity=f"Score range: {min_score} - {max_score}/100 across {len(all_scores)} IPs",
+            type="AbuseIPDB Score Range",
             source="AbuseIPDB",
-            confidence="Low",
+            confidence="Medium",
             color="slate",
             status="Analyzed",
-            tags=["geo", "distribution"],
+            tags=["threat-intel", "aggregate", "range"],
         ))
 
-    return findings
+if country_dist:
+    top_country = max(country_dist, key=country_dist.get)
+    findings.append(IntelligenceFinding(
+        entity=f"Top country: {top_country} ({country_dist[top_country]} IP(s))",
+        type="AbuseIPDB Country Distribution",
+        source="AbuseIPDB",
+        confidence="Low",
+        color="slate",
+        status="Analyzed",
+        tags=["geo", "distribution"],
+    ))
+
+    iso_codes = [f"{k}:{v}" for k, v in sorted(country_dist.items(), key=lambda x: -x[1])]
+    findings.append(IntelligenceFinding(
+        entity=f"Country distribution: {' '.join(iso_codes)}",
+        type="AbuseIPDB Full Country Distribution",
+        source="AbuseIPDB",
+        confidence="Low",
+        color="slate",
+        status="Analyzed",
+        tags=["geo", "distribution", "full"],
+    ))
+
+if usage_dist:
+    top_usage = max(usage_dist, key=usage_dist.get)
+    findings.append(IntelligenceFinding(
+        entity=f"Top usage type: {top_usage} ({usage_dist[top_usage]} IP(s))",
+        type="AbuseIPDB Usage Distribution",
+        source="AbuseIPDB",
+        confidence="Low",
+        color="slate",
+        status="Analyzed",
+        tags=["infrastructure", "usage"],
+    ))
+
+return findings

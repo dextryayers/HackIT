@@ -57,11 +57,14 @@ THREAT_INDICATORS = {
     "apt": ["apt", "advanced persistent", "state-sponsored", "intel", "cyber espionage"],
 }
 
+PASTE_DETECT_KEYWORDS = [
+    "password", "passwd", "secret", "token", "api", "key", "login", "email",
+    "admin", "root", "database", "dump", "sql", "backup", "config", "env",
+]
 
 async def search_ahmia(client: httpx.AsyncClient, query: str) -> List[Dict]:
     results = []
     try:
-        proxies = {"http://": "socks5h://127.0.0.1:9050", "https://": "socks5h://127.0.0.1:9050"}
         search_url = f"http://juhanurmihxlp77nkq76byazcldy2hlmovfu2epvl5ankdibsot4csyd.onion/search/?q={quote(query)}"
         headers = {"User-Agent": UA}
         resp = await client.get(search_url, headers=headers, timeout=30.0)
@@ -85,7 +88,6 @@ async def search_ahmia(client: httpx.AsyncClient, query: str) -> List[Dict]:
     except Exception:
         pass
     return results
-
 
 async def search_onionland(client: httpx.AsyncClient, query: str) -> List[Dict]:
     results = []
@@ -114,7 +116,6 @@ async def search_onionland(client: httpx.AsyncClient, query: str) -> List[Dict]:
         pass
     return results
 
-
 async def search_darksearch(client: httpx.AsyncClient, query: str) -> List[Dict]:
     results = []
     try:
@@ -133,7 +134,6 @@ async def search_darksearch(client: httpx.AsyncClient, query: str) -> List[Dict]
     except Exception:
         pass
     return results
-
 
 async def search_torch(client: httpx.AsyncClient, query: str) -> List[Dict]:
     results = []
@@ -162,7 +162,6 @@ async def search_torch(client: httpx.AsyncClient, query: str) -> List[Dict]:
         pass
     return results
 
-
 async def search_haystack(client: httpx.AsyncClient, query: str) -> List[Dict]:
     results = []
     try:
@@ -190,11 +189,49 @@ async def search_haystack(client: httpx.AsyncClient, query: str) -> List[Dict]:
         pass
     return results
 
+async def search_phobos(client: httpx.AsyncClient, query: str) -> List[Dict]:
+    results = []
+    try:
+        search_url = f"https://phobos.onion/search?q={quote(query)}"
+        headers = {"User-Agent": UA}
+        resp = await client.get(search_url, headers=headers, timeout=30.0)
+        if resp.status_code == 200:
+            html = resp.text
+            links = re.findall(r'<a[^>]+href="(https?://[^"]+)"[^>]*>([^<]*)</a>', html)
+            for url, title in links[:15]:
+                results.append({
+                    "url": url[:500],
+                    "title": title.strip()[:200] or url[:60],
+                    "snippet": "",
+                    "source": "Phobos",
+                })
+    except Exception:
+        pass
+    return results
+
+async def search_sentor(client: httpx.AsyncClient, query: str) -> List[Dict]:
+    results = []
+    try:
+        search_url = f"https://sentor.onion/search?q={quote(query)}"
+        headers = {"User-Agent": UA}
+        resp = await client.get(search_url, headers=headers, timeout=30.0)
+        if resp.status_code == 200:
+            html = resp.text
+            links = re.findall(r'<a[^>]+href="(https?://[^"]+)"[^>]*>([^<]*)</a>', html)
+            for url, title in links[:15]:
+                results.append({
+                    "url": url[:500],
+                    "title": title.strip()[:200] or url[:60],
+                    "snippet": "",
+                    "source": "Sentor",
+                })
+    except Exception:
+        pass
+    return results
 
 def classify_threat(text: str) -> List[tuple]:
     classifications = []
     text_lower = text.lower()
-
     for classification, config in THREAT_CLASSIFICATIONS.items():
         matches = 0
         for keyword in config["keywords"]:
@@ -204,19 +241,15 @@ def classify_threat(text: str) -> List[tuple]:
             classifications.append((classification, config["threat"], config["color"]))
         elif matches >= 1:
             classifications.append((classification, "Elevated Risk", "orange"))
-
     for threat_type, indicators in THREAT_INDICATORS.items():
         for indicator in indicators:
             if indicator in text_lower:
                 classifications.append((f"threat_{threat_type}", "Critical", "red"))
                 break
-
     return classifications
-
 
 def extract_onion_urls(text: str) -> List[str]:
     return re.findall(r'\b[a-z2-7]{16,56}\.onion\b', text)
-
 
 def calculate_confidence(title: str, snippet: str, url: str) -> str:
     combined = f"{title} {snippet} {url}".lower()
@@ -233,6 +266,13 @@ def calculate_confidence(title: str, snippet: str, url: str) -> str:
         return "Medium"
     return "Low"
 
+def detect_paste_content(text: str) -> List[str]:
+    found = []
+    text_lower = text.lower()
+    for kw in PASTE_DETECT_KEYWORDS:
+        if kw in text_lower:
+            found.append(kw)
+    return found
 
 async def process_result(result: Dict, query: str) -> List[IntelligenceFinding]:
     findings = []
@@ -243,23 +283,34 @@ async def process_result(result: Dict, query: str) -> List[IntelligenceFinding]:
 
     combined = f"{title} {snippet}"
     classifications = classify_threat(combined)
-
     confidence = calculate_confidence(title, snippet, url)
     is_onion = ".onion" in url
-
     onion_urls = extract_onion_urls(combined)
     all_onion_urls = set(onion_urls)
     if is_onion:
         all_onion_urls.add(url)
+
+    paste_keywords = detect_paste_content(combined)
+    if paste_keywords:
+        findings.append(IntelligenceFinding(
+            entity=f"Sensitive content indicators: {', '.join(paste_keywords[:5])}",
+            type="DarkWeb: Sensitive Content Detection",
+            source=f"DarkWeb/{source}",
+            confidence=confidence,
+            color="orange",
+            threat_level="Elevated Risk",
+            status="Monitoring",
+            resolution=f"URL: {url[:200]}",
+            raw_data=f"Keywords: {paste_keywords}\\nTitle: {title}",
+            tags=["sensitive", "content-analysis", source.lower()]
+        ))
 
     if classifications:
         primary_class = classifications[0]
         classification_name = primary_class[0]
         threat = primary_class[1]
         color = primary_class[2]
-
         display_label = classification_name.replace("_", " ").title()
-
         entity_text = title[:150] if title else url[:150]
         findings.append(IntelligenceFinding(
             entity=entity_text,
@@ -270,9 +321,23 @@ async def process_result(result: Dict, query: str) -> List[IntelligenceFinding]:
             threat_level=threat,
             status="Active Threat" if threat in ("Critical", "High Risk") else "Monitoring",
             resolution=f"URL: {url[:200]}",
-            raw_data=f"Title: {title}\nSnippet: {snippet}\nSource: {source}",
-            tags=["dark-web", "tor", source.lower(), classification_name] + ([f"onion:{u}" for u in list(all_onion_urls)[:3]] if all_onion_urls else [])
+            raw_data=f"Title: {title}\\nSnippet: {snippet}\\nSource: {source}",
+            tags=["dark-web", "tor", source.lower(), classification_name] + (
+                [f"onion:{u}" for u in list(all_onion_urls)[:3]] if all_onion_urls else [])
         ))
+        if len(classifications) > 1:
+            secondary = classifications[1]
+            findings.append(IntelligenceFinding(
+                entity=f"Additional classification: {secondary[0].replace('_', ' ').title()}",
+                type="DarkWeb: Secondary Classification",
+                source=f"DarkWeb/{source}",
+                confidence=confidence,
+                color=secondary[2],
+                threat_level=secondary[1],
+                status="Monitoring",
+                resolution=url[:200],
+                tags=["dark-web", "classification", secondary[0]]
+            ))
     elif is_onion or any(domain in combined.lower() for domain in ["exploit", "breach", "hack", "forum", "market"]):
         findings.append(IntelligenceFinding(
             entity=title[:150] if title else url[:150],
@@ -283,12 +348,22 @@ async def process_result(result: Dict, query: str) -> List[IntelligenceFinding]:
             threat_level="Elevated Risk",
             status="Monitoring",
             resolution=f"URL: {url[:200]}",
-            raw_data=f"Title: {title}\nSnippet: {snippet}",
-            tags=["dark-web", "mention", source.lower()] + ([f"onion:{u}" for u in list(all_onion_urls)[:3]] if all_onion_urls else [])
+            raw_data=f"Title: {title}\\nSnippet: {snippet}",
+            tags=["dark-web", "mention", source.lower()] + (
+                [f"onion:{u}" for u in list(all_onion_urls)[:3]] if all_onion_urls else [])
         ))
 
     return findings
 
+async def resolve_onion_services(all_results: List[Dict]) -> List[str]:
+    onion_urls = set()
+    for r in all_results:
+        url = r.get("url", "")
+        if ".onion" in url:
+            onion_urls.add(url[:100])
+        snippet = r.get("snippet", "")
+        onion_urls.update(extract_onion_urls(snippet))
+    return list(onion_urls)[:10]
 
 async def crawl(target: str, client: httpx.AsyncClient):
     findings = []
@@ -314,6 +389,8 @@ async def crawl(target: str, client: httpx.AsyncClient):
             search_darksearch(client, query),
             search_torch(client, query),
             search_haystack(client, query),
+            search_phobos(client, query),
+            search_sentor(client, query),
         ]
         search_results = await asyncio.gather(*search_tasks, return_exceptions=True)
 
@@ -328,6 +405,20 @@ async def crawl(target: str, client: httpx.AsyncClient):
     for f_list in processed:
         if isinstance(f_list, list):
             findings.extend(f_list)
+
+    onion_services = await resolve_onion_services(all_results)
+    if onion_services:
+        findings.append(IntelligenceFinding(
+            entity=f"{len(onion_services)} .onion hidden services discovered",
+            type="DarkWeb: Onion Services Discovery",
+            source="DarkWebScanner",
+            confidence="Medium",
+            color="slate",
+            threat_level="Informational",
+            resolution=domain,
+            raw_data="\\n".join(onion_services[:10]),
+            tags=["onion", "hidden-service", "discovery"]
+        ))
 
     threat_counts = {}
     source_counts = {}
@@ -354,6 +445,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         summary_lines = [
             f"Total dark web findings: {len(findings)}",
             f"Highest threat level: {highest_threat}",
+            f"Search engines used: 7 (Ahmia, OnionLand, DarkSearch, Torch, Haystack, Phobos, Sentor)",
             f"Sources: {', '.join(source_counts.keys())}",
         ]
         if onion_urls_found:
@@ -371,7 +463,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             confidence="Medium",
             color=color,
             threat_level=highest_threat,
-            raw_data="\n".join(summary_lines),
+            raw_data="\\n".join(summary_lines),
             tags=["summary", "dark-web", "tor"] + [f"onion:{u}" for u in list(onion_urls_found)[:5]]
         ))
 

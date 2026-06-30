@@ -27,6 +27,11 @@ SIMILAR_WEB_CSS_PATTERNS = [
     (r'zendesk\.com', "Zendesk"),
     (r'sentry\.(?:io|cdn)', "Sentry"),
     (r'datadog\.(?:com|eu)', "Datadog"),
+    (r'optimizely\.com', "Optimizely"),
+    (r'fullstory\.com', "FullStory"),
+    (r'heap\.io', "Heap Analytics"),
+    (r'amplitude\.com', "Amplitude"),
+    (r'mixpanel\.com', "Mixpanel"),
 ]
 
 EXPOSED_PATTERNS = [
@@ -40,6 +45,11 @@ EXPOSED_PATTERNS = [
     (r'["\']SG\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}["\']', "SendGrid API Key"),
     (r'["\']key-[0-9a-zA-Z]{32}["\']', "Mailgun API Key"),
     (r'["\'](?:api|apikey|secret)["\']\s*[:=]\s*["\'][A-Za-z0-9_\-]{16,}["\']', "Generic API Key"),
+    (r'["\']eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}["\']', "JWT Token"),
+    (r'-----BEGIN (?:RSA |EC )?PRIVATE KEY-----', "Private Key (PEM)"),
+    (r'["\'](?:sk|pk)_[a-z]+_[A-Za-z0-9]{10,}["\']', "Secret/Public Key (legacy)"),
+    (r'["\'](?:password|passwd|pwd)["\']\s*[:=]\s*["\'][^"\']{4,}["\']', "Hardcoded Password"),
+    (r'["\'](?:token|access_token|auth_token)["\']\s*[:=]\s*["\'][^"\']{8,}["\']', "Access Token"),
 ]
 
 CDN_JS_PATTERNS = [
@@ -50,6 +60,9 @@ CDN_JS_PATTERNS = [
     (r'maxcdn\.bootstrapcdn\.com/([^/]+)', "Bootstrap CDN (MaxCDN)"),
     (r'stackpath\.bootstrapcdn\.com/([^/]+)', "Bootstrap CDN (StackPath)"),
     (r'code\.jquery\.com/([^/]+)', "jQuery CDN"),
+    (r'cdn\.mathjax\.org/([^/]+)', "MathJax CDN"),
+    (r'cdn\.polyfill\.io/([^/]*)', "Polyfill.io CDN"),
+    (r'cdn\.jsdelivr\.net/([^/]+)', "jsDelivr (other)"),
 ]
 
 ANALYTICS_ID_PATTERNS = [
@@ -62,7 +75,85 @@ ANALYTICS_ID_PATTERNS = [
     (r'pub-\d{16}', "Google AdSense Publisher"),
     (r'ca-pub-\d{16}', "Google AdSense Publisher"),
     (r'mc[as]id_[A-Za-z0-9_-]{10,}', "Mailchimp Account"),
+    (r'^[A-Z0-9]{5,15}$', "Google Optimize ID"),
 ]
+
+TECH_SIGNATURES = {
+    "wordpress": "WordPress CMS",
+    "wp-content": "WordPress CMS",
+    "wp-includes": "WordPress CMS",
+    "drupal": "Drupal CMS",
+    "joomla": "Joomla CMS",
+    "magento": "Magento CMS",
+    "shopify": "Shopify CMS",
+    "squarespace": "Squarespace CMS",
+    "wix": "Wix CMS",
+    "react": "React JS",
+    "react-dom": "React JS",
+    "vue": "Vue.js",
+    "angular": "Angular",
+    "jquery": "jQuery",
+    "bootstrap": "Bootstrap",
+    "tailwind": "Tailwind CSS",
+    "font-awesome": "Font Awesome",
+    "material-icons": "Material Icons",
+    "materialize": "Materialize CSS",
+    "semantic-ui": "Semantic UI",
+    "foundation": "Foundation CSS",
+    "bulma": "Bulma CSS",
+    "chart.js": "Chart.js",
+    "d3.js": "D3.js",
+    "moment.js": "Moment.js",
+    "lodash": "Lodash",
+    "underscore": "Underscore.js",
+    "axios": "Axios",
+    "fetch": "Fetch API",
+    "slick": "Slick Slider",
+    "swiper": "Swiper Slider",
+    "owl.carousel": "Owl Carousel",
+    "select2": "Select2",
+    "flatpickr": "Flatpickr",
+    "datatables": "DataTables",
+    "tinymce": "TinyMCE Editor",
+    "ckeditor": "CKEditor",
+    "summernote": "Summernote Editor",
+    "socket.io": "Socket.io",
+    "next.js": "Next.js",
+    "nuxt": "Nuxt.js",
+    "gatsby": "Gatsby.js",
+    "amp-boilerplate": "Google AMP",
+    "cloudflare": "Cloudflare",
+    "cdn-cgi": "Cloudflare",
+}
+
+FRAMEWORK_SIGNATURES = {
+    "laravel": "Laravel PHP",
+    "csrf-token": "Laravel/PHP CSRF",
+    "symfony": "Symfony PHP",
+    "codeigniter": "CodeIgniter PHP",
+    "cakephp": "CakePHP",
+    "yii": "Yii PHP",
+    "zend": "Zend PHP",
+    "thinkphp": "ThinkPHP",
+    "django": "Django Python",
+    "flask": "Flask Python",
+    "tornado": "Tornado Python",
+    "fastapi": "FastAPI Python",
+    "express": "Express.js Node",
+    "koa": "Koa.js Node",
+    "nest": "Nest.js Node",
+    "rails": "Ruby on Rails",
+    "rack": "Rack Ruby",
+    "sinatra": "Sinatra Ruby",
+    "spring": "Spring Java",
+    "servlet": "Java Servlet",
+    "struts": "Struts Java",
+    "hibernate": "Hibernate Java",
+    "asp.net": "ASP.NET",
+    "aspnet": "ASP.NET Core",
+    "webform": "ASP.NET WebForms",
+    "sharepoint": "SharePoint",
+}
 
 
 async def scrape_publicwww(target: str, client: httpx.AsyncClient) -> list:
@@ -291,6 +382,56 @@ async def check_comment_references(html: str, target: str) -> list:
     return findings
 
 
+async def detect_technology_from_source(html: str, target: str) -> list:
+    findings = []
+    html_lower = html.lower()
+    meta_generator = re.search(r'<meta\s+name=["\']generator["\'][^>]*content=["\']([^"\']+)["\']', html, re.IGNORECASE)
+    if meta_generator:
+        generator = meta_generator.group(1).strip()
+        findings.append(IntelligenceFinding(
+            entity=f"Meta Generator: {generator}",
+            type="Technology Source: Meta Generator",
+            source="PublicWWW (HTML)",
+            confidence="High",
+            color="orange",
+            threat_level="Informational",
+            raw_data=f"Generator meta tag: {generator}",
+            tags=["technology", "meta-generator"]
+        ))
+
+    detected_techs = set()
+    for sig, tech_name in TECH_SIGNATURES.items():
+        if sig in html_lower:
+            detected_techs.add(tech_name)
+    for tech in sorted(detected_techs)[:15]:
+        findings.append(IntelligenceFinding(
+            entity=tech,
+            type="Technology Detection: Source Code",
+            source="PublicWWW (HTML)",
+            confidence="Medium",
+            color="orange",
+            threat_level="Informational",
+            tags=["technology", tech.lower().replace(" ", "-")]
+        ))
+
+    detected_frameworks = set()
+    for sig, framework in FRAMEWORK_SIGNATURES.items():
+        if sig in html_lower:
+            detected_frameworks.add(framework)
+    for fw in sorted(detected_frameworks)[:10]:
+        findings.append(IntelligenceFinding(
+            entity=fw,
+            type="Framework Detection: Source Code",
+            source="PublicWWW (HTML)",
+            confidence="Medium",
+            color="blue",
+            threat_level="Informational",
+            tags=["framework", fw.lower().replace(" ", "-")]
+        ))
+
+    return findings
+
+
 async def crawl(target: str, client: httpx.AsyncClient):
     findings = []
     domain = target.strip().lower()
@@ -318,6 +459,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         tasks.append(check_inline_exposed_secrets(html, domain))
         tasks.append(check_email_exposure(html, domain))
         tasks.append(check_comment_references(html, domain))
+        tasks.append(detect_technology_from_source(html, domain))
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
     for result in results:
@@ -327,10 +469,10 @@ async def crawl(target: str, client: httpx.AsyncClient):
     third_party = sum(1 for f in findings if "Third-Party" in f.type or "Integration" in f.type)
     analytics = sum(1 for f in findings if "Analytics" in f.type)
     secrets = sum(1 for f in findings if "Secret" in f.type or "Key" in f.type)
-    tech = sum(1 for f in findings if "Technology" in f.type)
+    tech = sum(1 for f in findings if "Technology" in f.type or "Framework" in f.type)
 
     findings.append(IntelligenceFinding(
-        entity=f"Public Code Search: {third_party} integrations, {analytics} analytics, {secrets} secrets, {tech} tech",
+        entity=f"Public Code Search: {third_party} integrations, {analytics} analytics, {secrets} secrets, {tech} tech/framework",
         type="PublicWWW Summary",
         source="PublicWWW",
         confidence="Medium",

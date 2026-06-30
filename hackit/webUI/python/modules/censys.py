@@ -10,18 +10,21 @@ CENSYS_V2_HOSTS = "https://search.censys.io/api/v2/hosts"
 CENSYS_V2_CERTS = "https://search.censys.io/api/v2/certificates/search"
 CENSYS_V2_SUBDOMAINS = "https://search.censys.io/api/v2/domains"
 CENSYS_V1_CERTS = "https://www.censys.io/api/v1/view/certificates"
+CENSYS_V2_SEARCH = "https://search.censys.io/api/v2"
 
 RISK_PORT_CATEGORIES = {
     "web": {80, 443, 8080, 8443, 3000, 5000, 8000, 8888},
-    "database": {3306, 5432, 27017, 6379, 1433, 1521, 9042, 5984},
-    "remote_access": {22, 23, 3389, 5900, 5800, 2222},
+    "database": {3306, 5432, 27017, 6379, 1433, 1521, 9042, 5984, 9200, 9300},
+    "remote_access": {22, 23, 3389, 5900, 5800, 2222, 3390},
     "mail": {25, 110, 143, 465, 587, 993, 995},
-    "file_sharing": {21, 445, 139, 2049, 111},
-    "management": {2082, 2083, 2086, 2087, 9090, 10000, 8834},
+    "file_sharing": {21, 445, 139, 2049, 111, 2049},
+    "management": {2082, 2083, 2086, 2087, 9090, 10000, 8834, 4848, 9443},
+    "message_queue": {5672, 61616, 1883, 8883, 15672},
+    "container": {2375, 2376, 8443, 10250, 10255},
 }
 
 TLS_WEAK_VERSIONS = {"SSLv2", "SSLv3", "TLSv1.0", "TLSv1.1"}
-WEAK_CIPHERS = {"RC4", "DES", "3DES", "MD5", "EXPORT", "NULL", "ANON", "aNULL", "eNULL"}
+WEAK_CIPHERS = {"RC4", "DES", "3DES", "MD5", "EXPORT", "NULL", "ANON", "aNULL", "eNULL", "DES-CBC3", "RC4-MD5"}
 
 async def query_hosts(target: str, client: httpx.AsyncClient) -> List[dict]:
     try:
@@ -62,15 +65,35 @@ async def query_subdomains(target: str, client: httpx.AsyncClient) -> List[dict]
     except:
         return []
 
+async def query_host_search(target: str, client: httpx.AsyncClient) -> List[dict]:
+    results = []
+    try:
+        resp = await client.get(
+            f"{CENSYS_V2_HOSTS}/search",
+            params={"q": target, "per_page": 20},
+            timeout=15.0,
+            headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            results.extend(data.get("result", {}).get("hits", []))
+    except:
+        pass
+    return results
+
 def classify_port_risk(port: int, service: str) -> tuple:
     for category, ports in RISK_PORT_CATEGORIES.items():
         if port in ports:
             if category == "database":
-                return "High Risk" if port in {3306, 5432, 27017, 6379} else "Elevated Risk"
+                return "High Risk" if port in {3306, 5432, 27017, 6379, 9200, 9300} else "Elevated Risk"
             if category == "remote_access":
                 return "Elevated Risk" if port in {22, 443} else "High Risk"
             if category == "management":
                 return "Elevated Risk"
+            if category == "message_queue":
+                return "Elevated Risk"
+            if category == "container":
+                return "High Risk"
             return "Standard Target"
     return "Low Profile"
 
@@ -154,7 +177,6 @@ def extract_services(ip: str, result: dict) -> List[dict]:
         software = svc.get("software", [])
         cert_info = svc.get("certificate", {})
         http = svc.get("http", {})
-        ssh = svc.get("ssh", {})
 
         entity_str = f"{ip}:{port} ({service_name})" if service_name else f"{ip}:{port}"
         try:
@@ -391,6 +413,30 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                 findings.append(make_finding(fingerprint[:64], "Censys Cert Fingerprint", "Censys",
                     confidence="High", color="slate", threat_level="Informational"))
 
+            # Certificate validity period
+            validity = hit.get("validity", {})
+            if isinstance(validity, dict):
+                valid_from = validity.get("start", "")
+                valid_to = validity.get("end", "")
+                if valid_from and valid_to:
+                    findings.append(make_finding(f"Valid: {valid_from[:10]} to {valid_to[:10]}", "Censys Cert Validity Period", "Censys",
+                        confidence="High", color="emerald", threat_level="Informational",
+                        raw_data=f"From: {valid_from}, To: {valid_to}"))
+
+            # Signature algorithm
+            sig_algo = hit.get("signature_algorithm", {}).get("name", hit.get("sig_alg", ""))
+            if sig_algo:
+                findings.append(make_finding(f"Sig Algorithm: {sig_algo}", "Censys Cert Signature Algorithm", "Censys",
+                    confidence="High", color="slate", threat_level="Informational"))
+
+            # Key type
+            key_algo = hit.get("key_algorithm", {}).get("name", "")
+            key_size = hit.get("key_size", hit.get("key_length", 0))
+            if key_algo:
+                key_str = f"{key_algo} {key_size}" if key_size else key_algo
+                findings.append(make_finding(key_str, "Censys Cert Key Algorithm", "Censys",
+                    confidence="High", color="slate", threat_level="Informational"))
+
         if seen_cns:
             findings.append(make_finding(f"{len(seen_cns)} unique names from Censys certs",
                 "Censys Cert Summary", "Censys",
@@ -422,7 +468,16 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                 confidence="High", color="purple", threat_level="Informational",
                 tags=["subdomain-summary"]))
 
-    if not host_results and not cert_hits and not subdomain_hits:
+    # Additional host search
+    host_search_hits = await query_host_search(normalized, client)
+    for hit in host_search_hits[:10]:
+        hit_ip = hit.get("ip", "")
+        if hit_ip:
+            findings.append(make_finding(f"{hit_ip}", "Censys Host Search Result", "Censys",
+                confidence="Medium", color="slate", threat_level="Informational",
+                resolution=normalized, tags=["host-search"]))
+
+    if not host_results and not cert_hits and not subdomain_hits and not host_search_hits:
         findings.append(make_finding(normalized, "Censys No Results", "Censys",
             confidence="Low", color="slate", threat_level="Informational",
             status="Not Found",

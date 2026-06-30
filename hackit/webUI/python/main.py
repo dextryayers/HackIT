@@ -841,7 +841,7 @@ async def subdomains_alias(domain: str = Query(...)):
 #  STATIC FILE SERVING
 # ─────────────────────────────────────────────
 
-dist_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "dist")
+dist_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "dist_new")
 ASTRO_DEV_URL = "http://localhost:4321"
 
 

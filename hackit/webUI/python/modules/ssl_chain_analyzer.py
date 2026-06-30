@@ -21,7 +21,8 @@ TLS_VERSION_CODES = {
 
 WEAK_CIPHERS = [
     "RC4", "DES", "3DES", "MD5", "EXPORT", "NULL", "anon",
-    "IDEA", "SEED", "CAMELLIA",
+    "IDEA", "SEED", "CAMELLIA", "TLS_RSA", "TLS_DH_anon",
+    "TLS_ECDH_anon", "TLS_PSK", "TLS_SRP",
 ]
 
 HEARTBLEED_PAYLOAD = b"\x18\x03\x02\x00\x03\x01\x40\x00"
@@ -29,11 +30,65 @@ HEARTBLEED_PAYLOAD = b"\x18\x03\x02\x00\x03\x01\x40\x00"
 CRL_DIST_POINT_REGEX = rb"https?://[^\x00]*\.crl"
 OCSP_REGEX = rb"https?://[^\x00]*ocsp[^\x00]*"
 
+KNOWN_CAS = {
+    "Let's Encrypt": ["Let's Encrypt", "R3", "ISRG Root X1", "ISRG Root X2"],
+    "DigiCert": ["DigiCert", "DigiCert Global Root", "DigiCert High Assurance"],
+    "Sectigo": ["Sectigo", "COMODO", "AAA Certificate Services", "USERTrust"],
+    "GlobalSign": ["GlobalSign", "GlobalSign Root", "AlphaSSL"],
+    "GoDaddy": ["GoDaddy", "Go Daddy", "GoDaddy Secure"],
+    "Amazon": ["Amazon", "Amazon Root CA"],
+    "Google Trust": ["Google Trust Services", "GTS"],
+    "Cloudflare": ["Cloudflare"],
+    "Microsoft": ["Microsoft Root"],
+    "Verizon": ["Verizon"],
+    "Entrust": ["Entrust", "Entrust Root"],
+    "GeoTrust": ["GeoTrust", "GeoTrust Global"],
+    "Thawte": ["Thawte"],
+    "RapidSSL": ["RapidSSL"],
+    "Symantec": ["Symantec"],
+    "VeriSign": ["VeriSign"],
+    "Certum": ["Certum", "Certum Trusted"],
+    "IdenTrust": ["IdenTrust", "DST Root"],
+    "Comodo": ["Comodo", "Comodo CA", "Comodo RSA"],
+    "Network Solutions": ["Network Solutions"],
+    "BuyPass": ["BuyPass", "Buypass"],
+    "ZeroSSL": ["ZeroSSL"],
+    "cPanel": ["cPanel"],
+    "SSL.com": ["SSL.com", "SSL Corp"],
+    "Trustwave": ["Trustwave"],
+    "Secom": ["SECOM", "Security Communication"],
+    "Digicert": ["DigiCert"],
+    "QuoVadis": ["QuoVadis"],
+    "SwissSign": ["SwissSign"],
+    "Actalis": ["Actalis"],
+    "Telia": ["Telia"],
+    "TurkTrust": ["TurkTrust"],
+    "CFCA": ["CFCA"],
+    "WISeKey": ["WISeKey"],
+    "StartCom": ["StartCom", "StartSSL"],
+    "WoSign": ["WoSign"],
+    "Let's Encrypt": ["Let's Encrypt"],
+}
+
+SIGNATURE_ALGORITHM_SCORES = {
+    "sha256": "Good",
+    "sha384": "Good",
+    "sha512": "Good",
+    "sha1": "Weak",
+    "sha224": "Acceptable",
+    "md5": "Critical",
+    "md4": "Critical",
+    "md2": "Critical",
+    "ecdsa": "Good",
+    "rsa": "Good",
+    "dsa": "Weak",
+}
+
 def get_cert_info(cert, label="Subject"):
     if not cert:
         return {}
     info = {}
-    for attr in ["commonName", "organizationName", "countryName", "stateOrProvinceName", "localityName", "organizationalUnitName", "emailAddress", "serialNumber"]:
+    for attr in ["commonName", "organizationName", "countryName", "stateOrProvinceName", "localityName", "organizationalUnitName", "emailAddress", "serialNumber", "postalCode", "streetAddress"]:
         try:
             val = getattr(cert.subject if label == "Subject" else cert.issuer, attr, None)
             if val:
@@ -41,6 +96,17 @@ def get_cert_info(cert, label="Subject"):
         except Exception:
             pass
     return info
+
+def detect_known_ca(cert_dict):
+    issuer_info = cert_dict.get("issuer", {})
+    org = issuer_info.get("organizationName", "")
+    cn = issuer_info.get("commonName", "")
+    combined = f"{org} {cn}"
+    for ca_name, identifiers in KNOWN_CAS.items():
+        for ident in identifiers:
+            if ident.lower() in combined.lower():
+                return ca_name
+    return "Unknown/Private CA"
 
 def cert_to_dict(cert):
     result = {}
@@ -83,6 +149,10 @@ def cert_to_dict(cert):
                     result["ext_key_usage"] = str(e.value)
                 elif "basicConstraints" in oid_name:
                     result["basic_constraints"] = str(e.value)
+                    if "CA" in str(e.value):
+                        result["is_ca"] = True
+                    if "pathLenConstraint" in str(e.value):
+                        result["path_length_constraint"] = str(e.value)
                 elif "certificatePolicies" in oid_name:
                     result["cert_policies"] = str(e.value)
                 elif "authorityKeyIdentifier" in oid_name:
@@ -95,6 +165,14 @@ def cert_to_dict(cert):
                     aia = str(e.value)
                     result["ocsp_responders"] = aia
                     result["ca_issuers"] = aia
+                elif "nameConstraints" in oid_name:
+                    result["name_constraints"] = str(e.value)
+                elif "policyConstraints" in oid_name:
+                    result["policy_constraints"] = str(e.value)
+                elif "inhibitAnyPolicy" in oid_name:
+                    result["inhibit_any_policy"] = str(e.value)
+                elif "freshestCRL" in oid_name:
+                    result["freshest_crl"] = str(e.value)
         except Exception:
             pass
 
@@ -107,6 +185,20 @@ def cert_to_dict(cert):
 
         try:
             result["public_key_algorithm"] = str(getattr(cert, "public_key_algorithm", ""))
+        except Exception:
+            pass
+
+        try:
+            result["public_key_bits"] = cert.public_key().key_size if hasattr(cert, "public_key") else 0
+        except Exception:
+            pass
+
+        try:
+            result["is_self_signed"] = False
+            sub = result.get("subject", {}).get("commonName", "")
+            iss = result.get("issuer", {}).get("commonName", "")
+            if sub and iss and sub == iss:
+                result["is_self_signed"] = True
         except Exception:
             pass
     except Exception:
@@ -168,6 +260,59 @@ async def test_heartbleed(host):
     except Exception:
         return False, ""
 
+async def check_poodle(host):
+    try:
+        supported, _ = await check_tls_version(host, "SSLv3", (0x03, 0x00))
+        return supported
+    except Exception:
+        return False
+
+async def check_freak(host):
+    try:
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        ctx.set_ciphers("EXP")
+        loop = asyncio.get_event_loop()
+        _, writer = await asyncio.wait_for(
+            loop.run_in_executor(None, lambda: socket.create_connection((host, 443), timeout=3.0)),
+            timeout=3.0
+        )
+        try:
+            ssock = ctx.wrap_socket(writer, server_hostname=host)
+            ssock.do_handshake()
+            ssock.close()
+            writer.close()
+            return True
+        except Exception:
+            writer.close()
+            return False
+    except Exception:
+        return False
+
+async def check_robot(host):
+    try:
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        ctx.set_ciphers("RSA")
+        loop = asyncio.get_event_loop()
+        _, writer = await asyncio.wait_for(
+            loop.run_in_executor(None, lambda: socket.create_connection((host, 443), timeout=3.0)),
+            timeout=3.0
+        )
+        try:
+            ssock = ctx.wrap_socket(writer, server_hostname=host)
+            ssock.do_handshake()
+            ssock.close()
+            writer.close()
+            return True
+        except Exception:
+            writer.close()
+            return False
+    except Exception:
+        return False
+
 async def crawl(target: str, client: httpx.AsyncClient):
     findings = []
     host = target.strip().lower()
@@ -221,6 +366,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             else:
                 cert_dicts.append(cert_to_dict(c))
 
+        chain_issues = []
         for i, cd in enumerate(cert_dicts):
             label = "Leaf" if i == 0 else ("Intermediate" if i < len(cert_dicts) - 1 else "Root")
             issuer_info = cd.get("issuer", {})
@@ -229,17 +375,76 @@ async def crawl(target: str, client: httpx.AsyncClient):
             subject_cn = subject_info.get("commonName", "Unknown")
             org = subject_info.get("organizationName", "")
             days = cd.get("days_remaining", 0)
+            sig_algo = cd.get("signature_algorithm", "unknown")
+            key_bits = cd.get("public_key_bits", 0)
+            is_self_signed = cd.get("is_self_signed", False)
+            is_ca = cd.get("is_ca", False)
+
+            known_ca = detect_known_ca(cd)
+            sig_strength = SIGNATURE_ALGORITHM_SCORES.get(sig_algo, "Unknown")
+
+            color = "emerald" if days > 30 else ("orange" if days > 0 else "red")
+            threat = "Informational" if days > 30 else ("Elevated Risk" if days > 0 else "High Risk")
 
             findings.append(IntelligenceFinding(
                 entity=f"[{label}] {subject_cn} (issued by {issuer_cn})",
                 type=f"SSL Certificate - {label}",
                 source="SSLChainAnalyzer",
                 confidence="High",
-                color="emerald" if days > 30 else ("orange" if days > 0 else "red"),
-                threat_level="Informational" if days > 30 else ("Elevated Risk" if days > 0 else "High Risk"),
-                raw_data=f"Subject: {subject_info} | Issuer: {issuer_info} | Serial: {cd.get('serial_number', '')} | Days remaining: {days}",
+                color=color,
+                threat_level=threat,
+                raw_data=f"Subject: {subject_info} | Issuer: {issuer_info} | Serial: {cd.get('serial_number', '')} | Days remaining: {days} | CA: {known_ca}",
                 tags=["ssl", label.lower(), "certificate"]
             ))
+
+            if known_ca and known_ca != "Unknown/Private CA":
+                findings.append(IntelligenceFinding(
+                    entity=f"CA: {known_ca} ({issuer_cn})",
+                    type=f"SSL Certificate Authority - {label}",
+                    source="SSLChainAnalyzer",
+                    confidence="High",
+                    color="blue",
+                    threat_level="Informational",
+                    raw_data=f"Issuer org: {issuer_info.get('organizationName', '')} | CA: {known_ca}",
+                    tags=["ssl", "ca", known_ca.lower().replace(" ", "-").replace("'", "")]
+                ))
+
+            if is_self_signed and label == "Root":
+                findings.append(IntelligenceFinding(
+                    entity=f"Self-signed root certificate: {subject_cn}",
+                    type="SSL Self-Signed Certificate",
+                    source="SSLChainAnalyzer",
+                    confidence="High",
+                    color="orange",
+                    threat_level="Elevated Risk",
+                    raw_data=f"Root certificate is self-signed: {subject_cn}",
+                    tags=["ssl", "self-signed", label.lower()]
+                ))
+
+            if key_bits > 0:
+                is_weak_key = key_bits < 2048
+                findings.append(IntelligenceFinding(
+                    entity=f"{label} key: {key_bits}-bit {cd.get('public_key_algorithm', '')}",
+                    type=f"SSL Key Strength - {label}",
+                    source="SSLChainAnalyzer",
+                    confidence="High",
+                    color="red" if is_weak_key else "emerald",
+                    threat_level="High Risk" if is_weak_key else "Informational",
+                    raw_data=f"Algorithm: {cd.get('public_key_algorithm', 'unknown')} | Bits: {key_bits}",
+                    tags=["ssl", label.lower(), "key-strength"]
+                ))
+
+            if sig_strength == "Weak" or sig_strength == "Critical":
+                findings.append(IntelligenceFinding(
+                    entity=f"{label} uses weak signature algorithm: {sig_algo}",
+                    type=f"SSL Weak Signature Algorithm - {label}",
+                    source="SSLChainAnalyzer",
+                    confidence="High",
+                    color="red",
+                    threat_level="High Risk",
+                    raw_data=f"Signature algorithm: {sig_algo} ({sig_strength})",
+                    tags=["ssl", "weak-signature", label.lower()]
+                ))
 
             if cd.get("key_usage"):
                 findings.append(IntelligenceFinding(
@@ -254,14 +459,51 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 ))
 
             if cd.get("ext_key_usage"):
+                ext_ku = cd["ext_key_usage"]
+                has_server_auth = "serverAuth" in ext_ku
+                has_client_auth = "clientAuth" in ext_ku
                 findings.append(IntelligenceFinding(
-                    entity=f"Extended Key Usage: {cd['ext_key_usage'][:200]}",
+                    entity=f"Extended Key Usage: {ext_ku[:200]}",
                     type=f"SSL Extended Key Usage - {label}",
                     source="SSLChainAnalyzer",
                     confidence="High",
                     color="slate",
                     threat_level="Informational",
+                    raw_data=ext_ku,
                     tags=["ssl", "ext-key-usage"]
+                ))
+                if label == "Leaf" and not has_server_auth:
+                    findings.append(IntelligenceFinding(
+                        entity=f"Leaf cert missing serverAuth EKU",
+                        type="SSL Missing Server Authentication",
+                        source="SSLChainAnalyzer",
+                        confidence="High",
+                        color="red",
+                        threat_level="High Risk",
+                        raw_data=f"EKU: {ext_ku}",
+                        tags=["ssl", "misconfiguration"]
+                    ))
+
+            if cd.get("path_length_constraint"):
+                findings.append(IntelligenceFinding(
+                    entity=f"Path Length Constraint: {cd['path_length_constraint'][:100]}",
+                    type=f"SSL Path Length Constraint - {label}",
+                    source="SSLChainAnalyzer",
+                    confidence="High",
+                    color="slate",
+                    threat_level="Informational",
+                    tags=["ssl", "path-length"]
+                ))
+
+            if cd.get("basic_constraints") and is_ca and label in ("Leaf",):
+                findings.append(IntelligenceFinding(
+                    entity=f"Leaf certificate has CA flag set: True",
+                    type=f"SSL Misconfiguration - CA flag on leaf",
+                    source="SSLChainAnalyzer",
+                    confidence="High",
+                    color="red",
+                    threat_level="Critical",
+                    tags=["ssl", "misconfiguration"]
                 ))
 
             if cd.get("crl_endpoints"):
@@ -286,8 +528,41 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     tags=["ssl", "ocsp"]
                 ))
 
+            if cd.get("freshest_crl"):
+                findings.append(IntelligenceFinding(
+                    entity=f"Freshest CRL: {cd['freshest_crl'][:200]}",
+                    type=f"SSL Freshest CRL - {label}",
+                    source="SSLChainAnalyzer",
+                    confidence="High",
+                    color="slate",
+                    threat_level="Informational",
+                    tags=["ssl", "freshest-crl"]
+                ))
+
+            if cd.get("name_constraints"):
+                findings.append(IntelligenceFinding(
+                    entity=f"Name Constraints: {cd['name_constraints'][:200]}",
+                    type=f"SSL Name Constraints - {label}",
+                    source="SSLChainAnalyzer",
+                    confidence="High",
+                    color="slate",
+                    threat_level="Informational",
+                    tags=["ssl", "name-constraints"]
+                ))
+
+            if cd.get("cert_policies"):
+                findings.append(IntelligenceFinding(
+                    entity=f"Cert Policies: {cd['cert_policies'][:200]}",
+                    type=f"SSL Certificate Policies - {label}",
+                    source="SSLChainAnalyzer",
+                    confidence="High",
+                    color="slate",
+                    threat_level="Informational",
+                    tags=["ssl", "cert-policies"]
+                ))
+
             if cd.get("subject_alt_names"):
-                for san in cd["subject_alt_names"][:10]:
+                for san in cd["subject_alt_names"][:15]:
                     findings.append(IntelligenceFinding(
                         entity=san,
                         type=f"SSL SAN - {label}",
@@ -297,6 +572,19 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         threat_level="Informational",
                         tags=["ssl", "san"]
                     ))
+                wildcard_sans = [san for san in cd["subject_alt_names"] if san.startswith("*.")]
+                if wildcard_sans:
+                    for ws in wildcard_sans[:5]:
+                        findings.append(IntelligenceFinding(
+                            entity=f"Wildcard SAN: {ws}",
+                            type=f"SSL Wildcard SAN - {label}",
+                            source="SSLChainAnalyzer",
+                            confidence="High",
+                            color="orange",
+                            threat_level="Elevated Risk",
+                            raw_data=f"Wildcard certificate detected: {ws} - broad subdomain coverage",
+                            tags=["ssl", "wildcard", "san"]
+                        ))
 
         cipher_info = ssock.cipher()
         if cipher_info:
@@ -312,6 +600,16 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 raw_data=f"Cipher: {cipher_name} | Version: {tls_ver} | Bits: {bits}",
                 tags=["ssl", "cipher"]
             ))
+            if is_weak:
+                findings.append(IntelligenceFinding(
+                    entity=f"Weak cipher negotiated: {cipher_name}",
+                    type="SSL Weak Cipher Warning",
+                    source="SSLChainAnalyzer",
+                    confidence="High",
+                    color="red",
+                    threat_level="High Risk",
+                    tags=["ssl", "weak-cipher"]
+                ))
 
         for ver_name in ["SSLv3", "TLS 1.0", "TLS 1.1", "TLS 1.2", "TLS 1.3"]:
             supported, cipher = await check_tls_version(host, ver_name, TLS_VERSION_CODES.get(ver_name, (0, 0)))
@@ -327,6 +625,16 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     raw_data=f"Version: {ver_name} | Cipher: {cipher}",
                     tags=["ssl", "tls-version"]
                 ))
+                if is_weak_ver:
+                    findings.append(IntelligenceFinding(
+                        entity=f"Deprecated TLS version active: {ver_name}",
+                        type="SSL Deprecated Version Warning",
+                        source="SSLChainAnalyzer",
+                        confidence="High",
+                        color="red",
+                        threat_level="High Risk",
+                        tags=["ssl", "deprecated-version"]
+                    ))
 
         heartbleed_vuln, hb_detail = await test_heartbleed(host)
         if heartbleed_vuln:
@@ -341,6 +649,42 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 tags=["ssl", "vulnerability", "heartbleed"]
             ))
 
+        poodle_vuln = await check_poodle(host)
+        if poodle_vuln:
+            findings.append(IntelligenceFinding(
+                entity="POODLE vulnerability (CVE-2014-3566)",
+                type="SSL Vulnerability - POODLE",
+                source="SSLChainAnalyzer",
+                confidence="High",
+                color="red",
+                threat_level="High Risk",
+                tags=["ssl", "vulnerability", "poodle"]
+            ))
+
+        freak_vuln = await check_freak(host)
+        if freak_vuln:
+            findings.append(IntelligenceFinding(
+                entity="FREAK attack vulnerability (CVE-2015-0204)",
+                type="SSL Vulnerability - FREAK",
+                source="SSLChainAnalyzer",
+                confidence="High",
+                color="red",
+                threat_level="High Risk",
+                tags=["ssl", "vulnerability", "freak"]
+            ))
+
+        robot_vuln = await check_robot(host)
+        if robot_vuln:
+            findings.append(IntelligenceFinding(
+                entity="ROBOT attack vulnerability (CVE-2017-17382)",
+                type="SSL Vulnerability - ROBOT",
+                source="SSLChainAnalyzer",
+                confidence="High",
+                color="red",
+                threat_level="High Risk",
+                tags=["ssl", "vulnerability", "robot"]
+            ))
+
         ssock.close()
         sock.close()
 
@@ -353,6 +697,17 @@ async def crawl(target: str, client: httpx.AsyncClient):
             threat_level="Informational",
             raw_data=f"Total certificates in chain: {len(cert_dicts)}",
             tags=["ssl", "summary"]
+        ))
+
+        findings.append(IntelligenceFinding(
+            entity=f"TLS versions: {sum(1 for f in findings if f.type == 'SSL/TLS Version')} supported | Ciphers: {sum(1 for f in findings if f.type == 'SSL Cipher - Negotiated')} negotiated",
+            type="SSL Security Posture Summary",
+            source="SSLChainAnalyzer",
+            confidence="High",
+            color="orange" if any(f.color == "red" for f in findings) else "emerald",
+            threat_level="High Risk" if any(f.threat_level == "Critical" or f.threat_level == "High Risk" for f in findings) else "Informational",
+            raw_data=f"Chain depth: {len(cert_dicts)} | Heartbleed: {'Vulnerable' if heartbleed_vuln else 'Not vulnerable'} | POODLE: {'Vulnerable' if poodle_vuln else 'Not vulnerable'}",
+            tags=["ssl", "summary", "security"]
         ))
 
     except Exception as e:

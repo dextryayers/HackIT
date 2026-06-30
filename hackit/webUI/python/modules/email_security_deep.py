@@ -2,6 +2,8 @@ import httpx
 import asyncio
 import re
 import dns.resolver
+import ssl
+import socket
 from models import IntelligenceFinding
 from urllib.parse import urlparse
 
@@ -10,7 +12,33 @@ COMMON_DKIM_SELECTORS = [
     "s1", "s2", "smtp", "email", "mailer", "pm", "protonmail", "zoho",
     "outlook", "office365", "microsoft", "mandrill", "sendgrid", "sparkpost",
     "mailgun", "postmark", "amazonses", "ses", "dkim1", "dkim2", "key1",
-    "2023", "2024", "2025", "2026", "ed25519", "rsa", "x", "z", "mta"
+    "2023", "2024", "2025", "2026", "ed25519", "rsa", "x", "z", "mta",
+    "dkim3", "dkim4", "dkim5", "mx1", "mx2", "mailer1", "mailer2",
+    "emails", "mailing", "mailinglist", "newsletter", "transactional",
+    "bounce", "bounces", "feedback", "noreply", "no-reply",
+    "selector", "smtp01", "smtp02", "exch", "pod", "pod1", "pod2",
+    "cluster", "node1", "node2", "node3", "hk1", "hk2", "hk3",
+    "eu1", "eu2", "eu3", "us1", "us2", "us3", "ap1", "ap2",
+    "dk", "dk01", "dk02", "key", "key2", "key3", "pub", "pubkey",
+    "rsa2048", "rsa1024", "256", "512", "1024", "2048",
+    "mta1", "mta2", "mta3", "mta4", "mta5",
+    "mail1", "mail2", "mail3", "em1", "em2", "em3",
+    "sg", "send", "mailchimp", "mandrillapp", "spf",
+    "dkim._domainkey", "selector._domainkey", "sig1", "sig2",
+    "dkim2010", "dkim2011", "dkim2012", "dkim2013", "dkim2014",
+    "dkim2015", "dkim2016", "dkim2017", "dkim2018", "dkim2019",
+    "dkim2020", "dkim2021", "dkim2022", "dkim2023", "dkim2024",
+    "dkim2025", "dkim2026", "dkim01", "dkim02", "dkim03",
+    "dkim-2023", "dkim-2024", "dkim-2025", "dkim-2026",
+    "mxhost", "smtp-relay", "relay", "edge", "border",
+    "inbound", "outbound", "transaction", "bulk", "marketing",
+    "ml", "list", "list1", "d1", "d2", "d3",
+    "dkim_prod", "dkim_staging", "prod", "stage",
+    "email-security", "security", "auth", "auth1",
+    "c1", "c2", "c3", "e1", "e2", "f1", "f2",
+    "g1", "g2", "h1", "h2", "selector01", "selector02",
+    "selector-a", "selector-b", "selector-c", "selector-d",
+    "smtp-auth", "dkim-relay", "mxs", "mxb", "mxp",
 ]
 
 DKIM_KEY_PATTERN = re.compile(r"p\s*=\s*([A-Za-z0-9+/=]+)")
@@ -76,6 +104,115 @@ def estimate_key_strength(dkim_txt: str):
         else:
             return ("Key too short or unknown", "Low", "red")
 
+def _check_mx_smtp_sync(mx_host):
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(8)
+        sock.connect((mx_host, 25))
+        banner = b""
+        try:
+            banner = sock.recv(4096)
+        except Exception:
+            sock.close()
+            return {"banner": None, "starttls": False, "tls_version": None, "ehlo_caps": [], "ehlo_raw": None, "error": "No banner"}
+        banner_str = banner.decode("utf-8", errors="ignore").strip()
+        sock.send(b"EHLO deepcheck.local\r\n")
+        ehlo_data = b""
+        while True:
+            try:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    break
+                ehlo_data += chunk
+                text = ehlo_data.decode("utf-8", errors="ignore")
+                if "\r\n" in text:
+                    lines = text.split("\r\n")
+                    for line in lines:
+                        clean = line.strip()
+                        if len(clean) >= 4 and clean[3:4] == " " and clean[:3].isdigit():
+                            ehlo_data = text.encode("utf-8", errors="ignore")
+                            break
+                    else:
+                        continue
+                    break
+            except Exception:
+                break
+        ehlo_text = ehlo_data.decode("utf-8", errors="ignore")
+        caps = []
+        for line in ehlo_text.split("\r\n"):
+            line = line.strip()
+            if line.startswith("250-"):
+                caps.append(line[4:].strip())
+            elif line.startswith("250 "):
+                caps.append(line[4:].strip())
+        has_starttls = any(c.upper() == "STARTTLS" for c in caps) or any("STARTTLS" in c.upper() for c in caps)
+        auth_mechs = []
+        tls_opts = []
+        for c in caps:
+            if c.upper().startswith("AUTH "):
+                auth_mechs = c[5:].strip().split()
+            elif c.upper().startswith("AUTH="):
+                auth_mechs = c[5:].strip().split()
+        for c in caps:
+            if c.upper().startswith("TLS") or c.upper() == "STARTTLS" or "REQUIRETLS" in c.upper():
+                tls_opts.append(c)
+        extensions = {}
+        for c in caps:
+            if c.upper().startswith("SIZE "):
+                try:
+                    extensions["SIZE"] = int(c[5:].strip())
+                except Exception:
+                    extensions["SIZE"] = c[5:].strip()
+            elif c.upper() in ("PIPELINING", "8BITMIME", "SMTPUTF8", "DSN", "CHUNKING", "BINARYMIME", "ENHANCEDSTATUSCODES", "VRFY", "EXPN"):
+                extensions[c.upper()] = True
+        tls_version = None
+        sock2 = None
+        if has_starttls and banner.startswith(b"2"):
+            try:
+                sock.send(b"STARTTLS\r\n")
+                resp = b""
+                try:
+                    resp = sock.recv(4096)
+                except Exception:
+                    pass
+                if resp.startswith(b"220"):
+                    ctx = ssl.create_default_context()
+                    ctx.check_hostname = False
+                    ctx.verify_mode = ssl.CERT_NONE
+                    try:
+                        sock2 = ctx.wrap_socket(sock, server_hostname=mx_host, do_handshake_on_connect=True)
+                        tls_version = sock2.version()
+                    except Exception as e:
+                        tls_version = f"TLS fail: {str(e)[:30]}"
+                else:
+                    if resp:
+                        tls_version = resp.decode("utf-8", errors="ignore").strip()[:80]
+            except Exception as e:
+                tls_version = f"Error: {str(e)[:30]}"
+        if sock2 is not None:
+            try:
+                sock2.close()
+            except Exception:
+                pass
+        else:
+            try:
+                sock.close()
+            except Exception:
+                pass
+        return {
+            "banner": banner_str,
+            "starttls": has_starttls,
+            "tls_version": tls_version,
+            "ehlo_caps": caps,
+            "ehlo_raw": ehlo_text[:2000],
+            "auth_mechs": auth_mechs,
+            "tls_opts": tls_opts,
+            "extensions": extensions,
+            "error": None
+        }
+    except Exception as e:
+        return {"banner": None, "starttls": False, "tls_version": None, "ehlo_caps": [], "ehlo_raw": None, "auth_mechs": [], "tls_opts": [], "extensions": {}, "error": str(e)[:80]}
+
 async def crawl(target: str, client: httpx.AsyncClient):
     findings = []
     domain = target.strip().lower()
@@ -133,6 +270,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 tags=["email-security", "mx"]
             ))
     except Exception as e:
+        mx_hosts = []
         findings.append(IntelligenceFinding(
             entity=f"No MX records: {str(e)[:60]}",
             type="Email Security - MX Error",
@@ -143,6 +281,151 @@ async def crawl(target: str, client: httpx.AsyncClient):
             raw_data=f"Cannot receive emails at {domain}",
             tags=["email-security", "mx"]
         ))
+
+    if mx_hosts:
+        for mx_prio, mx_host in mx_hosts:
+            try:
+                tlsa_records = await loop.run_in_executor(
+                    None, lambda h=mx_host: dns.resolver.resolve(f"_25._tcp.{h}", 'TLSA')
+                )
+                tlsa_count = 0
+                for r in tlsa_records:
+                    tlsa_count += 1
+                    tlsa_str = str(r)
+                    findings.append(IntelligenceFinding(
+                        entity=f"DANE TLSA for {mx_host}: {tlsa_str[:200]}",
+                        type="Email Security - DANE/TLSA Record",
+                        source="EmailSecurityDeep",
+                        confidence="High",
+                        color="emerald",
+                        raw_data=tlsa_str[:2000],
+                        tags=["email-security", "dane", "tlsa"]
+                    ))
+                if tlsa_count > 0:
+                    findings.append(IntelligenceFinding(
+                        entity=f"{mx_host}: {tlsa_count} TLSA record(s)",
+                        type="Email Security - DANE/TLSA Summary",
+                        source="EmailSecurityDeep",
+                        confidence="High",
+                        color="slate",
+                        tags=["email-security", "dane", "tlsa"]
+                    ))
+            except dns.resolver.NoAnswer:
+                pass
+            except dns.resolver.NXDOMAIN:
+                pass
+            except Exception:
+                pass
+
+        for mx_prio, mx_host in mx_hosts:
+            smtp_result = await loop.run_in_executor(None, _check_mx_smtp_sync, mx_host)
+            if smtp_result.get("error") and not smtp_result.get("banner"):
+                findings.append(IntelligenceFinding(
+                    entity=f"SMTP {mx_host}:25 - {smtp_result['error']}",
+                    type="Email Security - SMTP Connection Error",
+                    source="EmailSecurityDeep",
+                    confidence="Medium",
+                    color="orange",
+                    tags=["email-security", "smtp"]
+                ))
+                continue
+            if smtp_result["banner"]:
+                findings.append(IntelligenceFinding(
+                    entity=f"SMTP Banner: {smtp_result['banner'][:150]}",
+                    type=f"Email Security - SMTP Banner ({mx_host})",
+                    source="EmailSecurityDeep",
+                    confidence="High",
+                    color="slate",
+                    raw_data=smtp_result["banner"][:2000],
+                    tags=["email-security", "smtp"]
+                ))
+            if smtp_result["starttls"]:
+                findings.append(IntelligenceFinding(
+                    entity=f"STARTTLS supported on {mx_host}",
+                    type="Email Security - SMTP STARTTLS",
+                    source="EmailSecurityDeep",
+                    confidence="High",
+                    color="emerald",
+                    tags=["email-security", "smtp", "tls"]
+                ))
+            else:
+                findings.append(IntelligenceFinding(
+                    entity=f"No STARTTLS on {mx_host} - traffic sent in plaintext",
+                    type="Email Security - SMTP No TLS",
+                    source="EmailSecurityDeep",
+                    confidence="High",
+                    color="red",
+                    threat_level="High Risk",
+                    tags=["email-security", "smtp", "tls"]
+                ))
+            if smtp_result["tls_version"] and isinstance(smtp_result["tls_version"], str) and smtp_result["tls_version"].startswith("TLS"):
+                findings.append(IntelligenceFinding(
+                    entity=f"TLS version on {mx_host}: {smtp_result['tls_version']}",
+                    type="Email Security - SMTP TLS Version",
+                    source="EmailSecurityDeep",
+                    confidence="High",
+                    color="emerald" if "1.2" in smtp_result["tls_version"] or "1.3" in smtp_result["tls_version"] else "orange",
+                    raw_data=smtp_result["tls_version"],
+                    tags=["email-security", "smtp", "tls"]
+                ))
+            if smtp_result["ehlo_caps"]:
+                auth_str = ", ".join(smtp_result.get("auth_mechs", [])) or "None"
+                findings.append(IntelligenceFinding(
+                    entity=f"EHLO capabilities on {mx_host}: {len(smtp_result['ehlo_caps'])} extensions",
+                    type="Email Security - SMTP EHLO Extensions",
+                    source="EmailSecurityDeep",
+                    confidence="High",
+                    color="slate",
+                    raw_data=f"Auth: {auth_str}\nTLS opts: {', '.join(smtp_result.get('tls_opts', []))}\nExtensions: {', '.join(smtp_result['ehlo_caps'][:20])}",
+                    tags=["email-security", "smtp", "ehlo"]
+                ))
+                if smtp_result.get("auth_mechs"):
+                    findings.append(IntelligenceFinding(
+                        entity=f"SMTP AUTH mechanisms on {mx_host}: {', '.join(smtp_result['auth_mechs'])}",
+                        type="Email Security - SMTP Authentication Mechanisms",
+                        source="EmailSecurityDeep",
+                        confidence="High",
+                        color="slate",
+                        raw_data=", ".join(smtp_result["auth_mechs"]),
+                        tags=["email-security", "smtp", "auth"]
+                    ))
+                if "PIPELINING" in smtp_result.get("extensions", {}):
+                    findings.append(IntelligenceFinding(
+                        entity=f"PIPELINING supported on {mx_host}",
+                        type="Email Security - SMTP Extension",
+                        source="EmailSecurityDeep",
+                        confidence="High",
+                        color="slate",
+                        tags=["email-security", "smtp", "extension"]
+                    ))
+                if "SMTPUTF8" in smtp_result.get("extensions", {}):
+                    findings.append(IntelligenceFinding(
+                        entity=f"SMTPUTF8 supported on {mx_host}",
+                        type="Email Security - SMTP Extension",
+                        source="EmailSecurityDeep",
+                        confidence="High",
+                        color="slate",
+                        tags=["email-security", "smtp", "extension"]
+                    ))
+                if "DSN" in smtp_result.get("extensions", {}):
+                    findings.append(IntelligenceFinding(
+                        entity=f"DSN (Delivery Status Notification) on {mx_host}",
+                        type="Email Security - SMTP Extension",
+                        source="EmailSecurityDeep",
+                        confidence="High",
+                        color="slate",
+                        tags=["email-security", "smtp", "extension"]
+                    ))
+                ext_size = smtp_result.get("extensions", {}).get("SIZE")
+                if ext_size:
+                    findings.append(IntelligenceFinding(
+                        entity=f"Max message size on {mx_host}: {ext_size} bytes",
+                        type="Email Security - SMTP Max Size",
+                        source="EmailSecurityDeep",
+                        confidence="High",
+                        color="slate",
+                        tags=["email-security", "smtp", "extension"]
+                    ))
 
     try:
         txt_records = await loop.run_in_executor(None, lambda: dns.resolver.resolve(domain, 'TXT'))
@@ -238,6 +521,43 @@ async def crawl(target: str, client: httpx.AsyncClient):
                             confidence="High",
                             color="slate"
                         ))
+
+                if re.search(r'[%{}]', txt):
+                    findings.append(IntelligenceFinding(
+                        entity=f"SPF macros detected - complex expansion may cause misconfiguration",
+                        type="Email Security - SPF Macro Expansion",
+                        source="EmailSecurityDeep",
+                        confidence="High",
+                        color="orange",
+                        threat_level="Standard Target",
+                        raw_data=txt[:500],
+                        tags=["email-security", "spf", "macro"]
+                    ))
+
+                dns_lookups = sum(1 for m in spf_mechs if m[0] in ("include", "redirect", "a", "mx", "ptr", "exists"))
+                if dns_lookups > 8:
+                    findings.append(IntelligenceFinding(
+                        entity=f"SPF requires ~{dns_lookups} DNS lookups (limit: 10) - risk of PermError",
+                        type="Email Security - SPF DNS Lookup Limit",
+                        source="EmailSecurityDeep",
+                        confidence="High",
+                        color="orange",
+                        threat_level="Elevated Risk",
+                        raw_data=f"Estimated DNS lookups: {dns_lookups} from {len(spf_mechs)} mechanisms. Per-mechanism breakdown may vary with includes.",
+                        tags=["email-security", "spf", "dns-limit"]
+                    ))
+                elif dns_lookups >= 10:
+                    findings.append(IntelligenceFinding(
+                        entity=f"SPF exceeds recommended 10 DNS lookup limit (~{dns_lookups} lookups) - risk of PermError",
+                        type="Email Security - SPF DNS Lookup Limit Exceeded",
+                        source="EmailSecurityDeep",
+                        confidence="High",
+                        color="red",
+                        threat_level="High Risk",
+                        raw_data=f"Estimated DNS lookups: {dns_lookups}. SPF will fail for receivers enforcing the 10-lookup limit.",
+                        tags=["email-security", "spf", "dns-limit"]
+                    ))
+
                 break
         if not spf_raw:
             findings.append(IntelligenceFinding(
@@ -334,6 +654,52 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     raw_data=f"RUA: {rua_addr}",
                     tags=["email-security", "dmarc"]
                 ))
+                rua_clean = rua_addr.replace("mailto:", "")
+                rua_parts = rua_clean.split("@")
+                if len(rua_parts) == 2:
+                    rua_local, rua_domain = rua_parts
+                    rua_format = "Unknown"
+                    if "dmarc" in rua_local.lower() or "rua" in rua_local.lower():
+                        rua_format = "Standard (dmarc+subdomain@domain)"
+                    elif "report" in rua_local.lower():
+                        rua_format = "Report-based"
+                    elif "postmark" in rua_domain.lower():
+                        rua_format = "Postmark DMARC"
+                    elif "dmarcian" in rua_domain.lower():
+                        rua_format = "dmarcian"
+                    elif "uriports" in rua_domain.lower():
+                        rua_format = "URIports"
+                    elif "sendmail" in rua_domain.lower():
+                        rua_format = "Sendmail"
+                    elif "valimail" in rua_domain.lower():
+                        rua_format = "Valimail"
+                    elif "agari" in rua_domain.lower():
+                        rua_format = "Agari"
+                    elif "proofpoint" in rua_domain.lower():
+                        rua_format = "Proofpoint"
+                    elif "mimecast" in rua_domain.lower():
+                        rua_format = "Mimecast"
+                    elif "barracuda" in rua_domain.lower():
+                        rua_format = "Barracuda"
+                    elif "dmarcreport" in rua_domain.lower() or "dmarc-report" in rua_domain.lower():
+                        rua_format = "Standardized DMARC Reporter"
+                    elif "google" in rua_domain.lower():
+                        rua_format = "Google Workspace DMARC Reporting"
+                    else:
+                        rua_domain_parts = rua_domain.split(".")
+                        if len(rua_domain_parts) >= 2 and rua_local == f"{domain}!{domain}" or rua_local.startswith(f"{domain}!"):
+                            rua_format = "BIMI/IETF Standard (local-part!domain@reporter)"
+                        elif "!" in rua_local:
+                            rua_format = "Tagged reporting format"
+                    findings.append(IntelligenceFinding(
+                        entity=f"DMARC aggregate report format: {rua_format}",
+                        type="Email Security - DMARC RUA Format Analysis",
+                        source="EmailSecurityDeep",
+                        confidence="Medium",
+                        color="slate",
+                        raw_data=f"RUA: {rua_addr}, Format: {rua_format}",
+                        tags=["email-security", "dmarc", "reporting"]
+                    ))
             else:
                 findings.append(IntelligenceFinding(
                     entity="No DMARC reporting (rua) configured",
@@ -542,6 +908,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
     except Exception:
         pass
 
+    mta_sts_mx_list = []
     try:
         mta_sts_url = f"https://mta-sts.{domain}/.well-known/mta-sts.txt"
         mta_resp = await client.get(mta_sts_url, timeout=10.0, follow_redirects=True,
@@ -594,6 +961,38 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         confidence="High",
                         color="slate"
                     ))
+                mta_sts_mx_matches = re.findall(r"mx:\s*(\S+)", mta_policy, re.IGNORECASE)
+                mta_sts_mx_list = [m.lower().rstrip('.') for m in mta_sts_mx_matches]
+                if mta_sts_mx_list and mx_hosts:
+                    dns_mx_set = set(h.lower().rstrip('.') for _, h in mx_hosts)
+                    sts_mx_set = set(mta_sts_mx_list)
+                    missing_in_sts = dns_mx_set - sts_mx_set
+                    extra_in_sts = sts_mx_set - dns_mx_set
+                    if missing_in_sts or extra_in_sts:
+                        mismatch_parts = []
+                        if missing_in_sts:
+                            mismatch_parts.append(f"DNS MX not in policy: {', '.join(sorted(missing_in_sts))}")
+                        if extra_in_sts:
+                            mismatch_parts.append(f"Policy lists unknown MX: {', '.join(sorted(extra_in_sts))}")
+                        findings.append(IntelligenceFinding(
+                            entity=f"MTA-STS policy MX mismatch: {'; '.join(mismatch_parts)}",
+                            type="Email Security - MTA-STS Policy Mismatch",
+                            source="EmailSecurityDeep",
+                            confidence="High",
+                            color="orange",
+                            threat_level="Elevated Risk",
+                            raw_data=f"DNS MX: {', '.join(sorted(h.lower() for _, h in mx_hosts))} | STS MX: {', '.join(sorted(mta_sts_mx_list))}",
+                            tags=["email-security", "mta-sts"]
+                        ))
+                    else:
+                        findings.append(IntelligenceFinding(
+                            entity=f"MTA-STS policy MXes match DNS MX servers",
+                            type="Email Security - MTA-STS Policy Validated",
+                            source="EmailSecurityDeep",
+                            confidence="High",
+                            color="emerald",
+                            tags=["email-security", "mta-sts"]
+                        ))
     except Exception:
         pass
 
@@ -644,20 +1043,214 @@ async def crawl(target: str, client: httpx.AsyncClient):
     except Exception:
         pass
 
+    for mx_prio, mx_host in mx_hosts[:3]:
+        for port in [465, 587, 2525]:
+            try:
+                psock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                psock.settimeout(4)
+                psock.connect((mx_host, port))
+                pbanner = b""
+                try:
+                    pbanner = psock.recv(4096)
+                except:
+                    pass
+                pbanner_str = pbanner.decode("utf-8", errors="ignore").strip()
+                if pbanner_str:
+                    findings.append(IntelligenceFinding(
+                        entity=f"SMTP on port {port}: {pbanner_str[:150]}",
+                        type=f"Email Security - SMTP Alternate Port ({port})",
+                        source="EmailSecurityDeep",
+                        confidence="High",
+                        color="slate",
+                        raw_data=pbanner_str[:1000],
+                        tags=["email-security", "smtp", f"port-{port}"]
+                    ))
+                psock.close()
+            except:
+                pass
+
+    for mx_prio, mx_host in mx_hosts[:3]:
+        try:
+            vsock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            vsock.settimeout(4)
+            vsock.connect((mx_host, 25))
+            vsock.recv(4096)
+            for cmd in ["VRFY test", "EXPN test"]:
+                vsock.send(f"{cmd}\r\n".encode())
+                try:
+                    vresp = vsock.recv(4096).decode("utf-8", errors="ignore").strip()
+                    if vresp and not vresp.startswith("5") and not vresp.startswith("2"):
+                        continue
+                    if vresp.startswith("2"):
+                        findings.append(IntelligenceFinding(
+                            entity=f"{cmd} succeeded on {mx_host}: {vresp[:100]}",
+                            type="Email Security - SMTP User Enumeration Risk",
+                            source="EmailSecurityDeep",
+                            confidence="High",
+                            color="red",
+                            threat_level="Elevated Risk",
+                            raw_data=vresp[:1000],
+                            tags=["email-security", "smtp", "enumeration"]
+                        ))
+                except:
+                    pass
+            try:
+                vsock.send(b"QUIT\r\n")
+            except:
+                pass
+            vsock.close()
+        except:
+            pass
+
+    try:
+        dnssec_loop = asyncio.get_event_loop()
+        dnssec_result = await dnssec_loop.run_in_executor(None, lambda: dns.resolver.resolve(domain, 'DNSKEY'))
+        if dnssec_result:
+            key_count = len(dnssec_result)
+            findings.append(IntelligenceFinding(
+                entity=f"DNSSEC enabled: {key_count} DNSKEY record(s)",
+                type="Email Security - DNSSEC Status",
+                source="EmailSecurityDeep",
+                confidence="High",
+                color="emerald",
+                raw_data=f"DNSSEC configured with {key_count} DNSKEY records",
+                tags=["email-security", "dnssec"]
+            ))
+    except dns.resolver.NoAnswer:
+        findings.append(IntelligenceFinding(
+            entity="DNSSEC not enabled",
+            type="Email Security - DNSSEC Status",
+            source="EmailSecurityDeep",
+            confidence="High",
+            color="orange",
+            threat_level="Standard Target",
+            tags=["email-security", "dnssec"]
+        ))
+    except Exception:
+        pass
+
+    for mx_prio, mx_host in mx_hosts[:3]:
+        try:
+            mx_loop = asyncio.get_event_loop()
+            mx_a = mx_loop.run_in_executor(None, lambda: dns.resolver.resolve(mx_host, 'A'))
+            mx_aaaa = mx_loop.run_in_executor(None, lambda: dns.resolver.resolve(mx_host, 'AAAA'))
+            try:
+                for r in await mx_a:
+                    ip = str(r)
+                    try:
+                        rev = dns.resolver.resolve_address(ip)
+                        rev_name = str(rev[0]).rstrip('.')
+                        if rev_name:
+                            findings.append(IntelligenceFinding(
+                                entity=f"MX {mx_host} ({ip}) rDNS: {rev_name}",
+                                type="Email Security - MX Reverse DNS",
+                                source="EmailSecurityDeep",
+                                confidence="High",
+                                color="slate",
+                                raw_data=f"{ip} -> {rev_name}",
+                                tags=["email-security", "mx", "rdns"]
+                            ))
+                            if mx_host.lower() not in rev_name.lower() and mx_host.lower().rstrip('.') not in rev_name.lower():
+                                findings.append(IntelligenceFinding(
+                                    entity=f"MX {mx_host} rDNS mismatch: {rev_name}",
+                                    type="Email Security - MX rDNS Mismatch",
+                                    source="EmailSecurityDeep",
+                                    confidence="Medium",
+                                    color="orange",
+                                    tags=["email-security", "mx", "rdns"]
+                                ))
+                    except:
+                        pass
+            except:
+                pass
+        except:
+            pass
+
+    for mx_prio, mx_host in mx_hosts[:3]:
+        try:
+            import ssl as ssl_mod
+            ssl_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            ssl_sock.settimeout(5)
+            ssl_sock.connect((mx_host, 465))
+            ctx = ssl_mod.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl_mod.CERT_NONE
+            try:
+                tls = ctx.wrap_socket(ssl_sock, server_hostname=mx_host, do_handshake_on_connect=True)
+                cert = tls.getpeercert()
+                tls_version = tls.version()
+                tls.close()
+                if cert:
+                    cn = dict(cert.get("subject", [[["", ""]]])[0]).get("commonName", "")
+                    issuer = dict(cert.get("issuer", [[["", ""]]])[0]).get("commonName", "")
+                    sans = [v for _, v in cert.get("subjectAltName", [])]
+                    not_after = cert.get("notAfter", "")
+                    findings.append(IntelligenceFinding(
+                        entity=f"SSL cert on {mx_host}:465 - CN: {cn}, TLS: {tls_version}",
+                        type="Email Security - MX SSL Certificate (port 465)",
+                        source="EmailSecurityDeep",
+                        confidence="High",
+                        color="emerald" if "TLSv1.2" in str(tls_version) or "TLSv1.3" in str(tls_version) else "orange",
+                        raw_data=f"CN: {cn} | SANS: {', '.join(sans[:5])} | Issuer: {issuer} | Expires: {not_after} | TLS: {tls_version}",
+                        tags=["email-security", "ssl", "certificate"]
+                    ))
+            except Exception as e:
+                findings.append(IntelligenceFinding(
+                    entity=f"SSL error for {mx_host}:465 - {str(e)[:60]}",
+                    type="Email Security - MX SSL Handshake Error",
+                    source="EmailSecurityDeep",
+                    confidence="Medium",
+                    color="orange",
+                    tags=["email-security", "ssl"]
+                ))
+        except:
+            pass
+
+    try:
+        dmarc_check = None
+        for f in findings:
+            if "DMARC Record" in (f.type or ""):
+                dmarc_check = f.raw_data
+                break
+        if dmarc_check:
+            aspf = re.search(r"aspf\s*=\s*([rs])", dmarc_check)
+            adkim = re.search(r"adkim\s*=\s*([rs])", dmarc_check)
+            if aspf:
+                findings.append(IntelligenceFinding(
+                    entity=f"DMARC SPF Alignment: {'Strict (r)' if aspf.group(1) == 'r' else 'Relaxed (s)'}",
+                    type="Email Security - DMARC Alignment (SPF)",
+                    source="EmailSecurityDeep",
+                    confidence="High",
+                    color="emerald" if aspf.group(1) == 'r' else "orange",
+                    tags=["email-security", "dmarc", "alignment"]
+                ))
+            if adkim:
+                findings.append(IntelligenceFinding(
+                    entity=f"DMARC DKIM Alignment: {'Strict (r)' if adkim.group(1) == 'r' else 'Relaxed (s)'}",
+                    type="Email Security - DMARC Alignment (DKIM)",
+                    source="EmailSecurityDeep",
+                    confidence="High",
+                    color="emerald" if adkim.group(1) == 'r' else "orange",
+                    tags=["email-security", "dmarc", "alignment"]
+                ))
+    except Exception:
+        pass
+
     score = 0
-    max_score = 20
+    max_score = 40
     score_breakdown = []
 
     if any("SPF Record" in (f.type or "") or "v=spf1" in (f.raw_data or "") for f in findings):
-        score += 4
-        score_breakdown.append("SPF: 4")
+        score += 3
+        score_breakdown.append("SPF: 3")
     if any("DMARC Record" in (f.type or "") or "v=DMARC" in (f.raw_data or "") for f in findings):
-        score += 4
-        score_breakdown.append("DMARC: 4")
+        score += 3
+        score_breakdown.append("DMARC: 3")
     dkim_count = sum(1 for f in findings if "DKIM Record" in (f.type or ""))
     if dkim_count > 0:
-        score += min(dkim_count * 2, 4)
-        score_breakdown.append(f"DKIM({dkim_count}): {min(dkim_count*2, 4)}")
+        dkim_score = min(dkim_count, 4)
+        score += dkim_score
+        score_breakdown.append(f"DKIM({dkim_count}): {dkim_score}")
 
     if any("HardFail" in (f.entity or "") or "reject" in (f.entity or "").lower() for f in findings):
         score += 2
@@ -667,9 +1260,10 @@ async def crawl(target: str, client: httpx.AsyncClient):
         score_breakdown.append("Quarantine: 1")
 
     if any("BIMI Record" in (f.type or "") for f in findings):
-        score += 2
-        score_breakdown.append("BIMI: 2")
-    if any("MTA-STS Policy" in (f.type or "") or "MTA-STS Record" in (f.type or "") for f in findings):
+        score += 1
+        score_breakdown.append("BIMI: 1")
+    mta_sts_present = any("MTA-STS Policy" in (f.type or "") or "MTA-STS Record" in (f.type or "") for f in findings)
+    if mta_sts_present:
         score += 2
         score_breakdown.append("MTA-STS: 2")
     if any("TLS-RPT" in (f.type or "") for f in findings):
@@ -678,20 +1272,126 @@ async def crawl(target: str, client: httpx.AsyncClient):
     if any("ARC Record" in (f.type or "") for f in findings):
         score += 1
         score_breakdown.append("ARC: 1")
+    if any("DANE/TLSA Record" in (f.type or "") for f in findings):
+        score += 2
+        score_breakdown.append("DANE: 2")
+    if any("SMTP STARTTLS" in (f.type or "") or "SMTP - STARTTLS" in (f.type or "") for f in findings):
+        score += 1
+        score_breakdown.append("STARTTLS: 1")
+    if any("SMTP TLS Version" in (f.type or "") and ("TLSv1.2" in (f.entity or "") or "TLSv1.3" in (f.entity or "")) for f in findings):
+        score += 1
+        score_breakdown.append("TLSv1.2+: 1")
+    if any("SPF Macro" in (f.type or "") for f in findings):
+        score -= 1
+        score_breakdown.append("SPF Macros: -1")
+    if any("SPF DNS Lookup Limit" in (f.type or "") for f in findings):
+        score -= 1
+        score_breakdown.append("SPF Lookups: -1")
+    if any("MTA-STS Policy Validated" in (f.type or "") for f in findings):
+        score += 1
+        score_breakdown.append("MTA-STS match: 1")
+    elif any("MTA-STS Policy Mismatch" in (f.type or "") for f in findings):
+        score -= 1
+        score_breakdown.append("MTA-STS mismatch: -1")
+    if any("SPF Policy" in (f.type or "") and "HardFail" in (f.entity or "") for f in findings):
+        score += 1
+        score_breakdown.append("SPF HardFail: 1")
+    if any("EHLO" in (f.type or "") for f in findings):
+        score += 1
+        score_breakdown.append("EHLO: 1")
 
+    if any("DNSSEC enabled" in (f.entity or "") for f in findings):
+        score += 2
+        score_breakdown.append("DNSSEC: 2")
+    if any("DNSSEC not enabled" in (f.entity or "") for f in findings):
+        score -= 1
+        score_breakdown.append("No DNSSEC: -1")
+    if any("MX SSL Certificate" in (f.type or "") and "TLSv1" in (str(f.raw_data) or "") for f in findings):
+        score += 2
+        score_breakdown.append("MX SSL: 2")
+    if any("MX Reverse DNS" in (f.type or "") for f in findings):
+        score += 1
+        score_breakdown.append("MX rDNS: 1")
+    if any("MX rDNS Mismatch" in (f.type or "") for f in findings):
+        score -= 1
+        score_breakdown.append("rDNS mismatch: -1")
+    if any("DMARC Alignment" in (f.type or "") for f in findings):
+        score += 1
+        score_breakdown.append("DMARC align: 1")
+    if any("DMARC Alignment (SPF)" in (f.type or "") and "Strict" in (f.entity or "") for f in findings):
+        score += 1
+        score_breakdown.append("SPF strict: 1")
+    if any("DMARC Alignment (DKIM)" in (f.type or "") and "Strict" in (f.entity or "") for f in findings):
+        score += 1
+        score_breakdown.append("DKIM strict: 1")
+    if any("SMTP Alternate Port" in (f.type or "") for f in findings):
+        score += 1
+        score_breakdown.append("Alt ports: 1")
+    if any("SMTP User Enumeration" in (f.type or "") for f in findings):
+        score -= 2
+        score_breakdown.append("Enumeration: -2")
+
+    s_present = any("SPF Record" in (f.type or "") for f in findings)
+    d_present = any("DMARC Record" in (f.type or "") for f in findings)
+    k_present = dkim_count > 0
+    m_present = mta_sts_present
+    t_present = any("TLS-RPT" in (f.type or "") for f in findings)
+    auth_chain_count = sum([s_present, d_present, k_present, m_present, t_present])
+    if auth_chain_count >= 4:
+        score += 2
+        score_breakdown.append(f"AuthChain({auth_chain_count}/5): 2")
+    elif auth_chain_count >= 2:
+        score += 1
+        score_breakdown.append(f"AuthChain({auth_chain_count}/5): 1")
+
+    score = max(0, min(score, max_score))
     score_pct = round((score / max_score) * 100)
-    risk_level = "Low Risk" if score_pct >= 80 else ("Moderate Risk" if score_pct >= 50 else "High Risk")
-    risk_color = "emerald" if score_pct >= 80 else ("orange" if score_pct >= 50 else "red")
+
+    if score_pct >= 95:
+        grade = "A+"
+        risk_level = "Low Risk"
+        risk_color = "emerald"
+    elif score_pct >= 80:
+        grade = "A"
+        risk_level = "Low Risk"
+        risk_color = "emerald"
+    elif score_pct >= 65:
+        grade = "B"
+        risk_level = "Low-Medium Risk"
+        risk_color = "emerald"
+    elif score_pct >= 50:
+        grade = "C"
+        risk_level = "Moderate Risk"
+        risk_color = "orange"
+    elif score_pct >= 30:
+        grade = "D"
+        risk_level = "Elevated Risk"
+        risk_color = "orange"
+    else:
+        grade = "F"
+        risk_level = "High Risk"
+        risk_color = "red"
 
     findings.append(IntelligenceFinding(
-        entity=f"Email Security Score: {score}/{max_score} ({score_pct}%)",
+        entity=f"Email Security Grade: {grade} (Score: {score}/{max_score}, {score_pct}%)",
         type="Email Security - Composite Score",
         source="EmailSecurityDeep",
         confidence="High",
         color=risk_color,
         threat_level=risk_level,
-        raw_data=f"Score: {score}/{max_score} | Breakdown: {' + '.join(score_breakdown)} | {risk_level}",
+        raw_data=f"Grade: {grade} | Score: {score}/{max_score} ({score_pct}%) | Breakdown: {' + '.join(score_breakdown)} | AuthChain: {auth_chain_count}/5 | {risk_level}",
         tags=["email-security", "summary"]
+    ))
+
+    findings.append(IntelligenceFinding(
+        entity=f"Email authentication chain: {auth_chain_count}/5 pillars (SPF, DKIM, DMARC, MTA-STS, TLS-RPT)",
+        type="Email Security - Authentication Chain",
+        source="EmailSecurityDeep",
+        confidence="High",
+        color="slate" if auth_chain_count >= 3 else "orange",
+        threat_level="Informational" if auth_chain_count >= 4 else ("Standard Target" if auth_chain_count >= 2 else "Elevated Risk"),
+        raw_data=f"SPF={'Y' if s_present else 'N'}, DKIM={'Y' if k_present else 'N'}, DMARC={'Y' if d_present else 'N'}, MTA-STS={'Y' if m_present else 'N'}, TLS-RPT={'Y' if t_present else 'N'}",
+        tags=["email-security", "summary", "auth-chain"]
     ))
 
     return findings

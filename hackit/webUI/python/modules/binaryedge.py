@@ -2,6 +2,7 @@ import httpx
 import asyncio
 import socket
 import re
+import json
 from collections import defaultdict
 from models import IntelligenceFinding
 
@@ -35,6 +36,9 @@ PORT_CATEGORIES = {
     (8443, 8443): ("HTTPS-Alt", "Web"),
     (27017, 27017): ("MongoDB", "Database"),
     (11211, 11211): ("Memcached", "Database"),
+    (9200, 9200): ("Elasticsearch", "Database"),
+    (9300, 9300): ("Elasticsearch", "Database"),
+    (2222, 2222): ("SSH-Alt", "Remote Access"),
 }
 
 VULN_KEYWORDS = [
@@ -48,6 +52,7 @@ SERVICE_RISK_SCORE = {
     "MongoDB": 8, "Redis": 8, "Memcached": 7, "MySQL": 6,
     "MSSQL": 7, "PostgreSQL": 6, "Oracle DB": 7,
     "SMTP": 4, "DNS": 4, "HTTP": 3, "HTTPS": 2, "SSH": 3,
+    "Elasticsearch": 8, "Docker": 9,
 }
 
 async def resolve_to_ips(domain: str) -> list:
@@ -142,6 +147,31 @@ async def query_events(ip: str, client: httpx.AsyncClient) -> list:
         pass
     return []
 
+async def query_snapshot(ip: str, port: int, client: httpx.AsyncClient) -> dict:
+    try:
+        resp = await client.get(
+            f"{BINARYEDGE_API}/query/snapshot/{ip}/{port}",
+            headers={"User-Agent": UA, "X-Key": ""},
+            timeout=15.0,
+        )
+        return resp.json() if resp.status_code == 200 else {}
+    except:
+        return {}
+
+async def query_subdomains(domain: str, client: httpx.AsyncClient) -> list:
+    try:
+        resp = await client.get(
+            f"{BINARYEDGE_API}/query/subdomains/{domain}",
+            headers={"User-Agent": UA, "X-Key": ""},
+            timeout=15.0,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            return data.get("subdomains", data.get("results", []))[:20]
+    except:
+        pass
+    return []
+
 async def crawl(target: str, client: httpx.AsyncClient):
     findings = []
     t = target.strip().lower()
@@ -152,6 +182,11 @@ async def crawl(target: str, client: httpx.AsyncClient):
     ips = await resolve_to_ips(t)
     if not ips:
         ips = [t]
+
+    all_ports = set()
+    all_services = set()
+    total_cves = 0
+    total_leaks = 0
 
     for ip in ips[:3]:
         host_data = await query_host(ip, client)
@@ -176,6 +211,8 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     port = pdata.get("port", 0)
                     proto = pdata.get("protocol", "tcp")
                     service, cat = classify_port(port)
+                    all_ports.add(port)
+                    all_services.add(service)
                     port_summary[cat].append((port, proto, service))
                     ssl_info = pdata.get("ssl", {})
                     extra = f" | SSL: {ssl_info.get('version', '')}" if ssl_info else ""
@@ -206,6 +243,39 @@ async def crawl(target: str, client: httpx.AsyncClient):
                             tags=["protocol"],
                         ))
 
+                    # Check for software info
+                    software_list = pdata.get("software", [])
+                    if software_list:
+                        for sw in software_list[:3]:
+                            sw_name = sw.get("name", "") if isinstance(sw, dict) else str(sw)
+                            if sw_name:
+                                findings.append(IntelligenceFinding(
+                                    entity=f"Software: {sw_name} on {ip}:{port}",
+                                    type="BinaryEdge: Software Detection",
+                                    source="BinaryEdge",
+                                    confidence="Medium",
+                                    color="orange",
+                                    threat_level="Informational",
+                                    resolution=f"{ip}:{port}",
+                                    tags=["software"],
+                                ))
+
+                    # Check http data
+                    http_data = pdata.get("http", {})
+                    if isinstance(http_data, dict):
+                        title = http_data.get("title", "")
+                        if title:
+                            findings.append(IntelligenceFinding(
+                                entity=f"HTTP Title: {title[:200]}",
+                                type="BinaryEdge: HTTP Title",
+                                source="BinaryEdge",
+                                confidence="Medium",
+                                color="slate",
+                                threat_level="Informational",
+                                resolution=f"{ip}:{port}",
+                                tags=["http", "title"],
+                            ))
+
                 for cat, entries in port_summary.items():
                     findings.append(IntelligenceFinding(
                         entity=f"{cat}: {len(entries)} port(s)",
@@ -234,6 +304,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         cves = await query_cve(ip, client)
         if cves:
+            total_cves += len(cves)
             for cve_item in cves[:8]:
                 cve_id = cve_item.get("cve", cve_item.get("id", ""))
                 severity = cve_item.get("severity", cve_item.get("cvss", 0))
@@ -254,6 +325,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         leaks = await query_dataleaks(t, client)
         if leaks:
+            total_leaks += len(leaks)
             for leak in leaks[:5]:
                 leak_name = leak.get("name", leak.get("title", ""))
                 leak_date = leak.get("date", leak.get("discovered", ""))
@@ -287,6 +359,25 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     tags=["events", evt_type],
                 ))
 
+        # Try snapshot for web ports
+        for port in [80, 443, 8080, 8443]:
+            snapshot = await query_snapshot(ip, port, client)
+            if snapshot:
+                snap_result = snapshot.get("result", {})
+                if snap_result:
+                    findings.append(IntelligenceFinding(
+                        entity=f"Web snapshot available for {ip}:{port}",
+                        type="BinaryEdge: Web Snapshot",
+                        source="BinaryEdge",
+                        confidence="Medium",
+                        color="blue",
+                        threat_level="Informational",
+                        resolution=f"{ip}:{port}",
+                        raw_data=json.dumps(snap_result)[:500],
+                        tags=["snapshot", "web"],
+                    ))
+                break
+
     subdomain_data = await query_domain(t, client)
     if subdomain_data:
         subs = subdomain_data.get("subdomains", []) or subdomain_data.get("dns", {}).get("subdomains", [])
@@ -301,6 +392,34 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 resolution=f"{sub}.{t}",
                 tags=["dns", "subdomain"],
             ))
+
+    # Also query dedicated subdomains endpoint
+    more_subs = await query_subdomains(t, client)
+    for sub in more_subs[:10]:
+        sub_name = sub.get("hostname", sub.get("subdomain", sub)) if isinstance(sub, dict) else str(sub)
+        findings.append(IntelligenceFinding(
+            entity=sub_name,
+            type="BinaryEdge: Subdomain (deep)",
+            source="BinaryEdge",
+            confidence="Medium",
+            color="blue",
+            status="Confirmed",
+            resolution=f"{sub_name}.{t}",
+            tags=["dns", "subdomain"],
+        ))
+
+    # Aggregation summary
+    if all_ports or total_cves or total_leaks:
+        findings.append(IntelligenceFinding(
+            entity=f"BinaryEdge aggregation: {len(all_ports)} ports, {len(all_services)} services, {total_cves} CVEs, {total_leaks} leaks",
+            type="BinaryEdge: Aggregation Summary",
+            source="BinaryEdge",
+            confidence="High",
+            color="purple",
+            threat_level="Informational",
+            status="Aggregated",
+            tags=["aggregation"],
+        ))
 
     if not findings:
         findings.append(IntelligenceFinding(

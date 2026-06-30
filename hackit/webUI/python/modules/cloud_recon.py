@@ -9,7 +9,7 @@ CDN_DETECTION = {
     "cloudfront": {"name": "AWS CloudFront", "headers": ["x-amz-cf-id", "x-amz-cf-pop", "x-amz-cf-ip"], "color": "orange"},
     "akamai": {"name": "Akamai", "headers": ["x-akamai-transformed", "x-akamai-request-id"], "color": "orange"},
     "fastly": {"name": "Fastly", "headers": ["x-fastly-request-id", "x-served-by", "x-cache-hits"], "color": "orange"},
-    "incapsula": {"name": "Incapsula", "headers": ["x-request-id", "x-cdn"], "color": "orange"},
+    "incapsula": {"name": "Incapsula", "headers": ["x-request-id", "x-cdn", "x-iinfo"], "color": "orange"},
     "sucuri": {"name": "Sucuri", "headers": ["x-sucuri-id", "x-sucuri-cache"], "color": "orange"},
     "stackpath": {"name": "StackPath", "headers": ["x-stackpath-id"], "color": "orange"},
     "keycdn": {"name": "KeyCDN", "headers": ["x-keycdn"], "color": "orange"},
@@ -17,7 +17,27 @@ CDN_DETECTION = {
     "cachefly": {"name": "CacheFly", "headers": ["x-cachefly"], "color": "orange"},
     "section": {"name": "Section.io", "headers": ["x-section"], "color": "orange"},
     "belugacdn": {"name": "BelugaCDN", "headers": ["x-belugacdn"], "color": "orange"},
+    "vercel": {"name": "Vercel", "headers": ["x-vercel-id"], "color": "orange"},
+    "netlify": {"name": "Netlify", "headers": ["x-nf-request-id", "x-ns-server"], "color": "orange"},
+    "render": {"name": "Render", "headers": ["x-render-origin-server"], "color": "orange"},
+    "heroku": {"name": "Heroku", "headers": ["x-heroku-queue-wait-time", "x-heroku-dynos-in-use"], "color": "orange"},
 }
+
+CDN_SINGLE_HEADER_CHECKS = [
+    ("x-cache", "Generic CDN (x-cache)"),
+    ("x-iinfo", "Incapsula"),
+    ("x-sucuri-cache", "Sucuri"),
+    ("x-ns-server", "Netlify"),
+    ("x-vercel-id", "Vercel"),
+    ("x-render-origin-server", "Render"),
+    ("x-heroku-queue-wait-time", "Heroku"),
+]
+
+CDN_COOKIE_CHECKS = [
+    ("__cfduid", "Cloudflare"),
+    ("_csrf", "Netlify"),
+    ("heroku-session-", "Heroku"),
+]
 
 PAAS_PLATFORMS = {
     "herokuapp.com": "Heroku",
@@ -74,6 +94,70 @@ PAAS_PLATFORMS = {
     "phoenixnap.com": "PhoenixNAP",
     "ionos.com": "IONOS",
     "contabo.com": "Contabo",
+    "deno.dev": "Deno Deploy",
+    "glitch.me": "Glitch",
+    "repl.co": "Replit",
+    "codepen.io": "CodePen",
+    "surge.sh": "Surge",
+    "neocities.org": "Neocities",
+    "tiiny.host": "Tiiny.host",
+    "cyclic.app": "Cyclic",
+    "adaptable.app": "Adaptable",
+    "koyeb.app": "Koyeb",
+    "alwaysdata.net": "AlwaysData",
+    "pythonanywhere.com": "PythonAnywhere",
+    "eu.pythonanywhere.com": "PythonAnywhere",
+    "openshiftapps.com": "OpenShift",
+    "bluemix.net": "IBM Cloud",
+    "cfapps.io": "Cloud Foundry (Pivotal)",
+    "pws.pivotal.io": "Pivotal Web Services",
+    "sapcloud.io": "SAP Cloud",
+    "alibabacloud.com": "Alibaba Cloud",
+    "computenest.aliyuncs.com": "Alibaba Compute",
+    "oraclecloud.com": "Oracle Cloud",
+    "oci.oraclecloud.com": "Oracle OCI",
+    "tencentcloud.com": "Tencent Cloud",
+    "qcloud.com": "Tencent Cloud",
+    "ucloud.cn": "UCloud",
+    "nhost.run": "Nhost",
+    "nhost.app": "Nhost",
+    "supabase.co": "Supabase",
+    "supabase.in": "Supabase",
+    "fly.dev": "Fly.io Apps",
+    "edgecompute.app": "EdgeCompute",
+    "wasmer.app": "Wasmer",
+    "fleek.co": "Fleek",
+    "ipfs.io": "IPFS",
+    "infura.io": "Infura",
+    "alchemy.com": "Alchemy",
+    "quicknode.com": "QuickNode",
+    "moralis.io": "Moralis",
+    "thirdweb.com": "Thirdweb",
+    "storj.io": "Storj",
+    "filebase.com": "Filebase",
+    "4everland.io": "4Everland",
+    "akash.network": "Akash Network",
+    "spheron.network": "Spheron",
+    "lighthouse.storage": "Lighthouse Storage",
+    "pinata.cloud": "Pinata IPFS",
+    "nftstorage.link": "NFT.Storage",
+    "web3.storage": "Web3.Storage",
+    "bunnycdn.com": "Bunny CDN",
+    "bunny.net": "Bunny CDN",
+    "belugacdn.com": "BelugaCDN",
+    "cachefly.com": "CacheFly",
+    "section.io": "Section.io",
+    "gcore.com": "G-Core CDN",
+    "gcdn.co": "G-Core CDN",
+    "edgecastcdn.net": "Edgecast CDN",
+    "llnw.net": "Limelight CDN",
+    "level3.com": "Level 3 CDN",
+    "internap.com": "Internap CDN",
+    "swiftcdn.com": "SwiftCDN",
+    "bitgravity.com": "BitGravity CDN",
+    "highwinds.com": "Highwinds CDN",
+    "stackpath.com": "StackPath",
+    "stackpathdns.com": "StackPath DNS",
 }
 
 CLOUD_SERVER_HEADERS = {
@@ -91,6 +175,16 @@ CLOUD_SERVER_HEADERS = {
     "gfe": "Google Front End",
     "Google Cloud": "Google Cloud",
     "azure": "Microsoft Azure",
+    "Kestrel": "Microsoft ASP.NET Core",
+    "IIS": "Microsoft IIS",
+    "openresty": "OpenResty",
+    "Cowboy": "Cowboy (Erlang/Elixir)",
+    "Play": "Play Framework",
+    "Jetty": "Eclipse Jetty",
+    "Tomcat": "Apache Tomcat",
+    "Netlify": "Netlify",
+    "Vercel": "Vercel",
+    "deno": "Deno Deploy",
 }
 
 CLOUD_INDICATORS_HTML = [
@@ -115,8 +209,125 @@ CLOUD_INDICATORS_HTML = [
     (r"googleapis", "Google Cloud"),
     (r"gstatic", "Google Cloud"),
     (r"googlecloud", "Google Cloud"),
+    (r"render\.com", "Render"),
+    (r"fly\.io", "Fly.io"),
+    (r"railway", "Railway"),
+    (r"koyeb", "Koyeb"),
+    (r"cyclic", "Cyclic"),
+    (r"deno", "Deno Deploy"),
+    (r"shopify", "Shopify"),
+    (r"myshopify", "Shopify"),
+    (r"squarespace", "Squarespace"),
+    (r"wix", "Wix"),
+    (r"weebly", "Weebly"),
+    (r"wordpress", "WordPress"),
+    (r"blogspot", "Blogger (Google)"),
+    (r"tumblr", "Tumblr"),
+    (r"ghost", "Ghost"),
+    (r"ghost\.io", "Ghost"),
+    (r"incapsula", "Incapsula"),
+    (r"sucuri", "Sucuri"),
+    (r"newrelic", "New Relic"),
+    (r"nr-data\.net", "New Relic"),
+    (r"datadog", "Datadog"),
+    (r"dd-trace", "Datadog"),
+    (r"sentry", "Sentry"),
+    (r"stripe", "Stripe"),
+    (r"paypal", "PayPal"),
+    (r"braintree", "Braintree"),
+    (r"alibaba", "Alibaba Cloud"),
+    (r"aliyuncs", "Alibaba Cloud"),
+    (r"tencent", "Tencent Cloud"),
+    (r"oraclecloud", "Oracle Cloud"),
+    (r"ocp\.oracle", "Oracle Cloud"),
+    (r"ibmcloud", "IBM Cloud"),
+    (r"ibm\.com/cloud", "IBM Cloud"),
+    (r"scaleway", "Scaleway"),
+    (r"exoscale", "Exoscale"),
+    (r"upcloud", "UpCloud"),
+    (r"contabo", "Contabo"),
+    (r"ionos", "IONOS"),
 ]
 
+TECH_STACK_CMS = [
+    (r"/wp-content/", "WordPress"),
+    (r"/wp-includes/", "WordPress"),
+    (r"wordpress", "WordPress"),
+    (r"/sites/default/", "Drupal"),
+    (r"drupal", "Drupal"),
+    (r"Joomla", "Joomla"),
+    (r"joomla", "Joomla"),
+    (r"com_content", "Joomla"),
+    (r"Shopify", "Shopify"),
+    (r"shopify", "Shopify"),
+    (r"myshopify\.com", "Shopify"),
+    (r"Squarespace", "Squarespace"),
+    (r"squarespace", "Squarespace"),
+    (r"Wix", "Wix"),
+    (r"wixstatic\.com", "Wix"),
+    (r"ghost", "Ghost"),
+    (r"ghost\-kit", "Ghost"),
+    (r"HubSpot", "HubSpot"),
+    (r"hubspot", "HubSpot"),
+    (r"webflow", "Webflow"),
+    (r"Webflow", "Webflow"),
+    (r"strikingly", "Strikingly"),
+    (r"weebly", "Weebly"),
+]
+
+TECH_STACK_JS = [
+    (r"__NEXT_DATA__", "Next.js"),
+    (r"next", "Next.js"),
+    (r"next\.js", "Next.js"),
+    (r"nuxt", "Nuxt.js"),
+    (r"__NUXT__", "Nuxt.js"),
+    (r"gatsby", "Gatsby"),
+    (r"react", "React"),
+    (r"react\.js", "React"),
+    (r"React\.createElement", "React"),
+    (r"reactRoot", "React"),
+    (r"__REACT_DEVTOOLS", "React"),
+    (r"vue", "Vue.js"),
+    (r"Vue\.js", "Vue.js"),
+    (r"__VUE__", "Vue.js"),
+    (r"angular", "Angular"),
+    (r"ng-version", "Angular"),
+    (r"svelte", "Svelte"),
+    (r"__svelte", "Svelte"),
+    (r"jquery", "jQuery"),
+    (r"alpinejs", "Alpine.js"),
+    (r"Alpine\.js", "Alpine.js"),
+    (r"htmx", "htmx"),
+]
+
+TECH_STACK_CSS = [
+    (r"bootstrap", "Bootstrap"),
+    (r"tailwind", "Tailwind CSS"),
+    (r"bulma", "Bulma"),
+    (r"foundation", "Foundation CSS"),
+    (r"materialize", "Materialize CSS"),
+    (r"material\.min\.css", "Material Design"),
+    (r"semantic", "Semantic UI"),
+    (r"uikit", "UIkit"),
+    (r"purecss", "PureCSS"),
+    (r"milligram", "Milligram"),
+    (r"spectre", "Spectre CSS"),
+]
+
+TECH_STACK_ANALYTICS = [
+    (r"google-analytics", "Google Analytics"),
+    (r"googletagmanager", "Google Tag Manager"),
+    (r"gtag", "Google Analytics 4"),
+    (r"gtm\.js", "Google Tag Manager"),
+    (r"facebook\.com/tr", "Facebook Pixel"),
+    (r"fbq\(", "Facebook Pixel"),
+    (r"hotjar", "Hotjar"),
+    (r"clarity", "Microsoft Clarity"),
+    (r"mixpanel", "Mixpanel"),
+    (r"amplitude", "Amplitude"),
+    (r"segment\.com", "Segment"),
+    (r"analytics\.js", "Segment"),
+]
 
 async def _check_paas_cname(target: str, client: httpx.AsyncClient) -> list:
     findings = []
@@ -195,6 +406,10 @@ async def _check_ns_record(target: str, client: httpx.AsyncClient) -> list:
             "hichina": "HiChina (Alibaba)",
             "namecheap": "Namecheap FreeDNS",
             "digitalocean": "DigitalOcean DNS",
+            "dnsimple": "DNSimple",
+            "registrar-servers.com": "Namecheap",
+            "hostgator": "HostGator",
+            "bluehost": "Bluehost",
         }
         for r in answers:
             ns = str(r).lower()
@@ -243,6 +458,8 @@ async def _check_mx_cloud(target: str, client: httpx.AsyncClient) -> list:
             "fastmail": "Fastmail",
             "rackspace": "Rackspace Email",
             "exchange": "Microsoft Exchange",
+            "mx.aliyun": "Alibaba Cloud Email",
+            "mx.qcloud": "Tencent Cloud Email",
         }
         for r in answers:
             mx = str(r.exchange).lower()
@@ -263,6 +480,73 @@ async def _check_mx_cloud(target: str, client: httpx.AsyncClient) -> list:
                     break
     except Exception:
         pass
+    return findings
+
+
+async def _check_tech_stack(html: str) -> list:
+    findings = []
+    tech_found = set()
+
+    for pattern, name in TECH_STACK_CMS:
+        if re.search(pattern, html, re.IGNORECASE) and name not in tech_found:
+            tech_found.add(name)
+            findings.append(IntelligenceFinding(
+                entity=name,
+                type="CMS Detection",
+                source="CloudRecon",
+                confidence="Medium",
+                color="green",
+                threat_level="Informational",
+                status="Detected",
+                raw_data=f"CMS: {name} detected via HTML pattern",
+                tags=["tech", "cms", name.lower().replace(" ", "-")]
+            ))
+
+    for pattern, name in TECH_STACK_JS:
+        if re.search(pattern, html, re.IGNORECASE) and name not in tech_found:
+            tech_found.add(name)
+            findings.append(IntelligenceFinding(
+                entity=name,
+                type="JS Framework",
+                source="CloudRecon",
+                confidence="Medium",
+                color="green",
+                threat_level="Informational",
+                status="Detected",
+                raw_data=f"JS Framework: {name} detected via HTML pattern",
+                tags=["tech", "javascript", name.lower().replace(" ", "-")]
+            ))
+
+    for pattern, name in TECH_STACK_CSS:
+        if re.search(pattern, html, re.IGNORECASE) and name not in tech_found:
+            tech_found.add(name)
+            findings.append(IntelligenceFinding(
+                entity=name,
+                type="CSS Framework",
+                source="CloudRecon",
+                confidence="Medium",
+                color="green",
+                threat_level="Informational",
+                status="Detected",
+                raw_data=f"CSS Framework: {name} detected via HTML pattern",
+                tags=["tech", "css", name.lower().replace(" ", "-")]
+            ))
+
+    for pattern, name in TECH_STACK_ANALYTICS:
+        if re.search(pattern, html, re.IGNORECASE) and name not in tech_found:
+            tech_found.add(name)
+            findings.append(IntelligenceFinding(
+                entity=name,
+                type="Analytics Service",
+                source="CloudRecon",
+                confidence="Medium",
+                color="green",
+                threat_level="Informational",
+                status="Detected",
+                raw_data=f"Analytics: {name} detected via HTML pattern",
+                tags=["tech", "analytics", name.lower().replace(" ", "-")]
+            ))
+
     return findings
 
 
@@ -293,6 +577,35 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
                     ))
                     break
 
+        for header_name, cdn_name in CDN_SINGLE_HEADER_CHECKS:
+            if header_name in headers:
+                findings.append(IntelligenceFinding(
+                    entity=cdn_name,
+                    type="CDN Service (Header)",
+                    source="CloudRecon",
+                    confidence="High",
+                    color="orange",
+                    threat_level="Informational",
+                    status="Active",
+                    raw_data=f"CDN/Proxy: {cdn_name} detected via {header_name} header",
+                    tags=["cdn", cdn_name.lower().replace(" ", "-").replace("(", "").replace(")", "")]
+                ))
+
+        raw_set_cookie = headers.get("set-cookie", "")
+        for cookie_val, provider in CDN_COOKIE_CHECKS:
+            if cookie_val in raw_set_cookie:
+                findings.append(IntelligenceFinding(
+                    entity=provider,
+                    type="CDN Service (Cookie)",
+                    source="CloudRecon",
+                    confidence="High",
+                    color="orange",
+                    threat_level="Informational",
+                    status="Active",
+                    raw_data=f"CDN: {provider} detected via set-cookie {cookie_val}",
+                    tags=["cdn", provider.lower().replace(" ", "-")]
+                ))
+
         for sig, provider in CLOUD_SERVER_HEADERS.items():
             if sig.lower() in server.lower() or sig.lower() in via.lower():
                 findings.append(IntelligenceFinding(
@@ -307,6 +620,32 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
                     tags=["cloud", provider.lower().replace(" ", "-")]
                 ))
                 break
+
+        x_robots = headers.get("x-robots-tag", "")
+        if "noindex" in x_robots.lower():
+            findings.append(IntelligenceFinding(
+                entity="Cloudflare / Noindex",
+                type="Cloud Technology (Header)",
+                source="CloudRecon",
+                confidence="Medium",
+                color="slate",
+                threat_level="Informational",
+                raw_data=f"x-robots-tag: {x_robots}",
+                tags=["cloud", "cloudflare", "seo"]
+            ))
+
+        x_frame = headers.get("x-frame-options", "")
+        if x_frame:
+            findings.append(IntelligenceFinding(
+                entity=f"X-Frame-Options: {x_frame}",
+                type="Security Header",
+                source="CloudRecon",
+                confidence="Low",
+                color="slate",
+                threat_level="Informational",
+                raw_data=f"x-frame-options: {x_frame}",
+                tags=["security", "header"]
+            ))
 
         if via:
             findings.append(IntelligenceFinding(
@@ -333,7 +672,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
                     tags=["cloud", "tech"]
                 ))
 
-        html = resp.text[:50000].lower() if hasattr(resp, 'text') else ""
+        html = resp.text[:100000].lower() if hasattr(resp, 'text') else ""
         for pattern, provider in CLOUD_INDICATORS_HTML:
             if re.search(pattern, html):
                 findings.append(IntelligenceFinding(
@@ -347,6 +686,9 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
                     raw_data=f"HTML pattern '{pattern}' found indicating {provider}",
                     tags=["cloud", provider.lower().replace(" ", "-")]
                 ))
+
+        tech_findings = await _check_tech_stack(html)
+        findings.extend(tech_findings)
 
     except Exception as e:
         findings.append(IntelligenceFinding(
@@ -394,18 +736,50 @@ async def _check_ip_ranges(target: str, client: httpx.AsyncClient) -> list:
             (("104.131.0.0", "104.131.255.255"), "DigitalOcean", "DO"),
             (("159.65.0.0", "159.65.255.255"), "DigitalOcean", "DO"),
             (("167.99.0.0", "167.99.255.255"), "DigitalOcean", "DO"),
+            (("138.197.0.0", "138.197.255.255"), "DigitalOcean", "DO"),
+            (("165.227.0.0", "165.227.255.255"), "DigitalOcean", "DO"),
+            (("157.230.0.0", "157.230.255.255"), "DigitalOcean", "DO"),
             (("139.162.0.0", "139.162.255.255"), "Linode", "Linode"),
             (("172.104.0.0", "172.104.255.255"), "Linode", "Linode"),
+            (("45.33.0.0", "45.33.255.255"), "Linode", "Linode"),
+            (("45.56.0.0", "45.56.255.255"), "Linode", "Linode"),
+            (("45.79.0.0", "45.79.255.255"), "Linode", "Linode"),
+            (("45.33.0.0", "45.33.255.255"), "Linode", "Linode"),
+            (("96.126.0.0", "96.126.255.255"), "Linode", "Linode"),
             (("45.32.0.0", "45.32.255.255"), "Vultr", "Vultr"),
             (("149.28.0.0", "149.28.255.255"), "Vultr", "Vultr"),
+            (("108.61.0.0", "108.61.255.255"), "Vultr", "Vultr"),
+            (("207.148.0.0", "207.148.255.255"), "Vultr", "Vultr"),
+            (("209.222.0.0", "209.222.255.255"), "Vultr", "Vultr"),
             (("49.12.0.0", "49.12.255.255"), "Hetzner", "Hetzner"),
             (("78.46.0.0", "78.46.255.255"), "Hetzner", "Hetzner"),
             (("88.198.0.0", "88.198.255.255"), "Hetzner", "Hetzner"),
             (("95.216.0.0", "95.216.255.255"), "Hetzner", "Hetzner"),
+            (("65.21.0.0", "65.21.255.255"), "Hetzner", "Hetzner"),
+            (("116.202.0.0", "116.202.255.255"), "Hetzner", "Hetzner"),
+            (("144.76.0.0", "144.76.255.255"), "Hetzner", "Hetzner"),
             (("129.146.0.0", "129.146.255.255"), "Oracle Cloud", "OCI"),
             (("140.91.0.0", "140.91.255.255"), "Oracle Cloud", "OCI"),
             (("150.136.0.0", "150.136.255.255"), "Oracle Cloud", "OCI"),
             (("193.122.0.0", "193.122.255.255"), "Oracle Cloud", "OCI"),
+            (("192.29.0.0", "192.29.255.255"), "Oracle Cloud", "OCI"),
+            (("203.0.113.0", "203.0.113.255"), "Oracle Cloud", "OCI"),
+            (("47.0.0.0", "47.255.255.255"), "Alibaba Cloud", "Alibaba"),
+            (("8.128.0.0", "8.191.255.255"), "Alibaba Cloud", "Alibaba"),
+            (("106.14.0.0", "106.14.255.255"), "Alibaba Cloud", "Alibaba"),
+            (("9.0.0.0", "9.255.255.255"), "Tencent Cloud", "Tencent"),
+            (("49.0.0.0", "49.255.255.255"), "Tencent Cloud", "Tencent"),
+            (("51.0.0.0", "51.255.255.255"), "OVHcloud", "OVH"),
+            (("141.0.0.0", "141.255.255.255"), "OVHcloud", "OVH"),
+            (("51.15.0.0", "51.15.255.255"), "Scaleway", "Scaleway"),
+            (("212.47.0.0", "212.47.255.255"), "Scaleway", "Scaleway"),
+            (("185.19.28.0", "185.19.31.255"), "Exoscale", "Exoscale"),
+            (("217.160.0.0", "217.160.255.255"), "IONOS", "IONOS"),
+            (("195.201.0.0", "195.201.255.255"), "Contabo", "Contabo"),
+            (("95.216.0.0", "95.216.255.255"), "UpCloud", "UpCloud"),
+            (("104.18.0.0", "104.18.255.255"), "Cloudflare", "Cloudflare"),
+            (("172.64.0.0", "172.64.255.255"), "Cloudflare", "Cloudflare"),
+            (("141.101.0.0", "141.101.255.255"), "Cloudflare", "Cloudflare"),
         ]
 
         def ip_to_int(ip_str):
@@ -464,10 +838,32 @@ async def crawl(target: str, client: httpx.AsyncClient):
     paas_count = sum(1 for f in findings if f.type == "PaaS Platform")
     cdn_count = sum(1 for f in findings if f.type == "CDN Service")
     cloud_count = sum(1 for f in findings if "Cloud" in f.type and f.type not in ("CDN Service",))
+    tech_count = sum(1 for f in findings if f.type in ("CMS Detection", "JS Framework", "CSS Framework", "Analytics Service"))
 
-    if paas_count > 0 or cdn_count > 0 or cloud_count > 0:
+    cloud_score = 0
+
+    if paas_count > 0:
+        cloud_score += min(paas_count * 10, 30)
+    if cdn_count > 0:
+        cloud_score += min(cdn_count * 10, 25)
+    if cloud_count > 0:
+        cloud_score += min(cloud_count * 5, 20)
+    if tech_count > 0:
+        cloud_score += min(tech_count * 5, 15)
+
+    ns_count = sum(1 for f in findings if f.type == "DNS Nameserver Provider")
+    if ns_count > 0:
+        cloud_score += 5
+
+    mx_count = sum(1 for f in findings if f.type == "Email Cloud Provider (MX)")
+    if mx_count > 0:
+        cloud_score += 5
+
+    cloud_score = min(cloud_score, 100)
+
+    if paas_count > 0 or cdn_count > 0 or cloud_count > 0 or tech_count > 0:
         findings.append(IntelligenceFinding(
-            entity=f"Cloud Recon Complete: {cloud_count} cloud, {cdn_count} CDN, {paas_count} PaaS",
+            entity=f"Cloud Recon Complete: {cloud_count} cloud, {cdn_count} CDN, {paas_count} PaaS, {tech_count} tech",
             type="Cloud Recon Summary",
             source="CloudRecon",
             confidence="High",
@@ -475,8 +871,21 @@ async def crawl(target: str, client: httpx.AsyncClient):
             threat_level="Informational",
             status="Complete",
             resolution=f"{len(findings)} total findings",
-            raw_data=f"Cloud: {cloud_count}, CDN: {cdn_count}, PaaS: {paas_count}",
+            raw_data=f"Cloud: {cloud_count}, CDN: {cdn_count}, PaaS: {paas_count}, Tech: {tech_count}",
             tags=["cloud", "recon", "summary"]
+        ))
+
+        findings.append(IntelligenceFinding(
+            entity=f"Cloud Adoption Score: {cloud_score}/100",
+            type="Cloud Infrastructure Score",
+            source="CloudRecon",
+            confidence="Medium",
+            color="green" if cloud_score >= 60 else ("yellow" if cloud_score >= 30 else "slate"),
+            threat_level="Informational",
+            status="Calculated",
+            resolution=f"Score: {cloud_score}/100",
+            raw_data=f"Cloud adoption score: {cloud_score}. PaaS: {paas_count}, CDN: {cdn_count}, Cloud infra: {cloud_count}, Tech: {tech_count}, NS: {ns_count}, MX: {mx_count}",
+            tags=["cloud", "score", "summary"]
         ))
 
     return findings
