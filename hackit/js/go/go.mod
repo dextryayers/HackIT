@@ -1,3 +1,3 @@
-module js_analyzer
+module js_hunter
 
 go 1.21

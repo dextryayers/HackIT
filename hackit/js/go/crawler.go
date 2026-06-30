@@ -5,11 +5,13 @@ import (
 	"math/rand"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 )
 
 type Crawler struct {
+	Opts       *Options
 	BaseURL    string
 	BaseHost   string
 	BaseDomain string
@@ -18,48 +20,43 @@ type Crawler struct {
 	Filters    *Filters
 	WG         sync.WaitGroup
 	queueWg    sync.WaitGroup
-	waybackWg  sync.WaitGroup
 	mu         sync.Mutex
 	queuedURLs chan urlQueue
-	ShowCode   bool
 
-	// Subdomain tracking
+	activeHost string
+
 	Subdomains    map[string]bool
 	subdomainURLs map[string]string
 	subMu         sync.Mutex
 
-	// Per-subdomain sequential crawl
-	subdomainActive bool
-	subdomainQueue  chan urlQueue
-	subdomainWg     sync.WaitGroup
-	subdomainWorkers int
+	hintsShown map[string]bool
+	seenStrings map[string]bool
 
 	allCrawled []CrawlResult
 	startTime  time.Time
+	rateLimit  chan time.Time
 }
 
-func (c *Crawler) addQueueItem(item urlQueue) {
-	if c.subdomainActive && c.subdomainQueue != nil {
-		c.subdomainWg.Add(1)
-		c.subdomainQueue <- item
-		return
-	}
-	c.queueWg.Add(1)
-	c.queuedURLs <- item
-}
-
-func NewCrawler(baseURL string, baseHost string, showCode bool) *Crawler {
+func NewCrawler(opts *Options) *Crawler {
 	transport := &http.Transport{
 		MaxIdleConns:        200,
 		MaxIdleConnsPerHost: 50,
-		IdleConnTimeout:     30 * time.Second,
+		IdleConnTimeout:     60 * time.Second,
 		DisableCompression:  false,
 	}
+
+	if opts.Proxy != "" {
+		proxyURL, err := url.Parse(opts.Proxy)
+		if err == nil {
+			transport.Proxy = http.ProxyURL(proxyURL)
+		}
+	}
+
 	client := &http.Client{
 		Transport: transport,
-		Timeout:   30 * time.Second,
+		Timeout:   time.Duration(opts.Timeout) * time.Second,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 5 {
+			if len(via) >= 10 {
 				return fmt.Errorf("too many redirects")
 			}
 			if len(via) > 0 {
@@ -73,30 +70,73 @@ func NewCrawler(baseURL string, baseHost string, showCode bool) *Crawler {
 		},
 	}
 
-	u, _ := url.Parse(baseURL)
+	u, _ := url.Parse(opts.Target)
 	host := hostWithoutPort(u.Host)
-	parts := hostParts(host)
-	var baseDomain string
-	if len(parts) >= 2 {
-		baseDomain = parts[len(parts)-2] + "." + parts[len(parts)-1]
-	} else {
+	baseDomain := strings.TrimPrefix(host, "www.")
+	if baseDomain == host {
 		baseDomain = host
 	}
 
-	return &Crawler{
-		BaseURL:    baseURL,
-		BaseHost:   host,
-		BaseDomain: baseDomain,
-		Client:     client,
-		Scope:      NewScope(baseURL, 3),
-		Filters:    NewFilters(),
-		queuedURLs: make(chan urlQueue, 10000),
-		Subdomains: make(map[string]bool),
+	c := &Crawler{
+		Opts:          opts,
+		BaseURL:       opts.Target,
+		BaseHost:      host,
+		BaseDomain:    baseDomain,
+		activeHost:    host,
+		Client:        client,
+		Scope:         NewScope(opts.Target, opts.MaxDepth),
+		Filters:       NewFilters(),
+		queuedURLs:    make(chan urlQueue, 100000),
+		Subdomains:    make(map[string]bool),
 		subdomainURLs: make(map[string]string),
-		ShowCode:   showCode,
-		allCrawled: make([]CrawlResult, 0),
-		startTime:  time.Now(),
-		subdomainWorkers: 3,
+		hintsShown:    make(map[string]bool),
+		seenStrings:   make(map[string]bool),
+		allCrawled:    make([]CrawlResult, 0),
+		startTime:     time.Now(),
+	}
+
+	if opts.RateLimit > 0 {
+		c.rateLimit = make(chan time.Time, opts.RateLimit)
+		go func() {
+			ticker := time.NewTicker(time.Second / time.Duration(opts.RateLimit))
+			defer ticker.Stop()
+			for t := range ticker.C {
+				select {
+				case c.rateLimit <- t:
+				default:
+				}
+			}
+		}()
+	}
+
+	return c
+}
+
+func (c *Crawler) addQueueItem(item urlQueue) {
+	u, err := url.Parse(item.url)
+	if err == nil && u.Host != "" {
+		itemHost := hostWithoutPort(u.Host)
+		if itemHost != c.activeHost {
+			if strings.HasSuffix(itemHost, c.BaseDomain) && itemHost != c.BaseHost {
+				c.addSubdomain(itemHost, item.url)
+			}
+			return
+		}
+	}
+	c.queueWg.Add(1)
+	c.queuedURLs <- item
+}
+
+func (c *Crawler) getDelay() time.Duration {
+	if c.Opts.Delay > 0 {
+		return time.Duration(c.Opts.Delay) * time.Millisecond
+	}
+	return 0
+}
+
+func (c *Crawler) applyRateLimit() {
+	if c.rateLimit != nil {
+		<-c.rateLimit
 	}
 }
 
@@ -109,32 +149,13 @@ func hostWithoutPort(host string) string {
 	return host
 }
 
-func hostParts(host string) []string {
-	return splitHost(host)
-}
-
-func splitHost(host string) []string {
-	var parts []string
-	current := ""
-	for _, c := range host {
-		if c == '.' {
-			parts = append(parts, current)
-			current = ""
-		} else {
-			current += string(c)
-		}
-	}
-	if current != "" {
-		parts = append(parts, current)
-	}
-	return parts
-}
-
 func (c *Crawler) setHeaders(req *http.Request) {
 	uas := []string{
-		"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-		"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-		"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+		"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0.0.0 Safari/537.36",
+		"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/126.0.0.0 Safari/537.36",
+		"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/126.0.0.0 Safari/537.36",
+		"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0",
+		"Mozilla/5.0 (Macintosh; Intel Mac OS X 14.6; rv:126.0) Gecko/20100101 Firefox/126.0",
 	}
 	req.Header.Set("User-Agent", uas[rand.Intn(len(uas))])
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,application/javascript,*/*;q=0.8")
@@ -144,134 +165,106 @@ func (c *Crawler) setHeaders(req *http.Request) {
 	req.Header.Set("Sec-Fetch-Dest", "document")
 	req.Header.Set("Sec-Fetch-Mode", "navigate")
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
-	req.Header.Set("Sec-Ch-Ua", "\"Not/A)Brand\";v=\"99\", \"Google Chrome\";v=\"126\", \"Chromium\";v=\"126\"")
+	req.Header.Set("Sec-Ch-Ua", `"Not/A)Brand";v="99", "Google Chrome";v="126", "Chromium";v="126"`)
 	req.Header.Set("Sec-Ch-Ua-Mobile", "?0")
-	req.Header.Set("Sec-Ch-Ua-Platform", "\"Linux\"")
+	req.Header.Set("Sec-Ch-Ua-Platform", `"Linux"`)
 }
 
 func (c *Crawler) Start() {
-	// Start queue consumer first to prevent deadlock
 	go c.crawlQueue()
 
-	// ── PHASE 1: Main domain deep crawl ──
-	c.performPassiveChecks()
-
-	// Wayback Machine historical JS discovery
-	c.waybackWg.Add(1)
-	go func() {
-		defer c.waybackWg.Done()
-		c.queryWayback(c.BaseURL)
-	}()
-
-	// Active brute-force (common JS paths on main domain)
-	c.performActiveBrute()
-
-	// Queue base URL + trailing-slash variant (some servers treat them differently)
 	if !c.Filters.HasSeen(c.BaseURL) {
-		c.addQueueItem(urlQueue{url: c.BaseURL, source: "", depth: 0, phase: 1})
+		c.addQueueItem(urlQueue{url: c.BaseURL, source: "", depth: 0})
 	}
 	if c.BaseURL+"/" != c.BaseURL && !c.Filters.HasSeen(c.BaseURL+"/") {
-		c.addQueueItem(urlQueue{url: c.BaseURL + "/", source: "", depth: 0, phase: 1})
+		c.addQueueItem(urlQueue{url: c.BaseURL + "/", source: "", depth: 0})
 	}
 
-	// Wait for phase 1 crawl to complete
+	var bgWg sync.WaitGroup
+
+	if c.Opts.Archive || c.Opts.Brute {
+		if c.Opts.Archive {
+			bgWg.Add(1)
+			go func() {
+				defer bgWg.Done()
+				c.queryWayback(c.BaseURL)
+				c.queryCommonCrawl(c.BaseURL)
+			}()
+		}
+		if c.Opts.Brute {
+			bgWg.Add(1)
+			go func() {
+				defer bgWg.Done()
+				c.performActiveBrute()
+			}()
+		}
+	}
+	c.queueWg.Wait()
+	bgWg.Wait()
 	c.queueWg.Wait()
 
-	// Wait for wayback discovery to finish, then drain its items
-	c.waybackWg.Wait()
-	// Drain any remaining wayback-discovered URLs still in the queue
-	c.queueWg.Wait()
+	if c.Opts.Subdomains {
+		c.discoverAllSubdomains()
+		subList := c.getSubdomainList()
+		for _, s := range subList {
+			c.activeHost = s.host
+			writeOutput(`{"type":"subdomain","url":%q,"subdomain":%q,"method":"crawl"}`+"\n", s.url, s.name)
+			if !c.Filters.HasSeen(s.url) {
+				c.addQueueItem(urlQueue{url: s.url, source: c.BaseURL, depth: 1})
+			}
+			for _, p := range getBrutePaths() {
+				full := s.url + p
+				if !c.Filters.HasSeen(full) {
+					c.addQueueItem(urlQueue{url: full, source: s.url, depth: 2})
+				}
+			}
+			c.queueWg.Wait()
+		}
+	}
 
-	// ── PHASE 2: Sequential subdomain processing ──
-	c.discoverAllSubdomains()
-	c.crawlSubdomainsSequentially()
-
-	// ── Cleanup ──
+	c.activeHost = ""
 	close(c.queuedURLs)
 	c.printSummary()
 }
 
-// discoverAllSubdomains collects subdomains from all sources
-func (c *Crawler) discoverAllSubdomains() {
-	var wg sync.WaitGroup
-	wg.Add(4)
-	go func() { defer wg.Done(); c.discoverCTLogs() }()
-	go func() { defer wg.Done(); c.discoverAlienVault() }()
-	go func() { defer wg.Done(); c.discoverGoogleCT() }()
-	go func() { defer wg.Done(); c.discoverDNSBrute() }()
-	wg.Wait()
-	c.discoverSubdomainsFromJS()
+type subEntry struct {
+	name string
+	host string
+	url  string
 }
 
-// crawlSubdomainsSequentially processes each subdomain one at a time.
-// A subdomain is fully crawled (including all discovered JS, sub-pages, etc.)
-// before the next subdomain begins.
-func (c *Crawler) crawlSubdomainsSequentially() {
+func (c *Crawler) getSubdomainList() []subEntry {
 	c.subMu.Lock()
-	var subList []struct {
-		name string
-		url  string
-	}
+	defer c.subMu.Unlock()
+	var list []subEntry
 	for name, u := range c.subdomainURLs {
-		if c.Filters.HasSeen(u) {
+		parsed, err := url.Parse(u)
+		if err != nil {
 			continue
 		}
-		subList = append(subList, struct {
-			name string
-			url  string
-		}{name, u})
+		list = append(list, subEntry{name: name, host: hostWithoutPort(parsed.Host), url: u})
 	}
-	c.subMu.Unlock()
+	return list
+}
 
-	if len(subList) == 0 {
-		return
-	}
-
-	// Create the per-subdomain work queue + workers
-	c.subdomainQueue = make(chan urlQueue, 10000)
-	c.subdomainActive = true
-
-	// Start subdomain workers
-	for i := 0; i < c.subdomainWorkers; i++ {
-		go func() {
-			for item := range c.subdomainQueue {
-				c.crawlPage(item.url, item.source, item.depth)
-				c.subdomainWg.Done()
+func (c *Crawler) crawlQueue() {
+	workerLimit := make(chan struct{}, c.Opts.Concurrency)
+	for q := range c.queuedURLs {
+		workerLimit <- struct{}{}
+		go func(q urlQueue) {
+			defer func() { <-workerLimit; c.queueWg.Done() }()
+			if delay := c.getDelay(); delay > 0 {
+				time.Sleep(delay)
 			}
-		}()
+			c.applyRateLimit()
+			c.crawlPage(q.url, q.source, q.depth)
+		}(q)
 	}
-
-	// Process each subdomain: queue its URL, wait for full drain, repeat
-	for _, s := range subList {
-		if c.Filters.HasSeen(s.url) {
-			continue
-		}
-		writeOutput(`{"type":"subdomain","url":%q,"subdomain":%q,"method":"sequential"}`+"\n", s.url, s.name)
-
-		// Queue the subdomain main page
-		c.subdomainWg.Add(1)
-		c.subdomainQueue <- urlQueue{url: s.url, source: c.BaseURL, depth: 1, phase: 2}
-
-		// Queue common brute paths for this subdomain
-		for _, p := range getBrutePaths() {
-			c.subdomainWg.Add(1)
-			c.subdomainQueue <- urlQueue{url: s.url + p, source: s.url, depth: 2, phase: 2}
-		}
-
-		// Wait for ALL work for this subdomain to complete
-		// (all pages, JS files, SSRF configs, etc.)
-		c.subdomainWg.Wait()
-	}
-
-	// Cleanup subdomain channel
-	close(c.subdomainQueue)
-	c.subdomainActive = false
-	c.subdomainQueue = nil
 }
 
 func (c *Crawler) printSummary() {
 	c.mu.Lock()
-	totalCrawled := len(c.allCrawled)
+	total := len(c.allCrawled)
 	jsCount := 0
 	for _, r := range c.allCrawled {
 		if r.Extension == "js" || r.Type == "JavaScript" {
@@ -283,12 +276,29 @@ func (c *Crawler) printSummary() {
 	c.mu.Unlock()
 
 	writeOutput(`{"type":"summary","total":%d,"js_files":%d,"subdomains":%d,"elapsed":"%s"}`,
-		totalCrawled, jsCount, subCount, elapsed)
+		total, jsCount, subCount, elapsed)
 	writeOutput("\n")
+}
+
+func (c *Crawler) addSubdomain(subdomain, fullURL string) bool {
+	c.subMu.Lock()
+	defer c.subMu.Unlock()
+	if c.Subdomains[subdomain] {
+		return false
+	}
+	c.Subdomains[subdomain] = true
+	c.subdomainURLs[subdomain] = fullURL
+	return true
 }
 
 var uaList = []string{
 	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0.0.0 Safari/537.36",
 	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/126.0.0.0 Safari/537.36",
 	"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/126.0.0.0 Safari/537.36",
+}
+
+func (c *Crawler) setActiveHost(host string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.activeHost = host
 }

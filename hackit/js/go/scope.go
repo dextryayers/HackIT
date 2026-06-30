@@ -17,10 +17,9 @@ type Scope struct {
 func NewScope(rawURL string, maxDepth int) *Scope {
 	u, _ := url.Parse(rawURL)
 	host := strings.Split(u.Host, ":")[0]
-	parts := strings.Split(host, ".")
-	base := host
-	if len(parts) >= 2 {
-		base = strings.Join(parts[len(parts)-2:], ".")
+	base := strings.TrimPrefix(host, "www.")
+	if base == host {
+		base = host
 	}
 	return &Scope{
 		BaseHost:   host,

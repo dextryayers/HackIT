@@ -5,21 +5,41 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 )
 
+var sensitiveFilePatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)\.env$`),
+	regexp.MustCompile(`(?i)\.git/config$`),
+	regexp.MustCompile(`(?i)\.htaccess$`),
+	regexp.MustCompile(`(?i)config\.(json|yaml|yml|php|js|py)$`),
+	regexp.MustCompile(`(?i)secret`),
+	regexp.MustCompile(`(?i)credential`),
+	regexp.MustCompile(`(?i)token`),
+	regexp.MustCompile(`(?i)password`),
+	regexp.MustCompile(`(?i)api[_-]?key`),
+	regexp.MustCompile(`(?i)auth\.(json|yaml|yml|php|js|py)$`),
+	regexp.MustCompile(`(?i)(dump|backup|sql|db|database)`),
+}
+
+func isSensitiveFile(rawURL string) bool {
+	for _, re := range sensitiveFilePatterns {
+		if re.MatchString(rawURL) {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *Crawler) performActiveBrute() {
 	paths := []string{
-		// -- Core JS files --
 		"/app.js", "/main.js", "/index.js", "/bundle.js", "/vendor.js",
 		"/common.js", "/utils.js", "/helpers.js", "/functions.js",
 		"/core.js", "/app.min.js", "/main.min.js", "/all.js",
-		"/script.js", "/scripts.js", "/application.js",
-		"/global.js", "/site.js", "/theme.js", "/custom.js",
-		"/init.js", "/config.js", "/conf.js", "/settings.js",
-		"/runtime.js", "/polyfills.js", "/styles.js",
-
-		// -- Framework builds --
+		"/script.js", "/scripts.js", "/application.js", "/global.js",
+		"/site.js", "/theme.js", "/custom.js", "/init.js", "/config.js",
+		"/conf.js", "/settings.js", "/runtime.js", "/polyfills.js", "/styles.js",
 		"/static/js/main.js", "/static/js/bundle.js", "/static/js/app.js",
 		"/static/js/main.min.js", "/static/js/bundle.min.js",
 		"/static/js/vendor.js", "/static/js/runtime.js",
@@ -34,44 +54,32 @@ func (c *Crawler) performActiveBrute() {
 		"/public/js/main.js", "/public/js/bundle.js",
 		"/js/app.js", "/js/main.js", "/js/bundle.js", "/js/vendor.js",
 		"/js/common.js", "/js/scripts.js", "/js/global.js",
-
-		// -- Webpack / Parcel --
 		"/webpack-runtime.js", "/webpack.js",
 		"/runtime~main.js", "/runtime~app.js",
 		"/main.chunk.js", "/app.chunk.js", "/vendor.chunk.js",
-		"/0.chunk.js", "/1.chunk.js",
-
-		// -- Service Workers --
+		"/0.chunk.js", "/1.chunk.js", "/2.chunk.js", "/3.chunk.js",
 		"/service-worker.js", "/sw.js", "/sw.ts",
 		"/worker.js", "/workers.js", "/firebase-messaging-sw.js",
 		"/serviceworker.js", "/precache-manifest.js",
-
-		// -- Config & Data --
 		"/manifest.json", "/manifest.webmanifest",
 		"/site.webmanifest", "/browserconfig.xml",
 		"/asset-manifest.json", "/asset-manifest.json.map",
 		"/webpack-assets.json", "/webpack-stats.json",
 		"/stats.json", "/report.json",
-		"/robots.txt", "/sitemap.xml", "/sitemap_index.xml",
-		"/humans.txt", "/security.txt", "/.well-known/security.txt",
-		"/crossdomain.xml", "/clientaccesspolicy.xml",
-
-		// -- Source maps --
 		"/app.js.map", "/main.js.map", "/bundle.js.map", "/vendor.js.map",
 		"/app.min.js.map", "/main.min.js.map",
 		"/static/js/main.js.map", "/static/js/bundle.js.map",
 		"/dist/main.js.map", "/dist/bundle.js.map",
 		"/js/app.js.map", "/js/main.js.map",
-
-		// -- TypeScript / ES modules --
 		"/main.ts", "/app.ts", "/index.ts", "/config.ts",
 		"/main.mjs", "/app.mjs", "/index.mjs",
 		"/main.cjs", "/app.cjs", "/index.cjs",
 		"/tsconfig.json", "/tsconfig.app.json",
 		"/tsconfig.node.json", "/tsconfig.json.map",
 		"/jsconfig.json",
-
-		// -- Environment & Secrets --
+		"/robots.txt", "/sitemap.xml", "/sitemap_index.xml",
+		"/humans.txt", "/security.txt", "/.well-known/security.txt",
+		"/crossdomain.xml", "/clientaccesspolicy.xml",
 		"/.env", "/.env.production", "/.env.development", "/.env.local",
 		"/.env.example", "/env.js", "/env.json",
 		"/config.json", "/config.js", "/config.yaml", "/config.yml",
@@ -79,33 +87,23 @@ func (c *Crawler) performActiveBrute() {
 		"/secrets.json", "/secrets.js",
 		"/credentials.json", "/credentials.js",
 		"/keys.json", "/keys.js",
-
-		// -- API / GraphQL --
 		"/api", "/api/", "/api/v1", "/api/v2", "/api/v3",
 		"/graphql", "/graphql/", "/gql",
 		"/swagger.json", "/swagger.yaml", "/swagger.yml",
 		"/api-docs", "/api/docs", "/docs",
 		"/openapi.json", "/openapi.yaml",
 		"/.well-known/openid-configuration",
-
-		// -- Package manager files --
 		"/package.json", "/package-lock.json", "/yarn.lock",
 		"/pnpm-lock.yaml", "/bower.json",
 		"/.npmrc", "/.yarnrc", "/.yarnrc.yml",
 		"/lerna.json", "/nx.json", "/turbo.json",
-
-		// -- Docker / CI --
 		"/Dockerfile", "/docker-compose.yml", "/docker-compose.yaml",
 		"/.dockerignore", "/Makefile",
 		"/Jenkinsfile", "/.github/workflows/ci.yml",
 		"/.gitlab-ci.yml", "/.circleci/config.yml",
 		"/.travis.yml", "/azure-pipelines.yml",
-
-		// -- Git --
 		"/.git/config", "/.git/HEAD", "/.gitignore",
 		"/.gitattributes", "/.gitmodules",
-
-		// -- Backend / Source code --
 		"/index.php", "/index.html", "/index.htm",
 		"/index.asp", "/index.aspx", "/index.jsp",
 		"/index.do", "/index.action",
@@ -118,8 +116,6 @@ func (c *Crawler) performActiveBrute() {
 		"/staging", "/sandbox", "/demo",
 		"/.htaccess", "/.htpasswd", "/.user.ini",
 		"/nginx.conf", "/web.config", "/.htrouter.php",
-
-		// -- Next.js / SSR --
 		"/_next/static/chunks/pages",
 		"/_next/static/chunks/main.js",
 		"/_next/static/chunks/webpack.js",
@@ -130,29 +126,19 @@ func (c *Crawler) performActiveBrute() {
 		"/_next/static/runtime/main.js",
 		"/_next/static/runtime/webpack.js",
 		"/_next/data/build-id.json",
-
-		// -- Nuxt / Vue --
 		"/_nuxt/js/app.js", "/_nuxt/js/vendor.js",
 		"/_nuxt/js/main.js", "/_nuxt/js/runtime.js",
 		"/_nuxt/static/commons/app.js",
 		"/nuxt.config.js", "/nuxt.config.ts",
-
-		// -- Angular --
 		"/angular.json", "/workspace.json",
 		"/polyfills.js", "/runtime-es2015.js", "/runtime-es5.js",
 		"/main-es2015.js", "/main-es5.js",
 		"/styles-es2015.js", "/styles-es5.js",
-
-		// -- Svelte / Solid --
 		"/svelte.config.js", "/vite.config.js",
 		"/solid.config.js", "/astro.config.mjs",
-
-		// -- Firebase --
 		"/firebase.json", "/firestore.indexes.json",
 		"/firebase-messaging-sw.js",
 		"/__/firebase/init.json",
-
-		// -- Miscellaneous --
 		"/version", "/version.json", "/version.txt",
 		"/health", "/healthcheck", "/healthz",
 		"/status", "/status.json",
@@ -161,13 +147,6 @@ func (c *Crawler) performActiveBrute() {
 		"/.well-known/assetlinks.json",
 		"/.well-known/apple-app-site-association",
 		"/.well-known/change-password",
-		"/.well-known/dnt-policy.txt",
-		"/.well-known/gpc.json",
-		"/.well-known/keybase.txt",
-		"/.well-known/nodeinfo",
-		"/.well-known/webfinger",
-
-		// -- Next.js 13+ App Router --
 		"/_next/static/chunks/app/layout.js",
 		"/_next/static/chunks/app/page.js",
 		"/_next/static/chunks/app/loading.js",
@@ -175,12 +154,8 @@ func (c *Crawler) performActiveBrute() {
 		"/_next/static/css/app.css",
 		"/_next/static/css/pages.css",
 		"/_next/data/build-id.json",
-
-		// -- Vite-specific --
 		"/@vite/client", "/@vite/env",
 		"/manifest.json", "/vite.svg",
-
-		// -- SPA Routes (client-side) --
 		"/dashboard", "/profile", "/settings", "/search",
 		"/checkout", "/cart", "/payment", "/billing",
 		"/onboarding", "/verify-email", "/reset-password",
@@ -189,13 +164,9 @@ func (c *Crawler) performActiveBrute() {
 		"/admin/analytics", "/admin/api-keys", "/admin/webhooks",
 		"/api-keys", "/webhooks", "/integrations",
 		"/notifications", "/subscriptions", "/plans", "/pricing",
-
-		// -- API Documentation --
 		"/redoc", "/rapidoc", "/graphiql", "/graphql/playground",
 		"/altair", "/voyager", "/prisma", "/admin/panel",
 		"/docs/swagger", "/docs/api", "/api/docs",
-
-		// -- Cloud Config Files --
 		"/.aws/credentials", "/aws-config.json",
 		"/aws-exports.js", "/amplify-config.js",
 		"/firebase-config.js", "/firebaseConfig.js",
@@ -204,8 +175,6 @@ func (c *Crawler) performActiveBrute() {
 		"/_redirects", "/_headers",
 		"/deno.json", "/deno.jsonc", "/import_map.json",
 		"/bun.lockb", "/bunfig.toml",
-
-		// -- Test / Debug Files --
 		"/jest.config.js", "/vitest.config.ts",
 		"/.storybook/", "/playwright.config.ts",
 		"/cypress.json", "/cypress/",
@@ -214,19 +183,57 @@ func (c *Crawler) performActiveBrute() {
 		"/.github/workflows/codeql.yml",
 		"/sonar-project.properties",
 		"/codecov.yml",
-
-		// -- SSR Leakage --
 		"/_render", "/_ssr", "/_rsc", "/__rsc",
 		"/_next/data/",
-
-		// -- Source Code / Build --
 		"/src/", "/app/", "/pages/", "/components/",
 		"/lib/", "/utils/", "/helpers/",
+		"/sitemap.xml.gz", "/sitemap_index.xml",
+		"/.well-known/security.txt",
+		"/.well-known/did.json",
+		"/.well-known/microsoft-identity-association.json",
+		"/.well-known/nodeinfo",
+		"/.well-known/webfinger",
+		"/.well-known/matrix/client",
+		"/.well-known/matrix/server",
+		"/.well-known/apple-app-site-association",
+		"/.well-known/assetlinks.json",
+		"/.well-known/change-password",
+		"/.well-known/dnt-policy.txt",
+		"/.well-known/gpc.json",
+		"/.well-known/keybase.txt",
+		"/.well-known/private-tab",
+		"/.well-known/autoconfig/mail",
+		"/.well-known/caldav",
+		"/.well-known/carddav",
+		"/ads.txt",
+		"/app-ads.txt",
+		"/graphql/console",
+		"/graphiql",
+		"/hasura/console",
+		"/prisma/studio",
+		"/_dev/",
+		"/__internals/",
+		"/_debug/",
+		"/debug/",
+		"/dev/",
+		"/.env.staging",
+		"/.env.prod",
+		"/.env.test",
+		"/env.local",
+		"/.config.json",
+		"/app.config.json",
+		"/next.config.js",
+		"/nuxt.config.ts",
+		"/astro.config.mjs",
+		"/svelte.config.js",
+		"/remix.config.js",
+		"/.env.production.local",
+		"/.env.development.local",
+		"/.env.test.local",
+		"/.env.staging.local",
 	}
 
-	// Limit concurrent brute force requests to avoid connection saturation
 	limiter := make(chan struct{}, 20)
-
 	for _, p := range paths {
 		p := p
 		limiter <- struct{}{}
@@ -246,34 +253,22 @@ func (c *Crawler) performActiveBrute() {
 				return
 			}
 			defer resp.Body.Close()
-
-			isJS := strings.HasSuffix(p, ".js") || strings.HasSuffix(p, ".ts") ||
-				strings.HasSuffix(p, ".mjs") || strings.HasSuffix(p, ".cjs") ||
-				strings.HasSuffix(p, ".jsx") || strings.HasSuffix(p, ".tsx") ||
-				strings.HasSuffix(p, ".json") || strings.HasSuffix(p, ".map")
-
-			isCodeFile := isJS || strings.HasSuffix(p, ".env") ||
-				strings.HasSuffix(p, ".yml") || strings.HasSuffix(p, ".yaml") ||
-				strings.HasSuffix(p, ".conf") || strings.HasSuffix(p, ".config") ||
-				strings.HasSuffix(p, ".php") || strings.HasSuffix(p, ".py")
-
+			isJS := strings.HasSuffix(p, ".js") || strings.HasSuffix(p, ".ts") || strings.HasSuffix(p, ".mjs") || strings.HasSuffix(p, ".cjs") || strings.HasSuffix(p, ".jsx") || strings.HasSuffix(p, ".tsx") || strings.HasSuffix(p, ".json") || strings.HasSuffix(p, ".map")
+			isCodeFile := isJS || strings.HasSuffix(p, ".env") || strings.HasSuffix(p, ".yml") || strings.HasSuffix(p, ".yaml") || strings.HasSuffix(p, ".conf") || strings.HasSuffix(p, ".config") || strings.HasSuffix(p, ".php") || strings.HasSuffix(p, ".py")
 			if resp.StatusCode == 200 {
-				var bodyStr string
+				bodyStr := ""
 				if isJS {
 					bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
 					bodyStr = string(bodyBytes)
 				}
-
 				if isJS || isCodeFile || isSensitiveFile(fullURL) {
-					c.addQueueItem(urlQueue{url: fullURL, source: c.BaseURL, depth: 1, phase: 1})
+					c.addQueueItem(urlQueue{url: fullURL, source: c.BaseURL, depth: 1})
 					if strings.HasSuffix(fullURL, ".js") || strings.HasSuffix(fullURL, ".mjs") || strings.HasSuffix(fullURL, ".cjs") {
 						c.checkSourceMap(fullURL)
 					}
-
-					if c.ShowCode && isJS && bodyStr != "" && len(bodyStr) < 512*1024 {
+					if c.Opts.ShowCode && isJS && bodyStr != "" && len(bodyStr) < 512*1024 {
 						bodyJSON, _ := json.Marshal(bodyStr)
-						writeOutput(`{"type":"js_source","url":%q,"status":200,"length":%d,"body":%s,"method":"brute"}`+"\n",
-							fullURL, len(bodyStr), string(bodyJSON))
+						writeOutput(`{"type":"js_source","url":%q,"status":200,"length":%d,"body":%s,"method":"brute"}`+"\n", fullURL, len(bodyStr), string(bodyJSON))
 					}
 				}
 				writeOutput(`{"type":"discovered","url":%q,"source":%q,"method":"brute","status":200}`+"\n", fullURL, c.BaseURL)

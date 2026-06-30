@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net/url"
 	"path"
 	"strings"
@@ -16,8 +17,6 @@ func resolveURL(ref, base string) string {
 		return ""
 	}
 	resolved := baseU.ResolveReference(u)
-	
-	// Remove fragments and normalize
 	resolved.Fragment = ""
 	return resolved.String()
 }
@@ -36,16 +35,53 @@ func isInternal(rawURL, host string) bool {
 	if err != nil {
 		return false
 	}
-	
-	// Handle relative URLs
 	if u.Host == "" {
 		return true
 	}
-	
-	// Normalize hosts (remove ports)
 	targetHost := strings.Split(host, ":")[0]
 	currentHost := strings.Split(u.Host, ":")[0]
-	
-	// Strict root domain check (e.g., allow subdomains)
 	return strings.HasSuffix(currentHost, targetHost)
+}
+
+func resolveJSImport(imp string, baseURL string, discoveryType string) string {
+	if strings.HasPrefix(imp, "http://") || strings.HasPrefix(imp, "https://") {
+		return imp
+	}
+	if strings.HasPrefix(imp, "//") {
+		u, _ := url.Parse(baseURL)
+		return u.Scheme + ":" + imp
+	}
+	if strings.HasPrefix(imp, "/") {
+		u, _ := url.Parse(baseURL)
+		return fmt.Sprintf("%s://%s%s", u.Scheme, u.Host, imp)
+	}
+	if strings.HasPrefix(imp, "./") || strings.HasPrefix(imp, "../") || !strings.Contains(imp, "/") {
+		baseDir := baseURL
+		if idx := strings.LastIndex(baseURL, "/"); idx > 8 {
+			baseDir = baseURL[:idx]
+		}
+		cleaned := cleanPath(baseDir + "/" + imp)
+		return cleaned
+	}
+	return imp
+}
+
+func cleanPath(p string) string {
+	parts := strings.Split(p, "/")
+	var result []string
+	for _, part := range parts {
+		if part == "." || part == "" {
+			continue
+		}
+		if part == ".." && len(result) > 0 {
+			result = result[:len(result)-1]
+		} else {
+			result = append(result, part)
+		}
+	}
+	if len(result) < 2 {
+		return p
+	}
+	scheme := result[0] + "//"
+	return scheme + strings.Join(result[1:], "/")
 }

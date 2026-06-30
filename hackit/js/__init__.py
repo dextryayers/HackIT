@@ -12,9 +12,27 @@ from .go_bridge import GoEngine
 @click.command()
 @click.option('-o', '--output', default=None, help='Save results to JSON')
 @click.option('--code', is_flag=True, default=False, help='Show full JS source code in output')
+@click.option('-d', '--depth', default=3, type=int, help='Crawl depth (default 3)')
+@click.option('-c', '--concurrency', default=50, type=int, help='Concurrent requests (default 50)')
+@click.option('--timeout', default=30, type=int, help='Request timeout in seconds (default 30)')
+@click.option('--delay', default=0, type=int, help='Delay between requests in ms (default 0)')
+@click.option('--proxy', default=None, help='Proxy URL (e.g. http://127.0.0.1:8080)')
+@click.option('--rate-limit', default=0, type=int, help='Max requests per second (default 0 = unlimited)')
+@click.option('--no-crawl', is_flag=True, default=False, help='Disable page crawling')
+@click.option('--no-js', is_flag=True, default=False, help='Disable JS analysis')
+@click.option('--no-secrets', is_flag=True, default=False, help='Disable secret scanning')
+@click.option('--no-subdomains', is_flag=True, default=False, help='Disable subdomain discovery')
+@click.option('--no-archive', is_flag=True, default=False, help='Disable archive crawling')
+@click.option('--no-brute', is_flag=True, default=False, help='Disable brute force path discovery')
+@click.option('--no-sourcemap', is_flag=True, default=False, help='Disable source map analysis')
+@click.option('--no-tech', is_flag=True, default=False, help='Disable tech detection')
+@click.option('--no-endpoints', is_flag=True, default=False, help='Disable endpoint extraction')
+@click.option('--no-network', is_flag=True, default=False, help='Disable network call analysis')
 @click.argument('target_url', default=None, required=False)
 @click.pass_context
-def analyze_js(ctx, target_url, output, code):
+def analyze_js(ctx, target_url, output, code, depth, concurrency, timeout, delay, proxy,
+               rate_limit, no_crawl, no_js, no_secrets, no_subdomains, no_archive,
+               no_brute, no_sourcemap, no_tech, no_endpoints, no_network):
     display_tool_banner("JS HUNTER", force=True)
 
     if target_url:
@@ -56,7 +74,15 @@ def analyze_js(ctx, target_url, output, code):
     found_any = False
 
     try:
-        for result in engine.run(final_url, show_code=code):
+        for result in engine.run(final_url, show_code=code, depth=depth,
+                                 concurrency=concurrency, timeout=timeout, delay=delay,
+                                 proxy=proxy or '', crawl=not no_crawl,
+                                 js_analysis=not no_js, secrets=not no_secrets,
+                                 subdomains=not no_subdomains, archive=not no_archive,
+                                 brute=not no_brute, sourcemap=not no_sourcemap,
+                                 tech=not no_tech, endpoints=not no_endpoints,
+                                 network=not no_network, json_out=True,
+                                 rate_limit=rate_limit):
             if not isinstance(result, dict):
                 continue
             if 'error' in result:
@@ -70,6 +96,12 @@ def analyze_js(ctx, target_url, output, code):
             if rtype == 'discovered':
                 discovered.append(result)
                 click.echo(f"  {_colored('[+]', GREEN)} {url_val}")
+            elif rtype == 'tech':
+                name = result.get('name', '')
+                tech_type = result.get('tech_type', '')
+                click.echo(f"  {_colored('[TECH]', CYAN)} {name} ({tech_type})")
+            elif rtype == 'commoncrawl':
+                click.echo(f"  {_colored('[CC]', YELLOW)} {url_val}")
             elif rtype == 'sourcemap':
                 sourcemaps.append(result)
                 click.echo(f"  {_colored('[MAP]', YELLOW)} {url_val}")
@@ -103,6 +135,8 @@ def analyze_js(ctx, target_url, output, code):
                     click.echo()
             elif rtype == 'subdomain':
                 click.echo(f"  {_colored('[SUB]', B_CYAN)} {url_val}")
+            elif rtype == 'subdomain_found':
+                pass
             elif rtype == 'subdomain_hint':
                 click.echo(f"         {_colored('  └─ hint:', DIM)} {result.get('host', '')}")
             elif rtype == 'wayback':
@@ -119,7 +153,7 @@ def analyze_js(ctx, target_url, output, code):
                 s_color = GREEN if status == 200 else (YELLOW if status < 400 else RED)
                 click.echo(f"  {_colored(f'[{status}]', s_color)} {url_val} {_colored(f'({ct})', DIM)} {_colored(f'{length}b', DIM)}")
                 body = result.get('body', '')
-                if body and c.ShowCode and 'javascript' in ct:
+                if body and code and 'javascript' in ct:
                     rows = body.split('\n')
                     for i, row in enumerate(rows[:20]):
                         click.echo(f"    {_colored(f'{i+1:>4}', DIM)} {row}")
@@ -153,6 +187,9 @@ def analyze_js(ctx, target_url, output, code):
             elif rtype == 'webpack_chunk':
                 ctx = result.get('ctx', '')
                 click.echo(f"  {_colored('[WPK]', YELLOW)} {url_val} {_colored(f'({ctx})', DIM)}")
+            elif rtype == 'deep_extract':
+                ctx = result.get('ctx', '')
+                click.echo(f"  {_colored('[DEEP]', MAGENTA)} {url_val} {_colored(f'({ctx})', DIM)}")
             elif rtype == 'graphql_url':
                 click.echo(f"  {_colored('[GQL]', MAGENTA)} {url_val}")
             elif rtype == 'graphql_op':
@@ -164,6 +201,8 @@ def analyze_js(ctx, target_url, output, code):
             elif rtype == 'importmap':
                 ctx = result.get('ctx', '')
                 click.echo(f"  {_colored('[IMPORT]', B_CYAN)} {url_val} {_colored(f'({ctx})', DIM)}")
+            elif rtype == 'import_map':
+                click.echo(f"  {_colored('[IMPORT]', B_CYAN)} {url_val}")
             elif rtype == 'wasm_url':
                 click.echo(f"  {_colored('[WASM]', B_CYAN)} {url_val}")
             elif rtype == 'jsonp_endpoint':

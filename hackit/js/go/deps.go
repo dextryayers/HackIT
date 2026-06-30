@@ -7,35 +7,22 @@ import (
 
 var (
 	requirePattern  = regexp.MustCompile(`require\(["'\` + "`" + `]([^"'\` + "`" + `]+)["'\` + "`" + `]\)`)
-	importPattern   = regexp.MustCompile(`(?:import|export)\s+(?:(?:\{[^}]*\}|\*\s+as\s+\w+|\w+(?:\s*,\s*\{[^}]*\})?)\s+from\s+)?["'\` + "`" + `]([^"'\` + "`" + `]+)["'\` + "`" + `]`)
-	importMapPattern = regexp.MustCompile(`"imports"\s*:\s*\{([^}]+)\}`)
 	dynamicImport   = regexp.MustCompile(`import\s*\(\s*["'\` + "`" + `]([^"'\` + "`" + `]+)["'\` + "`" + `]\s*\)`)
 	moduleExports   = regexp.MustCompile(`module\.exports\s*=\s*require\(["'\` + "`" + `]([^"'\` + "`" + `]+)["'\` + "`" + `]\)`)
-	definePattern   = regexp.MustCompile(`define\(\[([^\]]+)\]`)
-	browserifyPattern = regexp.MustCompile(`require\(["'\` + "`" + `]([^"'\` + "`" + `]+)["'\` + "`" + `]\)`)
+	importMapPattern = regexp.MustCompile(`"imports"\s*:\s*\{([^}]+)\}`)
 )
-
-type DependencyInfo struct {
-	Type    string `json:"type"`
-	Source  string `json:"source"`
-	Module  string `json:"module"`
-	Resolved string `json:"resolved,omitempty"`
-}
 
 func (c *Crawler) extractDependencies(body string, sourceURL string, depth int) {
 	patterns := []struct {
-		name    string
-		re      *regexp.Regexp
-		group   int
+		name  string
+		re    *regexp.Regexp
+		group int
 	}{
 		{"require", requirePattern, 1},
-		{"import", importPattern, 1},
 		{"dynamic_import", dynamicImport, 1},
 		{"module_exports", moduleExports, 1},
 	}
-
 	seen := make(map[string]bool)
-
 	for _, p := range patterns {
 		matches := p.re.FindAllStringSubmatch(body, -1)
 		for _, m := range matches {
@@ -47,24 +34,17 @@ func (c *Crawler) extractDependencies(body string, sourceURL string, depth int) 
 				continue
 			}
 			seen[mod] = true
-
-			// Skip bare module names (node_modules)
 			if isBareModule(mod) {
-				writeOutput(`{"type":"dependency","source":%q,"module":%q,"resolved":"%s","kind":%q}`+"\n",
-					sourceURL, mod, "npm:"+mod, p.name)
+				writeOutput(`{"type":"dependency","source":%q,"module":%q,"resolved":"%s","kind":%q}`+"\n", sourceURL, mod, "npm:"+mod, p.name)
 				continue
 			}
-
 			absURL := resolveJSImport(mod, sourceURL, p.name)
 			if absURL != "" && c.Scope.IsInScope(absURL, depth+1) && !c.Filters.HasSeen(absURL) {
-				writeOutput(`{"type":"dependency","source":%q,"module":%q,"resolved":%q,"kind":%q}`+"\n",
-					sourceURL, mod, absURL, p.name)
-				c.addQueueItem(urlQueue{url: absURL, source: sourceURL, depth: depth + 1, phase: 1})
+				writeOutput(`{"type":"dependency","source":%q,"module":%q,"resolved":%q,"kind":%q}`+"\n", sourceURL, mod, absURL, p.name)
+				c.addQueueItem(urlQueue{url: absURL, source: sourceURL, depth: depth + 1})
 			}
 		}
 	}
-
-	// Parse import map if present
 	impMap := importMapPattern.FindStringSubmatch(body)
 	if len(impMap) >= 2 {
 		pairs := strings.Split(impMap[1], ",")
@@ -79,9 +59,8 @@ func (c *Crawler) extractDependencies(body string, sourceURL string, depth int) 
 			if k != "" && v != "" && strings.HasPrefix(v, "http") {
 				absURL := resolveURL(v, sourceURL)
 				if absURL != "" && c.Scope.IsInScope(absURL, depth+1) && !c.Filters.HasSeen(absURL) {
-					writeOutput(`{"type":"import_map","source":%q,"module":%q,"resolved":%q}`+"\n",
-						sourceURL, k, absURL)
-					c.addQueueItem(urlQueue{url: absURL, source: sourceURL, depth: depth + 1, phase: 1})
+					writeOutput(`{"type":"import_map","source":%q,"module":%q,"resolved":%q}`+"\n", sourceURL, k, absURL)
+					c.addQueueItem(urlQueue{url: absURL, source: sourceURL, depth: depth + 1})
 				}
 			}
 		}
@@ -89,18 +68,8 @@ func (c *Crawler) extractDependencies(body string, sourceURL string, depth int) 
 }
 
 func isBareModule(mod string) bool {
-	if strings.HasPrefix(mod, "http://") || strings.HasPrefix(mod, "https://") {
+	if strings.HasPrefix(mod, "http") || strings.HasPrefix(mod, "//") || strings.HasPrefix(mod, "/") || strings.HasPrefix(mod, "./") || strings.HasPrefix(mod, "../") {
 		return false
 	}
-	if strings.HasPrefix(mod, "//") {
-		return false
-	}
-	if strings.HasPrefix(mod, "/") {
-		return false
-	}
-	if strings.HasPrefix(mod, "./") || strings.HasPrefix(mod, "../") {
-		return false
-	}
-	// Bare specifier: no leading . or /
 	return true
 }

@@ -3,7 +3,6 @@ package main
 import (
 	"net/url"
 	"path"
-	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -29,12 +28,10 @@ func (f *Filters) Seen(rawURL string) bool {
 	return false
 }
 
-// HasSeen checks if a URL has been visited without marking it.
 func (f *Filters) HasSeen(rawURL string) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	key := normalizeKey(rawURL)
-	return f.visited[key]
+	return f.visited[normalizeKey(rawURL)]
 }
 
 func normalizeKey(rawURL string) string {
@@ -72,30 +69,4 @@ func isCrawable(rawURL string) bool {
 		return true
 	}
 	return mimeExts[ext]
-}
-
-var sensitiveFilePatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)\.env$`),
-	regexp.MustCompile(`(?i)\.git/config$`),
-	regexp.MustCompile(`(?i)\.htaccess$`),
-	regexp.MustCompile(`(?i)config\.(json|yaml|yml|php|js|py)$`),
-	regexp.MustCompile(`(?i)secret`),
-	regexp.MustCompile(`(?i)credential`),
-	regexp.MustCompile(`(?i)token`),
-	regexp.MustCompile(`(?i)password`),
-	regexp.MustCompile(`(?i)api[_-]?key`),
-	regexp.MustCompile(`(?i)auth\.(json|yaml|yml|php|js|py)$`),
-	regexp.MustCompile(`(?i)(dump|backup|sql|db|database)`),
-	regexp.MustCompile(`(?i)cloudinary`),
-	regexp.MustCompile(`(?i)firebase`),
-	regexp.MustCompile(`(?i)s3\.amazonaws`),
-}
-
-func isSensitiveFile(rawURL string) bool {
-	for _, re := range sensitiveFilePatterns {
-		if re.MatchString(rawURL) {
-			return true
-		}
-	}
-	return false
 }
