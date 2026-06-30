@@ -1,6 +1,7 @@
 package main
 
 import (
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -133,5 +134,6 @@ func unique(intSlice []int) []int {
 			list = append(list, entry)
 		}
 	}
+	sort.Ints(list)
 	return list
 }

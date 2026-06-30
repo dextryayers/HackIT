@@ -144,9 +144,7 @@ func (r *Reporter) PrintFinalTable() {
 				}
 			}
 			if serviceName == "" || serviceName == "unknown" {
-				if name, ok := commonPorts[res.Port]; ok {
-					serviceName = name
-				}
+				serviceName = lookupServiceName(res.Port)
 			}
 		}
 		serviceName = strings.ToUpper(serviceName)

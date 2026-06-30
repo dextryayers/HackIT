@@ -304,6 +304,12 @@ func main() {
 			return results[i].Port < results[j].Port
 		})
 
+		for i := range results {
+			if results[i].Service == "" {
+				results[i].Service = lookupServiceName(results[i].Port)
+			}
+		}
+
 		allResults = append(allResults, ScanResult{
 			Host:    host,
 			IP:      ipAddr,

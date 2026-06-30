@@ -697,10 +697,7 @@ func GetOSFingerprintCount() int {
 
 func DetectServiceV2(port int, banner string, host string) (string, string) {
 	if banner == "" {
-		if name, ok := commonPorts[port]; ok {
-			return name, ""
-		}
-		return fmt.Sprintf("port-%d", port), ""
+		return lookupServiceName(port), ""
 	}
 
 	sig := MatchServiceSignatures(port, banner)
@@ -762,10 +759,7 @@ func DetectServiceV2(port int, banner string, host string) (string, string) {
 		return "IMAP", ""
 	}
 
-	if name, ok := commonPorts[port]; ok {
-		return name, ""
-	}
-	return fmt.Sprintf("port-%d", port), ""
+	return lookupServiceName(port), ""
 }
 
 func GetOSFingerprintInfo(banner string, ttl int) string {

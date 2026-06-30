@@ -330,9 +330,7 @@ func (p *ParallelPipeline) postProcess(host string, results []PortResult) {
 			}
 
 			if r.Service == "" || r.Service == "unknown" {
-				if name, ok := commonPorts[r.Port]; ok {
-					r.Service = name
-				}
+				r.Service = lookupServiceName(r.Port)
 			}
 
 			if p.scanEngine.Lua == nil {
@@ -360,11 +358,7 @@ func (p *ParallelPipeline) postProcess(host string, results []PortResult) {
 			if r.Service == "" && r.Banner != "" {
 				r.Service, r.Version = DetectService(r.Port, r.Banner, host)
 			}
-			if r.Service == "" {
-				if name, ok := commonPorts[r.Port]; ok {
-					r.Service = name
-				}
-			}
+			r.Service = lookupServiceName(r.Port)
 
 			r.RiskScore = calculateRiskScore(r.Port, r.Service, r.Banner, r.Vulnerabilities)
 		}(i)

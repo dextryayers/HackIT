@@ -129,20 +129,19 @@ pub struct PortResult {
 
 fn detect_service(banner: &str, port: u16) -> (String, String, String) {
     for (pattern, service, product, version_hint, _sig_port) in SERVICE_SIGNATURES.iter() {
-        let re = {
+        let re_owned = {
             let mut cache = RE_CACHE.lock().unwrap();
-            cache.entry(pattern.to_string()).or_insert_with(|| Regex::new(pattern).unwrap())
+            cache.entry(pattern.to_string()).or_insert_with(|| Regex::new(pattern).unwrap()).clone()
         };
-        if let Some(caps) = re.captures(banner) {
-                let version = if caps.len() > 1 {
-                    caps[1].to_string()
-                } else {
-                    version_hint.to_string()
-                };
-                return (service.to_string(), product.to_string(), version);
-            }
+        if let Some(caps) = re_owned.captures(banner) {
+            let version = if caps.len() > 1 {
+                caps[1].to_string()
+            } else {
+                version_hint.to_string()
+            };
+            return (service.to_string(), product.to_string(), version);
         }
-    }
+        }
     let service = match port {
         21 => "FTP", 22 => "SSH", 23 => "Telnet", 25 => "SMTP",
         53 => "DNS", 80 => "HTTP", 110 => "POP3", 111 => "RPC",

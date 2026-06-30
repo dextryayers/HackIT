@@ -74,6 +74,110 @@ class Tip:
         tk.Label(self.tw,text=self.t,font=SMALL,fg=C.TEXT,bg='#0d1117',
                  bd=1,relief='solid',padx=8,pady=4).pack()
 
+class VirtualPortList(tk.Canvas):
+    def __init__(self, parent, **kw):
+        super().__init__(parent, bg=C.BG2, highlightthickness=0, **kw)
+        self.items = []
+        self.visible_start = 0
+        self.visible_count = 0
+        self.row_height = 26
+        self._font = MONO
+        self._bold_font = MONO_B
+        self._sort_reverse = False
+        self._sort_col = 0
+        self.configure(yscrollincrement=self.row_height)
+        self.bind('<Configure>', self._on_resize, '+')
+        self.bind('<MouseWheel>', self._on_scroll, '+')
+        self.bind('<Button-4>', lambda e: self._scroll(-3), '+')
+        self.bind('<Button-5>', lambda e: self._scroll(3), '+')
+        self._header_h = 28
+        self._draw_header()
+        self._redraw_after = None
+
+    def _draw_header(self):
+        self.delete('header')
+        cols = [('PORT', 70), ('STATUS', 80), ('SERVICE', 100), ('VERSION', 130), ('BANNER', 200)]
+        x = 4
+        self._col_x = []
+        self._col_w = []
+        for name, w in cols:
+            self._col_x.append(x)
+            self._col_w.append(w)
+            self.create_text(x + 4, 2, anchor='nw', text=name, font=self._bold_font,
+                             fill=C.CYAN, tags='header')
+            self.create_line(x + w + 4, 2, x + w + 4, self._header_h - 2, fill=C.BORD, tags='header')
+            x += w + 8
+        self.create_line(4, self._header_h - 1, x + 4, self._header_h - 1, fill=C.BORD, tags='header')
+
+    def _on_resize(self, e):
+        self.visible_count = (e.height - self._header_h) // self.row_height + 1
+        if self._redraw_after:
+            self.after_cancel(self._redraw_after)
+        self._redraw_after = self.after(50, self._render)
+
+    def _on_scroll(self, e):
+        self._scroll(-(e.delta // 120))
+
+    def _scroll(self, delta):
+        self.visible_start = max(0, min(self.visible_start + delta, max(0, len(self.items) - self.visible_count)))
+        self._render()
+
+    def set_items(self, items):
+        self.items = items
+        self.yview_moveto(0)
+        self.visible_start = 0
+        self._render()
+
+    def add_item(self, item):
+        self.items.append(item)
+        if len(self.items) - self.visible_start <= self.visible_count + 1:
+            self._render()
+
+    def _color_for_status(self, status):
+        s = status.upper() if status else ''
+        if s == 'OPEN': return C.GREEN
+        if s in ('FILTERED', 'FORBIDDEN'): return C.YELLOW
+        if s == 'CLOSED': return C.RED
+        return C.TEXT2
+
+    def _render(self):
+        self.delete('row')
+        w = self.winfo_width()
+        y = self._header_h
+        end = min(self.visible_start + self.visible_count, len(self.items))
+        for i in range(self.visible_start, end):
+            item = self.items[i]
+            bg = C.BG2 if i % 2 == 0 else '#111'
+            if len(item) >= 5:
+                p, st, svc, ver, ban = item[:5]
+            else:
+                continue
+            # Background
+            self.create_rectangle(0, y, w, y + self.row_height, fill=bg, outline='', tags='row')
+            # Port
+            pc = self._color_for_status(st)
+            self.create_text(self._col_x[0] + 4, y + 2, anchor='nw', text=str(p),
+                             font=self._bold_font, fill=pc, tags='row')
+            # Status
+            self.create_text(self._col_x[1] + 4, y + 2, anchor='nw', text=st.upper() if st else '',
+                             font=self._font, fill=pc, tags='row')
+            # Service
+            self.create_text(self._col_x[2] + 4, y + 2, anchor='nw', text=str(svc)[:18] if svc else '',
+                             font=self._font, fill=C.TEXT, tags='row')
+            # Version
+            self.create_text(self._col_x[3] + 4, y + 2, anchor='nw', text=str(ver)[:22] if ver else '',
+                             font=self._font, fill=C.TEXT2, tags='row')
+            # Banner
+            ban_str = str(ban).replace('\n', ' ').replace('\r', '')[:35] if ban else ''
+            self.create_text(self._col_x[4] + 4, y + 2, anchor='nw', text=ban_str,
+                             font=self._font, fill=C.DIM, tags='row')
+            y += self.row_height
+        total = len(self.items)
+        self.delete('footer')
+        self.create_text(4, max(y, self._header_h + 2), anchor='nw',
+                         text=f'{total} ports  |  showing {self.visible_start + 1}-{end}',
+                         font=SMALL, fill=C.TEXT2, tags='footer')
+
 class GUI:
     def __init__(self):
         self._theme='dark'
@@ -92,6 +196,8 @@ class GUI:
         self._spin_idx=0; self._collapsed=False; self._theme='dark'
         self._batch_update=False
         self._after_ids=[]
+        self._rate_history = [0] * 120
+        self._ctrl_sock = None
         # Master timer tracking (avoids multiple after calls)
         self._mt_tick=0
         # Pre-rendered StringVars
@@ -137,26 +243,31 @@ class GUI:
         if self._batch_update:
             self._after('master',50,self._master_timer)
             return
+        batch_size = 0
         with self._ui_lock:
-            while not self.q.empty():
+            while not self.q.empty() and batch_size < 100:
                 typ,data=self.q.get_nowait()
+                batch_size += 1
                 if typ=='log':
                     txt,tag=data
                     self.log.insert('end',txt+'\n',tag or())
                     self.log.see('end')
                 elif typ=='result':
                     p,st,svc,ver,ban=data
-                    idx=len(self.tree.get_children())
-                    tags=['even'if idx%2 else'odd']
-                    if st=='OPEN': tags.append('open')
-                    self.tree.insert('','end',values=data,tags=tags)
-                    c=len(self.tree.get_children())
+                    self._vpl.add_item(data)
+                    c=self._vpl.items.__len__()
                     self.cnv.set(f'{c} ports'); self.rcv.set(f'{c} ports')
                     self.res_cnt=c
-                    if str(p).isdigit():
-                        ports=[int(self.tree.item(k,'values')[0])for k in self.tree.get_children()
-                               if self.tree.item(k,'values')[0].isdigit()]
-                        if ports: self.rminv.set(f'\u2193{min(ports)}'); self.rmaxv.set(f'\u2191{max(ports)}')
+                    if str(p).isdigit() and c == 1:
+                        self.rminv.set(f'\u2193{p}'); self.rmaxv.set(f'\u2191{p}')
+                    elif str(p).isdigit():
+                        try:
+                            cur_min = int(self.rminv.get().replace('\u2193',''))
+                            cur_max = int(self.rmaxv.get().replace('\u2191',''))
+                            pi = int(p)
+                            if pi < cur_min: self.rminv.set(f'\u2193{pi}')
+                            if pi > cur_max: self.rmaxv.set(f'\u2191{pi}')
+                        except: pass
                 elif typ=='st': self.sv.set(f'\u25cf {data}')
                 elif typ=='prog':
                     self.prog['value']=data
@@ -170,24 +281,44 @@ class GUI:
         # Master timer ticks - run periodic tasks
         self._mt_tick+=1
         if self.running:
-            # Spin animation every 200ms (4 ticks at 50ms)
             if self._mt_tick%4==0:
                 chars=['\u25cf ','\u25cb ','\u25d8 ','\u25d9 ']
                 self._spin_idx=(self._spin_idx+1)%len(chars)
                 self._scan_indicator.config(text=chars[self._spin_idx],fg=C.GREEN)
-            # Rate calculation every 1000ms (20 ticks)
             if self._mt_tick%20==0:
-                self.spv.set(f'{self.rc}/s'); self.rc=0
+                self._rate_history.append(self.rc)
+                self._rate_history = self._rate_history[-120:]
+                self.spv.set(f'{self.rc}/s')
+                self._draw_rate_chart()
+                self.rc=0
                 if self.start:
                     el=time.time()-self.start
                     mins,secs=divmod(int(el),60)
                     self.elv.set(f'{mins}:{secs:02d}')
-            # Pulse animation every ~960ms
-            if self._mt_tick%19==0:
-                colors=[C.GREEN,'#2ea043','#238636','#196c2e','#0f5322']
-                for i,c in enumerate(colors):
-                    self.root.after(i*120,lambda c=c:self.sb.configure(highlightbackground=c))
         self._after('master',50,self._master_timer)
+
+    def _draw_rate_chart(self):
+        try:
+            cw = self._rate_chart.winfo_width() or 200
+            ch = self._rate_chart.winfo_height() or 50
+            self._rate_chart.delete('all')
+            if not self._rate_history or max(self._rate_history) == 0:
+                return
+            max_r = max(self._rate_history)
+            n = len(self._rate_history)
+            points = []
+            for i, r in enumerate(self._rate_history):
+                x = int(cw * i / n)
+                y = int(ch - (ch * r / max_r))
+                points.append((x, y))
+            if len(points) > 1:
+                for i in range(len(points) - 1):
+                    x1, y1 = points[i]
+                    x2, y2 = points[i + 1]
+                    self._rate_chart.create_line(x1, y1, x2, y2, fill=C.CYAN, width=1.5)
+                self._rate_chart.create_text(cw - 2, 2, anchor='ne', text=f'{max_r}/s max',
+                                             font=TINY, fill=C.TEXT2)
+        except: pass
 
     def _startup_animation(self):
         splash=tk.Frame(self.root,bg=C.BG1,highlightthickness=0)
@@ -827,7 +958,7 @@ class GUI:
     # ── Results ────────────────────────────────────────────────────
     def _res(self,p):
         h=tk.Frame(p,bg=C.BG1); h.pack(fill='x')
-        tk.Label(h,text='Open Port Results',font=FONT_B,fg=C.CYAN,bg=C.BG1).pack(side='left')
+        tk.Label(h,text='Port Scan Results',font=FONT_B,fg=C.CYAN,bg=C.BG1).pack(side='left')
         self.rcv=tk.StringVar(value='0 ports')
         tk.Label(h,textvariable=self.rcv,font=SMALL,fg=C.TEXT2,bg=C.BG1
                  ).pack(side='left',padx=(8,0))
@@ -836,64 +967,67 @@ class GUI:
                  ).pack(side='left',padx=(4,0))
         tk.Label(h,textvariable=self.rmaxv,font=TINY,fg=C.DIM,bg=C.BG1
                  ).pack(side='left',padx=(4,0))
-        self._btn(h,'Filter',self._res_filter).pack(side='right',padx=(0,2))
         self._btn(h,'Export',self._exp).pack(side='right',padx=(0,2))
         self._btn(h,'\u00d7 Clear',self._clear_res).pack(side='right')
-        cols=('Port','State','Service','Version','Banner')
-        self.tree=ttk.Treeview(p,columns=cols,show='headings',selectmode='extended')
-        for c in cols:
-            self.tree.heading(c,text=c,anchor='w',
-                              command=lambda _c=c:self._sort(self.tree,_c,0))
-            self.tree.column(c,width={'Port':65,'State':80,'Service':125,
-                                      'Version':145,'Banner':580}[c],
-                             anchor='center'if c in('Port','State')else'w')
-        self.tree.tag_configure('even',background=C.BG2)
-        self.tree.tag_configure('odd',background='#0d1520')
-        self.tree.tag_configure('open',foreground=C.GREEN)
-        self.tree.bind('<Button-3>',self._ctx)
-        vsb=ttk.Scrollbar(p,orient='vertical',command=self.tree.yview,style='Vertical.TScrollbar')
-        self.tree.configure(yscrollcommand=vsb.set)
-        self.tree.pack(side='left',fill='both',expand=1,pady=(4,0))
-        vsb.pack(side='right',fill='y',pady=(4,0))
+        # Virtual canvas-based port list (handles 65k+ ports smoothly)
+        vp = tk.Frame(p, bg=C.BG2)
+        vp.pack(fill='both', expand=1, pady=(4,0))
+        self._vpl = VirtualPortList(vp)
+        self._vpl.pack(side='left', fill='both', expand=1)
+        vsb = tk.Scrollbar(vp, orient='vertical', command=self._vpl.yview,
+                           bg=C.BTN, troughcolor=C.BG1, width=14,
+                           activebackground=C.HV, highlightbackground=C.BG1)
+        self._vpl.configure(yscrollcommand=vsb.set)
+        vsb.pack(side='right', fill='y')
+        self._vpl.bind('<Button-3>', self._ctx)
+        self._vpl.bind('<Button-1>', self._on_vpl_click, '+')
+        # Mini rate chart
+        cf = tk.Frame(p, bg=C.BG1)
+        cf.pack(fill='x', pady=(2, 0))
+        tk.Label(cf, text='Scan Rate (ports/s)', font=TINY, fg=C.TEXT2, bg=C.BG1).pack(anchor='w')
+        self._rate_chart = tk.Canvas(cf, height=45, bg=C.BG2, highlightthickness=0)
+        self._rate_chart.pack(fill='x')
 
     def _clear_res(self):
-        for r in self.tree.get_children(): self.tree.delete(r)
+        self._vpl.items.clear()
+        self._vpl._render()
         self.rcv.set('0 ports'); self.rminv.set(''); self.rmaxv.set('')
 
     def _res_filter(self):
-        sel=self.tree.selection()
-        if not sel: return
-        ports=[int(self.tree.item(k,'values')[0])for k in sel if self.tree.item(k,'values')[0].isdigit()]
-        if ports: self._toast(f'Selected: {min(ports)}-{max(ports)} ({len(ports)} ports)',C.CYAN)
-
-    def _sort(self,t,c,r):
-        items=[(t.set(k,c),k)for k in t.get_children('')]
-        try: items.sort(key=lambda x:(float(x[0])if x[0].replace('.','',1).isdigit()else x[0].lower()),reverse=r)
-        except: items.sort(key=lambda x:x[0].lower(),reverse=r)
-        for i,(_,k)in enumerate(items): t.move(k,'',i)
-        t.heading(c,command=lambda:self._sort(t,c,not r))
+        pass
 
     def _ctx(self,e):
-        sel=self.tree.identify_row(e.y)
-        if not sel: return
-        self.tree.selection_set(sel)
         m=tk.Menu(self.root,tearoff=0,bg=C.CARD,fg=C.TEXT,activebackground=C.SEL,activeforeground='#fff')
-        v=self.tree.item(sel,'values')
-        m.add_command(label='\U0001f4cb Copy Port',command=lambda:self._cp(v[0]))
-        m.add_command(label='\U0001f4cb Copy Row',command=lambda:self._cp('\t'.join(v)))
-        m.add_command(label='\U0001f4be Export Row',command=lambda:self._exp_row(v))
-        m.add_separator()
         m.add_command(label='\U0001f4cb Copy All',command=self._cp_all)
         m.tk_popup(e.x_root,e.y_root)
 
     def _cp(self,t): self.root.clipboard_clear(); self.root.clipboard_append(t)
-    def _exp_row(self,v):
-        p=filedialog.asksaveasfilename(defaultextension='.json',filetypes=[('JSON','*.json')])
-        if not p: return
-        with open(p,'w')as f: json.dump(dict(zip(['port','state','service','version','banner'],v)),f,indent=2)
     def _cp_all(self):
-        rows=[self.tree.item(k,'values')for k in self.tree.get_children()]
-        self._cp('\n'.join('\t'.join(r)for r in rows))
+        rows=[tuple(item[:5])for item in self._vpl.items]
+        self._cp('\n'.join('\t'.join(str(c)for c in r)for r in rows))
+
+    def _on_vpl_click(self, e):
+        if e.y < 28:  # header click
+            idx = 0
+            for x, w in zip(self._vpl._col_x, self._vpl._col_w):
+                if x <= e.x - 4 <= x + w:
+                    self._sort_vpl(idx)
+                    return
+                idx += 1
+
+    def _sort_vpl(self, col):
+        self._vpl._sort_col = col
+        self._vpl._sort_reverse = not self._vpl._sort_reverse
+        rev = self._vpl._sort_reverse
+        def sk(item):
+            try: val = item[col]
+            except: return ''
+            if col == 0:
+                try: return (int(val), '') if str(val).isdigit() else (float('inf'), str(val).lower())
+                except: return (float('inf'), str(val).lower())
+            return str(val).lower()
+        self._vpl.items.sort(key=sk, reverse=rev)
+        self._vpl._render()
 
     # ── NSE Results ────────────────────────────────────────────────
     def _nse_tab(self,p):
@@ -1157,7 +1291,8 @@ class GUI:
             if len(self.target_hist)>50: self.target_hist.pop(0)
             self.tc['values']=list(self.target_hist)
         self.results.clear()
-        for t in(self.tree,self.nt):
+        self._clear_res()
+        for t in(self.nt,):
             for r in t.get_children(): t.delete(r)
         self.log.delete('1.0','end')
         self.nse_log.delete('1.0','end') if hasattr(self,'nse_log') else None
@@ -1323,7 +1458,7 @@ class GUI:
         self.sb.configure(highlightbackground=C.GREEN)
         self.stb.children['!button'].config(state='disabled')
         self._prog(100)
-        c=len(self.tree.get_children()); nc=len(self.nt.get_children())
+        c=len(self._vpl.items); nc=len(self.nt.get_children())
         tgt=self.tv.get().strip()
         el=time.time()-(self.start or time.time())
         rate=int(self.sc/el)if el>0 else 0
@@ -1343,12 +1478,11 @@ class GUI:
 
     # ── Export ─────────────────────────────────────────────────────
     def _exp(self):
-        ch=self.tree.get_children()
-        if not ch: return
+        if not self._vpl.items: return
         p=filedialog.asksaveasfilename(defaultextension='.json',filetypes=[('JSON','*.json')])
         if not p: return
         keys=['port','state','service','version','banner']
-        data=[dict(zip(keys,self.tree.item(k,'values')))for k in ch]
+        data=[dict(zip(keys,item[:5]))for item in self._vpl.items]
         with open(p,'w')as f: json.dump(data,f,indent=2)
         self._logf(f'[+] Exported {len(data)} results \u2192 {Path(p).name}','ok')
 

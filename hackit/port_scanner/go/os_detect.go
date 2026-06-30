@@ -95,7 +95,7 @@ func RunCExpertOSDetectDetailed(host string, openPorts string, ttl int, window i
 	return ""
 }
 
-// OSInfo holds the detected OS information
+// OSInfo holds the detected OS information with full TCP/IP fingerprint details
 type OSInfo struct {
 	Name        string  `json:"name"`
 	Version     string  `json:"version,omitempty"`
@@ -109,6 +109,14 @@ type OSInfo struct {
 	TTL         int     `json:"ttl,omitempty"`
 	Window      int     `json:"window,omitempty"`
 	MSS         int     `json:"mss,omitempty"`
+	WScale      int     `json:"wscale,omitempty"`
+	DF          string  `json:"df,omitempty"`
+	Timestamps  string  `json:"timestamps,omitempty"`
+	SACK        string  `json:"sack,omitempty"`
+	DeviceType  string  `json:"device_type,omitempty"`
+	TCPOptions  string  `json:"tcp_options,omitempty"`
+	Signature   string  `json:"signature,omitempty"`
+	BannerHint  string  `json:"banner_hint,omitempty"`
 }
 
 func normalizeOSFamily(name string) string {
@@ -422,63 +430,231 @@ func AnalyzeOSFromBanners(host string) OSInfo {
 	return OSInfo{Name: "Unknown", Confidence: 0.0}
 }
 
+// serviceVersionToOS maps (service, major, minor) to OS name
+type svcOSEntry struct {
+	svcKeyword string
+	minVer     [3]int
+	maxVer     [3]int
+	osName     string
+}
+
+var serviceOSDB = []svcOSEntry{
+	// OpenSSH → OS
+	{"openssh", [3]int{1, 0, 0}, [3]int{3, 99, 99}, "OpenBSD"},
+	{"openssh", [3]int{5, 0, 0}, [3]int{5, 2, 99}, "Ubuntu"},
+	{"openssh", [3]int{5, 3, 0}, [3]int{5, 3, 99}, "Ubuntu 12.04"},
+	{"openssh", [3]int{5, 5, 0}, [3]int{5, 5, 99}, "Ubuntu 12.04"},
+	{"openssh", [3]int{5, 8, 0}, [3]int{5, 9, 99}, "Debian"},
+	{"openssh", [3]int{6, 0, 0}, [3]int{6, 5, 99}, "Ubuntu"},
+	{"openssh", [3]int{6, 6, 0}, [3]int{6, 6, 99}, "Ubuntu 14.04"},
+	{"openssh", [3]int{6, 7, 0}, [3]int{6, 7, 99}, "Debian 8"},
+	{"openssh", [3]int{6, 9, 0}, [3]int{7, 2, 99}, "Ubuntu 16.04"},
+	{"openssh", [3]int{7, 4, 0}, [3]int{7, 4, 99}, "Ubuntu 17.04"},
+	{"openssh", [3]int{7, 5, 0}, [3]int{7, 5, 99}, "Debian 10"},
+	{"openssh", [3]int{7, 6, 0}, [3]int{7, 8, 99}, "Ubuntu 18.04"},
+	{"openssh", [3]int{7, 9, 0}, [3]int{8, 2, 99}, "Ubuntu 20.04"},
+	{"openssh", [3]int{8, 1, 0}, [3]int{8, 1, 99}, "Debian 11"},
+	{"openssh", [3]int{8, 3, 0}, [3]int{8, 3, 99}, "Debian 11"},
+	{"openssh", [3]int{8, 5, 0}, [3]int{8, 6, 99}, "Fedora"},
+	{"openssh", [3]int{8, 7, 0}, [3]int{8, 7, 99}, "Debian 12"},
+	{"openssh", [3]int{8, 8, 0}, [3]int{9, 0, 99}, "Ubuntu 22.04"},
+	{"openssh", [3]int{9, 1, 0}, [3]int{9, 1, 99}, "Ubuntu 23.04"},
+	{"openssh", [3]int{9, 2, 0}, [3]int{9, 2, 99}, "Ubuntu 23.10"},
+	{"openssh", [3]int{9, 3, 0}, [3]int{9, 9, 99}, "Ubuntu 24.04"},
+
+	// Apache → OS
+	{"apache httpd", [3]int{2, 4, 1}, [3]int{2, 4, 7}, "Ubuntu 14.04"},
+	{"apache httpd", [3]int{2, 4, 10}, [3]int{2, 4, 10}, "Debian 8"},
+	{"apache httpd", [3]int{2, 4, 18}, [3]int{2, 4, 18}, "Ubuntu 16.04"},
+	{"apache httpd", [3]int{2, 4, 25}, [3]int{2, 4, 25}, "Debian 9"},
+	{"apache httpd", [3]int{2, 4, 29}, [3]int{2, 4, 38}, "Ubuntu 18.04"},
+	{"apache httpd", [3]int{2, 4, 37}, [3]int{2, 4, 37}, "Debian 10"},
+	{"apache httpd", [3]int{2, 4, 41}, [3]int{2, 4, 51}, "Ubuntu 20.04"},
+	{"apache httpd", [3]int{2, 4, 48}, [3]int{2, 4, 48}, "Debian 11"},
+	{"apache httpd", [3]int{2, 4, 52}, [3]int{2, 4, 55}, "Ubuntu 22.04"},
+	{"apache httpd", [3]int{2, 4, 54}, [3]int{2, 4, 54}, "Debian 12"},
+	{"apache httpd", [3]int{2, 4, 56}, [3]int{2, 4, 56}, "Ubuntu 23.04"},
+	{"apache httpd", [3]int{2, 4, 57}, [3]int{2, 9, 99}, "Ubuntu 24.04"},
+
+	// Nginx → OS
+	{"nginx", [3]int{1, 10, 0}, [3]int{1, 10, 99}, "Ubuntu 16.04"},
+	{"nginx", [3]int{1, 14, 0}, [3]int{1, 14, 99}, "Ubuntu 18.04"},
+	{"nginx", [3]int{1, 15, 0}, [3]int{1, 15, 99}, "Debian 10"},
+	{"nginx", [3]int{1, 18, 0}, [3]int{1, 18, 99}, "Ubuntu 20.04"},
+	{"nginx", [3]int{1, 20, 0}, [3]int{1, 20, 99}, "Debian 11"},
+	{"nginx", [3]int{1, 22, 0}, [3]int{1, 22, 99}, "Ubuntu 22.04"},
+	{"nginx", [3]int{1, 24, 0}, [3]int{1, 24, 99}, "Ubuntu 23.04"},
+	{"nginx", [3]int{1, 25, 0}, [3]int{1, 99, 99}, "Ubuntu 24.04"},
+
+	// IIS → Windows
+	{"iis", [3]int{7, 0, 0}, [3]int{7, 0, 99}, "Windows Server 2008"},
+	{"iis", [3]int{7, 5, 0}, [3]int{7, 5, 99}, "Windows Server 2008 R2"},
+	{"iis", [3]int{8, 0, 0}, [3]int{8, 0, 99}, "Windows Server 2012"},
+	{"iis", [3]int{8, 5, 0}, [3]int{8, 5, 99}, "Windows Server 2012 R2"},
+	{"iis", [3]int{10, 0, 0}, [3]int{99, 99, 99}, "Windows Server 2016/2019/2022"},
+
+	// MySQL → Linux
+	{"mysql", [3]int{0, 0, 0}, [3]int{99, 99, 99}, "Linux"},
+	{"mariadb", [3]int{0, 0, 0}, [3]int{99, 99, 99}, "Linux"},
+
+	// PostgreSQL → Linux
+	{"postgresql", [3]int{0, 0, 0}, [3]int{99, 99, 99}, "Linux"},
+
+	// FTP → OS
+	{"pure-ftpd", [3]int{0, 0, 0}, [3]int{99, 99, 99}, "Linux"},
+	{"vsftpd", [3]int{0, 0, 0}, [3]int{99, 99, 99}, "Linux"},
+	{"proftpd", [3]int{0, 0, 0}, [3]int{99, 99, 99}, "Linux/Unix"},
+
+	// Mail → OS
+	{"dovecot", [3]int{0, 0, 0}, [3]int{99, 99, 99}, "Linux"},
+	{"postfix", [3]int{0, 0, 0}, [3]int{99, 99, 99}, "Linux"},
+	{"exim", [3]int{0, 0, 0}, [3]int{99, 99, 99}, "Linux"},
+	{"sendmail", [3]int{0, 0, 0}, [3]int{99, 99, 99}, "Linux/Unix"},
+
+	// LiteSpeed → OS
+	{"litespeed", [3]int{0, 0, 0}, [3]int{99, 99, 99}, "Linux (cPanel)"},
+}
+
+func matchServiceVersion(svc, ver string) (string, float64) {
+	svcLower := strings.ToLower(svc)
+	verParts := parseVersionInts(ver)
+
+	for _, entry := range serviceOSDB {
+		if !strings.Contains(svcLower, entry.svcKeyword) {
+			continue
+		}
+		if entry.minVer == [3]int{0, 0, 0} && entry.maxVer == [3]int{99, 99, 99} {
+			return entry.osName, 0.85
+		}
+		if len(verParts) >= 3 {
+			v := [3]int{verParts[0], verParts[1], verParts[2]}
+			if versionGE(v, entry.minVer) && versionLE(v, entry.maxVer) {
+				return entry.osName, 0.90
+			}
+		}
+	}
+	return "", 0
+}
+
+func parseVersionInts(ver string) []int {
+	var parts []int
+	for _, p := range strings.Split(ver, ".") {
+		p = strings.TrimSpace(p)
+		n := 0
+		for _, c := range p {
+			if c >= '0' && c <= '9' {
+				n = n*10 + int(c-'0')
+			} else {
+				break
+			}
+		}
+		parts = append(parts, n)
+	}
+	return parts
+}
+
+func versionGE(a, b [3]int) bool {
+	return a[0] >= b[0] && a[1] >= b[1] && a[2] >= b[2]
+}
+func versionLE(a, b [3]int) bool {
+	return a[0] <= b[0] && a[1] <= b[1] && a[2] <= b[2]
+}
+
 // AnalyzeOSFromBanner analyzes a single banner for OS detection
 func AnalyzeOSFromBanner(banner string) OSInfo {
 	bannerLower := strings.ToLower(banner)
 
-	// Linux indicators
-	if strings.Contains(bannerLower, "ubuntu") {
-		return OSInfo{Name: "Ubuntu", Confidence: 0.95}
-	}
-	if strings.Contains(bannerLower, "debian") {
-		return OSInfo{Name: "Debian", Confidence: 0.95}
-	}
-	if strings.Contains(bannerLower, "centos") {
-		return OSInfo{Name: "CentOS", Confidence: 0.95}
-	}
-	if strings.Contains(bannerLower, "red hat") || strings.Contains(bannerLower, "rhel") {
-		return OSInfo{Name: "Red Hat Enterprise Linux", Confidence: 0.92}
-	}
-	if strings.Contains(bannerLower, "fedora") {
-		return OSInfo{Name: "Fedora", Confidence: 0.92}
-	}
-	if strings.Contains(bannerLower, "alpine") {
-		return OSInfo{Name: "Alpine Linux", Confidence: 0.90}
+	// Specific OS distribution names (high confidence)
+	osHints := []struct {
+		keyword    string
+		osName     string
+		confidence float64
+	}{
+		{"ubuntu 24", "Ubuntu 24.04", 0.95},
+		{"ubuntu 23", "Ubuntu 23.04", 0.95},
+		{"ubuntu 22", "Ubuntu 22.04", 0.95},
+		{"ubuntu 21", "Ubuntu 21.04", 0.95},
+		{"ubuntu 20", "Ubuntu 20.04", 0.95},
+		{"ubuntu 18", "Ubuntu 18.04", 0.95},
+		{"ubuntu 16", "Ubuntu 16.04", 0.95},
+		{"ubuntu 14", "Ubuntu 14.04", 0.95},
+		{"ubuntu", "Ubuntu", 0.90},
+		{"debian 12", "Debian 12", 0.95},
+		{"debian 11", "Debian 11", 0.95},
+		{"debian 10", "Debian 10", 0.95},
+		{"debian 9", "Debian 9", 0.95},
+		{"debian 8", "Debian 8", 0.95},
+		{"debian", "Debian", 0.90},
+		{"centos 9", "CentOS 9", 0.95},
+		{"centos 8", "CentOS 8", 0.95},
+		{"centos 7", "CentOS 7", 0.95},
+		{"centos", "CentOS", 0.90},
+		{"red hat", "Red Hat Enterprise Linux", 0.92},
+		{"rhel 9", "RHEL 9", 0.95},
+		{"rhel 8", "RHEL 8", 0.95},
+		{"rhel 7", "RHEL 7", 0.95},
+		{"fedora 40", "Fedora 40", 0.95},
+		{"fedora 39", "Fedora 39", 0.95},
+		{"fedora 38", "Fedora 38", 0.95},
+		{"fedora", "Fedora", 0.90},
+		{"alpine 3", "Alpine Linux", 0.92},
+		{"alpine", "Alpine Linux", 0.85},
+		{"suse", "SUSE Linux", 0.90},
+		{"opensuse", "openSUSE", 0.90},
+		{"arch linux", "Arch Linux", 0.95},
+		{"gentoo", "Gentoo Linux", 0.90},
+		{"slackware", "Slackware", 0.90},
+		{"microsoft", "Windows", 0.90},
+		{"windows server 2022", "Windows Server 2022", 0.95},
+		{"windows server 2019", "Windows Server 2019", 0.95},
+		{"windows server 2016", "Windows Server 2016", 0.95},
+		{"windows server 2012", "Windows Server 2012", 0.95},
+		{"windows server 2008", "Windows Server 2008", 0.95},
+		{"windows 11", "Windows 11", 0.95},
+		{"windows 10", "Windows 10", 0.95},
+		{"windows", "Windows", 0.85},
+		{"iis 10", "Windows Server 2016/2019/2022", 0.95},
+		{"iis 8", "Windows Server 2012", 0.95},
+		{"iis 7", "Windows Server 2008", 0.95},
+		{"cisco ios", "Cisco IOS", 0.97},
+		{"cisco", "Cisco IOS", 0.92},
+		{"mikrotik", "MikroTik RouterOS", 0.95},
+		{"juniper", "Juniper Junos", 0.95},
+		{"freebsd", "FreeBSD", 0.95},
+		{"openbsd", "OpenBSD", 0.95},
+		{"netbsd", "NetBSD", 0.95},
+		{"macos", "macOS", 0.90},
+		{"darwin", "macOS", 0.90},
+		{"apple", "macOS", 0.80},
+		{"solaris", "Solaris", 0.92},
+		{"sunos", "Solaris", 0.90},
+		{"aix", "AIX", 0.92},
+		{"hp-ux", "HP-UX", 0.92},
+		{"hpux", "HP-UX", 0.90},
+		{"openwrt", "OpenWrt", 0.95},
+		{"dd-wrt", "DD-WRT", 0.95},
+		{"pfsense", "pfSense", 0.95},
+		{"vyos", "VyOS", 0.95},
+		{"synology", "Synology DSM", 0.95},
+		{"qnap", "QNAP", 0.95},
+		{"vmware", "VMware ESXi", 0.90},
+		{"esxi", "VMware ESXi", 0.95},
+		{"xen", "Xen Server", 0.90},
+		{"proxmox", "Proxmox VE", 0.95},
+		{"docker", "Linux (Container)", 0.85},
+		{"kubernetes", "Linux (Kubernetes)", 0.85},
+		{"android", "Android", 0.90},
+		{"iphone", "iOS", 0.90},
+		{"ipad", "iPadOS", 0.90},
 	}
 
-	// Windows indicators
-	if strings.Contains(bannerLower, "microsoft") || strings.Contains(bannerLower, "windows") {
-		return OSInfo{Name: "Windows", Confidence: 0.90}
-	}
-	if strings.Contains(bannerLower, "iis") {
-		return OSInfo{Name: "Windows Server", Confidence: 0.95}
-	}
-
-	// Network devices
-	if strings.Contains(bannerLower, "cisco") {
-		return OSInfo{Name: "Cisco IOS", Confidence: 0.95}
-	}
-	if strings.Contains(bannerLower, "mikrotik") {
-		return OSInfo{Name: "MikroTik RouterOS", Confidence: 0.95}
-	}
-	if strings.Contains(bannerLower, "juniper") {
-		return OSInfo{Name: "Juniper Junos", Confidence: 0.95}
-	}
-
-	// BSD
-	if strings.Contains(bannerLower, "freebsd") {
-		return OSInfo{Name: "FreeBSD", Confidence: 0.95}
-	}
-	if strings.Contains(bannerLower, "openbsd") {
-		return OSInfo{Name: "OpenBSD", Confidence: 0.95}
+	for _, hint := range osHints {
+		if strings.Contains(bannerLower, hint.keyword) {
+			return OSInfo{Name: hint.osName, Confidence: hint.confidence}
+		}
 	}
 
 	return OSInfo{Name: "Unknown", Confidence: 0.0}
-}
-
-// HeuristicOSDetect uses common indicators to guess OS before/during scan
-func HeuristicOSDetect(host string) OSInfo {
-	return OSInfo{Name: "Detecting...", Confidence: 0.5}
 }
 
 // AnalyzeOSFromResults analyzes collected scan results to guess the OS
@@ -486,13 +662,65 @@ func AnalyzeOSFromResults(host string, results []PortResult) OSInfo {
 	var evidence []string
 	var openPorts []int
 	bannerSample := ""
+	osVotes := make(map[string]float64)
 	for _, r := range results {
 		if r.Banner != "" {
 			bannerSample += r.Banner + " "
 		}
 		if r.State == "open" {
-			evidence = append(evidence, fmt.Sprintf("open port %d/tcp", r.Port))
 			openPorts = append(openPorts, r.Port)
+		}
+	}
+
+	// Phase 1: Service-to-OS correlation (most accurate non-root method)
+	for _, r := range results {
+		if r.State != "open" {
+			continue
+		}
+		svc := r.Service
+		ver := r.Version
+		if svc == "" {
+			svc = r.Banner
+		}
+		if osName, conf := matchServiceVersion(svc, ver); osName != "" {
+			osVotes[osName] += conf
+			evidence = append(evidence, fmt.Sprintf("port %d %s %s → %s", r.Port, svc, ver, osName))
+		}
+	}
+
+	// Phase 2: Check for specific OS keywords in banners
+	for _, r := range results {
+		if r.State != "open" || r.Banner == "" {
+			continue
+		}
+		bannerOS := AnalyzeOSFromBanner(r.Banner)
+		if bannerOS.Confidence > 0 {
+			osVotes[bannerOS.Name] += bannerOS.Confidence
+			evidence = append(evidence, fmt.Sprintf("port %d banner: %s", r.Port, bannerOS.Name))
+		}
+	}
+
+	// If we have high-confidence service correlation, return it
+	if len(osVotes) > 0 {
+		bestOS := ""
+		bestConf := 0.0
+		totalConf := 0.0
+		for osName, conf := range osVotes {
+			totalConf += conf
+			if conf > bestConf {
+				bestConf = conf
+				bestOS = osName
+			}
+		}
+		confidence := bestConf
+		if confidence > 0.95 {
+			confidence = 0.95
+		}
+		return OSInfo{
+			Name:        bestOS,
+			Family:      normalizeOSFamily(bestOS),
+			Confidence:  confidence,
+			Fingerprint: joinEvidence(evidence),
 		}
 	}
 
@@ -507,11 +735,9 @@ func AnalyzeOSFromResults(host string, results []PortResult) OSInfo {
 		}
 	}
 
-	// 1. Try Advanced Rust OS Fingerprinting (HackIT Expert Mode)
-	// Passing heuristic guess and scan limit settings
+	// 1. Try Advanced Rust OS Fingerprinting
 	rustOSRaw := RustDetectOsDetailed(host, strings.Join(evidence, ","), true, false)
 	if rustOSRaw != "" && strings.Contains(rustOSRaw, "Operating System:") {
-		// Parse text block for name and confidence
 		lines := strings.Split(rustOSRaw, "\n")
 		var name, version string
 		for _, line := range lines {
@@ -524,14 +750,14 @@ func AnalyzeOSFromResults(host string, results []PortResult) OSInfo {
 			Name:        name,
 			Version:     version,
 			Family:      normalizeOSFamily(name),
-			Confidence:  0.8, // Base confidence for text-parsed results
+			Confidence:  0.8,
 			Fingerprint: rustOSRaw,
 		}
 	}
 
 	// 2. Try C Engine (TTL/Window based)
 	if len(results) > 0 && results[0].TTL > 0 {
-		cOutput := RunCExpertOSDetect(host, results[0].TTL, 0) // Window size extraction needs more logic
+		cOutput := RunCExpertOSDetect(host, results[0].TTL, 0)
 		if cOutput != "" {
 			cOS := ParseCOutput(cOutput)
 			if cOS.Name != "Unknown OS" {
@@ -540,11 +766,10 @@ func AnalyzeOSFromResults(host string, results []PortResult) OSInfo {
 		}
 	}
 
-	// 3. Fallback to existing Go logic (evidence-based scoring)
+	// 3. Fallback to evidence-based scoring
 	var scoreLinux, scoreWindows, scoreNetwork, scoreFreeBSD int
 	var detectedOS string
 	var maxConfidence float64
-	// evidence is already declared above
 
 	// Distro specific detection
 	distros := map[string]int{

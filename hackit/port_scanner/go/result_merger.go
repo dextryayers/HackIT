@@ -192,9 +192,7 @@ func pickBestService(entries []enginePortEntry) string {
 
 	if best == "" {
 		for _, e := range entries {
-			if name, ok := commonPorts[e.Result.Port]; ok {
-				return name
-			}
+			return lookupServiceName(e.Result.Port)
 		}
 	}
 

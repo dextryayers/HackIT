@@ -39,6 +39,7 @@ typedef struct {
     int   initial_seq;
     char  tcp_options[256];
     char  signatures[1024];
+    char  banner_hint[512];
 } OSFingerprint;
 
 typedef struct {
@@ -247,12 +248,6 @@ static int connect_and_probe(const char* host, uint32_t ip, int port, int timeou
         pclose(f);
     }
 
-    if (result->ttl == 0) result->ttl = 64;
-    if (result->window == 0) result->window = 65535;
-    if (result->mss == 0) result->mss = 1460;
-    if (result->wscale == 0) result->wscale = 7;
-    result->df = true;
-    result->seq = 12345678;
     return total > 0 ? 1 : 0;
 }
 
@@ -298,9 +293,21 @@ static void fingerprint_os(OSContext* ctx) {
     const char* os_ver = "";
     float conf = 0;
 
+    fp->banner_hint[0] = 0;
     for (int i = 0; i < valid_results; ++i) {
         const char* b = results[i].banner;
         if (!b || !b[0]) continue;
+        if (i == 0) {
+            strncpy(fp->banner_hint, b, sizeof(fp->banner_hint) - 1);
+        }
+        // LiteSpeed → CloudLinux (cPanel)
+        if (strstr(b, "LiteSpeed") && strstr(b, "Server: LiteSpeed")) {
+            os_name = "CloudLinux"; os_ver = "cPanel"; conf = 85; break;
+        }
+        // MySQL CloudLinux detection from version suffix
+        if (strstr(b, "cll") || strstr(b, "cloudlinux") || strstr(b, "lve")) {
+            os_name = "CloudLinux"; os_ver = "LVE hosting"; conf = 80; break;
+        }
         if (strstr(b, "SSH-2.0-OpenSSH")) {
             if (strstr(b, "Ubuntu")) { os_name = "Linux"; os_ver = "Ubuntu"; conf = 85; break; }
             else if (strstr(b, "Debian")) { os_name = "Linux"; os_ver = "Debian"; conf = 85; break; }
@@ -319,11 +326,15 @@ static void fingerprint_os(OSContext* ctx) {
             os_name = "Linux/Unix"; os_ver = ""; conf = 65;
         } else if (strstr(b, "Server: Microsoft-IIS")) {
             os_name = "Windows"; os_ver = "IIS"; conf = 90; break;
+        } else if (strstr(b, "Server: LiteSpeed") || strstr(b, "X-Powered-By: LiteSpeed")) {
+            os_name = "CloudLinux"; os_ver = "cPanel"; conf = 85; break;
         }
     }
 
-    if (conf == 0) {
-        if (fp->ttl <= 64) {
+    if (conf == 0 && fp->ttl == 0 && fp->window_size == 0) {
+        os_name = "Unknown"; os_ver = "Insufficient data"; conf = 0;
+    } else if (conf == 0) {
+        if (fp->ttl > 0 && fp->ttl <= 64) {
             if (fp->window_size == 5840 || fp->window_size == 29200) {
                 os_name = "Linux"; os_ver = "2.6.x - 5.x"; conf = 85;
             } else if (fp->window_size == 65535 && fp->mss == 1460) {
@@ -345,7 +356,7 @@ static void fingerprint_os(OSContext* ctx) {
             } else {
                 os_name = "Unix-like"; os_ver = "Generic"; conf = 50;
             }
-        } else if (fp->ttl <= 128) {
+        } else if (fp->ttl > 0 && fp->ttl <= 128) {
             if (fp->window_size == 8192 || fp->window_size == 64240) {
                 if (fp->mss == 1460) { os_name = "Windows"; os_ver = "10/11 / Server 2016+"; conf = 95; }
                 else { os_name = "Windows"; os_ver = "Modern"; conf = 85; }
@@ -360,7 +371,7 @@ static void fingerprint_os(OSContext* ctx) {
             } else {
                 os_name = "Windows"; os_ver = "Generic"; conf = 60;
             }
-        } else if (fp->ttl <= 255) {
+        } else if (fp->ttl > 0 && fp->ttl <= 255) {
             if (fp->window_size == 4128 || fp->window_size == 512) {
                 os_name = "Cisco IOS"; os_ver = "Generic"; conf = 85;
             } else if (fp->mss == 1500 || fp->mss == 1460) {
@@ -372,6 +383,8 @@ static void fingerprint_os(OSContext* ctx) {
             } else {
                 os_name = "Infrastructure"; os_ver = "Solaris / HP-UX / AIX"; conf = 55;
             }
+        } else {
+            os_name = "Unknown"; os_ver = ""; conf = 0;
         }
     }
 
@@ -413,12 +426,12 @@ int main(int argc, char** argv) {
     fprintf(stderr, "OS_FINGERPRINT target=%s ip=%s ports=%d\n", ctx.hostname, inet_ntoa(ia), ctx.port_count);
     fingerprint_os(&ctx);
     OSFingerprint* fp = &ctx.fp;
-    printf("RESULT:{\"os_name\":\"%s\",\"os_version\":\"%s\",\"confidence\":%.0f,\"ttl\":%d,\"window\":%d,\"mss\":%d,\"wscale\":%d,\"df\":%s,\"timestamps\":%s,\"sack\":%s,\"signature\":\"%s\"}\n",
+    printf("RESULT:{\"os_name\":\"%s\",\"os_version\":\"%s\",\"confidence\":%.0f,\"ttl\":%d,\"window\":%d,\"mss\":%d,\"wscale\":%d,\"df\":%s,\"timestamps\":%s,\"sack\":%s,\"signature\":\"%s\",\"banner_hint\":\"%s\"}\n",
         fp->os_name, fp->os_version, fp->confidence,
         fp->ttl, fp->window_size, fp->mss, fp->wscale,
         fp->df_bit ? "true" : "false",
         fp->timestamps ? "true" : "false",
         fp->sack_ok ? "true" : "false",
-        fp->signatures);
+        fp->signatures, fp->banner_hint);
     return 0;
 }

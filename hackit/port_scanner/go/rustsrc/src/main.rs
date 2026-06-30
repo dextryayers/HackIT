@@ -1,15 +1,16 @@
 use clap::{Parser, Subcommand};
-use serde::Serialize;
-use std::net::ToSocketAddrs;
-use std::time::{Duration, Instant};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
-use tokio::time::timeout;
+use std::time::Instant;
 
 mod scan;
 mod syn;
 mod os;
 mod rate;
+mod dns_resolver;
+mod ping_sweep;
+mod http_probe;
+mod tls_scanner;
+mod script_engine;
+mod vuln_check;
 
 #[derive(Parser)]
 #[command(name = "portstorm-rust", version = "3.0.0", about = "PortStorm Rust Engine — mass async scanner")]

@@ -546,58 +546,63 @@ def get_risk(port, service, banner):
 # ─────────────────────────────────────────────────────────────────
 
 def render_port_table(port_results, show_risk=False, timeline=None, open_only=False):
-    """Render port results in format: PORT : STATUS [color] : BANNER VERSION"""
+    """Render port results in clean port/service : STATUS : BANNER format."""
     if not port_results:
         return
 
-    click.echo()
-    header = _colored("  PORT NUMBER : STATUS [OPEN/CLOSED/FILTERED] : BANNER / VERSION", B_WHITE)
-    click.echo(header)
-    click.echo(_colored("  " + "─" * 70, DIM))
+    sorted_ports = sorted(port_results, key=lambda x: x.get('port', 0))
 
-    for p in sorted(port_results, key=lambda x: x.get('port', 0)):
+    click.echo()
+    click.echo(_colored("  PORT                   STATUS               BANNER & VERSION", B_WHITE, bold=True))
+    click.echo(_colored("  " + "─" * 78, DIM))
+    for p in sorted_ports:
         port_num = p.get('port', 0)
         if port_num == 0:
             continue
 
         st = p.get('status', 'unknown').lower()
-
-        if st == 'open':
-            state_colored = _colored("OPEN    ", B_GREEN, bold=True)
-        elif st in ('filtered', 'forbidden'):
-            state_colored = _colored("FILTERED", B_YELLOW, bold=True)
-        elif st == 'closed':
-            state_colored = _colored("CLOSED  ", B_RED, bold=True)
-        else:
-            state_colored = _colored(f"{st:<8}", DIM)
-
         if open_only and st != 'open':
             continue
 
-        banner = p.get('banner', p.get('version', ''))
         service = p.get('service', p.get('service_probe', ''))
-        version = p.get('version', '')
+        if not service or service in ('unknown', 'UNKNOWN'):
+            service = str(port_num)
+        service = service.split('|')[0].strip().lower().replace(' ', '-')
 
-        banner_str = str(banner).replace('\n', ' ').replace('\r', '').strip() if banner else ''
-        # Build banner/version display
+        left_raw = f"{port_num}/{service}"
+        left_display = left_raw.ljust(28)
+
+        if st == 'open':
+            port_color = B_GREEN
+            state_display = "OPEN"
+        elif st in ('filtered', 'forbidden'):
+            port_color = YELLOW
+            state_display = "FILTERED"
+        elif st == 'closed':
+            port_color = RED
+            state_display = "CLOSED"
+        else:
+            port_color = DIM
+            state_display = st.upper()
+
+        port_service = _colored(left_display, port_color, bold=(st == 'open'))
+        state_colored = _colored(f"{state_display:<8}", port_color, bold=(st == 'open'))
+
+        banner = p.get('banner', '')
+        version = p.get('version', '')
         info_parts = []
-        if service and service not in ('unknown', 'UNKNOWN', ''):
-            info_parts.append(str(service))
         if version:
             info_parts.append(str(version))
-        if banner_str and banner_str not in info_parts:
-            info_parts.append(banner_str)
+        if banner:
+            banner_str = str(banner).replace('\n', ' ').replace('\r', '').strip()
+            if banner_str:
+                info_parts.append(banner_str)
+        info_display = _colored(" | ".join(info_parts), DIM) if info_parts else ""
 
-        if info_parts:
-            info_display = _colored(" | ".join(info_parts), DIM)
-        else:
-            info_display = _colored("-", DIM)
-
-        port_str = _colored(f"{port_num:<6}", B_WHITE, bold=True)
-        line = f"  {port_str} : {state_colored} : {info_display}"
+        sep = "  " if info_display else ""
+        line = f"  {port_service} : {state_colored}{sep}{info_display}"
         click.echo(line)
 
-    click.echo(_colored("  " + "─" * 70, DIM))
     click.echo()
 
     if timeline:
@@ -683,7 +688,7 @@ def render_intel_grid(ip_addr, host_name, dns_enum, intel, os_info, mode, scan_m
 @click.option('-q', '--quiet', is_flag=True, help='Minimal output mode')
 @click.option('--no-color', is_flag=True, help='Disable colored output')
 @click.option('--open-only', is_flag=True, help='Show only open ports')
-@click.option('--timeout', 'host_timeout_sec', type=int, default=0, envvar='HACKIT_TIMEOUT', help='Per-host timeout in seconds (0=disabled)')
+@click.option('--timeout', type=int, default=0, envvar='HACKIT_TIMEOUT', help='Per-host timeout in seconds (0=disabled)')
 
 # [ STEALTH & EVASION ]
 @click.option('--ghost-protocol', is_flag=True, help='Max stealth: SYN+frag+decoys+delays')
@@ -722,6 +727,14 @@ def render_intel_grid(ip_addr, host_name, dns_enum, intel, os_info, mode, scan_m
 @click.option('--dns-server', help='Custom DNS server IP')
 @click.option('--show-version', is_flag=True, help='Display scanner version')
 @click.option('--risk', is_flag=True, help='Show risk score per port')
+
+# [ ADVANCED ]
+@click.option('--frag-size', type=int, help='Fragment size in bytes')
+@click.option('--all-engines', is_flag=True, help='Run Go+Rust+C+C++ engines in parallel and correlate')
+@click.option('--enrich', is_flag=True, help='Enrich results with Python intelligence pipeline')
+@click.option('--cpuprofile', help='Write CPU profile to file')
+@click.option('--memprofile', help='Write memory profile to file')
+@click.option('--control-socket', help='Unix socket path for GUI control commands')
 
 # [ NEW: Profiles & Pipeline ]
 @click.option('--profile', type=click.Choice(['quick', 'stealth', 'full', 'web', 'lan', 'comprehensive']),
@@ -821,6 +834,12 @@ def scan_ports(**kwargs):
             }
             raw_stages = kwargs.get('pipeline', '').split(',') if kwargs.get('pipeline') else None
             stages = [_STAGE_ALIASES.get(s.strip(), s.strip()) for s in raw_stages] if raw_stages else None
+            # Add OS detection stage if --os flag is set
+            if kwargs.get('os_detect'):
+                if stages is None:
+                    stages = ['tcp_scan', 'service_detect', 'os_detect']
+                elif 'os_detect' not in stages:
+                    stages = stages + ['os_detect']
 
             if kwargs.get('dashboard'):
                 from .live_dashboard import Dashboard
@@ -837,9 +856,117 @@ def scan_ports(**kwargs):
                                                  engines=None, stages=stages)
             if results:
                 all_ports = results.get('results', [])
+                # Resolve and show target IP
+                resolved_ip = target_raw
+                try:
+                    resolved_ip = socket.gethostbyname(target_raw)
+                except Exception:
+                    pass
+                click.echo()
+                click.echo(_colored(f"  Target: {target_raw}", B_WHITE) + _colored(f" ({resolved_ip})", DIM))
                 open_only_flag = kwargs.get('open_only', False)
                 display_ports = [p for p in all_ports if p.get('status','').lower() == 'open'] if open_only_flag else all_ports
                 render_port_table(display_ports, show_risk=kwargs.get('risk', False), open_only=open_only_flag)
+                # Show full OS fingerprint details
+                os_info = results.get('os', {})
+                if os_info and os_info.get('name', 'Unknown') not in ('Unknown', 'Detecting...', ''):
+                    os_name = os_info.get('name', 'Unknown')
+                    conf = os_info.get('confidence', os_info.get('accuracy', 0))
+                    if isinstance(conf, float) and conf < 1.0:
+                        conf = int(conf * 100)
+                    os_ver = os_info.get('version', '')
+                    os_family = os_info.get('family', '')
+                    
+                    # Show detected distribution
+                    os_display = os_name
+                    if os_ver:
+                        os_display += f" {os_ver}"
+                    
+                    click.echo()
+                    click.echo(_colored("  ──────────────── OS FINGERPRINT ────────────────", B_CYAN))
+                    
+                    # Show distribution set if available from voting
+                    os_votes = os_info.get('os_votes', {})
+                    if os_votes and len(os_votes) > 1:
+                        top_distros = [d for d, _ in sorted(os_votes.items(), key=lambda x: -x[1])[:4]]
+                        click.echo(_colored(f"  OS          : {os_display}", B_CYAN, bold=True) +
+                                    _colored(f" (confidence: {conf}%)", DIM))
+                        click.echo(_colored(f"  Candidates  : {' | '.join(top_distros)}", DIM))
+                    else:
+                        click.echo(_colored(f"  OS          : {os_display}", B_CYAN, bold=True) +
+                                    _colored(f" (confidence: {conf}%)", DIM))
+                    
+                    # TCP/IP stack fingerprint details
+                    fp_parts = []
+                    ttl = os_info.get('ttl')
+                    if ttl:
+                        fp_parts.append(f"TTL={ttl}")
+                    window = os_info.get('window')
+                    if window:
+                        fp_parts.append(f"WIN={window}")
+                    mss = os_info.get('mss')
+                    if mss:
+                        fp_parts.append(f"MSS={mss}")
+                    wscale = os_info.get('wscale')
+                    if wscale:
+                        fp_parts.append(f"WS={wscale}")
+                    df = os_info.get('df')
+                    if df:
+                        fp_parts.append(f"DF={df}")
+                    ts = os_info.get('timestamps')
+                    if ts:
+                        fp_parts.append(f"TS={ts}")
+                    sack = os_info.get('sack')
+                    if sack:
+                        fp_parts.append(f"SACK={sack}")
+                    ipid = os_info.get('ipid')
+                    if ipid:
+                        fp_parts.append(f"IPID={ipid}")
+                    family = os_info.get('family')
+                    if family:
+                        fp_parts.append(f"Family={family}")
+                    device = os_info.get('device_type')
+                    if device:
+                        fp_parts.append(f"Type={device}")
+                    if fp_parts:
+                        click.echo(_colored(f"  TCP/IP      : {' | '.join(fp_parts)}", DIM))
+                    
+                    # Architecture and kernel
+                    arch = os_info.get('arch')
+                    if arch:
+                        click.echo(_colored(f"  Arch        : {arch}", DIM))
+                    kernel = os_info.get('kernel')
+                    if kernel:
+                        click.echo(_colored(f"  Kernel      : {kernel}", DIM))
+                    
+                    # TCP options
+                    tcp_opts = os_info.get('tcp_options')
+                    if tcp_opts:
+                        click.echo(_colored(f"  TCP Options : {tcp_opts[:70]}", DIM))
+                    
+                    # Banner evidence
+                    banner_hint = os_info.get('banner_hint')
+                    if banner_hint:
+                        click.echo(_colored(f"  Banner Hint : {banner_hint[:60]}", DIM))
+                    
+                    # Full fingerprint evidence
+                    evidence_list = os_info.get('evidence', [])
+                    if evidence_list:
+                        click.echo(_colored(f"  Evidence    : {' | '.join(evidence_list)}", DIM))
+                    else:
+                        fp_str = os_info.get('fingerprint', '')
+                        if fp_str:
+                            click.echo(_colored(f"  Evidence    : {fp_str[:100]}", DIM))
+                    
+                    sig = os_info.get('signature')
+                    if sig:
+                        click.echo(_colored(f"  Signature   : {sig[:80]}", DIM))
+                    
+                    # Engine source
+                    engine_src = os_info.get('engine')
+                    if engine_src:
+                        click.echo(_colored(f"  Engine      : {engine_src}", DIM))
+                    click.echo()
             return
         except ImportError as e:
             click.echo(_colored(f"  [!] Multi-engine mode unavailable: {e}", YELLOW))
@@ -882,7 +1009,11 @@ def scan_ports(**kwargs):
     }
 
     t_cfg = TEMPO_CONFIG.get(tempo, TEMPO_CONFIG['normal'])
-    wait       = kwargs.get('host_timeout') or t_cfg['wait']
+    timeout_sec = kwargs.get('timeout', 0)
+    if timeout_sec:
+        wait = timeout_sec * 1000
+    else:
+        wait = kwargs.get('host_timeout') or t_cfg['wait']
     workers    = kwargs.get('workers')      or t_cfg['workers']
     scan_delay = kwargs.get('scan_delay')   or t_cfg['delay']
 
@@ -935,9 +1066,12 @@ def scan_ports(**kwargs):
         kwargs['os_detect'] = True
         kwargs['smart_probe'] = True
         kwargs['fingerprint'] = 9
+        kwargs['fingerprint_intensity'] = 9
         if not kwargs.get('script'):
             kwargs['script'] = 'vuln'
         click.echo(_colored("  [DEEP] Full pipeline: OS+service+vuln+fingerprint activated", CYAN))
+    if kwargs.get('fingerprint'):
+        kwargs.setdefault('fingerprint_intensity', kwargs['fingerprint'])
 
     # ── Port selection ───────────────────────────────────────────
     ports_str = parse_ports(
@@ -1023,7 +1157,7 @@ def scan_ports(**kwargs):
             # Forward all relevant kwargs to engine — exclude params passed explicitly
             explicit_params = {'target_arg', 'host', 'host_file', 'mode', 'ports',
                                'workers', 'tempo', 'risk', 'scan_delay', 'host_timeout',
-                               'verbose'}
+                               'timeout', 'verbose', 'output_format', 'fingerprint'}
             for k, v in kwargs.items():
                 if k not in explicit_params and v is not None:
                     engine_kwargs[k] = v

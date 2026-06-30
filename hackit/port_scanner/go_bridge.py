@@ -94,6 +94,8 @@ class GoEngine:
             cmd.extend(['-frag=true'])
         if kwargs.get('frag_size'):
             cmd.extend(['-frag-size', str(kwargs.get('frag_size'))])
+        if kwargs.get('control_socket'):
+            cmd.extend(['-control-socket', str(kwargs.get('control_socket'))])
         if kwargs.get('mtu'):
             cmd.extend(['-mtu', str(kwargs.get('mtu'))])
         if kwargs.get('ttl'):
@@ -138,6 +140,15 @@ class GoEngine:
             cmd.extend(['-resolve', str(kwargs.get('resolve'))])
         if kwargs.get('dns_server'):
             cmd.extend(['-dns-server', str(kwargs.get('dns_server'))])
+
+        if kwargs.get('all_engines'):
+            cmd.extend(['-all-engines=true'])
+        if kwargs.get('enrich'):
+            cmd.extend(['-enrich=true'])
+        if kwargs.get('cpuprofile'):
+            cmd.extend(['-cpuprofile', str(kwargs.get('cpuprofile'))])
+        if kwargs.get('memprofile'):
+            cmd.extend(['-memprofile', str(kwargs.get('memprofile'))])
 
         # Pipeline & Profile
         if kwargs.get('pipeline'):

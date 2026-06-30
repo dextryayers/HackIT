@@ -153,6 +153,30 @@ func RustExtractVersion(banner string, service string) string {
 	return ""
 }
 
+func readInt(raw map[string]interface{}, key string) int {
+	if v, ok := raw[key].(float64); ok {
+		return int(v)
+	}
+	return 0
+}
+
+func readString(raw map[string]interface{}, key string) string {
+	if v, ok := raw[key].(string); ok {
+		return v
+	}
+	return ""
+}
+
+func readBoolStr(raw map[string]interface{}, key string) string {
+	if v, ok := raw[key].(bool); ok {
+		if v {
+			return "yes"
+		}
+		return "no"
+	}
+	return ""
+}
+
 func RustDetectOS(host string) OSInfo {
 	binary := findBinary("os_detect")
 	if _, err := os.Stat(binary); os.IsNotExist(err) {
@@ -169,29 +193,38 @@ func RustDetectOS(host string) OSInfo {
 			if err := json.Unmarshal([]byte(line[7:]), &raw); err != nil {
 				continue
 			}
-			if n, ok := raw["name"].(string); ok {
-				os.Name = n
+			os.Name = readString(raw, "name")
+			if os.Name == "" {
+				os.Name = readString(raw, "os_name")
 			}
-			if v, ok := raw["version"].(string); ok {
-				os.Version = v
+			os.Version = readString(raw, "version")
+			if os.Version == "" {
+				os.Version = readString(raw, "os_version")
 			}
-			if f, ok := raw["family"].(string); ok {
-				os.Family = f
+			os.Family = readString(raw, "family")
+			if os.Family == "" {
+				os.Family = readString(raw, "os_family")
 			}
+			os.TTL = readInt(raw, "ttl")
+			os.Window = readInt(raw, "window")
+			os.MSS = readInt(raw, "mss")
+			os.WScale = readInt(raw, "wscale")
+			os.DF = readBoolStr(raw, "df")
+			os.Timestamps = readBoolStr(raw, "timestamps")
+			os.SACK = readBoolStr(raw, "sack")
+			os.Fingerprint = readString(raw, "signature")
+			if os.Fingerprint == "" {
+				os.Fingerprint = readString(raw, "fingerprint")
+			}
+			os.Signature = readString(raw, "signature")
 			if a, ok := raw["accuracy"].(float64); ok {
 				os.Accuracy = int(a)
 			}
-			if t, ok := raw["ttl"].(float64); ok {
-				os.TTL = int(t)
-			}
-			if w, ok := raw["window"].(float64); ok {
-				os.Window = int(w)
-			}
 			if c, ok := raw["confidence"].(float64); ok {
 				os.Confidence = c
-			}
-			if fp, ok := raw["fingerprint"].(string); ok {
-				os.Fingerprint = fp
+				if os.Confidence > 1.0 {
+					os.Confidence /= 100.0
+				}
 			}
 		}
 	}
@@ -230,31 +263,28 @@ func COsFingerprint(host string, ports []int, timeoutMs int) OSInfo {
 		if err := json.Unmarshal([]byte(line[7:]), &raw); err != nil {
 			continue
 		}
-		if n, ok := raw["os_name"].(string); ok && n != "" {
-			info.Name = n
-		}
-		if v, ok := raw["os_version"].(string); ok {
-			info.Version = v
-		}
-		if f, ok := raw["os_family"].(string); ok {
-			info.Family = f
-		}
+		info.Name = readString(raw, "os_name")
+		info.Version = readString(raw, "os_version")
+		info.Family = readString(raw, "os_family")
 		if c, ok := raw["confidence"].(float64); ok {
-			info.Confidence = c / 100.0
+			info.Confidence = c
+			if info.Confidence > 1.0 {
+				info.Confidence /= 100.0
+			}
 		}
 		if c, ok := raw["confidence"].(string); ok {
 			fmt.Sscanf(c, "%f", &info.Confidence)
 			info.Confidence /= 100.0
 		}
-		if t, ok := raw["ttl"].(float64); ok {
-			info.TTL = int(t)
-		}
-		if w, ok := raw["window"].(float64); ok {
-			info.Window = int(w)
-		}
-		if sig, ok := raw["signature"].(string); ok {
-			info.Fingerprint = sig
-		}
+		info.TTL = readInt(raw, "ttl")
+		info.Window = readInt(raw, "window")
+		info.MSS = readInt(raw, "mss")
+		info.WScale = readInt(raw, "wscale")
+		info.DF = readBoolStr(raw, "df")
+		info.Timestamps = readBoolStr(raw, "timestamps")
+		info.SACK = readBoolStr(raw, "sack")
+		info.Fingerprint = readString(raw, "signature")
+		info.Signature = readString(raw, "signature")
 	}
 	return info
 }
@@ -291,25 +321,31 @@ func CppOsDetect(host string, ports []int, timeoutMs int) OSInfo {
 		if err := json.Unmarshal([]byte(line[7:]), &raw); err != nil {
 			continue
 		}
-		if n, ok := raw["os_name"].(string); ok && n != "" {
-			info.Name = n
-		}
-		if v, ok := raw["os_version"].(string); ok {
-			info.Version = v
-		}
-		if f, ok := raw["os_family"].(string); ok {
-			info.Family = f
-		}
+		info.Name = readString(raw, "os_name")
+		info.Version = readString(raw, "os_version")
+		info.Family = readString(raw, "os_family")
+		info.DeviceType = readString(raw, "device_type")
+		info.BannerHint = readString(raw, "banner_hint")
+		info.TCPOptions = readString(raw, "tcp_options")
 		if c, ok := raw["confidence"].(float64); ok {
-			info.Confidence = c / 100.0
+			info.Confidence = c
+			if info.Confidence > 1.0 {
+				info.Confidence /= 100.0
+			}
 		}
-		if t, ok := raw["ttl"].(float64); ok {
-			info.TTL = int(t)
+		info.TTL = readInt(raw, "ttl")
+		info.Window = readInt(raw, "window_size")
+		if info.Window == 0 {
+			info.Window = readInt(raw, "window")
 		}
-		if w, ok := raw["window"].(float64); ok {
-			info.Window = int(w)
+		info.MSS = readInt(raw, "mss")
+		info.WScale = readInt(raw, "wscale")
+		info.DF = readBoolStr(raw, "df")
+		info.Timestamps = readBoolStr(raw, "timestamp")
+		if info.Timestamps == "" {
+			info.Timestamps = readBoolStr(raw, "timestamps")
 		}
-		info.Fingerprint = "C++OS"
+		info.SACK = readBoolStr(raw, "sack")
 	}
 	return info
 }
@@ -589,6 +625,84 @@ func RustKernelDetect(host string, ports string) string {
 		return ""
 	}
 	return output
+}
+
+// MassTcpScanner — Ultra-fast epoll-based mass TCP scanner
+// Calls the mass_tcp_scanner C binary which uses epoll for
+// concurrent connection handling (much faster than thread-per-port).
+// Only returns OPEN ports (the binary only outputs open results).
+func MassTcpScanner(host string, ports []int, timeoutMs int, workers int, batchSize int) []PortResult {
+	binary := findBinary("mass_tcp_scanner")
+	if _, err := os.Stat(binary); os.IsNotExist(err) {
+		return nil
+	}
+	var portArg string
+	if len(ports) > 100 {
+		minP, maxP := ports[0], ports[0]
+		for _, p := range ports {
+			if p < minP {
+				minP = p
+			}
+			if p > maxP {
+				maxP = p
+			}
+		}
+		if (maxP-minP+1) <= len(ports)*3/2 {
+			portArg = fmt.Sprintf("%d-%d", minP, maxP)
+		} else {
+			portStr := make([]string, len(ports))
+			for i, p := range ports {
+				portStr[i] = strconv.Itoa(p)
+			}
+			portArg = strings.Join(portStr, ",")
+		}
+	} else {
+		portStr := make([]string, len(ports))
+		for i, p := range ports {
+			portStr[i] = strconv.Itoa(p)
+		}
+		portArg = strings.Join(portStr, ",")
+	}
+	if workers < 1 {
+		workers = 8
+	}
+	if batchSize < 64 {
+		batchSize = 256
+	}
+	binTimeout := 120
+	output, err := runBinaryTimeout(binary, binTimeout, host, portArg, fmt.Sprintf("%d", timeoutMs), fmt.Sprintf("%d", workers), fmt.Sprintf("%d", batchSize))
+	if err != nil {
+		return nil
+	}
+	seen := make(map[int]bool)
+	var results []PortResult
+	for _, line := range strings.Split(output, "\n") {
+		if !strings.HasPrefix(line, "RESULT:") {
+			continue
+		}
+		var raw map[string]interface{}
+		if err := json.Unmarshal([]byte(line[7:]), &raw); err != nil {
+			continue
+		}
+		p := readInt(raw, "port")
+		if p <= 0 || seen[p] {
+			continue
+		}
+		stateInt := readInt(raw, "state")
+		stateStr := "closed"
+		if stateInt == 1 {
+			stateStr = "open"
+		}
+		seen[p] = true
+		results = append(results, PortResult{
+			Port:    p,
+			State:   stateStr,
+			Banner:  readString(raw, "banner"),
+			Service: "",
+			Version: "",
+		})
+	}
+	return results
 }
 
 func RustDnsDetect(host string, dnsServer string) string {

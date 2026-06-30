@@ -18,3 +18,9 @@ rand = "0.8"
 nix = "0.26"
 rayon = "1"
 clap = { version = "4", features = ["derive"] }
+libc = "0.2"
+rustls = { version = "0.21", features = ["dangerous_configuration"] }
+tokio-rustls = "0.24"
+webpki-roots = "0.22"
+ipnetwork = "0.20"
+x509-parser = "0.15"

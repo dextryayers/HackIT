@@ -174,11 +174,11 @@ func classifyDialError(err error) string {
 //   - CLOSED: RST received fast (< 50ms elapsed)
 //   - FILTERED: timeout or ICMP unreachable
 func QuickScanPort(host string, port int, timeoutMs int) PortResult {
-	if timeoutMs < 50 {
-		timeoutMs = 80
+	if timeoutMs < 200 {
+		timeoutMs = 200
 	}
-	if timeoutMs > 500 {
-		timeoutMs = 150
+	if timeoutMs > 5000 {
+		timeoutMs = 3000
 	}
 	ip, err := resolveHostCached(host)
 	if err != nil {

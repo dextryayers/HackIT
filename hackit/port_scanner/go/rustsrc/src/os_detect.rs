@@ -5,6 +5,7 @@ use std::sync::RwLock;
 use std::time::{Duration, Instant};
 use std::process::{Command, Stdio};
 use std::io::{Read, Write};
+use std::os::unix::io::AsRawFd;
 
 const DNS_CACHE_TTL: Duration = Duration::from_secs(300);
 
@@ -69,35 +70,102 @@ fn resolve_ip(host: &str) -> Option<std::net::IpAddr> {
     None
 }
 
+fn read_tcp_info(fd: std::os::unix::io::RawFd) -> (u16, u8, bool, bool, u16, bool) {
+    let mut mss: u16 = 0;
+    let mut wscale: u8 = 0;
+    let mut timestamps = false;
+    let mut sack = false;
+    let mut window: u16 = 0;
+    let mut df = true;
+
+    unsafe {
+        // TCP_MAXSEG for reliable MSS
+        let mut mss_val: libc::c_int = 0;
+        let mut mss_len: libc::socklen_t = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
+        if libc::getsockopt(
+            fd, libc::IPPROTO_TCP, libc::TCP_MAXSEG,
+            &mut mss_val as *mut _ as *mut libc::c_void, &mut mss_len,
+        ) == 0 && mss_val > 0 {
+            mss = mss_val as u16;
+        }
+
+        // TCP_INFO for wscale, timestamps, sack, window
+        let mut info: libc::tcp_info = std::mem::zeroed();
+        let mut info_len: libc::socklen_t = std::mem::size_of::<libc::tcp_info>() as libc::socklen_t;
+        if libc::getsockopt(
+            fd, libc::IPPROTO_TCP, libc::TCP_INFO,
+            &mut info as *mut _ as *mut libc::c_void, &mut info_len,
+        ) == 0 {
+            if mss == 0 {
+                let smss = info.tcpi_snd_mss;
+                if smss > 0 { mss = smss as u16; }
+            }
+            wscale = info.tcpi_snd_wscale as u8;
+            timestamps = (info.tcpi_options & libc::TCPI_OPT_TIMESTAMPS) != 0;
+            sack = (info.tcpi_options & libc::TCPI_OPT_SACK) != 0;
+            let rwnd = info.tcpi_rcv_space;
+            if rwnd > 0 && rwnd < 655360 { window = rwnd as u16; }
+        }
+    }
+
+    (mss, wscale, timestamps, sack, window, df)
+}
+
 fn probe_port(host: &str, port: u16, timeout_ms: u64) -> Option<TCPProbe> {
-    let start = Instant::now();
     let addr = format!("{}:{}", host, port);
-    let stream = TcpStream::connect_timeout(
+    let sock = TcpStream::connect_timeout(
         &addr.parse().ok()?,
         Duration::from_millis(timeout_ms),
     );
-    let mut sock = match stream {
+    let sock = match sock {
         Ok(s) => s,
         Err(_) => return None,
     };
     let _ = sock.set_read_timeout(Some(Duration::from_millis(timeout_ms / 2)));
     let _ = sock.set_write_timeout(Some(Duration::from_millis(timeout_ms / 2)));
     let _ = sock.set_nonblocking(false);
-    let probe = b"GET / HTTP/1.0\r\nHost: hackit\r\n\r\n";
-    let _ = (&mut sock as &mut dyn Write).write(probe);
+
+    // Read real TCP/IP stack params from socket
+    let fd = sock.as_raw_fd();
+    let (mss, wscale, timestamps, sack, window, df) = read_tcp_info(fd);
+
+    // Get actual TTL from ICMP ping
+    let ttl = get_ping_ttl(host);
+
+    // Banner grab — send protocol-appropriate probe
     let mut buf = [0u8; 4096];
-    let n = (&mut sock as &mut dyn Read).read(&mut buf).ok().unwrap_or(0);
-    let elapsed = start.elapsed().as_millis();
-    let _ping_ttl = get_ping_ttl(host);
+    let n = {
+        let probe = match port {
+            80 | 8080 | 8000 | 8888 => b"GET / HTTP/1.0\r\nHost: hackit\r\n\r\n" as &[u8],
+            21 => b"SYST\r\n",
+            25 | 587 => b"EHLO hackit\r\n",
+            110 => b"CAPA\r\n",
+            143 => b"A1 CAPABILITY\r\n",
+            443 | 8443 => b"",
+            3306 => b"",
+            5432 => b"\x00\x00\x00\x08\x04\xd2\x16\x2f",
+            6379 => b"PING\r\n",
+            873 => b"@RSYNCD: 31.0\n",
+            5900 => b"RFB 003.008\n",
+            11211 => b"stats\r\n",
+            27017 => b"\x3a\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\xd4\x07\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff\xff\xff\x13\x00\x00\x00\x10\x69\x73\x6d\x61\x73\x74\x65\x72\x00\x01\x00\x00\x00\x00",
+            _ => b"\r\n",
+        };
+        if !probe.is_empty() {
+            let _ = (&sock).write(probe);
+        }
+        let _ = (&sock).read(&mut buf).ok().unwrap_or(0)
+    };
+
     drop(sock);
     Some(TCPProbe {
-        ttl: 64,
-        window: 65535,
-        mss: if n > 0 { 1460 } else { 0 },
-        wscale: 7,
-        df: true,
-        timestamps: true,
-        sack: true,
+        ttl,
+        window: if window > 0 { window } else { 65535 },
+        mss: if mss > 0 { mss } else { 1460 },
+        wscale,
+        df,
+        timestamps,
+        sack,
         port,
         connected: n > 0,
     })

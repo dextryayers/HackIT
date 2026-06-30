@@ -327,8 +327,19 @@ static const std::vector<OSSignature> kSignatures = {
      125,130, 65535,65535, 1460,8, 1, 1, 1, 1,
      {{"HTTP","Hyper-V"}}, 85,"Hypervisor"},
     {"Proxmox","Proxmox VE","7.x-8.x",
-     60,64, 28960,65535, 1460,7, 1, 1, 1, 1,
-     {{"HTTP","Proxmox"},{"HTTPS","Proxmox"}}, 88,"Hypervisor"},
+      60,64, 28960,65535, 1460,7, 1, 1, 1, 1,
+      {{"HTTP","Proxmox"},{"HTTPS","Proxmox"}}, 88,"Hypervisor"},
+
+    // ===== CLOUDLINUX / cPanel =====
+    {"CloudLinux","CloudLinux","with cPanel",
+      60,64, 28960,65535, 1460,7, 1, 1, 1, 1,
+      {{"HTTP","LiteSpeed"},{"FTP","Pure-FTPd"},{"HTTP","cpsrvd"},{"SMTP","Dovecot"}}, 88,"Server"},
+    {"CloudLinux","CloudLinux","LVE (MySQL)",
+      60,64, 28960,65535, 1460,7, 1, 1, 1, 1,
+      {{"MySQL","cll-lve"},{"MySQL","cloudlinux"}}, 82,"Server"},
+    {"CloudLinux","CloudLinux","cPanel hosting",
+      60,64, 28960,65535, 1460,7, 1, 1, 1, 1,
+      {{"HTTP","cpsrvd"},{"HTTP","WHM"},{"HTTP","cpanel"}}, 85,"Server"},
 };
 
 // ---------------------------------------------------------------------------
@@ -677,13 +688,13 @@ static bool connect_probe(const struct sockaddr_in& dst, int dport,
     // Determine probe based on port
     std::string probe;
     switch (dport) {
-        case 21: probe = "QUIT\r\n"; break;
+        case 21: probe = "SYST\r\n"; break;
         case 22: probe = "\r\n"; break;
         case 23: probe = "\r\n"; break;
         case 25: probe = "EHLO detect.local\r\nQUIT\r\n"; break;
         case 80: probe = "GET / HTTP/1.0\r\nHost: detect.local\r\nUser-Agent: Mozilla/5.0\r\n\r\n"; break;
-        case 110: probe = "QUIT\r\n"; break;
-        case 143: probe = "a001 LOGOUT\r\n"; break;
+        case 110: probe = "CAPA\r\n"; break;
+        case 143: probe = "a001 CAPABILITY\r\n"; break;
         case 443:
         case 8443: probe = ""; break; // TLS — skip
         case 3306: probe = ""; break;
@@ -910,7 +921,9 @@ static int score_signature(const OSSignature& sig, const ProbeResult& pr,
     // Timestamp (weight 10)
     if (sig.timestamp >= 0 && pr.timestamp >= 0) {
         max_possible += 10;
-        if (pr.timestamp == (sig.timestamp != 0))
+        bool sig_ts = (sig.timestamp != 0);
+        bool probe_ts = (pr.timestamp != 0);
+        if (probe_ts == sig_ts)
             score += 10;
         else
             score -= 3;
@@ -921,7 +934,9 @@ static int score_signature(const OSSignature& sig, const ProbeResult& pr,
     // SACK OK (weight 10)
     if (sig.sack >= 0 && pr.sack_ok >= 0) {
         max_possible += 10;
-        if (pr.sack_ok == (sig.sack != 0))
+        bool sig_sack = (sig.sack != 0);
+        bool probe_sack = (pr.sack_ok != 0);
+        if (probe_sack == sig_sack)
             score += 10;
         else
             score -= 3;
@@ -932,7 +947,9 @@ static int score_signature(const OSSignature& sig, const ProbeResult& pr,
     // NOP (weight 5)
     if (sig.nop >= 0 && pr.nop >= 0) {
         max_possible += 5;
-        if (pr.nop == (sig.nop != 0))
+        bool sig_nop = (sig.nop != 0);
+        bool probe_nop = (pr.nop != 0);
+        if (probe_nop == sig_nop)
             score += 5;
     } else if (sig.nop >= 0 && pr.nop < 0) {
         max_possible += 5;

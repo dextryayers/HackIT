@@ -484,9 +484,7 @@ func (e *ScanEngine) enrichPort(res *PortResult, port int, isOpen bool) {
 			res.Service, res.Version = DetectService(port, res.Banner, e.Host)
 		}
 		if res.Service == "" {
-			if name, ok := commonPorts[port]; ok {
-				res.Service = name
-			}
+			res.Service = lookupServiceName(port)
 		}
 		return
 	}
@@ -565,9 +563,7 @@ func (e *ScanEngine) enrichPort(res *PortResult, port int, isOpen bool) {
 			res.Service, res.Version = DetectService(port, res.Banner, e.Host)
 		}
 		if res.Service == "" {
-			if name, ok := commonPorts[port]; ok {
-				res.Service = name
-			}
+			res.Service = lookupServiceName(port)
 		}
 	}()
 
@@ -579,9 +575,7 @@ func (e *ScanEngine) enrichPort(res *PortResult, port int, isOpen bool) {
 			res.Banner = GrabBannerByHost(e.Host, port, e.TimeoutMs/2)
 		}
 		if res.Service == "" {
-			if name, ok := commonPorts[port]; ok {
-				res.Service = name
-			}
+			res.Service = lookupServiceName(port)
 		}
 	}
 }
@@ -969,135 +963,203 @@ func (e *ScanEngine) enrichRustResults(openPortsStr string, allPorts []int) []Po
 // ─────────────────────────────────────────────────────────────────
 
 // massScanAll — Multi-strategy mass scan for 1-65535 ports
-// Tries C scanner (TCP connect, epoll) first, falls back to Go goroutines.
+// Three-phase architecture:
+//   Phase 1: MassTcpScanner (epoll-based, ultra-fast, open ports only)
+//   Phase 2: C scanner (thread pool, all states + banners for remaining)
+//   Phase 3: Go goroutines (QuickScanPort) for any ports still missing
+//   Phase 4: Enrich open ports missing banners (uses existing banners when available)
 func (e *ScanEngine) massScanAll(allPorts []int) []PortResult {
 	total := len(allPorts)
+	allSet := make(map[int]bool)
+	for _, p := range allPorts {
+		allSet[p] = true
+	}
 
-	// Phase 1: Quick scan all ports with C scanner or Go goroutines
+	timeoutMs := e.TimeoutMs
+	if timeoutMs < 300 {
+		timeoutMs = 300
+	}
+	if timeoutMs > 2000 {
+		timeoutMs = 2000
+	}
+
+	// ── Phase 1: MassTcpScanner (epoll, ultra-fast, open ports only) ──
 	var results []PortResult
-	var scannedSet map[int]bool
+	resultsMap := make(map[int]*PortResult)
+	scannedSet := make(map[int]bool)
 
-	// Strategy 1: Try C scanner (fast, epoll-based TCP connect)
-	if binary := findBinary("c_scanner"); binary != "c_scanner" {
+	if e.Reporter != nil {
+		e.Reporter.ReportStatus(fmt.Sprintf("Mass scan phase 1: %d ports via epoll engine", total), 2)
+	}
+	massResults := MassTcpScanner(e.Host, allPorts, timeoutMs, 16, 512)
+	if len(massResults) > 0 {
 		if e.Reporter != nil {
-			e.Reporter.ReportStatus(fmt.Sprintf("Mass scan: %d ports via C epoll engine", total), 2)
-		}
-		threads := 300
-		if threads > total {
-			threads = total
-		}
-		timeoutMs := e.TimeoutMs
-		if timeoutMs < 300 {
-			timeoutMs = 300
-		}
-		if timeoutMs > 1000 {
-			timeoutMs = 500
-		}
-		results = CScannerScan(e.Host, allPorts, timeoutMs, threads)
-		if len(results) > 0 {
-			if e.Reporter != nil {
-				e.Reporter.ReportStatus(fmt.Sprintf("C engine done: %d/%d results", len(results), total), 40)
+			openCount := 0
+			for _, r := range massResults {
+				if r.State == "open" {
+					openCount++
+				}
 			}
-			scannedSet = make(map[int]bool)
-			for _, r := range results {
+			e.Reporter.ReportStatus(fmt.Sprintf("Epoll engine done: %d open, %d total results", openCount, len(massResults)), 20)
+		}
+		for i := range massResults {
+			r := massResults[i]
+			resultsMap[r.Port] = &massResults[i]
+			scannedSet[r.Port] = true
+		}
+	}
+
+	// ── Phase 2: C scanner (scanner.c thread pool, all states) for remaining ──
+	remainingAfterEpoll := make([]int, 0)
+	for _, p := range allPorts {
+		if !scannedSet[p] {
+			remainingAfterEpoll = append(remainingAfterEpoll, p)
+		}
+	}
+
+	if len(remainingAfterEpoll) > 0 {
+		cThreads := 300
+		if cThreads > len(remainingAfterEpoll) {
+			cThreads = len(remainingAfterEpoll)
+		}
+		if e.Reporter != nil {
+			e.Reporter.ReportStatus(fmt.Sprintf("Mass scan phase 2: %d ports via C scanner (%d threads)", len(remainingAfterEpoll), cThreads), 25)
+		}
+		cResults := CScannerScan(e.Host, remainingAfterEpoll, timeoutMs, cThreads)
+		if len(cResults) > 0 {
+			if e.Reporter != nil {
+				e.Reporter.ReportStatus(fmt.Sprintf("C scanner done: %d/%d results", len(cResults), len(remainingAfterEpoll)), 55)
+			}
+			for i := range cResults {
+				r := cResults[i]
+				// Only use C result if we don't already have one from epoll
+				// OR if epoll result lacks banner and C has one
+				existing, hasExisting := resultsMap[r.Port]
+				if !hasExisting {
+					resultsMap[r.Port] = &cResults[i]
+				} else if existing.Banner == "" && r.Banner != "" {
+					existing.Banner = r.Banner
+					existing.Service = r.Service
+					existing.Version = r.Version
+				}
 				scannedSet[r.Port] = true
 			}
-		} else {
-			if e.Reporter != nil {
-				e.Reporter.ReportStatus("C scanner returned no results, falling back to Go", 10)
-			}
-			results = nil
 		}
 	}
 
-	// Strategy 2: Pure-Go goroutine pool for any ports not covered by C scanner
-	missingPorts := make([]int, 0)
-	if results == nil {
-		missingPorts = allPorts
-	} else {
-		for _, p := range allPorts {
-			if !scannedSet[p] {
-				missingPorts = append(missingPorts, p)
-			}
+	// ── Phase 3: Go goroutines for any ports still missing ──
+	remainingAfterC := make([]int, 0)
+	for _, p := range allPorts {
+		if !scannedSet[p] {
+			remainingAfterC = append(remainingAfterC, p)
 		}
 	}
 
-	if len(missingPorts) > 0 {
+	if len(remainingAfterC) > 0 {
 		if e.Reporter != nil {
-			e.Reporter.ReportStatus(fmt.Sprintf("Mass scan: %d ports via Go engine", len(missingPorts)), 45)
+			e.Reporter.ReportStatus(fmt.Sprintf("Mass scan phase 3: %d ports via Go goroutines", len(remainingAfterC)), 60)
 		}
-		workers := 150
-		if workers > len(missingPorts) {
-			workers = len(missingPorts)
+		goWorkers := 200
+		if goWorkers > len(remainingAfterC) {
+			goWorkers = len(remainingAfterC)
 		}
-		timeout := e.TimeoutMs
-		if timeout < 300 {
-			timeout = 300
-		}
-		if timeout > 500 {
-			timeout = 500
-		}
-
-		var (
-			mu       sync.Mutex
-			goResults []PortResult
-			openSet   = make(map[int]bool)
-		)
+		var mu sync.Mutex
 		var wg sync.WaitGroup
-		portCh := make(chan int, len(missingPorts))
+		portCh := make(chan int, len(remainingAfterC))
 
-		for i := 0; i < workers; i++ {
+		for i := 0; i < goWorkers; i++ {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
 				for port := range portCh {
-					res := QuickScanPort(e.Host, port, timeout)
+					res := QuickScanPort(e.Host, port, timeoutMs)
 					mu.Lock()
-					if res.State == "open" {
-						openSet[port] = true
+					existing, hasExisting := resultsMap[port]
+					if !hasExisting {
+						resultsMap[port] = &PortResult{
+							Port:    port,
+							State:   res.State,
+							Banner:  res.Banner,
+							Service: res.Service,
+							Version: res.Version,
+							Protocol: "tcp",
+						}
+					} else if existing.State != "open" && res.State == "open" {
+						// Upgrade to open if Go found it open
+						existing.State = "open"
+						if existing.Banner == "" && res.Banner != "" {
+							existing.Banner = res.Banner
+							existing.Service = res.Service
+							existing.Version = res.Version
+						}
+					} else if existing.State == "" || existing.State == "error" {
+						existing.State = res.State
 					}
-					goResults = append(goResults, res)
+					scannedSet[port] = true
 					mu.Unlock()
 				}
 			}()
 		}
-		for _, p := range missingPorts {
+		for _, p := range remainingAfterC {
 			portCh <- p
 		}
 		close(portCh)
 		wg.Wait()
+	}
 
-		if results == nil {
-			results = goResults
-			scannedSet = make(map[int]bool)
-			for _, r := range results {
-				scannedSet[r.Port] = true
-			}
-		} else {
-			results = append(results, goResults...)
+	// Convert resultsMap to slice
+	for _, p := range allPorts {
+		if r, ok := resultsMap[p]; ok {
+			results = append(results, *r)
 		}
 	}
 
-	// ── Phase 2: Enrich open ports ──
-	openList := make([]int, 0)
+	// ── Phase 4: Enrich open ports that lack banners ──
+	// Also run local DetectService on ports that have banners but no service
+	openNeedsEnrich := make([]int, 0)       // no banner → needs full reconnect
+	localDetect := make([]int, 0)           // has banner but no service → local only
+	openWithBanner := make(map[int]bool)
 	for _, r := range results {
 		if r.State == "open" {
-			openList = append(openList, r.Port)
+			if r.Banner == "" {
+				openNeedsEnrich = append(openNeedsEnrich, r.Port)
+			} else {
+				if r.Service == "" || r.Service == "unknown" {
+					localDetect = append(localDetect, r.Port)
+				}
+				openWithBanner[r.Port] = true
+			}
 		}
 	}
-	sort.Ints(openList)
 
-	if len(openList) > 0 {
+	// Local service detection from existing banners (no reconnect needed)
+	if len(localDetect) > 0 {
+		for _, port := range localDetect {
+			if r, ok := resultsMap[port]; ok && r.Banner != "" {
+				svc, ver := DetectService(port, r.Banner, e.Host)
+				if svc != "" && svc != "unknown" {
+					r.Service = svc
+				}
+				if ver != "" {
+					r.Version = ver
+				}
+			}
+		}
+	}
+
+	sort.Ints(openNeedsEnrich)
+
+	if len(openNeedsEnrich) > 0 {
 		if e.Reporter != nil {
-			e.Reporter.ReportStatus(fmt.Sprintf("Mass scan: Enriching %d open ports", len(openList)), 90)
+			e.Reporter.ReportStatus(fmt.Sprintf("Mass scan phase 4: enriching %d open ports (local-detect for %d, %d already identified)",
+				len(openNeedsEnrich), len(localDetect), len(openWithBanner)-len(localDetect)), 90)
 		}
 		enrichWorkers := 30
-		if len(openList) < enrichWorkers {
-			enrichWorkers = len(openList)
+		if len(openNeedsEnrich) < enrichWorkers {
+			enrichWorkers = len(openNeedsEnrich)
 		}
 		var wgEnrich sync.WaitGroup
-		enrichCh := make(chan int, len(openList))
-		enriched := make(map[int]PortResult)
+		enrichCh := make(chan int, len(openNeedsEnrich))
 		var enrichMu sync.Mutex
 
 		for i := 0; i < enrichWorkers; i++ {
@@ -1108,21 +1170,39 @@ func (e *ScanEngine) massScanAll(allPorts []int) []PortResult {
 					res := PortResult{Port: port, State: "open", Protocol: "tcp"}
 					e.enrichPort(&res, port, true)
 					enrichMu.Lock()
-					enriched[port] = res
+					if r, ok := resultsMap[port]; ok {
+						if res.Banner != "" {
+							r.Banner = res.Banner
+						}
+						if res.Service != "" && res.Service != "unknown" {
+							r.Service = res.Service
+						}
+						if res.Version != "" {
+							r.Version = res.Version
+						}
+						if len(res.Vulnerabilities) > 0 {
+							r.Vulnerabilities = res.Vulnerabilities
+						}
+						if res.RiskScore > r.RiskScore {
+							r.RiskScore = res.RiskScore
+						}
+					}
 					enrichMu.Unlock()
 				}
 			}()
 		}
-		for _, p := range openList {
+		for _, p := range openNeedsEnrich {
 			enrichCh <- p
 		}
 		close(enrichCh)
 		wgEnrich.Wait()
+	}
 
-		for i, r := range results {
-			if er, ok := enriched[r.Port]; ok {
-				results[i] = er
-			}
+	// Rebuild results from map after enrichment
+	results = make([]PortResult, 0, len(resultsMap))
+	for _, p := range allPorts {
+		if r, ok := resultsMap[p]; ok {
+			results = append(results, *r)
 		}
 	}
 

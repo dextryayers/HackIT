@@ -257,9 +257,7 @@ func (o *Orchestrator) runServiceDetect(host string, results []PortResult) {
 			}
 		}
 		if results[i].Service == "" {
-			if name, ok := commonPorts[results[i].Port]; ok {
-				results[i].Service = name
-			}
+			results[i].Service = lookupServiceName(results[i].Port)
 		}
 		if engine != nil && engine.Deep && results[i].Banner != "" {
 			rustSvc := RustFingerprintService(results[i].Banner)

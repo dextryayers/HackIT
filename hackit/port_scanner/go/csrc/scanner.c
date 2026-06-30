@@ -1475,7 +1475,7 @@ static const scan_sig_t SIGNATURES[] = {
     ,{"http","php/","PHP","php/"}
     ,{"http","Python/","Python","Python/"}
     ,{"http","IIS","IIS","IIS"}
-    ,{"http","Server: LiteSpeed","LiteSpeed","/"}
+    ,    {"http","Server: LiteSpeed","LiteSpeed","/"}
     ,{"http","X-Powered-By: LiteSpeed","LiteSpeed","LiteSpeed"}
     ,{"http","cpsrvd/","cPanel","cpsrvd/"}
     ,{"http","WHM/","cPanel WHM","/"}
@@ -1832,13 +1832,25 @@ static const char* state_str(int state) {
 }
 
 static void print_result(int port, int state, const char* service, const char* product, const char* version, const char* banner) {
+    static LOCK_T print_lock;
+    static int print_lock_init = 0;
+    if (!print_lock_init) { LOCK_INIT(&print_lock); print_lock_init = 1; }
+    char buf[8192];
     int is_open = (state == 1);
-    printf("[SCAN] PORT=%d STATE=%s SERVICE=%s", port, state_str(state), service);
-    if (is_open && product[0]) printf(" PRODUCT=%s", product);
-    if (is_open && version[0]) printf(" VERSION=%s", version);
-    if (is_open && banner[0]) printf(" BANNER=\"%s\"", banner);
-    printf("\n");
+    int n = snprintf(buf, sizeof(buf), "[SCAN] PORT=%d STATE=%s SERVICE=%s", port, state_str(state), service);
+    if (is_open && product[0] && n < (int)sizeof(buf) - 64)
+        n += snprintf(buf + n, sizeof(buf) - n, " PRODUCT=%s", product);
+    if (is_open && version[0] && n < (int)sizeof(buf) - 64)
+        n += snprintf(buf + n, sizeof(buf) - n, " VERSION=%s", version);
+    if (is_open && banner[0] && n < (int)sizeof(buf) - 64)
+        n += snprintf(buf + n, sizeof(buf) - n, " BANNER=\"%s\"", banner);
+    if (n < (int)sizeof(buf) - 2)
+        buf[n++] = '\n';
+    buf[n] = 0;
+    LOCK_ACQUIRE(&print_lock);
+    fputs(buf, stdout);
     fflush(stdout);
+    LOCK_RELEASE(&print_lock);
 }
 
 int main(int argc, char* argv[]) {
