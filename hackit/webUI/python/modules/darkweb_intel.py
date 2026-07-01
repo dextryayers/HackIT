@@ -30,6 +30,19 @@ DARKWEB_SEARCH_ENGINES = [
     ("Tor66", "http://tor66seweb.onion/search?q={}"),
 ]
 
+EXTRA_DARKWEB_SEARCH_ENGINES = [
+    ("Excavator", "https://excavator.onion/search?q={}"),
+    ("DarkMist", "https://darkmist.onion/search?q={}"),
+    ("OnionSearch", "https://onionsearch.onion/search?q={}"),
+    ("DeepWebSearch", "https://deepwebsearch.onion/search?q={}"),
+    ("TorSearch", "https://torsearch.onion/search?q={}"),
+    ("HiddenWiki", "https://hiddenwiki.onion/search?q={}"),
+    ("DarkLink", "https://darklink.onion/search?q={}"),
+    ("Underground", "https://underground.onion/search?q={}"),
+    ("BlackWeb", "https://blackweb.onion/search?q={}"),
+    ("ShadowWeb", "https://shadowweb.onion/search?q={}"),
+]
+
 RANSOMWARE_GROUPS = [
     "conti", "lockbit", "revil", "darkside", "blackmatter", "hive",
     "clop", "babuk", "avaddon", "pysa", "neps", "everest", "lorenz",
@@ -47,6 +60,17 @@ RANSOMWARE_GROUPS = [
     "synack", "threeam", "toufan", "vanilla", "vicesociety",
 ]
 
+EXTRA_RANSOMWARE_GROUPS = [
+    "blackbasta", "crylock", "hades", "hellokitty", "hollyrust",
+    "icefire", "karma", "leaktherapist", "lv", "mindware",
+    "moneymessage", "mosesstaff", "nightsky", "nvampt",
+    "onepiece", "pandora", "prolock", "prometheus", "pwnd",
+    "quantum", "ragnarlocker", "ranion", "ranzy", "redalert",
+    "sabbath", "sakura", "sirius", "sparta", "stormous",
+    "sugar", "tarile", "tellthem", "threeam", "trigona",
+    "vicesociety", "x001xs", "yanluowang",
+]
+
 HACKER_FORUMS = [
     "breached", "exploit", "raidforums", "nulled", "hackforums",
     "xss", "oracle", "sinfulsite", "cracking", "leakforum",
@@ -57,12 +81,34 @@ HACKER_FORUMS = [
     "antichat", "blackhatworld", "defcon", "0day", "kernelmode",
 ]
 
+EXTRA_HACKER_FORUMS = [
+    "4chan", "8kun", "telegram", "discord", "irc",
+    "hack5", "insec", "wrzuta", "dark0de", "crdpro",
+    "validmarket", "bestvalid", "accountmarket", "cardvilla",
+    "bmstore", "dumpshop", "ccshop", "cvvshop",
+    "safedumps", "validcc", "legitcarder", "cardempire",
+    "hackerone", "bugcrowd", "synack", "intigriti",
+    "forum.dark", "onion.forum", "hiddenforum",
+]
+
 THREAT_KEYWORDS = [
     "leak", "breach", "dump", "stolen", "compromised", "hacked",
     "credential", "password", "email", "database", "sql dump",
     "access", "shell", "backdoor", "exploit", "0day", "rce",
     "malware", "ransomware", "trojan", "rat", "botnet", "ddos",
     "cvv", "fullz", "ssn", "dox", "doxx", "phish",
+]
+
+EXTRA_THREAT_KEYWORDS = [
+    "pii", "personally identifiable", "identity theft",
+    "credit card", "bank account", "wire transfer", "paypal",
+    "login credentials", "email access", "webmail", "imap",
+    "vpn", "rdp", "shell access", "root access",
+    "admin panel", "cpanel", "whm", "wordpress admin",
+    "cryptocurrency", "bitcoin", "monero", "eth", "wallet",
+    "counterfeit", "fake id", "passport", "drivers license",
+    "carding", "cvv", "fullz", "dox", "ssn", "sin",
+    "bulletproof", "hosting", "vps", "dedicated server",
 ]
 
 PASTE_KEYWORDS = [
@@ -77,6 +123,19 @@ DARKWEB_PARSE_PATTERNS = {
     "tags": r'\b(?:category|tag|label)[:=]\s*["\']?([^"\'&\s,]+)',
     "onion_address": r'([a-z2-7]{16,}\.onion)',
 }
+
+HACKER_FORUM_CLEARNET_MIRRORS = [
+    ("Breached", "https://breached.vc/search?q={}"),
+    ("Exploit", "https://exploit.in/search?q={}"),
+    ("Nulled", "https://nulled.to/search?q={}"),
+    ("Cracked", "https://cracked.io/search?q={}"),
+    ("SinfulSite", "https://sinfulsite.com/search?q={}"),
+    ("LeaksForum", "https://leaksforum.com/search?q={}"),
+    ("DarkNet", "https://darknet.to/search?q={}"),
+    ("0Day", "https://0day.to/search?q={}"),
+    ("Carding", "https://cardingforum.com/search?q={}"),
+    ("Cracking", "https://cracking.org/search?q={}"),
+]
 
 def parse_darkweb_metadata(html: str, url: str = "") -> dict:
     metadata = {}
@@ -115,7 +174,8 @@ async def generic_search(engine_name: str, url_template: str, target: str, clien
 
 async def search_all_engines(target: str, client: httpx.AsyncClient) -> List[dict]:
     all_results = []
-    tasks = [generic_search(name, tmpl, target, client) for name, tmpl in DARKWEB_SEARCH_ENGINES]
+    all_engines = DARKWEB_SEARCH_ENGINES + EXTRA_DARKWEB_SEARCH_ENGINES
+    tasks = [generic_search(name, tmpl, target, client) for name, tmpl in all_engines]
     engine_results = await asyncio.gather(*tasks, return_exceptions=True)
     for res in engine_results:
         if isinstance(res, list):
@@ -246,7 +306,8 @@ def analyze_content_for_threats(text: str, target: str) -> List[dict]:
         return threats
     text_lower = text.lower()
     found_keywords = set()
-    for kw in THREAT_KEYWORDS:
+    all_threat_keywords = THREAT_KEYWORDS + EXTRA_THREAT_KEYWORDS
+    for kw in all_threat_keywords:
         if kw in text_lower:
             found_keywords.add(kw)
     if found_keywords:
@@ -288,7 +349,8 @@ def analyze_content_for_threats(text: str, target: str) -> List[dict]:
 def check_ransomware_mentions(text: str, target: str) -> List[dict]:
     mentions = []
     text_lower = text.lower() + " " + target.lower()
-    for group in RANSOMWARE_GROUPS:
+    all_ransomware = RANSOMWARE_GROUPS + EXTRA_RANSOMWARE_GROUPS
+    for group in all_ransomware:
         if group in text_lower:
             mentions.append(group)
     return mentions
@@ -296,7 +358,8 @@ def check_ransomware_mentions(text: str, target: str) -> List[dict]:
 def check_forum_mentions(text: str) -> List[dict]:
     mentions = []
     text_lower = text.lower()
-    for forum in HACKER_FORUMS:
+    all_forums = HACKER_FORUMS + EXTRA_HACKER_FORUMS
+    for forum in all_forums:
         if forum in text_lower:
             mentions.append(forum)
     return mentions
@@ -379,6 +442,24 @@ async def check_ramp_forum(target: str, client: httpx.AsyncClient) -> List[dict]
         pass
     return results
 
+async def search_forum_mirrors(target: str, client: httpx.AsyncClient) -> List[dict]:
+    results = []
+    for forum_name, url_tmpl in HACKER_FORUM_CLEARNET_MIRRORS:
+        try:
+            url = url_tmpl.format(quote(target))
+            resp = await client.get(url, timeout=10.0,
+                headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"})
+            if resp.status_code == 200 and len(resp.text) > 500:
+                results.append({
+                    "url": url,
+                    "title": f"Mention on {forum_name} forum",
+                    "snippet": resp.text[:200],
+                    "source": f"ForumMirror/{forum_name}",
+                })
+        except:
+            pass
+    return results
+
 def compute_darkweb_threat_score(all_darkweb_results: list, pastebin_results: list,
                                  ransom_mentions: list, forum_mentions: list,
                                  credential_leaks: int, target: str) -> dict:
@@ -447,8 +528,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
     ramp_results = await check_ramp_forum(normalized, client)
     pastebin_results = await search_pastebin(normalized, client)
     all_engine_results = await search_all_engines(normalized, client)
+    forum_mirror_results = await search_forum_mirrors(normalized, client)
 
-    all_darkweb_results = ahmia_results + onionland_results + darksearch_results + torch_results + darkeye_results + recon_results + ramp_results + all_engine_results
+    all_darkweb_results = ahmia_results + onionland_results + darksearch_results + torch_results + darkeye_results + recon_results + ramp_results + all_engine_results + forum_mirror_results
 
     global_ransom_mentions = []
     global_forum_mentions = []
@@ -532,6 +614,14 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                 confidence="Medium", color="slate", threat_level="Informational",
                 resolution=normalized,
                 tags=["multi-engine", "dark-web", "coverage"]))
+
+        if forum_mirror_results:
+            findings.append(make_finding(
+                f"{len(forum_mirror_results)} hacker forum mirror mentions",
+                "Hacker Forum Mirror Search", "DarkWebIntel",
+                confidence="Low", color="red", threat_level="High Risk",
+                resolution=normalized,
+                tags=["forum-mirror", "dark-web"]))
 
     if pastebin_results:
         for paste in pastebin_results[:15]:

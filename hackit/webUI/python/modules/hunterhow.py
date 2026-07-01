@@ -1064,4 +1064,129 @@ async def crawl(target: str, client: httpx.AsyncClient):
         tags=["email", "summary"]
     ))
 
+    async def check_security_headers_how():
+        for proto in ["https", "http"]:
+            try:
+                resp = await client.get(f"{proto}://{domain}", timeout=8.0, follow_redirects=False, headers={"User-Agent": "Mozilla/5.0"})
+                hdrs = {k.lower(): v for k, v in dict(resp.headers).items()}
+                for hdr in ["strict-transport-security", "x-content-type-options", "x-frame-options", "content-security-policy", "referrer-policy"]:
+                    if hdr in hdrs:
+                        findings.append(IntelligenceFinding(
+                            entity=f"{hdr}: {hdrs[hdr][:100]}", type="HOW - HTTP Security Header",
+                            source="HunterHOW", confidence="High", color="emerald", threat_level="Informational",
+                            tags=["http", "security"]))
+                if "server" in hdrs:
+                    findings.append(IntelligenceFinding(
+                        entity=f"Server: {hdrs['server'][:80]}", type="HOW - HTTP Server Header",
+                        source="HunterHOW", confidence="Medium", color="slate", threat_level="Informational",
+                        tags=["http", "server"]))
+                break
+            except: pass
+
+    async def check_common_discovery_how():
+        headers = {"User-Agent": "Mozilla/5.0"}
+        paths = [f"https://{domain}/.well-known/security.txt", f"https://{domain}/.well-known/change-password",
+                 f"https://{domain}/robots.txt", f"https://{domain}/sitemap.xml",
+                 f"https://{domain}/humans.txt", f"https://{domain}/security.txt",
+                 f"https://{domain}/ads.txt", f"https://{domain}/crossdomain.xml"]
+        async def check_path(path):
+            try:
+                resp = await client.get(path, timeout=8.0, follow_redirects=True, headers=headers)
+                if resp.status_code == 200:
+                    pname = path.split("/")[-1]
+                    findings.append(IntelligenceFinding(
+                        entity=f"{pname} accessible ({len(resp.text)} bytes)",
+                        type="HOW - File Discovery", source="HunterHOW",
+                        confidence="High", color="slate", threat_level="Informational",
+                        tags=["discovery", "file"]))
+                    if "security.txt" in path and "Contact" in resp.text:
+                        findings.append(IntelligenceFinding(
+                            entity=f"Security contact info found", type="HOW - Security.txt",
+                            source="HunterHOW", confidence="High", color="emerald",
+                            raw_data=resp.text[:2000], tags=["security", "disclosure"]))
+                        for m in EMAIL_REGEX.finditer(resp.text):
+                            findings.append(IntelligenceFinding(
+                                entity=m.group(0).lower(), type="HOW - Security.txt Email",
+                                source="HunterHOW", confidence="High", color="blue",
+                                tags=["email", "security"]))
+            except: pass
+        await asyncio.gather(*[check_path(p) for p in paths])
+
+    async def check_name_extraction():
+        all_text = html[:30000]
+        for _, pt in secondary_pages_html:
+            all_text += " " + pt[:5000]
+        people = set()
+        for m in re.finditer(r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3})\b', all_text):
+            full = m.group(1).strip()
+            if 3 <= len(full) <= 40 and not any(x in full.lower() for x in ["the ", "this ", "that ", "with ", "from "]):
+                people.add(full)
+        for name in list(people)[:5]:
+            findings.append(IntelligenceFinding(
+                entity=name, type="HOW - Person Name",
+                source="HunterHOW", confidence="Low", color="slate", threat_level="Informational",
+                tags=["people", "name"]))
+
+    async def check_cookie_analysis():
+        try:
+            resp = await client.get(f"https://{domain}", timeout=8.0, follow_redirects=True, headers={"User-Agent": "Mozilla/5.0"})
+            cookies = resp.cookies
+            if cookies:
+                for name in list(cookies.keys())[:5]:
+                    findings.append(IntelligenceFinding(
+                        entity=f"Cookie: {name}", type="HOW - Cookie Discovery",
+                        source="HunterHOW", confidence="Medium", color="slate", threat_level="Informational",
+                        tags=["http", "cookie"]))
+                trackers = [c for c in cookies if c.lower().startswith(("__cf","__utm","_ga","_gid","_fbp","_hjid"))]
+                if trackers:
+                    findings.append(IntelligenceFinding(
+                        entity=f"Tracking cookies: {', '.join(trackers)[:100]}",
+                        type="HOW - Tracking Cookie", source="HunterHOW",
+                        confidence="Medium", color="orange", threat_level="Informational",
+                        tags=["privacy", "tracking"]))
+        except: pass
+
+    async def check_page_metadata():
+        title = re.search(r'<title[^>]*>(.*?)</title>', html, re.IGNORECASE | re.DOTALL)
+        if title:
+            findings.append(IntelligenceFinding(
+                entity=f"Title: {title.group(1).strip()[:100]}",
+                type="HOW - Page Title", source="HunterHOW",
+                confidence="High", color="slate", threat_level="Informational",
+                tags=["page", "metadata"]))
+        for m in list(re.finditer(r'<meta[^>]+name=["\']([^"\']+)["\'][^>]+content=["\']([^"\']+)["\']', html, re.IGNORECASE))[:5]:
+            findings.append(IntelligenceFinding(
+                entity=f"Meta {m.group(1)}: {m.group(2)[:80]}",
+                type="HOW - Meta Tag", source="HunterHOW",
+                confidence="High", color="slate", threat_level="Informational",
+                tags=["page", "metadata"]))
+
+    async def check_tech_stack():
+        indicators = {"WordPress":["/wp-content/","/wp-admin/"],"Drupal":["drupal"],"Shopify":["shopify","myshopify"],
+            "Cloudflare":["cloudflare","__cfduid"],"jQuery":["jquery"],"Bootstrap":["bootstrap"],
+            "React":["react"],"Vue.js":["vuejs"],"Angular":["angular"],
+            "nginx":["nginx"],"Apache":["apache"],"PHP":[".php"],
+            "GA/GTM":["google-analytics","gtag","gtm.js"]}
+        detected = [tech for tech, pats in indicators.items() if any(p in html.lower() for p in pats)]
+        if detected:
+            findings.append(IntelligenceFinding(
+                entity=f"Tech: {', '.join(detected[:8])}", type="HOW - Technology Stack",
+                source="HunterHOW", confidence="Medium", color="purple",
+                tags=["tech", "stack"]))
+        ga = re.search(r'UA-\d{4,10}-\d{1,4}|G-[A-Z0-9]{10,12}', html)
+        if ga:
+            findings.append(IntelligenceFinding(
+                entity=f"Analytics: {ga.group(0)}", type="HOW - Analytics ID",
+                source="HunterHOW", confidence="High", color="slate",
+                tags=["analytics", "tracking"]))
+
+    await asyncio.gather(
+        check_security_headers_how(),
+        check_common_discovery_how(),
+        check_name_extraction(),
+        check_cookie_analysis(),
+        check_page_metadata(),
+        check_tech_stack(),
+    )
+
     return findings

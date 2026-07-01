@@ -3,7 +3,10 @@ import asyncio
 import re
 import dns.resolver
 import base64
+import hashlib
+import ssl
 from models import IntelligenceFinding
+from collections import defaultdict
 
 EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
 
@@ -873,5 +876,895 @@ async def crawl(target: str, client: httpx.AsyncClient):
         ),
         tags=["email-security", "overview"]
     ))
+
+    async def check_mx_ip_geo():
+        for mx in mx_hosts[:3]:
+            try:
+                mx_ip_records = await loop.run_in_executor(None, lambda: dns.resolver.resolve(mx, 'A'))
+                for mx_ip_rec in mx_ip_records:
+                    mx_ip = str(mx_ip_rec)
+                    region = None
+                    try:
+                        geo = await client.get(f"https://ipapi.co/{mx_ip}/json/", timeout=8.0, headers={"User-Agent": "Mozilla/5.0"})
+                        if geo.status_code == 200:
+                            gd = geo.json()
+                            region = f"{gd.get('city','')}, {gd.get('region','')}, {gd.get('country_name','')}"
+                            asn = gd.get('asn', '')
+                            org = gd.get('org', '')
+                    except: pass
+                    findings.append(IntelligenceFinding(
+                        entity=f"MX {mx} geo: {region or 'Unknown'}",
+                        type="MX Geolocation",
+                        source="Email Verifier",
+                        confidence="Medium", color="slate", threat_level="Informational",
+                        raw_data=f"{mx} ({mx_ip}) -> {region or 'N/A'} | AS{asn if 'asn' in dir() else ''} {org if 'org' in dir() else ''}",
+                        tags=["email-security", "mx", "geo"]
+                    ))
+                    break
+            except: pass
+
+    async def check_dmarc_extra_tags():
+        dmarc_raw = None
+        for f in findings:
+            if f.type == "DMARC Record":
+                dmarc_raw = f.raw_data
+                break
+        if not dmarc_raw:
+            return
+        tags = {
+            "pct": "DMARC Percent",
+            "fo": "DMARC Forensic Options",
+            "rf": "DMARC Report Format",
+            "ri": "DMARC Report Interval",
+        }
+        for tag, label in tags.items():
+            m = re.search(rf"{tag}\s*=\s*(\S+)", dmarc_raw)
+            if m:
+                findings.append(IntelligenceFinding(
+                    entity=f"{label}: {m.group(1)}",
+                    type="DMARC Tag",
+                    source="Email Verifier",
+                    confidence="High", color="slate", threat_level="Informational",
+                    tags=["email-security", "dmarc"]
+                ))
+
+    async def check_ns_soa():
+        try:
+            ns = await loop.run_in_executor(None, lambda: dns.resolver.resolve(domain, 'NS'))
+            ns_list = [str(r) for r in ns]
+            if ns_list:
+                findings.append(IntelligenceFinding(
+                    entity=f"NS: {', '.join(ns_list[:5])}",
+                    type="DNS Nameservers",
+                    source="Email Verifier",
+                    confidence="High", color="slate", threat_level="Informational",
+                    raw_data=f"Nameservers for {domain}: {', '.join(ns_list)}",
+                    tags=["email-security", "dns"]
+                ))
+        except: pass
+        try:
+            soa = await loop.run_in_executor(None, lambda: dns.resolver.resolve(domain, 'SOA'))
+            for r in soa:
+                findings.append(IntelligenceFinding(
+                    entity=f"SOA: {str(r)[:200]}",
+                    type="DNS SOA Record",
+                    source="Email Verifier",
+                    confidence="High", color="slate", threat_level="Informational",
+                    tags=["email-security", "dns"]
+                ))
+        except: pass
+
+    async def check_caa():
+        try:
+            caa = await loop.run_in_executor(None, lambda: dns.resolver.resolve(domain, 'CAA'))
+            for r in caa:
+                findings.append(IntelligenceFinding(
+                    entity=f"CAA: {str(r)[:200]}",
+                    type="DNS CAA Record",
+                    source="Email Verifier",
+                    confidence="High", color="slate", threat_level="Informational",
+                    tags=["email-security", "dns"]
+                ))
+        except: pass
+
+    async def check_dmarc_rua_analysis():
+        dmarc_raw = None
+        for f in findings:
+            if f.type == "DMARC Record":
+                dmarc_raw = f.raw_data
+                break
+        if not dmarc_raw:
+            return
+        rua = re.search(r"rua\s*=\s*mailto:([^;\s]+)", dmarc_raw)
+        if rua:
+            rua_addr = rua.group(1)
+            rua_domain = rua_addr.split("@")[-1] if "@" in rua_addr else ""
+            findings.append(IntelligenceFinding(
+                entity=f"DMARC reports sent to: {rua_addr}",
+                type="DMARC RUA Analysis",
+                source="Email Verifier",
+                confidence="High", color="slate", threat_level="Informational",
+                raw_data=f"RUA: {rua_addr} | Domain: {rua_domain} | Format: {'external' if rua_domain != domain else 'local'}",
+                tags=["email-security", "dmarc"]
+            ))
+            analysis = []
+            if "dmarcian" in rua_domain: analysis.append("dmarcian")
+            if "postmark" in rua_domain: analysis.append("Postmark")
+            if "google" in rua_domain or "gmail" in rua_domain: analysis.append("Google")
+            if "agari" in rua_domain: analysis.append("Agari")
+            if "proofpoint" in rua_domain: analysis.append("Proofpoint")
+            if "mimecast" in rua_domain: analysis.append("Mimecast")
+            if "dmarc-report" in rua_domain or "dmarcreport" in rua_domain: analysis.append("Standard Reporter")
+            if analysis:
+                findings.append(IntelligenceFinding(
+                    entity=f"DMARC Report Provider: {', '.join(analysis)}",
+                    type="DMARC Reporting Service",
+                    source="Email Verifier",
+                    confidence="Medium", color="purple", threat_level="Informational",
+                    tags=["email-security", "dmarc"]
+                ))
+
+    async def check_smtp_versions():
+        if not mx_hosts:
+            return
+        for mx in mx_hosts[:2]:
+            for port in [25, 465, 587]:
+                try:
+                    rdr, wrtr = await asyncio.wait_for(asyncio.open_connection(mx, port), timeout=4.0)
+                    bnner = await asyncio.wait_for(rdr.readline(), timeout=3.0)
+                    wrtr.close()
+                    banner_text = bnner.decode("utf-8", errors="ignore").strip()
+                    version_match = re.search(r'(\w+[-_ ]?\d+(?:\.\d+)*)', banner_text)
+                    if version_match:
+                        findings.append(IntelligenceFinding(
+                            entity=f"SMTP software on {mx}:{port}: {version_match.group(1)}",
+                            type="SMTP Software Version",
+                            source="Email Verifier",
+                            confidence="Medium", color="slate", threat_level="Informational",
+                            raw_data=f"Banner: {banner_text[:200]}",
+                            tags=["email-security", "smtp"]
+                        ))
+                except: pass
+
+    async def check_mx_over_ipv6():
+        if not mx_hosts:
+            return
+        for mx in mx_hosts[:3]:
+            try:
+                aaaa = await loop.run_in_executor(None, lambda: dns.resolver.resolve(mx, 'AAAA'))
+                ipv6_count = sum(1 for _ in aaaa)
+                if ipv6_count > 0:
+                    findings.append(IntelligenceFinding(
+                        entity=f"{mx} has IPv6 ({ipv6_count} AAAA records)",
+                        type="MX IPv6 Support",
+                        source="Email Verifier",
+                        confidence="High", color="emerald", threat_level="Informational",
+                        tags=["email-security", "mx", "ipv6"]
+                    ))
+            except: pass
+
+    async def check_dmarc_subdomain():
+        for sub in ["mail." + domain, "www." + domain, "m." + domain]:
+            try:
+                sub_dmarc = await loop.run_in_executor(None, lambda s=sub: dns.resolver.resolve(f"_dmarc.{s}", 'TXT'))
+                for r in sub_dmarc:
+                    dm = str(r)
+                    if "v=DMARC1" in dm:
+                        findings.append(IntelligenceFinding(
+                            entity=f"Subdomain DMARC for {sub}: {dm[:150]}",
+                            type="Subdomain DMARC Record",
+                            source="Email Verifier",
+                            confidence="High", color="slate", threat_level="Informational",
+                            tags=["email-security", "dmarc"]
+                        ))
+                    break
+            except: pass
+
+    await asyncio.gather(
+        check_mx_ip_geo(),
+        check_dmarc_extra_tags(),
+        check_ns_soa(),
+        check_caa(),
+        check_dmarc_rua_analysis(),
+        check_smtp_versions(),
+        check_mx_over_ipv6(),
+        check_dmarc_subdomain(),
+    )
+
+    async def analyze_mx_provider_diversity():
+        if not mx_hosts:
+            return
+        providers = defaultdict(list)
+        for mx in mx_hosts:
+            mx_lower = mx.lower()
+            if "google" in mx_lower: providers["Google Workspace"].append(mx)
+            elif "outlook" in mx_lower or "protection" in mx_lower: providers["Microsoft 365"].append(mx)
+            elif "zoho" in mx_lower: providers["Zoho"].append(mx)
+            elif "protonmail" in mx_lower: providers["ProtonMail"].append(mx)
+            elif "messagingengine" in mx_lower: providers["Fastmail"].append(mx)
+            elif "mailgun" in mx_lower: providers["Mailgun"].append(mx)
+            elif "sendgrid" in mx_lower: providers["SendGrid"].append(mx)
+            elif "amazonses" in mx_lower: providers["Amazon SES"].append(mx)
+            elif "yandex" in mx_lower: providers["Yandex"].append(mx)
+            elif "ovh" in mx_lower: providers["OVH"].append(mx)
+            else: providers["Unknown/Other"].append(mx)
+        for prov, mx_list in sorted(providers.items()):
+            findings.append(IntelligenceFinding(
+                entity=f"MX Provider: {prov} ({len(mx_list)} server(s))",
+                type="MX Provider Analysis",
+                source="Email Verifier",
+                confidence="High", color="purple", threat_level="Informational",
+                raw_data=f"{prov}: {', '.join(mx_list)}",
+                tags=["email-security", "mx", "provider"]
+            ))
+
+    async def email_security_recommendations():
+        recs = []
+        if not has_spf: recs.append("Add SPF record: v=spf1 include:_spf.google.com ~all")
+        if not has_dmarc: recs.append("Add DMARC: v=DMARC1;p=quarantine;rua=mailto:dmarc@yourdomain.com")
+        if not dkim_found: recs.append("Configure DKIM signing for outbound email")
+        if not any("MTA-STS" in (f.type or "") for f in findings): recs.append("Enable MTA-STS for TLS enforcement")
+        if not any("TLS-RPT" in (f.type or "") for f in findings): recs.append("Set up TLS-RPT for TLS failure reporting")
+        if any("Missing DMARC" in (f.entity or "") for f in findings): recs.append("DMARC p=none is monitoring-only; set p=quarantine or p=reject")
+        if any("SPF SoftFail" in (f.entity or "") for f in findings): recs.append("Upgrade SPF from ~all to -all for hard fail")
+        if any("DNSBL Listing" in (f.type or "") for f in findings): recs.append("Investigate and delist from DNSBLs to improve deliverability")
+        if any("DMARC RUA" not in (f.type or "") for f in findings) and not any("DMARC Reporting Gap" in (f.entity or "") for f in findings):
+            recs.append("Configure DMARC reporting (rua) to monitor email authentication")
+        if any("rDNS mismatch" in (f.entity or "").lower() for f in findings): recs.append("Fix rDNS (PTR) to match MX hostname")
+        if not any("BIMI" in (f.type or "") for f in findings): recs.append("Consider BIMI for brand-verified email display")
+        if recs:
+            for i, rec in enumerate(recs):
+                findings.append(IntelligenceFinding(
+                    entity=f"Recommendation {i+1}: {rec[:100]}",
+                    type="Email Security Recommendation",
+                    source="Email Verifier",
+                    confidence="High" if i < 3 else "Medium",
+                    color="orange", threat_level="Informational",
+                    tags=["email-security", "recommendation"]
+                ))
+
+    async def check_dmarc_policy_coverage():
+        dmarc_raw = None
+        for f in findings:
+            if f.type == "DMARC Record":
+                dmarc_raw = f.raw_data
+                break
+        if not dmarc_raw:
+            return
+        sp = re.search(r"sp\s*=\s*(\w+)", dmarc_raw)
+        if sp:
+            findings.append(IntelligenceFinding(
+                entity=f"DMARC Subdomain Policy: {sp.group(1)}",
+                type="DMARC Subdomain Policy",
+                source="Email Verifier",
+                confidence="High", color="slate", threat_level="Informational",
+                tags=["email-security", "dmarc"]
+            ))
+        else:
+            findings.append(IntelligenceFinding(
+                entity="DMARC subdomain policy not set (inherits from main policy)",
+                type="DMARC Subdomain Policy",
+                source="Email Verifier",
+                confidence="High", color="orange", threat_level="Informational",
+                tags=["email-security", "dmarc"]
+            ))
+        pct = re.search(r"pct\s*=\s*(\d+)", dmarc_raw)
+        if pct:
+            val = int(pct.group(1))
+            if val < 100:
+                findings.append(IntelligenceFinding(
+                    entity=f"DMARC applies to only {val}% of email",
+                    type="DMARC Coverage Warning",
+                    source="Email Verifier",
+                    confidence="High", color="orange", threat_level="Elevated Risk",
+                    tags=["email-security", "dmarc"]
+                ))
+
+    async def check_arc():
+        try:
+            arc = await loop.run_in_executor(None, lambda: dns.resolver.resolve(f"_arc._domainkey.{domain}", 'TXT'))
+            for r in arc:
+                findings.append(IntelligenceFinding(
+                    entity=f"ARC: {str(r)[:200]}",
+                    type="ARC Record",
+                    source="Email Verifier",
+                    confidence="High", color="slate", threat_level="Informational",
+                    tags=["email-security", "arc"]
+                ))
+        except: pass
+
+    async def check_well_known_paths():
+        paths = [
+            f"https://{domain}/.well-known/mta-sts.txt",
+            f"https://{domain}/.well-known/autoconfig/mail/config-v1.1.xml",
+            f"https://{domain}/.well-known/security.txt",
+            f"https://{domain}/.well-known/change-password",
+        ]
+        for path in paths:
+            try:
+                resp = await client.get(path, timeout=8.0, follow_redirects=True, headers={"User-Agent": "Mozilla/5.0"})
+                path_name = path.split("/.well-known/")[-1]
+                if resp.status_code == 200:
+                    findings.append(IntelligenceFinding(
+                        entity=f".well-known/{path_name} accessible (HTTP {resp.status_code})",
+                        type="Well-Known URL Discovery",
+                        source="Email Verifier",
+                        confidence="High", color="emerald" if "mta-sts" in path else "slate",
+                        threat_level="Informational",
+                        raw_data=f"{path} returned {resp.status_code} ({len(resp.text)} bytes)",
+                        tags=["email-security", "discovery"]
+                    ))
+                elif resp.status_code == 403:
+                    findings.append(IntelligenceFinding(
+                        entity=f".well-known/{path_name} exists (HTTP 403 Forbidden)",
+                        type="Well-Known URL Discovery",
+                        source="Email Verifier",
+                        confidence="Medium", color="orange", threat_level="Informational",
+                        tags=["email-security", "discovery"]
+                    ))
+            except: pass
+
+    async def analyze_smtp_extensions():
+        if not mx_hosts:
+            return
+        for mx in mx_hosts[:2]:
+            try:
+                rdr, wrtr = await asyncio.wait_for(asyncio.open_connection(mx, 25), timeout=5.0)
+                await asyncio.wait_for(rdr.readline(), timeout=3.0)
+                wrtr.write(b"EHLO verifier.local\r\n")
+                ehlo_resp = b""
+                while True:
+                    try:
+                        chunk = await asyncio.wait_for(rdr.readuntil(b"\r\n"), timeout=2.0)
+                        ehlo_resp += chunk
+                        if b"250 " in chunk or b" begin" in chunk.lower():
+                            break
+                    except: break
+                wrtr.close()
+                ehlo_text = ehlo_resp.decode("utf-8", errors="ignore")
+                caps = re.findall(r"250[ \-](\S+)", ehlo_text)
+                useful = [c for c in caps if c.upper() in ("STARTTLS", "PIPELINING", "8BITMIME", "SMTPUTF8", "DSN", "CHUNKING", "BINARYMIME", "ENHANCEDSTATUSCODES", "VRFY", "EXPN", "AUTH", "REQUIRETLS", "DELIVERBY", "MT-PRIORITY", "FUTURERELEASE")]
+                if useful:
+                    findings.append(IntelligenceFinding(
+                        entity=f"SMTP Extensions on {mx}: {', '.join(useful)}",
+                        type="SMTP Extension Analysis",
+                        source="Email Verifier",
+                        confidence="High", color="slate", threat_level="Informational",
+                        raw_data=f"EHLO capabilities: {', '.join(caps[:20])}",
+                        tags=["email-security", "smtp"]
+                    ))
+                auth = [c for c in caps if c.upper().startswith("AUTH")]
+                if auth:
+                    findings.append(IntelligenceFinding(
+                        entity=f"SMTP AUTH on {mx}: {', '.join(auth)}",
+                        type="SMTP Authentication",
+                        source="Email Verifier",
+                        confidence="High", color="slate", threat_level="Informational",
+                        tags=["email-security", "smtp"]
+                    ))
+            except: pass
+
+    async def check_email_security_standards():
+        standards = []
+        if has_spf: standards.append("RFC 7208 (SPF)")
+        else: standards.append("RFC 7208 (SPF) - NOT COMPLIANT")
+        if has_dmarc: standards.append("RFC 7489 (DMARC)")
+        else: standards.append("RFC 7489 (DMARC) - NOT COMPLIANT")
+        if dkim_found: standards.append("RFC 6376 (DKIM)")
+        else: standards.append("RFC 6376 (DKIM) - NOT COMPLIANT")
+        if any("MTA-STS" in (f.type or "") for f in findings): standards.append("RFC 8461 (MTA-STS)")
+        if any("TLS-RPT" in (f.type or "") for f in findings): standards.append("RFC 8460 (TLS-RPT)")
+        if any("BIMI" in (f.type or "") for f in findings): standards.append("BIMI (draft)")
+        if any("ARC" in (f.type or "") for f in findings): standards.append("RFC 8617 (ARC)")
+        if any("DANE" in (f.type or "") or "TLSA" in (f.type or "") for f in findings): standards.append("RFC 7671 (DANE)")
+        compliant = sum(1 for s in standards if "NOT" not in s)
+        findings.append(IntelligenceFinding(
+            entity=f"Email Standards Compliance: {compliant}/{len(standards)}",
+            type="Email Standards Compliance",
+            source="Email Verifier",
+            confidence="High", color="emerald" if compliant >= 4 else ("orange" if compliant >= 2 else "red"),
+            threat_level="Informational",
+            raw_data=" | ".join(standards),
+            tags=["email-security", "compliance"]
+        ))
+
+    async def analyze_dmarc_ruf():
+        dmarc_raw = None
+        for f in findings:
+            if f.type == "DMARC Record":
+                dmarc_raw = f.raw_data
+                break
+        if not dmarc_raw:
+            return
+        ruf = re.search(r"ruf\s*=\s*mailto:([^;\s]+)", dmarc_raw)
+        if ruf:
+            findings.append(IntelligenceFinding(
+                entity=f"DMARC forensic reports (RUF): {ruf.group(1)}",
+                type="DMARC RUF Analysis",
+                source="Email Verifier",
+                confidence="High", color="slate", threat_level="Informational",
+                tags=["email-security", "dmarc"]
+            ))
+        else:
+            findings.append(IntelligenceFinding(
+                entity="No DMARC forensic reporting (RUF) configured",
+                type="DMARC RUF Gap",
+                source="Email Verifier",
+                confidence="High", color="orange", threat_level="Informational",
+                tags=["email-security", "dmarc"]
+            ))
+
+    await asyncio.gather(
+        analyze_mx_provider_diversity(),
+        email_security_recommendations(),
+        check_dmarc_policy_coverage(),
+        check_arc(),
+        check_well_known_paths(),
+        analyze_smtp_extensions(),
+        check_email_security_standards(),
+        analyze_dmarc_ruf(),
+    )
+
+    async def check_smtp_submission_ports():
+        if not mx_hosts:
+            return
+        for mx in mx_hosts[:2]:
+            for port in [587, 465, 2525, 25025]:
+                try:
+                    rdr, wrtr = await asyncio.wait_for(asyncio.open_connection(mx, port), timeout=3.0)
+                    bnner = await asyncio.wait_for(rdr.readline(), timeout=2.0)
+                    wrtr.close()
+                    bnner_str = bnner.decode("utf-8", errors="ignore").strip()
+                    if bnner_str:
+                        findings.append(IntelligenceFinding(
+                            entity=f"Submission port {port} open on {mx}",
+                            type="SMTP Submission Port",
+                            source="Email Verifier",
+                            confidence="High", color="slate", threat_level="Informational",
+                            raw_data=f"Port {port} SMTP: {bnner_str[:150]}",
+                            tags=["email-security", "smtp"]
+                        ))
+                except: pass
+
+    async def check_spf_inheritance_chain():
+        spf_raw = None
+        for f in findings:
+            if "v=spf1" in (f.raw_data or ""):
+                spf_raw = f.raw_data
+                break
+        if not spf_raw:
+            return
+        includes = re.findall(r'include:(\S+)', spf_raw)
+        for inc in includes[:5]:
+            try:
+                inc_txt = await loop.run_in_executor(None, lambda: dns.resolver.resolve(inc, 'TXT'))
+                for r in inc_txt:
+                    txt = str(r)
+                    if "v=spf1" in txt:
+                        findings.append(IntelligenceFinding(
+                            entity=f"SPF Include: {inc}",
+                            type="SPF Inherited Record",
+                            source="Email Verifier",
+                            confidence="High", color="slate", threat_level="Informational",
+                            raw_data=f"{inc}: {txt[:200]}",
+                            tags=["email-security", "spf"]
+                        ))
+                    break
+            except: pass
+
+    async def analyze_email_auth_matrix():
+        auth = {
+            "SPF": "Yes" if has_spf else "No",
+            "DKIM": "Yes" if dkim_found else "No",
+            "DMARC": "Yes" if has_dmarc else "No",
+            "MTA-STS": "Yes" if any("MTA-STS" in (f.type or "") for f in findings) else "No",
+            "TLS-RPT": "Yes" if any("TLS-RPT" in (f.type or "") for f in findings) else "No",
+            "BIMI": "Yes" if any("BIMI" in (f.type or "") for f in findings) else "No",
+            "ARC": "Yes" if any("ARC" in (f.type or "") for f in findings) else "No",
+            "DNSSEC": "Yes" if any("DNSSEC" in (f.type or "") and "enabled" in (f.entity or "").lower() for f in findings) else "No",
+        }
+        findings.append(IntelligenceFinding(
+            entity=f"Email Auth Matrix: {sum(1 for v in auth.values() if v == 'Yes')}/{len(auth)} enabled",
+            type="Email Authentication Matrix",
+            source="Email Verifier",
+            confidence="High", color="emerald" if sum(1 for v in auth.values() if v == 'Yes') >= 5 else "orange",
+            threat_level="Informational",
+            raw_data=" | ".join(f"{k}: {v}" for k, v in auth.items()),
+            tags=["email-security", "summary"]
+        ))
+
+    async def check_security_headers():
+        for proto in ["https", "http"]:
+            try:
+                resp = await client.get(f"{proto}://{domain}", timeout=8.0, follow_redirects=False, headers={"User-Agent": "Mozilla/5.0"})
+                headers = {k.lower(): v for k, v in dict(resp.headers).items()}
+                for header, label in [
+                    ("strict-transport-security", "HSTS"),
+                    ("x-content-type-options", "X-Content-Type-Options"),
+                    ("x-frame-options", "X-Frame-Options"),
+                    ("content-security-policy", "Content-Security-Policy"),
+                    ("x-xss-protection", "X-XSS-Protection"),
+                    ("referrer-policy", "Referrer-Policy"),
+                    ("permissions-policy", "Permissions-Policy"),
+                ]:
+                    if header in headers:
+                        findings.append(IntelligenceFinding(
+                            entity=f"{label}: {headers[header][:100]}",
+                            type="HTTP Security Header",
+                            source="Email Verifier",
+                            confidence="High", color="emerald", threat_level="Informational",
+                            tags=["email-security", "http"]
+                        ))
+                if any(header in headers for header in ["server", "x-powered-by"]):
+                    val = headers.get("server", "") or headers.get("x-powered-by", "")
+                    findings.append(IntelligenceFinding(
+                        entity=f"Web Server: {val[:100]}",
+                        type="HTTP Server Header",
+                        source="Email Verifier",
+                        confidence="Medium", color="slate", threat_level="Informational",
+                        tags=["email-security", "http"]
+                    ))
+                break
+            except: pass
+
+    async def check_dmarc_aggregate_reports():
+        dmarc_raw = None
+        for f in findings:
+            if f.type == "DMARC Record":
+                dmarc_raw = f.raw_data
+                break
+        if not dmarc_raw:
+            return
+        ri = re.search(r"ri\s*=\s*(\d+)", dmarc_raw)
+        if ri:
+            val = int(ri.group(1))
+            findings.append(IntelligenceFinding(
+                entity=f"DMARC Report Interval: {val} seconds ({val/86400:.1f} days)",
+                type="DMARC Report Interval",
+                source="Email Verifier",
+                confidence="High", color="slate", threat_level="Informational",
+                tags=["email-security", "dmarc"]
+            ))
+
+    async def check_mx_ip_diversity():
+        if not mx_hosts:
+            return
+        ips = set()
+        for mx in mx_hosts[:5]:
+            try:
+                a = await loop.run_in_executor(None, lambda: dns.resolver.resolve(mx, 'A'))
+                for r in a:
+                    ips.add(str(r))
+            except: pass
+        if len(ips) >= 2:
+            findings.append(IntelligenceFinding(
+                entity=f"MX IP diversity: {len(ips)} unique IPs across {len(mx_hosts)} MX servers",
+                type="MX IP Diversity",
+                source="Email Verifier",
+                confidence="High", color="emerald" if len(ips) >= 3 else "slate",
+                threat_level="Informational",
+                raw_data=f"IPs: {', '.join(sorted(ips))}",
+                tags=["email-security", "mx"]
+            ))
+
+    async def check_vrfy_experiment():
+        if not mx_hosts:
+            return
+        for mx in mx_hosts[:1]:
+            try:
+                rdr, wrtr = await asyncio.wait_for(asyncio.open_connection(mx, 25), timeout=5.0)
+                await asyncio.wait_for(rdr.readline(), timeout=3.0)
+                for cmd in ["VRFY root", "VRFY postmaster", "VRFY mail", "EXPN postmaster"]:
+                    wrtr.write(f"{cmd}\r\n".encode())
+                    resp = await asyncio.wait_for(rdr.readline(), timeout=2.0)
+                    resp_str = resp.decode("utf-8", errors="ignore").strip()
+                    if resp_str and not resp_str.startswith("5") and not resp_str.startswith("2"):
+                        continue
+                    if resp_str.startswith("2") or "250" in resp_str:
+                        findings.append(IntelligenceFinding(
+                            entity=f"User enumeration possible: {cmd} on {mx} returned: {resp_str[:80]}",
+                            type="SMTP User Enumeration",
+                            source="Email Verifier",
+                            confidence="High", color="red", threat_level="Elevated Risk",
+                            raw_data=f"{cmd} -> {resp_str[:500]}",
+                            tags=["email-security", "smtp"]
+                        ))
+                wrtr.write(b"QUIT\r\n")
+                wrtr.close()
+            except: pass
+
+    async def analyze_dkim_found_statistics():
+        if not dkim_found:
+            findings.append(IntelligenceFinding(
+                entity="DKIM: No signing selectors found across 113 common selectors",
+                type="DKIM Statistics",
+                source="Email Verifier",
+                confidence="High", color="red", threat_level="Elevated Risk",
+                tags=["email-security", "dkim"]
+            ))
+            return
+        findings.append(IntelligenceFinding(
+            entity=f"DKIM: {len(dkim_found)} active selector(s): {', '.join(dkim_found[:10])}",
+            type="DKIM Statistics",
+            source="Email Verifier",
+            confidence="High", color="emerald", threat_level="Informational",
+            raw_data=f"Found {len(dkim_found)} selectors: {', '.join(dkim_found)}",
+            tags=["email-security", "dkim"]
+        ))
+
+    await asyncio.gather(
+        check_smtp_submission_ports(),
+        check_spf_inheritance_chain(),
+        analyze_email_auth_matrix(),
+        check_security_headers(),
+        check_dmarc_aggregate_reports(),
+        check_mx_ip_diversity(),
+        check_vrfy_experiment(),
+        analyze_dkim_found_statistics(),
+    )
+
+    async def check_dmarc_fo_options():
+        dmarc_raw = None
+        for f in findings:
+            if f.type == "DMARC Record":
+                dmarc_raw = f.raw_data
+                break
+        if not dmarc_raw:
+            return
+        fo = re.search(r"fo\s*=\s*([\d:]+)", dmarc_raw)
+        if fo:
+            fo_val = fo.group(1)
+            fo_desc = []
+            for v in fo_val.split(":"):
+                if v == "0": fo_desc.append("Generate report if SPF and DKIM both fail")
+                elif v == "1": fo_desc.append("Generate report if SPF or DKIM fails")
+                elif v == "d": fo_desc.append("Generate report if DKIM fails")
+                elif v == "s": fo_desc.append("Generate report if SPF fails")
+            findings.append(IntelligenceFinding(
+                entity=f"DMARC FO={fo_val}: {'; '.join(fo_desc)}",
+                type="DMARC Forensic Options",
+                source="Email Verifier",
+                confidence="High", color="slate", threat_level="Informational",
+                tags=["email-security", "dmarc"]
+            ))
+
+    async def check_mx_ip_asn():
+        if not mx_hosts:
+            return
+        for mx in mx_hosts[:2]:
+            try:
+                a = await loop.run_in_executor(None, lambda: dns.resolver.resolve(mx, 'A'))
+                for r in a:
+                    ip = str(r)
+                    try:
+                        geo = await client.get(f"https://ipapi.co/{ip}/json/", timeout=8.0, headers={"User-Agent": "Mozilla/5.0"})
+                        if geo.status_code == 200:
+                            gd = geo.json()
+                            asn_str = f"AS{gd.get('asn', 'N/A')}" if gd.get('asn') else "N/A"
+                            findings.append(IntelligenceFinding(
+                                entity=f"MX IP {ip} -> {asn_str} ({gd.get('org', 'N/A')})",
+                                type="MX ASN Information",
+                                source="Email Verifier",
+                                confidence="Medium", color="slate", threat_level="Informational",
+                                tags=["email-security", "mx"]
+                            ))
+                    except: pass
+                    break
+            except: pass
+
+    async def analyze_smtp_starttls_version():
+        if not mx_hosts:
+            return
+        for mx in mx_hosts[:2]:
+            try:
+                rdr, wrtr = await asyncio.wait_for(asyncio.open_connection(mx, 25), timeout=5.0)
+                await asyncio.wait_for(rdr.readline(), timeout=3.0)
+                wrtr.write(b"EHLO tlscheck.local\r\n")
+                resp = b""
+                try:
+                    while True:
+                        chunk = await asyncio.wait_for(rdr.readuntil(b"\r\n"), timeout=2.0)
+                        resp += chunk
+                        if b"250 " in chunk: break
+                except: pass
+                if b"STARTTLS" in resp:
+                    wrtr.write(b"STARTTLS\r\n")
+                    starttls_resp = await asyncio.wait_for(rdr.readline(), timeout=3.0)
+                    if starttls_resp.startswith(b"220"):
+                        ctx = ssl.create_default_context()
+                        ctx.check_hostname = False
+                        ctx.verify_mode = ssl.CERT_NONE
+                        tls = ctx.wrap_socket(wrtr, server_hostname=mx, do_handshake_on_connect=True)
+                        tls_version = tls.version()
+                        findings.append(IntelligenceFinding(
+                            entity=f"STARTTLS TLS version on {mx}: {tls_version}",
+                            type="STARTTLS Version",
+                            source="Email Verifier",
+                            confidence="High", color="emerald" if "1.3" in tls_version or "1.2" in tls_version else "orange",
+                            threat_level="Informational",
+                            tags=["email-security", "smtp"]
+                        ))
+                        tls.close()
+                    else:
+                        wrtr.close()
+                else:
+                    wrtr.close()
+            except: pass
+
+    async def check_mx_rdns_chain():
+        if not mx_hosts:
+            return
+        for mx in mx_hosts[:2]:
+            try:
+                a = await loop.run_in_executor(None, lambda: dns.resolver.resolve(mx, 'A'))
+                for r in a:
+                    ip = str(r)
+                    try:
+                        rev = dns.resolver.resolve_address(ip)
+                        rev_name = str(rev[0]).rstrip('.')
+                        findings.append(IntelligenceFinding(
+                            entity=f"MX {mx} rDNS: {ip} -> {rev_name}",
+                            type="MX rDNS Record",
+                            source="Email Verifier",
+                            confidence="High", color="slate", threat_level="Informational",
+                            tags=["email-security", "mx"]
+                        ))
+                        try:
+                            rev_a = dns.resolver.resolve(rev_name, 'A')
+                            rev_ips = [str(x) for x in rev_a]
+                            if ip not in rev_ips:
+                                findings.append(IntelligenceFinding(
+                                    entity=f"MX rDNS forward-confirm mismatch: {rev_name} resolves to {', '.join(rev_ips)} (not {ip})",
+                                    type="MX rDNS Forward-Confirm Failure",
+                                    source="Email Verifier",
+                                    confidence="Medium", color="orange", threat_level="Standard Target",
+                                    tags=["email-security", "mx"]
+                                ))
+                        except: pass
+                    except: pass
+                    break
+            except: pass
+
+    async def analyze_email_security_gaps():
+        gaps = []
+        if not has_spf: gaps.append("SPF")
+        if not has_dmarc: gaps.append("DMARC")
+        if not dkim_found: gaps.append("DKIM")
+        if not any("MTA-STS" in (f.type or "") for f in findings): gaps.append("MTA-STS")
+        if not any("TLS-RPT" in (f.type or "") for f in findings): gaps.append("TLS-RPT")
+        if not any("BIMI" in (f.type or "") for f in findings): gaps.append("BIMI")
+        if not any("ARC" in (f.type or "") for f in findings): gaps.append("ARC")
+        if not any("DNSSEC" in (f.type or "") and "enabled" in (f.entity or "").lower() for f in findings): gaps.append("DNSSEC")
+        if gaps:
+            findings.append(IntelligenceFinding(
+                entity=f"Security Gaps: {len(gaps)} ({', '.join(gaps)})",
+                type="Email Security Gap Analysis",
+                source="Email Verifier",
+                confidence="High", color="red" if len(gaps) >= 4 else "orange",
+                threat_level="Elevated Risk" if len(gaps) >= 4 else "Standard Target",
+                tags=["email-security", "analysis"]
+            ))
+        else:
+            findings.append(IntelligenceFinding(
+                entity="No major email security gaps detected",
+                type="Email Security Gap Analysis",
+                source="Email Verifier",
+                confidence="High", color="emerald", threat_level="Informational",
+                tags=["email-security", "analysis"]
+            ))
+
+    async def check_gravatar_for_mx():
+        if not has_dmarc:
+            return
+        try:
+            dmarc_raw = None
+            for f in findings:
+                if f.type == "DMARC Record":
+                    dmarc_raw = f.raw_data
+                    break
+            if dmarc_raw:
+                rua = re.search(r"rua\s*=\s*mailto:([^;\s]+)", dmarc_raw)
+                if rua:
+                    rua_email = rua.group(1)
+                    email_hash = hashlib.md5(rua_email.lower().encode()).hexdigest()
+                    gresp = await client.get(f"https://www.gravatar.com/{email_hash}.json", timeout=8.0, headers={"User-Agent": "Mozilla/5.0"})
+                    if gresp.status_code == 200:
+                        findings.append(IntelligenceFinding(
+                            entity=f"Gravatar profile found for DMARC RUA: {rua_email}",
+                            type="Gravatar Discovery",
+                            source="Email Verifier",
+                            confidence="Medium", color="purple", threat_level="Informational",
+                            tags=["email-security", "discovery"]
+                        ))
+        except: pass
+
+    await asyncio.gather(
+        check_dmarc_fo_options(),
+        check_mx_ip_asn(),
+        analyze_smtp_starttls_version(),
+        check_mx_rdns_chain(),
+        analyze_email_security_gaps(),
+        check_gravatar_for_mx(),
+    )
+
+    async def spf_lookup_count_analysis():
+        spf_raw = None
+        for f in findings:
+            if "v=spf1" in (f.raw_data or ""):
+                spf_raw = f.raw_data
+                break
+        total_mechs = 0
+        if spf_raw:
+            total_mechs = len(re.findall(r'\b(include:|a|mx|ptr|exists:|redirect=)', spf_raw))
+        findings.append(IntelligenceFinding(
+            entity=f"SPF lookup chain: {total_mechs} mechanism(s) {'(within limits)' if total_mechs <= 10 else '(EXCEEDS 10 limit!)'}",
+            type="SPF Lookup Analysis",
+            source="Email Verifier",
+            confidence="Medium", color="emerald" if total_mechs <= 10 else "red",
+            threat_level="Informational" if total_mechs <= 10 else "Elevated Risk",
+            tags=["email-security", "spf"]
+        ))
+
+    async def check_dns_additional_records():
+        for rtype, label in [("A", "IPv4"), ("AAAA", "IPv6"), ("TXT", "TXT")]:
+            try:
+                recs = await loop.run_in_executor(None, lambda t=rtype: dns.resolver.resolve(domain, t))
+                count = sum(1 for _ in recs)
+                if count > 0:
+                    findings.append(IntelligenceFinding(
+                        entity=f"{domain} has {count} {rtype} ({label}) record(s)",
+                        type="Base DNS Records",
+                        source="Email Verifier",
+                        confidence="High", color="slate", threat_level="Informational",
+                        tags=["email-security", "dns"]
+                    ))
+            except: pass
+
+    async def analyze_mx_count():
+        mx_count = len(mx_hosts) if mx_hosts else 0
+        findings.append(IntelligenceFinding(
+            entity=f"Total MX servers: {mx_count}",
+            type="MX Count Analysis",
+            source="Email Verifier",
+            confidence="High", color="slate", threat_level="Informational",
+            raw_data=f"{mx_count} MX server(s) configured",
+            tags=["email-security", "mx"]
+        ))
+
+    async def check_dkim_missing_recommendation():
+        if not dkim_found:
+            findings.append(IntelligenceFinding(
+                entity="Recommendation: Enable DKIM signing to improve email authentication and deliverability",
+                type="DKIM Recommendation",
+                source="Email Verifier",
+                confidence="High", color="orange", threat_level="Informational",
+                tags=["email-security", "recommendation"]
+            ))
+
+    async def analyze_security_score_breakdown():
+        score_vals = {"SPF": 4 if has_spf else 0, "DMARC": 4 if has_dmarc else 0,
+                      "DKIM": 2 if dkim_found else 0, "MTA-STS": 2 if any("MTA-STS" in (f.type or "") for f in findings) else 0,
+                      "TLS-RPT": 2 if any("TLS-RPT" in (f.type or "") for f in findings) else 0,
+                      "BIMI": 2 if any("BIMI" in (f.type or "") for f in findings) else 0,
+                      "DNSSEC": 2 if any("DNSSEC" in (f.type or "") and "enabled" in (f.entity or "").lower() for f in findings) else 0,
+                      "DNSBL": 3 if not dnsbl_hits else 0,
+                      "SMTP": 2 if smtp_banner else 0}
+        breakdown = " | ".join(f"{k}:{v}" for k, v in sorted(score_vals.items()))
+        findings.append(IntelligenceFinding(
+            entity=f"Score breakdown: {sum(score_vals.values())}/50 points",
+            type="Security Score Detail",
+            source="Email Verifier",
+            confidence="High", color="slate", threat_level="Informational",
+            raw_data=breakdown,
+            tags=["email-security", "summary"]
+        ))
+
+    await asyncio.gather(
+        spf_lookup_count_analysis(),
+        check_dns_additional_records(),
+        analyze_mx_count(),
+        check_dkim_missing_recommendation(),
+        analyze_security_score_breakdown(),
+    )
 
     return findings

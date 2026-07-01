@@ -656,3 +656,141 @@ async def crawl(target: str, client: httpx.AsyncClient):
         ))
 
     return findings
+
+
+PII_PATTERNS_EXTRA = [
+    (r'\b\d{3}-\d{2}-\d{4}\b', "US SSN", "Critical"),
+    (r'\b(?:\d{4}[ -]?){3}\d{4}\b', "Credit Card Number", "Critical"),
+    (r'\b\d{10}\b', "US Phone (10-digit)", "Medium"),
+    (r'\b\d{3}[-.]\d{3}[-.]\d{4}\b', "US Phone", "Medium"),
+    (r'\b\+1\d{10}\b', "US Phone (+1)", "Medium"),
+    (r'\b[A-Z]{2}\d{6}\b', "Passport Number", "High"),
+    (r'\b\d{9}\b', "US SSN Alt", "Critical"),
+    (r'\b\d{16}\b', "CC Pan Alt", "Critical"),
+    (r'\b[A-Z]\d{6}[A-Z]\b', "UK Driving License", "High"),
+    (r'\b[A-Z0-9]{9}\b', "National ID Generic", "High"),
+    (r'\b\d{3}-?\d{2}-?\d{4}\b', "SSN Dashed", "Critical"),
+    (r'\b[A-Z]{2}\d{2}\s?\d{2}\s?\d{2}\s?\d{2}\s?\d{2}\s?\d{2}\b', "Driver License Generic", "High"),
+    (r'\b\d{12,19}\b', "Credit Card (Luhn)", "Critical"),
+    (r'\b[A-Z0-9]{6,12}\b[A-Z0-9]', "Passport Generic", "High"),
+]
+
+CLOUD_SERVICE_PATTERNS = [
+    (r'(?i)\.s3\.amazonaws\.com', "AWS S3 Bucket", "High"),
+    (r'(?i)\.s3-[a-z0-9-]+\.amazonaws\.com', "AWS S3 Regional", "High"),
+    (r'(?i)\.storage\.googleapis\.com', "GCP Cloud Storage", "High"),
+    (r'(?i)\.blob\.core\.windows\.net', "Azure Blob Storage", "High"),
+    (r'(?i)\.azurewebsites\.net', "Azure App Service", "Medium"),
+    (r'(?i)\.cloudfront\.net', "AWS CloudFront", "Medium"),
+    (r'(?i)\.elasticbeanstalk\.com', "AWS Elastic Beanstalk", "Medium"),
+    (r'(?i)\.herokuapp\.com', "Heroku App", "Medium"),
+    (r'(?i)\.netlify\.app', "Netlify Site", "Medium"),
+    (r'(?i)\.vercel\.app', "Vercel Deployment", "Medium"),
+    (r'(?i)\.firebaseio\.com', "Firebase Realtime DB", "High"),
+    (r'(?i)\.appspot\.com', "Google App Engine", "Medium"),
+    (r'(?i)\.digitaloceanspaces\.com', "DigitalOcean Space", "High"),
+    (r'(?i)\.linodeobjects\.com', "Linode Object Storage", "High"),
+    (r'(?i)\.vultrobjects\.com', "Vultr Object Storage", "High"),
+    (r'(?i)\.onrender\.com', "Render Service", "Medium"),
+    (r'(?i)\.fly\.dev', "Fly.io App", "Medium"),
+    (r'(?i)\.railway\.app', "Railway Service", "Medium"),
+    (r'(?i)\.azureedge\.net', "Azure CDN", "Medium"),
+    (r'(?i)\.azurefd\.net', "Azure Front Door", "Medium"),
+    (r'(?i)\.trafficmanager\.net', "Azure Traffic Manager", "Medium"),
+    (r'(?i)\.akamaiedge\.net', "Akamai CDN", "Low"),
+    (r'(?i)\.edgesuite\.net', "Akamai CDN", "Low"),
+    (r'(?i)\.fastly\.net', "Fastly CDN", "Low"),
+    (r'(?i)\.b-cdn\.net', "Bunny CDN", "Low"),
+    (r'(?i)\.kxcdn\.com', "KeyCDN", "Low"),
+    (r'(?i)\.workers\.dev', "Cloudflare Workers", "Medium"),
+    (r'(?i)\.pages\.dev', "Cloudflare Pages", "Medium"),
+    (r'(?i)\.r2\.dev', "Cloudflare R2", "Medium"),
+    (r'(?i)\.pantheonsite\.io', "Pantheon", "Medium"),
+    (r'(?i)\.wpengine\.com', "WP Engine", "Medium"),
+    (r'(?i)\.flywheelsites\.com', "Flywheel", "Medium"),
+    (r'(?i)\.kinsta\.com', "Kinsta", "Medium"),
+    (r'(?i)myshopify\.com', "Shopify", "Medium"),
+    (r'(?i)\.ecwid\.com', "Ecwid", "Medium"),
+    (r'(?i)\.bigcommerce\.com', "BigCommerce", "Medium"),
+    (r'(?i)\.wixsite\.com', "Wix", "Medium"),
+    (r'(?i)\.squarespace\.com', "Squarespace", "Medium"),
+    (r'(?i)\.webflow\.io', "Webflow", "Medium"),
+    (r'(?i)\.ghost\.io', "Ghost CMS", "Medium"),
+    (r'(?i)\.wordpress\.com', "WordPress.com", "Medium"),
+    (r'(?i)\.tumblr\.com', "Tumblr", "Medium"),
+    (r'(?i)\.blogspot\.com', "Blogger", "Medium"),
+    (r'(?i)\.typepad\.com', "TypePad", "Medium"),
+    (r'(?i)\.weebly\.com', "Weebly", "Medium"),
+    (r'(?i)\.jimdo\.com', "Jimdo", "Medium"),
+    (r'(?i)\.strikingly\.com', "Strikingly", "Medium"),
+    (r'(?i)\.ucraft\.com', "Ucraft", "Medium"),
+    (r'(?i)\.duda\.co', "Duda", "Medium"),
+    (r'(?i)\-c\.us\-[a-z0-9-]+\.amazonaws\.com', "AWS EC2 Private", "Medium"),
+    (r'(?i)\.compute\.amazonaws\.com', "AWS EC2 Public", "Medium"),
+    (r'(?i)\.compute-1\.amazonaws\.com', "AWS EC2 US-East", "Medium"),
+    (r'(?i)\.rds\.amazonaws\.com', "AWS RDS", "Medium"),
+    (r'(?i)\.elb\.amazonaws\.com', "AWS ELB", "Medium"),
+    (r'(?i)\.execute-api\.[a-z0-9-]+\.amazonaws\.com', "AWS API Gateway", "Medium"),
+    (r'(?i)\.lambda-url\.[a-z0-9-]+\.on\.aws', "AWS Lambda URL", "Medium"),
+    (r'(?i)\.s3-accesspoint\.[a-z0-9-]+\.amazonaws\.com', "AWS S3 Access Point", "Medium"),
+]
+
+CREDIT_CARD_BRANDS = {
+    "Visa": r"^4[0-9]{12}(?:[0-9]{3})?$",
+    "Mastercard": r"^5[1-5][0-9]{14}$",
+    "Amex": r"^3[47][0-9]{13}$",
+    "Discover": r"^6(?:011|5[0-9]{2})[0-9]{12}$",
+    "Diners": r"^3(?:0[0-5]|[68][0-9])[0-9]{11}$",
+    "JCB": r"^(?:2131|1800|35\d{3})\d{11}$",
+}
+
+
+def _luhn_check(cc_number: str) -> bool:
+    digits = [int(d) for d in cc_number if d.isdigit()]
+    if len(digits) < 13:
+        return False
+    checksum = 0
+    for i, d in enumerate(reversed(digits)):
+        if i % 2 == 0:
+            checksum += d
+        else:
+            checksum += (d * 2) // 10 + (d * 2) % 10
+    return checksum % 10 == 0
+
+
+async def _scan_cloud_endpoints(html: str, page_url: str, findings: list):
+    for pattern, stype, severity in CLOUD_SERVICE_PATTERNS:
+        for m in re.finditer(pattern, html):
+            endpoint = m.group(0)[:200]
+            color_map = {"Critical": "red", "High": "orange", "Medium": "yellow"}
+            threat_map = {"Critical": "Critical Risk", "High": "High Risk", "Medium": "Elevated Risk"}
+            findings.append(IntelligenceFinding(
+                entity=endpoint,
+                type=f"Cloud Service: {stype}",
+                source="SecretFinder",
+                confidence="Medium",
+                color=color_map.get(severity, "orange"),
+                threat_level=threat_map.get(severity, "Elevated Risk"),
+                tags=["cloud", stype.lower().replace(" ", "_")],
+                raw_data=f"URL: {page_url}\nMatch: {endpoint}",
+            ))
+
+
+async def _scan_pii_extra(html: str, page_url: str, findings: list):
+    for pattern, stype, severity in PII_PATTERNS_EXTRA:
+        for m in re.finditer(pattern, html):
+            value = m.group(0)
+            if stype == "Credit Card Number" and not _luhn_check(value):
+                continue
+            color_map = {"Critical": "red", "High": "orange", "Medium": "yellow"}
+            threat_map = {"Critical": "Critical Risk", "High": "High Risk", "Medium": "Elevated Risk"}
+            findings.append(IntelligenceFinding(
+                entity=f"[{severity}] {stype}: {value[:20]}...",
+                type=f"PII: {stype}",
+                source="SecretFinder",
+                confidence="High",
+                color=color_map.get(severity, "red"),
+                threat_level=threat_map.get(severity, "High Risk"),
+                tags=["pii", stype.lower().replace(" ", "_")],
+                raw_data=f"URL: {page_url}\nValue: {value}",
+            ))

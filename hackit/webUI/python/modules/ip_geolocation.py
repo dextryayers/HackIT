@@ -49,6 +49,79 @@ async def network_boundary(ip: str) -> str:
     except:
         return ""
 
+ADDITIONAL_GEO_SOURCES = {
+    "country.is": "https://api.country.is/{}",
+    "ip2c": "https://ip2c.org/{}",
+    "ipapi.com": "http://api.ipapi.com/api/{}",
+}
+
+EXTRA_GEO_SOURCES = {
+    "ipapi.is": "https://api.ipapi.is/?q={}",
+    "ipapi.co": "https://ipapi.co/{}/region/",
+    "ipapi.co.country": "https://ipapi.co/{}/country/",
+    "ipapi.co.city": "https://ipapi.co/{}/city/",
+    "ipapi.co.lat": "https://ipapi.co/{}/latitude/",
+    "ipapi.co.lon": "https://ipapi.co/{}/longitude/",
+    "ipapi.co.org": "https://ipapi.co/{}/org/",
+    "ipapi.co.postal": "https://ipapi.co/{}/postal/",
+    "ipapi.co.timezone": "https://ipapi.co/{}/timezone/",
+    "ipapi.co.currency": "https://ipapi.co/{}/currency/",
+}
+
+ASN_LOOKUP_URLS = [
+    ("BGP.HE", lambda ip: f"https://bgp.he.net/ip/{ip}"),
+    ("ASLookup", lambda ip: f"https://aslookup.com/ip/{ip}"),
+    ("IPWhois", lambda ip: f"https://ipwhois.io/ip/{ip}"),
+]
+
+async def extract_asn_info(ip: str, client: httpx.AsyncClient) -> list:
+    findings = []
+    for name, url_builder in ASN_LOOKUP_URLS:
+        try:
+            url = url_builder(ip)
+            resp = await client.get(url, timeout=10.0,
+                headers={"User-Agent": UA})
+            if resp.status_code == 200 and len(resp.text) > 200:
+                findings.append(IntelligenceFinding(
+                    entity=f"ASN data available from {name}",
+                    type=f"IP Geo: ASN Lookup ({name})",
+                    source=name,
+                    confidence="Medium",
+                    color="slate",
+                    status="Available",
+                    resolution=ip,
+                    tags=["geo", "asn", name.lower()]
+                ))
+        except:
+            pass
+    return findings
+
+async def calculate_geo_confidence(successful_sources: int) -> list:
+    findings = []
+    if successful_sources >= 5:
+        findings.append(IntelligenceFinding(
+            entity=f"High geo confidence: {successful_sources} sources agree",
+            type="IP Geo: Confidence Score",
+            source="IPGeolocation",
+            confidence="High",
+            color="emerald",
+            threat_level="Informational",
+            status=f"{successful_sources} sources",
+            tags=["geo", "confidence", "high"]
+        ))
+    elif successful_sources >= 3:
+        findings.append(IntelligenceFinding(
+            entity=f"Medium geo confidence: {successful_sources} sources",
+            type="IP Geo: Confidence Score",
+            source="IPGeolocation",
+            confidence="Medium",
+            color="slate",
+            threat_level="Informational",
+            status=f"{successful_sources} sources",
+            tags=["geo", "confidence", "medium"]
+        ))
+    return findings
+
 async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFinding]:
     findings = []
     ip = target.strip().lower()
@@ -72,7 +145,8 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             ))
             return findings
 
-    tasks = [query_source(ip, name, tmpl, client) for name, tmpl in GEO_SOURCES.items()]
+    all_sources = {**GEO_SOURCES, **ADDITIONAL_GEO_SOURCES, **EXTRA_GEO_SOURCES}
+    tasks = [query_source(ip, name, tmpl, client) for name, tmpl in all_sources.items()]
     geo_results = await asyncio.gather(*tasks, return_exceptions=True)
     successful = 0
 
@@ -142,7 +216,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
     if successful:
         findings.append(IntelligenceFinding(
-            entity=f"Geolocation successful from {successful}/{len(GEO_SOURCES)} sources",
+            entity=f"Geolocation successful from {successful}/{len(all_sources)} sources",
             type="IP Geo: Source Coverage",
             source="IPGeolocation",
             confidence="Medium",
@@ -152,6 +226,12 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             resolution=ip,
             tags=["geo", "coverage"]
         ))
+
+        confidence_results = await calculate_geo_confidence(successful)
+        findings.extend(confidence_results)
+
+    asn_results = await extract_asn_info(ip, client)
+    findings.extend(asn_results)
 
     rdap_data = await rdap_lookup(ip, client)
     if rdap_data:

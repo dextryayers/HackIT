@@ -106,6 +106,87 @@ API_PATHS = [
     "/pocketbase", "/api/pocketbase",
     "/directus", "/api/directus",
     "/strapi", "/api/strapi",
+    "/api/v6", "/api/v7", "/api/v8", "/api/v9", "/api/v10",
+    "/v6", "/v7", "/v8", "/v9", "/v10",
+    "/api/v6/", "/api/v7/", "/api/v8/", "/api/v9/", "/api/v10/",
+    "/api/latest", "/api/stable", "/api/edge", "/api/canary", "/api/beta",
+    "/api/alpha", "/api/deprecated", "/api/experimental", "/api/rfc",
+    "/api/hub", "/api/billing", "/api/inventory", "/api/warehouse",
+    "/api/fulfillment", "/api/shipping", "/api/tracking", "/api/logistics",
+    "/api/catalog", "/api/catalogue", "/api/merchant", "/api/vendor",
+    "/api/reseller", "/api/distributor", "/api/franchise", "/api/wholesale",
+    "/api/retail", "/api/pos", "/api/terminal", "/api/register",
+    "/api/compliance", "/api/audit", "/api/tax", "/api/taxonomy",
+    "/api/regulation", "/api/license", "/api/permit", "/api/certification",
+    "/api/identity", "/api/verification", "/api/kba", "/api/mfa",
+    "/api/2fa", "/api/totp", "/api/hotp", "/api/u2f",
+    "/api/fido", "/api/webauthn", "/api/passkey", "/api/biometric",
+    "/api/kyc", "/api/aml", "/api/sanctions", "/api/screening",
+    "/api/onboarding", "/api/offboarding", "/api/provisioning",
+    "/api/delegation", "/api/escalation", "/api/routing",
+    "/api/federation", "/api/directory", "/api/ldap", "/api/scim",
+    "/api/saml", "/api/oidc", "/api/cas", "/api/sso",
+    "/api/idp", "/api/sp", "/api/relying-party",
+    "/api/entitlement", "/api/permission", "/api/role", "/api/scope",
+    "/api/namespace", "/api/tenant", "/api/organization", "/api/division",
+    "/api/department", "/api/unit", "/api/cost-center", "/api/budget",
+    "/api/forecast", "/api/revenue", "/api/profit", "/api/margin",
+    "/api/expense", "/api/refund", "/api/dispute", "/api/chargeback",
+    "/api/collection", "/api/reconciliation", "/api/settlement",
+    "/api/payout", "/api/commission", "/api/royalty", "/api/dividend",
+    "/api/trading", "/api/exchange", "/api/market", "/api/auction",
+    "/api/bid", "/api/offer", "/api/listing", "/api/classified",
+    "/api/registry", "/api/repository", "/api/artifact", "/api/package",
+    "/api/release", "/api/changelog", "/api/migration", "/api/rollback",
+    "/api/snapshot", "/api/backup", "/api/restore", "/api/archive",
+    "/api/retention", "/api/purge", "/api/cleanup", "/api/garbage",
+    "/api/compaction", "/api/defrag", "/api/optimize", "/api/analyze",
+    "/api/explain", "/api/profile", "/api/trace", "/api/debug",
+    "/api/benchmark", "/api/stress", "/api/load", "/api/performance",
+    "/api/latency", "/api/throughput", "/api/saturation", "/api/availability",
+    "/api/reliability", "/api/resilience", "/api/failover", "/api/replica",
+    "/api/shard", "/api/partition", "/api/distribution", "/api/cluster",
+    "/api/node", "/api/peer", "/api/gossip", "/api/consensus",
+    "/api/election", "/api/leader", "/api/follower", "/api/observer",
+    "/api/coordinator", "/api/orchestrator", "/api/scheduler",
+    "/api/workflow", "/api/pipeline", "/api/step", "/api/stage",
+    "/api/phase", "/api/milestone", "/api/gate", "/api/checkpoint",
+    "/api/review", "/api/approval", "/api/signoff", "/api/attestation",
+    "/api/ack", "/api/nack", "/api/heartbeat", "/api/keepalive",
+    "/api/discover", "/api/register", "/api/subscribe", "/api/unsubscribe",
+    "/api/publish", "/api/broadcast", "/api/multicast", "/api/anycast",
+    "/api/unicast", "/api/relay", "/api/bridge", "/api/gateway",
+    "/api/tunnel", "/api/proxy", "/api/forward", "/api/redirect",
+    "/api/dns", "/api/dhcp", "/api/ntp", "/api/ldap",
+    "/api/smtp", "/api/pop3", "/api/imap", "/api/sieve",
+    "/api/mta", "/api/mda", "/api/mua", "/api/ml",
+    "/api/fax", "/api/voip", "/api/sip", "/api/rtp",
+    "/api/rtsp", "/api/hls", "/api/dash", "/api/mpeg",
+    "/api/stream", "/api/ingest", "/api/transcode", "/api/package",
+    "/api/playback", "/api/recording", "/api/vod", "/api/live",
+    "/api/clip", "/api/thumbnail", "/api/preview", "/api/poster",
+    "/api/segment", "/api/playlist", "/api/channel", "/api/station",
+    "/api/schedule", "/api/guide", "/api/rating", "/api/review",
+    "/api/collection", "/api/folder", "/api/album", "/api/playlist",
+    "/api/library", "/api/shelf", "/api/tag", "/api/category",
+    "/api/facet", "/api/filter", "/api/sort", "/api/paginate",
+    "/api/cursor", "/api/offset", "/api/limit", "/api/page",
+    "/api/scroll", "/api/search_after", "/api/search_before",
+    "/api/aggregation", "/api/facet", "/api/bucket", "/api/metric",
+    "/api/dimension", "/api/hierarchy", "/api/rollup", "/api/drilldown",
+    "/api/pivot", "/api/cube", "/api/olap", "/api/datamart",
+    "/api/warehouse", "/api/lake", "/api/delta", "/api/iceberg",
+    "/api/hudi", "/api/parquet", "/api/avro", "/api/arrow",
+    "/api/flight", "/api/grpc", "/api/protobuf", "/api/thrift",
+    "/api/avro", "/api/flatbuffers", "/api/capnproto",
+    "/api/soap/v1", "/api/soap/v2", "/api/soap/action",
+    "/rest/v4", "/rest/v5", "/rest/v6", "/rest/v7",
+    "/api/v1/graphql", "/api/v2/graphql", "/api/v3/graphql",
+    "/subscriptions", "/api/subscriptions", "/subscription/v1",
+    "/events", "/api/events", "/event/v1",
+    "/sse", "/api/sse", "/eventsource",
+    "/streaming", "/api/streaming",
+    "/realtime", "/api/realtime",
 ]
 
 API_FRAMEWORK_PATTERNS = {
@@ -209,6 +290,23 @@ AUTH_HEADER_PATTERNS = {
     "AWS4-HMAC-SHA256": r"(?i)aws4-hmac-sha256\s+[A-Za-z0-9=/+]+",
     "X-API-Key": r"(?i)x-api-key",
     "X-Auth-Token": r"(?i)x-auth-token",
+    "NTLM": r"(?i)ntlm\s+[A-Za-z0-9+/=]+",
+    "Negotiate": r"(?i)negotiate\s+[A-Za-z0-9+/=]+",
+    "Hawk": r"(?i)hawk\s+[A-Za-z0-9=, ]+",
+    "Signature": r"(?i)signature\s+[A-Za-z0-9=, ]+",
+    "DPoP": r"(?i)dpop\s+[A-Za-z0-9_\-\.]+",
+    "Mutual": r"(?i)mutual\s+[A-Za-z0-9=, ]+",
+    "SCRAM": r"(?i)scram\s+[A-Za-z0-9=, ]+",
+    "AWS-Signature": r"(?i)aws\s*[-_]?signature\s*[-_]?version\s*[-_]?4",
+    "GCP-Bearer": r"(?i)ya29\.[A-Za-z0-9_\-]+",
+    "GitHub-Token": r"(?i)(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36}",
+    "GitLab-Token": r"(?i)glpat-[A-Za-z0-9_\-]{20,}",
+    "Slack-Token": r"(?i)xox[abposr]-[A-Za-z0-9\-]{10,}",
+    "Stripe-Signature": r"(?i)stripe-signature\s+[A-Za-z0-9=, ]+",
+    "X-Forwarded-User": r"(?i)x-forwarded-user",
+    "X-Real-IP": r"(?i)x-real-ip",
+    "CF-Access": r"(?i)cf-access-token",
+    "Authorization-User": r"(?i)x-authorization-user",
 }
 
 API_VERSION_PATTERNS = [
@@ -582,3 +680,184 @@ async def crawl(target: str, client: httpx.AsyncClient):
         ))
 
     return findings
+
+
+GRAPHQL_INTROSPECTION_QUERY = """
+{"query":"query { __schema { types { name fields { name type { name kind } } } } }"}
+"""
+
+
+async def _probe_content_negotation(target: str, client: httpx.AsyncClient, findings: list):
+    base = f"https://{target}" if not target.startswith("http") else target
+    accept_headers = [
+        ("application/json", "JSON"),
+        ("application/xml", "XML"),
+        ("text/yaml", "YAML"),
+        ("application/x-yaml", "YAML"),
+        ("text/csv", "CSV"),
+        ("application/msgpack", "MessagePack"),
+        ("application/protobuf", "Protobuf"),
+        ("application/grpc", "gRPC"),
+        ("text/plain", "Plain Text"),
+        ("*/*", "Wildcard"),
+    ]
+    for accept, label in accept_headers:
+        try:
+            resp = await client.get(f"{base}/api", timeout=5.0, follow_redirects=True,
+                headers={"User-Agent": "Mozilla/5.0", "Accept": accept})
+            ct = resp.headers.get("content-type", "")
+            if accept.split("/")[0] in ct or ct.startswith(accept):
+                findings.append(IntelligenceFinding(
+                    entity=f"Content negotiation: '{accept}' -> {ct[:60]}",
+                    type=f"API Content Negotiation ({label})",
+                    source="APIScanner",
+                    confidence="Medium",
+                    color="slate",
+                    threat_level="Informational",
+                    raw_data=f"Accept: {accept} -> Content-Type: {ct}",
+                    tags=["api", "content-negotiation"]
+                ))
+        except Exception:
+            pass
+
+
+async def _graphql_introspection_check(target: str, client: httpx.AsyncClient, findings: list):
+    base = f"https://{target}" if not target.startswith("http") else target
+    for gql_path in ["/graphql", "/api/graphql", "/graphql/v1", "/graphql/v2", "/graphql/playground"]:
+        try:
+            resp = await client.post(f"{base}{gql_path}",
+                content=GRAPHQL_INTROSPECTION_QUERY,
+                timeout=8.0,
+                headers={"User-Agent": "Mozilla/5.0", "Content-Type": "application/json"})
+            if resp.status_code == 200:
+                body = resp.text.lower()
+                if "__schema" in body or "types" in body:
+                    findings.append(IntelligenceFinding(
+                        entity=f"GraphQL introspection ENABLED at {gql_path}",
+                        type="API GraphQL Introspection",
+                        source="APIScanner",
+                        confidence="High",
+                        color="red",
+                        threat_level="High Risk",
+                        raw_data=f"GraphQL introspection is enabled at {gql_path}. Consider disabling in production.",
+                        tags=["api", "graphql", "introspection"]
+                    ))
+                else:
+                    findings.append(IntelligenceFinding(
+                        entity=f"GraphQL endpoint exists at {gql_path} (introspection disabled)",
+                        type="API GraphQL Endpoint",
+                        source="APIScanner",
+                        confidence="Medium",
+                        color="slate",
+                        threat_level="Informational",
+                        tags=["api", "graphql"]
+                    ))
+        except Exception:
+            pass
+
+
+async def _rate_limit_detection(target: str, client: httpx.AsyncClient, findings: list):
+    base = f"https://{target}" if not target.startswith("http") else target
+    headers_list = []
+    for _ in range(5):
+        try:
+            resp = await client.get(f"{base}/api", timeout=3.0,
+                headers={"User-Agent": "Mozilla/5.0"})
+            headers_list.append(dict(resp.headers))
+            statuses = [r.get("retry-after", "") for r in headers_list]
+            if any(s.strip() for s in statuses):
+                findings.append(IntelligenceFinding(
+                    entity=f"Rate limiting detected via Retry-After header",
+                    type="API Rate Limiting",
+                    source="APIScanner",
+                    confidence="Medium",
+                    color="emerald",
+                    threat_level="Informational",
+                    raw_data=f"Retry-After headers: {[s for s in statuses if s.strip()]}",
+                    tags=["api", "rate-limit"]
+                ))
+                break
+        except Exception:
+            pass
+    if headers_list:
+        last = headers_list[-1]
+        if int(last.get("x-ratelimit-remaining", "1")) == 0 or int(last.get("x-rate-limit-remaining", "1")) == 0:
+            findings.append(IntelligenceFinding(
+                entity=f"API rate limit exhausted or nearly exhausted",
+                type="API Rate Limit Status",
+                source="APIScanner",
+                confidence="Medium",
+                color="orange",
+                threat_level="Informational",
+                raw_data=f"Rate limit headers: {last}",
+                tags=["api", "rate-limit"]
+            ))
+
+
+async def _detect_waf(target: str, client: httpx.AsyncClient, findings: list):
+    base = f"https://{target}" if not target.startswith("http") else target
+    waf_payloads = [
+        ("' OR '1'='1", "SQL Injection"),
+        ("<script>alert(1)</script>", "XSS"),
+        ("../../../etc/passwd", "Path Traversal"),
+        ("${7*7}", "SSTI"),
+        ("1 UNION SELECT * FROM users", "SQL Union"),
+    ]
+    for payload, waf_type in waf_payloads:
+        try:
+            resp = await client.get(f"{base}/api?q={payload}", timeout=5.0,
+                headers={"User-Agent": "Mozilla/5.0", "Accept": "*/*"})
+            status = resp.status_code
+            body = resp.text.lower()
+            waf_indicators = ["blocked", "forbidden", "denied", "waf", "mod_security", "cloudflare",
+                            "challenge", "attention required", "security rule", "malicious"]
+            if any(w in body for w in waf_indicators) or status in (406, 403):
+                findings.append(IntelligenceFinding(
+                    entity=f"WAF/IDS detected ({waf_type} payload blocked, HTTP {status})",
+                    type="API WAF Detection",
+                    source="APIScanner",
+                    confidence="Medium",
+                    color="orange",
+                    threat_level="Informational",
+                    raw_data=f"Payload: {payload[:60]} triggered WAF (HTTP {status})",
+                    tags=["api", "waf", waf_type.lower().replace(" ", "-")]
+                ))
+                break
+        except Exception:
+            pass
+
+
+async def _analyze_response_schema(target: str, client: httpx.AsyncClient, findings: list):
+    base = f"https://{target}" if not target.startswith("http") else target
+    error_paths = ["/api/nonexistent12345", "/api/v1/nonexistent", "/api/users/9999999999"]
+    for ep in error_paths:
+        try:
+            resp = await client.get(f"{base}{ep}", timeout=5.0,
+                headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"})
+            if resp.status_code in (400, 404, 405, 500) and "json" in resp.headers.get("content-type", ""):
+                body_snippet = resp.text[:500]
+                findings.append(IntelligenceFinding(
+                    entity=f"Error response schema at {ep}: HTTP {resp.status_code}",
+                    type="API Error Response Schema",
+                    source="APIScanner",
+                    confidence="Medium",
+                    color="slate" if resp.status_code == 404 else "orange",
+                    threat_level="Informational" if resp.status_code == 404 else "Elevated Risk",
+                    raw_data=f"URL: {base}{ep}, Status: {resp.status_code}, Body: {body_snippet}",
+                    tags=["api", "error-handling"]
+                ))
+                stack_patterns = ["stacktrace", "stack trace", "at ", "line ", "file ",
+                                "traceback", "exception", "error:"]
+                if any(p in resp.text.lower() for p in stack_patterns):
+                    findings.append(IntelligenceFinding(
+                        entity=f"Stack trace disclosure at {ep}",
+                        type="API Stack Trace Disclosure",
+                        source="APIScanner",
+                        confidence="High",
+                        color="red",
+                        threat_level="High Risk",
+                        raw_data=f"Stack trace found in response: {resp.text[:1000]}",
+                        tags=["api", "information-disclosure"]
+                    ))
+        except Exception:
+            pass

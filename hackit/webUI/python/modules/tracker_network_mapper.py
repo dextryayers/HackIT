@@ -528,6 +528,55 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     tags=["tracker", "cookie", "tracking-cookie"]
                 ))
 
+        csp_data = await extract_csp_from_headers(headers)
+        for directive_name, directive_info in csp_data.items():
+            findings.append(IntelligenceFinding(
+                entity=f"CSP {directive_name}: {directive_info['value'][:100]}",
+                type=f"CSP Directive: {directive_info['label']}",
+                source="TrackerNetworkMapper",
+                confidence="High",
+                color="slate",
+                threat_level="Informational",
+                raw_data=f"Directive: {directive_name} = {directive_info['value'][:300]}",
+                tags=["csp", "security", directive_name]
+            ))
+
+        for inline in inline_scripts:
+            for ev_pat, ev_desc in EVENT_LISTENER_PATTERNS:
+                if re.search(ev_pat, inline, re.IGNORECASE):
+                    findings.append(IntelligenceFinding(
+                        entity=ev_desc,
+                        type="Event Listener Tracking",
+                        source="TrackerNetworkMapper",
+                        confidence="Low",
+                        color="orange",
+                        threat_level="Informational",
+                        tags=["tracker", "event-listener", "privacy"]
+                    ))
+                    break
+
+        tracker_stats = detect_cookie_tracking_vs_fingerprinting(inline_scripts)
+        if tracker_stats["cookie_tracking"] > 0:
+            findings.append(IntelligenceFinding(
+                entity=f"Cookie-based tracking detected ({tracker_stats['cookie_tracking']} signals)",
+                type="Cookie Tracking Detection",
+                source="TrackerNetworkMapper",
+                confidence="Medium",
+                color="orange",
+                threat_level="Elevated Risk",
+                tags=["tracker", "cookie-tracking", "privacy"]
+            ))
+        if tracker_stats["pixel_tracking"] > 0:
+            findings.append(IntelligenceFinding(
+                entity=f"Pixel/web beacon tracking detected ({tracker_stats['pixel_tracking']} signals)",
+                type="Pixel Tracking Detection",
+                source="TrackerNetworkMapper",
+                confidence="Medium",
+                color="red",
+                threat_level="Elevated Risk",
+                tags=["tracker", "pixel-tracking", "privacy"]
+            ))
+
         url_params = parse_qs(urlparse(base_url).query)
         for param in url_params:
             for tp_param in TRACKING_PARAM_PATTERNS:
@@ -574,3 +623,319 @@ async def crawl(target: str, client: httpx.AsyncClient):
         ))
 
     return findings
+
+
+# === EXTENDED UPGRADE: 200+ tracker domains, CSP extraction, more categories ===
+
+MORE_TRACKER_PATTERNS = {
+    "Taboola": [r"taboola\.com", r"trc\.taboola", r"taboola"],
+    "Outbrain": [r"outbrain\.com", r"traffic\.outbrain", r"obWidget"],
+    "Revcontent": [r"revcontent\.com", r"revcontent"],
+    "MGID": [r"mgid\.com", r"mgid"],
+    "AdRecover": [r"adrecover\.com"],
+    "PropellerAds": [r"propellerads\.com", r"propeller\.media"],
+    "PopAds": [r"popads\.net", r"popadscdn"],
+    "AdCash": [r"adcash\.com", r"adcash"],
+    "AdMaven": [r"admaven\.com"],
+    "AdThrive": [r"adthrive\.com", r"adthrive"],
+    "Media.net": [r"media\.net", r"media\.net"],
+    "Infolinks": [r"infolinks\.com", r"infolinks"],
+    "Chitika": [r"chitika\.net", r"chitika"],
+    "Kontera": [r"kontera\.com", r"kontera"],
+    "VibrantMedia": [r"vibrantmedia\.com", r"intellitxt"],
+    "Sovrn": [r"sovrn\.com", r"widget\.sovrn"],
+    "OpenX": [r"openx\.com", r"openx\.net", r"openx"],
+    "PubMatic": [r"pubmatic\.com", r"pubmatic"],
+    "Rubicon": [r"rubiconproject\.com", r"rubicon"],
+    "AppNexus": [r"appnexus\.com", r"adnxs\.com", r"appnexus"],
+    "Index Exchange": [r"indexexchange\.com", r"casalemedia"],
+    "ShareThrough": [r"sharethrough\.com", r"sharethrough"],
+    "TripleLift": [r"triplelift\.com", r"triplelift"],
+    "Teads": [r"teads\.com", r"teads\.tv", r"teads"],
+    "VideoAmp": [r"videoamp\.com", r"videoamp"],
+    "TheTradeDesk": [r"adsrvr\.org", r"thetradedesk"],
+    "Lotame": [r"lotame\.com", r"lotame"],
+    "Neustar": [r"neustar\.biz", r"adadvisor"],
+    "Liveramp": [r"liveramp\.com", r"liveramp"],
+    "Tapad": [r"tapad\.com", r"tapad"],
+    "Drawbridge": [r"drawbridge\.com", r"drawbridge"],
+    "CrossPixel": [r"crosspixel\.net", r"crosspixel"],
+    "BlueKai": [r"bluekai\.com", r"bluekai"],
+    "DemandBase": [r"demandbase\.com", r"demandbase"],
+    "Bombora": [r"bombora\.com", r"bombora"],
+    "6sense": [r"6sense\.com", r"6sense"],
+    "RollWorks": [r"rollworks\.com", r"rollworks"],
+    "ZoomInfo": [r"zoominfo\.com", r"zoominfo"],
+    "Clearbit": [r"clearbit\.com", r"clearbit"],
+    "FullContact": [r"fullcontact\.com", r"fullcontact"],
+    "Pipl": [r"pipl\.com", r"pipl"],
+    "Experian": [r"experian\.com", r"experian"],
+    "Acxiom": [r"acxiom\.com", r"acxiom"],
+    "Oracle Data Cloud": [r"oracle\.com/data", r"addthis"],
+    "Salesforce DMP": [r"salesforce\.com/dmp", r"krxd\.net"],
+    "Adobe Audience Manager": [r"demdex\.net", r"adobe\.com/audience"],
+    "MediaMath": [r"mediamath\.com", r"mathtag"],
+    "RocketFuel": [r"rocketfuel\.com", r"rfihub"],
+    "ConversionLogic": [r"conversionlogic\.com"],
+    "C3 Metrics": [r"c3metrics\.com", r"c3tag"],
+    "EffectiveMeasure": [r"effectivemeasure\.com", r"effectivemeasure"],
+    "Moat": [r"moat\.com", r"moatads"],
+    "DoubleVerify": [r"doubleverify\.com", r"doubleverify"],
+    "Integral Ad Science": [r"integralads\.com", r"ias\.ds"],
+    "Pixalate": [r"pixalate\.com", r"pixalate"],
+    "WhiteOps": [r"whiteops\.com", r"whiteops"],
+    "Human Security": [r"humansecurity\.com", r"humansecurity"],
+    "DataDome": [r"datadome\.co", r"datadome"],
+    "PerimeterX": [r"perimeterx\.com", r"px-cdn"],
+    "Akamai Bot Manager": [r"akamai\.com/bot", r"akamai/bot"],
+    "Cloudflare Bot Management": [r"cloudflare\.com/bot", r"cf-bot"],
+    "reCAPTCHA": [r"recaptcha\.net", r"google\.com/recaptcha", r"recaptcha/api"],
+    "hCaptcha": [r"hcaptcha\.com", r"hcaptcha"],
+    "Turnstile": [r"cloudflare\.com/turnstile", r"challenges\.cloudflare"],
+    "Arkose Labs": [r"arkoselabs\.com", r"funcaptcha"],
+    "GeoEdge": [r"geoedge\.com", r"geoedge"],
+    "Confiant": [r"confiant\.com", r"confiant"],
+    "AdGuard": [r"adguard\.com", r"adguard"],
+    "uBlock Origin": [r"ublockorigin\.com", r"ublock"],
+    "Ghostery": [r"ghostery\.com", r"ghostery"],
+    "Privacy Badger": [r"privacybadger\.org", r"eff\.org/privacy"],
+    "Disconnect": [r"disconnect\.me", r"disconnect"],
+    "NoScript": [r"noscript\.net", r"noscript"],
+    "DuckDuckGo": [r"duckduckgo\.com", r"duckduckgo"],
+    "Brave": [r"brave\.com", r"brave"],
+    "Cloudflare Warp": [r"cloudflarewarp\.com", r"warp"],
+    "1.1.1.1": [r"one\.one\.one\.one", r"1\.1\.1\.1"],
+    "NextDNS": [r"nextdns\.io", r"nextdns"],
+    "ControlD": [r"controld\.com", r"controld"],
+    "AdBlock": [r"adblock\.pl", r"adblock"],
+    "AdBlock Plus": [r"adblockplus\.org", r"adblockplus"],
+    "Malwarebytes": [r"malwarebytes\.com", r"malwarebytes"],
+    "Bitdefender": [r"bitdefender\.com", r"bitdefender"],
+    "Kaspersky": [r"kaspersky\.com", r"kaspersky"],
+    "Norton": [r"norton\.com", r"norton"],
+    "McAfee": [r"mcafee\.com", r"mcafee"],
+    "Avast": [r"avast\.com", r"avast"],
+    "AVG": [r"avg\.com", r"avg"],
+    "ESET": [r"eset\.com", r"eset"],
+    "Trend Micro": [r"trendmicro\.com", r"trendmicro"],
+    "Sophos": [r"sophos\.com", r"sophos"],
+    "Palo Alto Networks": [r"paloaltonetworks\.com", r"paloaltonetworks"],
+    "Fortinet": [r"fortinet\.com", r"fortinet"],
+    "Cisco": [r"cisco\.com", r"cisco"],
+    "Check Point": [r"checkpoint\.com", r"checkpoint"],
+    "Zscaler": [r"zscaler\.com", r"zscaler"],
+    "Mimecast": [r"mimecast\.com", r"mimecast"],
+    "Proofpoint": [r"proofpoint\.com", r"proofpoint"],
+    "Barracuda": [r"barracuda\.com", r"barracuda"],
+    "Trustwave": [r"trustwave\.com", r"trustwave"],
+    "F5": [r"f5\.com", r"f5"],
+    "Imperva": [r"imperva\.com", r"incapsula"],
+    "Akamai": [r"akamai\.com", r"akamaihd"],
+    "Fastly": [r"fastly\.com", r"fastly"],
+    "Amazon CloudFront": [r"cloudfront\.net", r"amazonaws"],
+    "Azure CDN": [r"azureedge\.net", r"azurefd"],
+    "Google Cloud CDN": [r"cdn\.google", r"gcpcdn"],
+    "Cloudflare": [r"cloudflare\.com", r"cloudflare"],
+    "StackPath": [r"stackpathcdn\.com", r"stackpath"],
+    "KeyCDN": [r"keycdn\.com", r"kxcdn"],
+    "BunnyCDN": [r"bunnycdn\.com", r"bunny\.net"],
+    "CDN77": [r"cdn77\.com", r"cdn77"],
+    "CacheFly": [r"cachefly\.com", r"cachefly"],
+    "OVH CDN": [r"ovh\.net", r"ovh"],
+    "Quantil": [r"quantil\.com", r"quantil"],
+    "G-Core CDN": [r"gcore\.com", r"gcore"],
+    "BelugaCDN": [r"belugacdn\.com", r"belugacdn"],
+    "CDNVideo": [r"cdnvideo\.ru", r"cdnvideo"],
+    "EdgeCast": [r"edgecastcdn\.net", r"edgecast"],
+    "Section.io": [r"section\.io", r"section"],
+    "ArvanCloud": [r"arvancloud\.com", r"arvancloud"],
+    "MyraCloud": [r"myracloud\.com", r"myracloud"],
+    "Sucuri": [r"sucuri\.net", r"sucuri"],
+    "Reblaze": [r"reblaze\.com", r"reblaze"],
+    "DDoS Guard": [r"ddos-guard\.net", r"ddosguard"],
+}
+
+MORE_THIRD_PARTY_CATEGORIES = {
+    "adsrvr.org": {"category": "Advertising/DSP", "company": "The Trade Desk", "privacy_impact": 9},
+    "adnxs.com": {"category": "Ad Exchange", "company": "AppNexus/Xandr", "privacy_impact": 9},
+    "rubiconproject.com": {"category": "Ad Exchange", "company": "Rubicon Project", "privacy_impact": 8},
+    "openx.net": {"category": "Ad Exchange", "company": "OpenX", "privacy_impact": 8},
+    "pubmatic.com": {"category": "Ad Exchange", "company": "PubMatic", "privacy_impact": 8},
+    "casalemedia.com": {"category": "Ad Exchange", "company": "Index Exchange", "privacy_impact": 8},
+    "moatads.com": {"category": "Ad Verification", "company": "Moat/Oracle", "privacy_impact": 8},
+    "scorecardresearch.com": {"category": "Analytics", "company": "comScore", "privacy_impact": 7},
+    "quantserve.com": {"category": "Analytics", "company": "Quantcast", "privacy_impact": 7},
+    "krxd.net": {"category": "DMP", "company": "Salesforce/Krux", "privacy_impact": 8},
+    "demdex.net": {"category": "DMP", "company": "Adobe Audience Manager", "privacy_impact": 8},
+    "bluekai.com": {"category": "DMP", "company": "Oracle BlueKai", "privacy_impact": 8},
+    "addthis.com": {"category": "Social/Sharing", "company": "Oracle AddThis", "privacy_impact": 7},
+    "sharethis.com": {"category": "Social/Sharing", "company": "ShareThis", "privacy_impact": 7},
+    "disqus.com": {"category": "Comments", "company": "Disqus", "privacy_impact": 6},
+    "taboola.com": {"category": "Content Recommendation", "company": "Taboola", "privacy_impact": 7},
+    "outbrain.com": {"category": "Content Recommendation", "company": "Outbrain", "privacy_impact": 7},
+    "revcontent.com": {"category": "Content Recommendation", "company": "Revcontent", "privacy_impact": 7},
+    "mgid.com": {"category": "Content Recommendation", "company": "MGID", "privacy_impact": 7},
+    "criteo.com": {"category": "Retargeting", "company": "Criteo", "privacy_impact": 9},
+    "criteo.net": {"category": "Retargeting", "company": "Criteo", "privacy_impact": 9},
+    "adroll.com": {"category": "Retargeting", "company": "AdRoll", "privacy_impact": 8},
+    "amazon-adsystem.com": {"category": "Advertising", "company": "Amazon", "privacy_impact": 9},
+    "aax.amazon-adsystem.com": {"category": "Advertising", "company": "Amazon Ads", "privacy_impact": 9},
+    "rlcdn.com": {"category": "Identity", "company": "LiveRamp", "privacy_impact": 9},
+    "idsync.rlcdn.com": {"category": "Identity Resolution", "company": "LiveRamp", "privacy_impact": 9},
+    "tapad.com": {"category": "Identity Resolution", "company": "Tapad", "privacy_impact": 9},
+    "drawbridge.com": {"category": "Identity Resolution", "company": "Drawbridge", "privacy_impact": 8},
+    "crosspixel.net": {"category": "Cross-Device", "company": "CrossPixel", "privacy_impact": 8},
+    "agkn.com": {"category": "DMP", "company": "Neustar", "privacy_impact": 8},
+    "2o7.net": {"category": "Analytics", "company": "Adobe Omniture", "privacy_impact": 7},
+    "omtrdc.net": {"category": "Analytics", "company": "Adobe Analytics", "privacy_impact": 7},
+    "demandbase.com": {"category": "ABM", "company": "Demandbase", "privacy_impact": 8},
+    "bombora.com": {"category": "Intent Data", "company": "Bombora", "privacy_impact": 8},
+    "6sense.com": {"category": "ABM/Intent", "company": "6sense", "privacy_impact": 8},
+    "zoominfo.com": {"category": "B2B Data", "company": "ZoomInfo", "privacy_impact": 8},
+    "clearbit.com": {"category": "B2B Data", "company": "Clearbit", "privacy_impact": 7},
+    "fullcontact.com": {"category": "Identity", "company": "FullContact", "privacy_impact": 8},
+    "pipl.com": {"category": "Identity", "company": "Pipl", "privacy_impact": 8},
+    "experian.com": {"category": "Credit/Data", "company": "Experian", "privacy_impact": 9},
+    "acxiom.com": {"category": "Data Broker", "company": "Acxiom", "privacy_impact": 9},
+    "oracle.com": {"category": "Cloud/Data", "company": "Oracle", "privacy_impact": 7},
+    "mediamath.com": {"category": "DSP", "company": "MediaMath", "privacy_impact": 8},
+    "mathtag.com": {"category": "DSP", "company": "MediaMath", "privacy_impact": 8},
+    "rfihub.com": {"category": "DSP", "company": "RocketFuel", "privacy_impact": 8},
+    "effectivemeasure.com": {"category": "Web Analytics", "company": "Effective Measure", "privacy_impact": 7},
+    "conviva.com": {"category": "Streaming Analytics", "company": "Conviva", "privacy_impact": 6},
+    "mux.com": {"category": "Video Analytics", "company": "Mux", "privacy_impact": 6},
+    "wistia.com": {"category": "Video Hosting", "company": "Wistia", "privacy_impact": 5},
+    "vimeo.com": {"category": "Video Hosting", "company": "Vimeo", "privacy_impact": 5},
+    "youtube.com": {"category": "Video Hosting", "company": "Google/YouTube", "privacy_impact": 7},
+    "brightcove.com": {"category": "Video Hosting", "company": "Brightcove", "privacy_impact": 5},
+    "jwplayer.com": {"category": "Video Player", "company": "JW Player", "privacy_impact": 5},
+    "cdn.ampproject.org": {"category": "CDN/AMP", "company": "Google", "privacy_impact": 4},
+    "cdn.jsdelivr.net": {"category": "CDN", "company": "jsDelivr", "privacy_impact": 2},
+    "cdnjs.cloudflare.com": {"category": "CDN", "company": "Cloudflare/cdnjs", "privacy_impact": 2},
+    "unpkg.com": {"category": "CDN", "company": "npm", "privacy_impact": 2},
+    "polyfill.io": {"category": "Polyfill", "company": "Polyfill.io", "privacy_impact": 3},
+    "code.jquery.com": {"category": "CDN", "company": "jQuery Foundation", "privacy_impact": 2},
+    "stackpath.bootstrapcdn.com": {"category": "CDN", "company": "BootstrapCDN", "privacy_impact": 2},
+    "netdna.bootstrapcdn.com": {"category": "CDN", "company": "BootstrapCDN (MaxCDN)", "privacy_impact": 2},
+    "maxcdn.bootstrapcdn.com": {"category": "CDN", "company": "BootstrapCDN (MaxCDN)", "privacy_impact": 2},
+    "c.speedcurve.com": {"category": "Performance Monitoring", "company": "SpeedCurve", "privacy_impact": 5},
+    "rum.perfops.net": {"category": "Performance Monitoring", "company": "PerfOps", "privacy_impact": 5},
+    "cdn.launchdarkly.com": {"category": "Feature Flags", "company": "LaunchDarkly", "privacy_impact": 5},
+    "cdn.split.io": {"category": "Feature Flags", "company": "Split.io", "privacy_impact": 5},
+    "cdn.auth0.com": {"category": "Auth/CDN", "company": "Auth0", "privacy_impact": 6},
+    "cdn.sanity.io": {"category": "CMS/CDN", "company": "Sanity", "privacy_impact": 3},
+    "cdn.contentful.com": {"category": "CMS/CDN", "company": "Contentful", "privacy_impact": 3},
+    "images.ctfassets.net": {"category": "CMS/CDN", "company": "Contentful", "privacy_impact": 3},
+    "cdn.storyblok.com": {"category": "CMS/CDN", "company": "Storyblok", "privacy_impact": 3},
+    "cdn.builder.io": {"category": "CMS/CDN", "company": "Builder.io", "privacy_impact": 3},
+    "ghost.org": {"category": "CMS", "company": "Ghost", "privacy_impact": 3},
+    "prismic.io": {"category": "CMS", "company": "Prismic", "privacy_impact": 3},
+    "cdn.shopify.com": {"category": "E-commerce/CDN", "company": "Shopify", "privacy_impact": 4},
+    "squarecdn.com": {"category": "E-commerce/CDN", "company": "Square", "privacy_impact": 4},
+    "cdn.woocommerce.com": {"category": "E-commerce", "company": "WooCommerce", "privacy_impact": 3},
+    "js.braintreegateway.com": {"category": "Payments", "company": "Braintree/PayPal", "privacy_impact": 6},
+    "js.stripe.com": {"category": "Payments", "company": "Stripe", "privacy_impact": 6},
+    "www.paypalobjects.com": {"category": "Payments", "company": "PayPal", "privacy_impact": 6},
+    "checkoutshopper-live.adyen.com": {"category": "Payments", "company": "Adyen", "privacy_impact": 6},
+    "js.squareup.com": {"category": "Payments", "company": "Square", "privacy_impact": 6},
+    "d3v27wwd40f0xu.cloudfront.net": {"category": "E-commerce", "company": "Shopify", "privacy_impact": 3},
+}
+
+CSP_DIRECTIVES = {
+    "default-src": "Default source",
+    "script-src": "Script sources",
+    "style-src": "Style sources",
+    "img-src": "Image sources",
+    "connect-src": "Connection/XHR sources",
+    "font-src": "Font sources",
+    "frame-src": "Frame sources",
+    "media-src": "Media sources",
+    "object-src": "Object/plugin sources",
+    "manifest-src": "Manifest sources",
+    "worker-src": "Web Worker sources",
+    "base-uri": "Base URL",
+    "form-action": "Form action targets",
+    "frame-ancestors": "Frame ancestors (clickjacking)",
+    "block-all-mixed-content": "Mixed content blocking",
+    "upgrade-insecure-requests": "HTTPS upgrade",
+    "navigate-to": "Navigation targets",
+    "report-uri": "CSP report URI",
+    "report-to": "CSP reporting endpoint",
+    "require-sri-for": "SRI requirement",
+    "trusted-types": "Trusted types policy",
+    "webrtc": "WebRTC sources",
+}
+
+EVENT_LISTENER_PATTERNS = [
+    (r"addEventListener\(['\"]?(scroll|resize|mousemove|click|touch)", "UI Event Tracking"),
+    (r"addEventListener\(['\"]?(beforeunload|unload|pagehide)", "Page Exit Tracking"),
+    (r"addEventListener\(['\"]?(focus|blur)", "Focus/Blur Tracking"),
+    (r"addEventListener\(['\"]?(copy|paste|cut)", "Clipboard Tracking"),
+    (r"addEventListener\(['\"]?(visibilitychange|pageshow)", "Visibility/Page Tracking"),
+]
+
+async def extract_csp_from_headers(headers):
+    csp_data = {}
+    try:
+        csp = headers.get("content-security-policy", "")
+        if csp:
+            directives = csp.split(";")
+            for directive in directives:
+                directive = directive.strip()
+                parts = directive.split(maxsplit=1)
+                if len(parts) >= 1:
+                    name = parts[0]
+                    value = parts[1] if len(parts) > 1 else ""
+                    label = CSP_DIRECTIVES.get(name, name)
+                    csp_data[name] = {"label": label, "value": value[:200]}
+    except Exception:
+        pass
+    return csp_data
+
+def detect_utm_parameters(url_params):
+    findings_list = []
+    try:
+        all_utm = ["utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
+                   "utm_id", "utm_cid", "utm_reader", "utm_viz_id", "utm_pubreferrer",
+                   "utm_social", "utm_social-type",
+                   "utm_affiliate", "utm_partner", "utm_brand",
+                   "utm_placement", "utm_device", "utm_network",
+                   "utm_target", "utm_keyword", "utm_adgroup",
+                   "utm_region", "utm_country", "utm_city",
+                   "utm_language", "utm_audience",
+                   "utm_segment", "utm_user", "utm_account"]
+        for param in url_params:
+            for utm in all_utm:
+                if param.lower() == utm:
+                    findings_list.append(param)
+    except Exception:
+        pass
+    return findings_list
+
+def analyze_privacy_impact(trackers, fingerprints, beacons):
+    score = 100
+    try:
+        score -= len(trackers) * 4
+        score -= fingerprints * 7
+        score -= beacons * 2
+        if len(trackers) > 10:
+            score -= 15
+        if fingerprints > 5:
+            score -= 10
+    except Exception:
+        pass
+    return max(0, min(100, score))
+
+def detect_cookie_tracking_vs_fingerprinting(inline_scripts):
+    result = {"cookie_tracking": 0, "fingerprinting": 0, "pixel_tracking": 0}
+    try:
+        for inline in inline_scripts:
+            if re.search(r'document\.cookie|setCookie|getCookie', inline, re.IGNORECASE):
+                result["cookie_tracking"] += 1
+            if re.search(r'canvas\.toDataURL|navigator\.|screen\.|webgl', inline, re.IGNORECASE):
+                result["fingerprinting"] += 1
+            if re.search(r'new Image\(\)|\.src\s*=|navigator\.sendBeacon', inline, re.IGNORECASE):
+                result["pixel_tracking"] += 1
+    except Exception:
+        pass
+    return result

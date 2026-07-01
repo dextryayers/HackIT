@@ -1,485 +1,262 @@
 import httpx
 import asyncio
-import socket
 import json
+import socket
 from datetime import datetime
-from collections import defaultdict
+from typing import List
 from models import IntelligenceFinding
 
 ABUSEIPDB_API = "https://api.abuseipdb.com/api/v2"
-ABUSEIPDB_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
+ABUSE_URL = "https://www.abuseipdb.com/check"
+ABUSE_REPORT_URL = "https://www.abuseipdb.com/report"
+UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
 
-CATEGORY_MAP = {
-    "3": "Fraud Orders",
-    "4": "DDoS Attack",
-    "5": "FTP Brute-Force",
-    "6": "Ping of Death",
-    "7": "Phishing",
-    "8": "Fraud VoIP",
-    "9": "Open Proxy",
-    "10": "Web Spam",
-    "11": "Email Spam",
-    "12": "Blog Spam",
-    "13": "VPN IP",
-    "14": "Port Scan",
-    "15": "Hacking",
-    "16": "SQL Injection",
-    "17": "Spoofing",
-    "18": "Brute-Force",
-    "19": "Bad Web Bot",
-    "20": "Exploited Host",
-    "21": "Web App Attack",
-    "22": "SSH",
-    "23": "IoT Targeted",
+ABUSE_CATEGORIES = {
+    1: "DNS Compromise", 2: "DNS Poisoning", 3: "Fraud Orders",
+    4: "DDoS Attack", 5: "FTP Brute-Force", 6: "Ping of Death",
+    7: "Phishing", 8: "Fraud VoIP", 9: "Open Proxy",
+    10: "Web Spam", 11: "Email Spam", 12: "Blog Spam",
+    13: "VPN IP", 14: "Port Scan", 15: "Hacking",
+    16: "SQL Injection", 17: "Spoofing", 18: "Brute-Force",
+    19: "Bad Web Bot", 20: "Exploited Host", 21: "Web App Attack",
+    22: "SSH Attacks", 23: "IoT Targeted"
 }
 
-SEVERITY_MAP = {
-    "DDoS Attack": "High Risk",
-    "Hacking": "High Risk",
-    "Brute-Force": "Elevated Risk",
-    "SQL Injection": "High Risk",
-    "Phishing": "High Risk",
-    "Web App Attack": "Elevated Risk",
-    "Bad Web Bot": "Standard Target",
-    "Port Scan": "Standard Target",
-    "SSH": "Standard Target",
-    "Fraud Orders": "Elevated Risk",
-    "Spoofing": "High Risk",
+KNOWN_BLACKLIST_DOMAINS = {
+    "spamhaus.org", "spamcop.net", "barracudacentral.org",
+    "talosintelligence.com", "proofpoint.com", "mxtoolbox.com",
+    "dnsbl.info", "uribl.com", "surbl.org",
 }
 
-BLACKLIST_SOURCES = [
-    "spamhaus", "spamcop", "barracuda", "sorbs", "dshield",
-    "tor_exit", "alienvault", "blocklist_de", "emerging_threats",
-    "green_snow", "malshare", "malwaredomains",
-]
-
-async def resolve_to_ips(domain: str) -> list:
-    loop = asyncio.get_event_loop()
-    try:
-        ais = await loop.run_in_executor(None, lambda: socket.getaddrinfo(domain, 80, family=socket.AF_INET))
-        return list(set(a[4][0] for a in ais))
-    except:
-        return []
-
-def score_category(score: int):
-    if score == 0:
-        return "Clean", "emerald", "Informational", "clean"
-    if score < 25:
-        return "Low Risk", "slate", "Standard Target", "low-risk"
-    if score < 50:
-        return "Moderate Risk", "orange", "Standard Target", "moderate-risk"
-    if score < 75:
-        return "High Risk", "red", "Elevated Risk", "high-risk"
-    return "Critical", "red", "High Risk", "critical"
-
-async def check_blacklist(client: httpx.AsyncClient, ip: str) -> list:
-    findings = []
-    for source in BLACKLIST_SOURCES:
-        try:
-            resp = await client.get(
-                f"https://api.abuseipdb.com/api/v2/blacklist",
-                params={"ipAddress": ip, "source": source},
-                timeout=10.0,
-            )
-        except:
-            pass
-    return findings
-
-async def fetch_category_trends(client: httpx.AsyncClient, ip: str) -> list:
-    findings = []
+async def query_api(ip: str, client: httpx.AsyncClient) -> dict:
     try:
         resp = await client.get(
             f"{ABUSEIPDB_API}/check",
             params={"ipAddress": ip, "maxAgeInDays": "365", "verbose": ""},
-            headers={"User-Agent": ABUSEIPDB_UA, "Accept": "application/json"},
-            timeout=15.0,
+            headers={"User-Agent": UA, "Accept": "application/json", "Key": ""},
+            timeout=15.0
         )
         if resp.status_code == 200:
-            data = resp.json().get("data", {})
-            reports = data.get("reports", [])
-            monthly = defaultdict(int)
-            for r in reports:
-                dt = r.get("reportedAt", "")[:7]
-                if dt:
-                    monthly[dt] += 1
-            sorted_months = sorted(monthly.items())[:12]
-            for month, cnt in sorted_months:
-                findings.append(IntelligenceFinding(
-                    entity=f"{month}: {cnt} report(s)",
-                    type="AbuseIPDB Monthly Trend",
-                    source="AbuseIPDB Trends",
-                    confidence="Medium",
-                    color="slate",
-                    status="Confirmed",
-                    resolution=ip,
-                    tags=["threat-intel", "trends", "timeline"],
-                ))
+            return resp.json().get("data", {})
     except:
         pass
-    return findings
+    return {}
 
-async def check_multi_ip_blacklist(client: httpx.AsyncClient, ips: list) -> list:
-    findings = []
+async def query_blacklist(client: httpx.AsyncClient) -> dict:
     try:
         resp = await client.get(
             f"{ABUSEIPDB_API}/blacklist",
-            params={"confidenceMinimum": "90", "limit": "100"},
-            headers={"User-Agent": ABUSEIPDB_UA, "Accept": "application/json"},
-            timeout=15.0,
+            params={"confidenceMinimum": "50", "limit": "500"},
+            headers={"User-Agent": UA, "Accept": "application/json", "Key": ""},
+            timeout=30.0
         )
         if resp.status_code == 200:
-            data = resp.json().get("data", [])
-            if data:
-                findings.append(IntelligenceFinding(
-                    entity=f"{len(data)} IPs in blacklist (90%+ confidence)",
-                    type="AbuseIPDB Blacklist Summary",
-                    source="AbuseIPDB Blacklist",
-                    confidence="High",
-                    color="red",
-                    threat_level="High Risk",
-                    status="Confirmed",
-                    raw_data=json.dumps([d.get("ipAddress") for d in data[:20]]),
-                    tags=["threat-intel", "blacklist", "aggregate"],
-                ))
+            return resp.json()
     except:
         pass
-    return findings
+    return {}
 
-async def check_domain_reputation(client: httpx.AsyncClient, domain: str) -> list:
-    findings = []
+async def check_website_blacklist(ip: str, client: httpx.AsyncClient) -> List[str]:
+    blacklists = []
+    for domain in KNOWN_BLACKLIST_DOMAINS:
+        try:
+            dnsbl_query = f"{'.'.join(reversed(ip.split('.')))}.{domain}"
+            socket.gethostbyname(dnsbl_query)
+            blacklists.append(domain)
+        except:
+            pass
+    return blacklists
+
+async def query_report_history(ip: str, client: httpx.AsyncClient) -> List[dict]:
     try:
         resp = await client.get(
-            f"{ABUSEIPDB_API}/check",
-            params={"ipAddress": domain, "maxAgeInDays": "90", "verbose": ""},
-            headers={"User-Agent": ABUSEIPDB_UA, "Accept": "application/json"},
-            timeout=15.0,
+            f"{ABUSEIPDB_API}/reports",
+            params={"ipAddress": ip, "maxAgeInDays": "365"},
+            headers={"User-Agent": UA, "Accept": "application/json", "Key": ""},
+            timeout=15.0
         )
         if resp.status_code == 200:
-            data = resp.json().get("data", {})
-            score = data.get("abuseConfidenceScore", 0)
-            isp = data.get("isp", "")
-            domain_name = data.get("domain", "")
-            findings.append(IntelligenceFinding(
-                entity=f"Domain reputation score: {score}/100",
-                type="AbuseIPDB Domain Reputation",
-                source="AbuseIPDB",
-                confidence="Medium",
-                color="red" if score > 50 else "orange",
-                threat_level="High Risk" if score > 50 else "Elevated Risk",
-                status="Analyzed",
-                resolution=domain,
-                raw_data=json.dumps(data),
-                tags=["threat-intel", "domain", "reputation"],
-            ))
-            if isp:
-                findings.append(IntelligenceFinding(
-                    entity=f"ISP: {isp}",
-                    type="AbuseIPDB Domain ISP",
-                    source="AbuseIPDB",
-                    confidence="Medium",
-                    color="slate",
-                    status="Confirmed",
-                    resolution=domain,
-                    tags=["infrastructure", "isp"],
-                ))
-            if domain_name:
-                findings.append(IntelligenceFinding(
-                    entity=f"Domain: {domain_name}",
-                    type="AbuseIPDB Domain Name",
-                    source="AbuseIPDB",
-                    confidence="Medium",
-                    color="slate",
-                    status="Confirmed",
-                    resolution=domain,
-                    tags=["infrastructure", "domain"],
-                ))
+            return resp.json().get("data", [])
     except:
         pass
-    return findings
+    return []
 
-async def crawl(target: str, client: httpx.AsyncClient):
+async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFinding]:
     findings = []
     t = target.strip().lower()
-    if t.startswith("http"):
-        from urllib.parse import urlparse
-        t = urlparse(t).netloc
 
-    ips = await resolve_to_ips(t)
-    if not ips:
-        ips = [t]
+    is_ip = False
+    try:
+        socket.inet_aton(t)
+        is_ip = True
+    except:
+        pass
 
-    domain_findings = await check_domain_reputation(client, t)
-    findings.extend(domain_findings)
-
-    headers = {
-        "User-Agent": ABUSEIPDB_UA,
-        "Accept": "application/json",
-        "Key": "",
-    }
-
-    country_dist = defaultdict(int)
-    usage_dist = defaultdict(int)
-    all_scores = []
-
-    for ip in ips[:5]:
+    if not is_ip:
         try:
-            resp = await client.get(
-                f"{ABUSEIPDB_API}/check",
-                params={"ipAddress": ip, "maxAgeInDays": "90", "verbose": ""},
-                headers=headers,
-                timeout=15.0,
-            )
-            if resp.status_code != 200:
-                continue
-
-            data = resp.json().get("data", {})
-            if not data:
-                continue
-
-            score = data.get("abuseConfidenceScore", 0)
-            all_scores.append((ip, score))
-            level, color, threat, tag = score_category(score)
-
-            country = data.get("countryCode", "")
-            if country:
-                country_dist[country] += 1
-
-            usage = data.get("usageType", "")
-            if usage:
-                usage_dist[usage] += 1
-
-            findings.append(IntelligenceFinding(
-                entity=f"Score: {score}/100 ({level})",
-                type="AbuseIPDB Score",
-                source="AbuseIPDB",
-                confidence="High",
-                color=color,
-                threat_level=threat,
-                status="Confirmed" if score > 0 else "Clean",
-                resolution=ip,
-                raw_data=f"abuseConfidenceScore={score}",
-                tags=["threat-intel", "reputation", tag],
-            ))
-
-            if country:
-                findings.append(IntelligenceFinding(
-                    entity=f"{country}",
-                    type="AbuseIPDB Country",
-                    source="AbuseIPDB",
-                    confidence="High",
-                    color="slate",
-                    status="Confirmed",
-                    resolution=ip,
-                    tags=["geo", "infrastructure"],
-                ))
-
-            isp = data.get("isp", "")
-            domain_name = data.get("domain", "")
-            if isp or domain_name:
-                findings.append(IntelligenceFinding(
-                    entity=isp or domain_name,
-                    type="AbuseIPDB ISP / Domain",
-                    source="AbuseIPDB",
-                    confidence="High",
-                    color="slate",
-                    status="Confirmed",
-                    resolution=ip,
-                    tags=["infrastructure"],
-                ))
-
-            if usage:
-                findings.append(IntelligenceFinding(
-                    entity=f"Usage: {usage}",
-                    type="AbuseIPDB Usage Type",
-                    source="AbuseIPDB",
-                    confidence="High",
-                    color="slate",
-                    status="Confirmed",
-                    resolution=ip,
-                    tags=["infrastructure"],
-                ))
-
-            total_reports = data.get("totalReports", 0)
-            last_reported = data.get("lastReportedAt", "")
-            if total_reports:
-                report_threat = "High Risk" if total_reports > 10 else ("Elevated Risk" if total_reports > 3 else "Standard Target")
-                findings.append(IntelligenceFinding(
-                    entity=f"{total_reports} report(s), last: {(last_reported or 'N/A')[:10]}",
-                    type="AbuseIPDB Report Volume",
-                    source="AbuseIPDB",
-                    confidence="High",
-                    color="red" if total_reports > 5 else "orange",
-                    threat_level=report_threat,
-                    status="Confirmed",
-                    resolution=ip,
-                    tags=["threat-intel", "volume"],
-                ))
-
-            is_whitelisted = data.get("isWhitelisted", False)
-            if is_whitelisted:
-                findings.append(IntelligenceFinding(
-                    entity="IP is whitelisted",
-                    type="AbuseIPDB Whitelist",
-                    source="AbuseIPDB",
-                    confidence="High",
-                    color="emerald",
-                    status="Confirmed",
-                    resolution=ip,
-                    tags=["trusted"],
-                ))
-
-            hostnames = data.get("hostnames", [])
-            if hostnames:
-                for hn in hostnames[:3]:
-                    findings.append(IntelligenceFinding(
-                        entity=hn,
-                        type="AbuseIPDB Hostname",
-                        source="AbuseIPDB",
-                        confidence="High",
-                        color="slate",
-                        status="Confirmed",
-                        resolution=ip,
-                        tags=["infrastructure", "dns"],
-                    ))
-
-            reports = data.get("reports", [])
-            if reports:
-                cat_counts = defaultdict(int)
-                reporter_countries = defaultdict(int)
-                date_buckets = defaultdict(int)
-
-                for r in reports[:100]:
-                    for c in r.get("categories", []):
-                        cname = CATEGORY_MAP.get(str(c), f"Other ({c})")
-                        cat_counts[cname] += 1
-                    rc = r.get("reporterCountryCode", "") or r.get("reporterCountryName", "")
-                    if rc:
-                        reporter_countries[rc] += 1
-                    reported_at = r.get("reportedAt", "")
-                    if reported_at:
-                        date_buckets[reported_at[:7]] += 1
-
-                for cat, cnt in sorted(cat_counts.items(), key=lambda x: -x[1])[:6]:
-                    sev = SEVERITY_MAP.get(cat, "Standard Target")
-                    findings.append(IntelligenceFinding(
-                        entity=f"{cat}: {cnt} report(s)",
-                        type="AbuseIPDB Category Breakdown",
-                        source="AbuseIPDB",
-                        confidence="High",
-                        color="red" if sev == "High Risk" else "orange",
-                        threat_level=sev,
-                        status="Confirmed",
-                        resolution=ip,
-                        raw_data=f"{cat} reported {cnt} times",
-                        tags=["threat-intel", "category-analysis"],
-                    ))
-
-                for rc, cnt in sorted(reporter_countries.items(), key=lambda x: -x[1])[:3]:
-                    findings.append(IntelligenceFinding(
-                        entity=f"Reports from {rc}: {cnt}",
-                        type="AbuseIPDB Reporter Country",
-                        source="AbuseIPDB",
-                        confidence="Medium",
-                        color="slate",
-                        status="Confirmed",
-                        resolution=ip,
-                        tags=["geo", "reporting"],
-                    ))
-
-                for month, cnt in sorted(date_buckets.items())[:6]:
-                    findings.append(IntelligenceFinding(
-                        entity=f"{month}: {cnt} report(s)",
-                        type="AbuseIPDB Reporting Trend",
-                        source="AbuseIPDB",
-                        confidence="Medium",
-                        color="slate",
-                        status="Confirmed",
-                        resolution=ip,
-                        tags=["threat-intel", "timeline"],
-                    ))
-
-            num_distinct_reporter_countries = len(set(
-                r.get("reporterCountryCode", "") for r in reports[:100] if r.get("reporterCountryCode")
-            ))
-            if num_distinct_reporter_countries:
-                findings.append(IntelligenceFinding(
-                    entity=f"Reported from {num_distinct_reporter_countries} distinct countries",
-                    type="AbuseIPDB Reporter Diversity",
-                    source="AbuseIPDB",
-                    confidence="Medium",
-                    color="slate",
-                    status="Confirmed",
-                    resolution=ip,
-                    tags=["geo", "reporting", "diversity"],
-                ))
-
+            ip = socket.gethostbyname(t)
         except:
-            continue
+            ip = t
+    else:
+        ip = t
 
-    if ips:
-        trends = await fetch_category_trends(client, ips[0])
-        findings.extend(trends)
+    api_data = await query_api(ip, client)
 
-        bl_check = await check_multi_ip_blacklist(client, ips)
-        findings.extend(bl_check)
+    if api_data:
+        total_reports = api_data.get("totalReports", 0)
+        abuse_confidence = api_data.get("abuseConfidenceScore", 0)
+        isp = api_data.get("isp", "")
+        domain = api_data.get("domain", "")
+        country = api_data.get("countryCode", "")
+        usage_type = api_data.get("usageType", "")
+        is_whitelisted = api_data.get("isWhitelisted", False)
+        last_reported = api_data.get("lastReportedAt", "")
 
-    if len(all_scores) > 1:
-        avg_score = sum(s for _, s in all_scores) / len(all_scores)
-        max_score = max(s for _, s in all_scores)
-        min_score = min(s for _, s in all_scores)
         findings.append(IntelligenceFinding(
-            entity=f"Average confidence across {len(all_scores)} IP(s): {avg_score:.0f}/100",
-            type="AbuseIPDB Multi-IP Summary",
+            entity=f"AbuseIPDB: {total_reports} reports, confidence={abuse_confidence}%",
+            type="AbuseIPDB Report",
             source="AbuseIPDB",
-            confidence="Medium",
-            color="red" if avg_score > 50 else "orange",
-            threat_level="Elevated Risk" if avg_score > 25 else "Informational",
-            status="Analyzed",
-            tags=["threat-intel", "aggregate"],
-        ))
-        findings.append(IntelligenceFinding(
-            entity=f"Score range: {min_score} - {max_score}/100 across {len(all_scores)} IPs",
-            type="AbuseIPDB Score Range",
-            source="AbuseIPDB",
-            confidence="Medium",
-            color="slate",
-            status="Analyzed",
-            tags=["threat-intel", "aggregate", "range"],
+            confidence="High",
+            color="red" if abuse_confidence > 50 else ("orange" if abuse_confidence > 0 else "emerald"),
+            threat_level="High Risk" if abuse_confidence > 50 else (f"Elevated Risk ({abuse_confidence}%)" if abuse_confidence > 0 else "Informational"),
+            status="Reported" if total_reports > 0 else ("Whitelisted" if is_whitelisted else "Clean"),
+            resolution=t,
+            raw_data=json.dumps(api_data),
+            tags=["abuseipdb", "report"]
         ))
 
-if country_dist:
-    top_country = max(country_dist, key=country_dist.get)
-    findings.append(IntelligenceFinding(
-        entity=f"Top country: {top_country} ({country_dist[top_country]} IP(s))",
-        type="AbuseIPDB Country Distribution",
-        source="AbuseIPDB",
-        confidence="Low",
-        color="slate",
-        status="Analyzed",
-        tags=["geo", "distribution"],
-    ))
+        if isp:
+            findings.append(IntelligenceFinding(
+                entity=f"ISP: {isp}",
+                type="AbuseIPDB ISP",
+                source="AbuseIPDB",
+                confidence="Medium",
+                color="slate",
+                threat_level="Informational",
+                status="Identified",
+                resolution=t,
+                tags=["abuseipdb", "isp"]
+            ))
 
-    iso_codes = [f"{k}:{v}" for k, v in sorted(country_dist.items(), key=lambda x: -x[1])]
-    findings.append(IntelligenceFinding(
-        entity=f"Country distribution: {' '.join(iso_codes)}",
-        type="AbuseIPDB Full Country Distribution",
-        source="AbuseIPDB",
-        confidence="Low",
-        color="slate",
-        status="Analyzed",
-        tags=["geo", "distribution", "full"],
-    ))
+        if domain:
+            findings.append(IntelligenceFinding(
+                entity=f"Domain: {domain}",
+                type="AbuseIPDB Domain",
+                source="AbuseIPDB",
+                confidence="Medium",
+                color="slate",
+                threat_level="Informational",
+                status="Related",
+                resolution=t,
+                tags=["abuseipdb", "domain"]
+            ))
 
-if usage_dist:
-    top_usage = max(usage_dist, key=usage_dist.get)
-    findings.append(IntelligenceFinding(
-        entity=f"Top usage type: {top_usage} ({usage_dist[top_usage]} IP(s))",
-        type="AbuseIPDB Usage Distribution",
-        source="AbuseIPDB",
-        confidence="Low",
-        color="slate",
-        status="Analyzed",
-        tags=["infrastructure", "usage"],
-    ))
+        if country:
+            findings.append(IntelligenceFinding(
+                entity=f"Country: {country}",
+                type="AbuseIPDB Geolocation",
+                source="AbuseIPDB",
+                confidence="Medium",
+                color="slate",
+                threat_level="Informational",
+                status="Located",
+                resolution=t,
+                tags=["abuseipdb", "geolocation"]
+            ))
 
-return findings
+        if usage_type:
+            findings.append(IntelligenceFinding(
+                entity=f"Usage type: {usage_type}",
+                type="AbuseIPDB Usage",
+                source="AbuseIPDB",
+                confidence="Medium",
+                color="slate",
+                threat_level="Informational",
+                status="Classified",
+                resolution=t,
+                tags=["abuseipdb", "usage"]
+            ))
+
+        if is_whitelisted:
+            findings.append(IntelligenceFinding(
+                entity="IP is whitelisted in AbuseIPDB",
+                type="AbuseIPDB Whitelist",
+                source="AbuseIPDB",
+                confidence="Medium",
+                color="emerald",
+                threat_level="Informational",
+                status="Whitelisted",
+                resolution=t,
+                tags=["abuseipdb", "whitelist"]
+            ))
+
+        if last_reported:
+            findings.append(IntelligenceFinding(
+                entity=f"Last reported: {last_reported}",
+                type="AbuseIPDB Timeline",
+                source="AbuseIPDB",
+                confidence="Medium",
+                color="slate",
+                threat_level="Informational",
+                status="Known",
+                resolution=t,
+                tags=["abuseipdb", "timeline"]
+            ))
+
+    reports = await query_report_history(ip, client)
+    if reports:
+        findings.append(IntelligenceFinding(
+            entity=f"Historical reports: {len(reports)} entries",
+            type="AbuseIPDB History",
+            source="AbuseIPDB",
+            confidence="Medium",
+            color="orange",
+            threat_level="Elevated Risk",
+            status="Available",
+            resolution=t,
+            tags=["abuseipdb", "history"]
+        ))
+        for r in reports[:5]:
+            cat_ids = r.get("categories", [])
+            cats = [ABUSE_CATEGORIES.get(c, str(c)) for c in cat_ids]
+            comment = r.get("comment", "")[:100]
+            findings.append(IntelligenceFinding(
+                entity=f"Report: {', '.join(cats)} | {comment}",
+                type="AbuseIPDB Report Detail",
+                source="AbuseIPDB",
+                confidence="Medium",
+                color="orange",
+                threat_level="Elevated Risk",
+                status="Reported",
+                resolution=t,
+                tags=["abuseipdb", "report-detail"]
+            ))
+
+    blacklists = await check_website_blacklist(ip, client)
+    if blacklists:
+        findings.append(IntelligenceFinding(
+            entity=f"DNSBL listings: {len(blacklists)} blacklists ({', '.join(blacklists)})",
+            type="AbuseIPDB DNSBL",
+            source="AbuseIPDB",
+            confidence="High",
+            color="red",
+            threat_level="High Risk",
+            status="Blacklisted",
+            resolution=t,
+            tags=["abuseipdb", "dnsbl"] + blacklists
+        ))
+
+    if not findings:
+        findings.append(IntelligenceFinding(
+            entity="No AbuseIPDB data available",
+            type="AbuseIPDB Check Complete",
+            source="AbuseIPDB",
+            confidence="Low",
+            color="emerald",
+            threat_level="Informational",
+            status="Not Found",
+            resolution=t,
+            tags=["abuseipdb", "empty"]
+        ))
+
+    return findings

@@ -61,6 +61,40 @@ SECURITY_HEADERS_EXTRA = {
     "NEL": ("NEL", "low", "Network Error Logging"),
     "Report-To": ("Report-To", "low", "Reporting API"),
     "Feature-Policy": ("Feature-Policy", "medium", "Legacy feature policy (use Permissions-Policy)"),
+    "X-Edge-Location": ("X-Edge-Location", "low", "Edge location header"),
+    "X-Amz-Cf-Pop": ("X-Amz-Cf-Pop", "low", "CloudFront POP location"),
+    "X-Amz-Cf-Id": ("X-Amz-Cf-Id", "low", "CloudFront distribution ID"),
+    "X-Amzn-RequestId": ("X-Amzn-RequestId", "low", "AWS request ID"),
+    "X-Amz-Rid": ("X-Amz-Rid", "low", "AWS request ID"),
+    "X-Amz-Request-Id": ("X-Amz-Request-Id", "low", "AWS S3 request ID"),
+    "X-Amz-Bucket-Region": ("X-Amz-Bucket-Region", "low", "S3 bucket region"),
+    "X-Cache-Hits": ("X-Cache-Hits", "low", "Cache hit count"),
+    "X-Cache-Status": ("X-Cache-Status", "low", "Cache status"),
+    "X-Sucuri-Cache": ("X-Sucuri-Cache", "low", "Sucuri cache"),
+    "X-Sucuri-ID": ("X-Sucuri-ID", "low", "Sucuri WAF ID"),
+    "X-Edge-IP": ("X-Edge-IP", "low", "Edge server IP"),
+    "X-Cache-Group": ("X-Cache-Group", "low", "Cache group"),
+    "X-Host": ("X-Host", "low", "Original host"),
+    "X-Forwarded-Proto": ("X-Forwarded-Proto", "low", "Forwarded protocol"),
+    "X-Forwarded-For": ("X-Forwarded-For", "low", "Forwarded for"),
+    "X-Real-IP": ("X-Real-IP", "low", "Real client IP"),
+    "X-Correlation-ID": ("X-Correlation-ID", "low", "Correlation ID"),
+    "X-Transaction-ID": ("X-Transaction-ID", "low", "Transaction ID"),
+    "X-Session-ID": ("X-Session-ID", "low", "Session ID"),
+    "X-Device-ID": ("X-Device-ID", "low", "Device ID"),
+    "X-Client-ID": ("X-Client-ID", "low", "Client ID"),
+    "X-Api-Version": ("X-Api-Version", "low", "API version header"),
+    "X-Deprecation": ("X-Deprecation", "medium", "Deprecation warning"),
+    "Sunset": ("Sunset", "medium", "API sunset header"),
+    "X-RateLimit-Limit": ("X-RateLimit-Limit", "medium", "Rate limit quota"),
+    "X-RateLimit-Remaining": ("X-RateLimit-Remaining", "medium", "Rate limit remaining"),
+    "X-RateLimit-Reset": ("X-RateLimit-Reset", "medium", "Rate limit reset"),
+    "Retry-After": ("Retry-After", "medium", "Rate limit retry"),
+    "X-Content-Type-Options": ("XCTO", "high", "MIME sniffing prevention"),
+    "X-Frame-Options": ("XFO", "high", "Clickjacking prevention"),
+    "X-XSS-Protection": ("X-XSS", "high", "XSS filter"),
+    "Referrer-Policy": ("Referrer-Policy", "medium", "Referrer information control"),
+    "Permissions-Policy": ("Permissions-Policy", "medium", "Feature permissions"),
 }
 
 HSTS_PRELOAD_PATTERNS = [
@@ -606,3 +640,95 @@ async def crawl(target: str, client: httpx.AsyncClient):
         ))
 
     return findings
+
+
+async def _hsts_preload_check(target: str, client: httpx.AsyncClient, findings: list):
+    try:
+        resp = await client.get(f"https://hstspreload.org/api/v2/status?domain={target}", timeout=8.0)
+        if resp.status_code == 200:
+            data = resp.json()
+            status = data.get("status", "")
+            if status == "preloaded":
+                findings.append(IntelligenceFinding(
+                    entity=f"HSTS preloaded: {target}",
+                    type="HSTS Preload Status",
+                    source="HeaderAudit",
+                    confidence="High",
+                    color="emerald",
+                    threat_level="Informational",
+                    tags=["hsts", "preload"]
+                ))
+            elif status == "pending":
+                findings.append(IntelligenceFinding(
+                    entity=f"HSTS preload pending: {target}",
+                    type="HSTS Preload Status",
+                    source="HeaderAudit",
+                    confidence="Medium",
+                    color="yellow",
+                    threat_level="Informational",
+                    tags=["hsts", "pending"]
+                ))
+    except Exception:
+        pass
+
+
+async def _csp_deep_analyze(csp_val: str, findings: list):
+    directives = [d.strip() for d in csp_val.split(";") if d.strip()]
+    for directive in directives:
+        dl = directive.lower()
+        if "script-src" in dl:
+            if "'unsafe-inline'" in dl:
+                findings.append(IntelligenceFinding(
+                    entity="CSP script-src allows unsafe-inline",
+                    type="CSP Weakness: Unsafe Inline",
+                    source="HeaderAudit",
+                    confidence="High", color="red",
+                    threat_level="High Risk",
+                    raw_data=directive, tags=["csp", "xss"]
+                ))
+            if "'unsafe-eval'" in dl:
+                findings.append(IntelligenceFinding(
+                    entity="CSP script-src allows unsafe-eval",
+                    type="CSP Weakness: Unsafe Eval",
+                    source="HeaderAudit",
+                    confidence="High", color="orange",
+                    threat_level="Elevated Risk",
+                    raw_data=directive, tags=["csp", "xss"]
+                ))
+        if "object-src" in dl and "'none'" not in dl:
+            findings.append(IntelligenceFinding(
+                entity="CSP object-src not restricted to 'none'",
+                type="CSP Weakness: Object Src",
+                source="HeaderAudit",
+                confidence="Medium", color="orange",
+                threat_level="Elevated Risk",
+                raw_data=directive, tags=["csp", "plugin"]
+            ))
+        if "base-uri" in dl and "'none'" not in dl and "'self'" not in dl:
+            findings.append(IntelligenceFinding(
+                entity="CSP base-uri not restricted",
+                type="CSP Weakness: Base URI",
+                source="HeaderAudit",
+                confidence="Medium", color="orange",
+                threat_level="Elevated Risk",
+                raw_data=directive, tags=["csp", "base-uri"]
+            ))
+        if "frame-ancestors" in dl:
+            if "'none'" not in dl and "https://" not in dl:
+                findings.append(IntelligenceFinding(
+                    entity="CSP frame-ancestors may allow clickjacking",
+                    type="CSP Weakness: Frame Ancestors",
+                    source="HeaderAudit",
+                    confidence="Medium", color="orange",
+                    threat_level="Elevated Risk",
+                    raw_data=directive, tags=["csp", "clickjacking"]
+                ))
+        if "default-src" in dl and "'none'" not in dl and "'self'" not in dl:
+            findings.append(IntelligenceFinding(
+                entity="CSP default-src is too permissive",
+                type="CSP Weakness: Default Src",
+                source="HeaderAudit",
+                confidence="Medium", color="yellow",
+                threat_level="Informational",
+                raw_data=directive, tags=["csp", "default-src"]
+            ))

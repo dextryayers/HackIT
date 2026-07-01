@@ -867,4 +867,190 @@ async def crawl(target: str, client: httpx.AsyncClient):
             tags=["breach", "summary", "comprehensive"]
         ))
 
+    async def analyze_target_overview():
+        is_email = "@" in domain
+        findings.append(IntelligenceFinding(
+            entity=f"Target: {domain} ({'Email' if is_email else 'Domain'})",
+            type="Target Overview", source="HIBP", confidence="High", color="slate",
+            threat_level="Informational", tags=["target"]))
+        if is_email:
+            local, dom = domain.split("@", 1)
+            findings.append(IntelligenceFinding(entity=f"Local part: {local}", type="Email Analysis",
+                source="HIBP", confidence="High", color="slate", tags=["target"]))
+            findings.append(IntelligenceFinding(entity=f"Domain: {dom}", type="Email Analysis",
+                source="HIBP", confidence="High", color="slate", tags=["target"]))
+            has_plus = "+" in local
+            findings.append(IntelligenceFinding(
+                entity=f"Aliasing: {'Plus-addressing' if has_plus else 'Not detected'}",
+                type="Email Analysis", source="HIBP", confidence="High",
+                color="emerald" if has_plus else "slate", tags=["target"]))
+
+    async def check_breach_db_access():
+        for url, name in [
+            ("https://haveibeenpwned.com/breaches", "HIBP Breaches"),
+            ("https://monitor.firefox.com/breaches", "Firefox Monitor"),
+        ]:
+            try:
+                resp = await client.get(url, timeout=8.0, headers={"User-Agent": UA})
+                if resp.status_code == 200:
+                    findings.append(IntelligenceFinding(
+                        entity=f"{name} accessible for breach research", type="Breach Database Status",
+                        source="HIBP", confidence="Medium", color="slate", tags=["breach"]))
+                    break
+            except: pass
+
+    async def check_dns_security():
+        import dns.resolver as dnsr
+        loop2 = asyncio.get_event_loop()
+        try:
+            mx = await loop2.run_in_executor(None, lambda: dnsr.resolve(domain, 'MX'))
+            mx_list = [str(r.exchange).rstrip('.') for r in mx]
+            findings.append(IntelligenceFinding(
+                entity=f"MX: {len(mx_list)} server(s)", type="Mail Infrastructure",
+                source="HIBP", confidence="High", color="slate", tags=["dns"]))
+            if mx_list:
+                findings.append(IntelligenceFinding(
+                    entity=f"Primary MX: {mx_list[0]}", type="Mail Infrastructure",
+                    source="HIBP", confidence="High", color="slate", tags=["dns"]))
+        except: pass
+        try:
+            spf = await loop2.run_in_executor(None, lambda: dnsr.resolve(domain, 'TXT'))
+            for r in spf:
+                txt = str(r)
+                if "v=spf1" in txt:
+                    findings.append(IntelligenceFinding(
+                        entity="SPF: Present", type="Email Security",
+                        source="HIBP", confidence="High", color="emerald", tags=["security"]))
+                    break
+        except: pass
+        try:
+            dmarc = await loop2.run_in_executor(None, lambda: dnsr.resolve(f"_dmarc.{domain}", 'TXT'))
+            for r in dmarc:
+                txt = str(r)
+                if "v=DMARC1" in txt:
+                    findings.append(IntelligenceFinding(
+                        entity="DMARC: Present", type="Email Security",
+                        source="HIBP", confidence="High", color="emerald", tags=["security"]))
+                    break
+        except: pass
+        for rtype in ["NS", "A", "AAAA"]:
+            try:
+                recs = await loop2.run_in_executor(None, lambda: dnsr.resolve(domain, rtype))
+                count = sum(1 for _ in recs)
+                findings.append(IntelligenceFinding(
+                    entity=f"DNS {rtype}: {count}", type="DNS Records",
+                    source="HIBP", confidence="High", color="slate", tags=["dns"]))
+            except: pass
+
+    async def check_web_presence():
+        for proto in ["https", "http"]:
+            try:
+                resp = await client.get(f"{proto}://{domain}", timeout=8.0, follow_redirects=True, headers={"User-Agent": UA})
+                status = resp.status_code
+                findings.append(IntelligenceFinding(
+                    entity=f"Website: HTTP {status} ({len(resp.text)} bytes)", type="Web Presence",
+                    source="HIBP", confidence="High", color="slate", tags=["web"]))
+                hdrs = {k.lower(): v for k, v in dict(resp.headers).items()}
+                for hdr in ["strict-transport-security", "x-frame-options", "content-security-policy"]:
+                    if hdr in hdrs:
+                        findings.append(IntelligenceFinding(
+                            entity=f"{hdr}: Present", type="Security Header",
+                            source="HIBP", confidence="High", color="emerald", tags=["security"]))
+                break
+            except: pass
+
+    async def check_domain_risk():
+        domain_to_check = domain.split("@")[-1] if "@" in domain else domain
+        risk_factors = []
+        disposable = {"mailinator.com","guerrillamail.com","tempmail.com","10minutemail.com","yopmail.com"}
+        free_domains = {"gmail.com","yahoo.com","hotmail.com","outlook.com","aol.com","protonmail.com","mail.com"}
+        if domain_to_check in disposable:
+            risk_factors.append("Disposable email domain - high fraud risk")
+            risk_factors.append("Likely used for temporary/suspicious activities")
+        if domain_to_check in free_domains:
+            risk_factors.append("Free email provider - common breach target")
+        if not risk_factors:
+            risk_factors.append("Custom domain - breach exposure depends on provider security")
+        risk_factors.append("Check HaveIBeenPwned for breach history")
+        risk_factors.append("Credential stuffing is a primary threat for reused passwords")
+        for rf in risk_factors:
+            findings.append(IntelligenceFinding(
+                entity=rf, type="Risk Assessment",
+                source="HIBP", confidence="Medium", color="orange",
+                threat_level="Standard Target", tags=["risk"]))
+
+    async def generate_breach_recommendations():
+        recs = [
+            "Enable 2FA on all accounts associated with this email",
+            "Use a password manager with unique passwords for each service",
+            "Regularly check HaveIBeenPwned for new breaches",
+            "Monitor for credential stuffing attacks on critical accounts",
+            "Remove unused accounts to reduce exposure surface",
+            "Use email aliases (plus addressing) for different services",
+            "Set up breach alerts via Firefox Monitor",
+        ]
+        for i, rec in enumerate(recs[:5]):
+            findings.append(IntelligenceFinding(
+                entity=f"Rec {i+1}: {rec}", type="Breach Recommendation",
+                source="HIBP", confidence="Medium", color="orange",
+                threat_level="Informational", tags=["recommendation"]))
+
+    async def check_paste_mentions():
+        site_urls = [
+            (f"https://psbdmp.ws/api/search/{domain}", "psbdmp.ws"),
+            (f"https://pastebin.com/search?q={domain}", "Pastebin"),
+        ]
+        for url, name in site_urls:
+            try:
+                resp = await client.get(url, timeout=8.0, headers={"User-Agent": UA})
+                if resp.status_code == 200 and len(resp.text.strip()) > 50:
+                    findings.append(IntelligenceFinding(
+                        entity=f"Paste site data: {name}", type="Paste Mention",
+                        source="HIBP", confidence="Low", color="orange",
+                        threat_level="Elevated Risk", tags=["paste"]))
+            except: pass
+
+    async def check_securitytxt():
+        for path in [f"https://{domain}/.well-known/security.txt", f"https://{domain}/security.txt"]:
+            try:
+                resp = await client.get(path, timeout=8.0, headers={"User-Agent": UA})
+                if resp.status_code == 200:
+                    findings.append(IntelligenceFinding(
+                        entity=f"Security.txt accessible", type="Security.txt",
+                        source="HIBP", confidence="High", color="emerald", tags=["security"]))
+                    for m in re.finditer(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}", resp.text):
+                        findings.append(IntelligenceFinding(
+                            entity=m.group(0), type="Security Contact Email",
+                            source="HIBP", confidence="High", color="blue", tags=["contact"]))
+                    break
+            except: pass
+
+    async def check_ssl_info():
+        try:
+            import ssl, socket
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            with ctx.wrap_socket(socket.socket(), server_hostname=domain) as s:
+                s.settimeout(5)
+                s.connect((domain, 443))
+                cert = s.getpeercert()
+                issuer = dict(cert.get("issuer", [[["", ""]]])[0]).get("commonName", "Unknown")
+                findings.append(IntelligenceFinding(
+                    entity=f"SSL: {issuer}", type="SSL Certificate",
+                    source="HIBP", confidence="High", color="slate", tags=["ssl"]))
+        except: pass
+
+    await asyncio.gather(
+        analyze_target_overview(),
+        check_breach_db_access(),
+        check_dns_security(),
+        check_web_presence(),
+        check_domain_risk(),
+        generate_breach_recommendations(),
+        check_paste_mentions(),
+        check_securitytxt(),
+        check_ssl_info(),
+    )
+
     return findings

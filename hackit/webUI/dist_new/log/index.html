@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"> <head><meta charset="UTF-8"><meta name="description" content="Spiderfoot HX Clone Dashboard"><meta name="viewport" content="width=device-width"><link rel="icon" type="image/svg+xml" href="/favicon.svg"><meta name="generator" content="Astro v4.16.19"><title>HackIT OSINT | Verbose Execution Log</title><!-- CDNs --><script src="https://cdn.tailwindcss.com"></script><script>
+<!DOCTYPE html><html lang="en"> <head><meta charset="UTF-8"><meta name="description" content="Spiderfoot HX Clone Dashboard"><meta name="viewport" content="width=device-width"><link rel="icon" type="image/x-icon" href="/logo.ico"><link rel="icon" type="image/svg+xml" href="/logo.svg"><meta name="generator" content="Astro v4.16.19"><title>HackIT OSINT | Verbose Execution Log</title><!-- CDNs --><script src="https://cdn.tailwindcss.com"></script><script>
 			tailwind.config = {
 				darkMode: 'class',
 				theme: {
@@ -62,6 +62,41 @@ TARGET: PENDING
 			targetBadge.innerText = `TARGET: ${target}`;
 
 			try {
+				// Check for existing job first
+				const existingRes = await fetch(`/api/job-by-target?target=${encodeURIComponent(target)}`);
+				const existingJob = await existingRes.json();
+				if (existingJob && existingJob.job_id) {
+					window.TitanJobId = existingJob.job_id;
+					window.TitanTarget = target;
+					document.getElementById('init-loader').remove();
+					renderTerminal(existingJob.job_id, target);
+					if (existingJob.status === 'Completed' || existingJob.status === 'Error') {
+						// Show all existing logs immediately
+						const logStatus = document.getElementById('log-status');
+						const logContainer = document.getElementById('log-container');
+						const terminalBody = document.getElementById('terminal-body');
+						const logCountEl = document.getElementById('log-count');
+						if (existingJob.live_logs) {
+							let c = 0;
+							existingJob.live_logs.forEach(l => {
+								const div = document.createElement('div');
+								if (l.includes('[+]')) div.className = 'text-emerald-400';
+								else if (l.includes('[!]')) div.className = 'text-red-400';
+								else if (l.includes('[INFO]')) div.className = 'text-sf-tabActive';
+								else div.className = 'text-sf-text opacity-90';
+								div.innerText = l;
+								logContainer.appendChild(div);
+								c++;
+							});
+							terminalBody.scrollTop = terminalBody.scrollHeight;
+							logCountEl.innerText = `LOGS: ${c}`;
+						}
+						logStatus.innerHTML = '<div class="w-1.5 h-1.5 rounded-full bg-sf-muted"></div> HackIT Intelligence Gathering Completed...';
+					}
+					return;
+				}
+
+				// No existing job — start new scan
 				const savedSettings = localStorage.getItem('hackit_scan_settings');
 				let scanUrl = `/api/scan?target=${encodeURIComponent(target)}`;
 				if (savedSettings) {
@@ -113,7 +148,7 @@ TARGET: PENDING
                         </div>
                         <div class="flex items-center gap-4">
                             <span id="log-status" class="text-[10px] font-mono text-sf-muted uppercase tracking-widest flex items-center gap-2">
-                                <div class="w-1.5 h-1.5 rounded-full bg-sf-green animate-pulse"></div> Link Established
+                                <div class="w-1.5 h-1.5 rounded-full bg-sf-green animate-pulse"></div> HackIT Intelligence Gathering in Progress...
                             </span>
                             <button id="clear-terminal" class="text-[10px] font-mono text-sf-muted hover:text-sf-text transition-colors uppercase tracking-widest">Clear</button>
                         </div>
@@ -166,7 +201,7 @@ TARGET: PENDING
                     }
                     if (data.status === 'Completed' || data.status === 'Error') {
                         clearInterval(poll);
-                        logStatus.innerHTML = '<div class="w-1.5 h-1.5 rounded-full bg-sf-muted"></div> Session Closed';
+                        logStatus.innerHTML = '<div class="w-1.5 h-1.5 rounded-full bg-sf-muted"></div> HackIT Intelligence Gathering Completed...';
                     }
                 } catch (e) {}
             }, 1000);

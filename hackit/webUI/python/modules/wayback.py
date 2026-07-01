@@ -57,6 +57,99 @@ async def get_archived_content(url: str, ts: str, client: httpx.AsyncClient) -> 
         pass
     return ""
 
+WAYBACK_CALENDAR_URL = "https://web.archive.org/web/"
+
+async def query_cdx_timeline(domain: str, client: httpx.AsyncClient) -> dict:
+    yearly_counts = {}
+    try:
+        params = {
+            "url": f"*.{domain}/*",
+            "output": "json",
+            "fl": "timestamp",
+            "limit": "50000",
+            "collapse": "timestamp:4",
+        }
+        resp = await client.get(CDX_API, params=params, timeout=30.0,
+            headers={"User-Agent": UA})
+        if resp.status_code == 200:
+            lines = resp.text.strip().splitlines()
+            for line in lines[1:]:
+                try:
+                    ts = json.loads(line)[1][:4] if line.startswith("[") else line.split(" ")[1][:4]
+                    yearly_counts[ts] = yearly_counts.get(ts, 0) + 1
+                except:
+                    continue
+    except:
+        pass
+    return yearly_counts
+
+async def analyze_snapshot_gaps(yearly_counts: dict) -> list:
+    findings = []
+    if not yearly_counts:
+        return findings
+    years = sorted(yearly_counts.keys())
+    if len(years) > 1:
+        gaps = []
+        for i in range(len(years) - 1):
+            yr1, yr2 = int(years[i]), int(years[i+1])
+            if yr2 - yr1 > 1:
+                gaps.append(f"{yr1+1}-{yr2-1}")
+        if gaps:
+            findings.append(IntelligenceFinding(
+                entity=f"Snapshot gaps: {', '.join(gaps[:5])}",
+                type="Wayback: Archival Gaps",
+                source="Wayback Machine",
+                confidence="Medium",
+                color="orange",
+                threat_level="Informational",
+                status=f"{len(gaps)} gaps",
+                tags=["wayback", "gaps", "timeline"]
+            ))
+    total = sum(yearly_counts.values())
+    avg_per_year = total / max(len(yearly_counts), 1)
+    findings.append(IntelligenceFinding(
+        entity=f"Snapshot frequency: avg {avg_per_year:.0f} per year over {len(yearly_counts)} years",
+        type="Wayback: Archival Frequency",
+        source="Wayback Machine",
+        confidence="Medium",
+        color="slate",
+        status="Analyzed",
+        tags=["wayback", "frequency"]
+    ))
+    return findings
+
+async def query_specific_snapshots(domain: str, client: httpx.AsyncClient) -> list:
+    results = []
+    try:
+        resp = await client.get(
+            f"{WAYBACK_API}/web/2010/{domain}",
+            timeout=10.0, headers={"User-Agent": UA}
+        )
+        if resp.status_code == 200:
+            first_year = "2010"
+            results.append(first_year)
+    except:
+        pass
+    try:
+        resp = await client.get(
+            f"{WAYBACK_API}/web/2020/{domain}",
+            timeout=10.0, headers={"User-Agent": UA}
+        )
+        if resp.status_code == 200:
+            results.append("2020")
+    except:
+        pass
+    try:
+        resp = await client.get(
+            f"{WAYBACK_API}/web/2024/{domain}",
+            timeout=10.0, headers={"User-Agent": UA}
+        )
+        if resp.status_code == 200:
+            results.append("2024")
+    except:
+        pass
+    return results
+
 async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFinding]:
     findings = []
     t = target.strip().lower()
@@ -64,6 +157,23 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         t = urlparse(t).netloc
 
     cdx_results = await query_cdx(t, client)
+
+    yearly_timeline = await query_cdx_timeline(t, client)
+    gap_results = await analyze_snapshot_gaps(yearly_timeline)
+    findings.extend(gap_results)
+
+    snap_years = await query_specific_snapshots(t, client)
+    for yr in snap_years:
+        findings.append(IntelligenceFinding(
+            entity=f"Snapshot exists for year {yr}",
+            type="Wayback: Yearly Snapshot Check",
+            source="Wayback Machine",
+            confidence="High",
+            color="slate",
+            status="Available",
+            resolution=t,
+            tags=["wayback", "year", yr]
+        ))
 
     if cdx_results:
         url_count = len(cdx_results)

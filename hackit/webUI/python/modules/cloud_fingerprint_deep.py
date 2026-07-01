@@ -613,32 +613,6 @@ def _check_ip_in_ranges(ip_str: str) -> list:
     return results
 
 
-async def _fetch_cloud_ip_ranges(target_ip: str, client: httpx.AsyncClient) -> list:
-    findings = []
-    try:
-        providers_found = _check_ip_in_ranges(target_ip)
-        seen = set()
-        for provider, region in providers_found:
-            key = f"{provider}-{region}"
-            if key not in seen:
-                seen.add(key)
-                findings.append(IntelligenceFinding(
-                    entity=f"{provider} ({region})",
-                    type="Cloud Provider (IP Range)",
-                    source="CloudFingerprintDeep",
-                    confidence="High",
-                    color="orange",
-                    threat_level="Informational",
-                    status="Verified",
-                    resolution=target_ip,
-                    raw_data=f"IP {target_ip} is in {provider} range ({region})",
-                    tags=["cloud", provider.lower().replace(" ", "-")]
-                ))
-    except Exception:
-        pass
-    return findings
-
-
 async def crawl(target: str, client: httpx.AsyncClient):
     findings = []
     target = target.strip().lower()
@@ -1042,4 +1016,137 @@ async def crawl(target: str, client: httpx.AsyncClient):
             tags=["cloud", "summary"]
         ))
 
+    return findings
+
+
+EXTRA_CLOUD_IP_RANGES = {
+    "Vercel": [
+        (("76.76.21.0", "76.76.21.255"), "Vercel Edge"),
+        (("76.76.21.0", "76.76.21.255"), "Vercel Global"),
+    ],
+    "Netlify": [
+        (("75.2.0.0", "75.2.255.255"), "Netlify Global"),
+        (("99.83.0.0", "99.83.255.255"), "Netlify Global"),
+        (("104.16.0.0", "104.16.255.255"), "Netlify Global"),
+    ],
+    "Fly.io": [
+        (("37.16.0.0", "37.16.15.255"), "Fly.io Global"),
+        (("46.243.0.0", "46.243.31.255"), "Fly.io Global"),
+    ],
+    "Render": [
+        (("13.48.0.0", "13.48.255.255"), "Render Stockholm"),
+        (("13.49.0.0", "13.49.255.255"), "Render Stockholm"),
+        (("16.16.0.0", "16.16.255.255"), "Render Frankfurt"),
+    ],
+    "Railway": [
+        (("34.22.0.0", "34.22.255.255"), "Railway Global"),
+        (("140.238.0.0", "140.238.255.255"), "Railway Global"),
+    ],
+    "Supabase": [
+        (("44.192.0.0", "44.192.255.255"), "Supabase US"),
+        (("54.197.0.0", "54.197.255.255"), "Supabase US"),
+        (("54.237.0.0", "54.237.255.255"), "Supabase US"),
+    ],
+    "Cloudflare": [
+        (("103.21.244.0", "103.21.247.255"), "Cloudflare"),
+        (("103.22.200.0", "103.22.203.255"), "Cloudflare"),
+        (("103.31.4.0", "103.31.7.255"), "Cloudflare"),
+        (("104.16.0.0", "104.31.255.255"), "Cloudflare"),
+        (("108.162.192.0", "108.162.255.255"), "Cloudflare"),
+        (("131.0.72.0", "131.0.75.255"), "Cloudflare"),
+        (("141.101.64.0", "141.101.127.255"), "Cloudflare"),
+        (("162.158.0.0", "162.159.255.255"), "Cloudflare"),
+        (("172.64.0.0", "172.71.255.255"), "Cloudflare"),
+        (("173.245.48.0", "173.245.63.255"), "Cloudflare"),
+        (("188.114.96.0", "188.114.127.255"), "Cloudflare"),
+        (("190.93.240.0", "190.93.255.255"), "Cloudflare"),
+        (("197.234.240.0", "197.234.243.255"), "Cloudflare"),
+        (("198.41.128.0", "198.41.255.255"), "Cloudflare"),
+    ],
+    "Akamai": [
+        (("2.16.0.0", "2.23.255.255"), "Akamai"),
+        (("23.0.0.0", "23.79.255.255"), "Akamai"),
+        (("23.192.0.0", "23.223.255.255"), "Akamai"),
+        (("23.235.0.0", "23.235.127.255"), "Akamai"),
+        (("23.236.0.0", "23.241.255.255"), "Akamai"),
+        (("23.246.0.0", "23.255.255.255"), "Akamai"),
+        (("63.98.0.0", "63.98.255.255"), "Akamai"),
+        (("64.14.0.0", "64.15.255.255"), "Akamai"),
+        (("65.197.0.0", "65.198.255.255"), "Akamai"),
+        (("69.28.0.0", "69.29.255.255"), "Akamai"),
+        (("72.246.0.0", "72.255.255.255"), "Akamai"),
+        (("88.221.0.0", "88.221.255.255"), "Akamai"),
+        (("92.122.0.0", "92.123.255.255"), "Akamai"),
+        (("95.100.0.0", "95.101.255.255"), "Akamai"),
+        (("104.64.0.0", "104.127.255.255"), "Akamai"),
+        (("173.222.0.0", "173.223.255.255"), "Akamai"),
+        (("184.24.0.0", "184.31.255.255"), "Akamai"),
+        (("184.50.0.0", "184.51.255.255"), "Akamai"),
+        (("184.84.0.0", "184.87.255.255"), "Akamai"),
+    ],
+    "Fastly": [
+        (("23.235.32.0", "23.235.63.255"), "Fastly"),
+        (("104.156.80.0", "104.156.95.255"), "Fastly"),
+        (("146.75.0.0", "146.75.255.255"), "Fastly"),
+        (("151.101.0.0", "151.101.255.255"), "Fastly"),
+        (("172.111.64.0", "172.111.127.255"), "Fastly"),
+        (("185.31.16.0", "185.31.19.255"), "Fastly"),
+        (("199.27.72.0", "199.27.79.255"), "Fastly"),
+    ],
+    "BunnyCDN": [
+        (("185.93.0.0", "185.93.15.255"), "BunnyCDN"),
+        (("213.227.152.0", "213.227.159.255"), "BunnyCDN"),
+        (("178.175.128.0", "178.175.143.255"), "BunnyCDN"),
+    ],
+    "KeyCDN": [
+        (("62.210.0.0", "62.210.255.255"), "KeyCDN"),
+        (("163.172.0.0", "163.172.255.255"), "KeyCDN"),
+    ],
+}
+
+
+async def _check_ip_in_ranges_extra(ip_str: str) -> list:
+    try:
+        ip_int = _ip_to_int(ip_str)
+    except Exception:
+        return []
+    results = []
+    for provider, ranges in EXTRA_CLOUD_IP_RANGES.items():
+        for (start_str, end_str), region in ranges:
+            try:
+                start_int = _ip_to_int(start_str)
+                end_int = _ip_to_int(end_str)
+                if start_int <= ip_int <= end_int:
+                    results.append((provider, region))
+                    break
+            except Exception:
+                continue
+    return results
+
+
+async def _fetch_cloud_ip_ranges(target_ip: str, client: httpx.AsyncClient) -> list:
+    findings = []
+    try:
+        providers_found = _check_ip_in_ranges(target_ip)
+        extra_found = await _check_ip_in_ranges_extra(target_ip)
+        all_found = providers_found + extra_found
+        seen = set()
+        for provider, region in all_found:
+            key = f"{provider}-{region}"
+            if key not in seen:
+                seen.add(key)
+                findings.append(IntelligenceFinding(
+                    entity=f"{provider} ({region})",
+                    type="Cloud Provider (IP Range)",
+                    source="CloudFingerprintDeep",
+                    confidence="High",
+                    color="orange",
+                    threat_level="Informational",
+                    status="Verified",
+                    resolution=target_ip,
+                    raw_data=f"IP {target_ip} is in {provider} range ({region})",
+                    tags=["cloud", provider.lower().replace(" ", "-")]
+                ))
+    except Exception:
+        pass
     return findings

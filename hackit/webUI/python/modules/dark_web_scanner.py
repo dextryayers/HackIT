@@ -46,6 +46,34 @@ THREAT_CLASSIFICATIONS = {
     },
 }
 
+EXTRA_THREAT_CLASSIFICATIONS = {
+    "ransomware_claim": {
+        "keywords": ["ransom", "lockbit", "hive", "blackcat", "clop", "paid", "bitcoin", "monero"],
+        "threat": "Critical",
+        "color": "red",
+    },
+    "carding": {
+        "keywords": ["cvv", "dumps", "fullz", "cardable", "carding", "cc shop", "valid cc"],
+        "threat": "Critical",
+        "color": "red",
+    },
+    "drug_trafficking": {
+        "keywords": ["weed", "cocaine", "heroin", "mdma", "lsd", "xanax", "oxy", "fentanyl"],
+        "threat": "High Risk",
+        "color": "red",
+    },
+    "weapons_trafficking": {
+        "keywords": ["ak-47", "ar-15", "glock", "sig sauer", "smith & wesson", "firearm", "weapon"],
+        "threat": "Critical",
+        "color": "red",
+    },
+    "hacking_services": {
+        "keywords": ["hack service", "hack instagram", "hack facebook", "hack email", "crash server", "ddos service"],
+        "threat": "High Risk",
+        "color": "orange",
+    },
+}
+
 DARKWEB_FORUMS = [
     "exploit", "raid", "breach", "cracking", "hack", "blackhat",
     "carding", "leaks", "warez", "dark", "tor", "hidden",
@@ -60,6 +88,12 @@ THREAT_INDICATORS = {
 PASTE_DETECT_KEYWORDS = [
     "password", "passwd", "secret", "token", "api", "key", "login", "email",
     "admin", "root", "database", "dump", "sql", "backup", "config", "env",
+]
+
+CMD_PATTERNS = [
+    r"\.onion", r"darknet", r"tor ", r"tails", r"whonix",
+    r"bitcoin", r"monero", r"crypto", r"blockchain",
+    r"encrypt", r"decrypt", r"anonymous", r"proxy",
 ]
 
 async def search_ahmia(client: httpx.AsyncClient, query: str) -> List[Dict]:
@@ -229,10 +263,38 @@ async def search_sentor(client: httpx.AsyncClient, query: str) -> List[Dict]:
         pass
     return results
 
+async def search_extra_engines(client: httpx.AsyncClient, query: str) -> List[Dict]:
+    results = []
+    extra_engines = [
+        ("DarkMist", f"https://darkmist.onion/search?q={quote(query)}"),
+        ("Excavator", f"https://excavator.onion/search?q={quote(query)}"),
+        ("OnionSearch", f"https://onionsearch.onion/search?q={quote(query)}"),
+        ("DeepWebSearch", f"https://deepwebsearch.onion/search?q={quote(query)}"),
+        ("TorSearch", f"https://torsearch.onion/search?q={quote(query)}"),
+    ]
+    for name, url in extra_engines:
+        try:
+            headers = {"User-Agent": UA}
+            resp = await client.get(url, headers=headers, timeout=20.0)
+            if resp.status_code == 200:
+                html = resp.text
+                links = re.findall(r'<a[^>]+href="(https?://[^"]+)"[^>]*>([^<]*)</a>', html)
+                for url, title in links[:10]:
+                    results.append({
+                        "url": url[:500],
+                        "title": title.strip()[:200] or url[:60],
+                        "snippet": "",
+                        "source": name,
+                    })
+        except:
+            pass
+    return results
+
 def classify_threat(text: str) -> List[tuple]:
     classifications = []
     text_lower = text.lower()
-    for classification, config in THREAT_CLASSIFICATIONS.items():
+    all_classifications = {**THREAT_CLASSIFICATIONS, **EXTRA_THREAT_CLASSIFICATIONS}
+    for classification, config in all_classifications.items():
         matches = 0
         for keyword in config["keywords"]:
             if keyword in text_lower:
@@ -391,6 +453,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             search_haystack(client, query),
             search_phobos(client, query),
             search_sentor(client, query),
+            search_extra_engines(client, query),
         ]
         search_results = await asyncio.gather(*search_tasks, return_exceptions=True)
 
@@ -445,7 +508,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         summary_lines = [
             f"Total dark web findings: {len(findings)}",
             f"Highest threat level: {highest_threat}",
-            f"Search engines used: 7 (Ahmia, OnionLand, DarkSearch, Torch, Haystack, Phobos, Sentor)",
+            f"Search engines used: 8 (Ahmia, OnionLand, DarkSearch, Torch, Haystack, Phobos, Sentor + extras)",
             f"Sources: {', '.join(source_counts.keys())}",
         ]
         if onion_urls_found:

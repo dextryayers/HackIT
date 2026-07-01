@@ -914,4 +914,72 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 tags=["cloud-probe", "leak-summary", "critical"]
             ))
 
+    async def analyze_provider_breakdown():
+        for pkey in sorted(provider_public.keys()):
+            pub = provider_public[pkey]
+            ex = provider_exists[pkey]
+            if pub > 0 or ex > 0:
+                findings.append(IntelligenceFinding(entity=f"{pkey}: {pub} public, {ex} restricted", type="Provider Breakdown", source="CloudProbe", confidence="Medium", color="orange" if pub else "slate", tags=[pkey, "breakdown"]))
+        findings.append(IntelligenceFinding(entity=f"Providers with results: {sum(1 for v in provider_public.values() if v > 0) + sum(1 for v in provider_exists.values() if v > 0)}", type="Provider Count", source="CloudProbe", confidence="Medium", color="slate", tags=["breakdown"]))
+
+    async def analyze_security_score():
+        findings.append(IntelligenceFinding(entity=f"Security score: {100 - total_public * 15 - total_exists * 5 - total_leaks * 25}/100", type="Security Score", source="CloudProbe", confidence="Medium", color="red" if total_public else "emerald", tags=["security"]))
+        findings.append(IntelligenceFinding(entity=f"Total probes: {len(bucket_names)} x {len(provider_map)} providers", type="Probe Volume", source="CloudProbe", confidence="Medium", color="slate", tags=["security"]))
+
+    async def analyze_exposure_summary():
+        findings.append(IntelligenceFinding(entity=f"Exposed buckets: {total_public}", type="Exposure Summary", source="CloudProbe", confidence="Medium", color="red" if total_public else "emerald", tags=["exposure"]))
+        findings.append(IntelligenceFinding(entity=f"Data leaks: {total_leaks}", type="Leak Summary", source="CloudProbe", confidence="Medium", color="red" if total_leaks else "emerald", tags=["exposure"]))
+        findings.append(IntelligenceFinding(entity=f"Restricted buckets: {total_exists}", type="Restricted Summary", source="CloudProbe", confidence="Medium", color="orange" if total_exists else "slate", tags=["exposure"]))
+        findings.append(IntelligenceFinding(entity="Review public bucket configurations immediately", type="Security Recommendation", source="CloudProbe", confidence="Medium", color="orange", tags=["exposure"]))
+
+    async def analyze_probe_coverage():
+        findings.append(IntelligenceFinding(entity=f"Keywords used: {len(bucket_names)}", type="Probe Coverage: Keywords", source="CloudProbe", confidence="Medium", color="slate", tags=["coverage"]))
+        findings.append(IntelligenceFinding(entity=f"Total bucket probes: {len(bucket_names) * len(provider_map)}", type="Probe Coverage: Total Probes", source="CloudProbe", confidence="Medium", color="slate", tags=["coverage"]))
+        findings.append(IntelligenceFinding(entity=f"Providers tested: {len(provider_map)}", type="Probe Coverage: Providers", source="CloudProbe", confidence="Medium", color="slate", tags=["coverage"]))
+
+    async def analyze_provider_risk():
+        findings.append(IntelligenceFinding(entity=f"AWS buckets public: {provider_public.get('aws', 0)}", type="Provider Risk: AWS", source="CloudProbe", confidence="Medium", color="red" if provider_public.get('aws', 0) else "emerald", tags=["risk"]))
+        findings.append(IntelligenceFinding(entity=f"Azure containers public: {provider_public.get('azure', 0)}", type="Provider Risk: Azure", source="CloudProbe", confidence="Medium", color="red" if provider_public.get('azure', 0) else "emerald", tags=["risk"]))
+        findings.append(IntelligenceFinding(entity=f"GCP buckets public: {provider_public.get('gcp', 0)}", type="Provider Risk: GCP", source="CloudProbe", confidence="Medium", color="red" if provider_public.get('gcp', 0) else "emerald", tags=["risk"]))
+        findings.append(IntelligenceFinding(entity="Enable logging and monitoring for all cloud storage", type="Monitoring Recommendation", source="CloudProbe", confidence="Medium", color="orange", tags=["risk"]))
+
+    async def analyze_leak_impact():
+        findings.append(IntelligenceFinding(entity=f"Leak severity: {'Critical' if total_leaks > 0 else 'None'}", type="Leak Impact", source="CloudProbe", confidence="Medium", color="red" if total_leaks else "emerald", tags=["leak"]))
+        findings.append(IntelligenceFinding(entity=f"Security posture: {'Compromised' if total_public > 0 else 'Secure'}", type="Security Posture", source="CloudProbe", confidence="Medium", color="red" if total_public else "emerald", tags=["leak"]))
+
+    async def analyze_bucket_inventory():
+        bucket_names_list = bucket_names
+        findings.append(IntelligenceFinding(entity=f"Keyword inventory: {len(bucket_names_list)} names tested", type="Bucket Inventory: Keywords", source="CloudProbe", confidence="Medium", color="slate", tags=["inventory"]))
+        findings.append(IntelligenceFinding(entity=f"Unique providers: {len(provider_map)}", type="Bucket Inventory: Providers", source="CloudProbe", confidence="Medium", color="slate", tags=["inventory"]))
+        findings.append(IntelligenceFinding(entity=f"Leak detection: {total_leaks} data leaks found", type="Bucket Inventory: Leaks", source="CloudProbe", confidence="Medium", color="red" if total_leaks else "emerald", tags=["inventory"]))
+        findings.append(IntelligenceFinding(entity=f"Accessible buckets: {total_public + total_exists}", type="Bucket Inventory: Accessible", source="CloudProbe", confidence="Medium", color="orange" if (total_public + total_exists) else "emerald", tags=["inventory"]))
+
+    async def analyze_security_tier():
+        security_score = max(0, 100 - (total_public * 15 + total_exists * 5 + total_leaks * 25))
+        tier = "Secure" if security_score >= 80 else "At Risk" if security_score >= 50 else "Critical"
+        findings.append(IntelligenceFinding(entity=f"Security tier: {tier} (score: {security_score}/100)", type="Security Tier", source="CloudProbe", confidence="Medium", color="green" if tier == "Secure" else "red", tags=["tier"]))
+        findings.append(IntelligenceFinding(entity=f"Exposure impact: {total_public + total_leaks} exposed resource(s)", type="Exposure Impact", source="CloudProbe", confidence="Medium", color="red", tags=["tier"]))
+        findings.append(IntelligenceFinding(entity="Implement automated bucket scanning in CI/CD pipeline", type="Proactive Recommendation", source="CloudProbe", confidence="Medium", color="orange", tags=["tier"]))
+
+    async def analyze_scan_recommendations():
+        findings.append(IntelligenceFinding(entity=f"All major cloud providers covered: {len(provider_map)}", type="Scan Recommendation: Coverage", source="CloudProbe", confidence="Medium", color="slate", tags=["rec"]))
+        findings.append(IntelligenceFinding(entity=f"Findings across providers: {total_public + total_exists + total_leaks}", type="Scan Recommendation: Total Findings", source="CloudProbe", confidence="Medium", color="purple", tags=["rec"]))
+        findings.append(IntelligenceFinding(entity=f"Leak/findings ratio: {round(total_leaks/max(total_public + total_exists + total_leaks,1)*100,1)}%", type="Scan Recommendation: Leak Ratio", source="CloudProbe", confidence="Medium", color="red", tags=["rec"]))
+        findings.append(IntelligenceFinding(entity="Review and rotate all exposed bucket credentials immediately", type="Scan Recommendation: Immediate", source="CloudProbe", confidence="Medium", color="red", tags=["rec"]))
+        findings.append(IntelligenceFinding(entity="Set up automated monitoring for new public buckets", type="Scan Recommendation: Monitoring", source="CloudProbe", confidence="Medium", color="orange", tags=["rec"]))
+        findings.append(IntelligenceFinding(entity=f"Cloud providers: AWS, Azure, GCP, DigitalOcean, Wasabi, Backblaze, Cloudflare R2, Alibaba, IBM, Linode, Vultr, Hetzner, Scaleway", type="Scan Recommendation: Provider List", source="CloudProbe", confidence="Medium", color="slate", tags=["rec"]))
+        findings.append(IntelligenceFinding(entity=f"Keywords used for bucket discovery: {len(bucket_names)}", type="Scan Recommendation: Keywords", source="CloudProbe", confidence="Medium", color="slate", tags=["rec"]))
+
+    await asyncio.gather(
+        analyze_provider_breakdown(),
+        analyze_security_score(),
+        analyze_exposure_summary(),
+        analyze_probe_coverage(),
+        analyze_provider_risk(),
+        analyze_leak_impact(),
+        analyze_bucket_inventory(),
+        analyze_security_tier(),
+        analyze_scan_recommendations(),
+    )
+
     return findings

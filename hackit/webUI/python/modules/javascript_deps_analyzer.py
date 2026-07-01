@@ -958,6 +958,168 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 except Exception:
                     pass
 
+        for lib_name, patterns in MORE_JS_LIB_SIGNATURES.items():
+            for pat in patterns:
+                if re.search(pat, html, re.IGNORECASE):
+                    if lib_name not in deps:
+                        deps[lib_name] = {"versions": set(), "sources": set(), "urls": []}
+                        deps[lib_name]["sources"].add("inline-extended-pattern")
+                    break
+
+        build_tools = detect_build_tools(html)
+        for tool in build_tools:
+            findings.append(IntelligenceFinding(
+                entity=f"Build tool/bundler: {tool}",
+                type="Build Tool Detected",
+                source="JSDepsAnalyzer",
+                confidence="High",
+                color="purple",
+                threat_level="Informational",
+                tags=["build-tool", tool.lower().replace(".", "-")]
+            ))
+
+        resource_hints = extract_resource_hints(html)
+        for hint_type, urls in resource_hints.items():
+            for url in urls[:5]:
+                findings.append(IntelligenceFinding(
+                    entity=f"Resource hint [{hint_type}]: {url[:200]}",
+                    type=f"Resource Hint: {hint_type}",
+                    source="JSDepsAnalyzer",
+                    confidence="Medium",
+                    color="slate",
+                    threat_level="Informational",
+                    raw_data=f"Type: {hint_type} | URL: {url}",
+                    tags=["resource-hint", hint_type]
+                ))
+
+        has_modules = detect_module_type(html)
+        if has_modules:
+            findings.append(IntelligenceFinding(
+                entity="ES Modules (type=module/nomodule) detected",
+                type="JS Module System",
+                source="JSDepsAnalyzer",
+                confidence="High",
+                color="cyan",
+                threat_level="Informational",
+                tags=["es-modules", "javascript"]
+            ))
+
+        inline_versions = detect_inline_version(html)
+        for vtype, version in inline_versions.items():
+            findings.append(IntelligenceFinding(
+                entity=f"Inline version disclosure: {version}",
+                type="Version Disclosure",
+                source="JSDepsAnalyzer",
+                confidence="Medium",
+                color="orange",
+                threat_level="Informational",
+                tags=["version-disclosure"]
+            ))
+
+        sw_analysis = analyze_service_worker(html, base_url)
+        if sw_analysis:
+            for key, val in sw_analysis.items():
+                findings.append(IntelligenceFinding(
+                    entity=f"Service Worker {key}: {val}",
+                    type="Service Worker Detail",
+                    source="JSDepsAnalyzer",
+                    confidence="High",
+                    color="slate",
+                    threat_level="Informational",
+                    tags=["pwa", "service-worker", key]
+                ))
+
+        esm_bundlers = detect_esm_bundler(html)
+        for bundler in esm_bundlers:
+            findings.append(IntelligenceFinding(
+                entity=f"ESM bundler type: {bundler}",
+                type="ESM Bundler Detection",
+                source="JSDepsAnalyzer",
+                confidence="Medium",
+                color="slate",
+                threat_level="Informational",
+                tags=["bundler", "esm"]
+            ))
+
+        all_script_urls = SCRIPT_REGEX.findall(html)
+        for url in all_script_urls:
+            integrity_match = INTEGRITY_REGEX.search(html[html.find(url)-200:html.find(url)+50] if url in html else "")
+            if not integrity_match and any(cdn in url.lower() for cdn in ["cdn.", "jsdelivr", "unpkg", "cdnjs", "cloudflare"]):
+                findings.append(IntelligenceFinding(
+                    entity=f"No SRI integrity for CDN script: {url[:150]}",
+                    type="Missing Subresource Integrity",
+                    source="JSDepsAnalyzer",
+                    confidence="Medium",
+                    color="orange",
+                    threat_level="Elevated Risk",
+                    raw_data=f"CDN script without integrity attribute: {url}",
+                    tags=["security", "sri", "integrity"]
+                ))
+
+        bundle_analyses = []
+        for url in all_script_urls[:8]:
+            if any(ext in url.lower() for ext in [".js", ".mjs", ".cjs"]):
+                if url.startswith("//"):
+                    url = "https:" + url
+                elif url.startswith("/"):
+                    url = base_href + url
+                elif not url.startswith("http"):
+                    continue
+                try:
+                    analysis = await fetch_and_analyze_js_bundle(client, url)
+                    if analysis:
+                        bundle_analyses.append((url, analysis))
+                except Exception:
+                    pass
+
+        for url, analysis in bundle_analyses:
+            if analysis.get("has_sourcemap"):
+                findings.append(IntelligenceFinding(
+                    entity=f"Source map exposed in bundle: {url}",
+                    type="JS Bundle Source Map",
+                    source="JSDepsAnalyzer",
+                    confidence="High",
+                    color="red",
+                    threat_level="High Risk",
+                    raw_data=f"Bundle URL: {url} | Source map: {analysis.get('sourcemap_url', 'unknown')}",
+                    tags=["source-map", "exposure"]
+                ))
+            if analysis.get("versions_found"):
+                for ver in analysis["versions_found"][:3]:
+                    findings.append(IntelligenceFinding(
+                        entity=f"Bundle version: {ver} in {url}",
+                        type="JS Bundle Version",
+                        source="JSDepsAnalyzer",
+                        confidence="Medium",
+                        color="slate",
+                        threat_level="Informational",
+                        tags=["version", "bundle"]
+                    ))
+            if analysis.get("is_minified"):
+                findings.append(IntelligenceFinding(
+                    entity=f"Minified bundle: {url} ({analysis.get('size', 0)} bytes)",
+                    type="JS Bundle Minified",
+                    source="JSDepsAnalyzer",
+                    confidence="Medium",
+                    color="slate",
+                    threat_level="Informational",
+                    tags=["minified", "bundle"]
+                ))
+
+        for lib_name in deps:
+            license_name = detect_license(lib_name)
+            if license_name and license_name != "Unknown":
+                findings.append(IntelligenceFinding(
+                    entity=f"{lib_name}: {license_name}",
+                    type="JS Library License",
+                    source="JSDepsAnalyzer",
+                    confidence="Medium",
+                    color="slate",
+                    threat_level="Informational",
+                    raw_data=f"Library: {lib_name} | License: {license_name}",
+                    tags=["license", lib_name.lower().replace(" ", "-")]
+                ))
+
         total_deps = len(deps)
         vuln_count = sum(1 for f in findings if "Vulnerable" in f.type)
         cdn_count = sum(1 for f in findings if "Self-Hosted" not in f.entity and "CDN" in f.source and f.type == "JS Dependency")
@@ -986,3 +1148,436 @@ async def crawl(target: str, client: httpx.AsyncClient):
         ))
 
     return findings
+
+
+# === EXTENDED UPGRADE: Additional JS Library Signatures (200+ more) ===
+
+MORE_JS_LIB_SIGNATURES = {
+    "hyperapp": [r"hyperapp"],
+    "petite-vue": [r"petite-vue", r"petiteVue"],
+    "million": [r"million", r"@million/"],
+    "preact-signals": [r"@preact/signals"],
+    "solid-js": [r"solid-js", r"createSignal", r"createEffect"],
+    "qwik": [r"qwik", r"@builder.io/qwik", r"$qwik"],
+    "marko": [r"marko", r"@marko/"],
+    "aurelia": [r"aurelia", r"au-"],
+    "dojo": [r"dojo", r"dojo/"],
+    "extjs": [r"ext\.js", r"Ext\.", r"sencha"],
+    "yui": [r"yui\.js", r"YUI"],
+    "prototype": [r"prototype\.js", r"Prototype"],
+    "scriptaculous": [r"script\.aculo\.us", r"scriptaculous"],
+    "mootools": [r"mootools", r"MooTools"],
+    "polymer": [r"polymer", r"@polymer/"],
+    "lit": [r"lit-element", r"lit-html", r"@lit/"],
+    "stencil": [r"stencil", r"@stencil/"],
+    "shoelace": [r"shoelace", r"@shoelace-style/"],
+    "stimulus": [r"stimulus", r"data-controller", r"data-target"],
+    "turbo": [r"turbo\.js", r"@hotwired/turbo", r"turbo-frame", r"turbo-stream"],
+    "hotwire": [r"hotwire", r"@hotwired/"],
+    "livewire": [r"livewire", r"@livewire/"],
+    "inertia": [r"inertia", r"@inertiajs/"],
+    "remix": [r"remix", r"@remix-run/", r"<Outlet"],
+    "astro": [r"astro", r"__ASTRO__", r"Astro\."],
+    "fresh": [r"fresh", r"$fresh/"],
+    "nitro": [r"nitro", r"unjs/nitro"],
+    "hono": [r"hono", r"@hono/"],
+    "elysia": [r"elysia", r"@elysiajs/"],
+    "bun": [r"bun\."],
+    "deno": [r"deno\."],
+    "nx": [r"nx\."],
+    "turborepo": [r"turbo", r"turborepo"],
+    "lerna": [r"lerna"],
+    "rush": [r"rush\."],
+    "changesets": [r"@changesets/"],
+    "semantic-release": [r"semantic-release"],
+    "release-please": [r"release-please"],
+    "standard-version": [r"standard-version"],
+    "commitlint": [r"@commitlint/"],
+    "husky": [r"husky"],
+    "lint-staged": [r"lint-staged"],
+    "pretty-quick": [r"pretty-quick"],
+    "knip": [r"knip"],
+    "depcheck": [r"depcheck"],
+    "syncpack": [r"syncpack"],
+    "renovate": [r"renovate"],
+    "dependabot": [r"dependabot"],
+    "sentry": [r"sentry", r"@sentry/", r"Sentry\.init"],
+    "datadog-rum": [r"datadog-rum", r"@datadog/", r"DD_RUM"],
+    "newrelic": [r"newrelic", r"NRBA", r"NREUM"],
+    "logrocket": [r"logrocket", r"LogRocket"],
+    "fullstory": [r"fullstory", r"FS\(\)"],
+    "hotjar": [r"hotjar", r"_hjSettings", r"hj\("],
+    "amplitude": [r"amplitude", r"amplitudeInstance"],
+    "mixpanel": [r"mixpanel", r"mixpanel\.init"],
+    "segment": [r"segment", r"analytics\.load"],
+    "heap": [r"heap", r"heap\.load"],
+    "posthog": [r"posthog", r"posthog\.init"],
+    "plausible": [r"plausible", r"plausible\.io"],
+    "fathom": [r"fathom", r"usefathom\.com"],
+    "simpleanalytics": [r"simpleanalytics", r"simpleanalytics\.com"],
+    "umami": [r"umami", r"umami\.is"],
+    "matomo": [r"matomo", r"piwik", r"_paq"],
+    "openreplay": [r"openreplay"],
+    "rudderstack": [r"rudderstack", r"rudderanalytics"],
+    "snowplow": [r"snowplow"],
+    "adobe-analytics": [r"adobedtm", r"dpm\.demdex", r"omtrdc"],
+    "yandex-metrica": [r"yandexmetrica", r"mc\.yandex"],
+    "baidu-tongji": [r"hm\.baidu", r"tongji\.baidu"],
+    "stripe": [r"stripe\.com", r"js\.stripe\.com", r"Stripe\("],
+    "paypal": [r"paypal", r"paypalobjects"],
+    "braintree": [r"braintree", r"braintreegateway"],
+    "square": [r"square", r"squareup"],
+    "shopify-buy": [r"shopify-buy", r"ShopifyBuy"],
+    "woocommerce": [r"woocommerce"],
+    "instantclick": [r"instantclick"],
+    "barba": [r"barba\.js", r"barba"],
+    "swup": [r"swup", r"Swup"],
+    "page.js": [r"page\.js", r"page\("],
+    "director": [r"director\.js", r"Router"],
+    "crossroads": [r"crossroads"],
+    "hasher": [r"hasher"],
+    "pathjs": [r"Path\.js"],
+    "platform.js": [r"platform\.js", r"platform\."],
+    "modernizr": [r"modernizr", r"Modernizr"],
+    "html5shiv": [r"html5shiv", r"html5shiv\.js"],
+    "respond": [r"respond\.js", r"respond\.min\.js"],
+    "normalize": [r"normalize\.css", r"normalize\.min\.css"],
+    "sanitize.css": [r"sanitize\.css"],
+    "reset-css": [r"reset\.css"],
+    "animate.css": [r"animate\.css", r"animate\.min\.css"],
+    "hover.css": [r"hover\.css", r"hvr-"],
+    "magic.css": [r"magic\.css"],
+    "hint.css": [r"hint\.css", r"hint--"],
+    "loaders.css": [r"loaders\.css"],
+    "spinkit": [r"spinkit"],
+    "pace": [r"pace\.js", r"pace\.min\.js"],
+    "nprogress": [r"nprogress", r"NProgress"],
+    "progressbar": [r"progressbar\.js"],
+    "countup": [r"countup", r"countUp"],
+    "odometer": [r"odometer", r"odometer\.js"],
+    "counterup": [r"counterup", r"counterUp"],
+    "waypoints": [r"waypoints", r"Waypoint"],
+    "scrollreveal": [r"scrollreveal", r"ScrollReveal"],
+    "scrollmagic": [r"scrollmagic", r"ScrollMagic"],
+    "locomotive-scroll": [r"locomotive-scroll"],
+    "lenis": [r"lenis", r"@studio-freight/lenis"],
+    "smoothscroll": [r"smoothscroll"],
+    "vivus": [r"vivus", r"vivus\.js"],
+    "kute": [r"kute\.js", r"KUTE"],
+    "dynamics": [r"dynamics\.js", r"dynamics\.min\.js"],
+    "tweenjs": [r"tween\.js", r"TWEEN"],
+    "bounce": [r"bounce\.js", r"bounce\."],
+    "reel": [r"reel\.js", r"Reel"],
+    "filmstrip": [r"filmstrip"],
+    "rgbaster": [r"rgbaster"],
+    "color-thief": [r"color-thief", r"ColorThief"],
+    "vibrant": [r"vibrant\.js", r"Vibrant"],
+    "grade": [r"grade\.js"],
+    "granim": [r"granim", r"Granim"],
+    "particles-bg": [r"particles-bg"],
+    "vanta": [r"vanta", r"VANTA"],
+    "ztext": [r"ztext", r"Ztext"],
+    "splitting": [r"splitting", r"Splitting"],
+    "textillate": [r"textillate"],
+    "lettering": [r"lettering\.js"],
+    "fittext": [r"fittext"],
+    "bigtext": [r"bigtext"],
+    "sal": [r"sal\.js"],
+    "rellax": [r"rellax", r"Rellax"],
+    "simpleparallax": [r"simpleparallax"],
+    "jarallax": [r"jarallax"],
+    "tilt": [r"tilt\.js", r"vanilla-tilt"],
+    "paroller": [r"paroller\.js"],
+    "stroll": [r"stroll\.js"],
+    "skrollr": [r"skrollr"],
+    "headroom": [r"headroom\.js", r"Headroom"],
+    "stickyfill": [r"stickyfill"],
+    "sticky-kit": [r"sticky-kit"],
+    "fixedsticky": [r"fixedsticky"],
+    "float-panel": [r"float-panel"],
+    "slideout": [r"slideout"],
+    "slidebars": [r"slidebars"],
+    "pushy": [r"pushy"],
+    "offcanvas": [r"offcanvas"],
+    "sidr": [r"sidr"],
+    "mm.js": [r"mmenu", r"mmenu\.js"],
+    "hamburgers": [r"hamburgers\.css", r"hamburger"],
+    "navgoco": [r"navgoco"],
+    "smartmenus": [r"smartmenus"],
+    "superfish": [r"superfish"],
+    "meanmenu": [r"meanmenu"],
+    "slimmenu": [r"slimmenu"],
+    "flexnav": [r"flexnav"],
+    "responsive-nav": [r"responsive-nav"],
+    "nav.js": [r"nav\.js"],
+    "tinynav": [r"tinynav"],
+    "selectnav": [r"selectnav"],
+    "priority-nav": [r"priority-nav"],
+    "drilldown": [r"drilldown"],
+    "metismenu": [r"metismenu"],
+    "treeview": [r"treeview"],
+    "jstree": [r"jstree", r"jsTree"],
+    "fancytree": [r"fancytree"],
+    "treed": [r"treed"],
+    "tablesaw": [r"tablesaw"],
+    "footable": [r"footable"],
+    "stacktable": [r"stacktable"],
+    "listjs": [r"list\.js", r"new List"],
+    "muuri": [r"muuri"],
+    "gridster": [r"gridster"],
+    "packery": [r"packery"],
+    "freewall": [r"freewall"],
+    "salvattore": [r"salvattore"],
+    "flexboxgrid": [r"flexboxgrid"],
+    "cssgram": [r"cssgram"],
+    "skeleton": [r"skeleton\.css"],
+    "motion-ui": [r"motion-ui"],
+    "hint": [r"hint\.css"],
+    "balloon": [r"balloon\.css"],
+    "tippy": [r"tippy\.js", r"tippy"],
+    "popper": [r"popper\.js", r"@popperjs/"],
+    "tooltipster": [r"tooltipster"],
+    "qtip": [r"qtip", r"qTip"],
+    "cluetip": [r"cluetip"],
+    "powertip": [r"powertip"],
+    "opentip": [r"opentip"],
+    "njoytip": [r"njoytip"],
+    "tipsy": [r"tipsy"],
+    "poshytip": [r"poshytip"],
+    "bootstrap-tooltip": [r"tooltip"],
+    "intro.js": [r"intro\.js", r"introJs"],
+    "shepherd": [r"shepherd\.js", r"Shepherd"],
+    "driver.js": [r"driver\.js", r"Driver"],
+    "pageguide": [r"pageguide"],
+    "joyride": [r"joyride"],
+    "hopscotch": [r"hopscotch"],
+    "chardin": [r"chardin"],
+    "bootstrap-tour": [r"bootstrap-tour"],
+    "tourist": [r"tourist"],
+    "multiscroll": [r"multiscroll"],
+    "pagepiling": [r"pagepiling"],
+    "onepage-scroll": [r"onepage-scroll"],
+    "turn.js": [r"turn\.js", r"turn\."],
+    "flipbook": [r"flipbook"],
+    "bookblock": [r"bookblock"],
+    "wowbook": [r"wowbook"],
+    "flexslider": [r"flexslider", r"FlexSlider"],
+    "unslider": [r"unslider"],
+    "bxslider": [r"bxslider", r"bxSlider"],
+    "sequence": [r"sequence\.js"],
+    "slider-pro": [r"slider-pro"],
+    "layerslider": [r"layerslider"],
+    "revslider": [r"revslider"],
+    "master-slider": [r"master-slider"],
+    "camera": [r"camera\.js"],
+    "coin-slider": [r"coin-slider"],
+    "jssor": [r"jssor"],
+    "tilesjs": [r"tilesjs"],
+    "vegas": [r"vegas", r"vegas\.js"],
+    "supersized": [r"supersized"],
+    "tabulous": [r"tabulous"],
+    "easy-tabs": [r"easy-tabs"],
+    "tabby": [r"tabby"],
+    "tabaccordion": [r"tabaccordion"],
+    "tabslet": [r"tabslet"],
+    "easy-responsive-tabs": [r"easy-responsive-tabs"],
+    "zozo-tabs": [r"zozo-tabs"],
+    "tiny-tabs": [r"tiny-tabs"],
+    "coda-slider": [r"coda-slider"],
+    "anything": [r"anything\.js"],
+    "tosrus": [r"tosrus"],
+    "fluidbox": [r"fluidbox"],
+    "nanoGallery": [r"nanoGallery"],
+    "unitegallery": [r"unitegallery"],
+    "justified-gallery": [r"justified-gallery", r"jgallery"],
+    "photo-swipe": [r"photoswipe", r"PhotoSwipe"],
+    "baguettebox": [r"baguettebox"],
+    "glightbox": [r"glightbox"],
+    "fslightbox": [r"fslightbox"],
+    "spotlight": [r"spotlight"],
+    "chocolat": [r"chocolat"],
+    "simplelightbox": [r"simplelightbox"],
+    "viewerjs": [r"viewerjs", r"Viewer"],
+    "image-map": [r"image-map"],
+    "imagemapster": [r"imagemapster"],
+    "rwd-image-maps": [r"rwd-image-maps"],
+    "zoom": [r"zoom\.js", r"jqzoom"],
+    "elevatezoom": [r"elevatezoom"],
+    "cloudzoom": [r"cloudzoom"],
+    "magiczoom": [r"magiczoom"],
+    "fresco": [r"fresco"],
+    "colorbox": [r"colorbox", r"Colorbox"],
+    "prettyphoto": [r"prettyphoto", r"prettyPhoto"],
+    "featherlight": [r"featherlight"],
+    "ekko-lightbox": [r"ekko-lightbox"],
+    "strip": [r"strip\.js"],
+    "lity": [r"lity"],
+    "fluidvids": [r"fluidvids"],
+    "fitvids": [r"fitvids"],
+    "bigvideo": [r"bigvideo"],
+    "videojs": [r"videojs", r"video\.js", r"videojs\."],
+    "plyr": [r"plyr", r"plyr\.io"],
+    "mediaelement": [r"mediaelement", r"mejs\."],
+    "jwplayer": [r"jwplayer", r"jwPlayer"],
+    "flowplayer": [r"flowplayer"],
+    "clappr": [r"clappr"],
+    "shaka": [r"shaka-player", r"shaka\."],
+    "dashjs": [r"dashjs", r"Dash\.js"],
+    "hls.js": [r"hls\.js", r"Hls"],
+    "howler": [r"howler\.js", r"Howler"],
+    "soundjs": [r"soundjs"],
+    "ion-sound": [r"ion-sound"],
+    "pizzicato": [r"pizzicato"],
+    "tone": [r"tone\.js", r"Tone\."],
+    "wavesurfer": [r"wavesurfer", r"WaveSurfer"],
+    "peaks": [r"peaks\.js"],
+    "midi": [r"midi\.js"],
+    "abcjs": [r"abcjs"],
+    "vexflow": [r"vexflow"],
+    "alphatab": [r"alphatab"],
+    "tabulature": [r"tabulature"],
+    "jquery-knob": [r"knob"],
+    "justgage": [r"justgage", r"justGage"],
+    "circle-progress": [r"circle-progress"],
+    "progressbar.js": [r"progressbar\.js", r"ProgressBar"],
+    "easy-pie-chart": [r"easy-pie-chart", r"easyPieChart"],
+    "css-pie": [r"pie\.js"],
+    "amcharts": [r"amcharts", r"AmCharts"],
+    "anychart": [r"anychart", r"AnyChart"],
+    "canvasjs": [r"canvasjs", r"CanvasJS"],
+    "fusioncharts": [r"fusioncharts", r"FusionCharts"],
+    "zingchart": [r"zingchart", r"ZingChart"],
+    "sigma": [r"sigma\.js", r"sigma\."],
+    "arbor": [r"arbor\.js"],
+    "viva": [r"viva\.js"],
+    "ngraph": [r"ngraph"],
+    "springy": [r"springy"],
+    "jgraph": [r"jgraph"],
+    "mxgraph": [r"mxgraph"],
+    "gojs": [r"gojs", r"go\.js", r"go\.TreeModel"],
+    "diagram": [r"diagram"],
+    "js-sequence-diagrams": [r"js-sequence-diagrams"],
+    "flowchart": [r"flowchart\.js"],
+    "raphael": [r"raphael", r"Raphael"],
+    "snap": [r"snap\.svg", r"Snap\."],
+    "svgjs": [r"svg\.js", r"Svgjs"],
+    "vivagraph": [r"vivagraph"],
+    "two": [r"two\.js", r"Two\."],
+    "processing": [r"processing\.js", r"Processing\."],
+    "p5": [r"p5\.js", r"p5\."],
+}
+
+def detect_license(lib_name):
+    try:
+        lib_lower = lib_name.lower().replace(" ", "-").replace("_", "-")
+        for key, lic in LICENSE_DB.items():
+            if key in lib_lower or lib_lower in key:
+                return lic
+        return "Unknown"
+    except Exception:
+        return "Unknown"
+
+def detect_build_tools(html):
+    detected = {}
+    for tool, patterns in BUNDLE_ANALYSIS_PATTERNS.items():
+        for pat in patterns:
+            if re.search(pat, html, re.IGNORECASE):
+                detected[tool] = True
+                break
+    return detected
+
+def extract_resource_hints(html):
+    hints = {"modulepreload": [], "prefetch": [], "preload": [], "dns-prefetch": [], "preconnect": []}
+    try:
+        for m in LINK_REL_MODULEPRELOAD.finditer(html): hints["modulepreload"].append(m.group(1))
+        for m in LINK_REL_PREFETCH.finditer(html): hints["prefetch"].append(m.group(1))
+        for m in LINK_REL_PRELOAD.finditer(html): hints["preload"].append(m.group(1))
+        for m in LINK_REL_DNS_PREFETCH.finditer(html): hints["dns-prefetch"].append(m.group(1))
+        for m in LINK_REL_PRECONNECT.finditer(html): hints["preconnect"].append(m.group(1))
+    except Exception:
+        pass
+    return hints
+
+def detect_module_type(html):
+    try:
+        has_modules = bool(NOMODULE_REGEX.search(html))
+        return has_modules
+    except Exception:
+        return False
+
+def detect_inline_version(html):
+    versions = {}
+    try:
+        for m in CONSOLE_LOG_REGEX.finditer(html):
+            line = m.group(0)
+            v = VERSION_IN_SCRIPT.search(line)
+            if v:
+                versions["console_version"] = v.group(1)
+    except Exception:
+        pass
+    try:
+        for m in re.finditer(r'["\']version["\']\s*:\s*["\']([\d.]+)["\']', html):
+            versions["json_version"] = m.group(1)
+    except Exception:
+        pass
+    return versions
+
+def analyze_service_worker(html, url):
+    sw_analysis = {}
+    try:
+        sw_reg = re.search(r'navigator\.serviceWorker\.register\s*\(\s*["\']([^"\']+)["\']', html)
+        if sw_reg:
+            sw_analysis["register_url"] = sw_reg.group(1)
+        sw_scope = re.search(r'scope\s*:\s*["\']([^"\']+)["\']', html)
+        if sw_scope:
+            sw_analysis["scope"] = sw_scope.group(1)
+        sw_update = bool(re.search(r'updateViaCache', html, re.IGNORECASE))
+        sw_analysis["update_via_cache"] = sw_update
+    except Exception:
+        pass
+    return sw_analysis
+
+def detect_esm_bundler(html):
+    bundlers = []
+    try:
+        if re.search(r'import\s+\w+\s+from\s+["\']/@\w+/', html):
+            bundlers.append("Vite/Alpine")
+        if re.search(r'__esModule', html):
+            bundlers.append("Rollup/ESM")
+        if re.search(r'System\.register', html):
+            bundlers.append("SystemJS")
+        if re.search(r'define\([\'"]__[^)]+\)', html):
+            bundlers.append("AMD")
+    except Exception:
+        pass
+    return bundlers
+
+def check_missing_integrity(scripts):
+    missing = []
+    for url in scripts:
+        if any(cdn in url.lower() for cdn in ["cdn.", "jsdelivr", "unpkg", "cdnjs", "cloudflare"]):
+            missing.append(url)
+    return missing
+
+async def fetch_and_analyze_js_bundle(client, url):
+    analysis = {}
+    try:
+        resp = await client.get(url, timeout=10.0, headers={"User-Agent": "Mozilla/5.0"})
+        if resp.status_code == 200:
+            text = resp.text[:100000]
+            analysis["size"] = len(resp.content)
+            analysis["has_sourcemap"] = bool(SOURCE_MAP_REGEX.search(text))
+            sm = SOURCE_MAP_REGEX.search(text)
+            if sm:
+                analysis["sourcemap_url"] = sm.group(1)
+            npm_in_bundle = re.findall(r'["\']_requested["\']:\s*["\'][^"\']+["\']', text)
+            analysis["npm_refs"] = len(npm_in_bundle)
+            versions = VERSION_JSON_REGEX.findall(text)
+            analysis["versions_found"] = versions[:10]
+            has_minified = bool(re.search(r'function\s+\w{1,2}\s*\([\w,]{5,}\)\s*\{[\w\s,]{100,}\}', text))
+            analysis["is_minified"] = has_minified
+            has_mangle = len(re.findall(r'\b[a-z]\.[a-z]{2}\b', text)) > 50
+            analysis["is_mangled"] = has_mangle
+    except Exception:
+        pass
+    return analysis

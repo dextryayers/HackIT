@@ -74,6 +74,125 @@ async def query_available(domain: str, client: httpx.AsyncClient) -> dict:
         pass
     return {}
 
+async def query_cdx_raw(domain: str, client: httpx.AsyncClient, limit: int = 500) -> list:
+    results = []
+    try:
+        params = {
+            "url": f"*.{domain}/*",
+            "output": "text",
+            "fl": "original,timestamp,statuscode,mimetype,length",
+            "limit": str(limit),
+            "collapse": "urlkey",
+        }
+        resp = await client.get(CDX_API, params=params, timeout=30.0,
+            headers={"User-Agent": UA})
+        if resp.status_code == 200:
+            lines = resp.text.strip().splitlines()
+            for line in lines:
+                parts = line.strip().split(" ")
+                if len(parts) >= 5:
+                    results.append({
+                        "url": parts[0], "timestamp": parts[1],
+                        "status": parts[2], "mime": parts[3], "length": parts[4],
+                    })
+    except:
+        pass
+    return results
+
+async def analyze_url_structure(urls: list) -> list:
+    findings = []
+    try:
+        path_depths = {}
+        query_count = 0
+        for r in urls:
+            url = r.get("url", "")
+            if "?" in url: query_count += 1
+            parsed = urlparse(url)
+            depth = len([p for p in parsed.path.split("/") if p])
+            path_depths[depth] = path_depths.get(depth, 0) + 1
+        if path_depths:
+            avg_depth = sum(k * v for k, v in path_depths.items()) / sum(path_depths.values())
+            findings.append(IntelligenceFinding(
+                entity=f"Avg URL path depth: {avg_depth:.1f} (query URLs: {query_count})",
+                type="Archive: URL Structure Analysis",
+                source="Wayback Machine",
+                confidence="Medium",
+                color="slate",
+                status="Analyzed",
+                resolution="",
+                tags=["archive", "structure"]
+            ))
+    except:
+        pass
+    return findings
+
+async def detect_technology_archived(urls: list, client: httpx.AsyncClient) -> list:
+    findings = []
+    tech_patterns = {
+        "WordPress": ["/wp-content/", "/wp-includes/", "/wp-json/"],
+        "Drupal": ["/sites/default/", "/modules/", "/themes/"],
+        "Joomla": ["/components/", "/modules/", "/templates/"],
+        "Laravel": ["/vendor/", "/storage/", "/artisan"],
+        "Django": ["/admin/", "/static/", "/media/"],
+        "React": ["/static/js/", "/service-worker.js"],
+        "Angular": ["/polyfills.", "/main.", "/runtime."],
+        "jQuery": ["jquery"],
+        "Bootstrap": ["bootstrap"],
+    }
+    found_techs = set()
+    for r in urls[:100]:
+        url = r.get("url", "").lower()
+        for tech, patterns in tech_patterns.items():
+            for p in patterns:
+                if p.lower() in url:
+                    found_techs.add(tech)
+    for tech in found_techs:
+        findings.append(IntelligenceFinding(
+            entity=f"Technology detected: {tech}",
+            type="Archive: Technology Detection",
+            source="Wayback Machine",
+            confidence="Medium",
+            color="slate",
+            status="Identified",
+            resolution="",
+            tags=["archive", "technology", tech.lower()]
+        ))
+    return findings
+
+async def check_redirect_chain_archived(urls: list) -> list:
+    findings = []
+    statuses = {}
+    for r in urls:
+        s = r.get("status", "000")
+        statuses[s] = statuses.get(s, 0) + 1
+    redirect_count = sum(v for k, v in statuses.items() if k.startswith("3"))
+    error_count = sum(v for k, v in statuses.items() if k.startswith(("4", "5")))
+    if redirect_count:
+        findings.append(IntelligenceFinding(
+            entity=f"{redirect_count} redirects (3xx) in archive",
+            type="Archive: Redirect Analysis",
+            source="Wayback Machine",
+            confidence="Medium",
+            color="orange",
+            threat_level="Informational",
+            status=f"{redirect_count} redirects",
+            resolution="",
+            tags=["archive", "redirect"]
+        ))
+    if error_count:
+        findings.append(IntelligenceFinding(
+            entity=f"{error_count} error responses (4xx/5xx) in archive",
+            type="Archive: Error Analysis",
+            source="Wayback Machine",
+            confidence="Medium",
+            color="orange",
+            threat_level="Elevated Risk",
+            status=f"{error_count} errors",
+            resolution="",
+            tags=["archive", "error"]
+        ))
+    return findings
+
 async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFinding]:
     findings = []
     t = target.strip().lower()
@@ -98,6 +217,16 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
     cdx_results = await query_cdx(t, client)
     if cdx_results:
+        cdx_raw = await query_cdx_raw(t, client)
+
+        struct_results = await analyze_url_structure(cdx_results)
+        findings.extend(struct_results)
+
+        tech_results = await detect_technology_archived(cdx_results, client)
+        findings.extend(tech_results)
+
+        redirect_results = await check_redirect_chain_archived(cdx_results)
+        findings.extend(redirect_results)
         findings.append(IntelligenceFinding(
             entity=f"{len(cdx_results)} historical URLs archived",
             type="Archive: Historical URL Count",

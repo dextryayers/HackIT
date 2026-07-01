@@ -344,6 +344,106 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     tags=["cookie", "weak-session"]
                 ))
 
+        for c in cookie_list:
+            prefix_issues = analyze_cookie_prefix(c.get("name", ""), c)
+            for issue in prefix_issues:
+                findings.append(IntelligenceFinding(
+                    entity=issue[:200],
+                    type="Cookie Prefix Violation",
+                    source="WebCookieAnalyzer",
+                    confidence="High",
+                    color="red",
+                    threat_level="High Risk",
+                    tags=["cookie", "prefix", "security"]
+                ))
+
+        jwt_cookies = detect_jwt_in_cookies(cookie_list)
+        for jc in jwt_cookies:
+            findings.append(IntelligenceFinding(
+                entity=f"JWT token in cookie: {jc}",
+                type="JWT Cookie Detected",
+                source="WebCookieAnalyzer",
+                confidence="High",
+                color="orange",
+                threat_level="Elevated Risk",
+                raw_data=f"JWT cookie detected: {jc}",
+                tags=["cookie", "jwt", "authentication"]
+            ))
+
+        for c in cookie_list:
+            samesite_analysis = analyze_samesite_protection(c.get("samesite", ""), c.get("secure", False))
+            if samesite_analysis.get("risk"):
+                findings.append(IntelligenceFinding(
+                    entity=f"SameSite={c.get('samesite', 'none')} on {c.get('name', '?')}: {samesite_analysis.get('risk', '')[:100]}",
+                    type="Cookie SameSite Analysis",
+                    source="WebCookieAnalyzer",
+                    confidence="High",
+                    color="orange" if samesite_analysis.get("value") == "none" else "emerald",
+                    threat_level="Elevated Risk" if samesite_analysis.get("value") == "none" else "Informational",
+                    tags=["cookie", "samesite", "security"]
+                ))
+
+            privacy_risk, privacy_score = categorize_privacy_risk(c)
+            if privacy_risk == "High":
+                findings.append(IntelligenceFinding(
+                    entity=f"High privacy risk: {c.get('name', '?')} (score: {privacy_score})",
+                    type="Cookie Privacy Risk",
+                    source="WebCookieAnalyzer",
+                    confidence="Medium",
+                    color="red",
+                    threat_level="Elevated Risk",
+                    tags=["cookie", "privacy", "tracking"]
+                ))
+
+            entropy = detect_cookie_entropy(c.get("value", ""))
+            if entropy > 3.5:
+                findings.append(IntelligenceFinding(
+                    entity=f"High entropy cookie: {c.get('name', '?')} (entropy: {entropy})",
+                    type="Cookie Entropy Analysis",
+                    source="WebCookieAnalyzer",
+                    confidence="Medium",
+                    color="slate",
+                    threat_level="Informational",
+                    tags=["cookie", "entropy", "security"]
+                ))
+
+            exp_analysis = analyze_expiration(c.get("expires", ""), c.get("max_age", ""))
+            if exp_analysis.get("type"):
+                findings.append(IntelligenceFinding(
+                    entity=f"{c.get('name', '?')}: {exp_analysis['type']}",
+                    type="Cookie Expiration Analysis",
+                    source="WebCookieAnalyzer",
+                    confidence="High",
+                    color="slate",
+                    threat_level="Informational",
+                    tags=["cookie", "expiration", "persistence"]
+                ))
+            if exp_analysis.get("risk"):
+                findings.append(IntelligenceFinding(
+                    entity=f"{c.get('name', '?')}: {exp_analysis['risk']}",
+                    type="Cookie Persistence Warning",
+                    source="WebCookieAnalyzer",
+                    confidence="High",
+                    color="orange",
+                    threat_level="Elevated Risk",
+                    tags=["cookie", "persistence", "tracking"]
+                ))
+
+        for fw_name, patterns in FRAMEWORK_COOKIE_SIGNATURES_EXTRA.items():
+            for pat in patterns:
+                for c in cookie_list:
+                    if re.search(pat, c.get("name", ""), re.IGNORECASE):
+                        findings.append(IntelligenceFinding(
+                            entity=f"Framework cookie: {c.get('name', '')} -> {fw_name}",
+                            type="Cookie Framework Detection",
+                            source="WebCookieAnalyzer",
+                            confidence="High",
+                            color="purple",
+                            threat_level="Informational",
+                            tags=["cookie", "framework", fw_name.lower().replace("/", "-").replace(" ", "-")]
+                        ))
+                        break
+
         if len(cookie_list) > 15:
             findings.append(IntelligenceFinding(
                 entity=f"{len(cookie_list)} cookies set - possible cookie inflation",
@@ -417,3 +517,178 @@ async def crawl(target: str, client: httpx.AsyncClient):
         ))
 
     return findings
+
+
+# === EXTENDED UPGRADE: Cookie prefix analysis, JWT detection, SameSite analysis, more patterns ===
+
+COOKIE_PREFIX_RULES = {
+    "__Host-": {"requires": ["secure", "path=/", "no domain"]},
+    "__Secure-": {"requires": ["secure"]},
+}
+
+COOKIE_SECURITY_RECOMMENDATIONS = {
+    "Missing Secure flag": "Set the 'Secure' flag to ensure cookie is only sent over HTTPS",
+    "Missing HttpOnly flag": "Set the 'HttpOnly' flag to prevent JavaScript access (mitigates XSS)",
+    "SameSite=None": "Set SameSite=Lax or Strict to provide CSRF protection",
+    "No Domain restriction": "Consider setting a specific Domain attribute to limit cookie scope",
+    "Wildcard domain": "Avoid wildcard domains (e.g. .example.com) to limit cookie scope",
+    "Root path": "Set a more specific Path to restrict cookie scope",
+    "Third-party cookie domain": "Review necessity of third-party cookies for privacy compliance",
+}
+
+FRAMEWORK_COOKIE_SIGNATURES_EXTRA = {
+    "Next.js": [r"__next", r"next-auth", r"_next"],
+    "Nuxt.js": [r"__nuxt"],
+    "Remix": [r"_remix"],
+    "Gatsby": [r"gatsby"],
+    "Drupal": [r"DRUPAL", r"SESS", r"SSESS"],
+    "Joomla": [r"joomla", r"JOS"],
+    "Magento": [r"mage", r"admin", r"MAGE"],
+    "Shopify": [r"_shopify", r"cart", r"secure_customer"],
+    "WooCommerce": [r"woocommerce", r"wp_woocommerce"],
+    "PrestaShop": [r"prestashop", r"PrestaShop"],
+    "TYPO3": [r"be_typo", r"fe_typo"],
+    "Concrete5": [r"CONCRETE"],
+    "SuiteCRM": [r"SuiteCRM"],
+    "SugarCRM": [r"sugar"],
+    "vBulletin": [r"bb_session", r"vbulletin"],
+    "phpBB": [r"phpbb"],
+    "Simple Machines Forum": [r"SMF"],
+}
+
+MORE_TRACKING_COOKIE_NAMES = [
+    "_clsk", "_clck", "_clskref", "_ga", "_gid", "_gat",
+    "_fbp", "_fbc", "_gcl_au", "_gcl_aw", "_gcl_gs",
+    "_ga_", "_hj", "_hjid", "_hjs", "_hp", "_mk", "_lr",
+    "_lr_", "_scid", "_shopify", "_s", "_sp", "_uetsid",
+    "_uetvid", "_uacct", "_utm", "__utm", "__utma", "__utmb",
+    "__utmc", "__utmt", "__utmz", "__gads", "__gpi", "__eoi",
+    "__ar_v4", "__s", "AMP_TOKEN", "_dc_gtm",
+    "_ym", "_ym_d", "_ym_isad", "_ym_uid",
+    "_ym_visorc", "_hstc", "_hssc", "_hssrc",
+    "__hstc", "__hssc", "__hssrc",
+    "hubspotutk", "__hs_opt_out",
+    "pardot", "lpt_h", "lpt_n",
+    "mkt_token", "mkt_data",
+    "ln_or", "li_sugr", "li_at",
+    "guest_id", "personalization_id",
+    "__cfduid", "cf_clearance",
+    "AUID", "demdex", "everest",
+]
+
+SAMESITE_VALUES = {
+    "strict": "Best CSRF protection, but may break some flows",
+    "lax": "Good CSRF protection (default in modern browsers)",
+    "none": "No CSRF protection, requires Secure flag",
+}
+
+JWT_COOKIE_PATTERN = re.compile(r'eyJ[A-Za-z0-9+/=_-]+\.eyJ[A-Za-z0-9+/=_-]+\.[A-Za-z0-9+/=_-]+')
+
+def analyze_cookie_prefix(name, attrs):
+    issues = []
+    try:
+        for prefix, rules in COOKIE_PREFIX_RULES.items():
+            if name.startswith(prefix):
+                for req in rules["requires"]:
+                    if req == "secure" and not attrs.get("secure"):
+                        issues.append(f"__Host-/__Secure- cookie '{name}' missing Secure flag")
+                    if req == "path=/" and attrs.get("path") != "/":
+                        issues.append(f"__Host- cookie '{name}' must have path=/")
+                    if "no domain" in req and attrs.get("domain"):
+                        issues.append(f"__Host- cookie '{name}' must not have Domain attribute")
+    except Exception:
+        pass
+    return issues
+
+def detect_jwt_in_cookies(cookie_list):
+    jwt_cookies = []
+    try:
+        for c in cookie_list:
+            value = c.get("value", "")
+            if JWT_COOKIE_PATTERN.match(value):
+                jwt_cookies.append(c.get("name", ""))
+    except Exception:
+        pass
+    return jwt_cookies
+
+def analyze_samesite_protection(samesite, secure):
+    analysis = {}
+    try:
+        samesite_lower = samesite.lower() if samesite else "none"
+        analysis["value"] = samesite_lower
+        analysis["desc"] = SAMESITE_VALUES.get(samesite_lower, "Unknown")
+        if samesite_lower == "none" and not secure:
+            analysis["risk"] = "Cookie sent on all requests, including cross-site, without HTTPS protection"
+        elif samesite_lower == "none" and secure:
+            analysis["risk"] = "Cookie sent on all cross-site requests (Secure only)"
+        elif samesite_lower == "lax":
+            analysis["risk"] = "Cookie sent on top-level navigations (good default)"
+        elif samesite_lower == "strict":
+            analysis["risk"] = "Cookie only sent in first-party context (most secure)"
+    except Exception:
+        pass
+    return analysis
+
+def categorize_privacy_risk(cookie):
+    risk = "Low"
+    score = 0
+    try:
+        name = cookie.get("name", "").lower()
+        if any(t in name for t in ["_ga", "_fbp", "_gcl", "_hj", "_ym", "_hstc", "hubspot"]):
+            score += 3
+            risk = "High"
+        if cookie.get("domain", "").startswith("."):
+            score += 2
+        if not cookie.get("httponly"):
+            score += 1
+        if cookie.get("samesite", "none").lower() == "none":
+            score += 1
+        if score >= 5:
+            risk = "High"
+        elif score >= 3:
+            risk = "Medium"
+    except Exception:
+        pass
+    return risk, score
+
+def detect_cookie_entropy(value):
+    entropy = 0
+    try:
+        if not value:
+            return 0
+        freq = {}
+        for ch in value:
+            freq[ch] = freq.get(ch, 0) + 1
+        for count in freq.values():
+            p = count / len(value)
+            if p > 0:
+                entropy -= p * (p and __import__('math').log2(p))
+    except Exception:
+        pass
+    return round(entropy, 2)
+
+def analyze_expiration(expires, max_age):
+    analysis = {}
+    try:
+        if max_age:
+            ma = int(max_age) if max_age.isdigit() else 0
+            if ma == 0:
+                analysis["type"] = "Session (deleted on browser close)"
+            elif ma < 3600:
+                analysis["type"] = f"Short-lived ({ma}s)"
+            elif ma < 86400:
+                analysis["type"] = f"Daily ({ma//3600}h)"
+            elif ma < 604800:
+                analysis["type"] = f"Weekly ({ma//86400}d)"
+            elif ma < 2592000:
+                analysis["type"] = f"Monthly ({ma//86400}d)"
+            else:
+                analysis["type"] = f"Long-lived ({ma//86400}d)"
+                analysis["risk"] = "Persistent tracking cookie"
+        elif expires:
+            analysis["type"] = f"Expires at: {expires[:30]}"
+        else:
+            analysis["type"] = "Session cookie (no expiry)"
+    except Exception:
+        pass
+    return analysis

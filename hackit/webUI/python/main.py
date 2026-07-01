@@ -45,8 +45,8 @@ jobs: Dict[str, ScanJob] = {}
 async def ping():
     return {
         "status": "alive",
-        "engine": "HackIT OSINT Engine v3.0",
-        "version": "3.0",
+        "engine": "HackIT OSINT Engine v2.1",
+        "version": "2.1",
         "timestamp": datetime.now(timezone.utc).isoformat()
     }
 
@@ -84,6 +84,14 @@ async def run_scan_task(job_id: str, target: str, target_type: str):
         print(f"Modular Scan Error: {str(e)}")
 
 
+@app.get("/api/job-by-target")
+async def get_job_by_target(target: str):
+    for job in jobs.values():
+        if job.target == target:
+            return job
+    return None
+
+
 @app.get("/api/scan")
 async def start_scan(
     target: str,
@@ -110,8 +118,8 @@ async def start_scan(
     background_tasks: BackgroundTasks = None
 ):
     for existing in jobs.values():
-        if existing.target == target and existing.status == "Running":
-            return {"job_id": existing.job_id, "status": "Resumed"}
+        if existing.target == target:
+            return {"job_id": existing.job_id, "status": f"Resumed ({existing.status})"}
     job_id = f"job_{uuid.uuid4().hex[:8]}"
     job = ScanJob(job_id=job_id, target=target, target_type=target_type, status="Running")
     parsed_api_keys = {}

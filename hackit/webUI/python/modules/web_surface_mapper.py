@@ -662,6 +662,12 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 tags=["javascript", "static"]
             ))
 
+        await _analyze_security_headers_surface(dict(resp.headers), findings)
+        await _analyze_response_cache_headers(dict(resp.headers), findings)
+
+        dir_findings = await _map_directory_structure(base_url, domain, client)
+        findings.extend(dir_findings)
+
     except httpx.TimeoutException:
         findings.append(IntelligenceFinding(
             entity=f"Timeout fetching {base_url}",
@@ -686,3 +692,239 @@ async def crawl(target: str, client: httpx.AsyncClient):
         ))
 
     return findings
+
+
+PATH_CATEGORIES = {
+    "Admin/Management": ["/admin", "/administrator", "/manager", "/backend", "/dashboard", "/panel", "/cpanel", "/whm", "/directadmin", "/plesk", "/webmin", "/cgi-sys/"],
+    "API/Dev": ["/api", "/v1", "/v2", "/v3", "/v4", "/graphql", "/swagger", "/docs", "/redoc", "/openapi.json", "/swagger.json", "/health", "/healthz", "/status", "/metrics"],
+    "CMS/SiteMgmt": ["/wp-admin", "/wp-login", "/administrator", "/admin/", "/joomla", "/drupal", "/magento", "/umbraco", "/sitefinity", "/webflow", "/wix"],
+    "Security/Auth": ["/login", "/signin", "/register", "/logout", "/forgot", "/reset", "/oauth", "/saml", "/oidc", "/auth", "/authenticate"],
+    "Config/Secrets": ["/.env", "/config", "/configuration", "/settings", "/.git", "/.svn", "/.hg", "/.aws", "/.azure", "/.gcloud", "/.ssh", "/.npmrc", "/.dockercfg"],
+    "Storage/Db": ["/backup", "/backups", "/storage", "/uploads", "/files", "/download", "/database", "/db", "/sql", "/dump", "/phpmyadmin", "/adminer.php", "/mysql", "/mongo-express"],
+    "Monitoring": ["/actuator", "/prometheus", "/grafana", "/kibana", "/jenkins", "/sonarqube", "/phpinfo.php", "/info.php", "/server-status", "/server-info"],
+    "CI/CD": ["/jenkins", "/.github", "/.gitlab-ci.yml", "/.circleci", "/.travis.yml", "/Jenkinsfile", "/Dockerfile", "/terraform/", "/ansible/", "/k8s/", "/helm/"],
+}
+
+RESPONSE_CODE_GROUPS = {
+    200: "Success",
+    201: "Created",
+    204: "No Content",
+    301: "Redirect",
+    302: "Redirect",
+    307: "Redirect",
+    308: "Redirect",
+    400: "Bad Request",
+    401: "Unauthorized",
+    403: "Forbidden",
+    404: "Not Found",
+    405: "Method Not Allowed",
+    406: "Not Acceptable",
+    408: "Request Timeout",
+    429: "Rate Limited",
+    500: "Server Error",
+    502: "Bad Gateway",
+    503: "Service Unavailable",
+}
+
+
+async def _map_directory_structure(base_url: str, domain: str, client: httpx.AsyncClient) -> list:
+    findings = []
+    try:
+        checked = {}
+        category_counts = defaultdict(int)
+        code_distribution = defaultdict(int)
+
+        for cat_name, paths in PATH_CATEGORIES.items():
+            for path in paths[:8]:
+                url = urljoin(base_url, path)
+                try:
+                    resp = await client.get(
+                        url, timeout=5.0, follow_redirects=False,
+                        headers={"User-Agent": USER_AGENT},
+                    )
+                    status = resp.status_code
+                    checked[url] = status
+                    code_distribution[status] += 1
+
+                    if status in (200, 204):
+                        category_counts[cat_name] += 1
+                        body_snippet = (resp.text or "")[:200]
+                        is_dir_listing = any(ind in body_snippet for ind in ["Index of /", "<title>Index of", "Parent Directory</a>"])
+                        extra_tags = ["directory-listing"] if is_dir_listing else []
+                        findings.append(IntelligenceFinding(
+                            entity=url,
+                            type=f"Accessible Path [{cat_name}]",
+                            source="WebSurfaceMapper",
+                            confidence="High",
+                            color="red" if is_dir_listing else "orange",
+                            threat_level="High Risk" if is_dir_listing else "Elevated Risk",
+                            status=f"HTTP {status}",
+                            tags=["path", cat_name.lower().replace("/", "_").replace(" ", "_")] + extra_tags,
+                        ))
+
+                    elif status == 401:
+                        category_counts[cat_name] += 1
+                        findings.append(IntelligenceFinding(
+                            entity=url,
+                            type=f"Protected Path [{cat_name}]",
+                            source="WebSurfaceMapper",
+                            confidence="High",
+                            color="orange",
+                            threat_level="Medium Risk",
+                            status=f"HTTP {status}",
+                            tags=["path", "protected", cat_name.lower().replace(" ", "_")],
+                        ))
+
+                    elif status == 403:
+                        category_counts[cat_name] += 1
+                        findings.append(IntelligenceFinding(
+                            entity=url,
+                            type=f"Restricted Path [{cat_name}]",
+                            source="WebSurfaceMapper",
+                            confidence="High",
+                            color="orange",
+                            threat_level="Restricted Access",
+                            status=f"HTTP {status}",
+                            tags=["path", "restricted"],
+                        ))
+
+                except Exception:
+                    pass
+
+        if category_counts:
+            cat_summary = ", ".join([f"{k}: {v}" for k, v in sorted(category_counts.items(), key=lambda x: -x[1]) if v > 0])
+            findings.append(IntelligenceFinding(
+                entity=f"Directory structure: {cat_summary[:200]}",
+                type="Directory Structure Summary",
+                source="WebSurfaceMapper",
+                confidence="High",
+                color="purple",
+                threat_level="Informational",
+                tags=["summary", "structure"],
+            ))
+
+        if code_distribution:
+            code_summary = ", ".join([f"HTTP {k}: {v}" for k, v in sorted(code_distribution.items(), key=lambda x: -x[1])])
+            findings.append(IntelligenceFinding(
+                entity=f"Response code distribution: {code_summary}",
+                type="Response Code Distribution",
+                source="WebSurfaceMapper",
+                confidence="High",
+                color="slate",
+                threat_level="Informational",
+                tags=["summary", "response-codes"],
+            ))
+
+    except Exception:
+        pass
+    return findings
+
+
+async def _analyze_security_headers_surface(headers: dict, findings: list):
+    try:
+        important_missing = []
+        security_header_checks = {
+            "Content-Security-Policy": "CSP",
+            "X-Content-Type-Options": "XCTO",
+            "X-Frame-Options": "XFO",
+            "Strict-Transport-Security": "HSTS",
+            "X-XSS-Protection": "XXSSP",
+            "Referrer-Policy": "Referrer-Policy",
+            "Permissions-Policy": "Permissions-Policy",
+            "Access-Control-Allow-Origin": "CORS",
+            "Cross-Origin-Resource-Policy": "CORP",
+            "Cross-Origin-Opener-Policy": "COOP",
+            "Cross-Origin-Embedder-Policy": "COEP",
+        }
+        for hdr, label in security_header_checks.items():
+            if hdr.lower() not in {k.lower(): v for k, v in headers.items()}:
+                important_missing.append(label)
+        if important_missing:
+            findings.append(IntelligenceFinding(
+                entity=f"Missing security headers: {', '.join(important_missing[:5])}",
+                type="Missing Security Headers",
+                source="WebSurfaceMapper",
+                confidence="High",
+                color="orange",
+                threat_level="Elevated Risk",
+                tags=["security", "headers", "missing"],
+            ))
+
+        server_hdr = headers.get("Server", "") or headers.get("server", "")
+        if server_hdr and server_hdr not in ("", "cloudflare", "nginx", "Apache"):
+            findings.append(IntelligenceFinding(
+                entity=f"Web Server: {server_hdr}",
+                type="Server Header",
+                source="WebSurfaceMapper",
+                confidence="High",
+                color="slate",
+                threat_level="Informational",
+                tags=["server", "technology"],
+            ))
+
+        powered_by = headers.get("X-Powered-By", "") or headers.get("x-powered-by", "")
+        if powered_by:
+            findings.append(IntelligenceFinding(
+                entity=f"X-Powered-By: {powered_by}",
+                type="Powered-By Header",
+                source="WebSurfaceMapper",
+                confidence="High",
+                color="orange",
+                threat_level="Informational",
+                tags=["technology", "leak"],
+            ))
+    except Exception:
+        pass
+
+
+async def _analyze_response_cache_headers(headers: dict, findings: list):
+    try:
+        cache_control = headers.get("Cache-Control", "") or headers.get("cache-control", "")
+        if cache_control and "no-store" not in cache_control.lower() and "private" not in cache_control.lower():
+            findings.append(IntelligenceFinding(
+                entity=f"Cache-Control: {cache_control}",
+                type="Cache Configuration",
+                source="WebSurfaceMapper",
+                confidence="Medium",
+                color="slate",
+                threat_level="Informational",
+                tags=["cache", "performance"],
+            ))
+
+        pragma = headers.get("Pragma", "") or headers.get("pragma", "")
+        if pragma:
+            findings.append(IntelligenceFinding(
+                entity=f"Pragma: {pragma}",
+                type="Pragma Header",
+                source="WebSurfaceMapper",
+                confidence="Low",
+                color="slate",
+                threat_level="Informational",
+                tags=["cache", "header"],
+            ))
+
+        expires = headers.get("Expires", "") or headers.get("expires", "")
+        if expires:
+            findings.append(IntelligenceFinding(
+                entity=f"Expires: {expires}",
+                type="Expires Header",
+                source="WebSurfaceMapper",
+                confidence="Low",
+                color="slate",
+                threat_level="Informational",
+                tags=["cache", "header"],
+            ))
+
+        age = headers.get("Age", "") or headers.get("age", "")
+        if age:
+            findings.append(IntelligenceFinding(
+                entity=f"Age: {age}s in cache",
+                type="Cache Age",
+                source="WebSurfaceMapper",
+                confidence="Medium",
+                color="slate",
+                threat_level="Informational",
+                tags=["cache", "cdn"],
+            ))
+    except Exception:
+        pass

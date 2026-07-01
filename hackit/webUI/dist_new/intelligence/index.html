@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"> <head><meta charset="UTF-8"><meta name="description" content="Spiderfoot HX Clone Dashboard"><meta name="viewport" content="width=device-width"><link rel="icon" type="image/svg+xml" href="/favicon.svg"><meta name="generator" content="Astro v4.16.19"><title>HackIT OSINT | Intelligence Dashboard</title><!-- CDNs --><script src="https://cdn.tailwindcss.com"></script><script>
+<!DOCTYPE html><html lang="en"> <head><meta charset="UTF-8"><meta name="description" content="Spiderfoot HX Clone Dashboard"><meta name="viewport" content="width=device-width"><link rel="icon" type="image/x-icon" href="/logo.ico"><link rel="icon" type="image/svg+xml" href="/logo.svg"><meta name="generator" content="Astro v4.16.19"><title>HackIT OSINT | Intelligence Dashboard</title><!-- CDNs --><script src="https://cdn.tailwindcss.com"></script><script>
 			tailwind.config = {
 				darkMode: 'class',
 				theme: {
@@ -34,7 +34,7 @@
 </a> <a href="/settings" class="px-4 py-2 hover:bg-sf-card rounded-full flex items-center gap-2 text-sm font-medium transition-all hover:text-sf-tabActive group"> <i class="fas fa-cog opacity-70 group-hover:scale-110 transition-transform"></i> Settings
 </a> </nav> </div> <!-- Right side --> <div class="flex items-center gap-4"> <!-- Theme Toggle --> <button id="theme-toggle" class="w-9 h-9 rounded-md border border-sf-border bg-sf-card flex items-center justify-center hover:border-sf-muted transition-all"> <i class="fas fa-moon dark:hidden"></i> <i class="fas fa-sun hidden dark:block text-yellow-500"></i> </button> <div class="h-8 w-px bg-sf-border mx-2"></div> <button class="px-4 py-2 bg-sf-card hover:bg-sf-border border border-sf-border rounded-lg flex items-center gap-2 text-sm font-medium transition-all shadow-sm"> <div class="w-2 h-2 rounded-full bg-sf-green animate-pulse"></div>
 Engine: Online
-</button> <button class="w-10 h-10 rounded-full bg-sf-accent/20 border border-sf-accent/30 flex items-center justify-center text-sf-accent hover:bg-sf-accent hover:text-white transition-all"> <i class="fas fa-user-secret"></i> </button> </div> </div> </header> <!-- Main Content Area --> <main class="flex-1 overflow-y-auto p-0">   <div id="history-view" class="hidden p-8 space-y-6"> <header class="flex justify-between items-center mb-10"> <div class="space-y-1"> <h2 class="text-3xl font-bold text-sf-text tracking-tight">Mission History</h2> <p class="text-sf-muted text-sm">Review past and active intelligence gathering missions.</p> </div> <a href="/" class="bg-sf-text text-sf-lightbg px-6 py-2.5 rounded-md text-sm font-bold hover:bg-white transition-all">New Mission</a> </header> <div class="bg-sf-card border border-sf-border rounded-xl overflow-hidden shadow-2xl"> <table class="w-full text-left border-collapse"> <thead> <tr class="bg-sf-lightbg/50 border-b border-sf-border"> <th class="px-6 py-4 text-[10px] font-bold text-sf-muted uppercase tracking-widest">Mission Target</th> <th class="px-6 py-4 text-[10px] font-bold text-sf-muted uppercase tracking-widest">Status</th> <th class="px-6 py-4 text-[10px] font-bold text-sf-muted uppercase tracking-widest">Intelligence</th> <th class="px-6 py-4 text-[10px] font-bold text-sf-muted uppercase tracking-widest">Duration</th> <th class="px-6 py-4 text-[10px] font-bold text-sf-muted uppercase tracking-widest">Action</th> </tr> </thead> <tbody id="history-tbody" class="divide-y divide-sf-border/50"> <!-- Dynamically Populated --> </tbody> </table> <div id="history-empty" class="p-20 text-center space-y-4 hidden"> <i class="fas fa-history text-sf-muted/20 text-5xl"></i> <p class="text-sf-muted font-mono text-xs uppercase tracking-widest">No previous missions found in database.</p> </div> </div> </div>  <div id="active-dashboard" class="hidden"> <!-- Page Header & Tab Navigation (Sticky Container) --> <div class="sticky top-16 z-30 bg-sf-lightbg"> <!-- Page Header --> <div class="border-b border-sf-border px-8 py-5 flex items-center justify-between"> <div class="space-y-1"> <div class="flex items-center gap-3"> <h2 id="header-target" class="text-xl font-semibold text-sf-text">Target Name</h2> <span id="header-status" class="bg-sf-green/10 text-sf-green text-[10px] px-2.5 py-1 rounded-sm font-medium uppercase tracking-wider border border-sf-green/20">Running Mission</span> </div> <p class="text-sf-muted text-xs flex items-center gap-2">
+</button> <button class="w-10 h-10 rounded-full bg-sf-accent/20 border border-sf-accent/30 flex items-center justify-center text-sf-accent hover:bg-sf-accent hover:text-white transition-all"> <i class="fas fa-user-secret"></i> </button> </div> </div> </header> <!-- Main Content Area --> <main class="flex-1 overflow-y-auto p-0">   <div id="history-view" class="hidden p-8 space-y-6"> <header class="flex justify-between items-center mb-10"> <div class="space-y-1"> <h2 class="text-3xl font-bold text-sf-text tracking-tight">Mission History</h2> <p class="text-sf-muted text-sm">Review past and active intelligence gathering missions.</p> </div> <a href="/" class="bg-sf-text text-sf-lightbg px-6 py-2.5 rounded-md text-sm font-bold hover:bg-white transition-all">New Mission</a> </header> <div class="bg-sf-card border border-sf-border rounded-xl overflow-hidden shadow-2xl"> <table class="w-full text-left border-collapse"> <thead> <tr class="bg-sf-lightbg/50 border-b border-sf-border"> <th class="px-6 py-4 text-[10px] font-bold text-sf-muted uppercase tracking-widest">Mission Target</th> <th class="px-6 py-4 text-[10px] font-bold text-sf-muted uppercase tracking-widest">Status</th> <th class="px-6 py-4 text-[10px] font-bold text-sf-muted uppercase tracking-widest">Intelligence</th> <th class="px-6 py-4 text-[10px] font-bold text-sf-muted uppercase tracking-widest">Duration</th> <th class="px-6 py-4 text-[10px] font-bold text-sf-muted uppercase tracking-widest">Action</th> </tr> </thead> <tbody id="history-tbody" class="divide-y divide-sf-border/50"> <!-- Dynamically Populated --> </tbody> </table> <div id="history-empty" class="p-20 text-center space-y-4 hidden"> <i class="fas fa-history text-sf-muted/20 text-5xl"></i> <p class="text-sf-muted font-mono text-xs uppercase tracking-widest">No previous missions found in database.</p> </div> </div> </div>  <div id="active-dashboard" class="hidden"> <!-- Page Header & Tab Navigation (Sticky Container) --> <div class="sticky top-16 z-30 bg-sf-lightbg"> <!-- Page Header --> <div class="border-b border-sf-border px-8 py-5 flex items-center justify-between"> <div class="space-y-1"> <div class="flex items-center gap-3"> <h2 id="header-target" class="text-xl font-semibold text-sf-text">Target Name</h2> <span id="header-status" class="bg-sf-green/10 text-sf-green text-[10px] px-2.5 py-1 rounded-sm font-medium uppercase tracking-wider border border-sf-green/20">Running Mission</span> </div> <p id="header-subtitle" class="text-sf-muted text-xs flex items-center gap-2">
 HackIT Intelligence Gathering in Progress...
 </p> </div> <div class="flex items-center gap-6"> <div class="flex flex-col items-end"> <span class="text-[10px] text-sf-muted uppercase font-medium tracking-wider">Duration</span> <span class="font-mono text-sm text-sf-text" id="scan-duration">00:00:00</span> </div> <div class="h-8 w-px bg-sf-border"></div> <button id="btn-export-hackit" class="bg-sf-text hover:bg-white text-sf-lightbg px-4 py-2 rounded-md text-xs font-semibold flex items-center gap-2 transition-all"> <i class="fas fa-file-export"></i> Export Intelligence
 </button> </div> </div> <!-- Tab Navigation --> <div class="border-b border-sf-border px-8 flex justify-between items-center relative"> <nav class="flex gap-6 pt-3" id="tab-nav"> <button class="pb-3 text-sm font-medium border-b-2 border-sf-text text-sf-text transition-all flex items-center gap-2" data-target="tab-overview">
@@ -318,6 +318,20 @@ Log
 
 			async function initDashboard(targetName) {
 				try {
+					// Check for existing job first
+					const existingRes = await fetch(`/api/job-by-target?target=${encodeURIComponent(targetName)}`);
+					const existingJob = await existingRes.json();
+					if (existingJob && existingJob.job_id) {
+						if (existingJob.status === 'Completed' || existingJob.status === 'Error') {
+							processResults(existingJob, targetName);
+							return;
+						} else if (existingJob.status === 'Running') {
+							startPolling('/api/status', existingJob.job_id, targetName);
+							return;
+						}
+					}
+
+					// No existing job — start new scan
 					const savedSettings = localStorage.getItem('hackit_scan_settings');
 					let url = `/api/scan?target=${encodeURIComponent(targetName)}`;
 					if (savedSettings) {
@@ -338,25 +352,20 @@ Log
 									url += `&${encodeURIComponent(k)}=${v ? '1' : '0'}`;
 								});
 							}
-							// API keys
 							if (s.apiKeys && Object.keys(s.apiKeys).length > 0) {
 								url += `&api_keys=${encodeURIComponent(JSON.stringify(s.apiKeys))}`;
 							}
-							// Proxy
 							if (s.proxy) {
 								if (s.proxy.http) url += `&proxy_http=${encodeURIComponent(s.proxy.http)}`;
 								if (s.proxy.socks) url += `&proxy_socks=${encodeURIComponent(s.proxy.socks)}`;
 							}
-							// Network
 							if (s.network) {
 								if (s.network.dnsResolver) url += `&dns_resolver=${encodeURIComponent(s.network.dnsResolver)}`;
 								if (s.network.userAgent) url += `&user_agent=${encodeURIComponent(s.network.userAgent)}`;
 							}
-							// Automation
 							if (s.automation?.webhookUrl) {
 								url += `&webhook_url=${encodeURIComponent(s.automation.webhookUrl)}`;
 							}
-							// Module-level toggles (pass detailed module selection as JSON)
 							if (s.moduleToggles && Object.keys(s.moduleToggles).length > 0) {
 								url += `&module_toggles=${encodeURIComponent(JSON.stringify(s.moduleToggles))}`;
 							}
@@ -405,10 +414,12 @@ Log
 					}
 					document.getElementById('header-status').innerText = 'MISSION COMPLETE';
 					document.getElementById('header-status').className = 'px-2.5 py-1 bg-sf-green/10 text-sf-green rounded-sm text-[10px] font-medium border border-sf-green/20 tracking-wider uppercase';
+					document.getElementById('header-subtitle').innerHTML = 'HackIT Intelligence Gathering Completed...';
 				}
 			}
 
-			document.getElementById('nav-log-link').href = `/log?target=${encodeURIComponent(target)}`;
+			const navLogLink = document.getElementById('nav-log-link');
+			if (navLogLink) navLogLink.href = `/log?target=${encodeURIComponent(target)}`;
 			document.getElementById('view-full-log').onclick = (e) => {
 				e.preventDefault();
 				window.location.href = `/log?target=${encodeURIComponent(target)}`;

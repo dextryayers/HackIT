@@ -2,6 +2,7 @@ import httpx
 import asyncio
 import json
 import re
+import ipaddress
 from datetime import datetime
 from typing import List, Optional
 from collections import defaultdict
@@ -30,6 +31,46 @@ THREAT_FEEDS = [
     "https://raw.githubusercontent.com/blackdotsh/OpenThreatIntel/master/threatintel.csv",
 ]
 
+ADDITIONAL_FEEDS = [
+    ("URLhaus", "https://urlhaus.abuse.ch/downloads/text/"),
+    ("Spamhaus DROP", "https://www.spamhaus.org/drop/drop.txt"),
+    ("Spamhaus EDROP", "https://www.spamhaus.org/drop/edrop.txt"),
+    ("OpenPhish Feed", "https://openphish.com/feed.txt"),
+    ("PhishStats", "https://phishstats.info/phish_stats.csv"),
+    ("Cybercrime Tracker", "https://cybercrime-tracker.net/all.php"),
+    ("Botvrij.eu", "https://www.botvrij.eu/data/ioclist.ip-dst"),
+    ("Circl.lu", "https://www.circl.lu/doc/misp/feed-osint"),
+    ("MISP Feed", "https://misppriv.circl.lu/feed-osint"),
+    ("AlienVault Reputation", "https://reputation.alienvault.com/reputation.data"),
+    ("Greensnow", "https://blocklist.greensnow.co/greensnow.txt"),
+    ("Darklist", "https://www.darklist.de/raw.php"),
+    ("Blocklist.net.ua", "https://blocklist.net.ua/blocklist.csv"),
+    ("Ransomware Tracker", "https://ransomwaretracker.abuse.ch/downloads/RW_IPBL.txt"),
+    ("Tor Exit Nodes", "https://check.torproject.org/torbulkexitlist"),
+    ("SSL Blacklist", "https://sslbl.abuse.ch/blacklist/sslipblacklist_aggressive.csv"),
+    ("Feodo Tracker", "https://feodotracker.abuse.ch/downloads/feodotracker.csv"),
+]
+
+CIDR_BLOCKLISTS = [
+    "https://www.spamhaus.org/drop/drop.txt",
+    "https://www.spamhaus.org/drop/edrop.txt",
+    "https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/firehol_level1.netset",
+    "https://lists.blocklist.de/lists/all.txt",
+]
+
+THREAT_CATEGORIES = {
+    "malware": ["malware", "trojan", "virus", "worm", "download", "dropper", "payload"],
+    "phishing": ["phish", "phishing", "fake", "spoof", "lookalike", "login page"],
+    "c2": ["c2", "command & control", "command and control", "cnc", "cc server", "botnet", "bot"],
+    "botnet": ["botnet", "bot", "zombie", "ddos agent", "irc bot"],
+    "ransomware": ["ransom", "lockbit", "hive", "blackcat", "clop", "encrypt"],
+    "scan": ["scanner", "scan", "portscan", "probe", "recon"],
+    "exploit": ["exploit", "cve", "vuln", "rce", "sql injection", "xss", "code exec"],
+    "spam": ["spam", "spammer", "email abuse", "phish mail", "malspam"],
+    "ddos": ["ddos", "amplification", "reflection", "flood", "attack target"],
+    "proxy": ["proxy", "open proxy", "socks", "vpn", "tor exit"],
+}
+
 IOC_PATTERNS = {
     "ipv4": re.compile(r'\b(?:\d{1,3}\.){3}\d{1,3}\b'),
     "domain": re.compile(r'\b(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}\b'),
@@ -51,7 +92,22 @@ RELIABILITY_RATINGS = {
     "malc0de": "Medium",
     "stamparm": "Medium",
     "stevenblack": "Medium",
+    "spamhaus": "High",
+    "openphish": "High",
+    "alienvault": "High",
+    "circl": "High",
 }
+
+KNOWN_CIDR_RANGES = [
+    ("10.0.0.0/8", "RFC1918 Private"),
+    ("172.16.0.0/12", "RFC1918 Private"),
+    ("192.168.0.0/16", "RFC1918 Private"),
+    ("127.0.0.0/8", "Loopback"),
+    ("0.0.0.0/8", "Invalid"),
+    ("169.254.0.0/16", "Link-Local"),
+    ("224.0.0.0/4", "Multicast"),
+    ("240.0.0.0/4", "Reserved"),
+]
 
 async def fetch_feed(client: httpx.AsyncClient, url: str, feed_name: str) -> dict:
     result = {"name": feed_name, "iocs": [], "lines": [], "source_url": url}
@@ -87,6 +143,83 @@ async def extract_iocs(text: str) -> dict:
             if m and len(m) > 3:
                 iocs[ioc_type].append(m)
     return {k: list(set(v))[:10] for k, v in iocs.items()}
+
+async def check_cidr_reputation(target_ip: str) -> list:
+    results = []
+    try:
+        ip_obj = ipaddress.ip_address(target_ip)
+        for cidr, desc in KNOWN_CIDR_RANGES:
+            if ip_obj in ipaddress.ip_network(cidr):
+                results.append({"cidr": cidr, "description": desc})
+    except:
+        pass
+    return results
+
+async def classify_threat_category(text: str) -> list:
+    categories = []
+    text_lower = text.lower()
+    for category, keywords in THREAT_CATEGORIES.items():
+        for kw in keywords:
+            if kw in text_lower:
+                categories.append(category)
+                break
+    return categories
+
+async def calculate_threat_score(feed_results: list, target: str) -> dict:
+    score = 0
+    total_feeds = len(feed_results)
+    feeds_with_data = sum(1 for r in feed_results if isinstance(r, dict) and r.get("iocs"))
+    total_iocs = sum(len(r.get("iocs", [])) for r in feed_results if isinstance(r, dict))
+
+    score += min(feeds_with_data * 5, 30)
+    score += min(total_iocs // 10, 30)
+    target_iocs = await extract_iocs(target)
+    if any(target_iocs.values()):
+        score += 20
+    score = min(score, 100)
+    if score >= 70:
+        severity = "Critical"
+    elif score >= 50:
+        severity = "High Risk"
+    elif score >= 30:
+        severity = "Elevated Risk"
+    elif score >= 10:
+        severity = "Low Risk"
+    else:
+        severity = "Informational"
+    return {"score": score, "severity": severity, "feeds_with_data": feeds_with_data, "total_feeds": total_feeds, "total_iocs": total_iocs}
+
+async def check_target_iocs_in_feeds(target: str, feed_results: list) -> list:
+    matches = []
+    target_lower = target.lower()
+    for result in feed_results:
+        if isinstance(result, dict):
+            for ioc in result.get("iocs", []):
+                if target_lower in ioc["value"].lower():
+                    matches.append({"feed": result["name"], "ioc": ioc["value"], "type": ioc["type"]})
+    return matches[:20]
+
+async def fetch_additional_sources(client: httpx.AsyncClient) -> list:
+    results = []
+    for name, url in ADDITIONAL_FEEDS:
+        try:
+            resp = await client.get(url, timeout=20.0,
+                headers={"User-Agent": "Mozilla/5.0", "Accept": "text/plain,text/csv,application/json"})
+            if resp.status_code == 200:
+                lines = resp.text.splitlines()
+                ips_found = 0
+                domains_found = 0
+                for line in lines[:300]:
+                    line = line.strip()
+                    if line and not line.startswith("#"):
+                        if IOC_PATTERNS["ipv4"].match(line):
+                            ips_found += 1
+                        elif IOC_PATTERNS["domain"].match(line):
+                            domains_found += 1
+                results.append({"name": name, "url": url, "ips": ips_found, "domains": domains_found, "total_lines": len(lines)})
+        except:
+            pass
+    return results
 
 async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFinding]:
     findings = []
@@ -166,6 +299,78 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                 tags=["statistics", feed.lower()]
             ))
 
+    additional = await fetch_additional_sources(client)
+    for src in additional:
+        findings.append(IntelligenceFinding(
+            entity=f"Additional feed: {src['name']} - {src['ips']} IPs, {src['domains']} domains ({src['total_lines']} lines)",
+            type="Additional Threat Feed",
+            source=src['name'],
+            confidence="Medium",
+            color="orange",
+            threat_level="Informational",
+            status="Fetched",
+            resolution=query,
+            raw_data=f"URL: {src['url']}",
+            tags=["threat-feed", "additional", src['name'].lower().replace(" ", "-")]
+        ))
+
+    cidr_results = await check_cidr_reputation(query)
+    for cidr_info in cidr_results:
+        findings.append(IntelligenceFinding(
+            entity=f"Target within {cidr_info['cidr']} ({cidr_info['description']})",
+            type="CIDR Range Check",
+            source="ThreatIntel",
+            confidence="High",
+            color="yellow",
+            threat_level="Informational",
+            status="Verified",
+            resolution=query,
+            tags=["cidr", cidr_info['description'].lower().replace(" ", "-")]
+        ))
+
+    threat_categories = await classify_threat_category(query)
+    for cat in threat_categories:
+        findings.append(IntelligenceFinding(
+            entity=f"Threat category: {cat}",
+            type="Threat Category Classification",
+            source="ThreatIntel",
+            confidence="Low",
+            color="orange",
+            threat_level="Elevated Risk",
+            status="Classified",
+            resolution=query,
+            tags=["threat-category", cat]
+        ))
+
+    threat_score = await calculate_threat_score(feed_results, query)
+    findings.append(IntelligenceFinding(
+        entity=f"Threat Score: {threat_score['score']}/100 ({threat_score['severity']}) - {threat_score['feeds_with_data']}/{threat_score['total_feeds']} feeds reporting",
+        type="Threat Score Assessment",
+        source="ThreatIntel",
+        confidence="Medium",
+        color="red" if threat_score['score'] >= 50 else "orange",
+        threat_level=threat_score['severity'],
+        status=f"Score: {threat_score['score']}",
+        resolution=query,
+        raw_data=json.dumps(threat_score),
+        tags=["threat-score", threat_score['severity'].lower().replace(" ", "-")]
+    ))
+
+    target_matches = await check_target_iocs_in_feeds(query, feed_results)
+    if target_matches:
+        for match in target_matches[:10]:
+            findings.append(IntelligenceFinding(
+                entity=f"Target matches IOC in {match['feed']}: {match['ioc']} ({match['type']})",
+                type="Target IOC Match",
+                source=match['feed'],
+                confidence="High",
+                color="red",
+                threat_level="High Risk",
+                status="Match Found",
+                resolution=query,
+                tags=["ioc-match", match['type']]
+            ))
+
     if not findings:
         findings.append(IntelligenceFinding(
             entity="No threat intelligence data collected",
@@ -180,7 +385,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         ))
 
     findings.append(IntelligenceFinding(
-        entity=f"Queried {len(THREAT_FEEDS)} threat feeds",
+        entity=f"Queried {len(THREAT_FEEDS) + len(ADDITIONAL_FEEDS)} threat feeds ({len(THREAT_FEEDS)} primary + {len(ADDITIONAL_FEEDS)} additional)",
         type="Threat Feed Coverage Summary",
         source="ThreatIntel",
         confidence="Medium",

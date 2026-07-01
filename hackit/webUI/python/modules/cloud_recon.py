@@ -888,4 +888,56 @@ async def crawl(target: str, client: httpx.AsyncClient):
             tags=["cloud", "score", "summary"]
         ))
 
+    async def analyze_cloud_providers():
+        providers = {}
+        for f in findings:
+            if f.type in ("PaaS Platform", "Cloud Provider IP", "DNS Nameserver Provider", "Email Cloud Provider (MX)", "CDN Service"):
+                prov = f.entity.split("(")[0].split(":")[0].strip()
+                providers[prov] = providers.get(prov, 0) + 1
+        if providers:
+            for prov, count in sorted(providers.items(), key=lambda x: -x[1])[:5]:
+                findings.append(IntelligenceFinding(entity=f"{prov}: {count}", type="Cloud Provider Breakdown", source="CloudRecon", confidence="Medium", color="purple", tags=["providers"]))
+            findings.append(IntelligenceFinding(entity=f"Unique providers: {len(providers)}", type="Provider Diversity", source="CloudRecon", confidence="Medium", color="slate", tags=["providers"]))
+
+    async def analyze_service_tiers():
+        findings.append(IntelligenceFinding(entity=f"PaaS services: {paas_count}", type="Service Tier: PaaS", source="CloudRecon", confidence="Medium", color="slate", tags=["tiers"]))
+        findings.append(IntelligenceFinding(entity=f"CDN services: {cdn_count}", type="Service Tier: CDN", source="CloudRecon", confidence="Medium", color="slate", tags=["tiers"]))
+        findings.append(IntelligenceFinding(entity=f"DNS providers: {ns_count}", type="Service Tier: DNS", source="CloudRecon", confidence="Medium", color="slate", tags=["tiers"]))
+        findings.append(IntelligenceFinding(entity=f"Email cloud providers: {mx_count}", type="Service Tier: Email", source="CloudRecon", confidence="Medium", color="slate", tags=["tiers"]))
+
+    async def analyze_exposure_risk():
+        findings.append(IntelligenceFinding(entity=f"Cloud recon score interpretation: {cloud_score}/100", type="Exposure Interpretation", source="CloudRecon", confidence="Medium", color="slate", tags=["exposure"]))
+        if cloud_score > 50:
+            findings.append(IntelligenceFinding(entity="High cloud adoption - review provider security", type="Exposure Warning", source="CloudRecon", confidence="Medium", color="orange", tags=["exposure"]))
+        else:
+            findings.append(IntelligenceFinding(entity="Moderate cloud adoption - standard security applies", type="Exposure Note", source="CloudRecon", confidence="Medium", color="emerald", tags=["exposure"]))
+        findings.append(IntelligenceFinding(entity=f"Total cloud-related findings: {sum(1 for f in findings if 'cloud' in (f.raw_data or '').lower() or any('cloud' in t.lower() for t in f.tags))}", type="Finding Volume", source="CloudRecon", confidence="Medium", color="slate", tags=["exposure"]))
+
+    async def analyze_cdn_insight():
+        findings.append(IntelligenceFinding(entity=f"CDN services found: {cdn_count}", type="CDN Insight", source="CloudRecon", confidence="Medium", color="slate", tags=["cdn"]))
+        findings.append(IntelligenceFinding(entity=f"PaaS platforms found: {paas_count}", type="PaaS Insight", source="CloudRecon", confidence="Medium", color="slate", tags=["cdn"]))
+
+    async def analyze_tech_stack():
+        findings.append(IntelligenceFinding(entity=f"Technologies detected: {tech_count}", type="Tech Stack", source="CloudRecon", confidence="Medium", color="slate", tags=["tech"]))
+        findings.append(IntelligenceFinding(entity=f"Cloud infra services: {cloud_count}", type="Cloud Infrastructure", source="CloudRecon", confidence="Medium", color="slate", tags=["tech"]))
+        findings.append(IntelligenceFinding(entity=f"Target: {target}", type="Scan Target", source="CloudRecon", confidence="High", color="slate", tags=["tech"]))
+
+    async def analyze_cloud_verdict():
+        findings.append(IntelligenceFinding(entity=f"Cloud score range: {cloud_score}% adoption", type="Adoption Level", source="CloudRecon", confidence="Medium", color="purple", tags=["verdict"]))
+        if cloud_score > 70:
+            findings.append(IntelligenceFinding(entity="Heavy cloud dependency - review multi-cloud security", type="Cloud Verdict", source="CloudRecon", confidence="Medium", color="orange", tags=["verdict"]))
+        elif cloud_score > 30:
+            findings.append(IntelligenceFinding(entity="Moderate cloud usage - review provider configurations", type="Cloud Verdict", source="CloudRecon", confidence="Medium", color="yellow", tags=["verdict"]))
+        else:
+            findings.append(IntelligenceFinding(entity="Minimal cloud footprint - low cloud attack surface", type="Cloud Verdict", source="CloudRecon", confidence="Medium", color="emerald", tags=["verdict"]))
+
+    await asyncio.gather(
+        analyze_cloud_providers(),
+        analyze_service_tiers(),
+        analyze_exposure_risk(),
+        analyze_cdn_insight(),
+        analyze_tech_stack(),
+        analyze_cloud_verdict(),
+    )
+
     return findings

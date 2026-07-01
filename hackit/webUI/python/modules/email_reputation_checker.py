@@ -1109,4 +1109,232 @@ async def crawl(target: str, client: httpx.AsyncClient):
             tags=["email-security", "posture", "comprehensive"]
         ))
 
+    async def detect_email_provider():
+        provider_map = {
+            "google.com": "Google Workspace/Gmail", "googlemail.com": "Google Workspace/Gmail",
+            "outlook.com": "Microsoft 365/Outlook", "protection.outlook.com": "Microsoft 365",
+            "mail.protection.outlook.com": "Microsoft 365",
+            "protonmail": "ProtonMail", "protonmail.ch": "ProtonMail",
+            "zoho.com": "Zoho Mail", "zimbra": "Zimbra",
+            "mxr.mail.qq": "Tencent QQ Mail", "mxw.mail.qq": "Tencent QQ Mail",
+            "mx1.qiye.qq": "Tencent Enterprise", "mx2.qiye.qq": "Tencent Enterprise",
+            "mx01.mail.icloud": "Apple iCloud Mail", "mx02.mail.icloud": "Apple iCloud Mail",
+            "amazonses.com": "Amazon SES", "aws": "Amazon SES",
+            "sparkpostmail.com": "SparkPost", "sparkpost": "SparkPost",
+            "sendgrid.net": "SendGrid", "sendgrid": "SendGrid",
+            "mailgun.org": "Mailgun", "mailgun": "Mailgun",
+            "mx.yandex": "Yandex Mail", "yandex": "Yandex Mail",
+            "mail.ru": "Mail.ru", "mx.mail.ru": "Mail.ru",
+            "fastmail": "Fastmail", "messagingengine.com": "Fastmail",
+            "postmarkapp.com": "Postmark", "pm.mtasv.net": "Postmark",
+            "mx.migadu.com": "Migadu", "mx1.migadu.com": "Migadu",
+        }
+        if mx_info["has_mx"]:
+            provider = "Unknown/Custom"
+            for mx in mx_info["mx_records"]:
+                mx_host = mx["host"].lower()
+                for key, name in provider_map.items():
+                    if key in mx_host:
+                        provider = name
+                        break
+                if provider != "Unknown/Custom":
+                    break
+            findings.append(IntelligenceFinding(
+                entity=f"Email Provider: {provider}",
+                type="Email: Provider Detection",
+                source="EmailReputation",
+                confidence="High" if provider != "Unknown/Custom" else "Medium",
+                color="slate",
+                threat_level="Informational",
+                tags=["email-security", "provider"]
+            ))
+            findings.append(IntelligenceFinding(
+                entity=f"MX Count: {len(mx_info['mx_records'])} server(s)",
+                type="Email: MX Server Count",
+                source="EmailReputation",
+                confidence="High",
+                color="slate",
+                threat_level="Informational",
+                tags=["email-security", "mx-count"]
+            ))
+
+    async def check_web_headers():
+        for proto in ["https", "http"]:
+            try:
+                resp = await client.get(f"{proto}://{domain}", timeout=8.0, follow_redirects=True,
+                    headers={"User-Agent": UA})
+                hdrs = {k.lower(): v for k, v in dict(resp.headers).items()}
+                status = resp.status_code
+                findings.append(IntelligenceFinding(
+                    entity=f"Website: HTTP {status} ({len(resp.content)} bytes)",
+                    type="Email: Web Presence",
+                    source="EmailReputation",
+                    confidence="High",
+                    color="slate",
+                    threat_level="Informational",
+                    tags=["web"]))
+                for hdr in ["strict-transport-security", "x-frame-options", "content-security-policy",
+                            "x-content-type-options", "referrer-policy", "permissions-policy"]:
+                    if hdr in hdrs:
+                        findings.append(IntelligenceFinding(
+                            entity=f"Security Header: {hdr}={hdrs[hdr][:80]}",
+                            type="Email: Security Header",
+                            source="EmailReputation",
+                            confidence="High",
+                            color="emerald",
+                            threat_level="Informational",
+                            tags=["web", "security-header"]))
+                break
+            except: pass
+
+    async def check_subdomains():
+        common = ["mail", "smtp", "imap", "pop3", "webmail", "email", "mx", "autodiscover", "m"]
+        for sub in common:
+            try:
+                resp = await client.get(f"https://{sub}.{domain}", timeout=5.0,
+                    headers={"User-Agent": UA}, follow_redirects=False)
+                if resp.status_code < 400:
+                    findings.append(IntelligenceFinding(
+                        entity=f"Subdomain: {sub}.{domain} (HTTP {resp.status_code})",
+                        type="Email: Subdomain Discovery",
+                        source="EmailReputation",
+                        confidence="Medium",
+                        color="slate",
+                        threat_level="Informational",
+                        tags=["discovery"]))
+            except: pass
+
+    async def check_ssl_cert():
+        try:
+            import ssl, socket
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            with ctx.wrap_socket(socket.socket(), server_hostname=domain) as s:
+                s.settimeout(5)
+                s.connect((domain, 443))
+                cert = s.getpeercert()
+                issuer = dict(cert.get("issuer", [[["", ""]]])[0]).get("commonName", "Unknown")
+                findings.append(IntelligenceFinding(
+                    entity=f"SSL Issuer: {issuer}",
+                    type="Email: SSL Certificate",
+                    source="EmailReputation",
+                    confidence="High",
+                    color="slate",
+                    tags=["ssl"]))
+                ver = s.version()
+                findings.append(IntelligenceFinding(
+                    entity=f"TLS Version: {ver}",
+                    type="Email: TLS Version",
+                    source="EmailReputation",
+                    confidence="High",
+                    color="emerald" if "TLSv1.2" in ver or "TLSv1.3" in ver else "orange",
+                    tags=["ssl"]))
+        except: pass
+
+    async def check_securitytxt():
+        for path in [f"https://{domain}/.well-known/security.txt", f"https://{domain}/security.txt"]:
+            try:
+                resp = await client.get(path, timeout=8.0, headers={"User-Agent": UA})
+                if resp.status_code == 200 and len(resp.text.strip()) > 20:
+                    findings.append(IntelligenceFinding(
+                        entity="Security.txt found",
+                        type="Email: Security.txt",
+                        source="EmailReputation",
+                        confidence="High", color="emerald", tags=["security"]))
+                    for m in re.finditer(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}", resp.text):
+                        findings.append(IntelligenceFinding(
+                            entity=f"Contact: {m.group(0)}",
+                            type="Email: Security Contact",
+                            source="EmailReputation",
+                            confidence="High", color="blue", tags=["contact"]))
+                    break
+            except: pass
+
+    async def generate_recommendations():
+        recs = []
+        if not spf["has_spf"]:
+            recs.append("Publish an SPF record to prevent spoofing")
+        if "+all" in spf.get("spf_record", ""):
+            recs.append("Remove +all from SPF - it allows any sender")
+        if "~all" not in spf.get("spf_record", "") and "-all" not in spf.get("spf_record", "") and spf["has_spf"]:
+            recs.append("Add a fail mechanism (~all or -all) to SPF")
+        if not dkim["has_dkim"]:
+            recs.append("Configure DKIM signing for outgoing mail")
+        if not dmarc["has_dmarc"]:
+            recs.append("Publish a DMARC record to protect against spoofing")
+        elif dmarc["policy"] == "none":
+            recs.append("Strengthen DMARC policy from 'none' to 'quarantine' or 'reject'")
+        if dmarc["has_dmarc"] and "rua=" not in dmarc.get("dmarc_record", ""):
+            recs.append("Add rua tag to DMARC for aggregate reporting")
+        if dnsbl_data.get("blacklisted_count", 0) > 0:
+            recs.append("Investigate DNSBL listings and request delisting")
+        if not ptr_global_data.get("has_ptr", False):
+            recs.append("Configure PTR records for your mail server IPs")
+        if s_score < 50:
+            recs.append("Improve email authentication to increase sending score")
+        for i, rec in enumerate(recs[:6]):
+            findings.append(IntelligenceFinding(
+                entity=f"Rec {i+1}: {rec}",
+                type="Email: Recommendation",
+                source="EmailReputation",
+                confidence="Medium",
+                color="orange",
+                threat_level="Informational",
+                tags=["recommendation"]))
+
+    async def check_mx_geo():
+        if mx_info["has_mx"]:
+            for mx in mx_info["mx_records"][:3]:
+                mx_host = mx["host"]
+                ips = await resolve_mx_to_ips(mx_host)
+                for ip in ips[:2]:
+                    try:
+                        resp = await client.get(f"http://ip-api.com/json/{ip}", timeout=8.0)
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            if data.get("status") == "success":
+                                findings.append(IntelligenceFinding(
+                                    entity=f"MX {mx_host} ({ip}): {data.get('city', '')}, {data.get('countryCode', '')} - {data.get('org', '')}",
+                                    type="Email: MX Geo Location",
+                                    source="EmailReputation",
+                                    confidence="Medium",
+                                    color="slate",
+                                    tags=["geo"]))
+                    except: pass
+
+    async def check_domain_risk_analysis():
+        domain_to_check = domain
+        is_free = any(dom in domain_to_check for dom in
+            ["gmail.com","yahoo.com","hotmail.com","outlook.com","aol.com","protonmail.com","mail.com"])
+        findings.append(IntelligenceFinding(
+            entity=f"Email Type: {'Free/Consumer' if is_free else 'Custom/Corporate'}",
+            type="Email: Domain Classification",
+            source="EmailReputation",
+            confidence="High",
+            color="slate",
+            tags=["classification"]))
+        tld = domain_to_check.rsplit(".", 1)[-1].lower() if "." in domain_to_check else ""
+        uncommon_tlds = {"tk","ml","ga","cf","gq","xyz","top","work","loan","date","download","men"}
+        if tld in uncommon_tlds:
+            findings.append(IntelligenceFinding(
+                entity=f"Uncommon TLD detected: .{tld}",
+                type="Email: Risk Factor",
+                source="EmailReputation",
+                confidence="High",
+                color="orange",
+                threat_level="Elevated Risk",
+                tags=["risk"]))
+
+    await asyncio.gather(
+        detect_email_provider(),
+        check_web_headers(),
+        check_subdomains(),
+        check_ssl_cert(),
+        check_securitytxt(),
+        generate_recommendations(),
+        check_mx_geo(),
+        check_domain_risk_analysis(),
+    )
+
     return findings

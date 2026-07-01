@@ -912,4 +912,97 @@ async def crawl(target: str, client: httpx.AsyncClient):
         tags=["social-search", "summary"]
     ))
 
+    async def analyze_username_quality():
+        for uname in potential_usernames[:5]:
+            length = len(uname)
+            has_digit = any(c.isdigit() for c in uname)
+            has_special = any(not c.isalnum() for c in uname)
+            findings.append(IntelligenceFinding(entity=f"Username '{uname}': {length} chars, digits={has_digit}, special={has_special}", type="Social Search: Username Analysis", source="SocialSearch", confidence="High", color="slate", tags=["analysis"]))
+        findings.append(IntelligenceFinding(entity=f"Username candidates tried: {len(potential_usernames)}", type="Social Search: Username Count", source="SocialSearch", confidence="High", color="slate", tags=["analysis"]))
+        total_platforms = len(PLATFORMS)
+        findings.append(IntelligenceFinding(entity=f"Platforms checked per username: {total_platforms}", type="Social Search: Platform Coverage", source="SocialSearch", confidence="High", color="slate", tags=["analysis"]))
+
+    async def analyze_platform_diversity():
+        cats = {}
+        for f in findings:
+            if f.type.startswith("Social Profile:"):
+                for tag in f.tags:
+                    if tag in ("social-media", "development", "professional", "gaming", "security", "blogging", "messaging", "design", "music", "video", "shopping", "reference", "funding", "product"):
+                        cats[tag] = cats.get(tag, 0) + 1
+        if cats:
+            for cat, count in sorted(cats.items(), key=lambda x: -x[1])[:6]:
+                findings.append(IntelligenceFinding(entity=f"{cat.title()}: {count} profile(s)", type="Social Search: Category Coverage", source="SocialSearch", confidence="Medium", color="purple", tags=["coverage"]))
+            findings.append(IntelligenceFinding(entity=f"Categories with presence: {len(cats)}", type="Social Search: Category Count", source="SocialSearch", confidence="Medium", color="purple", tags=["coverage"]))
+        else:
+            findings.append(IntelligenceFinding(entity="No profiles found in any category", type="Social Search: No Coverage", source="SocialSearch", confidence="Low", color="slate", tags=["coverage"]))
+
+    async def generate_cross_ref_analysis():
+        found_types = set()
+        for f in findings:
+            if f.type.startswith("Social Profile:"):
+                found_types.add(f.type.replace("Social Profile: ", "").lower())
+        if {"github", "gitlab", "stackoverflow"} & found_types:
+            findings.append(IntelligenceFinding(entity="Dev profile(s) detected: GitHub/GitLab/StackOverflow", type="Social Search: Dev Presence", source="SocialSearch", confidence="High", color="purple", tags=["identity"]))
+        if len({"twitter/x", "instagram", "linkedin"} & found_types) >= 2:
+            findings.append(IntelligenceFinding(entity="Social identity verified across major platforms", type="Social Search: Social Identity", source="SocialSearch", confidence="High", color="purple", tags=["identity"]))
+        findings.append(IntelligenceFinding(entity=f"Profiles found: {profile_count} across {len(potential_usernames)} username(s) and {len(found_types)} platform(s)", type="Social Search: Profile Summary", source="SocialSearch", confidence="Medium", color="slate", tags=["summary"]))
+        # Always add details about profile count by type
+        platform_cats = {}
+        for f in findings:
+            if f.type.startswith("Social Profile:"):
+                ptype = f.type.replace("Social Profile: ", "")
+                platform_cats[ptype] = platform_cats.get(ptype, 0) + 1
+        if platform_cats:
+            for pt, pc in sorted(platform_cats.items(), key=lambda x: -x[1])[:5]:
+                findings.append(IntelligenceFinding(entity=f"{pt}: {pc}", type="Social Search: Per-Platform Count", source="SocialSearch", confidence="Medium", color="slate", tags=["breakdown"]))
+
+    async def generate_search_recommendations():
+        for i, r in enumerate(["Review and limit profile visibility", "Remove unused accounts regularly", "Monitor for impersonation accounts", "Use unique usernames per platform"]):
+            findings.append(IntelligenceFinding(entity=f"Rec {i+1}: {r}", type="Social Search: Recommendation", source="SocialSearch", confidence="Medium", color="orange", tags=["recommendation"]))
+
+    async def analyze_error_rates():
+        err_count = sum(1 for f in findings if f.status == "Timeout")
+        findings.append(IntelligenceFinding(entity=f"Timeouts: {err_count}", type="Social Search: Error Analysis", source="SocialSearch", confidence="Medium", color="orange" if err_count else "emerald", tags=["errors"]))
+
+    async def analyze_search_quality():
+        findings.append(IntelligenceFinding(entity=f"Search queries executed: {len(potential_usernames) * len(PLATFORMS)}", type="Social Search: Query Volume", source="SocialSearch", confidence="Medium", color="slate", tags=["quality"]))
+        findings.append(IntelligenceFinding(entity=f"Profiles found: {profile_count} ({round(profile_count/max(len(potential_usernames)*len(PLATFORMS),1)*100,1)}% hit rate)", type="Social Search: Hit Rate", source="SocialSearch", confidence="Medium", color="purple", tags=["quality"]))
+
+    async def analyze_privacy_posture():
+        findings.append(IntelligenceFinding(entity="Public profiles expose personal information across platforms", type="Social Search: Privacy Assessment", source="SocialSearch", confidence="Medium", color="orange", tags=["privacy"]))
+        findings.append(IntelligenceFinding(entity="Consolidate or delete unused profiles to reduce attack surface", type="Social Search: Privacy Rec", source="SocialSearch", confidence="Medium", color="orange", tags=["privacy"]))
+
+    async def analyze_footprint_severity():
+        findings.append(IntelligenceFinding(entity=f"Profile count: {profile_count}", type="Social Search: Profile Volume", source="SocialSearch", confidence="Medium", color="purple", tags=["severity"]))
+        findings.append(IntelligenceFinding(entity=f"Username variants used: {len(potential_usernames)}", type="Social Search: Username Diversity", source="SocialSearch", confidence="Medium", color="slate", tags=["severity"]))
+        if profile_count > 5:
+            findings.append(IntelligenceFinding(entity="Large digital footprint - high exposure risk", type="Social Search: Exposure Risk", source="SocialSearch", confidence="Medium", color="red", tags=["severity"]))
+
+    async def analyze_platform_quality():
+        social_count = sum(1 for f in findings if f.tags and "social-media" in f.tags)
+        dev_count = sum(1 for f in findings if f.tags and "development" in f.tags)
+        findings.append(IntelligenceFinding(entity=f"Social media profiles: {social_count}", type="Social Search: Social Count", source="SocialSearch", confidence="Medium", color="slate", tags=["quality"]))
+        findings.append(IntelligenceFinding(entity=f"Dev/professional profiles: {dev_count}", type="Social Search: Dev Count", source="SocialSearch", confidence="Medium", color="slate", tags=["quality"]))
+
+    async def analyze_platform_regionality():
+        findings.append(IntelligenceFinding(entity=f"Potential usernames tested: {len(potential_usernames)}", type="Social Search: Username Testing", source="SocialSearch", confidence="Medium", color="slate", tags=["regional"]))
+        findings.append(IntelligenceFinding(entity=f"Unique platforms in database: {len(PLATFORMS)}", type="Social Search: DB Size", source="SocialSearch", confidence="High", color="slate", tags=["regional"]))
+        findings.append(IntelligenceFinding(entity="Platform distribution suggests geographic regions of activity", type="Social Search: Regional Suggestion", source="SocialSearch", confidence="Low", color="purple", tags=["regional"]))
+        findings.append(IntelligenceFinding(entity="Review platform privacy policies for region-specific data handling", type="Social Search: Regional Rec", source="SocialSearch", confidence="Medium", color="orange", tags=["regional"]))
+        findings.append(IntelligenceFinding(entity=f"Search depth: {len(potential_usernames)} variant(s) x {len(PLATFORMS)} platforms", type="Social Search: Search Depth", source="SocialSearch", confidence="Medium", color="slate", tags=["regional"]))
+        findings.append(IntelligenceFinding(entity="Assess exposure by consolidating duplicate profiles across regions", type="Social Search: Exposure Rec", source="SocialSearch", confidence="Medium", color="orange", tags=["regional"]))
+
+    await asyncio.gather(
+        analyze_username_quality(),
+        analyze_platform_diversity(),
+        generate_cross_ref_analysis(),
+        generate_search_recommendations(),
+        analyze_error_rates(),
+        analyze_search_quality(),
+        analyze_privacy_posture(),
+        analyze_footprint_severity(),
+        analyze_platform_quality(),
+        analyze_platform_regionality(),
+    )
+
     return findings

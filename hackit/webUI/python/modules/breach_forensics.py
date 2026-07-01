@@ -67,6 +67,38 @@ BREACH_SOURCES = [
     ("Rentry", lambda t: f"https://rentry.org/search?q={t}", False),
 ]
 
+ADDITIONAL_BREACH_SOURCES = [
+    ("FirefoxMonitor", lambda t: f"https://monitor.firefox.com/api/v1/breaches?q={t}", False),
+    ("CheckLeaked", lambda t: f"https://checkleaked.cc/api/v1/search?q={t}", False),
+    ("BreachCheck", lambda t: f"https://breachcheck.com/api/search?q={t}", False),
+    ("DataBreach", lambda t: f"https://databreach.com/api/search?q={t}", False),
+    ("PwnedDB", lambda t: f"https://pwneddb.com/api/search?q={t}", False),
+    ("EmailLeak", lambda t: f"https://emailleak.com/api/v1/check?q={t}", False),
+    ("PasswordLeak", lambda t: f"https://passwordleak.com/api/check?q={t}", False),
+    ("LeakRadar", lambda t: f"https://leakradar.io/api/search?q={t}", False),
+    ("BreachAlarm", lambda t: f"https://breachalarm.com/api/v1/check?q={t}", False),
+    ("DataLeak", lambda t: f"https://dataleak.xyz/api/search?q={t}", False),
+]
+
+JWT_PATTERN = re.compile(r"eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+")
+BTC_PATTERN = re.compile(r"\b[13][a-km-zA-HJ-NP-Z1-9]{25,34}\b")
+ETH_PATTERN = re.compile(r"\b0x[a-fA-F0-9]{40}\b")
+
+PASSWORD_STRENGTH_PATTERNS = {
+    "very_weak": re.compile(r"^.{1,6}$"),
+    "weak": re.compile(r"^.{7,10}$"),
+    "medium": re.compile(r"^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$"),
+    "strong": re.compile(r"^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_+{}|:<>?~]).{10,}$"),
+}
+
+HASH_EXTRA_PATTERNS = {
+    "NTLM": re.compile(r"\b[a-fA-F0-9]{32}\b"),
+    "LM": re.compile(r"\b[a-fA-F0-9]{32}\b"),
+    "MySQL": re.compile(r"\b\*[A-F0-9]{40}\b"),
+    "PostgreSQL": re.compile(r"\bmd5[a-f0-9]{32}\b"),
+    "Oracle": re.compile(r"\b[A-F0-9]{16}\b"),
+}
+
 PASTE_SITES = [
     ("LeakIX", lambda t: f"https://leakix.net/search?scope=leak&q={t}", True),
     ("PSBDMP", lambda t: f"https://psbdmp.ws/api/search/{t}", False),
@@ -523,6 +555,179 @@ async def analyze_data_impact_level(text: str) -> list:
         ))
     return findings
 
+async def analyze_jwt_tokens(text: str) -> list:
+    findings = []
+    try:
+        matches = JWT_PATTERN.findall(text)
+        if matches:
+            for jwt in matches[:5]:
+                findings.append(IntelligenceFinding(
+                    entity=f"JWT token found: {jwt[:60]}...",
+                    type="JWT Token Exposure",
+                    source="Breach Forensics",
+                    confidence="High",
+                    color="red",
+                    category="Leak / Breach Analysis",
+                    threat_level="Critical",
+                    status="Secret Exposed",
+                    raw_data=jwt,
+                    tags=["jwt", "token", "critical"]
+                ))
+    except:
+        pass
+    return findings
+
+async def analyze_crypto_wallets(text: str) -> list:
+    findings = []
+    try:
+        btc_matches = BTC_PATTERN.findall(text)
+        if btc_matches:
+            findings.append(IntelligenceFinding(
+                entity=f"{len(set(btc_matches))} Bitcoin address(es) found",
+                type="Crypto Wallet Exposure: BTC",
+                source="Breach Forensics",
+                confidence="Medium",
+                color="orange",
+                category="Leak / Breach Analysis",
+                threat_level="Elevated Risk",
+                status="Crypto Found",
+                tags=["crypto", "bitcoin", "wallet"]
+            ))
+        eth_matches = ETH_PATTERN.findall(text)
+        if eth_matches:
+            findings.append(IntelligenceFinding(
+                entity=f"{len(set(eth_matches))} Ethereum address(es) found",
+                type="Crypto Wallet Exposure: ETH",
+                source="Breach Forensics",
+                confidence="Medium",
+                color="orange",
+                category="Leak / Breach Analysis",
+                threat_level="Elevated Risk",
+                status="Crypto Found",
+                tags=["crypto", "ethereum", "wallet"]
+            ))
+    except:
+        pass
+    return findings
+
+async def analyze_password_strength(credentials: list) -> list:
+    findings = []
+    try:
+        weak_passwords = 0
+        very_weak_passwords = 0
+        for cred in credentials:
+            secret = cred.get("secret", "")
+            if PASSWORD_STRENGTH_PATTERNS["very_weak"].match(secret):
+                very_weak_passwords += 1
+            elif PASSWORD_STRENGTH_PATTERNS["weak"].match(secret):
+                weak_passwords += 1
+        if very_weak_passwords:
+            findings.append(IntelligenceFinding(
+                entity=f"{very_weak_passwords} very weak passwords (1-6 chars)",
+                type="Password Strength: Very Weak",
+                source="Breach Forensics",
+                confidence="High",
+                color="red",
+                category="Leak / Breach Analysis",
+                threat_level="Critical",
+                status="Weak Password",
+                tags=["password", "weak", "strength"]
+            ))
+        if weak_passwords:
+            findings.append(IntelligenceFinding(
+                entity=f"{weak_passwords} weak passwords (7-10 chars)",
+                type="Password Strength: Weak",
+                source="Breach Forensics",
+                confidence="High",
+                color="orange",
+                category="Leak / Breach Analysis",
+                threat_level="High Risk",
+                status="Weak Password",
+                tags=["password", "weak", "strength"]
+            ))
+    except:
+        pass
+    return findings
+
+async def analyze_credential_stuffing_risk(credentials: list) -> list:
+    findings = []
+    try:
+        total_creds = len(credentials)
+        if total_creds > 0:
+            domains = set()
+            for cred in credentials:
+                email = cred.get("email", "")
+                if "@" in email:
+                    domains.add(email.split("@")[1])
+            risk = "Low"
+            color = "emerald"
+            if total_creds >= 100:
+                risk = "Critical"
+                color = "red"
+            elif total_creds >= 10:
+                risk = "High Risk"
+                color = "red"
+            elif total_creds >= 3:
+                risk = "Elevated Risk"
+                color = "orange"
+            findings.append(IntelligenceFinding(
+                entity=f"Credential stuffing risk: {total_creds} credentials from {len(domains)} domains",
+                type="Credential Stuffing Risk Assessment",
+                source="Breach Forensics",
+                confidence="High",
+                color=color,
+                category="Leak / Breach Analysis",
+                threat_level=risk,
+                status=f"Risk: {risk}",
+                tags=["credential-stuffing", "risk", risk.lower().replace(" ", "-")]
+            ))
+    except:
+        pass
+    return findings
+
+async def check_additional_breach_sources(client, target):
+    findings = []
+    base_url = target.strip().lower()
+    for name, url_builder, _ in ADDITIONAL_BREACH_SOURCES:
+        try:
+            url = url_builder(base_url)
+            resp = await client.get(url, timeout=10.0,
+                headers={"User-Agent": "Mozilla/5.0"})
+            if resp.status_code == 200 and len(resp.text) > 50:
+                findings.append(IntelligenceFinding(
+                    entity=f"Source {name} returned results for {target}",
+                    type="Additional Breach Source Hit",
+                    source=name,
+                    confidence="Low",
+                    color="yellow",
+                    category="Leak / Breach Analysis",
+                    threat_level="Informational",
+                    status="Data Available",
+                    tags=["breach-source", name.lower()]
+                ))
+        except:
+            pass
+    return findings
+
+async def analyze_hash_types_advanced(text: str) -> list:
+    findings = []
+    for name, pattern in HASH_EXTRA_PATTERNS.items():
+        matches = pattern.findall(text)
+        if matches:
+            unique = set(matches)
+            findings.append(IntelligenceFinding(
+                entity=f"{len(unique)} potential {name} hashes found",
+                type=f"Advanced Hash Identification: {name}",
+                source="Breach Forensics",
+                confidence="Medium",
+                color="orange",
+                category="Leak / Breach Analysis",
+                threat_level="Medium",
+                status="Detected",
+                tags=["hash", name.lower(), "crypto"]
+            ))
+    return findings
+
 async def crawl(target: str, client: httpx.AsyncClient):
     findings = []
     search_target = quote(target.strip().lower())
@@ -545,6 +750,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
     clear_web_results = await check_clear_web_breach_sources(client, target.strip().lower())
     findings.extend(clear_web_results)
 
+    additional_breach_results = await check_additional_breach_sources(client, target.strip().lower())
+    findings.extend(additional_breach_results)
+
     all_text = ""
     for f in findings:
         if f.raw_data:
@@ -555,6 +763,27 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
     impact_results = await analyze_data_impact_level(all_text)
     findings.extend(impact_results)
+
+    jwt_results = await analyze_jwt_tokens(all_text)
+    findings.extend(jwt_results)
+
+    crypto_wallet_results = await analyze_crypto_wallets(all_text)
+    findings.extend(crypto_wallet_results)
+
+    all_creds = []
+    for f in findings:
+        if hasattr(f, 'raw_data') and f.raw_data:
+            creds = await extract_credentials(str(f.raw_data))
+            all_creds.extend(creds)
+
+    password_strength_results = await analyze_password_strength(all_creds)
+    findings.extend(password_strength_results)
+
+    stuffing_results = await analyze_credential_stuffing_risk(all_creds)
+    findings.extend(stuffing_results)
+
+    hash_advanced_results = await analyze_hash_types_advanced(all_text)
+    findings.extend(hash_advanced_results)
 
     breach_count = len([f for f in findings if "breach" in f.type.lower() or "credential" in f.type.lower() or "exposure" in f.type.lower()])
     if breach_count:

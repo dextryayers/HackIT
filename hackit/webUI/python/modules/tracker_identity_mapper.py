@@ -1170,4 +1170,129 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
     except Exception:
         pass
+
+    async def analyze_tracker_categories():
+        all_trackers = {}
+        for f in findings:
+            if f.type in ("Analytics / Tracking", "Advertising / Ad Tech", "Social Media Tracking",
+                          "Marketing Automation", "CRM / Customer Platform", "Email Marketing",
+                          "CDN / Performance", "Consent Management", "Identity / SSO", "Security / Anti-Bot"):
+                all_trackers[f.type] = all_trackers.get(f.type, 0) + 1
+        if all_trackers:
+            for ftype, count in sorted(all_trackers.items(), key=lambda x: -x[1])[:6]:
+                findings.append(IntelligenceFinding(
+                    entity=f"{ftype}: {count} tracker(s)",
+                    type="Tracker Category Summary",
+                    source="TrackerMapper", confidence="Medium",
+                    color="slate", tags=["category-summary"]))
+
+    async def analyze_tracking_ids():
+        id_count = sum(1 for f in findings if f.type == "Tracking ID")
+        findings.append(IntelligenceFinding(
+            entity=f"Tracking IDs found: {id_count}",
+            type="Tracking ID Summary",
+            source="TrackerMapper", confidence="Medium",
+            color="orange", tags=["ids"]))
+
+    async def analyze_data_sharing():
+        sharing_count = sum(1 for f in findings if f.type == "Data Sharing / Third-Party")
+        if sharing_count:
+            findings.append(IntelligenceFinding(
+                entity=f"Third-party data sharing partners: {sharing_count}",
+                type="Data Sharing Summary",
+                source="TrackerMapper", confidence="Medium",
+                color="yellow", tags=["data-sharing"]))
+
+    async def analyze_privacy_impact():
+        fp_count = sum(1 for f in findings if f.type == "Browser Fingerprinting")
+        storage_count = sum(1 for f in findings if f.type == "DOM Storage Detection")
+        if fp_count or storage_count:
+            findings.append(IntelligenceFinding(
+                entity=f"Privacy impact: {fp_count} fingerprinting techniques, {storage_count} storage methods, {len(cookie_categories) if 'cookie_categories' in dir() else 0} cookie categories",
+                type="Privacy Impact Analysis",
+                source="TrackerMapper", confidence="Medium",
+                color="red" if fp_count > 0 else "orange",
+                threat_level="Elevated Risk" if fp_count > 0 else "Informational",
+                tags=["privacy"]))
+
+    async def generate_privacy_recommendations():
+        rec_map = {}
+        for f in findings:
+            if f.type in ("Analytics / Tracking", "Advertising / Ad Tech"):
+                rec_map["trackers"] = rec_map.get("trackers", 0) + 1
+            if f.type == "Browser Fingerprinting":
+                rec_map["fingerprinting"] = True
+            if f.type == "Data Sharing / Third-Party":
+                rec_map["sharing"] = True
+        recs = []
+        if rec_map.get("trackers", 0) > 10:
+            recs.append("High tracker count - consider using ad-blockers/anti-tracking extensions")
+        if rec_map.get("fingerprinting"):
+            recs.append("Browser fingerprinting detected - use anti-fingerprinting browser")
+        if rec_map.get("sharing"):
+            recs.append("Data shared with third parties - review privacy policy")
+        if not recs:
+            recs.append("Moderate tracking profile - review cookie settings")
+        for i, r in enumerate(recs[:3]):
+            findings.append(IntelligenceFinding(entity=f"Rec {i+1}: {r}", type="Privacy Recommendation", source="TrackerMapper", confidence="Medium", color="orange", tags=["recommendation"]))
+
+    async def analyze_cookie_landscape():
+        cookie_count = sum(1 for f in findings if f.type == "Cookie Consent / Banner")
+        findings.append(IntelligenceFinding(entity=f"Cookie consent mechanisms: {cookie_count}", type="Cookie Analysis", source="TrackerMapper", confidence="Medium", color="slate", tags=["cookies"]))
+
+    async def analyze_dom_storage():
+        storage_count = sum(1 for f in findings if f.type == "DOM Storage Detection")
+        if storage_count:
+            findings.append(IntelligenceFinding(entity=f"DOM storage entries: {storage_count}", type="Storage Analysis", source="TrackerMapper", confidence="Medium", color="orange", tags=["storage"]))
+
+    async def analyze_total_exposure():
+        tracker_count = sum(1 for f in findings if f.type in ("Analytics / Tracking", "Advertising / Ad Tech", "Social Media Tracking", "Marketing Automation", "CRM / Customer Platform", "Email Marketing"))
+        findings.append(IntelligenceFinding(entity=f"Total marketing/tracking services: {tracker_count}", type="Exposure Summary", source="TrackerMapper", confidence="Medium", color="purple", tags=["exposure"]))
+        fingerprint_count = sum(1 for f in findings if f.type == "Browser Fingerprinting")
+        findings.append(IntelligenceFinding(entity=f"Fingerprinting scripts: {fingerprint_count}", type="Fingerprinting Summary", source="TrackerMapper", confidence="Medium", color="red" if fingerprint_count else "emerald", tags=["exposure"]))
+
+    async def analyze_consent_mechanisms():
+        consent_count = sum(1 for f in findings if f.type == "Consent Management")
+        findings.append(IntelligenceFinding(entity=f"Consent management platforms: {consent_count}", type="Consent Analysis", source="TrackerMapper", confidence="Medium", color="slate", tags=["consent"]))
+
+    async def analyze_third_party_scope():
+        third_party_count = sum(1 for f in findings if f.type == "Data Sharing / Third-Party")
+        findings.append(IntelligenceFinding(entity=f"Third-party data recipients: {third_party_count}", type="Third-Party Scope", source="TrackerMapper", confidence="Medium", color="orange" if third_party_count else "emerald", tags=["third-party"]))
+        findings.append(IntelligenceFinding(entity="Review data processing agreements with each third party", type="Compliance Recommendation", source="TrackerMapper", confidence="Medium", color="orange", tags=["recommendation"]))
+
+    async def analyze_security_headers():
+        security_findings = [f for f in findings if f.type == "Security / Anti-Bot"]
+        findings.append(IntelligenceFinding(entity=f"Security/anti-bot services: {len(security_findings)}", type="Security Analysis", source="TrackerMapper", confidence="Medium", color="slate", tags=["security"]))
+
+    async def analyze_tracker_velocity():
+        tracker_names = set()
+        for f in findings:
+            if f.type in ("Analytics / Tracking", "Advertising / Ad Tech"):
+                for t in f.tags:
+                    tracker_names.add(t)
+        findings.append(IntelligenceFinding(entity=f"Unique tracker technologies: {len(tracker_names)}", type="Tracker Velocity", source="TrackerMapper", confidence="Medium", color="slate", tags=["velocity"]))
+
+    async def analyze_privacy_tier():
+        all_findings_count = len(findings)
+        findings.append(IntelligenceFinding(entity=f"Total tracking entries: {all_findings_count}", type="Privacy Tier", source="TrackerMapper", confidence="Medium", color="purple", tags=["privacy-tier"]))
+        findings.append(IntelligenceFinding(entity="Review consent management platform for GDPR compliance", type="GDPR Recommendation", source="TrackerMapper", confidence="Medium", color="orange", tags=["privacy-tier"]))
+        findings.append(IntelligenceFinding(entity="Use browser extensions to limit third-party tracking", type="Browser Recommendation", source="TrackerMapper", confidence="Medium", color="orange", tags=["privacy-tier"]))
+        findings.append(IntelligenceFinding(entity="Audit third-party scripts regularly for privacy compliance", type="Audit Recommendation", source="TrackerMapper", confidence="Medium", color="orange", tags=["privacy-tier"]))
+
+    await asyncio.gather(
+        analyze_tracker_categories(),
+        analyze_tracking_ids(),
+        analyze_data_sharing(),
+        analyze_privacy_impact(),
+        generate_privacy_recommendations(),
+        analyze_cookie_landscape(),
+        analyze_dom_storage(),
+        analyze_total_exposure(),
+        analyze_consent_mechanisms(),
+        analyze_third_party_scope(),
+        analyze_security_headers(),
+        analyze_tracker_velocity(),
+        analyze_privacy_tier(),
+    )
+
     return findings

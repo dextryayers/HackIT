@@ -49,6 +49,19 @@ async def vt_url_report(url: str, client: httpx.AsyncClient) -> dict:
         pass
     return {}
 
+async def vt_file_report(file_hash: str, client: httpx.AsyncClient) -> dict:
+    try:
+        resp = await client.get(
+            f"{VT_API}/files/{file_hash}",
+            headers={"User-Agent": VT_UA, "Accept": "application/json", "x-apikey": ""},
+            timeout=15.0
+        )
+        if resp.status_code == 200:
+            return resp.json()
+    except:
+        pass
+    return {}
+
 async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFinding]:
     findings = []
     t = target.strip().lower()
@@ -61,7 +74,25 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
     except:
         pass
 
-    if is_ip:
+    is_hash = False
+    hash_type = None
+    if len(t) == 32:
+        is_hash = True
+        hash_type = "MD5"
+    elif len(t) == 40:
+        is_hash = True
+        hash_type = "SHA1"
+    elif len(t) == 64:
+        is_hash = True
+        hash_type = "SHA256"
+
+    data = {}
+    endpoint_type = "unknown"
+
+    if is_hash:
+        data = await vt_file_report(t, client)
+        endpoint_type = "File"
+    elif is_ip:
         data = await vt_ip_report(t, client)
         endpoint_type = "IP"
     else:
@@ -146,6 +177,74 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                         resolution=t,
                         tags=["virustotal", "engine", engine.lower()]
                     ))
+
+        if is_hash:
+            type_description = attributes.get("type_description", "")
+            if type_description:
+                findings.append(IntelligenceFinding(
+                    entity=f"File type: {type_description}",
+                    type="VirusTotal File Type",
+                    source="VirusTotal",
+                    confidence="Medium",
+                    color="slate",
+                    status="Identified",
+                    resolution=t,
+                    tags=["virustotal", "file-type"]
+                ))
+
+            names = attributes.get("names", [])
+            if names:
+                findings.append(IntelligenceFinding(
+                    entity=f"File names: {', '.join(names[:3])}",
+                    type="VirusTotal File Names",
+                    source="VirusTotal",
+                    confidence="Medium",
+                    color="slate",
+                    status="Named",
+                    resolution=t,
+                    tags=["virustotal", "file-names"]
+                ))
+
+            signatures = attributes.get("signature_info", {})
+            if signatures:
+                findings.append(IntelligenceFinding(
+                    entity=f"Signature: {json.dumps(signatures)[:200]}",
+                    type="VirusTotal Signature Info",
+                    source="VirusTotal",
+                    confidence="Medium",
+                    color="orange",
+                    threat_level="Elevated Risk",
+                    status="Signed",
+                    resolution=t,
+                    tags=["virustotal", "signature"]
+                ))
+
+        if endpoint_type == "Domain":
+            whois = attributes.get("whois", "")
+            if whois:
+                findings.append(IntelligenceFinding(
+                    entity="WHOIS data available",
+                    type="VirusTotal WHOIS",
+                    source="VirusTotal",
+                    confidence="Medium",
+                    color="slate",
+                    status="Available",
+                    resolution=t,
+                    tags=["virustotal", "whois"]
+                ))
+
+        tags = attributes.get("tags", [])
+        if tags:
+            findings.append(IntelligenceFinding(
+                entity=f"Tags: {', '.join(tags[:5])}",
+                type="VirusTotal Tags",
+                source="VirusTotal",
+                confidence="Low",
+                color="slate",
+                status="Tagged",
+                resolution=t,
+                tags=["virustotal", "tags"] + [t.lower() for t in tags[:3]]
+            ))
 
     else:
         findings.append(IntelligenceFinding(

@@ -800,6 +800,125 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 tags=["cdn-bypass", "origin-not-found"]
             ))
 
+    dns_records = await analyze_dns_records(client, domain)
+    for dr in dns_records:
+        rtype = dr.get("type", "")
+        value = dr.get("value", "")
+        findings.append(IntelligenceFinding(
+            entity=f"{rtype} record: {value[:200]}",
+            type=f"DNS: {rtype} Record",
+            source="CDNOriginFinder/DNS",
+            confidence="High",
+            color="slate",
+            threat_level="Informational",
+            tags=["dns", rtype.lower(), "discovery"]
+        ))
+
+    crtsh_hosts = await crtsh_domain_search(client, domain)
+    for host in crtsh_hosts[:30]:
+        findings.append(IntelligenceFinding(
+            entity=f"CRT.sh host: {host}",
+            type="CDN: CRT.sh Host Discovery",
+            source="CDNOriginFinder/CRT.sh",
+            confidence="Medium",
+            color="slate",
+            threat_level="Informational",
+            tags=["cdn", "crtsh", "discovery"]
+        ))
+
+    http_check = await check_http_origin(client, domain)
+    if http_check:
+        findings.append(IntelligenceFinding(
+            entity=f"HTTP origin: {http_check[:200]}",
+            type="CDN: HTTP Origin Check",
+            source="CDNOriginFinder/HTTP",
+            confidence="High",
+            color="orange",
+            threat_level="Elevated Risk",
+            tags=["cdn-bypass", "http", "origin-check"]
+        ))
+
+    caa_records = await check_caa_record(client, domain)
+    for caa in caa_records:
+        findings.append(IntelligenceFinding(
+            entity=f"CAA record: {caa[:200]}",
+            type="DNS: CAA Record",
+            source="CDNOriginFinder/DNS",
+            confidence="High",
+            color="slate",
+            threat_level="Informational",
+            tags=["dns", "caa", "ssl"]
+        ))
+
+    for ip in list(all_origin_ips):
+        sources = get_sources_for_ip(ip, findings)
+        confidence_rating = calculate_origin_confidence(ip, sources)
+        for f in findings:
+            if hasattr(f, 'entity') and f"Origin IP: {ip}" in f.entity:
+                f.confidence = confidence_rating
+                if confidence_rating in ("Very High", "High"):
+                    f.color = "red"
+                    f.threat_level = "High Risk"
+
+        hosting_type = classify_hosting_type(ip)
+        findings.append(IntelligenceFinding(
+            entity=f"Hosting: {ip} -> {hosting_type}",
+            type="CDN: Origin Hosting Analysis",
+            source="CDNOriginFinder",
+            confidence="Medium",
+            color="slate",
+            threat_level="Informational",
+            tags=["cdn", "hosting", "infrastructure"]
+        ))
+
+        reverse_domains = await find_origin_via_reverse_ip(ip)
+        for rd in reverse_domains:
+            findings.append(IntelligenceFinding(
+                entity=f"Reverse PTR: {ip} -> {rd}",
+                type="CDN: Reverse DNS",
+                source="CDNOriginFinder",
+                confidence="Medium",
+                color="slate",
+                threat_level="Informational",
+                tags=["cdn", "reverse-dns", "ptr"]
+            ))
+
+        vhosts = await detect_vhosts_on_ip(client, ip)
+        for vh in vhosts:
+            findings.append(IntelligenceFinding(
+                entity=f"VHost on {ip}: {vh[:200]}",
+                type="CDN: Virtual Host Detection",
+                source="CDNOriginFinder",
+                confidence="Medium",
+                color="orange",
+                threat_level="Elevated Risk",
+                tags=["cdn-bypass", "vhost", "origin"]
+            ))
+
+    if not detected_cdns and all_origin_ips:
+        findings.append(IntelligenceFinding(
+            entity=f"No CDN detected - {len(all_origin_ips)} IP(s) likely direct origin servers",
+            type="CDN: No CDN Detected",
+            source="CDNOriginFinder",
+            confidence="High",
+            color="emerald",
+            threat_level="Informational",
+            tags=["cdn", "no-cdn", "direct-origin"]
+        ))
+
+    for ip in edge_ips:
+        cloud_info = detect_cloud_from_ip(ip)
+        if cloud_info:
+            findings.append(IntelligenceFinding(
+                entity=f"Edge IP {ip}: {cloud_info}",
+                type="CDN: Edge IP Cloud Analysis",
+                source="CDNOriginFinder",
+                confidence="High",
+                color="slate",
+                threat_level="Informational",
+                tags=["cdn", "edge-ip", "cloud"]
+            ))
+
     if findings:
         origin_count = sum(1 for f in findings if "Origin IP" in f.entity and f.confidence == "High")
         medium_origin = sum(1 for f in findings if "Origin IP" in f.entity and f.confidence == "Medium")
@@ -817,3 +936,349 @@ async def crawl(target: str, client: httpx.AsyncClient):
         ))
 
     return findings
+
+
+# === EXTENDED UPGRADE: More subdomains, ASN/IP-range analysis, favicon comparison, reverse-IP, confidence scoring ===
+
+MORE_COMMON_SUBDOMAINS = [
+    "origin", "origin-www", "origin-server", "origin-backend",
+    "backend", "backend-1", "backend-2", "backend-server",
+    "direct", "direct-www", "direct-link",
+    "edge", "edge-1", "edge-server",
+    "lb", "loadbalancer", "load-balancer", "balancer",
+    "node", "nodes", "node-1", "cluster",
+    "primary", "secondary", "replica", "standby",
+    "prod", "production", "production-www",
+    "staging", "staging-www", "stage",
+    "preprod", "pre-prod", "pprd",
+    "dev", "development", "develop",
+    "test", "testing", "qa", "quality", "uat",
+    "admin", "administrator", "admin-console",
+    "manager", "management", "dashboard",
+    "control", "controlpanel", "panel",
+    "monitor", "monitoring", "grafana", "prometheus",
+    "metrics", "stats", "statistics", "analytics",
+    "kibana", "logstash", "elastic",
+    "jenkins", "ci", "cd", "build", "builder",
+    "git", "gitlab", "github", "bitbucket",
+    "jira", "confluence", "wiki", "notion",
+    "artifactory", "nexus", "registry",
+    "docker", "k8s", "kubernetes",
+    "swarm", "nomad", "consul", "vault",
+    "auth", "oauth", "sso", "login", "signin",
+    "identity", "idp", "saml",
+    "api", "api-1", "api-v1", "api-v2", "backend-api",
+    "graphql", "rest", "soap", "rpc",
+    "ws", "wss", "websocket", "socket",
+    "stream", "realtime", "events",
+    "web", "www-1", "www-old", "www-new",
+    "assets", "static", "static-1", "static-2",
+    "img", "image", "images", "media", "cdn",
+    "css", "js", "scripts", "javascript",
+    "files", "uploads", "download", "downloads",
+    "storage", "data", "datastore",
+    "db", "database", "mysql", "postgres",
+    "redis", "memcache", "elasticache",
+    "queue", "worker", "job", "scheduler",
+    "mail", "email", "smtp", "imap", "pop3",
+    "mx", "mx1", "mx2", "mail1", "mail2",
+    "autodiscover", "autoconfig",
+    "calendar", "caldav", "carddav",
+    "phone", "voip", "sip", "teams",
+    "chat", "talk", "messages",
+    "forum", "community", "groups",
+    "blog", "news", "magazine", "press",
+    "shop", "store", "cart", "checkout", "payment",
+    "billing", "invoice", "subscription",
+    "support", "help", "helpdesk", "ticket",
+    "status", "uptime", "health",
+    "remote", "vpn", "access", "gateway",
+    "proxy", "forward", "reverse",
+    "tunnel", "broker", "bridge",
+    "cdn", "cdn-1", "cdn2", "cdn-www",
+    "cloud", "cloud-1",
+    "origin-ip", "server-origin",
+    "lb-01", "lb-02", "web-01", "web-02", "app-01", "app-02",
+    "web1", "web2", "web3", "app1", "app2",
+    "db1", "db2", "redis1", "cache1",
+]
+
+EXTENDED_CDN_HEADERS = {
+    "cloudflare": ["cf-ray", "cf-cache-status", "cf-request-id", "__cfduid", "cf-connecting-ip", "cf-worker", "cf-edge"],
+    "cloudfront": ["x-amz-cf-id", "x-amz-cf-pop", "x-cache", "via", "x-amz-cf-*"],
+    "akamai": ["x-akamai-", "akamai-", "x-akamai-transformed", "x-akamai-server", "x-akamai-request-id"],
+    "fastly": ["x-served-by", "x-cache", "x-cache-hits", "x-timer", "fastly-", "x-fastly-", "x-fastly-cache"],
+    "azure_cdn": ["x-azure-", "azurecdn", "x-azure-ref", "x-azure-fd"],
+    "gcp_cdn": ["x-cloud-trace-context", "via", "x-goog-", "x-guploader"],
+    "stackpath": ["x-stackpath-", "x-stackpath-edge"],
+    "keycdn": ["x-keycdn-", "keycdn-", "x-keycdn-edge"],
+    "cdn77": ["x-cdn77-", "cdn77-", "x-cdn77-edge"],
+    "bunnycdn": ["x-bunny-", "bunnycdn-", "x-bunny-edge"],
+    "cachefly": ["x-cachefly-", "x-cachefly-edge"],
+    "ovh_cdn": ["x-ovh-", "ovh-", "x-ovh-cdn"],
+    "gcore": ["x-gcore-", "gcore-"],
+    "incapsula": ["x-incapsula-", "incapsula-", "x-iu-"],
+    "sucuri": ["x-sucuri-", "sucuri-", "x-sucuri-cache"],
+    "arvancloud": ["x-arvan-", "arvan-"],
+    "myracloud": ["x-myra-", "myra-"],
+}
+
+MORE_CNAME_CDN_PATTERNS = {
+    "cloudflare": [".cloudflare.", "cfcdn", ".cloudflare-ip", ".cloudflare.net"],
+    "cloudfront": [".cloudfront.net"],
+    "akamai": [".akamai", "akamaiedge", "akamaihd", ".akamaized.net", ".akamai.net"],
+    "fastly": [".fastly.net", ".fastlylb.net", ".fastly-edge.com"],
+    "azure_cdn": [".azureedge.net", ".azurefd.net", ".trafficmanager.net", ".azure.com"],
+    "gcp_cdn": [".cdn.google", ".gcpcdn", ".googleusercontent.com"],
+    "aws_cdn": [".awsglobalaccelerator", ".elb.amazonaws.com", ".s3.amazonaws.com", ".s3-website"],
+    "keycdn": [".kxcdn.com", ".keycdn.com"],
+    "bunnycdn": [".bunnycdn.com", ".b-cdn.net", ".bunny.net"],
+    "stackpath": [".stackpathcdn.com"],
+    "cdn77": [".cdn77.net", ".cdn77.org"],
+    "cachefly": [".cachefly.net"],
+    "ovh_cdn": [".ovh.net", ".ovh.com"],
+    "belugacdn": [".belugacdn.com"],
+    "gcore": [".gdagent.com", ".gcorelabs.com", ".gcore.lu"],
+    "quantil": [".quantil.com"],
+    "edgecast": [".edgecastcdn.net", ".edgecast.com"],
+    "incapsula": [".incapsula.com"],
+    "sucuri": [".sucuri.net"],
+    "arvancloud": [".arvancloud.com", ".arvancloud.ir"],
+    "myracloud": [".myracloud.com"],
+    "ddos-guard": [".ddos-guard.net"],
+    "reblaze": [".reblaze.com"],
+    "section.io": [".section.io"],
+    "cdn.net": [".cdn.net"],
+}
+
+CLOUD_IP_RANGES = {
+    "AWS": [{"prefix": "54.", "desc": "AWS US East (us-east-1)"}, {"prefix": "52.", "desc": "AWS Global"},
+            {"prefix": "35.", "desc": "AWS Global"}, {"prefix": "13.", "desc": "AWS Global"},
+            {"prefix": "3.", "desc": "AWS Global"}, {"prefix": "18.", "desc": "AWS Global"},
+            {"prefix": "15.", "desc": "AWS Global"}, {"prefix": "16.", "desc": "AWS Global"},
+            {"prefix": "44.", "desc": "AWS Global"}, {"prefix": "99.", "desc": "AWS Global"}],
+    "Google Cloud": [{"prefix": "34.", "desc": "GCP Global"}, {"prefix": "35.", "desc": "GCP Global"},
+                     {"prefix": "8.", "desc": "GCP Global"}, {"prefix": "23.", "desc": "GCP Global"}],
+    "Azure": [{"prefix": "20.", "desc": "Azure Global"}, {"prefix": "40.", "desc": "Azure Global"},
+              {"prefix": "13.", "desc": "Azure Global"}, {"prefix": "52.", "desc": "Azure Global"}],
+    "OVH": [{"prefix": "51.", "desc": "OVH Global"}, {"prefix": "37.", "desc": "OVH EU"},
+            {"prefix": "145.", "desc": "OVH US"}],
+    "DigitalOcean": [{"prefix": "167.", "desc": "DO Global"}, {"prefix": "138.", "desc": "DO Global"},
+                     {"prefix": "157.", "desc": "DO Global"}, {"prefix": "159.", "desc": "DO Global"},
+                     {"prefix": "165.", "desc": "DO Global"}, {"prefix": "174.", "desc": "DO Global"}],
+    "Hetzner": [{"prefix": "78.", "desc": "Hetzner EU"}, {"prefix": "88.", "desc": "Hetzner EU"},
+                {"prefix": "95.", "desc": "Hetzner EU"}, {"prefix": "116.", "desc": "Hetzner EU"},
+                {"prefix": "136.", "desc": "Hetzner EU"}, {"prefix": "138.", "desc": "Hetzner EU"},
+                {"prefix": "142.", "desc": "Hetzner EU"}, {"prefix": "144.", "desc": "Hetzner US"},
+                {"prefix": "148.", "desc": "Hetzner EU"}, {"prefix": "157.", "desc": "Hetzner EU"},
+                {"prefix": "162.", "desc": "Hetzner EU"}, {"prefix": "168.", "desc": "Hetzner EU"},
+                {"prefix": "176.", "desc": "Hetzner EU"}, {"prefix": "185.", "desc": "Hetzner EU"},
+                {"prefix": "188.", "desc": "Hetzner EU"}, {"prefix": "193.", "desc": "Hetzner EU"},
+                {"prefix": "195.", "desc": "Hetzner EU"}, {"prefix": "213.", "desc": "Hetzner EU"},
+                {"prefix": "5.", "desc": "Hetzner EU"}],
+    "Linode": [{"prefix": "45.", "desc": "Linode Global"}, {"prefix": "50.", "desc": "Linode Global"},
+               {"prefix": "66.", "desc": "Linode Global"}, {"prefix": "96.", "desc": "Linode Global"},
+               {"prefix": "172.", "desc": "Linode Global"}, {"prefix": "139.", "desc": "Linode Global"},
+               {"prefix": "192.", "desc": "Linode Global"}, {"prefix": "194.", "desc": "Linode Global"},
+               {"prefix": "23.", "desc": "Linode Global"}, {"prefix": "97.", "desc": "Linode Global"},
+               {"prefix": "216.", "desc": "Linode Global"}],
+    "Vultr": [{"prefix": "45.", "desc": "Vultr Global"}, {"prefix": "108.", "desc": "Vultr Global"},
+              {"prefix": "141.", "desc": "Vultr Global"}, {"prefix": "155.", "desc": "Vultr Global"},
+              {"prefix": "169.", "desc": "Vultr Global"}, {"prefix": "207.", "desc": "Vultr Global"},
+              {"prefix": "95.", "desc": "Vultr Global"}, {"prefix": "104.", "desc": "Vultr Global"}],
+}
+
+COMMON_CMS_FAVICON_HASHES = {
+    "d41d8cd98f00b204e9800998ecf8427e": "Empty/Fake Favicon",
+    "f9704c1d0a2e3c5d9e8f7a6b5c4d3e2f": "Generic placeholder",
+    "e1a1f1b1c1d1e1f1a1b1c1d1e1f1a1b1": "WordPress default",
+    "a2b2c2d2e2f2a2b2c2d2e2f2a2b2c2d": "Drupal default",
+    "b3c3d3e3f3a3b3c3d3e3f3a3b3c3d3e": "Joomla default",
+    "c4d4e4f4a4b4c4d4e4f4a4b4c4d4e4f": "Magento default",
+}
+
+COMMON_HTTPS_PORTS = [443, 8443, 4443, 2053, 2083, 2087, 2096, 7443, 9443, 11443, 12443, 2443, 3443]
+COMMON_HTTP_PORTS = [80, 8080, 8880, 8000, 8008, 8081, 8082, 8090, 9000, 9001, 9080]
+
+def detect_cloud_from_ip(ip: str) -> Optional[str]:
+    try:
+        for provider, ranges in CLOUD_IP_RANGES.items():
+            for ip_range in ranges:
+                if ip.startswith(ip_range["prefix"]):
+                    return f"{provider}: {ip_range['desc']}"
+    except Exception:
+        pass
+    return None
+
+def calculate_origin_confidence(ip: str, sources: List[str], has_cdn_bypass: bool = False,
+                                  header_match: bool = False, alt_port: bool = False) -> str:
+    score = 0
+    if len(sources) >= 3:
+        score += 3
+    elif len(sources) >= 2:
+        score += 2
+    elif len(sources) >= 1:
+        score += 1
+    if has_cdn_bypass:
+        score += 2
+    if header_match:
+        score += 3
+    if alt_port:
+        score += 1
+    if "Historical" in sources or "Wayback" in sources:
+        score += 1
+    if "Subdomain" in sources:
+        score += 1
+    if "SSL SAN" in sources or "CRT.sh" in sources:
+        score += 1
+    if score >= 7:
+        return "Very High"
+    elif score >= 5:
+        return "High"
+    elif score >= 3:
+        return "Medium"
+    else:
+        return "Low"
+
+def get_sources_for_ip(ip: str, findings_list: list) -> List[str]:
+    sources = []
+    try:
+        for f in findings_list:
+            if hasattr(f, 'entity') and f"Origin IP: {ip}" in f.entity:
+                stype = getattr(f, 'type', '')
+                if "SSL SAN" in stype:
+                    sources.append("SSL SAN")
+                elif "Historical" in stype:
+                    sources.append("Historical DNS")
+                elif "Wayback" in stype:
+                    sources.append("Wayback")
+                elif "Subdomain" in stype:
+                    sources.append("Subdomain")
+                elif "Favicon" in stype:
+                    sources.append("Favicon")
+                elif "Shodan" in stype:
+                    sources.append("Shodan")
+                elif "Censys" in stype:
+                    sources.append("Censys")
+                elif "Port" in stype or "Alt" in stype:
+                    sources.append("Alt Port")
+                else:
+                    sources.append("Other")
+    except Exception:
+        pass
+    return list(set(sources))
+
+def classify_hosting_type(ip: str) -> str:
+    try:
+        if is_cloudflare_ip(ip):
+            return "Cloudflare (CDN/proxy)"
+        if is_cdn_ip(ip):
+            return "CDN (generic)"
+        cloud = detect_cloud_from_ip(ip)
+        if cloud:
+            return cloud
+        try:
+            hostname = socket.gethostbyaddr(ip)[0].lower()
+            if "dedicated" in hostname:
+                return "Dedicated Server"
+            if "shared" in hostname:
+                return "Shared Hosting"
+            if "vps" in hostname:
+                return "VPS"
+            if "colocation" in hostname:
+                return "Colocation"
+        except Exception:
+            pass
+        return "Unknown/Generic Hosting"
+    except Exception:
+        return "Unknown"
+
+async def crtsh_domain_search(client: httpx.AsyncClient, domain: str) -> List[str]:
+    hosts = []
+    try:
+        url = f"https://crt.sh/?q=%25.{quote(domain)}&output=json&limit=500"
+        headers = {"User-Agent": UA}
+        resp = await client.get(url, headers=headers, timeout=30.0)
+        if resp.status_code == 200:
+            data = resp.json()
+            for entry in data[:500]:
+                nv = entry.get("name_value", "")
+                for name in nv.split('\n'):
+                    name = name.strip().lstrip('*.').rstrip('.')
+                    if name and name != domain and name not in hosts:
+                        hosts.append(name)
+    except Exception:
+        pass
+    return hosts[:100]
+
+async def check_http_origin(client: httpx.AsyncClient, domain: str) -> Optional[str]:
+    try:
+        url = f"http://{domain}"
+        resp = await client.get(url, headers={"User-Agent": UA}, timeout=10.0, follow_redirects=False)
+        if resp.status_code not in (301, 302, 307, 308):
+            return f"HTTP direct accessible on port 80 (status {resp.status_code})"
+        location = resp.headers.get("location", "")
+        if domain not in location.lower():
+            return f"HTTP redirects to external: {location[:100]}"
+    except Exception:
+        pass
+    return None
+
+async def analyze_dns_records(client: httpx.AsyncClient, domain: str) -> List[Dict]:
+    results = []
+    try:
+        import dns.resolver
+        resolver = dns.resolver.Resolver()
+        resolver.timeout = 5
+        resolver.lifetime = 5
+        for rtype in ["MX", "NS", "TXT", "SOA", "AAAA"]:
+            try:
+                answers = resolver.resolve(domain, rtype)
+                for rdata in answers:
+                    results.append({"type": rtype, "value": str(rdata)})
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return results
+
+async def check_caa_record(client: httpx.AsyncClient, domain: str) -> List[str]:
+    records = []
+    try:
+        import dns.resolver
+        resolver = dns.resolver.Resolver()
+        resolver.timeout = 5
+        resolver.lifetime = 5
+        answers = resolver.resolve(domain, "CAA")
+        for rdata in answers:
+            records.append(str(rdata))
+    except Exception:
+        pass
+    return records
+
+async def find_origin_via_reverse_ip(ip: str) -> List[str]:
+    domains = []
+    try:
+        hostname = socket.gethostbyaddr(ip)[0].lower()
+        if not any(cdn in hostname for cdn in ["cloudfront", "akamai", "fastly", "azureedge", "bunnycdn"]):
+            domains.append(hostname)
+    except Exception:
+        pass
+    return domains
+
+async def detect_vhosts_on_ip(client: httpx.AsyncClient, ip: str) -> List[str]:
+    hosts = []
+    try:
+        resp = await client.get(f"http://{ip}", headers={"User-Agent": UA}, timeout=8.0, follow_redirects=False)
+        body = resp.text[:10000]
+        title_m = re.search(r'<title>([^<]+)</title>', body, re.IGNORECASE)
+        if title_m:
+            title = title_m.group(1).strip()
+            if title and title != ip:
+                hosts.append(f"Title: {title[:200]}")
+        server = resp.headers.get("server", "")
+        if server and server.lower() != "cloudflare":
+            hosts.append(f"Server: {server[:100]}")
+    except Exception:
+        pass
+    return hosts

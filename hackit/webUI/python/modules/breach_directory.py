@@ -968,6 +968,460 @@ async def crawl(target: str, client: httpx.AsyncClient):
             tags=["breach", "landscape", "overview"]
         ))
 
+    async def check_paste_sites():
+        for url in [f"https://psbdmp.ws/api/search/{t}", f"https://pastebin.com/search?q={t}"]:
+            try:
+                resp = await client.get(url, timeout=10.0, headers={"User-Agent": UA})
+                if resp.status_code == 200 and len(resp.text.strip()) > 50:
+                    findings.append(IntelligenceFinding(
+                        entity=f"Paste site data found for {t}", type="Breach: Paste Site Mention",
+                        source="BreachDirectory", confidence="Low", color="orange", threat_level="Elevated Risk",
+                        raw_data=f"{url.split('/')[2]} returned results", tags=["breach", "paste"]))
+                    emails_in_paste = set(EMAIL_REGEX.findall(resp.text))
+                    for pe in list(emails_in_paste)[:5]:
+                        if pe not in seen_emails:
+                            findings.append(IntelligenceFinding(
+                                entity=pe, type="Breach: Paste Email",
+                                source="BreachDirectory", confidence="Low", color="orange",
+                                threat_level="Elevated Risk", tags=["breach", "email", "paste"]))
+            except: pass
+
+    async def analyze_email_security_breach():
+        import dns.resolver as dnsr
+        loop = asyncio.get_event_loop()
+        for record_type, label in [("SPF", "v=spf1"), ("DMARC", "v=DMARC1")]:
+            try:
+                domain = t.split("@")[-1] if "@" in t else t
+                target_rec = domain if record_type == "SPF" else f"_dmarc.{domain}"
+                txts = await loop.run_in_executor(None, lambda: dnsr.resolve(target_rec, 'TXT'))
+                for r in txts:
+                    txt = str(r)
+                    if label in txt:
+                        findings.append(IntelligenceFinding(
+                            entity=f"{record_type}: {'Present' if label in txt else 'Missing'}",
+                            type=f"Breach: Email Security - {record_type}",
+                            source="BreachDirectory", confidence="High", color="emerald",
+                            threat_level="Informational", tags=["breach", "email-security", record_type.lower()]))
+                        break
+            except: pass
+
+    async def analyze_email_reputation():
+        domain = t.split("@")[-1] if "@" in t else t
+        risk_factors = []
+        disposable_domains = {"mailinator.com","guerrillamail.com","tempmail.com","10minutemail.com","yopmail.com","throwaway.email"}
+        if domain in disposable_domains:
+            risk_factors.append("Disposable email domain")
+        free_domains = {"gmail.com","yahoo.com","hotmail.com","outlook.com","aol.com","mail.com","protonmail.com","yandex.com","gmx.com","icloud.com"}
+        is_free = domain in free_domains
+        if is_free:
+            risk_factors.append("Free email provider")
+        findings.append(IntelligenceFinding(
+            entity=f"Email domain: {domain} {'(Free/Consumer)' if is_free else '(Custom/Business)'}",
+            type="Breach: Email Domain Classification",
+            source="BreachDirectory", confidence="High", color="slate",
+            threat_level="Informational" if not is_free else "Standard Target",
+            tags=["breach", "domain"]))
+
+    async def analyze_email_variations():
+        if "@" not in t:
+            return
+        local, domain = t.split("@")
+        variations = []
+        for sep in [".", "_", "-", ""]:
+            if len(local) >= 2:
+                variations.append(f"{local}{sep}alt@{domain}")
+                if len(local) >= 3:
+                    variations.append(f"{local[:-1]}{sep}@{domain}")
+        if variations:
+            findings.append(IntelligenceFinding(
+                entity=f"Email variations: {', '.join(variations[:6])}",
+                type="Breach: Email Variation Analysis",
+                source="BreachDirectory", confidence="Low", color="slate",
+                threat_level="Informational", tags=["breach", "email", "variation"]))
+
+    async def analyze_password_breach_patterns():
+        if not password_hashes:
+            findings.append(IntelligenceFinding(
+                entity="No password data recovered from breach sources",
+                type="Breach: Password Recovery Status",
+                source="BreachDirectory", confidence="Medium", color="emerald",
+                threat_level="Informational", tags=["breach", "password"]))
+        else:
+            htypes = defaultdict(int)
+            for h in password_hashes:
+                htypes[identify_hash_type(h)] += 1
+            for ht, cnt in sorted(htypes.items(), key=lambda x: -x[1])[:5]:
+                findings.append(IntelligenceFinding(
+                    entity=f"Hash type: {ht} ({cnt})", type="Breach: Hash Type Distribution",
+                    source="BreachDirectory", confidence="High", color="slate",
+                    threat_level="Informational", tags=["breach", "hash"]))
+
+    async def scrape_common_breach_dbs():
+        breach_pages = {
+            "Firefox Monitor": f"https://monitor.firefox.com/breaches",
+            "HIBP": f"https://haveibeenpwned.com/breaches",
+        }
+        for name, url in breach_pages.items():
+            try:
+                resp = await client.get(url, timeout=10.0, headers={"User-Agent": UA})
+                if resp.status_code == 200:
+                    findings.append(IntelligenceFinding(
+                        entity=f"{name} accessible for breach research",
+                        type="Breach: Breach Database Access",
+                        source="BreachDirectory", confidence="Medium", color="slate",
+                        threat_level="Informational", tags=["breach", "source"]))
+                    break
+            except: pass
+
+    async def analyze_target_type():
+        if "@" in t:
+            findings.append(IntelligenceFinding(
+                entity=f"Target: Email address", type="Breach: Target Classification",
+                source="BreachDirectory", confidence="High", color="slate",
+                threat_level="Informational", tags=["breach", "target"]))
+        else:
+            findings.append(IntelligenceFinding(
+                entity=f"Target: Domain ({t})", type="Breach: Target Classification",
+                source="BreachDirectory", confidence="High", color="slate",
+                threat_level="Informational", tags=["breach", "target"]))
+
+    async def generate_breach_recommendations():
+        recs = []
+        if total_passwords > 0: recs.append("Change all exposed passwords immediately")
+        if weak_password_count > 0: recs.append("Use a password manager with strong random passwords")
+        if len(total_breach_sources) > 0: recs.append("Enable 2FA on all accounts associated with this email")
+        if len(seen_emails) > 0: recs.append("Monitor for phishing targeting this email")
+        if any("password_reuse" in tag for f in findings for tag in f.tags): recs.append("Use unique passwords for every service")
+        recs.append("Check https://haveibeenpwned.com for latest breach info")
+        recs.append("Use Firefox Monitor for ongoing breach monitoring")
+        if recs:
+            for i, rec in enumerate(recs[:5]):
+                findings.append(IntelligenceFinding(
+                    entity=f"Rec {i+1}: {rec[:100]}", type="Breach: Recommendation",
+                    source="BreachDirectory", confidence="Medium", color="orange",
+                    threat_level="Informational", tags=["breach", "recommendation"]))
+
+    async def check_email_format_analysis():
+        if "@" in t:
+            local, domain = t.split("@")
+            findings.append(IntelligenceFinding(entity=f"Local part length: {len(local)}", type="Breach: Email Format",
+                source="BreachDirectory", confidence="High", color="slate", threat_level="Informational", tags=["breach"]))
+            findings.append(IntelligenceFinding(entity=f"Domain: {domain}", type="Breach: Email Domain",
+                source="BreachDirectory", confidence="High", color="slate", threat_level="Informational", tags=["breach"]))
+            has_plus = "+" in local
+            findings.append(IntelligenceFinding(
+                entity=f"Plus addressing: {'Enabled' if has_plus else 'Not used'}", type="Breach: Email Plus Addressing",
+                source="BreachDirectory", confidence="High", color="emerald" if has_plus else "slate",
+                threat_level="Informational", tags=["breach", "email"]))
+            local_parts = re.split(r'[._\-]', local)
+            if len(local_parts) >= 2:
+                findings.append(IntelligenceFinding(
+                    entity=f"Local part has {len(local_parts)} segment(s)", type="Breach: Email Local Part Structure",
+                    source="BreachDirectory", confidence="High", color="slate", threat_level="Informational", tags=["breach"]))
+            has_number = bool(re.search(r'\d', local))
+            findings.append(IntelligenceFinding(
+                entity=f"Numbers in email: {'Yes' if has_number else 'No'}", type="Breach: Email Numeric Pattern",
+                source="BreachDirectory", confidence="High", color="slate", threat_level="Informational", tags=["breach"]))
+        else:
+            findings.append(IntelligenceFinding(entity=f"Target domain: {t}", type="Breach: Domain Analysis",
+                source="BreachDirectory", confidence="High", color="slate", threat_level="Informational", tags=["breach"]))
+
+    async def check_domain_reputation():
+        domain = t.split("@")[-1] if "@" in t else t
+        mx_found = False
+        try:
+            import dns.resolver as dnsr
+            mx = await asyncio.get_event_loop().run_in_executor(None, lambda: dnsr.resolve(domain, 'MX'))
+            mx_found = len(list(mx)) > 0
+        except: pass
+        findings.append(IntelligenceFinding(
+            entity=f"Mail exchangers: {'Configured' if mx_found else 'None found'}", type="Breach: Domain Mail Status",
+            source="BreachDirectory", confidence="High", color="emerald" if mx_found else "red",
+            threat_level="Informational", tags=["breach", "dns"]))
+        try:
+            resp = await client.get(f"https://{domain}", timeout=8.0, follow_redirects=True, headers={"User-Agent": UA})
+            findings.append(IntelligenceFinding(
+                entity=f"Website: {'Accessible' if resp.status_code == 200 else f'HTTP {resp.status_code}'}",
+                type="Breach: Domain Web Presence", source="BreachDirectory", confidence="High", color="slate",
+                threat_level="Informational", tags=["breach", "web"]))
+        except: pass
+
+    async def check_common_leaks():
+        leak_check_urls = [
+            ("HaveIBeenPwned", f"https://haveibeenpwned.com/breaches"),
+            ("Firefox Monitor", f"https://monitor.firefox.com/breaches"),
+            ("Dehashed", f"https://dehashed.com/"),
+        ]
+        for name, url in leak_check_urls:
+            try:
+                resp = await client.get(url, timeout=8.0, headers={"User-Agent": UA})
+                if resp.status_code == 200:
+                    findings.append(IntelligenceFinding(
+                        entity=f"{name} accessible ({len(resp.text)} bytes)", type="Breach: Breach Database Status",
+                        source="BreachDirectory", confidence="Medium", color="slate", tags=["breach"]))
+                    break
+            except: pass
+
+    async def analyze_breach_risk_factors():
+        domain = t.split("@")[-1] if "@" in t else t
+        factors = []
+        if any(d in domain for d in ["mailinator","guerrillamail","tempmail","10minutemail","yopmail","throwaway"]):
+            factors.append("Disposable email domain - high fraud risk")
+        if domain in {"gmail.com","yahoo.com","hotmail.com","outlook.com"}:
+            factors.append("Free email provider - common breach target")
+        factors.append("Check if email appears in known breach collections")
+        factors.append("Credential stuffing risk if password reused")
+        for f_text in factors:
+            findings.append(IntelligenceFinding(
+                entity=f_text, type="Breach: Risk Factor",
+                source="BreachDirectory", confidence="Medium", color="orange",
+                threat_level="Standard Target", tags=["breach", "risk"]))
+
+    async def check_email_domain_age():
+        domain = t.split("@")[-1] if "@" in t else t
+        try:
+            import whois
+            w = await asyncio.get_event_loop().run_in_executor(None, lambda: whois.whois(domain))
+            creation = str(w.creation_date) if w.creation_date else "Unknown"
+            findings.append(IntelligenceFinding(
+                entity=f"Domain created: {creation[:30]}", type="Breach: Domain Age",
+                source="BreachDirectory", confidence="Medium", color="slate", tags=["breach", "dns"]))
+        except:
+            findings.append(IntelligenceFinding(
+                entity=f"Domain age: Unknown", type="Breach: Domain Age Status",
+                source="BreachDirectory", confidence="Low", color="slate", tags=["breach", "dns"]))
+
+    async def analyze_breach_data_quality():
+        if password_hashes:
+            unique_hashes = len(set(password_hashes))
+            findings.append(IntelligenceFinding(
+                entity=f"Unique hashes: {unique_hashes}/{len(password_hashes)}", type="Breach: Data Quality Analysis",
+                source="BreachDirectory", confidence="Medium", color="slate", tags=["breach", "analysis"]))
+        findings.append(IntelligenceFinding(
+            entity=f"Breach sources found: {len(total_breach_sources)}", type="Breach: Source Count",
+            source="BreachDirectory", confidence="Medium", color="slate", tags=["breach", "source"]))
+        findings.append(IntelligenceFinding(
+            entity=f"Unique emails exposed: {len(seen_emails)}", type="Breach: Exposure Count",
+            source="BreachDirectory", confidence="Medium", color="red" if seen_emails else "emerald",
+            threat_level="Informational", tags=["breach", "count"]))
+
+    async def check_google_dork_breaches():
+        dork = f"site:pastebin.com \"{t}\""
+        try:
+            resp = await client.get(f"https://www.google.com/search?q={dork.replace(' ', '+')}", timeout=8.0, headers={"User-Agent": UA})
+            if resp.status_code == 200 and len(resp.text) > 200:
+                findings.append(IntelligenceFinding(
+                    entity=f"Google dork results for pastebin mentions", type="Breach: Google Dork Analysis",
+                    source="BreachDirectory", confidence="Low", color="orange", tags=["breach"]))
+        except: pass
+
+    async def check_social_mention_breaches():
+        social_sites = ["github.com", "stackoverflow.com", "reddit.com", "twitter.com"]
+        for site in social_sites:
+            dork = f"site:{site} \"{t}\""
+            try:
+                resp = await client.get(f"https://www.google.com/search?q={dork.replace(' ', '+')}", timeout=8.0, headers={"User-Agent": UA})
+                if resp.status_code == 200 and len(resp.text) > 200:
+                    findings.append(IntelligenceFinding(
+                        entity=f"Social mention: {site}", type="Breach: Social Media Mention",
+                        source="BreachDirectory", confidence="Low", color="slate", tags=["breach", "social"]))
+            except: pass
+
+    async def check_security_headers_breach():
+        domain = t.split("@")[-1] if "@" in t else t
+        for proto in ["https", "http"]:
+            try:
+                resp = await client.get(f"{proto}://{domain}", timeout=8.0, follow_redirects=False, headers={"User-Agent": UA})
+                hdrs = {k.lower(): v for k, v in dict(resp.headers).items()}
+                for hdr, label in [("strict-transport-security","HSTS"),("x-frame-options","XFO"),("content-security-policy","CSP")]:
+                    if hdr in hdrs:
+                        findings.append(IntelligenceFinding(
+                            entity=f"{label}: Present", type="Breach: Security Header",
+                            source="BreachDirectory", confidence="High", color="emerald", tags=["breach", "security"]))
+                break
+            except: pass
+
+    await asyncio.gather(
+        check_paste_sites(),
+        analyze_email_security_breach(),
+        analyze_email_reputation(),
+        analyze_email_variations(),
+        analyze_password_breach_patterns(),
+        scrape_common_breach_dbs(),
+        analyze_target_type(),
+        generate_breach_recommendations(),
+        check_email_format_analysis(),
+        check_domain_reputation(),
+        check_common_leaks(),
+        analyze_breach_risk_factors(),
+        check_email_domain_age(),
+        analyze_breach_data_quality(),
+        check_google_dork_breaches(),
+        check_social_mention_breaches(),
+        check_security_headers_breach(),
+    )
+
+    async def analyze_breach_impact_assessment():
+        domain = t.split("@")[-1] if "@" in t else t
+        total_exposed = len(seen_emails)
+        findings.append(IntelligenceFinding(
+            entity=f"Breach impact: {total_exposed} email(s), {total_passwords} password(s), {len(total_breach_sources)} source(s)",
+            type="Breach: Impact Assessment", source="BreachDirectory", confidence="Medium",
+            color="red" if total_exposed > 0 else "emerald",
+            threat_level="Critical Risk" if total_exposed > 0 else "Informational",
+            tags=["breach", "impact"]))
+        if total_exposed > 0:
+            findings.append(IntelligenceFinding(
+                entity=f"Estimated account takeover risk: {'HIGH' if total_passwords > 0 else 'MEDIUM'}",
+                type="Breach: Account Takeover Risk",
+                source="BreachDirectory", confidence="Medium", color="red",
+                threat_level="Elevated Risk", tags=["breach", "risk"]))
+
+    async def check_technology_fingerprint():
+        domain = t.split("@")[-1] if "@" in t else t
+        try:
+            resp = await client.get(f"https://{domain}", timeout=8.0, follow_redirects=True, headers={"User-Agent": UA})
+            html = resp.text[:50000] if hasattr(resp, 'text') else ""
+            indicators = {
+                "WordPress": ["/wp-content", "/wp-admin"], "Cloudflare": ["cloudflare", "__cfduid"],
+                "Bootstrap": ["bootstrap"], "jQuery": ["jquery"], "React": ["react"],
+                "Google Analytics": ["google-analytics", "gtag"], "PHP": [".php"],
+            }
+            for tech, pats in indicators.items():
+                if any(p in html.lower() for p in pats):
+                    findings.append(IntelligenceFinding(
+                        entity=f"Technology: {tech}", type="Breach: Tech Fingerprint",
+                        source="BreachDirectory", confidence="Medium", color="slate",
+                        tags=["breach", "tech"]))
+        except: pass
+
+    async def check_common_vulnerability_headers():
+        domain = t.split("@")[-1] if "@" in t else t
+        try:
+            resp = await client.get(f"https://{domain}", timeout=8.0, follow_redirects=False, headers={"User-Agent": UA})
+            hdrs = {k.lower(): v for k, v in dict(resp.headers).items()}
+            server = hdrs.get("server", "")
+            if server:
+                findings.append(IntelligenceFinding(
+                    entity=f"Server: {server[:60]}", type="Breach: Server Fingerprint",
+                    source="BreachDirectory", confidence="Medium", color="slate",
+                    tags=["breach", "tech"]))
+            x_powered = hdrs.get("x-powered-by", "")
+            if x_powered:
+                findings.append(IntelligenceFinding(
+                    entity=f"Powered by: {x_powered[:60]}", type="Breach: Technology Leak",
+                    source="BreachDirectory", confidence="Medium", color="orange",
+                    tags=["breach", "tech"]))
+        except: pass
+
+    async def analyze_dns_health():
+        domain = t.split("@")[-1] if "@" in t else t
+        loop2 = asyncio.get_event_loop()
+        import dns.resolver as dnsr
+        for rtype in ["A", "AAAA", "NS", "MX", "TXT"]:
+            try:
+                recs = await loop2.run_in_executor(None, lambda: dnsr.resolve(domain, rtype))
+                count = sum(1 for _ in recs)
+                findings.append(IntelligenceFinding(
+                    entity=f"DNS {rtype}: {count} record(s)", type="Breach: DNS Health",
+                    source="BreachDirectory", confidence="High", color="slate",
+                    tags=["breach", "dns"]))
+            except: pass
+
+    async def check_email_breach_prevention():
+        recs = []
+        recs.append("Enable 2FA on all accounts")
+        recs.append("Use a password manager (Bitwarden, 1Password, KeePass)")
+        recs.append("Regularly check HaveIBeenPwned for new breaches")
+        recs.append("Use unique email addresses for different services")
+        recs.append("Monitor for credential stuffing attacks")
+        recs.append("Set up breach alerts via Firefox Monitor")
+        for i, rec in enumerate(recs[:4]):
+            findings.append(IntelligenceFinding(
+                entity=f"Prevention {i+1}: {rec}", type="Breach: Prevention Advice",
+                source="BreachDirectory", confidence="Medium", color="blue",
+                tags=["breach", "prevention"]))
+
+    async def analyze_data_exposure_severity():
+        if total_passwords > 0:
+            pw_severity = "Critical" if total_passwords > 5 else "High"
+            findings.append(IntelligenceFinding(
+                entity=f"Password exposure severity: {pw_severity} ({total_passwords} passwords)",
+                type="Breach: Exposure Severity", source="BreachDirectory", confidence="High",
+                color="red", threat_level=f"{pw_severity} Risk", tags=["breach", "severity"]))
+        if len(exposed_data_classes) > 0:
+            findings.append(IntelligenceFinding(
+                entity=f"Data classes exposed: {len(exposed_data_classes)} distinct type(s)",
+                type="Breach: Data Class Exposure", source="BreachDirectory", confidence="High",
+                color="red", tags=["breach", "data-class"]))
+        if weak_password_count > 0:
+            findings.append(IntelligenceFinding(
+                entity=f"Weak passwords detected: {weak_password_count}",
+                type="Breach: Weak Password Alert", source="BreachDirectory", confidence="High",
+                color="red", threat_level="Critical Risk", tags=["breach", "weak-password"]))
+
+    await asyncio.gather(
+        analyze_breach_impact_assessment(),
+        check_technology_fingerprint(),
+        check_common_vulnerability_headers(),
+        analyze_dns_health(),
+        check_email_breach_prevention(),
+        analyze_data_exposure_severity(),
+    )
+
+    async def check_ssl_cert():
+        domain = t.split("@")[-1] if "@" in t else t
+        try:
+            import ssl, socket
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            with ctx.wrap_socket(socket.socket(), server_hostname=domain) as s:
+                s.settimeout(5)
+                s.connect((domain, 443))
+                cert = s.getpeercert()
+                issuer = dict(cert.get("issuer", [[["", ""]]])[0]).get("commonName", "Unknown")
+                findings.append(IntelligenceFinding(
+                    entity=f"SSL Issuer: {issuer}", type="Breach: SSL Certificate Info",
+                    source="BreachDirectory", confidence="High", color="slate", tags=["breach", "ssl"]))
+                sans = [v for _, v in cert.get("subjectAltName", [])]
+                if sans:
+                    findings.append(IntelligenceFinding(
+                        entity=f"SSL SANs: {len(sans)} domain(s)", type="Breach: SSL Subject Alt Names",
+                        source="BreachDirectory", confidence="High", color="slate", tags=["breach", "ssl"]))
+        except: pass
+
+    async def check_http_redirects():
+        domain = t.split("@")[-1] if "@" in t else t
+        try:
+            resp = await client.get(f"https://{domain}", timeout=8.0, follow_redirects=False, headers={"User-Agent": UA})
+            if resp.status_code in (301, 302, 307, 308):
+                location = resp.headers.get("location", "")
+                findings.append(IntelligenceFinding(
+                    entity=f"Redirect: {resp.status_code} -> {location[:80]}",
+                    type="Breach: HTTP Redirect", source="BreachDirectory",
+                    confidence="High", color="slate", tags=["breach", "http"]))
+        except: pass
+
+    async def analyze_breach_remediation():
+        recs = []
+        if total_passwords > 0: recs.append("Immediately rotate all passwords for exposed accounts")
+        if weak_password_count > 0: recs.append("Audit all accounts for weak password reuse")
+        if len(total_breach_sources) > 0: recs.append("Review account recovery options (security questions, backup email)")
+        recs.append("Check for exposed personal data (address, phone, SSN) in breach dumps")
+        recs.append("Set up credit monitoring if financial data exposed")
+        for i, rec in enumerate(recs[:3]):
+            findings.append(IntelligenceFinding(
+                entity=f"Remediation {i+1}: {rec[:100]}", type="Breach: Remediation Step",
+                source="BreachDirectory", confidence="Medium", color="orange",
+                tags=["breach", "remediation"]))
+
+    await asyncio.gather(
+        check_ssl_cert(),
+        check_http_redirects(),
+        analyze_breach_remediation(),
+    )
+
     if not findings:
         findings.append(IntelligenceFinding(
             entity=f"No breach records for {t}",

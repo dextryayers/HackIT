@@ -1,5 +1,6 @@
 import httpx
 import json
+import asyncio
 from models import IntelligenceFinding
 
 URLSCAN_API = "https://urlscan.io/api/v1"
@@ -429,6 +430,18 @@ async def crawl(target: str, client: httpx.AsyncClient):
         pass
 
     try:
+        uuid = await _submit_urlscan(domain, client)
+        if uuid:
+            result_data = await _poll_urlscan_result(uuid, client)
+            if result_data:
+                await _analyze_dom_element(result_data, findings, domain)
+                await _analyze_redirects(result_data, findings, domain)
+                await _analyze_cookies_from_lists(result_data, findings)
+                await _analyze_tech_from_scan(result_data, findings)
+    except Exception:
+        pass
+
+    try:
         sub_resp = await client.get(
             f"{URLSCAN_API}/search/?q=domain:{domain}&size=100",
             timeout=15.0,
@@ -467,3 +480,200 @@ async def crawl(target: str, client: httpx.AsyncClient):
         pass
 
     return findings
+
+
+async def _submit_urlscan(domain: str, client: httpx.AsyncClient) -> str | None:
+    try:
+        payload = {
+            "url": f"https://{domain}",
+            "public": "on",
+            "useragent": USER_AGENT,
+        }
+        resp = await client.post(
+            "https://urlscan.io/api/v1/scan/",
+            json=payload,
+            timeout=15.0,
+            headers={"User-Agent": USER_AGENT},
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            return data.get("uuid", "")
+    except Exception:
+        pass
+    return None
+
+
+async def _poll_urlscan_result(uuid: str, client: httpx.AsyncClient) -> dict | None:
+    for attempt in range(5):
+        try:
+            resp = await client.get(
+                f"https://urlscan.io/api/v1/result/{uuid}/",
+                timeout=10.0,
+                headers={"User-Agent": USER_AGENT},
+            )
+            if resp.status_code == 200:
+                return resp.json()
+        except Exception:
+            pass
+        if attempt < 4:
+            await asyncio.sleep(3)
+    return None
+
+
+async def _analyze_dom_element(data: dict, findings: list, domain: str):
+    try:
+        dom_data = data.get("data", {}).get("dom", {}) if data else {}
+        if not dom_data:
+            return
+
+        cookies = dom_data.get("cookies", [])
+        if cookies:
+            for c in cookies[:10]:
+                c_name = c.get("name", "")
+                c_domain = c.get("domain", "")
+                c_secure = c.get("secure", False)
+                c_http_only = c.get("httponly", False)
+                c_same_site = c.get("sameSite", "")
+                missing_attrs = []
+                if not c_secure:
+                    missing_attrs.append("Secure")
+                if not c_http_only:
+                    missing_attrs.append("HttpOnly")
+                if missing_attrs:
+                    findings.append(IntelligenceFinding(
+                        entity=f"Cookie: {c_name} (missing: {', '.join(missing_attrs)})",
+                        type="Insecure Cookie",
+                        source="urlscan.io",
+                        confidence="Medium",
+                        color="orange",
+                        threat_level="Elevated Risk",
+                        tags=["cookie", "security"],
+                    ))
+
+                if c_domain and c_domain.startswith("."):
+                    findings.append(IntelligenceFinding(
+                        entity=f"Wildcard cookie domain: {c_name} -> {c_domain}",
+                        type="Wildcard Cookie Domain",
+                        source="urlscan.io",
+                        confidence="Medium",
+                        color="orange",
+                        threat_level="Elevated Risk",
+                        tags=["cookie", "security"],
+                    ))
+
+        localStorage = dom_data.get("localStorage", [])
+        if localStorage:
+            for ls in localStorage[:5]:
+                ls_key = ls.get("name", "")
+                ls_val = ls.get("value", "")
+                if any(k in (ls_key + ls_val).lower() for k in ("token", "secret", "key", "password", "credential")):
+                    findings.append(IntelligenceFinding(
+                        entity=f"Sensitive localStorage: {ls_key}",
+                        type="Sensitive Client Storage",
+                        source="urlscan.io",
+                        confidence="Medium",
+                        color="red",
+                        threat_level="High Risk",
+                        tags=["security", "client-storage"],
+                    ))
+
+        sessionStorage = dom_data.get("sessionStorage", [])
+        if sessionStorage:
+            for ss in sessionStorage[:5]:
+                ss_key = ss.get("name", "")
+                ss_val = ss.get("value", "")
+                if any(k in (ss_key + ss_val).lower() for k in ("token", "secret", "key", "password", "credential")):
+                    findings.append(IntelligenceFinding(
+                        entity=f"Sensitive sessionStorage: {ss_key}",
+                        type="Sensitive Client Storage",
+                        source="urlscan.io",
+                        confidence="Medium",
+                        color="red",
+                        threat_level="High Risk",
+                        tags=["security", "client-storage"],
+                    ))
+    except Exception:
+        pass
+
+
+async def _analyze_redirects(data: dict, findings: list, domain: str):
+    try:
+        redirect_chain = data.get("data", {}).get("requests", []) if data else []
+        chain = []
+        for req in redirect_chain[:30]:
+            req_data = req.get("request", {})
+            resp_data = req.get("response", {})
+            req_url = (req_data or {}).get("url", "")
+            resp_status = (resp_data or {}).get("status", 0)
+            if resp_status in (301, 302, 303, 307, 308):
+                chain.append(f"{resp_status} -> {req_url[:120]}")
+        if len(chain) > 1:
+            findings.append(IntelligenceFinding(
+                entity=" -> ".join(chain[:5]),
+                type="Redirect Chain",
+                source="urlscan.io",
+                confidence="Medium",
+                color="orange",
+                threat_level="Informational",
+                tags=["redirect", "chain"],
+            ))
+        if len(chain) > 3:
+            findings.append(IntelligenceFinding(
+                entity=f"Long redirect chain: {len(chain)} hops",
+                type="Excessive Redirects",
+                source="urlscan.io",
+                confidence="Medium",
+                color="red",
+                threat_level="Elevated Risk",
+                tags=["redirect", "security"],
+            ))
+    except Exception:
+        pass
+
+
+async def _analyze_cookies_from_lists(data: dict, findings: list):
+    try:
+        lists_data = data.get("data", {}).get("lists", {}) if data else {}
+        cookies_list = lists_data.get("cookies", [])
+        if cookies_list:
+            for c in cookies_list[:15]:
+                c_name = c.get("name", "")
+                c_val = c.get("value", "")
+                if any(s in (c_val or "").lower() for s in ("session", "token", "auth", "sid", "jwt")):
+                    findings.append(IntelligenceFinding(
+                        entity=f"Auth-related cookie value: {c_name}",
+                        type="Authentication Cookie",
+                        source="urlscan.io",
+                        confidence="Medium",
+                        color="orange",
+                        threat_level="Elevated Risk",
+                        tags=["cookie", "authentication"],
+                    ))
+    except Exception:
+        pass
+
+
+async def _analyze_tech_from_scan(data: dict, findings: list):
+    try:
+        meta = data.get("meta", {}) if data else {}
+        processors = meta.get("processors", {}) if meta else {}
+        tech_data = processors.get("technology", {}).get("data", [])
+        if tech_data:
+            for tech in tech_data[:15]:
+                t_name = tech.get("name", "")
+                t_version = tech.get("version", "")
+                t_confidence = tech.get("confidence", 0)
+                if t_name:
+                    entity = f"{t_name} {t_version}" if t_version else t_name
+                    color_tech = "blue" if t_confidence > 80 else "slate"
+                    findings.append(IntelligenceFinding(
+                        entity=entity,
+                        type="Detected Technology",
+                        source="urlscan.io",
+                        confidence="Medium",
+                        color=color_tech,
+                        threat_level="Informational",
+                        tags=["technology", "detected"],
+                    ))
+    except Exception:
+        pass

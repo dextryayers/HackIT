@@ -1031,4 +1031,127 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 tags=["similarity", "username-variants", "typosquat"]
             ))
 
+    async def analyze_username_characteristics():
+        if username:
+            length = len(username)
+            has_upper = any(c.isupper() for c in username)
+            has_digit = any(c.isdigit() for c in username)
+            has_special = any(not c.isalnum() for c in username)
+            findings.append(IntelligenceFinding(
+                entity=f"Username '{username}': {length} chars, upper={has_upper}, digit={has_digit}, special={has_special}",
+                type="Username Characteristics",
+                source="WhatsMyName", confidence="High",
+                color="slate", tags=["analysis"]))
+            pattern_type = "complex (mixed)" if has_upper and has_digit else "simple"
+            findings.append(IntelligenceFinding(
+                entity=f"Pattern: {pattern_type}",
+                type="Username Pattern Type",
+                source="WhatsMyName", confidence="Medium",
+                color="slate", tags=["analysis"]))
+
+    async def analyze_category_presence():
+        cat_counts = {}
+        for cat, count in sorted(category_found.items(), key=lambda x: -x[1]):
+            label = CATEGORY_MAP.get(cat, cat)
+            cat_counts[label] = count
+        if cat_counts:
+            for label, count in list(cat_counts.items())[:6]:
+                findings.append(IntelligenceFinding(
+                    entity=f"{label}: {count} profile(s)",
+                    type="Category Presence",
+                    source="WhatsMyName", confidence="Medium",
+                    color="purple", tags=["category"]))
+        diversity = len(category_found)
+        findings.append(IntelligenceFinding(
+            entity=f"Category diversity: {diversity} categories",
+            type="Category Diversity",
+            source="WhatsMyName", confidence="Medium",
+            color="slate", tags=["diversity"]))
+
+    async def generate_identity_recommendations():
+        recs = []
+        if found_count > 10:
+            recs.append("High digital footprint - review platform privacy settings")
+        if verified_platforms:
+            recs.append("Verified accounts exist - ensure 2FA is enabled")
+        if not recs:
+            recs.append("Moderate online presence detected")
+            recs.append("Use unique passwords for each platform")
+        for i, r in enumerate(recs[:3]):
+            findings.append(IntelligenceFinding(entity=f"Rec {i+1}: {r}", type="Identity Recommendation", source="WhatsMyName", confidence="Medium", color="orange", tags=["recommendation"]))
+
+    async def analyze_verification_stats():
+        if verified_platforms:
+            findings.append(IntelligenceFinding(entity=f"{len(verified_platforms)} verified account(s): {', '.join(verified_platforms)}", type="Verified Account Summary", source="WhatsMyName", confidence="Medium", color="emerald", tags=["verified"]))
+        if enrichment_map:
+            findings.append(IntelligenceFinding(entity=f"{len(enrichment_map)} platform(s) enriched via API", type="API Enrichment Summary", source="WhatsMyName", confidence="Medium", color="slate", tags=["enrichment"]))
+
+    async def analyze_error_profile():
+        errors = sum(1 for f in findings if f.status in ("Timeout", "Error", "Rate Limited"))
+        ok_count = sum(1 for f in findings if f.status == "Found")
+        total = errors + ok_count + sum(1 for f in findings if f.status in ("Not Found", "Info"))
+        error_rate = round((errors / total) * 100, 1) if total else 0
+        findings.append(IntelligenceFinding(entity=f"Error rate: {error_rate}% ({errors}/{total} requests)", type="Error Analysis", source="WhatsMyName", confidence="Medium", color="orange" if error_rate > 20 else "emerald", tags=["error-analysis"]))
+        findings.append(IntelligenceFinding(entity=f"Successful lookups: {ok_count}", type="Success Rate", source="WhatsMyName", confidence="Medium", color="slate", tags=["error-analysis"]))
+
+    async def analyze_enriched_details():
+        if enrichment_map:
+            domains = set(e.get("domain", "") for e in enrichment_map.values())
+            findings.append(IntelligenceFinding(entity=f"Enriched domains: {len(domains)}", type="Enrichment Domain Coverage", source="WhatsMyName", confidence="Medium", color="slate", tags=["enrichment"]))
+        findings.append(IntelligenceFinding(entity=f"Total platforms checked: {len(PLATFORMS)} across {len(similarity_variants) if similarity_variants else 1} variant(s)", type="Platform Coverage", source="WhatsMyName", confidence="High", color="slate", tags=["coverage"]))
+
+    async def analyze_threat_assessment():
+        high_impact = sum(1 for f in findings if f.threat_level in ("Elevated Risk", "High Risk"))
+        findings.append(IntelligenceFinding(entity=f"High-risk profile(s): {high_impact}", type="Threat Assessment", source="WhatsMyName", confidence="Medium", color="red" if high_impact else "emerald", tags=["threat"]))
+        profile_spread = len(category_found)
+        if profile_spread >= 5:
+            findings.append(IntelligenceFinding(entity=f"Wide digital footprint ({profile_spread} categories)", type="Footprint Analysis", source="WhatsMyName", confidence="Medium", color="orange", tags=["footprint"]))
+        else:
+            findings.append(IntelligenceFinding(entity=f"Narrow digital footprint ({profile_spread} categories)", type="Footprint Analysis", source="WhatsMyName", confidence="Medium", color="emerald", tags=["footprint"]))
+
+    async def analyze_variant_effectiveness():
+        if similarity_variants:
+            variant_count = len(similarity_variants)
+            findings.append(IntelligenceFinding(entity=f"Similarity variants checked: {variant_count}", type="Variant Analysis", source="WhatsMyName", confidence="Medium", color="slate", tags=["variants"]))
+            sim_found = sum(1 for f in findings if "similar" in (f.raw_data or "").lower())
+            findings.append(IntelligenceFinding(entity=f"Matches from similarity: {sim_found}", type="Similarity Matches", source="WhatsMyName", confidence="Low", color="slate", tags=["variants"]))
+
+    async def analyze_profile_breadth():
+        platform_types = {}
+        for f in findings:
+            if f.type.startswith("Social Profile:"):
+                for tag in f.tags:
+                    platform_types[tag] = platform_types.get(tag, 0) + 1
+        if platform_types:
+            for pt, pc in sorted(platform_types.items(), key=lambda x: -x[1])[:3]:
+                findings.append(IntelligenceFinding(entity=f"{pt}: {pc}", type="Profile Type Breakdown", source="WhatsMyName", confidence="Medium", color="slate", tags=["breadth"]))
+
+    async def analyze_discovery_efficiency():
+        total_checked = sum(1 for f in findings if f.type.startswith("Social Profile:"))
+        findings.append(IntelligenceFinding(entity=f"Total platform checks: {total_checked}", type="Discovery Efficiency", source="WhatsMyName", confidence="Medium", color="slate", tags=["efficiency"]))
+        if found_count and total_checked:
+            findings.append(IntelligenceFinding(entity=f"Hit rate: {round(found_count/total_checked*100,1)}%", type="Hit Rate", source="WhatsMyName", confidence="Medium", color="purple" if found_count/total_checked > 0.1 else "slate", tags=["efficiency"]))
+        findings.append(IntelligenceFinding(entity=f"Primary username: '{username}'", type="Primary Identity", source="WhatsMyName", confidence="High", color="slate", tags=["identity"]))
+
+    async def analyze_mfa_exposure():
+        findings.append(IntelligenceFinding(entity=f"Total platforms in database: {len(PLATFORMS)}", type="Platform Inventory", source="WhatsMyName", confidence="High", color="slate", tags=["coverage"]))
+        findings.append(IntelligenceFinding(entity="Enable MFA on all identified accounts", type="Security Recommendation", source="WhatsMyName", confidence="Medium", color="orange", tags=["coverage"]))
+        findings.append(IntelligenceFinding(entity="Check for account recovery options on each platform", type="Recovery Recommendation", source="WhatsMyName", confidence="Medium", color="orange", tags=["coverage"]))
+        findings.append(IntelligenceFinding(entity=f"Total findings: {sum(1 for f in findings if f.type.startswith('Social Profile:'))}", type="Finding Volume", source="WhatsMyName", confidence="Medium", color="slate", tags=["coverage"]))
+        findings.append(IntelligenceFinding(entity="Monitor for credential leaks using this username", type="Monitoring Recommendation", source="WhatsMyName", confidence="Medium", color="orange", tags=["coverage"]))
+
+    await asyncio.gather(
+        analyze_username_characteristics(),
+        analyze_category_presence(),
+        generate_identity_recommendations(),
+        analyze_verification_stats(),
+        analyze_error_profile(),
+        analyze_enriched_details(),
+        analyze_threat_assessment(),
+        analyze_variant_effectiveness(),
+        analyze_profile_breadth(),
+        analyze_discovery_efficiency(),
+        analyze_mfa_exposure(),
+    )
+
     return findings

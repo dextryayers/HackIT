@@ -73,6 +73,23 @@ async def check_gnql(client: httpx.AsyncClient, ip: str) -> dict:
         pass
     return result
 
+async def check_gnql_multi(client: httpx.AsyncClient, ip: str) -> dict:
+    result = {"records": []}
+    queries = [f"ip:{ip}", f"destination_ip:{ip}", f"source_ip:{ip}"]
+    for query in queries:
+        try:
+            resp = await client.get(
+                f"{GREYNOISE_API}/gnql?query={query}",
+                headers={"User-Agent": UA, "Accept": "application/json"},
+                timeout=10.0
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                result["records"].extend(data.get("data", data.get("records", []))[:3])
+        except:
+            pass
+    return result
+
 def calculate_threat_score(gnip_result: dict, riot_result: dict) -> int:
     score = 0
     if gnip_result.get("noise"):
@@ -141,6 +158,20 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                 tags=["greynoise", "timeline"]
             ))
 
+        first_seen = data.get("first_seen", "")
+        if first_seen:
+            findings.append(IntelligenceFinding(
+                entity=f"First seen: {first_seen[:10]}",
+                type="GreyNoise First Seen",
+                source="GreyNoise",
+                confidence="Medium",
+                color="slate",
+                threat_level="Informational",
+                status="Observed",
+                resolution=ip,
+                tags=["greynoise", "timeline", "first-seen"]
+            ))
+
         tags = data.get("tags", [])
         if tags:
             for tag in tags[:5]:
@@ -198,6 +229,34 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                     tags=["greynoise", "cve", cve_tag.lower()]
                 ))
 
+        country = data.get("country", "")
+        city = data.get("city", "")
+        if country or city:
+            loc = f"{city}, {country}" if city else country
+            findings.append(IntelligenceFinding(
+                entity=f"Location: {loc}",
+                type="GreyNoise Geolocation",
+                source="GreyNoise",
+                confidence="Medium",
+                color="slate",
+                status="Identified",
+                resolution=ip,
+                tags=["greynoise", "geo"]
+            ))
+
+        asn = data.get("asn", "")
+        if asn:
+            findings.append(IntelligenceFinding(
+                entity=f"ASN: {asn}",
+                type="GreyNoise ASN",
+                source="GreyNoise",
+                confidence="Medium",
+                color="slate",
+                status="Identified",
+                resolution=ip,
+                tags=["greynoise", "asn"]
+            ))
+
     if riot_result.get("riot"):
         findings.append(IntelligenceFinding(
             entity=f"RIOT: {riot_result.get('name', 'Known service')}",
@@ -239,6 +298,20 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             status="Data Available",
             resolution=ip,
             tags=["greynoise", "gnql"]
+        ))
+
+    gnql_multi = await check_gnql_multi(client, ip)
+    if gnql_multi.get("records"):
+        findings.append(IntelligenceFinding(
+            entity=f"{len(gnql_multi['records'])} multi-query GNQL records",
+            type="GreyNoise Extended GNQL",
+            source="GreyNoise",
+            confidence="Low",
+            color="slate",
+            threat_level="Informational",
+            status="Data Available",
+            resolution=ip,
+            tags=["greynoise", "gnql", "extended"]
         ))
 
     if not gnip_result.get("raw") and not riot_result.get("riot"):

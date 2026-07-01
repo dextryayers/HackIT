@@ -59,6 +59,20 @@ async def shodan_dns_resolve(hostname: str, client: httpx.AsyncClient) -> dict:
         pass
     return {}
 
+async def shodan_ports(ip: str, client: httpx.AsyncClient) -> list:
+    try:
+        resp = await client.get(
+            f"{SHODAN_API}/shodan/host/{ip}/ports",
+            params={"key": ""},
+            headers={"User-Agent": SHODAN_UA, "Accept": "application/json"},
+            timeout=10.0
+        )
+        if resp.status_code == 200:
+            return resp.json().get("ports", [])
+    except:
+        pass
+    return []
+
 async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFinding]:
     findings = []
     t = target.strip().lower()
@@ -66,13 +80,16 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         t = urlparse(t).netloc
 
     ip = await resolve_host(t)
+
     host_data = await shodan_host(ip, client)
+    port_list = await shodan_ports(ip, client)
 
     if host_data:
-        ports = host_data.get("ports", [])
+        ports = host_data.get("ports", port_list)
         if ports:
+            sorted_ports = sorted(ports)
             findings.append(IntelligenceFinding(
-                entity=f"Open ports: {len(ports)} ({', '.join(map(str, sorted(ports)[:10]))})",
+                entity=f"Open ports: {len(ports)} ({', '.join(map(str, sorted_ports[:10]))})",
                 type="Shodan Open Ports",
                 source="Shodan",
                 confidence="High",
@@ -175,6 +192,32 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                         raw_data=banner[:300],
                         tags=["shodan", "service", product.lower()]
                     ))
+
+        domains = host_data.get("domains", [])
+        if domains:
+            findings.append(IntelligenceFinding(
+                entity=f"Domains: {', '.join(domains[:5])}",
+                type="Shodan Domains",
+                source="Shodan",
+                confidence="Medium",
+                color="slate",
+                status="Resolved",
+                resolution=ip,
+                tags=["shodan", "domains"]
+            ))
+
+        uptime = host_data.get("uptime", "")
+        if uptime:
+            findings.append(IntelligenceFinding(
+                entity=f"Uptime: {uptime} seconds",
+                type="Shodan Uptime",
+                source="Shodan",
+                confidence="Low",
+                color="slate",
+                status="Measured",
+                resolution=ip,
+                tags=["shodan", "uptime"]
+            ))
 
     else:
         findings.append(IntelligenceFinding(

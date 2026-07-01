@@ -61,6 +61,104 @@ async def get_page_title(html: str) -> str:
     m = re.search(r'<title[^>]*>(.*?)</title>', html, re.IGNORECASE | re.DOTALL)
     return m.group(1).strip()[:200] if m else ""
 
+async def extract_links_from_content(html: str) -> list:
+    links = []
+    try:
+        for m in re.finditer(r'<a\s+(?:[^>]*?\s+)?href="([^"]*)"', html, re.IGNORECASE):
+            links.append(m.group(1))
+        for m in re.finditer(r'<a\s+(?:[^>]*?\s+)?href=\'([^\']*)\'', html, re.IGNORECASE):
+            links.append(m.group(1))
+        for m in re.finditer(r'src="([^"]*)"', html, re.IGNORECASE):
+            links.append(m.group(1))
+        for m in re.finditer(r'src=\'([^\']*)\'', html, re.IGNORECASE):
+            links.append(m.group(1))
+    except:
+        pass
+    return links
+
+async def analyze_archived_content(url: str, ts: str, client: httpx.AsyncClient) -> list:
+    findings = []
+    try:
+        content = await get_snapshot_content(url, ts, client)
+        if not content:
+            return findings
+        links = await extract_links_from_content(content)
+        if links:
+            findings.append(IntelligenceFinding(
+                entity=f"Content analysis: {len(links)} links extracted from archived page",
+                type="Archive Forensics: Link Extraction",
+                source="Wayback CDX",
+                confidence="Medium",
+                color="slate",
+                status="Analyzed",
+                resolution=url[:200],
+                tags=["forensics", "links", "content"]
+            ))
+            internal = [l for l in links if l.startswith("/") or urlparse(url).netloc in l]
+            external = [l for l in links if l.startswith("http") and urlparse(url).netloc not in l]
+            if internal:
+                findings.append(IntelligenceFinding(
+                    entity=f"{len(internal)} internal links found in archived page",
+                    type="Archive Forensics: Internal Links",
+                    source="Wayback CDX",
+                    confidence="Medium",
+                    color="slate",
+                    status="Extracted",
+                    resolution=url[:200],
+                    tags=["forensics", "internal-links"]
+                ))
+            if external:
+                findings.append(IntelligenceFinding(
+                    entity=f"{len(external)} external links to {len(set(urlparse(l).netloc for l in external))} unique domains",
+                    type="Archive Forensics: External Links",
+                    source="Wayback CDX",
+                    confidence="Medium",
+                    color="slate",
+                    status="Extracted",
+                    resolution=url[:200],
+                    tags=["forensics", "external-links"]
+                ))
+        title_match = re.search(r'<title[^>]*>(.*?)</title>', content, re.IGNORECASE | re.DOTALL)
+        if title_match:
+            title = title_match.group(1).strip()[:200]
+            findings.append(IntelligenceFinding(
+                entity=f"Archived page title: {title}",
+                type="Archive Forensics: Page Title",
+                source="Wayback CDX",
+                confidence="High",
+                color="slate",
+                status="Retrieved",
+                resolution=url[:200],
+                tags=["forensics", "title", "content"]
+            ))
+        meta_desc = re.search(r'<meta\s+name="description"\s+content="([^"]*)"', content, re.IGNORECASE)
+        if meta_desc:
+            findings.append(IntelligenceFinding(
+                entity=f"Meta description: {meta_desc.group(1)[:200]}",
+                type="Archive Forensics: Meta Description",
+                source="Wayback CDX",
+                confidence="Medium",
+                color="slate",
+                status="Retrieved",
+                resolution=url[:200],
+                tags=["forensics", "meta", "description"]
+            ))
+        scripts = re.findall(r'<script[^>]*src="([^"]*)"', content, re.IGNORECASE)
+        if scripts:
+            findings.append(IntelligenceFinding(
+                entity=f"{len(scripts)} JavaScript files referenced in archived page",
+                type="Archive Forensics: JS References",
+                source="Wayback CDX",
+                confidence="Medium",
+                color="slate",
+                status="Counted",
+                resolution=url[:200],
+                tags=["forensics", "javascript", "scripts"]
+            ))
+    except:
+        pass
+    return findings
+
 async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFinding]:
     findings = []
     t = target.strip().lower()
@@ -128,6 +226,10 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
         earliest = min(r.get("timestamp", "9999") for r in cdx_results if r.get("timestamp"))
         latest = max(r.get("timestamp", "0000") for r in cdx_results if r.get("timestamp"))
+        for r in cdx_results[:5]:
+            content_results = await analyze_archived_content(r.get("url", ""), r.get("timestamp", ""), client)
+            findings.extend(content_results)
+
         if earliest and latest:
             findings.append(IntelligenceFinding(
                 entity=f"Archive timeline: {earliest[:10]} to {latest[:10]}",

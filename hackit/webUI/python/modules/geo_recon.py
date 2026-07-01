@@ -53,6 +53,51 @@ async def check_proxy_vpn(ip: str, client: httpx.AsyncClient) -> list:
         pass
     return results
 
+ADDITIONAL_GEO_APIS = {
+    "ipapi.is": "https://api.ipapi.is/?q={}",
+    "ipdata": "https://api.ipdata.co/{}/",
+    "ipapi.com": "http://api.ipapi.com/api/{}",
+    "ip2c": "https://ip2c.org/{}",
+    "ipapi.co": "https://ipapi.co/{}/city/",
+}
+
+EXTRA_GEO_APIS = {
+    "country.is": "https://api.country.is/{}",
+    "ipxapi": "http://ipxapi.com/api/{}",
+}
+
+async def extract_geo_fields(ip: str, source: str, data: dict) -> list:
+    findings = []
+    field_map = {
+        "city": ["city", "city_name", "locality"],
+        "region": ["region", "region_name", "state", "province"],
+        "country": ["country", "country_name", "countryCode"],
+        "lat": ["lat", "latitude"],
+        "lon": ["lon", "longitude", "lng"],
+        "org": ["org", "organization", "asn_description", "as"],
+        "isp": ["isp", "asn", "as_name"],
+        "timezone": ["timezone", "time_zone", "tz"],
+        "zip": ["zip", "postal", "postalCode"],
+        "continent": ["continent", "continent_code"],
+    }
+    for field, keys in field_map.items():
+        for k in keys:
+            val = data.get(k)
+            if val:
+                findings.append(IntelligenceFinding(
+                    entity=f"{field.title()}: {val}",
+                    type=f"Geo Recon: {field.title()} ({source})",
+                    source=source,
+                    confidence="High" if field in ("city", "country", "lat", "lon") else "Medium",
+                    color="slate",
+                    threat_level="Informational",
+                    status="Located",
+                    resolution=ip,
+                    tags=["geo", field, source.lower()]
+                ))
+                break
+    return findings
+
 async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFinding]:
     findings = []
     ip = target.strip().lower()
@@ -103,7 +148,8 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             tags=["geo", pv, "anonymizer"]
         ))
 
-    tasks = [query_geo(ip, name, tmpl, client) for name, tmpl in GEO_APIS.items()]
+    all_apis = {**GEO_APIS, **ADDITIONAL_GEO_APIS, **EXTRA_GEO_APIS}
+    tasks = [query_geo(ip, name, tmpl, client) for name, tmpl in all_apis.items()]
     geo_results = await asyncio.gather(*tasks, return_exceptions=True)
 
     for result in geo_results:
@@ -122,6 +168,8 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                 raw_data=json.dumps(data)[:500],
                 tags=["geo", source.lower()]
             ))
+            field_results = await extract_geo_fields(ip, source, data)
+            findings.extend(field_results)
 
     if not findings:
         findings.append(IntelligenceFinding(

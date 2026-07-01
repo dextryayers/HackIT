@@ -64,6 +64,93 @@ BANKING_KEYWORDS = {
     "creditcard": r"\b(?:\d{4}[ -]?){3}\d{4}\b",
 }
 
+BLOCKCHAIN_EXPLORERS = [
+    ("Blockchain.com", lambda addr: f"https://api.blockchain.info/address/{addr}?format=json"),
+    ("Blockchair", lambda addr: f"https://api.blockchair.com/bitcoin/address/{addr}"),
+    ("Etherscan", lambda addr: f"https://api.etherscan.io/api?module=account&action=balance&address={addr}&tag=latest"),
+    ("BTC.com", lambda addr: f"https://chain.api.btc.com/v3/address/{addr}"),
+]
+
+FINANCIAL_KEYWORDS_EXTRA = {
+    "swift_bic": r"\b[A-Z]{4}[A-Z]{2}[A-Z0-9]{2}([A-Z0-9]{3})?\b",
+    "iban": r"\b[A-Z]{2}[0-9]{2}[A-Z0-9]{1,30}\b",
+    "sort_code": r"\b\d{2}-\d{2}-\d{2}\b",
+    "routing_number": r"\b\d{9}\b",
+    "account_number": r"\b\d{8,17}\b",
+    "aba_routing": r"\b0\d{8}\b",
+    "cvv": r"\b\d{3,4}\b",
+    "credit_card": r"\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13}|6011[0-9]{12}|3(?:0[0-5]|[68][0-9])[0-9]{11})\b",
+}
+
+COMPANY_DATA_ENDPOINTS = [
+    ("OpenCorporates", lambda c: f"https://api.opencorporates.com/v0.4/companies/search?q={c}"),
+    ("CompanyHouse", lambda c: f"https://api.companyhouse.de/search?q={c}"),
+    ("Crunchbase", lambda c: f"https://api.crunchbase.com/api/v4/entities/organizations/{c}"),
+    ("LinkedIn", lambda c: f"https://www.linkedin.com/company/{c}"),
+    ("Glassdoor", lambda c: f"https://www.glassdoor.com/Overview/Working-at-{c}-EI_IE{''}.htm"),
+]
+
+async def check_blockchain_wallet(addr: str, client: httpx.AsyncClient) -> list:
+    findings = []
+    for name, url_builder in BLOCKCHAIN_EXPLORERS:
+        try:
+            url = url_builder(addr)
+            resp = await client.get(url, timeout=10.0,
+                headers={"User-Agent": "Mozilla/5.0"})
+            if resp.status_code == 200:
+                findings.append(IntelligenceFinding(
+                    entity=f"Blockchain data from {name} for {addr[:20]}...",
+                    type=f"Financial Recon: Blockchain ({name})",
+                    source=name,
+                    confidence="Medium",
+                    color="slate",
+                    status="Data Retrieved",
+                    resolution=addr,
+                    tags=["financial", "blockchain", name.lower().replace(" ", "-")]
+                ))
+        except:
+            pass
+    return findings
+
+async def check_company_data(company: str, client: httpx.AsyncClient) -> list:
+    findings = []
+    for name, url_builder in COMPANY_DATA_ENDPOINTS:
+        try:
+            url = url_builder(company)
+            resp = await client.get(url, timeout=10.0,
+                headers={"User-Agent": "Mozilla/5.0"})
+            if resp.status_code == 200 and len(resp.text) > 100:
+                findings.append(IntelligenceFinding(
+                    entity=f"Company data available from {name}",
+                    type=f"Financial Recon: Company Data ({name})",
+                    source=name,
+                    confidence="Medium",
+                    color="slate",
+                    status="Available",
+                    resolution=company,
+                    tags=["financial", "company", name.lower().replace(" ", "-")]
+                ))
+        except:
+            pass
+    return findings
+
+async def extract_financial_patterns(text: str) -> list:
+    findings = []
+    for fin_type, pattern in FINANCIAL_KEYWORDS_EXTRA.items():
+        matches = re.findall(pattern, text)
+        if matches:
+            findings.append(IntelligenceFinding(
+                entity=f"Potential {fin_type.replace('_', ' ').title()}: {matches[0][:30]}...",
+                type=f"Financial Recon: {fin_type.replace('_', ' ').title()}",
+                source="FinancialRecon",
+                confidence="Low",
+                color="orange",
+                threat_level="Sensitive Data",
+                status="Matched",
+                tags=["financial", fin_type, "pii"]
+            ))
+    return findings
+
 async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFinding]:
     findings = []
     t = target.strip()
@@ -127,6 +214,22 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                 resolution=t,
                 tags=["financial", "sec", "edgar"]
             ))
+
+    btc_match = re.search(r"\b[13][a-km-zA-HJ-NP-Z1-9]{25,34}\b", t)
+    eth_match = re.search(r"\b0x[a-fA-F0-9]{40}\b", t)
+    if btc_match:
+        btc_results = await check_blockchain_wallet(btc_match.group(), client)
+        findings.extend(btc_results)
+    if eth_match:
+        eth_results = await check_blockchain_wallet(eth_match.group(), client)
+        findings.extend(eth_results)
+
+    if company_match:
+        corp_data_results = await check_company_data(company_match, client)
+        findings.extend(corp_data_results)
+
+        fin_pattern_results = await extract_financial_patterns(t)
+        findings.extend(fin_pattern_results)
 
     for bank_type, pattern in BANKING_KEYWORDS.items():
         matches = re.findall(pattern, t)

@@ -1252,4 +1252,61 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             tags=["error"],
         ))
 
+    async def analyze_asn_landscape():
+        findings.append(IntelligenceFinding(entity=f"Total ASNs discovered: {len(seen_asns)}", type="BGP: ASN Count", source="BGP.HE.net", confidence="High", color="slate", tags=["analysis"]))
+        asn_types = {"peer": 0, "upstream": 0, "downstream": 0}
+        for f in findings:
+            if f.type == "BGP: Peer": asn_types["peer"] += 1
+            elif f.type == "BGP: Upstream": asn_types["upstream"] += 1
+            elif f.type == "BGP: Downstream": asn_types["downstream"] += 1
+        findings.append(IntelligenceFinding(entity=f"Peers: {asn_types['peer']}, Upstream: {asn_types['upstream']}, Downstream: {asn_types['downstream']}", type="BGP: Relationship Breakdown", source="BGP.HE.net", confidence="Medium", color="slate", tags=["analysis"]))
+        org_names = set()
+        for f in findings:
+            if f.type == "BGP: Organization":
+                org_names.add(f.entity)
+        findings.append(IntelligenceFinding(entity=f"Organizations: {len(org_names)}", type="BGP: Org Count", source="BGP.HE.net", confidence="Medium", color="slate", tags=["analysis"]))
+        findings.append(IntelligenceFinding(entity=f"Target: {t}", type="BGP: Target Summary", source="BGP.HE.net", confidence="High", color="slate", tags=["analysis"]))
+
+    async def analyze_bgp_security():
+        risks = [f for f in findings if f.type == "BGP: Risk Assessment"]
+        findings.append(IntelligenceFinding(entity=f"BGP risk findings: {len(risks)}", type="BGP: Risk Count", source="BGP.HE.net", confidence="Medium", color="red" if len(risks) > 2 else "emerald", tags=["security"]))
+        invalid_rpki = sum(1 for f in findings if "invalid" in f.entity.lower() and f.type == "BGP: RPKI Status")
+        findings.append(IntelligenceFinding(entity=f"RPKI invalid prefixes: {invalid_rpki}", type="BGP: RPKI Invalid Count", source="BGP.HE.net", confidence="Medium", color="red" if invalid_rpki else "emerald", tags=["security"]))
+        irr_gaps = sum(1 for f in findings if f.type == "BGP: IRR Coverage Gap")
+        findings.append(IntelligenceFinding(entity=f"IRR coverage gaps: {irr_gaps}", type="BGP: IRR Gap Count", source="BGP.HE.net", confidence="Medium", color="yellow" if irr_gaps else "emerald", tags=["security"]))
+
+    async def analyze_prefix_geography():
+        geo_count = sum(1 for f in findings if f.type == "BGP: Prefix Geolocation")
+        findings.append(IntelligenceFinding(entity=f"Prefixes with geolocation: {geo_count}", type="BGP: Geo Prefix Count", source="BGP.HE.net", confidence="Medium", color="slate", tags=["geo"]))
+        countries = set()
+        for f in findings:
+            if f.type == "BGP: Prefix Geolocation":
+                parts = f.entity.split("-")
+                if len(parts) >= 2:
+                    countries.add(parts[1].split("/")[0].strip())
+        findings.append(IntelligenceFinding(entity=f"Countries represented: {', '.join(sorted(countries)) if countries else 'N/A'}", type="BGP: Country Spread", source="BGP.HE.net", confidence="Medium", color="slate", tags=["geo"]))
+        findings.append(IntelligenceFinding(entity=f"Routing data source: BGP.HE.net (Hurricane Electric)", type="BGP: Data Source", source="BGP.HE.net", confidence="High", color="slate", tags=["geo"]))
+
+    async def analyze_routing_summary():
+        total_prefixes = sum(1 for f in findings if f.type in ("BGP: IPv4 Prefix", "BGP: IPv6 Prefix", "BGP: Prefix for IP"))
+        findings.append(IntelligenceFinding(entity=f"Total prefixes found: {total_prefixes}", type="BGP: Prefix Count", source="BGP.HE.net", confidence="High", color="slate", tags=["routing"]))
+        findings.append(IntelligenceFinding(entity=f"Peer connections: {sum(1 for f in findings if f.type == 'BGP: Peer')}", type="BGP: Peer Connections", source="BGP.HE.net", confidence="Medium", color="slate", tags=["routing"]))
+        findings.append(IntelligenceFinding(entity=f"Transit relationships: {sum(1 for f in findings if f.type in ('BGP: Upstream', 'BGP: Downstream'))}", type="BGP: Transit Links", source="BGP.HE.net", confidence="Medium", color="slate", tags=["routing"]))
+
+    async def analyze_network_health():
+        graphs = sum(1 for f in findings if f.type in ("BGP: Adjacency Graph", "BGP: Structured Graph Export"))
+        findings.append(IntelligenceFinding(entity=f"Network graphs generated: {graphs}", type="BGP: Graph Count", source="BGP.HE.net", confidence="Medium", color="slate", tags=["health"]))
+        paths = sum(1 for f in findings if f.type == "BGP: Path Analysis")
+        findings.append(IntelligenceFinding(entity=f"BGP paths traced: {paths}", type="BGP: Path Count", source="BGP.HE.net", confidence="Medium", color="slate", tags=["health"]))
+        irv = sum(1 for f in findings if f.type == "BGP: IRV Analysis")
+        findings.append(IntelligenceFinding(entity=f"IRV validations: {irv}", type="BGP: IRV Count", source="BGP.HE.net", confidence="Medium", color="slate", tags=["health"]))
+
+    await asyncio.gather(
+        analyze_asn_landscape(),
+        analyze_bgp_security(),
+        analyze_prefix_geography(),
+        analyze_routing_summary(),
+        analyze_network_health(),
+    )
+
     return findings

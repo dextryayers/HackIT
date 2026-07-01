@@ -11,6 +11,22 @@ from models import IntelligenceFinding
 THREATMINER_API = "https://api.threatminer.org/v2"
 UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
 
+DOMAIN_ENDPOINTS = {
+    "WHOIS": "5",
+    "PDNS": "2",
+    "Subdomains": "1",
+    "Reports": "4",
+    "Related Samples": "6",
+}
+
+IP_ENDPOINTS = {
+    "PDNS": "2",
+    "DNS Resolutions": "3",
+    "Malware Samples": "4",
+    "Reports": "5",
+    "SSL Certs": "6",
+}
+
 async def query_domain(domain: str, endpoint: str, client: httpx.AsyncClient) -> dict:
     try:
         resp = await client.get(
@@ -67,6 +83,34 @@ async def query_report(query: str, client: httpx.AsyncClient) -> dict:
         pass
     return {}
 
+async def query_av(av_query: str, client: httpx.AsyncClient) -> dict:
+    try:
+        resp = await client.get(
+            f"{THREATMINER_API}/av.php",
+            params={"q": av_query, "rt": "1"},
+            headers={"User-Agent": UA, "Accept": "application/json"},
+            timeout=10.0
+        )
+        if resp.status_code == 200:
+            return resp.json()
+    except:
+        pass
+    return {}
+
+async def query_imphash(imphash: str, client: httpx.AsyncClient) -> dict:
+    try:
+        resp = await client.get(
+            f"{THREATMINER_API}/imphash.php",
+            params={"q": imphash, "rt": "1"},
+            headers={"User-Agent": UA, "Accept": "application/json"},
+            timeout=10.0
+        )
+        if resp.status_code == 200:
+            return resp.json()
+    except:
+        pass
+    return {}
+
 async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFinding]:
     findings = []
     t = target.strip().lower()
@@ -79,119 +123,106 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         pass
 
     if is_ip:
-        subdomains = await query_ip(t, "2", client)
-        dns = await query_ip(t, "3", client)
-        samples = await query_ip(t, "4", client)
-        reports = await query_report(t, client)
-
-        sub_data = subdomains.get("results", [])
-        if sub_data:
-            findings.append(IntelligenceFinding(
-                entity=f"{len(sub_data)} subdomains/PDNS records for {t}",
-                type="ThreatMiner PDNS Records",
-                source="ThreatMiner",
-                confidence="Medium",
-                color="slate",
-                threat_level="Informational",
-                status="Found",
-                resolution=t,
-                tags=["threatminer", "pdns"]
-            ))
-
-        dns_data = dns.get("results", [])
-        if dns_data:
-            for entry in dns_data[:10]:
-                if isinstance(entry, dict):
+        for endpoint_name, rt in IP_ENDPOINTS.items():
+            data = await query_ip(t, rt, client)
+            results = data.get("results", [])
+            if results:
+                status_message = data.get("status_message", "Results found")
+                findings.append(IntelligenceFinding(
+                    entity=f"{endpoint_name}: {len(results)} entries",
+                    type=f"ThreatMiner: {endpoint_name}",
+                    source="ThreatMiner",
+                    confidence="Medium",
+                    color="slate" if endpoint_name in ("WHOIS", "PDNS") else "orange",
+                    threat_level="Elevated Risk" if endpoint_name in ("Malware Samples", "SSL Certs") else "Informational",
+                    status=status_message,
+                    resolution=t,
+                    tags=["threatminer", endpoint_name.lower().replace(" ", "-")]
+                ))
+                for entry in results[:5]:
+                    entry_str = str(entry)[:200]
                     findings.append(IntelligenceFinding(
-                        entity=f"DNS: {entry.get('domain', entry.get('hostname', str(entry)))[:200]}",
-                        type="ThreatMiner DNS Resolutions",
+                        entity=f"{endpoint_name[:15]} entry: {entry_str}",
+                        type=f"ThreatMiner: {endpoint_name} Detail",
                         source="ThreatMiner",
-                        confidence="Medium",
+                        confidence="Low",
                         color="slate",
-                        status="Resolved",
+                        status="Found",
                         resolution=t,
-                        tags=["threatminer", "dns"]
+                        tags=["threatminer", endpoint_name.lower().replace(" ", "-")]
                     ))
-
-        sample_data = samples.get("results", [])
-        if sample_data:
-            findings.append(IntelligenceFinding(
-                entity=f"{len(sample_data)} malware samples associated",
-                type="ThreatMiner Malware Samples",
-                source="ThreatMiner",
-                confidence="Medium",
-                color="orange",
-                threat_level="Elevated Risk",
-                status=f"{len(sample_data)} samples",
-                resolution=t,
-                tags=["threatminer", "malware"]
-            ))
 
     else:
-        whois = await query_domain(t, "5", client)
-        pdns = await query_domain(t, "2", client)
-        subdomains = await query_domain(t, "1", client)
-        reports = await query_report(t, client)
-
-        whois_data = whois.get("results", [])
-        if whois_data:
-            for entry in whois_data[:5]:
-                if isinstance(entry, dict):
+        for endpoint_name, rt in DOMAIN_ENDPOINTS.items():
+            data = await query_domain(t, rt, client)
+            results = data.get("results", [])
+            if results:
+                status_message = data.get("status_message", "Results found")
+                findings.append(IntelligenceFinding(
+                    entity=f"{endpoint_name}: {len(results)} entries",
+                    type=f"ThreatMiner: {endpoint_name}",
+                    source="ThreatMiner",
+                    confidence="Medium",
+                    color="slate" if endpoint_name in ("WHOIS", "PDNS", "Subdomains") else "orange",
+                    threat_level="Elevated Risk" if endpoint_name in ("Related Samples",) else "Informational",
+                    status=status_message,
+                    resolution=t,
+                    tags=["threatminer", endpoint_name.lower().replace(" ", "-")]
+                ))
+                for entry in results[:5]:
+                    entry_str = str(entry)[:200]
                     findings.append(IntelligenceFinding(
-                        entity=f"WHOIS: {entry.get('whois', str(entry))[:200]}",
-                        type="ThreatMiner WHOIS",
+                        entity=f"{endpoint_name[:15]} entry: {entry_str}",
+                        type=f"ThreatMiner: {endpoint_name} Detail",
                         source="ThreatMiner",
-                        confidence="Medium",
+                        confidence="Low",
                         color="slate",
                         status="Found",
                         resolution=t,
-                        tags=["threatminer", "whois"]
+                        tags=["threatminer", endpoint_name.lower().replace(" ", "-")]
                     ))
 
-        pdns_data = pdns.get("results", [])
-        if pdns_data:
-            for entry in pdns_data[:10]:
-                if isinstance(entry, dict):
-                    findings.append(IntelligenceFinding(
-                        entity=f"PDNS: {entry.get('ip', entry.get('domain', str(entry)))[:200]}",
-                        type="ThreatMiner Passive DNS",
-                        source="ThreatMiner",
-                        confidence="Medium",
-                        color="slate",
-                        status="Found",
-                        resolution=t,
-                        tags=["threatminer", "pdns"]
-                    ))
-
-        sub_data = subdomains.get("results", [])
-        if sub_data:
-            for sub in sub_data[:10]:
-                if isinstance(sub, dict):
-                    findings.append(IntelligenceFinding(
-                        entity=f"Subdomain: {sub.get('subdomain', str(sub))[:200]}",
-                        type="ThreatMiner Subdomain",
-                        source="ThreatMiner",
-                        confidence="Medium",
-                        color="slate",
-                        status="Found",
-                        resolution=t,
-                        tags=["threatminer", "subdomain"]
-                    ))
-
-    report_data = reports.get("results", [])
-    if report_data:
-        for r in report_data[:5]:
+    report_data = await query_report(t, client)
+    results = report_data.get("results", [])
+    if results:
+        findings.append(IntelligenceFinding(
+            entity=f"Reports: {len(results)} APT/threat reports available",
+            type="ThreatMiner: Reports",
+            source="ThreatMiner",
+            confidence="Medium",
+            color="orange",
+            threat_level="Elevated Risk",
+            status="Available",
+            resolution=t,
+            tags=["threatminer", "reports"]
+        ))
+        for r in results[:5]:
             findings.append(IntelligenceFinding(
                 entity=f"Report: {str(r)[:200]}",
-                type="ThreatMiner Report",
+                type="ThreatMiner Report Detail",
                 source="ThreatMiner",
-                confidence="Medium",
+                confidence="Low",
                 color="slate",
                 threat_level="Informational",
                 status="Available",
                 resolution=t,
                 tags=["threatminer", "report"]
             ))
+
+    av_data = await query_av(t, client)
+    av_results = av_data.get("results", [])
+    if av_results:
+        findings.append(IntelligenceFinding(
+            entity=f"AV detections: {len(av_results)} results",
+            type="ThreatMiner: AV Detection",
+            source="ThreatMiner",
+            confidence="Medium",
+            color="red",
+            threat_level="High Risk",
+            status="Detected",
+            resolution=t,
+            tags=["threatminer", "av"]
+        ))
 
     if not findings:
         findings.append(IntelligenceFinding(

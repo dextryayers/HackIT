@@ -523,6 +523,56 @@ async def crawl(target: str, client: httpx.AsyncClient):
             except Exception:
                 pass
 
+        if http2_supported and settings:
+            hpack = analyze_hpack_efficiency(settings)
+            if hpack:
+                findings.append(IntelligenceFinding(
+                    entity=f"HPACK: table_size={hpack.get('table_size', '?')}, efficiency={hpack.get('efficiency', '?')} ({hpack.get('profile', '?')})",
+                    type="HTTP/2 HPACK Analysis",
+                    source="HTTP2Fingerprinter",
+                    confidence="Medium",
+                    color="slate",
+                    threat_level="Informational",
+                    tags=["http2", "hpack", "compression"]
+                ))
+
+            tls_fp = detect_tls_fingerprint(alpn_protocol, headers.get("server", ""), settings)
+            if tls_fp.get("likely_server"):
+                findings.append(IntelligenceFinding(
+                    entity=f"Likely server: {tls_fp['likely_server']} (TLS fingerprint match)",
+                    type="HTTP/2 TLS Fingerprint",
+                    source="HTTP2Fingerprinter",
+                    confidence="Medium",
+                    color="purple",
+                    threat_level="Informational",
+                    tags=["http2", "fingerprint", "tls"]
+                ))
+
+        push_indicators = detect_push_promise_via_headers(headers)
+        for ind in push_indicators:
+            findings.append(IntelligenceFinding(
+                entity=f"Server push indicator: {ind}",
+                type="HTTP/2 Push Indicator",
+                source="HTTP2Fingerprinter",
+                confidence="Medium",
+                color="orange",
+                threat_level="Informational",
+                tags=["http2", "server-push"]
+            ))
+
+        h3_details = check_h3_alt_svc_advanced(alt_svc_header)
+        if h3_details:
+            for k, v in h3_details.items():
+                findings.append(IntelligenceFinding(
+                    entity=f"HTTP/3 detail - {k}: {v}",
+                    type="HTTP/3 Detail",
+                    source="HTTP2Fingerprinter",
+                    confidence="Medium",
+                    color="cyan",
+                    threat_level="Informational",
+                    tags=["http3", "quic", k]
+                ))
+
         tls13_h2 = await try_http2_direct_tls13_only(host)
         if tls13_h2:
             findings.append(IntelligenceFinding(
@@ -597,3 +647,177 @@ async def crawl(target: str, client: httpx.AsyncClient):
         ))
 
     return findings
+
+
+# === EXTENDED UPGRADE: HPACK analysis, priority frames, WINDOW_UPDATE, more profiles ===
+
+MORE_SERVER_PROFILES = {
+    "h2o": {"header_table_size": 4096, "max_concurrent_streams": 100, "initial_window_size": 65536, "max_frame_size": 65536, "enable_push": 0},
+    "nghttpx": {"header_table_size": 4096, "max_concurrent_streams": 200, "initial_window_size": 65536, "max_frame_size": 16384, "enable_push": 0},
+    "gunicorn": {"header_table_size": 4096, "max_concurrent_streams": 100, "initial_window_size": 65536, "max_frame_size": 16384, "enable_push": 0},
+    "hypercorn": {"header_table_size": 4096, "max_concurrent_streams": 100, "initial_window_size": 65536, "max_frame_size": 16384, "enable_push": 0},
+    "uwsgi": {"header_table_size": 4096, "max_concurrent_streams": 100, "initial_window_size": 65536, "max_frame_size": 16384, "enable_push": 0},
+    "node http2": {"header_table_size": 4096, "max_concurrent_streams": 128, "initial_window_size": 65535, "max_frame_size": 16384, "enable_push": 0},
+    "netty": {"header_table_size": 4096, "max_concurrent_streams": 100, "initial_window_size": 65536, "max_frame_size": 65536, "enable_push": 0},
+    "tomcat": {"header_table_size": 4096, "max_concurrent_streams": 200, "initial_window_size": 65536, "max_frame_size": 16384, "enable_push": 0},
+    "jetty": {"header_table_size": 4096, "max_concurrent_streams": 128, "initial_window_size": 65536, "max_frame_size": 65536, "enable_push": 0},
+    "caddy": {"header_table_size": 4096, "max_concurrent_streams": 256, "initial_window_size": 1048576, "max_frame_size": 1048576, "enable_push": 0},
+    "traefik": {"header_table_size": 4096, "max_concurrent_streams": 250, "initial_window_size": 65536, "max_frame_size": 16384, "enable_push": 0},
+    "envoy": {"header_table_size": 4096, "max_concurrent_streams": 100, "initial_window_size": 65536, "max_frame_size": 16384, "enable_push": 0},
+    "litespeed": {"header_table_size": 4096, "max_concurrent_streams": 100, "initial_window_size": 65536, "max_frame_size": 16384, "enable_push": 0},
+    "openresty": {"header_table_size": 4096, "max_concurrent_streams": 128, "initial_window_size": 65536, "max_frame_size": 16384, "enable_push": 0},
+    "varnish": {"header_table_size": 4096, "max_concurrent_streams": 100, "initial_window_size": 65536, "max_frame_size": 16384, "enable_push": 0},
+    "lighttpd": {"header_table_size": 4096, "max_concurrent_streams": 128, "initial_window_size": 65536, "max_frame_size": 16384, "enable_push": 0},
+    "apigee": {"header_table_size": 4096, "max_concurrent_streams": 100, "initial_window_size": 65536, "max_frame_size": 16384, "enable_push": 0},
+    "aws elb": {"header_table_size": 4096, "max_concurrent_streams": 200, "initial_window_size": 65536, "max_frame_size": 16384, "enable_push": 0},
+    "gcp lb": {"header_table_size": 4096, "max_concurrent_streams": 250, "initial_window_size": 65536, "max_frame_size": 16384, "enable_push": 0},
+    "azure app gateway": {"header_table_size": 4096, "max_concurrent_streams": 100, "initial_window_size": 65536, "max_frame_size": 16384, "enable_push": 0},
+}
+
+HPACK_HEADER_TABLE_SIZES = {
+    4096: "nginx/apache typical",
+    8192: "larger table (some proxies)",
+    16384: "cloudflare/fastly typical",
+    65536: "large table (caddy/h2o)",
+}
+
+PRIORITY_SETTINGS_ANALYSIS = {
+    256: "Default weight 256 (RFC 7540 default)",
+    16: "Lowest weight possible",
+    256: "Highest weight possible",
+}
+
+GRACEFUL_SHUTDOWN_CODES = {
+    0: "NO_ERROR (graceful)",
+    1: "PROTOCOL_ERROR",
+    2: "INTERNAL_ERROR",
+    3: "FLOW_CONTROL_ERROR",
+    4: "SETTINGS_TIMEOUT",
+    5: "STREAM_CLOSED",
+    6: "FRAME_SIZE_ERROR",
+    7: "REFUSED_STREAM",
+    8: "CANCEL",
+    9: "COMPRESSION_ERROR",
+    10: "CONNECT_ERROR",
+    11: "ENHANCE_YOUR_CALM",
+    12: "INADEQUATE_SECURITY",
+    13: "HTTP_1_1_REQUIRED",
+}
+
+HPACK_DYNAMIC_TABLE_ESTIMATE = re.compile(r'(?:[A-Z][a-z]+:\s*[^\r\n]+){2,}', re.MULTILINE)
+
+def analyze_hpack_efficiency(settings):
+    analysis = {}
+    try:
+        table_size = settings.get(0x1, 4096)
+        if table_size <= 4096:
+            analysis["table_size"] = table_size
+            analysis["efficiency"] = "Low (small table - more bytes per request)"
+        elif table_size <= 16384:
+            analysis["efficiency"] = "Medium (standard table)"
+        else:
+            analysis["efficiency"] = "High (large table - better compression)"
+        analysis["profile"] = HPACK_HEADER_TABLE_SIZES.get(table_size, "Custom size")
+    except Exception:
+        pass
+    return analysis
+
+def parse_priority_frame_detailed(data):
+    result = {}
+    try:
+        if len(data) >= 5:
+            exclusive = bool(data[0] & 0x80)
+            stream_dep = struct.unpack("!I", b"\x00" + data[:3])[0] & 0x7FFFFFFF
+            weight = data[4] if len(data) > 4 else 0
+            result["exclusive"] = exclusive
+            result["stream_dependency"] = stream_dep
+            result["weight"] = weight + 1
+            if weight == 0:
+                result["meaning"] = "Lowest priority"
+            elif weight < 128:
+                result["meaning"] = "Below average priority"
+            elif weight == 127:
+                result["meaning"] = "Default priority"
+            elif weight < 255:
+                result["meaning"] = "Above average priority"
+            else:
+                result["meaning"] = "Highest priority"
+    except Exception:
+        pass
+    return result
+
+def analyze_window_update(payload):
+    analysis = {}
+    try:
+        if len(payload) >= 4:
+            increment = struct.unpack("!I", payload[:4])[0] & 0x7FFFFFFF
+            analysis["window_size_increment"] = increment
+            if increment == 0:
+                analysis["note"] = "Zero increment (protocol error?)"
+            elif increment < 65536:
+                analysis["note"] = "Small window update"
+            elif increment < 1048576:
+                analysis["note"] = "Medium window update"
+            else:
+                analysis["note"] = "Large window update (high throughput)"
+    except Exception:
+        pass
+    return analysis
+
+def detect_push_promise_via_headers(headers):
+    indicators = []
+    try:
+        link_header = headers.get("link", "")
+        if link_header and "rel=preload" in link_header.lower():
+            indicators.append("Link preload headers (push-like)")
+        server_push = headers.get("x-http2-push", "")
+        if server_push:
+            indicators.append(f"X-HTTP2-Push header: {server_push}")
+    except Exception:
+        pass
+    return indicators
+
+def check_h3_alt_svc_advanced(alt_svc):
+    details = {}
+    try:
+        if not alt_svc:
+            return details
+        for part in alt_svc.split(","):
+            part = part.strip()
+            m = re.match(r'h3[=-](\d+)', part)
+            if m:
+                ver = m.group(1)
+                details["h3_version"] = ver
+                if "ma=" in part:
+                    m2 = re.search(r'ma=(\d+)', part)
+                    if m2:
+                        details["max_age"] = m2.group(1)
+                if "persist=" in part:
+                    m3 = re.search(r'persist=(\d)', part)
+                    if m3:
+                        details["persist"] = m3.group(1)
+    except Exception:
+        pass
+    return details
+
+def detect_tls_fingerprint(alpn, cipher, settings):
+    fingerprint = {}
+    try:
+        fingerprint["alpn"] = alpn
+        if alpn and alpn == "h2":
+            fingerprint["h2_negotiated"] = True
+        fingerprint["cipher"] = cipher
+        if settings:
+            window = settings.get(0x4)
+            max_frame = settings.get(0x5)
+            streams = settings.get(0x3)
+            if window and max_frame:
+                if window == 1048576 and max_frame == 1048576:
+                    fingerprint["likely_server"] = "Caddy/h2o"
+                elif window == 65536 and max_frame == 16384:
+                    fingerprint["likely_server"] = "nginx/apache typical"
+                elif window == 2147483647:
+                    fingerprint["likely_server"] = "Custom (very large window)"
+    except Exception:
+        pass
+    return fingerprint

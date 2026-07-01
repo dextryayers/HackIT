@@ -918,4 +918,91 @@ async def crawl(target: str, client: httpx.AsyncClient):
         )
         findings.append(summary)
 
+    async def analyze_dns_health():
+        findings.append(IntelligenceFinding(entity=f"PDNS entries: {pdns_total_count}", type="Robtex: PDNS Volume", source="Robtex", confidence="Medium", color="slate", tags=["dns"]))
+        findings.append(IntelligenceFinding(entity=f"DNS changes: {len(dns_timeline.get('new_records', []))} new, {len(dns_timeline.get('changed_ips', []))} IP changes, {len(dns_timeline.get('removed_records', []))} removed", type="Robtex: DNS Timeline", source="Robtex", confidence="Medium", color="yellow" if dns_timeline.get('changed_ips') else "slate", tags=["dns"]))
+        findings.append(IntelligenceFinding(entity=f"Forward PDNS records: {sum(len(v) if isinstance(v, list) else 0 for v in all_pdns_forward_records.values())}", type="Robtex: Forward PDNS Count", source="Robtex", confidence="Medium", color="slate", tags=["dns"]))
+
+    async def analyze_threat_landscape():
+        findings.append(IntelligenceFinding(entity=f"Threat score: {threat_data.get('threat_score', 0)}/100", type="Robtex: Threat Score", source="Robtex", confidence="Medium", color="red" if threat_data.get('threat_score', 0) > 30 else "emerald", tags=["threat"]))
+        findings.append(IntelligenceFinding(entity=f"Threat sources: {', '.join(threat_data.get('sources', ['None']))}", type="Robtex: Threat Sources", source="Robtex", confidence="Medium", color="slate", tags=["threat"]))
+        findings.append(IntelligenceFinding(entity=f"Reputation: {reputation['level']} ({reputation['score']}/100)", type="Robtex: Reputation Level", source="Robtex", confidence="Medium", color="red" if reputation['score'] >= 40 else "emerald", tags=["threat"]))
+
+    async def analyze_network_scope():
+        findings.append(IntelligenceFinding(entity=f"Target type: {'IP' if is_ip_target else 'Domain'}", type="Robtex: Target Type", source="Robtex", confidence="High", color="slate", tags=["network"]))
+        findings.append(IntelligenceFinding(entity=f"IP address: {ip_to_use or 'N/A'}", type="Robtex: Resolved IP", source="Robtex", confidence="High", color="slate", tags=["network"]))
+        findings.append(IntelligenceFinding(entity=f"ASN: {asn or 'N/A'}", type="Robtex: ASN Identity", source="Robtex", confidence="High", color="orange", tags=["network"]))
+        findings.append(IntelligenceFinding(entity=f"Co-hosted domains: {sum(cg['count'] for cg in cosited_data)}", type="Robtex: Co-Hosted Count", source="Robtex", confidence="Medium", color="orange", tags=["network"]))
+        findings.append(IntelligenceFinding(entity=f"Active DNS entries: {sum(1 for f in findings if f.type == 'Robtex Active DNS')}", type="Robtex: Active DNS Count", source="Robtex", confidence="Medium", color="slate", tags=["network"]))
+
+    async def analyze_intel_coverage():
+        dns_cat_count = sum(1 for f in findings if f.type.startswith("Robtex DNS Category"))
+        findings.append(IntelligenceFinding(entity=f"DNS categories: {dns_cat_count}", type="Robtex: DNS Category Count", source="Robtex", confidence="Medium", color="slate", tags=["coverage"]))
+        route_count = sum(1 for f in findings if f.type in ("Robtex Route", "Robtex ASN Route"))
+        findings.append(IntelligenceFinding(entity=f"BGP routes: {route_count}", type="Robtex: Route Count", source="Robtex", confidence="Medium", color="slate", tags=["coverage"]))
+        threat_count = sum(1 for f in findings if f.type == "Robtex Threat Intelligence")
+        findings.append(IntelligenceFinding(entity=f"Threat intel findings: {threat_count}", type="Robtex: Intel Count", source="Robtex", confidence="Medium", color="slate", tags=["coverage"]))
+        findings.append(IntelligenceFinding(entity=f"Total intelligence findings: {len(findings)}", type="Robtex: Total Findings", source="Robtex", confidence="Medium", color="purple", tags=["coverage"]))
+
+    async def analyze_pdns_detail():
+        reverse_count = sum(1 for f in findings if f.type.startswith("Robtex Reverse PDNS"))
+        forward_count = sum(1 for f in findings if f.type.startswith("Robtex Forward PDNS"))
+        findings.append(IntelligenceFinding(entity=f"Forward PDNS (unique hosts): {forward_count}", type="Robtex: Forward Host Count", source="Robtex", confidence="Medium", color="slate", tags=["pdns"]))
+        findings.append(IntelligenceFinding(entity=f"Reverse PDNS (unique hosts): {reverse_count}", type="Robtex: Reverse Host Count", source="Robtex", confidence="Medium", color="slate", tags=["pdns"]))
+
+    async def analyze_bgp_routing():
+        asn_routes = sum(1 for f in findings if f.type == "Robtex ASN Route")
+        sub_prefix = sum(1 for f in findings if f.type == "Robtex ASN Sub-Prefix Alert")
+        findings.append(IntelligenceFinding(entity=f"ASN route prefixes: {asn_routes}", type="Robtex: ASN Route Count", source="Robtex", confidence="Medium", color="slate", tags=["bgp"]))
+        findings.append(IntelligenceFinding(entity=f"Sub-prefix alerts: {sub_prefix}", type="Robtex: Hijack Alerts", source="Robtex", confidence="Medium", color="red" if sub_prefix else "emerald", tags=["bgp"]))
+
+    async def analyze_source_breakdown():
+        pas_dns = sum(1 for f in findings if "Passive DNS" in f.type)
+        active_dns = sum(1 for f in findings if f.type == "Robtex Active DNS")
+        findings.append(IntelligenceFinding(entity=f"Passive DNS total: {pas_dns}", type="Robtex: Passive DNS Total", source="Robtex", confidence="Medium", color="slate", tags=["sources"]))
+        findings.append(IntelligenceFinding(entity=f"Active DNS total: {active_dns}", type="Robtex: Active DNS Total", source="Robtex", confidence="Medium", color="slate", tags=["sources"]))
+        findings.append(IntelligenceFinding(entity=f"Data sources: Robtex API + web scraping + threat feeds", type="Robtex: Data Sources", source="Robtex", confidence="Medium", color="slate", tags=["sources"]))
+
+    async def analyze_summary_stats():
+        findings.append(IntelligenceFinding(entity=f"Reputation level: {reputation['level']}", type="Robtex: Reputation Category", source="Robtex", confidence="Medium", color="red" if reputation['score'] >= 40 else "emerald", tags=["summary"]))
+        findings.append(IntelligenceFinding(entity=f"Threat sources used: {len(threat_data.get('sources', []))}", type="Robtex: Threat Source Count", source="Robtex", confidence="Medium", color="slate", tags=["summary"]))
+        findings.append(IntelligenceFinding(entity=f"Co-hosted categories: {len(cosited_data)}", type="Robtex: Co-Host Categories", source="Robtex", confidence="Medium", color="slate", tags=["summary"]))
+
+    async def analyze_ioc_indicators():
+        findings.append(IntelligenceFinding(entity=f"Hijack alerts: {sum(1 for f in findings if f.type == 'Robtex ASN Sub-Prefix Alert')}", type="Robtex: BGP Hijack Count", source="Robtex", confidence="Medium", color="red", tags=["ioc"]))
+        findings.append(IntelligenceFinding(entity=f"IP changes detected: {len(dns_timeline.get('changed_ips', []))}", type="Robtex: IP Change Count", source="Robtex", confidence="Medium", color="yellow", tags=["ioc"]))
+        findings.append(IntelligenceFinding(entity=f"Removed DNS records: {len(dns_timeline.get('removed_records', []))}", type="Robtex: Removed Records", source="Robtex", confidence="Medium", color="slate", tags=["ioc"]))
+        findings.append(IntelligenceFinding(entity=f"New DNS records: {len(dns_timeline.get('new_records', []))}", type="Robtex: New Records", source="Robtex", confidence="Medium", color="slate", tags=["ioc"]))
+
+    async def analyze_geo_distribution():
+        asn_country = resp_ip_dict.get("country", "") if resp_ip_dict and isinstance(resp_ip_dict, dict) else ""
+        findings.append(IntelligenceFinding(entity=f"ASN country: {asn_country or 'N/A'}", type="Robtex: ASN Country", source="Robtex", confidence="Medium", color="slate", tags=["geo"]))
+        findings.append(IntelligenceFinding(entity=f"Target IP city: {resp_ip_dict.get('city', 'N/A') if resp_ip_dict and isinstance(resp_ip_dict, dict) else 'N/A'}", type="Robtex: IP City", source="Robtex", confidence="Medium", color="slate", tags=["geo"]))
+        findings.append(IntelligenceFinding(entity=f"IP owner: {resp_ip_dict.get('owner', 'N/A')[:100] if resp_ip_dict and isinstance(resp_ip_dict, dict) else 'N/A'}", type="Robtex: IP Owner Name", source="Robtex", confidence="Medium", color="slate", tags=["geo"]))
+
+    async def analyze_cosited_risk():
+        findings.append(IntelligenceFinding(entity=f"Suspicious co-hosted: {sum(cg['count'] for cg in cosited_data if cg['category'] == 'suspicious')}", type="Robtex: Suspicious Co-Host", source="Robtex", confidence="Medium", color="orange", tags=["cosited"]))
+        findings.append(IntelligenceFinding(entity=f"Malicious co-hosted: {sum(cg['count'] for cg in cosited_data if cg['category'] == 'malicious')}", type="Robtex: Malicious Co-Host", source="Robtex", confidence="Medium", color="red", tags=["cosited"]))
+        findings.append(IntelligenceFinding(entity=f"Legitimate co-hosted: {sum(cg['count'] for cg in cosited_data if cg['category'] == 'legitimate')}", type="Robtex: Legitimate Co-Host", source="Robtex", confidence="Medium", color="emerald", tags=["cosited"]))
+
+    async def analyze_scan_summary():
+        findings.append(IntelligenceFinding(entity=f"Total Robtex findings: {len(findings)}", type="Robtex: Final Count", source="Robtex", confidence="Medium", color="purple", tags=["final"]))
+        findings.append(IntelligenceFinding(entity=f"Reputation verdict: {reputation['level']}", type="Robtex: Final Verdict", source="Robtex", confidence="Medium", color="red" if reputation['score'] >= 40 else "emerald", tags=["final"]))
+        findings.append(IntelligenceFinding(entity=f"Robtex data sources: API + web scraping + threat feeds", type="Robtex: Data Sources Detail", source="Robtex", confidence="Medium", color="slate", tags=["final"]))
+
+    await asyncio.gather(
+        analyze_dns_health(),
+        analyze_threat_landscape(),
+        analyze_network_scope(),
+        analyze_intel_coverage(),
+        analyze_pdns_detail(),
+        analyze_bgp_routing(),
+        analyze_source_breakdown(),
+        analyze_summary_stats(),
+        analyze_ioc_indicators(),
+        analyze_geo_distribution(),
+        analyze_cosited_risk(),
+        analyze_scan_summary(),
+    )
+
     return findings

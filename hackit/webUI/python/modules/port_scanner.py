@@ -138,6 +138,51 @@ async def grab_banner(host: str, port: int) -> str:
     except:
         return ""
 
+PORT_CATEGORIES = {
+    "Web": [80, 443, 8080, 8443, 8000, 8008, 8888, 9443],
+    "Database": [3306, 5432, 6379, 27017, 1433, 1521, 9042, 9200],
+    "Remote Access": [22, 3389, 5900, 5901, 5800, 6000, 6001],
+    "Email": [25, 465, 587, 110, 143, 993, 995],
+    "File Transfer": [21, 445, 2049, 3690, 990],
+    "DNS/NTP": [53, 123, 161, 389, 636],
+    "Management": [2082, 2083, 2087, 9090, 10000, 8834],
+    "Message Queue": [5672, 61616, 9092, 11211],
+    "Container/Orch": [2375, 2376, 6443, 10250, 10255, 8472],
+    "Dev Tools": [3000, 4200, 5000, 9000, 9876],
+}
+
+BANNER_PORTS = [21, 22, 25, 80, 443, 8080, 8443, 3306, 5432, 6379, 27017, 1433, 1521, 5900, 5901]
+
+async def scan_live_ports(host: str) -> list:
+    open_ports = []
+    batch_size = 50
+    for i in range(0, len(SCAN_PORTS), batch_size):
+        batch = SCAN_PORTS[i:i+batch_size]
+        tasks = [check_port(host, port) for port in batch]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for r in results:
+            if r:
+                open_ports.append(r)
+    return open_ports
+
+async def grab_banners(host: str, ports: list) -> list:
+    findings = []
+    for port in ports:
+        if port in BANNER_PORTS:
+            banner = await grab_banner(host, port)
+            if banner:
+                findings.append(IntelligenceFinding(
+                    entity=f"Banner on port {port}: {banner[:200]}",
+                    type="Port Scanner: Banner Grabbing",
+                    source="PortScanner",
+                    confidence="Medium",
+                    color="slate",
+                    status="Banner Retrieved",
+                    resolution=host,
+                    tags=["port", "banner", str(port)]
+                ))
+    return findings
+
 async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFinding]:
     findings = []
     t = target.strip().lower()
@@ -174,7 +219,50 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         tags=["port", "services", "database"]
     ))
 
-    for port, service in list(COMMON_PORTS.items())[:50]:
+    for cat_name, cat_ports in PORT_CATEGORIES.items():
+        cat_detail = ", ".join(f"{p} ({COMMON_PORTS.get(p, 'Unknown')})" for p in cat_ports[:5])
+        findings.append(IntelligenceFinding(
+            entity=f"Category {cat_name}: {len(cat_ports)} ports ({cat_detail}...)",
+            type="Port Scanner: Port Category",
+            source="PortScanner",
+            confidence="Medium",
+            color="slate",
+            threat_level="Informational",
+            status="Categorized",
+            resolution=t,
+            tags=["port", "category", cat_name.lower().replace(" ", "-")]
+        ))
+
+    open_ports = await scan_live_ports(ip)
+    if open_ports:
+        findings.append(IntelligenceFinding(
+            entity=f"{len(open_ports)} open ports found on {t}",
+            type="Port Scanner: Open Ports",
+            source="PortScanner",
+            confidence="High",
+            color="red",
+            threat_level="High Risk" if len(open_ports) > 5 else "Elevated Risk",
+            status=f"{len(open_ports)} open",
+            resolution=t,
+            tags=["port", "open", str(len(open_ports))]
+        ))
+        for p in open_ports[:15]:
+            findings.append(IntelligenceFinding(
+                entity=f"Open port {p}: {COMMON_PORTS.get(p, 'Unknown service')}",
+                type="Port Scanner: Open Port Detail",
+                source="PortScanner",
+                confidence="High",
+                color="orange",
+                threat_level="Elevated Risk",
+                status="Open",
+                resolution=t,
+                tags=["port", "open", str(p), COMMON_PORTS.get(p, "unknown").lower()]
+            ))
+
+        banner_results = await grab_banners(ip, open_ports)
+        findings.extend(banner_results)
+
+    for port, service in list(COMMON_PORTS.items())[:30]:
         findings.append(IntelligenceFinding(
             entity=f"Port {port}: {service}",
             type="Port Scanner: Common Service",

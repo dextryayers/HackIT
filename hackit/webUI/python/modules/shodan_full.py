@@ -67,6 +67,34 @@ async def shodan_count(query: str, client: httpx.AsyncClient) -> dict:
         pass
     return {}
 
+async def shodan_protocols(client: httpx.AsyncClient) -> dict:
+    try:
+        resp = await client.get(
+            f"{SHODAN_API}/shodan/protocols",
+            params={"key": ""},
+            headers={"User-Agent": SHODAN_UA, "Accept": "application/json"},
+            timeout=10.0
+        )
+        if resp.status_code == 200:
+            return resp.json()
+    except:
+        pass
+    return {}
+
+async def shodan_services(client: httpx.AsyncClient) -> dict:
+    try:
+        resp = await client.get(
+            f"{SHODAN_API}/shodan/services",
+            params={"key": ""},
+            headers={"User-Agent": SHODAN_UA, "Accept": "application/json"},
+            timeout=10.0
+        )
+        if resp.status_code == 200:
+            return resp.json()
+    except:
+        pass
+    return {}
+
 async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFinding]:
     findings = []
     t = target.strip().lower()
@@ -82,16 +110,12 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
     search_data = await shodan_search(t, client)
     ports_data = await shodan_ports(ip, client)
     count_data = await shodan_count(t, client)
+    proto_data = await shodan_protocols(client)
+    svc_data = await shodan_services(client)
 
     if host_data:
-        for key in ["ports", "hostnames", "os", "country_name", "city", "org", "isp", "vulns"]:
-            pass
-
         open_ports = host_data.get("ports", ports_data.get("ports", []))
         if open_ports:
-            port_counts = defaultdict(int)
-            for p in open_ports:
-                port_counts[p] += 1
             for port in sorted(open_ports)[:15]:
                 findings.append(IntelligenceFinding(
                     entity=f"Port {port}/tcp open",
@@ -149,6 +173,99 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                     tags=["shodan", "cve", v.lower()]
                 ))
 
+        hostnames = host_data.get("hostnames", [])
+        if hostnames:
+            findings.append(IntelligenceFinding(
+                entity=f"Hostnames: {', '.join(hostnames[:5])}",
+                type="Shodan Hostnames",
+                source="Shodan",
+                confidence="High",
+                color="slate",
+                status="Resolved",
+                resolution=ip,
+                tags=["shodan", "hostnames"]
+            ))
+
+        os = host_data.get("os", "")
+        if os:
+            findings.append(IntelligenceFinding(
+                entity=f"OS: {os}",
+                type="Shodan OS Detection",
+                source="Shodan",
+                confidence="Medium",
+                color="slate",
+                status="Detected",
+                resolution=ip,
+                tags=["shodan", "os"]
+            ))
+
+        country = host_data.get("country_name", "")
+        city = host_data.get("city", "")
+        if country or city:
+            findings.append(IntelligenceFinding(
+                entity=f"Location: {city}, {country}" if city else f"Country: {country}",
+                type="Shodan Geolocation",
+                source="Shodan",
+                confidence="Medium",
+                color="slate",
+                status="Geolocated",
+                resolution=ip,
+                tags=["shodan", "geo"]
+            ))
+
+        org = host_data.get("org", "")
+        isp = host_data.get("isp", "")
+        if org or isp:
+            findings.append(IntelligenceFinding(
+                entity=f"Org: {org or isp}",
+                type="Shodan Organization",
+                source="Shodan",
+                confidence="High",
+                color="slate",
+                status="Identified",
+                resolution=ip,
+                tags=["shodan", "org"]
+            ))
+
+        domains = host_data.get("domains", [])
+        if domains:
+            findings.append(IntelligenceFinding(
+                entity=f"Domains: {', '.join(domains[:5])}",
+                type="Shodan Domain Resolution",
+                source="Shodan",
+                confidence="Medium",
+                color="slate",
+                status="Resolved",
+                resolution=ip,
+                tags=["shodan", "domains"]
+            ))
+
+        asn = host_data.get("asn", "")
+        if asn:
+            findings.append(IntelligenceFinding(
+                entity=f"ASN: {asn}",
+                type="Shodan ASN",
+                source="Shodan",
+                confidence="High",
+                color="slate",
+                status="Identified",
+                resolution=ip,
+                tags=["shodan", "asn"]
+            ))
+
+        data_entries = host_data.get("data", [])
+        if data_entries:
+            findings.append(IntelligenceFinding(
+                entity=f"{len(data_entries)} service banners collected",
+                type="Shodan Service Data",
+                source="Shodan",
+                confidence="High",
+                color="slate",
+                status="Collected",
+                resolution=ip,
+                tags=["shodan", "banners"]
+            ))
+
     if count_data:
         total = count_data.get("total", 0)
         if total > 0:
@@ -182,6 +299,30 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                     raw_data=match_data[:300],
                     tags=["shodan", "search"]
                 ))
+
+    if proto_data:
+        findings.append(IntelligenceFinding(
+            entity=f"Shodan protocols available: {len(proto_data)}",
+            type="Shodan Protocol List",
+            source="Shodan",
+            confidence="Low",
+            color="slate",
+            status="Available",
+            resolution=ip,
+            tags=["shodan", "protocols"]
+        ))
+
+    if svc_data:
+        findings.append(IntelligenceFinding(
+            entity=f"Shodan services database: {len(svc_data)} services",
+            type="Shodan Services DB",
+            source="Shodan",
+            confidence="Low",
+            color="slate",
+            status="Available",
+            resolution=ip,
+            tags=["shodan", "services"]
+        ))
 
     if not host_data and not search_data:
         findings.append(IntelligenceFinding(

@@ -1,20 +1,19 @@
 import httpx
 import asyncio
 import json
-import base64
-import socket
 from datetime import datetime
-from typing import List, Optional
-from collections import defaultdict
+from typing import List
 from models import IntelligenceFinding
 
 VT_API = "https://www.virustotal.com/api/v3"
 VT_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
 
-async def vt_get(path: str, client: httpx.AsyncClient) -> dict:
+REVIEWED_HASHES = set()
+
+async def vt_get(endpoint: str, client: httpx.AsyncClient) -> dict:
     try:
         resp = await client.get(
-            f"{VT_API}/{path}",
+            f"{VT_API}/{endpoint}",
             headers={"User-Agent": VT_UA, "Accept": "application/json", "x-apikey": ""},
             timeout=15.0
         )
@@ -24,24 +23,32 @@ async def vt_get(path: str, client: httpx.AsyncClient) -> dict:
         pass
     return {}
 
-async def vt_ip_analysis(ip: str, client: httpx.AsyncClient) -> dict:
-    return await vt_get(f"ip_addresses/{ip}", client)
+async def vt_ip_resolutions(ip: str, client: httpx.AsyncClient) -> dict:
+    return await vt_get(f"ip_addresses/{ip}/resolutions", client)
 
-async def vt_domain_analysis(domain: str, client: httpx.AsyncClient) -> dict:
-    return await vt_get(f"domains/{domain}", client)
-
-async def vt_url_analysis(url: str, client: httpx.AsyncClient) -> dict:
-    url_id = base64.urlsafe_b64encode(url.encode()).decode().rstrip("=")
-    return await vt_get(f"urls/{url_id}", client)
-
-async def vt_file_analysis(file_hash: str, client: httpx.AsyncClient) -> dict:
-    return await vt_get(f"files/{file_hash}", client)
-
-async def vt_ip_relationships(ip: str, client: httpx.AsyncClient) -> dict:
-    return await vt_get(f"ip_addresses/{ip}/relationships/resolutions?limit=10", client)
+async def vt_ip_historical_whois(ip: str, client: httpx.AsyncClient) -> dict:
+    return await vt_get(f"ip_addresses/{ip}/historical_whois", client)
 
 async def vt_domain_subdomains(domain: str, client: httpx.AsyncClient) -> dict:
-    return await vt_get(f"domains/{domain}/subdomains?limit=10", client)
+    return await vt_get(f"domains/{domain}/subdomains", client)
+
+async def vt_domain_resolutions(domain: str, client: httpx.AsyncClient) -> dict:
+    return await vt_get(f"domains/{domain}/resolutions", client)
+
+async def vt_url_relations(url_id: str, client: httpx.AsyncClient) -> dict:
+    return await vt_get(f"urls/{url_id}/relations", client)
+
+async def vt_url_analyse(url: str, client: httpx.AsyncClient) -> dict:
+    try:
+        import base64
+        url_id = base64.urlsafe_b64encode(url.encode()).decode().rstrip("=")
+        return await vt_get(f"urls/{url_id}/analyses", client)
+    except:
+        pass
+    return {}
+
+async def vt_related_hashes(domain: str, client: httpx.AsyncClient) -> dict:
+    return await vt_get(f"domains/{domain}/related_files", client)
 
 async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFinding]:
     findings = []
@@ -49,164 +56,192 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
     is_ip = False
     try:
+        import socket
         socket.inet_aton(t)
         is_ip = True
     except:
         pass
 
     if is_ip:
-        data = await vt_ip_analysis(t, client)
-        rel_data = await vt_ip_relationships(t, client)
-        endpoint = "IP"
-    else:
-        data = await vt_domain_analysis(t, client)
-        sub_data = await vt_domain_subdomains(t, client)
-        endpoint = "Domain"
-
-    if data:
-        attributes = data.get("data", {}).get("attributes", {})
-        last_analysis = attributes.get("last_analysis_stats", {})
-        malicious = last_analysis.get("malicious", 0)
-        suspicious = last_analysis.get("suspicious", 0)
-        harmless = last_analysis.get("harmless", 0)
-        undetected = last_analysis.get("undetected", 0)
-        total = malicious + suspicious + harmless + undetected
-
-        if total > 0:
+        res_data = await vt_ip_resolutions(t, client)
+        resolutions = res_data.get("data", [])
+        if resolutions:
             findings.append(IntelligenceFinding(
-                entity=f"VT Full: {malicious}/{total} engines detect as malicious",
-                type=f"VirusTotal {endpoint} Full Analysis",
-                source="VirusTotal",
-                confidence="High",
-                color="red" if malicious > 0 else "emerald",
-                threat_level="High Risk" if malicious > 0 else ("Elevated Risk" if suspicious > 0 else "Informational"),
-                status="Malicious" if malicious > 0 else "Clean",
-                resolution=t,
-                raw_data=json.dumps(last_analysis),
-                tags=["virustotal", endpoint.lower(), "full-analysis"]
-            ))
-
-        if harmless > 0 or undetected > 0:
-            findings.append(IntelligenceFinding(
-                entity=f"Clean signal: {harmless} harmless, {undetected} undetected out of {total}",
-                type="VirusTotal Clean Signal",
-                source="VirusTotal",
-                confidence="Medium",
-                color="emerald",
-                threat_level="Informational",
-                status="Clean Signal",
-                resolution=t,
-                tags=["virustotal", "clean-signal"]
-            ))
-
-        last_analysis_results = attributes.get("last_analysis_results", {})
-        if last_analysis_results:
-            engine_results = defaultdict(list)
-            for engine, result in last_analysis_results.items():
-                cat = result.get("category", "undetected")
-                engine_results[cat].append(engine)
-
-            for cat, engines in engine_results.items():
-                if engines:
-                    findings.append(IntelligenceFinding(
-                        entity=f"{cat.title()}: {len(engines)} engine(s): {', '.join(engines[:5])}",
-                        type="VirusTotal Engine Distribution",
-                        source="VirusTotal",
-                        confidence="Medium",
-                        color="red" if cat == "malicious" else "slate",
-                        threat_level="High Risk" if cat == "malicious" else "Informational",
-                        status=cat.title(),
-                        resolution=t,
-                        tags=["virustotal", "engines", cat]
-                    ))
-
-        whois = attributes.get("whois", "")
-        if whois:
-            findings.append(IntelligenceFinding(
-                entity="WHOIS data available for domain",
-                type="VirusTotal WHOIS",
-                source="VirusTotal",
+                entity=f"DNS resolutions: {len(resolutions)} historical records",
+                type="VT IP Resolutions",
+                source="VirusTotal (Full)",
                 confidence="Medium",
                 color="slate",
+                threat_level="Informational",
+                status="Available",
+                resolution=t,
+                tags=["virustotal", "resolutions"]
+            ))
+            for res in resolutions[:5]:
+                attrs = res.get("attributes", {})
+                hostname = attrs.get("host_name", "unknown")
+                date = attrs.get("date", "")
+                findings.append(IntelligenceFinding(
+                    entity=f"Resolution: {hostname} ({date})",
+                    type="VT IP Resolution Detail",
+                    source="VirusTotal (Full)",
+                    confidence="Medium",
+                    color="slate",
+                    status="Resolved",
+                    resolution=t,
+                    tags=["virustotal", "resolution"]
+                ))
+
+        whois_data = await vt_ip_historical_whois(t, client)
+        data = whois_data.get("data", [])
+        if data:
+            findings.append(IntelligenceFinding(
+                entity=f"Historical WHOIS: {len(data)} records",
+                type="VT IP WHOIS",
+                source="VirusTotal (Full)",
+                confidence="Medium",
+                color="slate",
+                threat_level="Informational",
                 status="Available",
                 resolution=t,
                 tags=["virustotal", "whois"]
             ))
-
-        tags = attributes.get("tags", [])
-        if tags:
-            for tag in tags[:5]:
+            for entry in data[:3]:
                 findings.append(IntelligenceFinding(
-                    entity=f"Tag: {tag}",
-                    type="VirusTotal Tag",
-                    source="VirusTotal",
-                    confidence="Low",
-                    color="slate",
-                    status="Tagged",
-                    resolution=t,
-                    tags=["virustotal", "tag", tag.lower()]
-                ))
-
-        popularity = attributes.get("popularity_ranks", {})
-        if popularity:
-            for source, rank_data in list(popularity.items())[:3]:
-                findings.append(IntelligenceFinding(
-                    entity=f"Rank #{rank_data.get('rank', 'N/A')} on {source}",
-                    type="VirusTotal Popularity Rank",
-                    source="VirusTotal",
+                    entity=f"WHOIS: {str(entry.get('attributes', {}))[:200]}",
+                    type="VT IP WHOIS Detail",
+                    source="VirusTotal (Full)",
                     confidence="Medium",
                     color="slate",
-                    status="Ranked",
+                    status="Found",
                     resolution=t,
-                    tags=["virustotal", "popularity", source.lower()]
+                    tags=["virustotal", "whois"]
                 ))
 
-        last_https = attributes.get("last_https_response_content_length", 0)
-        if last_https:
-            findings.append(IntelligenceFinding(
-                entity=f"Last HTTPS response: {last_https} bytes",
-                type="VirusTotal HTTPS Metadata",
-                source="VirusTotal",
-                confidence="Low",
-                color="slate",
-                status="Metadata Available",
-                resolution=t,
-                tags=["virustotal", "https"]
-            ))
-
-    if is_ip and 'rel_data' in dir():
-        resolutions = rel_data.get("data", [])
-        if resolutions:
-            findings.append(IntelligenceFinding(
-                entity=f"{len(resolutions)} DNS resolutions for this IP",
-                type="VirusTotal DNS Resolutions",
-                source="VirusTotal",
-                confidence="Medium",
-                color="slate",
-                status="Resolved",
-                resolution=t,
-                tags=["virustotal", "dns", "resolutions"]
-            ))
-
-    if not is_ip and 'sub_data' in dir():
+    else:
+        sub_data = await vt_domain_subdomains(t, client)
         subdomains = sub_data.get("data", [])
         if subdomains:
             findings.append(IntelligenceFinding(
-                entity=f"{len(subdomains)} subdomains found",
-                type="VirusTotal Subdomain Discovery",
-                source="VirusTotal",
-                confidence="Medium",
+                entity=f"Subdomains: {len(subdomains)} found",
+                type="VT Subdomain Discovery",
+                source="VirusTotal (Full)",
+                confidence="High",
                 color="slate",
-                status="Discovered",
+                threat_level="Informational",
+                status="Available",
                 resolution=t,
                 tags=["virustotal", "subdomains"]
             ))
+            for sub in subdomains[:5]:
+                attrs = sub.get("attributes", {})
+                sub_id = attrs.get("id", str(sub)[:100])
+                findings.append(IntelligenceFinding(
+                    entity=f"Subdomain: {sub_id}",
+                    type="VT Subdomain Detail",
+                    source="VirusTotal (Full)",
+                    confidence="Medium",
+                    color="slate",
+                    status="Found",
+                    resolution=t,
+                    tags=["virustotal", "subdomain"]
+                ))
 
-    if not data:
+        res_data = await vt_domain_resolutions(t, client)
+        resolutions = res_data.get("data", [])
+        if resolutions:
+            findings.append(IntelligenceFinding(
+                entity=f"Domain resolutions: {len(resolutions)} IP records",
+                type="VT Domain Resolutions",
+                source="VirusTotal (Full)",
+                confidence="Medium",
+                color="slate",
+                threat_level="Informational",
+                status="Available",
+                resolution=t,
+                tags=["virustotal", "domain-resolutions"]
+            ))
+            for res in resolutions[:5]:
+                attrs = res.get("attributes", {})
+                ip_addr = attrs.get("ip_address", "unknown")
+                date = attrs.get("date", "")
+                findings.append(IntelligenceFinding(
+                    entity=f"Resolved IP: {ip_addr} ({date})",
+                    type="VT Resolution Detail",
+                    source="VirusTotal (Full)",
+                    confidence="Medium",
+                    color="slate",
+                    status="Resolved",
+                    resolution=t,
+                    tags=["virustotal", "resolution"]
+                ))
+
+        related_files = await vt_related_hashes(t, client)
+        files_data = related_files.get("data", [])
+        if files_data:
+            findings.append(IntelligenceFinding(
+                entity=f"Related files: {len(files_data)} samples",
+                type="VT Related Files",
+                source="VirusTotal (Full)",
+                confidence="Medium",
+                color="orange",
+                threat_level="Elevated Risk",
+                status="Available",
+                resolution=t,
+                tags=["virustotal", "related-files"]
+            ))
+            for f in files_data[:5]:
+                attrs = f.get("attributes", {})
+                fhash = attrs.get("sha256", "")[:16]
+                det = attrs.get("last_analysis_stats", {}).get("malicious", 0)
+                findings.append(IntelligenceFinding(
+                    entity=f"Related file {fhash}... (det: {det})",
+                    type="VT Related File Detail",
+                    source="VirusTotal (Full)",
+                    confidence="Medium",
+                    color="orange" if det > 0 else "slate",
+                    threat_level="Elevated Risk" if det > 0 else "Informational",
+                    status="Found",
+                    resolution=t,
+                    tags=["virustotal", "related-file"]
+                ))
+
+    try:
+        import base64
+        url_id = base64.urlsafe_b64encode(t.encode()).decode().rstrip("=")
+        rel_data = await vt_url_relations(url_id, client)
+        relations = rel_data.get("data", [])
+        if relations:
+            findings.append(IntelligenceFinding(
+                entity=f"URL relations: {len(relations)} connected entities",
+                type="VT URL Relations",
+                source="VirusTotal (Full)",
+                confidence="Medium",
+                color="slate",
+                threat_level="Informational",
+                status="Available",
+                resolution=t,
+                tags=["virustotal", "relations"]
+            ))
+            for rel in relations[:5]:
+                findings.append(IntelligenceFinding(
+                    entity=f"Relation: {str(rel.get('attributes', {}).get('id', str(rel)))[:150]}",
+                    type="VT URL Relation Detail",
+                    source="VirusTotal (Full)",
+                    confidence="Low",
+                    color="slate",
+                    status="Found",
+                    resolution=t,
+                    tags=["virustotal", "relation"]
+                ))
+    except:
+        pass
+
+    if not findings:
         findings.append(IntelligenceFinding(
-            entity="No VirusTotal full data available",
-            type="VirusTotal Full Check Complete",
-            source="VirusTotal",
+            entity="No VirusTotal full intelligence data available",
+            type="VT Full Check Complete",
+            source="VirusTotal (Full)",
             confidence="Low",
             color="emerald",
             threat_level="Informational",

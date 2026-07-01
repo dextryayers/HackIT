@@ -159,6 +159,136 @@ CRAWL_PATHS = [
     "/rancher", "/openshift", "/nomad",
     "/consul", "/vault", "/etcd",
     "/terraform", "/ansible", "/puppet", "/chef",
+    "/.git", "/.git/", "/.git/config", "/.git/HEAD", "/.gitignore",
+    "/.svn", "/.svn/entries", "/.svn/wc.db",
+    "/.hg", "/.hg/hgrc", "/.hg/store/",
+    "/.bzr", "/.bzr/branch/",
+    "/.DS_Store", "/Thumbs.db",
+    "/crossdomain.xml", "/clientaccesspolicy.xml",
+    "/.htaccess", "/.htpasswd", "/.htgroup",
+    "/.aws/credentials", "/.aws/config",
+    "/.azure/credentials", "/.azure/config",
+    "/.gcloud/credentials", "/.gcloud/config.json",
+    "/.ssh/id_rsa", "/.ssh/id_rsa.pub", "/.ssh/authorized_keys",
+    "/.ssh/config", "/.ssh/known_hosts",
+    "/.npmrc", "/.dockercfg", "/.s3cfg", "/.netrc",
+    "/id_rsa", "/id_rsa.pub", "/authorized_keys",
+    "/.git-credentials", "/.gitconfig",
+    "/api/swagger.json", "/api/swagger.yaml", "/api/swagger.yml",
+    "/api/openapi.json", "/api/openapi.yaml",
+    "/api/docs", "/rest/", "/graphql", "/graphiql", "/voyager",
+    "/.travis.yml", "/.circleci/config.yml",
+    "/.github/workflows/", "/.gitlab-ci.yml",
+    "/Jenkinsfile", "/Dockerfile", "/docker-compose.yml",
+    "/Makefile", "/.gitmodules",
+    "/bitbucket-pipelines.yml", "/azure-pipelines.yml",
+    "/environment.ts", "/environment.prod.ts", "/.flaskenv", "/.env.yaml",
+    "/build.env", "/package.env",
+    "/security.txt", "/.well-known/security.txt",
+    "/ssl.crt", "/ssl.key", "/server.crt", "/server.key",
+    "/cert.pem", "/key.pem", "/fullchain.pem",
+    "/privkey.pem", "/chain.pem",
+    "/.well-known/", "/acme-challenge/",
+    "/.git/objects/", "/.git/refs/",
+    "/tmp/", "/temp/", "/cache/",
+    "/files/", "/uploads/", "/upload/",
+    "/downloads/", "/download/",
+    "/assets/", "/static/", "/public/",
+    "/phpinfo.php", "/info.php", "/test.php", "/debug.php",
+    "/tests/", "/test/", "/testing/",
+    "/phpunit.xml", "/phpunit.xml.dist",
+    "/phpinfo.php.bak", "/info.php.bak",
+    "/.phpunit.result.cache",
+    "/heapdump", "/heapdump.json",
+    "/trace",
+    "/__init__.py",
+    "/server-status", "/server-info", "/cgi-bin/",
+    "/cgi-bin/test.cgi", "/cgi-bin/php", "/cgi-bin/status",
+    "/aws.yml", "/aws.json", "/aws_config",
+    "/google-services.json", "/GoogleService-Info.plist",
+    "/firebase.json", "/firebase.php", "/firebase.config",
+    "/Procfile", "/.slugignore", "/runtime.txt",
+    "/requirements.txt", "/Pipfile", "/Pipfile.lock",
+    "/Gemfile", "/Gemfile.lock", "/composer.json", "/composer.lock",
+    "/package.json", "/package-lock.json", "/yarn.lock",
+    "/Gruntfile.js", "/gulpfile.js", "/webpack.config.js",
+    "/rollup.config.js", "/vite.config.js", "/tsconfig.json",
+    "/.babelrc", "/.eslintrc", "/.prettierrc",
+    "/nginx.conf", "/apache.conf", "/httpd.conf",
+    "/.htaccess.bak", "/.htaccess.old", "/.htaccess.sav",
+    "/htaccess.txt", "/htpasswd",
+    "/passwd", "/shadow", "/group",
+    "/sudoers", "/sudoers.d/",
+    "/mysql_history", "/psql_history", "/bash_history",
+    "/zsh_history", "/fish_history",
+    "/.mysql_history", "/.psql_history",
+    "/.bash_history", "/.zsh_history",
+    "/server.key", "/server.csr", "/server.crt",
+    "/ca.key", "/ca.crt", "/ca.csr",
+    "/client.key", "/client.crt", "/client.csr",
+    "/private.key", "/private.pem", "/public.pem",
+    "/certificate.pem", "/certificate.crt",
+    "/keystore.jks", "/keystore", "/truststore.jks",
+    "/.p12", "/.pfx", "/.jks",
+    "/.maintenance", "/maintenance.php",
+    "/app/.env", "/app/config.php", "/app/settings.php",
+    "/api/config", "/api/health", "/api/status",
+    "/v1/graphql", "/v2/graphql",
+    "/.elasticbeanstalk/", "/ebextensions/",
+    "/.platform/", "/.buildpacks",
+    "/Vagrantfile", "/.vagrant/",
+    "/.terraform/", "/terraform.tfstate",
+    "/terraform.tfvars", "/backend.tf",
+    "/.serverless/", "/serverless.yml",
+    "/samconfig.toml", "/template.yaml",
+    "/cloudformation.yaml", "/cloudformation.json",
+    "/Pulumi.yaml", "/pulumi/",
+    "/ansible.cfg", "/ansible/", "/playbook.yml",
+    "/docker-entrypoint.sh",
+    "/k8s/", "/kubernetes/", "/deployment.yaml",
+    "/service.yaml", "/kustomization.yaml",
+    "/Chart.yaml", "/helm/", "/values.yaml",
+    "/Podfile", "/Podfile.lock",
+    "/go.mod", "/go.sum", "/Gopkg.toml",
+    "/Cargo.toml", "/Cargo.lock",
+    "/build.gradle", "/gradle.properties",
+    "/pom.xml", "/settings.xml",
+    "/WEB-INF/web.xml", "/WEB-INF/applicationContext.xml",
+    "/META-INF/context.xml",
+    "/struts.xml", "/struts-config.xml",
+    "/hibernate.cfg.xml", "/mybatis-config.xml",
+    "/application.properties", "/application.yml",
+    "/bootstrap.properties", "/bootstrap.yml",
+    "/logback.xml", "/log4j.properties", "/log4j2.xml",
+    "/appsettings.json", "/appsettings.Development.json",
+    "/.well-known/acme-challenge/",
+    "/.well-known/assetlinks.json",
+    "/.well-known/apple-app-site-association",
+    "/.well-known/change-password",
+    "/.well-known/security.txt",
+    "/server-status", "/server-info",
+    "/cgi-bin/", "/cgi-bin/test.cgi",
+    "/sitemap.xml.gz", "/sitemaps.xml",
+    "/robots.txt.bak", "/robots.txt.old",
+    "/CVS/", "/CVS/Root", "/CVS/Entries",
+    "/.bzr.log", "/.bzr/README",
+    "/.hgignore", "/.hgtags",
+    "/error.html", "/404.html", "/500.html",
+    "/maintenance.html", "/under-construction.html",
+    "/.bashrc", "/.bash_profile", "/.profile",
+    "/.vimrc", "/.viminfo", "/.exrc",
+    "/.gitattributes", "/.editorconfig",
+    "/.python-version", "/.pythonrc",
+    "/.ruby-version", "/.ruby-gemset",
+    "/.yarnrc", "/.yarn/",
+    "/.npm/", "/.node_repl_history",
+    "/composer.lock", "/vendor/",
+    "/phpunit.phar", "/phpunit",
+    "/behat.yml", "/.behat/",
+    "/sonar-project.properties",
+    "/.idea/", "/.vscode/", "/.vs/",
+    "/artisan", "/.env.example",
+    "/auth.json", "/composer/auth.json",
 ]
 
 async def fetch_url_with_fallback(client, url, timeout=10.0):
@@ -695,3 +825,140 @@ async def crawl(target: str, client: httpx.AsyncClient):
             findings.extend(pr)
 
     return findings
+
+
+RSS_PATTERN = re.compile(r'<link[^>]*type=["\']application/rss\+xml["\'][^>]*href=["\']([^"\']+)["\']', re.I)
+ATOM_PATTERN = re.compile(r'<link[^>]*type=["\']application/atom\+xml["\'][^>]*href=["\']([^"\']+)["\']', re.I)
+JSONLD_PATTERN = re.compile(r'<script[^>]*type=["\']application/ld\+json["\']>([\s\S]*?)</script>', re.I)
+CANONICAL_PATTERN = re.compile(r'<link[^>]*rel=["\']canonical["\'][^>]*href=["\']([^"\']+)["\']', re.I)
+
+
+CSRF_PATTERNS = [
+    r'csrf[_-]?token',
+    r'csrfmiddlewaretoken',
+    r'__csrf',
+    r'csrf_key',
+    r'csrfName',
+    r'csrfParam',
+    r'_csrf',
+    r'csrf_test_name',
+    r'YII_CSRF_TOKEN',
+    r'CRAFT_CSRF_TOKEN',
+]
+
+
+async def _analyze_rss_feeds(client, base_url, findings):
+    urls_to_check = [f"{base_url}/rss.xml", f"{base_url}/atom.xml", f"{base_url}/feed.xml", f"{base_url}/rss", f"{base_url}/feed"]
+    for url in urls_to_check:
+        try:
+            resp = await client.get(url, timeout=5.0, headers={"User-Agent": UA}, follow_redirects=True)
+            if resp.status_code == 200 and "xml" in resp.headers.get("content-type", ""):
+                findings.append(IntelligenceFinding(
+                    entity=url,
+                    type="RSS/Feed Discovery",
+                    source="CrawlerCore",
+                    confidence="High",
+                    color="orange",
+                    category="Web Crawling & Content Discovery",
+                    threat_level="Informational",
+                    tags=["rss", "feed"]
+                ))
+        except Exception:
+            pass
+
+
+async def analyze_page_deep(client, url, domain, findings):
+    try:
+        resp = await client.get(url, timeout=10.0, headers={"User-Agent": UA}, follow_redirects=True)
+        if resp.status_code != 200:
+            return
+        html = resp.text
+        rss_feeds = RSS_PATTERN.findall(html)
+        for feed in rss_feeds[:3]:
+            findings.append(IntelligenceFinding(
+                entity=urljoin(url, feed),
+                type="RSS Feed Link",
+                source="CrawlerCore",
+                confidence="Medium",
+                color="slate",
+                category="Web Crawling & Content Discovery",
+                threat_level="Informational",
+                tags=["rss"]
+            ))
+        canonical = CANONICAL_PATTERN.search(html)
+        if canonical:
+            findings.append(IntelligenceFinding(
+                entity=canonical.group(1),
+                type="Canonical URL",
+                source="CrawlerCore",
+                confidence="High",
+                color="slate",
+                category="Web Crawling & Content Discovery",
+                threat_level="Informational",
+                tags=["seo", "canonical"]
+            ))
+        for csrf_pat in CSRF_PATTERNS:
+            if re.search(csrf_pat, html, re.I):
+                findings.append(IntelligenceFinding(
+                    entity=f"CSRF protection detected via pattern: {csrf_pat}",
+                    type="CSRF Token Detection",
+                    source="CrawlerCore",
+                    confidence="Medium",
+                    color="emerald",
+                    category="Web Crawling & Content Discovery",
+                    threat_level="Informational",
+                    tags=["csrf", "security"]
+                ))
+                break
+        open_graph = re.findall(r'<meta[^>]+property=["\']og:([^"\']+)["\'][^>]*content=["\']([^"\']+)["\']', html, re.I)
+        if open_graph:
+            findings.append(IntelligenceFinding(
+                entity=f"Open Graph tags found: {len(open_graph)} properties",
+                type="Open Graph Meta",
+                source="CrawlerCore",
+                confidence="Medium",
+                color="slate",
+                category="Web Crawling & Content Discovery",
+                threat_level="Informational",
+                tags=["opengraph", "seo"]
+            ))
+        twitter_cards = re.findall(r'<meta[^>]+name=["\']twitter:([^"\']+)["\'][^>]*content=["\']([^"\']+)["\']', html, re.I)
+        if twitter_cards:
+            findings.append(IntelligenceFinding(
+                entity=f"Twitter Card tags found: {len(twitter_cards)} properties",
+                type="Twitter Card Meta",
+                source="CrawlerCore",
+                confidence="Medium",
+                color="slate",
+                category="Web Crawling & Content Discovery",
+                threat_level="Informational",
+                tags=["twitter", "seo"]
+            ))
+        jsonld = JSONLD_PATTERN.findall(html)
+        if jsonld:
+            for block in jsonld[:3]:
+                truncated = block[:200]
+                findings.append(IntelligenceFinding(
+                    entity=f"JSON-LD: {truncated}",
+                    type="JSON-LD Structured Data",
+                    source="CrawlerCore",
+                    confidence="Medium",
+                    color="slate",
+                    category="Web Crawling & Content Discovery",
+                    threat_level="Informational",
+                    tags=["structured-data", "seo"]
+                ))
+        iframe_sandbox = re.findall(r'<iframe[^>]+sandbox[^>]*>', html, re.I)
+        if iframe_sandbox:
+            findings.append(IntelligenceFinding(
+                entity=f"{len(iframe_sandbox)} iframes with sandbox attribute",
+                type="IFrame Sandbox Attribute",
+                source="CrawlerCore",
+                confidence="Medium",
+                color="slate",
+                category="Web Crawling & Content Discovery",
+                threat_level="Informational",
+                tags=["iframe", "security"]
+            ))
+    except Exception:
+        pass

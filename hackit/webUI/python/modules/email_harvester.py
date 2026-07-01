@@ -955,6 +955,344 @@ async def crawl(target, client):
         except Exception:
             return None
 
+    async def detect_disposable_email_domains():
+        disposable = {
+            "mailinator.com","guerrillamail.com","tempmail.com","10minutemail.com","throwaway.email",
+            "yopmail.com","maildrop.cc","getnada.com","sharklasers.com","trashmail.com",
+            "temp-mail.org","fakeinbox.com","dispostable.com","burnermail.io","mytemp.email",
+            "spambox.us","mailnator.com","mailcatch.com","emailondeck.com","spamgourmet.com",
+            "jetable.org","kasmail.com","wegwerfmail.de","spamdecoy.net","mail7.io",
+            "mailsac.com","tempinbox.xyz","anonbox.net","spamhereplease.com","spamhole.com",
+        }
+        for email in list(all_emails.keys()):
+            dom = email.split("@")[-1]
+            if dom in disposable:
+                _dedup_and_merge(all_emails, {email: f"Disposable Domain ({dom})"})
+
+    async def analyze_email_patterns():
+        patterns = defaultdict(int)
+        for email in all_emails:
+            local = email.split("@")[0]
+            if re.match(r"^[a-z]+\.[a-z]+$", local): patterns["first.last"] += 1
+            if re.match(r"^[a-z]+\.[a-z]{1}$", local): patterns["first.li"] += 1
+            if re.match(r"^[a-z]{1}\.[a-z]+$", local): patterns["fi.last"] += 1
+            if "_" in local: patterns["underscore_separator"] += 1
+            if "-" in local: patterns["hyphen_separator"] += 1
+            if re.match(r"^[a-z]+[0-9]", local): patterns["alphanumeric_prefix"] += 1
+            if re.match(r"^[a-z]+$", local): patterns["single_word_username"] += 1
+            if len(local) <= 3: patterns["short_username"] += 1
+        for pat, cnt in sorted(patterns.items(), key=lambda x: -x[1]):
+            findings.append(IntelligenceFinding(
+                entity=f"Email Pattern: {pat}",
+                type="Email Analysis",
+                source=f"EmailHarvester (Pattern Analysis)",
+                confidence="Medium" if cnt > 1 else "Low",
+                color="purple", category="Email OSINT", threat_level="Informational",
+                raw_data=f"{pat}: {cnt} email(s)",
+                tags=["analysis", "pattern"]
+            ))
+
+    async def analyze_email_diversity():
+        if not all_emails: return
+        domains_found = defaultdict(list)
+        for email in all_emails:
+            domains_found[email.split("@")[-1]].append(email)
+        findings.append(IntelligenceFinding(
+            entity=f"Email Domain Diversity: {len(domains_found)} domains across {len(all_emails)} emails",
+            type="Email Analysis",
+            source="EmailHarvester (Diversity)",
+            confidence="High", color="purple", category="Email OSINT", threat_level="Informational",
+            raw_data=", ".join(sorted(domains_found.keys())[:20]),
+            tags=["analysis", "diversity"]
+        ))
+        for d, ems in sorted(domains_found.items(), key=lambda x: -len(x[1]))[:10]:
+            findings.append(IntelligenceFinding(
+                entity=f"Emails on {d}", type="Email Domain",
+                source="EmailHarvester (Diversity)",
+                confidence="Medium", color="slate", category="Email OSINT", threat_level="Informational",
+                raw_data=f"{len(ems)} email(s): {', '.join(ems[:5])}",
+                tags=["analysis", "domain"]
+            ))
+
+    async def analyze_email_stats():
+        if not all_emails: return
+        lengths = [len(e) for e in all_emails]
+        local_lens = [len(e.split("@")[0]) for e in all_emails]
+        findings.append(IntelligenceFinding(
+            entity=f"Email Length Stats (N={len(all_emails)})",
+            type="Email Analysis",
+            source="EmailHarvester (Statistics)",
+            confidence="High", color="cyan", category="Email OSINT", threat_level="Informational",
+            raw_data=f"Min:{min(lengths)} Max:{max(lengths)} Avg:{sum(lengths)//len(lengths)} | Local Min:{min(local_lens)} Max:{max(local_lens)} Avg:{sum(local_lens)//len(local_lens)}",
+            tags=["analysis", "statistics"]
+        ))
+
+    async def analyze_email_sources():
+        if not all_emails: return
+        source_counts = defaultdict(int)
+        for email, sources in all_emails.items():
+            src_list = sources if isinstance(sources, list) else [sources]
+            for s in src_list:
+                source_counts[s.split(" (")[0] if "(" in s else s] += 1
+        findings.append(IntelligenceFinding(
+            entity=f"Email Source Distribution ({len(all_emails)} emails)",
+            type="Email Analysis",
+            source="EmailHarvester (Sources)",
+            confidence="High", color="cyan", category="Email OSINT", threat_level="Informational",
+            raw_data=" | ".join(f"{s}: {c}" for s,c in sorted(source_counts.items(), key=lambda x: -x[1])),
+            tags=["analysis", "sources"]
+        ))
+        multi = sum(1 for s in all_emails.values() if isinstance(s, list) and len(s) > 1)
+        findings.append(IntelligenceFinding(
+            entity=f"Multi-Source Emails: {multi}",
+            type="Email Analysis",
+            source="EmailHarvester (Sources)",
+            confidence="Medium", color="green", category="Email OSINT", threat_level="Informational",
+            raw_data=f"{multi} email(s) found from multiple independent sources",
+            tags=["analysis", "confidence"]
+        ))
+
+    async def classify_role_emails():
+        role_prefixes = {
+            "info","contact","support","sales","admin","help","hello","careers","jobs",
+            "hr","billing","accounts","finance","marketing","pr","press","media",
+            "partners","business","enquiries","mail","office","team","webmaster",
+            "postmaster","hostmaster","abuse","noreply","feedback","newsletter",
+            "social","community","legal","privacy","security","engineering","tech",
+            "it","devops","system","network","editor","editorial","recruitment",
+            "bookings","reservations","orders","shop","store","service","services",
+        }
+        found = set()
+        for email in all_emails:
+            local = email.split("@")[0].lower()
+            if local in role_prefixes or any(local.startswith(p) for p in role_prefixes):
+                found.add(email)
+        if found:
+            findings.append(IntelligenceFinding(
+                entity=f"Role-Based Emails: {len(found)}",
+                type="Email Analysis",
+                source="EmailHarvester (Role Classification)",
+                confidence="High", color="yellow", category="Email OSINT", threat_level="Informational",
+                raw_data=", ".join(sorted(found)[:20]),
+                tags=["analysis", "role-based"]
+            ))
+
+    async def email_risk_scoring():
+        if not all_emails: return
+        risk_map = {}
+        for email in all_emails:
+            score = 0
+            local = email.split("@")[0]
+            dom = email.split("@")[-1]
+            reasons = []
+            if len(local) <= 2: score += 2; reasons.append("short_local")
+            if re.search(r'[0-9]{4,}', local): score += 1; reasons.append("contains_year")
+            if dom in {"gmail.com","yahoo.com","hotmail.com","outlook.com","aol.com","mail.com"}: score += 0
+            elif dom == "protonmail.com": score += 0
+            elif dom == "tempmail.com": score += 3; reasons.append("disposable")
+            if email not in risk_map or score > risk_map[email][0]:
+                risk_map[email] = (score, reasons)
+        low = sum(1 for v in risk_map.values() if v[0] == 0)
+        med = sum(1 for v in risk_map.values() if v[0] == 1)
+        high = sum(1 for v in risk_map.values() if v[0] >= 2)
+        findings.append(IntelligenceFinding(
+            entity=f"Email Risk Distribution | Low: {low} Med: {med} High: {high}",
+            type="Email Analysis",
+            source="EmailHarvester (Risk Scoring)",
+            confidence="Medium", color="orange", category="Email OSINT", threat_level="Informational",
+            raw_data=f"Risk scoring based on local-part length, numeric patterns, domain reputation",
+            tags=["analysis", "risk"]
+        ))
+
+    async def scrape_securitytrails():
+        try:
+            resp = await client.get(f"https://securitytrails.com/domain/{domain}/dns", timeout=15.0, headers={"User-Agent": "Mozilla/5.0"})
+            if resp.status_code == 200:
+                emails = {}
+                for m in EMAIL_RE.finditer(resp.text):
+                    e = m.group(0).lower()
+                    if domain in e.split("@")[-1]: emails[e] = "SecurityTrails"
+                _dedup_and_merge(all_emails, emails)
+        except: pass
+
+    async def scrape_urlscan():
+        try:
+            resp = await client.get(f"https://urlscan.io/api/v1/search/?q=domain:{domain}&size=50", timeout=15.0, headers={"User-Agent": "Mozilla/5.0"})
+            if resp.status_code == 200:
+                emails = {}
+                for result in resp.json().get("results", []):
+                    for m in EMAIL_RE.finditer(str(result.get("page", {}))):
+                        e = m.group(0).lower()
+                        if domain in e.split("@")[-1]: emails[e] = "URLScan.io"
+                _dedup_and_merge(all_emails, emails)
+        except: pass
+
+    async def scrape_virustotal():
+        try:
+            resp = await client.get(f"https://www.virustotal.com/ui/domains/{domain}/comments", timeout=15.0, headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"})
+            if resp.status_code == 200:
+                emails = {}
+                for c in resp.json().get("data", []):
+                    for m in EMAIL_RE.finditer(str(c.get("attributes", {}))):
+                        e = m.group(0).lower()
+                        if domain in e.split("@")[-1]: emails[e] = "VirusTotal"
+                _dedup_and_merge(all_emails, emails)
+        except: pass
+
+    async def scrape_shodan():
+        try:
+            resp = await client.get(f"https://www.shodan.io/search?query=hostname%3A{domain}", timeout=15.0, headers={"User-Agent": "Mozilla/5.0"})
+            if resp.status_code == 200:
+                emails = {}
+                for m in EMAIL_RE.finditer(resp.text):
+                    e = m.group(0).lower()
+                    if domain in e.split("@")[-1]: emails[e] = "Shodan"
+                _dedup_and_merge(all_emails, emails)
+        except: pass
+
+    async def scrape_google_dorks():
+        dorks = [
+            f"site:linkedin.com \"{domain}\" email", f"site:github.com \"{domain}\" \"@\"",
+            f"site:pastebin.com \"{domain}\"", f"\"@{domain}\" filetype:xls",
+            f"\"@{domain}\" filetype:csv", f"\"@{domain}\" filetype:txt",
+            f"\"@{domain}\" intitle:contact", f"\"@{domain}\" inurl:team",
+            f"\"@{domain}\" inurl:staff",
+        ]
+        emails = {}
+        for dork in dorks:
+            try:
+                resp = await client.get(f"https://www.google.com/search?q={dork.replace(' ', '+')}", timeout=10.0, headers={"User-Agent": "Mozilla/5.0"})
+                if resp.status_code == 200:
+                    for m in email_pattern.finditer(resp.text): emails[m.group(0).lower()] = f"Google Dork ({dork[:30]})"
+            except: pass
+        _dedup_and_merge(all_emails, emails)
+
+    async def scrape_social_media_profiles():
+        urls = [f"https://{domain}", f"http://{domain}", f"https://www.{domain}"]
+        social_patterns = [
+            (r'linkedin\.com/(?:company|in)/[\w-]+', 'LinkedIn'),
+            (r'twitter\.com/\w{1,15}', 'Twitter'),
+            (r'facebook\.com/[\w._-]+', 'Facebook'),
+            (r'instagram\.com/[\w_.]+', 'Instagram'),
+            (r'youtube\.com/(?:c|channel|user)/[\w-]+', 'YouTube'),
+            (r'github\.com/[\w-]+', 'GitHub'),
+            (r't\.me/\w+', 'Telegram'),
+            (r'discord\.gg/[\w]+', 'Discord'),
+        ]
+        for url in urls:
+            try:
+                resp = await client.get(url, timeout=10.0, follow_redirects=True, headers={"User-Agent": "Mozilla/5.0"})
+                if resp.status_code == 200:
+                    for pat, label in social_patterns:
+                        for m in re.finditer(pat, resp.text, re.IGNORECASE):
+                            findings.append(IntelligenceFinding(
+                                entity=m.group(0).lower(),
+                                type="Social Media Profile",
+                                source=f"EmailHarvester ({label})",
+                                confidence="High", color="green", category="Email OSINT", threat_level="Informational",
+                                raw_data=f"Found on {domain} homepage",
+                                tags=["social-media"]
+                            ))
+            except: pass
+
+    async def scrape_whois_deep():
+        try:
+            resp = await client.get(f"https://rdap.verisign.com/com/v1/domain/{domain}", timeout=15.0, headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"})
+            if resp.status_code == 200:
+                data = resp.json()
+                emails = {}
+                for entity in data.get("entities", []):
+                    for vcard in entity.get("vcardArray", []):
+                        if isinstance(vcard, list):
+                            for item in vcard:
+                                if isinstance(item, list) and len(item) >= 4:
+                                    if item[0] == "email":
+                                        e = item[3].lower()
+                                        emails[e] = f"RDAP ({','.join(entity.get('roles',['unknown']))})"
+                                    elif item[0] == "tel":
+                                        findings.append(IntelligenceFinding(
+                                            entity=item[3], type="Phone Number",
+                                            source="EmailHarvester (RDAP)",
+                                            confidence="High", color="orange", category="Email OSINT", threat_level="Informational",
+                                            raw_data=f"Phone in RDAP for {domain}",
+                                            tags=["contact"]
+                                        ))
+                _dedup_and_merge(all_emails, emails)
+        except: pass
+
+    async def scrape_forum_results():
+        forums = [
+            ("StackOverflow", f"https://api.stackexchange.com/2.3/search/excerpts?order=desc&sort=relevance&q={domain}&site=stackoverflow"),
+            ("ServerFault", f"https://api.stackexchange.com/2.3/search/excerpts?order=desc&sort=relevance&q={domain}&site=serverfault"),
+            ("SuperUser", f"https://api.stackexchange.com/2.3/search/excerpts?order=desc&sort=relevance&q={domain}&site=superuser"),
+        ]
+        emails = {}
+        for name, url in forums:
+            try:
+                resp = await client.get(url, timeout=10.0, headers={"User-Agent": "Mozilla/5.0"})
+                if resp.status_code == 200:
+                    for item in resp.json().get("items", []):
+                        for m in EMAIL_RE.finditer(item.get("body", "") + item.get("title", "")):
+                            e = m.group(0).lower()
+                            if domain in e.split("@")[-1]: emails[e] = f"Forum ({name})"
+            except: pass
+        _dedup_and_merge(all_emails, emails)
+
+    async def scrape_telegram_search():
+        try:
+            resp = await client.get(f"https://t.me/s/{domain}", timeout=10.0, headers={"User-Agent": "Mozilla/5.0"})
+            if resp.status_code == 200:
+                emails = {}
+                for m in EMAIL_RE.finditer(resp.text):
+                    e = m.group(0).lower()
+                    if domain in e.split("@")[-1]: emails[e] = "Telegram"
+                _dedup_and_merge(all_emails, emails)
+        except: pass
+
+    async def scrape_hackerone_bugcrowd():
+        for platform in [f"hackerone.com/teams/{domain}", f"bugcrowd.com/{domain}"]:
+            try:
+                resp = await client.get(f"https://{platform}", timeout=10.0, headers={"User-Agent": "Mozilla/5.0"})
+                if resp.status_code == 200:
+                    emails = {}
+                    for m in EMAIL_RE.finditer(resp.text):
+                        e = m.group(0).lower()
+                        if domain in e.split("@")[-1]: emails[e] = f"Security Platform ({platform.split('/')[0]})"
+                    _dedup_and_merge(all_emails, emails)
+            except: pass
+
+    async def scrape_keybase():
+        try:
+            resp = await client.get(f"https://keybase.io/_/api/1.0/user/lookup.json?q={domain}", timeout=15.0, headers={"User-Agent": "Mozilla/5.0"})
+            if resp.status_code == 200:
+                emails = {}
+                for user in resp.json().get("them", []):
+                    for m in EMAIL_RE.finditer(str(user)):
+                        e = m.group(0).lower()
+                        if domain in e.split("@")[-1]: emails[e] = "Keybase"
+                _dedup_and_merge(all_emails, emails)
+        except: pass
+
+    async def generate_tool_recommendations():
+        recs = []
+        if all_emails:
+            recs.append("theHarvester: python3 theHarvester.py -d {domain} -b all")
+            recs.append("sherlock: sherlock {domain}")
+            recs.append("holehe: holehe {email} (check OAuth signups)")
+            recs.append("social-analyzer: npm run start {domain}")
+            recs.append("hatbeat: hatbeat -d {domain}")
+            recs.append("infoga: infoga -d {domain}")
+            recs.append("recon-ng: use recon/contacts/domains/hunter_io")
+        if recs:
+            findings.append(IntelligenceFinding(
+                entity=f"Tool Recommendations ({len(recs)})",
+                type="Guidance",
+                source="EmailHarvester (Suggestions)",
+                confidence="High", color="cyan", category="Email OSINT", threat_level="Informational",
+                raw_data="\n".join(recs),
+                tags=["guidance", "tools"]
+            ))
+
     await asyncio.gather(
         scrape_bing(),
         scrape_google(),
@@ -995,6 +1333,28 @@ async def crawl(target, client):
         generate_advanced_permutations(),
         detect_email_format(),
         validate_domain_emails(),
+        scrape_securitytrails(),
+        scrape_urlscan(),
+        scrape_virustotal(),
+        scrape_shodan(),
+        scrape_google_dorks(),
+        scrape_social_media_profiles(),
+        scrape_whois_deep(),
+        scrape_forum_results(),
+        scrape_telegram_search(),
+        scrape_hackerone_bugcrowd(),
+        scrape_keybase(),
+    )
+
+    await asyncio.gather(
+        detect_disposable_email_domains(),
+        analyze_email_patterns(),
+        analyze_email_diversity(),
+        analyze_email_stats(),
+        analyze_email_sources(),
+        classify_role_emails(),
+        email_risk_scoring(),
+        generate_tool_recommendations(),
     )
 
     for email, sources in all_emails.items():

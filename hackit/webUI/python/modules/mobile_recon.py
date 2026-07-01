@@ -971,6 +971,92 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
     findings.extend(compute_mobile_presence_score(findings))
 
+    async def analyze_sdk_coverage():
+        sdk_count = sum(1 for f in findings if "SDK" in (f.type or ""))
+        framework_count = sum(1 for f in findings if "Framework" in (f.type or ""))
+        version_count = sum(1 for f in findings if "SDK Version" in (f.type or ""))
+        if sdk_count:
+            findings.append(IntelligenceFinding(
+                entity=f"Mobile SDKs: {sdk_count} SDK(s), {framework_count} framework(s), {version_count} version(s)",
+                type="Mobile SDK Coverage",
+                source="MobileRecon", confidence="Medium",
+                color="slate", tags=["sdk"]))
+        findings.append(IntelligenceFinding(
+            entity=f"SDK diversity: {sdk_count + framework_count} unique SDK/framework(s)",
+            type="Mobile SDK Diversity",
+            source="MobileRecon", confidence="Medium",
+            color="slate", tags=["sdk"]))
+
+    async def analyze_deep_link_coverage():
+        deep_count = sum(1 for f in findings if "Deep Link" in (f.type or ""))
+        if deep_count:
+            findings.append(IntelligenceFinding(
+                entity=f"Deep links: {deep_count} across app/social/media categories",
+                type="Deep Link Analysis",
+                source="MobileRecon", confidence="Medium",
+                color="blue", tags=["deep-link"]))
+        else:
+            findings.append(IntelligenceFinding(
+                entity="No deep links detected",
+                type="Deep Link Analysis",
+                source="MobileRecon", confidence="Low",
+                color="slate", tags=["deep-link"]))
+
+    async def analyze_pwa_capabilities():
+        pwa_count = sum(1 for f in findings if "PWA" in (f.type or "") or "Service Worker" in (f.type or ""))
+        manifest_count = sum(1 for f in findings if "Manifest" in (f.type or ""))
+        viewport_count = sum(1 for f in findings if "Viewport" in (f.type or ""))
+        if pwa_count > 0:
+            findings.append(IntelligenceFinding(
+                entity=f"PWA: {pwa_count} PWA feature(s), manifest={manifest_count > 0}, viewport={viewport_count > 0}",
+                type="PWA Capability Analysis",
+                source="MobileRecon", confidence="Medium",
+                color="emerald", tags=["pwa"]))
+        else:
+            findings.append(IntelligenceFinding(
+                entity="No PWA features detected",
+                type="PWA Capability Analysis",
+                source="MobileRecon", confidence="Low",
+                color="slate", tags=["pwa"]))
+
+    async def analyze_push_notifications():
+        push_count = sum(1 for f in findings if "Push Notification" in (f.type or ""))
+        if push_count:
+            findings.append(IntelligenceFinding(
+                entity=f"Push notification infrastructure: {push_count} component(s)",
+                type="Push Notification Analysis",
+                source="MobileRecon", confidence="Medium",
+                color="orange", tags=["push"]))
+        else:
+            findings.append(IntelligenceFinding(
+                entity="No push notification infrastructure detected",
+                type="Push Notification Analysis",
+                source="MobileRecon", confidence="Low",
+                color="slate", tags=["push"]))
+
+    async def analyze_app_store_presence():
+        ios_count = sum(1 for f in findings if "iOS" in (f.type or "") or "Apple App" in (f.type or ""))
+        android_count = sum(1 for f in findings if "Google Play" in (f.type or "") or "Android" in (f.type or ""))
+        if ios_count or android_count:
+            findings.append(IntelligenceFinding(
+                entity=f"App store presence: iOS={ios_count > 0}, Android={android_count > 0}",
+                type="App Store Analysis",
+                source="MobileRecon", confidence="Medium",
+                color="purple", tags=["app-store"]))
+        findings.append(IntelligenceFinding(
+            entity=f"Mobile header differentiation: {sum(1 for f in findings if 'UA Differentiation' in (f.type or ''))} UA(s) show different content",
+            type="Mobile Headers Analysis",
+            source="MobileRecon", confidence="Medium",
+            color="slate", tags=["headers"]))
+
+    await asyncio.gather(
+        analyze_sdk_coverage(),
+        analyze_deep_link_coverage(),
+        analyze_pwa_capabilities(),
+        analyze_push_notifications(),
+        analyze_app_store_presence(),
+    )
+
     findings.append(IntelligenceFinding(
         entity=f"Mobile reconnaissance complete: {len(findings)} findings",
         type="Mobile Recon Summary",

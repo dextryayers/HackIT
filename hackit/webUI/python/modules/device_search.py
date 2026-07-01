@@ -80,6 +80,86 @@ async def response_headers(ip: str, client: httpx.AsyncClient) -> dict:
         pass
     return {}
 
+VULNERABILITY_HEADERS = {
+    "X-Powered-By": ["PHP", "ASP.NET", "Express", "Django"],
+    "X-AspNet-Version": [r"\d+\.\d+"],
+    "X-AspNetMvc-Version": [r"\d+\.\d+"],
+    "X-Generator": ["Drupal", "WordPress"],
+    "X-Drupal-Cache": [r"\d+"],
+    "X-Varnish": [r"\d+"],
+    "X-Cache": ["HIT", "MISS"],
+}
+
+FRAMEWORK_PATTERNS = {
+    "PHP": [r"\.php", r"PHPSESSID", r"X-Powered-By: PHP"],
+    "ASP.NET": [r"\.aspx", r"\.ashx", r"ASP.NET", r"ViewState"],
+    "Java": [r"\.jsp", r"\.do", r"JSESSIONID", r"Servlet"],
+    "Python": [r"wsgi", r"flask", r"django", r"python"],
+    "Node.js": [r"node", r"express", r"koa", r"next\.js"],
+    "Ruby": [r"ruby", r"rails", r"rack"],
+    "Go": [r"gin", r"echo", r"fiber", r"go"],
+    "Rust": [r"rocket", r"actix", r"warp"],
+}
+
+CPE_PATTERNS = {
+    "Apache": [r"apache", r"httpd"],
+    "Nginx": [r"nginx"],
+    "IIS": [r"iis", r"microsoft-iis"],
+    "Tomcat": [r"tomcat", r"catalina"],
+    "Jetty": [r"jetty"],
+    "Node.js": [r"node\.js", r"nodejs"],
+    "Python": [r"python", r"gunicorn", r"uwsgi"],
+    "Ruby": [r"ruby", r"passenger", r"puma"],
+    "OpenSSL": [r"openssl"],
+    "OpenSSH": [r"openssh", r"ssh"],
+}
+
+async def detect_fingerprint_version(server_header: str) -> list:
+    findings = []
+    server_lower = server_header.lower()
+    version_patterns = [
+        (r"(apache|httpd)/([\d.]+)", "Apache HTTP Server"),
+        (r"nginx/([\d.]+)", "Nginx"),
+        (r"(iis|microsoft-iis)/([\d.]+)", "IIS"),
+        (r"tomcat/([\d.]+)", "Apache Tomcat"),
+        (r"jetty/([\d.]+)", "Jetty"),
+        (r"node\.js/([\d.]+)", "Node.js"),
+        (r"(gunicorn|uwsgi)/([\d.]+)", "Python WSGI"),
+        (r"openresty/([\d.]+)", "OpenResty"),
+        (r"caddy/([\d.]+)", "Caddy"),
+    ]
+    for pat, name in version_patterns:
+        m = re.search(pat, server_lower)
+        if m:
+            ver = m.group(2) if m.lastindex >= 2 else m.group(1)
+            findings.append(IntelligenceFinding(
+                entity=f"Versioned: {name} {ver}",
+                type="Device Search: Software Version",
+                source="DeviceSearch",
+                confidence="High",
+                color="slate",
+                status="Versioned",
+                tags=["device", "version", name.lower().replace(" ", "-")]
+            ))
+    return findings
+
+async def check_vulnerability_headers(headers: dict) -> list:
+    findings = []
+    for hdr, patterns in VULNERABILITY_HEADERS.items():
+        val = headers.get(hdr, "")
+        if val:
+            findings.append(IntelligenceFinding(
+                entity=f"Info leak header: {hdr}: {val}",
+                type="Device Search: Information Disclosure",
+                source="DeviceSearch",
+                confidence="Medium",
+                color="orange",
+                threat_level="Elevated Risk",
+                status="Disclosed",
+                tags=["device", "info-leak", hdr.lower().replace("-", "_")]
+            ))
+    return findings
+
 async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFinding]:
     findings = []
     ip = target.strip().lower()
@@ -144,6 +224,15 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                 resolution=ip,
                 tags=["device", "server", "fingerprint"]
             ))
+            version_results = await detect_fingerprint_version(srv)
+            for vr in version_results:
+                vr.resolution = ip
+                findings.append(vr)
+
+        vuln_results = await check_vulnerability_headers(headers.get("headers", {}))
+        for vr in vuln_results:
+            vr.resolution = ip
+            findings.append(vr)
 
     api_results = await device_fingerprint(ip, client)
     for source, data in api_results.items():

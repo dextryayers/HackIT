@@ -65,6 +65,97 @@ async def detect_sensitive_data(content: str) -> list:
             findings.append({"label": label, "count": len(matches), "samples": matches[:3]})
     return findings
 
+GIT_HUB_API = "https://api.github.com"
+GIT_LAB_API = "https://gitlab.com/api/v4"
+
+ADDITIONAL_GIT_PATHS = [
+    ".git/ORIG_HEAD",
+    ".git/FETCH_HEAD",
+    ".git/MERGE_HEAD",
+    ".git/CHERRY_PICK_HEAD",
+    ".git/REBASE_HEAD",
+    ".git/objects/info/packs",
+    ".git/info/refs",
+    ".git/info/exclude",
+    ".git/config.bak",
+    ".git/config.old",
+    ".git-credentials",
+    ".git-ftp-config",
+    ".gitreview",
+    ".git-blame-ignore-revs",
+    ".git-pre-commit",
+    ".git-commit-template",
+    "backup/.git/config",
+    "old/.git/config",
+]
+
+COMMIT_HASH_PATTERN = re.compile(r"\b[0-9a-f]{40}\b")
+URL_REF_PATTERN = re.compile(r"(?:github|gitlab|bitbucket)[.:][^\s\"'<>]+")
+
+async def check_git_dir_listing(domain: str, client: httpx.AsyncClient) -> list:
+    results = []
+    base = f"https://{domain}"
+    paths = [
+        ".git/", ".git/objects/", ".git/refs/", ".git/logs/",
+        ".git/hooks/", ".git/info/",
+    ]
+    for path in paths:
+        try:
+            url = f"{base}/{path}"
+            resp = await client.get(url, timeout=8.0,
+                headers={"User-Agent": "Mozilla/5.0"})
+            if resp.status_code == 200 and ("index" in resp.text.lower() or "parent directory" in resp.text.lower()):
+                results.append({"path": path, "url": url, "type": "directory_listing"})
+        except:
+            pass
+    return results
+
+async def check_github_search(domain: str, client: httpx.AsyncClient) -> list:
+    results = []
+    try:
+        resp = await client.get(
+            f"{GIT_HUB_API}/search/code",
+            params={"q": domain, "per_page": 5},
+            headers={"User-Agent": "Mozilla/5.0", "Accept": "application/vnd.github.v3+json"},
+            timeout=10.0
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            total = data.get("total_count", 0)
+            if total:
+                items = data.get("items", [])
+                for item in items[:5]:
+                    results.append({
+                        "repo": item.get("repository", {}).get("full_name", ""),
+                        "path": item.get("path", ""),
+                        "url": item.get("html_url", ""),
+                    })
+    except:
+        pass
+    return results
+
+async def check_gitlab_search(domain: str, client: httpx.AsyncClient) -> list:
+    results = []
+    try:
+        resp = await client.get(
+            f"{GIT_LAB_API}/search",
+            params={"scope": "blobs", "search": domain, "per_page": 5},
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=10.0
+        )
+        if resp.status_code == 200:
+            items = resp.json()
+            if isinstance(items, list) and items:
+                for item in items[:5]:
+                    results.append({
+                        "project": item.get("project_id", ""),
+                        "path": item.get("filename", item.get("path", "")),
+                        "ref": item.get("ref", ""),
+                    })
+    except:
+        pass
+    return results
+
 async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFinding]:
     findings = []
     t = target.strip().lower()
@@ -102,6 +193,75 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                         resolution=t,
                         tags=["git", "secret", s["label"].lower().replace(" ", "-")]
                     ))
+
+            all_git_content = " ".join(e["content"] for e in git_exposures)
+            commits = COMMIT_HASH_PATTERN.findall(all_git_content)
+            if commits:
+                findings.append(IntelligenceFinding(
+                    entity=f"{len(set(commits))} commit hashes found in .git data",
+                    type="Git Leak: Commit History",
+                    source="GitLeaks",
+                    confidence="Medium",
+                    color="orange",
+                    threat_level="Elevated Risk",
+                    status="Exposed",
+                    resolution=t,
+                    tags=["git", "commit", "history"]
+                ))
+
+    dir_listings = await check_git_dir_listing(t, client)
+    if dir_listings:
+        for dl in dir_listings:
+            findings.append(IntelligenceFinding(
+                entity=f"Git directory listing: {dl['path']}",
+                type="Git Leak: Directory Listing",
+                source="GitLeaks",
+                confidence="High",
+                color="red",
+                threat_level="Critical",
+                status="Exposed",
+                resolution=t,
+                tags=["git", "directory-listing", "exposure"]
+            ))
+
+    gh_results = await check_github_search(t, client)
+    if gh_results:
+        findings.append(IntelligenceFinding(
+            entity=f"GitHub: {len(gh_results)} code results referencing {t}",
+            type="Git Leak: GitHub Code Search",
+            source="GitLeaks",
+            confidence="Medium",
+            color="orange",
+            threat_level="Elevated Risk",
+            status="Found",
+            resolution=t,
+            tags=["git", "github", "code-search"]
+        ))
+        for r in gh_results[:3]:
+            findings.append(IntelligenceFinding(
+                entity=f"GitHub reference: {r['repo']}/{r['path']}",
+                type="Git Leak: GitHub Reference",
+                source="GitLeaks",
+                confidence="Medium",
+                color="slate",
+                status="Referenced",
+                resolution=t,
+                tags=["git", "github", r['repo'].replace("/", "-").lower()]
+            ))
+
+    gl_results = await check_gitlab_search(t, client)
+    if gl_results:
+        findings.append(IntelligenceFinding(
+            entity=f"GitLab: {len(gl_results)} code results referencing {t}",
+            type="Git Leak: GitLab Code Search",
+            source="GitLeaks",
+            confidence="Medium",
+            color="orange",
+            threat_level="Elevated Risk",
+            status="Found",
+            resolution=t,
+            tags=["git", "gitlab", "code-search"]
+        ))
 
     if not git_exposures:
         findings.append(IntelligenceFinding(

@@ -2,7 +2,7 @@ import httpx
 import asyncio
 import re
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from collections import defaultdict
 from typing import List
 from urllib.parse import quote
@@ -31,6 +31,24 @@ PASTE_SITES = [
     ("Rentry Raw", "https://rentry.org/{}/raw"),
 ]
 
+EXTRA_PASTE_SITES = [
+    ("Paste.fo", "https://paste.fo/search?q={}"),
+    ("Paste.md", "https://paste.md/search?q={}"),
+    ("Paste.rs", "https://paste.rs/search?q={}"),
+    ("Ideone", "https://ideone.com/search?q={}"),
+    ("JSFiddle", "https://jsfiddle.net/search?q={}"),
+    ("DGLog", "https://dglocker.de/search?q={}"),
+    ("Fedora Paste", "https://paste.fedoraproject.org/search?q={}"),
+    ("Mageia Paste", "https://paste.mageia.org/search?q={}"),
+    ("OpenSUSE Paste", "https://paste.opensuse.org/search?q={}"),
+    ("PrivNote", "https://privnote.com/search?q={}"),
+    ("SafeNote", "https://safenote.co/search?q={}"),
+    ("Toptal Paste", "https://paste.toptal.com/search?q={}"),
+    ("CatBin", "https://catbin.io/search?q={}"),
+    ("SnipBin", "https://snipbin.com/search?q={}"),
+    ("Krosk", "https://krosk.com/search?q={}"),
+]
+
 CREDENTIAL_PATTERN = re.compile(
     r'(?P<email>[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,})\s*[:;|]\s*(?P<password>\S+)'
 )
@@ -46,6 +64,8 @@ IP_PATTERN = re.compile(r'\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b')
 PHONE_PATTERN = re.compile(r'(?:\+?\d{1,3}[-.\s]?)?\(?\d{2,4}\)?[-.\s]?\d{3}[-.\s]?\d{4}')
 SSN_PATTERN = re.compile(r'\b\d{3}-\d{2}-\d{4}\b')
 CC_PATTERN = re.compile(r'\b(?:\d{4}[-\s]?){3}\d{4}\b')
+JWT_PATTERN = re.compile(r'eyJ[a-zA-Z0-9_-]+\.eyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+')
+BTC_PATTERN = re.compile(r'\b[13][a-km-zA-HJ-NP-Z1-9]{25,34}\b')
 
 SECRET_PATTERNS = {
     "password": r'\bpassword\s*[:=]\s*\S+',
@@ -54,6 +74,10 @@ SECRET_PATTERNS = {
     "token": r'\btoken\s*[:=]\s*\S+',
     "access_key": r'\b(?:access[_-]?key|accesskey)\s*[:=]\s*\S+',
     "database_url": r'\b(?:database[_-]?url|db[_-]?url|mongodb|postgresql|mysql)\s*[:=]\s*\S+',
+    "jwt": r'eyJ[a-zA-Z0-9_-]+\.eyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+',
+    "private_key": r'-----BEGIN\s?(?:RSA\s)?PRIVATE KEY-----',
+    "aws_key": r'AKIA[0-9A-Z]{16}',
+    "github_token": r'ghp_[0-9a-zA-Z]{36}',
 }
 
 CONTENT_CATEGORIES = {
@@ -64,6 +88,9 @@ CONTENT_CATEGORIES = {
     "personal_data": ["ssn", "social security", "address", "phone", "passport", "driver license"],
     "hacking_tools": ["exploit", "payload", "shell", "backdoor", "rat", "malware"],
     "database_dump": ["sql dump", "database", "insert into", "create table", "mysql"],
+    "log_file": ["log", "syslog", "access.log", "error.log", "debug", "trace"],
+    "certificate": ["certificate", "ssl", "tls", "crt", "pem", "cert"],
+    "crypto_wallet": ["bitcoin", "ethereum", "wallet", "seed phrase", "mnemonic", "private key"],
 }
 
 async def check_paste_site(client: httpx.AsyncClient, site_name: str, url_template: str, target: str) -> list:
@@ -96,13 +123,40 @@ async def detect_secrets(text: str) -> list:
             secrets.append({"type": name, "count": len(matches)})
     return secrets
 
+async def detect_language(text: str) -> str:
+    text_lower = text.lower()
+    if any(x in text_lower for x in ["import ", "def ", "class ", "print(", "return "]):
+        return "Python"
+    if any(x in text_lower for x in ["function ", "var ", "const ", "let ", "console."]):
+        return "JavaScript"
+    if any(x in text_lower for x in ["<?php", "echo ", "function ", "$"]):
+        return "PHP"
+    if any(x in text_lower for x in ["#include", "int main", "printf", "scanf"]):
+        return "C"
+    if any(x in text_lower for x in ["<html", "<div", "<body", "class="]):
+        return "HTML"
+    if any(x in text_lower for x in ["select ", "from ", "where ", "insert into", "create table"]):
+        return "SQL"
+    if any(x in text_lower for x in ["package ", "import java", "public class"]):
+        return "Java"
+    if any(x in text_lower for x in ["require ", "module.exports", "exports."]):
+        return "Node.js"
+    if any(x in text_lower for x in ["#!/bin/bash", "#!/bin/sh", "echo ", "export "]):
+        return "Shell"
+    if any(x in text_lower for x in ["ruby ", "gem ", "rails "]):
+        return "Ruby"
+    if any(x in text_lower for x in ["FROM ", "RUN ", "CMD ", "docker"]):
+        return "Dockerfile"
+    return "Unknown"
+
 async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFinding]:
     findings = []
     query = target.strip().lower()
 
     all_text = ""
 
-    for site_name, url_template in PASTE_SITES:
+    all_sites = PASTE_SITES + EXTRA_PASTE_SITES
+    for site_name, url_template in all_sites:
         results = await check_paste_site(client, site_name, url_template, query)
         for r in results:
             findings.append(IntelligenceFinding(
@@ -148,6 +202,48 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                 tags=["ip", "exposure", "paste"]
             ))
 
+        phones = PHONE_PATTERN.findall(all_text)
+        if phones:
+            findings.append(IntelligenceFinding(
+                entity=f"{len(set(phones))} phone numbers exposed",
+                type="Phone Exposure",
+                source="PastebinMonitor",
+                confidence="Medium",
+                color="red",
+                threat_level="High Risk",
+                status="Exposed",
+                resolution=query,
+                tags=["phone", "pii", "exposure"]
+            ))
+
+        ssns = SSN_PATTERN.findall(all_text)
+        if ssns:
+            findings.append(IntelligenceFinding(
+                entity=f"{len(set(ssns))} SSNs exposed",
+                type="SSN Exposure",
+                source="PastebinMonitor",
+                confidence="High",
+                color="red",
+                threat_level="Critical",
+                status="Exposed",
+                resolution=query,
+                tags=["ssn", "pii", "critical"]
+            ))
+
+        ccs = CC_PATTERN.findall(all_text)
+        if ccs:
+            findings.append(IntelligenceFinding(
+                entity=f"{len(set(ccs))} credit card numbers exposed",
+                type="Financial Data Exposure",
+                source="PastebinMonitor",
+                confidence="High",
+                color="red",
+                threat_level="Critical",
+                status="Exposed",
+                resolution=query,
+                tags=["financial", "credit-card", "critical"]
+            ))
+
         api_keys = API_KEY_PATTERN.findall(all_text)
         if api_keys:
             findings.append(IntelligenceFinding(
@@ -160,6 +256,34 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                 status="Secret Exposed",
                 resolution=query,
                 tags=["api-key", "secret", "critical"]
+            ))
+
+        jwts = JWT_PATTERN.findall(all_text)
+        if jwts:
+            findings.append(IntelligenceFinding(
+                entity=f"{len(set(jwts))} JWT tokens exposed",
+                type="JWT Token Exposure",
+                source="PastebinMonitor",
+                confidence="High",
+                color="red",
+                threat_level="Critical",
+                status="Secret Exposed",
+                resolution=query,
+                tags=["jwt", "token", "critical"]
+            ))
+
+        btc = BTC_PATTERN.findall(all_text)
+        if btc:
+            findings.append(IntelligenceFinding(
+                entity=f"{len(set(btc))} Bitcoin addresses exposed",
+                type="Crypto Wallet Exposure",
+                source="PastebinMonitor",
+                confidence="Medium",
+                color="orange",
+                threat_level="Elevated Risk",
+                status="Exposed",
+                resolution=query,
+                tags=["bitcoin", "crypto", "wallet"]
             ))
 
         secrets = await detect_secrets(all_text)
@@ -191,6 +315,20 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                 tags=["content", "category"] + list(set(categories))
             ))
 
+        language = await detect_language(all_text)
+        if language != "Unknown":
+            findings.append(IntelligenceFinding(
+                entity=f"Detected language: {language}",
+                type="Paste Language Detection",
+                source="PastebinMonitor",
+                confidence="Medium",
+                color="slate",
+                threat_level="Informational",
+                status="Detected",
+                resolution=query,
+                tags=["language", language.lower()]
+            ))
+
     if not findings:
         findings.append(IntelligenceFinding(
             entity="No paste mentions found",
@@ -203,5 +341,19 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             resolution=query,
             tags=["paste", "clean"]
         ))
+
+    total_sites = len(all_sites)
+    found_sites = len([f for f in findings if f.type == "Paste Site Mention"])
+    findings.append(IntelligenceFinding(
+        entity=f"Searched {total_sites} paste sites, {found_sites} had data",
+        type="Paste Monitor Coverage",
+        source="PastebinMonitor",
+        confidence="Medium",
+        color="slate",
+        threat_level="Informational",
+        status="Complete",
+        resolution=query,
+        tags=["paste", "coverage", "summary"]
+    ))
 
     return findings

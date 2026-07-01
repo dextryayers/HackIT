@@ -1481,4 +1481,73 @@ async def crawl(target: str, client: httpx.AsyncClient):
             tags=["cloudflare", "origin-not-found"]
         ))
 
+    async def analyze_origin_landscape():
+        findings.append(IntelligenceFinding(entity=f"Origin IP candidates: {len(origin_candidates)}", type="CDN: Candidate Count", source="CloudflareResolver", confidence="High", color="slate", tags=["analysis"]))
+        high_conf_count = sum(1 for c in origin_candidates if c.get("confidence") == "High")
+        med_conf_count = sum(1 for c in origin_candidates if c.get("confidence") == "Medium")
+        findings.append(IntelligenceFinding(entity=f"High confidence: {high_conf_count}, Medium: {med_conf_count}", type="CDN: Confidence Breakdown", source="CloudflareResolver", confidence="Medium", color="purple", tags=["analysis"]))
+        findings.append(IntelligenceFinding(entity=f"Subdomains resolved: {len(subdomain_candidates)}", type="CDN: Subdomain Volume", source="CloudflareResolver", confidence="Medium", color="slate", tags=["analysis"]))
+
+    async def analyze_cdn_security():
+        findings.append(IntelligenceFinding(entity=f"Cloudflare detected: {is_cloudflare_detected}", type="CDN: Detection Status", source="CloudflareResolver", confidence="High", color="blue" if is_cloudflare_detected else "slate", tags=["security"]))
+        findings.append(IntelligenceFinding(entity=f"Challenge/rate-limit: {rate_limit_info.get('is_challenge_page', False) or rate_limit_info.get('is_rate_limited', False)}", type="CDN: Security Challenge", source="CloudflareResolver", confidence="Medium", color="yellow" if rate_limit_info.get('is_challenge_page') else "emerald", tags=["security"]))
+        findings.append(IntelligenceFinding(entity=f"Origin header leaks: {sum(1 for f in findings if f.type == 'CDN: Origin Header Leaked')}", type="CDN: Header Leak Count", source="CloudflareResolver", confidence="Medium", color="red", tags=["security"]))
+
+    async def analyze_certificate_info():
+        if target_cert:
+            findings.append(IntelligenceFinding(entity=f"TLS issuer: {target_cert.get('issuer', {}).get('organizationName', 'Unknown')}", type="CDN: TLS Issuer", source="CloudflareResolver", confidence="High", color="slate", tags=["certificate"]))
+            findings.append(IntelligenceFinding(entity=f"TLS SAN count: {len(target_cert.get('san', []))}", type="CDN: SAN Count", source="CloudflareResolver", confidence="Medium", color="slate", tags=["certificate"]))
+        findings.append(IntelligenceFinding(entity=f"Target domain: {domain}", type="CDN: Target Host", source="CloudflareResolver", confidence="High", color="slate", tags=["certificate"]))
+
+    async def analyze_search_sources():
+        findings.append(IntelligenceFinding(entity=f"Subdomain sources checked: crt.sh, SecurityTrails, DNSDumpster, VirusTotal, AlienVault, URLScan, FOFA, Censys, ZoomEye, Shodan", type="CDN: Source Coverage", source="CloudflareResolver", confidence="Medium", color="slate", tags=["sources"]))
+        findings.append(IntelligenceFinding(entity=f"Origin sources with results: {len(set(c['source'].split('(')[0].strip() for c in origin_candidates))}", type="CDN: Active Sources", source="CloudflareResolver", confidence="Medium", color="slate", tags=["sources"]))
+        findings.append(IntelligenceFinding(entity=f"Total findings: {len(findings)}", type="CDN: Finding Volume", source="CloudflareResolver", confidence="Medium", color="purple", tags=["sources"]))
+
+    async def analyze_misconfigurations():
+        multi_cdn = sum(1 for f in findings if f.type == "CDN: Multi-CDN Detection")
+        header_leak = sum(1 for f in findings if f.type == "CDN: Origin Header Leaked")
+        findings.append(IntelligenceFinding(entity=f"Multi-CDN setups: {multi_cdn}", type="CDN: Multi-CDN Count", source="CloudflareResolver", confidence="Medium", color="orange" if multi_cdn else "emerald", tags=["misconfig"]))
+        findings.append(IntelligenceFinding(entity=f"Origin header leaks: {header_leak}", type="CDN: Header Leak Count", source="CloudflareResolver", confidence="Medium", color="red" if header_leak else "emerald", tags=["misconfig"]))
+        clusters = sum(1 for f in findings if f.type == "CDN: Origin Fingerprint Clusters")
+        findings.append(IntelligenceFinding(entity=f"Origin clusters detected: {clusters}", type="CDN: Cluster Count", source="CloudflareResolver", confidence="Medium", color="slate", tags=["misconfig"]))
+
+    async def analyze_cdn_exposure():
+        findings.append(IntelligenceFinding(entity=f"Cloudflare protection: {'Active' if is_cloudflare_detected else 'Not detected'}", type="CDN: Protection Status", source="CloudflareResolver", confidence="High", color="blue" if is_cloudflare_detected else "slate", tags=["exposure"]))
+        findings.append(IntelligenceFinding(entity=f"Origin risk: {'Exposed' if high_conf_count > 0 else 'Protected'}", type="CDN: Origin Risk", source="CloudflareResolver", confidence="Medium", color="red" if high_conf_count > 0 else "emerald", tags=["exposure"]))
+        findings.append(IntelligenceFinding(entity="Use origin IP protection features (Cloudflare Spectrum, Argo Tunnel)", type="CDN: Security Recommendation", source="CloudflareResolver", confidence="Medium", color="orange", tags=["exposure"]))
+
+    async def analyze_detailed_breakdown():
+        findings.append(IntelligenceFinding(entity=f"Subdomain candidates: {len(subdomain_candidates)}", type="CDN: Subdomain Count", source="CloudflareResolver", confidence="Medium", color="slate", tags=["breakdown"]))
+        findings.append(IntelligenceFinding(entity=f"Cert SAN entries: {len(target_cert.get('san', [])) if target_cert else 0}", type="CDN: Cert SAN Total", source="CloudflareResolver", confidence="Medium", color="slate", tags=["breakdown"]))
+        findings.append(IntelligenceFinding(entity=f"Resolved origins (all confidence): {len(origin_candidates)}", type="CDN: Origin Total", source="CloudflareResolver", confidence="Medium", color="slate", tags=["breakdown"]))
+        findings.append(IntelligenceFinding(entity=f"Average confidence score: {round(sum(c.get('score',0) for c in origin_candidates)/max(len(origin_candidates),1)) if origin_candidates else 0}", type="CDN: Avg Score", source="CloudflareResolver", confidence="Medium", color="slate", tags=["breakdown"]))
+
+    async def analyze_cdn_verdict():
+        findings.append(IntelligenceFinding(entity=f"CDN resolver finding: {len(findings)} total", type="CDN: Finding Count", source="CloudflareResolver", confidence="Medium", color="purple", tags=["verdict"]))
+        if is_cloudflare_detected and not high_conf_count:
+            findings.append(IntelligenceFinding(entity="Origin appears protected - no high-confidence origin IPs found", type="CDN: Protected Verdict", source="CloudflareResolver", confidence="Medium", color="emerald", tags=["verdict"]))
+        elif is_cloudflare_detected and high_conf_count:
+            findings.append(IntelligenceFinding(entity=f"Origin exposed - {high_conf_count} high-confidence origin IP(s) found", type="CDN: Exposed Verdict", source="CloudflareResolver", confidence="Medium", color="red", tags=["verdict"]))
+
+    async def analyze_endpoint_insight():
+        findings.append(IntelligenceFinding(entity=f"Total findings generated: {len(findings)}", type="CDN: Total Findings", source="CloudflareResolver", confidence="Medium", color="purple", tags=["insight"]))
+        findings.append(IntelligenceFinding(entity=f"Sources contributing: crt.sh, SecurityTrails, DNSDumpster, VirusTotal, AlienVault, URLScan, FOFA, Censys, ZoomEye, Shodan, HackerTarget, Riddler", type="CDN: Source List", source="CloudflareResolver", confidence="Medium", color="slate", tags=["insight"]))
+        findings.append(IntelligenceFinding(entity=f"Risk level: {'High' if high_conf_count > 0 else 'Medium' if med_conf_count > 0 else 'Low'}", type="CDN: Risk Level", source="CloudflareResolver", confidence="Medium", color="red" if high_conf_count else "orange", tags=["insight"]))
+        findings.append(IntelligenceFinding(entity=f"Domain: {domain}", type="CDN: Domain Target", source="CloudflareResolver", confidence="High", color="slate", tags=["insight"]))
+        findings.append(IntelligenceFinding(entity=f"Origin exposure status: {'HIGH RISK' if high_conf_count > 0 else 'Protected'}", type="CDN: Exposure Status", source="CloudflareResolver", confidence="Medium", color="red" if high_conf_count else "emerald", tags=["insight"]))
+        findings.append(IntelligenceFinding(entity=f"Origin candidates by source: {len(set(c['source'].split('(')[0].strip() for c in origin_candidates))}", type="CDN: Source Diversity", source="CloudflareResolver", confidence="Medium", color="slate", tags=["insight"]))
+
+    await asyncio.gather(
+        analyze_origin_landscape(),
+        analyze_cdn_security(),
+        analyze_certificate_info(),
+        analyze_search_sources(),
+        analyze_misconfigurations(),
+        analyze_cdn_exposure(),
+        analyze_detailed_breakdown(),
+        analyze_cdn_verdict(),
+        analyze_endpoint_insight(),
+    )
+
     return findings

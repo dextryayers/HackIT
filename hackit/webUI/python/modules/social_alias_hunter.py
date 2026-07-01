@@ -976,4 +976,137 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         break
     except Exception:
         pass
+
+    async def analyze_username_pattern():
+        if base_name:
+            length = len(base_name)
+            has_upper = any(c.isupper() for c in base_name)
+            has_digit = any(c.isdigit() for c in base_name)
+            has_special = any(not c.isalnum() for c in base_name)
+            findings.append(IntelligenceFinding(entity=f"Username: '{base_name}' ({length} chars)", type="Username Pattern Analysis", source="SocialAliasHunter", confidence="High", color="slate", tags=["analysis"]))
+            findings.append(IntelligenceFinding(entity=f"Digits: {has_digit}, Upper: {has_upper}, Special: {has_special}", type="Username Composition", source="SocialAliasHunter", confidence="High", color="slate", tags=["analysis"]))
+            uniqueness = "High" if length > 8 and has_digit and has_special else "Medium"
+            findings.append(IntelligenceFinding(entity=f"Uniqueness: {uniqueness}", type="Username Uniqueness", source="SocialAliasHunter", confidence="Medium", color="slate", tags=["analysis"]))
+            entropy = "High" if length > 10 and has_digit and has_special else "Low"
+            findings.append(IntelligenceFinding(entity=f"Entropy: {entropy}", type="Username Entropy", source="SocialAliasHunter", confidence="Medium", color="slate", tags=["analysis"]))
+
+    async def analyze_category_distribution():
+        cat_counts = {}
+        for f in findings:
+            if f.status == "Found" and f.type.startswith("Social Alias:"):
+                for tag in f.tags:
+                    if tag in CATEGORY_NAMES:
+                        cat_counts[tag] = cat_counts.get(tag, 0) + 1
+        if cat_counts:
+            for cat, count in sorted(cat_counts.items(), key=lambda x: -x[1])[:6]:
+                label = CATEGORY_NAMES.get(cat, cat)
+                findings.append(IntelligenceFinding(entity=f"{label}: {count} platform(s)", type="Category Distribution", source="SocialAliasHunter", confidence="Medium", color="purple", tags=["category"]))
+        else:
+            findings.append(IntelligenceFinding(entity="No platforms found across any category", type="Category Distribution", source="SocialAliasHunter", confidence="Low", color="slate", tags=["category"]))
+        findings.append(IntelligenceFinding(entity=f"Total categories: {len(cat_counts)}", type="Category Count", source="SocialAliasHunter", confidence="Medium", color="slate", tags=["category"]))
+
+    async def generate_platform_recommendations():
+        found_platforms = set()
+        for f in findings:
+            if f.status == "Found" and f.type.startswith("Social Alias:"):
+                found_platforms.add(f.type.replace("Social Alias: ", ""))
+        total = len(SOCIAL_PLATFORMS)
+        found_count = len(found_platforms)
+        pct = round((found_count / total) * 100, 1) if total > 0 else 0
+        findings.append(IntelligenceFinding(entity=f"Platform coverage: {found_count}/{total} ({pct}%)", type="Coverage Analysis", source="SocialAliasHunter", confidence="Medium", color="slate", tags=["coverage"]))
+        rate_limited = sum(1 for f in findings if f.status == "Rate Limited")
+        findings.append(IntelligenceFinding(entity=f"Rate-limited checks: {rate_limited}", type="Rate Limit Summary", source="SocialAliasHunter", confidence="Medium", color="orange", tags=["rate-limit"]))
+        if found_count > 0:
+            for r in ["Consider delisting unused accounts", "Review privacy settings on each platform", "Use different usernames per platform for compartmentalization"]:
+                findings.append(IntelligenceFinding(entity=r, type="Privacy Recommendation", source="SocialAliasHunter", confidence="Medium", color="orange", tags=["recommendation"]))
+
+    async def analyze_restricted_accounts():
+        restricted = [f for f in findings if f.status == "Restricted"]
+        if restricted:
+            platforms = set()
+            for f in restricted:
+                p = f.type.replace("Social Alias: ", "")
+                platforms.add(p)
+            findings.append(IntelligenceFinding(entity=f"{len(restricted)} restricted account(s): {', '.join(sorted(platforms))}", type="Restricted Accounts", source="SocialAliasHunter", confidence="Medium", color="orange", tags=["restricted"]))
+        else:
+            findings.append(IntelligenceFinding(entity="No restricted accounts detected", type="Restricted Accounts", source="SocialAliasHunter", confidence="Low", color="emerald", tags=["restricted"]))
+
+    async def analyze_platform_breakdown():
+        found = [f for f in findings if f.status == "Found" and f.type.startswith("Social Alias:")]
+        total_found = len(found)
+        findings.append(IntelligenceFinding(entity=f"Total found profiles: {total_found}", type="Found Summary", source="SocialAliasHunter", confidence="High", color="purple", tags=["summary"]))
+        by_type = {}
+        for f in found:
+            for tag in f.tags:
+                if tag in ("profile", "channel", "blog", "company", "organization", "shop", "address", "review", "workspace", "profile", "contact"):
+                    by_type[tag] = by_type.get(tag, 0) + 1
+        for t, c in sorted(by_type.items(), key=lambda x: -x[1])[:5]:
+            findings.append(IntelligenceFinding(entity=f"{t.title()}: {c}", type="Platform Type Breakdown", source="SocialAliasHunter", confidence="Medium", color="slate", tags=["breakdown"]))
+
+    async def analyze_timing_and_errors():
+        timeout_count = sum(1 for f in findings if f.status == "Timeout")
+        findings.append(IntelligenceFinding(entity=f"Timeouts: {timeout_count}", type="Timeout Summary", source="SocialAliasHunter", confidence="Medium", color="slate", tags=["timing"]))
+        error_count = sum(1 for f in findings if f.status == "Error")
+        findings.append(IntelligenceFinding(entity=f"Errors: {error_count}", type="Error Summary", source="SocialAliasHunter", confidence="Medium", color="orange" if error_count else "emerald", tags=["timing"]))
+
+    async def analyze_search_depth():
+        total_checks = 0
+        for f in findings:
+            if f.type.startswith("Social Alias:"):
+                total_checks += 1
+        total_platforms = len(SOCIAL_PLATFORMS)
+        findings.append(IntelligenceFinding(entity=f"Platforms scanned: {total_platforms}", type="Scan Coverage", source="SocialAliasHunter", confidence="High", color="slate", tags=["coverage"]))
+        findings.append(IntelligenceFinding(entity=f"Total status checks: {total_checks}", type="Check Volume", source="SocialAliasHunter", confidence="Medium", color="slate", tags=["coverage"]))
+        not_found = sum(1 for f in findings if f.status == "Not Found")
+        findings.append(IntelligenceFinding(entity=f"Absent profiles: {not_found}", type="Absence Analysis", source="SocialAliasHunter", confidence="Medium", color="slate", tags=["coverage"]))
+
+    async def analyze_threat_indicators():
+        restricted = sum(1 for f in findings if f.status == "Restricted")
+        findings.append(IntelligenceFinding(entity=f"Restricted/suspended accounts: {restricted}", type="Account Health", source="SocialAliasHunter", confidence="Medium", color="orange" if restricted else "emerald", tags=["health"]))
+        findings.append(IntelligenceFinding(entity="Monitor for impersonation accounts using similar usernames", type="Impersonation Risk", source="SocialAliasHunter", confidence="Medium", color="orange", tags=["health"]))
+
+    async def analyze_demographics():
+        cats_seen = set()
+        for f in findings:
+            if f.status == "Found" and f.type.startswith("Social Alias:"):
+                for tag in f.tags:
+                    if tag in CATEGORY_NAMES:
+                        cats_seen.add(tag)
+        if cats_seen:
+            findings.append(IntelligenceFinding(entity=f"Demographic categories: {', '.join(sorted(cats_seen))}", type="Demographic Analysis", source="SocialAliasHunter", confidence="Medium", color="purple", tags=["demographics"]))
+
+    async def analyze_variant_usage():
+        if base_name:
+            findings.append(IntelligenceFinding(entity=f"Permutations generated: {len(permutations)}", type="Variant Analysis", source="SocialAliasHunter", confidence="Medium", color="slate", tags=["variants"]))
+            if len(permutations) > 1:
+                findings.append(IntelligenceFinding(entity=f"Variant range: {permutations[0]} ... {permutations[-1]}", type="Variant Range", source="SocialAliasHunter", confidence="Medium", color="slate", tags=["variants"]))
+
+    async def analyze_privacy_exposure():
+        findings.append(IntelligenceFinding(entity=f"Profile density: {round(found_count/max(len(SOCIAL_PLATFORMS),1)*100,1)}%", type="Profile Density", source="SocialAliasHunter", confidence="Medium", color="purple", tags=["exposure"]))
+        if restricted_count > 0:
+            findings.append(IntelligenceFinding(entity=f"Restricted/suspended: {restricted_count} platform(s)", type="Account Restrictions", source="SocialAliasHunter", confidence="Medium", color="orange", tags=["exposure"]))
+        findings.append(IntelligenceFinding(entity=f"Rate-limited requests: {rate_limited}", type="Rate Limiting Impact", source="SocialAliasHunter", confidence="Medium", color="orange" if rate_limited else "emerald", tags=["exposure"]))
+
+    async def analyze_notable_platforms():
+        high_confidence = sum(1 for f in findings if f.confidence == "High" and f.status == "Found")
+        findings.append(IntelligenceFinding(entity=f"High-confidence matches: {high_confidence}", type="Notable Platforms", source="SocialAliasHunter", confidence="Medium", color="purple", tags=["notable"]))
+        findings.append(IntelligenceFinding(entity=f"Total platforms scanned: {len(SOCIAL_PLATFORMS)}", type="Scan Scope", source="SocialAliasHunter", confidence="High", color="slate", tags=["notable"]))
+        if found_count == 0:
+            findings.append(IntelligenceFinding(entity="No profiles found - username may be unique or inactive", type="Zero Results", source="SocialAliasHunter", confidence="Low", color="slate", tags=["notable"]))
+
+    await asyncio.gather(
+        analyze_username_pattern(),
+        analyze_category_distribution(),
+        generate_platform_recommendations(),
+        analyze_restricted_accounts(),
+        analyze_platform_breakdown(),
+        analyze_timing_and_errors(),
+        analyze_search_depth(),
+        analyze_threat_indicators(),
+        analyze_demographics(),
+        analyze_variant_usage(),
+        analyze_privacy_exposure(),
+        analyze_notable_platforms(),
+    )
+
     return findings

@@ -94,6 +94,69 @@ DORK_GROUPS = {
     ],
 }
 
+ADDITIONAL_DORK_GROUPS = {
+    "Open Redirects": [
+        'inurl:"redirect=" site:{}',
+        'inurl:"url=" site:{}',
+        'inurl:"next=" site:{}',
+        'inurl:"return=" site:{}',
+        'inurl:"dest=" site:{}',
+        'inurl:"goto=" site:{}',
+        'inurl:"target=" site:{}',
+        'inurl:"out=" site:{}',
+        'inurl:"view=" site:{}',
+        'inurl:"dir=" site:{}',
+    ],
+    "Error Messages": [
+        'intext:"warning" intext:"mysql" site:{}',
+        'intext:"fatal error" intext:"line" site:{}',
+        'intext:"PHP Error" site:{}',
+        'intext:"stack trace" site:{}',
+        'intext:"exception" intext:"line" site:{}',
+        'intext:"syntax error" site:{}',
+        'intext:"undefined index" site:{}',
+        'intext:"division by zero" site:{}',
+        'intext:"parse error" site:{}',
+        'intext:"server error" site:{}',
+    ],
+    "Login Pages": [
+        'inurl:admin login site:{}',
+        'inurl:login.aspx site:{}',
+        'inurl:signin site:{}',
+        'inurl:auth site:{}',
+        'inurl:user/login site:{}',
+        'intitle:"login" "password" site:{}',
+        'inurl:"member" "login" site:{}',
+        'inurl:"secure" "login" site:{}',
+        'inurl:"portal" "login" site:{}',
+        'inurl:"account" "login" site:{}',
+    ],
+    "Webcam / IoT": [
+        'intitle:"webcam" "live" site:{}',
+        'intitle:"cam" "live" site:{}',
+        'intitle:"IP Camera" site:{}',
+        'intitle:"DVR" "login" site:{}',
+        'intitle:"Network Camera" site:{}',
+        'inurl:"view/view.shtml" site:{}',
+        'intitle:"WVC" "IP Camera" site:{}',
+        'inurl:"/cgi-bin/" "camera" site:{}',
+        'intitle:"SNC" "Sony" site:{}',
+        'intitle:"Airlive" "Camera" site:{}',
+    ],
+    "Backup / Log Files": [
+        'filetype:log "password" site:{}',
+        'filetype:log "admin" site:{}',
+        'filetype:log "login" site:{}',
+        'filetype:log "error" site:{}',
+        'filetype:log "access" site:{}',
+        'filetype:bak "config" site:{}',
+        'filetype:bak "database" site:{}',
+        'filetype:bz2 "backup" site:{}',
+        'filetype:gz "backup" site:{}',
+        'filetype:tgz "backup" site:{}',
+    ],
+}
+
 async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFinding]:
     findings = []
     t = target.strip().lower()
@@ -123,6 +186,45 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             resolution=t,
             tags=["dorks", "group", group_name.lower().replace(" ", "-")]
         ))
+        for i, dork in enumerate(dorks[:3]):
+            example = dork.replace("site:{}", f"site:{t}")
+            findings.append(IntelligenceFinding(
+                entity=f"Example dork [{i+1}]: {example[:150]}",
+                type=f"Google Dorks: {group_name} Example",
+                source="GoogleDorksDeep",
+                confidence="Low",
+                color="slate",
+                threat_level="Informational",
+                status="Ready",
+                resolution=t,
+                tags=["dorks", "example", group_name.lower().replace(" ", "-")]
+            ))
+
+    for group_name, dorks in ADDITIONAL_DORK_GROUPS.items():
+        findings.append(IntelligenceFinding(
+            entity=f"Extra dork group: {group_name} ({len(dorks)} dorks)",
+            type=f"Google Dorks: {group_name}",
+            source="GoogleDorksDeep",
+            confidence="Medium",
+            color="slate",
+            threat_level="Informational",
+            status="Available",
+            resolution=t,
+            tags=["dorks", "group", "extra", group_name.lower().replace(" ", "-")]
+        ))
+        for i, dork in enumerate(dorks[:2]):
+            example = dork.replace("site:{}", f"site:{t}")
+            findings.append(IntelligenceFinding(
+                entity=f"Dork [{i+1}]: {example[:150]}",
+                type=f"Google Dorks: {group_name} Example",
+                source="GoogleDorksDeep",
+                confidence="Low",
+                color="slate",
+                threat_level="Informational",
+                status="Ready",
+                resolution=t,
+                tags=["dorks", "example", "extra"]
+            ))
 
     if not findings:
         findings.append(IntelligenceFinding(
