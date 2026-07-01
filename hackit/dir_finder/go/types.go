@@ -1,69 +1,156 @@
 package main
 
+import (
+	"regexp"
+	"time"
+)
+
 type DirResult struct {
-	Path        string  `json:"path"`
-	Status      int     `json:"status"`
-	Size        uint64  `json:"size"`
-	ContentType string  `json:"content_type"`
-	Redirect    string  `json:"redirect,omitempty"`
-	Title       string  `json:"title,omitempty"`
+	Path        string `json:"path"`
+	Status      int    `json:"status"`
+	Size        int64  `json:"size"`
+	ContentType string `json:"content_type,omitempty"`
+	Redirect    string `json:"redirect,omitempty"`
+	Title       string `json:"title,omitempty"`
+	Words       int    `json:"words,omitempty"`
+	Lines       int    `json:"lines,omitempty"`
+	TimeMs      int64  `json:"time_ms,omitempty"`
+	Depth       int    `json:"depth,omitempty"`
+}
+
+type SizeRange struct {
+	Min uint64
+	Max uint64
 }
 
 type ScanConfig struct {
-	// TARGET OPTIONS
-	Target    string            `json:"target"`
-	Paths     []string          `json:"paths"`
-	Method    string            `json:"method"`
-	Data      *string           `json:"data,omitempty"`
-	Headers   map[string]string `json:"headers"`
-	Cookie    *string           `json:"cookie,omitempty"`
-	Auth      *string           `json:"auth,omitempty"`
-	Proxy     *string           `json:"proxy,omitempty"`
-	UserAgent *string           `json:"user_agent,omitempty"`
+	Target   string
+	URLsFile string
+	Stdin    bool
 
-	// PERFORMANCE OPTIONS
-	Threads         int    `json:"threads"`
-	TimeoutMS       uint64 `json:"timeout_ms"`
-	DelayMS         uint64 `json:"delay_ms"`
-	Retries         int    `json:"retries"`
-	RandomAgent     bool   `json:"random_agent"`
-	HTTP2           bool   `json:"http2"`
-	FollowRedirects bool   `json:"follow_redirects"`
-	MaxRedirects    int    `json:"max_redirects"`
+	Wordlists          []string
+	WordlistCategories []string
+	Extensions         []string
+	ForceExtensions    bool
+	OverwriteExtensions bool
+	ExcludeExtensions  []string
+	Prefixes           []string
+	Suffixes           []string
+	Uppercase          bool
+	Lowercase          bool
+	Capital            bool
 
-	// SCANNING OPTIONS
-	Extensions    []string `json:"extensions"`
-	Recursive     bool     `json:"recursive"`
-	Depth         int      `json:"depth"`
-	ExcludeStatus []int    `json:"exclude_status"`
-	IncludeStatus []int    `json:"include_status"`
-	ExcludeLength []uint64 `json:"exclude_length"`
-	IncludeLength []uint64 `json:"include_length"`
+	Threads        int
+	Recursive      bool
+	DeepRecursive  bool
+	ForceRecursive bool
+	MaxDepth       int
+	RecursionStatus []int
+	Subdirs        []string
+	ExcludeSubdirs []string
+	IncludeStatus  []int
+	ExcludeStatus  []int
+	ExcludeSizes   []string
+	ExcludeText    []string
+	ExcludeRegex   string
+	ExcludeRedirect string
+	ExcludeResponse string
+	SkipOnStatus   []int
+	MinResponseSize int64
+	MaxResponseSize int64
+	MaxTime        int
+	ExitOnError    bool
 
-	// DETECTION OPTIONS
-	DetectWAF    bool `json:"detect_waf"`
-	DetectTech   bool `json:"detect_tech"`
-	DetectCMS    bool `json:"detect_cms"`
-	DetectBackup bool `json:"detect_backup"`
-	SmartFilter  bool `json:"smart_filter"`
+	AutoCalibration  bool
+	MatchStatus      []int
+	FilterStatus     []int
+	MatchSize        []SizeRange
+	FilterSize       []SizeRange
+	MatchWords       []SizeRange
+	FilterWords      []SizeRange
+	MatchLines       []SizeRange
+	FilterLines      []SizeRange
+	MatchRegex       string
+	FilterRegex      string
+	MatchHeader      []string
+	FilterHeader     []string
 
-	// ADVANCED OPTIONS
-	FuzzParam *string `json:"fuzz_param,omitempty"`
-	APIMode   bool    `json:"api_mode"`
-	JSONBody  bool    `json:"json_body"`
-	GraphQL   bool    `json:"graphql"`
-	RateLimit *float64 `json:"rate_limit,omitempty"`
+	Method         string
+	Data           string
+	DataFile       string
+	Headers        map[string]string
+	HeadersFile    string
+	FollowRedirect bool
+	RandomAgent    bool
+	Auth           string
+	AuthType       string
+	UserAgent      string
+	Cookie         string
 
-	// OSINT / SMART MODE
-	AutoWordlist bool `json:"auto_wordlist"`
-	Crawl        bool `json:"crawl"`
-	ExtractJS    bool `json:"extract_js"`
+	Timeout       int
+	Delay         int
+	Proxy         string
+	ProxiesFile   string
+	ProxyAuth     string
+	ReplayProxy   string
+	Tor           bool
+	Scheme        string
+	MaxRate       float64
+	Retries       int
+	IP            string
+	Interface     string
+
+	Crawl bool
+
+	FullURL  bool
+	NoColor  bool
+	Quiet    bool
+	Verbose  bool
+
+	OutputFormats []string
+	OutputFile    string
+	LogFile       string
+
+	ExcludeRegexCompiled    *regexp.Regexp
+	MatchRegexCompiled      *regexp.Regexp
+	ExcludeRedirectCompiled *regexp.Regexp
+
+	DetectWAF    bool
+	DetectTech   bool
+	DetectCMS    bool
+	DetectBackup bool
+	SmartFilter  bool
+	ExtractJS    bool
+	AutoWordlist bool
+
+	SaveSession bool
+	HTTP2       bool
+	JSONBody    bool
+	GraphQL     bool
+	APIMode     bool
+
+	Paths           []string
+	Blacklists      map[int][]string
+	WildcardStatus  int
+	WildcardSize    int64
+	DetectedWAF     string
+	DetectedTech    []string
+	ReferenceResponse *DirResult
 }
 
-type ScanOutput struct {
-	Target      string      `json:"target"`
-	Results     []DirResult `json:"results"`
-	Error       string      `json:"error,omitempty"`
-	TechStack   []string    `json:"tech_stack,omitempty"`
-	WAFDetected string      `json:"waf_detected,omitempty"`
+type ScanStats struct {
+	TotalRequests int
+	Found         int
+	Filtered      int
+	Errors        int
+	StartTime     time.Time
+	EndTime       time.Time
+}
+
+type SessionData struct {
+	Target    string
+	Remaining []string
+	Found     []DirResult
+	Stats     ScanStats
+	Timestamp time.Time
 }

@@ -4,179 +4,360 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 )
 
 func parseFlags() *ScanConfig {
 	config := &ScanConfig{
-		Headers:       make(map[string]string),
-		Extensions:    []string{},
-		ExcludeStatus: []int{},
-		IncludeStatus: []int{},
-		ExcludeLength: []uint64{},
-		IncludeLength: []uint64{},
-		Paths:         []string{},
+		Headers:  make(map[string]string),
+		Paths:    []string{},
+		Method:   "GET",
+		Threads:  25,
+		Timeout:  10,
+		Retries:  2,
+		MaxDepth: 3,
 	}
 
-	// TARGET OPTIONS
+	// Target options
 	target := flag.String("u", "", "Target URL")
-	wordlistStr := flag.String("w", "", "Wordlist (comma separated or file)")
-	method := flag.String("method", "GET", "HTTP method")
-	data := flag.String("data", "", "POST body data")
-	headerStr := flag.String("H", "", "Custom headers (Key:Val,Key2:Val2)")
-	cookie := flag.String("cookie", "", "Set cookie")
-	auth := flag.String("auth", "", "Basic auth (user:pass)")
-	proxy := flag.String("proxy", "", "Proxy URL (or file path for rotation)")
-	userAgent := flag.String("user-agent", "", "Custom User-Agent")
+	urlsFile := flag.String("l", "", "URL list file")
+	stdin := flag.Bool("stdin", false, "Read URL(s) from STDIN")
 
-	// PERFORMANCE OPTIONS
-	threads := flag.Int("t", 50, "Number of threads")
-	timeout := flag.Int("timeout", 10, "Timeout in seconds")
-	delay := flag.Int("delay", 0, "Delay between requests in ms")
-	retries := flag.Int("retries", 2, "Number of retries")
+	// Dictionary settings
+	wordlists := flag.String("w", "", "Wordlist files or directories (comma separated)")
+	wordlistCategories := flag.String("wordlist-categories", "", "Wordlist category names (comma separated)")
+	extensions := flag.String("e", "", "Extensions (comma separated, e.g. php,asp)")
+	forceExtensions := flag.Bool("f", false, "Force extensions on every wordlist entry")
+	overwriteExtensions := flag.Bool("overwrite-extensions", false, "Overwrite existing extensions")
+	excludeExtensions := flag.String("exclude-extensions", "", "Exclude extensions (comma separated)")
+	prefixes := flag.String("prefixes", "", "Add prefixes to all entries (comma separated)")
+	suffixes := flag.String("suffixes", "", "Add suffixes to all entries (comma separated)")
+	uppercase := flag.Bool("U", false, "Uppercase wordlist")
+	lowercase := flag.Bool("L", false, "Lowercase wordlist")
+	capital := flag.Bool("C", false, "Capital wordlist")
+	showWordlistStatus := flag.Bool("wordlist-status", false, "Show wordlist info and exit")
+
+	// General settings
+	threads := flag.Int("t", 25, "Number of threads")
+	listSessions := flag.Bool("list-sessions", false, "List resumable sessions")
+	recursive := flag.Bool("r", false, "Recursive brute-force")
+	deepRecursive := flag.Bool("deep-recursive", false, "Deep recursive scan")
+	forceRecursive := flag.Bool("force-recursive", false, "Force recursive on all found paths")
+	maxRecursionDepth := flag.Int("R", 3, "Max recursion depth")
+	recursionStatus := flag.String("recursion-status", "", "Status codes for recursion (comma separated)")
+	subdirs := flag.String("subdirs", "", "Scan sub-directories (comma separated)")
+	excludeSubdirs := flag.String("exclude-subdirs", "", "Exclude subdirs during recursive scan (comma separated)")
+	includeStatus := flag.String("i", "", "Include status codes (comma separated, supports ranges)")
+	excludeStatus := flag.String("x", "404", "Exclude status codes (comma separated, supports ranges)")
+	excludeSizes := flag.String("exclude-sizes", "", "Exclude response sizes (comma separated, e.g. 0,0B,4KB)")
+	excludeText := flag.String("exclude-text", "", "Exclude responses containing text")
+	excludeRegex := flag.String("exclude-regex", "", "Exclude responses matching regex")
+	excludeRedirect := flag.String("exclude-redirect", "", "Exclude redirects matching regex")
+	excludeResponse := flag.String("exclude-response", "", "Exclude responses similar to this path")
+	skipOnStatus := flag.String("skip-on-status", "", "Skip target on status codes")
+	minResponseSize := flag.String("min-response-size", "", "Minimum response size")
+	maxResponseSize := flag.String("max-response-size", "", "Maximum response size")
+	maxTime := flag.Int("max-time", 0, "Maximum scan time in seconds")
+	exitOnError := flag.Bool("exit-on-error", false, "Exit on error")
+
+	// Advanced filtering
+	autoCalibration := flag.Bool("auto-calibration", false, "Force wildcard calibration")
+	matchStatus := flag.String("match-status", "", "Match status codes (advanced)")
+	filterStatus := flag.String("filter-status", "", "Filter status codes (advanced)")
+	matchSize := flag.String("match-size", "", "Match response size (advanced)")
+	filterSize := flag.String("filter-size", "", "Filter response size (advanced)")
+	matchWords := flag.String("match-words", "", "Match word count (advanced)")
+	filterWords := flag.String("filter-words", "", "Filter word count (advanced)")
+	matchLines := flag.String("match-lines", "", "Match line count (advanced)")
+	filterLines := flag.String("filter-lines", "", "Filter line count (advanced)")
+	matchRegex := flag.String("match-regex", "", "Match body regex (advanced)")
+	filterRegex := flag.String("filter-regex", "", "Filter body regex (advanced)")
+	matchHeader := flag.String("match-header", "", "Match response header text")
+	filterHeader := flag.String("filter-header", "", "Filter response header text")
+
+	// Request settings
+	method := flag.String("m", "GET", "HTTP method")
+	bodyData := flag.String("d", "", "HTTP request data")
+	dataFile := flag.String("data-file", "", "File with HTTP request data")
+	headers := flag.String("H", "", "Custom headers (Key:Val,Key2:Val2)")
+	headersFile := flag.String("headers-file", "", "File with HTTP headers")
+	followRedirect := flag.Bool("F", false, "Follow redirects")
 	randomAgent := flag.Bool("random-agent", false, "Use random User-Agent")
-	http2 := flag.Bool("http2", false, "Enable HTTP/2")
-	followRedirect := flag.Bool("follow-redirect", false, "Follow redirects")
-	maxRedirect := flag.Int("max-redirect", 5, "Max redirects")
+	auth := flag.String("auth", "", "Authentication credentials (user:pass or bearer token)")
+	authType := flag.String("auth-type", "", "Auth type: basic, digest, bearer, ntlm, jwt")
+	userAgent := flag.String("user-agent", "", "Custom User-Agent")
+	cookie := flag.String("cookie", "", "HTTP Cookie")
 
-	// SCANNING OPTIONS
-	exts := flag.String("e", "", "Extensions (comma separated)")
-	recursive := flag.Bool("recursive", false, "Recursive scanning")
-	depth := flag.Int("depth", 2, "Max recursion depth")
-	excludeStatus := flag.String("exclude-status", "404", "Exclude status codes")
-	includeStatus := flag.String("include-status", "", "Include status codes")
-	excludeLength := flag.String("exclude-length", "", "Exclude response lengths")
-	includeLength := flag.String("include-length", "", "Include response lengths")
+	// Connection settings
+	timeout := flag.Int("timeout", 10, "Connection timeout in seconds")
+	delay := flag.Int("delay", 0, "Delay between requests in ms")
+	proxy := flag.String("p", "", "Proxy URL (http:// or socks5://)")
+	proxiesFile := flag.String("proxies-file", "", "File with proxy servers")
+	proxyAuth := flag.String("proxy-auth", "", "Proxy authentication")
+	tor := flag.Bool("tor", false, "Use Tor network")
+	scheme := flag.String("scheme", "", "URL scheme override")
+	maxRate := flag.Float64("max-rate", 0, "Max requests per second")
+	retries := flag.Int("retries", 2, "Number of retries")
+	ip := flag.String("ip", "", "Server IP address")
+	iface := flag.String("interface", "", "Network interface")
 
-	// DETECTION OPTIONS
-	detectWaf := flag.Bool("detect-waf", false, "Detect WAF")
-	detectTech := flag.Bool("detect-tech", false, "Detect technology")
-	detectCms := flag.Bool("detect-cms", false, "Detect CMS")
+	// Advanced settings
+	crawl := flag.Bool("crawl", false, "Crawl for new paths in responses")
+
+	// View settings
+	fullURL := flag.Bool("full-url", false, "Show full URLs in output")
+	noColor := flag.Bool("no-color", false, "Disable colored output")
+	quiet := flag.Bool("q", false, "Quiet mode")
+	verbose := flag.Bool("v", false, "Verbose output")
+
+	// Output settings
+	outputFormats := flag.String("O", "", "Output formats (simple,plain,json,xml,md,csv,html)")
+	outputFile := flag.String("o", "", "Output file")
+	logFile := flag.String("log", "", "Log file")
+
+	// Our custom detection features
+	detectWAF := flag.Bool("detect-waf", false, "Detect WAF")
+	detectTech := flag.Bool("detect-tech", false, "Detect technology stack")
+	detectCMS := flag.Bool("detect-cms", false, "Detect CMS")
 	detectBackup := flag.Bool("detect-backup", false, "Search backup files")
-	smartFilter := flag.Bool("smart-filter", false, "Enable smart filtering")
-
-	// ADVANCED OPTIONS
-	fuzz := flag.String("fuzz", "", "Fuzz parameter")
-	apiMode := flag.Bool("api-mode", false, "API mode")
+	smartFilter := flag.Bool("smart-filter", false, "Smart false-positive filtering")
+	extractJS := flag.Bool("extract-js", false, "Extract endpoints from JS")
+	autoWordlist := flag.Bool("auto-wordlist", false, "Auto wordlist generation")
+	saveSession := flag.Bool("save-session", false, "Save scan session")
+	http2 := flag.Bool("http2", false, "Enable HTTP/2")
+	apiMode := flag.Bool("api-mode", false, "API mode optimization")
 	jsonBody := flag.Bool("json-body", false, "Send JSON body")
 	graphql := flag.Bool("graphql", false, "GraphQL mode")
-	rateLimit := flag.Float64("rate-limit", 0, "Max requests per second (0 = unlimited)")
-
-	// OSINT / SMART MODE
-	autoWordlist := flag.Bool("auto-wordlist", false, "Auto wordlist generation")
-	crawl := flag.Bool("crawl", false, "Crawl target")
-	extractJs := flag.Bool("extract-js", false, "Extract endpoints from JS")
 
 	flag.Parse()
 
-	if *target == "" {
-		fmt.Println("Error: Target URL (-u) is required")
-		flag.Usage()
-		os.Exit(1)
+	// Handle help
+	if *listSessions {
+		fmt.Println("Sessions: (not yet implemented)")
+		os.Exit(0)
+	}
+
+	if *showWordlistStatus {
+		dbDir := findDBDir()
+		paths, err := LoadAllPayloads(dbDir)
+		if err != nil {
+			fmt.Printf("Error loading wordlists: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Wordlist directory: %s\n", dbDir)
+		fmt.Printf("Total entries: %d\n", len(paths))
+		// Count per category
+		categories := []string{"common", "conf", "web", "db", "keys", "logs", "backups", "extensions", "vcs"}
+		for _, cat := range categories {
+			catDir := dbDir + "/categories/" + cat
+			if cat+".txt" == cat {
+				continue
+			}
+			_ = catDir
+		}
+		os.Exit(0)
 	}
 
 	config.Target = *target
-	config.Method = *method
-	if *data != "" {
-		config.Data = data
-	}
-	if *cookie != "" {
-		config.Cookie = cookie
-	}
-	if *auth != "" {
-		config.Auth = auth
-	}
-	if *proxy != "" {
-		config.Proxy = proxy
-	}
-	if *userAgent != "" {
-		config.UserAgent = userAgent
-	}
+	config.URLsFile = *urlsFile
+	config.Stdin = *stdin
 
-	// Parse Headers
-	if *headerStr != "" {
-		parts := strings.Split(*headerStr, ",")
-		for _, p := range parts {
-			kv := strings.SplitN(p, ":", 2)
-			if len(kv) == 2 {
-				config.Headers[strings.TrimSpace(kv[0])] = strings.TrimSpace(kv[1])
+	if *target == "" && *urlsFile == "" && !*stdin {
+		if len(os.Args) > 1 {
+			arg := os.Args[1]
+			if !strings.HasPrefix(arg, "-") {
+				config.Target = arg
 			}
 		}
 	}
 
-	// Performance
+	// Dictionary
+	if *wordlists != "" {
+		config.Wordlists = strings.Split(*wordlists, ",")
+	}
+	if *wordlistCategories != "" {
+		config.WordlistCategories = strings.Split(*wordlistCategories, ",")
+	}
+	if *extensions != "" {
+		config.Extensions = strings.Split(*extensions, ",")
+	}
+	config.ForceExtensions = *forceExtensions
+	config.OverwriteExtensions = *overwriteExtensions
+	if *excludeExtensions != "" {
+		config.ExcludeExtensions = strings.Split(*excludeExtensions, ",")
+	}
+	if *prefixes != "" {
+		config.Prefixes = strings.Split(*prefixes, ",")
+	}
+	if *suffixes != "" {
+		config.Suffixes = strings.Split(*suffixes, ",")
+	}
+	config.Uppercase = *uppercase
+	config.Lowercase = *lowercase
+	config.Capital = *capital
+
+	// General
 	config.Threads = *threads
-	config.TimeoutMS = uint64(*timeout * 1000)
-	config.DelayMS = uint64(*delay)
-	config.Retries = *retries
-	config.RandomAgent = *randomAgent
-	config.HTTP2 = *http2
-	config.FollowRedirects = *followRedirect
-	config.MaxRedirects = *maxRedirect
-
-	// Scanning
-	if *wordlistStr != "" {
-		config.Paths = strings.Split(*wordlistStr, ",")
-	}
-	if *exts != "" {
-		config.Extensions = strings.Split(*exts, ",")
-	}
 	config.Recursive = *recursive
-	config.Depth = *depth
-	config.ExcludeStatus = parseToIntSlice(*excludeStatus)
-	config.IncludeStatus = parseToIntSlice(*includeStatus)
-	config.ExcludeLength = parseToUint64Slice(*excludeLength)
-	config.IncludeLength = parseToUint64Slice(*includeLength)
+	config.DeepRecursive = *deepRecursive
+	config.ForceRecursive = *forceRecursive
+	config.MaxDepth = *maxRecursionDepth
+	if *recursionStatus != "" {
+		config.RecursionStatus = parseStatusList(*recursionStatus)
+	}
+	if *subdirs != "" {
+		config.Subdirs = strings.Split(*subdirs, ",")
+	}
+	if *excludeSubdirs != "" {
+		config.ExcludeSubdirs = strings.Split(*excludeSubdirs, ",")
+	}
+	if *includeStatus != "" {
+		config.IncludeStatus = parseStatusList(*includeStatus)
+	}
+	if *excludeStatus != "" {
+		config.ExcludeStatus = parseStatusList(*excludeStatus)
+	}
+	if *excludeSizes != "" {
+		config.ExcludeSizes = strings.Split(*excludeSizes, ",")
+	}
+	if *excludeText != "" {
+		config.ExcludeText = strings.Split(*excludeText, ",")
+	}
+	config.ExcludeRegex = *excludeRegex
+	config.ExcludeRedirect = *excludeRedirect
+	config.ExcludeResponse = *excludeResponse
+	if *skipOnStatus != "" {
+		config.SkipOnStatus = parseStatusList(*skipOnStatus)
+	}
+	if *minResponseSize != "" {
+		config.MinResponseSize = parseSize(*minResponseSize)
+	}
+	if *maxResponseSize != "" {
+		config.MaxResponseSize = parseSize(*maxResponseSize)
+	}
+	config.MaxTime = *maxTime
+	config.ExitOnError = *exitOnError
 
-	// Detection
-	config.DetectWAF = *detectWaf
-	config.DetectTech = *detectTech
-	config.DetectCMS = *detectCms
-	config.DetectBackup = *detectBackup
-	config.SmartFilter = *smartFilter
+	// Advanced filtering
+	config.AutoCalibration = *autoCalibration
+	if *matchStatus != "" {
+		config.MatchStatus = parseStatusList(*matchStatus)
+	}
+	if *filterStatus != "" {
+		config.FilterStatus = parseStatusList(*filterStatus)
+	}
+	if *matchSize != "" {
+		config.MatchSize = parseSizeRangeList(*matchSize)
+	}
+	if *filterSize != "" {
+		config.FilterSize = parseSizeRangeList(*filterSize)
+	}
+	if *matchWords != "" {
+		config.MatchWords = parseSizeRangeList(*matchWords)
+	}
+	if *filterWords != "" {
+		config.FilterWords = parseSizeRangeList(*filterWords)
+	}
+	if *matchLines != "" {
+		config.MatchLines = parseSizeRangeList(*matchLines)
+	}
+	if *filterLines != "" {
+		config.FilterLines = parseSizeRangeList(*filterLines)
+	}
+	config.MatchRegex = *matchRegex
+	config.FilterRegex = *filterRegex
+	if *matchHeader != "" {
+		config.MatchHeader = strings.Split(*matchHeader, ",")
+	}
+	if *filterHeader != "" {
+		config.FilterHeader = strings.Split(*filterHeader, ",")
+	}
+
+	// Request
+	config.Method = *method
+	config.Data = *bodyData
+	config.DataFile = *dataFile
+	if *headers != "" {
+		for _, h := range strings.Split(*headers, ",") {
+			parts := strings.SplitN(h, ":", 2)
+			if len(parts) == 2 {
+				config.Headers[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
+			}
+		}
+	}
+	config.HeadersFile = *headersFile
+	config.FollowRedirect = *followRedirect
+	config.RandomAgent = *randomAgent
+	config.Auth = *auth
+	config.AuthType = *authType
+	config.UserAgent = *userAgent
+	config.Cookie = *cookie
+
+	// Connection
+	config.Timeout = *timeout
+	config.Delay = *delay
+	config.Proxy = *proxy
+	config.ProxiesFile = *proxiesFile
+	config.ProxyAuth = *proxyAuth
+	config.Tor = *tor
+	config.Scheme = *scheme
+	config.MaxRate = *maxRate
+	config.Retries = *retries
+	config.IP = *ip
+	config.Interface = *iface
 
 	// Advanced
-	if *fuzz != "" {
-		config.FuzzParam = fuzz
+	config.Crawl = *crawl
+
+	// View
+	config.FullURL = *fullURL
+	config.NoColor = *noColor
+	config.Quiet = *quiet
+	config.Verbose = *verbose
+
+	// Output
+	if *outputFormats != "" {
+		config.OutputFormats = strings.Split(*outputFormats, ",")
 	}
+	config.OutputFile = *outputFile
+	config.LogFile = *logFile
+
+	// Our features
+	config.DetectWAF = *detectWAF
+	config.DetectTech = *detectTech
+	config.DetectCMS = *detectCMS
+	config.DetectBackup = *detectBackup
+	config.SmartFilter = *smartFilter
+	config.ExtractJS = *extractJS
+	config.AutoWordlist = *autoWordlist
+	config.SaveSession = *saveSession
+	config.HTTP2 = *http2
 	config.APIMode = *apiMode
 	config.JSONBody = *jsonBody
 	config.GraphQL = *graphql
-	if *rateLimit > 0 {
-		config.RateLimit = rateLimit
+
+	// Compile regex patterns
+	if config.ExcludeRegex != "" {
+		config.ExcludeRegexCompiled, _ = regexp.Compile(config.ExcludeRegex)
+	}
+	if config.MatchRegex != "" {
+		config.MatchRegexCompiled, _ = regexp.Compile(config.MatchRegex)
+	}
+	if config.ExcludeRedirect != "" {
+		config.ExcludeRedirectCompiled, _ = regexp.Compile(config.ExcludeRedirect)
 	}
 
-	// OSINT
-	config.AutoWordlist = *autoWordlist
-	config.Crawl = *crawl
-	config.ExtractJS = *extractJs
+	// Disable color if requested
+	if config.NoColor {
+		// Handled at print time
+	}
 
 	return config
 }
 
-func parseToIntSlice(s string) []int {
-	if s == "" {
-		return []int{}
-	}
-	var res []int
-	for _, p := range strings.Split(s, ",") {
-		if i, err := strconv.Atoi(strings.TrimSpace(p)); err == nil {
-			res = append(res, i)
-		}
-	}
-	return res
-}
-
-func parseToUint64Slice(s string) []uint64 {
-	if s == "" {
-		return []uint64{}
-	}
-	var res []uint64
-	for _, p := range strings.Split(s, ",") {
-		if i, err := strconv.ParseUint(strings.TrimSpace(p), 10, 64); err == nil {
-			res = append(res, i)
-		}
-	}
-	return res
+func parseInt(s string) int {
+	i, _ := strconv.Atoi(strings.TrimSpace(s))
+	return i
 }

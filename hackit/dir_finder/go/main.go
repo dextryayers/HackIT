@@ -8,8 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
+
 	"github.com/fatih/color"
 )
 
@@ -20,398 +20,516 @@ var (
 	cWhite   = color.New(color.FgWhite)
 	cBlue    = color.New(color.FgBlue)
 	cRed     = color.New(color.FgRed)
+	cGreen   = color.New(color.FgGreen).Add(color.Bold)
+	cHiBlack = color.New(color.FgHiBlack)
 )
 
-func printHeader(config *ScanConfig) {
+func main() {
+	config := parseFlags()
 
-	// Creative DirFinder Banner
+	if config.Target == "" && config.URLsFile == "" {
+		fmt.Println(cRed.Sprint("[!] Target URL (-u) is required"))
+		os.Exit(1)
+	}
+
+	if config.NoColor {
+		color.NoColor = true
+	}
+
+	if !config.Quiet {
+		printHeader(config)
+	}
+
+	if config.Target != "" {
+		orchestrate(config)
+	}
+}
+
+func printHeader(config *ScanConfig) {
 	fmt.Println(cMagenta.Sprint(`
-    ____  _      _______           __           
-   / __ \(_)____/ ____(_)___  ____/ /__  _____ 
-  / / / / / ___/ /_  / / __ \/ __  / _ \/ ___/ 
- / /_/ / / /  / __/ / / / / / /_/ /  __/ /     
-/_____/_/_/  /_/   /_/_/ /_/\__,_/\___/_/      v2.2.0
+    ____  _      _______           __
+   / __ \(_)____/ ____(_)___  ____/ /__  _____
+  / / / / / ___/ /_  / / __ \/ __  / _ \/ ___/
+ / /_/ / / /  / __/ / / / / / /_/ /  __/ /
+/_____/_/_/  /_/   /_/_/ /_/\__,_/\___/_/      v3.0.0
 `))
 
-	// Extensions info
 	extsStr := "None"
 	if len(config.Extensions) > 0 {
 		extsStr = strings.Join(config.Extensions, ", ")
 	}
-	fmt.Printf("%s %s | %s %s | %s %s | %s %s\n",
-		color.New(color.FgYellow).Add(color.Bold).Sprint("Extensions:"), color.New(color.FgCyan).Sprint(extsStr),
-		color.New(color.FgYellow).Add(color.Bold).Sprint("HTTP method:"), color.New(color.FgCyan).Sprint(config.Method),
-		color.New(color.FgYellow).Add(color.Bold).Sprint("Threads:"), color.New(color.FgCyan).Sprint(config.Threads),
-		color.New(color.FgYellow).Add(color.Bold).Sprint("Wordlist size:"), color.New(color.FgCyan).Sprint(len(config.Paths)),
+	fmt.Printf("%s %s | %s %s | %s %d | %s %s\n",
+		cYellow.Add(color.Bold).Sprint("Extensions:"), cCyan.Sprint(extsStr),
+		cYellow.Add(color.Bold).Sprint("HTTP Method:"), cCyan.Sprint(config.Method),
+		cYellow.Add(color.Bold).Sprint("Threads:"), config.Threads,
+		cYellow.Add(color.Bold).Sprint("Wordlist:"), cCyan.Sprint(formatWordlistInfo(config)),
 	)
-	fmt.Println()
 
-	// Target info
-	fmt.Printf("%s %s\n",
-		color.New(color.FgYellow).Add(color.Bold).Sprint("Target:"),
-		cBlue.Sprint(config.Target),
-	)
-	fmt.Println()
+	modes := []string{}
+	if config.Recursive {
+		modes = append(modes, "Recursive")
+	}
+	if config.Crawl {
+		modes = append(modes, "Crawl")
+	}
+	if config.DetectWAF {
+		modes = append(modes, "WAF Detect")
+	}
+	if config.ExtractJS {
+		modes = append(modes, "JS Extract")
+	}
+	if len(modes) > 0 {
+		fmt.Printf("%s %s\n", cYellow.Add(color.Bold).Sprint("Modes:"), cCyan.Sprint(strings.Join(modes, ", ")))
+	}
 
-	// Starting time
-	now := time.Now().Format("15:04:05")
-	fmt.Printf("[%s] Starting:\n", cYellow.Sprint(now))
-	os.Stdout.Sync()
+	fmt.Printf("%s %s\n", cYellow.Add(color.Bold).Sprint("Target:"), cBlue.Sprint(config.Target))
+	fmt.Println()
 }
 
-func main() {
-	// 1. Parse CLI Flags
-	config := parseFlags()
-
-	if config.Target == "" {
-		color.Red("[!] Target URL is required")
-		os.Exit(1)
+func checkConnectivity(target string, client *http.Client) bool {
+	// First try GET with a short timeout
+	req, err := http.NewRequest("GET", target, nil)
+	if err != nil {
+		return false
 	}
-
-	// 1. Banner & Header
-	printHeader(config)
-
-	// 2. Load Wordlist from db/ recursively
-	// Try multiple possible paths for db/
-	dbPaths := []string{"db", "../db", "../../db", "hackit/dir_finder/db"}
-	var foundDb string
-	for _, p := range dbPaths {
-		if _, err := os.Stat(p); err == nil {
-			foundDb = p
-			break
-		}
+	resp, err := client.Do(req)
+	if err != nil {
+		return false
 	}
+	defer resp.Body.Close()
+	return true
+}
 
-	if foundDb == "" {
-		// Try to find it relative to the executable
-		exePath, _ := os.Executable()
-		exeDir := filepath.Dir(exePath)
-		p := filepath.Join(exeDir, "..", "db")
-		if _, err := os.Stat(p); err == nil {
-			foundDb = p
-		}
+func formatWordlistInfo(config *ScanConfig) string {
+	if len(config.WordlistCategories) > 0 {
+		return "cat:" + strings.Join(config.WordlistCategories, ",")
+	}
+	if len(config.Wordlists) > 0 {
+		return strings.Join(config.Wordlists, ",")
+	}
+	return "auto (db/)"
+}
+
+func orchestrate(config *ScanConfig) {
+	startTime := time.Now()
+	foundDB := findDBDir()
+
+	// Phase 0: Load wordlist
+	if !config.Quiet {
+		fmt.Printf("%s Loading wordlists...\n", cCyan.Sprint("[*]"))
 	}
 
 	if len(config.Paths) == 0 {
-		paths, err := LoadAllPayloads(foundDb)
+		var paths []string
+		var err error
+
+		if len(config.WordlistCategories) > 0 {
+			paths, err = LoadWordlistByCategory(foundDB, config.WordlistCategories)
+		} else if len(config.Wordlists) > 0 {
+			for _, wl := range config.Wordlists {
+				p, e := LoadWordlist(wl)
+				if e == nil {
+					paths = append(paths, p...)
+				}
+			}
+		} else {
+			paths, err = LoadAllPayloads(foundDB)
+		}
+
 		if err == nil && len(paths) > 0 {
 			config.Paths = paths
-			color.Green("[+] Loaded %d total payloads from %s directory recursively", len(paths), foundDb)
+			if !config.Quiet {
+				fmt.Fprintf(color.Output, "%s Loaded %d payloads from %s\n",
+					cGreen.Sprint("[+]"), len(paths), foundDB)
+			}
 		} else {
-			// Fallback if db is empty or error
 			config.Paths = []string{
-				".env", ".git/config", "admin/", "login/", "config.php",
-				"wp-config.php", ".htaccess", "robots.txt", "backup.sql",
+				".env", ".git/config", "admin", "login", "wp-admin",
+				"backup", "config", "robots.txt", "sitemap.xml",
 			}
-			color.Yellow("[!] No wordlists found in db/, using %d default paths", len(config.Paths))
-		}
-	}
-
-	// 3. Load Smart Analysis if exists
-	if _, err := os.Stat("../smart_analysis.json"); err == nil {
-		data, _ := os.ReadFile("../smart_analysis.json")
-		var smart struct {
-			Endpoints []string `json:"endpoints"`
-		}
-		if err := json.Unmarshal(data, &smart); err == nil {
-			config.Paths = append(config.Paths, smart.Endpoints...)
-			color.Green("[+] Injected %d endpoints from Smart Analysis", len(smart.Endpoints))
-		}
-	}
-
-	// 3.1. Extension Fuzzing Expansion
-	if len(config.Extensions) > 0 {
-		var extendedPaths []string
-		for _, p := range config.Paths {
-			extendedPaths = append(extendedPaths, p)
-			// Don't add extensions to directory paths (ending in /)
-			if !strings.HasSuffix(p, "/") {
-				for _, ext := range config.Extensions {
-					ext = strings.TrimPrefix(ext, ".")
-					extendedPaths = append(extendedPaths, p+"."+ext)
-				}
+			if !config.Quiet {
+				fmt.Fprintf(color.Output, "%s Using %d default paths\n",
+					cYellow.Sprint("[!]"), len(config.Paths))
 			}
 		}
-		config.Paths = extendedPaths
-		color.Green("[+] Extension Fuzzing enabled: Total paths expanded to %d", len(config.Paths))
 	}
 
-	results := make(chan DirResult)
-	var wg sync.WaitGroup
-	var collectorWg sync.WaitGroup
-	semaphore := make(chan struct{}, config.Threads)
-
-	// 3.5. Wildcard Detection (Ensure "Real" status codes)
-	wildcardStatus := 404
-	wildcardSize := int64(-1)
-
-	fmt.Printf("%s Detecting Wildcard / Soft-404 status...\n", color.CyanString("[*]"))
-	os.Stdout.Sync()
-	tempClient := CreateClient(int(config.TimeoutMS), config.FollowRedirects)
-
-	// Test 1: Random path
-	randomPath := fmt.Sprintf("hackit_%d_random", time.Now().UnixNano())
-	testURL := fmt.Sprintf("%s/%s", strings.TrimSuffix(config.Target, "/"), randomPath)
-	if resp, err := tempClient.Get(testURL); err == nil {
-		wildcardStatus = resp.StatusCode
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
-		wildcardSize = int64(len(body))
-		resp.Body.Close()
-		fmt.Printf("%s Wildcard detected (Random Path): Status %s, Size %d\n",
-			color.YellowString("[!]"), color.RedString(fmt.Sprintf("%d", wildcardStatus)), wildcardSize)
+	// Process paths (extensions, prefixes, suffixes, case)
+	if len(config.Extensions) > 0 || len(config.Prefixes) > 0 || len(config.Suffixes) > 0 ||
+		config.Uppercase || config.Lowercase || config.Capital {
+		config.Paths = ProcessPaths(config.Paths, config)
+		if !config.Quiet {
+			fmt.Fprintf(color.Output, "%s Processed to %d paths (ext/prefix/suffix/case)\n",
+				cGreen.Sprint("[+]"), len(config.Paths))
+		}
 	}
 
-	// Test 2: Traversal wildcard
-	traversalWildcardStatus := 400
-	traversalWildcardSize := int64(-1)
-	testURL = fmt.Sprintf("%s/../../hackit_traversal", strings.TrimSuffix(config.Target, "/"))
-	if resp, err := tempClient.Get(testURL); err == nil {
-		traversalWildcardStatus = resp.StatusCode
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
-		traversalWildcardSize = int64(len(body))
-		resp.Body.Close()
-		fmt.Printf("%s Wildcard detected (Traversal): Status %s, Size %d\n",
-			color.YellowString("[!]"), color.RedString(fmt.Sprintf("%d", traversalWildcardStatus)), traversalWildcardSize)
+	// Load blacklists
+	config.Blacklists = LoadBlacklists(foundDB)
+	if config.Blacklists != nil && !config.Quiet {
+		fmt.Fprintf(color.Output, "%s Loaded %d status blacklists\n",
+			cGreen.Sprint("[+]"), len(config.Blacklists))
 	}
 
-	// 3.6. WAF Detection (Expert Feature)
-	wafDetected := "None"
+	// Load user agents
+	var uaList []string
+	if config.RandomAgent {
+		uaList = LoadUserAgents(foundDB)
+		if uaList != nil && !config.Quiet {
+			fmt.Fprintf(color.Output, "%s Loaded %d User-Agents for rotation\n",
+				cGreen.Sprint("[+]"), len(uaList))
+		}
+	}
+
+	client := CreateClient(config)
+
+	// Phase 1: Connectivity check
+	if !config.Quiet {
+		fmt.Fprintf(color.Output, "%s Checking target connectivity...\n", cCyan.Sprint("[*]"))
+	}
+	connOK := checkConnectivity(config.Target, client)
+	if !connOK {
+		fmt.Fprintf(color.Output, "\n%s Cannot reach target: %s\n", cRed.Sprint("[!]"), cYellow.Sprint(config.Target))
+		fmt.Fprintf(color.Output, "%s Check the URL, network, or use a proxy.\n", cYellow.Sprint("[*]"))
+		if !config.Quiet {
+			fmt.Fprintf(color.Output, "%s Starting scan anyway (might get errors)...\n", cYellow.Sprint("[!]"))
+		}
+		if config.ExitOnError {
+			os.Exit(1)
+		}
+	}
+	// Phase 2: Pre-scan detection
+	if !config.Quiet {
+		fmt.Fprintf(color.Output, "%s Pre-scan detection phase...\n", cCyan.Sprint("[*]"))
+	}
+
+	// Wildcard detection
+	wildcardStatus, wildcardSize := config.WildcardStatus, config.WildcardSize
+	if wildcardStatus == 0 || config.AutoCalibration {
+		s, sz := DetectWildcard(config.Target, client)
+		wildcardStatus = s
+		wildcardSize = sz
+		config.WildcardStatus = s
+		config.WildcardSize = sz
+		wildcardInfo := ""
+		if wildcardSize < 0 {
+			wildcardInfo = " (request failed - run without filter: -x '')"
+		}
+		if !config.Quiet {
+			fmt.Fprintf(color.Output, "%s Wildcard: Status=%d, Size=%d%s\n",
+				cYellow.Sprint("[!]"), wildcardStatus, wildcardSize, wildcardInfo)
+		}
+	}
+
+	// WAF detection
 	if config.DetectWAF {
-		fmt.Printf("%s Performing WAF Fingerprinting...\n", color.CyanString("[*]"))
-		wafPayloads := map[string]string{
-			"Cloudflare":  "?id=' OR '1'='1",
-			"Akamai":      "?path=../../etc/passwd",
-			"ModSecurity": "?id=<script>alert(1)</script>",
-			"AWS WAF":     "?query=UNION SELECT NULL,NULL,NULL--",
+		if !config.Quiet {
+			fmt.Fprintf(color.Output, "%s Detecting WAF...\n", cCyan.Sprint("[*]"))
 		}
-
-		for _, payload := range wafPayloads {
-			testURL := fmt.Sprintf("%s/%s", strings.TrimSuffix(config.Target, "/"), payload)
-			if resp, err := tempClient.Get(testURL); err == nil {
-				// WAF usually blocks with 403, 406, 429, or 501
-				if resp.StatusCode == 403 || resp.StatusCode == 406 || resp.StatusCode == 429 || resp.StatusCode == 501 {
-					serverHeader := resp.Header.Get("Server")
-					if strings.Contains(strings.ToLower(serverHeader), "cloudflare") {
-						wafDetected = "Cloudflare"
-					} else if strings.Contains(strings.ToLower(serverHeader), "akamai") {
-						wafDetected = "Akamai"
-					} else {
-						wafDetected = fmt.Sprintf("Generic WAF (Blocked: %d)", resp.StatusCode)
-					}
-					fmt.Printf("%s WAF Detected: %s\n", color.RedString("[!]"), color.YellowString(wafDetected))
-					resp.Body.Close()
-					break
-				}
-				resp.Body.Close()
+		waf := DetectWAF(config.Target, client)
+		config.DetectedWAF = waf
+		if waf != "" {
+			fmt.Fprintf(color.Output, "%s WAF Detected: %s\n", cRed.Sprint("[!]"), cYellow.Sprint(waf))
+		} else {
+			if !config.Quiet {
+				fmt.Fprintf(color.Output, "%s No WAF detected\n", cGreen.Sprint("[+]"))
 			}
 		}
 	}
 
-	// 3.7. JS Spidering (Expert Feature)
+	// Load smart analysis
+	if _, err := os.Stat(filepath.Join(filepath.Dir(foundDB), "smart_analysis.json")); err == nil {
+		endpoints, info := LoadSmartAnalysis(filepath.Join(filepath.Dir(foundDB), "smart_analysis.json"))
+		if len(endpoints) > 0 {
+			config.Paths = append(config.Paths, endpoints...)
+			config.Paths = Deduplicate(config.Paths)
+			if !config.Quiet {
+				fmt.Fprintf(color.Output, "%s Injected %d endpoints from Smart Analysis\n",
+					cGreen.Sprint("[+]"), len(endpoints))
+			}
+		}
+		if info != "" && config.DetectedWAF == "" {
+			config.DetectedWAF = info
+		}
+	}
+
+	// JS spidering
 	if config.ExtractJS {
-		fmt.Printf("%s Extracting endpoints from JavaScript files...\n", color.CyanString("[*]"))
-
-		// Find common JS files
-		commonJS := []string{"main.js", "app.js", "index.js", "script.js", "bundle.js", "vendor.js"}
-		for _, js := range commonJS {
-			jsURL := fmt.Sprintf("%s/%s", strings.TrimSuffix(config.Target, "/"), js)
-			if resp, err := tempClient.Get(jsURL); err == nil && resp.StatusCode == 200 {
-				body, _ := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024)) // Limit 2MB
-				resp.Body.Close()
-
-				// Very basic regex-like logic to find paths starting with /
-				// e.g. "/api/v1/user" or "endpoint: '/admin'"
-				content := string(body)
-				words := strings.FieldsFunc(content, func(r rune) bool {
-					return r == '"' || r == '\'' || r == ' ' || r == '\n' || r == '\t'
-				})
-
-				count := 0
-				for _, w := range words {
-					if strings.HasPrefix(w, "/") && len(w) > 2 && !strings.ContainsAny(w, "<>{};()[]") {
-						config.Paths = append(config.Paths, strings.TrimPrefix(w, "/"))
-						count++
-					}
-				}
-				if count > 0 {
-					fmt.Printf("%s Found %d endpoints in %s\n", color.GreenString("[+]"), count, js)
-				}
+		if !config.Quiet {
+			fmt.Fprintf(color.Output, "%s Extracting endpoints from JavaScript...\n", cCyan.Sprint("[*]"))
+		}
+		jsEndpoints := ExtractJSEndpoints(config.Target, client)
+		if len(jsEndpoints) > 0 {
+			config.Paths = append(config.Paths, jsEndpoints...)
+			config.Paths = Deduplicate(config.Paths)
+			if !config.Quiet {
+				fmt.Fprintf(color.Output, "%s Found %d JS endpoints\n", cGreen.Sprint("[+]"), len(jsEndpoints))
 			}
 		}
 	}
 
-	// 3.8. Backup Detection (Expert Feature)
+	// Backup detection
 	if config.DetectBackup {
-		fmt.Printf("%s Adding backup & config pattern detection...\n", color.CyanString("[*]"))
-		backupExts := []string{".bak", ".old", ".tmp", ".zip", ".tar.gz", ".sql", ".conf"}
-		newPaths := []string{}
+		backupExts := []string{".bak", ".old", ".tmp", ".zip", ".tar.gz", ".sql", ".conf", ".save", ".backup"}
+		backupPaths := make([]string, 0)
 		for _, p := range config.Paths {
-			// Only add for files, not directories
 			if !strings.HasSuffix(p, "/") {
 				for _, ext := range backupExts {
-					newPaths = append(newPaths, p+ext)
+					backupPaths = append(backupPaths, p+ext)
 				}
 			}
 		}
-		config.Paths = append(config.Paths, newPaths...)
-		fmt.Printf("%s Added %d backup patterns to scan queue\n", color.GreenString("[+]"), len(newPaths))
-	}
-
-	// 5. Engine Creation
-	client := CreateClient(int(config.TimeoutMS), config.FollowRedirects)
-
-	// Result collector (Expert Style)
-	collectorWg.Add(1)
-	sizeFrequency := make(map[string]int)
-	go func() {
-		defer collectorWg.Done()
-		for res := range results {
-			// Honeypot Protection
-			sizeKey := fmt.Sprintf("%d-%d", res.Status, res.Size)
-			sizeFrequency[sizeKey]++
-			if sizeFrequency[sizeKey] > 15 { continue }
-			if sizeFrequency[sizeKey] == 15 {
-				fmt.Printf("%s High frequency pattern detected (%s). Suppressing noise...\n", color.YellowString("[!]"), sizeKey)
-				continue
-			}
-
-			timestamp := time.Now().Format("15:04:05")
-			statusStr := fmt.Sprintf("%d", res.Status)
-
-			var statusColored string
-			switch {
-			case res.Status >= 200 && res.Status < 300:
-				statusColored = color.New(color.FgGreen).Add(color.Bold).Sprint(statusStr)
-				// If directory found and recursive is on, add to queue
-				if config.Recursive && strings.HasSuffix(res.Path, "/") {
-					// We only recurse if it's a directory
-					// (Implementation detail: usually we should check if depth is allowed)
-				}
-			case res.Status >= 300 && res.Status < 400:
-				statusColored = color.New(color.FgYellow).Sprint(statusStr)
-			case res.Status == 403:
-				statusColored = color.New(color.FgBlue).Add(color.Bold).Sprint(statusStr)
-			case res.Status == 404:
-				statusColored = color.New(color.FgRed).Sprint(statusStr)
-			case res.Status >= 400 && res.Status < 500:
-				statusColored = color.New(color.FgHiYellow).Sprint(statusStr) 
-			case res.Status >= 500:
-				statusColored = color.New(color.FgHiRed).Add(color.Bold).Sprint(statusStr)
-			default:
-				statusColored = color.New(color.FgWhite).Sprint(statusStr)
-			}
-
-			sizeStr := fmt.Sprintf("%7s", FormatSize(int64(res.Size)))
-			redirectStr := ""
-			if res.Redirect != "" {
-				redirectStr = color.HiBlackString(" -> " + res.Redirect)
-			}
-
-			fmt.Printf("[%s] %s - %s - %s%s\n",
-				cYellow.Sprint(timestamp),
-				statusColored,
-				sizeStr,
-				cBlue.Sprint("/"+strings.TrimPrefix(res.Path, "/")),
-				redirectStr,
-			)
-			os.Stdout.Sync()
+		config.Paths = append(config.Paths, backupPaths...)
+		if !config.Quiet {
+			fmt.Fprintf(color.Output, "%s Added %d backup patterns\n", cGreen.Sprint("[+]"), len(backupPaths))
 		}
-	}()
-
-	// Rate Limiter
-	var ticker *time.Ticker
-	if config.RateLimit != nil && *config.RateLimit > 0 {
-		interval := time.Duration(float64(time.Second) / *config.RateLimit)
-		ticker = time.NewTicker(interval)
-		defer ticker.Stop()
 	}
 
-	// Load User Agents once
-	var uaList []string
-	uaPath := filepath.Join(foundDb, "user-agents.txt")
-	if content, err := os.ReadFile(uaPath); err == nil {
-		uaList = strings.Split(string(content), "\n")
-	}
-
-	// 6. Main scan loop
-	for _, path := range config.Paths {
-		if ticker != nil {
-			<-ticker.C
+	// Exclude response reference
+	if config.ExcludeResponse != "" {
+		if !config.Quiet {
+			fmt.Fprintf(color.Output, "%s Loading reference response from %s...\n", cCyan.Sprint("[*]"), config.ExcludeResponse)
 		}
-		wg.Add(1)
-		semaphore <- struct{}{}
-		go func(p string) {
-			defer wg.Done()
-			defer func() { <-semaphore }()
-
-			fullURL := fmt.Sprintf("%s/%s", strings.TrimSuffix(config.Target, "/"), strings.TrimPrefix(p, "/"))
-
-			req, err := http.NewRequest(config.Method, fullURL, nil)
-			if err != nil {
-				return
+		refURL := buildURL(config.Target, config.ExcludeResponse)
+		resp, err := client.Get(refURL)
+		if err == nil && resp.StatusCode == 200 {
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
+			config.ReferenceResponse = &DirResult{
+				Status: resp.StatusCode,
+				Size:   int64(len(body)),
 			}
+			resp.Body.Close()
+		}
+	}
 
-			// Add headers
-			for k, v := range config.Headers {
-				req.Header.Set(k, v)
-			}
-
-			// Strong Anonymity: Rotate User-Agent from db
-			ua := "HackIt-Expert-Scanner/v2.0"
-			if len(uaList) > 0 {
-				ua = strings.TrimSpace(uaList[time.Now().UnixNano()%int64(len(uaList))])
-			}
-			req.Header.Set("User-Agent", ua)
-
-			// 6. Real-time Cross Check (Double verification for accuracy)
-			resp, err := client.Do(req)
-			if err != nil {
-				return
-			}
-			defer resp.Body.Close()
-
-			finalStatus := resp.StatusCode
-			finalSize := resp.ContentLength
-			redirectURL := ""
-			if finalStatus >= 300 && finalStatus < 400 {
-				redirectURL = resp.Header.Get("Location")
-			}
-
-			// Check for Soft 404 (keywords in body if status is 200)
-			if finalStatus == 200 {
-				body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024*1024)) // Read up to 1MB
-				finalSize = int64(len(body))
-				bodyLower := strings.ToLower(string(body))
-				soft404Keywords := []string{"not found", "error 404", "page not found", "doesn't exist", "maaf, halaman tidak ditemukan"}
-				for _, kw := range soft404Keywords {
-					if strings.Contains(bodyLower, kw) {
-						finalStatus = 404 // Mark as 404
-						break
-					}
+	// Subdirs handling
+	if len(config.Subdirs) > 0 {
+		expanded := make([]string, 0)
+		for _, sd := range config.Subdirs {
+			sd = strings.Trim(sd, "/")
+			if sd != "" {
+				for _, p := range config.Paths {
+					expanded = append(expanded, sd+"/"+p)
 				}
 			}
-
-			// Cross Check against Wildcards (Normal and Traversal)
-			isWildcard := (finalStatus == wildcardStatus && finalSize == wildcardSize) ||
-				(strings.Contains(p, "..") && finalStatus == traversalWildcardStatus && finalSize == traversalWildcardSize)
-
-			if isWildcard {
-				return
-			}
-
-			results <- DirResult{
-				Path:     p,
-				Status:   finalStatus,
-				Size:     uint64(finalSize),
-				Redirect: redirectURL,
-			}
-		}(path)
+		}
+		config.Paths = append(config.Paths, expanded...)
+		config.Paths = Deduplicate(config.Paths)
 	}
 
-	wg.Wait()
-	close(results)
-	collectorWg.Wait()
+	// Phase 2: Main scan
+	if !config.Quiet {
+		fmt.Fprintf(color.Output, "%s Starting scan with %d paths (%d threads)...\n",
+			cCyan.Sprint("[*]"), len(config.Paths), config.Threads)
+		fmt.Println()
+	}
 
+	results, stats := RunScan(config)
+
+	// Phase 3: Recursive scan
+	var recursiveResults []DirResult
+	var recursiveStats *ScanStats
+
+	if config.Recursive || config.DeepRecursive || config.ForceRecursive {
+		if !config.Quiet {
+			fmt.Fprintf(color.Output, "\n%s Starting recursive scan (depth: %d)...\n",
+				cCyan.Sprint("[*]"), config.MaxDepth)
+		}
+		recursiveResults, recursiveStats = RunRecursiveScan(config, results)
+	}
+
+	// Phase 4: Output
 	fmt.Println()
-	color.New(color.FgYellow).Add(color.Bold).Println("Task Completed")
+	printResults(config, results, recursiveResults, stats, recursiveStats, startTime)
+
+	// Save session
+	if config.SaveSession {
+		saveSessionData(config, results, stats)
+	}
+
+	// Save report
+	if config.OutputFile != "" {
+		saveReport(config, results, recursiveResults, stats, recursiveStats)
+	}
+
+	elapsed := time.Since(startTime).Round(time.Second)
+	if !config.Quiet {
+		fmt.Fprintf(color.Output, "\n%s Scan completed in %s\n", cGreen.Sprint("[+]"), elapsed)
+	}
+}
+
+func printResults(config *ScanConfig, results, recursiveResults []DirResult, stats *ScanStats, recursiveStats *ScanStats, startTime time.Time) {
+	allResults := results
+	if recursiveResults != nil {
+		allResults = append(allResults, recursiveResults...)
+	}
+
+	if len(allResults) == 0 {
+		fmt.Fprintf(color.Output, "%s No results found\n", cYellow.Sprint("[!]"))
+		return
+	}
+
+	fmt.Fprintf(color.Output, "%s Results (%d found):\n\n", cGreen.Sprint("[+]"), len(allResults))
+
+	for _, res := range allResults {
+		timestamp := time.Now().Format("15:04:05")
+		statusStr := fmt.Sprintf("%d", res.Status)
+
+		var statusColored string
+		switch {
+		case res.Status >= 200 && res.Status < 300:
+			statusColored = color.New(color.FgGreen).Add(color.Bold).Sprint(statusStr)
+		case res.Status >= 300 && res.Status < 400:
+			statusColored = color.New(color.FgYellow).Sprint(statusStr)
+		case res.Status == 403:
+			statusColored = color.New(color.FgBlue).Add(color.Bold).Sprint(statusStr)
+		case res.Status == 401:
+			statusColored = color.New(color.FgHiYellow).Add(color.Bold).Sprint(statusStr)
+		case res.Status >= 400 && res.Status < 500:
+			statusColored = color.New(color.FgHiYellow).Sprint(statusStr)
+		case res.Status >= 500:
+			statusColored = color.New(color.FgHiRed).Add(color.Bold).Sprint(statusStr)
+		default:
+			statusColored = color.New(color.FgWhite).Sprint(statusStr)
+		}
+
+		sizeStr := fmt.Sprintf("%7s", FormatSize(res.Size))
+		redirectStr := ""
+		if res.Redirect != "" {
+			redirectStr = cHiBlack.Sprint(" -> " + res.Redirect)
+		}
+		titleStr := ""
+		if res.Title != "" {
+			titleStr = cHiBlack.Sprint(" /* " + res.Title + " */")
+		}
+
+		displayPath := res.Path
+		if config.FullURL {
+			displayPath = buildURL(config.Target, displayPath)
+		}
+
+		fmt.Fprintf(color.Output, "[%s] %s - %s - %s%s%s\n",
+			cYellow.Sprint(timestamp),
+			statusColored,
+			sizeStr,
+			cBlue.Sprint("/"+strings.TrimPrefix(displayPath, "/")),
+			redirectStr,
+			titleStr,
+		)
+	}
+
+	// Stats - leader to separate from progress lines
+	fmt.Println()
+	fmt.Println()
+	if stats != nil {
+		fmt.Fprintf(color.Output, "%s Requests: %d | Found: %d | Filtered: %d | Errors: %d\n",
+			cCyan.Sprint("[*]"),
+			stats.TotalRequests, stats.Found, stats.Filtered, stats.Errors)
+	}
+	if recursiveStats != nil {
+		fmt.Fprintf(color.Output, "%s Recursive requests: %d | Found: %d | Errors: %d\n",
+			cCyan.Sprint("[*]"),
+			recursiveStats.TotalRequests, recursiveStats.Found, recursiveStats.Errors)
+	}
+}
+
+func saveSessionData(config *ScanConfig, results []DirResult, stats *ScanStats) {
+	session := SessionData{
+		Target:    config.Target,
+		Remaining: config.Paths,
+		Found:     results,
+		Stats:     *stats,
+		Timestamp: time.Now(),
+	}
+
+	sessionDir := "sessions"
+	os.MkdirAll(sessionDir, 0755)
+	sessionFile := filepath.Join(sessionDir, fmt.Sprintf("session_%d.json", time.Now().Unix()))
+
+	data, _ := json.MarshalIndent(session, "", "  ")
+	os.WriteFile(sessionFile, data, 0644)
+
+	if !config.Quiet {
+		fmt.Fprintf(color.Output, "%s Session saved to %s\n", cGreen.Sprint("[+]"), sessionFile)
+	}
+}
+
+func saveReport(config *ScanConfig, results, recursiveResults []DirResult, stats, recursiveStats *ScanStats) {
+	allResults := results
+	if recursiveResults != nil {
+		allResults = append(allResults, recursiveResults...)
+	}
+
+	for _, format := range config.OutputFormats {
+		format = strings.TrimSpace(strings.ToLower(format))
+		var data []byte
+		var err error
+		ext := "txt"
+
+		switch format {
+		case "json":
+			ext = "json"
+			report := map[string]interface{}{
+				"target":        config.Target,
+				"timestamp":     time.Now(),
+				"total_requests": stats.TotalRequests,
+				"found":         len(allResults),
+				"results":       allResults,
+				"waf":           config.DetectedWAF,
+			}
+			data, err = json.MarshalIndent(report, "", "  ")
+		case "simple":
+			ext = "txt"
+			var sb strings.Builder
+			for _, r := range allResults {
+				sb.WriteString(fmt.Sprintf("%s %d %s\n", r.Path, r.Status, FormatSize(r.Size)))
+			}
+			data = []byte(sb.String())
+		case "plain":
+			ext = "txt"
+			var sb strings.Builder
+			for _, r := range allResults {
+				sb.WriteString(fmt.Sprintf("%s/%s\n", strings.TrimRight(config.Target, "/"), strings.TrimLeft(r.Path, "/")))
+			}
+			data = []byte(sb.String())
+		case "csv":
+			ext = "csv"
+			var sb strings.Builder
+			sb.WriteString("path,status,size,redirect,title\n")
+			for _, r := range allResults {
+				sb.WriteString(fmt.Sprintf("%s,%d,%d,%s,%s\n", r.Path, r.Status, r.Size, r.Redirect, r.Title))
+			}
+			data = []byte(sb.String())
+		case "md":
+			ext = "md"
+			var sb strings.Builder
+			sb.WriteString(fmt.Sprintf("# Dir Finder Report - %s\n\n", config.Target))
+			sb.WriteString(fmt.Sprintf("**Date:** %s\n\n", time.Now().Format(time.RFC3339)))
+			sb.WriteString(fmt.Sprintf("**Found:** %d URLs\n\n", len(allResults)))
+			sb.WriteString("| Path | Status | Size | Redirect | Title |\n")
+			sb.WriteString("|------|--------|------|----------|-------|\n")
+			for _, r := range allResults {
+				sb.WriteString(fmt.Sprintf("| %s | %d | %s | %s | %s |\n", r.Path, r.Status, FormatSize(r.Size), r.Redirect, r.Title))
+			}
+			data = []byte(sb.String())
+		default:
+			if !config.Quiet {
+				fmt.Fprintf(color.Output, "%s Unknown format: %s\n", cYellow.Sprint("[!]"), format)
+			}
+			continue
+		}
+
+		if err != nil {
+			continue
+		}
+
+		outputPath := config.OutputFile
+		if !strings.HasSuffix(outputPath, "."+ext) {
+			outputPath = outputPath + "." + ext
+		}
+		os.WriteFile(outputPath, data, 0644)
+		if !config.Quiet {
+			fmt.Fprintf(color.Output, "%s Report saved: %s\n", cGreen.Sprint("[+]"), outputPath)
+		}
+	}
 }
