@@ -14,16 +14,19 @@ func parseFlags() *ScanConfig {
 		Headers:  make(map[string]string),
 		Paths:    []string{},
 		Method:   "GET",
-		Threads:  25,
-		Timeout:  10,
-		Retries:  2,
+		Threads:  5,
+		Timeout:  5,
+		Retries:  1,
 		MaxDepth: 3,
 	}
 
 	// Target options
 	target := flag.String("u", "", "Target URL")
 	urlsFile := flag.String("l", "", "URL list file")
+	rawFile := flag.String("raw", "", "Load raw HTTP request from file (Burp-style)")
 	stdin := flag.Bool("stdin", false, "Read URL(s) from STDIN")
+	sessionFile := flag.String("session", "", "Session file to resume")
+	sessionID := flag.Int("session-id", 0, "Resume session by ID")
 
 	// Dictionary settings
 	wordlists := flag.String("w", "", "Wordlist files or directories (comma separated)")
@@ -40,7 +43,7 @@ func parseFlags() *ScanConfig {
 	showWordlistStatus := flag.Bool("wordlist-status", false, "Show wordlist info and exit")
 
 	// General settings
-	threads := flag.Int("t", 25, "Number of threads")
+	threads := flag.Int("t", 5, "Number of threads (default: 5)")
 	listSessions := flag.Bool("list-sessions", false, "List resumable sessions")
 	recursive := flag.Bool("r", false, "Recursive brute-force")
 	deepRecursive := flag.Bool("deep-recursive", false, "Deep recursive scan")
@@ -50,7 +53,7 @@ func parseFlags() *ScanConfig {
 	subdirs := flag.String("subdirs", "", "Scan sub-directories (comma separated)")
 	excludeSubdirs := flag.String("exclude-subdirs", "", "Exclude subdirs during recursive scan (comma separated)")
 	includeStatus := flag.String("i", "", "Include status codes (comma separated, supports ranges)")
-	excludeStatus := flag.String("x", "404", "Exclude status codes (comma separated, supports ranges)")
+	excludeStatus := flag.String("x", "", "Exclude status codes (comma separated, supports ranges)")
 	excludeSizes := flag.String("exclude-sizes", "", "Exclude response sizes (comma separated, e.g. 0,0B,4KB)")
 	excludeText := flag.String("exclude-text", "", "Exclude responses containing text")
 	excludeRegex := flag.String("exclude-regex", "", "Exclude responses matching regex")
@@ -91,7 +94,7 @@ func parseFlags() *ScanConfig {
 	cookie := flag.String("cookie", "", "HTTP Cookie")
 
 	// Connection settings
-	timeout := flag.Int("timeout", 10, "Connection timeout in seconds")
+	timeout := flag.Int("timeout", 5, "Connection timeout in seconds")
 	delay := flag.Int("delay", 0, "Delay between requests in ms")
 	proxy := flag.String("p", "", "Proxy URL (http:// or socks5://)")
 	proxiesFile := flag.String("proxies-file", "", "File with proxy servers")
@@ -99,7 +102,7 @@ func parseFlags() *ScanConfig {
 	tor := flag.Bool("tor", false, "Use Tor network")
 	scheme := flag.String("scheme", "", "URL scheme override")
 	maxRate := flag.Float64("max-rate", 0, "Max requests per second")
-	retries := flag.Int("retries", 2, "Number of retries")
+	retries := flag.Int("retries", 1, "Number of retries")
 	ip := flag.String("ip", "", "Server IP address")
 	iface := flag.String("interface", "", "Network interface")
 
@@ -122,7 +125,7 @@ func parseFlags() *ScanConfig {
 	detectTech := flag.Bool("detect-tech", false, "Detect technology stack")
 	detectCMS := flag.Bool("detect-cms", false, "Detect CMS")
 	detectBackup := flag.Bool("detect-backup", false, "Search backup files")
-	smartFilter := flag.Bool("smart-filter", false, "Smart false-positive filtering")
+	smartFilter := flag.Bool("smart-filter", true, "Smart false-positive filtering")
 	extractJS := flag.Bool("extract-js", false, "Extract endpoints from JS")
 	autoWordlist := flag.Bool("auto-wordlist", false, "Auto wordlist generation")
 	saveSession := flag.Bool("save-session", false, "Save scan session")
@@ -162,7 +165,10 @@ func parseFlags() *ScanConfig {
 
 	config.Target = *target
 	config.URLsFile = *urlsFile
+	config.RawFile = *rawFile
 	config.Stdin = *stdin
+	config.SessionFile = *sessionFile
+	config.SessionID = *sessionID
 
 	if *target == "" && *urlsFile == "" && !*stdin {
 		if len(os.Args) > 1 {

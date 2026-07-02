@@ -12,6 +12,7 @@ type DirResult struct {
 	ContentType string `json:"content_type,omitempty"`
 	Redirect    string `json:"redirect,omitempty"`
 	Title       string `json:"title,omitempty"`
+	BodyHash    string `json:"body_hash,omitempty"`
 	Words       int    `json:"words,omitempty"`
 	Lines       int    `json:"lines,omitempty"`
 	TimeMs      int64  `json:"time_ms,omitempty"`
@@ -23,10 +24,19 @@ type SizeRange struct {
 	Max uint64
 }
 
+type RawRequest struct {
+	Method  string
+	Path    string
+	Headers map[string]string
+	Body    string
+	Target  string
+}
+
 type ScanConfig struct {
-	Target   string
-	URLsFile string
-	Stdin    bool
+	Target    string
+	URLsFile  string
+	RawFile   string
+	Stdin     bool
 
 	Wordlists          []string
 	WordlistCategories []string
@@ -129,13 +139,20 @@ type ScanConfig struct {
 	GraphQL     bool
 	APIMode     bool
 
-	Paths           []string
-	Blacklists      map[int][]string
-	WildcardStatus  int
-	WildcardSize    int64
-	DetectedWAF     string
-	DetectedTech    []string
+	Paths             []string
+	SessionFile    string
+	SessionID      int
+	RestoredPaths  []string
+	RestoredResults []DirResult
+
+	Blacklists        map[int][]string
+	WildcardStatus    int
+	WildcardSize      int64
+	DetectedWAF       string
+	DetectedTech      []string
 	ReferenceResponse *DirResult
+	Scheduler         *Scheduler
+	Fingerprint       FingerprintResult
 }
 
 type ScanStats struct {

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,10 +21,100 @@ var (
 	cRed     = color.New(color.FgRed)
 	cGreen   = color.New(color.FgGreen).Add(color.Bold)
 	cHiBlack = color.New(color.FgHiBlack)
+	cOrange  = color.New(color.Attribute(38), color.Attribute(5), color.Attribute(208))
+)
+
+const (
+	ANSI_RESET       = "\033[0m"
+	ANSI_GREEN       = "\033[1;32m"
+	ANSI_YELLOW      = "\033[33m"
+	ANSI_ORANGE      = "\033[38;5;208m"
+	ANSI_RED         = "\033[1;31m"
+	ANSI_CYAN        = "\033[36m"
+	ANSI_BLUE        = "\033[34m"
+	ANSI_MAGENTA     = "\033[1;35m"
+	ANSI_GRAY        = "\033[90m"
+	ANSI_CLEAR_LINE  = "\033[2K\r"
 )
 
 func main() {
 	config := parseFlags()
+	color.NoColor = false
+
+	if config.NoColor {
+		color.NoColor = true
+	}
+
+	// Handle --raw: parse raw HTTP request file
+	if config.RawFile != "" {
+		rawReq, err := ParseRawRequest(config.RawFile)
+		if err != nil {
+			fmt.Fprintf(color.Output, "%s Cannot parse raw request: %v\n", cRed.Sprint("[!]"), err)
+			os.Exit(1)
+		}
+		if config.Target == "" {
+			config.Target = rawReq.Target
+		}
+		if config.Method == "GET" || config.Method == "" {
+			config.Method = rawReq.Method
+		}
+		if config.Data == "" {
+			config.Data = rawReq.Body
+		}
+		for k, v := range rawReq.Headers {
+			if config.Headers == nil {
+				config.Headers = make(map[string]string)
+			}
+			kLower := strings.ToLower(k)
+			if kLower == "host" || kLower == "content-length" {
+				continue
+			}
+			if _, exists := config.Headers[k]; !exists {
+				config.Headers[k] = v
+			}
+		}
+		if !config.Quiet {
+			fmt.Fprintf(color.Output, "%s Loaded raw request: %s %s\n",
+				cGreen.Sprint("[+]"), rawReq.Method, rawReq.Path)
+		}
+	}
+
+	// Handle --session / --session-id: resume from session
+	var sessionResume *SessionData
+	if config.SessionFile != "" {
+		sessionResume, _ = LoadSession(config.SessionFile)
+	} else if config.SessionID > 0 {
+		sessions := ListSessions()
+		for _, s := range sessions {
+			var id int
+			fmt.Sscanf(s, "session_%d.json", &id)
+			if id == config.SessionID {
+				sessionResume, _ = LoadSession(filepath.Join("sessions", s))
+				break
+			}
+		}
+		if sessionResume == nil {
+			fmt.Fprintf(color.Output, "%s No session found with ID %d\n", cRed.Sprint("[!]"), config.SessionID)
+			if len(sessions) > 0 {
+				fmt.Fprintf(color.Output, "%s Available sessions:\n", cYellow.Sprint("[*]"))
+				for _, s := range sessions {
+					fmt.Fprintf(color.Output, "  %s\n", s)
+				}
+			}
+			os.Exit(1)
+		}
+	}
+
+	// Apply session restore
+	if sessionResume != nil {
+		config.Target = sessionResume.Target
+		config.RestoredPaths = sessionResume.Remaining
+		config.RestoredResults = sessionResume.Found
+		if !config.Quiet {
+			fmt.Fprintf(color.Output, "%s Resumed session: %d remaining, %d found\n",
+				cGreen.Sprint("[+]"), len(sessionResume.Remaining), len(config.RestoredResults))
+		}
+	}
 
 	if config.Target == "" && config.URLsFile == "" {
 		fmt.Println(cRed.Sprint("[!] Target URL (-u) is required"))
@@ -51,7 +140,7 @@ func printHeader(config *ScanConfig) {
    / __ \(_)____/ ____(_)___  ____/ /__  _____
   / / / / / ___/ /_  / / __ \/ __  / _ \/ ___/
  / /_/ / / /  / __/ / / / / / /_/ /  __/ /
-/_____/_/_/  /_/   /_/_/ /_/\__,_/\___/_/      v3.0.0
+/_____/_/_/  /_/   /_/_/ /_/\__,_/\___/_/      HackIT DirFInder V2.1
 `))
 
 	extsStr := "None"
@@ -86,20 +175,6 @@ func printHeader(config *ScanConfig) {
 	fmt.Println()
 }
 
-func checkConnectivity(target string, client *http.Client) bool {
-	// First try GET with a short timeout
-	req, err := http.NewRequest("GET", target, nil)
-	if err != nil {
-		return false
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return false
-	}
-	defer resp.Body.Close()
-	return true
-}
-
 func formatWordlistInfo(config *ScanConfig) string {
 	if len(config.WordlistCategories) > 0 {
 		return "cat:" + strings.Join(config.WordlistCategories, ",")
@@ -113,6 +188,34 @@ func formatWordlistInfo(config *ScanConfig) string {
 func orchestrate(config *ScanConfig) {
 	startTime := time.Now()
 	foundDB := findDBDir()
+
+	// Session resume: use restored paths
+	if len(config.RestoredPaths) > 0 {
+		config.Paths = config.RestoredPaths
+		if !config.Quiet {
+			fmt.Fprintf(color.Output, "%s Resuming scan with %d remaining paths\n",
+				cGreen.Sprint("[+]"), len(config.Paths))
+		}
+	}
+
+	// API mode presets
+	if config.APIMode {
+		if len(config.Extensions) == 0 {
+			config.Extensions = []string{"json", "xml", "php"}
+		}
+		if config.Headers == nil {
+			config.Headers = make(map[string]string)
+		}
+		if config.Headers["Accept"] == "" {
+			config.Headers["Accept"] = "application/json, text/plain, */*"
+		}
+		config.DetectTech = true
+		config.DetectWAF = true
+		if !config.Quiet {
+			fmt.Fprintf(color.Output, "%s API mode: exts=%s\n",
+				cGreen.Sprint("[+]"), strings.Join(config.Extensions, ","))
+		}
+	}
 
 	// Phase 0: Load wordlist
 	if !config.Quiet {
@@ -187,16 +290,29 @@ func orchestrate(config *ScanConfig) {
 	if !config.Quiet {
 		fmt.Fprintf(color.Output, "%s Checking target connectivity...\n", cCyan.Sprint("[*]"))
 	}
-	connOK := checkConnectivity(config.Target, client)
+	connOK, connInfo := checkConnectivity(config.Target, client)
 	if !connOK {
 		fmt.Fprintf(color.Output, "\n%s Cannot reach target: %s\n", cRed.Sprint("[!]"), cYellow.Sprint(config.Target))
-		fmt.Fprintf(color.Output, "%s Check the URL, network, or use a proxy.\n", cYellow.Sprint("[*]"))
+		fmt.Fprintf(color.Output, "%s %s\n", cYellow.Sprint("[*]"), connInfo)
+		if strings.Contains(connInfo, "DNS lookup failed") {
+			fmt.Fprintf(color.Output, "%s The domain does not resolve. Check your DNS or internet connection.\n", cYellow.Sprint("[!]"))
+		} else if strings.Contains(connInfo, "timeout") {
+			fmt.Fprintf(color.Output, "%s Connection timed out. The server may be down or blocking your IP.\n", cYellow.Sprint("[!]"))
+			fmt.Fprintf(color.Output, "%s Try: --proxy http://your-proxy:port\n", cYellow.Sprint("[*]"))
+		} else if strings.Contains(connInfo, "refused") {
+			fmt.Fprintf(color.Output, "%s Connection refused. The server is rejecting connections.\n", cYellow.Sprint("[!]"))
+		} else if strings.Contains(connInfo, "reset") {
+			fmt.Fprintf(color.Output, "%s Connection reset. The server closed the connection.\n", cYellow.Sprint("[!]"))
+			fmt.Fprintf(color.Output, "%s Reduce threads: -t 5 or use a proxy.\n", cYellow.Sprint("[*]"))
+		}
 		if !config.Quiet {
 			fmt.Fprintf(color.Output, "%s Starting scan anyway (might get errors)...\n", cYellow.Sprint("[!]"))
 		}
 		if config.ExitOnError {
 			os.Exit(1)
 		}
+	} else if !config.Quiet {
+		fmt.Fprintf(color.Output, "%s Target is reachable: %s\n", cGreen.Sprint("[+]"), connInfo)
 	}
 	// Phase 2: Pre-scan detection
 	if !config.Quiet {
@@ -253,7 +369,120 @@ func orchestrate(config *ScanConfig) {
 		}
 	}
 
-	// JS spidering
+	// Phase 2a: Signature Engine — Fingerprint target
+	var fingerprint FingerprintResult
+	if !config.Quiet {
+		fmt.Fprintf(color.Output, "%s Fingerprinting target...\n", cCyan.Sprint("[*]"))
+	}
+	resp, err := client.Get(config.Target)
+	if err == nil && resp != nil {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
+		fingerprint = FingerprintResponse(&resp.Header, string(body))
+		resp.Body.Close()
+	}
+	if fingerprint.Server != "" || fingerprint.CMS != "" || fingerprint.WAF != "" {
+		if !config.Quiet {
+			fmt.Fprintf(color.Output, "%s Server: %s", cGreen.Sprint("[+]"), fingerprint.Server)
+			if fingerprint.CMS != "" {
+				fmt.Fprintf(color.Output, " | CMS: %s", cYellow.Sprint(fingerprint.CMS))
+			}
+			if fingerprint.WAF != "" {
+				fmt.Fprintf(color.Output, " | WAF: %s", cRed.Sprint(fingerprint.WAF))
+			}
+			if fingerprint.Framework != "" {
+				fmt.Fprintf(color.Output, " | Framework: %s", cCyan.Sprint(fingerprint.Framework))
+			}
+			if fingerprint.Language != "" {
+				fmt.Fprintf(color.Output, " | Lang: %s", cGreen.Sprint(fingerprint.Language))
+			}
+			fmt.Println()
+		}
+	}
+
+	// Auto-suggest wordlist categories from fingerprint
+	if config.AutoWordlist && fingerprint.Tech != nil {
+		suggested := SuggestWordlistCategories(fingerprint)
+		if len(suggested) > 0 {
+			config.WordlistCategories = append(config.WordlistCategories, suggested...)
+			config.Paths = nil
+			paths, err := LoadWordlistByCategory(foundDB, config.WordlistCategories)
+			if err == nil && len(paths) > 0 {
+				config.Paths = paths
+				if !config.Quiet {
+					fmt.Fprintf(color.Output, "%s Auto-loaded %d payloads (tech-based)\n",
+						cGreen.Sprint("[+]"), len(paths))
+				}
+			}
+		}
+	}
+
+	// Phase 2b: Parser Engine — Crawl homepage, robots.txt, sitemap
+	if !config.Quiet {
+		fmt.Fprintf(color.Output, "%s Crawling target sources...\n", cCyan.Sprint("[*]"))
+	}
+	var crawledPaths []string
+	seenCrawled := make(map[string]bool)
+
+	// Parse homepage
+	if resp != nil {
+		homeBody, _ := io.ReadAll(io.LimitReader(resp.Body, 512*1024))
+		_ = homeBody
+	}
+	homeResp, err := client.Get(config.Target)
+	if err == nil && homeResp != nil {
+		homeBody, _ := io.ReadAll(io.LimitReader(homeResp.Body, 512*1024))
+		homeLinks := ParseHTMLLinks(string(homeBody), config.Target)
+		for _, l := range homeLinks {
+			if !seenCrawled[l] {
+				seenCrawled[l] = true
+				crawledPaths = append(crawledPaths, l)
+			}
+		}
+		formActions := ExtractFormActions(string(homeBody), config.Target)
+		for _, f := range formActions {
+			if !seenCrawled[f] {
+				seenCrawled[f] = true
+				crawledPaths = append(crawledPaths, f)
+			}
+		}
+		jsEndpoints := ParseJSEndpoints(string(homeBody))
+		for _, j := range jsEndpoints {
+			if !seenCrawled[j] {
+				seenCrawled[j] = true
+				crawledPaths = append(crawledPaths, j)
+			}
+		}
+		homeResp.Body.Close()
+	}
+
+	// Parse robots.txt
+	robotsPaths := ParseRobots(config.Target, client)
+	for _, p := range robotsPaths {
+		if !seenCrawled[p] {
+			seenCrawled[p] = true
+			crawledPaths = append(crawledPaths, p)
+		}
+	}
+
+	// Parse sitemap.xml
+	sitemapPaths := ParseSitemap(config.Target, client)
+	for _, p := range sitemapPaths {
+		if !seenCrawled[p] {
+			seenCrawled[p] = true
+			crawledPaths = append(crawledPaths, p)
+		}
+	}
+
+	if len(crawledPaths) > 0 {
+		config.Paths = append(crawledPaths, config.Paths...)
+		config.Paths = Deduplicate(config.Paths)
+		if !config.Quiet {
+			fmt.Fprintf(color.Output, "%s Found %d endpoints via crawling\n",
+				cGreen.Sprint("[+]"), len(crawledPaths))
+		}
+	}
+
+	// JS spidering (additional JS-specific crawl)
 	if config.ExtractJS {
 		if !config.Quiet {
 			fmt.Fprintf(color.Output, "%s Extracting endpoints from JavaScript...\n", cCyan.Sprint("[*]"))
@@ -317,7 +546,13 @@ func orchestrate(config *ScanConfig) {
 		config.Paths = Deduplicate(config.Paths)
 	}
 
-	// Phase 2: Main scan
+	// Phase 2c: Create scheduler
+	config.Scheduler = NewScheduler(config.Threads)
+	if config.Delay > 0 || config.MaxRate > 0 {
+		config.Scheduler.EnableJitter(config.Delay, config.Delay+100)
+	}
+
+	// Phase 3: Main scan
 	if !config.Quiet {
 		fmt.Fprintf(color.Output, "%s Starting scan with %d paths (%d threads)...\n",
 			cCyan.Sprint("[*]"), len(config.Paths), config.Threads)
@@ -325,6 +560,13 @@ func orchestrate(config *ScanConfig) {
 	}
 
 	results, stats := RunScan(config)
+	if config.Scheduler != nil {
+		_, _, finalErrRate := config.Scheduler.Stats()
+		if finalErrRate > 0.1 && !config.Quiet {
+			fmt.Fprintf(color.Output, "\n%s Error rate: %.1f%% — server may be throttling\n",
+				cYellow.Sprint("[!]"), finalErrRate*100)
+		}
+	}
 
 	// Phase 3: Recursive scan
 	var recursiveResults []DirResult
@@ -338,18 +580,29 @@ func orchestrate(config *ScanConfig) {
 		recursiveResults, recursiveStats = RunRecursiveScan(config, results)
 	}
 
+	// Merge restored results (from session resume)
+	allResults := results
+	if len(config.RestoredResults) > 0 {
+		allResults = append(config.RestoredResults, results...)
+		stats.Found += len(config.RestoredResults)
+		if !config.Quiet {
+			fmt.Fprintf(color.Output, "%s Restored %d previous results from session\n",
+				cGreen.Sprint("[+]"), len(config.RestoredResults))
+		}
+	}
+
 	// Phase 4: Output
 	fmt.Println()
-	printResults(config, results, recursiveResults, stats, recursiveStats, startTime)
+	printResults(config, allResults, recursiveResults, stats, recursiveStats, startTime)
 
 	// Save session
 	if config.SaveSession {
-		saveSessionData(config, results, stats)
+		saveSessionData(config, allResults, stats)
 	}
 
 	// Save report
 	if config.OutputFile != "" {
-		saveReport(config, results, recursiveResults, stats, recursiveStats)
+		saveReport(config, allResults, recursiveResults, stats, recursiveStats)
 	}
 
 	elapsed := time.Since(startTime).Round(time.Second)
@@ -431,6 +684,33 @@ func printResults(config *ScanConfig, results, recursiveResults []DirResult, sta
 			cCyan.Sprint("[*]"),
 			recursiveStats.TotalRequests, recursiveStats.Found, recursiveStats.Errors)
 	}
+}
+
+func LoadSession(path string) (*SessionData, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var session SessionData
+	if err := json.Unmarshal(data, &session); err != nil {
+		return nil, err
+	}
+	return &session, nil
+}
+
+func ListSessions() []string {
+	sessionDir := "sessions"
+	entries, err := os.ReadDir(sessionDir)
+	if err != nil {
+		return nil
+	}
+	var sessions []string
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasPrefix(e.Name(), "session_") && strings.HasSuffix(e.Name(), ".json") {
+			sessions = append(sessions, e.Name())
+		}
+	}
+	return sessions
 }
 
 func saveSessionData(config *ScanConfig, results []DirResult, stats *ScanStats) {

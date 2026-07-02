@@ -57,20 +57,24 @@ func RunRecursiveScan(config *ScanConfig, initialResults []DirResult) ([]DirResu
 				recursivePaths := generateRecursivePaths(config, dir, depth)
 
 				for _, p := range recursivePaths {
-					res := scanPath(config, client, p, uaList)
-					if res != nil {
-						res.Depth = depth
+					sr := scanPath(config, client, p, uaList)
+					if sr != nil && sr.res != nil {
+						sr.res.Depth = depth
 						mu.Lock()
-						if !ShouldFilter(res, config) {
-							allResults = append(allResults, *res)
+						filtered := ShouldFilter(sr.res, config) ||
+							ShouldFilterBody([]byte(sr.body), sr.res, config) ||
+							ShouldFilterRedirect(sr.res, config) ||
+							ShouldFilterHeaders(sr.header, config)
+						if !filtered {
+							allResults = append(allResults, *sr.res)
 							totalStats.Found++
 						}
 						mu.Unlock()
 						totalStats.TotalRequests++
 
-						if shouldRecurse(res, config) {
+						if shouldRecurse(sr.res, config) {
 							mu.Lock()
-							nextDirs = append(nextDirs, res.Path)
+							nextDirs = append(nextDirs, sr.res.Path)
 							mu.Unlock()
 						}
 					} else {
