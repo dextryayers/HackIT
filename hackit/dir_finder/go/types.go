@@ -17,6 +17,12 @@ type DirResult struct {
 	Lines       int    `json:"lines,omitempty"`
 	TimeMs      int64  `json:"time_ms,omitempty"`
 	Depth       int    `json:"depth,omitempty"`
+
+	IsLogin     bool   `json:"is_login,omitempty"`
+	IsAPI       bool   `json:"is_api,omitempty"`
+	HasSwagger  bool   `json:"has_swagger,omitempty"`
+	TechStack   string `json:"tech_stack,omitempty"`
+	JSEndpoints int    `json:"js_endpoints,omitempty"`
 }
 
 type SizeRange struct {
@@ -138,6 +144,13 @@ type ScanConfig struct {
 	JSONBody    bool
 	GraphQL     bool
 	APIMode     bool
+	AdaptiveRate bool
+	DetectLogin  bool
+	DetectAPI    bool
+	JSDeep       bool
+	Swagger      bool
+	Similarity   int
+	ReportFile   string
 
 	Paths             []string
 	SessionFile    string

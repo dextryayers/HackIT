@@ -57,6 +57,9 @@ func RunScan(config *ScanConfig) ([]DirResult, *ScanStats) {
 	seenPaths := make(map[string]bool)
 	pathCount := len(config.Paths)
 
+	adaptiveRate := NewAdaptiveRateController(config)
+	recursionPlan := BuildRecursionPlan(config)
+
 	// Max-time timeout
 	var timedOut int32
 	if config.MaxTime > 0 {
@@ -139,31 +142,45 @@ func RunScan(config *ScanConfig) ([]DirResult, *ScanStats) {
 					config.Scheduler.RecordRequest(isErr)
 				}()
 			}
+			adaptiveRate.RecordResult(isErr)
+
 			mu.Lock()
 			if sr != nil && sr.res != nil {
 				if !seenPaths[sr.res.Path] {
 					seenPaths[sr.res.Path] = true
-					fpKey := fmt.Sprintf("%s-%d-%d-%d-%d", sr.res.BodyHash, sr.res.Status, sr.res.Size, sr.res.Words, sr.res.Lines)
-					if config.SmartFilter {
-						fpFrequency[fpKey]++
-						if fpFrequency[fpKey] > 10 {
-							mu.Unlock()
-							return
-						}
-						if fpFrequency[fpKey] == 10 {
-							fmt.Fprintf(color.Output, "%s%s High frequency (%dx status=%d size=%s words=%d lines=%d). Suppressing...\n",
-								ANSI_CLEAR_LINE, color.YellowString("[!]"), fpFrequency[fpKey],
-								sr.res.Status, FormatSize(sr.res.Size), sr.res.Words, sr.res.Lines)
-						}
+
+					// Classify response (login, API)
+					ClassifyResponse(sr.res, sr.body)
+
+					// SmartFilter: false-positive suppression
+					if SmartFilterResult(sr.res, config, fpFrequency) {
+						stats.Filtered++
+						mu.Unlock()
+						return
 					}
-				isRedirect := sr.res.Status >= 300 && sr.res.Status < 400
-				filtered := ShouldFilter(sr.res, config) ||
-					ShouldFilterBody([]byte(sr.body), sr.res, config) ||
-					ShouldFilterRedirect(sr.res, config) ||
-					ShouldFilterHeaders(sr.header, config)
-				if isRedirect && filtered && sr.res.Status == config.WildcardStatus && sr.res.Size == config.WildcardSize {
-					filtered = false
-				}
+
+					// Advanced filtering via filter_engine + match_engine + text_engine
+					filterRes := FilterResponseAdvanced(sr.res, config)
+					textRes := ExcludeByText(config.ExcludeText, sr.body)
+					regexRes := ExcludeByRegex(config.ExcludeRegex, sr.body)
+					redirectRes := ExcludeByRedirect(config.ExcludeRedirect, sr.res.Redirect)
+					refRes := ExcludeByReference(sr.res, config.ReferenceResponse)
+					matchRes := MatchResponseAdvanced(sr.res, sr.body, sr.header, config)
+
+					// Legacy filter integration
+					isRedirect := sr.res.Status >= 300 && sr.res.Status < 400
+					legacyFiltered := ShouldFilter(sr.res, config) ||
+						ShouldFilterBody([]byte(sr.body), sr.res, config) ||
+						ShouldFilterRedirect(sr.res, config) ||
+						ShouldFilterHeaders(sr.header, config)
+					if isRedirect && legacyFiltered && sr.res.Status == config.WildcardStatus && sr.res.Size == config.WildcardSize {
+						legacyFiltered = false
+					}
+
+					filtered := legacyFiltered || filterRes.Filtered || textRes.Filtered ||
+						regexRes.Filtered || redirectRes.Filtered || refRes.Filtered ||
+						matchRes.Filtered
+
 					if !config.Quiet {
 						printAttempt(sr.res, config, filtered)
 					}
@@ -172,6 +189,11 @@ func RunScan(config *ScanConfig) ([]DirResult, *ScanStats) {
 						stats.Found++
 					} else {
 						stats.Filtered++
+					}
+
+					// Recursion check
+					if ShouldRecurse(sr.res, recursionPlan) {
+						recursionPlan.Level++
 					}
 				}
 			} else {
@@ -324,70 +346,58 @@ func scanPath(config *ScanConfig, client *http.Client, path string, uaList []str
 		return nil
 	}
 
+	// Pre-compute body string (doesn't change per retry)
+	var bodyStrInit string
+	if config.Data != "" {
+		bodyStrInit = config.Data
+		if config.GraphQL {
+			bodyStrInit = `{"query":"` + strings.ReplaceAll(bodyStrInit, `"`, `\"`) + `"}`
+		}
+	} else if config.DataFile != "" {
+		if dataBytes, err := os.ReadFile(config.DataFile); err == nil {
+			bodyStrInit = string(dataBytes)
+			if config.GraphQL {
+				bodyStrInit = `{"query":"` + strings.ReplaceAll(strings.ReplaceAll(bodyStrInit, `\`, `\\`), `"`, `\"`) + `"}`
+			}
+		}
+	} else if config.JSONBody {
+		bodyStrInit = "{}"
+	}
+
+	// Pre-hash UA index for consistent selection
+	uaIdx := 0
+	if len(uaList) > 0 {
+		uaIdx = int(hashPath(path) % uint64(len(uaList)))
+	}
+
 	var resp *http.Response
 	var err error
 	var timeMs int64
 
-	for retry := 0; retry <= config.Retries; retry++ {
-		start := time.Now()
-
-		var reqBody io.Reader
-		if config.Data != "" {
-			dataStr := config.Data
-			if config.GraphQL {
-				dataStr = `{"query":"` + strings.ReplaceAll(dataStr, `"`, `\"`) + `"}`
-			}
-			reqBody = strings.NewReader(dataStr)
-		} else if config.DataFile != "" {
-			dataBytes, err := os.ReadFile(config.DataFile)
-			if err == nil {
-				dataStr := string(dataBytes)
-				if config.GraphQL {
-					dataStr = `{"query":"` + strings.ReplaceAll(strings.ReplaceAll(dataStr, `\`, `\\`), `"`, `\"`) + `"}`
-				}
-				reqBody = strings.NewReader(dataStr)
-			}
-		} else if config.JSONBody {
-			reqBody = strings.NewReader("{}")
-		}
-
-		req, err := http.NewRequest(config.Method, fullURL, reqBody)
-		if err != nil {
-			return nil
-		}
-
+	headerSetup := func(req *http.Request) {
 		for k, v := range config.Headers {
 			req.Header.Set(k, v)
 		}
-
 		if config.JSONBody && config.Data == "" {
 			req.Header.Set("Content-Type", "application/json")
 		} else if config.GraphQL {
 			req.Header.Set("Content-Type", "application/json")
 		}
-
-		if config.APIMode {
-			if req.Header.Get("Accept") == "" {
-				req.Header.Set("Accept", "application/json, text/plain, */*")
-			}
+		if config.APIMode && req.Header.Get("Accept") == "" {
+			req.Header.Set("Accept", "application/json, text/plain, */*")
 		}
-
 		if config.UserAgent != "" {
 			req.Header.Set("User-Agent", config.UserAgent)
 		} else if len(uaList) > 0 {
-			ua := strings.TrimSpace(uaList[time.Now().UnixNano()%int64(len(uaList))])
-			req.Header.Set("User-Agent", ua)
+			req.Header.Set("User-Agent", strings.TrimSpace(uaList[uaIdx]))
 		}
-
 		if config.Cookie != "" {
 			req.Header.Set("Cookie", config.Cookie)
 		}
-
 		if config.Auth != "" {
 			switch config.AuthType {
 			case "basic":
-				parts := strings.SplitN(config.Auth, ":", 2)
-				if len(parts) == 2 {
+				if parts := strings.SplitN(config.Auth, ":", 2); len(parts) == 2 {
 					req.SetBasicAuth(parts[0], parts[1])
 				}
 			case "bearer", "jwt":
@@ -398,14 +408,25 @@ func scanPath(config *ScanConfig, client *http.Client, path string, uaList []str
 				req.Header.Set("Authorization", "NTLM "+config.Auth)
 			}
 		}
+	}
+
+	for retry := 0; retry <= config.Retries; retry++ {
+		start := time.Now()
+		var bodyReader io.Reader
+		if bodyStrInit != "" {
+			bodyReader = strings.NewReader(bodyStrInit)
+		}
+		req, err := http.NewRequest(config.Method, fullURL, bodyReader)
+		if err != nil {
+			return nil
+		}
+		headerSetup(req)
 
 		resp, err = client.Do(req)
 		timeMs = time.Since(start).Milliseconds()
-
 		if err == nil {
 			break
 		}
-
 		if retry < config.Retries {
 			time.Sleep(time.Duration(500*(retry+1)) * time.Millisecond)
 		}
@@ -419,26 +440,23 @@ func scanPath(config *ScanConfig, client *http.Client, path string, uaList []str
 	redirectURL := ""
 	if finalStatus >= 300 && finalStatus < 400 {
 		redirectURL = resp.Header.Get("Location")
-		if redirectURL != "" {
-			if !strings.HasPrefix(redirectURL, "http") {
-				parsed, _ := url.Parse(buildURL(config.Target, path))
-				if parsed != nil {
-					if strings.HasPrefix(redirectURL, "/") {
-						redirectURL = parsed.Scheme + "://" + parsed.Host + redirectURL
-					} else {
-						redirectURL = parsed.Scheme + "://" + parsed.Host + "/" + redirectURL
-					}
-				}
+		if redirectURL != "" && !strings.HasPrefix(redirectURL, "http") {
+			baseURL := config.Target
+			if strings.HasPrefix(redirectURL, "/") {
+				redirectURL = strings.TrimRight(baseURL, "/") + redirectURL
+			} else {
+				redirectURL = strings.TrimRight(baseURL, "/") + "/" + redirectURL
 			}
+		}
+		if redirectURL != "" {
 			followReq, _ := http.NewRequest("GET", redirectURL, nil)
 			if followReq != nil {
 				if config.UserAgent != "" {
 					followReq.Header.Set("User-Agent", config.UserAgent)
 				} else if len(uaList) > 0 {
-					followReq.Header.Set("User-Agent", uaList[time.Now().UnixNano()%int64(len(uaList))])
+					followReq.Header.Set("User-Agent", strings.TrimSpace(uaList[uaIdx]))
 				}
-				followResp, followErr := client.Do(followReq)
-				if followErr == nil && followResp != nil {
+				if followResp, followErr := client.Do(followReq); followErr == nil && followResp != nil {
 					resp.Body.Close()
 					resp = followResp
 					finalStatus = followResp.StatusCode
@@ -451,31 +469,14 @@ func scanPath(config *ScanConfig, client *http.Client, path string, uaList []str
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
 	finalSize := int64(len(body))
 
-	if finalSize == 0 {
-		if finalStatus == 200 || finalStatus == 301 || finalStatus == 302 {
-			return nil
-		}
+	if finalSize == 0 && (finalStatus == 200 || finalStatus == 301 || finalStatus == 302) {
+		return nil
 	}
 
-	if config.SmartFilter {
-		bodyLower := strings.ToLower(string(body))
-		soft404Keywords := []string{
-			"not found", "error 404", "page not found", "doesn't exist",
-			"no results", "nothing found", "404 error", "page unavailable",
-			"this page could not be found", "http 404", "not available",
-			"content not found", "no such page", "404 not found",
-			"the requested url was not found", "page does not exist",
-			"halaman tidak ditemukan", "pagina no encontrada",
-			"seite nicht gefunden", "page non trouvee",
-		}
-		titleCheck := extractTitle(string(body))
-		titleLower := strings.ToLower(titleCheck)
-		for _, kw := range soft404Keywords {
-			if strings.Contains(bodyLower, kw) || strings.Contains(titleLower, kw) {
-				finalStatus = 404
-				break
-			}
-		}
+	bodyStr := string(body)
+
+	if config.SmartFilter && CheckSoft404(bodyStr, extractTitle(bodyStr)) {
+		finalStatus = 404
 	}
 
 	if config.ExcludeResponse != "" && config.ReferenceResponse != nil {
@@ -485,26 +486,21 @@ func scanPath(config *ScanConfig, client *http.Client, path string, uaList []str
 	}
 
 	contentType := resp.Header.Get("Content-Type")
-	title := extractTitle(string(body))
-	words := countWords(string(body))
-	lines := countLines(string(body))
+	title := extractTitle(bodyStr)
+	words := countWords(bodyStr)
+	lines := countLines(bodyStr)
 	hdrStr := headerMapToString(resp.Header)
 	bodyHash := fmt.Sprintf("%x", sha1.Sum(body))[:16]
 
-	res := &DirResult{
-		Path:        path,
-		Status:      finalStatus,
-		Size:        finalSize,
-		ContentType: contentType,
-		Redirect:    redirectURL,
-		Title:       title,
-		BodyHash:    bodyHash,
-		Words:       words,
-		Lines:       lines,
-		TimeMs:      timeMs,
+	return &scanResult{
+		res: &DirResult{
+			Path: path, Status: finalStatus, Size: finalSize,
+			ContentType: contentType, Redirect: redirectURL, Title: title,
+			BodyHash: bodyHash, Words: words, Lines: lines, TimeMs: timeMs,
+		},
+		body:   bodyStr,
+		header: hdrStr,
 	}
-
-	return &scanResult{res: res, body: string(body), header: hdrStr}
 }
 
 func buildURL(target, path string) string {

@@ -121,18 +121,25 @@ func parseFlags() *ScanConfig {
 	logFile := flag.String("log", "", "Log file")
 
 	// Our custom detection features
-	detectWAF := flag.Bool("detect-waf", false, "Detect WAF")
-	detectTech := flag.Bool("detect-tech", false, "Detect technology stack")
-	detectCMS := flag.Bool("detect-cms", false, "Detect CMS")
-	detectBackup := flag.Bool("detect-backup", false, "Search backup files")
-	smartFilter := flag.Bool("smart-filter", true, "Smart false-positive filtering")
-	extractJS := flag.Bool("extract-js", false, "Extract endpoints from JS")
-	autoWordlist := flag.Bool("auto-wordlist", false, "Auto wordlist generation")
-	saveSession := flag.Bool("save-session", false, "Save scan session")
+	detectWAF := flag.Bool("detect-waf", false, "Detect WAF (20+ signatures)")
+	detectTech := flag.Bool("detect-tech", false, "Detect technology stack (50+ signatures)")
+	detectCMS := flag.Bool("detect-cms", false, "Detect CMS (WordPress, Joomla, Drupal, etc)")
+	detectBackup := flag.Bool("detect-backup", false, "Search backup files (.bak, .old, .zip, .tar.gz, .sql)")
+	smartFilter := flag.Bool("smart-filter", true, "Smart false-positive filtering (soft-404, wildcard suppression)")
+	extractJS := flag.Bool("extract-js", false, "Extract endpoints from JS files")
+	autoWordlist := flag.Bool("auto-wordlist", false, "Auto wordlist generation from target fingerprint")
+	saveSession := flag.Bool("save-session", false, "Save scan session for resume")
 	http2 := flag.Bool("http2", false, "Enable HTTP/2")
-	apiMode := flag.Bool("api-mode", false, "API mode optimization")
-	jsonBody := flag.Bool("json-body", false, "Send JSON body")
-	graphql := flag.Bool("graphql", false, "GraphQL mode")
+	apiMode := flag.Bool("api-mode", false, "API mode: presets for API scanning")
+	jsonBody := flag.Bool("json-body", false, "Send JSON body (Content-Type: application/json)")
+	graphql := flag.Bool("graphql", false, "GraphQL mode: wraps body in {query} format")
+	adaptiveRate := flag.Bool("adaptive-rate", false, "Dynamically adjust scan rate based on server response")
+	detectLogin := flag.Bool("detect-login", false, "Detect login/admin pages")
+	detectAPI := flag.Bool("detect-api", false, "Detect API endpoints")
+	jsDeep := flag.Bool("js-deep", false, "Deep JavaScript analysis (follows imports, evaluates dynamic URLs)")
+	swagger := flag.Bool("swagger", false, "Detect Swagger/OpenAPI documentation")
+	similarity := flag.Int("similarity", 0, "Response similarity threshold (0-100) for filtering")
+	reportFile := flag.String("report", "", "Generate scan report file (JSON format)")
 
 	flag.Parse()
 
@@ -343,6 +350,13 @@ func parseFlags() *ScanConfig {
 	config.APIMode = *apiMode
 	config.JSONBody = *jsonBody
 	config.GraphQL = *graphql
+	config.AdaptiveRate = *adaptiveRate
+	config.DetectLogin = *detectLogin
+	config.DetectAPI = *detectAPI
+	config.JSDeep = *jsDeep
+	config.Swagger = *swagger
+	config.Similarity = *similarity
+	config.ReportFile = *reportFile
 
 	// Compile regex patterns
 	if config.ExcludeRegex != "" {

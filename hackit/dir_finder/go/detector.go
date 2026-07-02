@@ -151,46 +151,6 @@ func DetectTechnologies(resp *http.Response) []string {
 	return tech
 }
 
-func ExtractJSEndpoints(target string, client *http.Client) []string {
-	var endpoints []string
-	commonJS := []string{
-		"main.js", "app.js", "index.js", "script.js", "bundle.js",
-		"vendor.js", "common.js", "config.js", "api.js", "routes.js",
-	}
-
-	for _, js := range commonJS {
-		jsURL := fmt.Sprintf("%s/%s", strings.TrimSuffix(target, "/"), js)
-		resp, err := client.Get(jsURL)
-		if err != nil || resp.StatusCode != 200 {
-			if resp != nil {
-				resp.Body.Close()
-			}
-			continue
-		}
-
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024))
-		resp.Body.Close()
-
-		content := string(body)
-		words := strings.FieldsFunc(content, func(r rune) bool {
-			return r == '"' || r == '\'' || r == '`' || r == ' ' || r == '\n' || r == '\t' || r == ',' || r == ';'
-		})
-
-		for _, w := range words {
-			w = strings.TrimSpace(w)
-			if strings.HasPrefix(w, "/") && len(w) > 2 && !strings.ContainsAny(w, "<>{}()[]") {
-				endpoint := strings.TrimPrefix(w, "/")
-				endpoint = strings.Split(endpoint, "?")[0]
-				if endpoint != "" && !strings.HasPrefix(endpoint, "/") {
-					endpoints = append(endpoints, endpoint)
-				}
-			}
-		}
-	}
-
-	return endpoints
-}
-
 func LoadSmartAnalysis(path string) ([]string, string) {
 	if _, err := os.Stat(path); err != nil {
 		return nil, ""

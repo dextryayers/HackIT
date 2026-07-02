@@ -124,6 +124,13 @@ from hackit.ui import display_tool_banner, _colored, GREEN, YELLOW, RED, CYAN, B
 @click.option('--api-mode', is_flag=True, help='API mode — presets for API scanning (json/xml extensions, Accept header, auto tech/WAF detection)')
 @click.option('--json-body', is_flag=True, help='Send request body as JSON (Content-Type: application/json)')
 @click.option('--graphql', is_flag=True, help='GraphQL mode — wraps body in {"query": "..."} format')
+@click.option('--adaptive-rate', is_flag=True, help='Dynamically adjust scan rate based on server response (errors/success ratio)')
+@click.option('--detect-login', is_flag=True, help='Detect login and admin pages (login, admin, dashboard, wp-admin, etc)')
+@click.option('--detect-api', is_flag=True, help='Detect API endpoints (api/, v1/, graphql, swagger, rest)')
+@click.option('--js-deep', is_flag=True, help='Deep JavaScript analysis — follows imports, evaluates dynamic URLs, extracts endpoints recursively')
+@click.option('--swagger', is_flag=True, help='Detect Swagger/OpenAPI documentation (swagger.json, api-docs, openapi.json, v2/v3)')
+@click.option('--similarity', type=int, default=0, help='Response similarity threshold 0-100 for filtering (default: 0 = disabled)')
+@click.option('--report', help='Generate scan report file (JSON format with full results, stats, and metadata)')
 
 @click.pass_context
 def dirfinder(ctx, mode, **kwargs):
@@ -214,6 +221,8 @@ def dirfinder(ctx, mode, **kwargs):
         'retries': '-retries',
         'ip': '-ip',
         'interface': '-interface',
+        'similarity': '-similarity',
+        'report': '-report',
         'output_formats': '-O',
         'output': '-o',
         'log': '-log',
@@ -231,6 +240,11 @@ def dirfinder(ctx, mode, **kwargs):
     bool_flags = {
         'force_extensions': '-f',
         'overwrite_extensions': '-overwrite-extensions',
+        'adaptive_rate': '-adaptive-rate',
+        'detect_login': '-detect-login',
+        'detect_api': '-detect-api',
+        'js_deep': '-js-deep',
+        'swagger': '-swagger',
         'uppercase': '-U',
         'lowercase': '-L',
         'capital': '-C',

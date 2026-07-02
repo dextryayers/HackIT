@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -81,28 +80,17 @@ func main() {
 
 	// Handle --session / --session-id: resume from session
 	var sessionResume *SessionData
-	if config.SessionFile != "" {
-		sessionResume, _ = LoadSession(config.SessionFile)
-	} else if config.SessionID > 0 {
+	sessionResume, _ = ResumeSession(config)
+	if sessionResume == nil && (config.SessionFile != "" || config.SessionID > 0) {
+		fmt.Fprintf(color.Output, "%s Session not found\n", cRed.Sprint("[!]"))
 		sessions := ListSessions()
-		for _, s := range sessions {
-			var id int
-			fmt.Sscanf(s, "session_%d.json", &id)
-			if id == config.SessionID {
-				sessionResume, _ = LoadSession(filepath.Join("sessions", s))
-				break
+		if len(sessions) > 0 {
+			fmt.Fprintf(color.Output, "%s Available sessions:\n", cYellow.Sprint("[*]"))
+			for _, s := range sessions {
+				fmt.Fprintf(color.Output, "  %s\n", s)
 			}
 		}
-		if sessionResume == nil {
-			fmt.Fprintf(color.Output, "%s No session found with ID %d\n", cRed.Sprint("[!]"), config.SessionID)
-			if len(sessions) > 0 {
-				fmt.Fprintf(color.Output, "%s Available sessions:\n", cYellow.Sprint("[*]"))
-				for _, s := range sessions {
-					fmt.Fprintf(color.Output, "  %s\n", s)
-				}
-			}
-			os.Exit(1)
-		}
+		os.Exit(1)
 	}
 
 	// Apply session restore
@@ -189,7 +177,16 @@ func orchestrate(config *ScanConfig) {
 	startTime := time.Now()
 	foundDB := findDBDir()
 
-	// Session resume: use restored paths
+	// === URL ENGINE ===
+	targets := ResolveTargets(config)
+	if len(targets) > 0 {
+		config.Target = targets[0].URL
+		if !config.Quiet {
+			PrintTargetInfo(targets, config)
+		}
+	}
+
+	// === SESSION ENGINE ===
 	if len(config.RestoredPaths) > 0 {
 		config.Paths = config.RestoredPaths
 		if !config.Quiet {
@@ -198,73 +195,37 @@ func orchestrate(config *ScanConfig) {
 		}
 	}
 
-	// API mode presets
+	// === API SPEC ENGINE ===
 	if config.APIMode {
-		if len(config.Extensions) == 0 {
-			config.Extensions = []string{"json", "xml", "php"}
-		}
-		if config.Headers == nil {
-			config.Headers = make(map[string]string)
-		}
-		if config.Headers["Accept"] == "" {
-			config.Headers["Accept"] = "application/json, text/plain, */*"
-		}
-		config.DetectTech = true
-		config.DetectWAF = true
+		SetupAPIMode(config)
 		if !config.Quiet {
 			fmt.Fprintf(color.Output, "%s API mode: exts=%s\n",
 				cGreen.Sprint("[+]"), strings.Join(config.Extensions, ","))
 		}
 	}
 
-	// Phase 0: Load wordlist
+	// === DICT ENGINE — Phase 0: Load dictionary ===
 	if !config.Quiet {
-		fmt.Printf("%s Loading wordlists...\n", cCyan.Sprint("[*]"))
+		fmt.Printf("%s Loading dictionary...\n", cCyan.Sprint("[*]"))
 	}
 
 	if len(config.Paths) == 0 {
-		var paths []string
-		var err error
-
-		if len(config.WordlistCategories) > 0 {
-			paths, err = LoadWordlistByCategory(foundDB, config.WordlistCategories)
-		} else if len(config.Wordlists) > 0 {
-			for _, wl := range config.Wordlists {
-				p, e := LoadWordlist(wl)
-				if e == nil {
-					paths = append(paths, p...)
-				}
-			}
-		} else {
-			paths, err = LoadAllPayloads(foundDB)
-		}
-
-		if err == nil && len(paths) > 0 {
-			config.Paths = paths
-			if !config.Quiet {
-				fmt.Fprintf(color.Output, "%s Loaded %d payloads from %s\n",
-					cGreen.Sprint("[+]"), len(paths), foundDB)
-			}
-		} else {
-			config.Paths = []string{
-				".env", ".git/config", "admin", "login", "wp-admin",
-				"backup", "config", "robots.txt", "sitemap.xml",
-			}
-			if !config.Quiet {
-				fmt.Fprintf(color.Output, "%s Using %d default paths\n",
-					cYellow.Sprint("[!]"), len(config.Paths))
-			}
+		paths, dictStats := LoadDictionary(config)
+		config.Paths = paths
+		if !config.Quiet {
+			PrintDictionaryInfo(dictStats)
 		}
 	}
 
-	// Process paths (extensions, prefixes, suffixes, case)
+	// === TRANSFORM ENGINE — Phase 0b: Apply path transforms ===
 	if len(config.Extensions) > 0 || len(config.Prefixes) > 0 || len(config.Suffixes) > 0 ||
 		config.Uppercase || config.Lowercase || config.Capital {
-		config.Paths = ProcessPaths(config.Paths, config)
-		if !config.Quiet {
-			fmt.Fprintf(color.Output, "%s Processed to %d paths (ext/prefix/suffix/case)\n",
-				cGreen.Sprint("[+]"), len(config.Paths))
-		}
+		config.Paths = ProcessPathTransforms(config.Paths, config)
+	}
+
+	// === FILTER ENGINE: exclude extensions ===
+	if len(config.ExcludeExtensions) > 0 {
+		config.Paths = FilterExcludedExtensions(config.Paths, config.ExcludeExtensions)
 	}
 
 	// Load blacklists
@@ -284,13 +245,21 @@ func orchestrate(config *ScanConfig) {
 		}
 	}
 
-	client := CreateClient(config)
+	// === CONN ENGINE — Phase 0c: Setup connection ===
+	if !config.Quiet {
+		PrintConnectionInfo(config)
+	}
+
+	client := SetupConnection(config)
+	if !config.Quiet {
+		fmt.Fprintf(color.Output, "%s Creating HTTP client...\n", cCyan.Sprint("[*]"))
+	}
 
 	// Phase 1: Connectivity check
 	if !config.Quiet {
 		fmt.Fprintf(color.Output, "%s Checking target connectivity...\n", cCyan.Sprint("[*]"))
 	}
-	connOK, connInfo := checkConnectivity(config.Target, client)
+	connOK, connInfo := ValidateConnectivity(config.Target, client)
 	if !connOK {
 		fmt.Fprintf(color.Output, "\n%s Cannot reach target: %s\n", cRed.Sprint("[!]"), cYellow.Sprint(config.Target))
 		fmt.Fprintf(color.Output, "%s %s\n", cYellow.Sprint("[*]"), connInfo)
@@ -314,12 +283,11 @@ func orchestrate(config *ScanConfig) {
 	} else if !config.Quiet {
 		fmt.Fprintf(color.Output, "%s Target is reachable: %s\n", cGreen.Sprint("[+]"), connInfo)
 	}
-	// Phase 2: Pre-scan detection
+	// === SMART ENGINE: wildcard calibration ===
 	if !config.Quiet {
-		fmt.Fprintf(color.Output, "%s Pre-scan detection phase...\n", cCyan.Sprint("[*]"))
+		fmt.Fprintf(color.Output, "%s Pre-scan analysis...\n", cCyan.Sprint("[*]"))
 	}
 
-	// Wildcard detection
 	wildcardStatus, wildcardSize := config.WildcardStatus, config.WildcardSize
 	if wildcardStatus == 0 || config.AutoCalibration {
 		s, sz := DetectWildcard(config.Target, client)
@@ -329,7 +297,7 @@ func orchestrate(config *ScanConfig) {
 		config.WildcardSize = sz
 		wildcardInfo := ""
 		if wildcardSize < 0 {
-			wildcardInfo = " (request failed - run without filter: -x '')"
+			wildcardInfo = " (request failed)"
 		}
 		if !config.Quiet {
 			fmt.Fprintf(color.Output, "%s Wildcard: Status=%d, Size=%d%s\n",
@@ -337,7 +305,7 @@ func orchestrate(config *ScanConfig) {
 		}
 	}
 
-	// WAF detection
+	// === DETECTION ENGINE: WAF detection ===
 	if config.DetectWAF {
 		if !config.Quiet {
 			fmt.Fprintf(color.Output, "%s Detecting WAF...\n", cCyan.Sprint("[*]"))
@@ -346,30 +314,26 @@ func orchestrate(config *ScanConfig) {
 		config.DetectedWAF = waf
 		if waf != "" {
 			fmt.Fprintf(color.Output, "%s WAF Detected: %s\n", cRed.Sprint("[!]"), cYellow.Sprint(waf))
-		} else {
-			if !config.Quiet {
-				fmt.Fprintf(color.Output, "%s No WAF detected\n", cGreen.Sprint("[+]"))
-			}
+		} else if !config.Quiet {
+			fmt.Fprintf(color.Output, "%s No WAF detected\n", cGreen.Sprint("[+]"))
 		}
 	}
 
-	// Load smart analysis
-	if _, err := os.Stat(filepath.Join(filepath.Dir(foundDB), "smart_analysis.json")); err == nil {
-		endpoints, info := LoadSmartAnalysis(filepath.Join(filepath.Dir(foundDB), "smart_analysis.json"))
-		if len(endpoints) > 0 {
-			config.Paths = append(config.Paths, endpoints...)
-			config.Paths = Deduplicate(config.Paths)
-			if !config.Quiet {
-				fmt.Fprintf(color.Output, "%s Injected %d endpoints from Smart Analysis\n",
-					cGreen.Sprint("[+]"), len(endpoints))
-			}
+	// === API SPEC ENGINE: Swagger detection ===
+	var swaggerFound bool
+	var swaggerPath string
+	if config.Swagger {
+		if !config.Quiet {
+			fmt.Fprintf(color.Output, "%s Checking Swagger/OpenAPI...\n", cCyan.Sprint("[*]"))
 		}
-		if info != "" && config.DetectedWAF == "" {
-			config.DetectedWAF = info
+		swaggerPath, swaggerFound = DetectSwagger(config.Target, client)
+		PrintSwaggerResult(swaggerPath, swaggerFound)
+		if swaggerFound {
+			config.Paths = append(config.Paths, swaggerPath)
 		}
 	}
 
-	// Phase 2a: Signature Engine — Fingerprint target
+	// === SIGNATURE ENGINE: Fingerprint target ===
 	var fingerprint FingerprintResult
 	if !config.Quiet {
 		fmt.Fprintf(color.Output, "%s Fingerprinting target...\n", cCyan.Sprint("[*]"))
@@ -399,14 +363,14 @@ func orchestrate(config *ScanConfig) {
 		}
 	}
 
-	// Auto-suggest wordlist categories from fingerprint
+	// === SMART ENGINE: Auto-wordlist from fingerprint ===
 	if config.AutoWordlist && fingerprint.Tech != nil {
 		suggested := SuggestWordlistCategories(fingerprint)
 		if len(suggested) > 0 {
 			config.WordlistCategories = append(config.WordlistCategories, suggested...)
 			config.Paths = nil
-			paths, err := LoadWordlistByCategory(foundDB, config.WordlistCategories)
-			if err == nil && len(paths) > 0 {
+			paths, _ := LoadCategoryWordlists(foundDB, config.WordlistCategories)
+			if len(paths) > 0 {
 				config.Paths = paths
 				if !config.Quiet {
 					fmt.Fprintf(color.Output, "%s Auto-loaded %d payloads (tech-based)\n",
@@ -416,78 +380,78 @@ func orchestrate(config *ScanConfig) {
 		}
 	}
 
-	// Phase 2b: Parser Engine — Crawl homepage, robots.txt, sitemap
-	if !config.Quiet {
-		fmt.Fprintf(color.Output, "%s Crawling target sources...\n", cCyan.Sprint("[*]"))
-	}
-	var crawledPaths []string
-	seenCrawled := make(map[string]bool)
-
-	// Parse homepage
-	if resp != nil {
-		homeBody, _ := io.ReadAll(io.LimitReader(resp.Body, 512*1024))
-		_ = homeBody
-	}
-	homeResp, err := client.Get(config.Target)
-	if err == nil && homeResp != nil {
-		homeBody, _ := io.ReadAll(io.LimitReader(homeResp.Body, 512*1024))
-		homeLinks := ParseHTMLLinks(string(homeBody), config.Target)
-		for _, l := range homeLinks {
-			if !seenCrawled[l] {
-				seenCrawled[l] = true
-				crawledPaths = append(crawledPaths, l)
-			}
-		}
-		formActions := ExtractFormActions(string(homeBody), config.Target)
-		for _, f := range formActions {
-			if !seenCrawled[f] {
-				seenCrawled[f] = true
-				crawledPaths = append(crawledPaths, f)
-			}
-		}
-		jsEndpoints := ParseJSEndpoints(string(homeBody))
-		for _, j := range jsEndpoints {
-			if !seenCrawled[j] {
-				seenCrawled[j] = true
-				crawledPaths = append(crawledPaths, j)
-			}
-		}
-		homeResp.Body.Close()
-	}
-
-	// Parse robots.txt
-	robotsPaths := ParseRobots(config.Target, client)
-	for _, p := range robotsPaths {
-		if !seenCrawled[p] {
-			seenCrawled[p] = true
-			crawledPaths = append(crawledPaths, p)
-		}
-	}
-
-	// Parse sitemap.xml
-	sitemapPaths := ParseSitemap(config.Target, client)
-	for _, p := range sitemapPaths {
-		if !seenCrawled[p] {
-			seenCrawled[p] = true
-			crawledPaths = append(crawledPaths, p)
-		}
-	}
-
-	if len(crawledPaths) > 0 {
-		config.Paths = append(crawledPaths, config.Paths...)
-		config.Paths = Deduplicate(config.Paths)
+	// === PARSER ENGINE: Crawl homepage, robots.txt, sitemap ===
+	if config.Crawl {
 		if !config.Quiet {
-			fmt.Fprintf(color.Output, "%s Found %d endpoints via crawling\n",
-				cGreen.Sprint("[+]"), len(crawledPaths))
+			fmt.Fprintf(color.Output, "%s Crawling target sources...\n", cCyan.Sprint("[*]"))
+		}
+		var crawledPaths []string
+		seenCrawled := make(map[string]bool)
+
+		homeResp, err := client.Get(config.Target)
+		if err == nil && homeResp != nil {
+			homeBody, _ := io.ReadAll(io.LimitReader(homeResp.Body, 512*1024))
+			homeLinks := ParseHTMLLinks(string(homeBody), config.Target)
+			for _, l := range homeLinks {
+				if !seenCrawled[l] {
+					seenCrawled[l] = true
+					crawledPaths = append(crawledPaths, l)
+				}
+			}
+			formActions := ExtractFormActions(string(homeBody), config.Target)
+			for _, f := range formActions {
+				if !seenCrawled[f] {
+					seenCrawled[f] = true
+					crawledPaths = append(crawledPaths, f)
+				}
+			}
+			jsPaths := ParseJSEndpoints(string(homeBody))
+			for _, j := range jsPaths {
+				if !seenCrawled[j] {
+					seenCrawled[j] = true
+					crawledPaths = append(crawledPaths, j)
+				}
+			}
+			homeResp.Body.Close()
+		}
+
+		robotsPaths := ParseRobots(config.Target, client)
+		for _, p := range robotsPaths {
+			if !seenCrawled[p] {
+				seenCrawled[p] = true
+				crawledPaths = append(crawledPaths, p)
+			}
+		}
+
+		sitemapPaths := ParseSitemap(config.Target, client)
+		for _, p := range sitemapPaths {
+			if !seenCrawled[p] {
+				seenCrawled[p] = true
+				crawledPaths = append(crawledPaths, p)
+			}
+		}
+
+		if len(crawledPaths) > 0 {
+			config.Paths = append(crawledPaths, config.Paths...)
+			config.Paths = Deduplicate(config.Paths)
+			if !config.Quiet {
+				fmt.Fprintf(color.Output, "%s Found %d endpoints via crawling\n",
+					cGreen.Sprint("[+]"), len(crawledPaths))
+			}
 		}
 	}
 
-	// JS spidering (additional JS-specific crawl)
+	// === JS ENGINE: JavaScript endpoint extraction ===
 	if config.ExtractJS {
 		if !config.Quiet {
-			fmt.Fprintf(color.Output, "%s Extracting endpoints from JavaScript...\n", cCyan.Sprint("[*]"))
+			fmt.Fprintf(color.Output, "%s Extracting endpoints from JS...\n", cCyan.Sprint("[*]"))
 		}
-		jsEndpoints := ExtractJSEndpoints(config.Target, client)
+		var jsEndpoints []string
+		if config.JSDeep {
+			jsEndpoints = DeepJSAnalysis(config.Target, client, 3)
+		} else {
+			jsEndpoints = ExtractJSEndpoints(config.Target, client)
+		}
 		if len(jsEndpoints) > 0 {
 			config.Paths = append(config.Paths, jsEndpoints...)
 			config.Paths = Deduplicate(config.Paths)
@@ -497,29 +461,20 @@ func orchestrate(config *ScanConfig) {
 		}
 	}
 
-	// Backup detection
+	// === BACKUP ENGINE ===
 	if config.DetectBackup {
-		backupExts := []string{".bak", ".old", ".tmp", ".zip", ".tar.gz", ".sql", ".conf", ".save", ".backup"}
-		backupPaths := make([]string, 0)
-		for _, p := range config.Paths {
-			if !strings.HasSuffix(p, "/") {
-				for _, ext := range backupExts {
-					backupPaths = append(backupPaths, p+ext)
-				}
-			}
-		}
+		backupPaths := GenerateBackupPaths(config.Paths)
 		config.Paths = append(config.Paths, backupPaths...)
-		if !config.Quiet {
-			fmt.Fprintf(color.Output, "%s Added %d backup patterns\n", cGreen.Sprint("[+]"), len(backupPaths))
-		}
+		config.Paths = Deduplicate(config.Paths)
+		PrintBackupInfo(len(backupPaths))
 	}
 
-	// Exclude response reference
+	// === TEXT ENGINE: reference response ===
 	if config.ExcludeResponse != "" {
 		if !config.Quiet {
 			fmt.Fprintf(color.Output, "%s Loading reference response from %s...\n", cCyan.Sprint("[*]"), config.ExcludeResponse)
 		}
-		refURL := buildURL(config.Target, config.ExcludeResponse)
+		refURL := buildFullURL(config.Target, config.ExcludeResponse)
 		resp, err := client.Get(refURL)
 		if err == nil && resp.StatusCode == 200 {
 			body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
@@ -531,28 +486,21 @@ func orchestrate(config *ScanConfig) {
 		}
 	}
 
-	// Subdirs handling
+	// === RECURSION ENGINE: subdirs ===
 	if len(config.Subdirs) > 0 {
-		expanded := make([]string, 0)
-		for _, sd := range config.Subdirs {
-			sd = strings.Trim(sd, "/")
-			if sd != "" {
-				for _, p := range config.Paths {
-					expanded = append(expanded, sd+"/"+p)
-				}
-			}
-		}
-		config.Paths = append(config.Paths, expanded...)
-		config.Paths = Deduplicate(config.Paths)
+		config.Paths = ExpandSubdirs(config.Paths, config.Subdirs)
+	}
+	if len(config.ExcludeSubdirs) > 0 {
+		config.Paths = FilterExcludedSubdirs(config.Paths, config.ExcludeSubdirs)
 	}
 
-	// Phase 2c: Create scheduler
+	// === SCHEDULER ENGINE ===
 	config.Scheduler = NewScheduler(config.Threads)
 	if config.Delay > 0 || config.MaxRate > 0 {
 		config.Scheduler.EnableJitter(config.Delay, config.Delay+100)
 	}
 
-	// Phase 3: Main scan
+	// === Phase 3: Main scan ===
 	if !config.Quiet {
 		fmt.Fprintf(color.Output, "%s Starting scan with %d paths (%d threads)...\n",
 			cCyan.Sprint("[*]"), len(config.Paths), config.Threads)
@@ -568,10 +516,9 @@ func orchestrate(config *ScanConfig) {
 		}
 	}
 
-	// Phase 3: Recursive scan
+	// === RECURSIVE SCAN ===
 	var recursiveResults []DirResult
 	var recursiveStats *ScanStats
-
 	if config.Recursive || config.DeepRecursive || config.ForceRecursive {
 		if !config.Quiet {
 			fmt.Fprintf(color.Output, "\n%s Starting recursive scan (depth: %d)...\n",
@@ -580,7 +527,7 @@ func orchestrate(config *ScanConfig) {
 		recursiveResults, recursiveStats = RunRecursiveScan(config, results)
 	}
 
-	// Merge restored results (from session resume)
+	// === Merge restored results ===
 	allResults := results
 	if len(config.RestoredResults) > 0 {
 		allResults = append(config.RestoredResults, results...)
@@ -591,23 +538,41 @@ func orchestrate(config *ScanConfig) {
 		}
 	}
 
-	// Phase 4: Output
-	fmt.Println()
-	printResults(config, allResults, recursiveResults, stats, recursiveStats, startTime)
-
-	// Save session
-	if config.SaveSession {
-		saveSessionData(config, allResults, stats)
+	// === DETECTION ENGINE: summarize login/API ===
+	loginCount := 0
+	apiCount := 0
+	for _, r := range allResults {
+		if r.IsLogin {
+			loginCount++
+		}
+		if r.IsAPI {
+			apiCount++
+		}
+	}
+	if config.DetectLogin || config.DetectAPI {
+		PrintDetectionSummary(loginCount, apiCount)
 	}
 
-	// Save report
+	// === REPORT ENGINE: output ===
+	fmt.Println()
+	PrintResultsSummary(config, allResults, stats, startTime)
+
+	// === SESSION ENGINE ===
+	if config.SaveSession {
+		SaveSession(config, allResults, config.Paths, stats)
+	}
+
+	// === REPORT ENGINE: save reports ===
 	if config.OutputFile != "" {
 		saveReport(config, allResults, recursiveResults, stats, recursiveStats)
 	}
 
-	elapsed := time.Since(startTime).Round(time.Second)
-	if !config.Quiet {
-		fmt.Fprintf(color.Output, "\n%s Scan completed in %s\n", cGreen.Sprint("[+]"), elapsed)
+	// Generate JSON report if --report specified
+	if config.ReportFile != "" {
+		report := GenerateReport(config, allResults, stats, startTime)
+		if err := SaveJSONReport(report, config.ReportFile); err == nil && !config.Quiet {
+			fmt.Fprintf(color.Output, "%s Report saved: %s\n", cGreen.Sprint("[+]"), config.ReportFile)
+		}
 	}
 }
 
@@ -683,54 +648,6 @@ func printResults(config *ScanConfig, results, recursiveResults []DirResult, sta
 		fmt.Fprintf(color.Output, "%s Recursive requests: %d | Found: %d | Errors: %d\n",
 			cCyan.Sprint("[*]"),
 			recursiveStats.TotalRequests, recursiveStats.Found, recursiveStats.Errors)
-	}
-}
-
-func LoadSession(path string) (*SessionData, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	var session SessionData
-	if err := json.Unmarshal(data, &session); err != nil {
-		return nil, err
-	}
-	return &session, nil
-}
-
-func ListSessions() []string {
-	sessionDir := "sessions"
-	entries, err := os.ReadDir(sessionDir)
-	if err != nil {
-		return nil
-	}
-	var sessions []string
-	for _, e := range entries {
-		if !e.IsDir() && strings.HasPrefix(e.Name(), "session_") && strings.HasSuffix(e.Name(), ".json") {
-			sessions = append(sessions, e.Name())
-		}
-	}
-	return sessions
-}
-
-func saveSessionData(config *ScanConfig, results []DirResult, stats *ScanStats) {
-	session := SessionData{
-		Target:    config.Target,
-		Remaining: config.Paths,
-		Found:     results,
-		Stats:     *stats,
-		Timestamp: time.Now(),
-	}
-
-	sessionDir := "sessions"
-	os.MkdirAll(sessionDir, 0755)
-	sessionFile := filepath.Join(sessionDir, fmt.Sprintf("session_%d.json", time.Now().Unix()))
-
-	data, _ := json.MarshalIndent(session, "", "  ")
-	os.WriteFile(sessionFile, data, 0644)
-
-	if !config.Quiet {
-		fmt.Fprintf(color.Output, "%s Session saved to %s\n", cGreen.Sprint("[+]"), sessionFile)
 	}
 }
 
