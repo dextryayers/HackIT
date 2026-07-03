@@ -1,143 +1,238 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
+	"time"
 )
 
-var (
-	host       string
-	port       int
-	timeout    int
-	outputFile string
-)
+var banner = `
+  ╔════════════════════════════════════╗
+  ║  <<  ADVANCED SSL TOOL SUITE  >>   ║
+  ║  ────────────────────────────────  ║
+  ║  • Deep SSL/TLS Scanner            ║
+  ║  • Certificate Chain Analysis      ║
+  ║  • Cipher & Crypto Audit           ║
+  ║  • Vulnerability Detection         ║
+  ║  • DNS Security Check              ║
+  ║  • HTTP Headers Audit              ║
+  ║  • Port Scanning                   ║
+  ║  • Report Generation               ║
+  ╚════════════════════════════════════╝
+`
 
 func main() {
-	flag.StringVar(&host, "host", "", "Target Host")
-	flag.IntVar(&port, "port", 443, "Target Port")
-	flag.IntVar(&timeout, "timeout", 10, "Timeout in seconds")
-	flag.StringVar(&outputFile, "output", "", "Save results to JSON file")
-	flag.Parse()
+	if len(os.Args) > 1 && os.Args[1] == "--json" {
+		runFlagMode()
+		return
+	}
+
+	reader := bufio.NewReader(os.Stdin)
+
+	fmt.Print(banner)
+	fmt.Println("\n  Example: google.com, 192.168.1.1:8443, detik.com:443")
+	fmt.Println()
+
+	for {
+		fmt.Print("  Input Target: ")
+		input, err := reader.ReadString('\n')
+		if err != nil {
+			fmt.Println()
+			fmt.Println("  [!] Exiting...")
+			return
+		}
+		input = strings.TrimSpace(input)
+		if input == "" {
+			continue
+		}
+		if input == "exit" || input == "quit" || input == "q" {
+			fmt.Println("  [!] Exiting...")
+			return
+		}
+
+		host := input
+		port := 443
+
+		if strings.Contains(input, ":") {
+			parts := strings.SplitN(input, ":", 2)
+			host = strings.TrimSpace(parts[0])
+			if len(parts) > 1 {
+				p, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+				if err == nil && p > 0 && p < 65536 {
+					port = p
+				}
+			}
+		}
+
+		fmt.Printf("\n  [*] Scanning %s:%d...\n", host, port)
+		start := time.Now()
+
+		analyzer := NewAnalyzer(15, false)
+		result := analyzer.Analyze(host, port)
+
+		if result.Error != "" {
+			fmt.Printf("\n  [!] Error: %s\n", result.Error)
+			continue
+		}
+
+		result.Duration = time.Since(start)
+
+		printGenReport(generateReport(
+			host, result.Grade, result.Score, result.Duration,
+			result.CertReport, result.CipherReport, result.VulnReport,
+			result.TLSReport, result.DNSReport, result.HTTPReport,
+			result.ChainReport, result.CryptoReport, result.PortReport,
+		))
+
+		fmt.Println("\n  Press Enter to scan another target, or type 'exit' to quit.")
+	}
+}
+
+func runFlagMode() {
+	var host string
+	var port int
+	var timeout int
+	var outputFile string
+	var fullScan bool
+
+	args := os.Args[1:]
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--json":
+		case "-host", "--host":
+			if i+1 < len(args) {
+				host = args[i+1]
+				i++
+			}
+		case "-port", "--port":
+			if i+1 < len(args) {
+				port, _ = strconv.Atoi(args[i+1])
+				i++
+			}
+		case "-timeout", "--timeout":
+			if i+1 < len(args) {
+				timeout, _ = strconv.Atoi(args[i+1])
+				i++
+			}
+		case "-output", "--output":
+			if i+1 < len(args) {
+				outputFile = args[i+1]
+				i++
+			}
+		case "-full", "--full":
+			fullScan = true
+		}
+	}
 
 	if host == "" {
-		fmt.Println("Error: --host is required")
+		fmt.Println("  Usage: worker --json -host <host> [-port 443] [-timeout 15] [-full] [-output file.json]")
 		os.Exit(1)
 	}
+	if port == 0 {
+		port = 443
+	}
+	if timeout == 0 {
+		timeout = 15
+	}
 
-	fmt.Printf("[*] Analyzing %s:%d...\n", host, port)
-
-	analyzer := NewAnalyzer(timeout)
+	start := time.Now()
+	analyzer := NewAnalyzer(timeout, fullScan)
 	result := analyzer.Analyze(host, port)
+	result.Duration = time.Since(start)
 
 	if result.Error != "" {
-		fmt.Printf("[!] Error: %s\n", result.Error)
+		fmt.Printf(`{"error":"%s"}`, result.Error)
 		os.Exit(1)
 	}
 
-	fmt.Printf("\n[+] Security Grade: %s\n", result.Grade)
+	report := generateReport(host, result.Grade, result.Score, result.Duration,
+		result.CertReport, result.CipherReport, result.VulnReport,
+		result.TLSReport, result.DNSReport, result.HTTPReport,
+		result.ChainReport, result.CryptoReport, result.PortReport)
 
-	fmt.Printf("\n[+] Certificate Detail:\n")
-	if cn, ok := result.Certificate["common_name"].(string); ok {
-		fmt.Printf("    %-15s : %s\n", "Common Name", cn)
-	}
-	if issuer, ok := result.Certificate["issuer"].(string); ok {
-		fmt.Printf("    %-15s : %s\n", "Issuer", issuer)
-	}
-	if validTo, ok := result.Certificate["valid_to"].(string); ok {
-		fmt.Printf("    %-15s : %s\n", "Expiry Date", validTo)
-	}
-	if days, ok := result.Certificate["days_remaining"].(int); ok {
-		color := "\033[32m"
-		if days < 30 { color = "\033[33m" }
-		if days < 0 { color = "\033[31m" }
-		fmt.Printf("    %-15s : %s%d days%s\n", "Life Remaining", color, days, "\033[0m")
-	}
-	if keyAlg, ok := result.Certificate["key_alg"].(string); ok {
-		fmt.Printf("    %-15s : %s\n", "Public Key", keyAlg)
-	}
-	if sigAlg, ok := result.Certificate["signature_alg"].(string); ok {
-		fmt.Printf("    %-15s : %s\n", "Signature", sigAlg)
-	}
-
-	if san, ok := result.Certificate["san"].([]string); ok && len(san) > 0 {
-		fmt.Printf("\n[+] Subject Alternative Names (SAN):\n")
-		for _, name := range san {
-			fmt.Printf("    - %s\n", name)
-		}
-	}
-
-	if len(result.Chain) > 0 {
-		fmt.Printf("\n[+] Trust Chain Mapping:\n")
-		for i, c := range result.Chain {
-			prefix := "    └── "
-			if i == 0 { prefix = "    [0] " }
-			fmt.Printf("%s%s (Issuer: %s)\n", prefix, c["subject"], c["issuer"])
-		}
-	}
-
-	fmt.Println("\n[+] Protocol Support Mapping:")
-	protocols := []string{"TLS 1.3", "TLS 1.2", "TLS 1.1", "TLS 1.0"}
-	for _, proto := range protocols {
-		supported, exists := result.Protocols[proto]
-		if !exists { continue }
-		
-		status := "\033[31m[NO]\033[0m "
-		color := "\033[31m"
-		if supported {
-			status = "\033[32m[YES]\033[0m"
-			color = "\033[32m"
-			if proto == "TLS 1.1" || proto == "TLS 1.0" {
-				color = "\033[33m" // Warning for legacy
-			}
-		}
-		fmt.Printf("    %s %s%-10s%s\n", status, color, proto, "\033[0m")
-	}
-
-	if len(result.ALPN) > 0 {
-		fmt.Printf("\n[+] ALPN Negotiated Protocols:\n")
-		for _, proto := range result.ALPN {
-			fmt.Printf("    - %s\n", proto)
-		}
-	}
-
-	if len(result.Ciphers) > 0 {
-		fmt.Printf("\n[+] Supported Cipher Suites:\n")
-		for _, cipher := range result.Ciphers {
-			fmt.Printf("    - %s\n", cipher)
-		}
-	}
-
-	fmt.Printf("\n[+] Advanced TLS Features:\n")
-	ocspStatus := "\033[31m[NO]\033[0m"
-	if result.OCSPStapled { ocspStatus = "\033[32m[YES]\033[0m" }
-	fmt.Printf("    %-20s : %s\n", "OCSP Stapling", ocspStatus)
-
-	renegStatus := "\033[31m[NO]\033[0m"
-	if result.SecureReneg { renegStatus = "\033[32m[YES]\033[0m" }
-	fmt.Printf("    %-20s : %s\n", "Secure Renegotiation", renegStatus)
-
-	if len(result.Issues) > 0 {
-		fmt.Println("\n[!] Issues Found:")
-		for _, issue := range result.Issues {
-			fmt.Printf("    - %s\n", issue)
-		}
-	} else {
-		fmt.Println("\n[✓] No major issues found.")
-	}
+	jsonData, _ := json.MarshalIndent(report, "", "  ")
+	fmt.Println(string(jsonData))
 
 	if outputFile != "" {
-		data, err := json.MarshalIndent(result, "", "  ")
-		if err != nil {
-			fmt.Printf("Error saving results: %v\n", err)
-		} else {
-			err = os.WriteFile(outputFile, data, 0644)
-			if err != nil {
-				fmt.Printf("Error writing file: %v\n", err)
-			} else {
-				fmt.Printf("[+] Results saved to %s\n", outputFile)
+		os.WriteFile(outputFile, jsonData, 0644)
+	}
+}
+
+func printGenReport(r GenReport) {
+	gradeColor := "\033[32m"
+	switch r.Grade {
+	case "A", "A-":
+		gradeColor = "\033[32m"
+	case "B+", "B", "C+", "C":
+		gradeColor = "\033[33m"
+	case "D+", "D":
+		gradeColor = "\033[31m"
+	case "F":
+		gradeColor = "\033[31;1m"
+	}
+
+	fmt.Printf("\n%s", strings.Repeat("=", 60))
+	fmt.Printf("\n  SSL TOOL — ADVANCED SECURITY REPORT")
+	fmt.Printf("\n%s", strings.Repeat("=", 60))
+	fmt.Printf("\n  Target    : \033[1m%s\033[0m", r.Target)
+	fmt.Printf("\n  Grade     : %s%s\033[0m  (%d/100)", gradeColor, r.Grade, r.Score)
+	fmt.Printf("\n  Duration  : %s", r.Duration)
+	fmt.Printf("\n  Issues    : %d total", len(r.AllIssues))
+	fmt.Printf("\n%s", strings.Repeat("-", 60))
+
+	if r.Cert.SubjectCN != "" {
+		fmt.Printf("\n  [+] Certificate: %s", r.Cert.SubjectCN)
+		fmt.Printf("\n      Issuer     : %s", r.Cert.IssuerCN)
+		fmt.Printf("\n      Expires    : %d days", r.Cert.DaysRemaining)
+		fmt.Printf("\n      Key        : %d-bit %s (%s)", r.Cert.KeyBits, r.Cert.KeyType, r.Cert.KeyStrength)
+		fmt.Printf("\n      SANs       : %d entries", r.Cert.SanCount)
+		fmt.Printf("\n      Chain OK   : %v", r.Cert.ChainValid)
+	}
+
+	fmt.Printf("\n  [+] Ciphers : %d supported, PFS=%v", r.Ciphers.TotalCiphers, r.Ciphers.PFSEnabled)
+	fmt.Printf("\n      Best    : %s", r.Ciphers.BestCipher)
+
+	if r.Vulns.Count > 0 {
+		fmt.Printf("\n  [+] Vulns   : %d active", r.Vulns.Count)
+	}
+	fmt.Printf("\n  [+] TLS     : %s, h2=%v", strings.Join(r.TLS.Protocols, ", "), r.TLS.H2)
+
+	if r.DNS.SPFRecord != "" || r.DNS.DMARC != "" {
+		fmt.Printf("\n  [+] DNS     : SPF=%v DMARC=%v DKIM=%v",
+			r.DNS.SPFRecord != "", r.DNS.DMARC != "", r.DNS.DKIMDetect)
+	}
+
+	if r.HTTP.HSTS != "" || r.HTTP.CSP != "" {
+		fmt.Printf("\n  [+] HTTP    : HSTS=%v CSP=%v XFO=%v",
+			r.HTTP.HSTS != "", r.HTTP.CSP != "", r.HTTP.XFrameOptions != "")
+	}
+
+	if r.Ports.TotalOpen > 0 {
+		fmt.Printf("\n  [+] Ports   : %d open", r.Ports.TotalOpen)
+	}
+
+	if len(r.Recommendations) > 0 {
+		fmt.Printf("\n%s", strings.Repeat("-", 60))
+		fmt.Printf("\n  RECOMMENDATIONS:")
+		maxRecs := 8
+		if len(r.Recommendations) < maxRecs {
+			maxRecs = len(r.Recommendations)
+		}
+		for i := 0; i < maxRecs; i++ {
+			rc := "\033[33m"
+			if strings.HasPrefix(r.Recommendations[i], "RENEW") || strings.HasPrefix(r.Recommendations[i], "REPLACE") {
+				rc = "\033[31m"
+			} else if strings.HasPrefix(r.Recommendations[i], "ENABLE") || strings.HasPrefix(r.Recommendations[i], "CONFIGURE") {
+				rc = "\033[32m"
 			}
+			fmt.Printf("\n    %s• %s\033[0m", rc, r.Recommendations[i])
 		}
 	}
+
+	fmt.Printf("\n%s", strings.Repeat("=", 60))
+	fmt.Println()
 }

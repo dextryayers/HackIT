@@ -1,60 +1,50 @@
-
 import ssl
 import socket
+import struct
+import sys
 from datetime import datetime, timezone
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional, Tuple
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import rsa, ec, ed25519
+from cryptography.x509.oid import ExtensionOID, AuthorityInformationAccessOID
 
 class SSLAnalyzer:
-    """
-    Enterprise-Grade SSL/TLS Analyzer
-    """
-    
     def __init__(self, host: str, port: int = 443, timeout: int = 5):
         self.host = host
         self.port = port
         self.timeout = timeout
         self.grade = "F"
+        self.score = 0
         self.issues: List[str] = []
-        self.vulnerabilities: List[Dict[str, str]] = []
 
     def analyze(self) -> Dict[str, Any]:
-        """Run full analysis"""
         results = {
             "host": self.host,
             "port": self.port,
             "certificate": {},
             "protocols": {},
-            "ciphers": {},
+            "ciphers": {}, 
             "vulnerabilities": [],
             "grade": "F",
+            "score": 0,
             "issues": []
         }
-
-        # 1. Get Certificate Info
         cert_info = self.get_certificate_info()
         results["certificate"] = cert_info
-        
         if "error" in cert_info:
             results["error"] = cert_info["error"]
             return results
-
-        # 2. Check Protocols
         results["protocols"] = self.check_protocols()
-
-        # 3. Check Weak Ciphers
         results["ciphers"] = self.check_ciphers()
-
-        # 4. Check Vulnerabilities
+        results["tls_features"] = self.check_tls_features()
         self.check_known_vulns(results)
         results["vulnerabilities"] = self.vulnerabilities
-
-        # 5. Calculate Grade
         self.calculate_grade(results)
         results["grade"] = self.grade
+        results["score"] = self.score
         results["issues"] = self.issues
-
         return results
 
     def get_certificate_info(self) -> Dict[str, Any]:
@@ -62,18 +52,12 @@ class SSLAnalyzer:
             context = ssl.create_default_context()
             context.check_hostname = False
             context.verify_mode = ssl.CERT_NONE
-            
             with socket.create_connection((self.host, self.port), timeout=self.timeout) as sock:
                 with context.wrap_socket(sock, server_hostname=self.host) as ssock:
                     der_cert = ssock.getpeercert(binary_form=True)
                     cert = x509.load_der_x509_certificate(der_cert, default_backend())
-                    
-                    # Basic Info
                     subject = {attr.oid._name: attr.value for attr in cert.subject}
                     issuer = {attr.oid._name: attr.value for attr in cert.issuer}
-                    
-                    # Dates
-                    # Use timezone-aware variants when available (cryptography >= 42)
                     if hasattr(cert, 'not_valid_before_utc'):
                         not_before = cert.not_valid_before_utc
                         not_after = cert.not_valid_after_utc
@@ -82,22 +66,52 @@ class SSLAnalyzer:
                         not_before = cert.not_valid_before
                         not_after = cert.not_valid_after
                         days_left = (not_after - datetime.utcnow()).days
-                    
-                    # SAN
                     san = []
                     try:
-                        ext = cert.extensions.get_extension_for_oid(x509.oid.ExtensionOID.SUBJECT_ALTERNATIVE_NAME)
-                        san = [n.value for n in ext.value]
+                        ext = cert.extensions.get_extension_for_oid(
+                            x509.oid.ExtensionOID.SUBJECT_ALTERNATIVE_NAME)
+                        san = [str(n.value) for n in ext.value]
                     except Exception:
                         pass
-
-                    # Key Info
                     pub_key = cert.public_key()
-                    key_size = pub_key.key_size
-                    
-                    # Signature Algorithm
+                    key_size = pub_key.key_size if hasattr(pub_key, 'key_size') else 0
                     sig_alg = cert.signature_algorithm_oid._name
-
+                    sct_count = 0
+                    try:
+                        ext = cert.extensions.get_extension_for_oid(
+                            x509.ObjectIdentifier("1.3.6.1.4.1.11129.2.4.2"))
+                        sct_count = 1
+                    except Exception:
+                        pass
+                    is_ev = False
+                    try:
+                        ext = cert.extensions.get_extension_for_oid(
+                            x509.oid.ExtensionOID.CERTIFICATE_POLICIES)
+                        for policy in ext.value:
+                            if policy.policy_identifier.dotted_string.startswith("2.23.140.1."):
+                                is_ev = True
+                    except Exception:
+                        pass
+                    ocsp_urls = []
+                    try:
+                        ext = cert.extensions.get_extension_for_oid(
+                            x509.oid.ExtensionOID.AUTHORITY_INFORMATION_ACCESS)
+                        for access in ext.value:
+                            if access.access_method == AuthorityInformationAccessOID.OCSP:
+                                ocsp_urls.append(access.access_location.value)
+                    except Exception:
+                        pass
+                    crl_urls = []
+                    try:
+                        ext = cert.extensions.get_extension_for_oid(
+                            x509.oid.ExtensionOID.CRL_DISTRIBUTION_POINTS)
+                        for dp in ext.value:
+                            for name in dp.full_name:
+                                crl_urls.append(name.value)
+                    except Exception:
+                        pass
+                    wildcard = any("*" in s for s in san)
+                    self_signed = subject.get("commonName", "") == issuer.get("commonName", "")
                     return {
                         "subject": subject,
                         "issuer": issuer,
@@ -105,248 +119,261 @@ class SSLAnalyzer:
                         "valid_to": not_after.isoformat(),
                         "days_remaining": days_left,
                         "expired": days_left < 0,
+                        "expires_soon": 0 <= days_left < 30,
                         "san": san,
+                        "san_count": len(san),
+                        "wildcard": wildcard,
+                        "self_signed": self_signed,
                         "key_size": key_size,
                         "signature_algorithm": sig_alg,
-                        "serial_number": hex(cert.serial_number)
+                        "serial_number": hex(cert.serial_number),
+                        "serial_bits": cert.serial_number.bit_length(),
+                        "sct_count": sct_count,
+                        "is_ev": is_ev,
+                        "ocsp_urls": ocsp_urls,
+                        "crl_urls": crl_urls,
+                        "sha256_fingerprint": cert.fingerprint(hashes.SHA256()).hex(),
                     }
         except Exception as e:
             return {"error": str(e)}
 
     def check_protocols(self) -> Dict[str, bool]:
-        """Check supported protocols"""
         supported = {}
-        
-        # We try to create contexts for specific versions if available.
-        # Python's ssl module support depends on OpenSSL version linked.
-        
-        # 1. SSLv2/SSLv3 (Dangerous)
-        # Often removed from modern Python/OpenSSL, but we try
-        for name, proto in [("SSLv2", "PROTOCOL_SSLv2"), ("SSLv3", "PROTOCOL_SSLv3")]:
-            try:
-                if hasattr(ssl, proto):
-                    p_const = getattr(ssl, proto)
-                    if self._test_connection(p_const):
-                        supported[name] = True
-                    else:
-                        supported[name] = False
-                else:
-                    supported[name] = False # Not supported by client, assume safe or unknown
-            except Exception:
+        for name, version_attr, version_val in [
+            ("SSLv2", None, ssl.PROTOCOL_SSLv2 if hasattr(ssl, 'PROTOCOL_SSLv2') else None),
+            ("SSLv3", None, ssl.PROTOCOL_SSLv3 if hasattr(ssl, 'PROTOCOL_SSLv3') else None),
+        ]:
+            if version_val is not None:
+                supported[name] = self._test_version_ctx(version_val)
+            else:
                 supported[name] = False
-
-        # 2. TLS 1.0/1.1 (Deprecated)
-        # PROTOCOL_TLSv1 / PROTOCOL_TLSv1_1 removed in Python 3.10+
-        # Use TLSVersion enum with max_version constraint instead
-        for name, tls_ver_attr in [("TLSv1.0", "TLSv1"), ("TLSv1.1", "TLSv1_1")]:
-            try:
-                tls_ver = getattr(ssl.TLSVersion, tls_ver_attr, None)
-                if tls_ver is not None:
-                    supported[name] = self._test_tls_version(tls_ver)
-                else:
-                    # Fallback for older Python: try legacy protocol constants
-                    legacy_proto = f"PROTOCOL_{tls_ver_attr}"
-                    if hasattr(ssl, legacy_proto):
-                        supported[name] = self._test_connection(getattr(ssl, legacy_proto))
-                    else:
-                        supported[name] = False
-            except Exception:
+        for name, tls_version in [
+            ("TLSv1.0", ssl.TLSVersion.TLSv1_0 if hasattr(ssl.TLSVersion, 'TLSv1_0') else None),
+            ("TLSv1.1", ssl.TLSVersion.TLSv1_1 if hasattr(ssl.TLSVersion, 'TLSv1_1') else None),
+            ("TLSv1.2", ssl.TLSVersion.TLSv1_2 if hasattr(ssl.TLSVersion, 'TLSv1_2') else None),
+            ("TLSv1.3", ssl.TLSVersion.TLSv1_3 if hasattr(ssl.TLSVersion, 'TLSv1_3') else None),
+        ]:
+            if tls_version is not None:
+                supported[name] = self._test_tls_version(tls_version)
+            else:
                 supported[name] = False
-
-        # 3. TLS 1.2/1.3 (Modern)
-        # We use default context which usually tries highest available
-        try:
-            context = ssl.create_default_context()
-            context.check_hostname = False
-            context.verify_mode = ssl.CERT_NONE
-            with socket.create_connection((self.host, self.port), timeout=self.timeout) as sock:
-                with context.wrap_socket(sock, server_hostname=self.host) as ssock:
-                    ver = ssock.version()
-                    if ver == "TLSv1.3":
-                        supported["TLSv1.3"] = True
-                        supported["TLSv1.2"] = True # Implied
-                    elif ver == "TLSv1.2":
-                        supported["TLSv1.2"] = True
-                        # TLS 1.3 might be false or just not negotiated
-                        supported["TLSv1.3"] = False 
-                    else:
-                        # If negotiated lower, it means server prefers lower or doesn't support high
-                        supported["TLSv1.2"] = False
-                        supported["TLSv1.3"] = False
-        except Exception:
-            supported["TLSv1.2"] = False
-            supported["TLSv1.3"] = False
-
         return supported
 
-    def _test_connection(self, protocol_version) -> bool:
+    def _test_version_ctx(self, protocol_version) -> bool:
         try:
-            context = ssl.SSLContext(protocol_version)
-            context.check_hostname = False
-            context.verify_mode = ssl.CERT_NONE
-            # Enable all ciphers for this test to ensure handshake succeeds if protocol is supported
-            context.set_ciphers('ALL:COMPLEMENTOFDEFAULT') 
+            ctx = ssl.SSLContext(protocol_version)
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
             with socket.create_connection((self.host, self.port), timeout=self.timeout) as sock:
-                with context.wrap_socket(sock, server_hostname=self.host):
+                with ctx.wrap_socket(sock, server_hostname=self.host):
                     return True
         except Exception:
             return False
 
     def _test_tls_version(self, tls_version) -> bool:
-        """Test if server supports a specific TLS version using TLSVersion enum."""
         try:
-            context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-            context.check_hostname = False
-            context.verify_mode = ssl.CERT_NONE
-            context.minimum_version = tls_version
-            context.maximum_version = tls_version
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            ctx.minimum_version = tls_version
+            ctx.maximum_version = tls_version
             with socket.create_connection((self.host, self.port), timeout=self.timeout) as sock:
-                with context.wrap_socket(sock, server_hostname=self.host):
+                with ctx.wrap_socket(sock, server_hostname=self.host):
                     return True
         except Exception:
             return False
 
-    def check_ciphers(self) -> Dict[str, List[str]]:
-        """Check for Weak Ciphers"""
+    def check_ciphers(self) -> Dict[str, Any]:
         results = {
+            "supported": [],
             "weak": [],
-            "insecure": [] # Really bad
+            "insecure": [],
+            "pfs": False,
         }
-        
-        # Cipher categories to test
-        # Note: 'ALL' includes robust ones, we specifically want to test for BAD ones.
-        
-        # 1. NULL Ciphers (No Encryption)
-        if self._test_cipher_suite('NULL'):
-            results['insecure'].append('NULL Ciphers (No Encryption)')
-
-        # 2. Anonymous Ciphers (No Auth)
-        if self._test_cipher_suite('ADH:AECDH'):
-            results['insecure'].append('Anonymous Ciphers (No Authentication)')
-
-        # 3. RC4 (Broken)
-        if self._test_cipher_suite('RC4'):
-            results['weak'].append('RC4 (Broken Stream Cipher)')
-
-        # 4. 3DES (Weak/Slow)
-        if self._test_cipher_suite('3DES'):
-            results['weak'].append('3DES (Sweet32 Vulnerable)')
-
-        # 5. Export Grade (FREAK/Logjam)
-        if self._test_cipher_suite('EXP'):
-            results['insecure'].append('Export Grade Ciphers (FREAK/Logjam)')
-            
-        # 6. MD5 (Weak Hashing)
-        if self._test_cipher_suite('MD5'):
-            results['weak'].append('MD5 Signature/Hash')
-
+        cipher_tests = [
+            ("NULL", "insecure", "NULL Ciphers (No Encryption)"),
+            ("ADH:AECDH", "insecure", "Anonymous Ciphers (No Auth)"),
+            ("RC4", "weak", "RC4 (Broken Stream Cipher)"),
+            ("3DES", "weak", "3DES (Sweet32 Vulnerable)"),
+            ("EXP", "insecure", "Export Grade (FREAK/Logjam)"),
+            ("MD5", "weak", "MD5 Hashing"),
+        ]
+        for cipher_str, category, desc in cipher_tests:
+            if self._test_cipher_suite(cipher_str):
+                results["supported"].append(desc)
+                results[category].append(desc)
+        try:
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            with socket.create_connection((self.host, self.port), timeout=self.timeout) as sock:
+                with ctx.wrap_socket(sock, server_hostname=self.host) as ssock:
+                    cipher_name = ssock.cipher()
+                    if cipher_name:
+                        results["best_cipher"] = f"{cipher_name[0]} ({cipher_name[1]})"
+                        if "ECDHE" in cipher_name[0] or "DHE" in cipher_name[0]:
+                            results["pfs"] = True
+        except Exception:
+            pass
         return results
 
     def _test_cipher_suite(self, cipher_string: str) -> bool:
         try:
-            context = ssl.create_default_context()
-            context.check_hostname = False
-            context.verify_mode = ssl.CERT_NONE
-            context.set_ciphers(cipher_string)
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            ctx.set_ciphers(cipher_string)
             with socket.create_connection((self.host, self.port), timeout=self.timeout) as sock:
-                with context.wrap_socket(sock, server_hostname=self.host):
+                with ctx.wrap_socket(sock, server_hostname=self.host):
                     return True
         except Exception:
             return False
 
+    def check_tls_features(self) -> Dict[str, Any]:
+        features = {
+            "ocsp_stapled": False,
+            "h2": False,
+            "alpn": [],
+        }
+        try:
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            ctx.set_alpn_protocols(["h2", "http/1.1"])
+            with socket.create_connection((self.host, self.port), timeout=self.timeout) as sock:
+                with ctx.wrap_socket(sock, server_hostname=self.host) as ssock:
+                    alpn = ssock.selected_alpn_protocol()
+                    if alpn:
+                        features["alpn"].append(alpn)
+                        if alpn == "h2":
+                            features["h2"] = True
+        except Exception:
+            pass
+        return features
+
     def check_known_vulns(self, results: Dict[str, Any]):
-        """Check for known vulnerabilities based on configuration"""
+        self.vulnerabilities = []
         protos = results.get("protocols", {})
         ciphers = results.get("ciphers", {})
-        
-        # POODLE (SSLv3)
         if protos.get("SSLv3"):
             self.vulnerabilities.append({
-                "name": "POODLE",
-                "severity": "HIGH",
-                "desc": "SSLv3 is enabled, making the server vulnerable to POODLE attack."
+                "name": "POODLE", "severity": "HIGH",
+                "desc": "SSLv3 enabled - vulnerable to POODLE attack (CVE-2014-3566)"
             })
-
-        # DROWN (SSLv2)
         if protos.get("SSLv2"):
             self.vulnerabilities.append({
-                "name": "DROWN",
-                "severity": "CRITICAL",
-                "desc": "SSLv2 is enabled, making the server vulnerable to DROWN attack."
+                "name": "DROWN", "severity": "CRITICAL",
+                "desc": "SSLv2 enabled - vulnerable to DROWN attack (CVE-2016-0800)"
             })
-            
-        # Sweet32 (3DES)
         if any('3DES' in c for c in ciphers.get('weak', [])):
             self.vulnerabilities.append({
-                "name": "Sweet32",
-                "severity": "MEDIUM",
-                "desc": "3DES ciphers are enabled. Vulnerable to collision attacks (Sweet32)."
+                "name": "Sweet32", "severity": "MEDIUM",
+                "desc": "3DES ciphers enabled - vulnerable to Sweet32 attack (CVE-2016-2183)"
             })
-
-        # BEAST (TLS 1.0 + CBC)
-        # Hard to detect accurately without checking CBC preference, but TLS 1.0 is a flag
         if protos.get("TLSv1.0"):
-             self.vulnerabilities.append({
-                "name": "BEAST (Potential)",
-                "severity": "LOW",
-                "desc": "TLS 1.0 enabled. Might be vulnerable to BEAST if CBC ciphers are used."
+            self.vulnerabilities.append({
+                "name": "BEAST", "severity": "LOW",
+                "desc": "TLS 1.0 enabled - potential BEAST attack with CBC ciphers (CVE-2011-3389)"
             })
-
-        # LOGJAM (Export DHE)
         if any('Export' in c for c in ciphers.get('insecure', [])):
-             self.vulnerabilities.append({
-                "name": "Logjam/FREAK",
-                "severity": "HIGH",
-                "desc": "Export grade ciphers enabled."
+            self.vulnerabilities.append({
+                "name": "Logjam/FREAK", "severity": "HIGH",
+                "desc": "Export grade ciphers enabled (CVE-2015-4000/CVE-2015-0204)"
+            })
+        if protos.get("TLSv1.1"):
+            self.vulnerabilities.append({
+                "name": "TLS 1.1 Deprecated", "severity": "LOW",
+                "desc": "TLS 1.1 is deprecated by RFC 8996"
             })
 
     def calculate_grade(self, results: Dict[str, Any]):
-        """Calculate security grade (A-F)"""
         cert = results.get("certificate", {})
         protocols = results.get("protocols", {})
-        vulns = results.get("vulnerabilities", [])
         ciphers = results.get("ciphers", {})
-        
-        grade_val = 100 # Internal score
+        vulns = results.get("vulnerabilities", [])
+        tls_features = results.get("tls_features", {})
+
+        score = 100
         issues = []
 
-        # Critical Failures (Automatic F)
         if cert.get("expired"):
-            grade_val = 0
+            score = 0
             issues.append("Certificate Expired")
         if protocols.get("SSLv2") or protocols.get("SSLv3"):
-            grade_val = 0
+            score = min(score, 20)
             issues.append("Insecure Protocol (SSLv2/SSLv3)")
         if ciphers.get("insecure"):
-            grade_val = 0
+            score = min(score, 30)
             issues.append("Insecure Ciphers (NULL/Export/Anon)")
-        
-        # Major Penalties
         if protocols.get("TLSv1.0") or protocols.get("TLSv1.1"):
-            grade_val = min(grade_val, 60) # Max C/D
+            score -= 15
             issues.append("Deprecated Protocol (TLS 1.0/1.1)")
-        
         if ciphers.get("weak"):
-            grade_val -= 20
+            score -= 15 * len(ciphers["weak"])
             issues.append(f"Weak Ciphers Enabled ({len(ciphers['weak'])})")
-
         if cert.get("key_size", 0) < 2048:
-            grade_val -= 20
+            score -= 20
             issues.append("Weak Key Size (<2048 bits)")
-
-        if "sha1" in cert.get("signature_algorithm", "").lower():
-            grade_val -= 20
+        sig_alg = cert.get("signature_algorithm", "")
+        if "sha1" in sig_alg.lower() or "sha-1" in sig_alg.lower():
+            score -= 20
             issues.append("Weak Signature (SHA1)")
-            
-        # Convert Score to Grade
-        if grade_val >= 90: self.grade = "A"
-        elif grade_val >= 80: self.grade = "B"
-        elif grade_val >= 60: self.grade = "C"
-        elif grade_val >= 40: self.grade = "D"
-        else: self.grade = "F"
-        
-        # A+ Check
-        if self.grade == "A" and protocols.get("TLSv1.3") and not issues:
-            self.grade = "A+"
-            
+        if cert.get("wildcard"):
+            score -= 5
+        if cert.get("sct_count", 0) == 0:
+            score -= 5
+            issues.append("No SCTs found")
+        if not tls_features.get("h2"):
+            score -= 5
+        for v in vulns:
+            if v["severity"] == "CRITICAL":
+                score -= 35
+            elif v["severity"] == "HIGH":
+                score -= 25
+            elif v["severity"] == "MEDIUM":
+                score -= 15
+            elif v["severity"] == "LOW":
+                score -= 5
+
+        if score < 0:
+            score = 0
+
+        if score >= 90:
+            self.grade = "A"
+        elif score >= 80:
+            self.grade = "A-"
+        elif score >= 70:
+            self.grade = "B+"
+        elif score >= 60:
+            self.grade = "B"
+        elif score >= 50:
+            self.grade = "C+"
+        elif score >= 40:
+            self.grade = "C"
+        elif score >= 30:
+            self.grade = "D+"
+        elif score >= 20:
+            self.grade = "D"
+        else:
+            self.grade = "F"
+
+        if self.grade == "A" and not any("deprecated" in i.lower() or "weak" in i.lower() for i in issues):
+            if protocols.get("TLSv1.3") and not protocols.get("SSLv2"):
+                self.grade = "A+"
+
+        self.score = score
         self.issues = issues
+
+class TLSClient:
+    def __init__(self, host: str, port: int = 443, timeout: int = 5):
+        self.host = host
+        self.port = port
+        self.timeout = timeout
+
+    def get_certificate(self):
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        with socket.create_connection((self.host, self.port), timeout=self.timeout) as sock:
+            with ctx.wrap_socket(sock, server_hostname=self.host) as ssock:
+                return ssock.getpeercert()

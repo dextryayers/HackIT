@@ -4,32 +4,41 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net"
+	"strings"
+	"sync"
 	"time"
 )
 
 type Result struct {
-	Host            string                 `json:"host"`
-	Port            int                    `json:"port"`
-	Certificate     map[string]interface{} `json:"certificate"`
-	Protocols       map[string]bool        `json:"protocols"`
-	Ciphers         []string               `json:"ciphers"`
-	Vulnerabilities []string               `json:"vulnerabilities"`
-	Grade           string                 `json:"grade"`
-	Issues          []string               `json:"issues"`
-	Chain           []map[string]interface{} `json:"chain"`
-	ALPN            []string               `json:"alpn"`
-	OCSPStapled     bool                   `json:"ocsp_stapled"`
-	SecureReneg     bool                   `json:"secure_renegotiation"`
-	Error           string                 `json:"error,omitempty"`
+	Host          string            `json:"host"`
+	Port          int               `json:"port"`
+	StartTime     time.Time         `json:"-"`
+	Duration      time.Duration     `json:"-"`
+	CertReport    CertReport        `json:"certificate"`
+	CipherReport  CipherReport      `json:"ciphers"`
+	VulnReport    VulnReport        `json:"vulnerabilities"`
+	TLSReport     TLSFeatureReport  `json:"tls_features"`
+	DNSReport     DNSReport         `json:"dns"`
+	HTTPReport    HTTPReport        `json:"http"`
+	ChainReport   ChainReport       `json:"chain"`
+	CryptoReport  CryptoReport      `json:"crypto"`
+	PortReport    PortScanReport    `json:"port_scan"`
+	Protocols     []string          `json:"protocols"`
+	Grade         string            `json:"grade"`
+	Score         int               `json:"score"`
+	Issues        []string          `json:"issues"`
+	Error         string            `json:"error,omitempty"`
 }
 
 type Analyzer struct {
 	Timeout time.Duration
+	Full    bool
 }
 
-func NewAnalyzer(timeout int) *Analyzer {
+func NewAnalyzer(timeout int, full bool) *Analyzer {
 	return &Analyzer{
 		Timeout: time.Duration(timeout) * time.Second,
+		Full:    full,
 	}
 }
 
@@ -37,127 +46,169 @@ func (a *Analyzer) Analyze(host string, port int) Result {
 	res := Result{
 		Host:      host,
 		Port:      port,
-		Protocols: make(map[string]bool),
-		Issues:    []string{},
+		StartTime: time.Now(),
 	}
+	deadline := time.Now().Add(a.Timeout)
 
-	addr := fmt.Sprintf("%s:%d", host, port)
+	addr := resolveAddr(host, port)
 	dialer := &net.Dialer{Timeout: a.Timeout}
 
-	// 1. Get Certificate Info
-	conn, err := tls.DialWithDialer(dialer, "tcp", addr, &tls.Config{InsecureSkipVerify: true})
+	config := &tls.Config{
+		InsecureSkipVerify: true,
+		ServerName:         host,
+	}
+
+	conn, err := tls.DialWithDialer(dialer, "tcp", addr, config)
 	if err != nil {
 		res.Error = fmt.Sprintf("Connection failed: %v", err)
 		return res
 	}
-	state := conn.ConnectionState()
-	cert := state.PeerCertificates[0]
+
+	cert := conn.ConnectionState().PeerCertificates[0]
+	chain := conn.ConnectionState().PeerCertificates
 	conn.Close()
 
-	res.Certificate = map[string]interface{}{
-		"subject":        cert.Subject.String(),
-		"common_name":    cert.Subject.CommonName,
-		"issuer":         cert.Issuer.String(),
-		"valid_from":     cert.NotBefore.Format(time.RFC3339),
-		"valid_to":       cert.NotAfter.Format(time.RFC3339),
-		"days_remaining": int(time.Until(cert.NotAfter).Hours() / 24),
-		"signature_alg":  cert.SignatureAlgorithm.String(),
-		"key_alg":        cert.PublicKeyAlgorithm.String(),
-		"serial":         cert.SerialNumber.String(),
-		"san":            cert.DNSNames,
-		"version":        cert.Version,
-	}
+	res.CertReport = analyzeCertificate(cert, chain)
+	res.ChainReport = scanChain(cert, chain)
 
-	// 1b. Chain Info
-	for i, c := range state.PeerCertificates {
-		res.Chain = append(res.Chain, map[string]interface{}{
-			"depth":   i,
-			"subject": c.Subject.CommonName,
-			"issuer":  c.Issuer.CommonName,
-			"valid":   time.Now().After(c.NotBefore) && time.Now().Before(c.NotAfter),
-		})
-	}
-
-	if time.Now().After(cert.NotAfter) {
-		res.Issues = append(res.Issues, "Certificate Expired")
-	}
-	if cert.SignatureAlgorithm.String() == "SHA1-RSA" || cert.SignatureAlgorithm.String() == "MD5-RSA" {
-		res.Issues = append(res.Issues, "Weak Signature Algorithm (SHA1/MD5)")
-	}
-	if cert.PublicKeyAlgorithm.String() == "RSA" {
-		// Try to check key size if possible (simple heuristic)
-		res.Certificate["key_bits"] = 2048 // Default assumed if not easily extracted
-	}
-
-	res.ALPN = []string{}
-	if state.NegotiatedProtocol != "" && state.NegotiatedProtocol != " " {
-		res.ALPN = append(res.ALPN, state.NegotiatedProtocol)
-	}
-	res.OCSPStapled = len(state.OCSPResponse) > 0
-
-	// 2. Check Protocols & ALPN
-	protocols := []uint16{
-		tls.VersionTLS10,
-		tls.VersionTLS11,
-		tls.VersionTLS12,
-		tls.VersionTLS13,
-	}
-	protoNames := map[uint16]string{
-		tls.VersionTLS10: "TLS 1.0",
-		tls.VersionTLS11: "TLS 1.1",
-		tls.VersionTLS12: "TLS 1.2",
-		tls.VersionTLS13: "TLS 1.3",
-	}
-
-	for _, p := range protocols {
-		config := &tls.Config{
-			InsecureSkipVerify: true,
-			MinVersion:         p,
-			MaxVersion:         p,
-			NextProtos:         []string{"h2", "http/1.1"},
-		}
-		conn, err := tls.DialWithDialer(dialer, "tcp", addr, config)
-		if err == nil {
-			res.Protocols[protoNames[p]] = true
-			if conn.ConnectionState().NegotiatedProtocol != "" {
-				res.ALPN = append(res.ALPN, conn.ConnectionState().NegotiatedProtocol)
-			}
-			res.Ciphers = append(res.Ciphers, tls.CipherSuiteName(conn.ConnectionState().CipherSuite))
-			res.SecureReneg = true // If connection succeeds in modern Go tls, it usually supports secure reneg or is safe
-			conn.Close()
-		} else {
-			res.Protocols[protoNames[p]] = false
+	useHost := host
+	usePort := port
+	if net.ParseIP(host) == nil {
+		parts := strings.SplitN(addr, ":", 2)
+		if len(parts) == 2 {
+			useHost = parts[0]
 		}
 	}
-	res.ALPN = uniqueStrings(res.ALPN)
-	res.Ciphers = uniqueStrings(res.Ciphers)
 
-	// 3. Calculate Grade
-	grade := "A"
-	if res.Protocols["TLS 1.0"] || res.Protocols["TLS 1.1"] {
-		grade = "B"
-		res.Issues = append(res.Issues, "Supports legacy protocols (TLS 1.0/1.1)")
-	}
-	if !res.Protocols["TLS 1.2"] && !res.Protocols["TLS 1.3"] {
-		grade = "F"
-		res.Issues = append(res.Issues, "Does not support TLS 1.2/1.3")
-	}
-	if time.Now().After(cert.NotAfter) {
-		grade = "F"
+	var wg sync.WaitGroup
+
+	heavyTimeout := time.Until(deadline)
+	if heavyTimeout < 6*time.Second {
+		heavyTimeout = 6 * time.Second
 	}
 
-	res.Grade = grade
+	wg.Add(4)
+	go func() {
+		defer wg.Done()
+		res.CipherReport = scanCiphers(useHost, usePort, heavyTimeout)
+		if a.Full {
+			legacy := scanWeakCiphersLegacy(useHost, usePort, heavyTimeout)
+			res.CipherReport.Supported = append(res.CipherReport.Supported, legacy.Supported...)
+			res.CipherReport.Insecure = append(res.CipherReport.Insecure, legacy.Insecure...)
+			res.CipherReport.TotalCiphers = len(res.CipherReport.Supported)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		res.VulnReport = scanVulnerabilities(useHost, usePort, heavyTimeout)
+	}()
+	go func() {
+		defer wg.Done()
+		res.TLSReport = simulateTLS(useHost, usePort, heavyTimeout)
+		res.Protocols = res.TLSReport.Protocols
+	}()
+	go func() {
+		defer wg.Done()
+		res.CryptoReport = scanCrypto(useHost, usePort, heavyTimeout)
+	}()
+	wg.Wait()
+
+	lightTimeout := time.Until(deadline)
+	if lightTimeout < 4*time.Second {
+		lightTimeout = 4 * time.Second
+	}
+
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		res.DNSReport = scanDNS(host, lightTimeout)
+	}()
+	go func() {
+		defer wg.Done()
+		res.HTTPReport = scanHTTP(useHost, usePort, lightTimeout)
+	}()
+	go func() {
+		defer wg.Done()
+		res.PortReport = scanPorts(host, useHost, lightTimeout)
+	}()
+	wg.Wait()
+
+	res.Score = calculateFinalGrade(res.CertReport, res.CipherReport, res.VulnReport, res.TLSReport)
+	res.Grade = calculateGrade(res.Score)
+
+	allIssues := collectAllIssues(res.CertReport, res.CipherReport, res.VulnReport, res.TLSReport)
+	allIssues = append(allIssues, res.DNSReport.Issues...)
+	allIssues = append(allIssues, res.HTTPReport.Issues...)
+	allIssues = append(allIssues, res.ChainReport.Issues...)
+	allIssues = append(allIssues, res.CryptoReport.Issues...)
+	allIssues = append(allIssues, res.PortReport.Issues...)
+	res.Issues = allIssues
+
+	res.Duration = time.Since(res.StartTime)
+
 	return res
 }
 
-func uniqueStrings(slice []string) []string {
-	keys := make(map[string]bool)
-	list := []string{}
-	for _, entry := range slice {
-		if _, value := keys[entry]; !value && entry != "" {
-			keys[entry] = true
-			list = append(list, entry)
+func resolveAddr(host string, port int) string {
+	if net.ParseIP(host) != nil {
+		return fmt.Sprintf("%s:%d", host, port)
+	}
+
+	ips, err := net.LookupIP(host)
+	if err == nil {
+		for _, ip := range ips {
+			if ipv4 := ip.To4(); ipv4 != nil {
+				return fmt.Sprintf("%s:%d", ipv4.String(), port)
+			}
 		}
 	}
-	return list
+	return fmt.Sprintf("%s:%d", host, port)
+}
+
+func printResult(r Result) {
+	gradeColor := "\033[32m"
+	switch r.Grade {
+	case "A", "A-":
+		gradeColor = "\033[32m"
+	case "B+", "B", "C+", "C":
+		gradeColor = "\033[33m"
+	case "D+", "D":
+		gradeColor = "\033[31m"
+	case "F":
+		gradeColor = "\033[31;1m"
+	}
+
+	fmt.Printf("\n%s", strings.Repeat("=", 60))
+	fmt.Printf("\n  SSL/TLS DEEP ANALYSIS RESULTS")
+	fmt.Printf("\n%s", strings.Repeat("=", 60))
+	fmt.Printf("\n  Host      : %s:%d", r.Host, r.Port)
+	fmt.Printf("\n  Grade     : %s%s\033[0m  (%d/100)", gradeColor, r.Grade, r.Score)
+	fmt.Printf("\n  Speed     : %dms", r.Duration.Milliseconds())
+	fmt.Printf("\n%s", strings.Repeat("-", 60))
+
+	printCertReport(r.CertReport)
+	printChainReport(r.ChainReport)
+	printCipherReport(r.CipherReport)
+	printVulnReport(r.VulnReport)
+	printTLSFeatures(r.TLSReport)
+	printDNSReport(r.DNSReport)
+	printHTTPReport(r.HTTPReport)
+	printCryptoReport(r.CryptoReport)
+	printPortReport(r.PortReport)
+
+	fmt.Printf("\n%s", strings.Repeat("=", 60))
+	fmt.Printf("\n  Scan Complete -- %d total findings", len(r.Issues))
+	fmt.Printf("\n    %d Certificate Issues", len(r.CertReport.Issues))
+	fmt.Printf("\n    %d Chain Issues", len(r.ChainReport.Issues))
+	fmt.Printf("\n    %d Weak + %d Broken Ciphers", len(r.CipherReport.Weak), len(r.CipherReport.Insecure))
+	fmt.Printf("\n    %d Vulnerabilities (%d critical, %d high, %d medium, %d low)",
+		r.VulnReport.Count, r.VulnReport.Critical, r.VulnReport.High,
+		r.VulnReport.Medium, r.VulnReport.Low)
+	fmt.Printf("\n    %d TLS Feature Issues", len(r.TLSReport.Issues))
+	fmt.Printf("\n    %d DNS Issues", len(r.DNSReport.Issues))
+	fmt.Printf("\n    %d HTTP Issues", len(r.HTTPReport.Issues))
+	fmt.Printf("\n    %d Crypto Issues", len(r.CryptoReport.Issues))
+	fmt.Printf("\n    %d Port Issues", len(r.PortReport.Issues))
+	fmt.Printf("\n%s", strings.Repeat("=", 60))
+	fmt.Println()
 }
