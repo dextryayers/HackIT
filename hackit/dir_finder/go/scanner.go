@@ -146,6 +146,11 @@ func RunScan(config *ScanConfig) ([]DirResult, *ScanStats) {
 
 			mu.Lock()
 			if sr != nil && sr.res != nil {
+				if sr.filtered {
+					stats.Filtered++
+					mu.Unlock()
+					return
+				}
 				if !seenPaths[sr.res.Path] {
 					seenPaths[sr.res.Path] = true
 
@@ -332,9 +337,10 @@ func shortContentType(ct string) string {
 }
 
 type scanResult struct {
-	res    *DirResult
-	body   string
-	header string
+	res      *DirResult
+	body     string
+	header   string
+	filtered bool
 }
 
 func scanPath(config *ScanConfig, client *http.Client, path string, uaList []string) *scanResult {
@@ -475,8 +481,25 @@ func scanPath(config *ScanConfig, client *http.Client, path string, uaList []str
 
 	bodyStr := string(body)
 
-	if config.SmartFilter && CheckSoft404(bodyStr, extractTitle(bodyStr)) {
-		finalStatus = 404
+	contentType := resp.Header.Get("Content-Type")
+	title := extractTitle(bodyStr)
+	words := countWords(bodyStr)
+	lines := countLines(bodyStr)
+	hdrStr := headerMapToString(resp.Header)
+	bodyHash := fmt.Sprintf("%x", sha1.Sum(body))[:16]
+
+	if config.SmartFilter && CheckSoft404(bodyStr, title) {
+		return &scanResult{
+			res: &DirResult{
+				Path: path, Status: 404, Size: finalSize,
+				ContentType: contentType, Title: title,
+				Redirect: redirectURL, Words: words, Lines: lines,
+				BodyHash: bodyHash, TimeMs: timeMs,
+			},
+			body:     bodyStr,
+			header:   hdrStr,
+			filtered: true,
+		}
 	}
 
 	if config.ExcludeResponse != "" && config.ReferenceResponse != nil {
@@ -484,13 +507,6 @@ func scanPath(config *ScanConfig, client *http.Client, path string, uaList []str
 			return nil
 		}
 	}
-
-	contentType := resp.Header.Get("Content-Type")
-	title := extractTitle(bodyStr)
-	words := countWords(bodyStr)
-	lines := countLines(bodyStr)
-	hdrStr := headerMapToString(resp.Header)
-	bodyHash := fmt.Sprintf("%x", sha1.Sum(body))[:16]
 
 	return &scanResult{
 		res: &DirResult{

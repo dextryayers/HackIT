@@ -283,3 +283,12 @@ def dirfinder(ctx, mode, **kwargs):
     if kwargs.get('header'):
         headers_str = ",".join(kwargs['header'])
         cmd.extend(['-H', headers_str])
+
+    try:
+        result = subprocess.run(cmd)
+        if result.returncode != 0:
+            click.echo(f"[!] Go binary exited with code {result.returncode}")
+    except FileNotFoundError:
+        click.echo(f"[!] Go binary not found: {go_bin}")
+    except Exception as e:
+        click.echo(f"[!] Failed to execute Go binary: {e}")

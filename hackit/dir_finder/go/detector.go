@@ -11,33 +11,54 @@ import (
 )
 
 func DetectWildcard(target string, client *http.Client) (int, int64) {
-	// Test 1: Random path
 	randomPath := fmt.Sprintf("hackit_wildcard_%d", time.Now().UnixNano())
 	testURL := fmt.Sprintf("%s/%s", strings.TrimSuffix(target, "/"), randomPath)
 	resp, err := client.Get(testURL)
 	if err != nil {
 		return 404, -1
 	}
-	defer resp.Body.Close()
 
-	status := resp.StatusCode
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
-	size := int64(len(body))
+	status, size := followAndRead(resp, client, target)
 
-	// Test 2: Another random path for verification
 	randomPath2 := fmt.Sprintf("hackit_wildcard_verify_%d", time.Now().UnixNano())
 	testURL2 := fmt.Sprintf("%s/%s", strings.TrimSuffix(target, "/"), randomPath2)
 	resp2, err2 := client.Get(testURL2)
 	if err2 == nil {
-		defer resp2.Body.Close()
-		body2, _ := io.ReadAll(io.LimitReader(resp2.Body, 1024*1024))
-		size2 := int64(len(body2))
-		if resp2.StatusCode == status && size2 == size {
+		status2, size2 := followAndRead(resp2, client, target)
+		if status2 == status && size2 == size {
 			return status, size
 		}
 	}
 
 	return status, size
+}
+
+func followAndRead(resp *http.Response, client *http.Client, baseTarget string) (int, int64) {
+	finalResp := resp
+	for finalResp.StatusCode >= 300 && finalResp.StatusCode < 400 {
+		loc := finalResp.Header.Get("Location")
+		if loc == "" {
+			break
+		}
+		if !strings.HasPrefix(loc, "http") {
+			base := strings.TrimRight(baseTarget, "/")
+			if strings.HasPrefix(loc, "/") {
+				loc = base + loc
+			} else {
+				loc = base + "/" + loc
+			}
+		}
+		req, _ := http.NewRequest("GET", loc, nil)
+		finalResp.Body.Close()
+		nextResp, err := client.Do(req)
+		if err != nil || nextResp == nil {
+			break
+		}
+		finalResp = nextResp
+	}
+	defer finalResp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(finalResp.Body, 1024*1024))
+	return finalResp.StatusCode, int64(len(body))
 }
 
 func DetectWAF(target string, client *http.Client) string {
