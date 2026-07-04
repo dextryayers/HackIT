@@ -234,3 +234,150 @@ class AIHyperBrain:
             return _colored("[!] Engine timeout (120s)", RED)
         except Exception as e:
             return _colored(f"[!] Bridge error: {e}", RED)
+
+    def stream_ai(self, prompt, on_token=None, system_prompt=None, mode=""):
+        if not os.path.exists(self.binary_path):
+            if on_token:
+                on_token({"token": f"[!] Engine not found: {self.binary_path}", "done": True})
+            return
+
+        if system_prompt is None:
+            system_prompt = self.system_prompt
+
+        key = self.keys.get(self.provider)
+        if not key and self.provider != "ollama":
+            if on_token:
+                on_token({"token": f"[!] API Key for {self.provider.upper()} not configured", "done": True})
+            return
+
+        cmd = [self.binary_path, "-provider", self.provider, "-key", key or "",
+               "-prompt", prompt, "-system", system_prompt, "-stream"]
+
+        if self.model:
+            cmd.extend(["-model", self.model])
+        if self.engine == "chat" and mode:
+            cmd.extend(["-cmd", mode])
+        elif mode:
+            cmd.extend(["-mode", mode])
+
+        full_response = []
+        try:
+            process = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, bufsize=1
+            )
+            for line in process.stdout:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                    if "token" in event:
+                        full_response.append(event["token"])
+                        if on_token:
+                            on_token({"token": event["token"], "done": False})
+                    elif event.get("done"):
+                        if on_token:
+                            on_token({"token": "", "done": True})
+                        break
+                except json.JSONDecodeError:
+                    pass
+
+            process.wait(timeout=120)
+            return "".join(full_response)
+        except Exception as e:
+            if on_token:
+                on_token({"token": f"[!] Stream error: {e}", "done": True})
+            return "".join(full_response)
+
+    def run_hative(self, target, modules=None):
+        hative_path = os.path.join(self.base_dir, "go", "hative", "hative")
+        if not os.path.exists(hative_path):
+            return [{"error": f"hative binary not found at {hative_path}"}]
+
+        args = []
+        if modules:
+            for mod in modules:
+                args.extend([f"--{mod}", target])
+        else:
+            args = ["--all", target, "--concurrent"]
+
+        try:
+            result = subprocess.run(
+                [hative_path] + args,
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
+            stdout = result.stdout.strip()
+            if not stdout:
+                return [{"error": "No output from hative"}]
+            try:
+                return json.loads(stdout)
+            except json.JSONDecodeError:
+                return [{"error": f"Invalid JSON: {stdout[:200]}"}]
+        except subprocess.TimeoutExpired:
+            return [{"error": "hative timeout (300s)"}]
+        except Exception as e:
+            return [{"error": f"hative error: {e}"}]
+
+    def stream_hative(self, target, on_progress=None, modules=None):
+        hative_path = os.path.join(self.base_dir, "go", "hative", "hative")
+        if not os.path.exists(hative_path):
+            if on_progress:
+                on_progress({"event": "error", "message": "hative binary not found"})
+            return []
+
+        args = []
+        if modules:
+            for mod in modules:
+                args.extend([f"--{mod}", target])
+        else:
+            args = ["--all", target, "--concurrent", "--report"]
+
+        total_modules = 0
+        completed_modules = 0
+        start_time = time.time()
+
+        try:
+            process = subprocess.Popen(
+                [hative_path] + args,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+
+            for line in process.stderr:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                    if event.get("event") == "start":
+                        total_modules += 1
+                    elif event.get("event") in ("done", "error"):
+                        completed_modules += 1
+                        if total_modules > 0 and completed_modules > 0:
+                            elapsed = time.time() - start_time
+                            pct = int(completed_modules / total_modules * 100)
+                            if completed_modules < total_modules:
+                                eta = elapsed / completed_modules * (total_modules - completed_modules)
+                                event["pct"] = pct
+                                event["eta_seconds"] = int(eta)
+                    if on_progress:
+                        on_progress(event)
+                except json.JSONDecodeError:
+                    pass
+
+            stdout, _ = process.communicate(timeout=300)
+            if stdout.strip():
+                try:
+                    return json.loads(stdout.strip())
+                except json.JSONDecodeError:
+                    return [{"error": f"Invalid JSON"}] if stdout.strip() else []
+            return []
+        except subprocess.TimeoutExpired:
+            process.kill()
+            return [{"error": "hative timeout (300s)"}]
+        except Exception as e:
+            return [{"error": f"hative error: {e}"}]

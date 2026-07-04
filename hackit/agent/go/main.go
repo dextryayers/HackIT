@@ -27,6 +27,7 @@ func main() {
 	autopilot := flag.String("autopilot", "", "Target for Autonomous AI Bug Hunter")
 	swarmMode := flag.String("swarm", "", "Trigger 20-Node Autonomous Swarm on Target")
 	swarmScope := flag.String("swarm-scope", "passive", "Scope for Swarm (passive, active_stealth, aggressive)")
+	stream := flag.Bool("stream", false, "Enable token-by-token streaming output")
 	flag.Parse()
 
 	history := NewHistoryManager()
@@ -70,44 +71,106 @@ func main() {
 		finalSystem = analyzer.SystemPrompt
 	}
 
-	client := &http.Client{Timeout: 60 * time.Second}
+	client := &http.Client{Timeout: 120 * time.Second}
 	var response string
 	var err error
 
-	// Multi-Intelligence Orchestration
-	orchestrator := NewIntelligenceOrchestrator(map[string]string{*provider: *apiKey})
+	keys := make(map[string]string)
+	keys[*provider] = *apiKey
+	orchestrator := NewIntelligenceOrchestrator(keys)
+
+	// Response cache for non-analysis queries
+	cache := NewResponseCache()
+	if !*analyze && *autopilot == "" && *swarmMode == "" {
+		if cached, ok := cache.Get(*provider, *model, *prompt, *system); ok {
+			out := AIResponse{Text: cached}
+			jsonOut, _ := json.Marshal(out)
+			fmt.Println(string(jsonOut))
+			return
+		}
+	}
+
+	// Probe provider latencies in background
+	go orchestrator.ProbeLatency(5 * time.Second)
+
+	histData := history.Load()
+
+	// Try requested provider first, then fallback chain
+	providersToTry := []string{*provider}
 	if *model == "" {
 		*model = orchestrator.GetOptimalModel(*provider)
 	}
 
-	histData := history.Load()
+	for _, p := range orchestrator.FallbackChain {
+		if p != *provider {
+			providersToTry = append(providersToTry, p)
+		}
+		if len(providersToTry) >= 5 {
+			break
+		}
+	}
 
-	switch *provider {
-	case "gemini":
-		response, err = handleGemini(client, *apiKey, finalPrompt, finalSystem, *model, histData)
-	case "groq":
-		response, err = handleOpenAICompatible(client, "groq", *apiKey, finalPrompt, finalSystem, *model, histData)
-	case "claude":
-		response, err = handleClaude(client, *apiKey, finalPrompt, finalSystem, *model, histData)
-	case "openai", "openrouter", "deepseek", "mistral", "togetherai":
-		response, err = handleOpenAICompatible(client, *provider, *apiKey, finalPrompt, finalSystem, *model, histData)
-	case "ollama":
-		response, err = handleOllama(client, *apiKey, finalPrompt, finalSystem, *model, histData)
-	default:
-		err = fmt.Errorf("unsupported provider: %s", *provider)
+	for _, p := range providersToTry {
+		key := orchestrator.Providers[p]
+		if p == "ollama" {
+			response, err = handleOllama(client, "", finalPrompt, finalSystem, "", histData)
+		} else if key == "" {
+			continue
+		} else {
+			switch p {
+			case "gemini":
+				response, err = handleGemini(client, key, finalPrompt, finalSystem, "", histData)
+			case "claude":
+				response, err = handleClaude(client, key, finalPrompt, finalSystem, "", histData)
+			default:
+				response, err = handleOpenAICompatible(client, p, key, finalPrompt, finalSystem, "", histData)
+			}
+		}
+		if err == nil {
+			break
+		}
+		if p != *provider {
+			fmt.Fprintf(os.Stderr, `{"fallback":"%s failed, trying %s: %v"}`+"\n", p, providersToTry[1], err)
+		}
 	}
 
 	if err != nil {
-		errResp := map[string]string{"error": err.Error()}
+		ranked := orchestrator.RankByLatency()
+		hint := ""
+		if len(ranked) > 0 {
+			hint = fmt.Sprintf(" Fastest available: %s", ranked[0])
+		}
+		errResp := map[string]string{
+			"error": fmt.Sprintf("All %d providers failed. Last error: %v.%s",
+				len(providersToTry), err, hint),
+		}
 		jsonErr, _ := json.Marshal(errResp)
 		fmt.Println(string(jsonErr))
 		os.Exit(1)
+	}
+
+	// Handle streaming output
+	if *stream {
+		words := strings.Fields(response)
+		for _, word := range words {
+			token := map[string]string{"token": word + " "}
+			tokenJSON, _ := json.Marshal(token)
+			fmt.Println(string(tokenJSON))
+			time.Sleep(15 * time.Millisecond)
+		}
+		fmt.Println(`{"done":true}`)
+		return
 	}
 
 	// Save history
 	histData = append(histData, Message{Role: "user", Content: finalPrompt})
 	histData = append(histData, Message{Role: "assistant", Content: response})
 	history.Save(histData)
+
+	// Cache result (300s TTL for non-analysis queries)
+	if !*analyze && *autopilot == "" && *swarmMode == "" {
+		cache.Set(*provider, *model, *prompt, *system, response, 300)
+	}
 
 	out := AIResponse{Text: response}
 	jsonOut, _ := json.Marshal(out)

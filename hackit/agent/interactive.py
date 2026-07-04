@@ -9,9 +9,30 @@ import select
 import subprocess as _sp
 import re
 import textwrap
-from hackit.ui import GREEN, RED, YELLOW, DIM, B_CYAN, MAGENTA, RESET, BOLD, CYAN, WHITE, B_GREEN, B_YELLOW, B_BLUE, B_MAGENTA
+import json
+import datetime
+from hackit.ui import GREEN, RED, YELLOW, DIM, B_CYAN, MAGENTA, RESET, BOLD, CYAN, WHITE, B_GREEN, B_YELLOW, B_BLUE, B_MAGENTA, _colored
+
+try:
+    from prompt_toolkit import PromptSession
+    from prompt_toolkit.history import FileHistory
+    from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
+    from prompt_toolkit.formatted_text import ANSI
+    from prompt_toolkit.completion import Completer, Completion
+    _HAS_PT = True
+except ImportError:
+    _HAS_PT = False
+
+try:
+    from pygments import highlight as _pyg_highlight
+    from pygments.lexers import get_lexer_by_name, guess_lexer
+    from pygments.formatters import TerminalFormatter
+    _HAS_PYGMENTS = True
+except ImportError:
+    _HAS_PYGMENTS = False
 
 _ANSI_RE = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+_HACKIT_WATERMARK = f"\n{DIM}────────────────────{RESET}\n{DIM}  HackIT AI v2.1{RESET}\n"
 
 AUTOPILOT_COMMANDS = {
     "set-target":    "Lock target domain/IP",
@@ -36,6 +57,8 @@ AUTOPILOT_COMMANDS = {
     "takeover":      "Subdomain takeover check",
     "deep":          "Deep vulnerability analysis",
     "report":        "Generate pentest report",
+    "export":        "Export conversation [filename]",
+    "import":        "Import conversation [filename]",
     "help":          "Show all commands",
     "clear":         "Clear screen",
     "exit":          "Exit autopilot",
@@ -61,6 +84,8 @@ CHAT_COMMANDS = {
     "plan":       "Create a step-by-step plan",
     "compare":    "Compare and contrast items",
     "analyze":    "Deep analysis of data/input",
+    "export":     "Export conversation [filename]",
+    "import":     "Import conversation [filename]",
     "clear":      "Clear conversation",
     "help":       "Show all commands",
     "exit":       "Exit chat mode",
@@ -68,13 +93,13 @@ CHAT_COMMANDS = {
 }
 
 AUTOPILOT_BANNER = r"""
-  █████╗ ██╗   ██╗████████╗ ██████╗ ██████╗ ██╗██████╗  ██████╗ ████████╗
- ██╔══██╗██║   ██║╚══██╔══╝██╔═══██╗██╔══██╗██║██╔══██╗██╔═══██╗╚══██╔══╝
- ███████║██║   ██║   ██║   ██║   ██║██████╔╝██║██████╔╝██║   ██║   ██║
- ██╔══██║██║   ██║   ██║   ██║   ██║██╔═══╝ ██║██╔══██╗██║   ██║   ██║
- ██║  ██║╚██████╔╝   ██║   ╚██████╔╝██║     ██║██║  ██║╚██████╔╝   ██║
- ╚═╝  ╚═╝ ╚═════╝    ╚═╝    ╚═════╝ ╚═╝     ╚═╝╚═╝  ╚═╝ ╚═════╝    ╚═╝
-                     AUTONOMOUS PENTEST AI ENGINE
+    █████╗ ██╗   ██╗████████╗ ██████╗ ██████╗ ██╗██╗      ██████╗ ████████╗
+   ██╔══██╗██║   ██║╚══██╔══╝██╔═══██╗██╔══██╗██║██║     ██╔═══██╗╚══██╔══╝
+   ███████║██║   ██║   ██║   ██║   ██║██████╔╝██║██║     ██║   ██║   ██║
+   ██╔══██║██║   ██║   ██║   ██║   ██║██╔═══╝ ██║██║     ██║   ██║   ██║
+   ██║  ██║╚██████╔╝   ██║   ╚██████╔╝██║     ██║███████╗╚██████╔╝   ██║
+   ╚═╝  ╚═╝ ╚═════╝    ╚═╝    ╚═════╝ ╚═╝     ╚═╝╚══════╝ ╚═════╝    ╚═╝
+                      AUTONOMOUS PENTEST AI ENGINE
 """
 
 CHAT_BANNER = r"""
@@ -170,6 +195,15 @@ class TermUI:
         sz = _get_term_size()
         self.cols = sz.columns
         self.rows = sz.lines
+        self._setup_sigwinch()
+
+    def _setup_sigwinch(self):
+        import signal as _sig
+        def _resize(signum, frame):
+            sz = _get_term_size()
+            self.cols = sz.columns
+            self.rows = sz.lines
+        _sig.signal(_sig.SIGWINCH, _resize)
 
     def transition_in(self):
         _transition_to(self.mode_name, self.theme, self.banner_art)
@@ -211,6 +245,18 @@ class TermUI:
         if ch == '\t': return 'TAB'
         return ch
 
+    def _highlight_code(self, code, lang=""):
+        if not _HAS_PYGMENTS or not code.strip():
+            return code
+        try:
+            if lang:
+                lexer = get_lexer_by_name(lang, stripall=True)
+            else:
+                lexer = guess_lexer(code)
+            return _pyg_highlight(code, lexer, TerminalFormatter()).rstrip('\n')
+        except Exception:
+            return code
+
     def _render_msg(self, role, content, color, width):
         lines = []
         if role == "banner":
@@ -218,20 +264,38 @@ class TermUI:
             return lines
         prefix_v = "\u25bc" if role != "assistant" else "\u25c9"
         role_clean = role.upper() if role in ("user", "system") else role.title()
-        lines.append(f" {color}{prefix_v}{RESET} {BOLD}{color}{role_clean}{RESET}")
+        ts = datetime.datetime.now().strftime("%H:%M:%S")
+        lines.append(f" {DIM}[{ts}]{RESET} {color}{prefix_v}{RESET} {BOLD}{color}{role_clean}{RESET}")
         if content:
             in_code = False
+            code_lang = ""
+            code_buf = []
             for line in content.splitlines():
                 stripped = line.strip()
                 if stripped.startswith('```'):
+                    if in_code:
+                        code_text = '\n'.join(code_buf)
+                        highlighted = self._highlight_code(code_text, code_lang)
+                        for hl_line in highlighted.split('\n'):
+                            for wl in _wrap_text(hl_line, width - 4):
+                                lines.append(f"   {wl}")
+                        code_buf = []
+                        code_lang = ""
+                    else:
+                        code_lang = stripped[3:].strip().split()[0] if len(stripped) > 3 else ""
                     in_code = not in_code
                     continue
                 if in_code:
-                    for wl in _wrap_text(line, width - 4):
-                        lines.append(f"   {YELLOW}{wl}{RESET}")
+                    code_buf.append(line)
                 else:
                     for wl in _wrap_text(line, width - 2):
                         lines.append(f"  {wl}")
+            if code_buf:
+                code_text = '\n'.join(code_buf)
+                highlighted = self._highlight_code(code_text, code_lang)
+                for hl_line in highlighted.split('\n'):
+                    for wl in _wrap_text(hl_line, width - 4):
+                        lines.append(f"   {wl}")
         lines.append("")
         return lines
 
@@ -285,14 +349,43 @@ class TermUI:
 
     def _thinking(self, active=True):
         if active:
-            self.messages.append(("", f"{DIM}\u23f3 thinking...{RESET}", DIM))
+            import threading
+            self._thinking_active = True
+            self._thinking_msg = f"{DIM}\u23f3 HackIT AI is thinking{RESET}"
+            self.messages.append(("", self._thinking_msg, DIM))
+            self._redraw_messages()
+            self._draw_input_bar("", 0)
+
+            def _animate():
+                chars = ["\u25e2", "\u25e3", "\u25e4", "\u25e5"]
+                dots = 0
+                while getattr(self, '_thinking_active', False):
+                    c = chars[int(time.time() * 4) % 4]
+                    dots = (dots % 3) + 1
+                    msg = f"{DIM}{c} HackIT AI is thinking{'.' * dots}{RESET}"
+                    for i in range(len(self.messages) - 1, -1, -1):
+                        if "\u23f3 HackIT AI is thinking" in str(self.messages[i]) or \
+                           "\u25e2 HackIT AI is thinking" in str(self.messages[i]) or \
+                           "\u25e3 HackIT AI is thinking" in str(self.messages[i]) or \
+                           "\u25e4 HackIT AI is thinking" in str(self.messages[i]) or \
+                           "\u25e5 HackIT AI is thinking" in str(self.messages[i]):
+                            self.messages[i] = ("", msg, DIM)
+                            break
+                    self._redraw_messages()
+                    self._draw_input_bar("", 0)
+                    time.sleep(0.15)
+
+            t = threading.Thread(target=_animate, daemon=True)
+            t.start()
         else:
+            self._thinking_active = False
+            time.sleep(0.05)
             for i in range(len(self.messages) - 1, -1, -1):
-                if "\u23f3 thinking..." in str(self.messages[i]):
+                if "HackIT AI is thinking" in str(self.messages[i]):
                     self.messages.pop(i)
                     break
-        self._redraw_messages()
-        self._draw_input_bar("", 0)
+            self._redraw_messages()
+            self._draw_input_bar("", 0)
 
     def _draw_input_bar(self, input_text, cursor):
         bar_y = self.rows
@@ -356,6 +449,50 @@ class TermUI:
         if out_parts:
             sys.stdout.write(''.join(out_parts))
             sys.stdout.flush()
+
+    def _rich_input(self, commands_dict):
+        if not _HAS_PT:
+            return self.get_input(commands_dict)
+
+        history_path = os.path.join(os.path.expanduser("~"), ".hackit_pt_history")
+        try:
+            session = PromptSession(
+                history=FileHistory(history_path),
+                auto_suggest=AutoSuggestFromHistory(),
+                enable_history_search=True,
+                multiline=False,
+            )
+
+            class CmdCompleter(Completer):
+                def __init__(self, cmds):
+                    self.cmds = cmds
+                def get_completions(self, document, complete_event):
+                    text = document.text
+                    if text.startswith('/'):
+                        partial = text[1:].lower()
+                        for cmd, desc in self.cmds.items():
+                            if cmd.startswith(partial):
+                                display = f"/{cmd}  — {desc}"
+                                yield Completion(f"/{cmd} ", start_position=-len(text), display=display)
+
+            prompt_text = ANSI(f"\033[2K\r  {self.theme}\u25b8{RESET} ")
+            try:
+                result = session.prompt(
+                    prompt_text,
+                    completer=CmdCompleter(commands_dict),
+                    complete_while_typing=True,
+                    vi_mode=False,
+                )
+                result = result.strip()
+                if not result:
+                    return ""
+                if result.startswith('//'):
+                    return result[1:]
+                return result
+            except (EOFError, KeyboardInterrupt):
+                return "/exit"
+        except Exception:
+            return self.get_input(commands_dict)
 
     def _autocomplete_best(self, input_text, commands_dict):
         if not input_text.startswith('/') or input_text.startswith('//'):
@@ -512,20 +649,105 @@ class TermUI:
         sys.stdout.flush()
 
 
+    def _export_conversation(self, filepath=""):
+        if not filepath:
+            ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            filepath = f"hackit_conversation_{ts}.md"
+        md_lines = [f"# HackIT AI Conversation\n", f"**Exported:** {datetime.datetime.now().isoformat()}\n", f"**Mode:** {self.mode_name}\n\n---\n"]
+        for role, content, color in self.messages:
+            if role == "banner":
+                continue
+            prefix = "**User**" if role == "user" else "**System**" if role == "system" else "**Assistant**"
+            md_lines.append(f"\n### {prefix}\n\n{content}\n")
+        md_lines.append("\n---\n*Generated by HackIT AI v2.1*\n")
+        try:
+            with open(filepath, 'w') as f:
+                f.write('\n'.join(md_lines))
+            return f"Conversation exported to {filepath}"
+        except Exception as e:
+            return f"Export failed: {e}"
+
+    def _import_conversation(self, filepath):
+        try:
+            with open(filepath, 'r') as f:
+                content = f.read()
+            sections = content.split('### ')
+            count = 0
+            for sec in sections:
+                if sec.startswith('**User**'):
+                    text = sec.split('\n\n', 1)[-1].strip()
+                    self._add_message("user", text, self.theme)
+                    count += 1
+                elif sec.startswith('**Assistant**'):
+                    text = sec.split('\n\n', 1)[-1].strip()
+                    if text and not text.startswith('*Generated by'):
+                        self._add_message("assistant", text, GREEN if self.mode_name == "AUTOPILOT" else CYAN)
+                        count += 1
+            return f"Imported {count} messages from {filepath}"
+        except Exception as e:
+            return f"Import failed: {e}"
+
 class AutopilotUI(TermUI):
     def __init__(self):
         super().__init__("AUTOPILOT", B_GREEN, AUTOPILOT_BANNER)
         self.brain = None
 
+    def _run_hative(self, modules=None):
+        if not self.target:
+            self._add_message("system", "Set target first with /set-target", YELLOW)
+            return
+        self._add_message("system", f"Launching hative scan on {self.target}...", self.theme)
+        from hackit.agent.brain import AIHyperBrain
+        brain = AIHyperBrain(engine="native")
+
+        def on_progress(evt):
+            event = evt.get("event", "")
+            mod = evt.get("module", "")
+            msg = evt.get("message", "")
+            pct = evt.get("pct", 0)
+            eta = evt.get("eta_seconds", 0)
+            if event == "start":
+                self._add_message("", f"  [{B_GREEN}\u25b6{RESET}] {msg}", DIM)
+            elif event == "done":
+                eta_str = f" (ETA: {eta}s)" if eta else ""
+                self._add_message("", f"  [{GREEN}\u2713{RESET}] {msg}{eta_str}", GREEN)
+            elif event == "error":
+                self._add_message("", f"  [{RED}\u2717{RESET}] {msg}", RED)
+            elif event == "interrupted":
+                self._add_message("", f"  [{YELLOW}\u26a0{RESET}] {msg}", YELLOW)
+            elif event == "complete":
+                self._add_message("system", f"Scan complete: {msg}", GREEN)
+
+        results = brain.stream_hative(self.target, on_progress=on_progress, modules=modules)
+        if not results:
+            self._add_message("system", "No results from hative", RED)
+            return
+        if isinstance(results, list) and len(results) > 0:
+            if "error" in results[0]:
+                self._add_message("system", f"Hative error: {results[0]['error']}", RED)
+                return
+
+            vuln_count = 0
+            total_count = len(results)
+            for r in results:
+                data = r.get("data")
+                if isinstance(data, list):
+                    vuln_count += len(data)
+
+            self._add_message("system",
+                f"Scan complete: {total_count} modules, {vuln_count} findings", GREEN)
+
     def run(self):
         self.transition_in()
         from hackit.agent.brain import AIHyperBrain
         self.brain = AIHyperBrain(engine="native")
+        use_pt = _HAS_PT and os.isatty(self.fd)
         try:
-            tty.setraw(self.fd)
+            if not use_pt:
+                tty.setraw(self.fd)
             self._add_message("system", "Autopilot ready. Set target with /set-target", DIM)
             while self.running:
-                cmd = self.get_input(AUTOPILOT_COMMANDS)
+                cmd = self._rich_input(AUTOPILOT_COMMANDS) if use_pt else self.get_input(AUTOPILOT_COMMANDS)
                 if not cmd:
                     continue
                 if cmd in ('/exit', '/quit', 'exit', 'quit'):
@@ -546,6 +768,32 @@ class AutopilotUI(TermUI):
                     else:
                         self._add_message("system", "No target set. Use /set-target <domain|ip>", YELLOW)
                     continue
+                if cmd == '/all':
+                    self._add_message("user", "Running full comprehensive scan via hative...", self.theme)
+                    self._run_hative()
+                    continue
+                if cmd == '/js':
+                    self._add_message("user", "Running JS analysis...", self.theme)
+                    self._run_hative(modules=["js"])
+                    continue
+                if cmd == '/params':
+                    self._add_message("user", "Running param discovery...", self.theme)
+                    self._run_hative(modules=["param"])
+                    continue
+                if cmd.startswith('/export '):
+                    fp = cmd[8:].strip()
+                    result = self._export_conversation(fp)
+                    self._add_message("system", result, YELLOW)
+                    continue
+                if cmd == '/export':
+                    result = self._export_conversation()
+                    self._add_message("system", result, YELLOW)
+                    continue
+                if cmd.startswith('/import '):
+                    fp = cmd[8:].strip()
+                    result = self._import_conversation(fp)
+                    self._add_message("system", result, YELLOW)
+                    continue
                 if cmd == '/help':
                     self._add_message("system", "COMMANDS", self.theme)
                     for c, d in AUTOPILOT_COMMANDS.items():
@@ -561,7 +809,7 @@ class AutopilotUI(TermUI):
                         resp = resp.replace('[!] AI Error:', '').replace('[!] Engine Error:', '').strip()
                         if not resp:
                             resp = "No response from engine"
-                        self._add_message("assistant", resp[:800], GREEN)
+                        self._add_message("assistant", resp + _HACKIT_WATERMARK, GREEN)
                     else:
                         self._add_message("assistant", "Set target first with /set-target", YELLOW)
                     continue
@@ -572,7 +820,7 @@ class AutopilotUI(TermUI):
                 resp = resp.replace('[!] AI Error:', '').replace('[!] Engine Error:', '').strip()
                 if not resp:
                     resp = "No response from engine"
-                self._add_message("assistant", resp[:800], GREEN)
+                self._add_message("assistant", resp + _HACKIT_WATERMARK, GREEN)
         except Exception as e:
             self._add_message("system", f"Error: {e}", RED)
         finally:
@@ -588,11 +836,13 @@ class ChatUI(TermUI):
         self.transition_in()
         from hackit.agent.brain import AIHyperBrain
         self.brain = AIHyperBrain(engine="chat")
+        use_pt = _HAS_PT and os.isatty(self.fd)
         try:
-            tty.setraw(self.fd)
+            if not use_pt:
+                tty.setraw(self.fd)
             self._add_message("system", "Chat mode active. Ask me anything!", DIM)
             while self.running:
-                cmd = self.get_input(CHAT_COMMANDS)
+                cmd = self._rich_input(CHAT_COMMANDS) if use_pt else self.get_input(CHAT_COMMANDS)
                 if not cmd:
                     continue
                 if cmd in ('/exit', '/quit', 'exit', 'quit'):
@@ -602,6 +852,20 @@ class ChatUI(TermUI):
                     self.messages = []
                     _clear_screen()
                     self.transition_in()
+                    continue
+                if cmd.startswith('/export '):
+                    fp = cmd[8:].strip()
+                    result = self._export_conversation(fp)
+                    self._add_message("system", result, YELLOW)
+                    continue
+                if cmd == '/export':
+                    result = self._export_conversation()
+                    self._add_message("system", result, YELLOW)
+                    continue
+                if cmd.startswith('/import '):
+                    fp = cmd[8:].strip()
+                    result = self._import_conversation(fp)
+                    self._add_message("system", result, YELLOW)
                     continue
                 if cmd == '/help':
                     self._add_message("system", "COMMANDS", self.theme)
@@ -616,7 +880,7 @@ class ChatUI(TermUI):
                 resp = resp.replace('[!] AI Error:', '').replace('[!] Engine Error:', '').strip()
                 if not resp:
                     resp = "No response from engine"
-                self._add_message("assistant", resp[:800], CYAN)
+                self._add_message("assistant", resp + _HACKIT_WATERMARK, CYAN)
         except Exception as e:
             self._add_message("system", f"Error: {e}", RED)
         finally:
