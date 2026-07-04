@@ -25,7 +25,563 @@ from hackit.osint import osint as osint_console
 from hackit.agent import agent
 from hackit.ddos import ddos as ddos_attack
 from hackit.ui import display_banner, _colored, YELLOW, GREEN, B_GREEN, B_CYAN, B_WHITE, DIM, RED, MAGENTA, BLUE, CYAN, B_MAGENTA, B_RED, B_BLUE, B_YELLOW, WHITE, BG_BLUE, BG_CYAN, BG_MAGENTA
-from hackit.config import load_config, save_config, set_theme, DEFAULT_CONFIG
+from hackit.config import load_config, save_config, set_theme, DEFAULT_CONFIG, VALID_THEMES, VALID_ACCENTS, VALID_BORDERS, VALID_PROMPTS, VALID_MASKING_LEVELS, MASKING_PROFILES, CONFIG_PATH, apply_masking_level, get_masking_info
+
+import re as _re
+import json
+import shutil
+import time
+import textwrap
+from datetime import datetime
+from typing import Dict, Any, Optional
+
+_strip_ansi = _re.compile(r'\x1b\[[0-9;]*[a-zA-Z]')
+
+ACCENT_MAP = {
+    'cyan': CYAN, 'magenta': MAGENTA, 'green': GREEN,
+    'blue': BLUE, 'red': RED, 'yellow': YELLOW, 'white': B_WHITE,
+}
+
+BORDER_MAP = {
+    'double':  {'tl':'╔','tr':'╗','bl':'╚','br':'╝','h':'═','v':'║'},
+    'single':  {'tl':'┌','tr':'┐','bl':'└','br':'┘','h':'─','v':'│'},
+    'rounded': {'tl':'╭','tr':'╮','bl':'╰','br':'╯','h':'─','v':'│'},
+    'block':   {'tl':'█','tr':'█','bl':'█','br':'█','h':'█','v':'█'},
+    'ascii':   {'tl':'+','tr':'+','bl':'+','br':'+','h':'-','v':'|'},
+    'none':    {'tl':' ','tr':' ','bl':' ','br':' ','h':' ','v':' '},
+}
+
+PROMPT_MAP = {
+    'arrow': '└─$', 'hash': '#', 'dollar': '$',
+    'lambda': 'λ', 'skull': '☠', 'none': '',
+}
+
+def _vis_len(text):
+    return len(_strip_ansi.sub('', str(text)))
+
+def _truncate_ansi(text, max_vis):
+    if _vis_len(text) <= max_vis:
+        return text
+    count = 0
+    result = []
+    i = 0
+    while i < len(text) and count < max_vis:
+        if text[i] == '\x1b':
+            j = text.index('m', i) + 1 if 'm' in text[i:] else len(text)
+            result.append(text[i:j])
+            i = j
+        else:
+            result.append(text[i])
+            count += 1
+            i += 1
+    return ''.join(result)
+
+def _bx(line, box_w, ac, bc):
+    visible = _vis_len(line)
+    pad = max(0, box_w - visible)
+    return f"  {_colored(bc['v'], ac)} {line}{' '*pad} {_colored(bc['v'], ac)}"
+
+def _get_theme_preview(theme, user, host, ctx, ac):
+    previews = {
+        'kali':       f"{_colored('┌──(', DIM)}{_colored(user, ac)}{_colored('㉿', DIM)}{_colored(host, ac)}{_colored(')-[', DIM)}{_colored('10:00', DIM)}{_colored(']-[', DIM)}{_colored(ctx, B_MAGENTA)}{_colored(']', DIM)} {_colored('└─$', ac)}",
+        'cyberpunk':  f"{_colored(user, B_CYAN)}{_colored(' ❯❯ ', B_MAGENTA)}{_colored(f'[{ctx}]', B_GREEN)}",
+        'minimalist': f"{_colored(f'hackit({ctx}) > ', DIM)}",
+        'retro':      f"{_colored(f'{user}@{host}:{ctx}$ ', B_GREEN)}",
+        'gacor':      f"{_colored('🔥 ', YELLOW)}{_colored(f'[{user}@{host}]', B_MAGENTA)}{_colored(f' ⚙️  {ctx}', CYAN)}{_colored(' 🚀 ', B_GREEN)}",
+        'powerline':  f"{_colored(f' {user} ', BG_BLUE+WHITE)}{_colored(f' {ctx} ', BG_CYAN+WHITE)}{_colored(f' 10:00 ', BG_MAGENTA+WHITE)} {_colored('❯', DIM)}",
+        'modern':     f"{_colored(f'{user} ', B_CYAN)}{_colored('❯ ', B_MAGENTA)}{_colored(ctx, B_GREEN)}{_colored(' ❯ ', B_MAGENTA)}",
+        'pill':       f"{_colored(f'({user}) ', BG_BLUE+WHITE)}{_colored(f'({ctx}) ', B_GREEN)} {_colored('➜', DIM)}",
+        'nexus':      f"{_colored('❯❯', B_CYAN)} {_colored(f'[{user}]', B_BLUE)} {_colored(f'[{ctx}]', B_CYAN)} {_colored('>>', B_BLUE)}",
+        'zinc':       f"{_colored(f'[{user}@HackIT]', B_GREEN)} {_colored('➜', WHITE)} {_colored(ctx, B_GREEN)} {_colored('➜', WHITE)}",
+        'vault':      f"{_colored('[[', B_WHITE)} {_colored(f'{user}@HackIT', CYAN)} {_colored(']]', B_WHITE)} {_colored('[[', B_WHITE)} {_colored(ctx, CYAN)} {_colored(']]', B_WHITE)} {_colored('$', B_WHITE)}",
+        'storm':      f"{_colored('[⚡', B_YELLOW)} {_colored(user, B_MAGENTA)} {_colored('⚡]', B_YELLOW)} {_colored(f'[{ctx}]', B_MAGENTA)} {_colored('#', B_YELLOW)}",
+        'drift':      f"{_colored(f'[{user}@hackit:', CYAN)}{_colored(ctx, MAGENTA)}{_colored(']', CYAN)} {_colored('➤', B_WHITE)}",
+        'pulse':      f"{_colored(f'[{user}]', B_GREEN)} {_colored('←', B_BLUE)} {_colored(f'[{ctx}]', B_GREEN)} {_colored('->', B_BLUE)} {_colored('$', B_GREEN)}",
+        'slash':      f"{_colored('//', B_RED)} {_colored(user, WHITE)} {_colored('//', B_RED)} {_colored(ctx, WHITE)} {_colored('//', B_RED)} {_colored('#', WHITE)}",
+    }
+    return previews.get(theme, f"{_colored(user, ac)}{_colored('@', DIM)}{_colored(host, ac)} {_colored(PROMPT_MAP.get('arrow', '└─$'), B_GREEN)} {_colored('command', DIM)}")
+
+CONFIG_PROMPT = f"{_colored('[', B_CYAN)}{_colored('config', B_WHITE)}{_colored(' ⚙️ ', YELLOW)}{_colored('HackIT', B_CYAN)}{_colored(']', B_CYAN)} {_colored('>>', B_GREEN)} "
+
+def _show_loading_bar(stage, msg, pct, box_w, color):
+    spinner = ['◢', '◣', '◤', '◥']
+    sp = spinner[pct % 4]
+    filled = '▓' * (pct * box_w // 100)
+    empty  = '░' * (box_w - len(filled))
+    bar = filled + empty
+    cols = shutil.get_terminal_size().columns
+    line = f"  {_colored(sp, color)} {_colored(stage, color)}  {_colored(msg, DIM)}  [{_colored(bar, DIM)}]  {_colored(f'{pct:>3}%', YELLOW)}"
+    sys.stdout.write(f"\r{line}{' ' * max(0, cols - len(line))}")
+    sys.stdout.flush()
+
+def _config_entry_animation(cfg):
+    os.system('clear' if os.name == 'posix' else 'cls')
+    cols = shutil.get_terminal_size().columns
+    box_w = min(cols - 8, 56)
+    ac = ACCENT_MAP.get(cfg.get('accent', 'cyan'), CYAN)
+
+    stages = [
+        ("INIT",    "Loading configuration module",   CYAN,    8),
+        ("READ",    f"Reading config file",            BLUE,    6),
+        ("VALIDATE","Validating config schema",        MAGENTA, 5),
+        ("THEME",   f"Applying {cfg.get('theme','vault').upper()} theme",  GREEN,   6),
+        ("READY",   "Configuration shell ready",       GREEN,   5),
+    ]
+    total = sum(s[3] for s in stages)
+    step = 1
+    for name, msg, color, steps in stages:
+        for s in range(steps):
+            pct = int((step / total) * 100)
+            _show_loading_bar(name, msg, pct, box_w, color)
+            time.sleep(0.06 + (0.03 if name == "READY" else 0.0))
+            step += 1
+    sys.stdout.write('\r' + ' ' * cols + '\r')
+    sys.stdout.flush()
+    time.sleep(0.15)
+
+def _config_box_top(cfg, box_w):
+    ac = ACCENT_MAP.get(cfg.get('accent', 'cyan'), CYAN)
+    bc = BORDER_MAP.get(cfg.get('border', 'double'), BORDER_MAP['double'])
+    print(f"  {_colored(bc['tl'], ac)}{_colored(bc['h']*box_w, ac)}{_colored(bc['tr'], ac)}")
+
+def _config_box_bot(cfg, box_w):
+    ac = ACCENT_MAP.get(cfg.get('accent', 'cyan'), CYAN)
+    bc = BORDER_MAP.get(cfg.get('border', 'double'), BORDER_MAP['double'])
+    print(f"  {_colored(bc['bl'], ac)}{_colored(bc['h']*box_w, ac)}{_colored(bc['br'], ac)}")
+
+def _config_box_line(text, cfg, box_w):
+    ac = ACCENT_MAP.get(cfg.get('accent', 'cyan'), CYAN)
+    bc = BORDER_MAP.get(cfg.get('border', 'double'), BORDER_MAP['double'])
+    visible = _vis_len(text)
+    avail = box_w - 2
+    if visible > avail:
+        text = _truncate_ansi(text, avail)
+        visible = avail
+    pad = max(0, avail - visible)
+    return f"  {_colored(bc['v'], ac)} {text}{' '*pad} {_colored(bc['v'], ac)}"
+
+def _config_box_sep(cfg, box_w):
+    ac = ACCENT_MAP.get(cfg.get('accent', 'cyan'), CYAN)
+    bc = BORDER_MAP.get(cfg.get('border', 'double'), BORDER_MAP['double'])
+    print(_config_box_line(f"{_colored(bc['h']*box_w, DIM)}", cfg, box_w))
+
+def _show_config_shell_banner(cfg):
+    cols = shutil.get_terminal_size().columns
+    box_w = min(cols - 8, 56)
+    ac = ACCENT_MAP.get(cfg.get('accent', 'cyan'), CYAN)
+    bc = BORDER_MAP.get(cfg.get('border', 'double'), BORDER_MAP['double'])
+
+    cmds_grid = [
+        ("list",    "show full config"),
+        ("get",     "show one key"),
+        ("set",     "change a value"),
+        ("theme",   "switch theme"),
+        ("accent",  "set accent color"),
+        ("border",  "set border style"),
+        ("prompt",  "set prompt style"),
+        ("masking", "set anonymity lvl"),
+        ("user",    "set username"),
+        ("host",    "set hostname"),
+        ("reset",   "factory defaults"),
+        ("export",  "save config"),
+        ("import",  "load config"),
+        ("help",    "command reference"),
+        ("back",    "exit config shell"),
+    ]
+    half = (len(cmds_grid) + 1) // 2
+    left = cmds_grid[:half]
+    right = cmds_grid[half:]
+
+    col_w = (box_w - 4) // 2
+
+    print()
+    _config_box_top(cfg, box_w)
+    print(_config_box_line(f"  {_colored('⚙', B_WHITE)}  {_colored('C O N F I G U R A T I O N   S H E L L', B_WHITE)}", cfg, box_w))
+    print(_config_box_line(f"  {_colored('Manage all HackIT preferences', DIM)}", cfg, box_w))
+    _config_box_sep(cfg, box_w)
+    for i in range(max(len(left), len(right))):
+        lcmd, ldesc = left[i] if i < len(left) else ("", "")
+        rcmd, rdesc = right[i] if i < len(right) else ("", "")
+        lpart = f"{_colored('▶', GREEN)} {_colored(f'{lcmd}:', B_CYAN)} {_colored(ldesc, DIM)}" if lcmd else ""
+        rpart = f"{_colored('▶', GREEN)} {_colored(f'{rcmd}:', B_CYAN)} {_colored(rdesc, DIM)}" if rcmd else ""
+        lvis = _vis_len(lpart)
+        need = col_w - lvis + 2
+        if need < 2: need = 2
+        line = f"{lpart}{' ' * need}{rpart}"
+        print(_config_box_line(line, cfg, box_w))
+    _config_box_bot(cfg, box_w)
+
+def _show_config_display(cfg):
+    cols = shutil.get_terminal_size().columns
+    box_w = min(cols - 8, 56)
+    ac = ACCENT_MAP.get(cfg.get('accent', 'cyan'), CYAN)
+    bc = BORDER_MAP.get(cfg.get('border', 'double'), BORDER_MAP['double'])
+
+    label_w = 14
+    val_start = label_w + 5
+    val_w = box_w - val_start - 2
+
+    def _row(label, value, vcolor):
+        ls = _colored(label.ljust(label_w), B_WHITE)
+        vs = _colored(str(value)[:val_w].ljust(val_w), vcolor)
+        return _config_box_line(f"{ls} {_colored('»', DIM)}  {vs}", cfg, box_w)
+
+    print()
+    _config_box_top(cfg, box_w)
+    print(_config_box_line(f"  {_colored('H A C K I T   C O N F I G U R A T I O N', B_WHITE)}", cfg, box_w))
+    _config_box_sep(cfg, box_w)
+
+    for label, key, color in [
+        ("Theme",  'theme',  YELLOW),
+        ("User",   'user',   ac),
+        ("Host",   'hostname', ac),
+        ("Accent", 'accent', GREEN),
+        ("Border", 'border', GREEN),
+        ("Prompt", 'prompt', GREEN),
+    ]:
+        print(_row(label, cfg.get(key, '').upper() if isinstance(cfg.get(key, ''), str) else str(cfg.get(key, '')), color))
+
+    _config_box_sep(cfg, box_w)
+
+    for label, key in [
+        ("Timeout",      'timeout'),
+        ("Max Threads",  'max_threads'),
+        ("Stealth Mode", 'stealth_mode'),
+        ("Verify SSL",   'verify_ssl'),
+        ("Output Format",'output_format'),
+        ("Auto Report",  'auto_save_reports'),
+    ]:
+        print(_row(label, str(cfg.get(key, '')), DIM))
+
+    _config_box_sep(cfg, box_w)
+
+    minfo = get_masking_info(cfg)
+    level_upper = minfo['level'].upper()
+    level_color = {
+        'none': RED, 'basic': YELLOW, 'medium': CYAN,
+        'advanced': MAGENTA, 'expert': B_RED, 'paranoid': B_MAGENTA,
+    }.get(minfo['level'], DIM)
+    print(_row("Masking Level", f"{minfo['icon']}  {level_upper}", level_color))
+    feat_count = minfo['feature_count']
+    total_feat = minfo['total_features']
+    if feat_count > 0:
+        bar_filled = '█' * (feat_count * 6 // total_feat + 1)
+        bar_empty  = '░' * max(0, 6 - (feat_count * 6 // total_feat + 1))
+        print(_row("Active Layers", f"{bar_filled}{bar_empty}  {feat_count}/{total_feat}", GREEN))
+    else:
+        print(_row("Active Layers", '○  none', RED))
+
+    delay_min, delay_max = minfo['delay_range']
+    if delay_max > 0:
+        print(_row("Delay Range", f"{delay_min}s — {delay_max}s / req", YELLOW))
+    p_depth = minfo['proxy_depth']
+    if p_depth > 0:
+        print(_row("Proxy Chain", f"{p_depth}-hop chain", CYAN))
+    ip_freq = minfo['ip_rotate_freq']
+    if ip_freq > 0:
+        print(_row("IP Rotate", f"every {ip_freq} requests", MAGENTA))
+
+    cats = minfo['categories']
+    if cats:
+        cat_abbr = {"Network": "NET", "Headers": "HDR", "Privacy": "PRIV", "Evasion": "EVADE"}
+        cat_labels = []
+        for cn in ["Network", "Headers", "Privacy", "Evasion"]:
+            if cn in cats:
+                cat_labels.append(cat_abbr.get(cn, cn))
+        print(_row("Categories", ' · '.join(cat_labels), GREEN))
+
+    prov = cfg.get('ai_provider', '')
+    if prov:
+        model = cfg.get('ai_models', {}).get(prov, 'auto')
+        _config_box_sep(cfg, box_w)
+        print(_row("AI Provider", prov.upper(), MAGENTA))
+        print(_row("AI Model", model, MAGENTA))
+
+    _config_box_sep(cfg, box_w)
+
+    preview = _get_theme_preview(cfg['theme'], cfg['user'], cfg['hostname'], 'config', ac)
+    print(_config_box_line(f"{_colored('Prompt Preview', B_WHITE)} {_colored('»', DIM)}  {preview}", cfg, box_w))
+    _config_box_bot(cfg, box_w)
+    print()
+
+def _show_config_help(cfg):
+    cols = shutil.get_terminal_size().columns
+    box_w = min(cols - 8, 56)
+
+    cmds = [
+        ("list",         "Display full configuration"),
+        ("show",         "Alias for list"),
+        ("get <key>",    "Show value of a single key"),
+        ("set <k> <v>",  "Set a config key to a value"),
+        ("theme <name>", "Switch terminal visual theme"),
+        ("accent <c>",   "Set accent color"),
+        ("border <s>",   "Set border style"),
+        ("prompt <s>",   "Set prompt symbol"),
+        ("masking <lvl>","Set masking anonymity level"),
+        ("user <name>",  "Set display username"),
+        ("host <name>",  "Set display hostname"),
+        ("reset",        "Restore factory defaults"),
+        ("export <f>",   "Export config to JSON file"),
+        ("import <f>",   "Import config from JSON file"),
+        ("help",         "Show this command reference"),
+        ("back / exit",  "Exit configuration shell"),
+    ]
+
+    print()
+    _config_box_top(cfg, box_w)
+    print(_config_box_line(f"  {_colored('C O N F I G   S H E L L   C O M M A N D S', B_WHITE)}", cfg, box_w))
+    _config_box_sep(cfg, box_w)
+    for cmd, desc in cmds:
+        print(_config_box_line(f"  {_colored(cmd.ljust(18), B_GREEN)}  {_colored(desc, DIM)}", cfg, box_w))
+    _config_box_sep(cfg, box_w)
+    cont_pad = ' ' * 12
+    for label, items in [
+        ("Themes",   ', '.join(VALID_THEMES)),
+        ("Accents",  ', '.join(VALID_ACCENTS)),
+        ("Borders",  ', '.join(VALID_BORDERS)),
+        ("Prompts",  ', '.join(VALID_PROMPTS)),
+        ("Masking",  ', '.join(VALID_MASKING_LEVELS)),
+    ]:
+        wrapped = textwrap.wrap(items, width=box_w - 16) if len(items) > box_w - 16 else [items]
+        for idx, chunk in enumerate(wrapped):
+            prefix = f"  {_colored(label.ljust(8), B_WHITE)}  " if idx == 0 else f"  {cont_pad}"
+            print(_config_box_line(f"{prefix}{_colored(chunk, DIM)}", cfg, box_w))
+    _config_box_bot(cfg, box_w)
+    print()
+
+def _save_and_confirm(cfg, msg):
+    if save_config(cfg):
+        print(f"  {_colored('✔', GREEN)}  {_colored(msg, DIM)}")
+    else:
+        print(f"  {_colored('✘', RED)}  {_colored('Failed to save configuration!', RED)}")
+
+def _interactive_config_shell():
+    try:
+        import readline
+    except ImportError:
+        readline = None
+
+    cfg = load_config()
+    hist_file = os.path.join(os.path.expanduser("~"), ".hackit_config_history")
+    if readline:
+        try:
+            if os.path.exists(hist_file):
+                readline.read_history_file(hist_file)
+            readline.set_history_length(500)
+            def _completer(text, state):
+                cmds = ['list','show','get','set','theme','accent','border','prompt','masking','user','host','reset','export','import','help','back','exit','quit','clear']
+                opts = [c for c in cmds if c.startswith(text)]
+                return opts[state] if state < len(opts) else None
+            readline.set_completer(_completer)
+            if hasattr(readline, '__doc__') and readline.__doc__ and 'libedit' in readline.__doc__:
+                readline.parse_and_bind("bind ^I rl_complete")
+            else:
+                readline.parse_and_bind("tab: complete")
+        except Exception:
+            pass
+
+    _config_entry_animation(cfg)
+    _show_config_shell_banner(cfg)
+    print(f"  {_colored('[*] Type', DIM)} {_colored('help', B_GREEN)} {_colored('for commands or', DIM)} {_colored('back', B_GREEN)} {_colored('to exit', DIM)}")
+    print()
+
+    while True:
+        try:
+            line = input(CONFIG_PROMPT).strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            break
+
+        if not line:
+            continue
+
+        parts = line.split()
+        cmd = parts[0].lower()
+        args = parts[1:]
+
+        if cmd in ('exit', 'quit', 'back', 'q'):
+            print(f"  {_colored('[*] Exiting configuration shell.', DIM)}")
+            break
+
+        if cmd in ('help', '?'):
+            _show_config_help(cfg)
+            continue
+
+        if cmd in ('list', 'show'):
+            _show_config_display(cfg)
+            continue
+
+        if cmd == 'get':
+            if not args:
+                print(f"  {_colored('Usage:', YELLOW)} {_colored('get <key>', B_GREEN)} {_colored('<key>', DIM)}")
+                continue
+            key = args[0]
+            if key in cfg:
+                val = cfg[key]
+                if isinstance(val, dict):
+                    print(f"  {_colored(key, B_WHITE)} {_colored('»', DIM)}")
+                    for k, v in val.items():
+                        print(f"    {_colored(k, CYAN)} {_colored(':', DIM)} {_colored(str(v)[:200], WHITE)}")
+                else:
+                    print(f"  {_colored(key, B_WHITE)} {_colored('»', DIM)}  {_colored(str(val), CYAN)}")
+            else:
+                print(f"  {_colored('Key not found:', RED)} {_colored(key, B_YELLOW)}")
+            continue
+
+        if cmd == 'set':
+            if len(args) < 2:
+                print(f"  {_colored('Usage:', YELLOW)} {_colored('set <key> <value>', B_GREEN)}")
+                continue
+            key = args[0]
+            value_str = ' '.join(args[1:])
+            value = value_str
+            if key == 'masking_level':
+                if value_str.lower() not in VALID_MASKING_LEVELS:
+                    print(f"  {_colored('Invalid masking level:', RED)} {value_str}")
+                    print(f"  {_colored('Valid:', DIM)} {', '.join(VALID_MASKING_LEVELS)}")
+                    continue
+                cfg = apply_masking_level(cfg, value_str.lower())
+                _save_and_confirm(cfg, f"Masking level set to {cfg['masking_level'].upper()} ({len([v for v in MASKING_PROFILES[cfg['masking_level']].values() if v])} layers active)")
+                continue
+            if key in ('timeout', 'ai_timeout', 'ai_temperature', 'request_delay_min', 'request_delay_max'):
+                try: value = float(value_str)
+                except: print(f"  {_colored('Invalid number:', RED)} {value_str}"); continue
+            elif key in ('max_threads', 'history_size', 'ai_max_tokens', 'proxy_chain_depth', 'ip_rotation_freq'):
+                try: value = int(value_str)
+                except: print(f"  {_colored('Invalid integer:', RED)} {value_str}"); continue
+            elif key in ('stealth_mode', 'verify_ssl', 'auto_save_reports', 'notifications_enabled', 'auto_update_check', 'randomize_ua', 'randomize_fingerprint', 'proxy_rotation', 'dns_leak_protection', 'timing_jitter', 'header_randomization', 'request_padding', 'tor_enabled', 'mac_spoofing', 'tls_fingerprint', 'ip_rotation', 'dns_over_https', 'tor_stream_isolation', 'cache_busting', 'referer_spoofing', 'session_isolation', 'adaptive_delays', 'http2_disable', 'packet_fragmentation', 'decoy_traffic', 'notifications_enabled', 'auto_update_check'):
+                value = value_str.lower() in ('true', '1', 'yes', 'on')
+            cfg[key] = value
+            _save_and_confirm(cfg, f"Set {key} = {value_str}")
+            continue
+
+        if cmd == 'theme':
+            if not args or args[0].lower() not in VALID_THEMES:
+                print(f"  {_colored('Usage:', YELLOW)} {_colored('theme <name>', B_GREEN)}")
+                print(f"  {_colored('Options:', DIM)} {', '.join(VALID_THEMES)}")
+                continue
+            cfg['theme'] = args[0].lower()
+            _save_and_confirm(cfg, f"Theme changed to {cfg['theme'].upper()}")
+
+        elif cmd == 'accent':
+            if not args or args[0].lower() not in VALID_ACCENTS:
+                print(f"  {_colored('Usage:', YELLOW)} {_colored('accent <color>', B_GREEN)}")
+                print(f"  {_colored('Options:', DIM)} {', '.join(VALID_ACCENTS)}")
+                continue
+            cfg['accent'] = args[0].lower()
+            _save_and_confirm(cfg, f"Accent set to {cfg['accent'].upper()}")
+
+        elif cmd == 'border':
+            if not args or args[0].lower() not in VALID_BORDERS:
+                print(f"  {_colored('Usage:', YELLOW)} {_colored('border <style>', B_GREEN)}")
+                print(f"  {_colored('Options:', DIM)} {', '.join(VALID_BORDERS)}")
+                continue
+            cfg['border'] = args[0].lower()
+            _save_and_confirm(cfg, f"Border set to {cfg['border'].upper()}")
+
+        elif cmd == 'prompt':
+            if not args or args[0].lower() not in VALID_PROMPTS:
+                print(f"  {_colored('Usage:', YELLOW)} {_colored('prompt <style>', B_GREEN)}")
+                print(f"  {_colored('Options:', DIM)} {', '.join(VALID_PROMPTS)}")
+                continue
+            cfg['prompt'] = args[0].lower()
+            _save_and_confirm(cfg, f"Prompt set to {cfg['prompt'].upper()}")
+
+        elif cmd == 'masking':
+            if not args or args[0].lower() not in VALID_MASKING_LEVELS:
+                print(f"  {_colored('Usage:', YELLOW)} {_colored('masking <level>', B_GREEN)}")
+                print(f"  {_colored('Levels:', DIM)}")
+                for lvl in VALID_MASKING_LEVELS:
+                    prof = MASKING_PROFILES[lvl]
+                    bool_cnt = len([k for k in prof if isinstance(prof[k], bool) and prof[k]])
+                    delay = prof.get('request_delay_max', 0)
+                    chain = prof.get('proxy_chain_depth', 0)
+                    icon = {'none':'○','basic':'◶','medium':'◑','advanced':'◐','expert':'●','paranoid':'★'}.get(lvl, '○')
+                    extra = []
+                    if delay > 0: extra.append(f"delay ≤{delay}s")
+                    if chain > 0: extra.append(f"chain {chain}")
+                    info = f" ({bool_cnt} layers)" + (f" — {', '.join(extra)}" if extra else "")
+                    print(f"    {_colored(icon, B_CYAN)}  {_colored(f'{lvl:12s}', B_WHITE)} {_colored(info, DIM)}")
+                continue
+            cfg = apply_masking_level(cfg, args[0].lower())
+            minfo = get_masking_info(cfg)
+            cat_list = ', '.join(minfo['categories'].keys())
+            _save_and_confirm(cfg, f"Masking {cfg['masking_level'].upper()} ({minfo['feature_count']} layers: {cat_list})")
+            continue
+
+        elif cmd in ('user', 'username'):
+            if not args:
+                print(f"  {_colored('Usage:', YELLOW)} {_colored('user <name>', B_GREEN)}")
+                continue
+            cfg['user'] = ' '.join(args)
+            _save_and_confirm(cfg, f"Username set to {cfg['user']}")
+
+        elif cmd in ('host', 'hostname'):
+            if not args:
+                print(f"  {_colored('Usage:', YELLOW)} {_colored('host <name>', B_GREEN)}")
+                continue
+            cfg['hostname'] = ' '.join(args)
+            _save_and_confirm(cfg, f"Hostname set to {cfg['hostname']}")
+
+        elif cmd == 'reset':
+            print(f"  {_colored('⚠', B_YELLOW)}  {_colored('Reset all settings to factory defaults?', YELLOW)}")
+            try:
+                confirm = input(f"  {_colored('Confirm', YELLOW)} {_colored('(y/N):', DIM)} ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                print(); continue
+            if confirm in ('y', 'yes'):
+                from hackit.config import reset_to_defaults
+                cfg = reset_to_defaults()
+                if cfg:
+                    print(f"  {_colored('✔', GREEN)}  {_colored('All settings restored to factory defaults', DIM)}")
+                else:
+                    print(f"  {_colored('✘', RED)}  {_colored('Reset failed', RED)}")
+            else:
+                print(f"  {_colored('Reset cancelled.', DIM)}")
+
+        elif cmd == 'export':
+            export_path = ' '.join(args) if args else os.path.join(os.path.expanduser("~"), f"hackit_config_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
+            try:
+                parent = os.path.dirname(export_path)
+                if parent: os.makedirs(parent, exist_ok=True)
+                with open(export_path, 'w', encoding='utf-8') as f:
+                    json.dump(cfg, f, indent=4, ensure_ascii=False)
+                print(f"  {_colored('✔', GREEN)}  {_colored('Config exported to:', DIM)} {_colored(export_path, CYAN)}")
+            except Exception as e:
+                print(f"  {_colored('✘', RED)}  {_colored(f'Export failed: {e}', RED)}")
+
+        elif cmd == 'import':
+            if not args:
+                print(f"  {_colored('Usage:', YELLOW)} {_colored('import <filepath>', B_GREEN)}")
+                continue
+            import_path = ' '.join(args)
+            if not os.path.exists(import_path):
+                print(f"  {_colored('File not found:', RED)} {import_path}")
+                continue
+            try:
+                with open(import_path, 'r', encoding='utf-8') as f:
+                    imported = json.load(f)
+                for k, v in imported.items():
+                    if k in SCHEMA or k == 'ai_keys':
+                        cfg[k] = v
+                _save_and_confirm(cfg, f"Config imported from {import_path}")
+            except Exception as e:
+                print(f"  {_colored('✘', RED)}  {_colored(f'Import failed: {e}', RED)}")
+
+        elif cmd == 'clear':
+            os.system('cls' if os.name == 'nt' else 'clear')
+            _show_config_shell_banner(cfg)
+            print(f"  {_colored('[*] Screen cleared.', DIM)}")
+
+        else:
+            print(f"  {_colored('Unknown command:', RED)} {_colored(cmd, B_YELLOW)}")
+            print(f"  {_colored('Type', DIM)} {_colored('help', B_GREEN)} {_colored('for available commands', DIM)}")
+
+    if readline:
+        try:
+            readline.write_history_file(hist_file)
+        except Exception:
+            pass
 
 
 @click.group(invoke_without_command=True)
@@ -225,152 +781,62 @@ def examples():
 
 
 @cli.command()
-@click.option('--theme', type=click.Choice(['kali', 'cyberpunk', 'minimalist', 'retro', 'gacor', 'powerline', 'modern', 'pill', 'nexus', 'zinc', 'vault', 'storm', 'drift', 'pulse', 'slash']), help='Change terminal theme')
+@click.option('--theme', type=click.Choice(VALID_THEMES), help='Change terminal theme')
 @click.option('--user', help='Change display username')
 @click.option('--host', help='Change display hostname')
-@click.option('--accent', type=click.Choice(['cyan', 'magenta', 'green', 'blue', 'red', 'yellow', 'white']), help='Set accent color')
-@click.option('--border', type=click.Choice(['double', 'single', 'rounded', 'block', 'ascii', 'none']), help='Set border character style')
-@click.option('--prompt', type=click.Choice(['arrow', 'hash', 'dollar', 'lambda', 'skull', 'none']), help='Set prompt style')
+@click.option('--accent', type=click.Choice(VALID_ACCENTS), help='Set accent color')
+@click.option('--border', type=click.Choice(VALID_BORDERS), help='Set border character style')
+@click.option('--prompt', type=click.Choice(VALID_PROMPTS), help='Set prompt style')
 @click.option('--reset', is_flag=True, help='Reset to factory defaults')
 @click.pass_context
 def config(ctx, theme, user, host, accent, border, prompt, reset):
-    """Configure HackIt terminal CLI theme (15 modes)"""
-    cfg = load_config()
-    changed = False
+    """Configure HackIT terminal CLI theme (15 modes)"""
+    if any([theme, user, host, accent, border, prompt, reset]):
+        cfg = load_config()
+        changed = False
 
-    if reset:
-        cfg = DEFAULT_CONFIG.copy()
-        save_config(cfg)
-        click.echo(_colored("  [+] All settings reset to factory defaults.", B_GREEN))
+        if reset:
+            cfg = DEFAULT_CONFIG.copy()
+            save_config(cfg)
+            click.echo(_colored("  [+] All settings reset to factory defaults.", B_GREEN))
+            return
+
+        if theme:
+            cfg["theme"] = theme
+            click.echo(_colored(f"  [+] Theme changed to: {theme.upper()}", B_GREEN))
+            changed = True
+
+        if user:
+            cfg["user"] = user
+            click.echo(_colored(f"  [+] Username changed to: {user}", B_CYAN))
+            changed = True
+
+        if host:
+            cfg["hostname"] = host
+            click.echo(_colored(f"  [+] Hostname changed to: {host}", B_CYAN))
+            changed = True
+
+        if accent:
+            cfg["accent"] = accent
+            click.echo(_colored(f"  [+] Accent color set to: {accent.upper()}", B_GREEN))
+            changed = True
+
+        if border:
+            cfg["border"] = border
+            click.echo(_colored(f"  [+] Border style set to: {border.upper()}", B_GREEN))
+            changed = True
+
+        if prompt:
+            cfg["prompt"] = prompt
+            click.echo(_colored(f"  [+] Prompt style set to: {prompt.upper()}", B_GREEN))
+            changed = True
+
+        if changed:
+            save_config(cfg)
+            click.echo(_colored("  [*] Configuration updated.", DIM))
         return
 
-    if theme:
-        cfg["theme"] = theme
-        click.echo(_colored(f"  [+] Theme changed to: {theme.upper()}", B_GREEN))
-        changed = True
-
-    if user:
-        cfg["user"] = user
-        click.echo(_colored(f"  [+] Username changed to: {user}", B_CYAN))
-        changed = True
-
-    if host:
-        cfg["hostname"] = host
-        click.echo(_colored(f"  [+] Hostname changed to: {host}", B_CYAN))
-        changed = True
-
-    if accent:
-        cfg["accent"] = accent
-        click.echo(_colored(f"  [+] Accent color set to: {accent.upper()}", B_GREEN))
-        changed = True
-
-    if border:
-        cfg["border"] = border
-        click.echo(_colored(f"  [+] Border style set to: {border.upper()}", B_GREEN))
-        changed = True
-
-    if prompt:
-        cfg["prompt"] = prompt
-        click.echo(_colored(f"  [+] Prompt style set to: {prompt.upper()}", B_GREEN))
-        changed = True
-
-    if changed:
-        save_config(cfg)
-        click.echo(_colored("  [*] Configuration updated.", DIM))
-    else:
-        accent_map = {
-            'cyan': CYAN, 'magenta': MAGENTA, 'green': GREEN,
-            'blue': BLUE, 'red': RED, 'yellow': YELLOW, 'white': B_WHITE
-        }
-        ac = accent_map.get(cfg['accent'], CYAN)
-
-        border_chars = {
-            'double':  {'tl':'╔','tr':'╗','bl':'╚','br':'╝','h':'═','v':'║'},
-            'single':  {'tl':'┌','tr':'┐','bl':'└','br':'┘','h':'─','v':'│'},
-            'rounded': {'tl':'╭','tr':'╮','bl':'╰','br':'╯','h':'─','v':'│'},
-            'block':   {'tl':'█','tr':'█','bl':'█','br':'█','h':'█','v':'█'},
-            'ascii':   {'tl':'+','tr':'+','bl':'+','br':'+','h':'-','v':'|'},
-            'none':    {'tl':' ','tr':' ','bl':' ','br':' ','h':' ','v':' '},
-        }
-        bc = border_chars.get(cfg['border'], border_chars['double'])
-
-        prompt_chars = {
-            'arrow': '└─$', 'hash': '#', 'dollar': '$',
-            'lambda': 'λ', 'skull': '☠', 'none': ''
-        }
-        pp = prompt_chars.get(cfg['prompt'], '└─$')
-
-        BOX_W = 52
-
-        import re as _re
-        _strip_ansi = _re.compile(r'\x1b\[[0-9;]*[a-zA-Z]')
-
-        def _bx(line):
-            visible = len(_strip_ansi.sub('', line))
-            pad = BOX_W - visible
-            if pad < 0:
-                pad = 0
-            return f"  {_colored(bc['v'], ac)} {line}{' '*pad} {_colored(bc['v'], ac)}"
-
-        click.echo(f"\n  {_colored(bc['tl'], ac)}{_colored(bc['h']*BOX_W, ac)}{_colored(bc['tr'], ac)}")
-        click.echo(_bx(f"  {_colored('H A C K I T   T H E M E   C O N F I G', B_WHITE)}"))
-        click.echo(f"  {_colored(bc['bl'], ac)}{_colored(bc['h']*BOX_W, ac)}{_colored(bc['br'], ac)}")
-        click.echo()
-
-        click.echo(_bx(f"{_colored('Theme', B_WHITE)}  {_colored('»', DIM)}  {_colored(cfg['theme'].upper(), YELLOW)}"))
-        click.echo(_bx(f"{_colored('User', B_WHITE)}   {_colored('»', DIM)}  {_colored(cfg['user'], ac)}"))
-        click.echo(_bx(f"{_colored('Host', B_WHITE)}   {_colored('»', DIM)}  {_colored(cfg['hostname'], ac)}"))
-        click.echo(_bx(f"{_colored('Accent', B_WHITE)} {_colored('»', DIM)}  {_colored(cfg['accent'].upper(), ac)}"))
-        click.echo(_bx(f"{_colored('Border', B_WHITE)} {_colored('»', DIM)}  {_colored(cfg['border'].upper(), ac)}"))
-        click.echo(_bx(f"{_colored('Prompt', B_WHITE)} {_colored('»', DIM)}  {_colored(cfg['prompt'].upper(), ac)}"))
-
-        click.echo(_bx(f"{_colored('─'*BOX_W, DIM)}"))
-
-        u = cfg['user']
-        h = cfg['hostname']
-        ctx = 'main'
-        t = cfg['theme']
-
-        theme_previews = {
-            'kali':       f"{_colored('┌──(', DIM)}{_colored(u, ac)}{_colored('㉿', DIM)}{_colored(h, ac)}{_colored(')-[', DIM)}{_colored('10:00', DIM)}{_colored(']-[', DIM)}{_colored(ctx, B_MAGENTA)}{_colored(']', DIM)} {_colored('└─$', ac)}",
-            'cyberpunk':  f"{_colored(u, B_CYAN)}{_colored(' ❯❯ ', B_MAGENTA)}{_colored(f'[{ctx}]', B_GREEN)}",
-            'minimalist': f"{_colored(f'hackit({ctx}) > ', DIM)}",
-            'retro':      f"{_colored(f'{u}@{h}:{ctx}$ ', B_GREEN)}",
-            'gacor':      f"{_colored('🔥 ', YELLOW)}{_colored(f'[{u}@{h}]', B_MAGENTA)}{_colored(f' ⚙️  {ctx}', B_CYAN)}{_colored(' 🚀 ', B_GREEN)}",
-            'powerline':  f"{_colored(f' {u} ', BG_BLUE+WHITE)}{_colored(f' {ctx} ', BG_CYAN+WHITE)}{_colored(f' 10:00 ', BG_MAGENTA+WHITE)} {_colored('❯', DIM)}",
-            'modern':     f"{_colored(f'{u} ', B_CYAN)}{_colored('❯ ', B_MAGENTA)}{_colored(ctx, B_GREEN)}{_colored(' ❯ ', B_MAGENTA)}",
-            'pill':       f"{_colored(f'({u}) ', BG_BLUE+WHITE)}{_colored(f'({ctx}) ', B_GREEN)} {_colored('➜', DIM)}",
-            'nexus':      f"{_colored('❯❯', B_CYAN)} {_colored(f'[{u}]', B_BLUE)} {_colored(f'[{ctx}]', B_CYAN)} {_colored('>>', B_BLUE)}",
-            'zinc':       f"{_colored(f'[{u}@HackIT]', B_GREEN)} {_colored('➜', WHITE)} {_colored(ctx, B_GREEN)} {_colored('➜', WHITE)}",
-            'vault':      f"{_colored('[[', B_WHITE)} {_colored(f'{u}@HackIT', B_CYAN)} {_colored(']]', B_WHITE)} {_colored('[[', B_WHITE)} {_colored(ctx, B_CYAN)} {_colored(']]', B_WHITE)} {_colored('$', B_WHITE)}",
-            'storm':      f"{_colored('[⚡', B_YELLOW)} {_colored(u, B_MAGENTA)} {_colored('⚡]', B_YELLOW)} {_colored(f'[{ctx}]', B_MAGENTA)} {_colored('#', B_YELLOW)}",
-            'drift':      f"{_colored(f'[{u}@hackit:', B_CYAN)}{_colored(ctx, B_MAGENTA)}{_colored(']', B_CYAN)} {_colored('➤', B_WHITE)}",
-            'pulse':      f"{_colored(f'[{u}]', B_GREEN)} {_colored('←', B_BLUE)} {_colored(f'[{ctx}]', B_GREEN)} {_colored('->', B_BLUE)} {_colored('$', B_GREEN)}",
-            'slash':      f"{_colored('//', B_RED)} {_colored(u, WHITE)} {_colored('//', B_RED)} {_colored(ctx, WHITE)} {_colored('//', B_RED)} {_colored('#', WHITE)}",
-        }
-        prompt_str = theme_previews.get(t, f"{_colored(u, ac)}{_colored('@', DIM)}{_colored(h, ac)} {_colored(pp, B_GREEN)} {_colored('command', DIM)}")
-        click.echo(_bx(f"{_colored('Preview', B_WHITE)} {_colored('»', DIM)}  {prompt_str}"))
-
-        click.echo(f"  {_colored(bc['tl'], ac)}{_colored(bc['h']*BOX_W, ac)}{_colored(bc['tr'], ac)}")
-        click.echo()
-
-        click.echo(_colored(f"  {_colored('Help', B_WHITE)}", DIM))
-        click.echo(f"  {_colored('config', YELLOW)}                                    {_colored('show current config', DIM)}")
-        click.echo(f"  {_colored('config --theme <name>', YELLOW)}                      {_colored('switch terminal visual theme', DIM)}")
-        click.echo(f"  {_colored('config --user <name>', YELLOW)}                       {_colored('set display username', DIM)}")
-        click.echo(f"  {_colored('config --host <name>', YELLOW)}                       {_colored('set display hostname', DIM)}")
-        click.echo(f"  {_colored('config --accent <color>', YELLOW)}                    {_colored('set accent highlight color', DIM)}")
-        click.echo(f"  {_colored('config --border <style>', YELLOW)}                    {_colored('set border box style', DIM)}")
-        click.echo(f"  {_colored('config --prompt <style>', YELLOW)}                    {_colored('set prompt symbol', DIM)}")
-        click.echo(f"  {_colored('config --reset', YELLOW)}                             {_colored('restore factory defaults', DIM)}")
-        click.echo()
-
-        click.echo(_colored(f"  {_colored('Options', B_WHITE)}", DIM))
-        click.echo(f"  {_colored('Theme', B_WHITE)}  : {_colored('kali, cyberpunk, minimalist, retro, gacor, powerline, modern, pill, nexus, zinc, vault, storm, drift, pulse, slash', DIM)}")
-        click.echo(f"  {_colored('Accent', B_WHITE)} : {_colored('cyan, magenta, green, blue, red, yellow, white', DIM)}")
-        click.echo(f"  {_colored('Border', B_WHITE)} : {_colored('double, single, rounded, block, ascii, none', DIM)}")
-        click.echo(f"  {_colored('Prompt', B_WHITE)} : {_colored('arrow, hash, dollar, lambda, skull, none', DIM)}")
-        click.echo()
+    _interactive_config_shell()
 
 
 @cli.command()
