@@ -4,7 +4,7 @@ import Layout from '../layouts/Layout.astro';
 const MODULE_CATEGORIES = {
   "dns_domain": { label: "DNS & Domain", icon: "fa-globe", color: "text-sky-400", desc: "DNS records, subdomains, whois", modules: ["crtsh", "dns_brute", "dns_deep_forensics", "dns_enum_full", "dns_resolver", "dnsdumpster", "dnshistory", "dnstwister", "domain_profile_deep", "rapiddns", "securitytrails", "subdomain_passive", "subdomain_takeover", "viewdns", "whois", "certificate_search", "certspotter", "hackertarget", "fullhunt"] },
   "web_server": { label: "Web & Server", icon: "fa-server", color: "text-emerald-400", desc: "HTTP headers, SSL, tech detection", modules: ["api_scanner", "builtwith", "crawler_core", "header_audit", "js_secrets", "secret_finder", "sensitive_files_hunter", "ssl_analyzer", "urlscan", "vulnerability_scanner_lite", "web_surface_mapper", "web_tech", "cloud_fingerprint_deep", "cve_exploit_lookup", "publicwww", "netlas", "fofa", "zoomeye", "binaryedge", "onyphe", "intelx", "leakix", "leakix_scanner", "censys", "firewall_detector", "javascript_deps_analyzer", "ssl_chain_analyzer", "http2_fingerprinter", "api_endpoint_fuzzer", "tracker_network_mapper", "open_redirect_scanner", "web_cookie_analyzer", "technology_stack_profiler", "cdn_origin_finder", "vulnerability_db_scanner"] },
-  "email_osint": { label: "Email OSINT", icon: "fa-envelope", color: "text-cyan-400", desc: "Email harvest, SPF/DKIM/DMARC", modules: ["email_harvester", "email_security_deep", "email_verifier", "hunterhow", "breach_directory", "haveibeenpwned", "email_reputation_checker", "mail_server_analyzer"] },
+  "email_osint": { label: "Email OSINT", icon: "fa-envelope", color: "text-cyan-400", desc: "Email harvest, SPF/DKIM/DMARC", modules: ["email_harvester", "email_security_deep", "email_verifier", "hunterhow", "breach_directory", "haveibeenpwned", "email_reputation_checker", "mail_server_analyzer", "rust_email_finder"] },
   "people_social": { label: "People & Social", icon: "fa-users", color: "text-purple-400", desc: "Social media, people search", modules: ["people_org_osint", "social_alias_hunter", "social_search", "tracker_identity_mapper", "whatsmyname_checker", "mobile_recon", "reverse_image_search"] },
   "cloud_infrastructure": { label: "Cloud & Infrastructure", icon: "fa-cloud", color: "text-orange-400", desc: "Cloud providers, CDN, ASN", modules: ["cloud_infrastructure_hunter", "cloud_probe", "cloud_recon", "asn_bgp_radar", "bgp_he_net", "robtex", "cloudflare_resolver"] },
   "threat_leaks": { label: "Threat & Leaks", icon: "fa-shield-halved", color: "text-red-400", desc: "Breach data, malware, VT", modules: ["abuseipdb", "breach_forensics", "darkweb_intel", "greynoise", "malware_reputation_radar", "otx", "pastebin_monitor", "shodan_full", "shodan", "threat_intel", "threatminer", "virustotal_full", "virustotal", "crypto_abuse_radar", "leak_checker_pro", "dark_web_scanner", "malware_sandbox_check", "phishing_detector"] },
@@ -145,45 +145,78 @@ const MODULE_CATEGORIES = {
         <!-- API Keys & Integrations -->
         <div class="bg-sf-card border border-sf-border rounded-lg p-6">
           <h3 class="text-sm font-semibold text-sf-text mb-5 flex items-center gap-2"><i class="fas fa-key text-sf-tabActive"></i> API Keys & Integrations</h3>
-          <p class="text-[10px] text-sf-muted mb-4">These keys are stored locally in your browser and sent with each scan request. Never share your browser's storage.</p>
+          <p class="text-[10px] text-sf-muted mb-4">Keys are sent to the backend server on save. Modules will use these keys automatically.</p>
           <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div class="p-3 rounded-lg bg-sf-lightbg border border-sf-border">
               <label class="text-[11px] text-sf-text font-medium flex items-center gap-2 mb-1">
-                <i class="fas fa-shield text-red-400 text-[10px]"></i> Shodan API Key
+                <i class="fas fa-shield text-red-400 text-[10px]"></i> Shodan
               </label>
-              <input type="password" id="api-shodan" class="api-key-input w-full bg-sf-card border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text focus:outline-none focus:border-sf-tabActive font-mono" placeholder="Enter Shodan API key..." spellcheck="false">
+              <input type="password" id="api-shodan" class="api-key-input w-full bg-sf-card border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text focus:outline-none focus:border-sf-tabActive font-mono" placeholder="shodan API key" spellcheck="false">
             </div>
             <div class="p-3 rounded-lg bg-sf-lightbg border border-sf-border">
               <label class="text-[11px] text-sf-text font-medium flex items-center gap-2 mb-1">
-                <i class="fas fa-bug text-emerald-400 text-[10px]"></i> VirusTotal API Key
+                <i class="fas fa-bug text-emerald-400 text-[10px]"></i> VirusTotal
               </label>
-              <input type="password" id="api-virustotal" class="api-key-input w-full bg-sf-card border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text focus:outline-none focus:border-sf-tabActive font-mono" placeholder="Enter VirusTotal API key..." spellcheck="false">
+              <input type="password" id="api-virustotal" class="api-key-input w-full bg-sf-card border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text focus:outline-none focus:border-sf-tabActive font-mono" placeholder="virustotal API key" spellcheck="false">
             </div>
             <div class="p-3 rounded-lg bg-sf-lightbg border border-sf-border">
               <label class="text-[11px] text-sf-text font-medium flex items-center gap-2 mb-1">
-                <i class="fas fa-eye text-sky-400 text-[10px]"></i> SecurityTrails API Key
+                <i class="fas fa-eye text-sky-400 text-[10px]"></i> SecurityTrails
               </label>
-              <input type="password" id="api-securitytrails" class="api-key-input w-full bg-sf-card border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text focus:outline-none focus:border-sf-tabActive font-mono" placeholder="Enter SecurityTrails API key..." spellcheck="false">
+              <input type="password" id="api-securitytrails" class="api-key-input w-full bg-sf-card border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text focus:outline-none focus:border-sf-tabActive font-mono" placeholder="securitytrails API key" spellcheck="false">
             </div>
             <div class="p-3 rounded-lg bg-sf-lightbg border border-sf-border">
               <label class="text-[11px] text-sf-text font-medium flex items-center gap-2 mb-1">
-                <i class="fas fa-search text-purple-400 text-[10px]"></i> Censys API Key
+                <i class="fas fa-database text-cyan-400 text-[10px]"></i> AbuseIPDB
               </label>
-              <input type="password" id="api-censys" class="api-key-input w-full bg-sf-card border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text focus:outline-none focus:border-sf-tabActive font-mono" placeholder="Enter Censys API key..." spellcheck="false">
+              <input type="password" id="api-abuseipdb" class="api-key-input w-full bg-sf-card border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text focus:outline-none focus:border-sf-tabActive font-mono" placeholder="abuseipdb API key" spellcheck="false">
             </div>
             <div class="p-3 rounded-lg bg-sf-lightbg border border-sf-border">
               <label class="text-[11px] text-sf-text font-medium flex items-center gap-2 mb-1">
-                <i class="fas fa-network-wired text-orange-400 text-[10px]"></i> Shodan.io Full Feed
+                <i class="fas fa-network-wired text-orange-400 text-[10px]"></i> BinaryEdge
               </label>
-              <input type="password" id="api-shodan-full" class="api-key-input w-full bg-sf-card border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text focus:outline-none focus:border-sf-tabActive font-mono" placeholder="Enter Shodan Full Feed API..." spellcheck="false">
+              <input type="password" id="api-binaryedge" class="api-key-input w-full bg-sf-card border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text focus:outline-none focus:border-sf-tabActive font-mono" placeholder="binaryedge API key" spellcheck="false">
             </div>
             <div class="p-3 rounded-lg bg-sf-lightbg border border-sf-border">
               <label class="text-[11px] text-sf-text font-medium flex items-center gap-2 mb-1">
-                <i class="fas fa-database text-cyan-400 text-[10px]"></i> Have I Been Pwned Key
+                <i class="fas fa-search text-purple-400 text-[10px]"></i> GreyNoise
               </label>
-              <input type="password" id="api-hibp" class="api-key-input w-full bg-sf-card border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text focus:outline-none focus:border-sf-tabActive font-mono" placeholder="Enter HIBP API key..." spellcheck="false">
+              <input type="password" id="api-greynoise" class="api-key-input w-full bg-sf-card border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text focus:outline-none focus:border-sf-tabActive font-mono" placeholder="greynoise API key" spellcheck="false">
+            </div>
+            <div class="p-3 rounded-lg bg-sf-lightbg border border-sf-border">
+              <label class="text-[11px] text-sf-text font-medium flex items-center gap-2 mb-1">
+                <i class="fas fa-bolt text-yellow-400 text-[10px]"></i> Hunter.io
+              </label>
+              <input type="password" id="api-hunter" class="api-key-input w-full bg-sf-card border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text focus:outline-none focus:border-sf-tabActive font-mono" placeholder="hunter.io API key" spellcheck="false">
+            </div>
+            <div class="p-3 rounded-lg bg-sf-lightbg border border-sf-border">
+              <label class="text-[11px] text-sf-text font-medium flex items-center gap-2 mb-1">
+                <i class="fas fa-database text-cyan-400 text-[10px]"></i> Have I Been Pwned
+              </label>
+              <input type="password" id="api-haveibeenpwned" class="api-key-input w-full bg-sf-card border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text focus:outline-none focus:border-sf-tabActive font-mono" placeholder="hibp API key" spellcheck="false">
+            </div>
+            <div class="p-3 rounded-lg bg-sf-lightbg border border-sf-border">
+              <label class="text-[11px] text-sf-text font-medium flex items-center gap-2 mb-1">
+                <i class="fas fa-envelope text-pink-400 text-[10px]"></i> EmailRep
+              </label>
+              <input type="password" id="api-email_rep" class="api-key-input w-full bg-sf-card border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text focus:outline-none focus:border-sf-tabActive font-mono" placeholder="emailrep.io API key" spellcheck="false">
+            </div>
+            <div class="p-3 rounded-lg bg-sf-lightbg border border-sf-border">
+              <label class="text-[11px] text-sf-text font-medium flex items-center gap-2 mb-1">
+                <i class="fas fa-shield-halved text-lime-400 text-[10px]"></i> LeakCheck
+              </label>
+              <input type="password" id="api-leakcheck" class="api-key-input w-full bg-sf-card border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text focus:outline-none focus:border-sf-tabActive font-mono" placeholder="leak-check.net API key" spellcheck="false">
             </div>
           </div>
+          <div class="flex gap-2 mt-4">
+            <button id="save-api-keys" class="bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold px-4 py-2 rounded-lg transition-all flex items-center gap-1.5">
+              <i class="fas fa-cloud-upload-alt"></i> Save Keys to Server
+            </button>
+            <button id="load-api-keys" class="bg-sf-border hover:bg-sf-muted/20 text-sf-text text-[10px] font-medium px-4 py-2 rounded-lg transition-all flex items-center gap-1.5">
+              <i class="fas fa-cloud-download-alt"></i> Load from Server
+            </button>
+          </div>
+          <p id="api-key-status" class="text-[9px] text-sf-muted mt-2 hidden"></p>
         </div>
 
         <!-- Network & Proxy -->
@@ -603,7 +636,55 @@ const MODULE_CATEGORIES = {
       }
     }
 
+    /* ─── API Key Server Sync ─── */
+    async function saveApiKeysToServer() {
+      const keys = {};
+      document.querySelectorAll('.api-key-input').forEach(input => {
+        const key = input.id.replace('api-', '');
+        keys[key] = input.value.trim();
+      });
+      try {
+        const resp = await fetch('/api/settings/api-keys', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(keys)
+        });
+        if (resp.ok) {
+          const statusEl = document.getElementById('api-key-status');
+          statusEl.textContent = '✓ API keys saved to server successfully';
+          statusEl.className = 'text-[9px] text-emerald-500 mt-2';
+          statusEl.classList.remove('hidden');
+          setTimeout(() => statusEl.classList.add('hidden'), 3000);
+        }
+      } catch (e) {
+        console.error('Failed to save API keys:', e);
+      }
+    }
+
+    async function loadApiKeysFromServer() {
+      try {
+        const resp = await fetch('/api/settings/api-keys');
+        if (resp.ok) {
+          const keys = await resp.json();
+          Object.entries(keys).forEach(([key, val]) => {
+            const input = document.getElementById(`api-${key}`);
+            if (input) input.value = val;
+          });
+          const statusEl = document.getElementById('api-key-status');
+          statusEl.textContent = '✓ API keys loaded from server';
+          statusEl.className = 'text-[9px] text-emerald-500 mt-2';
+          statusEl.classList.remove('hidden');
+          setTimeout(() => statusEl.classList.add('hidden'), 3000);
+        }
+      } catch (e) {
+        console.error('Failed to load API keys:', e);
+      }
+    }
+
     document.addEventListener('DOMContentLoaded', () => {
+      document.getElementById('save-api-keys')?.addEventListener('click', saveApiKeysToServer);
+      document.getElementById('load-api-keys')?.addEventListener('click', loadApiKeysFromServer);
+      loadApiKeysFromServer(); // auto-load on page load
       const saved = localStorage.getItem('hackit_scan_settings');
       if (saved) {
         try { applySettings(JSON.parse(saved)); } catch(e) { console.warn('Failed to apply settings:', e); }

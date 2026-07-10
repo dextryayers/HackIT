@@ -1,0 +1,22 @@
+{
+  "api_keys": {
+    "shodan": "",
+    "virustotal": "",
+    "abuseipdb": "",
+    "binaryedge": "",
+    "email_rep": "",
+    "greynoise": "",
+    "leakcheck": "",
+    "hunter": "",
+    "haveibeenpwned": "",
+    "securitytrails": ""
+  },
+  "scan_defaults": {
+    "depth": "deep",
+    "sniper_ratio": "max",
+    "timeout": 15,
+    "max_findings": 5000,
+    "verify_findings": true,
+    "correlation_engine": true
+  }
+}

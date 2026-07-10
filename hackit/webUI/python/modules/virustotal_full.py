@@ -4,6 +4,7 @@ import json
 from datetime import datetime
 from typing import List
 from models import IntelligenceFinding
+from settings_store import get_api_key
 
 VT_API = "https://www.virustotal.com/api/v3"
 VT_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
@@ -14,7 +15,7 @@ async def vt_get(endpoint: str, client: httpx.AsyncClient) -> dict:
     try:
         resp = await client.get(
             f"{VT_API}/{endpoint}",
-            headers={"User-Agent": VT_UA, "Accept": "application/json", "x-apikey": ""},
+            headers={"User-Agent": VT_UA, "Accept": "application/json", "x-apikey": get_api_key("virustotal")},
             timeout=15.0
         )
         if resp.status_code == 200:

@@ -9,9 +9,7 @@
     "preview": "astro preview"
   },
   "dependencies": {
-    "astro": "^4.16.0",
-    "gsap": "^3.12.5",
-    "tailwindcss": "^3.4.1",
-    "@astrojs/tailwind": "^5.1.0"
+    "astro": "^7.0.0",
+    "gsap": "^3.15.0"
   }
 }

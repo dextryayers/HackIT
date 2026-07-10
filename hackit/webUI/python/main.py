@@ -16,7 +16,9 @@ from models import (
     EmailResponse, PortScanResponse
 )
 from orchestrator import run_modular_scan
-from typing import Dict, Optional, List
+from models import RustSSLResponse, SettingsResponse
+from settings_store import load_settings, save_settings, get_api_key, DEFAULT_API_KEYS
+from typing import Dict, Optional, List, Any
 import random
 import httpx
 import dns.resolver
@@ -349,6 +351,66 @@ async def ssl_certificate(hostname: str = Query(..., description="Target hostnam
         )
     except Exception as e:
         return SSLResponse(hostname=hostname, error=str(e))
+
+
+@app.get("/api/ssl/advanced", response_model=RustSSLResponse)
+async def ssl_advanced(hostname: str = Query(...), port: int = Query(443), full: bool = Query(False)):
+    from hackit.ssl_tool.rust_bridge import RustEngine
+    engine = RustEngine()
+    result = await asyncio.get_event_loop().run_in_executor(
+        None, lambda: engine.run(hostname, port, json_only=True, full=full)
+    )
+    if not engine.ensure_compiled():
+        return RustSSLResponse(hostname=hostname, port=port, error="Rust engine not compiled")
+    if result is None:
+        return RustSSLResponse(hostname=hostname, port=port, error="Rust engine returned no data")
+    return RustSSLResponse(
+        hostname=hostname,
+        port=port,
+        grade=result.get("grade"),
+        score=result.get("score"),
+        duration_ms=result.get("duration_ms"),
+        certificate=result.get("certificate"),
+        chain=result.get("chain"),
+        ciphers=result.get("ciphers"),
+        vulnerabilities=result.get("vulnerabilities"),
+        tls_features=result.get("tls_features"),
+        dns=result.get("dns"),
+        http=result.get("http"),
+        crypto=result.get("crypto"),
+        ports=result.get("ports") or result.get("port_scan"),
+        all_issues=result.get("all_issues", []),
+    )
+
+
+# ─────────────────────────────────────────────
+#  SETTINGS API
+# ─────────────────────────────────────────────
+
+@app.get("/api/settings/api-keys", response_model=Dict[str, str])
+async def get_api_keys():
+    return load_settings().get("api_keys", DEFAULT_API_KEYS)
+
+
+@app.post("/api/settings/api-keys")
+async def save_api_keys(keys: Dict[str, str]):
+    current = load_settings()
+    current["api_keys"] = {**current.get("api_keys", {}), **keys}
+    save_settings(current)
+    return {"status": "saved"}
+
+
+@app.get("/api/settings/scan")
+async def get_scan_settings():
+    return load_settings().get("scan_defaults", {})
+
+
+@app.post("/api/settings/scan")
+async def save_scan_settings(settings: Dict[str, Any]):
+    current = load_settings()
+    current["scan_defaults"] = {**current.get("scan_defaults", {}), **settings}
+    save_settings(current)
+    return {"status": "saved"}
 
 
 # ─────────────────────────────────────────────
@@ -849,7 +911,7 @@ async def subdomains_alias(domain: str = Query(...)):
 #  STATIC FILE SERVING
 # ─────────────────────────────────────────────
 
-dist_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "dist_new")
+dist_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "dist")
 ASTRO_DEV_URL = "http://localhost:4321"
 
 

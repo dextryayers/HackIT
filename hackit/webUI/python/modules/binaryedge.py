@@ -5,6 +5,7 @@ import re
 import json
 from collections import defaultdict
 from models import IntelligenceFinding
+from settings_store import get_api_key
 
 BINARYEDGE_API = "https://api.binaryedge.io/v2"
 UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
@@ -76,7 +77,7 @@ async def query_host(ip: str, client: httpx.AsyncClient) -> dict:
     try:
         resp = await client.get(
             f"{BINARYEDGE_API}/query/ip/{ip}",
-            headers={"User-Agent": UA, "X-Key": ""},
+            headers={"User-Agent": UA, "X-Key": get_api_key("binaryedge")},
             timeout=15.0,
         )
         return resp.json() if resp.status_code == 200 else {}
@@ -87,7 +88,7 @@ async def query_domain(domain: str, client: httpx.AsyncClient) -> dict:
     try:
         resp = await client.get(
             f"{BINARYEDGE_API}/query/domain/{domain}",
-            headers={"User-Agent": UA, "X-Key": ""},
+            headers={"User-Agent": UA, "X-Key": get_api_key("binaryedge")},
             timeout=15.0,
         )
         return resp.json() if resp.status_code == 200 else {}
@@ -98,7 +99,7 @@ async def query_port_history(ip: str, port: int, client: httpx.AsyncClient) -> d
     try:
         resp = await client.get(
             f"{BINARYEDGE_API}/query/ip/{ip}/port/{port}",
-            headers={"User-Agent": UA, "X-Key": ""},
+            headers={"User-Agent": UA, "X-Key": get_api_key("binaryedge")},
             timeout=15.0,
         )
         return resp.json() if resp.status_code == 200 else {}
@@ -109,7 +110,7 @@ async def query_cve(ip: str, client: httpx.AsyncClient) -> list:
     try:
         resp = await client.get(
             f"{BINARYEDGE_API}/query/cve/ip/{ip}",
-            headers={"User-Agent": UA, "X-Key": ""},
+            headers={"User-Agent": UA, "X-Key": get_api_key("binaryedge")},
             timeout=15.0,
         )
         if resp.status_code == 200:
@@ -123,7 +124,7 @@ async def query_dataleaks(domain: str, client: httpx.AsyncClient) -> list:
     try:
         resp = await client.get(
             f"{BINARYEDGE_API}/query/dataleaks/domain/{domain}",
-            headers={"User-Agent": UA, "X-Key": ""},
+            headers={"User-Agent": UA, "X-Key": get_api_key("binaryedge")},
             timeout=15.0,
         )
         if resp.status_code == 200:
@@ -137,7 +138,7 @@ async def query_events(ip: str, client: httpx.AsyncClient) -> list:
     try:
         resp = await client.get(
             f"{BINARYEDGE_API}/query/ip/{ip}/events",
-            headers={"User-Agent": UA, "X-Key": ""},
+            headers={"User-Agent": UA, "X-Key": get_api_key("binaryedge")},
             timeout=15.0,
         )
         if resp.status_code == 200:
@@ -151,7 +152,7 @@ async def query_snapshot(ip: str, port: int, client: httpx.AsyncClient) -> dict:
     try:
         resp = await client.get(
             f"{BINARYEDGE_API}/query/snapshot/{ip}/{port}",
-            headers={"User-Agent": UA, "X-Key": ""},
+            headers={"User-Agent": UA, "X-Key": get_api_key("binaryedge")},
             timeout=15.0,
         )
         return resp.json() if resp.status_code == 200 else {}
@@ -162,7 +163,7 @@ async def query_subdomains(domain: str, client: httpx.AsyncClient) -> list:
     try:
         resp = await client.get(
             f"{BINARYEDGE_API}/query/subdomains/{domain}",
-            headers={"User-Agent": UA, "X-Key": ""},
+            headers={"User-Agent": UA, "X-Key": get_api_key("binaryedge")},
             timeout=15.0,
         )
         if resp.status_code == 200:

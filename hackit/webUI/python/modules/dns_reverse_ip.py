@@ -5,6 +5,7 @@ import re
 import json
 from urllib.parse import urlparse
 from models import IntelligenceFinding
+from settings_store import get_api_key
 
 async def resolve_to_ips(domain: str):
     loop = asyncio.get_event_loop()
@@ -93,7 +94,7 @@ async def query_yougetsignal(ip: str, client: httpx.AsyncClient):
     try:
         resp = await client.post(
             "https://domains.yougetsignal.com/domains.php",
-            data={"remoteAddress": ip, "key": ""},
+            data={"remoteAddress": ip, "key": get_api_key("yougetsignal")},
             headers={
                 "User-Agent": "Mozilla/5.0",
                 "Content-Type": "application/x-www-form-urlencoded",

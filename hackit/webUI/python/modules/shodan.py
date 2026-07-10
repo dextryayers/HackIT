@@ -6,6 +6,7 @@ from datetime import datetime
 from urllib.parse import urlparse
 from typing import List
 from models import IntelligenceFinding
+from settings_store import get_api_key
 
 SHODAN_API = "https://api.shodan.io"
 SHODAN_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
@@ -21,7 +22,7 @@ async def shodan_host(ip: str, client: httpx.AsyncClient) -> dict:
     try:
         resp = await client.get(
             f"{SHODAN_API}/shodan/host/{ip}",
-            params={"key": ""},
+            params={"key": get_api_key("shodan")},
             headers={"User-Agent": SHODAN_UA, "Accept": "application/json"},
             timeout=15.0
         )
@@ -49,7 +50,7 @@ async def shodan_dns_resolve(hostname: str, client: httpx.AsyncClient) -> dict:
     try:
         resp = await client.get(
             f"{SHODAN_API}/dns/resolve",
-            params={"key": "", "hostnames": hostname},
+            params={"key": get_api_key("shodan"), "hostnames": hostname},
             headers={"User-Agent": SHODAN_UA, "Accept": "application/json"},
             timeout=10.0
         )
@@ -63,7 +64,7 @@ async def shodan_ports(ip: str, client: httpx.AsyncClient) -> list:
     try:
         resp = await client.get(
             f"{SHODAN_API}/shodan/host/{ip}/ports",
-            params={"key": ""},
+            params={"key": get_api_key("shodan")},
             headers={"User-Agent": SHODAN_UA, "Accept": "application/json"},
             timeout=10.0
         )

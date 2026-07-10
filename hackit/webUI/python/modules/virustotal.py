@@ -4,6 +4,7 @@ import json
 from datetime import datetime
 from typing import List
 from models import IntelligenceFinding
+from settings_store import get_api_key
 
 VT_API = "https://www.virustotal.com/api/v3"
 VT_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
@@ -12,7 +13,7 @@ async def vt_ip_report(ip: str, client: httpx.AsyncClient) -> dict:
     try:
         resp = await client.get(
             f"{VT_API}/ip_addresses/{ip}",
-            headers={"User-Agent": VT_UA, "Accept": "application/json", "x-apikey": ""},
+            headers={"User-Agent": VT_UA, "Accept": "application/json", "x-apikey": get_api_key("virustotal")},
             timeout=15.0
         )
         if resp.status_code == 200:
@@ -25,7 +26,7 @@ async def vt_domain_report(domain: str, client: httpx.AsyncClient) -> dict:
     try:
         resp = await client.get(
             f"{VT_API}/domains/{domain}",
-            headers={"User-Agent": VT_UA, "Accept": "application/json", "x-apikey": ""},
+            headers={"User-Agent": VT_UA, "Accept": "application/json", "x-apikey": get_api_key("virustotal")},
             timeout=15.0
         )
         if resp.status_code == 200:
@@ -40,7 +41,7 @@ async def vt_url_report(url: str, client: httpx.AsyncClient) -> dict:
         url_id = base64.urlsafe_b64encode(url.encode()).decode().rstrip("=")
         resp = await client.get(
             f"{VT_API}/urls/{url_id}",
-            headers={"User-Agent": VT_UA, "Accept": "application/json", "x-apikey": ""},
+            headers={"User-Agent": VT_UA, "Accept": "application/json", "x-apikey": get_api_key("virustotal")},
             timeout=15.0
         )
         if resp.status_code == 200:
@@ -53,7 +54,7 @@ async def vt_file_report(file_hash: str, client: httpx.AsyncClient) -> dict:
     try:
         resp = await client.get(
             f"{VT_API}/files/{file_hash}",
-            headers={"User-Agent": VT_UA, "Accept": "application/json", "x-apikey": ""},
+            headers={"User-Agent": VT_UA, "Accept": "application/json", "x-apikey": get_api_key("virustotal")},
             timeout=15.0
         )
         if resp.status_code == 200:

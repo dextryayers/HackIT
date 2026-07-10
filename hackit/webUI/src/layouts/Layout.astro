@@ -19,6 +19,7 @@ const { title } = Astro.props;
 		
 		<!-- CDNs -->
 		<script src="https://cdn.tailwindcss.com" is:inline></script>
+		<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js" is:inline></script>
 		<script is:inline>
 			tailwind.config = {
 				darkMode: 'class',
@@ -109,6 +110,9 @@ const { title } = Astro.props;
 			<slot />
 		</main>
 
+		<!-- Page Transition Overlay -->
+		<div id="page-transition" class="fixed inset-0 z-[9999] pointer-events-none bg-sf-lightbg opacity-0"></div>
+
 		<!-- Copyright Footer -->
 		<footer class="border-t border-sf-border bg-sf-lightbg/80 backdrop-blur-sm py-3 px-8 text-center">
 			<p class="text-[11px] text-sf-muted tracking-wider">
@@ -154,6 +158,42 @@ const { title } = Astro.props;
 					setTimeout(() => banner.classList.add('hidden'), 300);
 				});
 			})();
+			// GSAP Page Entry Animation
+			window.addEventListener('load', () => {
+				if (typeof gsap !== 'undefined') {
+					gsap.from('main', { opacity: 0, y: 20, duration: 0.8, ease: 'power3.out' });
+					gsap.from('header', { opacity: 0, y: -10, duration: 0.6, delay: 0.1, ease: 'power2.out' });
+					gsap.from('footer', { opacity: 0, duration: 0.5, delay: 0.3 });
+				}
+			});
+			// Premium card hover effects
+			document.addEventListener('DOMContentLoaded', () => {
+				document.querySelectorAll('.bg-sf-card').forEach(card => {
+					card.addEventListener('mouseenter', () => {
+						if (typeof gsap !== 'undefined') {
+							gsap.to(card, { borderColor: 'rgba(56, 189, 248, 0.3)', duration: 0.3 });
+						}
+					});
+					card.addEventListener('mouseleave', () => {
+						if (typeof gsap !== 'undefined') {
+							gsap.to(card, { borderColor: 'var(--color-border)', duration: 0.3 });
+						}
+					});
+				});
+				// Nav link hover glow
+				document.querySelectorAll('nav a').forEach(link => {
+					link.addEventListener('mouseenter', () => {
+						if (typeof gsap !== 'undefined') {
+							gsap.to(link.querySelector('i'), { scale: 1.2, duration: 0.2 });
+						}
+					});
+					link.addEventListener('mouseleave', () => {
+						if (typeof gsap !== 'undefined') {
+							gsap.to(link.querySelector('i'), { scale: 1, duration: 0.2 });
+						}
+					});
+				});
+			});
 		</script>
 	</body>
 </html>
@@ -207,4 +247,72 @@ const { title } = Astro.props;
 	/* Fallback if not using .dark class on html but using .light */
 	html:not(.light) .dark\:hidden { display: none !important; }
 	html:not(.light) .dark\:block { display: block !important; }
+
+	/* Premium Glass Effect */
+	.glass {
+		background: rgba(17, 17, 17, 0.6);
+		backdrop-filter: blur(20px);
+		-webkit-backdrop-filter: blur(20px);
+		border: 1px solid rgba(255, 255, 255, 0.05);
+	}
+	.light .glass {
+		background: rgba(255, 255, 255, 0.7);
+		border: 1px solid rgba(0, 0, 0, 0.05);
+	}
+
+	/* Premium Gradient Borders */
+	.gradient-border {
+		position: relative;
+	}
+	.gradient-border::before {
+		content: '';
+		position: absolute;
+		inset: 0;
+		border-radius: inherit;
+		padding: 1px;
+		background: linear-gradient(135deg, rgba(56, 189, 248, 0.5), rgba(99, 102, 241, 0.5));
+		-webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+		-webkit-mask-composite: xor;
+		mask-composite: exclude;
+		pointer-events: none;
+	}
+
+	/* Smooth glow on active elements */
+	.glow-hover:hover {
+		box-shadow: 0 0 20px rgba(56, 189, 248, 0.15);
+	}
+
+	/* Premium text gradient */
+	.text-gradient {
+		background: linear-gradient(135deg, #38BDF8, #818CF8);
+		-webkit-background-clip: text;
+		-webkit-text-fill-color: transparent;
+		background-clip: text;
+	}
+
+	/* Smooth transitions for all interactive elements */
+	a, button, input, select {
+		transition: all 0.2s ease;
+	}
+
+	/* Card premium hover */
+	.card-premium {
+		transition: transform 0.3s ease, box-shadow 0.3s ease, border-color 0.3s ease;
+	}
+	.card-premium:hover {
+		transform: translateY(-2px);
+		box-shadow: 0 8px 30px rgba(0, 0, 0, 0.3);
+	}
+	.light .card-premium:hover {
+		box-shadow: 0 8px 30px rgba(0, 0, 0, 0.1);
+	}
+
+	/* Animated gradient border for active elements */
+	@keyframes borderGlow {
+		0%, 100% { border-color: rgba(56, 189, 248, 0.3); }
+		50% { border-color: rgba(56, 189, 248, 0.6); }
+	}
+	.border-glow {
+		animation: borderGlow 2s ease-in-out infinite;
+	}
 </style>

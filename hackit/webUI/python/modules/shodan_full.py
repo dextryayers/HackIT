@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 from typing import List
 from collections import defaultdict
 from models import IntelligenceFinding
+from settings_store import get_api_key
 
 SHODAN_API = "https://api.shodan.io"
 SHODAN_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
@@ -15,7 +16,7 @@ async def shodan_host(ip: str, client: httpx.AsyncClient) -> dict:
     try:
         resp = await client.get(
             f"{SHODAN_API}/shodan/host/{ip}",
-            params={"key": ""},
+            params={"key": get_api_key("shodan")},
             headers={"User-Agent": SHODAN_UA, "Accept": "application/json"},
             timeout=15.0
         )
@@ -29,7 +30,7 @@ async def shodan_search(query: str, client: httpx.AsyncClient) -> dict:
     try:
         resp = await client.get(
             f"{SHODAN_API}/shodan/host/search",
-            params={"key": "", "query": query, "limit": 20},
+            params={"key": get_api_key("shodan"), "query": query, "limit": 20},
             headers={"User-Agent": SHODAN_UA, "Accept": "application/json"},
             timeout=15.0
         )
@@ -43,7 +44,7 @@ async def shodan_ports(ip: str, client: httpx.AsyncClient) -> dict:
     try:
         resp = await client.get(
             f"{SHODAN_API}/shodan/host/{ip}/ports",
-            params={"key": ""},
+            params={"key": get_api_key("shodan")},
             headers={"User-Agent": SHODAN_UA, "Accept": "application/json"},
             timeout=15.0
         )
@@ -57,7 +58,7 @@ async def shodan_count(query: str, client: httpx.AsyncClient) -> dict:
     try:
         resp = await client.get(
             f"{SHODAN_API}/shodan/host/count",
-            params={"key": "", "query": query},
+            params={"key": get_api_key("shodan"), "query": query},
             headers={"User-Agent": SHODAN_UA, "Accept": "application/json"},
             timeout=15.0
         )
@@ -71,7 +72,7 @@ async def shodan_protocols(client: httpx.AsyncClient) -> dict:
     try:
         resp = await client.get(
             f"{SHODAN_API}/shodan/protocols",
-            params={"key": ""},
+            params={"key": get_api_key("shodan")},
             headers={"User-Agent": SHODAN_UA, "Accept": "application/json"},
             timeout=10.0
         )
@@ -85,7 +86,7 @@ async def shodan_services(client: httpx.AsyncClient) -> dict:
     try:
         resp = await client.get(
             f"{SHODAN_API}/shodan/services",
-            params={"key": ""},
+            params={"key": get_api_key("shodan")},
             headers={"User-Agent": SHODAN_UA, "Accept": "application/json"},
             timeout=10.0
         )

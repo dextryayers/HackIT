@@ -5,6 +5,7 @@ import socket
 import dns.resolver
 from urllib.parse import urlparse
 from models import IntelligenceFinding
+from settings_store import get_api_key
 from typing import List, Dict, Optional
 from datetime import datetime
 
@@ -427,7 +428,7 @@ async def url_vt_check(client: httpx.AsyncClient, domain: str) -> Dict:
         url_id = domain.encode("utf-8").hex()
         resp = await client.get(
             f"https://www.virustotal.com/api/v3/urls/{url_id}",
-            headers={"User-Agent": UA, "x-apikey": ""},
+            headers={"User-Agent": UA, "x-apikey": get_api_key("email_rep")},
             timeout=15.0,
         )
         if resp.status_code == 200:
@@ -445,7 +446,7 @@ async def url_vt_check(client: httpx.AsyncClient, domain: str) -> Dict:
         resp = await client.post(
             "https://www.virustotal.com/api/v3/urls",
             data={"url": f"https://{domain}"},
-            headers={"User-Agent": UA, "x-apikey": "", "Accept": "application/json"},
+            headers={"User-Agent": UA, "x-apikey": get_api_key("email_rep"), "Accept": "application/json"},
             timeout=15.0,
         )
         if resp.status_code == 200:

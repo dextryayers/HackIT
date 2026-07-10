@@ -32,6 +32,31 @@ class SummaryItem(BaseModel):
     last_finding: Optional[str] = None
 
 
+class RustSSLResponse(BaseModel):
+    hostname: str
+    port: int = 443
+    grade: Optional[str] = None
+    score: Optional[int] = None
+    duration_ms: Optional[int] = None
+    
+    certificate: Optional[Dict[str, Any]] = None
+    chain: Optional[Dict[str, Any]] = None
+    ciphers: Optional[Dict[str, Any]] = None
+    vulnerabilities: Optional[Dict[str, Any]] = None
+    tls_features: Optional[Dict[str, Any]] = None
+    dns: Optional[Dict[str, Any]] = None
+    http: Optional[Dict[str, Any]] = None
+    crypto: Optional[Dict[str, Any]] = None
+    ports: Optional[Dict[str, Any]] = None
+    all_issues: List[str] = []
+    error: Optional[str] = None
+
+
+class SettingsResponse(BaseModel):
+    api_keys: Dict[str, str]
+    scan_defaults: Dict[str, Any]
+
+
 class ScanJob(BaseModel):
     job_id: str
     target: str

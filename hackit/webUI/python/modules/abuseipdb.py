@@ -5,6 +5,7 @@ import socket
 from datetime import datetime
 from typing import List
 from models import IntelligenceFinding
+from settings_store import get_api_key
 
 ABUSEIPDB_API = "https://api.abuseipdb.com/api/v2"
 ABUSE_URL = "https://www.abuseipdb.com/check"
@@ -33,7 +34,7 @@ async def query_api(ip: str, client: httpx.AsyncClient) -> dict:
         resp = await client.get(
             f"{ABUSEIPDB_API}/check",
             params={"ipAddress": ip, "maxAgeInDays": "365", "verbose": ""},
-            headers={"User-Agent": UA, "Accept": "application/json", "Key": ""},
+            headers={"User-Agent": UA, "Accept": "application/json", "Key": get_api_key("abuseipdb")},
             timeout=15.0
         )
         if resp.status_code == 200:
@@ -47,7 +48,7 @@ async def query_blacklist(client: httpx.AsyncClient) -> dict:
         resp = await client.get(
             f"{ABUSEIPDB_API}/blacklist",
             params={"confidenceMinimum": "50", "limit": "500"},
-            headers={"User-Agent": UA, "Accept": "application/json", "Key": ""},
+            headers={"User-Agent": UA, "Accept": "application/json", "Key": get_api_key("abuseipdb")},
             timeout=30.0
         )
         if resp.status_code == 200:
@@ -72,7 +73,7 @@ async def query_report_history(ip: str, client: httpx.AsyncClient) -> List[dict]
         resp = await client.get(
             f"{ABUSEIPDB_API}/reports",
             params={"ipAddress": ip, "maxAgeInDays": "365"},
-            headers={"User-Agent": UA, "Accept": "application/json", "Key": ""},
+            headers={"User-Agent": UA, "Accept": "application/json", "Key": get_api_key("abuseipdb")},
             timeout=15.0
         )
         if resp.status_code == 200:
