@@ -2,8 +2,8 @@ import httpx
 import re
 import json
 import asyncio
-import socket
 from urllib.parse import urlparse
+from module_common import safe_fetch, safe_fetch_json, make_finding
 from models import IntelligenceFinding
 
 CLOUD_CNAME_PATTERNS = {
@@ -57,7 +57,7 @@ TXT_VERIFICATION = {
 async def _check_cname_patterns(domain: str, client: httpx.AsyncClient) -> list:
     findings = []
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://dns.google/resolve?name={domain}&type=CNAME",
             timeout=10.0,
             headers={"Accept": "application/json"}
@@ -68,7 +68,7 @@ async def _check_cname_patterns(domain: str, client: httpx.AsyncClient) -> list:
             for ans in answers:
                 if ans.get("type") == 5:
                     cname = ans.get("data", "").lower()
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"CNAME: {cname}",
                         type="Cloud Detection - CNAME Record",
                         source="Passive Cloud Detection",
@@ -80,7 +80,7 @@ async def _check_cname_patterns(domain: str, client: httpx.AsyncClient) -> list:
                     for provider, patterns in CLOUD_CNAME_PATTERNS.items():
                         for pat in patterns:
                             if pat in cname:
-                                findings.append(IntelligenceFinding(
+                                findings.append(make_finding(
                                     entity=f"Cloud Provider: {provider} (via CNAME match: {pat})",
                                     type="Cloud Detection - CNAME Provider Match",
                                     source="Passive Cloud Detection",
@@ -97,7 +97,7 @@ async def _check_cname_patterns(domain: str, client: httpx.AsyncClient) -> list:
 async def _check_subdomains_for_cloud(domain: str, client: httpx.AsyncClient) -> list:
     findings = []
     try:
-        ht_resp = await client.get(
+        ht_resp = await safe_fetch(client, 
             f"https://api.hackertarget.com/hostsearch/?q={domain}",
             timeout=12.0,
             headers={"User-Agent": "Mozilla/5.0"}
@@ -110,7 +110,7 @@ async def _check_subdomains_for_cloud(domain: str, client: httpx.AsyncClient) ->
                     for provider, patterns in CLOUD_CNAME_PATTERNS.items():
                         for pat in patterns:
                             if pat in sub:
-                                findings.append(IntelligenceFinding(
+                                findings.append(make_finding(
                                     entity=f"{sub} -> {provider} (via hostname: {pat})",
                                     type="Cloud Detection - Subdomain Pattern",
                                     source="Passive Cloud Detection",
@@ -126,7 +126,7 @@ async def _check_subdomains_for_cloud(domain: str, client: httpx.AsyncClient) ->
 async def _check_whois_cloud(domain: str, client: httpx.AsyncClient) -> list:
     findings = []
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://api.hackertarget.com/whois/?q={domain}",
             timeout=12.0,
             headers={"User-Agent": "Mozilla/5.0"}
@@ -135,7 +135,7 @@ async def _check_whois_cloud(domain: str, client: httpx.AsyncClient) -> list:
             whois_text = resp.text.lower()
             for keyword, provider in CLOUD_WHOIS_ORG.items():
                 if keyword in whois_text:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"WHOIS organization suggests {provider}",
                         type="Cloud Detection - WHOIS Organization",
                         source="Passive Cloud Detection",
@@ -152,7 +152,7 @@ async def _check_whois_cloud(domain: str, client: httpx.AsyncClient) -> list:
 async def _check_dns_txt_cloud(domain: str, client: httpx.AsyncClient) -> list:
     findings = []
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://dns.google/resolve?name={domain}&type=TXT",
             timeout=10.0,
             headers={"Accept": "application/json"}
@@ -165,7 +165,7 @@ async def _check_dns_txt_cloud(domain: str, client: httpx.AsyncClient) -> list:
                     txt = ans.get("data", "").lower()
                     for pattern, service in TXT_VERIFICATION.items():
                         if pattern.lower() in txt:
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=f"TXT verification for {service} (pattern: {pattern})",
                                 type="Cloud Detection - TXT Verification Record",
                                 source="Passive Cloud Detection",
@@ -182,7 +182,7 @@ async def _check_dns_txt_cloud(domain: str, client: httpx.AsyncClient) -> list:
                             for provider, patterns in CLOUD_CNAME_PATTERNS.items():
                                 for pat in patterns:
                                     if pat in included:
-                                        findings.append(IntelligenceFinding(
+                                        findings.append(make_finding(
                                             entity=f"SPF include: {included} -> {provider}",
                                             type="Cloud Detection - SPF Cloud Provider",
                                             source="Passive Cloud Detection",
@@ -215,7 +215,7 @@ async def _check_mx_cloud(domain: str, client: httpx.AsyncClient) -> list:
         "mx.cloudflare": "Cloudflare Email",
     }
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://dns.google/resolve?name={domain}&type=MX",
             timeout=10.0,
             headers={"Accept": "application/json"}
@@ -230,7 +230,7 @@ async def _check_mx_cloud(domain: str, client: httpx.AsyncClient) -> list:
                     mx_servers.append(mx_val)
                     for keyword, provider in mx_providers.items():
                         if keyword in mx_val:
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=f"MX: {mx_val} -> {provider}",
                                 type="Cloud Detection - Email Provider (MX)",
                                 source="Passive Cloud Detection",
@@ -255,7 +255,7 @@ async def _check_ssl_issuer_cloud(domain: str, client: httpx.AsyncClient) -> lis
         "sectigo": "Sectigo (Multi-Cloud)",
     }
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://crt.sh/?q=%25.{domain}&output=json",
             timeout=15.0,
             headers={"User-Agent": "Mozilla/5.0"}
@@ -270,7 +270,7 @@ async def _check_ssl_issuer_cloud(domain: str, client: httpx.AsyncClient) -> lis
                 seen_issuers.add(issuer)
                 for keyword, provider in ssl_cloud_map.items():
                     if keyword in issuer.lower():
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"SSL Issuer: {issuer[:100]} -> Cloud: {provider}",
                             type="Cloud Detection - SSL Issuer",
                             source="Passive Cloud Detection",
@@ -313,7 +313,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             for t in f.tags:
                 if t in ["cloud"] or any(c in t for c in ["aws", "azure", "gcp", "cloudflare"]):
                     cloud_providers.add(t)
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Cloud detection complete: {len(findings)} findings across {len(cloud_providers)} provider indicators",
             type="Cloud Detection - Summary",
             source="Passive Cloud Detection",

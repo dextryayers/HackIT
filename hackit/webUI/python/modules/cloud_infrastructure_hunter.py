@@ -4,6 +4,7 @@ import re
 import time
 from collections import defaultdict
 from urllib.parse import urlparse
+from module_common import safe_fetch, safe_fetch_json, make_finding
 from models import IntelligenceFinding
 
 CLOUD_PROVIDERS = {
@@ -349,7 +350,7 @@ async def check_content_analysis(client, base_url, bucket_name):
     for fname in EXPOSED_FILE_PATTERNS:
         url = base_url.rstrip("/") + "/" + fname
         try:
-            resp = await client.get(url, timeout=5.0,
+            resp = await safe_fetch(client, url, timeout=5.0,
                 headers={"User-Agent": "Mozilla/5.0", "Range": "bytes=0-2048"})
             if resp.status_code in (200, 206):
                 body_preview = resp.text[:300] if hasattr(resp, "text") else ""
@@ -370,7 +371,7 @@ async def check_content_analysis(client, base_url, bucket_name):
 async def check_bucket(client, url, platform, style, base_name):
     start_time = time.monotonic()
     try:
-        resp = await client.get(url, timeout=8.0,
+        resp = await safe_fetch(client, url, timeout=8.0,
             headers={"User-Agent": "Mozilla/5.0"})
         elapsed = time.monotonic() - start_time
         status = resp.status_code
@@ -446,7 +447,7 @@ async def check_bucket(client, url, platform, style, base_name):
             if sensitive_exposed:
                 raw_lines.append(f"SENSITIVE EXPOSED ({len(sensitive_exposed)}): {', '.join(sensitive_exposed[:10])}")
 
-            finding = IntelligenceFinding(
+            finding = make_finding(
                 entity=url[:200],
                 type="Cloud Storage Bucket",
                 source=f"{platform} Hunter",
@@ -462,7 +463,7 @@ async def check_bucket(client, url, platform, style, base_name):
             return finding
 
         elif status == 403:
-            return IntelligenceFinding(
+            return make_finding(
                 entity=url[:200],
                 type="Cloud Storage Bucket",
                 source=f"{platform} Hunter",
@@ -503,10 +504,10 @@ async def check_port_scan(client, name, platform, style, base_name):
     for port in NON_STANDARD_PORTS:
         alt_url = f"https://{domain_part}:{port}/"
         try:
-            resp = await client.get(alt_url, timeout=5.0,
+            resp = await safe_fetch(client, alt_url, timeout=5.0,
                 headers={"User-Agent": "Mozilla/5.0"})
             if resp.status_code < 500:
-                port_findings.append(IntelligenceFinding(
+                port_findings.append(make_finding(
                     entity=alt_url[:200],
                     type="Cloud Storage Bucket (Alt Port)",
                     source=f"{platform} Hunter",
@@ -613,7 +614,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
     for provider in heavy_providers:
         bucket_list = provider_buckets[provider]
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Heavy usage detected on {provider}: {provider_counts[provider]} buckets",
             type="Provider Heavy Usage",
             source=f"{provider} Hunter",
@@ -645,7 +646,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             f"Scan Duration: {scan_duration:.2f}s",
         ]
 
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Scan Summary | {len(bucket_results)} buckets across {len(provider_counts)} providers",
             type="Cloud Storage Summary",
             source="Cloud Infrastructure Hunter",
@@ -659,7 +660,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         ))
 
         if listing_count > 0:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{listing_count} buckets allow object listing!",
                 type="Bucket Listing Warning",
                 source="Cloud Infrastructure Hunter",
@@ -672,7 +673,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ))
 
         if write_count > 0:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{write_count} buckets allow public WRITE access!",
                 type="Bucket Public Write Warning",
                 source="Cloud Infrastructure Hunter",
@@ -685,7 +686,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ))
 
         if heavy_providers:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Heavy provider usage detected: {', '.join(heavy_providers)}",
                 type="Provider Concentration",
                 source="Cloud Infrastructure Hunter",
@@ -698,59 +699,59 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ))
 
     async def analyze_cloud_security():
-        findings.append(IntelligenceFinding(entity=f"Public buckets: {public_count}", type="Cloud Security: Public Exposure", source="CloudInfraHunter", confidence="Medium", color="red" if public_count else "emerald", tags=["security"]))
-        findings.append(IntelligenceFinding(entity=f"Listable buckets: {listing_count}", type="Cloud Security: Listing Risk", source="CloudInfraHunter", confidence="Medium", color="red" if listing_count else "emerald", tags=["security"]))
-        findings.append(IntelligenceFinding(entity=f"Writable buckets: {write_count}", type="Cloud Security: Write Risk", source="CloudInfraHunter", confidence="Medium", color="red" if write_count else "emerald", tags=["security"]))
-        findings.append(IntelligenceFinding(entity=f"Total buckets probed: {stats['total']}", type="Cloud Security: Scan Volume", source="CloudInfraHunter", confidence="Medium", color="slate", tags=["security"]))
+        findings.append(make_finding(entity=f"Public buckets: {public_count}", type="Cloud Security: Public Exposure", source="CloudInfraHunter", confidence="Medium", color="red" if public_count else "emerald", tags=["security"]))
+        findings.append(make_finding(entity=f"Listable buckets: {listing_count}", type="Cloud Security: Listing Risk", source="CloudInfraHunter", confidence="Medium", color="red" if listing_count else "emerald", tags=["security"]))
+        findings.append(make_finding(entity=f"Writable buckets: {write_count}", type="Cloud Security: Write Risk", source="CloudInfraHunter", confidence="Medium", color="red" if write_count else "emerald", tags=["security"]))
+        findings.append(make_finding(entity=f"Total buckets probed: {stats['total']}", type="Cloud Security: Scan Volume", source="CloudInfraHunter", confidence="Medium", color="slate", tags=["security"]))
 
     async def analyze_provider_diversity():
         if provider_counts:
             for p, c in sorted(provider_counts.items(), key=lambda x: -x[1])[:5]:
-                findings.append(IntelligenceFinding(entity=f"{p}: {c} bucket(s)", type="Cloud Provider: Bucket Count", source="CloudInfraHunter", confidence="Medium", color="slate", tags=["providers"]))
-            findings.append(IntelligenceFinding(entity=f"Provider diversity: {len(provider_counts)}", type="Cloud Provider: Diversity", source="CloudInfraHunter", confidence="Medium", color="slate", tags=["providers"]))
-        findings.append(IntelligenceFinding(entity=f"Buckets with exposure: {public_count + write_count + listing_count}", type="Cloud Security: Exposure Total", source="CloudInfraHunter", confidence="Medium", color="orange", tags=["security"]))
+                findings.append(make_finding(entity=f"{p}: {c} bucket(s)", type="Cloud Provider: Bucket Count", source="CloudInfraHunter", confidence="Medium", color="slate", tags=["providers"]))
+            findings.append(make_finding(entity=f"Provider diversity: {len(provider_counts)}", type="Cloud Provider: Diversity", source="CloudInfraHunter", confidence="Medium", color="slate", tags=["providers"]))
+        findings.append(make_finding(entity=f"Buckets with exposure: {public_count + write_count + listing_count}", type="Cloud Security: Exposure Total", source="CloudInfraHunter", confidence="Medium", color="orange", tags=["security"]))
 
     async def analyze_exposure_ratio():
         if stats['total'] > 0:
             exposure_pct = round((public_count / stats['total']) * 100, 1)
-            findings.append(IntelligenceFinding(entity=f"Exposure ratio: {exposure_pct}%", type="Cloud Security: Exposure Ratio", source="CloudInfraHunter", confidence="Medium", color="red" if exposure_pct > 20 else "orange", tags=["security"]))
-            findings.append(IntelligenceFinding(entity=f"Private buckets: {stats['private']}", type="Cloud Security: Private Count", source="CloudInfraHunter", confidence="Medium", color="emerald", tags=["security"]))
-        findings.append(IntelligenceFinding(entity=f"Not found buckets: {stats['not_found']}", type="Cloud Security: NotFound Count", source="CloudInfraHunter", confidence="Medium", color="slate", tags=["security"]))
+            findings.append(make_finding(entity=f"Exposure ratio: {exposure_pct}%", type="Cloud Security: Exposure Ratio", source="CloudInfraHunter", confidence="Medium", color="red" if exposure_pct > 20 else "orange", tags=["security"]))
+            findings.append(make_finding(entity=f"Private buckets: {stats['private']}", type="Cloud Security: Private Count", source="CloudInfraHunter", confidence="Medium", color="emerald", tags=["security"]))
+        findings.append(make_finding(entity=f"Not found buckets: {stats['not_found']}", type="Cloud Security: NotFound Count", source="CloudInfraHunter", confidence="Medium", color="slate", tags=["security"]))
 
     async def analyze_bucket_overview():
-        findings.append(IntelligenceFinding(entity=f"Total buckets found: {len(bucket_results)}", type="Cloud Overview: Found Buckets", source="CloudInfraHunter", confidence="High", color="purple", tags=["overview"]))
-        findings.append(IntelligenceFinding(entity=f"Providers with buckets: {len(provider_counts)}", type="Cloud Overview: Provider Count", source="CloudInfraHunter", confidence="Medium", color="slate", tags=["overview"]))
-        findings.append(IntelligenceFinding(entity=f"Buckets per provider: {round(len(bucket_results)/max(len(provider_counts),1),1)} avg", type="Cloud Overview: Avg Buckets", source="CloudInfraHunter", confidence="Medium", color="slate", tags=["overview"]))
+        findings.append(make_finding(entity=f"Total buckets found: {len(bucket_results)}", type="Cloud Overview: Found Buckets", source="CloudInfraHunter", confidence="High", color="purple", tags=["overview"]))
+        findings.append(make_finding(entity=f"Providers with buckets: {len(provider_counts)}", type="Cloud Overview: Provider Count", source="CloudInfraHunter", confidence="Medium", color="slate", tags=["overview"]))
+        findings.append(make_finding(entity=f"Buckets per provider: {round(len(bucket_results)/max(len(provider_counts),1),1)} avg", type="Cloud Overview: Avg Buckets", source="CloudInfraHunter", confidence="Medium", color="slate", tags=["overview"]))
 
     async def analyze_exposure_recommendations():
-        findings.append(IntelligenceFinding(entity="Enable 'Block Public Access' on all storage buckets", type="Cloud Rec: Block Public Access", source="CloudInfraHunter", confidence="Medium", color="orange", tags=["recommendation"]))
-        findings.append(IntelligenceFinding(entity="Audit bucket ACLs and IAM policies regularly", type="Cloud Rec: Regular Audit", source="CloudInfraHunter", confidence="Medium", color="orange", tags=["recommendation"]))
-        findings.append(IntelligenceFinding(entity="Use bucket-level logging to monitor access", type="Cloud Rec: Enable Logging", source="CloudInfraHunter", confidence="Medium", color="orange", tags=["recommendation"]))
-        findings.append(IntelligenceFinding(entity="Implement least-privilege access for bucket operations", type="Cloud Rec: Least Privilege", source="CloudInfraHunter", confidence="Medium", color="orange", tags=["recommendation"]))
+        findings.append(make_finding(entity="Enable 'Block Public Access' on all storage buckets", type="Cloud Rec: Block Public Access", source="CloudInfraHunter", confidence="Medium", color="orange", tags=["recommendation"]))
+        findings.append(make_finding(entity="Audit bucket ACLs and IAM policies regularly", type="Cloud Rec: Regular Audit", source="CloudInfraHunter", confidence="Medium", color="orange", tags=["recommendation"]))
+        findings.append(make_finding(entity="Use bucket-level logging to monitor access", type="Cloud Rec: Enable Logging", source="CloudInfraHunter", confidence="Medium", color="orange", tags=["recommendation"]))
+        findings.append(make_finding(entity="Implement least-privilege access for bucket operations", type="Cloud Rec: Least Privilege", source="CloudInfraHunter", confidence="Medium", color="orange", tags=["recommendation"]))
 
     async def analyze_security_verdict():
         total_risk = public_count + listing_count + write_count
-        findings.append(IntelligenceFinding(entity=f"Total security issues: {total_risk}", type="Cloud Security: Issue Count", source="CloudInfraHunter", confidence="Medium", color="red" if total_risk else "emerald", tags=["verdict"]))
+        findings.append(make_finding(entity=f"Total security issues: {total_risk}", type="Cloud Security: Issue Count", source="CloudInfraHunter", confidence="Medium", color="red" if total_risk else "emerald", tags=["verdict"]))
         if total_risk == 0:
-            findings.append(IntelligenceFinding(entity="No security issues detected in bucket configurations", type="Cloud Security: Clean Bill", source="CloudInfraHunter", confidence="Medium", color="emerald", tags=["verdict"]))
+            findings.append(make_finding(entity="No security issues detected in bucket configurations", type="Cloud Security: Clean Bill", source="CloudInfraHunter", confidence="Medium", color="emerald", tags=["verdict"]))
         else:
-            findings.append(IntelligenceFinding(entity=f"Immediate action required: {total_risk} bucket(s) with security issues", type="Cloud Security: Action Required", source="CloudInfraHunter", confidence="Medium", color="red", tags=["verdict"]))
-        findings.append(IntelligenceFinding(entity=f"Scan completed: {len(tasks)} bucket URL(s) tested", type="Cloud Security: Scan Stats", source="CloudInfraHunter", confidence="Medium", color="slate", tags=["verdict"]))
+            findings.append(make_finding(entity=f"Immediate action required: {total_risk} bucket(s) with security issues", type="Cloud Security: Action Required", source="CloudInfraHunter", confidence="Medium", color="red", tags=["verdict"]))
+        findings.append(make_finding(entity=f"Scan completed: {len(tasks)} bucket URL(s) tested", type="Cloud Security: Scan Stats", source="CloudInfraHunter", confidence="Medium", color="slate", tags=["verdict"]))
 
     async def analyze_risk_assessment():
-        findings.append(IntelligenceFinding(entity=f"Critical issues (public): {public_count}", type="Cloud Risk: Critical", source="CloudInfraHunter", confidence="Medium", color="red", tags=["risk"]))
-        findings.append(IntelligenceFinding(entity=f"High issues (listing): {listing_count}", type="Cloud Risk: High", source="CloudInfraHunter", confidence="Medium", color="red", tags=["risk"]))
-        findings.append(IntelligenceFinding(entity=f"Medium issues (write): {write_count}", type="Cloud Risk: Medium", source="CloudInfraHunter", confidence="Medium", color="orange", tags=["risk"]))
-        findings.append(IntelligenceFinding(entity=f"Low issues (private): {stats['private']}", type="Cloud Risk: Low", source="CloudInfraHunter", confidence="Medium", color="emerald", tags=["risk"]))
-        findings.append(IntelligenceFinding(entity=f"False positives (not found): {stats['not_found']}", type="Cloud Risk: False Positive", source="CloudInfraHunter", confidence="Medium", color="slate", tags=["risk"]))
-        findings.append(IntelligenceFinding(entity=f"Scan efficiency: {round(len(bucket_results)/max(stats['total'],1)*100,1)}% hit rate", type="Cloud Risk: Efficiency", source="CloudInfraHunter", confidence="Medium", color="slate", tags=["risk"]))
+        findings.append(make_finding(entity=f"Critical issues (public): {public_count}", type="Cloud Risk: Critical", source="CloudInfraHunter", confidence="Medium", color="red", tags=["risk"]))
+        findings.append(make_finding(entity=f"High issues (listing): {listing_count}", type="Cloud Risk: High", source="CloudInfraHunter", confidence="Medium", color="red", tags=["risk"]))
+        findings.append(make_finding(entity=f"Medium issues (write): {write_count}", type="Cloud Risk: Medium", source="CloudInfraHunter", confidence="Medium", color="orange", tags=["risk"]))
+        findings.append(make_finding(entity=f"Low issues (private): {stats['private']}", type="Cloud Risk: Low", source="CloudInfraHunter", confidence="Medium", color="emerald", tags=["risk"]))
+        findings.append(make_finding(entity=f"False positives (not found): {stats['not_found']}", type="Cloud Risk: False Positive", source="CloudInfraHunter", confidence="Medium", color="slate", tags=["risk"]))
+        findings.append(make_finding(entity=f"Scan efficiency: {round(len(bucket_results)/max(stats['total'],1)*100,1)}% hit rate", type="Cloud Risk: Efficiency", source="CloudInfraHunter", confidence="Medium", color="slate", tags=["risk"]))
 
     async def analyze_overall_assessment():
-        findings.append(IntelligenceFinding(entity=f"Provider: {', '.join(sorted(provider_counts.keys()))}", type="Cloud Assessment: Providers", source="CloudInfraHunter", confidence="Medium", color="slate", tags=["assessment"]))
-        findings.append(IntelligenceFinding(entity=f"Public bucket risk: {public_count + listing_count + write_count} issue(s)", type="Cloud Assessment: Public Risk", source="CloudInfraHunter", confidence="Medium", color="red", tags=["assessment"]))
-        findings.append(IntelligenceFinding(entity=f"Total buckets tested: {stats['total']}", type="Cloud Assessment: Tested", source="CloudInfraHunter", confidence="Medium", color="slate", tags=["assessment"]))
-        findings.append(IntelligenceFinding(entity=f"Scan recommendation: {'Lock all public buckets' if public_count else 'No action needed'}", type="Cloud Assessment: Recommendation", source="CloudInfraHunter", confidence="Medium", color="orange", tags=["assessment"]))
-        findings.append(IntelligenceFinding(entity=f"Non-public buckets: {stats['private'] + stats['not_found']}", type="Cloud Assessment: Non-Public", source="CloudInfraHunter", confidence="Medium", color="slate", tags=["assessment"]))
+        findings.append(make_finding(entity=f"Provider: {', '.join(sorted(provider_counts.keys()))}", type="Cloud Assessment: Providers", source="CloudInfraHunter", confidence="Medium", color="slate", tags=["assessment"]))
+        findings.append(make_finding(entity=f"Public bucket risk: {public_count + listing_count + write_count} issue(s)", type="Cloud Assessment: Public Risk", source="CloudInfraHunter", confidence="Medium", color="red", tags=["assessment"]))
+        findings.append(make_finding(entity=f"Total buckets tested: {stats['total']}", type="Cloud Assessment: Tested", source="CloudInfraHunter", confidence="Medium", color="slate", tags=["assessment"]))
+        findings.append(make_finding(entity=f"Scan recommendation: {'Lock all public buckets' if public_count else 'No action needed'}", type="Cloud Assessment: Recommendation", source="CloudInfraHunter", confidence="Medium", color="orange", tags=["assessment"]))
+        findings.append(make_finding(entity=f"Non-public buckets: {stats['private'] + stats['not_found']}", type="Cloud Assessment: Non-Public", source="CloudInfraHunter", confidence="Medium", color="slate", tags=["assessment"]))
 
     await asyncio.gather(
         analyze_cloud_security(),

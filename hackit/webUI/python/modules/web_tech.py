@@ -3,8 +3,8 @@ import ssl
 import socket
 import asyncio
 import re
-from models import IntelligenceFinding
 from osint_common import get_ssl_cert_info, parse_cert_to_dict
+from module_common import safe_fetch, make_finding
 
 TECH_SIGNATURES = {
     "X-Powered-By": ("Tech Stack", "orange"),
@@ -140,13 +140,12 @@ VERSION_PATTERNS = {
     "Ruby": [r"(?i)ruby/(\d+\.\d+(?:\.\d+)?)"],
 }
 
-
 async def crawl(target: str, client: httpx.AsyncClient):
     findings = []
     base_url = f"https://{target}" if not target.startswith("http") else target
 
     try:
-        resp = await client.get(base_url, follow_redirects=True,
+        resp = await safe_fetch(client, base_url, follow_redirects=True,
             headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"})
         headers = dict(resp.headers)
         html = resp.text[:100000] if hasattr(resp, 'text') else ""
@@ -154,9 +153,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         for header_key, (ftype, color) in TECH_SIGNATURES.items():
             val = headers.get(header_key.lower())
             if val:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=val[:200],
-                    type=ftype,
+                    ftype=ftype,
                     source="WebTech",
                     confidence="High",
                     color=color,
@@ -170,9 +169,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 val_lower = val.lower()
                 for pattern, tech_name, category, tech_color in patterns:
                     if re.search(pattern, val_lower):
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=tech_name,
-                            type=f"Tech: {category} (Header)",
+                            ftype=f"Tech: {category} (Header)",
                             source="WebTech",
                             confidence="High",
                             color=tech_color,
@@ -186,9 +185,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             matched = False
             for sig, ftype in SERVER_SIGNATURES.items():
                 if sig in server:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=headers.get("server", "")[:200],
-                        type=ftype,
+                        ftype=ftype,
                         source="WebTech",
                         confidence="High",
                         color="orange",
@@ -198,9 +197,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     matched = True
                     break
             if not matched:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=headers.get("server", "")[:200],
-                    type="Web Server",
+                    ftype="Web Server",
                     source="WebTech",
                     confidence="High",
                     color="slate",
@@ -209,9 +208,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         ct = headers.get("content-type", "")
         if "php" in html.lower() or "php" in ct:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="PHP detected",
-                type="Tech: PHP",
+                ftype="Tech: PHP",
                 source="WebTech",
                 confidence="Medium",
                 color="orange",
@@ -240,9 +239,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         await _check_eol(tech_name, version, findings)
                     confidence = "High" if version else "Medium"
 
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=entity,
-                        type=f"{category}: {tech_name}",
+                        ftype=f"{category}: {tech_name}",
                         source="WebTech",
                         confidence=confidence,
                         color=color,
@@ -252,9 +251,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     break
 
         if "csrf" in html.lower() or "csrf_token" in html.lower():
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="CSRF protection detected",
-                type="Security: CSRF Protection",
+                ftype="Security: CSRF Protection",
                 source="WebTech",
                 confidence="Medium",
                 color="emerald",
@@ -266,9 +265,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             directives = [d.strip() for d in csp.split(";") if d.strip()]
             for d in directives:
                 if "unsafe-inline" in d or "unsafe-eval" in d:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"CSP allows unsafe: {d[:80]}",
-                        type="CSP Weakness",
+                        ftype="CSP Weakness",
                         source="WebTech",
                         confidence="High",
                         color="red",
@@ -278,9 +277,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         x_frame = headers.get("x-frame-options", "")
         if x_frame:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"X-Frame-Options: {x_frame}",
-                type="Security: Clickjacking Protection",
+                ftype="Security: Clickjacking Protection",
                 source="WebTech",
                 confidence="High",
                 color="emerald" if x_frame.lower() in ("deny", "sameorigin") else "orange",
@@ -289,9 +288,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         strict_transport = headers.get("strict-transport-security", "")
         if strict_transport:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="HSTS enabled",
-                type="Security: HSTS",
+                ftype="Security: HSTS",
                 source="WebTech",
                 confidence="High",
                 color="emerald",
@@ -299,9 +298,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ))
 
     except Exception as e:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"WebTech HTTP error: {str(e)[:100]}",
-            type="WebTech Error",
+            ftype="WebTech Error",
             source="WebTech",
             confidence="Low",
             color="red",
@@ -317,9 +316,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             if parsed.get("issuer"):
                 org = parsed["issuer"].get("organizationName", "Unknown")
                 cn = parsed["issuer"].get("commonName", "")
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Issuer: {org} ({cn})" if cn else f"Issuer: {org}",
-                    type="SSL Certificate Authority",
+                    ftype="SSL Certificate Authority",
                     source="WebTech",
                     confidence="High",
                     color="emerald",
@@ -331,9 +330,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 days = parsed["days_remaining"]
                 color = "emerald" if days > 30 else ("orange" if days > 7 else "red")
                 risk = "Informational" if days > 30 else ("Elevated Risk" if days > 7 else "High Risk")
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"SSL expires in {days} days ({parsed.get('valid_to', '')})",
-                    type="SSL Expiry",
+                    ftype="SSL Expiry",
                     source="WebTech",
                     confidence="High",
                     color=color,
@@ -342,9 +341,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 ))
 
             if parsed.get("is_expired"):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity="SSL Certificate has EXPIRED",
-                    type="SSL Expired",
+                    ftype="SSL Expired",
                     source="WebTech",
                     confidence="High",
                     color="red",
@@ -356,18 +355,18 @@ async def crawl(target: str, client: httpx.AsyncClient):
             if parsed.get("subject_alt_names"):
                 sans = parsed["subject_alt_names"]
                 for san in sans[:10]:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=san,
-                        type="SSL SAN (Subject Alternative Name)",
+                        ftype="SSL SAN (Subject Alternative Name)",
                         source="WebTech",
                         confidence="High",
                         color="blue",
                         threat_level="Informational",
                     ))
                 if len(sans) > 10:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"... and {len(sans)-10} more SANs",
-                        type="SSL SAN Summary",
+                        ftype="SSL SAN Summary",
                         source="WebTech",
                         confidence="High",
                         color="slate",
@@ -376,9 +375,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
             protocol = cert_info.get("protocol", "")
             if protocol:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=protocol,
-                    type="SSL/TLS Protocol",
+                    ftype="SSL/TLS Protocol",
                     source="WebTech",
                     confidence="High",
                     color="emerald",
@@ -388,9 +387,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             cipher = cert_info.get("cipher")
             if cipher:
                 cipher_name = cipher[0] if isinstance(cipher, tuple) else str(cipher)
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=cipher_name,
-                    type="SSL/TLS Cipher",
+                    ftype="SSL/TLS Cipher",
                     source="WebTech",
                     confidence="High",
                     color="slate",
@@ -401,7 +400,6 @@ async def crawl(target: str, client: httpx.AsyncClient):
         pass
 
     return findings
-
 
 EXTRA_HTML_TECH_PATTERNS = {
     "Hugo": {"patterns": [r"hugo"], "category": "Static Site Generator", "color": "orange"},
@@ -699,7 +697,6 @@ EOL_VERSIONS = {
 
 EOL_WARNINGS = {k: v["eol"] for k, v in EOL_VERSIONS.items()}
 
-
 async def _check_eol(tech_name: str, version: str, findings: list):
     try:
         if tech_name not in EOL_VERSIONS:
@@ -710,9 +707,9 @@ async def _check_eol(tech_name: str, version: str, findings: list):
                 from datetime import datetime
                 eol_dt = datetime.strptime(eol_date, "%Y-%m-%d")
                 if eol_dt < datetime.now():
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"{tech_name} {version} reached EOL on {eol_date}",
-                        type="End of Life Software",
+                        ftype="End of Life Software",
                         source="WebTech",
                         confidence="High",
                         color="red",

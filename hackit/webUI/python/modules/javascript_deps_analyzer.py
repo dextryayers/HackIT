@@ -1,8 +1,7 @@
 import httpx
 import re
 import json
-from models import IntelligenceFinding
-
+from module_common import safe_fetch, make_finding
 VULN_DB = {
     "jquery": {
         "1.0.0-1.12.3": [{"id": "CVE-2020-11023", "severity": "Medium", "desc": "XSS via HTML parsing in jQuery before 3.5.0"}],
@@ -738,7 +737,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
     base_url = f"https://{target}" if not target.startswith("http") else target
 
     try:
-        resp = await client.get(base_url, follow_redirects=True,
+        resp = await safe_fetch(client, base_url, follow_redirects=True,
             headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"})
         html = resp.text
         base_href = base_url.rstrip("/")
@@ -831,9 +830,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             if vulns_found:
                 color = "red" if cvss_max >= 3 else "orange"
                 threat = "High Risk" if cvss_max >= 3 else ("Elevated Risk" if cvss_max >= 2 else "Informational")
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{lib} {version_str} - {len(vulns_found)} known vulnerabilities ({source_type})",
-                    type="JS Dependency - Vulnerable",
+                    ftype="JS Dependency - Vulnerable",
                     source="JSDepsAnalyzer",
                     confidence="High",
                     color=color,
@@ -842,9 +841,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     tags=["javascript", "dependency", "vulnerability", "cve", source_type.lower().replace("-", "")]
                 ))
             else:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{lib} {version_str} [{source_type}]" if version_str else f"{lib} [{source_type}]",
-                    type="JS Dependency",
+                    ftype="JS Dependency",
                     source="JSDepsAnalyzer",
                     confidence="High",
                     color="emerald" if version_str and version_str != "unknown" else "slate",
@@ -855,9 +854,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
             if vulns_found:
                 for vuln in vulns_found:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"{vuln['id']}: {vuln['desc'][:100]}",
-                        type=f"CVE Detail - {lib}",
+                        ftype=f"CVE Detail - {lib}",
                         source="JSDepsAnalyzer",
                         confidence="High",
                         color="red" if vuln['severity'] in ("Critical", "High") else "orange",
@@ -868,9 +867,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         has_webpack = bool(WEBPACK_CHUNK.search(html))
         if has_webpack:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="Webpack bundle detected",
-                type="Build Tool: Webpack",
+                ftype="Build Tool: Webpack",
                 source="JSDepsAnalyzer",
                 confidence="High",
                 color="purple",
@@ -880,9 +879,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ))
             chunk_files = [s for s in scripts if "chunk" in s.lower() or "bundle" in s.lower()]
             for cf in chunk_files[:5]:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=cf[:200],
-                    type="Webpack Chunk",
+                    ftype="Webpack Chunk",
                     source="JSDepsAnalyzer",
                     confidence="Medium",
                     color="slate",
@@ -894,9 +893,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         if has_sw:
             sw_scripts = [s for s in scripts if "sw" in s.lower() or "service-worker" in s.lower()]
             for sw_s in sw_scripts[:3]:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Service Worker: {sw_s[:200]}",
-                    type="Service Worker Detected",
+                    ftype="Service Worker Detected",
                     source="JSDepsAnalyzer",
                     confidence="High",
                     color="slate",
@@ -906,9 +905,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         source_maps = SOURCE_MAP_REGEX.findall(html)
         for sm in source_maps[:5]:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Source map: {sm[:200]}",
-                type="Source Map Detected",
+                ftype="Source Map Detected",
                 source="JSDepsAnalyzer",
                 confidence="Medium",
                 color="orange",
@@ -926,16 +925,16 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 elif not url.startswith("http"):
                     continue
                 try:
-                    js_resp = await client.get(url, timeout=5.0,
+                    js_resp = await safe_fetch(client, url, timeout=5.0,
                         headers={"User-Agent": "Mozilla/5.0"})
                     if js_resp.status_code == 200:
                         js_text = js_resp.text[:50000]
                         npm_matches = NPM_REGEX.findall(js_text)
                         for pkg_name, pkg_ver in npm_matches:
                             if pkg_name and pkg_name not in deps:
-                                findings.append(IntelligenceFinding(
+                                findings.append(make_finding(
                                     entity=f"{pkg_name}@{pkg_ver}" if pkg_ver else pkg_name,
-                                    type="NPM Dependency (from source map)",
+                                    ftype="NPM Dependency (from source map)",
                                     source="JSDepsAnalyzer",
                                     confidence="Medium",
                                     color="slate",
@@ -945,9 +944,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                                 ))
                         pkg_json_version = VERSION_JSON_REGEX.search(js_text)
                         if pkg_json_version:
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=f"Version from bundle: {pkg_json_version.group(1)}",
-                                type="Package Version Disclosure",
+                                ftype="Package Version Disclosure",
                                 source="JSDepsAnalyzer",
                                 confidence="Medium",
                                 color="slate",
@@ -968,9 +967,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         build_tools = detect_build_tools(html)
         for tool in build_tools:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Build tool/bundler: {tool}",
-                type="Build Tool Detected",
+                ftype="Build Tool Detected",
                 source="JSDepsAnalyzer",
                 confidence="High",
                 color="purple",
@@ -981,9 +980,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         resource_hints = extract_resource_hints(html)
         for hint_type, urls in resource_hints.items():
             for url in urls[:5]:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Resource hint [{hint_type}]: {url[:200]}",
-                    type=f"Resource Hint: {hint_type}",
+                    ftype=f"Resource Hint: {hint_type}",
                     source="JSDepsAnalyzer",
                     confidence="Medium",
                     color="slate",
@@ -994,9 +993,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         has_modules = detect_module_type(html)
         if has_modules:
-            findings.append(IntelligenceFinding(
-                entity="ES Modules (type=module/nomodule) detected",
-                type="JS Module System",
+            findings.append(make_finding(
+                entity="ES Modules (ftype=module/nomodule) detected",
+                ftype="JS Module System",
                 source="JSDepsAnalyzer",
                 confidence="High",
                 color="cyan",
@@ -1006,9 +1005,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         inline_versions = detect_inline_version(html)
         for vtype, version in inline_versions.items():
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Inline version disclosure: {version}",
-                type="Version Disclosure",
+                ftype="Version Disclosure",
                 source="JSDepsAnalyzer",
                 confidence="Medium",
                 color="orange",
@@ -1019,9 +1018,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         sw_analysis = analyze_service_worker(html, base_url)
         if sw_analysis:
             for key, val in sw_analysis.items():
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Service Worker {key}: {val}",
-                    type="Service Worker Detail",
+                    ftype="Service Worker Detail",
                     source="JSDepsAnalyzer",
                     confidence="High",
                     color="slate",
@@ -1031,9 +1030,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         esm_bundlers = detect_esm_bundler(html)
         for bundler in esm_bundlers:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"ESM bundler type: {bundler}",
-                type="ESM Bundler Detection",
+                ftype="ESM Bundler Detection",
                 source="JSDepsAnalyzer",
                 confidence="Medium",
                 color="slate",
@@ -1045,9 +1044,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         for url in all_script_urls:
             integrity_match = INTEGRITY_REGEX.search(html[html.find(url)-200:html.find(url)+50] if url in html else "")
             if not integrity_match and any(cdn in url.lower() for cdn in ["cdn.", "jsdelivr", "unpkg", "cdnjs", "cloudflare"]):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"No SRI integrity for CDN script: {url[:150]}",
-                    type="Missing Subresource Integrity",
+                    ftype="Missing Subresource Integrity",
                     source="JSDepsAnalyzer",
                     confidence="Medium",
                     color="orange",
@@ -1074,9 +1073,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         for url, analysis in bundle_analyses:
             if analysis.get("has_sourcemap"):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Source map exposed in bundle: {url}",
-                    type="JS Bundle Source Map",
+                    ftype="JS Bundle Source Map",
                     source="JSDepsAnalyzer",
                     confidence="High",
                     color="red",
@@ -1086,9 +1085,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 ))
             if analysis.get("versions_found"):
                 for ver in analysis["versions_found"][:3]:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Bundle version: {ver} in {url}",
-                        type="JS Bundle Version",
+                        ftype="JS Bundle Version",
                         source="JSDepsAnalyzer",
                         confidence="Medium",
                         color="slate",
@@ -1096,9 +1095,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         tags=["version", "bundle"]
                     ))
             if analysis.get("is_minified"):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Minified bundle: {url} ({analysis.get('size', 0)} bytes)",
-                    type="JS Bundle Minified",
+                    ftype="JS Bundle Minified",
                     source="JSDepsAnalyzer",
                     confidence="Medium",
                     color="slate",
@@ -1109,9 +1108,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         for lib_name in deps:
             license_name = detect_license(lib_name)
             if license_name and license_name != "Unknown":
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{lib_name}: {license_name}",
-                    type="JS Library License",
+                    ftype="JS Library License",
                     source="JSDepsAnalyzer",
                     confidence="Medium",
                     color="slate",
@@ -1125,9 +1124,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         cdn_count = sum(1 for f in findings if "Self-Hosted" not in f.entity and "CDN" in f.source and f.type == "JS Dependency")
         self_hosted_count = sum(1 for f in findings if "Self-Hosted" in f.entity)
 
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{total_deps} JS deps found ({cdn_count} CDN, {self_hosted_count} self-hosted), {vuln_count} vulnerable",
-            type="JSDeps Summary",
+            ftype="JSDeps Summary",
             source="JSDepsAnalyzer",
             confidence="High",
             color="red" if vuln_count else "emerald",
@@ -1137,9 +1136,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         ))
 
     except Exception as e:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"JS Deps error: {str(e)[:100]}",
-            type="JSDeps Error",
+            ftype="JSDeps Error",
             source="JSDepsAnalyzer",
             confidence="Low",
             color="red",
@@ -1148,7 +1147,6 @@ async def crawl(target: str, client: httpx.AsyncClient):
         ))
 
     return findings
-
 
 # === EXTENDED UPGRADE: Additional JS Library Signatures (200+ more) ===
 
@@ -1562,7 +1560,7 @@ def check_missing_integrity(scripts):
 async def fetch_and_analyze_js_bundle(client, url):
     analysis = {}
     try:
-        resp = await client.get(url, timeout=10.0, headers={"User-Agent": "Mozilla/5.0"})
+        resp = await safe_fetch(client, url, timeout=10.0, headers={"User-Agent": "Mozilla/5.0"})
         if resp.status_code == 200:
             text = resp.text[:100000]
             analysis["size"] = len(resp.content)

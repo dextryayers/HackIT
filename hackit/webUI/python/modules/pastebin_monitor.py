@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from collections import defaultdict
 from typing import List
 from urllib.parse import quote
+from module_common import safe_fetch, safe_fetch_json, make_finding
 from models import IntelligenceFinding
 
 PASTE_SITES = [
@@ -97,7 +98,7 @@ async def check_paste_site(client: httpx.AsyncClient, site_name: str, url_templa
     results = []
     try:
         url = url_template.format(quote(target))
-        resp = await client.get(url, timeout=10.0,
+        resp = await safe_fetch(client, url, timeout=10.0,
             headers={"User-Agent": "Mozilla/5.0"})
         if resp.status_code == 200 and len(resp.text) > 200:
             results.append({"site": site_name, "url": url, "content_snippet": resp.text[:1000], "status": "accessible"})
@@ -159,7 +160,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
     for site_name, url_template in all_sites:
         results = await check_paste_site(client, site_name, url_template, query)
         for r in results:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Mention on {site_name}",
                 type="Paste Site Mention",
                 source=site_name,
@@ -176,7 +177,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
     if all_text:
         emails = EMAIL_PATTERN.findall(all_text)
         if emails:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{len(set(emails))} unique emails exposed",
                 type="Email Exposure",
                 source="PastebinMonitor",
@@ -190,7 +191,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
         ips = IP_PATTERN.findall(all_text)
         if ips:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{len(set(ips))} IP addresses exposed",
                 type="IP Exposure",
                 source="PastebinMonitor",
@@ -204,7 +205,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
         phones = PHONE_PATTERN.findall(all_text)
         if phones:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{len(set(phones))} phone numbers exposed",
                 type="Phone Exposure",
                 source="PastebinMonitor",
@@ -218,7 +219,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
         ssns = SSN_PATTERN.findall(all_text)
         if ssns:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{len(set(ssns))} SSNs exposed",
                 type="SSN Exposure",
                 source="PastebinMonitor",
@@ -232,7 +233,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
         ccs = CC_PATTERN.findall(all_text)
         if ccs:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{len(set(ccs))} credit card numbers exposed",
                 type="Financial Data Exposure",
                 source="PastebinMonitor",
@@ -246,7 +247,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
         api_keys = API_KEY_PATTERN.findall(all_text)
         if api_keys:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{len(set(api_keys))} API keys exposed",
                 type="API Key Exposure",
                 source="PastebinMonitor",
@@ -260,7 +261,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
         jwts = JWT_PATTERN.findall(all_text)
         if jwts:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{len(set(jwts))} JWT tokens exposed",
                 type="JWT Token Exposure",
                 source="PastebinMonitor",
@@ -274,7 +275,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
         btc = BTC_PATTERN.findall(all_text)
         if btc:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{len(set(btc))} Bitcoin addresses exposed",
                 type="Crypto Wallet Exposure",
                 source="PastebinMonitor",
@@ -288,7 +289,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
         secrets = await detect_secrets(all_text)
         for secret in secrets:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{secret['count']} {secret['type']} pattern(s) found",
                 type=f"Secret Detection: {secret['type'].title()}",
                 source="PastebinMonitor",
@@ -303,7 +304,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         categories = await categorize_content(all_text)
         if categories:
             cat_str = ", ".join(set(categories))
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Content categories: {cat_str}",
                 type="Paste Content Categorization",
                 source="PastebinMonitor",
@@ -317,7 +318,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
         language = await detect_language(all_text)
         if language != "Unknown":
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Detected language: {language}",
                 type="Paste Language Detection",
                 source="PastebinMonitor",
@@ -330,7 +331,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             ))
 
     if not findings:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="No paste mentions found",
             type="Paste Monitor Complete",
             source="PastebinMonitor",
@@ -344,7 +345,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
     total_sites = len(all_sites)
     found_sites = len([f for f in findings if f.type == "Paste Site Mention"])
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Searched {total_sites} paste sites, {found_sites} had data",
         type="Paste Monitor Coverage",
         source="PastebinMonitor",

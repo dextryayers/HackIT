@@ -3,7 +3,7 @@ import dns.resolver
 import socket
 import re
 import time
-from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash
 
 MX_SOFTWARE_SIGNATURES = {
     "Postfix": ["postfix", "ESMTP Postfix"],
@@ -103,9 +103,9 @@ async def crawl(target: str, client=None):
 
     mx_records = await get_mx(domain)
     if not mx_records:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"No MX records for {domain}",
-            type="MX Record Missing",
+            ftype="MX Record Missing",
             source="DNS MX Analyzer",
             confidence="High",
             color="red",
@@ -117,9 +117,9 @@ async def crawl(target: str, client=None):
         return findings
 
     for pref, mx_host in mx_records:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"[{pref}] {mx_host}",
-            type="MX Record",
+            ftype="MX Record",
             source="DNS MX Analyzer",
             confidence="High",
             color="slate",
@@ -133,9 +133,9 @@ async def crawl(target: str, client=None):
         if ips:
             loc_str = ", ".join(ips)
             for ip in ips:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{mx_host} -> {ip}",
-                    type="MX IP Resolution",
+                    ftype="MX IP Resolution",
                     source="DNS MX Analyzer",
                     confidence="High",
                     color="blue",
@@ -147,7 +147,7 @@ async def crawl(target: str, client=None):
 
                 ptrs = await get_ptr(ip)
                 if ptrs:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"rDNS: {ip} -> {', '.join(ptrs)}",
                         type="MX rDNS (PTR) Check",
                         source="DNS MX Analyzer",
@@ -162,9 +162,9 @@ async def crawl(target: str, client=None):
                     for ptr in ptrs:
                         ptr_clean = ptr.rstrip('.')
                         if mx_host.lower() not in ptr_clean.lower():
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=f"rDNS mismatch: {mx_host} vs {ptr_clean}",
-                                type="MX rDNS Inconsistency",
+                                ftype="MX rDNS Inconsistency",
                                 source="DNS MX Analyzer",
                                 confidence="Medium",
                                 color="orange",
@@ -173,9 +173,9 @@ async def crawl(target: str, client=None):
                                 tags=["mx", "rdns", "inconsistency"]
                             ))
                 else:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"No PTR record for {ip}",
-                        type="MX rDNS Missing",
+                        ftype="MX rDNS Missing",
                         source="DNS MX Analyzer",
                         confidence="High",
                         color="orange",
@@ -192,9 +192,9 @@ async def crawl(target: str, client=None):
                 if any(s.lower() in banner.lower() or s.lower() in ehlo.lower() for s in sigs):
                     detected_software = sw
                     break
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{mx_host}: {detected_software}",
-                type="MX Software Detection",
+                ftype="MX Software Detection",
                 source="DNS MX Analyzer",
                 confidence="Medium",
                 color="purple",
@@ -205,9 +205,9 @@ async def crawl(target: str, client=None):
             ))
 
         tls = await check_starttls(mx_host)
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{mx_host}: STARTTLS {'supported' if tls else 'NOT supported'}",
-            type="MX TLS Support",
+            ftype="MX TLS Support",
             source="DNS MX Analyzer",
             confidence="High",
             color="emerald" if tls else "red",
@@ -219,7 +219,7 @@ async def crawl(target: str, client=None):
     priorities = [pref for pref, _ in mx_records]
     if len(set(priorities)) > 1:
         sorted_prio = sorted(set(priorities))
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"MX priorities: {', '.join(map(str, sorted_prio))}",
             type="MX Priority Analysis",
             source="DNS MX Analyzer",
@@ -231,7 +231,7 @@ async def crawl(target: str, client=None):
             tags=["mx", "priority"]
         ))
     else:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"All MX servers have same priority ({priorities[0]}) - no failover order",
             type="MX Failover Analysis",
             source="DNS MX Analyzer",
@@ -243,7 +243,7 @@ async def crawl(target: str, client=None):
         ))
 
     if len(mx_records) > 1:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{len(mx_records)} MX servers provide redundancy",
             type="MX Redundancy Check",
             source="DNS MX Analyzer",
@@ -256,7 +256,7 @@ async def crawl(target: str, client=None):
         lowest_prio = min(pref for pref, _ in mx_records)
         backup = [mx for pref, mx in mx_records if pref > lowest_prio]
         if backup:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Backup MX servers: {', '.join(backup)}",
                 type="MX Backup Detection",
                 source="DNS MX Analyzer",
@@ -267,9 +267,9 @@ async def crawl(target: str, client=None):
                 tags=["mx", "backup"]
             ))
     else:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Single MX server - no redundancy",
-            type="MX Single Point of Failure",
+            ftype="MX Single Point of Failure",
             source="DNS MX Analyzer",
             confidence="High",
             color="orange",
@@ -284,7 +284,7 @@ async def crawl(target: str, client=None):
         ips_all.extend(await resolve_a(mx))
     unique_ips = list(set(ips_all))
     if len(unique_ips) < len(hostnames_only):
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"MX servers share {len(unique_ips)} unique IP(s) across {len(hostnames_only)} hosts",
             type="MX IP Diversity",
             source="DNS MX Analyzer",
@@ -295,7 +295,7 @@ async def crawl(target: str, client=None):
             tags=["mx", "diversity"]
         ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Analyzed {len(mx_records)} MX servers for {domain}",
         type="MX Analysis Summary",
         source="DNS MX Analyzer",

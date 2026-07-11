@@ -5,8 +5,7 @@ import gzip
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 from urllib.parse import urlparse, urljoin, parse_qs, urlencode
-from models import IntelligenceFinding
-
+from module_common import safe_fetch, make_finding
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
 LINK_RE = re.compile(r'href=["\'](.*?)["\']', re.IGNORECASE)
@@ -296,7 +295,7 @@ async def fetch_url_with_fallback(client, url, timeout=10.0):
         try:
             full = f"{scheme}://{url.lstrip('http://').lstrip('https://')}"
             full = full.replace("https://https://", "https://").replace("http://http://", "http://")
-            resp = await client.get(full, timeout=timeout,
+            resp = await safe_fetch(client, full, timeout=timeout,
                 headers={"User-Agent": UA}, follow_redirects=True)
             if resp.status_code < 500:
                 return resp
@@ -312,7 +311,7 @@ async def parse_sitemap_xml(client, sitemap_url, visited_sitemaps):
     visited_sitemaps.add(sitemap_url)
 
     try:
-        resp = await client.get(sitemap_url, timeout=10.0,
+        resp = await safe_fetch(client, sitemap_url, timeout=10.0,
             headers={"User-Agent": UA}, follow_redirects=True)
         if resp.status_code != 200:
             return findings, urls_found
@@ -351,9 +350,9 @@ async def parse_sitemap_xml(client, sitemap_url, visited_sitemaps):
                     if priority is not None and priority.text:
                         attrs.append(f"pri={priority.text}")
                     if attrs:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=u[:200],
-                            type="Sitemap URL (with attributes)",
+                            ftype="Sitemap URL (with attributes)",
                             source="CrawlerCore",
                             confidence="High",
                             color="blue",
@@ -376,13 +375,13 @@ async def analyze_robots_txt(client, base_url):
     findings = []
     sitemaps_found = []
     try:
-        resp = await client.get(f"{base_url}/robots.txt", timeout=8.0,
+        resp = await safe_fetch(client, f"{base_url}/robots.txt", timeout=8.0,
             headers={"User-Agent": UA})
         if resp.status_code == 200:
             text = resp.text
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{base_url}/robots.txt",
-                type="Robots.txt Detected",
+                ftype="Robots.txt Detected",
                 source="CrawlerCore",
                 confidence="High",
                 color="slate",
@@ -399,9 +398,9 @@ async def analyze_robots_txt(client, base_url):
 
             delays = CRAWL_DELAY_RE.findall(text)
             if delays:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Crawl-Delay: {delays[0]}s",
-                    type="Robots.txt Crawl Delay",
+                    ftype="Robots.txt Crawl Delay",
                     source="CrawlerCore",
                     confidence="High",
                     color="slate",
@@ -413,9 +412,9 @@ async def analyze_robots_txt(client, base_url):
 
             user_agents = re.findall(r"User-agent:\s*(.+)", text)
             if user_agents:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"User-Agents targeted: {', '.join(set(user_agents))[:200]}",
-                    type="Robots.txt User-Agents",
+                    ftype="Robots.txt User-Agents",
                     source="CrawlerCore",
                     confidence="High",
                     color="slate",
@@ -429,9 +428,9 @@ async def analyze_robots_txt(client, base_url):
             allowed = re.findall(r"Allow:\s*(.*)", text)
             for path in disallowed[:10]:
                 if path.strip():
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=path.strip()[:200],
-                        type="Disallowed Path (robots.txt)",
+                        ftype="Disallowed Path (robots.txt)",
                         source="CrawlerCore",
                         confidence="High",
                         color="orange" if not path.strip().startswith("/") else "slate",
@@ -442,9 +441,9 @@ async def analyze_robots_txt(client, base_url):
                     ))
             for path in allowed[:5]:
                 if path.strip():
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=path.strip()[:200],
-                        type="Allowed Path (robots.txt)",
+                        ftype="Allowed Path (robots.txt)",
                         source="CrawlerCore",
                         confidence="High",
                         color="slate",
@@ -458,9 +457,9 @@ async def analyze_robots_txt(client, base_url):
             if crawl_rules:
                 for rule_type, rule_val in crawl_rules:
                     if rule_type.strip().lower() not in ("user-agent", "disallow", "allow"):
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"{rule_type}: {rule_val.strip()[:100]}",
-                            type="Robots.txt Extra Directive",
+                            ftype="Robots.txt Extra Directive",
                             source="CrawlerCore",
                             confidence="High",
                             color="slate",
@@ -475,7 +474,7 @@ async def analyze_robots_txt(client, base_url):
 async def analyze_page(client, url, domain):
     findings = []
     try:
-        resp = await client.get(url, timeout=10.0,
+        resp = await safe_fetch(client, url, timeout=10.0,
             headers={"User-Agent": UA}, follow_redirects=True)
         if resp.status_code != 200:
             return findings
@@ -483,9 +482,9 @@ async def analyze_page(client, url, domain):
 
         content_type = resp.headers.get("content-type", "")
         if content_type:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Content-Type: {content_type[:100]}",
-                type="Page Content Type",
+                ftype="Page Content Type",
                 source="CrawlerCore",
                 confidence="High",
                 color="slate",
@@ -509,9 +508,9 @@ async def analyze_page(client, url, domain):
                 external_links.add(full)
 
         if internal_links:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{len(internal_links)} internal links found on {url[:80]}",
-                type="Internal Link Discovery",
+                ftype="Internal Link Discovery",
                 source="CrawlerCore",
                 confidence="High",
                 color="slate",
@@ -526,9 +525,9 @@ async def analyze_page(client, url, domain):
             ext_domains = set()
             for el in external_links:
                 ext_domains.add(urlparse(el).netloc)
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{len(ext_domains)} external domains linked from {url[:80]}",
-                type="External Link Discovery",
+                ftype="External Link Discovery",
                 source="CrawlerCore",
                 confidence="Medium",
                 color="slate",
@@ -542,9 +541,9 @@ async def analyze_page(client, url, domain):
         scripts = SCRIPT_RE.findall(html)
         if scripts:
             unique_scripts = set(scripts)
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{len(unique_scripts)} JavaScript files referenced",
-                type="JavaScript Discovery",
+                ftype="JavaScript Discovery",
                 source="CrawlerCore",
                 confidence="High",
                 color="orange",
@@ -574,9 +573,9 @@ async def analyze_page(client, url, domain):
                 else:
                     form_types.append("generic")
 
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{form_count} forms detected ({', '.join(set(form_types))})",
-                type="Form Discovery",
+                ftype="Form Discovery",
                 source="CrawlerCore",
                 confidence="High",
                 color="orange",
@@ -588,9 +587,9 @@ async def analyze_page(client, url, domain):
             ))
 
             if "login" in form_types:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Login form(s) detected on {url[:80]}",
-                    type="Login Form Discovery",
+                    ftype="Login Form Discovery",
                     source="CrawlerCore",
                     confidence="High",
                     color="red",
@@ -601,9 +600,9 @@ async def analyze_page(client, url, domain):
                 ))
 
             if "search" in form_types:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Search form(s) detected on {url[:80]}",
-                    type="Search Form Discovery",
+                    ftype="Search Form Discovery",
                     source="CrawlerCore",
                     confidence="High",
                     color="slate",
@@ -616,9 +615,9 @@ async def analyze_page(client, url, domain):
             inputs = INPUT_RE.findall(html)
             hidden_inputs = [i for i in inputs if any(p in i.lower() for p in HIDDEN_PARAM_NAMES)]
             for hi in hidden_inputs[:5]:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Hidden/interesting param: {hi}",
-                    type="Hidden Parameter Detection",
+                    ftype="Hidden Parameter Detection",
                     source="CrawlerCore",
                     confidence="Medium",
                     color="orange",
@@ -630,9 +629,9 @@ async def analyze_page(client, url, domain):
 
         title_match = TITLE_RE.search(html)
         if title_match:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Page Title: {title_match.group(1).strip()[:200]}",
-                type="Page Title",
+                ftype="Page Title",
                 source="CrawlerCore",
                 confidence="High",
                 color="slate",
@@ -645,9 +644,9 @@ async def analyze_page(client, url, domain):
         meta_tags = META_RE.findall(html)
         for name, content in meta_tags[:5]:
             if name.lower() in ("description", "keywords", "robots", "author", "viewport", "generator"):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Meta {name}: {content[:200]}",
-                    type="Meta Tag",
+                    ftype="Meta Tag",
                     source="CrawlerCore",
                     confidence="High",
                     color="slate",
@@ -660,9 +659,9 @@ async def analyze_page(client, url, domain):
         url_params = parse_qs(urlparse(url).query)
         for param in url_params:
             if param.lower() in HIDDEN_PARAM_NAMES:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"URL parameter: {param}={url_params[param][0][:100]}",
-                    type="Interesting URL Parameter",
+                    ftype="Interesting URL Parameter",
                     source="CrawlerCore",
                     confidence="Medium",
                     color="orange",
@@ -674,9 +673,9 @@ async def analyze_page(client, url, domain):
 
         css_files = re.findall(r'<link[^>]+href=["\']([^"\']*\.css[^"\']*)["\']', html, re.I)
         if css_files:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{len(css_files)} CSS files referenced",
-                type="CSS Discovery",
+                ftype="CSS Discovery",
                 source="CrawlerCore",
                 confidence="High",
                 color="slate",
@@ -687,9 +686,9 @@ async def analyze_page(client, url, domain):
 
         images = re.findall(r'<img[^>]+src=["\']([^"\']+)["\']', html, re.I)
         if images:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{len(images)} images found on {url[:80]}",
-                type="Image Discovery",
+                ftype="Image Discovery",
                 source="CrawlerCore",
                 confidence="High",
                 color="slate",
@@ -702,9 +701,9 @@ async def analyze_page(client, url, domain):
         font_links = re.findall(r'<link[^>]+href=["\']([^"\']*\.(?:woff|woff2|ttf|eot|otf)[^"\']*)["\']', html, re.I)
         all_fonts = set(fonts + font_links)
         if all_fonts:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{len(all_fonts)} font resources found",
-                type="Font Discovery",
+                ftype="Font Discovery",
                 source="CrawlerCore",
                 confidence="Medium",
                 color="slate",
@@ -715,9 +714,9 @@ async def analyze_page(client, url, domain):
 
         iframes = re.findall(r'<iframe[^>]+src=["\']([^"\']+)["\']', html, re.I)
         if iframes:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{len(iframes)} iframes found on {url[:80]}",
-                type="IFrame Discovery",
+                ftype="IFrame Discovery",
                 source="CrawlerCore",
                 confidence="High",
                 color="orange",
@@ -728,9 +727,9 @@ async def analyze_page(client, url, domain):
 
         structured_data = re.findall(r'<script[^>]+type=["\']application/ld\+json["\']>([\s\S]*?)</script>', html, re.I)
         if structured_data:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{len(structured_data)} JSON-LD structured data blocks",
-                type="Structured Data Discovery",
+                ftype="Structured Data Discovery",
                 source="CrawlerCore",
                 confidence="Medium",
                 color="slate",
@@ -774,9 +773,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
     findings.extend(all_sitemap_findings)
 
     if all_sitemap_urls:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{len(all_sitemap_urls)} URLs discovered in sitemaps",
-            type="Sitemap URL Count",
+            ftype="Sitemap URL Count",
             source="CrawlerCore",
             confidence="High",
             color="blue",
@@ -795,9 +794,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     ext_count[label] += 1
         if ext_count:
             ext_str = ", ".join(f"{k}:{v}" for k, v in sorted(ext_count.items(), key=lambda x: -x[1]))
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Sitemap content: {ext_str}",
-                type="Sitemap Content Breakdown",
+                ftype="Sitemap Content Breakdown",
                 source="CrawlerCore",
                 confidence="High",
                 color="slate",
@@ -826,12 +825,10 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
     return findings
 
-
 RSS_PATTERN = re.compile(r'<link[^>]*type=["\']application/rss\+xml["\'][^>]*href=["\']([^"\']+)["\']', re.I)
 ATOM_PATTERN = re.compile(r'<link[^>]*type=["\']application/atom\+xml["\'][^>]*href=["\']([^"\']+)["\']', re.I)
 JSONLD_PATTERN = re.compile(r'<script[^>]*type=["\']application/ld\+json["\']>([\s\S]*?)</script>', re.I)
 CANONICAL_PATTERN = re.compile(r'<link[^>]*rel=["\']canonical["\'][^>]*href=["\']([^"\']+)["\']', re.I)
-
 
 CSRF_PATTERNS = [
     r'csrf[_-]?token',
@@ -846,16 +843,15 @@ CSRF_PATTERNS = [
     r'CRAFT_CSRF_TOKEN',
 ]
 
-
 async def _analyze_rss_feeds(client, base_url, findings):
     urls_to_check = [f"{base_url}/rss.xml", f"{base_url}/atom.xml", f"{base_url}/feed.xml", f"{base_url}/rss", f"{base_url}/feed"]
     for url in urls_to_check:
         try:
-            resp = await client.get(url, timeout=5.0, headers={"User-Agent": UA}, follow_redirects=True)
+            resp = await safe_fetch(client, url, timeout=5.0, headers={"User-Agent": UA}, follow_redirects=True)
             if resp.status_code == 200 and "xml" in resp.headers.get("content-type", ""):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=url,
-                    type="RSS/Feed Discovery",
+                    ftype="RSS/Feed Discovery",
                     source="CrawlerCore",
                     confidence="High",
                     color="orange",
@@ -866,18 +862,17 @@ async def _analyze_rss_feeds(client, base_url, findings):
         except Exception:
             pass
 
-
 async def analyze_page_deep(client, url, domain, findings):
     try:
-        resp = await client.get(url, timeout=10.0, headers={"User-Agent": UA}, follow_redirects=True)
+        resp = await safe_fetch(client, url, timeout=10.0, headers={"User-Agent": UA}, follow_redirects=True)
         if resp.status_code != 200:
             return
         html = resp.text
         rss_feeds = RSS_PATTERN.findall(html)
         for feed in rss_feeds[:3]:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=urljoin(url, feed),
-                type="RSS Feed Link",
+                ftype="RSS Feed Link",
                 source="CrawlerCore",
                 confidence="Medium",
                 color="slate",
@@ -887,9 +882,9 @@ async def analyze_page_deep(client, url, domain, findings):
             ))
         canonical = CANONICAL_PATTERN.search(html)
         if canonical:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=canonical.group(1),
-                type="Canonical URL",
+                ftype="Canonical URL",
                 source="CrawlerCore",
                 confidence="High",
                 color="slate",
@@ -899,9 +894,9 @@ async def analyze_page_deep(client, url, domain, findings):
             ))
         for csrf_pat in CSRF_PATTERNS:
             if re.search(csrf_pat, html, re.I):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"CSRF protection detected via pattern: {csrf_pat}",
-                    type="CSRF Token Detection",
+                    ftype="CSRF Token Detection",
                     source="CrawlerCore",
                     confidence="Medium",
                     color="emerald",
@@ -912,9 +907,9 @@ async def analyze_page_deep(client, url, domain, findings):
                 break
         open_graph = re.findall(r'<meta[^>]+property=["\']og:([^"\']+)["\'][^>]*content=["\']([^"\']+)["\']', html, re.I)
         if open_graph:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Open Graph tags found: {len(open_graph)} properties",
-                type="Open Graph Meta",
+                ftype="Open Graph Meta",
                 source="CrawlerCore",
                 confidence="Medium",
                 color="slate",
@@ -924,9 +919,9 @@ async def analyze_page_deep(client, url, domain, findings):
             ))
         twitter_cards = re.findall(r'<meta[^>]+name=["\']twitter:([^"\']+)["\'][^>]*content=["\']([^"\']+)["\']', html, re.I)
         if twitter_cards:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Twitter Card tags found: {len(twitter_cards)} properties",
-                type="Twitter Card Meta",
+                ftype="Twitter Card Meta",
                 source="CrawlerCore",
                 confidence="Medium",
                 color="slate",
@@ -938,9 +933,9 @@ async def analyze_page_deep(client, url, domain, findings):
         if jsonld:
             for block in jsonld[:3]:
                 truncated = block[:200]
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"JSON-LD: {truncated}",
-                    type="JSON-LD Structured Data",
+                    ftype="JSON-LD Structured Data",
                     source="CrawlerCore",
                     confidence="Medium",
                     color="slate",
@@ -950,9 +945,9 @@ async def analyze_page_deep(client, url, domain, findings):
                 ))
         iframe_sandbox = re.findall(r'<iframe[^>]+sandbox[^>]*>', html, re.I)
         if iframe_sandbox:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{len(iframe_sandbox)} iframes with sandbox attribute",
-                type="IFrame Sandbox Attribute",
+                ftype="IFrame Sandbox Attribute",
                 source="CrawlerCore",
                 confidence="Medium",
                 color="slate",

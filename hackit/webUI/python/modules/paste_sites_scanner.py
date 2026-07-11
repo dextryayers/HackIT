@@ -1,9 +1,9 @@
-import httpx
 import re
 import json
 from urllib.parse import urlparse, quote
 from typing import List
 from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash
 
 PASTE_SITES = [
     ("Pastebin", "https://pastebin.com/search?q={}"),

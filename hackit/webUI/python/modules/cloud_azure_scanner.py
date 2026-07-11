@@ -1,7 +1,7 @@
 import httpx
 import asyncio
 import re
-import socket
+from module_common import safe_fetch, safe_fetch_json, make_finding, resolve_ip, is_ip
 from models import IntelligenceFinding
 
 AZURE_SERVICES = {
@@ -59,16 +59,13 @@ WAF_HEADERS = ["x-azure-waf", "x-ms-waf", "application-gateway"]
 FRONTDOOR_HEADERS = ["x-azure-fd", "x-azure-ref", "azurefd"]
 
 async def _resolve_target(target: str) -> tuple:
-    try:
-        socket.inet_aton(target)
-        return target, True
-    except OSError:
-        pass
-    try:
-        ip = socket.gethostbyname(target)
+    t = target.strip()
+    if is_ip(t):
+        return t, True
+    ip = resolve_ip(t)
+    if ip:
         return ip, False
-    except Exception as e:
-        return None, str(e)
+    return None, "DNS resolution failed"
 
 async def _check_ip_ranges(ip: str) -> list:
     findings = []
@@ -97,7 +94,7 @@ async def _check_ip_ranges(ip: str) -> list:
             si = (int(sp[0])<<24)+(int(sp[1])<<16)+(int(sp[2])<<8)+int(sp[3])
             ei = (int(ep[0])<<24)+(int(ep[1])<<16)+(int(ep[2])<<8)+int(ep[3])
             if si <= ip_int <= ei:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Azure {region}",
                     type="Azure IP Range Match",
                     source="AzureCloudScanner",
@@ -120,7 +117,7 @@ async def _check_ip_ranges(ip: str) -> list:
                 si = (int(sp[0])<<24)+(int(sp[1])<<16)+(int(sp[2])<<8)+int(sp[3])
                 ei = (int(ep[0])<<24)+(int(ep[1])<<16)+(int(ep[2])<<8)+int(ep[3])
                 if si <= ip_int <= ei:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Azure Region: {region}",
                         type="Azure Region Detected (IP)",
                         source="AzureCloudScanner",
@@ -149,7 +146,7 @@ async def _check_dns_services(target: str) -> list:
                 for svc, patterns in AZURE_SERVICES.items():
                     for pat in patterns:
                         if pat in cname:
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=f"Azure {svc}",
                                 type="Azure Service (CNAME)",
                                 source="AzureCloudScanner",
@@ -170,7 +167,7 @@ async def _check_dns_services(target: str) -> list:
             for r in answers_ns:
                 ns = str(r.target).rstrip('.').lower()
                 if "azure-dns" in ns or "azure.com" in ns:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity="Azure DNS",
                         type="Azure DNS Service (NS)",
                         source="AzureCloudScanner",
@@ -190,7 +187,7 @@ async def _check_dns_services(target: str) -> list:
             for r in answers_txt:
                 txt = str(r).lower()
                 if "ms=" in txt or "microsoft" in txt or "outlook" in txt:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity="Microsoft 365 / Azure (TXT)",
                         type="Azure Service (TXT)",
                         source="AzureCloudScanner",
@@ -212,14 +209,14 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
     findings = []
     base = f"https://{target}" if not target.startswith("http") else target
     try:
-        resp = await client.get(base, follow_redirects=True, timeout=10.0,
+        resp = await safe_fetch(client, base, follow_redirects=True, timeout=10.0,
             headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"})
         headers = dict(resp.headers)
         server = headers.get("server", "").lower()
         all_vals = " ".join(str(v).lower() for v in headers.values())
 
         if "kestrel" in server:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="Azure App Service (Kestrel)",
                 type="Azure Service (Header)",
                 source="AzureCloudScanner",
@@ -232,7 +229,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
                 tags=["cloud", "azure", "app-service"]
             ))
         if "azure" in server or "azure" in all_vals:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="Azure (Server Header)",
                 type="Azure Infrastructure",
                 source="AzureCloudScanner",
@@ -245,7 +242,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
                 tags=["cloud", "azure"]
             ))
         if "x-ms-" in all_vals:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="Azure Headers Present",
                 type="Azure Service (Header)",
                 source="AzureCloudScanner",
@@ -258,7 +255,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
                 tags=["cloud", "azure"]
             ))
         if "x-ms-request-id" in headers:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="Azure Request ID Present",
                 type="Azure Service (Header)",
                 source="AzureCloudScanner",
@@ -272,7 +269,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
             ))
         if "x-ms-region" in headers:
             region = headers.get("x-ms-region", "")
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Azure Region: {region}",
                 type="Azure Region (Header)",
                 source="AzureCloudScanner",
@@ -287,7 +284,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
             ))
         if "x-azure-ref" in headers:
             ref = headers.get("x-azure-ref", "")
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Azure Front Door Ref: {ref[:30]}",
                 type="Azure Front Door",
                 source="AzureCloudScanner",
@@ -302,7 +299,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
             ))
         if "x-azure-fd" in headers:
             fd = headers.get("x-azure-fd", "")
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Azure Front Door Edge: {fd}",
                 type="Azure Front Door Edge",
                 source="AzureCloudScanner",
@@ -317,7 +314,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
             ))
         html = resp.text[:50000].lower() if hasattr(resp, "text") else ""
         if "azure" in html or "microsoft" in html or "msapplication" in html:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="Azure (HTML Indicator)",
                 type="Azure Cloud (HTML)",
                 source="AzureCloudScanner",
@@ -330,7 +327,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
                 tags=["cloud", "azure"]
             ))
     except Exception as e:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Header analysis error: {str(e)[:100]}",
             type="Azure Scan Error",
             source="AzureCloudScanner",
@@ -357,12 +354,12 @@ async def _check_azure_blob(target: str, client: httpx.AsyncClient) -> list:
         for tmpl in AZURE_BLOB_URLS:
             url = tmpl.format(name=name)
             try:
-                resp = await client.get(url, timeout=5.0,
+                resp = await safe_fetch(client, url, timeout=5.0,
                     headers={"User-Agent": "Mozilla/5.0"})
                 if resp.status_code == 200:
                     body = resp.text[:300]
                     is_listing = "Blobs" in body or "EnumerationResults" in body or "Container" in body
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"azure-blob://{name}",
                         type="Azure Blob Container (Public)",
                         source="AzureCloudScanner",
@@ -380,7 +377,7 @@ async def _check_azure_blob(target: str, client: httpx.AsyncClient) -> list:
                     body = resp.text[:200]
                     if "AccessDenied" in body or "access_denied" in body.lower() or "ResourceNotFound" in body:
                         if "ResourceNotFound" not in body:
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=f"azure-blob://{name}",
                                 type="Azure Blob Container (Exists)",
                                 source="AzureCloudScanner",
@@ -407,11 +404,11 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     ip, is_ip = await _resolve_target(target)
     if ip is None:
-        findings.append(IntelligenceFinding(entity=f"DNS resolution failed: {target}", type="DNS Error", source="AzureCloudScanner", confidence="Low", color="red", category="Cloud / Infrastructure OSINT", raw_data=str(is_ip)[:200], tags=["error"]))
+        findings.append(make_finding(entity=f"DNS resolution failed: {target}", type="DNS Error", source="AzureCloudScanner", confidence="Low", color="red", category="Cloud / Infrastructure OSINT", raw_data=str(is_ip)[:200], tags=["error"]))
         return findings
 
     if not is_ip:
-        findings.append(IntelligenceFinding(entity=f"{target} -> {ip}", type="DNS Resolution", source="AzureCloudScanner", confidence="High", color="slate", category="Cloud / Infrastructure OSINT", threat_level="Informational", status="Resolved", resolution=ip, tags=["dns", "resolution"]))
+        findings.append(make_finding(entity=f"{target} -> {ip}", type="DNS Resolution", source="AzureCloudScanner", confidence="High", color="slate", category="Cloud / Infrastructure OSINT", threat_level="Informational", status="Resolved", resolution=ip, tags=["dns", "resolution"]))
 
     ip_findings = await _check_ip_ranges(ip)
     findings.extend(ip_findings)
@@ -429,12 +426,12 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     infra = sum(1 for f in findings if "Azure Infrastructure" in f.type or "Azure IP Range" in f.type)
     blobs = sum(1 for f in findings if "Blob" in f.type or "azure-blob" in f.entity)
 
-    findings.append(IntelligenceFinding(entity=f"Azure services detected: {services}", type="Azure Service Count", source="AzureCloudScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["azure", "summary"]))
-    findings.append(IntelligenceFinding(entity=f"Azure infrastructure indicators: {infra}", type="Azure Infrastructure Count", source="AzureCloudScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["azure", "summary"]))
-    findings.append(IntelligenceFinding(entity=f"Azure Blob containers: {blobs}", type="Azure Blob Count", source="AzureCloudScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["azure", "summary"]))
-    findings.append(IntelligenceFinding(entity=f"Azure hosted: {'Yes' if any('Azure IP Range' in f.type for f in findings) else 'No'}", type="Azure Hosting Status", source="AzureCloudScanner", confidence="Medium", color="slate", category="Cloud / Infrastructure OSINT", tags=["azure", "summary"]))
-    findings.append(IntelligenceFinding(entity=f"Target: {target}", type="Azure Scan Target", source="AzureCloudScanner", confidence="High", color="slate", category="Cloud / Infrastructure OSINT", tags=["azure", "target"]))
-    findings.append(IntelligenceFinding(entity=f"Resolved IP: {ip}", type="Azure Resolved Address", source="AzureCloudScanner", confidence="High", color="slate", category="Cloud / Infrastructure OSINT", tags=["azure", "ip"]))
-    findings.append(IntelligenceFinding(entity=f"Total Azure findings: {len(findings)}", type="Azure Scan Summary", source="AzureCloudScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["azure", "summary"]))
+    findings.append(make_finding(entity=f"Azure services detected: {services}", type="Azure Service Count", source="AzureCloudScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["azure", "summary"]))
+    findings.append(make_finding(entity=f"Azure infrastructure indicators: {infra}", type="Azure Infrastructure Count", source="AzureCloudScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["azure", "summary"]))
+    findings.append(make_finding(entity=f"Azure Blob containers: {blobs}", type="Azure Blob Count", source="AzureCloudScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["azure", "summary"]))
+    findings.append(make_finding(entity=f"Azure hosted: {'Yes' if any('Azure IP Range' in f.type for f in findings) else 'No'}", type="Azure Hosting Status", source="AzureCloudScanner", confidence="Medium", color="slate", category="Cloud / Infrastructure OSINT", tags=["azure", "summary"]))
+    findings.append(make_finding(entity=f"Target: {target}", type="Azure Scan Target", source="AzureCloudScanner", confidence="High", color="slate", category="Cloud / Infrastructure OSINT", tags=["azure", "target"]))
+    findings.append(make_finding(entity=f"Resolved IP: {ip}", type="Azure Resolved Address", source="AzureCloudScanner", confidence="High", color="slate", category="Cloud / Infrastructure OSINT", tags=["azure", "ip"]))
+    findings.append(make_finding(entity=f"Total Azure findings: {len(findings)}", type="Azure Scan Summary", source="AzureCloudScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["azure", "summary"]))
 
     return findings

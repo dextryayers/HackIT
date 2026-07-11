@@ -5,8 +5,8 @@ import json
 import re
 import dns.resolver
 from datetime import datetime
-from models import IntelligenceFinding
 from urllib.parse import urlparse
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash
 
 CLOUD_SERVICES = {
     "AWS S3": {
@@ -1307,7 +1307,7 @@ async def resolve_dns_chain(hostname: str) -> dict:
 async def analyze_http_response(hostname: str, client: httpx.AsyncClient) -> dict:
     result = {"status": None, "headers": {}, "body_snippet": "", "redirect_chain": []}
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://{hostname}", timeout=10.0, follow_redirects=True,
             headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}
         )
@@ -1318,7 +1318,7 @@ async def analyze_http_response(hostname: str, client: httpx.AsyncClient) -> dic
             result["redirect_chain"].append(str(r.url))
     except Exception:
         try:
-            resp = await client.get(
+            resp = await safe_fetch(client, 
                 f"http://{hostname}", timeout=10.0, follow_redirects=True,
                 headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}
             )
@@ -1332,7 +1332,7 @@ async def analyze_http_response(hostname: str, client: httpx.AsyncClient) -> dic
 async def get_subdomains_crtsh(domain: str, client: httpx.AsyncClient) -> set[str]:
     subdomains = set()
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://crt.sh/?q=%25.{domain}&output=json",
             timeout=15.0,
             headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"},
@@ -1354,7 +1354,7 @@ async def get_subdomains_securitytrails(domain: str, client: httpx.AsyncClient) 
     subdomains = set()
     try:
         headers = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://securitytrails.com/domain/{domain}/dns",
             timeout=15.0, headers=headers
         )
@@ -1371,7 +1371,7 @@ async def get_subdomains_rapiddns(domain: str, client: httpx.AsyncClient) -> set
     subdomains = set()
     try:
         headers = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://rapiddns.io/subdomain/{domain}",
             timeout=15.0, headers=headers
         )
@@ -1387,7 +1387,7 @@ async def get_subdomains_rapiddns(domain: str, client: httpx.AsyncClient) -> set
 async def get_subdomains_hackertarget(domain: str, client: httpx.AsyncClient) -> set[str]:
     subdomains = set()
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://api.hackertarget.com/hostsearch/?q={domain}",
             timeout=15.0,
             headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}
@@ -1497,7 +1497,7 @@ async def verify_takeover(hostname: str, service_name: str,
     test_url = f"https://{hostname}"
 
     try:
-        resp = await client.get(test_url, timeout=10.0, follow_redirects=True,
+        resp = await safe_fetch(client, test_url, timeout=10.0, follow_redirects=True,
                                 headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"})
         body = resp.text.lower()[:5000]
         for fp in fingerprints:
@@ -1513,7 +1513,7 @@ async def verify_takeover(hostname: str, service_name: str,
         pass
 
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"http://{hostname}", timeout=10.0, follow_redirects=True,
             headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"})
         body = resp.text.lower()[:5000]
@@ -1550,9 +1550,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             subdomains_set.add(domain)
 
         if not subdomains_set:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=domain,
-                type="Subdomain Takeover",
+                ftype="Subdomain Takeover",
                 source="SubdomainTakeover",
                 confidence="Low",
                 color="slate",
@@ -1561,7 +1561,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ))
             return findings
 
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{len(subdomains_set)} subdomains discovered from multiple sources (crt.sh, SecurityTrails, RapidDNS, HackerTarget)",
             type="Subdomain Discovery",
             source="SubdomainTakeover",
@@ -1584,9 +1584,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 http_analysis = await analyze_http_response(subdomain, client)
 
                 if dns_chain.get("a"):
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=subdomain,
-                        type="DNS A Record",
+                        ftype="DNS A Record",
                         source="SubdomainTakeover",
                         confidence="High",
                         color="blue",
@@ -1599,9 +1599,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
                 if dns_chain.get("cname"):
                     for cname in dns_chain["cname"]:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=subdomain,
-                            type="DNS CNAME Record",
+                            ftype="DNS CNAME Record",
                             source="SubdomainTakeover",
                             confidence="High",
                             color="orange",
@@ -1613,9 +1613,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         ))
 
                 if http_analysis.get("status"):
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=subdomain,
-                        type="HTTP Response Status",
+                        ftype="HTTP Response Status",
                         source="SubdomainTakeover",
                         confidence="High",
                         color="red" if http_analysis["status"] in POTENTIALLY_VULNERABLE_STATUS_CODES else "emerald",
@@ -1629,9 +1629,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 if http_analysis.get("headers"):
                     server_val = http_analysis["headers"].get("server", "")
                     if server_val:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=subdomain,
-                            type="HTTP Server Header",
+                            ftype="HTTP Server Header",
                             source="SubdomainTakeover",
                             confidence="High",
                             color="slate",
@@ -1677,9 +1677,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     confidence = "Low"
 
                 domain_info = evidence[:500] if evidence else "No specific evidence"
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=subdomain,
-                    type=f"Takeover Check: {service_name} [{classification.upper()}]",
+                    ftype=f"Takeover Check: {service_name} [{classification.upper()}]",
                     source="SubdomainTakeover",
                     confidence=confidence,
                     color=color,
@@ -1703,7 +1703,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 continue
 
         if vulnerable_list:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"CONFIRMED vulnerable subdomains: {', '.join(vulnerable_list)}",
                 type="Vulnerable Subdomains List (Confirmed)",
                 source="SubdomainTakeover",
@@ -1717,7 +1717,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ))
 
         if potential_list:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Potential vulnerable subdomains: {', '.join(potential_list)}",
                 type="Potential Subdomains List",
                 source="SubdomainTakeover",
@@ -1730,7 +1730,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 tags=["takeover", "high-risk", "potential"]
             ))
 
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Takeover scan complete: {takeover_count} confirmed, {len(potential_list)} potential, {len(inactive_list)} inactive out of {len(subdomains_set)} checked",
             type="Takeover Scan Summary",
             source="SubdomainTakeover",
@@ -1742,7 +1742,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         ))
 
     except Exception as e:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Subdomain takeover error: {str(e)[:150]}",
             type="Subdomain Takeover Error",
             source="SubdomainTakeover",

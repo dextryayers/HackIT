@@ -5,6 +5,7 @@ import re
 import json
 from collections import defaultdict
 from urllib.parse import urlparse
+from module_common import safe_fetch, safe_fetch_json, make_finding
 from models import IntelligenceFinding
 
 UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
@@ -30,7 +31,7 @@ async def resolve_to_ips(domain: str):
 
 async def query_bgpview(path: str, client: httpx.AsyncClient):
     try:
-        resp = await client.get(f"{BGPVIEW_API}{path}", headers={"Accept": "application/json", "User-Agent": UA}, timeout=15.0)
+        resp = await safe_fetch(client, f"{BGPVIEW_API}{path}", headers={"Accept": "application/json", "User-Agent": UA}, timeout=15.0)
         if resp.status_code == 200:
             data = resp.json()
             return data if data.get("status") == "ok" else {}
@@ -39,21 +40,21 @@ async def query_bgpview(path: str, client: httpx.AsyncClient):
 
 async def query_ripe(path: str, client: httpx.AsyncClient, params: dict = None):
     try:
-        resp = await client.get(f"{RIPE_STAT_API}{path}", params=params or {}, headers={"User-Agent": UA}, timeout=15.0)
+        resp = await safe_fetch(client, f"{RIPE_STAT_API}{path}", params=params or {}, headers={"User-Agent": UA}, timeout=15.0)
         if resp.status_code == 200: return resp.json()
     except: pass
     return {}
 
 async def query_ipinfo(ip: str, client: httpx.AsyncClient):
     try:
-        resp = await client.get(f"{IPINFO_API}/{ip}/json", headers={"User-Agent": UA}, timeout=10.0)
+        resp = await safe_fetch(client, f"{IPINFO_API}/{ip}/json", headers={"User-Agent": UA}, timeout=10.0)
         if resp.status_code == 200: return resp.json()
     except: pass
     return {}
 
 async def scrape_he_asn(asn: str, client: httpx.AsyncClient):
     try:
-        resp = await client.get(f"{HE_BASE}/AS{asn}", headers={"User-Agent": UA}, timeout=15.0)
+        resp = await safe_fetch(client, f"{HE_BASE}/AS{asn}", headers={"User-Agent": UA}, timeout=15.0)
         if resp.status_code == 200:
             text = resp.text
             info = {}
@@ -76,7 +77,7 @@ async def scrape_he_asn(asn: str, client: httpx.AsyncClient):
 
 async def query_peeringdb(asn: str, client: httpx.AsyncClient):
     try:
-        resp = await client.get(f"{PEERINGDB_API}/net/asn/{asn}", headers={"Accept": "application/json", "User-Agent": UA}, timeout=15.0)
+        resp = await safe_fetch(client, f"{PEERINGDB_API}/net/asn/{asn}", headers={"Accept": "application/json", "User-Agent": UA}, timeout=15.0)
         if resp.status_code == 200:
             data = resp.json()
             nets = data.get("data", [])
@@ -86,7 +87,7 @@ async def query_peeringdb(asn: str, client: httpx.AsyncClient):
 
 async def scrape_he_irv(ip: str, client: httpx.AsyncClient):
     try:
-        resp = await client.get(f"{HE_BASE}/irv.cgi?ip={ip}", headers={"User-Agent": UA}, timeout=15.0)
+        resp = await safe_fetch(client, f"{HE_BASE}/irv.cgi?ip={ip}", headers={"User-Agent": UA}, timeout=15.0)
         if resp.status_code == 200:
             text = resp.text
             info = {}
@@ -102,7 +103,7 @@ async def scrape_he_irv(ip: str, client: httpx.AsyncClient):
 
 async def check_rpki_ripe(asn: str, client: httpx.AsyncClient):
     try:
-        resp = await client.get(f"{RIPE_STAT_API}/rpki-validation/data.json", params={"resource": asn}, headers={"User-Agent": UA}, timeout=15.0)
+        resp = await safe_fetch(client, f"{RIPE_STAT_API}/rpki-validation/data.json", params={"resource": asn}, headers={"User-Agent": UA}, timeout=15.0)
         if resp.status_code == 200:
             data = resp.json()
             if data.get("status") == "ok":
@@ -116,7 +117,7 @@ async def check_rpki_ripe(asn: str, client: httpx.AsyncClient):
 
 async def check_moas(ip: str, client: httpx.AsyncClient):
     try:
-        resp = await client.get(f"{RIPE_STAT_API}/routing-status/data.json", params={"resource": ip}, headers={"User-Agent": UA}, timeout=15.0)
+        resp = await safe_fetch(client, f"{RIPE_STAT_API}/routing-status/data.json", params={"resource": ip}, headers={"User-Agent": UA}, timeout=15.0)
         if resp.status_code == 200:
             data = resp.json()
             if data.get("status") == "ok":
@@ -159,7 +160,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         irv = await scrape_he_irv(ip, client)
         if irv and irv.get("origin_as"):
             seen_asns.add(irv["origin_as"])
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"AS{irv['origin_as']} | Prefix: {irv.get('prefix', '?')}",
                 type="BGP: Origin AS via IRV",
                 source="HE.net IRV",
@@ -172,7 +173,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ))
             if irv.get("as_path"):
                 path_asns = re.findall(r'(\d+)', irv["as_path"])
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"AS Path: {' -> '.join(f'AS{a}' for a in path_asns[:15])}",
                     type="BGP: AS Path",
                     source="HE.net IRV",
@@ -186,7 +187,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         moas = await check_moas(ip, client)
         if moas and moas.get("moas"):
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"MOAS detected: {moas['count']} origins for {ip}: {', '.join(moas['origins'][:8])}",
                 type="BGP: MOAS (Multiple Origin AS)",
                 source="RIPE Stat",
@@ -201,7 +202,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
     for asn in list(seen_asns)[:5]:
         he = await scrape_he_asn(asn, client)
         if he:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"AS{asn} | {he.get('name', 'Unknown')} | {he.get('country', '?')}",
                 type="BGP: ASN Information",
                 source="HE.net",
@@ -215,7 +216,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             peer_count = he.get("all_peer_count", 0)
             prefix_count = len(he.get("prefixes", []))
             ips_originated = he.get("ips_originated", 0)
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"AS{asn}: {peer_count} peers, {prefix_count} prefixes, {ips_originated:,} IPs",
                 type="BGP: ASN Scale Metrics",
                 source="HE.net",
@@ -227,7 +228,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ))
 
             tier = "Tier 1" if int(asn) in TIER1_ASNS else "Cloud Provider" if int(asn) in MAJOR_CLOUD_ASNS else "CDN" if int(asn) in MAJOR_CDN_ASNS else "Standard"
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"AS{asn} classified as: {tier}",
                 type="BGP: ASN Tier Classification",
                 source="Comprehensive ASN/BGP",
@@ -246,7 +247,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             peer_count_bv = data.get("peers", {}).get("count", data.get("peer_count", len(data.get("peers", []))))
             upstream_count_bv = data.get("upstreams", {}).get("count", len(data.get("upstreams", [])))
             downstream_count_bv = data.get("downstreams", {}).get("count", len(data.get("downstreams", [])))
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"BGPView: {prefix_count_v4} v4, {prefix_count_v6} v6 prefixes | {peer_count_bv} peers, {upstream_count_bv} upstreams, {downstream_count_bv} downstreams",
                 type="BGP: BGPView Statistics",
                 source="BGPView.io",
@@ -258,7 +259,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ))
 
             for up in data.get("upstreams", [])[:5]:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"AS{up.get('asn', '')} | {up.get('name', '')}",
                     type="BGP: Upstream Provider",
                     source="BGPView.io",
@@ -270,7 +271,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 ))
 
             for peer in data.get("peers", [])[:10]:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"AS{peer.get('asn', '')} | {peer.get('name', '')}",
                     type="BGP: Peer AS",
                     source="BGPView.io",
@@ -282,7 +283,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 ))
 
             for down in data.get("downstreams", [])[:5]:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"AS{down.get('asn', '')} | {down.get('name', '')}",
                     type="BGP: Downstream Customer",
                     source="BGPView.io",
@@ -300,7 +301,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ixlans = pdb.get("ixlans", [])
             if ixlans:
                 ix_names = [ix.get("name", "") for ix in ixlans[:10]]
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"PeeringDB: policy={policy}, type={info_type}, IXPs: {', '.join(ix_names[:5])}",
                     type="BGP: PeeringDB Info",
                     source="PeeringDB",
@@ -311,7 +312,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     tags=["bgp", "peeringdb"]
                 ))
             else:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"PeeringDB: policy={policy}, type={info_type}",
                     type="BGP: PeeringDB Info",
                     source="PeeringDB",
@@ -325,7 +326,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         rpki = await check_rpki_ripe(asn, client)
         if rpki:
             rpki_color = "red" if rpki.get("invalid", 0) > 0 else "green"
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"RPKI: {rpki['valid']} valid, {rpki['invalid']} invalid, {rpki['not_found']} not found ({rpki['total']} total ROAs)",
                 type="BGP: RPKI/ROV Status",
                 source="RIPE Stat",
@@ -336,7 +337,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 tags=["bgp", "rpki", "rov"]
             ))
             if rpki.get("invalid", 0) > 3:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{rpki['invalid']} RPKI-invalid prefixes - potential BGP hijack!",
                     type="BGP: RPKI Hijack Alert",
                     source="RIPE Stat",
@@ -351,7 +352,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         if ripe_routing and ripe_routing.get("status") == "ok":
             vis = ripe_routing.get("data", {}).get("visibility", {})
             if vis:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Route visibility: {vis.get('percentage', '?')}% ({vis.get('visible', '?')}/{vis.get('total', '?')} routes)",
                     type="BGP: Route Visibility",
                     source="RIPE Stat",
@@ -364,7 +365,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         traffic_est = bgpv.get("data", {}).get("traffic_estimation", "") if bgpv else ""
         if traffic_est:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Traffic estimation: {traffic_est}",
                 type="BGP: Traffic Estimation",
                 source="BGPView.io",
@@ -376,7 +377,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ))
 
     if seen_asns:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Analyzed {len(seen_asns)} ASN(s): {', '.join(f'AS{a}' for a in seen_asns)}",
             type="BGP: Comprehensive Analysis Summary",
             source="ASN/BGP Comprehensive",
@@ -387,7 +388,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             tags=["bgp", "asn", "summary"]
         ))
     else:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"No ASN information found for {domain}",
             type="BGP: No Results",
             source="ASN/BGP Comprehensive",

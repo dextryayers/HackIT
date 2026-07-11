@@ -1,7 +1,6 @@
 import httpx
 import re
-import asyncio
-from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash
 
 KEYSERVERS = [
     ("keys.openpgp.org", "https://keys.openpgp.org/vks/v1/by-email/{email}"),
@@ -29,7 +28,7 @@ async def check_keyserver(key_name: str, url_template: str, email: str, client: 
     result = {"found": False, "keyserver": key_name, "raw": "", "details": {}}
     url = url_template.format(email=email)
     try:
-        resp = await client.get(url, timeout=20.0,
+        resp = await safe_fetch(client, url, timeout=20.0,
             headers={"User-Agent": UA, "Accept": "text/html,application/pgp-keys,*/*"})
         if resp.status_code == 200 and len(resp.text) > 100:
             text = resp.text
@@ -47,7 +46,7 @@ async def check_keyserver(key_name: str, url_template: str, email: str, client: 
 
 async def fetch_public_key(email: str, client: httpx.AsyncClient) -> str | None:
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://keys.openpgp.org/vks/v1/by-email/{email}",
             timeout=15.0,
             headers={"User-Agent": UA, "Accept": "application/pgp-keys"}
@@ -62,9 +61,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     findings = []
     email = target.strip().lower()
     if "@" not in email:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="Not a valid email",
-            type="PGP Discovery Error",
+            ftype="PGP Discovery Error",
             source="EmailPGPDiscovery",
             confidence="High", color="red", category="General OSINT",
             threat_level="Informational", status="Error",
@@ -85,9 +84,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             is_revoked = "revoked" in details
 
             if is_revoked:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"REVOKED key found on {name}",
-                    type="PGP: Revoked Key",
+                    ftype="PGP: Revoked Key",
                     source="EmailPGPDiscovery",
                     confidence="High",
                     color="red",
@@ -98,9 +97,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                     tags=["pgp", "revoked", name]
                 ))
 
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"PGP key for {email} on {name}: Key ID {key_id[:16]}",
-                type="PGP: Key Discovery",
+                ftype="PGP: Key Discovery",
                 source="EmailPGPDiscovery",
                 confidence="High",
                 color="purple",
@@ -113,9 +112,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             ))
 
             if key_id:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Key ID: {key_id[:16]}",
-                    type="PGP: Key ID",
+                    ftype="PGP: Key ID",
                     source="EmailPGPDiscovery",
                     confidence="High",
                     color="slate",
@@ -125,9 +124,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                 ))
 
             if fingerprint and fingerprint != "N/A":
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Fingerprint: {fingerprint[:60]}",
-                    type="PGP: Fingerprint",
+                    ftype="PGP: Fingerprint",
                     source="EmailPGPDiscovery",
                     confidence="High",
                     color="slate",
@@ -137,9 +136,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                 ))
 
             if algorithm:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Algorithm: {algorithm}",
-                    type="PGP: Algorithm",
+                    ftype="PGP: Algorithm",
                     source="EmailPGPDiscovery",
                     confidence="High",
                     color="slate",
@@ -152,9 +151,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                 try:
                     ks = int(key_size)
                     ks_color = "emerald" if ks >= 4096 else "orange" if ks >= 2048 else "red"
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Key size: {key_size} bits",
-                        type="PGP: Key Strength",
+                        ftype="PGP: Key Strength",
                         source="EmailPGPDiscovery",
                         confidence="High",
                         color=ks_color,
@@ -166,9 +165,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                     pass
 
             if created and created != "Unknown":
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Key created: {created}",
-                    type="PGP: Creation Date",
+                    ftype="PGP: Creation Date",
                     source="EmailPGPDiscovery",
                     confidence="High",
                     color="slate",
@@ -178,9 +177,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                 ))
 
             if expires and expires != "Never":
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Key expires: {expires}",
-                    type="PGP: Expiration",
+                    ftype="PGP: Expiration",
                     source="EmailPGPDiscovery",
                     confidence="High",
                     color="orange",
@@ -189,9 +188,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                     tags=["pgp", "expiration"]
                 ))
             elif not is_revoked:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity="No key expiration date set - key never expires",
-                    type="PGP: No Expiration",
+                    ftype="PGP: No Expiration",
                     source="EmailPGPDiscovery",
                     confidence="Medium",
                     color="orange",
@@ -202,9 +201,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
             sig_count = details.get("signatures", "0")
             if sig_count:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Signatures on key: {sig_count}",
-                    type="PGP: Signature Count",
+                    ftype="PGP: Signature Count",
                     source="EmailPGPDiscovery",
                     confidence="Medium",
                     color="slate",
@@ -215,9 +214,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
             if "user_id" in details:
                 uid = details["user_id"]
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"User ID: {uid[:100]}",
-                    type="PGP: User ID",
+                    ftype="PGP: User ID",
                     source="EmailPGPDiscovery",
                     confidence="High",
                     color="slate",
@@ -228,9 +227,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                 other_emails = re.findall(r'<([^>]+@[^>]+)>', uid)
                 for oe in other_emails:
                     if oe.lower() != email:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"Associated email on same key: {oe}",
-                            type="PGP: Associated Email",
+                            ftype="PGP: Associated Email",
                             source="EmailPGPDiscovery",
                             confidence="High",
                             color="purple",
@@ -239,9 +238,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                             tags=["pgp", "associated-email"]
                         ))
         else:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"No PGP key found on {name} for {email}",
-                type="PGP: No Key",
+                ftype="PGP: No Key",
                 source="EmailPGPDiscovery",
                 confidence="High",
                 color="slate",
@@ -253,7 +252,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     public_key = await fetch_public_key(email, client)
     if public_key:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Public key exported from keys.openpgp.org ({len(public_key)} chars)",
             type="PGP: Public Key Export",
             source="EmailPGPDiscovery",
@@ -267,7 +266,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         ))
 
     total_found = sum(1 for f in findings if f.type == "PGP: Key Discovery")
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"PGP key search complete: {total_found} key(s) found across {len(KEYSERVERS)} keyservers",
         type="PGP: Scan Summary",
         source="EmailPGPDiscovery",

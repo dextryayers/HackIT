@@ -2,8 +2,8 @@ import httpx
 import re
 import json
 import asyncio
-import socket
 from urllib.parse import urlparse
+from module_common import safe_fetch, safe_fetch_json, make_finding, resolve_ip
 from models import IntelligenceFinding
 
 CDN_PROVIDERS = {
@@ -21,7 +21,7 @@ CDN_PROVIDERS = {
 async def _find_historical_dns_before_cdn(domain: str, client: httpx.AsyncClient) -> list:
     findings = []
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://viewdns.info/iphistory/?domain={domain}",
             timeout=20.0,
             headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}
@@ -30,7 +30,7 @@ async def _find_historical_dns_before_cdn(domain: str, client: httpx.AsyncClient
             ip_dates = re.findall(r'>(\d+\.\d+\.\d+\.\d+)</td><td>(\d{4}-\d{2}-\d{2})', resp.text)
             unique_ips = list(set(ip_dates))
             if unique_ips:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{len(unique_ips)} historical IPs found",
                     type="CDN Bypass - Historical IPs (ViewDNS)",
                     source="ViewDNS",
@@ -41,7 +41,7 @@ async def _find_historical_dns_before_cdn(domain: str, client: httpx.AsyncClient
                     tags=["cdn-bypass", "historical-ip", "viewdns"]
                 ))
                 for ip, dt in unique_ips[:15]:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Historical IP: {ip} (seen {dt})",
                         type="CDN Bypass - Pre-CDN IP Candidate",
                         source="ViewDNS",
@@ -58,7 +58,7 @@ async def _find_historical_dns_before_cdn(domain: str, client: httpx.AsyncClient
 async def _find_origin_via_ct_logs(domain: str, client: httpx.AsyncClient) -> list:
     findings = []
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://crt.sh/?q=%25.{domain}&output=json",
             timeout=20.0,
             headers={"User-Agent": "Mozilla/5.0"}
@@ -71,14 +71,15 @@ async def _find_origin_via_ct_logs(domain: str, client: httpx.AsyncClient) -> li
                 for sub in name_val.split("\n"):
                     sub = sub.strip().lower()
                     if sub.endswith("." + domain) and "*" not in sub:
-                        try:
-                            loop = asyncio.get_event_loop()
-                            ip = await loop.run_in_executor(None, lambda s=sub: socket.gethostbyname(s))
-                            ips_in_certs.add(ip)
-                        except Exception:
-                            pass
+                            try:
+                                loop = asyncio.get_event_loop()
+                                ip = await loop.run_in_executor(None, lambda s=sub: resolve_ip(s))
+                                if ip:
+                                    ips_in_certs.add(ip)
+                            except Exception:
+                                pass
             if ips_in_certs:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{len(ips_in_certs)} unique IPs resolved from CT subdomains",
                     type="CDN Bypass - IPs from CT Logs",
                     source="crt.sh",
@@ -89,7 +90,7 @@ async def _find_origin_via_ct_logs(domain: str, client: httpx.AsyncClient) -> li
                     tags=["cdn-bypass", "ct-ip", "origin-candidate"]
                 ))
                 for ip in list(sorted(ips_in_certs))[:10]:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Origin IP candidate: {ip}",
                         type="CDN Bypass - Origin IP (CT Resolution)",
                         source="crt.sh",
@@ -106,7 +107,7 @@ async def _find_origin_via_ct_logs(domain: str, client: httpx.AsyncClient) -> li
 async def _find_origin_via_spf(domain: str, client: httpx.AsyncClient) -> list:
     findings = []
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://dns.google/resolve?name={domain}&type=TXT",
             timeout=10.0,
             headers={"Accept": "application/json"}
@@ -121,7 +122,7 @@ async def _find_origin_via_spf(domain: str, client: httpx.AsyncClient) -> list:
                         ip4s = re.findall(r'ip4:([\d.]+)', txt)
                         includes = re.findall(r'include:([\w.]+)', txt)
                         for ip4 in ip4s:
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=f"SPF IP: {ip4}",
                                 type="CDN Bypass - Origin IP (SPF ip4)",
                                 source="Passive CDN Bypass",
@@ -132,7 +133,7 @@ async def _find_origin_via_spf(domain: str, client: httpx.AsyncClient) -> list:
                                 tags=["cdn-bypass", "origin-ip", "spf"]
                             ))
                         for inc in includes:
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=f"SPF include: {inc}",
                                 type="CDN Bypass - SPF Include Domain",
                                 source="Passive CDN Bypass",
@@ -148,7 +149,7 @@ async def _find_origin_via_spf(domain: str, client: httpx.AsyncClient) -> list:
 async def _find_origin_via_mx(domain: str, client: httpx.AsyncClient) -> list:
     findings = []
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://dns.google/resolve?name={domain}&type=MX",
             timeout=10.0,
             headers={"Accept": "application/json"}
@@ -164,17 +165,18 @@ async def _find_origin_via_mx(domain: str, client: httpx.AsyncClient) -> list:
                         mx_server = mx_parts[1].rstrip(".")
                         try:
                             loop = asyncio.get_event_loop()
-                            mx_ip = await loop.run_in_executor(None, lambda: socket.gethostbyname(mx_server))
-                            findings.append(IntelligenceFinding(
-                                entity=f"MX server: {mx_server} -> {mx_ip}",
-                                type="CDN Bypass - MX Server IP",
-                                source="Passive CDN Bypass",
-                                confidence="High",
-                                color="orange",
-                                status="Origin Candidate",
-                                raw_data=f"MX {mx_server} resolves to {mx_ip}",
-                                tags=["cdn-bypass", "origin-ip", "mx"]
-                            ))
+                            mx_ip = await loop.run_in_executor(None, lambda: resolve_ip(mx_server))
+                            if mx_ip:
+                                findings.append(make_finding(
+                                    entity=f"MX server: {mx_server} -> {mx_ip}",
+                                    type="CDN Bypass - MX Server IP",
+                                    source="Passive CDN Bypass",
+                                    confidence="High",
+                                    color="orange",
+                                    status="Origin Candidate",
+                                    raw_data=f"MX {mx_server} resolves to {mx_ip}",
+                                    tags=["cdn-bypass", "origin-ip", "mx"]
+                                ))
                         except Exception:
                             pass
     except Exception:
@@ -184,7 +186,7 @@ async def _find_origin_via_mx(domain: str, client: httpx.AsyncClient) -> list:
 async def _check_non_cdn_subdomains(domain: str, client: httpx.AsyncClient) -> list:
     findings = []
     try:
-        ht_resp = await client.get(
+        ht_resp = await safe_fetch(client, 
             f"https://api.hackertarget.com/hostsearch/?q={domain}",
             timeout=12.0,
             headers={"User-Agent": "Mozilla/5.0"}
@@ -201,7 +203,7 @@ async def _check_non_cdn_subdomains(domain: str, client: httpx.AsyncClient) -> l
                         sub_ip_map[sub] = ip
             all_ips = set(sub_ip_map.values())
             if len(all_ips) > 1:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{len(all_ips)} unique IPs across subdomains",
                     type="CDN Bypass - IP Diversity Across Subdomains",
                     source="Passive CDN Bypass",
@@ -212,7 +214,7 @@ async def _check_non_cdn_subdomains(domain: str, client: httpx.AsyncClient) -> l
                     tags=["cdn-bypass", "ip-diversity"]
                 ))
                 for sub, ip in list(sub_ip_map.items())[:10]:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"{sub} -> {ip}",
                         type="CDN Bypass - Subdomain IP Mapping",
                         source="Passive CDN Bypass",
@@ -229,7 +231,7 @@ async def _check_non_cdn_subdomains(domain: str, client: httpx.AsyncClient) -> l
 async def _check_reverse_dns(domain: str, client: httpx.AsyncClient) -> list:
     findings = []
     try:
-        ht_resp = await client.get(
+        ht_resp = await safe_fetch(client, 
             f"https://api.hackertarget.com/reverseip/?q={domain}",
             timeout=12.0,
             headers={"User-Agent": "Mozilla/5.0"}
@@ -251,7 +253,7 @@ async def _check_reverse_dns(domain: str, client: httpx.AsyncClient) -> list:
                     if not is_cdn:
                         non_cdn_hosts.append(host)
             if non_cdn_hosts:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{len(non_cdn_hosts)} non-CDN hosts co-located with origin IP",
                     type="CDN Bypass - Non-CDN Co-hosted Domains",
                     source="Passive CDN Bypass",
@@ -262,7 +264,7 @@ async def _check_reverse_dns(domain: str, client: httpx.AsyncClient) -> list:
                     tags=["cdn-bypass", "co-hosted", "origin-candidate"]
                 ))
                 for host in non_cdn_hosts[:10]:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=host[:200],
                         type="CDN Bypass - Co-hosted Domain",
                         source="Passive CDN Bypass",
@@ -300,7 +302,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     findings.extend(rev_findings)
 
     if findings:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"CDN Bypass analysis complete: {len(findings)} findings",
             type="CDN Bypass - Summary",
             source="Passive CDN Bypass",

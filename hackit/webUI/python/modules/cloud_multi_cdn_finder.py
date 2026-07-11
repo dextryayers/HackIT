@@ -1,7 +1,7 @@
 import httpx
 import asyncio
 import re
-import socket
+from module_common import safe_fetch, safe_fetch_json, make_finding, resolve_ip, is_ip
 from models import IntelligenceFinding
 
 CDN_PROVIDERS = {
@@ -152,22 +152,19 @@ CDN_PROVIDERS = {
 }
 
 async def _resolve_target(target: str) -> tuple:
-    try:
-        socket.inet_aton(target)
-        return target, True
-    except OSError:
-        pass
-    try:
-        ip = socket.gethostbyname(target)
+    t = target.strip()
+    if is_ip(t):
+        return t, True
+    ip = resolve_ip(t)
+    if ip:
         return ip, False
-    except Exception as e:
-        return None, str(e)
+    return None, "DNS resolution failed"
 
 async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
     findings = []
     base = f"https://{target}" if not target.startswith("http") else target
     try:
-        resp = await client.get(base, follow_redirects=True, timeout=10.0,
+        resp = await safe_fetch(client, base, follow_redirects=True, timeout=10.0,
             headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"})
         headers = dict(resp.headers)
         server = headers.get("server", "").lower()
@@ -187,7 +184,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
                         break
             if found:
                 detected_cdns.append(name)
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=name,
                     type="CDN Detected (Header)",
                     source="MultiCDNFinder",
@@ -201,7 +198,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
                 ))
 
         if len(detected_cdns) > 1:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Multi-CDN detected: {', '.join(detected_cdns)}",
                 type="Multi-CDN Configuration",
                 source="MultiCDNFinder",
@@ -216,7 +213,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
 
         if "via" in headers:
             via = headers["via"]
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Via: {via[:200]}",
                 type="CDN Hop (Via Header)",
                 source="MultiCDNFinder",
@@ -231,7 +228,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
 
         if "x-cache" in headers:
             xcache = headers["x-cache"]
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"X-Cache: {xcache}",
                 type="CDN Cache Status",
                 source="MultiCDNFinder",
@@ -246,7 +243,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
 
         if "x-served-by" in headers:
             served = headers["x-served-by"]
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Served-By: {served}",
                 type="CDN Edge Node",
                 source="MultiCDNFinder",
@@ -261,7 +258,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
             ))
 
     except Exception as e:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Header analysis error: {str(e)[:100]}",
             type="CDN Scan Error",
             source="MultiCDNFinder",
@@ -285,7 +282,7 @@ async def _check_dns_cname(target: str) -> list:
                 for name, config in CDN_PROVIDERS.items():
                     for cname_pat in config.get("cname", []):
                         if cname_pat in cname:
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=f"{name} (CNAME: {cname})",
                                 type="CDN Detected (CNAME)",
                                 source="MultiCDNFinder",
@@ -318,7 +315,7 @@ async def _check_ip_range(ip: str) -> list:
                 si = (int(sp[0])<<24)+(int(sp[1])<<16)+(int(sp[2])<<8)+int(sp[3])
                 ei = (int(ep[0])<<24)+(int(ep[1])<<16)+(int(ep[2])<<8)+int(ep[3])
                 if si <= ip_int <= ei:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"{name} (IP Range)",
                         type="CDN Detected (IP Range)",
                         source="MultiCDNFinder",
@@ -345,11 +342,11 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     ip, is_ip = await _resolve_target(target)
     if ip is None:
-        findings.append(IntelligenceFinding(entity=f"DNS resolution failed: {target}", type="DNS Error", source="MultiCDNFinder", confidence="Low", color="red", category="Cloud / Infrastructure OSINT", raw_data=str(is_ip)[:200], tags=["error"]))
+        findings.append(make_finding(entity=f"DNS resolution failed: {target}", type="DNS Error", source="MultiCDNFinder", confidence="Low", color="red", category="Cloud / Infrastructure OSINT", raw_data=str(is_ip)[:200], tags=["error"]))
         return findings
 
     if not is_ip:
-        findings.append(IntelligenceFinding(entity=f"{target} -> {ip}", type="DNS Resolution", source="MultiCDNFinder", confidence="High", color="slate", category="Cloud / Infrastructure OSINT", threat_level="Informational", status="Resolved", resolution=ip, tags=["dns", "resolution"]))
+        findings.append(make_finding(entity=f"{target} -> {ip}", type="DNS Resolution", source="MultiCDNFinder", confidence="High", color="slate", category="Cloud / Infrastructure OSINT", threat_level="Informational", status="Resolved", resolution=ip, tags=["dns", "resolution"]))
 
     findings.extend(await _check_ip_range(ip))
     findings.extend(await _check_dns_cname(target))
@@ -360,10 +357,10 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     if cdns_found:
         cdns_found.add(primary_cdn)
 
-    findings.append(IntelligenceFinding(entity=f"Primary CDN: {primary_cdn}", type="CDN: Primary", source="MultiCDNFinder", confidence="High", color="purple", category="Cloud / Infrastructure OSINT", threat_level="Informational", status="Identified", tags=["cdn", "primary"]))
-    findings.append(IntelligenceFinding(entity=f"Total CDNs detected: {len(cdns_found)}", type="CDN: Total Count", source="MultiCDNFinder", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["cdn", "count"]))
-    findings.append(IntelligenceFinding(entity=f"Target: {target}", type="CDN Scan Target", source="MultiCDNFinder", confidence="High", color="slate", category="Cloud / Infrastructure OSINT", tags=["cdn", "target"]))
-    findings.append(IntelligenceFinding(entity=f"Resolved IP: {ip}", type="CDN Resolved IP", source="MultiCDNFinder", confidence="High", color="slate", category="Cloud / Infrastructure OSINT", tags=["cdn", "ip"]))
-    findings.append(IntelligenceFinding(entity=f"Total CDN findings: {len(findings)}", type="CDN Scan Summary", source="MultiCDNFinder", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["cdn", "summary"]))
+    findings.append(make_finding(entity=f"Primary CDN: {primary_cdn}", type="CDN: Primary", source="MultiCDNFinder", confidence="High", color="purple", category="Cloud / Infrastructure OSINT", threat_level="Informational", status="Identified", tags=["cdn", "primary"]))
+    findings.append(make_finding(entity=f"Total CDNs detected: {len(cdns_found)}", type="CDN: Total Count", source="MultiCDNFinder", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["cdn", "count"]))
+    findings.append(make_finding(entity=f"Target: {target}", type="CDN Scan Target", source="MultiCDNFinder", confidence="High", color="slate", category="Cloud / Infrastructure OSINT", tags=["cdn", "target"]))
+    findings.append(make_finding(entity=f"Resolved IP: {ip}", type="CDN Resolved IP", source="MultiCDNFinder", confidence="High", color="slate", category="Cloud / Infrastructure OSINT", tags=["cdn", "ip"]))
+    findings.append(make_finding(entity=f"Total CDN findings: {len(findings)}", type="CDN Scan Summary", source="MultiCDNFinder", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["cdn", "summary"]))
 
     return findings

@@ -3,7 +3,7 @@ import asyncio
 import socket
 import re
 from urllib.parse import urlparse
-from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash
 
 COMMON_TLDS = [
     "com", "net", "org", "co", "io", "me", "tv", "info", "biz", "dev",
@@ -363,7 +363,7 @@ async def check_dns(variant: str) -> tuple:
 
 async def check_http(variant: str, client: httpx.AsyncClient) -> tuple:
     try:
-        resp = await client.get(f"http://{variant}", timeout=8.0, follow_redirects=False,
+        resp = await safe_fetch(client, f"http://{variant}", timeout=8.0, follow_redirects=False,
                                 headers={"User-Agent": "Mozilla/5.0"})
         server = resp.headers.get("server", "")
         ctype = resp.headers.get("content-type", "")
@@ -382,7 +382,7 @@ async def check_http(variant: str, client: httpx.AsyncClient) -> tuple:
 async def check_via_dnstwister_api(domain: str, client: httpx.AsyncClient) -> list:
     findings = []
     try:
-        resp = await client.get(f"https://dnstwister.report/api/v1/domain/{domain}", timeout=15.0,
+        resp = await safe_fetch(client, f"https://dnstwister.report/api/v1/domain/{domain}", timeout=15.0,
                                 headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"})
         if resp.status_code == 200:
             data = resp.json()
@@ -390,8 +390,8 @@ async def check_via_dnstwister_api(domain: str, client: httpx.AsyncClient) -> li
             if isinstance(fuzzy, list):
                 for entry in fuzzy[:15]:
                     if isinstance(entry, str):
-                        findings.append(IntelligenceFinding(
-                            entity=entry, type="Typosquat Variant (API)", source="DNSTwister",
+                        findings.append(make_finding(
+                            entity=entry, ftype="Typosquat Variant (API)", source="DNSTwister",
                             confidence="Medium", color="orange", threat_level="Elevated Risk",
                             status="Potential Typosquat", resolution="Discovered via dnstwister API",
                             tags=["typosquat", "dns-twist"]
@@ -399,8 +399,8 @@ async def check_via_dnstwister_api(domain: str, client: httpx.AsyncClient) -> li
                     elif isinstance(entry, dict):
                         name = entry.get("domain", entry.get("name", ""))
                         if name:
-                            findings.append(IntelligenceFinding(
-                                entity=name, type="Typosquat Variant (API)", source="DNSTwister",
+                            findings.append(make_finding(
+                                entity=name, ftype="Typosquat Variant (API)", source="DNSTwister",
                                 confidence="Medium", color="orange", threat_level="Elevated Risk",
                                 status="Potential Typosquat", resolution="Discovered via dnstwister API",
                                 tags=["typosquat", "dns-twist"]
@@ -487,9 +487,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             if http_title:
                 details_parts.append(f"Title: {http_title}")
 
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=v,
-            type=f"Typosquat: {ctype}",
+            ftype=f"Typosquat: {ctype}",
             source="DNSTwister",
             confidence="High" if dns_resolved else "Medium",
             color=color_map.get(risk, "slate"),
@@ -503,9 +503,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
     bitsquat_count = sum(1 for _, ct, _ in variants[:100] if ct == "Bitsquatting")
 
     if homograph_count > 0:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{homograph_count} homograph attack variants generated",
-            type="Homograph Attack Analysis",
+            ftype="Homograph Attack Analysis",
             source="DNSTwister",
             confidence="High",
             color="red",
@@ -516,9 +516,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         ))
 
     if bitsquat_count > 0:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{bitsquat_count} bitsquatting variants generated",
-            type="Bitsquatting Analysis",
+            ftype="Bitsquatting Analysis",
             source="DNSTwister",
             confidence="High",
             color="orange",
@@ -529,7 +529,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         ))
 
     if variants:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Typosquat scan summary: {len(variants)} variants, {resolved_count} DNS-resolved, {http_alive_count} HTTP-alive",
             type="DNSTwister Summary",
             source="DNSTwister",
@@ -546,7 +546,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         matched_terms = [t for t in PHISHING_TERMS if t in lower_v]
         if matched_terms:
             phishing_matches.append((variant, matched_terms))
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{variant} contains phishing indicators: {', '.join(matched_terms)}",
                 type="Phishing Keyword Match",
                 source="DNSTwister",
@@ -558,9 +558,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ))
 
     if same_ip_count > 0:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{same_ip_count} variants resolve to SAME IP as original - possible mirror/phishing",
-            type="Same-IP Cluster",
+            ftype="Same-IP Cluster",
             source="DNSTwister",
             confidence="High",
             color="red",
@@ -571,7 +571,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         ))
 
     if parked_count > 0:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{parked_count} variants appear to be PARKED domains (sinkhole)",
             type="Parked Domain Detection",
             source="DNSTwister",
@@ -584,9 +584,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         ))
 
     if http_alive_count > 0:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{http_alive_count} HTTP-alive typosquat variants are actively serving content",
-            type="Active Typosquat Alert",
+            ftype="Active Typosquat Alert",
             source="DNSTwister",
             confidence="High",
             color="red",

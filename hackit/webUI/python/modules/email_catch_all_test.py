@@ -4,7 +4,7 @@ import dns.resolver
 import asyncio
 import random
 import string
-from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 
@@ -103,9 +103,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     mx_behavior = await check_mx_behavior(domain)
 
     if mx_behavior["mx_count"] > 0:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"MX servers for {domain}: {mx_behavior['mx_count']} found",
-            type="Catch-All: MX Discovery",
+            ftype="Catch-All: MX Discovery",
             source="EmailCatchAllTest",
             confidence="High",
             color="slate",
@@ -116,9 +116,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             tags=["catch-all", "mx", domain]
         ))
         for pat in mx_behavior["patterns"]:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=pat,
-                type="Catch-All: MX Pattern",
+                ftype="Catch-All: MX Pattern",
                 source="EmailCatchAllTest",
                 confidence="Medium",
                 color="orange",
@@ -127,9 +127,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                 tags=["catch-all", "mx-pattern"]
             ))
     else:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"No MX records for {domain}",
-            type="Catch-All: No MX",
+            ftype="Catch-All: No MX",
             source="EmailCatchAllTest",
             confidence="High",
             color="red",
@@ -138,9 +138,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             status="No MX",
             tags=["catch-all", "no-mx"]
         ))
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="Catch-all test cannot proceed without MX records",
-            type="Catch-All: Test Aborted",
+            ftype="Catch-All: Test Aborted",
             source="EmailCatchAllTest",
             confidence="High",
             color="slate",
@@ -167,9 +167,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     accept_rate = len(accepted) / total * 100 if total > 0 else 0
 
     for r in accepted[:10]:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Email accepted: {r['local_part']}@{domain}",
-            type="Catch-All: Accepted",
+            ftype="Catch-All: Accepted",
             source="EmailCatchAllTest",
             confidence="High",
             color="orange",
@@ -181,9 +181,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         ))
 
     for r in bounced[:10]:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Email bounced: {r['local_part']}@{domain}",
-            type="Catch-All: Bounced",
+            ftype="Catch-All: Bounced",
             source="EmailCatchAllTest",
             confidence="High",
             color="emerald",
@@ -194,9 +194,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         ))
 
     for r in errors[:5]:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Error testing {r['local_part']}: {r['error'][:100]}",
-            type="Catch-All: Test Error",
+            ftype="Catch-All: Test Error",
             source="EmailCatchAllTest",
             confidence="Low",
             color="slate",
@@ -210,7 +210,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     c_color = "red" if catch_all_likelihood == "HIGH" else "orange" if catch_all_likelihood == "MEDIUM" else "emerald"
     c_threat = "Elevated Risk" if catch_all_likelihood == "HIGH" else "Standard Target" if catch_all_likelihood == "MEDIUM" else "Informational"
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Catch-all likelihood: {catch_all_likelihood} ({accept_rate:.0f}% acceptance rate)",
         type="Catch-All: Likelihood Assessment",
         source="EmailCatchAllTest",
@@ -223,7 +223,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         tags=["catch-all", "likelihood", catch_all_likelihood.lower()]
     ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Catch-all test results: {len(accepted)}/{total} accepted, {len(bounced)}/{total} bounced",
         type="Catch-All: Test Summary",
         source="EmailCatchAllTest",
@@ -236,9 +236,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     ))
 
     if catch_all_likelihood == "HIGH":
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="Domain appears to have catch-all email - all email addresses on this domain will accept email",
-            type="Catch-All: Warning",
+            ftype="Catch-All: Warning",
             source="EmailCatchAllTest",
             confidence="Medium",
             color="red",
@@ -248,9 +248,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             tags=["catch-all", "warning", "security-risk"]
         ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"SMTP VRFY/EXPN analysis for {domain} also suggests catch-all behavior",
-        type="Catch-All: SMTP Analysis",
+        ftype="Catch-All: SMTP Analysis",
         source="EmailCatchAllTest",
         confidence="Low",
         color="slate",

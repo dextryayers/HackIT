@@ -3,6 +3,7 @@ import asyncio
 import json
 from datetime import datetime
 from typing import List
+from module_common import safe_fetch, safe_fetch_json, make_finding
 from models import IntelligenceFinding
 
 GREYNOISE_API = "https://api.greynoise.io/v3"
@@ -24,7 +25,7 @@ CLASSIFICATION_WEIGHTS = {
 async def check_gnip(client: httpx.AsyncClient, ip: str) -> dict:
     result = {"raw": None, "noise": False, "classification": "", "tags": []}
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"{GREYNOISE_API}/noise/context/{ip}",
             headers={"User-Agent": UA, "Accept": "application/json"},
             timeout=15.0
@@ -42,7 +43,7 @@ async def check_gnip(client: httpx.AsyncClient, ip: str) -> dict:
 async def check_riot(client: httpx.AsyncClient, ip: str) -> dict:
     result = {"riot": False, "category": "", "name": "", "description": ""}
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"{GREYNOISE_RIOT}/lookup/{ip}",
             headers={"User-Agent": UA, "Accept": "application/json"},
             timeout=15.0
@@ -60,7 +61,7 @@ async def check_riot(client: httpx.AsyncClient, ip: str) -> dict:
 async def check_gnql(client: httpx.AsyncClient, ip: str) -> dict:
     result = {"count": 0, "records": []}
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"{GREYNOISE_API}/gnql?query=ip:{ip}",
             headers={"User-Agent": UA, "Accept": "application/json"},
             timeout=15.0
@@ -78,7 +79,7 @@ async def check_gnql_multi(client: httpx.AsyncClient, ip: str) -> dict:
     queries = [f"ip:{ip}", f"destination_ip:{ip}", f"source_ip:{ip}"]
     for query in queries:
         try:
-            resp = await client.get(
+            resp = await safe_fetch(client, 
                 f"{GREYNOISE_API}/gnql?query={query}",
                 headers={"User-Agent": UA, "Accept": "application/json"},
                 timeout=10.0
@@ -118,7 +119,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         classification = data.get("classification", "unknown")
         severity = THREAT_SEVERITY.get(classification, THREAT_SEVERITY["unknown"])
 
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"GreyNoise classification: {classification}",
             type="GreyNoise IP Analysis",
             source="GreyNoise",
@@ -132,7 +133,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         ))
 
         if noise:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Noise detected on internet scanners",
                 type="GreyNoise Noise Status",
                 source="GreyNoise",
@@ -146,7 +147,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
         last_seen = data.get("last_seen", "")
         if last_seen:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Last seen: {last_seen[:10]}",
                 type="GreyNoise Last Seen",
                 source="GreyNoise",
@@ -160,7 +161,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
         first_seen = data.get("first_seen", "")
         if first_seen:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"First seen: {first_seen[:10]}",
                 type="GreyNoise First Seen",
                 source="GreyNoise",
@@ -175,7 +176,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         tags = data.get("tags", [])
         if tags:
             for tag in tags[:5]:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Tag: {tag}",
                     type="GreyNoise Tag",
                     source="GreyNoise",
@@ -189,7 +190,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
         actor = data.get("actor", "")
         if actor:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Actor: {actor}",
                 type="GreyNoise Actor",
                 source="GreyNoise",
@@ -203,7 +204,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
         organization = data.get("organization", "")
         if organization:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Organization: {organization}",
                 type="GreyNoise Organization",
                 source="GreyNoise",
@@ -217,7 +218,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         cve_tags = [t for t in tags if "cve" in t.lower() or "CVE-" in t]
         if cve_tags:
             for cve_tag in cve_tags[:3]:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"CVE associated: {cve_tag}",
                     type="GreyNoise CVE Association",
                     source="GreyNoise",
@@ -233,7 +234,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         city = data.get("city", "")
         if country or city:
             loc = f"{city}, {country}" if city else country
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Location: {loc}",
                 type="GreyNoise Geolocation",
                 source="GreyNoise",
@@ -246,7 +247,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
         asn = data.get("asn", "")
         if asn:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"ASN: {asn}",
                 type="GreyNoise ASN",
                 source="GreyNoise",
@@ -258,7 +259,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             ))
 
     if riot_result.get("riot"):
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"RIOT: {riot_result.get('name', 'Known service')}",
             type="GreyNoise RIOT",
             source="GreyNoise RIOT",
@@ -274,7 +275,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
     threat_score = calculate_threat_score(gnip_result, riot_result)
     if threat_score > 0:
         score_level = "High Risk" if threat_score > 60 else ("Elevated Risk" if threat_score > 30 else "Informational")
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Threat score: {threat_score}/100",
             type="GreyNoise Threat Score",
             source="GreyNoise",
@@ -288,7 +289,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
     gnql_result = await check_gnql(client, ip)
     if gnql_result.get("count", 0) > 0:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{gnql_result['count']} GNQL records found",
             type="GreyNoise GNQL Query",
             source="GreyNoise",
@@ -302,7 +303,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
     gnql_multi = await check_gnql_multi(client, ip)
     if gnql_multi.get("records"):
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{len(gnql_multi['records'])} multi-query GNQL records",
             type="GreyNoise Extended GNQL",
             source="GreyNoise",
@@ -315,7 +316,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         ))
 
     if not gnip_result.get("raw") and not riot_result.get("riot"):
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="No GreyNoise data available",
             type="GreyNoise No Data",
             source="GreyNoise",

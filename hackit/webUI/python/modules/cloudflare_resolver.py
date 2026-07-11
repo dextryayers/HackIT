@@ -7,9 +7,10 @@ import struct
 import hashlib
 import time
 from urllib.parse import urlparse, quote
-from models import IntelligenceFinding
 from typing import List, Dict, Optional, Set, Any, Tuple
 from datetime import datetime
+from module_common import safe_fetch, safe_fetch_json, make_finding
+from models import IntelligenceFinding
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
@@ -201,7 +202,7 @@ async def resolve_dns(hostname: str, record_type: str = "A") -> List[str]:
 async def check_http_on_port(client: httpx.AsyncClient, hostname: str, port: int) -> Optional[Dict]:
     try:
         url = f"http://{hostname}:{port}"
-        resp = await client.get(url, headers={"User-Agent": UA}, timeout=10.0, follow_redirects=False)
+        resp = await safe_fetch(client, url, headers={"User-Agent": UA}, timeout=10.0, follow_redirects=False)
         headers = dict(resp.headers)
         server = headers.get("server", "")
         if server and "cloudflare" not in server.lower():
@@ -216,7 +217,7 @@ async def check_http_on_port(client: httpx.AsyncClient, hostname: str, port: int
 
     try:
         url = f"https://{hostname}:{port}"
-        resp = await client.get(url, headers={"User-Agent": UA}, timeout=10.0, follow_redirects=False)
+        resp = await safe_fetch(client, url, headers={"User-Agent": UA}, timeout=10.0, follow_redirects=False)
         headers = dict(resp.headers)
         server = headers.get("server", "")
         if server and "cloudflare" not in server.lower():
@@ -236,7 +237,7 @@ async def search_crtsh_certs(client: httpx.AsyncClient, domain: str, page: int =
     try:
         url = f"https://crt.sh/?q=%25.{quote(domain)}&output=json&page={page}"
         headers = {"User-Agent": UA}
-        resp = await client.get(url, headers=headers, timeout=30.0)
+        resp = await safe_fetch(client, url, headers=headers, timeout=30.0)
         if resp.status_code == 200:
             data = resp.json()
             if not data:
@@ -270,7 +271,7 @@ async def search_securitytrails(client: httpx.AsyncClient, domain: str) -> Dict:
     try:
         url = f"https://api.securitytrails.com/v1/domain/{domain}"
         headers = {"User-Agent": UA, "Accept": "application/json", "APIKEY": "demo"}
-        resp = await client.get(url, headers=headers, timeout=20.0)
+        resp = await safe_fetch(client, url, headers=headers, timeout=20.0)
         if resp.status_code == 200:
             data = resp.json()
             for record in data.get("current_dns", {}).get("a", []):
@@ -298,18 +299,18 @@ async def search_securitytrails(client: httpx.AsyncClient, domain: str) -> Dict:
                     result["txt_records"].append(record)
 
         sub_url = f"https://api.securitytrails.com/v1/domain/{domain}/subdomains"
-        resp2 = await client.get(sub_url, headers=headers, timeout=20.0)
+        resp2 = await safe_fetch(client, sub_url, headers=headers, timeout=20.0)
         if resp2.status_code == 200:
             sub_data = resp2.json()
             result["subdomains"] = sub_data.get("subdomains", [])
 
         tags_url = f"https://api.securitytrails.com/v1/domain/{domain}/tags"
-        resp3 = await client.get(tags_url, headers=headers, timeout=20.0)
+        resp3 = await safe_fetch(client, tags_url, headers=headers, timeout=20.0)
         if resp3.status_code == 200:
             result["tags"] = resp3.json().get("tags", [])
 
         associated_url = f"https://api.securitytrails.com/v1/domain/{domain}/associated"
-        resp4 = await client.get(associated_url, headers=headers, timeout=20.0)
+        resp4 = await safe_fetch(client, associated_url, headers=headers, timeout=20.0)
         if resp4.status_code == 200:
             result["associated"] = resp4.json().get("associated_domains", [])
     except Exception:
@@ -321,7 +322,7 @@ async def search_dnsdumpster(client: httpx.AsyncClient, domain: str) -> List[Dic
     results = []
     try:
         url = "https://dnsdumpster.com/"
-        resp = await client.get(url, headers={"User-Agent": UA}, timeout=15.0)
+        resp = await safe_fetch(client, url, headers={"User-Agent": UA}, timeout=15.0)
         csrf_match = re.search(r'name="csrfmiddlewaretoken" value="([^"]+)"', resp.text)
 
         headers = {
@@ -381,12 +382,12 @@ async def check_shodan_favicon(client: httpx.AsyncClient, domain: str) -> List[s
     ips = []
     try:
         favicon_url = f"https://{domain}/favicon.ico"
-        resp = await client.get(favicon_url, headers={"User-Agent": UA}, timeout=15.0)
+        resp = await safe_fetch(client, favicon_url, headers={"User-Agent": UA}, timeout=15.0)
         if resp.status_code == 200:
             fav_hash = hashlib.md5(resp.content).hexdigest()
             shodan_url = f"https://www.shodan.io/search?query=http.favicon.hash:{fav_hash}"
             headers = {"User-Agent": UA}
-            shodan_resp = await client.get(shodan_url, headers=headers, timeout=20.0)
+            shodan_resp = await safe_fetch(client, shodan_url, headers=headers, timeout=20.0)
             if shodan_resp.status_code == 200:
                 found_ips = re.findall(r'(?:\b(?:\d{1,3}\.){3}\d{1,3})\b', shodan_resp.text)
                 for found_ip in set(found_ips):
@@ -408,7 +409,7 @@ async def search_shodan_direct(client: httpx.AsyncClient, domain: str) -> List[D
         for query in queries:
             try:
                 shodan_url = f"https://www.shodan.io/search?query={quote(query)}"
-                resp = await client.get(shodan_url, headers={"User-Agent": UA}, timeout=20.0)
+                resp = await safe_fetch(client, shodan_url, headers={"User-Agent": UA}, timeout=20.0)
                 if resp.status_code == 200:
                     found_ips = re.findall(r'(?:\b(?:\d{1,3}\.){3}\d{1,3})\b', resp.text)
                     for found_ip in set(found_ips):
@@ -425,12 +426,12 @@ async def search_fofa_favicon(client: httpx.AsyncClient, domain: str) -> List[Di
     results = []
     try:
         favicon_url = f"https://{domain}/favicon.ico"
-        resp = await client.get(favicon_url, headers={"User-Agent": UA}, timeout=15.0)
+        resp = await safe_fetch(client, favicon_url, headers={"User-Agent": UA}, timeout=15.0)
         if resp.status_code == 200:
             mmh3_hash = compute_favicon_hash_mmh3(resp.content)
             if mmh3_hash:
                 fofa_url = f"https://fofa.info/result?qbase64={quote(mmh3_hash)}"
-                fofa_resp = await client.get(fofa_url, headers={"User-Agent": UA}, timeout=20.0)
+                fofa_resp = await safe_fetch(client, fofa_url, headers={"User-Agent": UA}, timeout=20.0)
                 if fofa_resp.status_code == 200:
                     found_ips = re.findall(r'(?:\b(?:\d{1,3}\.){3}\d{1,3})\b', fofa_resp.text)
                     for found_ip in set(found_ips):
@@ -440,7 +441,7 @@ async def search_fofa_favicon(client: httpx.AsyncClient, domain: str) -> List[Di
             md5_hash = compute_favicon_hash_md5(resp.content)
             if md5_hash:
                 fofa_md5_url = f"https://fofa.info/result?qbase64={quote(md5_hash)}"
-                fofa_md5_resp = await client.get(fofa_md5_url, headers={"User-Agent": UA}, timeout=20.0)
+                fofa_md5_resp = await safe_fetch(client, fofa_md5_url, headers={"User-Agent": UA}, timeout=20.0)
                 if fofa_md5_resp.status_code == 200:
                     found_ips = re.findall(r'(?:\b(?:\d{1,3}\.){3}\d{1,3})\b', fofa_md5_resp.text)
                     for found_ip in set(found_ips):
@@ -471,7 +472,7 @@ async def search_censys_certificate(client: httpx.AsyncClient, domain: str) -> L
 
         if sha256_fp:
             censys_url = f"https://search.censys.io/certificates?q=sha256:{sha256_fp}"
-            censys_resp = await client.get(censys_url, headers={"User-Agent": UA}, timeout=20.0)
+            censys_resp = await safe_fetch(client, censys_url, headers={"User-Agent": UA}, timeout=20.0)
             if censys_resp.status_code == 200:
                 found_ips = re.findall(r'(?:\b(?:\d{1,3}\.){3}\d{1,3})\b', censys_resp.text)
                 for found_ip in set(found_ips):
@@ -479,7 +480,7 @@ async def search_censys_certificate(client: httpx.AsyncClient, domain: str) -> L
                         results.append({"ip": found_ip, "source": "Censys certificate search", "confidence": "High"})
 
         censys_query_url = f"https://search.censys.io/search?resource=hosts&q=services.tls.certificates.leaf_data.subject.common_name:%22{quote(domain)}%22"
-        censys_resp2 = await client.get(censys_query_url, headers={"User-Agent": UA}, timeout=20.0)
+        censys_resp2 = await safe_fetch(client, censys_query_url, headers={"User-Agent": UA}, timeout=20.0)
         if censys_resp2.status_code == 200:
             found_ips = re.findall(r'(?:\b(?:\d{1,3}\.){3}\d{1,3})\b', censys_resp2.text)
             for found_ip in set(found_ips):
@@ -494,12 +495,12 @@ async def search_zoomeye_favicon(client: httpx.AsyncClient, domain: str) -> List
     results = []
     try:
         favicon_url = f"https://{domain}/favicon.ico"
-        resp = await client.get(favicon_url, headers={"User-Agent": UA}, timeout=15.0)
+        resp = await safe_fetch(client, favicon_url, headers={"User-Agent": UA}, timeout=15.0)
         if resp.status_code == 200:
             mmh3_hash = compute_favicon_hash_mmh3(resp.content)
             if mmh3_hash:
                 zoomeye_url = f"https://www.zoomeye.org/searchResult?q={quote(f'app:"{domain}"')}"
-                zoomeye_resp = await client.get(zoomeye_url, headers={"User-Agent": UA}, timeout=20.0)
+                zoomeye_resp = await safe_fetch(client, zoomeye_url, headers={"User-Agent": UA}, timeout=20.0)
                 if zoomeye_resp.status_code == 200:
                     found_ips = re.findall(r'(?:\b(?:\d{1,3}\.){3}\d{1,3})\b', zoomeye_resp.text)
                     for found_ip in set(found_ips):
@@ -515,7 +516,7 @@ async def search_virustotal_passive_dns(client: httpx.AsyncClient, domain: str) 
     try:
         url = f"https://www.virustotal.com/api/v3/domains/{domain}/resolutions"
         headers = {"User-Agent": UA, "Accept": "application/json"}
-        resp = await client.get(url, headers=headers, timeout=20.0)
+        resp = await safe_fetch(client, url, headers=headers, timeout=20.0)
         if resp.status_code == 200:
             data = resp.json()
             for item in data.get("data", []):
@@ -538,7 +539,7 @@ async def search_alienvault_otx(client: httpx.AsyncClient, domain: str) -> List[
     try:
         url = f"https://otx.alienvault.com/api/v1/indicators/domain/{domain}/passive_dns"
         headers = {"User-Agent": UA, "Accept": "application/json"}
-        resp = await client.get(url, headers=headers, timeout=20.0)
+        resp = await safe_fetch(client, url, headers=headers, timeout=20.0)
         if resp.status_code == 200:
             data = resp.json()
             for entry in data.get("passive_dns", []):
@@ -562,7 +563,7 @@ async def search_urlscan(client: httpx.AsyncClient, domain: str) -> List[Dict]:
     try:
         url = f"https://urlscan.io/api/v1/search/?q=domain:{domain}"
         headers = {"User-Agent": UA, "Accept": "application/json"}
-        resp = await client.get(url, headers=headers, timeout=30.0)
+        resp = await safe_fetch(client, url, headers=headers, timeout=30.0)
         if resp.status_code == 200:
             data = resp.json()
             for result_item in data.get("results", []):
@@ -593,7 +594,7 @@ async def search_securitytrails_history(client: httpx.AsyncClient, domain: str) 
         for url in urls:
             try:
                 headers = {"User-Agent": UA, "Accept": "application/json", "APIKEY": "demo"}
-                resp = await client.get(url, headers=headers, timeout=20.0)
+                resp = await safe_fetch(client, url, headers=headers, timeout=20.0)
                 if resp.status_code == 200:
                     data = resp.json()
                     for record in data.get("records", []):
@@ -619,7 +620,7 @@ async def search_subdomain_center(client: httpx.AsyncClient, domain: str) -> Lis
     try:
         url = f"https://subdomaincenter.com/api/subdomain/{domain}"
         headers = {"User-Agent": UA, "Accept": "application/json"}
-        resp = await client.get(url, headers=headers, timeout=20.0)
+        resp = await safe_fetch(client, url, headers=headers, timeout=20.0)
         if resp.status_code == 200:
             data = resp.json()
             if isinstance(data, list):
@@ -640,7 +641,7 @@ async def search_threatminer(client: httpx.AsyncClient, domain: str) -> List[str
     try:
         url = f"https://api.threatminer.org/v2/domain.php?q={domain}&rt=5"
         headers = {"User-Agent": UA, "Accept": "application/json"}
-        resp = await client.get(url, headers=headers, timeout=20.0)
+        resp = await safe_fetch(client, url, headers=headers, timeout=20.0)
         if resp.status_code == 200:
             data = resp.json()
             if data.get("status_code") == "200":
@@ -657,7 +658,7 @@ async def search_anubisdb(client: httpx.AsyncClient, domain: str) -> List[str]:
     try:
         url = f"https://jldc.me/anubis/subdomains/{domain}"
         headers = {"User-Agent": UA, "Accept": "application/json"}
-        resp = await client.get(url, headers=headers, timeout=20.0)
+        resp = await safe_fetch(client, url, headers=headers, timeout=20.0)
         if resp.status_code == 200:
             data = resp.json()
             if isinstance(data, list):
@@ -676,7 +677,7 @@ async def search_riddler(client: httpx.AsyncClient, domain: str) -> List[Dict]:
     try:
         url = f"https://riddler.io/search?q=pld:{domain}"
         headers = {"User-Agent": UA}
-        resp = await client.get(url, headers=headers, timeout=20.0)
+        resp = await safe_fetch(client, url, headers=headers, timeout=20.0)
         if resp.status_code == 200:
             found_ips = re.findall(r'(?:\b(?:\d{1,3}\.){3}\d{1,3})\b', resp.text)
             for found_ip in set(found_ips):
@@ -712,7 +713,7 @@ async def search_hackertarget_reverse_ip(client: httpx.AsyncClient, domain: str)
     try:
         url = f"https://api.hackertarget.com/reverseip/?q={domain}"
         headers = {"User-Agent": UA}
-        resp = await client.get(url, headers=headers, timeout=20.0)
+        resp = await safe_fetch(client, url, headers=headers, timeout=20.0)
         if resp.status_code == 200:
             for line in resp.text.split('\n'):
                 if line.strip() and not line.startswith("Host"):
@@ -731,7 +732,7 @@ async def test_alternative_ports(client: httpx.AsyncClient, ip: str) -> List[Dic
                 url = f"https://{ip}:{port}"
             else:
                 url = f"http://{ip}:{port}"
-            resp = await client.get(url, headers={"User-Agent": UA}, timeout=5.0, follow_redirects=False)
+            resp = await safe_fetch(client, url, headers={"User-Agent": UA}, timeout=5.0, follow_redirects=False)
             headers = dict(resp.headers)
             server = headers.get("server", "")
             if server and "cloudflare" not in server.lower():
@@ -759,7 +760,7 @@ async def analyze_error_page(client: httpx.AsyncClient, ip: str, domain: str, po
     try:
         scheme = "https" if port in [443, 8443, 4443, 2083, 2087, 2096] else "http"
         url = f"{scheme}://{ip}:{port}"
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             url,
             headers={"User-Agent": UA, "Host": domain},
             timeout=8.0,
@@ -848,7 +849,7 @@ async def check_cdn_misconfiguration(client: httpx.AsyncClient, domain: str) -> 
                             detected_cdns.append(cdn_name)
 
         try:
-            resp = await client.get(
+            resp = await safe_fetch(client, 
                 f"https://{domain}",
                 headers={"User-Agent": UA},
                 timeout=10.0,
@@ -891,7 +892,7 @@ async def check_cdn_misconfiguration(client: httpx.AsyncClient, domain: str) -> 
                 if not is_cloudflare_ip(ip):
                     continue
                 try:
-                    resp_direct = await client.get(
+                    resp_direct = await safe_fetch(client, 
                         f"https://{ip}",
                         headers={"User-Agent": UA, "Host": domain},
                         timeout=8.0,
@@ -927,7 +928,7 @@ async def detect_rate_limiting(client: httpx.AsyncClient, domain: str) -> Dict:
         "details": "",
     }
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://{domain}",
             headers={"User-Agent": UA},
             timeout=10.0,
@@ -980,7 +981,7 @@ async def fingerprint_origin(client: httpx.AsyncClient, ip: str, domain: str) ->
         "response_similarity": 0.0,
     }
     try:
-        resp_http = await client.get(
+        resp_http = await safe_fetch(client, 
             f"http://{ip}",
             headers={"User-Agent": UA, "Host": domain},
             timeout=8.0,
@@ -999,7 +1000,7 @@ async def fingerprint_origin(client: httpx.AsyncClient, ip: str, domain: str) ->
         pass
 
     try:
-        resp_https = await client.get(
+        resp_https = await safe_fetch(client, 
             f"https://{ip}",
             headers={"User-Agent": UA, "Host": domain},
             timeout=8.0,
@@ -1109,14 +1110,14 @@ async def crawl(target: str, client: httpx.AsyncClient):
     rate_limit_info = {}
 
     try:
-        resp = await client.get(f"https://{domain}", headers={"User-Agent": UA}, timeout=15.0, follow_redirects=True)
+        resp = await safe_fetch(client, f"https://{domain}", headers={"User-Agent": UA}, timeout=15.0, follow_redirects=True)
         headers = dict(resp.headers)
         cf_ray = headers.get("cf-ray", "")
         cf_cache = headers.get("cf-cache-status", "")
         server = headers.get("server", "")
         if "cloudflare" in server.lower() or cf_ray or cf_cache:
             is_cloudflare_detected = True
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="Cloudflare detected via response headers",
                 type="CDN: Cloudflare Detected",
                 source="CloudflareResolver",
@@ -1130,7 +1131,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
     rate_limit_info = await detect_rate_limiting(client, domain)
     if rate_limit_info.get("is_challenge_page") or rate_limit_info.get("is_rate_limited"):
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Cloudflare security: {rate_limit_info.get('details', 'Unknown')}",
             type="CDN: Cloudflare Security Detection",
             source="CloudflareResolver",
@@ -1261,7 +1262,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
     cdn_misconfigs = await check_cdn_misconfiguration(client, domain)
     for entry in cdn_misconfigs:
         if entry["type"] == "multi_cdn":
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Multi-CDN detected: {', '.join(entry['cdns'])}",
                 type="CDN: Multi-CDN Detection",
                 source="CloudflareResolver",
@@ -1272,7 +1273,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 tags=["cdn", "multi-cdn", "misconfiguration"]
             ))
         elif entry["type"] == "leaked_origin_header":
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Origin IP leaked via headers: {', '.join(entry['headers'].keys())}",
                 type="CDN: Origin Header Leaked",
                 source="CloudflareResolver",
@@ -1321,7 +1322,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         for port in [80, 443, 8080, 8443]:
             try:
                 scheme = "https" if port in [443, 8443] else "http"
-                resp = await client.get(
+                resp = await safe_fetch(client, 
                     f"{scheme}://{ip}:{port}",
                     headers={"User-Agent": UA, "Host": domain},
                     timeout=5.0,
@@ -1391,7 +1392,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         if fp.get("http", {}).get("body_snippet"):
             raw_data += f"\nHTTP Body (first 200 chars): {fp['http']['body_snippet']}"
 
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Origin IP: {ip}",
             type="CDN: Origin IP Candidate",
             source=f"CloudflareResolver/{source_info.split('(')[0].strip()}",
@@ -1417,7 +1418,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 cluster_info.append(f"Cluster: {', '.join(ips)} (same response body)")
 
         if cluster_info:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Origin server clusters: {len(cluster_info)} groups found",
                 type="CDN: Origin Fingerprint Clusters",
                 source="CloudflareResolver",
@@ -1429,7 +1430,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ))
 
     if target_cert:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Target TLS Certificate: {len(target_cert.get('san', []))} SANs, Issuer: {target_cert.get('issuer', {}).get('organizationName', 'Unknown')}",
             type="CDN: Target Certificate Analysis",
             source="CloudflareResolver",
@@ -1460,7 +1461,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             f"Certificate matches: {sum(1 for c in origin_candidates if c.get('score', 0) >= 80)} high-score candidates",
         ]
 
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Cloudflare Origin Resolution: {len(high_conf)} high-confidence origins (avg score: {avg_score:.0f}/100)",
             type="CDN: Origin Resolution Summary",
             source="CloudflareResolver",
@@ -1471,7 +1472,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             tags=["summary", "cloudflare", "origin-resolution"]
         ))
     elif is_cloudflare_detected and not findings:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="Cloudflare detected but no origin IP found. Target likely fully proxied.",
             type="CDN: Origin Resolution",
             source="CloudflareResolver",
@@ -1482,61 +1483,61 @@ async def crawl(target: str, client: httpx.AsyncClient):
         ))
 
     async def analyze_origin_landscape():
-        findings.append(IntelligenceFinding(entity=f"Origin IP candidates: {len(origin_candidates)}", type="CDN: Candidate Count", source="CloudflareResolver", confidence="High", color="slate", tags=["analysis"]))
+        findings.append(make_finding(entity=f"Origin IP candidates: {len(origin_candidates)}", type="CDN: Candidate Count", source="CloudflareResolver", confidence="High", color="slate", tags=["analysis"]))
         high_conf_count = sum(1 for c in origin_candidates if c.get("confidence") == "High")
         med_conf_count = sum(1 for c in origin_candidates if c.get("confidence") == "Medium")
-        findings.append(IntelligenceFinding(entity=f"High confidence: {high_conf_count}, Medium: {med_conf_count}", type="CDN: Confidence Breakdown", source="CloudflareResolver", confidence="Medium", color="purple", tags=["analysis"]))
-        findings.append(IntelligenceFinding(entity=f"Subdomains resolved: {len(subdomain_candidates)}", type="CDN: Subdomain Volume", source="CloudflareResolver", confidence="Medium", color="slate", tags=["analysis"]))
+        findings.append(make_finding(entity=f"High confidence: {high_conf_count}, Medium: {med_conf_count}", type="CDN: Confidence Breakdown", source="CloudflareResolver", confidence="Medium", color="purple", tags=["analysis"]))
+        findings.append(make_finding(entity=f"Subdomains resolved: {len(subdomain_candidates)}", type="CDN: Subdomain Volume", source="CloudflareResolver", confidence="Medium", color="slate", tags=["analysis"]))
 
     async def analyze_cdn_security():
-        findings.append(IntelligenceFinding(entity=f"Cloudflare detected: {is_cloudflare_detected}", type="CDN: Detection Status", source="CloudflareResolver", confidence="High", color="blue" if is_cloudflare_detected else "slate", tags=["security"]))
-        findings.append(IntelligenceFinding(entity=f"Challenge/rate-limit: {rate_limit_info.get('is_challenge_page', False) or rate_limit_info.get('is_rate_limited', False)}", type="CDN: Security Challenge", source="CloudflareResolver", confidence="Medium", color="yellow" if rate_limit_info.get('is_challenge_page') else "emerald", tags=["security"]))
-        findings.append(IntelligenceFinding(entity=f"Origin header leaks: {sum(1 for f in findings if f.type == 'CDN: Origin Header Leaked')}", type="CDN: Header Leak Count", source="CloudflareResolver", confidence="Medium", color="red", tags=["security"]))
+        findings.append(make_finding(entity=f"Cloudflare detected: {is_cloudflare_detected}", type="CDN: Detection Status", source="CloudflareResolver", confidence="High", color="blue" if is_cloudflare_detected else "slate", tags=["security"]))
+        findings.append(make_finding(entity=f"Challenge/rate-limit: {rate_limit_info.get('is_challenge_page', False) or rate_limit_info.get('is_rate_limited', False)}", type="CDN: Security Challenge", source="CloudflareResolver", confidence="Medium", color="yellow" if rate_limit_info.get('is_challenge_page') else "emerald", tags=["security"]))
+        findings.append(make_finding(entity=f"Origin header leaks: {sum(1 for f in findings if f.type == 'CDN: Origin Header Leaked')}", type="CDN: Header Leak Count", source="CloudflareResolver", confidence="Medium", color="red", tags=["security"]))
 
     async def analyze_certificate_info():
         if target_cert:
-            findings.append(IntelligenceFinding(entity=f"TLS issuer: {target_cert.get('issuer', {}).get('organizationName', 'Unknown')}", type="CDN: TLS Issuer", source="CloudflareResolver", confidence="High", color="slate", tags=["certificate"]))
-            findings.append(IntelligenceFinding(entity=f"TLS SAN count: {len(target_cert.get('san', []))}", type="CDN: SAN Count", source="CloudflareResolver", confidence="Medium", color="slate", tags=["certificate"]))
-        findings.append(IntelligenceFinding(entity=f"Target domain: {domain}", type="CDN: Target Host", source="CloudflareResolver", confidence="High", color="slate", tags=["certificate"]))
+            findings.append(make_finding(entity=f"TLS issuer: {target_cert.get('issuer', {}).get('organizationName', 'Unknown')}", type="CDN: TLS Issuer", source="CloudflareResolver", confidence="High", color="slate", tags=["certificate"]))
+            findings.append(make_finding(entity=f"TLS SAN count: {len(target_cert.get('san', []))}", type="CDN: SAN Count", source="CloudflareResolver", confidence="Medium", color="slate", tags=["certificate"]))
+        findings.append(make_finding(entity=f"Target domain: {domain}", type="CDN: Target Host", source="CloudflareResolver", confidence="High", color="slate", tags=["certificate"]))
 
     async def analyze_search_sources():
-        findings.append(IntelligenceFinding(entity=f"Subdomain sources checked: crt.sh, SecurityTrails, DNSDumpster, VirusTotal, AlienVault, URLScan, FOFA, Censys, ZoomEye, Shodan", type="CDN: Source Coverage", source="CloudflareResolver", confidence="Medium", color="slate", tags=["sources"]))
-        findings.append(IntelligenceFinding(entity=f"Origin sources with results: {len(set(c['source'].split('(')[0].strip() for c in origin_candidates))}", type="CDN: Active Sources", source="CloudflareResolver", confidence="Medium", color="slate", tags=["sources"]))
-        findings.append(IntelligenceFinding(entity=f"Total findings: {len(findings)}", type="CDN: Finding Volume", source="CloudflareResolver", confidence="Medium", color="purple", tags=["sources"]))
+        findings.append(make_finding(entity=f"Subdomain sources checked: crt.sh, SecurityTrails, DNSDumpster, VirusTotal, AlienVault, URLScan, FOFA, Censys, ZoomEye, Shodan", type="CDN: Source Coverage", source="CloudflareResolver", confidence="Medium", color="slate", tags=["sources"]))
+        findings.append(make_finding(entity=f"Origin sources with results: {len(set(c['source'].split('(')[0].strip() for c in origin_candidates))}", type="CDN: Active Sources", source="CloudflareResolver", confidence="Medium", color="slate", tags=["sources"]))
+        findings.append(make_finding(entity=f"Total findings: {len(findings)}", type="CDN: Finding Volume", source="CloudflareResolver", confidence="Medium", color="purple", tags=["sources"]))
 
     async def analyze_misconfigurations():
         multi_cdn = sum(1 for f in findings if f.type == "CDN: Multi-CDN Detection")
         header_leak = sum(1 for f in findings if f.type == "CDN: Origin Header Leaked")
-        findings.append(IntelligenceFinding(entity=f"Multi-CDN setups: {multi_cdn}", type="CDN: Multi-CDN Count", source="CloudflareResolver", confidence="Medium", color="orange" if multi_cdn else "emerald", tags=["misconfig"]))
-        findings.append(IntelligenceFinding(entity=f"Origin header leaks: {header_leak}", type="CDN: Header Leak Count", source="CloudflareResolver", confidence="Medium", color="red" if header_leak else "emerald", tags=["misconfig"]))
+        findings.append(make_finding(entity=f"Multi-CDN setups: {multi_cdn}", type="CDN: Multi-CDN Count", source="CloudflareResolver", confidence="Medium", color="orange" if multi_cdn else "emerald", tags=["misconfig"]))
+        findings.append(make_finding(entity=f"Origin header leaks: {header_leak}", type="CDN: Header Leak Count", source="CloudflareResolver", confidence="Medium", color="red" if header_leak else "emerald", tags=["misconfig"]))
         clusters = sum(1 for f in findings if f.type == "CDN: Origin Fingerprint Clusters")
-        findings.append(IntelligenceFinding(entity=f"Origin clusters detected: {clusters}", type="CDN: Cluster Count", source="CloudflareResolver", confidence="Medium", color="slate", tags=["misconfig"]))
+        findings.append(make_finding(entity=f"Origin clusters detected: {clusters}", type="CDN: Cluster Count", source="CloudflareResolver", confidence="Medium", color="slate", tags=["misconfig"]))
 
     async def analyze_cdn_exposure():
-        findings.append(IntelligenceFinding(entity=f"Cloudflare protection: {'Active' if is_cloudflare_detected else 'Not detected'}", type="CDN: Protection Status", source="CloudflareResolver", confidence="High", color="blue" if is_cloudflare_detected else "slate", tags=["exposure"]))
-        findings.append(IntelligenceFinding(entity=f"Origin risk: {'Exposed' if high_conf_count > 0 else 'Protected'}", type="CDN: Origin Risk", source="CloudflareResolver", confidence="Medium", color="red" if high_conf_count > 0 else "emerald", tags=["exposure"]))
-        findings.append(IntelligenceFinding(entity="Use origin IP protection features (Cloudflare Spectrum, Argo Tunnel)", type="CDN: Security Recommendation", source="CloudflareResolver", confidence="Medium", color="orange", tags=["exposure"]))
+        findings.append(make_finding(entity=f"Cloudflare protection: {'Active' if is_cloudflare_detected else 'Not detected'}", type="CDN: Protection Status", source="CloudflareResolver", confidence="High", color="blue" if is_cloudflare_detected else "slate", tags=["exposure"]))
+        findings.append(make_finding(entity=f"Origin risk: {'Exposed' if high_conf_count > 0 else 'Protected'}", type="CDN: Origin Risk", source="CloudflareResolver", confidence="Medium", color="red" if high_conf_count > 0 else "emerald", tags=["exposure"]))
+        findings.append(make_finding(entity="Use origin IP protection features (Cloudflare Spectrum, Argo Tunnel)", type="CDN: Security Recommendation", source="CloudflareResolver", confidence="Medium", color="orange", tags=["exposure"]))
 
     async def analyze_detailed_breakdown():
-        findings.append(IntelligenceFinding(entity=f"Subdomain candidates: {len(subdomain_candidates)}", type="CDN: Subdomain Count", source="CloudflareResolver", confidence="Medium", color="slate", tags=["breakdown"]))
-        findings.append(IntelligenceFinding(entity=f"Cert SAN entries: {len(target_cert.get('san', [])) if target_cert else 0}", type="CDN: Cert SAN Total", source="CloudflareResolver", confidence="Medium", color="slate", tags=["breakdown"]))
-        findings.append(IntelligenceFinding(entity=f"Resolved origins (all confidence): {len(origin_candidates)}", type="CDN: Origin Total", source="CloudflareResolver", confidence="Medium", color="slate", tags=["breakdown"]))
-        findings.append(IntelligenceFinding(entity=f"Average confidence score: {round(sum(c.get('score',0) for c in origin_candidates)/max(len(origin_candidates),1)) if origin_candidates else 0}", type="CDN: Avg Score", source="CloudflareResolver", confidence="Medium", color="slate", tags=["breakdown"]))
+        findings.append(make_finding(entity=f"Subdomain candidates: {len(subdomain_candidates)}", type="CDN: Subdomain Count", source="CloudflareResolver", confidence="Medium", color="slate", tags=["breakdown"]))
+        findings.append(make_finding(entity=f"Cert SAN entries: {len(target_cert.get('san', [])) if target_cert else 0}", type="CDN: Cert SAN Total", source="CloudflareResolver", confidence="Medium", color="slate", tags=["breakdown"]))
+        findings.append(make_finding(entity=f"Resolved origins (all confidence): {len(origin_candidates)}", type="CDN: Origin Total", source="CloudflareResolver", confidence="Medium", color="slate", tags=["breakdown"]))
+        findings.append(make_finding(entity=f"Average confidence score: {round(sum(c.get('score',0) for c in origin_candidates)/max(len(origin_candidates),1)) if origin_candidates else 0}", type="CDN: Avg Score", source="CloudflareResolver", confidence="Medium", color="slate", tags=["breakdown"]))
 
     async def analyze_cdn_verdict():
-        findings.append(IntelligenceFinding(entity=f"CDN resolver finding: {len(findings)} total", type="CDN: Finding Count", source="CloudflareResolver", confidence="Medium", color="purple", tags=["verdict"]))
+        findings.append(make_finding(entity=f"CDN resolver finding: {len(findings)} total", type="CDN: Finding Count", source="CloudflareResolver", confidence="Medium", color="purple", tags=["verdict"]))
         if is_cloudflare_detected and not high_conf_count:
-            findings.append(IntelligenceFinding(entity="Origin appears protected - no high-confidence origin IPs found", type="CDN: Protected Verdict", source="CloudflareResolver", confidence="Medium", color="emerald", tags=["verdict"]))
+            findings.append(make_finding(entity="Origin appears protected - no high-confidence origin IPs found", type="CDN: Protected Verdict", source="CloudflareResolver", confidence="Medium", color="emerald", tags=["verdict"]))
         elif is_cloudflare_detected and high_conf_count:
-            findings.append(IntelligenceFinding(entity=f"Origin exposed - {high_conf_count} high-confidence origin IP(s) found", type="CDN: Exposed Verdict", source="CloudflareResolver", confidence="Medium", color="red", tags=["verdict"]))
+            findings.append(make_finding(entity=f"Origin exposed - {high_conf_count} high-confidence origin IP(s) found", type="CDN: Exposed Verdict", source="CloudflareResolver", confidence="Medium", color="red", tags=["verdict"]))
 
     async def analyze_endpoint_insight():
-        findings.append(IntelligenceFinding(entity=f"Total findings generated: {len(findings)}", type="CDN: Total Findings", source="CloudflareResolver", confidence="Medium", color="purple", tags=["insight"]))
-        findings.append(IntelligenceFinding(entity=f"Sources contributing: crt.sh, SecurityTrails, DNSDumpster, VirusTotal, AlienVault, URLScan, FOFA, Censys, ZoomEye, Shodan, HackerTarget, Riddler", type="CDN: Source List", source="CloudflareResolver", confidence="Medium", color="slate", tags=["insight"]))
-        findings.append(IntelligenceFinding(entity=f"Risk level: {'High' if high_conf_count > 0 else 'Medium' if med_conf_count > 0 else 'Low'}", type="CDN: Risk Level", source="CloudflareResolver", confidence="Medium", color="red" if high_conf_count else "orange", tags=["insight"]))
-        findings.append(IntelligenceFinding(entity=f"Domain: {domain}", type="CDN: Domain Target", source="CloudflareResolver", confidence="High", color="slate", tags=["insight"]))
-        findings.append(IntelligenceFinding(entity=f"Origin exposure status: {'HIGH RISK' if high_conf_count > 0 else 'Protected'}", type="CDN: Exposure Status", source="CloudflareResolver", confidence="Medium", color="red" if high_conf_count else "emerald", tags=["insight"]))
-        findings.append(IntelligenceFinding(entity=f"Origin candidates by source: {len(set(c['source'].split('(')[0].strip() for c in origin_candidates))}", type="CDN: Source Diversity", source="CloudflareResolver", confidence="Medium", color="slate", tags=["insight"]))
+        findings.append(make_finding(entity=f"Total findings generated: {len(findings)}", type="CDN: Total Findings", source="CloudflareResolver", confidence="Medium", color="purple", tags=["insight"]))
+        findings.append(make_finding(entity=f"Sources contributing: crt.sh, SecurityTrails, DNSDumpster, VirusTotal, AlienVault, URLScan, FOFA, Censys, ZoomEye, Shodan, HackerTarget, Riddler", type="CDN: Source List", source="CloudflareResolver", confidence="Medium", color="slate", tags=["insight"]))
+        findings.append(make_finding(entity=f"Risk level: {'High' if high_conf_count > 0 else 'Medium' if med_conf_count > 0 else 'Low'}", type="CDN: Risk Level", source="CloudflareResolver", confidence="Medium", color="red" if high_conf_count else "orange", tags=["insight"]))
+        findings.append(make_finding(entity=f"Domain: {domain}", type="CDN: Domain Target", source="CloudflareResolver", confidence="High", color="slate", tags=["insight"]))
+        findings.append(make_finding(entity=f"Origin exposure status: {'HIGH RISK' if high_conf_count > 0 else 'Protected'}", type="CDN: Exposure Status", source="CloudflareResolver", confidence="Medium", color="red" if high_conf_count else "emerald", tags=["insight"]))
+        findings.append(make_finding(entity=f"Origin candidates by source: {len(set(c['source'].split('(')[0].strip() for c in origin_candidates))}", type="CDN: Source Diversity", source="CloudflareResolver", confidence="Medium", color="slate", tags=["insight"]))
 
     await asyncio.gather(
         analyze_origin_landscape(),

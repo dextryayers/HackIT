@@ -1,8 +1,8 @@
 import httpx
 import asyncio
 import re
-import socket
 import json
+from module_common import safe_fetch, safe_fetch_json, make_finding, resolve_ip, is_ip
 from models import IntelligenceFinding
 
 AWS_SERVICES = {
@@ -67,16 +67,13 @@ ALB_PATTERNS = ["elb.amazonaws.com", "internal-elb", "loadbalancer"]
 ROUTE53_PATTERNS = ["awsdns-", "route53"]
 
 async def _resolve_target(target: str) -> tuple:
-    try:
-        socket.inet_aton(target)
-        return target, True
-    except OSError:
-        pass
-    try:
-        ip = socket.gethostbyname(target)
+    t = target.strip()
+    if is_ip(t):
+        return t, True
+    ip = resolve_ip(t)
+    if ip:
         return ip, False
-    except Exception as e:
-        return None, str(e)
+    return None, "DNS resolution failed"
 
 async def _check_ip_ranges(ip: str) -> list:
     findings = []
@@ -106,7 +103,7 @@ async def _check_ip_ranges(ip: str) -> list:
             si = (int(sp[0])<<24)+(int(sp[1])<<16)+(int(sp[2])<<8)+int(sp[3])
             ei = (int(ep[0])<<24)+(int(ep[1])<<16)+(int(ep[2])<<8)+int(ep[3])
             if si <= ip_int <= ei:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"AWS {region}",
                     type="AWS IP Range Match",
                     source="AWSCloudScanner",
@@ -129,7 +126,7 @@ async def _check_ip_ranges(ip: str) -> list:
                 si = (int(sp[0])<<24)+(int(sp[1])<<16)+(int(sp[2])<<8)+int(sp[3])
                 ei = (int(ep[0])<<24)+(int(ep[1])<<16)+(int(ep[2])<<8)+int(ep[3])
                 if si <= ip_int <= ei:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"AWS Region: {region}",
                         type="AWS Region Detected (IP)",
                         source="AWSCloudScanner",
@@ -158,7 +155,7 @@ async def _check_dns_services(target: str) -> list:
                 for svc, patterns in AWS_SERVICES.items():
                     for pat in patterns:
                         if pat in cname:
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=f"AWS {svc}",
                                 type="AWS Service (CNAME)",
                                 source="AWSCloudScanner",
@@ -180,7 +177,7 @@ async def _check_dns_services(target: str) -> list:
                 ns = str(r.target).rstrip('.').lower()
                 for pat in ROUTE53_PATTERNS:
                     if pat in ns:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity="AWS Route53",
                             type="AWS DNS Service (NS)",
                             source="AWSCloudScanner",
@@ -201,7 +198,7 @@ async def _check_dns_services(target: str) -> list:
             for r in answers_txt:
                 txt = str(r).lower()
                 if "amazonses" in txt:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity="AWS SES",
                         type="AWS Service (TXT)",
                         source="AWSCloudScanner",
@@ -214,7 +211,7 @@ async def _check_dns_services(target: str) -> list:
                         tags=["cloud", "aws", "ses"]
                     ))
                 if "_amazonses" in txt or "amazon.com" in txt:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity="AWS Domain Verification",
                         type="AWS Domain (TXT)",
                         source="AWSCloudScanner",
@@ -236,7 +233,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
     findings = []
     base = f"https://{target}" if not target.startswith("http") else target
     try:
-        resp = await client.get(base, follow_redirects=True, timeout=10.0,
+        resp = await safe_fetch(client, base, follow_redirects=True, timeout=10.0,
             headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"})
         headers = dict(resp.headers)
         server = headers.get("server", "").lower()
@@ -245,7 +242,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
         all_vals = " ".join(str(v).lower() for v in headers.values())
 
         if "cloudfront" in server or "cloudfront" in all_vals or "x-amz-cf-id" in headers:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="AWS CloudFront",
                 type="AWS Service (Header)",
                 source="AWSCloudScanner",
@@ -258,7 +255,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
                 tags=["cloud", "aws", "cloudfront"]
             ))
         if "amazons3" in server or "x-amz-request-id" in headers or "x-amz-id-2" in headers:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="AWS S3",
                 type="AWS Service (Header)",
                 source="AWSCloudScanner",
@@ -271,7 +268,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
                 tags=["cloud", "aws", "s3"]
             ))
         if "amazon" in server or "amzn" in server:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="AWS (Server Header)",
                 type="AWS Infrastructure",
                 source="AWSCloudScanner",
@@ -284,7 +281,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
                 tags=["cloud", "aws"]
             ))
         if "x-amzn-requestid" in headers or "x-amzn-ErrorType" in headers:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="AWS API Gateway / ALB",
                 type="AWS Service (Header)",
                 source="AWSCloudScanner",
@@ -297,7 +294,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
                 tags=["cloud", "aws", "api-gateway"]
             ))
         if "x-amz-request-id" in headers:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="AWS S3 / API Gateway",
                 type="AWS Service (Header)",
                 source="AWSCloudScanner",
@@ -311,7 +308,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
             ))
         if "x-amz-cf-pop" in headers:
             pop = headers.get("x-amz-cf-pop", "")
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"CloudFront POP: {pop}",
                 type="AWS CloudFront Edge",
                 source="AWSCloudScanner",
@@ -326,7 +323,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
             ))
         if "x-amz-cf-id" in headers:
             cf_id = headers.get("x-amz-cf-id", "")
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"CloudFront ID: {cf_id[:30]}",
                 type="AWS CloudFront Request",
                 source="AWSCloudScanner",
@@ -341,7 +338,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
             ))
         if "x-amz-region" in headers:
             region = headers.get("x-amz-region", "")
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"AWS Region: {region}",
                 type="AWS Region (Header)",
                 source="AWSCloudScanner",
@@ -356,7 +353,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
             ))
         if "x-amz-bucket-region" in headers:
             region = headers.get("x-amz-bucket-region", "")
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"S3 Bucket Region: {region}",
                 type="AWS S3 Region",
                 source="AWSCloudScanner",
@@ -371,7 +368,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
             ))
         html = resp.text[:50000].lower() if hasattr(resp, "text") else ""
         if "amazonaws" in html or "aws-" in html or "s3." in html:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="AWS (HTML Indicator)",
                 type="AWS Cloud (HTML)",
                 source="AWSCloudScanner",
@@ -384,7 +381,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
                 tags=["cloud", "aws"]
             ))
     except Exception as e:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Header analysis error: {str(e)[:100]}",
             type="AWS Scan Error",
             source="AWSCloudScanner",
@@ -409,12 +406,12 @@ async def _check_s3_buckets(target: str, client: httpx.AsyncClient) -> list:
         for tmpl in S3_BUCKET_CHECK_URLS:
             url = tmpl.format(name=name_base)
             try:
-                resp = await client.get(url, timeout=5.0,
+                resp = await safe_fetch(client, url, timeout=5.0,
                     headers={"User-Agent": "Mozilla/5.0"})
                 if resp.status_code == 200:
                     body = resp.text[:500]
                     is_listing = "<ListBucketResult" in body or "<Contents>" in body
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"s3://{name_base}",
                         type="AWS S3 Bucket (Public)",
                         source="AWSCloudScanner",
@@ -431,7 +428,7 @@ async def _check_s3_buckets(target: str, client: httpx.AsyncClient) -> list:
                 elif resp.status_code == 403:
                     body = resp.text[:200]
                     if "AccessDenied" in body or "access_denied" in body.lower():
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"s3://{name_base}",
                             type="AWS S3 Bucket (Exists)",
                             source="AWSCloudScanner",
@@ -458,11 +455,11 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     ip, is_ip = await _resolve_target(target)
     if ip is None:
-        findings.append(IntelligenceFinding(entity=f"DNS resolution failed: {target}", type="DNS Error", source="AWSCloudScanner", confidence="Low", color="red", category="Cloud / Infrastructure OSINT", raw_data=str(is_ip)[:200], tags=["error"]))
+        findings.append(make_finding(entity=f"DNS resolution failed: {target}", type="DNS Error", source="AWSCloudScanner", confidence="Low", color="red", category="Cloud / Infrastructure OSINT", raw_data=str(is_ip)[:200], tags=["error"]))
         return findings
 
     if not is_ip:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{target} -> {ip}",
             type="DNS Resolution",
             source="AWSCloudScanner",
@@ -491,12 +488,12 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     aws_infra = sum(1 for f in findings if "AWS" in f.type and "AWS" not in f.entity)
     aws_buckets = sum(1 for f in findings if "S3" in f.entity or "s3://" in f.entity)
 
-    findings.append(IntelligenceFinding(entity=f"AWS services detected: {aws_services}", type="AWS Service Count", source="AWSCloudScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["aws", "summary"]))
-    findings.append(IntelligenceFinding(entity=f"AWS infrastructure indicators: {aws_infra}", type="AWS Infrastructure Count", source="AWSCloudScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["aws", "summary"]))
-    findings.append(IntelligenceFinding(entity=f"AWS S3 buckets: {aws_buckets}", type="AWS Bucket Count", source="AWSCloudScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["aws", "summary"]))
-    findings.append(IntelligenceFinding(entity=f"AWS IP match: {'Yes' if any('AWS IP Range' in f.type for f in findings) else 'No'}", type="AWS Hosting Status", source="AWSCloudScanner", confidence="Medium", color="slate", category="Cloud / Infrastructure OSINT", tags=["aws", "summary"]))
-    findings.append(IntelligenceFinding(entity=f"Target: {target}", type="AWS Scan Target", source="AWSCloudScanner", confidence="High", color="slate", category="Cloud / Infrastructure OSINT", tags=["aws", "target"]))
-    findings.append(IntelligenceFinding(entity=f"Resolved IP: {ip}", type="AWS Resolved Address", source="AWSCloudScanner", confidence="High", color="slate", category="Cloud / Infrastructure OSINT", tags=["aws", "ip"]))
-    findings.append(IntelligenceFinding(entity=f"Total AWS findings: {len(findings)}", type="AWS Scan Summary", source="AWSCloudScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["aws", "summary"]))
+    findings.append(make_finding(entity=f"AWS services detected: {aws_services}", type="AWS Service Count", source="AWSCloudScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["aws", "summary"]))
+    findings.append(make_finding(entity=f"AWS infrastructure indicators: {aws_infra}", type="AWS Infrastructure Count", source="AWSCloudScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["aws", "summary"]))
+    findings.append(make_finding(entity=f"AWS S3 buckets: {aws_buckets}", type="AWS Bucket Count", source="AWSCloudScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["aws", "summary"]))
+    findings.append(make_finding(entity=f"AWS IP match: {'Yes' if any('AWS IP Range' in f.type for f in findings) else 'No'}", type="AWS Hosting Status", source="AWSCloudScanner", confidence="Medium", color="slate", category="Cloud / Infrastructure OSINT", tags=["aws", "summary"]))
+    findings.append(make_finding(entity=f"Target: {target}", type="AWS Scan Target", source="AWSCloudScanner", confidence="High", color="slate", category="Cloud / Infrastructure OSINT", tags=["aws", "target"]))
+    findings.append(make_finding(entity=f"Resolved IP: {ip}", type="AWS Resolved Address", source="AWSCloudScanner", confidence="High", color="slate", category="Cloud / Infrastructure OSINT", tags=["aws", "ip"]))
+    findings.append(make_finding(entity=f"Total AWS findings: {len(findings)}", type="AWS Scan Summary", source="AWSCloudScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["aws", "summary"]))
 
     return findings

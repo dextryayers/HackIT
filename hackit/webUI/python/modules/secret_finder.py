@@ -5,8 +5,7 @@ import json
 import base64
 import math
 from urllib.parse import urljoin, urlparse
-from models import IntelligenceFinding
-
+from module_common import safe_fetch, make_finding
 SECRET_PATTERNS = [
     (r'AKIA[0-9A-Z]{16}', "AWS Access Key ID", "Critical"),
     (r'(?i)aws_secret_access_key\s*[=:]\s*["\']?([A-Za-z0-9/+=]{40})["\']?', "AWS Secret Access Key", "Critical"),
@@ -169,7 +168,6 @@ FP_PATTERNS = [
     r"\.md$", r"\.txt$",
 ]
 
-
 def _is_false_positive(match: str) -> bool:
     for fp in FP_PATTERNS:
         if re.search(fp, match, re.I):
@@ -179,7 +177,6 @@ def _is_false_positive(match: str) -> bool:
     if re.match(r'^[a-zA-Z]+$', match):
         return True
     return False
-
 
 def _score_severity(secret_type: str, severity: str) -> int:
     base = SENSITIVITY_WEIGHTS.get(severity, 30)
@@ -191,7 +188,6 @@ def _score_severity(secret_type: str, severity: str) -> int:
         base += 15
     return min(base, 100)
 
-
 def _extract_context(text: str, match_start: int, match_end: int) -> str:
     start = max(0, match_start - CONTEXT_WINDOW)
     end = min(len(text), match_end + CONTEXT_WINDOW)
@@ -200,10 +196,9 @@ def _extract_context(text: str, match_start: int, match_end: int) -> str:
     suffix = text[match_end:end]
     return f"...{prefix}[{matched}]{suffix}..."
 
-
 async def _crawl_page(url: str, client: httpx.AsyncClient, domain: str) -> tuple:
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             url, timeout=10.0, follow_redirects=True,
             headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"},
         )
@@ -212,7 +207,6 @@ async def _crawl_page(url: str, client: httpx.AsyncClient, domain: str) -> tuple
     except Exception:
         pass
     return url, "", {}
-
 
 async def _fetch_and_scan_js(js_url: str, base_url: str, domain: str, client: httpx.AsyncClient) -> list:
     findings = []
@@ -225,7 +219,7 @@ async def _fetch_and_scan_js(js_url: str, base_url: str, domain: str, client: ht
     if domain not in js_url:
         return findings
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             js_url, timeout=8.0,
             headers={"User-Agent": "Mozilla/5.0", "Accept": "*/*"},
         )
@@ -241,9 +235,9 @@ async def _fetch_and_scan_js(js_url: str, base_url: str, domain: str, client: ht
             matched = m.group(0)[:60]
             color_map = {"Critical": "red", "High": "orange", "Medium": "yellow"}
             threat_map = {"Critical": "Critical Risk", "High": "High Risk", "Medium": "Elevated Risk"}
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"JS [{severity}] {stype}: {matched}...",
-                type=f"Secret Found: {stype}",
+                ftype=f"Secret Found: {stype}",
                 source="SecretFinder",
                 confidence="High",
                 color=color_map.get(severity, "red"),
@@ -255,9 +249,9 @@ async def _fetch_and_scan_js(js_url: str, base_url: str, domain: str, client: ht
     for pattern, etype in ENDPOINT_PATTERNS:
         for m in re.finditer(pattern, js):
             endpoint = m.group(0)[:200]
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=endpoint,
-                type=f"Endpoint Found: {etype}",
+                ftype=f"Endpoint Found: {etype}",
                 source="SecretFinder",
                 confidence="Low",
                 color="blue",
@@ -268,9 +262,9 @@ async def _fetch_and_scan_js(js_url: str, base_url: str, domain: str, client: ht
     for pattern, ptype in IP_PORT_PATTERNS:
         for m in re.finditer(pattern, js):
             ip = m.group(0)[:40]
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=ip,
-                type=f"Network: {ptype}",
+                ftype=f"Network: {ptype}",
                 source="SecretFinder",
                 confidence="Medium",
                 color="orange",
@@ -281,9 +275,9 @@ async def _fetch_and_scan_js(js_url: str, base_url: str, domain: str, client: ht
     for pattern, ftype in FILE_PATH_PATTERNS:
         for m in re.finditer(pattern, js):
             path = m.group(0)[:100]
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=path,
-                type=f"File Path: {ftype}",
+                ftype=f"File Path: {ftype}",
                 source="SecretFinder",
                 confidence="Medium",
                 color="orange",
@@ -298,9 +292,9 @@ async def _fetch_and_scan_js(js_url: str, base_url: str, domain: str, client: ht
                 decoded = base64.b64decode(b64_str)
                 decoded_text = decoded.decode("utf-8", errors="ignore")
                 if re.search(r'(?:password|secret|key|token|api|credential)', decoded_text, re.I):
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Base64 secret: {b64_str[:40]}...",
-                        type="Secret: Base64 Encoded Data",
+                        ftype="Secret: Base64 Encoded Data",
                         source="SecretFinder",
                         confidence="Medium",
                         color="orange",
@@ -311,7 +305,6 @@ async def _fetch_and_scan_js(js_url: str, base_url: str, domain: str, client: ht
             except Exception:
                 pass
     return findings
-
 
 def _scan_html_comments(html: str, page_url: str) -> list:
     findings = []
@@ -330,9 +323,9 @@ def _scan_html_comments(html: str, page_url: str) -> list:
             if matched_keywords:
                 seen_kw = ",".join(matched_keywords[:3])
                 truncated = comment_text[:150]
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Sensitive comment: [{seen_kw}] {truncated}...",
-                    type="Secret: Sensitive Comment",
+                    ftype="Secret: Sensitive Comment",
                     source="SecretFinder",
                     confidence="Medium",
                     color="orange",
@@ -341,7 +334,6 @@ def _scan_html_comments(html: str, page_url: str) -> list:
                     raw_data=f"URL: {page_url}\nComment: {comment_text[:500]}",
                 ))
     return findings
-
 
 def _scan_hidden_fields(html: str, page_url: str) -> list:
     findings = []
@@ -352,9 +344,9 @@ def _scan_hidden_fields(html: str, page_url: str) -> list:
             name_match = re.search(r'name=["\']([^"\']+)["\']', input_tag)
             field_name = name_match.group(1) if name_match else "unknown"
             if value and len(value) > 4 and field_name.lower() not in ("_token", "csrf_token", "nonce", "_method"):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Hidden field '{field_name}': {value[:50]}...",
-                    type="Secret: Hidden Input Field",
+                    ftype="Secret: Hidden Input Field",
                     source="SecretFinder",
                     confidence="Low",
                     color="orange",
@@ -363,7 +355,6 @@ def _scan_hidden_fields(html: str, page_url: str) -> list:
                     raw_data=f"URL: {page_url}\nField: {field_name}={value[:200]}",
                 ))
     return findings
-
 
 def _scan_sensitive_inputs(html: str, page_url: str) -> list:
     findings = []
@@ -374,9 +365,9 @@ def _scan_sensitive_inputs(html: str, page_url: str) -> list:
     for m in input_pattern.finditer(html):
         name = m.group(1).lower()
         if any(sn in name for sn in SENSITIVE_INPUT_NAMES):
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Plaintext input for sensitive field: {m.group(1)}",
-                type="Secret: Plaintext Sensitive Input",
+                ftype="Secret: Plaintext Sensitive Input",
                 source="SecretFinder",
                 confidence="Medium",
                 color="orange",
@@ -386,15 +377,14 @@ def _scan_sensitive_inputs(html: str, page_url: str) -> list:
             ))
     return findings
 
-
 def _scan_pii(html: str, page_url: str) -> list:
     findings = []
     for spat in SSN_PATTERNS:
         for m in re.finditer(spat, html):
             ssn = m.group(0)
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"SSN: {ssn[:5]}**-**{ssn[-4:]}",
-                type="Secret: SSN Exposed",
+                ftype="Secret: SSN Exposed",
                 source="SecretFinder",
                 confidence="High",
                 color="red",
@@ -405,9 +395,9 @@ def _scan_pii(html: str, page_url: str) -> list:
     for cpat in CC_PATTERNS:
         for m in re.finditer(cpat, html):
             cc = m.group(0)
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Credit Card: {cc[:4]}********{cc[-4:]}",
-                type="Secret: Credit Card Exposed",
+                ftype="Secret: Credit Card Exposed",
                 source="SecretFinder",
                 confidence="High",
                 color="red",
@@ -417,7 +407,6 @@ def _scan_pii(html: str, page_url: str) -> list:
             ))
     return findings
 
-
 def _scan_bas64(html: str, page_url: str) -> list:
     findings = []
     for m in re.finditer(r'[A-Za-z0-9+/]{50,}={0,2}', html):
@@ -426,9 +415,9 @@ def _scan_bas64(html: str, page_url: str) -> list:
             decoded = base64.b64decode(b64_str)
             decoded_text = decoded.decode("utf-8", errors="ignore")
             if re.search(r'(?:password|secret|key|token|api_key|credential|connection)', decoded_text, re.I):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Base64 secret in HTML: {b64_str[:40]}...",
-                    type="Secret: Base64 Data in HTML",
+                    ftype="Secret: Base64 Data in HTML",
                     source="SecretFinder",
                     confidence="Low",
                     color="yellow",
@@ -439,7 +428,6 @@ def _scan_bas64(html: str, page_url: str) -> list:
         except Exception:
             pass
     return findings
-
 
 async def crawl(target: str, client: httpx.AsyncClient):
     findings = []
@@ -453,7 +441,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
     crawled_pages = []
 
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             base_url, timeout=10.0, follow_redirects=True,
             headers={"User-Agent": "Mozilla/5.0"},
         )
@@ -494,9 +482,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 score = _score_severity(secret_type, severity)
                 color_map = {"Critical": "red", "High": "orange", "Medium": "yellow"}
                 threat_map = {"Critical": "Critical Risk", "High": "High Risk", "Medium": "Elevated Risk"}
-                page_findings.append(IntelligenceFinding(
+                page_findings.append(make_finding(
                     entity=f"[{score}] {secret_type}: {secret_text}...",
-                    type=f"Secret Found: {secret_type}",
+                    ftype=f"Secret Found: {secret_type}",
                     source="SecretFinder",
                     confidence="High",
                     color=color_map.get(severity, "red"),
@@ -510,9 +498,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         for pattern, etype in ENDPOINT_PATTERNS:
             for m in re.finditer(pattern, html):
                 endpoint = m.group(0)[:200]
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=endpoint,
-                    type=f"Endpoint Found: {etype}",
+                    ftype=f"Endpoint Found: {etype}",
                     source="SecretFinder",
                     confidence="Low",
                     color="blue",
@@ -523,9 +511,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         for pattern, ptype in IP_PORT_PATTERNS:
             for m in re.finditer(pattern, html):
                 ip = m.group(0)[:40]
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=ip,
-                    type=f"Network: {ptype}",
+                    ftype=f"Network: {ptype}",
                     source="SecretFinder",
                     confidence="Medium",
                     color="orange",
@@ -536,9 +524,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         for pattern, ftype in FILE_PATH_PATTERNS:
             for m in re.finditer(pattern, html):
                 path = m.group(0)[:100]
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=path,
-                    type=f"File Path: {ftype}",
+                    ftype=f"File Path: {ftype}",
                     source="SecretFinder",
                     confidence="Medium",
                     color="orange",
@@ -557,9 +545,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         for p in pwd_like:
             if not re.match(r'^[a-zA-Z0-9_\-\.!@#$%^&*]{6,}$', p):
                 continue
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Potential Password: {p[:30]}...",
-                type="Secret Found: Password Field",
+                ftype="Secret Found: Password Field",
                 source="SecretFinder",
                 confidence="Medium",
                 color="orange",
@@ -573,9 +561,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         for m in re.finditer(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', html):
             emails.add(m.group(0))
     for email in list(emails)[:15]:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=email,
-            type="Secret: Email Address Found",
+            ftype="Secret: Email Address Found",
             source="SecretFinder",
             confidence="Medium",
             color="slate",
@@ -588,9 +576,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         for m in re.finditer(r'["\']((?:https?:)?//[^"\']*/api/[^"\']*)["\']', html):
             api_endpoints.add(m.group(1))
     for ep in list(api_endpoints)[:10]:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=ep[:200],
-            type="Secret: API Endpoint Found",
+            ftype="Secret: API Endpoint Found",
             source="SecretFinder",
             confidence="Low",
             color="blue",
@@ -621,9 +609,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 matched = m.group(0)[:60]
                 color_map = {"Critical": "red", "High": "orange", "Medium": "yellow"}
                 threat_map = {"Critical": "Critical Risk", "High": "High Risk", "Medium": "Elevated Risk"}
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Inline JS [{severity}] {stype}: {matched}...",
-                    type=f"Secret Found: {stype}",
+                    ftype=f"Secret Found: {stype}",
                     source="SecretFinder",
                     confidence="High",
                     color=color_map.get(severity, "red"),
@@ -645,9 +633,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             else:
                 by_severity["Low"] += 1
         severity_str = f"C:{by_severity['Critical']} H:{by_severity['High']} M:{by_severity['Medium']} L:{by_severity['Low']}"
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Secret scan complete: {len(findings)} findings across {len(crawled_pages)} pages on {domain} ({severity_str})",
-            type="SecretFinder Summary",
+            ftype="SecretFinder Summary",
             source="SecretFinder",
             confidence="High",
             color="purple",
@@ -656,7 +644,6 @@ async def crawl(target: str, client: httpx.AsyncClient):
         ))
 
     return findings
-
 
 PII_PATTERNS_EXTRA = [
     (r'\b\d{3}-\d{2}-\d{4}\b', "US SSN", "Critical"),
@@ -744,7 +731,6 @@ CREDIT_CARD_BRANDS = {
     "JCB": r"^(?:2131|1800|35\d{3})\d{11}$",
 }
 
-
 def _luhn_check(cc_number: str) -> bool:
     digits = [int(d) for d in cc_number if d.isdigit()]
     if len(digits) < 13:
@@ -757,16 +743,15 @@ def _luhn_check(cc_number: str) -> bool:
             checksum += (d * 2) // 10 + (d * 2) % 10
     return checksum % 10 == 0
 
-
 async def _scan_cloud_endpoints(html: str, page_url: str, findings: list):
     for pattern, stype, severity in CLOUD_SERVICE_PATTERNS:
         for m in re.finditer(pattern, html):
             endpoint = m.group(0)[:200]
             color_map = {"Critical": "red", "High": "orange", "Medium": "yellow"}
             threat_map = {"Critical": "Critical Risk", "High": "High Risk", "Medium": "Elevated Risk"}
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=endpoint,
-                type=f"Cloud Service: {stype}",
+                ftype=f"Cloud Service: {stype}",
                 source="SecretFinder",
                 confidence="Medium",
                 color=color_map.get(severity, "orange"),
@@ -774,7 +759,6 @@ async def _scan_cloud_endpoints(html: str, page_url: str, findings: list):
                 tags=["cloud", stype.lower().replace(" ", "_")],
                 raw_data=f"URL: {page_url}\nMatch: {endpoint}",
             ))
-
 
 async def _scan_pii_extra(html: str, page_url: str, findings: list):
     for pattern, stype, severity in PII_PATTERNS_EXTRA:
@@ -784,9 +768,9 @@ async def _scan_pii_extra(html: str, page_url: str, findings: list):
                 continue
             color_map = {"Critical": "red", "High": "orange", "Medium": "yellow"}
             threat_map = {"Critical": "Critical Risk", "High": "High Risk", "Medium": "Elevated Risk"}
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"[{severity}] {stype}: {value[:20]}...",
-                type=f"PII: {stype}",
+                ftype=f"PII: {stype}",
                 source="SecretFinder",
                 confidence="High",
                 color=color_map.get(severity, "red"),

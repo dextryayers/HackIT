@@ -4,7 +4,7 @@ import dns.message
 import dns.rdatatype
 import time
 from collections import defaultdict
-from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash
 
 RESOLVERS = [
     ("Google", "8.8.8.8"),
@@ -68,7 +68,7 @@ async def crawl(target: str, client=None):
                 if values:
                     rtype_summary[rtype][name] = values
                     resolver_latency[name].append(elapsed)
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"{rtype}: {', '.join(values[:3])}",
                         type=f"DNS {rtype} via {name}",
                         source="DNS Mass Resolver",
@@ -92,7 +92,7 @@ async def crawl(target: str, client=None):
                     agreement_count += 1
             pct = round(agreement_count / len(resolver_data) * 100)
             color = "green" if pct >= 90 else "orange" if pct >= 50 else "red"
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{rtype}: {agreement_count}/{len(resolver_data)} resolvers agree ({pct}%)",
                 type="DNS Resolver Consensus",
                 source="DNS Mass Resolver",
@@ -106,7 +106,7 @@ async def crawl(target: str, client=None):
 
             discrepancies = {name: vals for name, vals in resolver_data.items() if set(vals) != all_values}
             for dname, dvals in discrepancies.items():
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{dname} returns different {rtype}: {', '.join(dvals[:3])} vs expected {', '.join(sorted(all_values)[:3])}",
                     type="DNS Resolver Discrepancy",
                     source="DNS Mass Resolver",
@@ -123,9 +123,9 @@ async def crawl(target: str, client=None):
             avg_lat = round(sum(latencies) / len(latencies), 3)
             min_lat = round(min(latencies), 3)
             max_lat = round(max(latencies), 3)
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{resolver_name}: avg {avg_lat}s, min {min_lat}s, max {max_lat}s",
-                type="Resolver Latency Analysis",
+                ftype="Resolver Latency Analysis",
                 source="DNS Mass Resolver",
                 confidence="High",
                 color="green" if avg_lat < 0.1 else "orange" if avg_lat < 0.5 else "red",
@@ -140,7 +140,7 @@ async def crawl(target: str, client=None):
         if valid_avg:
             fastest = min(valid_avg, key=valid_avg.get)
             slowest = max(valid_avg, key=valid_avg.get)
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Fastest: {fastest} ({valid_avg[fastest]}s) | Slowest: {slowest} ({valid_avg[slowest]}s)",
                 type="Resolver Speed Ranking",
                 source="DNS Mass Resolver",
@@ -153,7 +153,7 @@ async def crawl(target: str, client=None):
             ))
 
     total_queries = sum(len(types) for types in rtype_summary.values())
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Completed {len(RECORD_TYPES)} record types across {len(RESOLVERS)} resolvers ({total_queries} resolver-record pairs)",
         type="Mass Resolution Summary",
         source="DNS Mass Resolver",

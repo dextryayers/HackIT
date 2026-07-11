@@ -1,7 +1,7 @@
 import httpx
 import asyncio
 import re
-import socket
+from module_common import safe_fetch, safe_fetch_json, make_finding, resolve_ip, is_ip
 from models import IntelligenceFinding
 
 VERCEL_DOMAINS = [".vercel.app", ".now.sh", ".vercel.com"]
@@ -53,16 +53,13 @@ SERVERLESS_FUNCTION_PATTERNS = [
 PREVIEW_DOMAIN_PATTERNS = ["-git-", "-preview-", "-staging-", "-dev-", "-pr-", "-branch-"]
 
 async def _resolve_target(target: str) -> tuple:
-    try:
-        socket.inet_aton(target)
-        return target, True
-    except OSError:
-        pass
-    try:
-        ip = socket.gethostbyname(target)
+    t = target.strip()
+    if is_ip(t):
+        return t, True
+    ip = resolve_ip(t)
+    if ip:
         return ip, False
-    except Exception as e:
-        return None, str(e)
+    return None, "DNS resolution failed"
 
 async def _check_dns_deployment(target: str) -> list:
     findings = []
@@ -74,7 +71,7 @@ async def _check_dns_deployment(target: str) -> list:
                 cname = str(r.target).rstrip('.').lower()
                 for d in VERCEL_DOMAINS:
                     if d in cname:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity="Vercel Deployment",
                             type="Vercel Platform (CNAME)",
                             source="VercelNetlifyScanner",
@@ -89,7 +86,7 @@ async def _check_dns_deployment(target: str) -> list:
                         ))
                 for d in NETLIFY_DOMAINS:
                     if d in cname:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity="Netlify Deployment",
                             type="Netlify Platform (CNAME)",
                             source="VercelNetlifyScanner",
@@ -117,7 +114,7 @@ async def _check_dns_deployment(target: str) -> list:
                         ei = (int(ep[0])<<24)+(int(ep[1])<<16)+(int(ep[2])<<8)+int(ep[3])
                         if si <= ip_int <= ei:
                             plat = "Vercel" if "Vercel" in rgn else "Netlify"
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=f"{plat} Edge ({ip_str})",
                                 type=f"{plat} IP Range",
                                 source="VercelNetlifyScanner",
@@ -140,7 +137,7 @@ async def _check_dns_deployment(target: str) -> list:
                 txt = str(r).lower()
                 if "vercel" in txt or "netlify" in txt:
                     plat = "Vercel" if "vercel" in txt else "Netlify"
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"{plat} (TXT Verification)",
                         type=f"{plat} Domain Verification",
                         source="VercelNetlifyScanner",
@@ -162,14 +159,14 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
     findings = []
     base = f"https://{target}" if not target.startswith("http") else target
     try:
-        resp = await client.get(base, follow_redirects=True, timeout=10.0,
+        resp = await safe_fetch(client, base, follow_redirects=True, timeout=10.0,
             headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"})
         headers = dict(resp.headers)
 
         for h in VERCEL_HEADERS:
             if h in headers:
                 val = headers.get(h, "")
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Vercel ({h}: {val[:50]})",
                     type="Vercel Platform (Header)",
                     source="VercelNetlifyScanner",
@@ -184,7 +181,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
         for h in NETLIFY_HEADERS:
             if h in headers:
                 val = headers.get(h, "")
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Netlify ({h}: {val[:50]})",
                     type="Netlify Platform (Header)",
                     source="VercelNetlifyScanner",
@@ -199,7 +196,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
 
         server = headers.get("server", "").lower()
         if "vercel" in server:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="Vercel (Server Header)",
                 type="Vercel Platform (Header)",
                 source="VercelNetlifyScanner",
@@ -212,7 +209,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
                 tags=["cloud", "vercel"]
             ))
         if "netlify" in server:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="Netlify (Server Header)",
                 type="Netlify Platform (Header)",
                 source="VercelNetlifyScanner",
@@ -230,7 +227,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
 
         for pattern, fw_name, platform in FRAMEWORK_PATTERNS:
             if re.search(pattern, html, re.IGNORECASE):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{fw_name} Framework",
                     type=f"Framework ({platform.capitalize()})",
                     source="VercelNetlifyScanner",
@@ -246,7 +243,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
         for pat in SERVERLESS_FUNCTION_PATTERNS:
             if pat in html_lower:
                 plat = "vercel" if "vercel" in pat else "netlify"
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Serverless Function ({pat})",
                     type=f"Serverless Function ({plat.capitalize()})",
                     source="VercelNetlifyScanner",
@@ -261,7 +258,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
 
         for pat in PREVIEW_DOMAIN_PATTERNS:
             if pat in target.lower():
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Preview/Staging Deployment ({pat})",
                     type="Preview Deployment",
                     source="VercelNetlifyScanner",
@@ -275,7 +272,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
                 ))
 
         if "edge" in html_lower and ("vercel" in html_lower or "netlify" in html_lower):
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="Edge Functions / Middleware",
                 type="Edge Compute",
                 source="VercelNetlifyScanner",
@@ -291,7 +288,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
         cache_headers = ["x-vercel-cache", "x-nf-cache", "cf-cache-status"]
         for ch in cache_headers:
             if ch in headers:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"CDN Caching ({headers[ch]})",
                     type="CDN Cache Status",
                     source="VercelNetlifyScanner",
@@ -305,7 +302,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
                 ))
 
     except Exception as e:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Header analysis error: {str(e)[:100]}",
             type="VercelNetlify Scan Error",
             source="VercelNetlifyScanner",
@@ -327,11 +324,11 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     ip, is_ip = await _resolve_target(target)
     if ip is None:
-        findings.append(IntelligenceFinding(entity=f"DNS resolution failed: {target}", type="DNS Error", source="VercelNetlifyScanner", confidence="Low", color="red", category="Cloud / Infrastructure OSINT", raw_data=str(is_ip)[:200], tags=["error"]))
+        findings.append(make_finding(entity=f"DNS resolution failed: {target}", type="DNS Error", source="VercelNetlifyScanner", confidence="Low", color="red", category="Cloud / Infrastructure OSINT", raw_data=str(is_ip)[:200], tags=["error"]))
         return findings
 
     if not is_ip:
-        findings.append(IntelligenceFinding(entity=f"{target} -> {ip}", type="DNS Resolution", source="VercelNetlifyScanner", confidence="High", color="slate", category="Cloud / Infrastructure OSINT", threat_level="Informational", status="Resolved", resolution=ip, tags=["dns", "resolution"]))
+        findings.append(make_finding(entity=f"{target} -> {ip}", type="DNS Resolution", source="VercelNetlifyScanner", confidence="High", color="slate", category="Cloud / Infrastructure OSINT", threat_level="Informational", status="Resolved", resolution=ip, tags=["dns", "resolution"]))
 
     findings.extend(await _check_dns_deployment(target))
     findings.extend(await _analyze_headers(target, client))
@@ -340,7 +337,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     is_netlify = any(f.type.startswith("Netlify") for f in findings)
     fw_count = sum(1 for f in findings if f.type == "Framework (vercel)" or f.type == "Framework (netlify)")
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Platform: {'Vercel' if is_vercel else 'Netlify' if is_netlify else 'Unknown'}",
         type="Deployment Platform",
         source="VercelNetlifyScanner",
@@ -351,9 +348,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         status="Identified",
         tags=["cloud", "platform"]
     ))
-    findings.append(IntelligenceFinding(entity=f"Frameworks detected: {fw_count}", type="Framework Count", source="VercelNetlifyScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["tech", "summary"]))
-    findings.append(IntelligenceFinding(entity=f"Target: {target}", type="Vercel/Netlify Scan Target", source="VercelNetlifyScanner", confidence="High", color="slate", category="Cloud / Infrastructure OSINT", tags=["target"]))
-    findings.append(IntelligenceFinding(entity=f"Resolved IP: {ip}", type="Vercel/Netlify Resolved IP", source="VercelNetlifyScanner", confidence="High", color="slate", category="Cloud / Infrastructure OSINT", tags=["ip"]))
-    findings.append(IntelligenceFinding(entity=f"Total findings: {len(findings)}", type="Vercel/Netlify Scan Summary", source="VercelNetlifyScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["summary"]))
+    findings.append(make_finding(entity=f"Frameworks detected: {fw_count}", type="Framework Count", source="VercelNetlifyScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["tech", "summary"]))
+    findings.append(make_finding(entity=f"Target: {target}", type="Vercel/Netlify Scan Target", source="VercelNetlifyScanner", confidence="High", color="slate", category="Cloud / Infrastructure OSINT", tags=["target"]))
+    findings.append(make_finding(entity=f"Resolved IP: {ip}", type="Vercel/Netlify Resolved IP", source="VercelNetlifyScanner", confidence="High", color="slate", category="Cloud / Infrastructure OSINT", tags=["ip"]))
+    findings.append(make_finding(entity=f"Total findings: {len(findings)}", type="Vercel/Netlify Scan Summary", source="VercelNetlifyScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["summary"]))
 
     return findings

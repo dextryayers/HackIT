@@ -2,9 +2,9 @@ import httpx
 import re
 import asyncio
 import json
-from models import IntelligenceFinding
 from urllib.parse import urlparse
 from datetime import datetime
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash
 
 
 LEADERSHIP_TITLES = [
@@ -360,12 +360,8 @@ async def extract_org_from_whois(target: str, client: httpx.AsyncClient) -> list
     findings = []
     domain = target.strip().lower()
     try:
-        resp = await client.get(
-            f"https://api.hackertarget.com/whois/?q={domain}",
-            timeout=10.0,
-            headers={"User-Agent": "Mozilla/5.0"}
-        )
-        if resp.status_code == 200:
+        resp = await safe_fetch(client, f"https://api.hackertarget.com/whois/?q={domain}", timeout=10.0)
+        if resp and resp.status_code == 200:
             text = resp.text
             org_keys = [
                 "Registrant Organization", "OrgName", "org_name",
@@ -380,9 +376,9 @@ async def extract_org_from_whois(target: str, client: httpx.AsyncClient) -> list
                     if line.lower().startswith(key.lower()) and ":" in line:
                         val = line.split(":", 1)[1].strip()
                         if val and val != "N/A" and val != "None":
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=val[:200],
-                                type="WHOIS: Organization",
+                                ftype="WHOIS: Organization",
                                 source="PeopleOrgOSINT (HackerTarget)",
                                 confidence="High",
                                 color="emerald",
@@ -396,9 +392,9 @@ async def extract_org_from_whois(target: str, client: httpx.AsyncClient) -> list
                     if line.lower().startswith(key.lower()) and ":" in line:
                         val = line.split(":", 1)[1].strip()
                         if val and "@" in val:
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=val[:200],
-                                type="WHOIS: Contact Email",
+                                ftype="WHOIS: Contact Email",
                                 source="PeopleOrgOSINT (HackerTarget)",
                                 confidence="High",
                                 color="cyan",
@@ -412,9 +408,9 @@ async def extract_org_from_whois(target: str, client: httpx.AsyncClient) -> list
                 if "Registrant Name" in line and ":" in line:
                     val = line.split(":", 1)[1].strip()
                     if val and val != "N/A" and val != "None":
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=val[:200],
-                            type="WHOIS: Registrant Name",
+                            ftype="WHOIS: Registrant Name",
                             source="PeopleOrgOSINT (HackerTarget)",
                             confidence="Medium",
                             color="slate",
@@ -440,9 +436,9 @@ async def extract_org_from_ssl(target: str) -> list:
             cn = parsed.get("issuer", {}).get("commonName", "")
             subj_org = parsed.get("subject", {}).get("organizationName", "")
             if org:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=org[:200],
-                    type="SSL: Issuer Organization",
+                    ftype="SSL: Issuer Organization",
                     source="PeopleOrgOSINT (SSL)",
                     confidence="High",
                     color="emerald",
@@ -451,9 +447,9 @@ async def extract_org_from_ssl(target: str) -> list:
                     tags=["ssl", "organization"]
                 ))
             if subj_org and subj_org != org:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=subj_org[:200],
-                    type="SSL: Subject Organization",
+                    ftype="SSL: Subject Organization",
                     source="PeopleOrgOSINT (SSL)",
                     confidence="High",
                     color="emerald",
@@ -461,9 +457,9 @@ async def extract_org_from_ssl(target: str) -> list:
                     tags=["ssl", "organization", "subject"]
                 ))
             if cn:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=cn[:200],
-                    type="SSL: Common Name",
+                    ftype="SSL: Common Name",
                     source="PeopleOrgOSINT (SSL)",
                     confidence="High",
                     color="slate",
@@ -485,9 +481,9 @@ async def extract_people_from_html(html: str, target: str) -> list:
         html, re.IGNORECASE
     )
     for path in set(team_paths[:5]):
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"https://{target}{path}",
-            type="Team/About Page Link",
+            ftype="Team/About Page Link",
             source="PeopleOrgOSINT (HTML)",
             confidence="High",
             color="purple",
@@ -536,9 +532,9 @@ async def extract_people_from_html(html: str, target: str) -> list:
     for pattern, label in social_patterns:
         matches = re.findall(pattern, html, re.IGNORECASE)
         for m in matches[:2]:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=m[:200],
-                type=f"Social: {label}",
+                ftype=f"Social: {label}",
                 source="PeopleOrgOSINT (HTML)",
                 confidence="Medium",
                 color="purple",
@@ -551,9 +547,9 @@ async def extract_people_from_html(html: str, target: str) -> list:
     for platform_name, pattern in SOCIAL_PLATFORMS:
         matches = re.findall(pattern, html, re.IGNORECASE)
         for m in matches[:2]:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=m[:200] if isinstance(m, str) else str(m)[:200],
-                type=f"Social: {platform_name}",
+                ftype=f"Social: {platform_name}",
                 source="PeopleOrgOSINT (HTML)",
                 confidence="Medium",
                 color="purple",
@@ -570,9 +566,9 @@ async def extract_people_from_html(html: str, target: str) -> list:
                 key = f"{tech_type}:{tech_name}"
                 if key not in tech_found:
                     tech_found.add(key)
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=tech_name[:200],
-                        type=f"Technology: {tech_type}",
+                        ftype=f"Technology: {tech_type}",
                         source="PeopleOrgOSINT (HTML)",
                         confidence="Medium",
                         color="slate",
@@ -587,9 +583,9 @@ async def extract_people_from_html(html: str, target: str) -> list:
                 key = f"Generator:{val}"
                 if key not in tech_found:
                     tech_found.add(key)
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=val[:200],
-                        type=f"Technology: {tech_type}",
+                        ftype=f"Technology: {tech_type}",
                         source="PeopleOrgOSINT (HTML)",
                         confidence="High",
                         color="slate",
@@ -600,7 +596,7 @@ async def extract_people_from_html(html: str, target: str) -> list:
 
     # Extract JSON-LD structured data
     ld_json = re.findall(
-        r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
+        r'<script[^>]*ftype=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
         html, re.IGNORECASE | re.DOTALL
     )
     for block in ld_json[:5]:
@@ -610,9 +606,9 @@ async def extract_people_from_html(html: str, target: str) -> list:
                 for key in ["name", "legalName", "alternateName"]:
                     val = data.get(key, "")
                     if val:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=val[:200],
-                            type="Schema.org: Organization Name",
+                            ftype="Schema.org: Organization Name",
                             source="PeopleOrgOSINT (JSON-LD)",
                             confidence="High",
                             color="emerald",
@@ -621,9 +617,9 @@ async def extract_people_from_html(html: str, target: str) -> list:
                         ))
                 founder = data.get("founder", "")
                 if isinstance(founder, dict) and founder.get("name"):
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=founder["name"][:200],
-                        type="Schema.org: Founder",
+                        ftype="Schema.org: Founder",
                         source="PeopleOrgOSINT (JSON-LD)",
                         confidence="Medium",
                         color="cyan",
@@ -632,9 +628,9 @@ async def extract_people_from_html(html: str, target: str) -> list:
                     ))
                 employees = data.get("numberOfEmployees", "")
                 if employees:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=str(employees)[:100],
-                        type="Schema.org: Employee Count",
+                        ftype="Schema.org: Employee Count",
                         source="PeopleOrgOSINT (JSON-LD)",
                         confidence="Medium",
                         color="slate",
@@ -644,9 +640,9 @@ async def extract_people_from_html(html: str, target: str) -> list:
                 same_as = data.get("sameAs", [])
                 if isinstance(same_as, list):
                     for link in same_as:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=link[:200],
-                            type="Schema.org: SameAs (Social)",
+                            ftype="Schema.org: SameAs (Social)",
                             source="PeopleOrgOSINT (JSON-LD)",
                             confidence="High",
                             color="slate",
@@ -656,9 +652,9 @@ async def extract_people_from_html(html: str, target: str) -> list:
                 # Description from JSON-LD
                 desc = data.get("description", "")
                 if desc:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=desc[:200],
-                        type="Schema.org: Description",
+                        ftype="Schema.org: Description",
                         source="PeopleOrgOSINT (JSON-LD)",
                         confidence="Medium",
                         color="slate",
@@ -668,9 +664,9 @@ async def extract_people_from_html(html: str, target: str) -> list:
                 # Founding date from JSON-LD
                 founding_date = data.get("foundingDate", "") or data.get("foundingDate", "")
                 if founding_date:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=str(founding_date)[:100],
-                        type="Schema.org: Founding Date",
+                        ftype="Schema.org: Founding Date",
                         source="PeopleOrgOSINT (JSON-LD)",
                         confidence="Medium",
                         color="amber",
@@ -685,9 +681,9 @@ async def extract_people_from_html(html: str, target: str) -> list:
                         if address.get(addr_key):
                             parts.append(address[addr_key])
                     if parts:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=", ".join(parts)[:200],
-                            type="Schema.org: Address",
+                            ftype="Schema.org: Address",
                             source="PeopleOrgOSINT (JSON-LD)",
                             confidence="High",
                             color="slate",
@@ -700,9 +696,9 @@ async def extract_people_from_html(html: str, target: str) -> list:
                         for key in ["name", "legalName"]:
                             val = item.get(key, "")
                             if val:
-                                findings.append(IntelligenceFinding(
+                                findings.append(make_finding(
                                     entity=val[:200],
-                                    type="Schema.org: Organization Name",
+                                    ftype="Schema.org: Organization Name",
                                     source="PeopleOrgOSINT (JSON-LD)",
                                     confidence="High",
                                     color="emerald",
@@ -711,9 +707,9 @@ async def extract_people_from_html(html: str, target: str) -> list:
                                 ))
                         emp = item.get("numberOfEmployees", "")
                         if emp:
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=str(emp)[:100],
-                                type="Schema.org: Employee Count",
+                                ftype="Schema.org: Employee Count",
                                 source="PeopleOrgOSINT (JSON-LD)",
                                 confidence="Medium",
                                 color="slate",
@@ -722,9 +718,9 @@ async def extract_people_from_html(html: str, target: str) -> list:
                             ))
                         desc = item.get("description", "")
                         if desc:
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=desc[:200],
-                                type="Schema.org: Description",
+                                ftype="Schema.org: Description",
                                 source="PeopleOrgOSINT (JSON-LD)",
                                 confidence="Medium",
                                 color="slate",
@@ -733,9 +729,9 @@ async def extract_people_from_html(html: str, target: str) -> list:
                             ))
                         fdate = item.get("foundingDate", "")
                         if fdate:
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=str(fdate)[:100],
-                                type="Schema.org: Founding Date",
+                                ftype="Schema.org: Founding Date",
                                 source="PeopleOrgOSINT (JSON-LD)",
                                 confidence="Medium",
                                 color="amber",
@@ -749,9 +745,9 @@ async def extract_people_from_html(html: str, target: str) -> list:
                                 if addr.get(ak):
                                     parts.append(addr[ak])
                             if parts:
-                                findings.append(IntelligenceFinding(
+                                findings.append(make_finding(
                                     entity=", ".join(parts)[:200],
-                                    type="Schema.org: Address",
+                                    ftype="Schema.org: Address",
                                     source="PeopleOrgOSINT (JSON-LD)",
                                     confidence="High",
                                     color="slate",
@@ -770,9 +766,9 @@ async def extract_people_from_html(html: str, target: str) -> list:
     ]:
         m = re.search(pattern, html, re.IGNORECASE)
         if m:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=m.group(1)[:200],
-                type=f"Meta: {label}",
+                ftype=f"Meta: {label}",
                 source="PeopleOrgOSINT (HTML)",
                 confidence="Medium",
                 color="slate",
@@ -791,9 +787,9 @@ async def extract_people_from_html(html: str, target: str) -> list:
         if m:
             desc_val = m.group(1).strip()
             if desc_val:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=desc_val[:200],
-                    type=f"Description: {label}",
+                    ftype=f"Description: {label}",
                     source="PeopleOrgOSINT (HTML)",
                     confidence="Medium",
                     color="slate",
@@ -809,9 +805,9 @@ async def extract_people_from_html(html: str, target: str) -> list:
     if copyright_match:
         entity = copyright_match.group(1).strip()
         if len(entity) > 3 and domain_short.lower() not in entity.lower():
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=entity[:200],
-                type="Copyright: Organization Name",
+                ftype="Copyright: Organization Name",
                 source="PeopleOrgOSINT (HTML)",
                 confidence="Medium",
                 color="slate",
@@ -828,9 +824,9 @@ async def extract_people_from_html(html: str, target: str) -> list:
         year = founding_year_match.group(1)
         current_year = datetime.now().year
         if int(year) < current_year:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=year[:10],
-                type="Founding Year (Copyright)",
+                ftype="Founding Year (Copyright)",
                 source="PeopleOrgOSINT (HTML)",
                 confidence="Medium",
                 color="amber",
@@ -846,9 +842,9 @@ async def extract_people_from_html(html: str, target: str) -> list:
     ]:
         m = re.search(pattern, html, re.IGNORECASE)
         if m:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=m.group(1)[:50],
-                type="Founding Year",
+                ftype="Founding Year",
                 source="PeopleOrgOSINT (HTML)",
                 confidence="Medium",
                 color="amber",
@@ -865,9 +861,9 @@ async def extract_people_from_html(html: str, target: str) -> list:
     for pattern, label in geo_patterns:
         m = re.search(pattern, html, re.IGNORECASE)
         if m:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=m.group(1)[:200],
-                type=f"Location: {label}",
+                ftype=f"Location: {label}",
                 source="PeopleOrgOSINT (HTML)",
                 confidence="Medium",
                 color="slate",
@@ -884,9 +880,9 @@ async def extract_people_from_html(html: str, target: str) -> list:
     for pattern, label in emp_patterns:
         for m in re.finditer(pattern, html, re.IGNORECASE):
             val = m.group(1).strip()
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=val[:100],
-                type=f"Employee Count: {label}",
+                ftype=f"Employee Count: {label}",
                 source="PeopleOrgOSINT (HTML)",
                 confidence="Low",
                 color="slate",
@@ -909,9 +905,9 @@ async def extract_people_from_html(html: str, target: str) -> list:
         if fc:
             org = fc.group(1).strip()
             if org and len(org) > 3:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=org[:200],
-                    type="Footer: Organization Name",
+                    ftype="Footer: Organization Name",
                     source="PeopleOrgOSINT (HTML)",
                     confidence="Medium",
                     color="emerald",
@@ -925,9 +921,9 @@ async def extract_people_from_html(html: str, target: str) -> list:
         for line in footer_lines:
             line_clean = line.strip()
             if any(m in line_clean.lower() for m in addr_markers) and len(line_clean) > 15 and len(line_clean) < 250:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=line_clean[:200],
-                    type="Footer: Address",
+                    ftype="Footer: Address",
                     source="PeopleOrgOSINT (HTML)",
                     confidence="Low",
                     color="slate",
@@ -938,9 +934,9 @@ async def extract_people_from_html(html: str, target: str) -> list:
         # Footer email
         fe = re.findall(r'[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}', footer_html)
         for email in set(fe):
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=email,
-                type="Footer: Contact Email",
+                ftype="Footer: Contact Email",
                 source="PeopleOrgOSINT (HTML)",
                 confidence="High",
                 color="cyan",
@@ -951,9 +947,9 @@ async def extract_people_from_html(html: str, target: str) -> list:
         # Footer phone
         phones = re.findall(r'[\+\(]?[1-9][0-9 .\-\(\)]{8,}[0-9]', footer_html)
         for phone in phones[:2]:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=phone.strip()[:30],
-                type="Footer: Phone Number",
+                ftype="Footer: Phone Number",
                 source="PeopleOrgOSINT (HTML)",
                 confidence="Medium",
                 color="slate",
@@ -968,21 +964,18 @@ async def search_github_org(target: str, client: httpx.AsyncClient) -> list:
     findings = []
     domain_short = target.split(".")[0] if "." in target else target
     try:
-        resp = await client.get(
-            f"https://api.github.com/search/users?q={domain_short}+in:name+type:org",
-            timeout=10.0,
-            headers={
+        resp = await safe_fetch(client, f"https://api.github.com/search/users?q={domain_short}+in:name+type:org",
+            timeout=10.0, headers={
                 "User-Agent": "Mozilla/5.0",
                 "Accept": "application/vnd.github.v3+json"
-            }
-        )
-        if resp.status_code == 200:
+            })
+        if resp and resp.status_code == 200:
             data = resp.json()
             items = data.get("items", [])
             for item in items[:3]:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=item.get("login", "")[:200],
-                    type="GitHub Organization Match",
+                    ftype="GitHub Organization Match",
                     source="PeopleOrgOSINT (GitHub)",
                     confidence="Medium",
                     color="purple",
@@ -1006,15 +999,11 @@ async def search_security_contacts(target: str, client: httpx.AsyncClient) -> li
     ]
     for path in paths:
         try:
-            resp = await client.get(
-                f"https://{target}{path}",
-                timeout=8.0,
-                headers={"User-Agent": "Mozilla/5.0"}
-            )
-            if resp.status_code == 200 and len(resp.text) > 10:
-                findings.append(IntelligenceFinding(
+            resp = await safe_fetch(client, f"https://{target}{path}", timeout=8.0)
+            if resp and resp.status_code == 200 and len(resp.text) > 10:
+                findings.append(make_finding(
                     entity=f"https://{target}{path}",
-                    type="Security Contact File",
+                    ftype="Security Contact File",
                     source="PeopleOrgOSINT",
                     confidence="High",
                     color="emerald",
@@ -1025,9 +1014,9 @@ async def search_security_contacts(target: str, client: httpx.AsyncClient) -> li
                 ))
                 emails = re.findall(r'[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}', resp.text)
                 for email in emails[:3]:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=email,
-                        type="Security Contact Email",
+                        ftype="Security Contact Email",
                         source="PeopleOrgOSINT",
                         confidence="High",
                         color="cyan",
@@ -1053,9 +1042,9 @@ async def extract_emails_from_page(html: str, target: str) -> list:
         email_domain = email.split("@")[-1].lower()
         if email_domain == domain_lower or email_domain.endswith("." + domain_lower):
             found_emails.add(email)
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=email,
-                type="Corporate Email Address",
+                ftype="Corporate Email Address",
                 source="PeopleOrgOSINT (HTML)",
                 confidence="High",
                 color="cyan",
@@ -1085,9 +1074,9 @@ async def extract_emails_from_page(html: str, target: str) -> list:
             formats.append(f"firstl@domain ({local_part[0]}{domain_clean})")
             formats.append(f"flast@domain ({local_part[0]}{local_part if len(local_part) > 1 else ''}{domain_clean})")
 
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=domain_clean[:100],
-            type="Email Format Suggestion",
+            ftype="Email Format Suggestion",
             source="PeopleOrgOSINT (HTML)",
             confidence="Medium",
             color="cyan",
@@ -1105,19 +1094,14 @@ async def extract_contact_page(target: str, client: httpx.AsyncClient) -> list:
     contact_paths = ["/contact", "/contact-us", "/contactus", "/about", "/about-us"]
     for path in contact_paths:
         try:
-            resp = await client.get(
-                f"https://{target}{path}",
-                timeout=8.0,
-                headers={"User-Agent": "Mozilla/5.0"},
-                follow_redirects=True
-            )
-            if resp.status_code == 200 and len(resp.text) > 200:
+            resp = await safe_fetch(client, f"https://{target}{path}", timeout=8.0)
+            if resp and resp.status_code == 200 and len(resp.text) > 200:
                 html = resp.text.lower()
                 phones = re.findall(r'[\+\(]?[1-9][0-9 .\-\(\)]{8,}[0-9]', html)
                 for phone in phones[:2]:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=phone.strip()[:30],
-                        type="Contact Phone Number",
+                        ftype="Contact Phone Number",
                         source="PeopleOrgOSINT",
                         confidence="Medium",
                         color="slate",
@@ -1129,9 +1113,9 @@ async def extract_contact_page(target: str, client: httpx.AsyncClient) -> list:
                 for line in lines:
                     line_clean = line.strip()
                     if any(m in line_clean for m in addr_markers) and len(line_clean) > 15 and len(line_clean) < 200:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=re.sub(r'<[^>]+>', '', line_clean).strip()[:200],
-                            type="Office Address",
+                            ftype="Office Address",
                             source="PeopleOrgOSINT",
                             confidence="Low",
                             color="slate",
@@ -1160,7 +1144,7 @@ async def search_crunchbase(target: str, client: httpx.AsyncClient) -> list:
         if api_success:
             break
         try:
-            resp = await client.get(
+            resp = await safe_fetch(client, 
                 api_url,
                 timeout=8.0,
                 headers={"User-Agent": "Mozilla/5.0"}
@@ -1173,9 +1157,9 @@ async def search_crunchbase(target: str, client: httpx.AsyncClient) -> list:
                     props = data.get("data", {})
                 name = props.get("name", props.get("title", ""))
                 if name:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=name[:200],
-                        type="Crunchbase: Organization Name",
+                        ftype="Crunchbase: Organization Name",
                         source="PeopleOrgOSINT (Crunchbase)",
                         confidence="High",
                         color="emerald",
@@ -1185,9 +1169,9 @@ async def search_crunchbase(target: str, client: httpx.AsyncClient) -> list:
                     ))
                 desc = props.get("description", props.get("short_description", ""))
                 if desc:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=desc[:200],
-                        type="Crunchbase: Description",
+                        ftype="Crunchbase: Description",
                         source="PeopleOrgOSINT (Crunchbase)",
                         confidence="Medium",
                         color="slate",
@@ -1197,9 +1181,9 @@ async def search_crunchbase(target: str, client: httpx.AsyncClient) -> list:
                 for emp_field in ["num_employees_min", "num_employees_max", "employee_count", "employees"]:
                     emp = props.get(emp_field, "")
                     if emp:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=str(emp)[:100],
-                            type="Crunchbase: Employee Count",
+                            ftype="Crunchbase: Employee Count",
                             source="PeopleOrgOSINT (Crunchbase)",
                             confidence="Medium",
                             color="slate",
@@ -1209,9 +1193,9 @@ async def search_crunchbase(target: str, client: httpx.AsyncClient) -> list:
                         break
                 founded = props.get("founded_on", props.get("founded_date", props.get("founded", "")))
                 if founded:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=str(founded)[:50],
-                        type="Crunchbase: Founding Date",
+                        ftype="Crunchbase: Founding Date",
                         source="PeopleOrgOSINT (Crunchbase)",
                         confidence="Medium",
                         color="amber",
@@ -1220,9 +1204,9 @@ async def search_crunchbase(target: str, client: httpx.AsyncClient) -> list:
                     ))
                 location = props.get("location", props.get("city", ""))
                 if location:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=str(location)[:200],
-                        type="Crunchbase: Location",
+                        ftype="Crunchbase: Location",
                         source="PeopleOrgOSINT (Crunchbase)",
                         confidence="Medium",
                         color="slate",
@@ -1231,9 +1215,9 @@ async def search_crunchbase(target: str, client: httpx.AsyncClient) -> list:
                     ))
                 industry = props.get("industry", props.get("categories", ""))
                 if industry:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=str(industry)[:200],
-                        type="Crunchbase: Industry",
+                        ftype="Crunchbase: Industry",
                         source="PeopleOrgOSINT (Crunchbase)",
                         confidence="Medium",
                         color="slate",
@@ -1242,9 +1226,9 @@ async def search_crunchbase(target: str, client: httpx.AsyncClient) -> list:
                     ))
                 cb_url = props.get("crunchbase_url", props.get("permalink", ""))
                 if cb_url:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=str(cb_url)[:200],
-                        type="Crunchbase: Profile URL",
+                        ftype="Crunchbase: Profile URL",
                         source="PeopleOrgOSINT (Crunchbase)",
                         confidence="High",
                         color="purple",
@@ -1255,9 +1239,9 @@ async def search_crunchbase(target: str, client: httpx.AsyncClient) -> list:
                 for arr_key in ["categories", "industries"]:
                     for item in props.get(arr_key, []):
                         if isinstance(item, dict) and item.get("value"):
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=item["value"][:200],
-                                type="Crunchbase: Category",
+                                ftype="Crunchbase: Category",
                                 source="PeopleOrgOSINT (Crunchbase)",
                                 confidence="Medium",
                                 color="slate",
@@ -1265,9 +1249,9 @@ async def search_crunchbase(target: str, client: httpx.AsyncClient) -> list:
                                 tags=["crunchbase", "industry", "category"]
                             ))
                         elif isinstance(item, str):
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=item[:200],
-                                type="Crunchbase: Category",
+                                ftype="Crunchbase: Category",
                                 source="PeopleOrgOSINT (Crunchbase)",
                                 confidence="Medium",
                                 color="slate",
@@ -1281,16 +1265,11 @@ async def search_crunchbase(target: str, client: httpx.AsyncClient) -> list:
     if not api_success:
         try:
             search_url = f"https://www.crunchbase.com/organization/{domain_clean}"
-            resp = await client.get(
-                search_url,
-                timeout=10.0,
-                headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"},
-                follow_redirects=True
-            )
-            if resp.status_code == 200:
-                findings.append(IntelligenceFinding(
+            resp = await safe_fetch(client, search_url, timeout=10.0, headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"})
+            if resp and resp.status_code == 200:
+                findings.append(make_finding(
                     entity=search_url,
-                    type="Crunchbase: Profile Page",
+                    ftype="Crunchbase: Profile Page",
                     source="PeopleOrgOSINT (Crunchbase)",
                     confidence="Medium",
                     color="purple",
@@ -1316,17 +1295,12 @@ async def search_linkedin_company(target: str, client: httpx.AsyncClient) -> lis
     ]
     for cache_url in cache_urls:
         try:
-            resp = await client.get(
-                cache_url,
-                timeout=8.0,
-                headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"},
-                follow_redirects=True
-            )
-            if resp.status_code == 200 and len(resp.text) > 200:
+            resp = await safe_fetch(client, cache_url, timeout=8.0, headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"})
+            if resp and resp.status_code == 200 and len(resp.text) > 200:
                 linkedin_url = f"linkedin.com/company/{domain_short}"
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=linkedin_url[:200],
-                    type="LinkedIn: Company Page",
+                    ftype="LinkedIn: Company Page",
                     source="PeopleOrgOSINT (LinkedIn)",
                     confidence="Medium",
                     color="purple",
@@ -1337,9 +1311,9 @@ async def search_linkedin_company(target: str, client: httpx.AsyncClient) -> lis
                 # Try to extract employee count from cached page
                 emp_match = re.search(r'(\d[\d,.-]*)\s*(?:employees|on LinkedIn)', resp.text, re.IGNORECASE)
                 if emp_match:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=emp_match.group(1).strip()[:50],
-                        type="LinkedIn: Employee Count",
+                        ftype="LinkedIn: Employee Count",
                         source="PeopleOrgOSINT (LinkedIn)",
                         confidence="Low",
                         color="slate",
@@ -1349,9 +1323,9 @@ async def search_linkedin_company(target: str, client: httpx.AsyncClient) -> lis
                 # Try to extract industry from cached page
                 ind_match = re.search(r'industry[":\s]+([^"<,]{3,60})', resp.text, re.IGNORECASE)
                 if ind_match:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=ind_match.group(1).strip()[:100],
-                        type="LinkedIn: Industry",
+                        ftype="LinkedIn: Industry",
                         source="PeopleOrgOSINT (LinkedIn)",
                         confidence="Low",
                         color="slate",
@@ -1364,16 +1338,11 @@ async def search_linkedin_company(target: str, client: httpx.AsyncClient) -> lis
 
     # Also check if LinkedIn company URL is embedded elsewhere
     try:
-        resp = await client.get(
-            f"https://{target}/linkedin",
-            timeout=8.0,
-            headers={"User-Agent": "Mozilla/5.0"},
-            follow_redirects=True
-        )
-        if resp.status_code == 200 and "linkedin.com/company" in resp.text:
-            findings.append(IntelligenceFinding(
+        resp = await safe_fetch(client, f"https://{target}/linkedin", timeout=8.0)
+        if resp and resp.status_code == 200 and "linkedin.com/company" in resp.text:
+            findings.append(make_finding(
                 entity=f"linkedin.com/company/{domain_short}",
-                type="LinkedIn: Company Page (Redirect)",
+                ftype="LinkedIn: Company Page (Redirect)",
                 source="PeopleOrgOSINT (LinkedIn)",
                 confidence="Medium",
                 color="purple",
@@ -1417,9 +1386,9 @@ async def classify_industry(html: str, target: str) -> list:
     )
     if meta_keywords:
         kw_content = meta_keywords.group(1).lower()
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=kw_content[:200],
-            type="Meta: Keywords",
+            ftype="Meta: Keywords",
             source="PeopleOrgOSINT (HTML)",
             confidence="Medium",
             color="slate",
@@ -1431,9 +1400,9 @@ async def classify_industry(html: str, target: str) -> list:
                 if kw in kw_content:
                     if industry == best_match:
                         best_score += 3
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"{industry} (matched keyword: {kw})",
-                        type="Industry Classification",
+                        ftype="Industry Classification",
                         source="PeopleOrgOSINT (HTML)",
                         confidence="Low",
                         color="slate",
@@ -1442,9 +1411,9 @@ async def classify_industry(html: str, target: str) -> list:
                     ))
 
     if best_match and best_score > 2:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{best_match} (score: {best_score}, keywords: {', '.join(industry_matches[:5])})",
-            type="Industry Classification (Primary)",
+            ftype="Industry Classification (Primary)",
             source="PeopleOrgOSINT (HTML)",
             confidence="Medium",
             color="emerald",
@@ -1468,9 +1437,9 @@ async def extract_locations(html: str, target: str) -> list:
         html
     )
     for city, state in city_state[:3]:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{city}, {state}",
-            type="Location: City, State + Zip",
+            ftype="Location: City, State + Zip",
             source="PeopleOrgOSINT (HTML)",
             confidence="Medium",
             color="slate",
@@ -1484,9 +1453,9 @@ async def extract_locations(html: str, target: str) -> list:
         html
     )
     for loc in set(city_country[:3]):
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=loc[:200],
-            type="Location: City, Country",
+            ftype="Location: City, Country",
             source="PeopleOrgOSINT (HTML)",
             confidence="Low",
             color="slate",
@@ -1505,12 +1474,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
     html = ""
     try:
-        resp = await client.get(
-            f"https://{domain}",
-            follow_redirects=True, timeout=15.0,
-            headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}
-        )
-        html = resp.text[:200000] if hasattr(resp, 'text') else ""
+        resp = await safe_fetch(client, f"https://{domain}", timeout=15.0, headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"})
+        if resp:
+            html = resp.text[:200000]
     except:
         pass
 
@@ -1563,9 +1529,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
     if tech_count:
         org_profile_parts.append(f"Tech Stack Items: {tech_count}")
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"People & Org OSINT: {len(set(org_names))} orgs, {people_count} contacts, {social_count} social links, {tech_count} tech items",
-        type="People & Org OSINT Summary",
+        ftype="People & Org OSINT Summary",
         source="PeopleOrgOSINT",
         confidence="Medium",
         color="purple",
@@ -1574,9 +1540,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         tags=["people-osint", "org-osint", "summary"]
     ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=" | ".join(org_profile_parts),
-        type="Organization Profile Summary",
+        ftype="Organization Profile Summary",
         source="PeopleOrgOSINT",
         confidence="Medium",
         color="emerald",

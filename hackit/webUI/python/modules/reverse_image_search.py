@@ -1,11 +1,10 @@
-import httpx
 import re
 import base64
 import struct
 import io
 import json
-from models import IntelligenceFinding
 from urllib.parse import urljoin, urlparse
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash
 
 IMG_TAG_REGEX = re.compile(r'<img[^>]+src=["\']([^"\']+)["\']', re.IGNORECASE)
 CSS_BG_REGEX = re.compile(r'background(?:-image)?:\s*url\(["\']?([^"\')]+)["\']?\)', re.IGNORECASE)
@@ -19,7 +18,7 @@ VIDEO_POSTER_REGEX = re.compile(r'<video[^>]+poster=["\']([^"\']+)["\']', re.IGN
 PRELOAD_IMAGE_REGEX = re.compile(r'<link[^>]+rel=["\']preload["\'][^>]+as=["\']image["\'][^>]+href=["\']([^"\']+)["\']', re.IGNORECASE)
 APPLE_TOUCH_ICON_REGEX = re.compile(r'<link[^>]+rel=["\']apple-touch-icon(?:-precomposed)?["\'][^>]+href=["\']([^"\']+)["\']', re.IGNORECASE)
 INLINE_SVG_REGEX = re.compile(r'<svg[^>]*>(.*?)</svg>', re.IGNORECASE | re.DOTALL)
-JSON_LD_REGEX = re.compile(r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', re.IGNORECASE | re.DOTALL)
+JSON_LD_REGEX = re.compile(r'<script[^>]+ftype=["\']application/ld\+json["\'][^>]*>(.*?)</script>', re.IGNORECASE | re.DOTALL)
 
 STOCK_WATERMARKS = [
     "gettyimages", "shutterstock", "istockphoto", "123rf", "dreamstime",
@@ -260,7 +259,7 @@ def extract_image_dimensions(image_data):
         pass
     return None
 
-def detect_image_format(image_data, content_type=""):
+def detect_image_format(image_data, content_ftype=""):
     sig_map = {
         b'\xff\xd8\xff': "JPEG",
         b'\x89PNG\r\n\x1a\n': "PNG",
@@ -394,8 +393,10 @@ async def crawl(target: str, client: httpx.AsyncClient):
     base_url = f"https://{target}" if not target.startswith("http") else target
 
     try:
-        resp = await client.get(base_url, follow_redirects=True,
+        resp = await safe_fetch(client, base_url, follow_redirects=True,
             headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"})
+        if not resp:
+            return findings
         html = resp.text
         image_urls = []
         image_alt_map = {}
@@ -443,9 +444,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         inline_svg_info = extract_inline_svg_data(html)
         for svg_info in inline_svg_info:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=svg_info[:200],
-                type="Image Found - Inline SVG",
+                ftype="Image Found - Inline SVG",
                 source="ReverseImageSearch",
                 confidence="High",
                 color="blue",
@@ -471,9 +472,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         for img_url in absolute_urls[:15]:
             alt_text = image_alt_map.get(img_url, "")
             img_type = classify_image_type(img_url, base_url)
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=img_url[:200],
-                type=f"Image Found - {img_type}",
+                ftype=f"Image Found - {img_type}",
                 source="ReverseImageSearch",
                 confidence="High",
                 color="blue",
@@ -483,9 +484,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ))
 
             try:
-                img_resp = await client.get(img_url, timeout=10.0,
+                img_resp = await safe_fetch(client, img_url, timeout=10.0,
                     headers={"User-Agent": "Mozilla/5.0"})
-                if img_resp.status_code == 200 and len(img_resp.content) > 1000:
+                if img_resp and img_resp.status_code == 200 and len(img_resp.content) > 1000:
                     image_data = img_resp.content
                     content_type = img_resp.headers.get("content-type", "")
                     exif_info = extract_exif_info(image_data)
@@ -493,9 +494,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     if exif_info:
                         for exif_key, exif_val in exif_info.items():
                             if exif_key != "exif":
-                                findings.append(IntelligenceFinding(
+                                findings.append(make_finding(
                                     entity=f"{exif_key}: {str(exif_val)[:100]}",
-                                    type="Image EXIF Metadata",
+                                    ftype="Image EXIF Metadata",
                                     source="ReverseImageSearch",
                                     confidence="High",
                                     color="orange",
@@ -507,9 +508,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         gps_keys = [k for k in exif_info if "GPS" in k]
                         if gps_keys:
                             gps_str = "; ".join(f"{k}={v}" for k, v in exif_info.items() if "GPS" in k)
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=f"GPS data found: {gps_str[:150]}",
-                                type="Image GPS Location",
+                                ftype="Image GPS Location",
                                 source="ReverseImageSearch",
                                 confidence="High",
                                 color="red",
@@ -521,9 +522,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     dimensions = extract_image_dimensions(image_data)
                     if dimensions:
                         dim_str = f"{dimensions['width']}x{dimensions['height']} ({dimensions['orientation']}, ratio {dimensions['aspect_ratio']})"
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"Image dimensions: {dim_str}",
-                            type="Image Dimensions",
+                            ftype="Image Dimensions",
                             source="ReverseImageSearch",
                             confidence="High",
                             color="slate",
@@ -535,9 +536,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     img_format = detect_image_format(image_data, content_type)
                     format_tags = ["image-format", img_format.lower()]
                     is_outdated = img_format in ("GIF", "ICO")
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Image format: {img_format}{' (outdated)' if is_outdated else ''}",
-                        type="Image Format Detection",
+                        ftype="Image Format Detection",
                         source="ReverseImageSearch",
                         confidence="High",
                         color="yellow" if is_outdated else "slate",
@@ -548,9 +549,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
                     is_tracking = check_tracking_pixel(image_data, dimensions)
                     if is_tracking:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"Suspected tracking pixel: {img_url[:150]}",
-                            type="Tracking Pixel Detection",
+                            ftype="Tracking Pixel Detection",
                             source="ReverseImageSearch",
                             confidence="Medium",
                             color="yellow",
@@ -561,9 +562,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
                     has_face = detect_face_indicators(img_url, alt_text)
                     if has_face:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"Possible people in image: {img_url[:150]}",
-                            type="Face Detection Indicator",
+                            ftype="Face Detection Indicator",
                             source="ReverseImageSearch",
                             confidence="Low",
                             color="slate",
@@ -575,9 +576,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     img_body_lower = image_data[:50000].lower()
                     for wm in STOCK_WATERMARKS:
                         if wm.encode() in img_body_lower or wm in exif_info.get("Software", "").lower():
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=f"Stock photo detected: {wm}",
-                                type="Stock Photo Detection",
+                                ftype="Stock Photo Detection",
                                 source="ReverseImageSearch",
                                 confidence="Medium" if wm in ("unsplash", "pexels", "pixabay") else "High",
                                 color="slate",
@@ -589,9 +590,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
                     cdn_name = detect_cdn(img_url)
                     if cdn_name:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"CDN: {cdn_name} - {img_url[:150]}",
-                            type="Image CDN Detection",
+                            ftype="Image CDN Detection",
                             source="ReverseImageSearch",
                             confidence="High",
                             color="slate",
@@ -612,9 +613,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     ]
 
                     for search_engine, search_url in rev_engines:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"Reverse search: {search_engine}",
-                            type="Image Reverse Search Link",
+                            ftype="Image Reverse Search Link",
                             source="ReverseImageSearch",
                             confidence="Low",
                             color="slate",
@@ -651,9 +652,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             summary_parts.append(f"{svg_count} inline SVGs")
         summary_str = " | ".join(summary_parts)
 
-        findings.insert(0, IntelligenceFinding(
+        findings.insert(0, make_finding(
             entity=summary_str,
-            type="Image Analysis Summary",
+            ftype="Image Analysis Summary",
             source="ReverseImageSearch",
             confidence="High",
             color="purple",
@@ -668,9 +669,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         ))
 
     except Exception as e:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Reverse Image Search error: {str(e)[:100]}",
-            type="Reverse Image Search Error",
+            ftype="Reverse Image Search Error",
             source="ReverseImageSearch",
             confidence="Low",
             color="red",
@@ -685,8 +686,8 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 ext = url.rsplit(".", 1)[-1].split("?")[0].lower() if "." in url else "none"
                 ext_counts[ext] = ext_counts.get(ext, 0) + 1
             for ext, count in sorted(ext_counts.items(), key=lambda x: -x[1])[:5]:
-                findings.append(IntelligenceFinding(entity=f"Format: .{ext} ({count} images)", type="Image Format Distribution", source="ReverseImageSearch", confidence="Medium", color="slate", tags=["format"]))
-            findings.append(IntelligenceFinding(entity=f"Format diversity: {len(ext_counts)} distinct format(s)", type="Image Format Diversity", source="ReverseImageSearch", confidence="Medium", color="slate", tags=["format"]))
+                findings.append(make_finding(entity=f"Format: .{ext} ({count} images)", ftype="Image Format Distribution", source="ReverseImageSearch", confidence="Medium", color="slate", tags=["format"]))
+            findings.append(make_finding(entity=f"Format diversity: {len(ext_counts)} distinct format(s)", ftype="Image Format Diversity", source="ReverseImageSearch", confidence="Medium", color="slate", tags=["format"]))
 
     async def analyze_image_hosting():
         if absolute_urls:
@@ -697,28 +698,28 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     hosts[h] = hosts.get(h, 0) + 1
                 except: pass
             for host, count in sorted(hosts.items(), key=lambda x: -x[1])[:6]:
-                findings.append(IntelligenceFinding(entity=f"Host: {host} ({count})", type="Image Hosting Distribution", source="ReverseImageSearch", confidence="Medium", color="slate", tags=["hosting"]))
-            findings.append(IntelligenceFinding(entity=f"Hosting diversity: {len(hosts)} unique host(s)", type="Image Hosting Diversity", source="ReverseImageSearch", confidence="Medium", color="slate", tags=["hosting"]))
+                findings.append(make_finding(entity=f"Host: {host} ({count})", ftype="Image Hosting Distribution", source="ReverseImageSearch", confidence="Medium", color="slate", tags=["hosting"]))
+            findings.append(make_finding(entity=f"Hosting diversity: {len(hosts)} unique host(s)", ftype="Image Hosting Diversity", source="ReverseImageSearch", confidence="Medium", color="slate", tags=["hosting"]))
 
     async def check_image_privacy_risks():
         gps_findings = [f for f in findings if f.type == "Image GPS Location"]
         stock_findings = [f for f in findings if f.type == "Stock Photo Detection"]
         face_findings = [f for f in findings if f.type == "Face Detection Indicator"]
         if gps_findings:
-            findings.append(IntelligenceFinding(entity=f"{len(gps_findings)} image(s) with GPS data", type="Privacy Risk: GPS", source="ReverseImageSearch", confidence="High", color="red", threat_level="Elevated Risk", tags=["privacy"]))
+            findings.append(make_finding(entity=f"{len(gps_findings)} image(s) with GPS data", ftype="Privacy Risk: GPS", source="ReverseImageSearch", confidence="High", color="red", threat_level="Elevated Risk", tags=["privacy"]))
         if stock_findings:
-            findings.append(IntelligenceFinding(entity=f"{len(stock_findings)} stock photo(s)", type="Privacy Risk: Stock Photos", source="ReverseImageSearch", confidence="Medium", color="orange", tags=["privacy"]))
+            findings.append(make_finding(entity=f"{len(stock_findings)} stock photo(s)", ftype="Privacy Risk: Stock Photos", source="ReverseImageSearch", confidence="Medium", color="orange", tags=["privacy"]))
         if face_findings:
-            findings.append(IntelligenceFinding(entity=f"{len(face_findings)} image(s) with people indicators", type="Privacy Risk: People", source="ReverseImageSearch", confidence="Low", color="orange", tags=["privacy"]))
-        findings.append(IntelligenceFinding(entity="Check for embedded metadata before publishing images publicly", type="Privacy Recommendation", source="ReverseImageSearch", confidence="Medium", color="slate", tags=["recommendation"]))
-        findings.append(IntelligenceFinding(entity="Strip EXIF/GPS data from shared images", type="Privacy Recommendation", source="ReverseImageSearch", confidence="Medium", color="slate", tags=["recommendation"]))
+            findings.append(make_finding(entity=f"{len(face_findings)} image(s) with people indicators", ftype="Privacy Risk: People", source="ReverseImageSearch", confidence="Low", color="orange", tags=["privacy"]))
+        findings.append(make_finding(entity="Check for embedded metadata before publishing images publicly", ftype="Privacy Recommendation", source="ReverseImageSearch", confidence="Medium", color="slate", tags=["recommendation"]))
+        findings.append(make_finding(entity="Strip EXIF/GPS data from shared images", ftype="Privacy Recommendation", source="ReverseImageSearch", confidence="Medium", color="slate", tags=["recommendation"]))
 
     async def check_tracking_analysis():
         tracking_findings = [f for f in findings if f.type == "Tracking Pixel Detection"]
         if tracking_findings:
-            findings.append(IntelligenceFinding(entity=f"{len(tracking_findings)} tracking pixel(s)", type="Tracking Analysis", source="ReverseImageSearch", confidence="Medium", color="orange", tags=["tracking"]))
+            findings.append(make_finding(entity=f"{len(tracking_findings)} tracking pixel(s)", ftype="Tracking Analysis", source="ReverseImageSearch", confidence="Medium", color="orange", tags=["tracking"]))
         else:
-            findings.append(IntelligenceFinding(entity="No tracking pixels detected", type="Tracking Analysis", source="ReverseImageSearch", confidence="Low", color="emerald", tags=["tracking"]))
+            findings.append(make_finding(entity="No tracking pixels detected", ftype="Tracking Analysis", source="ReverseImageSearch", confidence="Low", color="emerald", tags=["tracking"]))
 
     async def check_image_security():
         cdn_findings = [f for f in findings if f.type == "Image CDN Detection"]
@@ -726,16 +727,16 @@ async def crawl(target: str, client: httpx.AsyncClient):
             cdn_names = set()
             for f in cdn_findings:
                 cdn_names.add(f.entity.split(" -")[0] if " -" in f.entity else f.entity)
-            findings.append(IntelligenceFinding(entity=f"CDNs: {', '.join(sorted(cdn_names))}", type="CDN Usage Summary", source="ReverseImageSearch", confidence="Medium", color="slate", tags=["cdn"]))
-        findings.append(IntelligenceFinding(entity=f"Total unique images: {len(absolute_urls)}", type="Image Count Summary", source="ReverseImageSearch", confidence="High", color="slate", tags=["summary"]))
+            findings.append(make_finding(entity=f"CDNs: {', '.join(sorted(cdn_names))}", ftype="CDN Usage Summary", source="ReverseImageSearch", confidence="Medium", color="slate", tags=["cdn"]))
+        findings.append(make_finding(entity=f"Total unique images: {len(absolute_urls)}", ftype="Image Count Summary", source="ReverseImageSearch", confidence="High", color="slate", tags=["summary"]))
         outdated = sum(1 for f in findings if "outdated" in (f.raw_data or "").lower())
         if outdated:
-            findings.append(IntelligenceFinding(entity=f"{outdated} image(s) use outdated format(s)", type="Outdated Format Warning", source="ReverseImageSearch", confidence="Medium", color="yellow", tags=["format"]))
+            findings.append(make_finding(entity=f"{outdated} image(s) use outdated format(s)", ftype="Outdated Format Warning", source="ReverseImageSearch", confidence="Medium", color="yellow", tags=["format"]))
 
     async def check_reverse_search_links():
         rev_count = sum(1 for f in findings if f.type == "Image Reverse Search Link")
-        findings.append(IntelligenceFinding(entity=f"Reverse image search URLs: {rev_count}", type="Reverse Search Summary", source="ReverseImageSearch", confidence="Medium", color="slate", tags=["reverse-search"]))
-        findings.append(IntelligenceFinding(entity="Use reverse search engines to find original sources", type="OSINT Recommendation", source="ReverseImageSearch", confidence="Medium", color="slate", tags=["recommendation"]))
+        findings.append(make_finding(entity=f"Reverse image search URLs: {rev_count}", ftype="Reverse Search Summary", source="ReverseImageSearch", confidence="Medium", color="slate", tags=["reverse-search"]))
+        findings.append(make_finding(entity="Use reverse search engines to find original sources", ftype="OSINT Recommendation", source="ReverseImageSearch", confidence="Medium", color="slate", tags=["recommendation"]))
 
     async def analyze_image_sources():
         source_domains = set()
@@ -745,31 +746,31 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     sd = urlparse(f.entity.split(": ")[1] if ": " in f.entity else f.entity).hostname or ""
                     source_domains.add(sd)
                 except: pass
-        findings.append(IntelligenceFinding(entity=f"Reverse search engines: {len(source_domains)}", type="Source Diversity", source="ReverseImageSearch", confidence="Medium", color="slate", tags=["sources"]))
+        findings.append(make_finding(entity=f"Reverse search engines: {len(source_domains)}", ftype="Source Diversity", source="ReverseImageSearch", confidence="Medium", color="slate", tags=["sources"]))
 
     async def analyze_metadata_findings():
         meta_count = sum(1 for f in findings if f.type.startswith("Image"))
-        findings.append(IntelligenceFinding(entity=f"Total metadata findings: {meta_count}", type="Metadata Volume", source="ReverseImageSearch", confidence="Medium", color="slate", tags=["metadata"]))
+        findings.append(make_finding(entity=f"Total metadata findings: {meta_count}", ftype="Metadata Volume", source="ReverseImageSearch", confidence="Medium", color="slate", tags=["metadata"]))
 
     async def analyze_image_threat():
         suspicious = sum(1 for f in findings if f.threat_level in ("Elevated Risk", "High Risk"))
-        findings.append(IntelligenceFinding(entity=f"Risk indicators: {suspicious}", type="Risk Assessment", source="ReverseImageSearch", confidence="Medium", color="red" if suspicious else "emerald", tags=["risk"]))
+        findings.append(make_finding(entity=f"Risk indicators: {suspicious}", ftype="Risk Assessment", source="ReverseImageSearch", confidence="Medium", color="red" if suspicious else "emerald", tags=["risk"]))
 
     async def analyze_network_impact():
-        findings.append(IntelligenceFinding(entity=f"All images stored externally - review CDN/cloud provider", type="Network Impact", source="ReverseImageSearch", confidence="Medium", color="orange", tags=["network"]))
-        findings.append(IntelligenceFinding(entity="Cached images may persist even after source deletion", type="Caching Warning", source="ReverseImageSearch", confidence="Medium", color="orange", tags=["network"]))
+        findings.append(make_finding(entity=f"All images stored externally - review CDN/cloud provider", ftype="Network Impact", source="ReverseImageSearch", confidence="Medium", color="orange", tags=["network"]))
+        findings.append(make_finding(entity="Cached images may persist even after source deletion", ftype="Caching Warning", source="ReverseImageSearch", confidence="Medium", color="orange", tags=["network"]))
 
     async def analyze_domain_reputation():
         social_images = sum(1 for u in absolute_urls if any(d in u for d in ["facebook", "instagram", "twitter", "linkedin", "cdninstagram"]))
-        findings.append(IntelligenceFinding(entity=f"Images hosted on social platforms: {social_images}", type="Social Hosting", source="ReverseImageSearch", confidence="Medium", color="slate", tags=["reputation"]))
-        findings.append(IntelligenceFinding(entity=f"Total image URLs extracted: {len(absolute_urls)}", type="Total Extracted", source="ReverseImageSearch", confidence="High", color="slate", tags=["reputation"]))
+        findings.append(make_finding(entity=f"Images hosted on social platforms: {social_images}", ftype="Social Hosting", source="ReverseImageSearch", confidence="Medium", color="slate", tags=["reputation"]))
+        findings.append(make_finding(entity=f"Total image URLs extracted: {len(absolute_urls)}", ftype="Total Extracted", source="ReverseImageSearch", confidence="High", color="slate", tags=["reputation"]))
 
     async def analyze_exif_awareness():
         exif_count = sum(1 for f in findings if "GPS" in f.type or "EXIF" in f.type)
-        findings.append(IntelligenceFinding(entity=f"EXIF/GPS findings: {exif_count}", type="EXIF Awareness", source="ReverseImageSearch", confidence="Medium", color="orange" if exif_count else "emerald", tags=["exif"]))
-        findings.append(IntelligenceFinding(entity="Always verify image metadata before sharing publicly", type="EXIF Recommendation", source="ReverseImageSearch", confidence="Medium", color="slate", tags=["exif"]))
-        findings.append(IntelligenceFinding(entity=f"Image total types: {len(set(url.rsplit('.',1)[-1].split('?')[0].lower() for url in absolute_urls if '.' in url))}", type="Format Count", source="ReverseImageSearch", confidence="Medium", color="slate", tags=["exif"]))
-        findings.append(IntelligenceFinding(entity="Consider watermarking images before public sharing", type="Watermark Recommendation", source="ReverseImageSearch", confidence="Medium", color="slate", tags=["exif"]))
+        findings.append(make_finding(entity=f"EXIF/GPS findings: {exif_count}", ftype="EXIF Awareness", source="ReverseImageSearch", confidence="Medium", color="orange" if exif_count else "emerald", tags=["exif"]))
+        findings.append(make_finding(entity="Always verify image metadata before sharing publicly", ftype="EXIF Recommendation", source="ReverseImageSearch", confidence="Medium", color="slate", tags=["exif"]))
+        findings.append(make_finding(entity=f"Image total types: {len(set(url.rsplit('.',1)[-1].split('?')[0].lower() for url in absolute_urls if '.' in url))}", ftype="Format Count", source="ReverseImageSearch", confidence="Medium", color="slate", tags=["exif"]))
+        findings.append(make_finding(entity="Consider watermarking images before public sharing", ftype="Watermark Recommendation", source="ReverseImageSearch", confidence="Medium", color="slate", tags=["exif"]))
 
     await asyncio.gather(
         analyze_image_diversity(),

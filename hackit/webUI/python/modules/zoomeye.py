@@ -1,8 +1,7 @@
 import httpx
 import json
 import re
-from models import IntelligenceFinding
-
+from module_common import safe_fetch, make_finding
 ZOOMEYE_API = "https://api.zoomeye.org"
 ZOOMEYE_WEB = "https://www.zoomeye.org"
 USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
@@ -42,7 +41,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
     all_technologies = set()
 
     try:
-        dns_resp = await client.get(
+        dns_resp = await safe_fetch(client, 
             f"https://dns.google/resolve?name={domain}&type=A",
             timeout=10.0,
             headers={"User-Agent": USER_AGENT}
@@ -54,9 +53,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     ip = answer.get("data", "")
                     if ip:
                         resolved_ips.add(ip)
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=ip,
-                            type="Resolved IP",
+                            ftype="Resolved IP",
                             source="ZoomEye",
                             confidence="High",
                             color="blue",
@@ -72,7 +71,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
     try:
         host_search_url = f"{ZOOMEYE_API}/host/search"
         params = {"query": f"domain:{domain}", "page": 1, "size": 20}
-        host_resp = await client.get(
+        host_resp = await safe_fetch(client, 
             host_search_url,
             params=params,
             timeout=20.0,
@@ -128,9 +127,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     if country:
                         raw_parts.append(f"Country: {country}")
 
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"{ip}:{port} ({service or protocol or 'unknown'})",
-                        type="ZoomEye Host Service",
+                        ftype="ZoomEye Host Service",
                         source="ZoomEye",
                         confidence="High",
                         color="orange",
@@ -143,9 +142,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
                 if app:
                     all_technologies.add(app)
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"{app} on {ip}:{port}",
-                        type="Technology / Application",
+                        ftype="Technology / Application",
                         source="ZoomEye",
                         confidence="High",
                         color="purple",
@@ -157,9 +156,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
                 if banner:
                     banner_truncated = banner[:200]
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Banner: {banner_truncated}",
-                        type="Service Banner",
+                        ftype="Service Banner",
                         source="ZoomEye",
                         confidence="Medium",
                         color="slate",
@@ -170,9 +169,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     ))
 
                 if os_name:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"{os_name} on {ip}",
-                        type="Operating System",
+                        ftype="Operating System",
                         source="ZoomEye",
                         confidence="Medium",
                         color="cyan",
@@ -184,9 +183,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
                 if country or city:
                     location = f"{city}, {country}" if city and country else (country or city)
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=location,
-                        type="Host Location",
+                        ftype="Host Location",
                         source="ZoomEye",
                         confidence="High",
                         color="slate",
@@ -198,9 +197,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
                 if asn or org:
                     entity = f"{org} ({asn})" if org and asn else (org or asn)
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=entity[:200],
-                        type="ASN / Organization",
+                        ftype="ASN / Organization",
                         source="ZoomEye",
                         confidence="High",
                         color="purple",
@@ -211,9 +210,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     ))
 
                 if service:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"{service} on {ip}:{port}",
-                        type="Detected Service",
+                        ftype="Detected Service",
                         source="ZoomEye",
                         confidence="High",
                         color="blue",
@@ -224,9 +223,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     ))
 
             if len(matches) > 20:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{total_matches} total ZoomEye host results for {domain} (showing 20)",
-                    type="ZoomEye Host Results Summary",
+                    ftype="ZoomEye Host Results Summary",
                     source="ZoomEye",
                     confidence="High",
                     color="purple",
@@ -236,9 +235,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     tags=["zoomeye", "summary"]
                 ))
             elif matches:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{len(matches)} ZoomEye host results for {domain}",
-                    type="ZoomEye Host Results Summary",
+                    ftype="ZoomEye Host Results Summary",
                     source="ZoomEye",
                     confidence="High",
                     color="purple",
@@ -249,9 +248,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 ))
 
         elif host_resp.status_code == 401:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="ZoomEye API requires authentication (HTTP 401)",
-                type="ZoomEye API Error",
+                ftype="ZoomEye API Error",
                 source="ZoomEye",
                 confidence="High",
                 color="red",
@@ -260,9 +259,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 tags=["error", "auth"]
             ))
         elif host_resp.status_code == 403:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="ZoomEye API access forbidden (HTTP 403)",
-                type="ZoomEye API Error",
+                ftype="ZoomEye API Error",
                 source="ZoomEye",
                 confidence="High",
                 color="red",
@@ -271,9 +270,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 tags=["error", "auth"]
             ))
     except Exception as e:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"ZoomEye host API error: {str(e)[:100]}",
-            type="ZoomEye API Error",
+            ftype="ZoomEye API Error",
             source="ZoomEye",
             confidence="Low",
             color="red",
@@ -285,7 +284,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
     try:
         web_search_url = f"{ZOOMEYE_API}/web/search"
         web_params = {"query": f"domain:{domain}", "page": 1, "size": 20}
-        web_resp = await client.get(
+        web_resp = await safe_fetch(client, 
             web_search_url,
             params=web_params,
             timeout=20.0,
@@ -317,9 +316,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
                 if site_url:
                     site_count += 1
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=site_url[:200],
-                        type="ZoomEye Web Site",
+                        ftype="ZoomEye Web Site",
                         source="ZoomEye",
                         confidence="High",
                         color="slate",
@@ -330,9 +329,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     ))
 
                 if site_title:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Title: {site_title[:200]}",
-                        type="Web Page Title",
+                        ftype="Web Page Title",
                         source="ZoomEye",
                         confidence="Medium",
                         color="blue",
@@ -344,9 +343,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
                 if site_server:
                     all_technologies.add(site_server)
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=site_server[:200],
-                        type="Web Server (ZoomEye)",
+                        ftype="Web Server (ZoomEye)",
                         source="ZoomEye",
                         confidence="High",
                         color="orange",
@@ -358,9 +357,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
                 if site_keywords and isinstance(site_keywords, list):
                     kw_str = ", ".join(site_keywords[:5])
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Keywords: {kw_str[:200]}",
-                        type="Web Page Keywords",
+                        ftype="Web Page Keywords",
                         source="ZoomEye",
                         confidence="Medium",
                         color="slate",
@@ -370,9 +369,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     ))
 
                 if site_description:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Description: {site_description[:200]}",
-                        type="Web Page Description",
+                        ftype="Web Page Description",
                         source="ZoomEye",
                         confidence="Medium",
                         color="slate",
@@ -381,9 +380,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     ))
 
             if web_matches:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{web_total} ZoomEye web results for {domain} (showing {site_count})",
-                    type="ZoomEye Web Results Summary",
+                    ftype="ZoomEye Web Results Summary",
                     source="ZoomEye",
                     confidence="High",
                     color="purple",
@@ -398,7 +397,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
     try:
         ssl_keywords = ["ssl", "tls", "certificate", "cert", "https"]
         ssl_params = {"query": f"domain:{domain} port:443", "page": 1, "size": 10}
-        ssl_resp = await client.get(
+        ssl_resp = await safe_fetch(client, 
             host_search_url,
             params=ssl_params,
             timeout=15.0,
@@ -419,9 +418,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 ip = match.get("ip", "")
 
                 if ssl_subject:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"SSL Subject: {ssl_subject}",
-                        type="SSL Certificate Subject",
+                        ftype="SSL Certificate Subject",
                         source="ZoomEye",
                         confidence="High",
                         color="emerald",
@@ -432,9 +431,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     ))
 
                 if ssl_issuer:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"SSL Issuer: {ssl_issuer}",
-                        type="SSL Certificate Issuer",
+                        ftype="SSL Certificate Issuer",
                         source="ZoomEye",
                         confidence="High",
                         color="emerald",
@@ -444,9 +443,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     ))
 
                 if ssl_version:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"SSL/TLS: {ssl_version}",
-                        type="SSL/TLS Version",
+                        ftype="SSL/TLS Version",
                         source="ZoomEye",
                         confidence="Medium",
                         color="slate",
@@ -460,7 +459,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
     try:
         for single_ip in list(resolved_ips)[:5]:
             ip_params = {"query": f"ip:{single_ip}", "page": 1, "size": 10}
-            ip_resp = await client.get(
+            ip_resp = await safe_fetch(client, 
                 host_search_url,
                 params=ip_params,
                 timeout=15.0,
@@ -480,9 +479,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     if s:
                         service_set.add(s)
                 if port_set:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"{single_ip}: open ports {', '.join(sorted(port_set, key=int)[:10])}",
-                        type="ZoomEye IP Services",
+                        ftype="ZoomEye IP Services",
                         source="ZoomEye",
                         confidence="Medium",
                         color="blue",
@@ -496,7 +495,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
     try:
         domain_search_params = {"query": f"domain:{domain}", "page": 1, "size": 20}
-        domain_resp = await client.get(
+        domain_resp = await safe_fetch(client, 
             f"{ZOOMEYE_API}",
             params=domain_search_params,
             timeout=15.0,
@@ -508,9 +507,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
     # Summary findings for port and technology distribution
     if all_ports:
         port_str = ", ".join(str(p) for p in sorted(all_ports)[:15])
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Port distribution: {port_str}",
-            type="ZoomEye Port Summary",
+            ftype="ZoomEye Port Summary",
             source="ZoomEye",
             confidence="Medium",
             color="slate",
@@ -521,9 +520,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
     if all_services:
         svc_str = ", ".join(sorted(all_services)[:10])
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Service distribution: {svc_str}",
-            type="ZoomEye Service Summary",
+            ftype="ZoomEye Service Summary",
             source="ZoomEye",
             confidence="Medium",
             color="blue",
@@ -534,9 +533,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
     if all_technologies:
         tech_str = ", ".join(sorted(all_technologies)[:10])
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Technology stack: {tech_str}",
-            type="ZoomEye Technology Summary",
+            ftype="ZoomEye Technology Summary",
             source="ZoomEye",
             confidence="Medium",
             color="orange",
@@ -546,9 +545,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         ))
 
     if not findings:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"No ZoomEye data found for {domain}",
-            type="ZoomEye No Results",
+            ftype="ZoomEye No Results",
             source="ZoomEye",
             confidence="Low",
             color="slate",

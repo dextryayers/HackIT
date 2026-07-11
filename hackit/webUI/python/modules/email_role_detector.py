@@ -1,6 +1,6 @@
 import httpx
 import re
-from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash
 
 ROLE_PATTERNS = [
     ("admin", "Administrator", "High"),
@@ -165,9 +165,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     findings = []
     email = target.strip().lower()
     if "@" not in email:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="Not a valid email",
-            type="Role Detection Error",
+            ftype="Role Detection Error",
             source="EmailRoleDetector",
             confidence="High", color="red", category="General OSINT",
             threat_level="Informational", status="Error",
@@ -179,9 +179,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     domain = email.split("@")[1]
 
     if not PATTERN_TYPES.match(local_part):
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Local part '{local_part}' contains unusual characters",
-            type="Unusual Local Part",
+            ftype="Unusual Local Part",
             source="EmailRoleDetector",
             confidence="High", color="orange", category="Email Analysis",
             threat_level="Elevated Risk", status="Unusual",
@@ -197,7 +197,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         for pattern, description, sensitivity in matched_roles:
             color_map = {"High": "red", "Medium": "orange", "Low": "slate"}
             sev_map = {"High": "Elevated Risk", "Medium": "Standard Target", "Low": "Informational"}
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"ROLE ACCOUNT: {email} matches '{pattern}' ({description})",
                 type="Role-Based Email Detected",
                 source="EmailRoleDetector",
@@ -211,9 +211,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                 tags=["role-based", "generic-account", pattern, sensitivity.lower(), domain]
             ))
     else:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"No role pattern match for {local_part}",
-            type="No Role Detected",
+            ftype="No Role Detected",
             source="EmailRoleDetector",
             confidence="High",
             color="emerald",
@@ -230,7 +230,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     for pattern, description, sensitivity in prefix_matches:
         suffix = local_part.replace(pattern, "", 1).lstrip(".-_")
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"PREFIX MATCH: {email} starts with '{pattern}' (+ suffix '{suffix}')",
             type="Role-Prefix Email Detected",
             source="EmailRoleDetector",
@@ -248,9 +248,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             suffix_matches.append((pattern, description, sensitivity))
 
     for pattern, description, sensitivity in suffix_matches:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"SUFFIX MATCH: {email} ends with '{pattern}'",
-            type="Role-Suffix Email Detected",
+            ftype="Role-Suffix Email Detected",
             source="EmailRoleDetector",
             confidence="Medium",
             color="orange",
@@ -267,7 +267,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     med_sensitivity_count = sum(1 for _, _, s in all_role_matches if s == "Medium")
 
     if role_count > 0:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Role Analysis: {role_count} pattern match(es) for {email}",
             type="Role Detection Summary",
             source="EmailRoleDetector",
@@ -280,9 +280,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             tags=["role-based", "summary", email]
         ))
     else:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"No role patterns matched local part '{local_part}'",
-            type="Role Detection Summary",
+            ftype="Role Detection Summary",
             source="EmailRoleDetector",
             confidence="High",
             color="emerald",
@@ -294,9 +294,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     found_role = any(p == local_part for p, _, _ in ROLE_PATTERNS)
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Email classification: {'ROLE/GENERIC' if found_role else 'PERSONAL/UNIQUE'}",
-        type="Email Type Classification",
+        ftype="Email Type Classification",
         source="EmailRoleDetector",
         confidence="High",
         color="red" if found_role else "emerald",
@@ -307,7 +307,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         tags=["classification", "email-type"]
     ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Checked {email} against {len(ROLE_PATTERNS)} role patterns",
         type="Role Pattern Coverage",
         source="EmailRoleDetector",
@@ -328,9 +328,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         recommendations.append("Using a unique local part reduces spam and targeted attack surface")
 
     for i, rec in enumerate(recommendations):
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Recommendation {i+1}: {rec[:100]}",
-            type="Role-Based Email Recommendation",
+            ftype="Role-Based Email Recommendation",
             source="EmailRoleDetector",
             confidence="Medium",
             color="orange",

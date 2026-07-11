@@ -1,8 +1,6 @@
-import httpx
-import asyncio
 import re
-import socket
 from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash
 
 MARITIME_PLATFORMS = {
     "MarineTraffic": ["marinetraffic.com", "marinetraffic"],
@@ -70,14 +68,13 @@ MARITIME_DNS_PATTERNS = [
 ]
 
 async def _resolve_target(target: str) -> tuple:
-    try:
-        socket.inet_aton(target)
+    if is_ip(target):
         return target, True
-    except OSError:
-        pass
     try:
-        ip = socket.gethostbyname(target)
-        return ip, False
+        ip = resolve_ip(target)
+        if ip:
+            return ip, False
+        return None, "Resolution failed"
     except Exception as e:
         return None, str(e)
 
@@ -92,9 +89,9 @@ async def _check_marine_aviation(ip: str, client: httpx.AsyncClient) -> list:
             for name, pats in MARITIME_PLATFORMS.items():
                 for p in pats:
                     if p in org:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=name,
-                            type="Maritime Platform",
+                            ftype="Maritime Platform",
                             source="MarineAviationScanner",
                             confidence="High",
                             color="blue",
@@ -109,9 +106,9 @@ async def _check_marine_aviation(ip: str, client: httpx.AsyncClient) -> list:
             for name, pats in AVIATION_PLATFORMS.items():
                 for p in pats:
                     if p in org:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=name,
-                            type="Aviation Platform",
+                            ftype="Aviation Platform",
                             source="MarineAviationScanner",
                             confidence="High",
                             color="blue",
@@ -126,9 +123,9 @@ async def _check_marine_aviation(ip: str, client: httpx.AsyncClient) -> list:
             for name, pats in SATCOM_PROVIDERS.items():
                 for p in pats:
                     if p in org:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=name,
-                            type="SATCOM Provider",
+                            ftype="SATCOM Provider",
                             source="MarineAviationScanner",
                             confidence="High",
                             color="purple",
@@ -151,9 +148,9 @@ async def _check_rdns_aviation_marine(target: str) -> list:
         ptr_name = ptr[0].lower()
         for pat in AVIATION_DNS_PATTERNS:
             if pat in ptr_name:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Aviation rDNS: {ptr_name}",
-                    type="Aviation DNS Indicator",
+                    ftype="Aviation DNS Indicator",
                     source="MarineAviationScanner",
                     confidence="High",
                     color="blue",
@@ -167,9 +164,9 @@ async def _check_rdns_aviation_marine(target: str) -> list:
                 break
         for pat in MARITIME_DNS_PATTERNS:
             if pat in ptr_name:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Maritime rDNS: {ptr_name}",
-                    type="Maritime DNS Indicator",
+                    ftype="Maritime DNS Indicator",
                     source="MarineAviationScanner",
                     confidence="High",
                     color="blue",
@@ -188,7 +185,7 @@ async def _check_rdns_aviation_marine(target: str) -> list:
 async def _list_all_platforms() -> list:
     findings = []
     for name, pats in MARITIME_PLATFORMS.items():
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=name,
             type="Maritime Platform Reference",
             source="MarineAviationScanner",
@@ -201,7 +198,7 @@ async def _list_all_platforms() -> list:
             tags=["maritime", name.lower().replace(" ", "-").replace("(", "").replace(")", "")]
         ))
     for name, pats in AVIATION_PLATFORMS.items():
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=name,
             type="Aviation Platform Reference",
             source="MarineAviationScanner",
@@ -214,7 +211,7 @@ async def _list_all_platforms() -> list:
             tags=["aviation", name.lower().replace(" ", "-").replace("(", "").replace(")", "")]
         ))
     for name, pats in SATCOM_PROVIDERS.items():
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=name,
             type="SATCOM Provider Reference",
             source="MarineAviationScanner",
@@ -237,11 +234,11 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     ip, is_ip = await _resolve_target(target)
     if ip is None:
-        findings.append(IntelligenceFinding(entity=f"DNS resolution failed: {target}", type="DNS Error", source="MarineAviationScanner", confidence="Low", color="red", category="Geo / Network OSINT", raw_data=str(is_ip)[:200], tags=["error"]))
+        findings.append(make_finding(entity=f"DNS resolution failed: {target}", type="DNS Error", source="MarineAviationScanner", confidence="Low", color="red", category="Geo / Network OSINT", raw_data=str(is_ip)[:200], tags=["error"]))
         return findings
 
     if not is_ip:
-        findings.append(IntelligenceFinding(entity=f"{target} -> {ip}", type="DNS Resolution", source="MarineAviationScanner", confidence="High", color="slate", category="Geo / Network OSINT", threat_level="Informational", status="Resolved", resolution=ip, tags=["dns", "resolution"]))
+        findings.append(make_finding(entity=f"{target} -> {ip}", type="DNS Resolution", source="MarineAviationScanner", confidence="High", color="slate", category="Geo / Network OSINT", threat_level="Informational", status="Resolved", resolution=ip, tags=["dns", "resolution"]))
 
     findings.extend(await _check_marine_aviation(ip, client))
     findings.extend(await _check_rdns_aviation_marine(ip))
@@ -251,11 +248,11 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     aviation_count = sum(1 for f in findings if "Aviation" in f.type)
     satcom_count = sum(1 for f in findings if "SATCOM" in f.type)
 
-    findings.append(IntelligenceFinding(entity=f"Maritime platforms: {maritime_count}", type="Maritime Count", source="MarineAviationScanner", confidence="Medium", color="purple", category="Geo / Network OSINT", tags=["maritime", "summary"]))
-    findings.append(IntelligenceFinding(entity=f"Aviation platforms: {aviation_count}", type="Aviation Count", source="MarineAviationScanner", confidence="Medium", color="purple", category="Geo / Network OSINT", tags=["aviation", "summary"]))
-    findings.append(IntelligenceFinding(entity=f"SATCOM providers: {satcom_count}", type="SATCOM Count", source="MarineAviationScanner", confidence="Medium", color="purple", category="Geo / Network OSINT", tags=["satcom", "summary"]))
-    findings.append(IntelligenceFinding(entity=f"Target: {target}", type="Marine/Aviation Target", source="MarineAviationScanner", confidence="High", color="slate", category="Geo / Network OSINT", tags=["maritime", "aviation", "target"]))
-    findings.append(IntelligenceFinding(entity=f"Resolved IP: {ip}", type="Marine/Aviation IP", source="MarineAviationScanner", confidence="High", color="slate", category="Geo / Network OSINT", tags=["maritime", "aviation", "ip"]))
-    findings.append(IntelligenceFinding(entity=f"Total marine/aviation findings: {len(findings)}", type="Marine/Aviation Summary", source="MarineAviationScanner", confidence="Medium", color="purple", category="Geo / Network OSINT", tags=["maritime", "aviation", "summary"]))
+    findings.append(make_finding(entity=f"Maritime platforms: {maritime_count}", type="Maritime Count", source="MarineAviationScanner", confidence="Medium", color="purple", category="Geo / Network OSINT", tags=["maritime", "summary"]))
+    findings.append(make_finding(entity=f"Aviation platforms: {aviation_count}", type="Aviation Count", source="MarineAviationScanner", confidence="Medium", color="purple", category="Geo / Network OSINT", tags=["aviation", "summary"]))
+    findings.append(make_finding(entity=f"SATCOM providers: {satcom_count}", type="SATCOM Count", source="MarineAviationScanner", confidence="Medium", color="purple", category="Geo / Network OSINT", tags=["satcom", "summary"]))
+    findings.append(make_finding(entity=f"Target: {target}", type="Marine/Aviation Target", source="MarineAviationScanner", confidence="High", color="slate", category="Geo / Network OSINT", tags=["maritime", "aviation", "target"]))
+    findings.append(make_finding(entity=f"Resolved IP: {ip}", type="Marine/Aviation IP", source="MarineAviationScanner", confidence="High", color="slate", category="Geo / Network OSINT", tags=["maritime", "aviation", "ip"]))
+    findings.append(make_finding(entity=f"Total marine/aviation findings: {len(findings)}", type="Marine/Aviation Summary", source="MarineAviationScanner", confidence="Medium", color="purple", category="Geo / Network OSINT", tags=["maritime", "aviation", "summary"]))
 
     return findings

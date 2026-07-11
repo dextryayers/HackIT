@@ -3,8 +3,8 @@ import asyncio
 import socket
 import re
 from datetime import datetime, timedelta
-from models import IntelligenceFinding
 from urllib.parse import urlparse
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash
 
 DNSTWISTER_BASE = "https://dnstwister.report/api"
 VIEWDNS_BASE = "https://viewdns.info"
@@ -28,10 +28,10 @@ async def _check_dns_blacklist(domain: str, client: httpx.AsyncClient) -> list:
         try:
             query = f"{domain}.{rbl_host}"
             try:
-                await asyncio.get_event_loop().run_in_executor(None, lambda: socket.gethostbyname(query))
-                findings.append(IntelligenceFinding(
+                await asyncio.get_event_loop().run_in_executor(None, lambda: resolve_ip(query))
+                findings.append(make_finding(
                     entity=f"Listed on {rbl_name}",
-                    type="DNSBL Blacklist Hit",
+                    ftype="DNSBL Blacklist Hit",
                     source="DNSHistory (RBL)",
                     confidence="High",
                     color="red",
@@ -45,7 +45,7 @@ async def _check_dns_blacklist(domain: str, client: httpx.AsyncClient) -> list:
         except Exception:
             pass
     if findings:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Domain listed on {len(findings)} DNSBL(s)",
             type="DNSBL Summary",
             source="DNSHistory (RBL)",
@@ -57,9 +57,9 @@ async def _check_dns_blacklist(domain: str, client: httpx.AsyncClient) -> list:
             tags=["dnsbl", "blacklist", "summary"]
         ))
     else:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="Not listed on any tested DNSBL",
-            type="DNSBL Clean",
+            ftype="DNSBL Clean",
             source="DNSHistory (RBL)",
             confidence="High",
             color="emerald",
@@ -74,7 +74,7 @@ async def _check_dns_blacklist(domain: str, client: httpx.AsyncClient) -> list:
 async def _check_dnssec(domain: str, client: httpx.AsyncClient) -> list:
     findings = []
     try:
-        doh_resp = await client.get(
+        doh_resp = await safe_fetch(client, 
             f"https://dns.google/resolve?name={domain}&type=DS",
             timeout=10.0,
             headers={"Accept": "application/json"}
@@ -85,7 +85,7 @@ async def _check_dnssec(domain: str, client: httpx.AsyncClient) -> list:
             ds_records = [a for a in ds_answers if a.get("type") == 43]
             if ds_records:
                 for rec in ds_records[:5]:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=rec.get("data", "")[:200],
                         type="DNSSEC - DS Record",
                         source="DNSHistory (Google DoH)",
@@ -96,7 +96,7 @@ async def _check_dnssec(domain: str, client: httpx.AsyncClient) -> list:
                         raw_data=f"DS Record: {rec.get('data', '')}",
                         tags=["dnssec", "ds-record"]
                     ))
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity="DNSSEC is ENABLED (DS records found)",
                     type="DNSSEC Status",
                     source="DNSHistory (Google DoH)",
@@ -108,7 +108,7 @@ async def _check_dnssec(domain: str, client: httpx.AsyncClient) -> list:
                     tags=["dnssec", "secure"]
                 ))
             else:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity="DNSSEC is DISABLED (no DS records)",
                     type="DNSSEC Status",
                     source="DNSHistory (Google DoH)",
@@ -127,7 +127,7 @@ async def _check_dnssec(domain: str, client: httpx.AsyncClient) -> list:
 async def _check_caa(domain: str, client: httpx.AsyncClient) -> list:
     findings = []
     try:
-        caa_resp = await client.get(
+        caa_resp = await safe_fetch(client, 
             f"https://dns.google/resolve?name={domain}&type=CAA",
             timeout=10.0,
             headers={"Accept": "application/json"}
@@ -138,7 +138,7 @@ async def _check_caa(domain: str, client: httpx.AsyncClient) -> list:
             caa_records = [a for a in caa_answers if a.get("type") == 257]
             if caa_records:
                 for rec in caa_records[:5]:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=rec.get("data", "")[:200],
                         type="CAA Record",
                         source="DNSHistory (Google DoH)",
@@ -149,9 +149,9 @@ async def _check_caa(domain: str, client: httpx.AsyncClient) -> list:
                         tags=["dns", "caa"]
                     ))
             else:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity="No CAA record configured",
-                    type="CAA Record Status",
+                    ftype="CAA Record Status",
                     source="DNSHistory (Google DoH)",
                     confidence="High",
                     color="orange",
@@ -168,12 +168,14 @@ async def _check_caa(domain: str, client: httpx.AsyncClient) -> list:
 async def _check_https_service(domain: str, client: httpx.AsyncClient) -> list:
     findings = []
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://{domain}",
             timeout=12.0,
             follow_redirects=True,
             headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}
         )
+        if resp is None:
+            raise httpx.ConnectError("Connection failed")
         final_url = str(resp.url)
         chain_len = len(resp.history)
         status = resp.status_code
@@ -182,7 +184,7 @@ async def _check_https_service(domain: str, client: httpx.AsyncClient) -> list:
         cf_ray = resp.headers.get("cf-ray", "")
         powered_by = resp.headers.get("x-powered-by", "")
 
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"HTTPS {status} ({final_url})",
             type="HTTPS Service Check",
             source="DNSHistory (HTTP Probe)",
@@ -194,9 +196,9 @@ async def _check_https_service(domain: str, client: httpx.AsyncClient) -> list:
             tags=["https", "probe"]
         ))
         if server:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=server[:200],
-                type="Web Server Header",
+                ftype="Web Server Header",
                 source="DNSHistory (HTTP Probe)",
                 confidence="High",
                 color="slate",
@@ -204,7 +206,7 @@ async def _check_https_service(domain: str, client: httpx.AsyncClient) -> list:
                 tags=["server", "fingerprint"]
             ))
         if cf_ray:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="Cloudflare detected (cf-ray header)",
                 type="CDN Detection",
                 source="DNSHistory (HTTP Probe)",
@@ -215,9 +217,9 @@ async def _check_https_service(domain: str, client: httpx.AsyncClient) -> list:
                 tags=["cdn", "cloudflare"]
             ))
         if powered_by:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=powered_by[:200],
-                type="X-Powered-By Header",
+                ftype="X-Powered-By Header",
                 source="DNSHistory (HTTP Probe)",
                 confidence="High",
                 color="slate",
@@ -225,9 +227,9 @@ async def _check_https_service(domain: str, client: httpx.AsyncClient) -> list:
                 tags=["technology", "fingerprint"]
             ))
     except httpx.ConnectError:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="HTTPS connection FAILED",
-            type="HTTPS Service Check",
+            ftype="HTTPS Service Check",
             source="DNSHistory (HTTP Probe)",
             confidence="High",
             color="red",
@@ -249,7 +251,7 @@ async def _check_dns_history_securitytrails(domain: str, client: httpx.AsyncClie
     ]
     for url in urls_to_try:
         try:
-            resp = await client.get(
+            resp = await safe_fetch(client, 
                 url, timeout=12.0,
                 headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
             )
@@ -257,7 +259,7 @@ async def _check_dns_history_securitytrails(domain: str, client: httpx.AsyncClie
                 data = resp.json()
                 if "subdomains" in data:
                     subs = data["subdomains"]
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"{len(subs)} subdomains from SecurityTrails",
                         type="SecurityTrails - Subdomain Count",
                         source="DNSHistory (SecurityTrails)",
@@ -267,9 +269,9 @@ async def _check_dns_history_securitytrails(domain: str, client: httpx.AsyncClie
                         tags=["securitytrails", "subdomain-count"]
                     ))
                     for sub in subs[:10]:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"{sub}.{domain}",
-                            type="SecurityTrails - Historic Subdomain",
+                            ftype="SecurityTrails - Historic Subdomain",
                             source="DNSHistory (SecurityTrails)",
                             confidence="High",
                             color="emerald",
@@ -280,7 +282,7 @@ async def _check_dns_history_securitytrails(domain: str, client: httpx.AsyncClie
                 if "a" in data or "A" in data:
                     a_records = data.get("a", data.get("A", []))
                     if isinstance(a_records, list):
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"{len(a_records)} A records in SecurityTrails",
                             type="SecurityTrails - A Record History",
                             source="DNSHistory (SecurityTrails)",
@@ -299,7 +301,7 @@ async def _check_ip_reputation(domain: str, current_ips: set, client: httpx.Asyn
     findings = []
     for ip in current_ips:
         try:
-            resp = await client.get(
+            resp = await safe_fetch(client, 
                 f"https://ipapi.co/{ip}/json/",
                 timeout=10.0,
                 headers={"User-Agent": "Mozilla/5.0"}
@@ -310,9 +312,9 @@ async def _check_ip_reputation(domain: str, current_ips: set, client: httpx.Asyn
                 country = data.get("country_name", "")
                 asn = data.get("asn", "")
                 if org:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=org[:200],
-                        type="IP Organization",
+                        ftype="IP Organization",
                         source="DNSHistory (IP Geolocation)",
                         confidence="High",
                         color="slate",
@@ -321,9 +323,9 @@ async def _check_ip_reputation(domain: str, current_ips: set, client: httpx.Asyn
                         tags=["ip-geo", "organization"]
                     ))
                 if "cloud" in org.lower() or "aws" in org.lower() or "google" in org.lower() or "azure" in org.lower() or "cloudflare" in org.lower():
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Hosted on cloud provider: {org}",
-                        type="Cloud Provider Detection",
+                        ftype="Cloud Provider Detection",
                         source="DNSHistory (IP Geolocation)",
                         confidence="High",
                         color="orange",
@@ -339,7 +341,7 @@ async def _check_ip_reputation(domain: str, current_ips: set, client: httpx.Asyn
 async def _check_dns_timeline(domain: str, client: httpx.AsyncClient) -> list:
     findings = []
     try:
-        doh_resp = await client.get(
+        doh_resp = await safe_fetch(client, 
             f"https://dns.google/resolve?name={domain}&type=A",
             timeout=10.0,
             headers={"Accept": "application/json"}
@@ -357,7 +359,7 @@ async def _check_dns_timeline(domain: str, client: httpx.AsyncClient) -> list:
                         ttl_values.append(ans.get("TTL", 0))
             if ttl_values:
                 avg_ttl = sum(ttl_values) / len(ttl_values)
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Average TTL: {avg_ttl:.0f}s (low={min(ttl_values)}, high={max(ttl_values)})",
                     type="DNS Timeline - TTL Analysis",
                     source="DNSHistory (Google DoH)",
@@ -367,7 +369,7 @@ async def _check_dns_timeline(domain: str, client: httpx.AsyncClient) -> list:
                     tags=["dns", "ttl", "timeline"]
                 ))
                 if avg_ttl < 300:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity="Low TTL (<5 min) suggests dynamic DNS or fast-flux",
                         type="DNS Timeline - Fast Flux Detection",
                         source="DNSHistory (Google DoH)",
@@ -393,7 +395,7 @@ async def _check_dns_records_bulk(domain: str, client: httpx.AsyncClient) -> lis
     ]
     for rtype_name, rtype_num, desc in record_types_to_check:
         try:
-            resp = await client.get(
+            resp = await safe_fetch(client, 
                 f"https://dns.google/resolve?name={domain}&type={rtype_name}",
                 timeout=10.0,
                 headers={"Accept": "application/json"}
@@ -404,7 +406,7 @@ async def _check_dns_records_bulk(domain: str, client: httpx.AsyncClient) -> lis
                 matching = [a for a in answers if a.get("type") == rtype_num]
                 if matching:
                     for ans in matching[:3]:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=ans.get("data", "")[:200],
                             type=desc,
                             source="DNSHistory (Google DoH)",
@@ -421,7 +423,7 @@ async def _check_dns_records_bulk(domain: str, client: httpx.AsyncClient) -> lis
 async def _check_viewdns_history(domain: str, client: httpx.AsyncClient) -> list:
     findings = []
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://viewdns.info/iphistory/?domain={domain}",
             timeout=20.0,
             headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}
@@ -430,7 +432,7 @@ async def _check_viewdns_history(domain: str, client: httpx.AsyncClient) -> list
             ip_dates = re.findall(r'>(\d+\.\d+\.\d+\.\d+)</td><td>(\d{4}-\d{2}-\d{2})', resp.text)
             ip_dates_unique = list(set(ip_dates))
             if ip_dates_unique:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{len(ip_dates_unique)} historical IP changes from ViewDNS",
                     type="ViewDNS - IP History Summary",
                     source="DNSHistory (ViewDNS)",
@@ -443,9 +445,9 @@ async def _check_viewdns_history(domain: str, client: httpx.AsyncClient) -> list
                 for ip, dt in ip_dates_unique[:30]:
                     ip_count[ip] = ip_count.get(ip, 0) + 1
                 for ip, cnt in sorted(ip_count.items(), key=lambda x: -x[1])[:5]:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=ip,
-                        type="ViewDNS - Historical IP",
+                        ftype="ViewDNS - Historical IP",
                         source="DNSHistory (ViewDNS)",
                         confidence="Medium",
                         color="slate",
@@ -454,7 +456,7 @@ async def _check_viewdns_history(domain: str, client: httpx.AsyncClient) -> list
                         tags=["viewdns", "ip", "historical"]
                     ))
                 if len(ip_count) >= 5:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"IP changed {len(ip_count)} times - high volatility",
                         type="ViewDNS - IP Volatility",
                         source="DNSHistory (ViewDNS)",
@@ -472,7 +474,7 @@ async def _check_viewdns_history(domain: str, client: httpx.AsyncClient) -> list
 async def _check_dnssec_and_security(domain: str, client: httpx.AsyncClient) -> list:
     findings = []
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://dns.google/resolve?name={domain}&type=DNSKEY",
             timeout=10.0,
             headers={"Accept": "application/json"}
@@ -483,7 +485,7 @@ async def _check_dnssec_and_security(domain: str, client: httpx.AsyncClient) -> 
             dnskey_records = [a for a in answers if a.get("type") == 48]
             rrsig_records = [a for a in answers if a.get("type") == 46]
             if dnskey_records:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{len(dnskey_records)} DNSKEY records found",
                     type="DNSSEC - DNSKEY Records",
                     source="DNSHistory (Google DoH)",
@@ -494,7 +496,7 @@ async def _check_dnssec_and_security(domain: str, client: httpx.AsyncClient) -> 
                     tags=["dnssec", "dnskey"]
                 ))
             if rrsig_records:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{len(rrsig_records)} RRSIG records - zone is signed",
                     type="DNSSEC - RRSIG Present",
                     source="DNSHistory (Google DoH)",
@@ -536,9 +538,9 @@ async def _check_certificate_chain(domain: str, client: httpx.AsyncClient) -> li
                         if key == "commonName":
                             cn = val
                 if cn:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=cn[:200],
-                        type="SSL Certificate Subject CN",
+                        ftype="SSL Certificate Subject CN",
                         source="DNSHistory (SSL Check)",
                         confidence="High",
                         color="slate",
@@ -549,9 +551,9 @@ async def _check_certificate_chain(domain: str, client: httpx.AsyncClient) -> li
             if cipher_info:
                 cipher_name = cipher_info[0]
                 proto = result.get("protocol", "")
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{proto} / {cipher_name}",
-                    type="SSL Cipher & Protocol",
+                    ftype="SSL Cipher & Protocol",
                     source="DNSHistory (SSL Check)",
                     confidence="High",
                     color="emerald",
@@ -604,9 +606,9 @@ async def _check_email_security_extended(domain: str, client: httpx.AsyncClient)
                     mx_hosters.add("Custom/Other")
 
             for h in sorted(mx_hosters):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=h,
-                    type="Email Hosting Provider",
+                    ftype="Email Hosting Provider",
                     source="DNSHistory (MX Analysis)",
                     confidence="High",
                     color="slate",
@@ -614,7 +616,7 @@ async def _check_email_security_extended(domain: str, client: httpx.AsyncClient)
                     tags=["email", "hosting", "mx-analysis"]
                 ))
 
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"MX servers: {', '.join(mx_records[:3])}",
                 type="Mail Server (MX Records)",
                 source="DNSHistory",
@@ -624,9 +626,9 @@ async def _check_email_security_extended(domain: str, client: httpx.AsyncClient)
                 tags=["email", "mx"]
             ))
         else:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="No MX records - domain cannot receive email",
-                type="Missing MX Records",
+                ftype="Missing MX Records",
                 source="DNSHistory",
                 confidence="High",
                 color="orange",
@@ -656,9 +658,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             host = await asyncio.get_event_loop().run_in_executor(
                 None, lambda: socket.gethostbyaddr(domain)
             )
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=host[0],
-                type="Reverse DNS (PTR)",
+                ftype="Reverse DNS (PTR)",
                 source="DNSHistory",
                 confidence="High",
                 color="blue",
@@ -670,7 +672,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         except Exception:
             pass
         try:
-            crt_resp = await client.get(
+            crt_resp = await safe_fetch(client, 
                 f"https://crt.sh/?q={domain}&output=json",
                 timeout=15.0,
                 headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}
@@ -683,9 +685,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         name = cert.get("name_value", "")
                         if name and name not in seen:
                             seen.add(name)
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=name[:200],
-                                type="Domain Associated with IP (crt.sh)",
+                                ftype="Domain Associated with IP (crt.sh)",
                                 source="DNSHistory",
                                 confidence="High",
                                 color="blue",
@@ -700,7 +702,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
     loop = asyncio.get_event_loop()
 
     try:
-        whois_resp = await client.get(
+        whois_resp = await safe_fetch(client, 
             f"https://api.hackertarget.com/whois/?q={domain}",
             timeout=12.0,
             headers={"User-Agent": "Mozilla/5.0"}
@@ -744,7 +746,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     age_label = f"{age_years:.1f} years"
                     if age_years < 1:
                         age_label = f"{age_days} days"
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Domain age: {age_label} (created {creation_date[:10]})",
                         type="DNS History - Domain Age",
                         source="DNSHistory (WHOIS)",
@@ -756,7 +758,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         tags=["domain-age", "whois"]
                     ))
                     if age_days < 30:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity="Domain is VERY NEW (<30 days) - HIGH RISK",
                             type="DNS History - New Domain Alert",
                             source="DNSHistory (WHOIS)",
@@ -768,9 +770,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                             tags=["new-domain", "risk"]
                         ))
                     elif age_days < 365:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity="Domain is less than 1 year old",
-                            type="DNS History - Domain Age Risk",
+                            ftype="DNS History - Domain Age Risk",
                             source="DNSHistory (WHOIS)",
                             confidence="High",
                             color="orange",
@@ -783,9 +785,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     pass
 
             if expiry_date:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Domain expires: {expiry_date[:10]}",
-                    type="DNS History - Domain Expiry",
+                    ftype="DNS History - Domain Expiry",
                     source="DNSHistory (WHOIS)",
                     confidence="High",
                     color="red" if "202" not in expiry_date[:7] else "emerald",
@@ -796,7 +798,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     exp_dt = datetime.strptime(expiry_date[:10], "%Y-%m-%d")
                     days_until_expiry = (exp_dt - datetime.now()).days
                     if days_until_expiry < 30:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"Domain EXPIRES SOON ({days_until_expiry} days)",
                             type="DNS History - Imminent Expiry",
                             source="DNSHistory (WHOIS)",
@@ -812,9 +814,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
             if registrars:
                 for registrar in registrars[:2]:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=registrar[:200],
-                        type="DNS History - Registrar",
+                        ftype="DNS History - Registrar",
                         source="DNSHistory (WHOIS)",
                         confidence="High",
                         color="slate",
@@ -822,9 +824,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     ))
 
             if org:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=org[:200],
-                    type="DNS History - Registrant Organization",
+                    ftype="DNS History - Registrant Organization",
                     source="DNSHistory (WHOIS)",
                     confidence="High",
                     color="slate",
@@ -832,9 +834,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 ))
 
             if admin_email:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=admin_email[:200],
-                    type="DNS History - Admin Email",
+                    ftype="DNS History - Admin Email",
                     source="DNSHistory (WHOIS)",
                     confidence="High",
                     color="orange",
@@ -842,9 +844,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 ))
 
             if tech_email:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=tech_email[:200],
-                    type="DNS History - Tech Email",
+                    ftype="DNS History - Tech Email",
                     source="DNSHistory (WHOIS)",
                     confidence="High",
                     color="orange",
@@ -854,9 +856,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             if name_servers:
                 ns_providers = set()
                 for ns in name_servers[:5]:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=ns[:200],
-                        type="DNS History - Nameserver",
+                        ftype="DNS History - Nameserver",
                         source="DNSHistory (WHOIS)",
                         confidence="High",
                         color="blue",
@@ -886,9 +888,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     else:
                         ns_providers.add("Custom/Unknown DNS")
                 for prov in sorted(ns_providers):
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Nameserver Provider: {prov}",
-                        type="DNS History - NS Provider",
+                        ftype="DNS History - NS Provider",
                         source="DNSHistory (WHOIS)",
                         confidence="High",
                         color="purple",
@@ -900,7 +902,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
     try:
         crt_url = f"https://crt.sh/?q=%25.{domain}&output=json"
-        crt_resp = await client.get(crt_url, timeout=20.0, headers={
+        crt_resp = await safe_fetch(client, crt_url, timeout=20.0, headers={
             "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
         })
         if crt_resp.status_code == 200:
@@ -928,9 +930,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         name_data[single_name]["count"] += 1
 
                 for name, data in sorted(name_data.items(), key=lambda x: x[1]["first"])[:40]:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=name[:200],
-                        type="DNS History - Historic Subdomain (CT Log)",
+                        ftype="DNS History - Historic Subdomain (CT Log)",
                         source="DNSHistory (crt.sh)",
                         confidence="High",
                         color="emerald",
@@ -940,7 +942,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         tags=["dns-history", "subdomain", "certificate-transparency"]
                     ))
 
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{len(name_data)} unique subdomains found in CT logs",
                     type="DNS History - CT Log Summary",
                     source="DNSHistory (crt.sh)",
@@ -956,9 +958,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     if data["first"] and (earliest_date is None or data["first"] < earliest_date):
                         earliest_date = data["first"]
                 if earliest_date:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Earliest SSL cert: {earliest_date}",
-                        type="DNS History - SSL Timeline Start",
+                        ftype="DNS History - SSL Timeline Start",
                         source="DNSHistory (crt.sh)",
                         confidence="High",
                         color="slate",
@@ -968,7 +970,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         pass
 
     try:
-        ht_resp = await client.get(
+        ht_resp = await safe_fetch(client, 
             f"https://api.hackertarget.com/hostsearch/?q={domain}",
             timeout=12.0,
             headers={"User-Agent": "Mozilla/5.0"}
@@ -988,9 +990,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             for sub, ips in list(sub_ip_map.items())[:30]:
                 ip_list = ", ".join(sorted(ips)[:3])
                 extra = f" and {len(ips)-3} more" if len(ips) > 3 else ""
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=sub[:200],
-                    type="DNS History - Current Subdomain",
+                    ftype="DNS History - Current Subdomain",
                     source="DNSHistory (HackerTarget)",
                     confidence="High",
                     color="cyan",
@@ -1000,7 +1002,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     tags=["subdomain", "active"]
                 ))
 
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{len(sub_ip_map)} active subdomains from passive DNS",
                 type="DNS History - Subdomain Summary",
                 source="DNSHistory (HackerTarget)",
@@ -1015,7 +1017,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             for ips in sub_ip_map.values():
                 all_ips.update(ips)
             if len(all_ips) >= 5:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{len(all_ips)} unique IPs across {len(sub_ip_map)} subdomains",
                     type="DNS History - IP Diversity",
                     source="DNSHistory",
@@ -1029,7 +1031,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         pass
 
     try:
-        rev_resp = await client.get(
+        rev_resp = await safe_fetch(client, 
             f"https://api.hackertarget.com/reverseip/?q={domain}",
             timeout=12.0,
             headers={"User-Agent": "Mozilla/5.0"}
@@ -1043,9 +1045,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     if host_part and host_part != domain:
                         rev_hosts.append(host_part)
             for host in rev_hosts[:15]:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=host[:200],
-                    type="DNS History - Co-hosted Domain (Reverse IP)",
+                    ftype="DNS History - Co-hosted Domain (Reverse IP)",
                     source="DNSHistory (HackerTarget)",
                     confidence="Medium",
                     color="purple",
@@ -1056,7 +1058,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         pass
 
     try:
-        doh_resp = await client.get(
+        doh_resp = await safe_fetch(client, 
             f"https://dns.google/resolve?name={domain}&type=A",
             timeout=10.0,
             headers={"Accept": "application/json"}
@@ -1072,9 +1074,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         current_ips.add(ip_val)
 
             for ip_val in sorted(current_ips):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=ip_val,
-                    type="DNS History - Current A Record",
+                    ftype="DNS History - Current A Record",
                     source="DNSHistory (Google DoH)",
                     confidence="High",
                     color="emerald",
@@ -1085,7 +1087,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 ))
 
             if len(current_ips) > 2:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{len(current_ips)} A records: {', '.join(sorted(current_ips))}",
                     type="DNS History - Multiple A Records",
                     source="DNSHistory (Google DoH)",
@@ -1099,7 +1101,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         pass
 
     try:
-        mx_doh = await client.get(
+        mx_doh = await safe_fetch(client, 
             f"https://dns.google/resolve?name={domain}&type=MX",
             timeout=10.0,
             headers={"Accept": "application/json"}
@@ -1111,9 +1113,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 if ans.get("type") == 15:
                     mx_val = ans.get("data", "")
                     if mx_val:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=mx_val[:200],
-                            type="DNS History - MX Record",
+                            ftype="DNS History - MX Record",
                             source="DNSHistory (Google DoH)",
                             confidence="High",
                             color="slate",
@@ -1124,7 +1126,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         pass
 
     try:
-        ns_doh = await client.get(
+        ns_doh = await safe_fetch(client, 
             f"https://dns.google/resolve?name={domain}&type=NS",
             timeout=10.0,
             headers={"Accept": "application/json"}
@@ -1136,9 +1138,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 if ans.get("type") == 2:
                     ns_val = ans.get("data", "")
                     if ns_val:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=ns_val[:200],
-                            type="DNS History - NS Record",
+                            ftype="DNS History - NS Record",
                             source="DNSHistory (Google DoH)",
                             confidence="High",
                             color="blue",
@@ -1149,7 +1151,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         pass
 
     try:
-        aaaa_resp = await client.get(
+        aaaa_resp = await safe_fetch(client, 
             f"https://dns.google/resolve?name={domain}&type=AAAA",
             timeout=10.0,
             headers={"Accept": "application/json"}
@@ -1161,9 +1163,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 if ans.get("type") == 28:
                     aaaa_val = ans.get("data", "")
                     if aaaa_val:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=aaaa_val[:200],
-                            type="DNS History - AAAA Record (IPv6)",
+                            ftype="DNS History - AAAA Record (IPv6)",
                             source="DNSHistory (Google DoH)",
                             confidence="High",
                             color="emerald",
@@ -1175,7 +1177,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         pass
 
     try:
-        txt_doh = await client.get(
+        txt_doh = await safe_fetch(client, 
             f"https://dns.google/resolve?name={domain}&type=TXT",
             timeout=10.0,
             headers={"Accept": "application/json"}
@@ -1187,9 +1189,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 if ans.get("type") == 16:
                     txt_val = ans.get("data", "")
                     if txt_val and txt_val.startswith("v=") and len(txt_val) > 10:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=txt_val[:200],
-                            type="DNS History - TXT Record",
+                            ftype="DNS History - TXT Record",
                             source="DNSHistory (Google DoH)",
                             confidence="High",
                             color="slate",
@@ -1200,7 +1202,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         pass
 
     try:
-        cname_resp = await client.get(
+        cname_resp = await safe_fetch(client, 
             f"https://dns.google/resolve?name={domain}&type=CNAME",
             timeout=10.0,
             headers={"Accept": "application/json"}
@@ -1212,9 +1214,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 if ans.get("type") == 5:
                     cname_val = ans.get("data", "")
                     if cname_val:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=cname_val[:200],
-                            type="DNS History - CNAME Record",
+                            ftype="DNS History - CNAME Record",
                             source="DNSHistory (Google DoH)",
                             confidence="High",
                             color="purple",
@@ -1226,7 +1228,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         pass
 
     try:
-        soa_resp = await client.get(
+        soa_resp = await safe_fetch(client, 
             f"https://dns.google/resolve?name={domain}&type=SOA",
             timeout=10.0,
             headers={"Accept": "application/json"}
@@ -1238,9 +1240,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 if ans.get("type") == 6:
                     soa_val = ans.get("data", "")
                     if soa_val:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=soa_val[:200],
-                            type="DNS History - SOA Record",
+                            ftype="DNS History - SOA Record",
                             source="DNSHistory (Google DoH)",
                             confidence="High",
                             color="slate",
@@ -1252,7 +1254,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
     dnstwister_url = f"https://dnstwister.report/api/fuzz/{domain}"
     try:
-        dw_resp = await client.get(dnstwister_url, timeout=15.0, headers={
+        dw_resp = await safe_fetch(client, dnstwister_url, timeout=15.0, headers={
             "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
         })
         if dw_resp.status_code == 200:
@@ -1265,9 +1267,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         fuzz_domain = fuzz_item.get("domain", "")
                         fuzz_ip = fuzz_item.get("ip", "")
                         if fuzz_domain:
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=fuzz_domain[:200],
-                                type="DNS History - Typosquatting Variant",
+                                ftype="DNS History - Typosquatting Variant",
                                 source="DNSHistory (DNSTwister)",
                                 confidence="Medium",
                                 color="red",
@@ -1280,7 +1282,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         pass
 
     try:
-        rt_resp = await client.get(
+        rt_resp = await safe_fetch(client, 
             f"https://api.hackertarget.com/zonetransfer/?q={domain}",
             timeout=15.0,
             headers={"User-Agent": "Mozilla/5.0"}
@@ -1290,9 +1292,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             if zt_text and "error" not in zt_text.lower()[:50] and "fail" not in zt_text.lower()[:50]:
                 zt_lines = [l.strip() for l in zt_text.split("\n") if l.strip()]
                 for zl in zt_lines[:20]:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=zl[:200],
-                        type="DNS History - Zone Transfer Data",
+                        ftype="DNS History - Zone Transfer Data",
                         source="DNSHistory (HackerTarget)",
                         confidence="High",
                         color="red",
@@ -1300,7 +1302,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         raw_data=f"Zone transfer: {zl[:500]}",
                         tags=["zone-transfer"]
                     ))
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Zone transfer VULNERABLE - {len(zt_lines)} records leaked",
                     type="DNS History - Zone Transfer Risk",
                     source="DNSHistory (HackerTarget)",
@@ -1347,7 +1349,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
     try:
         current_ips_in_doh = set()
-        doh_check = await client.get(
+        doh_check = await safe_fetch(client, 
             f"https://dns.google/resolve?name={domain}&type=A",
             timeout=10.0,
             headers={"Accept": "application/json"}

@@ -1,7 +1,7 @@
 import httpx
 import re
 import json
-from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash, IntelligenceFinding
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 
@@ -26,17 +26,17 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     events = []
 
     try:
-        resp = await client.get(api_url, timeout=15.0,
+        resp = await safe_fetch(client, api_url, timeout=15.0,
             headers={"User-Agent": UA, "Accept": "application/vnd.github.v3+json"})
-        if resp.status_code == 200:
+        if resp and resp.status_code == 200:
             profile = resp.json()
     except Exception:
         pass
 
     if not profile or profile.get("message") == "Not Found":
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"GitHub user not found: {username}",
-            type="GitHub: User Not Found",
+            ftype="GitHub: User Not Found",
             source="SocialGitHubIntel",
             confidence="High", color="orange",
             category="Social Media Intelligence",
@@ -45,9 +45,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         ))
         return findings
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"GitHub profile: {profile.get('login', username)}",
-        type="GitHub: Profile Found",
+        ftype="GitHub: Profile Found",
         source="SocialGitHubIntel",
         confidence="High",
         color="purple",
@@ -71,9 +71,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     for field, ftype in fields:
         val = profile.get(field)
         if val:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{field.replace('_', ' ').title()}: {str(val)[:200]}",
-                type=ftype,
+                ftype=ftype,
                 source="SocialGitHubIntel",
                 confidence="High" if field != "bio" else "Medium",
                 color="orange" if field in ("email",) else "slate",
@@ -99,9 +99,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             display = str(val)
             if kind == "date":
                 display = str(val)[:10]
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{field.replace('_', ' ').title()}: {display[:100]}",
-                type=ftype,
+                ftype=ftype,
                 source="SocialGitHubIntel",
                 confidence="High",
                 color="slate",
@@ -111,9 +111,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             ))
 
     try:
-        resp = await client.get(repo_url, timeout=20.0,
+        resp = await safe_fetch(client, repo_url, timeout=20.0,
             headers={"User-Agent": UA, "Accept": "application/vnd.github.v3+json"})
-        if resp.status_code == 200:
+        if resp and resp.status_code == 200:
             repos = resp.json()
     except Exception:
         pass
@@ -127,9 +127,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
         if lang_counts:
             sorted_langs = sorted(lang_counts.items(), key=lambda x: -x[1])
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Languages: {', '.join(f'{l}({c})' for l, c in sorted_langs[:8])}",
-                type="GitHub: Language Analysis",
+                ftype="GitHub: Language Analysis",
                 source="SocialGitHubIntel",
                 confidence="High",
                 color="slate",
@@ -145,9 +145,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             for t in r.get("topics", []):
                 topics.add(t)
 
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Total stars: {total_stars} | Forks: {total_forks} | Repos: {len(repos)}",
-            type="GitHub: Repository Stats",
+            ftype="GitHub: Repository Stats",
             source="SocialGitHubIntel",
             confidence="High",
             color="slate",
@@ -157,9 +157,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         ))
 
         if topics:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Topics: {', '.join(list(topics)[:10])}",
-                type="GitHub: Repository Topics",
+                ftype="GitHub: Repository Topics",
                 source="SocialGitHubIntel",
                 confidence="Medium",
                 color="slate",
@@ -170,9 +170,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
         top_repos = sorted(repos, key=lambda r: r.get("stargazers_count", 0), reverse=True)[:5]
         for repo in top_repos:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Repo: {repo['name']} ({repo.get('stargazers_count', 0)} stars, {repo.get('forks_count', 0)} forks)",
-                type="GitHub: Top Repository",
+                ftype="GitHub: Top Repository",
                 source="SocialGitHubIntel",
                 confidence="High",
                 color="slate",
@@ -184,9 +184,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
         forked_repos = [r for r in repos if r.get("fork")]
         if forked_repos:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Forked repos: {len(forked_repos)}/{len(repos)}",
-                type="GitHub: Fork Analysis",
+                ftype="GitHub: Fork Analysis",
                 source="SocialGitHubIntel",
                 confidence="High",
                 color="slate",
@@ -196,17 +196,17 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             ))
 
     try:
-        resp = await client.get(gist_url, timeout=15.0,
+        resp = await safe_fetch(client, gist_url, timeout=15.0,
             headers={"User-Agent": UA, "Accept": "application/vnd.github.v3+json"})
-        if resp.status_code == 200:
+        if resp and resp.status_code == 200:
             gists = resp.json()
     except Exception:
         pass
 
     if gists:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Public gists: {len(gists)}",
-            type="GitHub: Public Gists",
+            ftype="GitHub: Public Gists",
             source="SocialGitHubIntel",
             confidence="High",
             color="slate",
@@ -216,18 +216,18 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         ))
 
     try:
-        resp = await client.get(org_url, timeout=15.0,
+        resp = await safe_fetch(client, org_url, timeout=15.0,
             headers={"User-Agent": UA, "Accept": "application/vnd.github.v3+json"})
-        if resp.status_code == 200:
+        if resp and resp.status_code == 200:
             orgs = resp.json()
     except Exception:
         pass
 
     if orgs:
         org_names = [o.get("login", "") for o in orgs]
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Organizations ({len(orgs)}): {', '.join(org_names)}",
-            type="GitHub: Organization Membership",
+            ftype="GitHub: Organization Membership",
             source="SocialGitHubIntel",
             confidence="High",
             color="slate",
@@ -237,9 +237,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         ))
 
     try:
-        resp = await client.get(events_url, timeout=15.0,
+        resp = await safe_fetch(client, events_url, timeout=15.0,
             headers={"User-Agent": UA, "Accept": "application/vnd.github.v3+json"})
-        if resp.status_code == 200:
+        if resp and resp.status_code == 200:
             events = resp.json()
     except Exception:
         pass
@@ -249,9 +249,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         for e in events[:50]:
             et = e.get("type", "Unknown")
             event_types[et] = event_types.get(et, 0) + 1
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Recent activity: {', '.join(f'{t}({c})' for t, c in sorted(event_types.items(), key=lambda x: -x[1])[:5])}",
-            type="GitHub: Recent Activity",
+            ftype="GitHub: Recent Activity",
             source="SocialGitHubIntel",
             confidence="Medium",
             color="slate",
@@ -272,9 +272,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                     commit_emails.add(email)
 
     if commit_emails:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Emails in commits: {', '.join(list(commit_emails)[:5])}",
-            type="GitHub: Commit Emails",
+            ftype="GitHub: Commit Emails",
             source="SocialGitHubIntel",
             confidence="Medium",
             color="orange",
@@ -286,9 +286,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     if profile.get("plan"):
         plan_name = profile["plan"].get("name", "Free")
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"GitHub plan: {plan_name}",
-            type="GitHub: Account Plan",
+            ftype="GitHub: Account Plan",
             source="SocialGitHubIntel",
             confidence="High",
             color="slate",
@@ -300,17 +300,17 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     ssh_keys = profile.get("public_keys", [])
     if not ssh_keys:
         try:
-            keys_resp = await client.get(f"https://api.github.com/users/{username}/keys", timeout=10.0,
+            keys_resp = await safe_fetch(client, f"https://api.github.com/users/{username}/keys", timeout=10.0,
                 headers={"User-Agent": UA, "Accept": "application/vnd.github.v3+json"})
-            if keys_resp.status_code == 200:
+            if keys_resp and keys_resp.status_code == 200:
                 ssh_keys = keys_resp.json()
         except Exception:
             pass
 
     if ssh_keys:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"SSH keys: {len(ssh_keys)} key(s) registered",
-            type="GitHub: SSH Keys",
+            ftype="GitHub: SSH Keys",
             source="SocialGitHubIntel",
             confidence="High",
             color="orange",
@@ -322,18 +322,18 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     pinned_repos = []
     try:
-        pinned_resp = await client.get(
+        pinned_resp = await safe_fetch(client, 
             f"https://api.github.com/users/{username}/pinned?per_page=5",
             timeout=10.0, headers={"User-Agent": UA})
-        if pinned_resp.status_code == 200:
+        if pinned_resp and pinned_resp.status_code == 200:
             pinned_repos = pinned_resp.json()
     except Exception:
         pass
 
     if pinned_repos:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Pinned repos: {len(pinned_repos)}",
-            type="GitHub: Pinned Repositories",
+            ftype="GitHub: Pinned Repositories",
             source="SocialGitHubIntel",
             confidence="High",
             color="slate",
@@ -344,10 +344,10 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     contribution_data = None
     try:
-        contrib_resp = await client.get(
+        contrib_resp = await safe_fetch(client, 
             f"https://github.com/users/{username}/contributions",
             timeout=15.0, headers={"User-Agent": UA})
-        if contrib_resp.status_code == 200:
+        if contrib_resp and contrib_resp.status_code == 200:
             contrib_text = contrib_resp.text
             total_contrib = re.search(r'(\d[\d,]*)\s*(?:contribution|Contribution)', contrib_text)
             if total_contrib:
@@ -356,9 +356,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         pass
 
     if contribution_data:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Total contributions: {contribution_data}",
-            type="GitHub: Contribution Graph",
+            ftype="GitHub: Contribution Graph",
             source="SocialGitHubIntel",
             confidence="Medium",
             color="slate",
@@ -367,9 +367,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             tags=["github", "contributions", username]
         ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"GitHub intelligence gathering complete for {username}",
-        type="GitHub: Intel Summary",
+        ftype="GitHub: Intel Summary",
         source="SocialGitHubIntel",
         confidence="Medium",
         color="purple",

@@ -3,7 +3,7 @@ import asyncio
 import socket
 import re
 from urllib.parse import urlparse
-from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash
 
 COMMON_TLDS = [
     "com", "net", "org", "co", "io", "me", "tv", "info", "biz", "dev",
@@ -83,7 +83,7 @@ async def check_dns(host: str):
 
 async def check_http(host: str, client: httpx.AsyncClient):
     try:
-        resp = await client.get(f"http://{host}", timeout=8.0, follow_redirects=False,
+        resp = await safe_fetch(client, f"http://{host}", timeout=8.0, follow_redirects=False,
                                 headers={"User-Agent": "Mozilla/5.0"})
         title = ""
         try:
@@ -163,9 +163,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
     variants = generate_variants(domain)
     if not variants:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="Could not generate domain variants",
-            type="Similarity Checker Error",
+            ftype="Similarity Checker Error",
             source="Domain Similarity Checker",
             confidence="Low",
             color="slate",
@@ -209,9 +209,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     risk_threat = "Elevated Risk"
                     risk_status = "Parked"
 
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=v,
-            type=f"Domain Variant: {vtype}",
+            ftype=f"Domain Variant: {vtype}",
             source="Domain Similarity Checker",
             confidence="High" if dns_ok else "Medium",
             color=risk_color,
@@ -224,7 +224,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
     summary_parts = [f"Total variants: {len(variants)}", f"DNS resolved: {resolved}", f"HTTP alive: {http_alive}",
                      f"Same IP: {same_ip}", f"Parked: {parked}"]
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=" | ".join(summary_parts),
         type="Domain Similarity Summary",
         source="Domain Similarity Checker",
@@ -236,9 +236,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
     ))
 
     if same_ip > 0:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{same_ip} variants resolve to same IP as original - possible mirror/phishing",
-            type="Same-IP Variant Alert",
+            ftype="Same-IP Variant Alert",
             source="Domain Similarity Checker",
             confidence="High",
             color="red",
@@ -248,9 +248,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         ))
 
     if parked > 0:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{parked} variants are parked domains",
-            type="Parked Domain Detection",
+            ftype="Parked Domain Detection",
             source="Domain Similarity Checker",
             confidence="Medium",
             color="orange",
@@ -260,9 +260,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         ))
 
     if http_alive > 0:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{http_alive} live HTTP variants actively serving content",
-            type="Active Variant Alert",
+            ftype="Active Variant Alert",
             source="Domain Similarity Checker",
             confidence="High",
             color="orange",

@@ -3,8 +3,8 @@ import re
 import ssl
 import socket
 import asyncio
-from models import IntelligenceFinding
 from datetime import datetime
+from module_common import safe_fetch, make_finding
 
 HEADER_SIGNATURES = {
     "server": ("Web Server", "High"),
@@ -454,7 +454,7 @@ PROXY_DB_PATTERNS = {
 async def probe_path(host, path, client):
     try:
         url = f"https://{host}{path}"
-        resp = await client.get(url, timeout=5.0,
+        resp = await safe_fetch(client, url, timeout=5.0,
             headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"},
             follow_redirects=False)
         return resp.status_code, dict(resp.headers), resp.text[:10000] if hasattr(resp, "text") else ""
@@ -495,7 +495,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
     try:
         base_url = f"https://{host}"
-        resp = await client.get(base_url, follow_redirects=True,
+        resp = await safe_fetch(client, base_url, follow_redirects=True,
             headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"})
         headers = dict(resp.headers)
         html = resp.text[:200000]
@@ -511,9 +511,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             val = headers.get(header_key)
             if val:
                 layer = "security" if "Security:" in ftype else ("cache" if "Cache:" in ftype else "web_server")
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=val[:200] if val else ftype,
-                    type=ftype,
+                    ftype=ftype,
                     source="TechStackProfiler",
                     confidence=confidence,
                     color="orange",
@@ -541,9 +541,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             entity = f"{cms_name} {version}" if version else cms_name
             confidence = "High" if version else "Medium"
             timeline_year = TECHNOLOGY_TIMELINE.get(cms_name, "Unknown")
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=entity,
-                type=f"CMS: {cms_name}",
+                ftype=f"CMS: {cms_name}",
                 source="TechStackProfiler",
                 confidence=confidence,
                 color="blue",
@@ -556,9 +556,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             for pat in patterns:
                 if re.search(pat, html, re.IGNORECASE):
                     timeline_year = TECHNOLOGY_TIMELINE.get(fw_name, "Unknown")
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=fw_name,
-                        type="JavaScript Framework",
+                        ftype="JavaScript Framework",
                         source="TechStackProfiler",
                         confidence="Medium",
                         color="cyan",
@@ -571,9 +571,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         for css_name, patterns in CSS_PATTERNS.items():
             for pat in patterns:
                 if re.search(pat, html, re.IGNORECASE):
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=css_name,
-                        type="CSS Framework",
+                        ftype="CSS Framework",
                         source="TechStackProfiler",
                         confidence="Medium",
                         color="purple",
@@ -585,9 +585,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         for path, ftype in PATH_SIGNATURES.items():
             status, _, body = await probe_path(host, path, client)
             if status not in (0, 404, 403):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{path} [{status}]",
-                    type=ftype,
+                    ftype=ftype,
                     source="TechStackProfiler",
                     confidence="High" if status == 200 else "Medium",
                     color="slate",
@@ -599,9 +599,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         headers_str = str(headers).lower()
         for pattern, ftype in CDN_PATTERNS.items():
             if re.search(pattern, headers_str, re.IGNORECASE):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=ftype.replace("CDN: ", "").replace("CDN/WAAP: ", ""),
-                    type=ftype,
+                    ftype=ftype,
                     source="TechStackProfiler",
                     confidence="High",
                     color="slate",
@@ -613,9 +613,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         html_lower = html.lower()
         for pattern, ftype in ANALYTICS_PATTERNS.items():
             if re.search(pattern, html_lower, re.IGNORECASE):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=ftype.replace("Analytics: ", "").replace("Monitoring: ", ""),
-                    type=ftype,
+                    ftype=ftype,
                     source="TechStackProfiler",
                     confidence="High",
                     color="slate",
@@ -626,9 +626,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         for db_name, db_pattern in PROXY_DB_PATTERNS.items():
             if re.search(db_pattern, html_lower, re.IGNORECASE) or re.search(db_pattern, headers_str, re.IGNORECASE):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=db_name.title(),
-                    type=f"Database: {db_name.title()}",
+                    ftype=f"Database: {db_name.title()}",
                     source="TechStackProfiler",
                     confidence="Low",
                     color="slate",
@@ -640,9 +640,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         if issuer_info:
             for issuer_name, ftype in SSL_ISSUER_SIGNATURES.items():
                 if issuer_name.lower() in issuer_info.lower():
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=issuer_info[:200],
-                        type=ftype,
+                        ftype=ftype,
                         source="TechStackProfiler",
                         confidence="High",
                         color="emerald",
@@ -655,9 +655,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         for cookie in cookies_list:
             cookie_name = cookie.name if hasattr(cookie, "name") else str(cookie).split("=")[0]
             if "php" in cookie_name.lower():
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity="PHP (via PHPSESSID cookie)",
-                    type="Tech: PHP",
+                    ftype="Tech: PHP",
                     source="TechStackProfiler",
                     confidence="High",
                     color="orange",
@@ -665,9 +665,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     tags=["technology", "php"]
                 ))
             elif "asp.net" in cookie_name.lower() or "aspnet" in cookie_name.lower():
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity="ASP.NET (via ASP.NET_SessionId cookie)",
-                    type="Tech: ASP.NET",
+                    ftype="Tech: ASP.NET",
                     source="TechStackProfiler",
                     confidence="High",
                     color="blue",
@@ -675,9 +675,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     tags=["technology", "aspnet"]
                 ))
             elif "laravel" in cookie_name.lower():
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity="Laravel (via laravel_session cookie)",
-                    type="Tech: Laravel (PHP)",
+                    ftype="Tech: Laravel (PHP)",
                     source="TechStackProfiler",
                     confidence="High",
                     color="orange",
@@ -685,9 +685,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     tags=["technology", "laravel"]
                 ))
             elif "connect.sid" == cookie_name.lower():
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity="Express.js/Node.js (via connect.sid cookie)",
-                    type="Tech: Express.js",
+                    ftype="Tech: Express.js",
                     source="TechStackProfiler",
                     confidence="High",
                     color="green",
@@ -716,9 +716,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         }
         for os_sig, os_type in os_indicators.items():
             if os_sig in server_h:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=os_type.replace("OS: ", ""),
-                    type=os_type,
+                    ftype=os_type,
                     source="TechStackProfiler",
                     confidence="Medium",
                     color="slate",
@@ -731,9 +731,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         for hdr_key, (ftype, conf) in MORE_HEADER_SIGNATURES.items():
             val = headers.get(hdr_key)
             if val:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=val[:200] if val else ftype,
-                    type=ftype,
+                    ftype=ftype,
                     source="TechStackProfiler",
                     confidence=conf,
                     color="slate",
@@ -745,9 +745,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             for pat in patterns:
                 if re.search(pat, html, re.IGNORECASE):
                     era = detect_technology_era(cms_name)
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=cms_name,
-                        type=f"CMS: {cms_name}",
+                        ftype=f"CMS: {cms_name}",
                         source="TechStackProfiler",
                         confidence="Medium",
                         color="blue",
@@ -761,9 +761,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             for pat in patterns:
                 if re.search(pat, html, re.IGNORECASE):
                     era = detect_technology_era(fw_name)
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=fw_name,
-                        type="JavaScript Framework",
+                        ftype="JavaScript Framework",
                         source="TechStackProfiler",
                         confidence="Medium",
                         color="cyan",
@@ -777,9 +777,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             for pat in patterns:
                 if re.search(pat, html, re.IGNORECASE):
                     era = detect_technology_era(css_name)
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=css_name,
-                        type="CSS Framework",
+                        ftype="CSS Framework",
                         source="TechStackProfiler",
                         confidence="Medium",
                         color="purple",
@@ -792,9 +792,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         for path in additional_paths:
             status, _, body = await probe_path(host, path, client)
             if status not in (0, 404, 403):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{path} [{status}]",
-                    type="Extended Path Discovery",
+                    ftype="Extended Path Discovery",
                     source="TechStackProfiler",
                     confidence="High" if status == 200 else "Medium",
                     color="slate",
@@ -805,9 +805,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         payment_processors = detect_payment_processors(html)
         for pp in payment_processors:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=pp.replace("Payment: ", ""),
-                type=pp,
+                ftype=pp,
                 source="TechStackProfiler",
                 confidence="Medium",
                 color="amber",
@@ -817,9 +817,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         fonts = detect_fonts(html)
         for font in fonts:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=font.replace("Font: ", ""),
-                type=font,
+                ftype=font,
                 source="TechStackProfiler",
                 confidence="High",
                 color="slate",
@@ -829,9 +829,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         third_party = detect_third_party_integrations(html)
         for tp, pattern in third_party:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=tp.replace("Third-party: ", ""),
-                type=tp,
+                ftype=tp,
                 source="TechStackProfiler",
                 confidence="High",
                 color="slate",
@@ -842,9 +842,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         build_tools = detect_build_tools(html)
         for bt in build_tools:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=bt,
-                type=bt,
+                ftype=bt,
                 source="TechStackProfiler",
                 confidence="Medium",
                 color="cyan",
@@ -854,9 +854,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         test_tools = detect_test_frameworks(html)
         for tt in test_tools:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=tt,
-                type=tt,
+                ftype=tt,
                 source="TechStackProfiler",
                 confidence="Medium",
                 color="cyan",
@@ -867,9 +867,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         sec_findings = analyze_security_headers(headers)
         for sec_type, sec_msg, sec_severity, sec_color in sec_findings:
             threat = "Elevated Risk" if sec_severity == "High" else ("Medium Risk" if sec_severity == "Medium" else "Informational")
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=sec_msg[:200],
-                type=f"Security Header: {sec_type}",
+                ftype=f"Security Header: {sec_type}",
                 source="TechStackProfiler",
                 confidence="High",
                 color=sec_color,
@@ -884,9 +884,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             if version_str:
                 eol_year, is_eol = check_eol(tech_name, version_str)
                 if is_eol:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"{tech_name} {version_str} (EOL {eol_year})",
-                        type=f"End-of-Life: {tech_name}",
+                        ftype=f"End-of-Life: {tech_name}",
                         source="TechStackProfiler",
                         confidence="High",
                         color="red",
@@ -896,9 +896,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     ))
                 known_cve = check_version_vulnerability(tech_name, version_str)
                 if known_cve:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"{tech_name} {version_str}: {known_cve}",
-                        type=f"CVE: {known_cve.split('(')[0].strip()}",
+                        ftype=f"CVE: {known_cve.split('(')[0].strip()}",
                         source="TechStackProfiler",
                         confidence="Medium",
                         color="red",
@@ -910,9 +910,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             if era:
                 age = 2026 - era
                 if age > 15:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"{tech_name} (Released {era}, {age} years old)",
-                        type="Legacy Technology",
+                        ftype="Legacy Technology",
                         source="TechStackProfiler",
                         confidence="Low",
                         color="orange",
@@ -930,9 +930,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     break
 
         for cat in sorted(tech_categories_used):
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=cat,
-                type=f"Technology Category: {cat}",
+                ftype=f"Technology Category: {cat}",
                 source="TechStackProfiler",
                 confidence="High",
                 color="emerald",
@@ -941,9 +941,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ))
 
         if findings:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{len(findings)} technologies detected",
-                type="Technology Stack Summary",
+                ftype="Technology Stack Summary",
                 source="TechStackProfiler",
                 confidence="High",
                 color="purple",
@@ -953,9 +953,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ))
 
     except Exception as e:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Tech Stack Profiler error: {str(e)[:100]}",
-            type="Tech Stack Error",
+            ftype="Tech Stack Error",
             source="TechStackProfiler",
             confidence="Low",
             color="red",
@@ -964,7 +964,6 @@ async def crawl(target: str, client: httpx.AsyncClient):
         ))
 
     return findings
-
 
 # === EXTENDED UPGRADE: 300+ more signatures, EOL detection, dependency mapping, confidence scoring ===
 

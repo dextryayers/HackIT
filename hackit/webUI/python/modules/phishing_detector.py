@@ -9,6 +9,7 @@ from urllib.parse import urlparse, urljoin
 from datetime import datetime, timedelta
 from typing import List, Optional
 from collections import defaultdict
+from module_common import safe_fetch, safe_fetch_json, make_finding
 from models import IntelligenceFinding
 
 LOOKALIKE_DOMAINS = [
@@ -252,7 +253,7 @@ def extract_html_indicators(html: str) -> list:
 async def check_openphish(client: httpx.AsyncClient) -> list:
     results = []
     try:
-        resp = await client.get("https://openphish.com/feed.txt", timeout=15.0,
+        resp = await safe_fetch(client, "https://openphish.com/feed.txt", timeout=15.0,
             headers={"User-Agent": "Mozilla/5.0"})
         if resp.status_code == 200:
             urls = resp.text.strip().splitlines()
@@ -264,7 +265,7 @@ async def check_openphish(client: httpx.AsyncClient) -> list:
 async def check_phishstats(client: httpx.AsyncClient) -> list:
     results = []
     try:
-        resp = await client.get("https://phishstats.info/phish_stats.csv", timeout=15.0,
+        resp = await safe_fetch(client, "https://phishstats.info/phish_stats.csv", timeout=15.0,
             headers={"User-Agent": "Mozilla/5.0"})
         if resp.status_code == 200:
             lines = resp.text.strip().splitlines()
@@ -279,7 +280,7 @@ async def check_phishstats(client: httpx.AsyncClient) -> list:
 async def check_urlscan_recent(client: httpx.AsyncClient) -> list:
     results = []
     try:
-        resp = await client.get("https://urlscan.io/api/v1/result/", timeout=15.0,
+        resp = await safe_fetch(client, "https://urlscan.io/api/v1/result/", timeout=15.0,
             headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"})
         if resp.status_code == 200:
             data = resp.json()
@@ -363,7 +364,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
     suspicious_tlds = check_suspicious_tld(domain)
 
     for lookalike in lookalikes:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Lookalike domain detected: {lookalike} in {domain}",
             type="Phishing: Lookalike Domain",
             source="PhishingDetector",
@@ -377,7 +378,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         ))
 
     for hg in homographs[:10]:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Homograph detected: '{hg['original']}' replaced with '{hg['homoglyph']}' (U+{hg['char_code'][2:]})",
             type="Phishing: Homograph Attack",
             source="PhishingDetector",
@@ -390,7 +391,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         ))
 
     for issue in url_issues:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"URL structural issue: {issue}",
             type="Phishing: URL Anomaly",
             source="PhishingDetector",
@@ -403,7 +404,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         ))
 
     for tld in suspicious_tlds:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Suspicious TLD: .{tld}",
             type="Phishing: Suspicious TLD",
             source="PhishingDetector",
@@ -417,7 +418,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
     openphish_urls = await check_openphish(client)
     if openphish_urls:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"OpenPhish feed: {len(openphish_urls)} live phishing URLs",
             type="Phishing: OpenPhish Feed",
             source="PhishingDetector",
@@ -431,7 +432,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
     phishstats_urls = await check_phishstats(client)
     if phishstats_urls:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"PhishStats feed: {len(phishstats_urls)} live phishing URLs",
             type="Phishing: PhishStats Feed",
             source="PhishingDetector",
@@ -445,7 +446,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
     urlscan_results = await check_urlscan_recent(client)
     if urlscan_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"URLScan.io: {len(urlscan_results)} recent scans",
             type="Phishing: URLScan Recent",
             source="PhishingDetector",
@@ -459,7 +460,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
     feed_matches = await check_target_in_phish_feeds(domain, openphish_urls, phishstats_urls, urlscan_results)
     for match in feed_matches:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Target found in {match['source']}: {match['url'][:200]}",
             type="Phishing: Target in Phish Feed",
             source=match['source'],
@@ -474,7 +475,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
     ssl_info = await check_ssl_cert_age(domain)
     if ssl_info.get("days_since_creation") is not None:
         if ssl_info["days_since_creation"] < 30:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"SSL cert created only {ssl_info['days_since_creation']} days ago (very recent)",
                 type="Phishing: Recent SSL Certificate",
                 source="PhishingDetector",
@@ -486,7 +487,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                 tags=["phishing", "ssl", "recent-cert"]
             ))
         else:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"SSL cert age: {ssl_info['days_since_creation']} days since creation",
                 type="Phishing: SSL Certificate Age",
                 source="PhishingDetector",
@@ -498,7 +499,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                 tags=["ssl", "cert-age"]
             ))
         if ssl_info.get("days_remaining") is not None and ssl_info["days_remaining"] < 30:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"SSL cert expires in {ssl_info['days_remaining']} days (expiring soon)",
                 type="Phishing: Expiring SSL Certificate",
                 source="PhishingDetector",
@@ -511,13 +512,13 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             ))
 
     try:
-        resp = await client.get(url, timeout=10.0,
+        resp = await safe_fetch(client, url, timeout=10.0,
             headers={"User-Agent": "Mozilla/5.0"})
         if resp.status_code == 200:
             html = resp.text
             html_indicators = extract_html_indicators(html)
             for indicator in html_indicators:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"HTML indicator: {indicator}",
                     type="Phishing: HTML Analysis",
                     source="PhishingDetector",
@@ -533,7 +534,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             all_keywords = PHISHING_KEYWORDS + EXTRA_PHISHING_KEYWORDS
             keyword_matches = [kw for kw in all_keywords if kw in html_lower]
             for kw in keyword_matches[:10]:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Phishing keyword detected: {kw}",
                     type="Phishing: Keyword Match",
                     source="PhishingDetector",
@@ -554,7 +555,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                           "coinbase", "binance", "kraken", "metamask", "opensea"]
             brand_mentions = [b for b in brand_names if b in html_lower]
             if brand_mentions:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Brand names in page: {', '.join(brand_mentions[:5])}",
                     type="Phishing: Brand Reference",
                     source="PhishingDetector",
@@ -570,7 +571,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             if resp.history:
                 for h in resp.history:
                     redirect_chain.append(str(h.url))
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Redirect chain: {' -> '.join(redirect_chain)}",
                     type="Phishing: Redirect Analysis",
                     source="PhishingDetector",
@@ -588,7 +589,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                                        suspicious_tlds, 
                                        [f for f in findings if "HTML" in f.type],
                                        [f for f in findings if "Keyword" in f.type])
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Phishing Risk Score: {risk['score']}/100 ({risk['severity']})",
         type="Phishing: Risk Score",
         source="PhishingDetector",
@@ -602,7 +603,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
     ))
 
     if not findings:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="No phishing indicators detected",
             type="Phishing: Analysis Complete",
             source="PhishingDetector",

@@ -3,8 +3,7 @@ import re
 import asyncio
 import json
 from urllib.parse import urlparse
-from models import IntelligenceFinding
-
+from module_common import safe_fetch, make_finding
 API_PATHS = [
     "/api", "/api/", "/api/v1", "/api/v2", "/api/v3", "/api/v4", "/api/v5",
     "/v1", "/v2", "/v3", "/v4", "/v5",
@@ -337,7 +336,7 @@ async def _probe_path(target: str, path: str, client: httpx.AsyncClient, finding
     base = f"https://{target}" if not target.startswith("http") else target
     url = f"{base.rstrip('/')}{path}"
     try:
-        resp = await client.get(url, timeout=8.0, follow_redirects=True,
+        resp = await safe_fetch(client, url, timeout=8.0, follow_redirects=True,
             headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
                      "Accept": "application/json, text/html, */*"})
 
@@ -381,9 +380,9 @@ async def _probe_path(target: str, path: str, client: httpx.AsyncClient, finding
                     version_detected = vm.group(0)[:50]
                     break
 
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Found: {path}",
-                type=finding_type,
+                ftype=finding_type,
                 source="APIScanner",
                 confidence="High",
                 color=color,
@@ -395,9 +394,9 @@ async def _probe_path(target: str, path: str, client: httpx.AsyncClient, finding
             ))
 
             if body_length > 0:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Response body: {body_length} bytes at {path}",
-                    type="API Response Size",
+                    ftype="API Response Size",
                     source="APIScanner",
                     confidence="Medium",
                     color="slate",
@@ -407,9 +406,9 @@ async def _probe_path(target: str, path: str, client: httpx.AsyncClient, finding
                 ))
 
             if auth_type_detected:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{auth_type_detected} authentication at {path}",
-                    type="API Auth Method",
+                    ftype="API Auth Method",
                     source="APIScanner",
                     confidence="High",
                     color="orange",
@@ -419,9 +418,9 @@ async def _probe_path(target: str, path: str, client: httpx.AsyncClient, finding
                 ))
 
             if version_detected:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"API version: {version_detected} at {path}",
-                    type="API Versioning",
+                    ftype="API Versioning",
                     source="APIScanner",
                     confidence="Medium",
                     color="emerald",
@@ -431,9 +430,9 @@ async def _probe_path(target: str, path: str, client: httpx.AsyncClient, finding
                 ))
 
             if framework_hit:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{framework_hit['name']} detected at {path}",
-                    type="API Framework",
+                    ftype="API Framework",
                     source="APIScanner",
                     confidence="High",
                     color=framework_hit["color"],
@@ -449,9 +448,9 @@ async def _probe_path(target: str, path: str, client: httpx.AsyncClient, finding
                     data = resp.json()
                     if isinstance(data, dict):
                         keys_str = ", ".join(list(data.keys())[:10])
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"API JSON response at {path}: {{{keys_str}}}",
-                            type="API JSON Structure",
+                            ftype="API JSON Structure",
                             source="APIScanner",
                             confidence="Medium",
                             color="slate",
@@ -463,9 +462,9 @@ async def _probe_path(target: str, path: str, client: httpx.AsyncClient, finding
                     pass
 
             if server:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Server: {server[:100]} at {path}",
-                    type="API Server Header",
+                    ftype="API Server Header",
                     source="APIScanner",
                     confidence="High",
                     color="indigo",
@@ -475,9 +474,9 @@ async def _probe_path(target: str, path: str, client: httpx.AsyncClient, finding
                 ))
 
         elif resp.status_code == 401:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Protected: {path} (401 Unauthorized)",
-                type="API Endpoint (Auth Required)",
+                ftype="API Endpoint (Auth Required)",
                 source="APIScanner",
                 confidence="High",
                 color="orange",
@@ -490,9 +489,9 @@ async def _probe_path(target: str, path: str, client: httpx.AsyncClient, finding
 
         elif resp.status_code == 403:
             auth_header = resp.headers.get("www-authenticate", "")
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Forbidden: {path} (403)",
-                type="API Endpoint (Restricted)",
+                ftype="API Endpoint (Restricted)",
                 source="APIScanner",
                 confidence="High",
                 color="red",
@@ -504,9 +503,9 @@ async def _probe_path(target: str, path: str, client: httpx.AsyncClient, finding
             ))
 
         elif resp.status_code == 405:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Method not allowed: {path} (405)",
-                type="API Endpoint (Exists)",
+                ftype="API Endpoint (Exists)",
                 source="APIScanner",
                 confidence="High",
                 color="slate",
@@ -519,9 +518,9 @@ async def _probe_path(target: str, path: str, client: httpx.AsyncClient, finding
 
         elif resp.status_code in (301, 302, 303, 307, 308):
             location = resp.headers.get("location", "")
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Redirect: {path} -> {location[:100]}",
-                type="API Endpoint (Redirect)",
+                ftype="API Endpoint (Redirect)",
                 source="APIScanner",
                 confidence="Medium",
                 color="slate",
@@ -533,9 +532,9 @@ async def _probe_path(target: str, path: str, client: httpx.AsyncClient, finding
             ))
 
         elif resp.status_code == 501:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Not Implemented: {path} (501)",
-                type="API Endpoint (Not Implemented)",
+                ftype="API Endpoint (Not Implemented)",
                 source="APIScanner",
                 confidence="High",
                 color="yellow",
@@ -546,9 +545,9 @@ async def _probe_path(target: str, path: str, client: httpx.AsyncClient, finding
             ))
 
         elif resp.status_code == 400:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Bad Request: {path} (400)",
-                type="API Endpoint (Bad Request)",
+                ftype="API Endpoint (Bad Request)",
                 source="APIScanner",
                 confidence="Medium",
                 color="yellow",
@@ -562,7 +561,6 @@ async def _probe_path(target: str, path: str, client: httpx.AsyncClient, finding
     except Exception:
         pass
 
-
 async def _probe_methods(target: str, path: str, client: httpx.AsyncClient, findings: list):
     base = f"https://{target}" if not target.startswith("http") else target
     url = f"{base.rstrip('/')}{path}"
@@ -572,9 +570,9 @@ async def _probe_methods(target: str, path: str, client: httpx.AsyncClient, find
                 headers={"User-Agent": "Mozilla/5.0"})
             status = resp.status_code
             if status not in (405, 501, 400):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Uncommon method {method} allowed on {path} (HTTP {status})",
-                    type="API Uncommon HTTP Method",
+                    ftype="API Uncommon HTTP Method",
                     source="APIScanner",
                     confidence="Medium",
                     color="red" if method in ("TRACE", "CONNECT") else "orange",
@@ -584,7 +582,6 @@ async def _probe_methods(target: str, path: str, client: httpx.AsyncClient, find
                 ))
         except Exception:
             pass
-
 
 async def crawl(target: str, client: httpx.AsyncClient):
     findings = []
@@ -600,13 +597,13 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
     base = f"https://{target}"
     try:
-        resp = await client.get(f"{base}/api", timeout=10.0, follow_redirects=True,
+        resp = await safe_fetch(client, f"{base}/api", timeout=10.0, follow_redirects=True,
             headers={"User-Agent": "Mozilla/5.0", "Accept": "*/*"})
         allow_header = resp.headers.get("allow", resp.headers.get("access-control-allow-methods", ""))
         if allow_header:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"API CORS/Allowed Methods: {allow_header}",
-                type="API CORS Configuration",
+                ftype="API CORS Configuration",
                 source="APIScanner",
                 confidence="Medium",
                 color="orange",
@@ -619,7 +616,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         pass
 
     try:
-        resp = await client.get(base, timeout=10.0, follow_redirects=True,
+        resp = await safe_fetch(client, base, timeout=10.0, follow_redirects=True,
             headers={"User-Agent": "Mozilla/5.0"})
         headers = dict(resp.headers)
         cors_headers = {
@@ -633,9 +630,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         for ch, label in cors_headers.items():
             val = headers.get(ch)
             if val:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{label}: {val[:100]}",
-                    type="CORS Header",
+                    ftype="CORS Header",
                     source="APIScanner",
                     confidence="High",
                     color="orange" if val == "*" else "emerald",
@@ -650,9 +647,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             headers={"User-Agent": "Mozilla/5.0"})
         allow = resp.headers.get("allow", "")
         if allow:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"OPTIONS allowed methods: {allow}",
-                type="API OPTIONS Discovery",
+                ftype="API OPTIONS Discovery",
                 source="APIScanner",
                 confidence="High",
                 color="slate",
@@ -666,9 +663,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
     open_count = sum(1 for f in findings if f.status == "Open" or f.status == "Exists")
     auth_count = sum(1 for f in findings if "Auth Required" in f.type or "Restricted" in f.type or f.status == "Authenticated")
     if open_count > 0 or auth_count > 0:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"API Scan Complete: {open_count} open endpoints, {auth_count} auth-required",
-            type="API Scanner Summary",
+            ftype="API Scanner Summary",
             source="APIScanner",
             confidence="High",
             color="purple",
@@ -681,11 +678,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
     return findings
 
-
 GRAPHQL_INTROSPECTION_QUERY = """
 {"query":"query { __schema { types { name fields { name type { name kind } } } } }"}
 """
-
 
 async def _probe_content_negotation(target: str, client: httpx.AsyncClient, findings: list):
     base = f"https://{target}" if not target.startswith("http") else target
@@ -703,13 +698,13 @@ async def _probe_content_negotation(target: str, client: httpx.AsyncClient, find
     ]
     for accept, label in accept_headers:
         try:
-            resp = await client.get(f"{base}/api", timeout=5.0, follow_redirects=True,
+            resp = await safe_fetch(client, f"{base}/api", timeout=5.0, follow_redirects=True,
                 headers={"User-Agent": "Mozilla/5.0", "Accept": accept})
             ct = resp.headers.get("content-type", "")
             if accept.split("/")[0] in ct or ct.startswith(accept):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Content negotiation: '{accept}' -> {ct[:60]}",
-                    type=f"API Content Negotiation ({label})",
+                    ftype=f"API Content Negotiation ({label})",
                     source="APIScanner",
                     confidence="Medium",
                     color="slate",
@@ -720,21 +715,20 @@ async def _probe_content_negotation(target: str, client: httpx.AsyncClient, find
         except Exception:
             pass
 
-
 async def _graphql_introspection_check(target: str, client: httpx.AsyncClient, findings: list):
     base = f"https://{target}" if not target.startswith("http") else target
     for gql_path in ["/graphql", "/api/graphql", "/graphql/v1", "/graphql/v2", "/graphql/playground"]:
         try:
-            resp = await client.post(f"{base}{gql_path}",
+            resp = await safe_fetch(client, f"{base}{gql_path}", method="POST",
                 content=GRAPHQL_INTROSPECTION_QUERY,
                 timeout=8.0,
                 headers={"User-Agent": "Mozilla/5.0", "Content-Type": "application/json"})
             if resp.status_code == 200:
                 body = resp.text.lower()
                 if "__schema" in body or "types" in body:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"GraphQL introspection ENABLED at {gql_path}",
-                        type="API GraphQL Introspection",
+                        ftype="API GraphQL Introspection",
                         source="APIScanner",
                         confidence="High",
                         color="red",
@@ -743,9 +737,9 @@ async def _graphql_introspection_check(target: str, client: httpx.AsyncClient, f
                         tags=["api", "graphql", "introspection"]
                     ))
                 else:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"GraphQL endpoint exists at {gql_path} (introspection disabled)",
-                        type="API GraphQL Endpoint",
+                        ftype="API GraphQL Endpoint",
                         source="APIScanner",
                         confidence="Medium",
                         color="slate",
@@ -755,20 +749,19 @@ async def _graphql_introspection_check(target: str, client: httpx.AsyncClient, f
         except Exception:
             pass
 
-
 async def _rate_limit_detection(target: str, client: httpx.AsyncClient, findings: list):
     base = f"https://{target}" if not target.startswith("http") else target
     headers_list = []
     for _ in range(5):
         try:
-            resp = await client.get(f"{base}/api", timeout=3.0,
+            resp = await safe_fetch(client, f"{base}/api", timeout=3.0,
                 headers={"User-Agent": "Mozilla/5.0"})
             headers_list.append(dict(resp.headers))
             statuses = [r.get("retry-after", "") for r in headers_list]
             if any(s.strip() for s in statuses):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Rate limiting detected via Retry-After header",
-                    type="API Rate Limiting",
+                    ftype="API Rate Limiting",
                     source="APIScanner",
                     confidence="Medium",
                     color="emerald",
@@ -782,9 +775,9 @@ async def _rate_limit_detection(target: str, client: httpx.AsyncClient, findings
     if headers_list:
         last = headers_list[-1]
         if int(last.get("x-ratelimit-remaining", "1")) == 0 or int(last.get("x-rate-limit-remaining", "1")) == 0:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"API rate limit exhausted or nearly exhausted",
-                type="API Rate Limit Status",
+                ftype="API Rate Limit Status",
                 source="APIScanner",
                 confidence="Medium",
                 color="orange",
@@ -792,7 +785,6 @@ async def _rate_limit_detection(target: str, client: httpx.AsyncClient, findings
                 raw_data=f"Rate limit headers: {last}",
                 tags=["api", "rate-limit"]
             ))
-
 
 async def _detect_waf(target: str, client: httpx.AsyncClient, findings: list):
     base = f"https://{target}" if not target.startswith("http") else target
@@ -805,16 +797,16 @@ async def _detect_waf(target: str, client: httpx.AsyncClient, findings: list):
     ]
     for payload, waf_type in waf_payloads:
         try:
-            resp = await client.get(f"{base}/api?q={payload}", timeout=5.0,
+            resp = await safe_fetch(client, f"{base}/api?q={payload}", timeout=5.0,
                 headers={"User-Agent": "Mozilla/5.0", "Accept": "*/*"})
             status = resp.status_code
             body = resp.text.lower()
             waf_indicators = ["blocked", "forbidden", "denied", "waf", "mod_security", "cloudflare",
                             "challenge", "attention required", "security rule", "malicious"]
             if any(w in body for w in waf_indicators) or status in (406, 403):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"WAF/IDS detected ({waf_type} payload blocked, HTTP {status})",
-                    type="API WAF Detection",
+                    ftype="API WAF Detection",
                     source="APIScanner",
                     confidence="Medium",
                     color="orange",
@@ -826,19 +818,18 @@ async def _detect_waf(target: str, client: httpx.AsyncClient, findings: list):
         except Exception:
             pass
 
-
 async def _analyze_response_schema(target: str, client: httpx.AsyncClient, findings: list):
     base = f"https://{target}" if not target.startswith("http") else target
     error_paths = ["/api/nonexistent12345", "/api/v1/nonexistent", "/api/users/9999999999"]
     for ep in error_paths:
         try:
-            resp = await client.get(f"{base}{ep}", timeout=5.0,
+            resp = await safe_fetch(client, f"{base}{ep}", timeout=5.0,
                 headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"})
             if resp.status_code in (400, 404, 405, 500) and "json" in resp.headers.get("content-type", ""):
                 body_snippet = resp.text[:500]
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Error response schema at {ep}: HTTP {resp.status_code}",
-                    type="API Error Response Schema",
+                    ftype="API Error Response Schema",
                     source="APIScanner",
                     confidence="Medium",
                     color="slate" if resp.status_code == 404 else "orange",
@@ -849,9 +840,9 @@ async def _analyze_response_schema(target: str, client: httpx.AsyncClient, findi
                 stack_patterns = ["stacktrace", "stack trace", "at ", "line ", "file ",
                                 "traceback", "exception", "error:"]
                 if any(p in resp.text.lower() for p in stack_patterns):
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Stack trace disclosure at {ep}",
-                        type="API Stack Trace Disclosure",
+                        ftype="API Stack Trace Disclosure",
                         source="APIScanner",
                         confidence="High",
                         color="red",

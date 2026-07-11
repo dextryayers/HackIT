@@ -1,8 +1,7 @@
 import httpx
 import json
 import re
-from models import IntelligenceFinding
-
+from module_common import safe_fetch, make_finding
 LEAKIX_BASE = "https://leakix.net"
 UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
@@ -122,7 +121,7 @@ async def search_service(target: str, service: str, config: dict, client: httpx.
     protocol = config["protocol"]
     try:
         url = f"{LEAKIX_BASE}/search?q={protocol}:{target}&scope=leak"
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             url, timeout=15.0,
             headers={"User-Agent": UA, "Accept": "application/json"},
         )
@@ -202,9 +201,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         if "api" in leak_label.lower():
             tags.append("api-key")
 
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=entity[:200],
-            type=f"LeakIX: {leak_service}",
+            ftype=f"LeakIX: {leak_service}",
             source="LeakIX Scanner",
             confidence="High",
             color=color,
@@ -216,9 +215,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         ))
 
         if description:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{leak_label} details: {description[:200]}",
-                type=f"LeakIX: {leak_service} Description",
+                ftype=f"LeakIX: {leak_service} Description",
                 source="LeakIX Scanner",
                 confidence="Medium",
                 color="slate",
@@ -228,9 +227,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ))
 
         if count > 0:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{leak_label} impact: {count} records",
-                type="LeakIX: Breach Impact",
+                ftype="LeakIX: Breach Impact",
                 source="LeakIX Scanner",
                 confidence="Medium",
                 color="red",
@@ -250,9 +249,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         for pm in pattern_matches:
             for p in pm["patterns"]:
                 all_patterns.add(p)
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Response pattern matches: {', '.join(sorted(all_patterns)[:10])}",
-            type="LeakIX: Response Pattern Analysis",
+            ftype="LeakIX: Response Pattern Analysis",
             source="LeakIX Scanner",
             confidence="Medium",
             color="orange",
@@ -263,9 +262,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
     # Leak type classification breakdown
     for lt, lcount in sorted(leak_type_counter.items(), key=lambda x: -x[1])[:10]:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{lt}: {lcount} occurrence(s)",
-            type="LeakIX: Leak Type Classification",
+            ftype="LeakIX: Leak Type Classification",
             source="LeakIX Scanner",
             confidence="Medium",
             color="red" if "Critical" in lt else "orange",
@@ -278,9 +277,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         config = SERVICE_QUERIES.get(service, {})
         sev = config.get("severity", "Medium")
         color = config.get("color", "orange")
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{service}: {count} leaks detected on {domain}",
-            type=f"LeakIX: {service} Summary",
+            ftype=f"LeakIX: {service} Summary",
             source="LeakIX Scanner",
             confidence="High",
             color=color,
@@ -293,9 +292,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
     if all_leaks:
         overall_sev, crit, high, med = score_severity(all_leaks)
         color = "red" if crit > 0 else ("orange" if high > 0 else "slate")
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"LeakIX scan summary: {len(all_leaks)} total leaks | {crit} critical, {high} high, {med} medium across {len(service_counts)} services",
-            type="LeakIX: Scan Summary",
+            ftype="LeakIX: Scan Summary",
             source="LeakIX Scanner",
             confidence="High",
             color=color,
@@ -305,9 +304,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             tags=["scan-summary"],
         ))
     else:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"No leaks found for {domain} on LeakIX",
-            type="LeakIX: Clear",
+            ftype="LeakIX: Clear",
             source="LeakIX Scanner",
             confidence="Low",
             color="emerald",

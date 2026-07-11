@@ -5,7 +5,7 @@ import ssl
 import socket
 import asyncio
 from datetime import datetime
-from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash
 
 VIEWDNS_BASE = "https://viewdns.info"
 USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
@@ -101,7 +101,7 @@ async def check_spam_database(ip: str, client: httpx.AsyncClient) -> list:
                 reversed_ip = ".".join(reversed(ip.split(".")))
                 query = f"{reversed_ip}.{spam_db}"
                 await loop.run_in_executor(
-                    None, lambda: socket.gethostbyname(query)
+                    None, lambda: resolve_ip(query)
                 )
                 results.append(spam_db)
             except socket.gaierror:
@@ -146,7 +146,7 @@ async def get_ssl_certificate_info(hostname: str) -> dict:
 async def check_http_security_headers(url: str, client: httpx.AsyncClient) -> dict:
     result = {}
     try:
-        resp = await client.get(url, timeout=10.0, follow_redirects=True,
+        resp = await safe_fetch(client, url, timeout=10.0, follow_redirects=True,
                                 headers={"User-Agent": USER_AGENT})
         headers = resp.headers
         result["status"] = resp.status_code
@@ -176,7 +176,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
     resolved_ip = ""
 
     try:
-        ip_resp = await client.get(
+        ip_resp = await safe_fetch(client, 
             f"{VIEWDNS_BASE}/reverseip/?host={domain}&t=1",
             timeout=15.0,
             headers={"User-Agent": USER_AGENT}
@@ -188,9 +188,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
             for hostname, ip_addr in ip_hosts[:30]:
                 if hostname and ip_addr:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=hostname[:200],
-                        type="ViewDNS Reverse IP",
+                        ftype="ViewDNS Reverse IP",
                         source="ViewDNS",
                         confidence="Medium",
                         color="emerald",
@@ -202,9 +202,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     ))
 
             if resolved_ip:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=resolved_ip,
-                    type="Resolved IP Address",
+                    ftype="Resolved IP Address",
                     source="ViewDNS",
                     confidence="High",
                     color="blue",
@@ -217,7 +217,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
             total_hosts = re.search(r'There\s+are\s+(\d[\d,]*)\s+domains', ip_resp.text)
             if total_hosts:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{total_hosts.group(1)} domains hosted on same IP",
                     type="Reverse IP Summary",
                     source="ViewDNS",
@@ -231,7 +231,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         pass
 
     try:
-        whois_resp = await client.get(
+        whois_resp = await safe_fetch(client, 
             f"{VIEWDNS_BASE}/whois/?domain={domain}",
             timeout=15.0,
             headers={"User-Agent": USER_AGENT}
@@ -248,9 +248,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     if key_stripped and val_stripped:
                         whois_lines.append(f"{key_stripped}: {val_stripped}")
                         if any(k in key_stripped.lower() for k in ["registrar", "registrant", "creation", "expir", "updated", "name server", "dnssec", "status"]):
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=f"{key_stripped}: {val_stripped[:180]}",
-                                type=f"WHOIS: {key_stripped}",
+                                ftype=f"WHOIS: {key_stripped}",
                                 source="ViewDNS",
                                 confidence="High",
                                 color="slate",
@@ -260,9 +260,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                             ))
 
             if whois_lines:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"WHOIS data retrieved for {domain}",
-                    type="WHOIS Summary",
+                    ftype="WHOIS Summary",
                     source="ViewDNS",
                     confidence="High",
                     color="purple",
@@ -273,7 +273,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
             email_match = re.search(r'[\w.+-]+@[\w-]+\.[\w.-]+', whois_text)
             if email_match:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=email_match.group(0),
                     type="WHOIS Contact Email",
                     source="ViewDNS",
@@ -287,7 +287,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         pass
 
     try:
-        dns_resp = await client.get(
+        dns_resp = await safe_fetch(client, 
             f"{VIEWDNS_BASE}/dnsrecord/?domain={domain}",
             timeout=15.0,
             headers={"User-Agent": USER_AGENT}
@@ -316,9 +316,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     if rt in dns_record_count:
                         dns_record_count[rt] += 1
 
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"{rt}: {value[:180]}",
-                        type=f"DNS Record: {rt}",
+                        ftype=f"DNS Record: {rt}",
                         source="ViewDNS",
                         confidence="High",
                         color=record_color,
@@ -329,7 +329,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
             active_counts = {k: v for k, v in dns_record_count.items() if v > 0}
             if active_counts:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"DNS record summary: {', '.join(f'{k}: {v}' for k, v in active_counts.items())}",
                     type="DNS Record Summary",
                     source="ViewDNS",
@@ -342,7 +342,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         pass
 
     try:
-        ip_loc_resp = await client.get(
+        ip_loc_resp = await safe_fetch(client, 
             f"{VIEWDNS_BASE}/ipinfo/?ip={resolved_ip if resolved_ip else domain}&t=1",
             timeout=15.0,
             headers={"User-Agent": USER_AGENT}
@@ -353,9 +353,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             for key, value in loc_rows[:15]:
                 if key.lower() in ("country", "city", "region", "isp", "organization", "latitude", "longitude", "asn"):
                     location_data[key] = value
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"{key}: {value[:180]}",
-                        type=f"IP Location: {key}",
+                        ftype=f"IP Location: {key}",
                         source="ViewDNS",
                         confidence="Medium",
                         color="slate",
@@ -365,7 +365,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         tags=["geo", "ip-location"]
                     ))
             if location_data:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Geo-location summary: {location_data.get('city', '?')}, {location_data.get('region', '?')}, {location_data.get('country', '?')}",
                     type="Geo-Location Summary",
                     source="ViewDNS",
@@ -379,7 +379,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         pass
 
     try:
-        rev_dns_resp = await client.get(
+        rev_dns_resp = await safe_fetch(client, 
             f"{VIEWDNS_BASE}/reversedns/?ip={resolved_ip if resolved_ip else domain}",
             timeout=15.0,
             headers={"User-Agent": USER_AGENT}
@@ -392,9 +392,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 rev_host = m.group(2).strip()
                 if rev_host:
                     ptr_count += 1
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"{rev_ip} -> {rev_host}",
-                        type="Reverse DNS (PTR)",
+                        ftype="Reverse DNS (PTR)",
                         source="ViewDNS",
                         confidence="Medium",
                         color="blue",
@@ -404,9 +404,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         tags=["dns", "reverse-dns"]
                     ))
             if ptr_count > 0:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{ptr_count} PTR records found for IP range",
-                    type="Reverse DNS Summary",
+                    ftype="Reverse DNS Summary",
                     source="ViewDNS",
                     confidence="Medium",
                     color="purple",
@@ -417,7 +417,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         pass
 
     try:
-        ns_resp = await client.get(
+        ns_resp = await safe_fetch(client, 
             f"{VIEWDNS_BASE}/nameserver/?domain={domain}",
             timeout=15.0,
             headers={"User-Agent": USER_AGENT}
@@ -429,9 +429,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 ns_clean = ns.strip().rstrip(".")
                 if ns_clean and ns_clean != domain and ns_clean not in ns_list:
                     ns_list.append(ns_clean)
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=ns_clean,
-                        type="Nameserver",
+                        ftype="Nameserver",
                         source="ViewDNS",
                         confidence="High",
                         color="purple",
@@ -440,7 +440,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         tags=["dns", "nameserver"]
                     ))
             if ns_list:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Nameservers: {', '.join(ns_list)}",
                     type="Nameserver Summary",
                     source="ViewDNS",
@@ -453,7 +453,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         pass
 
     try:
-        port_resp = await client.get(
+        port_resp = await safe_fetch(client, 
             f"{VIEWDNS_BASE}/portscan/?host={domain}",
             timeout=25.0,
             headers={"User-Agent": USER_AGENT}
@@ -477,7 +477,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     elif status_val.lower() == "closed":
                         closed_ports.append(port_num)
 
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Port {port_num} ({status_val})",
                         type="ViewDNS Port Scan",
                         source="ViewDNS",
@@ -488,7 +488,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         tags=["port-scan"]
                     ))
 
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Port scan summary: {len(open_ports)} open, {len(filtered_ports)} filtered, {len(closed_ports)} closed",
                 type="Port Scan Summary",
                 source="ViewDNS",
@@ -502,7 +502,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         pass
 
     try:
-        host_resp = await client.get(
+        host_resp = await safe_fetch(client, 
             f"{VIEWDNS_BASE}/domainhistory/?domain={domain}",
             timeout=15.0,
             headers={"User-Agent": USER_AGENT}
@@ -513,9 +513,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             for date_val, ip_val in host_rows[:20]:
                 if date_val and ip_val:
                     unique_ips.add(ip_val.strip())
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"{date_val}: {ip_val}",
-                        type="Hosting History",
+                        ftype="Hosting History",
                         source="ViewDNS",
                         confidence="Medium",
                         color="slate",
@@ -525,7 +525,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         tags=["history", "hosting"]
                     ))
             if len(host_rows) > 10:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"... and {len(host_rows) - 10} more historical records ({len(unique_ips)} unique IPs)",
                     type="Hosting History Summary",
                     source="ViewDNS",
@@ -538,7 +538,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         pass
 
     try:
-        rdns_resp = await client.get(
+        rdns_resp = await safe_fetch(client, 
             f"{VIEWDNS_BASE}/reversednsip/?ip={resolved_ip if resolved_ip else domain}",
             timeout=15.0,
             headers={"User-Agent": USER_AGENT}
@@ -551,9 +551,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 rdns_clean = rdns_host.strip().lower()
                 if rdns_clean and rdns_clean not in rdns_unique:
                     rdns_unique.add(rdns_clean)
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=rdns_clean,
-                        type="Reverse IP Hostnames",
+                        ftype="Reverse IP Hostnames",
                         source="ViewDNS",
                         confidence="Low",
                         color="slate",
@@ -562,7 +562,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         tags=["reverse-ip", "hostname"]
                     ))
             if rdns_unique:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{len(rdns_unique)} unique hostnames on same IP",
                     type="Reverse IP Hostnames Summary",
                     source="ViewDNS",
@@ -578,9 +578,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         spam_results = await check_spam_database(resolved_ip if resolved_ip else domain, client)
         if spam_results:
             for spam_db in spam_results:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"LISTED in {spam_db}",
-                    type="Spam Database Check",
+                    ftype="Spam Database Check",
                     source="ViewDNS",
                     confidence="High",
                     color="red",
@@ -590,7 +590,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     raw_data=f"Spam DB: {spam_db}",
                     tags=["spam", "blacklist", "reputation"]
                 ))
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Listed in {len(spam_results)}/{len(SPAM_DATABASES)} spam databases checked",
                 type="Spam Database Summary",
                 source="ViewDNS",
@@ -602,9 +602,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 tags=["spam", "blacklist", "summary"]
             ))
         else:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Not listed in any spam database checked",
-                type="Spam Database Check",
+                ftype="Spam Database Check",
                 source="ViewDNS",
                 confidence="High",
                 color="emerald",
@@ -621,9 +621,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         if ssl_info:
             if ssl_info.get("issuer"):
                 issuer_str = str(ssl_info["issuer"])
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=issuer_str[:200],
-                    type="SSL Certificate Issuer",
+                    ftype="SSL Certificate Issuer",
                     source="ViewDNS",
                     confidence="High",
                     color="emerald",
@@ -632,9 +632,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     tags=["ssl", "certificate"]
                 ))
             if ssl_info.get("protocol"):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=ssl_info["protocol"],
-                    type="SSL/TLS Protocol",
+                    ftype="SSL/TLS Protocol",
                     source="ViewDNS",
                     confidence="High",
                     color="slate",
@@ -644,9 +644,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 ))
             if ssl_info.get("cipher"):
                 cipher_name = ssl_info["cipher"][0] if isinstance(ssl_info["cipher"], tuple) else str(ssl_info["cipher"])
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=cipher_name[:100],
-                    type="SSL/TLS Cipher",
+                    ftype="SSL/TLS Cipher",
                     source="ViewDNS",
                     confidence="High",
                     color="slate",
@@ -656,9 +656,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 ))
             if ssl_info.get("sans"):
                 for san in ssl_info["sans"][:5]:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=san,
-                        type="SSL Subject Alternative Name",
+                        ftype="SSL Subject Alternative Name",
                         source="ViewDNS",
                         confidence="High",
                         color="blue",
@@ -673,9 +673,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         sec_headers = await check_http_security_headers(f"https://{domain}", client)
         if sec_headers:
             if sec_headers.get("strict_transport_security"):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"HSTS: {sec_headers['strict_transport_security'][:100]}",
-                    type="HTTP Security Header: HSTS",
+                    ftype="HTTP Security Header: HSTS",
                     source="ViewDNS",
                     confidence="High",
                     color="emerald",
@@ -684,9 +684,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     tags=["security", "http-header", "hsts"]
                 ))
             if sec_headers.get("x_frame_options"):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"X-Frame-Options: {sec_headers['x_frame_options']}",
-                    type="HTTP Security Header: X-Frame-Options",
+                    ftype="HTTP Security Header: X-Frame-Options",
                     source="ViewDNS",
                     confidence="High",
                     color="emerald" if sec_headers["x_frame_options"].upper() in ("DENY", "SAMEORIGIN") else "orange",
@@ -702,7 +702,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 if "unsafe-eval" in csp:
                     csp_issues.append("unsafe-eval")
                 if csp_issues:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"CSP allows: {', '.join(csp_issues)}",
                         type="HTTP Security: CSP Weakness",
                         source="ViewDNS",
@@ -713,9 +713,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         tags=["security", "csp", "weakness"]
                     ))
             if sec_headers.get("server"):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Server: {sec_headers['server'][:100]}",
-                    type="HTTP Server Header",
+                    ftype="HTTP Server Header",
                     source="ViewDNS",
                     confidence="High",
                     color="slate",
@@ -725,9 +725,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 ))
             status = sec_headers.get("status")
             if status:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"HTTP Status: {status}",
-                    type="HTTP Response Status",
+                    ftype="HTTP Response Status",
                     source="ViewDNS",
                     confidence="High",
                     color="emerald" if status < 400 else "red",

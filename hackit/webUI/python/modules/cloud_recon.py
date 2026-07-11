@@ -1,8 +1,7 @@
 import httpx
 import asyncio
-import socket
 import re
-from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, resolve_ip
 
 CDN_DETECTION = {
     "cloudflare": {"name": "Cloudflare", "headers": ["cf-ray", "cf-cache-status", "cf-connecting-ip"], "color": "orange"},
@@ -340,7 +339,7 @@ async def _check_paas_cname(target: str, client: httpx.AsyncClient) -> list:
                 for pattern, platform in PAAS_PLATFORMS.items():
                     if pattern in cname:
                         if not any(f.entity == platform and f.type == "PaaS Platform" for f in findings):
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=platform,
                                 type="PaaS Platform",
                                 source="CloudRecon",
@@ -361,7 +360,7 @@ async def _check_paas_cname(target: str, client: httpx.AsyncClient) -> list:
                 ip_str = str(r)
                 for pattern, platform in PAAS_PLATFORMS.items():
                     if pattern in ip_str:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=platform,
                             type="PaaS Platform (IP)",
                             source="CloudRecon",
@@ -415,7 +414,7 @@ async def _check_ns_record(target: str, client: httpx.AsyncClient) -> list:
             ns = str(r).lower()
             for key, provider in ns_providers.items():
                 if key in ns:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"{provider} ({ns})",
                         type="DNS Nameserver Provider",
                         source="CloudRecon",
@@ -465,7 +464,7 @@ async def _check_mx_cloud(target: str, client: httpx.AsyncClient) -> list:
             mx = str(r.exchange).lower()
             for key, provider in mx_patterns.items():
                 if key in mx:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"{provider} ({mx})",
                         type="Email Cloud Provider (MX)",
                         source="CloudRecon",
@@ -490,7 +489,7 @@ async def _check_tech_stack(html: str) -> list:
     for pattern, name in TECH_STACK_CMS:
         if re.search(pattern, html, re.IGNORECASE) and name not in tech_found:
             tech_found.add(name)
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=name,
                 type="CMS Detection",
                 source="CloudRecon",
@@ -505,7 +504,7 @@ async def _check_tech_stack(html: str) -> list:
     for pattern, name in TECH_STACK_JS:
         if re.search(pattern, html, re.IGNORECASE) and name not in tech_found:
             tech_found.add(name)
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=name,
                 type="JS Framework",
                 source="CloudRecon",
@@ -520,7 +519,7 @@ async def _check_tech_stack(html: str) -> list:
     for pattern, name in TECH_STACK_CSS:
         if re.search(pattern, html, re.IGNORECASE) and name not in tech_found:
             tech_found.add(name)
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=name,
                 type="CSS Framework",
                 source="CloudRecon",
@@ -535,7 +534,7 @@ async def _check_tech_stack(html: str) -> list:
     for pattern, name in TECH_STACK_ANALYTICS:
         if re.search(pattern, html, re.IGNORECASE) and name not in tech_found:
             tech_found.add(name)
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=name,
                 type="Analytics Service",
                 source="CloudRecon",
@@ -554,7 +553,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
     findings = []
     base = f"https://{target}" if not target.startswith("http") else target
     try:
-        resp = await client.get(base, follow_redirects=True, timeout=10.0,
+        resp = await safe_fetch(client, base, follow_redirects=True, timeout=10.0,
             headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"})
         headers = dict(resp.headers)
         server = headers.get("server", "")
@@ -564,7 +563,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
         for cdn_key, cdn_info in CDN_DETECTION.items():
             for h in cdn_info["headers"]:
                 if h in headers:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=cdn_info["name"],
                         type="CDN Service",
                         source="CloudRecon",
@@ -579,7 +578,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
 
         for header_name, cdn_name in CDN_SINGLE_HEADER_CHECKS:
             if header_name in headers:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=cdn_name,
                     type="CDN Service (Header)",
                     source="CloudRecon",
@@ -594,7 +593,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
         raw_set_cookie = headers.get("set-cookie", "")
         for cookie_val, provider in CDN_COOKIE_CHECKS:
             if cookie_val in raw_set_cookie:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=provider,
                     type="CDN Service (Cookie)",
                     source="CloudRecon",
@@ -608,7 +607,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
 
         for sig, provider in CLOUD_SERVER_HEADERS.items():
             if sig.lower() in server.lower() or sig.lower() in via.lower():
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=provider,
                     type="Cloud Infrastructure (Header)",
                     source="CloudRecon",
@@ -623,7 +622,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
 
         x_robots = headers.get("x-robots-tag", "")
         if "noindex" in x_robots.lower():
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="Cloudflare / Noindex",
                 type="Cloud Technology (Header)",
                 source="CloudRecon",
@@ -636,7 +635,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
 
         x_frame = headers.get("x-frame-options", "")
         if x_frame:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"X-Frame-Options: {x_frame}",
                 type="Security Header",
                 source="CloudRecon",
@@ -648,7 +647,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
             ))
 
         if via:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Via: {via[:200]}",
                 type="Cloud Infrastructure (Via Header)",
                 source="CloudRecon",
@@ -661,7 +660,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
 
         if x_powered:
             if any(cloud in x_powered.lower() for cloud in ["aws", "azure", "google", "cloud", "heroku"]):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"X-Powered-By: {x_powered[:100]}",
                     type="Cloud Technology (Header)",
                     source="CloudRecon",
@@ -675,7 +674,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
         html = resp.text[:100000].lower() if hasattr(resp, 'text') else ""
         for pattern, provider in CLOUD_INDICATORS_HTML:
             if re.search(pattern, html):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=provider,
                     type="Cloud Service (HTML Indicator)",
                     source="CloudRecon",
@@ -691,7 +690,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
         findings.extend(tech_findings)
 
     except Exception as e:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Header analysis error: {str(e)[:100]}",
             type="Cloud Recon Error",
             source="CloudRecon",
@@ -713,7 +712,7 @@ async def _check_ip_ranges(target: str, client: httpx.AsyncClient) -> list:
             ipaddress.ip_address(target)
             target_ip = target
         except ValueError:
-            target_ip = await loop.run_in_executor(None, lambda: socket.gethostbyname(target))
+            target_ip = await loop.run_in_executor(None, lambda: resolve_ip(target))
 
         cloud_ranges = [
             (("34.0.0.0", "34.255.255.255"), "Google Cloud", "GCP"),
@@ -792,7 +791,7 @@ async def _check_ip_ranges(target: str, client: httpx.AsyncClient) -> list:
                 start_int = ip_to_int(start_str)
                 end_int = ip_to_int(end_str)
                 if start_int <= ip_int <= end_int:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"{provider} (IP Range Match)",
                         type="Cloud Provider IP",
                         source="CloudRecon",
@@ -862,7 +861,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
     cloud_score = min(cloud_score, 100)
 
     if paas_count > 0 or cdn_count > 0 or cloud_count > 0 or tech_count > 0:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Cloud Recon Complete: {cloud_count} cloud, {cdn_count} CDN, {paas_count} PaaS, {tech_count} tech",
             type="Cloud Recon Summary",
             source="CloudRecon",
@@ -875,7 +874,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             tags=["cloud", "recon", "summary"]
         ))
 
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Cloud Adoption Score: {cloud_score}/100",
             type="Cloud Infrastructure Score",
             source="CloudRecon",
@@ -896,40 +895,40 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 providers[prov] = providers.get(prov, 0) + 1
         if providers:
             for prov, count in sorted(providers.items(), key=lambda x: -x[1])[:5]:
-                findings.append(IntelligenceFinding(entity=f"{prov}: {count}", type="Cloud Provider Breakdown", source="CloudRecon", confidence="Medium", color="purple", tags=["providers"]))
-            findings.append(IntelligenceFinding(entity=f"Unique providers: {len(providers)}", type="Provider Diversity", source="CloudRecon", confidence="Medium", color="slate", tags=["providers"]))
+                findings.append(make_finding(entity=f"{prov}: {count}", type="Cloud Provider Breakdown", source="CloudRecon", confidence="Medium", color="purple", tags=["providers"]))
+            findings.append(make_finding(entity=f"Unique providers: {len(providers)}", type="Provider Diversity", source="CloudRecon", confidence="Medium", color="slate", tags=["providers"]))
 
     async def analyze_service_tiers():
-        findings.append(IntelligenceFinding(entity=f"PaaS services: {paas_count}", type="Service Tier: PaaS", source="CloudRecon", confidence="Medium", color="slate", tags=["tiers"]))
-        findings.append(IntelligenceFinding(entity=f"CDN services: {cdn_count}", type="Service Tier: CDN", source="CloudRecon", confidence="Medium", color="slate", tags=["tiers"]))
-        findings.append(IntelligenceFinding(entity=f"DNS providers: {ns_count}", type="Service Tier: DNS", source="CloudRecon", confidence="Medium", color="slate", tags=["tiers"]))
-        findings.append(IntelligenceFinding(entity=f"Email cloud providers: {mx_count}", type="Service Tier: Email", source="CloudRecon", confidence="Medium", color="slate", tags=["tiers"]))
+        findings.append(make_finding(entity=f"PaaS services: {paas_count}", type="Service Tier: PaaS", source="CloudRecon", confidence="Medium", color="slate", tags=["tiers"]))
+        findings.append(make_finding(entity=f"CDN services: {cdn_count}", type="Service Tier: CDN", source="CloudRecon", confidence="Medium", color="slate", tags=["tiers"]))
+        findings.append(make_finding(entity=f"DNS providers: {ns_count}", type="Service Tier: DNS", source="CloudRecon", confidence="Medium", color="slate", tags=["tiers"]))
+        findings.append(make_finding(entity=f"Email cloud providers: {mx_count}", type="Service Tier: Email", source="CloudRecon", confidence="Medium", color="slate", tags=["tiers"]))
 
     async def analyze_exposure_risk():
-        findings.append(IntelligenceFinding(entity=f"Cloud recon score interpretation: {cloud_score}/100", type="Exposure Interpretation", source="CloudRecon", confidence="Medium", color="slate", tags=["exposure"]))
+        findings.append(make_finding(entity=f"Cloud recon score interpretation: {cloud_score}/100", type="Exposure Interpretation", source="CloudRecon", confidence="Medium", color="slate", tags=["exposure"]))
         if cloud_score > 50:
-            findings.append(IntelligenceFinding(entity="High cloud adoption - review provider security", type="Exposure Warning", source="CloudRecon", confidence="Medium", color="orange", tags=["exposure"]))
+            findings.append(make_finding(entity="High cloud adoption - review provider security", type="Exposure Warning", source="CloudRecon", confidence="Medium", color="orange", tags=["exposure"]))
         else:
-            findings.append(IntelligenceFinding(entity="Moderate cloud adoption - standard security applies", type="Exposure Note", source="CloudRecon", confidence="Medium", color="emerald", tags=["exposure"]))
-        findings.append(IntelligenceFinding(entity=f"Total cloud-related findings: {sum(1 for f in findings if 'cloud' in (f.raw_data or '').lower() or any('cloud' in t.lower() for t in f.tags))}", type="Finding Volume", source="CloudRecon", confidence="Medium", color="slate", tags=["exposure"]))
+            findings.append(make_finding(entity="Moderate cloud adoption - standard security applies", type="Exposure Note", source="CloudRecon", confidence="Medium", color="emerald", tags=["exposure"]))
+        findings.append(make_finding(entity=f"Total cloud-related findings: {sum(1 for f in findings if 'cloud' in (f.raw_data or '').lower() or any('cloud' in t.lower() for t in f.tags))}", type="Finding Volume", source="CloudRecon", confidence="Medium", color="slate", tags=["exposure"]))
 
     async def analyze_cdn_insight():
-        findings.append(IntelligenceFinding(entity=f"CDN services found: {cdn_count}", type="CDN Insight", source="CloudRecon", confidence="Medium", color="slate", tags=["cdn"]))
-        findings.append(IntelligenceFinding(entity=f"PaaS platforms found: {paas_count}", type="PaaS Insight", source="CloudRecon", confidence="Medium", color="slate", tags=["cdn"]))
+        findings.append(make_finding(entity=f"CDN services found: {cdn_count}", type="CDN Insight", source="CloudRecon", confidence="Medium", color="slate", tags=["cdn"]))
+        findings.append(make_finding(entity=f"PaaS platforms found: {paas_count}", type="PaaS Insight", source="CloudRecon", confidence="Medium", color="slate", tags=["cdn"]))
 
     async def analyze_tech_stack():
-        findings.append(IntelligenceFinding(entity=f"Technologies detected: {tech_count}", type="Tech Stack", source="CloudRecon", confidence="Medium", color="slate", tags=["tech"]))
-        findings.append(IntelligenceFinding(entity=f"Cloud infra services: {cloud_count}", type="Cloud Infrastructure", source="CloudRecon", confidence="Medium", color="slate", tags=["tech"]))
-        findings.append(IntelligenceFinding(entity=f"Target: {target}", type="Scan Target", source="CloudRecon", confidence="High", color="slate", tags=["tech"]))
+        findings.append(make_finding(entity=f"Technologies detected: {tech_count}", type="Tech Stack", source="CloudRecon", confidence="Medium", color="slate", tags=["tech"]))
+        findings.append(make_finding(entity=f"Cloud infra services: {cloud_count}", type="Cloud Infrastructure", source="CloudRecon", confidence="Medium", color="slate", tags=["tech"]))
+        findings.append(make_finding(entity=f"Target: {target}", type="Scan Target", source="CloudRecon", confidence="High", color="slate", tags=["tech"]))
 
     async def analyze_cloud_verdict():
-        findings.append(IntelligenceFinding(entity=f"Cloud score range: {cloud_score}% adoption", type="Adoption Level", source="CloudRecon", confidence="Medium", color="purple", tags=["verdict"]))
+        findings.append(make_finding(entity=f"Cloud score range: {cloud_score}% adoption", type="Adoption Level", source="CloudRecon", confidence="Medium", color="purple", tags=["verdict"]))
         if cloud_score > 70:
-            findings.append(IntelligenceFinding(entity="Heavy cloud dependency - review multi-cloud security", type="Cloud Verdict", source="CloudRecon", confidence="Medium", color="orange", tags=["verdict"]))
+            findings.append(make_finding(entity="Heavy cloud dependency - review multi-cloud security", type="Cloud Verdict", source="CloudRecon", confidence="Medium", color="orange", tags=["verdict"]))
         elif cloud_score > 30:
-            findings.append(IntelligenceFinding(entity="Moderate cloud usage - review provider configurations", type="Cloud Verdict", source="CloudRecon", confidence="Medium", color="yellow", tags=["verdict"]))
+            findings.append(make_finding(entity="Moderate cloud usage - review provider configurations", type="Cloud Verdict", source="CloudRecon", confidence="Medium", color="yellow", tags=["verdict"]))
         else:
-            findings.append(IntelligenceFinding(entity="Minimal cloud footprint - low cloud attack surface", type="Cloud Verdict", source="CloudRecon", confidence="Medium", color="emerald", tags=["verdict"]))
+            findings.append(make_finding(entity="Minimal cloud footprint - low cloud attack surface", type="Cloud Verdict", source="CloudRecon", confidence="Medium", color="emerald", tags=["verdict"]))
 
     await asyncio.gather(
         analyze_cloud_providers(),

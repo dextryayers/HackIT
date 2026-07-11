@@ -5,7 +5,8 @@ import json
 from typing import List, Optional
 from urllib.parse import quote
 from models import IntelligenceFinding
-from osint_common import normalize_target, make_finding, extract_emails, extract_ips
+from module_common import safe_fetch, safe_fetch_json, make_finding, extract_emails
+from osint_common import normalize_target, extract_ips
 
 AHMIA_SEARCH = "https://ahmia.fi/search"
 ONIONLAND_SEARCH = "https://onionland.io/api/v1/search"
@@ -160,7 +161,7 @@ async def generic_search(engine_name: str, url_template: str, target: str, clien
     results = []
     try:
         url = url_template.format(quote(target))
-        resp = await client.get(url, timeout=15.0,
+        resp = await safe_fetch(client, url, timeout=15.0,
             headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"})
         if resp.status_code == 200:
             links = re.findall(r'<a[^>]+href="(https?://[^"]+)"[^>]*>([^<]*)</a>', resp.text)
@@ -185,7 +186,7 @@ async def search_all_engines(target: str, client: httpx.AsyncClient) -> List[dic
 async def search_ahmia(target: str, client: httpx.AsyncClient) -> List[dict]:
     results = []
     try:
-        resp = await client.get(f"{AHMIA_SEARCH}/?q={quote(target)}", timeout=20.0,
+        resp = await safe_fetch(client, f"{AHMIA_SEARCH}/?q={quote(target)}", timeout=20.0,
             headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"})
         if resp.status_code == 200:
             links = re.findall(r'<a[^>]+href="(http://[a-z0-9]{16,}\.onion[^"]*)"[^>]*>([^<]*)</a>', resp.text)
@@ -200,7 +201,7 @@ async def search_ahmia(target: str, client: httpx.AsyncClient) -> List[dict]:
 async def search_onionland(target: str, client: httpx.AsyncClient) -> List[dict]:
     results = []
     try:
-        resp = await client.get(f"{ONIONLAND_SEARCH}?query={quote(target)}&page=1", timeout=15.0,
+        resp = await safe_fetch(client, f"{ONIONLAND_SEARCH}?query={quote(target)}&page=1", timeout=15.0,
             headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"})
         if resp.status_code == 200:
             data = resp.json()
@@ -239,7 +240,7 @@ async def search_darksearch(target: str, client: httpx.AsyncClient) -> List[dict
 async def search_pastebin(target: str, client: httpx.AsyncClient) -> List[dict]:
     results = []
     try:
-        resp = await client.get(f"https://psbdmp.ws/api/v3/search?q={quote(target)}", timeout=15.0,
+        resp = await safe_fetch(client, f"https://psbdmp.ws/api/v3/search?q={quote(target)}", timeout=15.0,
             headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"})
         if resp.status_code == 200:
             data = resp.json()
@@ -256,7 +257,7 @@ async def search_pastebin(target: str, client: httpx.AsyncClient) -> List[dict]:
                             "section": section,
                             "source": "Pastebin",
                         })
-        resp2 = await client.get(f"https://psbdmp.ws/api/v3/search?q={quote(target.split('.')[0])}", timeout=10.0,
+        resp2 = await safe_fetch(client, f"https://psbdmp.ws/api/v3/search?q={quote(target.split('.')[0])}", timeout=10.0,
             headers={"User-Agent": "Mozilla/5.0"})
         if resp2.status_code == 200:
             data2 = resp2.json()
@@ -278,7 +279,7 @@ async def search_pastebin(target: str, client: httpx.AsyncClient) -> List[dict]:
 
 async def fetch_paste_content(url: str, client: httpx.AsyncClient) -> str:
     try:
-        resp = await client.get(url, timeout=10.0, headers={"User-Agent": "Mozilla/5.0"})
+        resp = await safe_fetch(client, url, timeout=10.0, headers={"User-Agent": "Mozilla/5.0"})
         if resp.status_code == 200:
             return resp.text[:5000]
     except:
@@ -293,7 +294,7 @@ async def fetch_paste_content_fallback(paste_id: str, target: str, client: httpx
     ]
     for url in fallback_urls:
         try:
-            resp = await client.get(url, timeout=10.0, headers={"User-Agent": "Mozilla/5.0"})
+            resp = await safe_fetch(client, url, timeout=10.0, headers={"User-Agent": "Mozilla/5.0"})
             if resp.status_code == 200 and len(resp.text) > 20:
                 return resp.text[:5000]
         except:
@@ -367,7 +368,7 @@ def check_forum_mentions(text: str) -> List[dict]:
 async def search_torch(target: str, client: httpx.AsyncClient) -> List[dict]:
     results = []
     try:
-        resp = await client.get(f"{TORCH_SEARCH}?q={quote(target)}&action=search", timeout=20.0,
+        resp = await safe_fetch(client, f"{TORCH_SEARCH}?q={quote(target)}&action=search", timeout=20.0,
             headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"})
         if resp.status_code == 200:
             links = re.findall(r'<a[^>]+href="(https?://[^"]+)"[^>]*>([^<]*)</a>', resp.text)
@@ -382,7 +383,7 @@ async def search_torch(target: str, client: httpx.AsyncClient) -> List[dict]:
 async def search_darkeye(target: str, client: httpx.AsyncClient) -> List[dict]:
     results = []
     try:
-        resp = await client.get(f"{DARKEYE_SEARCH}?q={quote(target)}", timeout=15.0,
+        resp = await safe_fetch(client, f"{DARKEYE_SEARCH}?q={quote(target)}", timeout=15.0,
             headers={"User-Agent": "Mozilla/5.0"})
         if resp.status_code == 200:
             links = re.findall(r'<a[^>]+href="(https?://[^"]+)"[^>]*>([^<]*)</a>', resp.text)
@@ -403,7 +404,7 @@ async def search_recon(target: str, client: httpx.AsyncClient) -> List[dict]:
     try:
         for url in urls:
             try:
-                resp = await client.get(url, timeout=15.0,
+                resp = await safe_fetch(client, url, timeout=15.0,
                     headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"})
                 if resp.status_code == 200:
                     links = re.findall(r'<a[^>]+href="(https?://[^"]+)"[^>]*>(?:<[^>]+>)*([^<]*)', resp.text)
@@ -425,7 +426,7 @@ async def check_ramp_forum(target: str, client: httpx.AsyncClient) -> List[dict]
     try:
         for ramp_url in ramp_urls:
             try:
-                resp = await client.get(f"{ramp_url}/search?q={quote(target)}", timeout=15.0,
+                resp = await safe_fetch(client, f"{ramp_url}/search?q={quote(target)}", timeout=15.0,
                     headers={"User-Agent": "Mozilla/5.0"})
                 if resp.status_code == 200:
                     matches = re.findall(rf'[^.]*?{re.escape(target)}[^<]*', resp.text, re.IGNORECASE)
@@ -447,7 +448,7 @@ async def search_forum_mirrors(target: str, client: httpx.AsyncClient) -> List[d
     for forum_name, url_tmpl in HACKER_FORUM_CLEARNET_MIRRORS:
         try:
             url = url_tmpl.format(quote(target))
-            resp = await client.get(url, timeout=10.0,
+            resp = await safe_fetch(client, url, timeout=10.0,
                 headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"})
             if resp.status_code == 200 and len(resp.text) > 500:
                 results.append({

@@ -1,8 +1,7 @@
 import httpx
 import re
-import asyncio
 import dns.resolver
-from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash
 
 DISPOSABLE_DOMAINS = [
     "10minutemail.com", "10minutemail.net", "10minutemail.org", "20minutemail.com",
@@ -119,7 +118,7 @@ UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 async def check_domain_age(domain: str, client: httpx.AsyncClient) -> dict:
     result = {"age_days": None, "is_recent": False}
     try:
-        whois_resp = await client.get(f"https://who.is/whois/{domain}", timeout=10.0,
+        whois_resp = await safe_fetch(client, f"https://who.is/whois/{domain}", timeout=10.0,
             headers={"User-Agent": UA})
         if whois_resp.status_code == 200:
             text = whois_resp.text
@@ -174,7 +173,7 @@ async def check_disposable_apis(domain: str, client: httpx.AsyncClient) -> dict:
     ]
     for name, url in apis:
         try:
-            resp = await client.get(url, timeout=8.0, headers={"User-Agent": UA})
+            resp = await safe_fetch(client, url, timeout=8.0, headers={"User-Agent": UA})
             if resp.status_code == 200:
                 text = resp.text.lower()
                 if any(x in text for x in ["true", "yes", "disposable", "temporary", "1"]):
@@ -188,9 +187,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     findings = []
     email = target.strip().lower()
     if "@" not in email:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="Not a valid email address",
-            type="Disposable Check Error",
+            ftype="Disposable Check Error",
             source="EmailDisposableCheck",
             confidence="High", color="red", category="General OSINT",
             threat_level="Informational", status="Error",
@@ -203,9 +202,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     is_disposable = domain.lower() in DISPOSABLE_DOMAINS
     if is_disposable:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"DISPOSABLE EMAIL: {domain} is a known disposable/temporary email domain",
-            type="Disposable Email Detected",
+            ftype="Disposable Email Detected",
             source="EmailDisposableCheck",
             confidence="High",
             color="red",
@@ -217,9 +216,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             tags=["disposable", "temporary-email", "high-risk", domain]
         ))
     else:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Domain {domain} not in disposable domains list",
-            type="Disposable Domain Check",
+            ftype="Disposable Domain Check",
             source="EmailDisposableCheck",
             confidence="High",
             color="emerald",
@@ -229,7 +228,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             tags=["disposable", "domain-check", domain]
         ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Testing {domain} against {len(DISPOSABLE_DOMAINS)} known disposable domains",
         type="Domain List Coverage",
         source="EmailDisposableCheck",
@@ -244,7 +243,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     domain_age = await check_domain_age(domain, client)
     if domain_age.get("age_days") is not None:
         age_color = "red" if domain_age["is_recent"] else "emerald"
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Domain age: {domain_age['age_days']} days ({'RECENT - likely disposable' if domain_age['is_recent'] else 'Established'})",
             type="Domain Age Analysis",
             source="EmailDisposableCheck",
@@ -256,9 +255,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             tags=["domain-age", "whois", "new-domain" if domain_age["is_recent"] else "aged-domain"]
         ))
     else:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Could not determine age for {domain}",
-            type="Domain Age Unknown",
+            ftype="Domain Age Unknown",
             source="EmailDisposableCheck",
             confidence="Low",
             color="slate",
@@ -270,9 +269,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     mx_check = await check_mx_pattern(domain)
     if mx_check["has_mx"]:
         if mx_check["suspicious"]:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Suspicious MX pattern: {mx_check['mx_pattern']}",
-                type="MX Server Pattern Analysis",
+                ftype="MX Server Pattern Analysis",
                 source="EmailDisposableCheck",
                 confidence="Medium",
                 color="red",
@@ -282,7 +281,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                 tags=["mx", "suspicious", "disposable-mx"]
             ))
         else:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="MX servers appear legitimate (not disposable patterns)",
                 type="MX Server Pattern Analysis",
                 source="EmailDisposableCheck",
@@ -294,9 +293,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                 tags=["mx", "legitimate"]
             ))
     else:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="No MX records found - domain may not accept email",
-            type="MX Server Check",
+            ftype="MX Server Check",
             source="EmailDisposableCheck",
             confidence="High",
             color="orange",
@@ -309,7 +308,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     api_result = await check_disposable_apis(domain, client)
     if api_result["detected"]:
         sources = ", ".join(api_result["sources"])
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"External APIs confirm {domain} is disposable ({sources})",
             type="API Disposable Confirmation",
             source="EmailDisposableCheck",
@@ -322,9 +321,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             tags=["disposable", "api-check", "confirmed"]
         ))
     else:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"External APIs do not classify {domain} as disposable",
-            type="API Disposable Check",
+            ftype="API Disposable Check",
             source="EmailDisposableCheck",
             confidence="Low",
             color="emerald",
@@ -336,9 +335,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     is_role = local_part.lower() in ROLE_PREFIXES
     if is_role:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Role-based local part: {local_part}@{domain}",
-            type="Role-Based Email Detected",
+            ftype="Role-Based Email Detected",
             source="EmailDisposableCheck",
             confidence="High",
             color="orange",
@@ -351,7 +350,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     total_indicators = sum([is_disposable, domain_age.get("is_recent", False),
                            mx_check["suspicious"], api_result["detected"]])
     if total_indicators >= 2:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"HIGH CONFIDENCE DISPOSABLE: {email} ({total_indicators}/4 indicators positive)",
             type="Disposable Confidence Assessment",
             source="EmailDisposableCheck",
@@ -364,7 +363,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             tags=["disposable", "high-confidence", "temporary"]
         ))
     elif total_indicators >= 1:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"POSSIBLY DISPOSABLE: {email} ({total_indicators}/4 indicators positive)",
             type="Disposable Confidence Assessment",
             source="EmailDisposableCheck",
@@ -376,7 +375,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             tags=["disposable", "medium-confidence"]
         ))
     else:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"LIKELY LEGITIMATE: {email} (0/4 disposable indicators)",
             type="Disposable Confidence Assessment",
             source="EmailDisposableCheck",
@@ -388,9 +387,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             tags=["disposable", "legitimate", "clean"]
         ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Disposable email check complete for {email}",
-        type="Disposable Check Summary",
+        ftype="Disposable Check Summary",
         source="EmailDisposableCheck",
         confidence="High",
         color="purple",

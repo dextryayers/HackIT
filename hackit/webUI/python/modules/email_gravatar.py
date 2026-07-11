@@ -2,8 +2,8 @@ import httpx
 import re
 import hashlib
 import json
-from models import IntelligenceFinding
 from datetime import datetime
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 
@@ -11,9 +11,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     findings = []
     email = target.strip().lower()
     if "@" not in email:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="Not a valid email",
-            type="Gravatar Error",
+            ftype="Gravatar Error",
             source="EmailGravatar",
             confidence="High", color="red", category="General OSINT",
             threat_level="Informational", status="Error",
@@ -23,9 +23,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     email_hash = hashlib.md5(email.encode()).hexdigest()
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Gravatar hash for {email}: {email_hash}",
-        type="Gravatar: Hash Generation",
+        ftype="Gravatar: Hash Generation",
         source="EmailGravatar",
         confidence="High",
         color="slate",
@@ -41,7 +41,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     profile_data = None
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://www.gravatar.com/{email_hash}.json",
             timeout=15.0,
             headers={"User-Agent": UA, "Accept": "application/json"}
@@ -65,9 +65,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         profile_url_g = entry.get("profileUrl", "")
         thumbnail_url = entry.get("thumbnailUrl", "")
 
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Gravatar profile: {display_name or preferred_username or 'Unknown'}",
-            type="Gravatar: Profile Found",
+            ftype="Gravatar: Profile Found",
             source="EmailGravatar",
             confidence="High",
             color="purple",
@@ -80,9 +80,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         ))
 
         if display_name:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Display Name: {display_name}",
-                type="Gravatar: Display Name",
+                ftype="Gravatar: Display Name",
                 source="EmailGravatar",
                 confidence="High",
                 color="slate",
@@ -92,9 +92,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             ))
 
         if preferred_username:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Username: {preferred_username}",
-                type="Gravatar: Username",
+                ftype="Gravatar: Username",
                 source="EmailGravatar",
                 confidence="High",
                 color="slate",
@@ -104,9 +104,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             ))
 
         if about:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Bio/About: {about[:200]}",
-                type="Gravatar: Bio",
+                ftype="Gravatar: Bio",
                 source="EmailGravatar",
                 confidence="Medium",
                 color="slate",
@@ -117,9 +117,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             ))
 
         if current_location:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Location: {current_location}",
-                type="Gravatar: Location",
+                ftype="Gravatar: Location",
                 source="EmailGravatar",
                 confidence="Medium",
                 color="slate",
@@ -132,7 +132,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             for pn in phone_numbers[:3]:
                 pn_value = pn.get("value", "")
                 pn_type = pn.get("type", "unknown")
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Phone: {pn_value} (type: {pn_type})",
                     type="Gravatar: Phone Number",
                     source="EmailGravatar",
@@ -149,9 +149,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             for em in emails[:3]:
                 em_value = em.get("value", "")
                 if em_value.lower() != email:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Additional email: {em_value}",
-                        type="Gravatar: Associated Email",
+                        ftype="Gravatar: Associated Email",
                         source="EmailGravatar",
                         confidence="High",
                         color="slate",
@@ -160,9 +160,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                         tags=["gravatar", "email", "associated-account"]
                     ))
             if additional_email_count > 3:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Gravatar has {additional_email_count} total emails",
-                    type="Gravatar: Email Count",
+                    ftype="Gravatar: Email Count",
                     source="EmailGravatar",
                     confidence="Medium",
                     color="slate",
@@ -178,9 +178,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                 display = acc.get("display", "")
                 acc_url = acc.get("url", "")
                 acc_shortname = acc.get("shortname", "")
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{domain}: {display or username}",
-                    type=f"Gravatar: {domain} Account",
+                    ftype=f"Gravatar: {domain} Account",
                     source="EmailGravatar",
                     confidence="High" if acc.get("verified") else "Medium",
                     color="purple",
@@ -196,9 +196,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             for u in urls[:5]:
                 u_value = u.get("value", "")
                 u_title = u.get("title", "")
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"URL: {u_title or u_value}",
-                    type="Gravatar: Associated URL",
+                    ftype="Gravatar: Associated URL",
                     source="EmailGravatar",
                     confidence="Medium",
                     color="slate",
@@ -211,9 +211,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         if photos:
             avatar_photos = [p for p in photos if p.get("type") == "avatar" or "avatar" in p.get("value", "")]
             if avatar_photos:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Avatar image available: {avatar_photos[0]['value'][:100]}",
-                    type="Gravatar: Avatar Image",
+                    ftype="Gravatar: Avatar Image",
                     source="EmailGravatar",
                     confidence="High",
                     color="slate",
@@ -223,7 +223,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                 ))
 
             if len(photos) > 1:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Gravatar has {len(photos)} photo(s) on profile",
                     type="Gravatar: Photo Count",
                     source="EmailGravatar",
@@ -242,9 +242,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             given = name_details.get("givenName", "")
             family = name_details.get("familyName", "")
             if formatted:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Full Name: {formatted}",
-                    type="Gravatar: Full Name",
+                    ftype="Gravatar: Full Name",
                     source="EmailGravatar",
                     confidence="High",
                     color="slate",
@@ -253,9 +253,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                     tags=["gravatar", "full-name"]
                 ))
             if given:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Given Name: {given}",
-                    type="Gravatar: Given Name",
+                    ftype="Gravatar: Given Name",
                     source="EmailGravatar",
                     confidence="High",
                     color="slate",
@@ -264,9 +264,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                     tags=["gravatar", "given-name"]
                 ))
             if family:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Family Name: {family}",
-                    type="Gravatar: Family Name",
+                    ftype="Gravatar: Family Name",
                     source="EmailGravatar",
                     confidence="High",
                     color="slate",
@@ -284,7 +284,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                 profile_urls_associated.append(val)
 
         if profile_urls_associated:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Total associated URLs/profiles: {len(profile_urls_associated)}",
                 type="Gravatar: Associated URLs Summary",
                 source="EmailGravatar",
@@ -297,11 +297,11 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
         avatar_check_url = f"https://www.gravatar.com/avatar/{email_hash}?d=404&s=200"
         try:
-            av_resp = await client.get(avatar_check_url, timeout=8.0,
+            av_resp = await safe_fetch(client, avatar_check_url, timeout=8.0,
                 headers={"User-Agent": UA})
             if av_resp.status_code == 200:
                 image_data = av_resp.content
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Avatar image: {len(image_data)} bytes, {av_resp.headers.get('content-type', 'unknown')}",
                     type="Gravatar: Avatar Metadata",
                     source="EmailGravatar",
@@ -318,12 +318,12 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     else:
         av_check = avatar_url + "?d=404"
         try:
-            av_resp = await client.get(av_check, timeout=8.0,
+            av_resp = await safe_fetch(client, av_check, timeout=8.0,
                 headers={"User-Agent": UA})
             if av_resp.status_code == 200:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Avatar exists but no profile JSON for {email}",
-                    type="Gravatar: Avatar Without Profile",
+                    ftype="Gravatar: Avatar Without Profile",
                     source="EmailGravatar",
                     confidence="Medium",
                     color="slate",
@@ -334,9 +334,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                     tags=["gravatar", "avatar-only"]
                 ))
             else:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity="No Gravatar profile or avatar found",
-                    type="Gravatar: Not Found",
+                    ftype="Gravatar: Not Found",
                     source="EmailGravatar",
                     confidence="High",
                     color="slate",
@@ -346,9 +346,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                     tags=["gravatar", "not-found"]
                 ))
         except Exception:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="No Gravatar profile or avatar found",
-                type="Gravatar: Not Found",
+                ftype="Gravatar: Not Found",
                 source="EmailGravatar",
                 confidence="High",
                 color="slate",
@@ -360,15 +360,15 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     rating = "G"
     try:
-        rating_resp = await client.get(f"https://www.gravatar.com/avatar/{email_hash}?d=404&f=y", timeout=8.0,
+        rating_resp = await safe_fetch(client, f"https://www.gravatar.com/avatar/{email_hash}?d=404&f=y", timeout=8.0,
             headers={"User-Agent": UA})
         rating_map = {"g": "G (General)", "pg": "PG (Parental Guidance)", "r": "R (Restricted)", "x": "X (Explicit)"}
         if rating_resp.status_code == 200:
             ct = rating_resp.headers.get("content-type", "")
             if "image" in ct:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Avatar accessible without restrictions",
-                    type="Gravatar: Accessibility",
+                    ftype="Gravatar: Accessibility",
                     source="EmailGravatar",
                     confidence="Medium",
                     color="emerald",
@@ -381,9 +381,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     qr_url = f"https://www.gravatar.com/{email_hash}.qr"
     vcf_url = f"https://www.gravatar.com/{email_hash}.vcf"
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Gravatar related URLs: QR={qr_url}, VCF={vcf_url}, Profile={profile_url}",
-        type="Gravatar: Related URLs",
+        ftype="Gravatar: Related URLs",
         source="EmailGravatar",
         confidence="High",
         color="slate",
@@ -393,9 +393,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     ))
 
     association_count = sum(1 for f in findings if f.type.startswith("Gravatar:") and "Account" in f.type)
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Gravatar scan complete: {association_count} associated accounts, profile={'FOUND' if profile_data else 'NOT FOUND'}",
-        type="Gravatar: Scan Summary",
+        ftype="Gravatar: Scan Summary",
         source="EmailGravatar",
         confidence="High",
         color="purple",

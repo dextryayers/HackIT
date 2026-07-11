@@ -7,6 +7,7 @@ from urllib.parse import urlparse, urljoin
 from typing import List, Optional
 from collections import defaultdict
 from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash
 
 WAYBACK_API = "https://web.archive.org"
 CDX_API = f"{WAYBACK_API}/cdx/search/cdx"
@@ -14,47 +15,36 @@ UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
 
 async def query_cdx(domain: str, client: httpx.AsyncClient, limit: int = 500) -> list:
     results = []
-    try:
-        params = {
-            "url": f"*.{domain}/*",
-            "output": "json",
-            "fl": "original,timestamp,statuscode,mimetype,length",
-            "limit": str(limit),
-            "filter": "statuscode:200",
-            "collapse": "urlkey",
-        }
-        resp = await client.get(CDX_API, params=params, timeout=30.0,
-            headers={"User-Agent": UA})
-        if resp.status_code == 200:
-            lines = resp.text.strip().splitlines()
-            for line in lines[1:]:
-                try:
-                    parts = json.loads(line) if line.startswith("[") else line.split(" ")
-                    if isinstance(parts, list) and len(parts) >= 4:
-                        results.append({
-                            "url": parts[0] if len(parts) > 0 else "",
-                            "timestamp": parts[1] if len(parts) > 1 else "",
-                            "status": parts[2] if len(parts) > 2 else "",
-                            "mime": parts[3] if len(parts) > 3 else "",
-                            "length": parts[4] if len(parts) > 4 else "0",
-                        })
-                except:
-                    continue
-    except:
-        pass
+    params = {
+        "url": f"*.{domain}/*",
+        "output": "json",
+        "fl": "original,timestamp,statuscode,mimetype,length",
+        "limit": str(limit),
+        "filter": "statuscode:200",
+        "collapse": "urlkey",
+    }
+    resp = await safe_fetch(client, CDX_API, params=params, timeout=30.0)
+    if resp and resp.status_code == 200:
+        lines = resp.text.strip().splitlines()
+        for line in lines[1:]:
+            try:
+                parts = json.loads(line) if line.startswith("[") else line.split(" ")
+                if isinstance(parts, list) and len(parts) >= 4:
+                    results.append({
+                        "url": parts[0] if len(parts) > 0 else "",
+                        "timestamp": parts[1] if len(parts) > 1 else "",
+                        "status": parts[2] if len(parts) > 2 else "",
+                        "mime": parts[3] if len(parts) > 3 else "",
+                        "length": parts[4] if len(parts) > 4 else "0",
+                    })
+            except:
+                continue
     return results
 
 async def get_snapshot_content(url: str, ts: str, client: httpx.AsyncClient) -> str:
-    try:
-        resp = await client.get(
-            f"{WAYBACK_API}/web/{ts}/{url}",
-            timeout=20.0,
-            headers={"User-Agent": UA}
-        )
-        if resp.status_code == 200:
-            return resp.text[:5000]
-    except:
-        pass
+    resp = await safe_fetch(client, f"{WAYBACK_API}/web/{ts}/{url}", timeout=20.0)
+    if resp and resp.status_code == 200:
+        return resp.text[:5000]
     return ""
 
 async def get_page_title(html: str) -> str:
@@ -78,85 +68,82 @@ async def extract_links_from_content(html: str) -> list:
 
 async def analyze_archived_content(url: str, ts: str, client: httpx.AsyncClient) -> list:
     findings = []
-    try:
-        content = await get_snapshot_content(url, ts, client)
-        if not content:
-            return findings
-        links = await extract_links_from_content(content)
-        if links:
-            findings.append(IntelligenceFinding(
-                entity=f"Content analysis: {len(links)} links extracted from archived page",
-                type="Archive Forensics: Link Extraction",
+    content = await get_snapshot_content(url, ts, client)
+    if not content:
+        return findings
+    links = await extract_links_from_content(content)
+    if links:
+        findings.append(make_finding(
+            entity=f"Content analysis: {len(links)} links extracted from archived page",
+            ftype="Archive Forensics: Link Extraction",
+            source="Wayback CDX",
+            confidence="Medium",
+            color="slate",
+            status="Analyzed",
+            resolution=url[:200],
+            tags=["forensics", "links", "content"]
+        ))
+        internal = [l for l in links if l.startswith("/") or urlparse(url).netloc in l]
+        external = [l for l in links if l.startswith("http") and urlparse(url).netloc not in l]
+        if internal:
+            findings.append(make_finding(
+                entity=f"{len(internal)} internal links found in archived page",
+                ftype="Archive Forensics: Internal Links",
                 source="Wayback CDX",
                 confidence="Medium",
                 color="slate",
-                status="Analyzed",
+                status="Extracted",
                 resolution=url[:200],
-                tags=["forensics", "links", "content"]
+                tags=["forensics", "internal-links"]
             ))
-            internal = [l for l in links if l.startswith("/") or urlparse(url).netloc in l]
-            external = [l for l in links if l.startswith("http") and urlparse(url).netloc not in l]
-            if internal:
-                findings.append(IntelligenceFinding(
-                    entity=f"{len(internal)} internal links found in archived page",
-                    type="Archive Forensics: Internal Links",
-                    source="Wayback CDX",
-                    confidence="Medium",
-                    color="slate",
-                    status="Extracted",
-                    resolution=url[:200],
-                    tags=["forensics", "internal-links"]
-                ))
-            if external:
-                findings.append(IntelligenceFinding(
-                    entity=f"{len(external)} external links to {len(set(urlparse(l).netloc for l in external))} unique domains",
-                    type="Archive Forensics: External Links",
-                    source="Wayback CDX",
-                    confidence="Medium",
-                    color="slate",
-                    status="Extracted",
-                    resolution=url[:200],
-                    tags=["forensics", "external-links"]
-                ))
-        title_match = re.search(r'<title[^>]*>(.*?)</title>', content, re.IGNORECASE | re.DOTALL)
-        if title_match:
-            title = title_match.group(1).strip()[:200]
-            findings.append(IntelligenceFinding(
-                entity=f"Archived page title: {title}",
-                type="Archive Forensics: Page Title",
-                source="Wayback CDX",
-                confidence="High",
-                color="slate",
-                status="Retrieved",
-                resolution=url[:200],
-                tags=["forensics", "title", "content"]
-            ))
-        meta_desc = re.search(r'<meta\s+name="description"\s+content="([^"]*)"', content, re.IGNORECASE)
-        if meta_desc:
-            findings.append(IntelligenceFinding(
-                entity=f"Meta description: {meta_desc.group(1)[:200]}",
-                type="Archive Forensics: Meta Description",
+        if external:
+            findings.append(make_finding(
+                entity=f"{len(external)} external links to {len(set(urlparse(l).netloc for l in external))} unique domains",
+                ftype="Archive Forensics: External Links",
                 source="Wayback CDX",
                 confidence="Medium",
                 color="slate",
-                status="Retrieved",
+                status="Extracted",
                 resolution=url[:200],
-                tags=["forensics", "meta", "description"]
+                tags=["forensics", "external-links"]
             ))
-        scripts = re.findall(r'<script[^>]*src="([^"]*)"', content, re.IGNORECASE)
-        if scripts:
-            findings.append(IntelligenceFinding(
-                entity=f"{len(scripts)} JavaScript files referenced in archived page",
-                type="Archive Forensics: JS References",
-                source="Wayback CDX",
-                confidence="Medium",
-                color="slate",
-                status="Counted",
-                resolution=url[:200],
-                tags=["forensics", "javascript", "scripts"]
-            ))
-    except:
-        pass
+    title_match = re.search(r'<title[^>]*>(.*?)</title>', content, re.IGNORECASE | re.DOTALL)
+    if title_match:
+        title = title_match.group(1).strip()[:200]
+        findings.append(make_finding(
+            entity=f"Archived page title: {title}",
+            ftype="Archive Forensics: Page Title",
+            source="Wayback CDX",
+            confidence="High",
+            color="slate",
+            status="Retrieved",
+            resolution=url[:200],
+            tags=["forensics", "title", "content"]
+        ))
+    meta_desc = re.search(r'<meta\s+name="description"\s+content="([^"]*)"', content, re.IGNORECASE)
+    if meta_desc:
+        findings.append(make_finding(
+            entity=f"Meta description: {meta_desc.group(1)[:200]}",
+            ftype="Archive Forensics: Meta Description",
+            source="Wayback CDX",
+            confidence="Medium",
+            color="slate",
+            status="Retrieved",
+            resolution=url[:200],
+            tags=["forensics", "meta", "description"]
+        ))
+    scripts = re.findall(r'<script[^>]*src="([^"]*)"', content, re.IGNORECASE)
+    if scripts:
+        findings.append(make_finding(
+            entity=f"{len(scripts)} JavaScript files referenced in archived page",
+            ftype="Archive Forensics: JS References",
+            source="Wayback CDX",
+            confidence="Medium",
+            color="slate",
+            status="Counted",
+            resolution=url[:200],
+            tags=["forensics", "javascript", "scripts"]
+        ))
     return findings
 
 async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFinding]:
@@ -168,9 +155,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
     cdx_results = await query_cdx(t, client)
 
     if cdx_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{len(cdx_results)} archived pages for {t}",
-            type="Archive Forensics: Historical Data",
+            ftype="Archive Forensics: Historical Data",
             source="Wayback CDX",
             confidence="High",
             color="slate",
@@ -191,9 +178,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                 path_counts["/unknown"] += 1
 
         for path, count in sorted(path_counts.items(), key=lambda x: -x[1])[:10]:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Path '{path}': {count} archived URLs",
-                type="Archive Forensics: Path Analysis",
+                ftype="Archive Forensics: Path Analysis",
                 source="Wayback CDX",
                 confidence="Medium",
                 color="slate",
@@ -213,9 +200,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
         if subdomains:
             for sub, count in sorted(subdomains.items(), key=lambda x: -x[1])[:10]:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Subdomain '{sub}.{t}': {count} archived pages",
-                    type="Archive Forensics: Subdomain Discovery",
+                    ftype="Archive Forensics: Subdomain Discovery",
                     source="Wayback CDX",
                     confidence="Medium",
                     color="slate",
@@ -231,9 +218,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             findings.extend(content_results)
 
         if earliest and latest:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Archive timeline: {earliest[:10]} to {latest[:10]}",
-                type="Archive Forensics: Timeline",
+                ftype="Archive Forensics: Timeline",
                 source="Wayback CDX",
                 confidence="High",
                 color="slate",
@@ -242,9 +229,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                 tags=["forensics", "timeline", "historical"]
             ))
 
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Archive span: {len(set(r.get('timestamp', '')[:4] for r in cdx_results if r.get('timestamp')))} years",
-                type="Archive Forensics: Temporal Coverage",
+                ftype="Archive Forensics: Temporal Coverage",
                 source="Wayback CDX",
                 confidence="Medium",
                 color="slate",
@@ -254,9 +241,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             ))
 
     if not findings:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="No forensic archive data found",
-            type="Archive Forensics: Complete",
+            ftype="Archive Forensics: Complete",
             source="Wayback Machine",
             confidence="Low",
             color="emerald",

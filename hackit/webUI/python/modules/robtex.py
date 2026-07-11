@@ -2,10 +2,11 @@ import httpx
 import re
 import socket
 import asyncio
-from models import IntelligenceFinding
 from urllib.parse import urlparse
 from datetime import datetime
 from typing import Optional
+from module_common import safe_fetch, safe_fetch_json, make_finding, resolve_ip, is_ip
+from models import IntelligenceFinding
 
 ROBTEX_API = "https://freeapi.robtex.com"
 ROBTEX_WEB = "https://www.robtex.com"
@@ -15,23 +16,21 @@ MAX_PDNS_RESULTS = 50
 
 
 async def _robtex_get(url: str, client: httpx.AsyncClient, is_json: bool = True) -> dict | list | str | None:
-    try:
-        resp = await client.get(url, timeout=15.0,
-            headers={"User-Agent": USER_AGENT, "Accept": "application/json" if is_json else "text/html"})
-        if resp.status_code == 200:
-            if is_json:
+    resp = await safe_fetch(client, url, timeout=15.0,
+        headers={"User-Agent": USER_AGENT, "Accept": "application/json" if is_json else "text/html"})
+    if resp and resp.status_code == 200:
+        if is_json:
+            try:
                 return resp.json()
-            return resp.text
-    except Exception:
-        pass
+            except Exception:
+                pass
+        return resp.text
     return None
 
 
 async def _resolve_dns(hostname: str) -> str | None:
-    try:
-        return socket.gethostbyname(hostname)
-    except Exception:
-        return None
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, lambda: resolve_ip(hostname))
 
 
 async def _dns_lookup_full(hostname: str, record_type: str) -> list[str]:
@@ -310,7 +309,7 @@ async def _check_threat_intel(ip: str, domain: str | None, client: httpx.AsyncCl
         "details": []
     }
     try:
-        urlhaus_resp = await client.get(
+        urlhaus_resp = await safe_fetch(client, 
             f"https://urlhaus-api.abuse.ch/v1/host/{domain or ip}",
             timeout=10.0,
             headers={"User-Agent": USER_AGENT, "Accept": "application/json"}
@@ -326,7 +325,7 @@ async def _check_threat_intel(ip: str, domain: str | None, client: httpx.AsyncCl
         pass
     try:
         if ip:
-            abuse_resp = await client.get(
+            abuse_resp = await safe_fetch(client, 
                 f"https://api.abuseipdb.com/api/v2/check?ipAddress={ip}&maxAgeInDays=90",
                 timeout=10.0,
                 headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
@@ -360,7 +359,7 @@ async def _check_threat_intel(ip: str, domain: str | None, client: httpx.AsyncCl
         pass
     try:
         if ip:
-            isc_resp = await client.get(
+            isc_resp = await safe_fetch(client, 
                 f"https://isc.sans.edu/api/ip/{ip}?json",
                 timeout=10.0,
                 headers={"User-Agent": USER_AGENT}
@@ -377,7 +376,7 @@ async def _check_threat_intel(ip: str, domain: str | None, client: httpx.AsyncCl
     except Exception:
         pass
     try:
-        tor_resp = await client.get(
+        tor_resp = await safe_fetch(client, 
             "https://check.torproject.org/cgi-bin/TorBulkExitList.py?ip=1.1.1.1",
             timeout=10.0,
             headers={"User-Agent": USER_AGENT}
@@ -389,7 +388,7 @@ async def _check_threat_intel(ip: str, domain: str | None, client: httpx.AsyncCl
     except Exception:
         pass
     try:
-        blocklist_resp = await client.get(
+        blocklist_resp = await safe_fetch(client, 
             f"https://www.binarydefense.com/banlist.txt",
             timeout=10.0,
             headers={"User-Agent": USER_AGENT}
@@ -515,7 +514,7 @@ def _build_comprehensive_summary(findings: list[IntelligenceFinding], target: st
     tags.append(f"reputation_{reputation['level'].lower().replace(' ', '_')}")
     if threat_data.get("malicious"):
         tags.append("threat_flagged")
-    return IntelligenceFinding(
+    return make_finding(
         entity=f"Robtex comprehensive intelligence for {target}",
         type="Robtex Comprehensive Summary",
         source="Robtex",
@@ -529,29 +528,7 @@ def _build_comprehensive_summary(findings: list[IntelligenceFinding], target: st
     )
 
 
-def _make_finding(entity: str, ftype: str, source: str = "Robtex",
-                  confidence: str = "Medium", color: str = "slate",
-                  threat_level: str = "Informational", status: str = "Identified",
-                  resolution: str | None = None, raw_data: str | None = None,
-                  tags: list[str] | None = None,
-                  category: str = "General OSINT") -> IntelligenceFinding:
-    return IntelligenceFinding(
-        entity=str(entity)[:300],
-        type=ftype,
-        source=source,
-        confidence=confidence,
-        color=color,
-        category=category,
-        threat_level=threat_level,
-        status=status,
-        resolution=resolution,
-        raw_data=raw_data,
-        tags=tags or []
-    )
 
-
-def _is_ip(target: str) -> bool:
-    return bool(re.match(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$', target))
 
 
 async def crawl(target: str, client: httpx.AsyncClient):
@@ -561,7 +538,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         raw_target = urlparse(raw_target).netloc
     raw_target = raw_target.strip().lower()
 
-    is_ip_target = _is_ip(raw_target)
+    is_ip_target = is_ip(raw_target)
     target_ip = raw_target if is_ip_target else None
     target_domain = raw_target if not is_ip_target else None
 
@@ -585,7 +562,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 ip_to_use = resolved_ip
                 resp_ip_dict = await _query_ip(ip_to_use, client)
             else:
-                findings.append(_make_finding(
+                findings.append(make_finding(
                     entity=f"Cannot resolve {target_domain} to IP",
                     ftype="Robtex Resolution Error",
                     confidence="Low", color="red",
@@ -607,7 +584,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             passive_dns = resp_ip_dict.get("passive", [])
 
             if ip:
-                findings.append(_make_finding(
+                findings.append(make_finding(
                     entity=ip, ftype="Robtex IP Address",
                     confidence="High", color="slate",
                     status="Confirmed",
@@ -616,7 +593,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 ))
             if asn:
                 asn_str = f"AS{asn}" if not str(asn).startswith("AS") else str(asn)
-                findings.append(_make_finding(
+                findings.append(make_finding(
                     entity=f"{asn_str} - {as_name[:200]}",
                     ftype="Robtex ASN",
                     confidence="High", color="orange",
@@ -625,7 +602,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     tags=["asn", asn_str.replace(':', '_')]
                 ))
             if country:
-                findings.append(_make_finding(
+                findings.append(make_finding(
                     entity=country, ftype="Robtex Country",
                     confidence="High", color="slate",
                     status="GeoLocated",
@@ -633,7 +610,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     tags=["geo", "country"]
                 ))
             if city:
-                findings.append(_make_finding(
+                findings.append(make_finding(
                     entity=city, ftype="Robtex City",
                     confidence="Medium", color="slate",
                     status="GeoLocated",
@@ -641,7 +618,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     tags=["geo", "city"]
                 ))
             if owner:
-                findings.append(_make_finding(
+                findings.append(make_finding(
                     entity=owner[:200], ftype="Robtex IP Owner",
                     confidence="High", color="slate",
                     status="Identified",
@@ -650,7 +627,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 ))
             for route in routes[:10]:
                 route_str = route.get("route", route) if isinstance(route, dict) else str(route)
-                findings.append(_make_finding(
+                findings.append(make_finding(
                     entity=str(route_str)[:200], ftype="Robtex Route",
                     confidence="High", color="blue",
                     status="Announced",
@@ -661,7 +638,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 active_host = active.get("host", "") if isinstance(active, dict) else str(active)
                 active_ip_val = active.get("ip", "") if isinstance(active, dict) else ""
                 if active_host:
-                    findings.append(_make_finding(
+                    findings.append(make_finding(
                         entity=active_host[:200], ftype="Robtex Active DNS",
                         confidence="Medium", color="emerald",
                         status="Active", resolution=active_ip_val,
@@ -673,7 +650,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 pdns_type = pdns_entry.get("type", pdns_entry.get("rtype", "")) if isinstance(pdns_entry, dict) else ""
                 pdns_time = pdns_entry.get("time", pdns_entry.get("timestamp", "")) if isinstance(pdns_entry, dict) else ""
                 if pdns_host:
-                    findings.append(_make_finding(
+                    findings.append(make_finding(
                         entity=pdns_host[:200], ftype=f"Robtex Passive DNS ({pdns_type})",
                         confidence="High", color="emerald",
                         status="Historical", resolution=ip_to_use,
@@ -693,7 +670,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                                 rtype_rec = rec.get("type", rec.get("rtype", rtype))
                                 time_rec = rec.get("time", rec.get("timestamp", ""))
                                 if host:
-                                    findings.append(_make_finding(
+                                    findings.append(make_finding(
                                         entity=host[:200], ftype=f"Robtex Forward PDNS ({rtype_rec})",
                                         confidence="High", color="blue",
                                         status="Historical",
@@ -713,7 +690,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                                 rtype_rec = rec.get("type", rec.get("rtype", rtype))
                                 time_rec = rec.get("time", rec.get("timestamp", ""))
                                 if host:
-                                    findings.append(_make_finding(
+                                    findings.append(make_finding(
                                         entity=host[:200], ftype=f"Robtex Reverse PDNS ({rtype_rec})",
                                         confidence="High", color="emerald",
                                         status="Historical", resolution=ip_to_use,
@@ -730,7 +707,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 asn_name = asn_data.get("asname", "")
                 for route in asn_routes[:10]:
                     route_str = route.get("route", route) if isinstance(route, dict) else str(route)
-                    findings.append(_make_finding(
+                    findings.append(make_finding(
                         entity=str(route_str)[:200], ftype="Robtex ASN Route",
                         confidence="High", color="blue",
                         status="Announced",
@@ -739,7 +716,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     ))
                 for ip_entry in asn_ipset[:10]:
                     ip_str = ip_entry.get("ip", ip_entry) if isinstance(ip_entry, dict) else str(ip_entry)
-                    findings.append(_make_finding(
+                    findings.append(make_finding(
                         entity=str(ip_str)[:200], ftype="Robtex ASN IP Set",
                         confidence="Medium", color="slate",
                         status="Member",
@@ -748,7 +725,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     ))
                 hijack_alerts = _detect_subprefix_hijack(asn_routes, asn_ipset, asn_clean)
                 for alert in hijack_alerts[:5]:
-                    findings.append(_make_finding(
+                    findings.append(make_finding(
                         entity=alert["specific_prefix"],
                         ftype="Robtex ASN Sub-Prefix Alert",
                         confidence="Low", color="yellow",
@@ -767,7 +744,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     scraped_asn = scrape_data.get("sections", {}).get("asn")
                     scraped_country = scrape_data.get("sections", {}).get("country")
                     if scraped_asn:
-                        findings.append(_make_finding(
+                        findings.append(make_finding(
                             entity=f"Scraped {scraped_asn}",
                             ftype="Robtex Scraped ASN",
                             confidence="Low", color="orange",
@@ -776,7 +753,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                             tags=["scraped", "asn"]
                         ))
                     if scraped_country:
-                        findings.append(_make_finding(
+                        findings.append(make_finding(
                             entity=scraped_country,
                             ftype="Robtex Scraped Country",
                             confidence="Low", color="slate",
@@ -788,7 +765,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 dns_scrape = await _scrape_robtex_dns(target_domain, client)
                 if dns_scrape.get("records"):
                     for rec in dns_scrape["records"][:10]:
-                        findings.append(_make_finding(
+                        findings.append(make_finding(
                             entity=rec.get("name", ""),
                             ftype=f"Robtex Scraped DNS ({rec.get('type', '')})",
                             confidence="Low", color="cyan",
@@ -802,7 +779,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         if dns_timeline.get("new_records"):
             for nr in dns_timeline["new_records"][:10]:
-                findings.append(_make_finding(
+                findings.append(make_finding(
                     entity=nr["host"], ftype="Robtex New DNS Record",
                     confidence="Medium", color="yellow",
                     threat_level="Notice",
@@ -812,7 +789,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 ))
         if dns_timeline.get("changed_ips"):
             for ci in dns_timeline["changed_ips"][:10]:
-                findings.append(_make_finding(
+                findings.append(make_finding(
                     entity=ci["host"], ftype="Robtex IP Change Detected",
                     confidence="Medium", color="amber",
                     threat_level="Notice",
@@ -823,7 +800,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 ))
         if dns_timeline.get("removed_records"):
             for rr in dns_timeline["removed_records"][:10]:
-                findings.append(_make_finding(
+                findings.append(make_finding(
                     entity=rr["host"], ftype="Robtex Removed DNS Record",
                     confidence="Medium", color="red",
                     threat_level="Notice",
@@ -835,7 +812,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         if ip_to_use:
             threat_data = await _check_threat_intel(ip_to_use, target_domain, client)
             if threat_data.get("malicious") or threat_data.get("threat_score", 0) > 0:
-                findings.append(_make_finding(
+                findings.append(make_finding(
                     entity=f"Threat intel for {ip_to_use}",
                     ftype="Robtex Threat Intelligence",
                     confidence="Medium" if threat_data.get("malicious") else "Low",
@@ -854,7 +831,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             set()
         )
         for cat_group in cosited_data:
-            findings.append(_make_finding(
+            findings.append(make_finding(
                 entity=f"{cat_group['category'].title()}: {cat_group['count']} co-hosted domains",
                 ftype="Robtex Co-Hosted Domains",
                 confidence="Medium" if cat_group["category"] == "legitimate" else "Low",
@@ -872,7 +849,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         for cat_name, entries in dns_categories.items():
             if entries:
                 unique_hosts = list(dict.fromkeys(e["host"] for e in entries))
-                findings.append(_make_finding(
+                findings.append(make_finding(
                     entity=f"{cat_name.replace('_', ' ').title()}: {len(unique_hosts)} records",
                     ftype=f"Robtex DNS Category: {cat_name.replace('_', ' ').title()}",
                     confidence="Medium", color="blue",
@@ -890,7 +867,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             {"country": resp_ip_dict.get("country", "")} if resp_ip_dict and isinstance(resp_ip_dict, dict) else None
         )
         if ip_to_use:
-            findings.append(_make_finding(
+            findings.append(make_finding(
                 entity=f"IP Reputation: {reputation['level']} ({reputation['score']}/100)",
                 ftype="Robtex IP Reputation",
                 confidence="Medium",
@@ -902,7 +879,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ))
 
     except Exception as e:
-        findings.append(_make_finding(
+        findings.append(make_finding(
             entity=f"Robtex query error: {str(e)[:100]}",
             ftype="Robtex Error",
             confidence="Low", color="red",
@@ -919,76 +896,76 @@ async def crawl(target: str, client: httpx.AsyncClient):
         findings.append(summary)
 
     async def analyze_dns_health():
-        findings.append(IntelligenceFinding(entity=f"PDNS entries: {pdns_total_count}", type="Robtex: PDNS Volume", source="Robtex", confidence="Medium", color="slate", tags=["dns"]))
-        findings.append(IntelligenceFinding(entity=f"DNS changes: {len(dns_timeline.get('new_records', []))} new, {len(dns_timeline.get('changed_ips', []))} IP changes, {len(dns_timeline.get('removed_records', []))} removed", type="Robtex: DNS Timeline", source="Robtex", confidence="Medium", color="yellow" if dns_timeline.get('changed_ips') else "slate", tags=["dns"]))
-        findings.append(IntelligenceFinding(entity=f"Forward PDNS records: {sum(len(v) if isinstance(v, list) else 0 for v in all_pdns_forward_records.values())}", type="Robtex: Forward PDNS Count", source="Robtex", confidence="Medium", color="slate", tags=["dns"]))
+        findings.append(make_finding(entity=f"PDNS entries: {pdns_total_count}", type="Robtex: PDNS Volume", source="Robtex", confidence="Medium", color="slate", tags=["dns"]))
+        findings.append(make_finding(entity=f"DNS changes: {len(dns_timeline.get('new_records', []))} new, {len(dns_timeline.get('changed_ips', []))} IP changes, {len(dns_timeline.get('removed_records', []))} removed", type="Robtex: DNS Timeline", source="Robtex", confidence="Medium", color="yellow" if dns_timeline.get('changed_ips') else "slate", tags=["dns"]))
+        findings.append(make_finding(entity=f"Forward PDNS records: {sum(len(v) if isinstance(v, list) else 0 for v in all_pdns_forward_records.values())}", type="Robtex: Forward PDNS Count", source="Robtex", confidence="Medium", color="slate", tags=["dns"]))
 
     async def analyze_threat_landscape():
-        findings.append(IntelligenceFinding(entity=f"Threat score: {threat_data.get('threat_score', 0)}/100", type="Robtex: Threat Score", source="Robtex", confidence="Medium", color="red" if threat_data.get('threat_score', 0) > 30 else "emerald", tags=["threat"]))
-        findings.append(IntelligenceFinding(entity=f"Threat sources: {', '.join(threat_data.get('sources', ['None']))}", type="Robtex: Threat Sources", source="Robtex", confidence="Medium", color="slate", tags=["threat"]))
-        findings.append(IntelligenceFinding(entity=f"Reputation: {reputation['level']} ({reputation['score']}/100)", type="Robtex: Reputation Level", source="Robtex", confidence="Medium", color="red" if reputation['score'] >= 40 else "emerald", tags=["threat"]))
+        findings.append(make_finding(entity=f"Threat score: {threat_data.get('threat_score', 0)}/100", type="Robtex: Threat Score", source="Robtex", confidence="Medium", color="red" if threat_data.get('threat_score', 0) > 30 else "emerald", tags=["threat"]))
+        findings.append(make_finding(entity=f"Threat sources: {', '.join(threat_data.get('sources', ['None']))}", type="Robtex: Threat Sources", source="Robtex", confidence="Medium", color="slate", tags=["threat"]))
+        findings.append(make_finding(entity=f"Reputation: {reputation['level']} ({reputation['score']}/100)", type="Robtex: Reputation Level", source="Robtex", confidence="Medium", color="red" if reputation['score'] >= 40 else "emerald", tags=["threat"]))
 
     async def analyze_network_scope():
-        findings.append(IntelligenceFinding(entity=f"Target type: {'IP' if is_ip_target else 'Domain'}", type="Robtex: Target Type", source="Robtex", confidence="High", color="slate", tags=["network"]))
-        findings.append(IntelligenceFinding(entity=f"IP address: {ip_to_use or 'N/A'}", type="Robtex: Resolved IP", source="Robtex", confidence="High", color="slate", tags=["network"]))
-        findings.append(IntelligenceFinding(entity=f"ASN: {asn or 'N/A'}", type="Robtex: ASN Identity", source="Robtex", confidence="High", color="orange", tags=["network"]))
-        findings.append(IntelligenceFinding(entity=f"Co-hosted domains: {sum(cg['count'] for cg in cosited_data)}", type="Robtex: Co-Hosted Count", source="Robtex", confidence="Medium", color="orange", tags=["network"]))
-        findings.append(IntelligenceFinding(entity=f"Active DNS entries: {sum(1 for f in findings if f.type == 'Robtex Active DNS')}", type="Robtex: Active DNS Count", source="Robtex", confidence="Medium", color="slate", tags=["network"]))
+        findings.append(make_finding(entity=f"Target type: {'IP' if is_ip_target else 'Domain'}", type="Robtex: Target Type", source="Robtex", confidence="High", color="slate", tags=["network"]))
+        findings.append(make_finding(entity=f"IP address: {ip_to_use or 'N/A'}", type="Robtex: Resolved IP", source="Robtex", confidence="High", color="slate", tags=["network"]))
+        findings.append(make_finding(entity=f"ASN: {asn or 'N/A'}", type="Robtex: ASN Identity", source="Robtex", confidence="High", color="orange", tags=["network"]))
+        findings.append(make_finding(entity=f"Co-hosted domains: {sum(cg['count'] for cg in cosited_data)}", type="Robtex: Co-Hosted Count", source="Robtex", confidence="Medium", color="orange", tags=["network"]))
+        findings.append(make_finding(entity=f"Active DNS entries: {sum(1 for f in findings if f.type == 'Robtex Active DNS')}", type="Robtex: Active DNS Count", source="Robtex", confidence="Medium", color="slate", tags=["network"]))
 
     async def analyze_intel_coverage():
         dns_cat_count = sum(1 for f in findings if f.type.startswith("Robtex DNS Category"))
-        findings.append(IntelligenceFinding(entity=f"DNS categories: {dns_cat_count}", type="Robtex: DNS Category Count", source="Robtex", confidence="Medium", color="slate", tags=["coverage"]))
+        findings.append(make_finding(entity=f"DNS categories: {dns_cat_count}", type="Robtex: DNS Category Count", source="Robtex", confidence="Medium", color="slate", tags=["coverage"]))
         route_count = sum(1 for f in findings if f.type in ("Robtex Route", "Robtex ASN Route"))
-        findings.append(IntelligenceFinding(entity=f"BGP routes: {route_count}", type="Robtex: Route Count", source="Robtex", confidence="Medium", color="slate", tags=["coverage"]))
+        findings.append(make_finding(entity=f"BGP routes: {route_count}", type="Robtex: Route Count", source="Robtex", confidence="Medium", color="slate", tags=["coverage"]))
         threat_count = sum(1 for f in findings if f.type == "Robtex Threat Intelligence")
-        findings.append(IntelligenceFinding(entity=f"Threat intel findings: {threat_count}", type="Robtex: Intel Count", source="Robtex", confidence="Medium", color="slate", tags=["coverage"]))
-        findings.append(IntelligenceFinding(entity=f"Total intelligence findings: {len(findings)}", type="Robtex: Total Findings", source="Robtex", confidence="Medium", color="purple", tags=["coverage"]))
+        findings.append(make_finding(entity=f"Threat intel findings: {threat_count}", type="Robtex: Intel Count", source="Robtex", confidence="Medium", color="slate", tags=["coverage"]))
+        findings.append(make_finding(entity=f"Total intelligence findings: {len(findings)}", type="Robtex: Total Findings", source="Robtex", confidence="Medium", color="purple", tags=["coverage"]))
 
     async def analyze_pdns_detail():
         reverse_count = sum(1 for f in findings if f.type.startswith("Robtex Reverse PDNS"))
         forward_count = sum(1 for f in findings if f.type.startswith("Robtex Forward PDNS"))
-        findings.append(IntelligenceFinding(entity=f"Forward PDNS (unique hosts): {forward_count}", type="Robtex: Forward Host Count", source="Robtex", confidence="Medium", color="slate", tags=["pdns"]))
-        findings.append(IntelligenceFinding(entity=f"Reverse PDNS (unique hosts): {reverse_count}", type="Robtex: Reverse Host Count", source="Robtex", confidence="Medium", color="slate", tags=["pdns"]))
+        findings.append(make_finding(entity=f"Forward PDNS (unique hosts): {forward_count}", type="Robtex: Forward Host Count", source="Robtex", confidence="Medium", color="slate", tags=["pdns"]))
+        findings.append(make_finding(entity=f"Reverse PDNS (unique hosts): {reverse_count}", type="Robtex: Reverse Host Count", source="Robtex", confidence="Medium", color="slate", tags=["pdns"]))
 
     async def analyze_bgp_routing():
         asn_routes = sum(1 for f in findings if f.type == "Robtex ASN Route")
         sub_prefix = sum(1 for f in findings if f.type == "Robtex ASN Sub-Prefix Alert")
-        findings.append(IntelligenceFinding(entity=f"ASN route prefixes: {asn_routes}", type="Robtex: ASN Route Count", source="Robtex", confidence="Medium", color="slate", tags=["bgp"]))
-        findings.append(IntelligenceFinding(entity=f"Sub-prefix alerts: {sub_prefix}", type="Robtex: Hijack Alerts", source="Robtex", confidence="Medium", color="red" if sub_prefix else "emerald", tags=["bgp"]))
+        findings.append(make_finding(entity=f"ASN route prefixes: {asn_routes}", type="Robtex: ASN Route Count", source="Robtex", confidence="Medium", color="slate", tags=["bgp"]))
+        findings.append(make_finding(entity=f"Sub-prefix alerts: {sub_prefix}", type="Robtex: Hijack Alerts", source="Robtex", confidence="Medium", color="red" if sub_prefix else "emerald", tags=["bgp"]))
 
     async def analyze_source_breakdown():
         pas_dns = sum(1 for f in findings if "Passive DNS" in f.type)
         active_dns = sum(1 for f in findings if f.type == "Robtex Active DNS")
-        findings.append(IntelligenceFinding(entity=f"Passive DNS total: {pas_dns}", type="Robtex: Passive DNS Total", source="Robtex", confidence="Medium", color="slate", tags=["sources"]))
-        findings.append(IntelligenceFinding(entity=f"Active DNS total: {active_dns}", type="Robtex: Active DNS Total", source="Robtex", confidence="Medium", color="slate", tags=["sources"]))
-        findings.append(IntelligenceFinding(entity=f"Data sources: Robtex API + web scraping + threat feeds", type="Robtex: Data Sources", source="Robtex", confidence="Medium", color="slate", tags=["sources"]))
+        findings.append(make_finding(entity=f"Passive DNS total: {pas_dns}", type="Robtex: Passive DNS Total", source="Robtex", confidence="Medium", color="slate", tags=["sources"]))
+        findings.append(make_finding(entity=f"Active DNS total: {active_dns}", type="Robtex: Active DNS Total", source="Robtex", confidence="Medium", color="slate", tags=["sources"]))
+        findings.append(make_finding(entity=f"Data sources: Robtex API + web scraping + threat feeds", type="Robtex: Data Sources", source="Robtex", confidence="Medium", color="slate", tags=["sources"]))
 
     async def analyze_summary_stats():
-        findings.append(IntelligenceFinding(entity=f"Reputation level: {reputation['level']}", type="Robtex: Reputation Category", source="Robtex", confidence="Medium", color="red" if reputation['score'] >= 40 else "emerald", tags=["summary"]))
-        findings.append(IntelligenceFinding(entity=f"Threat sources used: {len(threat_data.get('sources', []))}", type="Robtex: Threat Source Count", source="Robtex", confidence="Medium", color="slate", tags=["summary"]))
-        findings.append(IntelligenceFinding(entity=f"Co-hosted categories: {len(cosited_data)}", type="Robtex: Co-Host Categories", source="Robtex", confidence="Medium", color="slate", tags=["summary"]))
+        findings.append(make_finding(entity=f"Reputation level: {reputation['level']}", type="Robtex: Reputation Category", source="Robtex", confidence="Medium", color="red" if reputation['score'] >= 40 else "emerald", tags=["summary"]))
+        findings.append(make_finding(entity=f"Threat sources used: {len(threat_data.get('sources', []))}", type="Robtex: Threat Source Count", source="Robtex", confidence="Medium", color="slate", tags=["summary"]))
+        findings.append(make_finding(entity=f"Co-hosted categories: {len(cosited_data)}", type="Robtex: Co-Host Categories", source="Robtex", confidence="Medium", color="slate", tags=["summary"]))
 
     async def analyze_ioc_indicators():
-        findings.append(IntelligenceFinding(entity=f"Hijack alerts: {sum(1 for f in findings if f.type == 'Robtex ASN Sub-Prefix Alert')}", type="Robtex: BGP Hijack Count", source="Robtex", confidence="Medium", color="red", tags=["ioc"]))
-        findings.append(IntelligenceFinding(entity=f"IP changes detected: {len(dns_timeline.get('changed_ips', []))}", type="Robtex: IP Change Count", source="Robtex", confidence="Medium", color="yellow", tags=["ioc"]))
-        findings.append(IntelligenceFinding(entity=f"Removed DNS records: {len(dns_timeline.get('removed_records', []))}", type="Robtex: Removed Records", source="Robtex", confidence="Medium", color="slate", tags=["ioc"]))
-        findings.append(IntelligenceFinding(entity=f"New DNS records: {len(dns_timeline.get('new_records', []))}", type="Robtex: New Records", source="Robtex", confidence="Medium", color="slate", tags=["ioc"]))
+        findings.append(make_finding(entity=f"Hijack alerts: {sum(1 for f in findings if f.type == 'Robtex ASN Sub-Prefix Alert')}", type="Robtex: BGP Hijack Count", source="Robtex", confidence="Medium", color="red", tags=["ioc"]))
+        findings.append(make_finding(entity=f"IP changes detected: {len(dns_timeline.get('changed_ips', []))}", type="Robtex: IP Change Count", source="Robtex", confidence="Medium", color="yellow", tags=["ioc"]))
+        findings.append(make_finding(entity=f"Removed DNS records: {len(dns_timeline.get('removed_records', []))}", type="Robtex: Removed Records", source="Robtex", confidence="Medium", color="slate", tags=["ioc"]))
+        findings.append(make_finding(entity=f"New DNS records: {len(dns_timeline.get('new_records', []))}", type="Robtex: New Records", source="Robtex", confidence="Medium", color="slate", tags=["ioc"]))
 
     async def analyze_geo_distribution():
         asn_country = resp_ip_dict.get("country", "") if resp_ip_dict and isinstance(resp_ip_dict, dict) else ""
-        findings.append(IntelligenceFinding(entity=f"ASN country: {asn_country or 'N/A'}", type="Robtex: ASN Country", source="Robtex", confidence="Medium", color="slate", tags=["geo"]))
-        findings.append(IntelligenceFinding(entity=f"Target IP city: {resp_ip_dict.get('city', 'N/A') if resp_ip_dict and isinstance(resp_ip_dict, dict) else 'N/A'}", type="Robtex: IP City", source="Robtex", confidence="Medium", color="slate", tags=["geo"]))
-        findings.append(IntelligenceFinding(entity=f"IP owner: {resp_ip_dict.get('owner', 'N/A')[:100] if resp_ip_dict and isinstance(resp_ip_dict, dict) else 'N/A'}", type="Robtex: IP Owner Name", source="Robtex", confidence="Medium", color="slate", tags=["geo"]))
+        findings.append(make_finding(entity=f"ASN country: {asn_country or 'N/A'}", type="Robtex: ASN Country", source="Robtex", confidence="Medium", color="slate", tags=["geo"]))
+        findings.append(make_finding(entity=f"Target IP city: {resp_ip_dict.get('city', 'N/A') if resp_ip_dict and isinstance(resp_ip_dict, dict) else 'N/A'}", type="Robtex: IP City", source="Robtex", confidence="Medium", color="slate", tags=["geo"]))
+        findings.append(make_finding(entity=f"IP owner: {resp_ip_dict.get('owner', 'N/A')[:100] if resp_ip_dict and isinstance(resp_ip_dict, dict) else 'N/A'}", type="Robtex: IP Owner Name", source="Robtex", confidence="Medium", color="slate", tags=["geo"]))
 
     async def analyze_cosited_risk():
-        findings.append(IntelligenceFinding(entity=f"Suspicious co-hosted: {sum(cg['count'] for cg in cosited_data if cg['category'] == 'suspicious')}", type="Robtex: Suspicious Co-Host", source="Robtex", confidence="Medium", color="orange", tags=["cosited"]))
-        findings.append(IntelligenceFinding(entity=f"Malicious co-hosted: {sum(cg['count'] for cg in cosited_data if cg['category'] == 'malicious')}", type="Robtex: Malicious Co-Host", source="Robtex", confidence="Medium", color="red", tags=["cosited"]))
-        findings.append(IntelligenceFinding(entity=f"Legitimate co-hosted: {sum(cg['count'] for cg in cosited_data if cg['category'] == 'legitimate')}", type="Robtex: Legitimate Co-Host", source="Robtex", confidence="Medium", color="emerald", tags=["cosited"]))
+        findings.append(make_finding(entity=f"Suspicious co-hosted: {sum(cg['count'] for cg in cosited_data if cg['category'] == 'suspicious')}", type="Robtex: Suspicious Co-Host", source="Robtex", confidence="Medium", color="orange", tags=["cosited"]))
+        findings.append(make_finding(entity=f"Malicious co-hosted: {sum(cg['count'] for cg in cosited_data if cg['category'] == 'malicious')}", type="Robtex: Malicious Co-Host", source="Robtex", confidence="Medium", color="red", tags=["cosited"]))
+        findings.append(make_finding(entity=f"Legitimate co-hosted: {sum(cg['count'] for cg in cosited_data if cg['category'] == 'legitimate')}", type="Robtex: Legitimate Co-Host", source="Robtex", confidence="Medium", color="emerald", tags=["cosited"]))
 
     async def analyze_scan_summary():
-        findings.append(IntelligenceFinding(entity=f"Total Robtex findings: {len(findings)}", type="Robtex: Final Count", source="Robtex", confidence="Medium", color="purple", tags=["final"]))
-        findings.append(IntelligenceFinding(entity=f"Reputation verdict: {reputation['level']}", type="Robtex: Final Verdict", source="Robtex", confidence="Medium", color="red" if reputation['score'] >= 40 else "emerald", tags=["final"]))
-        findings.append(IntelligenceFinding(entity=f"Robtex data sources: API + web scraping + threat feeds", type="Robtex: Data Sources Detail", source="Robtex", confidence="Medium", color="slate", tags=["final"]))
+        findings.append(make_finding(entity=f"Total Robtex findings: {len(findings)}", type="Robtex: Final Count", source="Robtex", confidence="Medium", color="purple", tags=["final"]))
+        findings.append(make_finding(entity=f"Reputation verdict: {reputation['level']}", type="Robtex: Final Verdict", source="Robtex", confidence="Medium", color="red" if reputation['score'] >= 40 else "emerald", tags=["final"]))
+        findings.append(make_finding(entity=f"Robtex data sources: API + web scraping + threat feeds", type="Robtex: Data Sources Detail", source="Robtex", confidence="Medium", color="slate", tags=["final"]))
 
     await asyncio.gather(
         analyze_dns_health(),

@@ -2,8 +2,7 @@ import httpx
 import re
 from collections import defaultdict
 from urllib.parse import urlparse, urljoin
-from models import IntelligenceFinding
-
+from module_common import safe_fetch, make_finding
 USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
 
 SOCIAL_DOMAINS = {
@@ -175,7 +174,6 @@ CT_CLASSIFICATION = {
     "application/vnd.ms-fontobject": "EOT Font",
 }
 
-
 async def crawl(target: str, client: httpx.AsyncClient):
     findings = []
     domain = target.strip().lower()
@@ -188,7 +186,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         base_url = f"https://{domain}"
 
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             base_url,
             timeout=15.0,
             follow_redirects=True,
@@ -210,9 +208,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 break
 
         if "text/html" not in content_type:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Content-Type: {content_type} ({ct_class})",
-                type="Non-HTML Response",
+                ftype="Non-HTML Response",
                 source="WebSurfaceMapper",
                 confidence="High",
                 color="orange",
@@ -223,9 +221,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             return findings
 
         if resp.status_code != 200:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"HTTP {resp.status_code} for {base_url}",
-                type="Non-200 Response",
+                ftype="Non-200 Response",
                 source="WebSurfaceMapper",
                 confidence="High",
                 color="orange" if resp.status_code in (301, 302, 307, 308) else "red",
@@ -238,9 +236,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         if title_match:
             title_text = re.sub(r'\s+', ' ', title_match.group(1)).strip()[:200]
             if title_text:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=title_text,
-                    type="Page Title",
+                    ftype="Page Title",
                     source="WebSurfaceMapper",
                     confidence="High",
                     color="blue",
@@ -254,9 +252,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         if meta_description:
             desc = meta_description.group(1).strip()[:200]
             if desc:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=desc[:200],
-                    type="Meta Description",
+                    ftype="Meta Description",
                     source="WebSurfaceMapper",
                     confidence="High",
                     color="slate",
@@ -268,9 +266,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         if meta_keywords:
             keywords = meta_keywords.group(1).strip()[:200]
             if keywords:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=keywords[:200],
-                    type="Meta Keywords",
+                    ftype="Meta Keywords",
                     source="WebSurfaceMapper",
                     confidence="High",
                     color="slate",
@@ -282,9 +280,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         if meta_author:
             author = meta_author.group(1).strip()[:200]
             if author:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=author[:200],
-                    type="Page Author",
+                    ftype="Page Author",
                     source="WebSurfaceMapper",
                     confidence="High",
                     color="slate",
@@ -296,9 +294,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         if meta_generator:
             generator = meta_generator.group(1).strip()[:200]
             if generator:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=generator[:200],
-                    type="Generator Meta Tag",
+                    ftype="Generator Meta Tag",
                     source="WebSurfaceMapper",
                     confidence="High",
                     color="slate",
@@ -310,9 +308,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         if favicon:
             fav_url = favicon.group(1)
             full_fav_url = urljoin(final_url, fav_url)
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=full_fav_url[:200],
-                type="Favicon",
+                ftype="Favicon",
                 source="WebSurfaceMapper",
                 confidence="High",
                 color="slate",
@@ -326,9 +324,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             full_src = urljoin(final_url, src)
             script_sources.add(full_src)
             is_inline = not src.startswith("http") and not src.startswith("//")
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=full_src[:200],
-                type="Script Source",
+                ftype="Script Source",
                 source="WebSurfaceMapper",
                 confidence="High",
                 color="cyan" if not is_inline else "slate",
@@ -342,9 +340,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         if inline_scripts:
             inline_count = sum(1 for s in inline_scripts if s.strip())
             if inline_count:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{inline_count} inline script blocks",
-                    type="Inline Scripts",
+                    ftype="Inline Scripts",
                     source="WebSurfaceMapper",
                     confidence="Medium",
                     color="slate",
@@ -358,9 +356,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             rel_match = re.search(r'rel=["\']([^"\']+)["\']', m.group(0), re.IGNORECASE)
             rel_type = rel_match.group(1) if rel_match else "unknown"
             color = "purple" if "stylesheet" in rel_type.lower() else "slate"
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=full_href[:200],
-                type=f"Link Resource ({rel_type})",
+                ftype=f"Link Resource ({rel_type})",
                 source="WebSurfaceMapper",
                 confidence="High",
                 color=color,
@@ -374,9 +372,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             full_src = urljoin(final_url, src)
             img_count += 1
             if img_count <= 20:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=full_src[:200],
-                    type="Image Source",
+                    ftype="Image Source",
                     source="WebSurfaceMapper",
                     confidence="High",
                     color="slate",
@@ -384,9 +382,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     tags=["image", "resource"]
                 ))
         if img_count > 20:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{img_count} images found (showing first 20)",
-                type="Image Count",
+                ftype="Image Count",
                 source="WebSurfaceMapper",
                 confidence="Medium",
                 color="slate",
@@ -397,9 +395,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         for m in re.finditer(r'<iframe[^>]+src=["\']([^"\']+)["\']', html, re.IGNORECASE):
             src = m.group(1)
             full_src = urljoin(final_url, src)
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=full_src[:200],
-                type="IFrame Source",
+                ftype="IFrame Source",
                 source="WebSurfaceMapper",
                 confidence="High",
                 color="orange",
@@ -410,9 +408,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         for m in re.finditer(r'<video[^>]+src=["\']([^"\']+)["\']', html, re.IGNORECASE):
             src = m.group(1)
             full_src = urljoin(final_url, src)
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=full_src[:200],
-                type="Video Source",
+                ftype="Video Source",
                 source="WebSurfaceMapper",
                 confidence="High",
                 color="slate",
@@ -423,9 +421,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         for m in re.finditer(r'<audio[^>]+src=["\']([^"\']+)["\']', html, re.IGNORECASE):
             src = m.group(1)
             full_src = urljoin(final_url, src)
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=full_src[:200],
-                type="Audio Source",
+                ftype="Audio Source",
                 source="WebSurfaceMapper",
                 confidence="High",
                 color="slate",
@@ -436,9 +434,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         for m in re.finditer(r'<object[^>]+data=["\']([^"\']+)["\']', html, re.IGNORECASE):
             data = m.group(1)
             full_data = urljoin(final_url, data)
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=full_data[:200],
-                type="Object Embed",
+                ftype="Object Embed",
                 source="WebSurfaceMapper",
                 confidence="Medium",
                 color="slate",
@@ -454,9 +452,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 full_font = urljoin(final_url, font_url)
                 if full_font not in font_srcs:
                     font_srcs.add(full_font)
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=full_font[:200],
-                        type="Font Resource",
+                        ftype="Font Resource",
                         source="WebSurfaceMapper",
                         confidence="Medium",
                         color="slate",
@@ -468,9 +466,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         for form_action in forms_found[:10]:
             action = form_action or "(self)"
             full_action = urljoin(final_url, action) if action != "(self)" else final_url
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=full_action[:150],
-                type="Form Endpoint",
+                ftype="Form Endpoint",
                 source="WebSurfaceMapper",
                 confidence="High",
                 color="orange",
@@ -499,9 +497,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 external_links.add(href)
 
         for link in sorted(social_links)[:10]:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=link[:200],
-                type="Social Link",
+                ftype="Social Link",
                 source="WebSurfaceMapper",
                 confidence="High",
                 color="blue",
@@ -510,9 +508,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ))
 
         for link in sorted(external_links)[:10]:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=link[:200],
-                type="External Link",
+                ftype="External Link",
                 source="WebSurfaceMapper",
                 confidence="High",
                 color="slate",
@@ -521,9 +519,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ))
 
         for link in sorted(internal_links)[:15]:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=link[:200],
-                type="Internal Link",
+                ftype="Internal Link",
                 source="WebSurfaceMapper",
                 confidence="High",
                 color="emerald",
@@ -532,9 +530,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ))
 
         for link in sorted(asset_links)[:10]:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=link[:200],
-                type="Asset Link",
+                ftype="Asset Link",
                 source="WebSurfaceMapper",
                 confidence="High",
                 color="slate",
@@ -550,9 +548,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 if hidden_name:
                     name = hidden_name.group(1)
                     val = hidden_val.group(1)[:100] if hidden_val else "(empty)"
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Hidden: {name} = {val}",
-                        type="Hidden Form Field",
+                        ftype="Hidden Form Field",
                         source="WebSurfaceMapper",
                         confidence="High",
                         color="orange",
@@ -564,9 +562,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         for comment in comment_leaks[:8]:
             stripped = comment.strip()
             if stripped and len(stripped) > 10:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"HTML comment: {stripped[:180]}",
-                    type="HTML Comment",
+                    ftype="HTML Comment",
                     source="WebSurfaceMapper",
                     confidence="High",
                     color="slate",
@@ -577,9 +575,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         api_patterns = re.findall(r'(?:/api/|/v\d+/|/graphql|/rest/|/endpoint/|/webhook/)(?:[a-zA-Z0-9_./?-]+)', html, re.IGNORECASE)
         for api_path in set(api_patterns)[:10]:
             full_api = urljoin(final_url, api_path)
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=full_api[:200],
-                type="API Endpoint",
+                ftype="API Endpoint",
                 source="WebSurfaceMapper",
                 confidence="Medium",
                 color="purple",
@@ -590,9 +588,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         for script_url in script_sources:
             api_in_scripts = re.findall(r'(https?://[^/]+/(?:api|v\d|rest|graphql|endpoint)[^\s"\'<>]*)', script_url, re.IGNORECASE)
             for api_url in api_in_scripts[:5]:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=api_url[:200],
-                    type="API Endpoint (from script src)",
+                    ftype="API Endpoint (from script src)",
                     source="WebSurfaceMapper",
                     confidence="Low",
                     color="purple",
@@ -605,9 +603,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             file_type_dist[ext] = html.lower().count(ext)
         file_type_str = ", ".join(f"{k}:{v}" for k, v in sorted(file_type_dist.items(), key=lambda x: -x[1]) if v > 0)
         if file_type_str:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"File type distribution: {file_type_str[:200]}",
-                type="File Type Distribution",
+                ftype="File Type Distribution",
                 source="WebSurfaceMapper",
                 confidence="Medium",
                 color="slate",
@@ -617,9 +615,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         structured_data = re.findall(r'<script[^>]*type=["\']application/ld\+json["\']>([\s\S]*?)</script>', html, re.I)
         if structured_data:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{len(structured_data)} JSON-LD blocks detected",
-                type="Structured Data",
+                ftype="Structured Data",
                 source="WebSurfaceMapper",
                 confidence="Medium",
                 color="slate",
@@ -628,9 +626,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ))
 
         links_summary = f"Internal: {len(internal_links)} | External: {len(external_links)} | Social: {len(social_links)} | Assets: {len(asset_links)}"
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Link summary for {domain}: {links_summary}",
-            type="Link Classification Summary",
+            ftype="Link Classification Summary",
             source="WebSurfaceMapper",
             confidence="High",
             color="purple",
@@ -640,9 +638,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         ))
 
         content_type_classification = ct_class if ct_class != "Unknown" else content_type[:50]
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Content-Type: {content_type_classification}",
-            type="Content Type Classification",
+            ftype="Content Type Classification",
             source="WebSurfaceMapper",
             confidence="High",
             color="slate",
@@ -652,9 +650,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         ))
 
         if not js_detected and not inline_scripts:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="No JavaScript detected",
-                type="JavaScript Detection",
+                ftype="JavaScript Detection",
                 source="WebSurfaceMapper",
                 confidence="Low",
                 color="emerald",
@@ -669,9 +667,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         findings.extend(dir_findings)
 
     except httpx.TimeoutException:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Timeout fetching {base_url}",
-            type="Fetch Error",
+            ftype="Fetch Error",
             source="WebSurfaceMapper",
             confidence="Medium",
             color="red",
@@ -680,9 +678,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             tags=["error", "timeout"]
         ))
     except Exception as e:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Web surface error: {str(e)[:100]}",
-            type="WebSurfaceMapper Error",
+            ftype="WebSurfaceMapper Error",
             source="WebSurfaceMapper",
             confidence="Low",
             color="red",
@@ -692,7 +690,6 @@ async def crawl(target: str, client: httpx.AsyncClient):
         ))
 
     return findings
-
 
 PATH_CATEGORIES = {
     "Admin/Management": ["/admin", "/administrator", "/manager", "/backend", "/dashboard", "/panel", "/cpanel", "/whm", "/directadmin", "/plesk", "/webmin", "/cgi-sys/"],
@@ -726,7 +723,6 @@ RESPONSE_CODE_GROUPS = {
     503: "Service Unavailable",
 }
 
-
 async def _map_directory_structure(base_url: str, domain: str, client: httpx.AsyncClient) -> list:
     findings = []
     try:
@@ -738,7 +734,7 @@ async def _map_directory_structure(base_url: str, domain: str, client: httpx.Asy
             for path in paths[:8]:
                 url = urljoin(base_url, path)
                 try:
-                    resp = await client.get(
+                    resp = await safe_fetch(client, 
                         url, timeout=5.0, follow_redirects=False,
                         headers={"User-Agent": USER_AGENT},
                     )
@@ -751,9 +747,9 @@ async def _map_directory_structure(base_url: str, domain: str, client: httpx.Asy
                         body_snippet = (resp.text or "")[:200]
                         is_dir_listing = any(ind in body_snippet for ind in ["Index of /", "<title>Index of", "Parent Directory</a>"])
                         extra_tags = ["directory-listing"] if is_dir_listing else []
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=url,
-                            type=f"Accessible Path [{cat_name}]",
+                            ftype=f"Accessible Path [{cat_name}]",
                             source="WebSurfaceMapper",
                             confidence="High",
                             color="red" if is_dir_listing else "orange",
@@ -764,9 +760,9 @@ async def _map_directory_structure(base_url: str, domain: str, client: httpx.Asy
 
                     elif status == 401:
                         category_counts[cat_name] += 1
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=url,
-                            type=f"Protected Path [{cat_name}]",
+                            ftype=f"Protected Path [{cat_name}]",
                             source="WebSurfaceMapper",
                             confidence="High",
                             color="orange",
@@ -777,9 +773,9 @@ async def _map_directory_structure(base_url: str, domain: str, client: httpx.Asy
 
                     elif status == 403:
                         category_counts[cat_name] += 1
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=url,
-                            type=f"Restricted Path [{cat_name}]",
+                            ftype=f"Restricted Path [{cat_name}]",
                             source="WebSurfaceMapper",
                             confidence="High",
                             color="orange",
@@ -793,9 +789,9 @@ async def _map_directory_structure(base_url: str, domain: str, client: httpx.Asy
 
         if category_counts:
             cat_summary = ", ".join([f"{k}: {v}" for k, v in sorted(category_counts.items(), key=lambda x: -x[1]) if v > 0])
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Directory structure: {cat_summary[:200]}",
-                type="Directory Structure Summary",
+                ftype="Directory Structure Summary",
                 source="WebSurfaceMapper",
                 confidence="High",
                 color="purple",
@@ -805,9 +801,9 @@ async def _map_directory_structure(base_url: str, domain: str, client: httpx.Asy
 
         if code_distribution:
             code_summary = ", ".join([f"HTTP {k}: {v}" for k, v in sorted(code_distribution.items(), key=lambda x: -x[1])])
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Response code distribution: {code_summary}",
-                type="Response Code Distribution",
+                ftype="Response Code Distribution",
                 source="WebSurfaceMapper",
                 confidence="High",
                 color="slate",
@@ -818,7 +814,6 @@ async def _map_directory_structure(base_url: str, domain: str, client: httpx.Asy
     except Exception:
         pass
     return findings
-
 
 async def _analyze_security_headers_surface(headers: dict, findings: list):
     try:
@@ -840,9 +835,9 @@ async def _analyze_security_headers_surface(headers: dict, findings: list):
             if hdr.lower() not in {k.lower(): v for k, v in headers.items()}:
                 important_missing.append(label)
         if important_missing:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Missing security headers: {', '.join(important_missing[:5])}",
-                type="Missing Security Headers",
+                ftype="Missing Security Headers",
                 source="WebSurfaceMapper",
                 confidence="High",
                 color="orange",
@@ -852,9 +847,9 @@ async def _analyze_security_headers_surface(headers: dict, findings: list):
 
         server_hdr = headers.get("Server", "") or headers.get("server", "")
         if server_hdr and server_hdr not in ("", "cloudflare", "nginx", "Apache"):
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Web Server: {server_hdr}",
-                type="Server Header",
+                ftype="Server Header",
                 source="WebSurfaceMapper",
                 confidence="High",
                 color="slate",
@@ -864,9 +859,9 @@ async def _analyze_security_headers_surface(headers: dict, findings: list):
 
         powered_by = headers.get("X-Powered-By", "") or headers.get("x-powered-by", "")
         if powered_by:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"X-Powered-By: {powered_by}",
-                type="Powered-By Header",
+                ftype="Powered-By Header",
                 source="WebSurfaceMapper",
                 confidence="High",
                 color="orange",
@@ -876,14 +871,13 @@ async def _analyze_security_headers_surface(headers: dict, findings: list):
     except Exception:
         pass
 
-
 async def _analyze_response_cache_headers(headers: dict, findings: list):
     try:
         cache_control = headers.get("Cache-Control", "") or headers.get("cache-control", "")
         if cache_control and "no-store" not in cache_control.lower() and "private" not in cache_control.lower():
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Cache-Control: {cache_control}",
-                type="Cache Configuration",
+                ftype="Cache Configuration",
                 source="WebSurfaceMapper",
                 confidence="Medium",
                 color="slate",
@@ -893,9 +887,9 @@ async def _analyze_response_cache_headers(headers: dict, findings: list):
 
         pragma = headers.get("Pragma", "") or headers.get("pragma", "")
         if pragma:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Pragma: {pragma}",
-                type="Pragma Header",
+                ftype="Pragma Header",
                 source="WebSurfaceMapper",
                 confidence="Low",
                 color="slate",
@@ -905,9 +899,9 @@ async def _analyze_response_cache_headers(headers: dict, findings: list):
 
         expires = headers.get("Expires", "") or headers.get("expires", "")
         if expires:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Expires: {expires}",
-                type="Expires Header",
+                ftype="Expires Header",
                 source="WebSurfaceMapper",
                 confidence="Low",
                 color="slate",
@@ -917,9 +911,9 @@ async def _analyze_response_cache_headers(headers: dict, findings: list):
 
         age = headers.get("Age", "") or headers.get("age", "")
         if age:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Age: {age}s in cache",
-                type="Cache Age",
+                ftype="Cache Age",
                 source="WebSurfaceMapper",
                 confidence="Medium",
                 color="slate",

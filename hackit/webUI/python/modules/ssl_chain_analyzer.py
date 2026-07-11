@@ -4,8 +4,7 @@ import socket
 import struct
 import httpx
 from datetime import datetime
-from models import IntelligenceFinding
-
+from module_common import safe_fetch, make_finding
 TLS_VERSIONS = {
     ssl.PROTOCOL_TLSv1_2: "TLS 1.2",
     ssl.PROTOCOL_TLSv1: "TLS 1.0",
@@ -386,9 +385,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             color = "emerald" if days > 30 else ("orange" if days > 0 else "red")
             threat = "Informational" if days > 30 else ("Elevated Risk" if days > 0 else "High Risk")
 
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"[{label}] {subject_cn} (issued by {issuer_cn})",
-                type=f"SSL Certificate - {label}",
+                ftype=f"SSL Certificate - {label}",
                 source="SSLChainAnalyzer",
                 confidence="High",
                 color=color,
@@ -398,9 +397,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ))
 
             if known_ca and known_ca != "Unknown/Private CA":
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"CA: {known_ca} ({issuer_cn})",
-                    type=f"SSL Certificate Authority - {label}",
+                    ftype=f"SSL Certificate Authority - {label}",
                     source="SSLChainAnalyzer",
                     confidence="High",
                     color="blue",
@@ -410,9 +409,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 ))
 
             if is_self_signed and label == "Root":
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Self-signed root certificate: {subject_cn}",
-                    type="SSL Self-Signed Certificate",
+                    ftype="SSL Self-Signed Certificate",
                     source="SSLChainAnalyzer",
                     confidence="High",
                     color="orange",
@@ -423,9 +422,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
             if key_bits > 0:
                 is_weak_key = key_bits < 2048
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{label} key: {key_bits}-bit {cd.get('public_key_algorithm', '')}",
-                    type=f"SSL Key Strength - {label}",
+                    ftype=f"SSL Key Strength - {label}",
                     source="SSLChainAnalyzer",
                     confidence="High",
                     color="red" if is_weak_key else "emerald",
@@ -435,9 +434,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 ))
 
             if sig_strength == "Weak" or sig_strength == "Critical":
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{label} uses weak signature algorithm: {sig_algo}",
-                    type=f"SSL Weak Signature Algorithm - {label}",
+                    ftype=f"SSL Weak Signature Algorithm - {label}",
                     source="SSLChainAnalyzer",
                     confidence="High",
                     color="red",
@@ -447,9 +446,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 ))
 
             if cd.get("key_usage"):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Key Usage: {cd['key_usage'][:200]}",
-                    type=f"SSL Key Usage - {label}",
+                    ftype=f"SSL Key Usage - {label}",
                     source="SSLChainAnalyzer",
                     confidence="High",
                     color="slate",
@@ -462,9 +461,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 ext_ku = cd["ext_key_usage"]
                 has_server_auth = "serverAuth" in ext_ku
                 has_client_auth = "clientAuth" in ext_ku
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Extended Key Usage: {ext_ku[:200]}",
-                    type=f"SSL Extended Key Usage - {label}",
+                    ftype=f"SSL Extended Key Usage - {label}",
                     source="SSLChainAnalyzer",
                     confidence="High",
                     color="slate",
@@ -473,9 +472,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     tags=["ssl", "ext-key-usage"]
                 ))
                 if label == "Leaf" and not has_server_auth:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Leaf cert missing serverAuth EKU",
-                        type="SSL Missing Server Authentication",
+                        ftype="SSL Missing Server Authentication",
                         source="SSLChainAnalyzer",
                         confidence="High",
                         color="red",
@@ -485,9 +484,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     ))
 
             if cd.get("path_length_constraint"):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Path Length Constraint: {cd['path_length_constraint'][:100]}",
-                    type=f"SSL Path Length Constraint - {label}",
+                    ftype=f"SSL Path Length Constraint - {label}",
                     source="SSLChainAnalyzer",
                     confidence="High",
                     color="slate",
@@ -496,9 +495,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 ))
 
             if cd.get("basic_constraints") and is_ca and label in ("Leaf",):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Leaf certificate has CA flag set: True",
-                    type=f"SSL Misconfiguration - CA flag on leaf",
+                    ftype=f"SSL Misconfiguration - CA flag on leaf",
                     source="SSLChainAnalyzer",
                     confidence="High",
                     color="red",
@@ -507,9 +506,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 ))
 
             if cd.get("crl_endpoints"):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=cd["crl_endpoints"][:200],
-                    type=f"CRL Distribution Point - {label}",
+                    ftype=f"CRL Distribution Point - {label}",
                     source="SSLChainAnalyzer",
                     confidence="High",
                     color="blue",
@@ -518,9 +517,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 ))
 
             if cd.get("ocsp_responders"):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=cd["ocsp_responders"][:200],
-                    type=f"OCSP Responder - {label}",
+                    ftype=f"OCSP Responder - {label}",
                     source="SSLChainAnalyzer",
                     confidence="High",
                     color="blue",
@@ -529,9 +528,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 ))
 
             if cd.get("freshest_crl"):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Freshest CRL: {cd['freshest_crl'][:200]}",
-                    type=f"SSL Freshest CRL - {label}",
+                    ftype=f"SSL Freshest CRL - {label}",
                     source="SSLChainAnalyzer",
                     confidence="High",
                     color="slate",
@@ -540,9 +539,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 ))
 
             if cd.get("name_constraints"):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Name Constraints: {cd['name_constraints'][:200]}",
-                    type=f"SSL Name Constraints - {label}",
+                    ftype=f"SSL Name Constraints - {label}",
                     source="SSLChainAnalyzer",
                     confidence="High",
                     color="slate",
@@ -551,9 +550,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 ))
 
             if cd.get("cert_policies"):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Cert Policies: {cd['cert_policies'][:200]}",
-                    type=f"SSL Certificate Policies - {label}",
+                    ftype=f"SSL Certificate Policies - {label}",
                     source="SSLChainAnalyzer",
                     confidence="High",
                     color="slate",
@@ -563,9 +562,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
             if cd.get("subject_alt_names"):
                 for san in cd["subject_alt_names"][:15]:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=san,
-                        type=f"SSL SAN - {label}",
+                        ftype=f"SSL SAN - {label}",
                         source="SSLChainAnalyzer",
                         confidence="High",
                         color="slate",
@@ -575,9 +574,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 wildcard_sans = [san for san in cd["subject_alt_names"] if san.startswith("*.")]
                 if wildcard_sans:
                     for ws in wildcard_sans[:5]:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"Wildcard SAN: {ws}",
-                            type=f"SSL Wildcard SAN - {label}",
+                            ftype=f"SSL Wildcard SAN - {label}",
                             source="SSLChainAnalyzer",
                             confidence="High",
                             color="orange",
@@ -590,9 +589,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         if cipher_info:
             cipher_name, tls_ver, bits = cipher_info[0], cipher_info[1], cipher_info[2] if len(cipher_info) > 2 else 0
             is_weak = any(w in cipher_name for w in WEAK_CIPHERS)
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{cipher_name} ({bits} bits, {tls_ver})",
-                type="SSL Cipher - Negotiated",
+                ftype="SSL Cipher - Negotiated",
                 source="SSLChainAnalyzer",
                 confidence="High",
                 color="red" if is_weak else "emerald",
@@ -601,9 +600,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 tags=["ssl", "cipher"]
             ))
             if is_weak:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Weak cipher negotiated: {cipher_name}",
-                    type="SSL Weak Cipher Warning",
+                    ftype="SSL Weak Cipher Warning",
                     source="SSLChainAnalyzer",
                     confidence="High",
                     color="red",
@@ -615,9 +614,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             supported, cipher = await check_tls_version(host, ver_name, TLS_VERSION_CODES.get(ver_name, (0, 0)))
             if supported:
                 is_weak_ver = ver_name in ("SSLv3", "TLS 1.0", "TLS 1.1")
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{ver_name} supported - {cipher}",
-                    type="SSL/TLS Version",
+                    ftype="SSL/TLS Version",
                     source="SSLChainAnalyzer",
                     confidence="High",
                     color="red" if is_weak_ver else "emerald",
@@ -626,9 +625,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     tags=["ssl", "tls-version"]
                 ))
                 if is_weak_ver:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Deprecated TLS version active: {ver_name}",
-                        type="SSL Deprecated Version Warning",
+                        ftype="SSL Deprecated Version Warning",
                         source="SSLChainAnalyzer",
                         confidence="High",
                         color="red",
@@ -638,9 +637,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         heartbleed_vuln, hb_detail = await test_heartbleed(host)
         if heartbleed_vuln:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Heartbleed vulnerability detected: {hb_detail}",
-                type="SSL Vulnerability - Heartbleed",
+                ftype="SSL Vulnerability - Heartbleed",
                 source="SSLChainAnalyzer",
                 confidence="High",
                 color="red",
@@ -651,9 +650,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         poodle_vuln = await check_poodle(host)
         if poodle_vuln:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="POODLE vulnerability (CVE-2014-3566)",
-                type="SSL Vulnerability - POODLE",
+                ftype="SSL Vulnerability - POODLE",
                 source="SSLChainAnalyzer",
                 confidence="High",
                 color="red",
@@ -663,9 +662,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         freak_vuln = await check_freak(host)
         if freak_vuln:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="FREAK attack vulnerability (CVE-2015-0204)",
-                type="SSL Vulnerability - FREAK",
+                ftype="SSL Vulnerability - FREAK",
                 source="SSLChainAnalyzer",
                 confidence="High",
                 color="red",
@@ -675,9 +674,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         robot_vuln = await check_robot(host)
         if robot_vuln:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="ROBOT attack vulnerability (CVE-2017-17382)",
-                type="SSL Vulnerability - ROBOT",
+                ftype="SSL Vulnerability - ROBOT",
                 source="SSLChainAnalyzer",
                 confidence="High",
                 color="red",
@@ -690,9 +689,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             if fingerprint:
                 for ca_name, fp in CA_FINGERPRINTS_SHA256.items():
                     if fingerprint.startswith(fp[:16]) or fingerprint.endswith(fp[-16:]):
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"Known CA fingerprint matched: {ca_name}",
-                            type="SSL Known CA Match",
+                            ftype="SSL Known CA Match",
                             source="SSLChainAnalyzer",
                             confidence="High",
                             color="blue",
@@ -703,9 +702,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         chain_issues = analyze_chain_depth(cert_dicts)
         for issue in chain_issues:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Chain validation: {issue}",
-                type="SSL Chain Validation Issue",
+                ftype="SSL Chain Validation Issue",
                 source="SSLChainAnalyzer",
                 confidence="High",
                 color="orange",
@@ -717,9 +716,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             label = "Leaf" if i == 0 else ("Intermediate" if i < len(cert_dicts) - 1 else "Root")
             key_flags = check_key_usage_flags(cd, label)
             for flag in key_flags:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{label} key usage: {flag}",
-                    type=f"SSL Key Usage Flag - {label}",
+                    ftype=f"SSL Key Usage Flag - {label}",
                     source="SSLChainAnalyzer",
                     confidence="High",
                     color="slate",
@@ -731,9 +730,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             algo = cd.get("public_key_algorithm", "")
             strength = detect_key_strength(key_bits, algo)
             if "Weak" in strength or "Critical" in strength:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{label} key strength: {strength} ({key_bits}-bit {algo})",
-                    type=f"SSL Key Strength Warning - {label}",
+                    ftype=f"SSL Key Strength Warning - {label}",
                     source="SSLChainAnalyzer",
                     confidence="High",
                     color="red",
@@ -743,9 +742,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
             rev_info = get_revocation_info(cd)
             if "warning" in rev_info:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{label}: No CRL or OCSP endpoints",
-                    type="SSL Revocation Check Missing",
+                    ftype="SSL Revocation Check Missing",
                     source="SSLChainAnalyzer",
                     confidence="Medium",
                     color="orange",
@@ -756,9 +755,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             if label == "Leaf":
                 wildcard_risks = check_wildcard_risk(cd, host)
                 for risk in wildcard_risks:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Wildcard risk: {risk}",
-                        type="SSL Wildcard Certificate Risk",
+                        ftype="SSL Wildcard Certificate Risk",
                         source="SSLChainAnalyzer",
                         confidence="High",
                         color="orange",
@@ -768,9 +767,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         sweet32 = await check_sweet32(host)
         if sweet32:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="SWEET32 vulnerability (CVE-2016-2183) - 3DES supported",
-                type="SSL Vulnerability - SWEET32",
+                ftype="SSL Vulnerability - SWEET32",
                 source="SSLChainAnalyzer",
                 confidence="High",
                 color="red",
@@ -780,9 +779,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         logjam = await check_logjam(host)
         if logjam:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="LOGJAM vulnerability (CVE-2015-4000) - DHE export ciphers",
-                type="SSL Vulnerability - LOGJAM",
+                ftype="SSL Vulnerability - LOGJAM",
                 source="SSLChainAnalyzer",
                 confidence="High",
                 color="red",
@@ -792,9 +791,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         drown = await check_drown(host)
         if drown:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="DROWN vulnerability (CVE-2016-0800) - SSLv2/TLSv1.0",
-                type="SSL Vulnerability - DROWN",
+                ftype="SSL Vulnerability - DROWN",
                 source="SSLChainAnalyzer",
                 confidence="High",
                 color="red",
@@ -806,9 +805,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         sock.close()
 
         chain_len = len(cert_dicts)
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Chain length: {chain_len} certificates",
-            type="SSL Chain Summary",
+            ftype="SSL Chain Summary",
             source="SSLChainAnalyzer",
             confidence="High",
             color="purple",
@@ -817,9 +816,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             tags=["ssl", "summary"]
         ))
 
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"TLS versions: {sum(1 for f in findings if f.type == 'SSL/TLS Version')} supported | Ciphers: {sum(1 for f in findings if f.type == 'SSL Cipher - Negotiated')} negotiated",
-            type="SSL Security Posture Summary",
+            ftype="SSL Security Posture Summary",
             source="SSLChainAnalyzer",
             confidence="High",
             color="orange" if any(f.color == "red" for f in findings) else "emerald",
@@ -829,9 +828,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         ))
 
     except Exception as e:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"SSL Chain error: {str(e)[:100]}",
-            type="SSL Chain Error",
+            ftype="SSL Chain Error",
             source="SSLChainAnalyzer",
             confidence="Low",
             color="red",
@@ -840,7 +839,6 @@ async def crawl(target: str, client: httpx.AsyncClient):
         ))
 
     return findings
-
 
 # === EXTENDED UPGRADE: Additional CA fingerprints, chain analysis, vulnerabilities ===
 

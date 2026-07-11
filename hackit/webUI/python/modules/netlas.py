@@ -1,7 +1,7 @@
 import httpx
 import json
 import re
-from models import IntelligenceFinding
+from module_common import safe_fetch, make_finding
 
 NETLAS_BASE = "https://app.netlas.io/api"
 NETLAS_KEY = ""
@@ -89,7 +89,7 @@ async def netlas_search(target: str, query_type: str, config: dict, client: http
         "X-API-Key": NETLAS_KEY,
     }
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"{NETLAS_BASE}{config['endpoint']}",
             params=params,
             timeout=20.0,
@@ -211,9 +211,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 all_items.append(res)
             elif res["type"] == "summary":
                 if res["count"] > 0:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"{res['count']} results for {qtype} query on {domain}",
-                        type=f"Netlas: {qtype.title()} Search Summary",
+                        ftype=f"Netlas: {qtype.title()} Search Summary",
                         source="Netlas",
                         confidence="High",
                         color="purple",
@@ -255,9 +255,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         if service:
             tags.append(f"service-{service}")
 
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=entity[:200],
-            type=f"Netlas: {cat}",
+            ftype=f"Netlas: {cat}",
             source="Netlas",
             confidence="Medium",
             color="emerald",
@@ -270,9 +270,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         techs = detect_technology(str(banner)) + detect_http_techs(item)
         for tech in set(techs):
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=tech[:200],
-                type="Netlas: Technology Detection",
+                ftype="Netlas: Technology Detection",
                 source="Netlas",
                 confidence="Medium",
                 color="blue",
@@ -287,9 +287,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             if isinstance(cert, dict):
                 issuer = cert.get("issuer", cert.get("issuer_dn", ""))
                 if issuer:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=str(issuer)[:200],
-                        type="Netlas: SSL Certificate Issuer",
+                        ftype="Netlas: SSL Certificate Issuer",
                         source="Netlas",
                         confidence="High",
                         color="emerald",
@@ -299,9 +299,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     ))
                 validity = cert.get("validity", cert.get("valid_to", ""))
                 if validity:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=str(validity)[:200],
-                        type="Netlas: SSL Certificate Expiry",
+                        ftype="Netlas: SSL Certificate Expiry",
                         source="Netlas",
                         confidence="High",
                         color="orange",
@@ -312,9 +312,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 sans = cert.get("subject_alt_name", cert.get("san", []))
                 if isinstance(sans, list):
                     for san in sans[:5]:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=str(san)[:200],
-                            type="Netlas: SSL SAN",
+                            ftype="Netlas: SSL SAN",
                             source="Netlas",
                             confidence="High",
                             color="slate",
@@ -325,9 +325,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 for sub in subs_from_cert:
                     if sub not in all_subdomains:
                         all_subdomains.add(sub)
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=sub,
-                            type="Netlas: Subdomain from Certificate",
+                            ftype="Netlas: Subdomain from Certificate",
                             source="Netlas",
                             confidence="Medium",
                             color="blue",
@@ -340,9 +340,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         if isinstance(http_resp, dict):
             status_code = http_resp.get("status_code", http_resp.get("code", 0))
             if status_code:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"HTTP {status_code} on {entity}",
-                    type="Netlas: HTTP Status",
+                    ftype="Netlas: HTTP Status",
                     source="Netlas",
                     confidence="High",
                     color="emerald" if 200 <= int(status_code) < 400 else "orange",
@@ -352,9 +352,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 ))
             location = http_resp.get("location", http_resp.get("redirect", ""))
             if location:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=str(location)[:200],
-                    type="Netlas: HTTP Redirect",
+                    ftype="Netlas: HTTP Redirect",
                     source="Netlas",
                     confidence="Medium",
                     color="slate",
@@ -364,9 +364,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 ))
             content_type = http_resp.get("content_type", http_resp.get("mime_type", ""))
             if content_type:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Content-Type: {content_type}",
-                    type="Netlas: HTTP Content Type",
+                    ftype="Netlas: HTTP Content Type",
                     source="Netlas",
                     confidence="Medium",
                     color="slate",
@@ -387,9 +387,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     loc_str += f" ({org})"
                 if asn:
                     loc_str += f" [AS{asn}]"
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=loc_str[:200],
-                    type="Netlas: Geolocation",
+                    ftype="Netlas: Geolocation",
                     source="Netlas",
                     confidence="High",
                     color="slate",
@@ -402,9 +402,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
     # Summary: endpoint coverage
     endpoints_queried = list(QUERY_TYPES.keys())
     total_items = len(all_items)
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Netlas scan: {total_items} items from {len(endpoints_queried)} endpoints",
-        type="Netlas: Scan Summary",
+        ftype="Netlas: Scan Summary",
         source="Netlas",
         confidence="High",
         color="purple",
@@ -415,9 +415,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
     ))
 
     if not findings:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"No Netlas results found for {domain}",
-            type="Netlas: Empty",
+            ftype="Netlas: Empty",
             source="Netlas",
             confidence="Low",
             color="emerald",

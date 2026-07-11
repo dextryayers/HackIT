@@ -4,8 +4,7 @@ import json
 import math
 import asyncio
 from urllib.parse import urljoin, urlparse, parse_qs
-from models import IntelligenceFinding
-
+from module_common import safe_fetch, make_finding
 JS_FILE_PATTERNS = [
     (r'["\']((?:https?:)?//[^"\']*\.js(?:[?#][^"\']*)?)["\']', "JavaScript File Reference"),
     (r'["\']((?:https?:)?//[^"\']*\.min\.js(?:[?#][^"\']*)?)["\']', "Minified JavaScript File"),
@@ -197,7 +196,6 @@ COMMON_PATTERNS_FP = [
     r"documentation", r"docs/", r"README",
 ]
 
-
 def _shannon_entropy(s: str) -> float:
     if not s:
         return 0.0
@@ -207,7 +205,6 @@ def _shannon_entropy(s: str) -> float:
         if p > 0:
             entropy -= p * math.log2(p)
     return entropy
-
 
 def _is_false_positive(match: str, context: str) -> bool:
     match_lower = match.lower()
@@ -222,14 +219,12 @@ def _is_false_positive(match: str, context: str) -> bool:
         return True
     return False
 
-
 def _classify_secret(stype: str, severity: str) -> str:
     for level, keywords in SECRET_CLASSIFICATION.items():
         for kw in keywords:
             if kw.lower() in stype.lower():
                 return level
     return severity
-
 
 async def _extract_js_urls(html: str) -> list[str]:
     urls = []
@@ -251,7 +246,6 @@ async def _extract_js_urls(html: str) -> list[str]:
             urls.append(url)
     return urls
 
-
 async def _fetch_and_scan_js(url: str, base_url: str, domain: str, client: httpx.AsyncClient) -> list:
     findings = []
     if url.startswith("//"):
@@ -265,7 +259,7 @@ async def _fetch_and_scan_js(url: str, base_url: str, domain: str, client: httpx
         return findings
 
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             url, timeout=10.0,
             headers={"User-Agent": "Mozilla/5.0", "Accept": "*/*"},
         )
@@ -276,9 +270,9 @@ async def _fetch_and_scan_js(url: str, base_url: str, domain: str, client: httpx
         return findings
 
     if len(js_content) > 500000:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Large JS file ({len(js_content)} bytes): {url}",
-            type="JS: Large File",
+            ftype="JS: Large File",
             source="JSSecrets",
             confidence="Medium",
             color="orange",
@@ -300,9 +294,9 @@ async def _fetch_and_scan_js(url: str, base_url: str, domain: str, client: httpx
             actual_severity = _classify_secret(stype, severity)
             color_map = {"Critical": "red", "High": "orange", "Medium": "yellow", "Low": "slate"}
             threat_map = {"Critical": "Critical Risk", "High": "High Risk", "Medium": "Elevated Risk", "Low": "Informational"}
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{stype}: {matched}...",
-                type=f"JS Secret: {stype}",
+                ftype=f"JS Secret: {stype}",
                 source="JSSecrets",
                 confidence="High",
                 color=color_map.get(actual_severity, "red"),
@@ -316,9 +310,9 @@ async def _fetch_and_scan_js(url: str, base_url: str, domain: str, client: httpx
         if len(s) >= 20 and _shannon_entropy(s) >= ENTROPY_THRESHOLD:
             is_secret = not _is_false_positive(s, m.group(0))
             if is_secret:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"High entropy string ({_shannon_entropy(s):.1f}): {s[:40]}...",
-                    type="JS: High Entropy String (Potential Secret)",
+                    ftype="JS: High Entropy String (Potential Secret)",
                     source="JSSecrets",
                     confidence="Low",
                     color="yellow",
@@ -330,9 +324,9 @@ async def _fetch_and_scan_js(url: str, base_url: str, domain: str, client: httpx
     for pattern, ftype in API_ENDPOINT_PATTERNS:
         for m in re.finditer(pattern, js_content):
             endpoint = m.group(1)[:200]
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=endpoint,
-                type=f"JS Endpoint: {ftype}",
+                ftype=f"JS Endpoint: {ftype}",
                 source="JSSecrets",
                 confidence="Medium",
                 color="blue",
@@ -344,9 +338,9 @@ async def _fetch_and_scan_js(url: str, base_url: str, domain: str, client: httpx
     for pattern, ftype in INTERNAL_HOST_PATTERNS:
         for m in re.finditer(pattern, js_content):
             internal_ref = m.group(1)[:200]
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=internal_ref,
-                type=f"JS Internal: {ftype}",
+                ftype=f"JS Internal: {ftype}",
                 source="JSSecrets",
                 confidence="High",
                 color="orange",
@@ -358,9 +352,9 @@ async def _fetch_and_scan_js(url: str, base_url: str, domain: str, client: httpx
     for pattern in SENSITIVE_ROUTES:
         for m in re.finditer(pattern, js_content):
             route = m.group(1)[:200]
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=route,
-                type="JS: Sensitive Route Found",
+                ftype="JS: Sensitive Route Found",
                 source="JSSecrets",
                 confidence="Medium",
                 color="orange",
@@ -371,9 +365,9 @@ async def _fetch_and_scan_js(url: str, base_url: str, domain: str, client: httpx
     for m in re.finditer(r'["\'](/?[a-zA-Z0-9_\-]+/[a-zA-Z0-9_\-]+/[a-zA-Z0-9_\-]+(?:/[a-zA-Z0-9_\-]+)?)["\']', js_content):
         potential_route = m.group(1)
         if 5 < len(potential_route) < 100 and "/" in potential_route:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=potential_route,
-                type="JS: Potential API Route",
+                ftype="JS: Potential API Route",
                 source="JSSecrets",
                 confidence="Low",
                 color="slate",
@@ -390,9 +384,9 @@ async def _fetch_and_scan_js(url: str, base_url: str, domain: str, client: httpx
                 decoded = base64.b64decode(b64_str)
                 decoded_str = decoded.decode("utf-8", errors="ignore")
                 if re.search(r'(?:password|secret|key|token|api|credential)', decoded_str, re.I):
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Base64 encoded secret: {b64_str[:40]}...",
-                        type="JS: Base64 Encoded Secret",
+                        ftype="JS: Base64 Encoded Secret",
                         source="JSSecrets",
                         confidence="Medium",
                         color="orange",
@@ -407,7 +401,6 @@ async def _fetch_and_scan_js(url: str, base_url: str, domain: str, client: httpx
 
     return findings
 
-
 async def crawl(target: str, client: httpx.AsyncClient):
     findings = []
     domain = target.strip().lower()
@@ -419,7 +412,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
     html = ""
 
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             base_url, timeout=10.0, follow_redirects=True,
             headers={"User-Agent": "Mozilla/5.0"},
         )
@@ -430,9 +423,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
     for pattern, ftype in JS_FILE_PATTERNS:
         for m in re.finditer(pattern, html):
             url = m.group(1)[:200]
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=url,
-                type=f"JS: {ftype}",
+                ftype=f"JS: {ftype}",
                 source="JSSecrets",
                 confidence="Medium",
                 color="slate",
@@ -443,9 +436,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
     for pattern, ftype in API_ENDPOINT_PATTERNS:
         for m in re.finditer(pattern, html):
             endpoint = m.group(1)[:200]
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=endpoint,
-                type=f"JS Endpoint: {ftype}",
+                ftype=f"JS Endpoint: {ftype}",
                 source="JSSecrets",
                 confidence="Medium",
                 color="blue",
@@ -460,9 +453,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             for pattern, ftype in JS_FILE_PATTERNS:
                 for m in re.finditer(pattern, script_block):
                     url = m.group(1)[:200]
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=url,
-                        type=f"JS (inline): {ftype}",
+                        ftype=f"JS (inline): {ftype}",
                         source="JSSecrets",
                         confidence="Medium",
                         color="slate",
@@ -477,9 +470,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             findings.extend(res)
 
     if findings:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"JS secrets scan complete: {len(findings)} findings across {len(js_urls)} JS files",
-            type="JSSecrets Summary",
+            ftype="JSSecrets Summary",
             source="JSSecrets",
             confidence="Medium",
             color="purple",
@@ -487,7 +480,6 @@ async def crawl(target: str, client: httpx.AsyncClient):
         ))
 
     return findings
-
 
 CLOUD_SECRET_PATTERNS = [
     (r'(?i)google_application_credentials\s*[=:]\s*["\']?([A-Za-z0-9_\-\.]+\.json)["\']?', "GCP Service Account JSON", "Critical"),
@@ -588,7 +580,6 @@ CLOUD_SECRET_PATTERNS = [
     (r'(?i)AZURE_CLIENT_ID\s*[=:]\s*["\']?([A-Za-z0-9\-]{36})["\']?', "Azure Client ID", "High"),
 ]
 
-
 async def _scan_cloud_secrets(js_content: str, findings: list):
     for pattern, stype, severity in CLOUD_SECRET_PATTERNS:
         for m in re.finditer(pattern, js_content):
@@ -600,9 +591,9 @@ async def _scan_cloud_secrets(js_content: str, findings: list):
                 continue
             color_map = {"Critical": "red", "High": "orange"}
             threat_map = {"Critical": "Critical Risk", "High": "High Risk"}
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{stype}: {matched}...",
-                type=f"JS Cloud Secret: {stype}",
+                ftype=f"JS Cloud Secret: {stype}",
                 source="JSSecrets",
                 confidence="High",
                 color=color_map.get(severity, "red"),

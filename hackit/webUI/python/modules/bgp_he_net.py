@@ -7,6 +7,7 @@ import math
 from datetime import datetime
 from collections import defaultdict
 from typing import List
+from module_common import safe_fetch, safe_fetch_json, make_finding
 from models import IntelligenceFinding
 
 UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
@@ -110,7 +111,7 @@ async def resolve_to_ips(domain: str) -> list:
 
 async def fetch_he_net(path: str, client: httpx.AsyncClient, timeout: int = 15) -> str:
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"{BGP_HE_BASE}{path}",
             headers={"User-Agent": UA},
             timeout=timeout,
@@ -124,7 +125,7 @@ async def fetch_he_net(path: str, client: httpx.AsyncClient, timeout: int = 15) 
 
 async def scrape_asn_page(asn: str, client: httpx.AsyncClient) -> dict:
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"{BGP_HE_BASE}/AS{asn}",
             headers={"User-Agent": UA},
             timeout=15.0,
@@ -188,7 +189,7 @@ async def scrape_asn_page(asn: str, client: httpx.AsyncClient) -> dict:
 
 async def scrape_prefix_history(asn: str, client: httpx.AsyncClient) -> list:
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"{BGP_HE_BASE}/AS{asn}#_prefixes",
             headers={"User-Agent": UA},
             timeout=15.0,
@@ -211,7 +212,7 @@ async def scrape_irr_lookup(asn: str, client: httpx.AsyncClient) -> list:
     missing_sources = []
     for source in IRR_SOURCES:
         try:
-            resp = await client.get(
+            resp = await safe_fetch(client, 
                 f"{BGP_HE_BASE}/irr.cgi?cmd=show+route+AS{asn}&source={source}",
                 headers={"User-Agent": UA},
                 timeout=15.0,
@@ -232,7 +233,7 @@ async def scrape_irr_lookup(asn: str, client: httpx.AsyncClient) -> list:
 
 async def scrape_rpki_status(asn: str, client: httpx.AsyncClient) -> dict:
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"{BGP_HE_BASE}/AS{asn}#_rpki",
             headers={"User-Agent": UA},
             timeout=15.0,
@@ -250,7 +251,7 @@ async def scrape_rpki_status(asn: str, client: httpx.AsyncClient) -> dict:
 
 async def scrape_roa_records(asn: str, client: httpx.AsyncClient) -> list:
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://rpki.grumptech.com/AS{asn}/",
             headers={"User-Agent": UA},
             timeout=15.0,
@@ -357,7 +358,7 @@ async def trace_as_path(target_asn: str, dest_asns: list, client: httpx.AsyncCli
     for dest_asn_list_entry in dest_asns[:3]:
         dest_asn = str(dest_asn_list_entry)
         try:
-            resp = await client.get(
+            resp = await safe_fetch(client, 
                 f"{BGP_HE_BASE}/bgp.cgi?as1=AS{target_asn}&as2=AS{dest_asn}",
                 headers={"User-Agent": UA},
                 timeout=15.0,
@@ -450,7 +451,7 @@ async def get_prefix_geolocation(prefixes: list, client: httpx.AsyncClient) -> l
     seen_nets = set()
     for prefix in prefixes[:5]:
         try:
-            resp = await client.get(
+            resp = await safe_fetch(client, 
                 f"{BGP_HE_BASE}/net/{prefix}",
                 headers={"User-Agent": UA},
                 timeout=15.0,
@@ -555,7 +556,7 @@ async def get_asn_age_info(asn: str, info: dict, client: httpx.AsyncClient) -> d
             f"{BGP_HE_BASE}/AS{asn}#_prefixes",
             f"https://stat.ripe.net/AS{asn}/prefixes.json",
         ]
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             prefix_history_urls[0],
             headers={"User-Agent": UA},
             timeout=15.0,
@@ -590,7 +591,7 @@ async def find_comparable_asns(info: dict, client: httpx.AsyncClient) -> list:
     seen_candidates = set()
     for surl in search_urls[:1]:
         try:
-            resp = await client.get(surl, headers={"User-Agent": UA}, timeout=15.0)
+            resp = await safe_fetch(client, surl, headers={"User-Agent": UA}, timeout=15.0)
             if resp.status_code == 200:
                 found_asns = re.findall(r'/AS(\d+)', resp.text)
                 found_names = re.findall(r'/AS\d+\s*[">]([^<]+)', resp.text)
@@ -880,7 +881,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
     for ip in ips[:2]:
         try:
-            resp = await client.get(
+            resp = await safe_fetch(client, 
                 f"{BGP_HE_BASE}/ip/{ip}",
                 headers={"User-Agent": UA},
                 timeout=15.0,
@@ -893,7 +894,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                     if asn not in seen_asns:
                         seen_asns.add(asn)
 
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"AS{asn}",
                             type="BGP: ASN Discovery",
                             source="BGP.HE.net",
@@ -908,7 +909,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                         if info:
                             org_name = info.get("name", "")
                             if org_name:
-                                findings.append(IntelligenceFinding(
+                                findings.append(make_finding(
                                     entity=f"{org_name}",
                                     type="BGP: Organization",
                                     source="BGP.HE.net",
@@ -921,7 +922,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
                             country = info.get("country", "")
                             if country:
-                                findings.append(IntelligenceFinding(
+                                findings.append(make_finding(
                                     entity=country,
                                     type="BGP: Country",
                                     source="BGP.HE.net",
@@ -934,7 +935,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
                             registry = info.get("registry", "")
                             if registry:
-                                findings.append(IntelligenceFinding(
+                                findings.append(make_finding(
                                     entity=registry,
                                     type="BGP: Registry",
                                     source="BGP.HE.net",
@@ -946,7 +947,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                                 ))
 
                             for prefix in info.get("ipv4_prefixes", [])[:8]:
-                                findings.append(IntelligenceFinding(
+                                findings.append(make_finding(
                                     entity=prefix,
                                     type="BGP: IPv4 Prefix",
                                     source="BGP.HE.net",
@@ -958,7 +959,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                                 ))
 
                             for prefix6 in info.get("ipv6_prefixes", [])[:6]:
-                                findings.append(IntelligenceFinding(
+                                findings.append(make_finding(
                                     entity=prefix6,
                                     type="BGP: IPv6 Prefix",
                                     source="BGP.HE.net",
@@ -972,7 +973,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                             peer_count = len(info.get("peers", []))
                             up_count = len(info.get("upstreams", []))
                             down_count = len(info.get("downstreams", []))
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=f"Peers: {peer_count}, Upstreams: {up_count}, Downstreams: {down_count}",
                                 type="BGP: Adjacency Summary",
                                 source="BGP.HE.net",
@@ -984,7 +985,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                             ))
 
                             for peer in info.get("peers", [])[:12]:
-                                findings.append(IntelligenceFinding(
+                                findings.append(make_finding(
                                     entity=f"AS{peer}",
                                     type="BGP: Peer",
                                     source="BGP.HE.net",
@@ -996,7 +997,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                                 ))
 
                             for up in info.get("upstreams", [])[:8]:
-                                findings.append(IntelligenceFinding(
+                                findings.append(make_finding(
                                     entity=f"AS{up}",
                                     type="BGP: Upstream",
                                     source="BGP.HE.net",
@@ -1008,7 +1009,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                                 ))
 
                             for down in info.get("downstreams", [])[:8]:
-                                findings.append(IntelligenceFinding(
+                                findings.append(make_finding(
                                     entity=f"AS{down}",
                                     type="BGP: Downstream",
                                     source="BGP.HE.net",
@@ -1022,7 +1023,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                         irr_data, irr_missing = await scrape_irr_lookup(asn, client)
                         for source, routes in irr_data:
                             for route in routes:
-                                findings.append(IntelligenceFinding(
+                                findings.append(make_finding(
                                     entity=f"[{source}] {route}",
                                     type="BGP: IRR Record",
                                     source="BGP.HE.net",
@@ -1034,7 +1035,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                                 ))
 
                         if irr_missing:
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=f"Missing IRR in: {', '.join(irr_missing)}",
                                 type="BGP: IRR Coverage Gap",
                                 source="BGP.HE.net",
@@ -1049,7 +1050,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                         if rpki and any(rpki.values()):
                             total_rpki = sum(rpki.values())
                             rpki_color = "red" if rpki.get("invalid", 0) > 0 else "emerald"
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=f"Valid: {rpki.get('valid', 0)}, Invalid: {rpki.get('invalid', 0)}, Unknown: {rpki.get('unknown', 0)}",
                                 type="BGP: RPKI Status",
                                 source="BGP.HE.net",
@@ -1063,7 +1064,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
                         roas = await scrape_roa_records(asn, client)
                         if roas:
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=f"{len(roas)} ROA record(s) for AS{asn}",
                                 type="BGP: ROA Records",
                                 source="RPKI GrumpTech",
@@ -1078,7 +1079,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                             graph_adj = await build_adjacent_graph(asn, client)
 
                             graph_json = build_graph_json(asn, info, graph_adj)
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=f"AS{asn} Graph: {len(json.loads(graph_json)['nodes'])} nodes, {len(json.loads(graph_json)['edges'])} edges",
                                 type="BGP: Adjacency Graph",
                                 source="BGP.HE.net",
@@ -1091,7 +1092,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                             ))
 
                             categorization = categorize_asn(info)
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=f"AS{asn} is a {categorization['primary_category']}",
                                 type="BGP: Organization Category",
                                 source="BGP.HE.net",
@@ -1103,7 +1104,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                             ))
 
                             transit_info = analyze_transit_free(info)
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=f"Tier Level: {transit_info['tier_level']}",
                                 type="BGP: Transit-Free Analysis",
                                 source="BGP.HE.net",
@@ -1116,7 +1117,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
                             prefix_geo = await get_prefix_geolocation(info.get("ipv4_prefixes", [])[:5], client)
                             for geo_item in prefix_geo:
-                                findings.append(IntelligenceFinding(
+                                findings.append(make_finding(
                                     entity=f"{geo_item['prefix']} - {geo_item.get('country', '?')}/{geo_item.get('city', '?')}",
                                     type="BGP: Prefix Geolocation",
                                     source="BGP.HE.net",
@@ -1129,7 +1130,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
                             age_info = await get_asn_age_info(asn, info, client)
                             if age_info.get("allocation_date"):
-                                findings.append(IntelligenceFinding(
+                                findings.append(make_finding(
                                     entity=f"Allocated: {age_info['allocation_date']} (~{age_info['estimated_age_years']} years ago)",
                                     type="BGP: ASN Age",
                                     source="BGP.HE.net",
@@ -1143,7 +1144,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                             comparable = await find_comparable_asns(info, client)
                             if comparable:
                                 cmp_str = ", ".join([f"AS{c['asn']}" for c in comparable[:3]])
-                                findings.append(IntelligenceFinding(
+                                findings.append(make_finding(
                                     entity=f"Comparable ASNs: {cmp_str}",
                                     type="BGP: Comparison",
                                     source="BGP.HE.net",
@@ -1157,7 +1158,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                             risk_assessment = await assess_bgp_risk(asn, info, rpki, irr_data, irr_missing)
                             for risk in risk_assessment.get("risks", []):
                                 sev_color = "red" if risk["severity"] in ("Critical", "High") else "yellow" if risk["severity"] == "Medium" else "slate"
-                                findings.append(IntelligenceFinding(
+                                findings.append(make_finding(
                                     entity=f"[{risk['severity']}] {risk['category']}: {risk['detail']}",
                                     type="BGP: Risk Assessment",
                                     source="BGP.HE.net",
@@ -1169,7 +1170,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                                     tags=["asn", "risk", risk["category"].lower().replace(" ", "_")],
                                 ))
 
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=f"Overall BGP Risk: {risk_assessment['overall_score']}/100 ({risk_assessment['risk_level']})",
                                 type="BGP: Overall Risk Score",
                                 source="BGP.HE.net",
@@ -1187,7 +1188,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                                     dasn_str = str(dasn)
                                     if dasn_str in bgp_paths:
                                         path_data = bgp_paths[dasn_str]
-                                        findings.append(IntelligenceFinding(
+                                        findings.append(make_finding(
                                             entity=f"Path to {dest_name} (AS{dasn_str}): {path_data['raw'][:80]}",
                                             type="BGP: Path Analysis",
                                             source="BGP.HE.net",
@@ -1201,7 +1202,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                             irv_data = await scrape_irv_data(asn, client)
                             if irv_data.get("path_consistency") != "unknown":
                                 irv_color = "emerald" if irv_data["path_consistency"] == "high" else "yellow" if irv_data["path_consistency"] == "moderate" else "red"
-                                findings.append(IntelligenceFinding(
+                                findings.append(make_finding(
                                     entity=f"IRV Path Consistency: {irv_data['path_consistency'].title()} (valid: {irv_data['valid_paths']}, invalid: {irv_data['invalid_paths']}, origin mismatches: {irv_data['origin_mismatches']})",
                                     type="BGP: IRV Analysis",
                                     source="BGP.HE.net",
@@ -1214,7 +1215,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                                 ))
 
                             detailed_graph = build_detailed_graph_json(asn, info, graph_adj, prefix_geo, bgp_paths, risk_assessment, categorization, transit_info)
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=f"AS{asn} Network Graph ({len(json.loads(detailed_graph)['nodes'])} nodes)",
                                 type="BGP: Structured Graph Export",
                                 source="BGP.HE.net",
@@ -1227,7 +1228,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                             ))
 
                 for prefix in prefixes[:5]:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=prefix,
                         type="BGP: Prefix for IP",
                         source="BGP.HE.net",
@@ -1242,7 +1243,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             continue
 
     if not seen_asns:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"No BGP data found for {t}",
             type="BGP: No Results",
             source="BGP.HE.net",
@@ -1253,53 +1254,53 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         ))
 
     async def analyze_asn_landscape():
-        findings.append(IntelligenceFinding(entity=f"Total ASNs discovered: {len(seen_asns)}", type="BGP: ASN Count", source="BGP.HE.net", confidence="High", color="slate", tags=["analysis"]))
+        findings.append(make_finding(entity=f"Total ASNs discovered: {len(seen_asns)}", type="BGP: ASN Count", source="BGP.HE.net", confidence="High", color="slate", tags=["analysis"]))
         asn_types = {"peer": 0, "upstream": 0, "downstream": 0}
         for f in findings:
             if f.type == "BGP: Peer": asn_types["peer"] += 1
             elif f.type == "BGP: Upstream": asn_types["upstream"] += 1
             elif f.type == "BGP: Downstream": asn_types["downstream"] += 1
-        findings.append(IntelligenceFinding(entity=f"Peers: {asn_types['peer']}, Upstream: {asn_types['upstream']}, Downstream: {asn_types['downstream']}", type="BGP: Relationship Breakdown", source="BGP.HE.net", confidence="Medium", color="slate", tags=["analysis"]))
+        findings.append(make_finding(entity=f"Peers: {asn_types['peer']}, Upstream: {asn_types['upstream']}, Downstream: {asn_types['downstream']}", type="BGP: Relationship Breakdown", source="BGP.HE.net", confidence="Medium", color="slate", tags=["analysis"]))
         org_names = set()
         for f in findings:
             if f.type == "BGP: Organization":
                 org_names.add(f.entity)
-        findings.append(IntelligenceFinding(entity=f"Organizations: {len(org_names)}", type="BGP: Org Count", source="BGP.HE.net", confidence="Medium", color="slate", tags=["analysis"]))
-        findings.append(IntelligenceFinding(entity=f"Target: {t}", type="BGP: Target Summary", source="BGP.HE.net", confidence="High", color="slate", tags=["analysis"]))
+        findings.append(make_finding(entity=f"Organizations: {len(org_names)}", type="BGP: Org Count", source="BGP.HE.net", confidence="Medium", color="slate", tags=["analysis"]))
+        findings.append(make_finding(entity=f"Target: {t}", type="BGP: Target Summary", source="BGP.HE.net", confidence="High", color="slate", tags=["analysis"]))
 
     async def analyze_bgp_security():
         risks = [f for f in findings if f.type == "BGP: Risk Assessment"]
-        findings.append(IntelligenceFinding(entity=f"BGP risk findings: {len(risks)}", type="BGP: Risk Count", source="BGP.HE.net", confidence="Medium", color="red" if len(risks) > 2 else "emerald", tags=["security"]))
+        findings.append(make_finding(entity=f"BGP risk findings: {len(risks)}", type="BGP: Risk Count", source="BGP.HE.net", confidence="Medium", color="red" if len(risks) > 2 else "emerald", tags=["security"]))
         invalid_rpki = sum(1 for f in findings if "invalid" in f.entity.lower() and f.type == "BGP: RPKI Status")
-        findings.append(IntelligenceFinding(entity=f"RPKI invalid prefixes: {invalid_rpki}", type="BGP: RPKI Invalid Count", source="BGP.HE.net", confidence="Medium", color="red" if invalid_rpki else "emerald", tags=["security"]))
+        findings.append(make_finding(entity=f"RPKI invalid prefixes: {invalid_rpki}", type="BGP: RPKI Invalid Count", source="BGP.HE.net", confidence="Medium", color="red" if invalid_rpki else "emerald", tags=["security"]))
         irr_gaps = sum(1 for f in findings if f.type == "BGP: IRR Coverage Gap")
-        findings.append(IntelligenceFinding(entity=f"IRR coverage gaps: {irr_gaps}", type="BGP: IRR Gap Count", source="BGP.HE.net", confidence="Medium", color="yellow" if irr_gaps else "emerald", tags=["security"]))
+        findings.append(make_finding(entity=f"IRR coverage gaps: {irr_gaps}", type="BGP: IRR Gap Count", source="BGP.HE.net", confidence="Medium", color="yellow" if irr_gaps else "emerald", tags=["security"]))
 
     async def analyze_prefix_geography():
         geo_count = sum(1 for f in findings if f.type == "BGP: Prefix Geolocation")
-        findings.append(IntelligenceFinding(entity=f"Prefixes with geolocation: {geo_count}", type="BGP: Geo Prefix Count", source="BGP.HE.net", confidence="Medium", color="slate", tags=["geo"]))
+        findings.append(make_finding(entity=f"Prefixes with geolocation: {geo_count}", type="BGP: Geo Prefix Count", source="BGP.HE.net", confidence="Medium", color="slate", tags=["geo"]))
         countries = set()
         for f in findings:
             if f.type == "BGP: Prefix Geolocation":
                 parts = f.entity.split("-")
                 if len(parts) >= 2:
                     countries.add(parts[1].split("/")[0].strip())
-        findings.append(IntelligenceFinding(entity=f"Countries represented: {', '.join(sorted(countries)) if countries else 'N/A'}", type="BGP: Country Spread", source="BGP.HE.net", confidence="Medium", color="slate", tags=["geo"]))
-        findings.append(IntelligenceFinding(entity=f"Routing data source: BGP.HE.net (Hurricane Electric)", type="BGP: Data Source", source="BGP.HE.net", confidence="High", color="slate", tags=["geo"]))
+        findings.append(make_finding(entity=f"Countries represented: {', '.join(sorted(countries)) if countries else 'N/A'}", type="BGP: Country Spread", source="BGP.HE.net", confidence="Medium", color="slate", tags=["geo"]))
+        findings.append(make_finding(entity=f"Routing data source: BGP.HE.net (Hurricane Electric)", type="BGP: Data Source", source="BGP.HE.net", confidence="High", color="slate", tags=["geo"]))
 
     async def analyze_routing_summary():
         total_prefixes = sum(1 for f in findings if f.type in ("BGP: IPv4 Prefix", "BGP: IPv6 Prefix", "BGP: Prefix for IP"))
-        findings.append(IntelligenceFinding(entity=f"Total prefixes found: {total_prefixes}", type="BGP: Prefix Count", source="BGP.HE.net", confidence="High", color="slate", tags=["routing"]))
-        findings.append(IntelligenceFinding(entity=f"Peer connections: {sum(1 for f in findings if f.type == 'BGP: Peer')}", type="BGP: Peer Connections", source="BGP.HE.net", confidence="Medium", color="slate", tags=["routing"]))
-        findings.append(IntelligenceFinding(entity=f"Transit relationships: {sum(1 for f in findings if f.type in ('BGP: Upstream', 'BGP: Downstream'))}", type="BGP: Transit Links", source="BGP.HE.net", confidence="Medium", color="slate", tags=["routing"]))
+        findings.append(make_finding(entity=f"Total prefixes found: {total_prefixes}", type="BGP: Prefix Count", source="BGP.HE.net", confidence="High", color="slate", tags=["routing"]))
+        findings.append(make_finding(entity=f"Peer connections: {sum(1 for f in findings if f.type == 'BGP: Peer')}", type="BGP: Peer Connections", source="BGP.HE.net", confidence="Medium", color="slate", tags=["routing"]))
+        findings.append(make_finding(entity=f"Transit relationships: {sum(1 for f in findings if f.type in ('BGP: Upstream', 'BGP: Downstream'))}", type="BGP: Transit Links", source="BGP.HE.net", confidence="Medium", color="slate", tags=["routing"]))
 
     async def analyze_network_health():
         graphs = sum(1 for f in findings if f.type in ("BGP: Adjacency Graph", "BGP: Structured Graph Export"))
-        findings.append(IntelligenceFinding(entity=f"Network graphs generated: {graphs}", type="BGP: Graph Count", source="BGP.HE.net", confidence="Medium", color="slate", tags=["health"]))
+        findings.append(make_finding(entity=f"Network graphs generated: {graphs}", type="BGP: Graph Count", source="BGP.HE.net", confidence="Medium", color="slate", tags=["health"]))
         paths = sum(1 for f in findings if f.type == "BGP: Path Analysis")
-        findings.append(IntelligenceFinding(entity=f"BGP paths traced: {paths}", type="BGP: Path Count", source="BGP.HE.net", confidence="Medium", color="slate", tags=["health"]))
+        findings.append(make_finding(entity=f"BGP paths traced: {paths}", type="BGP: Path Count", source="BGP.HE.net", confidence="Medium", color="slate", tags=["health"]))
         irv = sum(1 for f in findings if f.type == "BGP: IRV Analysis")
-        findings.append(IntelligenceFinding(entity=f"IRV validations: {irv}", type="BGP: IRV Count", source="BGP.HE.net", confidence="Medium", color="slate", tags=["health"]))
+        findings.append(make_finding(entity=f"IRV validations: {irv}", type="BGP: IRV Count", source="BGP.HE.net", confidence="Medium", color="slate", tags=["health"]))
 
     await asyncio.gather(
         analyze_asn_landscape(),

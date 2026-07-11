@@ -3,8 +3,9 @@ import asyncio
 import re
 import random
 from urllib.parse import quote, urlparse
-from models import IntelligenceFinding
 from typing import List, Dict, Optional
+from module_common import safe_fetch, safe_fetch_json, make_finding
+from models import IntelligenceFinding
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
@@ -101,7 +102,7 @@ async def search_ahmia(client: httpx.AsyncClient, query: str) -> List[Dict]:
     try:
         search_url = f"http://juhanurmihxlp77nkq76byazcldy2hlmovfu2epvl5ankdibsot4csyd.onion/search/?q={quote(query)}"
         headers = {"User-Agent": UA}
-        resp = await client.get(search_url, headers=headers, timeout=30.0)
+        resp = await safe_fetch(client, search_url, headers=headers, timeout=30.0)
         if resp.status_code == 200:
             html = resp.text
             result_items = re.findall(r'<div[^>]*class="[^"]*result[^"]*"[^>]*>(.*?)</div>', html, re.DOTALL)
@@ -128,7 +129,7 @@ async def search_onionland(client: httpx.AsyncClient, query: str) -> List[Dict]:
     try:
         search_url = f"https://onionland.io/search?q={quote(query)}"
         headers = {"User-Agent": UA}
-        resp = await client.get(search_url, headers=headers, timeout=30.0)
+        resp = await safe_fetch(client, search_url, headers=headers, timeout=30.0)
         if resp.status_code == 200:
             html = resp.text
             result_blocks = re.findall(r'<div[^>]*class="[^"]*(?:result|search-result)[^"]*"[^>]*>(.*?)</div>', html, re.DOTALL)
@@ -155,7 +156,7 @@ async def search_darksearch(client: httpx.AsyncClient, query: str) -> List[Dict]
     try:
         search_url = f"https://darksearch.io/api/search?query={quote(query)}"
         headers = {"User-Agent": UA, "Accept": "application/json"}
-        resp = await client.get(search_url, headers=headers, timeout=30.0)
+        resp = await safe_fetch(client, search_url, headers=headers, timeout=30.0)
         if resp.status_code == 200:
             data = resp.json()
             for item in data.get("data", [])[:20]:
@@ -174,7 +175,7 @@ async def search_torch(client: httpx.AsyncClient, query: str) -> List[Dict]:
     try:
         search_url = f"http://torchdeedp3i2j6scr2mlpvkdso2by3cnrqixrj7k63qdw7qyivd7qad.onion/search?query={quote(query)}"
         headers = {"User-Agent": UA}
-        resp = await client.get(search_url, headers=headers, timeout=30.0)
+        resp = await safe_fetch(client, search_url, headers=headers, timeout=30.0)
         if resp.status_code == 200:
             html = resp.text
             result_items = re.findall(r'<div[^>]*class="[^"]*result[^"]*"[^>]*>(.*?)</div>', html, re.DOTALL)
@@ -201,7 +202,7 @@ async def search_haystack(client: httpx.AsyncClient, query: str) -> List[Dict]:
     try:
         search_url = f"https://haystack.com/search?q={quote(query)}"
         headers = {"User-Agent": UA}
-        resp = await client.get(search_url, headers=headers, timeout=30.0)
+        resp = await safe_fetch(client, search_url, headers=headers, timeout=30.0)
         if resp.status_code == 200:
             html = resp.text
             result_items = re.findall(r'<div[^>]*class="[^"]*(?:result|haystack-result)[^"]*"[^>]*>(.*?)</div>', html, re.DOTALL)
@@ -228,7 +229,7 @@ async def search_phobos(client: httpx.AsyncClient, query: str) -> List[Dict]:
     try:
         search_url = f"https://phobos.onion/search?q={quote(query)}"
         headers = {"User-Agent": UA}
-        resp = await client.get(search_url, headers=headers, timeout=30.0)
+        resp = await safe_fetch(client, search_url, headers=headers, timeout=30.0)
         if resp.status_code == 200:
             html = resp.text
             links = re.findall(r'<a[^>]+href="(https?://[^"]+)"[^>]*>([^<]*)</a>', html)
@@ -248,7 +249,7 @@ async def search_sentor(client: httpx.AsyncClient, query: str) -> List[Dict]:
     try:
         search_url = f"https://sentor.onion/search?q={quote(query)}"
         headers = {"User-Agent": UA}
-        resp = await client.get(search_url, headers=headers, timeout=30.0)
+        resp = await safe_fetch(client, search_url, headers=headers, timeout=30.0)
         if resp.status_code == 200:
             html = resp.text
             links = re.findall(r'<a[^>]+href="(https?://[^"]+)"[^>]*>([^<]*)</a>', html)
@@ -275,7 +276,7 @@ async def search_extra_engines(client: httpx.AsyncClient, query: str) -> List[Di
     for name, url in extra_engines:
         try:
             headers = {"User-Agent": UA}
-            resp = await client.get(url, headers=headers, timeout=20.0)
+            resp = await safe_fetch(client, url, headers=headers, timeout=20.0)
             if resp.status_code == 200:
                 html = resp.text
                 links = re.findall(r'<a[^>]+href="(https?://[^"]+)"[^>]*>([^<]*)</a>', html)
@@ -354,7 +355,7 @@ async def process_result(result: Dict, query: str) -> List[IntelligenceFinding]:
 
     paste_keywords = detect_paste_content(combined)
     if paste_keywords:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Sensitive content indicators: {', '.join(paste_keywords[:5])}",
             type="DarkWeb: Sensitive Content Detection",
             source=f"DarkWeb/{source}",
@@ -374,7 +375,7 @@ async def process_result(result: Dict, query: str) -> List[IntelligenceFinding]:
         color = primary_class[2]
         display_label = classification_name.replace("_", " ").title()
         entity_text = title[:150] if title else url[:150]
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=entity_text,
             type=f"DarkWeb: {display_label}",
             source=f"DarkWeb/{source}",
@@ -389,7 +390,7 @@ async def process_result(result: Dict, query: str) -> List[IntelligenceFinding]:
         ))
         if len(classifications) > 1:
             secondary = classifications[1]
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Additional classification: {secondary[0].replace('_', ' ').title()}",
                 type="DarkWeb: Secondary Classification",
                 source=f"DarkWeb/{source}",
@@ -401,7 +402,7 @@ async def process_result(result: Dict, query: str) -> List[IntelligenceFinding]:
                 tags=["dark-web", "classification", secondary[0]]
             ))
     elif is_onion or any(domain in combined.lower() for domain in ["exploit", "breach", "hack", "forum", "market"]):
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=title[:150] if title else url[:150],
             type="DarkWeb: Mention",
             source=f"DarkWeb/{source}",
@@ -471,7 +472,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
     onion_services = await resolve_onion_services(all_results)
     if onion_services:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{len(onion_services)} .onion hidden services discovered",
             type="DarkWeb: Onion Services Discovery",
             source="DarkWebScanner",
@@ -519,7 +520,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 summary_lines.append(f"  {cls}: {count}")
 
         color = "red" if highest_threat in ("Critical", "High Risk") else "orange" if highest_threat == "Elevated Risk" else "slate"
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Dark Web Scan: {len(findings)} results | Highest: {highest_threat}",
             type="DarkWeb: Summary",
             source="DarkWebScanner",

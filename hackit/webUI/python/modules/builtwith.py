@@ -3,8 +3,7 @@ import asyncio
 import re
 import json
 from collections import defaultdict
-from models import IntelligenceFinding
-
+from module_common import safe_fetch, make_finding
 UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
 BUILTWITH_API = "https://api.builtwith.com/v21/api.json"
 
@@ -405,7 +404,7 @@ VERSION_PATTERNS = {
 
 async def query_builtwith_api(domain: str, client: httpx.AsyncClient) -> dict:
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             BUILTWITH_API,
             params={"KEY": "", "LOOKUP": domain},
             headers={"User-Agent": UA},
@@ -417,7 +416,7 @@ async def query_builtwith_api(domain: str, client: httpx.AsyncClient) -> dict:
 
 async def scrape_builtwith(domain: str, client: httpx.AsyncClient) -> list:
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://builtwith.com/{domain}",
             headers={"User-Agent": UA},
             timeout=15.0,
@@ -455,9 +454,9 @@ async def analyze_technology_signatures(html: str, headers: dict, base_url: str)
                                 version = vm.group(1)
                                 break
                     confidence = "High" if version else "Medium"
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"{tech_name}" + (f" v{version}" if version else ""),
-                        type=f"BuiltWith Signature: {category}",
+                        ftype=f"BuiltWith Signature: {category}",
                         source="BuiltWith",
                         confidence=confidence,
                         color="blue" if category == "CMS" else ("orange" if category == "Framework" else "slate"),
@@ -494,9 +493,9 @@ async def analyze_headers(html: str, headers: dict) -> list:
         for header_key, label in tech_headers.items():
             val = headers.get(header_key) if isinstance(headers, dict) else headers.get(header_key, "")
             if val:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{label}: {val[:100]}",
-                    type="BuiltWith: Header Technology",
+                    ftype="BuiltWith: Header Technology",
                     source="BuiltWith",
                     confidence="High",
                     color="orange",
@@ -587,9 +586,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     entity_parts.append(f"(since {first_seen[:7]})")
                 entity = " ".join(entity_parts)
 
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=entity,
-                    type=f"BuiltWith: {display_cat}",
+                    ftype=f"BuiltWith: {display_cat}",
                     source="BuiltWith",
                     confidence=confidence,
                     color=color,
@@ -602,9 +601,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 tech_groups[display_cat].append(tech_name)
 
                 if is_eol and eol_note:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"{clean_name or tech_name}: {eol_note}",
-                        type="BuiltWith: End-of-Life Warning",
+                        ftype="BuiltWith: End-of-Life Warning",
                         source="BuiltWith",
                         confidence="High",
                         color="red",
@@ -619,9 +618,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             seen_techs.add(st)
             version, clean_name = detect_version(st)
             entity = f"{clean_name or st} v{version}" if version else st
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=entity,
-                type="BuiltWith: Technology (Scraped)",
+                ftype="BuiltWith: Technology (Scraped)",
                 source="BuiltWith",
                 confidence="Medium",
                 color="slate",
@@ -631,7 +630,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
     base_url = f"https://{t}"
     try:
-        resp = await client.get(base_url, timeout=15.0, follow_redirects=True,
+        resp = await safe_fetch(client, base_url, timeout=15.0, follow_redirects=True,
             headers={"User-Agent": UA})
         html = resp.text
         headers = dict(resp.headers)
@@ -648,9 +647,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         pass
 
     for cat, items in sorted(tech_groups.items(), key=lambda x: -len(x[1])):
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{cat}: {len(items)} technology(ies)",
-            type="BuiltWith: Category Summary",
+            ftype="BuiltWith: Category Summary",
             source="BuiltWith",
             confidence="Medium",
             color="slate",
@@ -659,9 +658,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         ))
 
     total_risk = sum(tech_risk_score(cat.lower().replace(" ", "_")) for cat in tech_groups)
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Technology risk score: {total_risk} across {len(seen_techs)} technology(ies)",
-        type="BuiltWith: Risk Summary",
+        ftype="BuiltWith: Risk Summary",
         source="BuiltWith",
         confidence="Medium",
         color="red" if total_risk > 50 else ("orange" if total_risk > 25 else "emerald"),
@@ -672,9 +671,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
     if "CMS" in tech_groups:
         cms_list = ", ".join(tech_groups["CMS"][:5])
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"CMS: {cms_list}",
-            type="BuiltWith: CMS Detection",
+            ftype="BuiltWith: CMS Detection",
             source="BuiltWith",
             confidence="High",
             color="blue",
@@ -694,9 +693,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
     if "Framework" in tech_groups and "Database" in tech_groups:
         dependency_chains.append("Framework + Database")
     if dependency_chains:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=" | ".join(dependency_chains),
-            type="BuiltWith: Dependency Chain",
+            ftype="BuiltWith: Dependency Chain",
             source="BuiltWith",
             confidence="Low",
             color="slate",
@@ -705,9 +704,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         ))
 
     if not findings:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"No technology data for {t}",
-            type="BuiltWith: No Results",
+            ftype="BuiltWith: No Results",
             source="BuiltWith",
             confidence="Low",
             color="slate",

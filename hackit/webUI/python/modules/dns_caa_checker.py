@@ -1,6 +1,6 @@
 import asyncio
 import dns.resolver
-from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash
 
 SUBDOMAINS_CAA = [
     "www", "mail", "api", "app", "admin", "blog", "cdn", "dev",
@@ -91,7 +91,7 @@ async def crawl(target: str, client=None):
                     flags = getattr(r, 'flags', 0)
                     if tag == 'issue' and value:
                         seen_cas.add(value.strip('"'))
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"{d}: issue \"{value.strip(chr(34))}\"",
                             type="CAA Issue Permission",
                             source="DNS CAA Checker",
@@ -105,7 +105,7 @@ async def crawl(target: str, client=None):
                         ))
                     elif tag == 'issuewild' and value:
                         seen_cas.add(value.strip('"'))
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"{d}: issuewild \"{value.strip(chr(34))}\"",
                             type="CAA Wildcard Permission",
                             source="DNS CAA Checker",
@@ -119,7 +119,7 @@ async def crawl(target: str, client=None):
                         ))
                     elif tag == 'iodef' and value:
                         seen_iodef.add(value.strip('"'))
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"{d}: iodef \"{value.strip(chr(34))}\"",
                             type="CAA iodef Report URI",
                             source="DNS CAA Checker",
@@ -134,9 +134,9 @@ async def crawl(target: str, client=None):
 
     root_caa = await get_caa(domain)
     if not root_caa:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"No CAA records for {domain}",
-            type="CAA Record Missing",
+            ftype="CAA Record Missing",
             source="DNS CAA Checker",
             confidence="High",
             color="orange",
@@ -149,7 +149,7 @@ async def crawl(target: str, client=None):
     if seen_cas:
         authorized = [c for c in seen_cas if any(kc.lower() in c.lower() for kc in KNOWN_CAS)]
         unknown = [c for c in seen_cas if c not in authorized]
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Authorized CAs: {', '.join(sorted(seen_cas))}",
             type="CAA Authorized CA Summary",
             source="DNS CAA Checker",
@@ -161,7 +161,7 @@ async def crawl(target: str, client=None):
             tags=["caa", "cas", "authorized"]
         ))
         if unknown:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Unknown/uncommon CAs: {', '.join(unknown)}",
                 type="CAA Unknown CA Alert",
                 source="DNS CAA Checker",
@@ -173,7 +173,7 @@ async def crawl(target: str, client=None):
             ))
 
     if seen_iodef:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"iodef reporting to: {', '.join(seen_iodef)}",
             type="CAA iodef Reporting",
             source="DNS CAA Checker",
@@ -190,9 +190,9 @@ async def crawl(target: str, client=None):
         for s in SUBDOMAINS_CAA for f in findings
     )
     if not issuewild_found:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"No issuewild CAA records for wildcard domains",
-            type="CAA Wildcard Compliance",
+            ftype="CAA Wildcard Compliance",
             source="DNS CAA Checker",
             confidence="Medium",
             color="orange",
@@ -202,9 +202,9 @@ async def crawl(target: str, client=None):
             tags=["caa", "wildcard", "compliance"]
         ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Scanned {total_subdomains} subdomains, {caa_subdomains} have CAA records",
-        type="CAA Scan Summary",
+        ftype="CAA Scan Summary",
         source="DNS CAA Checker",
         confidence="High",
         color="purple",

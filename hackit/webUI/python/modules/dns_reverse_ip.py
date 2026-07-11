@@ -4,8 +4,8 @@ import socket
 import re
 import json
 from urllib.parse import urlparse
-from models import IntelligenceFinding
 from settings_store import get_api_key
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash
 
 async def resolve_to_ips(domain: str):
     loop = asyncio.get_event_loop()
@@ -26,7 +26,7 @@ async def get_ptr(ip: str):
 
 async def query_viewdns(ip: str, client: httpx.AsyncClient):
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://viewdns.info/reverseip/?host={ip}&t=1",
             headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"},
             timeout=15.0
@@ -40,12 +40,10 @@ async def query_viewdns(ip: str, client: httpx.AsyncClient):
 
 async def query_hackertarget(ip: str, client: httpx.AsyncClient):
     try:
-        resp = await client.post(
-            "https://api.hackertarget.com/reverseiplookup/",
+        resp = await safe_fetch(client, "https://api.hackertarget.com/reverseiplookup/",
             data={"q": ip},
             headers={"User-Agent": "Mozilla/5.0"},
-            timeout=15.0
-        )
+            timeout=15.0, method="POST")
         if resp.status_code == 200:
             lines = resp.text.strip().split("\n")
             domains = [l.strip().lower() for l in lines if l.strip() and not l.startswith("API")]
@@ -56,7 +54,7 @@ async def query_hackertarget(ip: str, client: httpx.AsyncClient):
 
 async def query_securitytrails(ip: str, client: httpx.AsyncClient):
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://api.securitytrails.com/v1/ips/{ip}",
             headers={
                 "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
@@ -79,7 +77,7 @@ async def query_securitytrails(ip: str, client: httpx.AsyncClient):
 
 async def query_ipinfo(ip: str, client: httpx.AsyncClient):
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://ipinfo.io/{ip}/json",
             headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
             timeout=10.0
@@ -92,16 +90,14 @@ async def query_ipinfo(ip: str, client: httpx.AsyncClient):
 
 async def query_yougetsignal(ip: str, client: httpx.AsyncClient):
     try:
-        resp = await client.post(
-            "https://domains.yougetsignal.com/domains.php",
+        resp = await safe_fetch(client, "https://domains.yougetsignal.com/domains.php",
             data={"remoteAddress": ip, "key": get_api_key("yougetsignal")},
             headers={
                 "User-Agent": "Mozilla/5.0",
                 "Content-Type": "application/x-www-form-urlencoded",
                 "Referer": "https://www.yougetsignal.com/tools/web-sites-on-web-server/"
             },
-            timeout=15.0
-        )
+            timeout=15.0, method="POST")
         if resp.status_code == 200:
             data = resp.json()
             domains = data.get("domainArray", [])
@@ -112,7 +108,7 @@ async def query_yougetsignal(ip: str, client: httpx.AsyncClient):
 
 async def query_ipapi(ip: str, client: httpx.AsyncClient):
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"http://ip-api.com/json/{ip}",
             headers={"User-Agent": "Mozilla/5.0"},
             timeout=10.0
@@ -137,9 +133,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             pass
 
     for ip in ips[:5]:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=ip,
-            type="Target IP Address",
+            ftype="Target IP Address",
             source="DNS Reverse IP",
             confidence="High",
             color="blue",
@@ -150,7 +146,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         ptrs = await get_ptr(ip)
         if ptrs:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"PTR: {ip} -> {', '.join(ptrs)}",
                 type="Reverse DNS (PTR)",
                 source="DNS Reverse IP",
@@ -169,9 +165,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             city = ipinfo.get("city", "")
             hostname_v = ipinfo.get("hostname", "")
             if org:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"ISP/Org: {org}",
-                    type="IP Organization",
+                    ftype="IP Organization",
                     source="IPInfo.io",
                     confidence="High",
                     color="slate",
@@ -181,9 +177,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     tags=["ip", "organization"]
                 ))
             if country:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Country: {country}",
-                    type="IP Geolocation",
+                    ftype="IP Geolocation",
                     source="IPInfo.io",
                     confidence="High",
                     color="slate",
@@ -193,9 +189,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     tags=["ip", "geo"]
                 ))
             if city:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"City: {city}, {country}",
-                    type="IP City",
+                    ftype="IP City",
                     source="IPInfo.io",
                     confidence="Medium",
                     color="slate",
@@ -211,9 +207,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             org2 = ipapi.get("org", "")
             asn = ipapi.get("as", "")
             if isp:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"ISP: {isp}",
-                    type="IP ISP (ip-api)",
+                    ftype="IP ISP (ip-api)",
                     source="ip-api.com",
                     confidence="High",
                     color="slate",
@@ -230,7 +226,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         if vd_domains:
             all_domains.update(vd_domains)
             sources_used.append("ViewDNS")
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"ViewDNS: {len(vd_domains)} domains on {ip}",
                 type="Reverse IP Source",
                 source="ViewDNS.info",
@@ -246,7 +242,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         if ht_domains:
             all_domains.update(ht_domains)
             sources_used.append("HackerTarget")
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"HackerTarget: {len(ht_domains)} domains on {ip}",
                 type="Reverse IP Source",
                 source="HackerTarget",
@@ -262,7 +258,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         if st_domains:
             all_domains.update(st_domains)
             sources_used.append("SecurityTrails")
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"SecurityTrails: {len(st_domains)} domains on {ip}",
                 type="Reverse IP Source",
                 source="SecurityTrails",
@@ -278,7 +274,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         if yg_domains:
             all_domains.update(yg_domains)
             sources_used.append("YouGetSignal")
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"YouGetSignal: {len(yg_domains)} domains on {ip}",
                 type="Reverse IP Source",
                 source="YouGetSignal",
@@ -292,9 +288,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         if all_domains:
             shared_count = len(all_domains)
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Total: {shared_count} unique domains hosted on {ip}",
-                type="Reverse IP Summary",
+                ftype="Reverse IP Summary",
                 source="DNS Reverse IP",
                 confidence="High",
                 color="purple",
@@ -306,9 +302,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ))
 
             if shared_count > 50:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Shared hosting detected: {shared_count} domains on {ip}",
-                    type="Shared Hosting Detection",
+                    ftype="Shared Hosting Detection",
                     source="DNS Reverse IP",
                     confidence="High",
                     color="orange",
@@ -319,9 +315,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 ))
 
             for d in sorted(all_domains)[:20]:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=d,
-                    type="Co-Hosted Domain",
+                    ftype="Co-Hosted Domain",
                     source="DNS Reverse IP",
                     confidence="Medium",
                     color="slate",
@@ -335,7 +331,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 try:
                     d_ips = await resolve_to_ips(d)
                     if d_ips and ip not in d_ips:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"{d} now resolves to {', '.join(d_ips)} (no longer on {ip})",
                             type="Domain IP Change Detected",
                             source="DNS Reverse IP",
@@ -349,9 +345,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     pass
 
         if not all_domains:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"No co-hosted domains found for {ip}",
-                type="Reverse IP: No Results",
+                ftype="Reverse IP: No Results",
                 source="DNS Reverse IP",
                 confidence="Low",
                 color="slate",
@@ -361,7 +357,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 tags=["reverse-ip", "no-results"]
             ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Reverse IP lookup complete for {len(ips)} IP(s)",
         type="Reverse IP Overall Summary",
         source="DNS Reverse IP",

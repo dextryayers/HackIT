@@ -6,8 +6,8 @@ import ssl
 import base64
 import json
 from urllib.parse import urlparse, quote
-from models import IntelligenceFinding
 from osint_common import get_ssl_cert_info, parse_cert_to_dict
+from module_common import safe_fetch, make_finding
 
 FOFA_BASE = "https://en.fofa.info"
 FOFA_API_BASE = "https://fofa.info/api/v1"
@@ -53,14 +53,14 @@ async def fetch_fofa_search(domain: str, client: httpx.AsyncClient, page: int = 
     encoded = quote(query)
     url = f"{FOFA_BASE}/result?qbase64={encoded}&page={page}"
     try:
-        resp = await client.get(url, headers={"User-Agent": UA, "Accept": "text/html"}, timeout=15.0)
+        resp = await safe_fetch(client, url, headers={"User-Agent": UA, "Accept": "text/html"}, timeout=15.0)
         if resp.status_code == 200:
             return resp.text
     except:
         pass
     try:
         url2 = f"{FOFA_BASE}/result?q={quote(domain)}&page={page}"
-        resp = await client.get(url2, headers={"User-Agent": UA, "Accept": "text/html"}, timeout=15.0)
+        resp = await safe_fetch(client, url2, headers={"User-Agent": UA, "Accept": "text/html"}, timeout=15.0)
         if resp.status_code == 200:
             return resp.text
     except:
@@ -73,7 +73,7 @@ async def fetch_fofa_api(target: str, client: httpx.AsyncClient, email: str = ""
         return results
     try:
         query = base64.b64encode(f'domain="{target}"'.encode()).decode()
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"{FOFA_API_BASE}/search/all",
             params={"email": email, "key": key, "qbase64": query, "size": 100, "page": 1},
             timeout=20.0,
@@ -197,9 +197,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
     html = await fetch_fofa_search(domain, client)
     if not html:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"FOFA search returned no results for {domain}",
-            type="FOFA Status", source="FOFA",
+            ftype="FOFA Status", source="FOFA",
             confidence="Low", color="slate", threat_level="Informational",
             status="No Data", tags=["fofa"]
         ))
@@ -208,16 +208,16 @@ async def crawl(target: str, client: httpx.AsyncClient):
     results = parse_fofa_results(html, domain)
 
     for ip in sorted(results["ips"])[:20]:
-        findings.append(IntelligenceFinding(
-            entity=ip, type="FOFA: IP Address", source="FOFA",
+        findings.append(make_finding(
+            entity=ip, ftype="FOFA: IP Address", source="FOFA",
             confidence="Medium", color="slate", threat_level="Informational",
             status="Discovered", resolution=f"IP associated with {domain}",
             tags=["fofa", "ip"]
         ))
 
     for host in sorted(results["hosts"])[:20]:
-        findings.append(IntelligenceFinding(
-            entity=host, type="FOFA: Host", source="FOFA",
+        findings.append(make_finding(
+            entity=host, ftype="FOFA: Host", source="FOFA",
             confidence="Medium", color="emerald", threat_level="Informational",
             status="Subdomain", resolution=f"Sub-host of {domain}",
             tags=["fofa", "host"]
@@ -226,8 +226,8 @@ async def crawl(target: str, client: httpx.AsyncClient):
     recognized_services = 0
     for port in sorted(results["ports"])[:20]:
         proto = PORT_PROTOCOLS.get(port, "Unknown")
-        findings.append(IntelligenceFinding(
-            entity=f"Port {port}/{proto}", type="FOFA: Service/Port", source="FOFA",
+        findings.append(make_finding(
+            entity=f"Port {port}/{proto}", ftype="FOFA: Service/Port", source="FOFA",
             confidence="Medium", color="blue", threat_level="Informational",
             status="Open", resolution=f"Port {port} detected via FOFA",
             tags=["fofa", "port", f"port-{port}"]
@@ -235,15 +235,15 @@ async def crawl(target: str, client: httpx.AsyncClient):
         recognized_services += 1
 
     for country in sorted(results["countries"])[:10]:
-        findings.append(IntelligenceFinding(
-            entity=country, type="FOFA: Country/Location", source="FOFA",
+        findings.append(make_finding(
+            entity=country, ftype="FOFA: Country/Location", source="FOFA",
             confidence="Medium", color="slate", threat_level="Informational",
             status="Geo", tags=["fofa", "geo"]
         ))
 
     for svc in results["services"][:10]:
-        findings.append(IntelligenceFinding(
-            entity=svc, type="FOFA: Protocol/Service", source="FOFA",
+        findings.append(make_finding(
+            entity=svc, ftype="FOFA: Protocol/Service", source="FOFA",
             confidence="Medium", color="orange", threat_level="Informational",
             status="Protocol Detected",
             tags=["fofa", "protocol"]
@@ -256,8 +256,8 @@ async def crawl(target: str, client: httpx.AsyncClient):
             if sig in low_banner:
                 techs_found.add(tech_name)
     for tech in sorted(techs_found)[:10]:
-        findings.append(IntelligenceFinding(
-            entity=tech, type="FOFA: Technology Fingerprint", source="FOFA",
+        findings.append(make_finding(
+            entity=tech, ftype="FOFA: Technology Fingerprint", source="FOFA",
             confidence="Medium", color="orange", threat_level="Informational",
             status="Detected", tags=["fofa", "technology"]
         ))
@@ -266,8 +266,8 @@ async def crawl(target: str, client: httpx.AsyncClient):
         for port in [443, 80, 8080, 8443]:
             banner = await attempt_banner_grab(ip, port)
             if banner:
-                findings.append(IntelligenceFinding(
-                    entity=f"{ip}:{port} banner", type="FOFA: Banner Grab", source="FOFA",
+                findings.append(make_finding(
+                    entity=f"{ip}:{port} banner", ftype="FOFA: Banner Grab", source="FOFA",
                     confidence="Medium", color="slate", threat_level="Informational",
                     status="Banner", resolution=banner[:200],
                     tags=["fofa", "banner"]
@@ -279,18 +279,18 @@ async def crawl(target: str, client: httpx.AsyncClient):
         if cert_info and cert_info.get("cert"):
             parsed = parse_cert_to_dict(cert_info["cert"])
             if parsed.get("issuer"):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=parsed["issuer"].get("organizationName", "Unknown"),
-                    type="FOFA: SSL Certificate", source="FOFA",
+                    ftype="FOFA: SSL Certificate", source="FOFA",
                     confidence="High", color="emerald", threat_level="Informational",
                     status="SSL", tags=["fofa", "ssl"]
                 ))
             if parsed.get("days_remaining") is not None:
                 days = parsed["days_remaining"]
                 color = "emerald" if days > 30 else "orange"
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"SSL expires in {days} days",
-                    type="FOFA: SSL Expiry", source="FOFA",
+                    ftype="FOFA: SSL Expiry", source="FOFA",
                     confidence="High", color=color, threat_level="Informational",
                     status="SSL Valid" if days > 0 else "Expired",
                     tags=["fofa", "ssl"]
@@ -304,17 +304,17 @@ async def crawl(target: str, client: httpx.AsyncClient):
         if sig in html_lower:
             html_techs.add(tech)
     for tech in sorted(html_techs - techs_found)[:10]:
-        findings.append(IntelligenceFinding(
-            entity=tech, type="FOFA: Technology from HTML", source="FOFA",
+        findings.append(make_finding(
+            entity=tech, ftype="FOFA: Technology from HTML", source="FOFA",
             confidence="Medium", color="orange", threat_level="Informational",
             status="Detected", tags=["fofa", "technology"]
         ))
 
     subdomain_count = len(results["hosts"])
     if subdomain_count > 0:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{subdomain_count} subdomains found via FOFA",
-            type="FOFA: Subdomain Summary",
+            ftype="FOFA: Subdomain Summary",
             source="FOFA",
             confidence="Medium",
             color="purple",
@@ -331,9 +331,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
     summary_parts.append(f"{len(results['ports'])} ports")
     summary_parts.append(f"{len(techs_found | html_techs)} technologies")
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity="FOFA scan complete: " + ", ".join(summary_parts),
-        type="FOFA Summary",
+        ftype="FOFA Summary",
         source="FOFA",
         confidence="High",
         color="purple",

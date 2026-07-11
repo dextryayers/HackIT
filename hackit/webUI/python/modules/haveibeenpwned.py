@@ -2,7 +2,7 @@ import httpx
 import hashlib
 import re
 from datetime import datetime, timezone, timedelta
-from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash
 
 DATA_CLASS_SEVERITY = {
     "Email addresses": "Medium",
@@ -203,7 +203,7 @@ async def check_pwned_password(password: str, client: httpx.AsyncClient) -> dict
     sha1 = hashlib.sha1(password.encode()).hexdigest().upper()
     prefix, suffix = sha1[:5], sha1[5:]
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://api.pwnedpasswords.com/range/{prefix}",
             timeout=10.0,
             headers={"User-Agent": UA},
@@ -220,12 +220,10 @@ async def check_pwned_password(password: str, client: httpx.AsyncClient) -> dict
 async def query_snusbase(domain: str, client: httpx.AsyncClient) -> dict:
     try:
         payload = {"search": domain, "type": "domain"}
-        resp = await client.post(
-            "https://snusbase.com/api/search/query",
+        resp = await safe_fetch(client, "https://snusbase.com/api/search/query",
             json=payload,
             headers={"User-Agent": UA, "Content-Type": "application/json", "Authorization": ""},
-            timeout=15.0,
-        )
+            timeout=15.0, method="POST")
         if resp.status_code == 200:
             return resp.json()
     except Exception:
@@ -234,7 +232,7 @@ async def query_snusbase(domain: str, client: httpx.AsyncClient) -> dict:
 
 async def query_leakcheck(domain: str, client: httpx.AsyncClient) -> dict:
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://leakcheck.io/api/v2/domain/{domain}",
             headers={"User-Agent": UA, "Accept": "application/json"},
             timeout=15.0,
@@ -247,7 +245,7 @@ async def query_leakcheck(domain: str, client: httpx.AsyncClient) -> dict:
 
 async def query_scylla(domain: str, client: httpx.AsyncClient) -> list:
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://scylla.so/api/search/domain/{domain}",
             headers={"User-Agent": UA, "Accept": "application/json"},
             timeout=15.0,
@@ -266,7 +264,7 @@ async def query_scylla(domain: str, client: httpx.AsyncClient) -> list:
 
 async def query_dehashed(domain: str, client: httpx.AsyncClient) -> dict:
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             "https://dehashed.com/api/v1/search",
             params={"query": f"domain:{domain}", "size": 30, "page": 1},
             headers={"User-Agent": UA, "Accept": "application/json", "Authorization": ""},
@@ -280,7 +278,7 @@ async def query_dehashed(domain: str, client: httpx.AsyncClient) -> dict:
 
 async def query_firefox_monitor(domain: str, client: httpx.AsyncClient) -> list:
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             "https://monitor.firefox.com/api/v1/breaches",
             headers={"User-Agent": UA},
             timeout=15.0,
@@ -299,7 +297,7 @@ async def query_firefox_monitor(domain: str, client: httpx.AsyncClient) -> list:
 
 async def query_hibp_pastes(email: str, client: httpx.AsyncClient) -> list:
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://haveibeenpwned.com/api/v3/pasteaccount/{email}",
             timeout=15.0,
             headers={"User-Agent": UA, "hibp-api-key": "", "Accept": "application/json"},
@@ -324,7 +322,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
     total_emails_with_passwords = 0
 
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://haveibeenpwned.com/api/v3/breaches?domain={domain}",
             timeout=15.0,
             headers={
@@ -401,9 +399,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     tags.extend([dc.lower().replace(" ", "-") for dc in data_classes[:5]])
                 tags.append(f"type-{breach_type}")
 
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=entity_str[:200],
-                    type="Breach: Account Leak",
+                    ftype="Breach: Account Leak",
                     source="HaveIBeenPwned",
                     confidence="High",
                     color=sev_color,
@@ -414,9 +412,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 ))
 
                 if logo_type:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"{name} logo type: {logo_type}",
-                        type="Breach: Branding",
+                        ftype="Breach: Branding",
                         source="HaveIBeenPwned",
                         confidence="Medium",
                         color="slate",
@@ -427,9 +425,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 for dc in data_classes:
                     sev = DATA_CLASS_SEVERITY.get(dc, "Low")
                     dc_color = "red" if sev == "Critical" else ("orange" if sev in ("High", "Medium") else "slate")
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"{name}: {dc}",
-                        type=f"Data Class: {sev}",
+                        ftype=f"Data Class: {sev}",
                         source="HaveIBeenPwned",
                         confidence="High",
                         color=dc_color,
@@ -441,7 +439,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             if severity_scores:
                 avg_score = sum(severity_scores) / len(severity_scores)
                 overall_sev = "Critical" if avg_score >= 20 else ("High Risk" if avg_score >= 12 else ("Elevated Risk" if avg_score >= 6 else "Informational"))
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{len(breaches)} known breaches (avg severity: {avg_score:.1f}) for {domain}",
                     type="HIBP Summary",
                     source="HaveIBeenPwned",
@@ -456,7 +454,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             if timeline_events:
                 timeline_events.sort(key=lambda x: x["date"])
                 for ev in timeline_events:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"{ev['date']}: {ev['name']} ({ev['severity']})",
                         type="Breach Timeline",
                         source="HaveIBeenPwned",
@@ -468,9 +466,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     ))
 
             for cat, count in sorted(data_class_count.items()):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{cat}: {count} occurrences across breaches",
-                    type="Data Class Category",
+                    ftype="Data Class Category",
                     source="HaveIBeenPwned",
                     confidence="Medium",
                     color="slate",
@@ -482,7 +480,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             if all_data_classes:
                 exposure = compute_data_exposure_score(all_data_classes)
                 exp_color = "red" if exposure["level"] in ("Critical", "High") else ("orange" if exposure["level"] == "Medium" else "slate")
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Data Exposure Score: {exposure['score']} ({exposure['level']})",
                     type="Data Exposure Aggregation",
                     source="HaveIBeenPwned",
@@ -496,7 +494,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
             if recent_breaches:
                 for rb in recent_breaches:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Recent breach: {rb['name']} ({rb['date']}) - {rb['severity']}",
                         type="Breach Recency Alert",
                         source="HaveIBeenPwned",
@@ -510,9 +508,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
             if breach_type_counts:
                 type_summary = " | ".join(f"{bt}: {cnt}" for bt, cnt in sorted(breach_type_counts.items()))
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Breach Type Classification: {type_summary}",
-                    type="Breach Type Summary",
+                    ftype="Breach Type Summary",
                     source="HaveIBeenPwned",
                     confidence="Medium",
                     color="slate",
@@ -523,7 +521,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 ))
 
     except Exception as e:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"HIBP breach error: {str(e)[:100]}",
             type="HIBP Error",
             source="HaveIBeenPwned",
@@ -534,7 +532,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         ))
 
     try:
-        resp2 = await client.get(
+        resp2 = await safe_fetch(client, 
             f"https://haveibeenpwned.com/api/v3/breaches?domain={domain}",
             timeout=10.0,
             headers={"User-Agent": UA, "Accept": "application/json"},
@@ -543,7 +541,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             all_breaches = resp2.json()
             breach_names = [b.get("Name", "") for b in all_breaches if isinstance(b, dict)]
             if breach_names:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Affected by: {', '.join(breach_names[:10])}",
                     type="Breach: Affected Services",
                     source="HaveIBeenPwned",
@@ -558,7 +556,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
     try:
         from urllib.parse import urlparse, quote
-        resp3 = await client.get(
+        resp3 = await safe_fetch(client, 
             f"https://haveibeenpwned.com/api/v3/breacheddomain/{domain}",
             timeout=10.0,
             headers={"User-Agent": UA, "Accept": "application/json"},
@@ -568,7 +566,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             if isinstance(data3, list):
                 for item in data3[:10]:
                     if isinstance(item, dict):
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=item.get("Name", ""),
                             type="Breach: Domain Breach",
                             source="HaveIBeenPwned",
@@ -586,7 +584,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         try:
             pastes = await query_hibp_pastes(sample_email, client)
             if pastes:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{len(pastes)} paste(s) found for {sample_email}",
                     type="HIBP Paste Search",
                     source="HaveIBeenPwned",
@@ -600,7 +598,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     paste_title = paste.get("Title", paste.get("Source", "Unknown"))
                     paste_date = paste.get("Date", "")
                     paste_source = paste.get("Source", "")
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Paste: {paste_title} ({paste_date})",
                         type="HIBP Paste Entry",
                         source="HaveIBeenPwned",
@@ -619,7 +617,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             sb_results = snusbase_data.get("results", snusbase_data.get("data", snusbase_data.get("records", [])))
             if sb_results:
                 sb_count = len(sb_results) if isinstance(sb_results, list) else (snusbase_data.get("count", 0) or len(sb_results))
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{sb_count} record(s) from SnusBase for {domain}",
                     type="Breach: SnusBase",
                     source="SnusBase",
@@ -641,9 +639,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                                 total_emails_with_passwords += 1
                                 email_password_map.setdefault(sb_email, []).append(sb_pass)
                                 all_breach_entries.append({"source": sb_source, "email": sb_email, "password": True})
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=sb_email,
-                                type="Breach: Leaked Email",
+                                ftype="Breach: Leaked Email",
                                 source="SnusBase",
                                 confidence="Medium",
                                 color="red",
@@ -660,7 +658,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         if leakcheck_data and leakcheck_data.get("success"):
             lc_count = leakcheck_data.get("count", 0)
             if lc_count:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{lc_count} leaked credential(s) from LeakCheck for {domain}",
                     type="Breach: LeakCheck",
                     source="LeakCheck",
@@ -683,9 +681,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                             total_emails_with_passwords += 1
                             email_password_map.setdefault(lc_email, []).append(lc_pass)
                             all_breach_entries.append({"source": lc_source, "email": lc_email, "password": True})
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=lc_email,
-                            type="Breach: Leaked Email",
+                            ftype="Breach: Leaked Email",
                             source="LeakCheck",
                             confidence="Medium",
                             color="red",
@@ -701,7 +699,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         scylla_data = await query_scylla(domain, client)
         if scylla_data:
             scylla_count = len(scylla_data)
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{scylla_count} record(s) from Scylla.so for {domain}",
                 type="Breach: Scylla",
                 source="Scylla.so",
@@ -722,9 +720,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         total_emails_with_passwords += 1
                         email_password_map.setdefault(sc_email, []).append(sc_pass)
                         all_breach_entries.append({"source": sc_source, "email": sc_email, "password": True})
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=sc_email,
-                        type="Breach: Leaked Email",
+                        ftype="Breach: Leaked Email",
                         source="Scylla.so",
                         confidence="Medium",
                         color="red",
@@ -741,7 +739,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         if dehashed_data:
             dehashed_entries = dehashed_data.get("entries", dehashed_data.get("data", []))
             if dehashed_entries:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{len(dehashed_entries)} record(s) from Dehashed for {domain}",
                     type="Breach: Dehashed",
                     source="Dehashed",
@@ -762,9 +760,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                             total_emails_with_passwords += 1
                             email_password_map.setdefault(dh_email, []).append(dh_pass)
                             all_breach_entries.append({"source": dh_breach, "email": dh_email, "password": True})
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=dh_email,
-                            type="Breach: Leaked Email",
+                            ftype="Breach: Leaked Email",
                             source="Dehashed",
                             confidence="High",
                             color="red",
@@ -779,7 +777,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
     try:
         ff_breaches = await query_firefox_monitor(domain, client)
         if ff_breaches:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{len(ff_breaches)} breach(es) from Firefox Monitor for {domain}",
                 type="Breach: Firefox Monitor",
                 source="Firefox Monitor",
@@ -792,7 +790,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             for br in ff_breaches[:5]:
                 br_name = br.get("Name", "")
                 br_date = br.get("Date", br.get("BreachDate", ""))
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{br_name} ({br_date})",
                     type="Breach: Firefox Monitor Entry",
                     source="Firefox Monitor",
@@ -807,7 +805,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
     if total_emails_with_passwords > 0:
         stuffing_risk_services = total_emails_with_passwords * 50
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Credential stuffing risk: {total_emails_with_passwords} email(s) with plain-text passwords could compromise up to ~{stuffing_risk_services} services",
             type="Credential Stuffing Risk Assessment",
             source="HackIT Analysis",
@@ -823,9 +821,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         reuse_flags = check_password_reuse(email_password_map)
         if reuse_flags:
             for flag in reuse_flags:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Password reuse detected for {flag['email']}: {flag['unique_passwords']} unique passwords across breaches",
-                    type="Password Reuse Analysis",
+                    ftype="Password Reuse Analysis",
                     source="HackIT Analysis",
                     confidence="High",
                     color="red",
@@ -841,7 +839,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             source_mapping.setdefault(entry["email"], set()).add(entry["source"])
         multi_source_emails = {e: s for e, s in source_mapping.items() if len(s) > 1}
         if multi_source_emails:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{len(multi_source_emails)} email(s) appear in multiple breach sources",
                 type="Cross-Source Breach Correlation",
                 source="HackIT Analysis",
@@ -855,7 +853,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
     if total_emails_with_passwords > 0 or len(emails_found) > 0:
         pw_exposure_pct = round((total_emails_with_passwords / max(len(emails_found), 1)) * 100)
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Exposure Summary: {len(emails_found)} emails, {total_clear_passwords} passwords, {len(all_breach_entries)} total records",
             type="Comprehensive Breach Exposure Summary",
             source="HaveIBeenPwned",
@@ -869,20 +867,20 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
     async def analyze_target_overview():
         is_email = "@" in domain
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Target: {domain} ({'Email' if is_email else 'Domain'})",
             type="Target Overview", source="HIBP", confidence="High", color="slate",
             threat_level="Informational", tags=["target"]))
         if is_email:
             local, dom = domain.split("@", 1)
-            findings.append(IntelligenceFinding(entity=f"Local part: {local}", type="Email Analysis",
+            findings.append(make_finding(entity=f"Local part: {local}", ftype="Email Analysis",
                 source="HIBP", confidence="High", color="slate", tags=["target"]))
-            findings.append(IntelligenceFinding(entity=f"Domain: {dom}", type="Email Analysis",
+            findings.append(make_finding(entity=f"Domain: {dom}", ftype="Email Analysis",
                 source="HIBP", confidence="High", color="slate", tags=["target"]))
             has_plus = "+" in local
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Aliasing: {'Plus-addressing' if has_plus else 'Not detected'}",
-                type="Email Analysis", source="HIBP", confidence="High",
+                ftype="Email Analysis", source="HIBP", confidence="High",
                 color="emerald" if has_plus else "slate", tags=["target"]))
 
     async def check_breach_db_access():
@@ -891,10 +889,10 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ("https://monitor.firefox.com/breaches", "Firefox Monitor"),
         ]:
             try:
-                resp = await client.get(url, timeout=8.0, headers={"User-Agent": UA})
+                resp = await safe_fetch(client, url, timeout=8.0, headers={"User-Agent": UA})
                 if resp.status_code == 200:
-                    findings.append(IntelligenceFinding(
-                        entity=f"{name} accessible for breach research", type="Breach Database Status",
+                    findings.append(make_finding(
+                        entity=f"{name} accessible for breach research", ftype="Breach Database Status",
                         source="HIBP", confidence="Medium", color="slate", tags=["breach"]))
                     break
             except: pass
@@ -905,12 +903,12 @@ async def crawl(target: str, client: httpx.AsyncClient):
         try:
             mx = await loop2.run_in_executor(None, lambda: dnsr.resolve(domain, 'MX'))
             mx_list = [str(r.exchange).rstrip('.') for r in mx]
-            findings.append(IntelligenceFinding(
-                entity=f"MX: {len(mx_list)} server(s)", type="Mail Infrastructure",
+            findings.append(make_finding(
+                entity=f"MX: {len(mx_list)} server(s)", ftype="Mail Infrastructure",
                 source="HIBP", confidence="High", color="slate", tags=["dns"]))
             if mx_list:
-                findings.append(IntelligenceFinding(
-                    entity=f"Primary MX: {mx_list[0]}", type="Mail Infrastructure",
+                findings.append(make_finding(
+                    entity=f"Primary MX: {mx_list[0]}", ftype="Mail Infrastructure",
                     source="HIBP", confidence="High", color="slate", tags=["dns"]))
         except: pass
         try:
@@ -918,8 +916,8 @@ async def crawl(target: str, client: httpx.AsyncClient):
             for r in spf:
                 txt = str(r)
                 if "v=spf1" in txt:
-                    findings.append(IntelligenceFinding(
-                        entity="SPF: Present", type="Email Security",
+                    findings.append(make_finding(
+                        entity="SPF: Present", ftype="Email Security",
                         source="HIBP", confidence="High", color="emerald", tags=["security"]))
                     break
         except: pass
@@ -928,8 +926,8 @@ async def crawl(target: str, client: httpx.AsyncClient):
             for r in dmarc:
                 txt = str(r)
                 if "v=DMARC1" in txt:
-                    findings.append(IntelligenceFinding(
-                        entity="DMARC: Present", type="Email Security",
+                    findings.append(make_finding(
+                        entity="DMARC: Present", ftype="Email Security",
                         source="HIBP", confidence="High", color="emerald", tags=["security"]))
                     break
         except: pass
@@ -937,24 +935,24 @@ async def crawl(target: str, client: httpx.AsyncClient):
             try:
                 recs = await loop2.run_in_executor(None, lambda: dnsr.resolve(domain, rtype))
                 count = sum(1 for _ in recs)
-                findings.append(IntelligenceFinding(
-                    entity=f"DNS {rtype}: {count}", type="DNS Records",
+                findings.append(make_finding(
+                    entity=f"DNS {rtype}: {count}", ftype="DNS Records",
                     source="HIBP", confidence="High", color="slate", tags=["dns"]))
             except: pass
 
     async def check_web_presence():
         for proto in ["https", "http"]:
             try:
-                resp = await client.get(f"{proto}://{domain}", timeout=8.0, follow_redirects=True, headers={"User-Agent": UA})
+                resp = await safe_fetch(client, f"{proto}://{domain}", timeout=8.0, follow_redirects=True, headers={"User-Agent": UA})
                 status = resp.status_code
-                findings.append(IntelligenceFinding(
-                    entity=f"Website: HTTP {status} ({len(resp.text)} bytes)", type="Web Presence",
+                findings.append(make_finding(
+                    entity=f"Website: HTTP {status} ({len(resp.text)} bytes)", ftype="Web Presence",
                     source="HIBP", confidence="High", color="slate", tags=["web"]))
                 hdrs = {k.lower(): v for k, v in dict(resp.headers).items()}
                 for hdr in ["strict-transport-security", "x-frame-options", "content-security-policy"]:
                     if hdr in hdrs:
-                        findings.append(IntelligenceFinding(
-                            entity=f"{hdr}: Present", type="Security Header",
+                        findings.append(make_finding(
+                            entity=f"{hdr}: Present", ftype="Security Header",
                             source="HIBP", confidence="High", color="emerald", tags=["security"]))
                 break
             except: pass
@@ -974,8 +972,8 @@ async def crawl(target: str, client: httpx.AsyncClient):
         risk_factors.append("Check HaveIBeenPwned for breach history")
         risk_factors.append("Credential stuffing is a primary threat for reused passwords")
         for rf in risk_factors:
-            findings.append(IntelligenceFinding(
-                entity=rf, type="Risk Assessment",
+            findings.append(make_finding(
+                entity=rf, ftype="Risk Assessment",
                 source="HIBP", confidence="Medium", color="orange",
                 threat_level="Standard Target", tags=["risk"]))
 
@@ -990,8 +988,8 @@ async def crawl(target: str, client: httpx.AsyncClient):
             "Set up breach alerts via Firefox Monitor",
         ]
         for i, rec in enumerate(recs[:5]):
-            findings.append(IntelligenceFinding(
-                entity=f"Rec {i+1}: {rec}", type="Breach Recommendation",
+            findings.append(make_finding(
+                entity=f"Rec {i+1}: {rec}", ftype="Breach Recommendation",
                 source="HIBP", confidence="Medium", color="orange",
                 threat_level="Informational", tags=["recommendation"]))
 
@@ -1002,10 +1000,10 @@ async def crawl(target: str, client: httpx.AsyncClient):
         ]
         for url, name in site_urls:
             try:
-                resp = await client.get(url, timeout=8.0, headers={"User-Agent": UA})
+                resp = await safe_fetch(client, url, timeout=8.0, headers={"User-Agent": UA})
                 if resp.status_code == 200 and len(resp.text.strip()) > 50:
-                    findings.append(IntelligenceFinding(
-                        entity=f"Paste site data: {name}", type="Paste Mention",
+                    findings.append(make_finding(
+                        entity=f"Paste site data: {name}", ftype="Paste Mention",
                         source="HIBP", confidence="Low", color="orange",
                         threat_level="Elevated Risk", tags=["paste"]))
             except: pass
@@ -1013,14 +1011,14 @@ async def crawl(target: str, client: httpx.AsyncClient):
     async def check_securitytxt():
         for path in [f"https://{domain}/.well-known/security.txt", f"https://{domain}/security.txt"]:
             try:
-                resp = await client.get(path, timeout=8.0, headers={"User-Agent": UA})
+                resp = await safe_fetch(client, path, timeout=8.0, headers={"User-Agent": UA})
                 if resp.status_code == 200:
-                    findings.append(IntelligenceFinding(
-                        entity=f"Security.txt accessible", type="Security.txt",
+                    findings.append(make_finding(
+                        entity=f"Security.txt accessible", ftype="Security.txt",
                         source="HIBP", confidence="High", color="emerald", tags=["security"]))
                     for m in re.finditer(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}", resp.text):
-                        findings.append(IntelligenceFinding(
-                            entity=m.group(0), type="Security Contact Email",
+                        findings.append(make_finding(
+                            entity=m.group(0), ftype="Security Contact Email",
                             source="HIBP", confidence="High", color="blue", tags=["contact"]))
                     break
             except: pass
@@ -1036,8 +1034,8 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 s.connect((domain, 443))
                 cert = s.getpeercert()
                 issuer = dict(cert.get("issuer", [[["", ""]]])[0]).get("commonName", "Unknown")
-                findings.append(IntelligenceFinding(
-                    entity=f"SSL: {issuer}", type="SSL Certificate",
+                findings.append(make_finding(
+                    entity=f"SSL: {issuer}", ftype="SSL Certificate",
                     source="HIBP", confidence="High", color="slate", tags=["ssl"]))
         except: pass
 

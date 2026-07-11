@@ -2,7 +2,7 @@ import asyncio
 import dns.resolver
 import re
 from collections import defaultdict
-from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash
 
 SPF_MECHANISMS = ['all', 'include', 'a', 'mx', 'ptr', 'ip4', 'ip6', 'exists', 'redirect']
 SPF_MODIFIERS = ['redirect', 'exp']
@@ -25,9 +25,9 @@ async def crawl(target: str, client=None):
     txt_records = await get_txt(domain)
     spf_records = [r for r in txt_records if r.startswith("v=spf1")]
     if not spf_records:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"No SPF record for {domain}",
-            type="SPF Record Missing",
+            ftype="SPF Record Missing",
             source="DNS SPF Validator",
             confidence="High",
             color="red",
@@ -39,9 +39,9 @@ async def crawl(target: str, client=None):
         return findings
 
     for spf in spf_records:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=spf[:300],
-            type="SPF Record Found",
+            ftype="SPF Record Found",
             source="DNS SPF Validator",
             confidence="High",
             color="emerald",
@@ -66,7 +66,7 @@ async def crawl(target: str, client=None):
                 all_type = "SoftFail (~all)" if '~all' in all_val else "Fail (-all)" if '-all' in all_val else "Neutral (?all)" if '?all' in all_val else "Pass (+all)"
                 all_color = "green" if '-all' in all_val else "orange" if '~all' in all_val else "red" if '+all' in all_val else "slate"
                 all_threat = "Informational" if '-all' in all_val else "Standard Target" if '~all' in all_val else "Elevated Risk" if '+all' in all_val else "Standard Target"
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"SPF 'all' mechanism: {all_val} ({all_type})",
                     type="SPF All Mechanism",
                     source="DNS SPF Validator",
@@ -79,7 +79,7 @@ async def crawl(target: str, client=None):
                 ))
 
             if dns_lookups > 10:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"SPF requires {dns_lookups} DNS lookups (limit is 10) - PERMERROR!",
                     type="SPF DNS Lookup Limit Exceeded",
                     source="DNS SPF Validator",
@@ -91,7 +91,7 @@ async def crawl(target: str, client=None):
                     tags=["spf", "dns-lookup", "error", "permerror"]
                 ))
             else:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"SPF requires {dns_lookups} DNS lookups (limit: 10)",
                     type="SPF DNS Lookup Count",
                     source="DNS SPF Validator",
@@ -105,9 +105,9 @@ async def crawl(target: str, client=None):
             include_mechs = mechanisms.get('include', [])
             if include_mechs:
                 for inc in include_mechs[:10]:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"include:{inc}",
-                        type="SPF Include Mechanism",
+                        ftype="SPF Include Mechanism",
                         source="DNS SPF Validator",
                         confidence="High",
                         color="blue",
@@ -117,7 +117,7 @@ async def crawl(target: str, client=None):
                         tags=["spf", "include", inc]
                     ))
 
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{len(include_mechs)} include mechanisms (chains to other domains)",
                     type="SPF Include Chain Analysis",
                     source="DNS SPF Validator",
@@ -132,7 +132,7 @@ async def crawl(target: str, client=None):
             ip6_mechs = mechanisms.get('ip6', [])
             if ip4_mechs or ip6_mechs:
                 total_ips = len(ip4_mechs) + len(ip6_mechs)
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Authorized IP ranges: {len(ip4_mechs)} IPv4, {len(ip6_mechs)} IPv6",
                     type="SPF Authorized IPs",
                     source="DNS SPF Validator",
@@ -144,9 +144,9 @@ async def crawl(target: str, client=None):
                 ))
                 if ip4_mechs:
                     for ip4 in ip4_mechs[:5]:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"ip4:{ip4}",
-                            type="SPF IPv4 Authorization",
+                            ftype="SPF IPv4 Authorization",
                             source="DNS SPF Validator",
                             confidence="High",
                             color="slate",
@@ -156,9 +156,9 @@ async def crawl(target: str, client=None):
                         ))
                 if ip6_mechs:
                     for ip6 in ip6_mechs[:5]:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"ip6:{ip6}",
-                            type="SPF IPv6 Authorization",
+                            ftype="SPF IPv6 Authorization",
                             source="DNS SPF Validator",
                             confidence="High",
                             color="slate",
@@ -169,9 +169,9 @@ async def crawl(target: str, client=None):
 
             a_mechs = mechanisms.get('a', [])
             if a_mechs:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity="SPF includes 'a' mechanism - domain's A records can send email",
-                    type="SPF A Mechanism",
+                    ftype="SPF A Mechanism",
                     source="DNS SPF Validator",
                     confidence="High",
                     color="blue",
@@ -182,9 +182,9 @@ async def crawl(target: str, client=None):
 
             mx_mechs = mechanisms.get('mx', [])
             if mx_mechs:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity="SPF includes 'mx' mechanism - MX hosts can send email",
-                    type="SPF MX Mechanism",
+                    ftype="SPF MX Mechanism",
                     source="DNS SPF Validator",
                     confidence="High",
                     color="blue",
@@ -196,9 +196,9 @@ async def crawl(target: str, client=None):
             exists_mechs = mechanisms.get('exists', [])
             if exists_mechs:
                 for ex in exists_mechs[:3]:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"exists:{ex}",
-                        type="SPF Exists Mechanism",
+                        ftype="SPF Exists Mechanism",
                         source="DNS SPF Validator",
                         confidence="Medium",
                         color="orange",
@@ -209,9 +209,9 @@ async def crawl(target: str, client=None):
                     ))
 
             if redirect:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"SPF redirect={redirect}",
-                    type="SPF Redirect Modifier",
+                    ftype="SPF Redirect Modifier",
                     source="DNS SPF Validator",
                     confidence="High",
                     color="purple",
@@ -223,7 +223,7 @@ async def crawl(target: str, client=None):
 
             macros_found = re.findall(r'%{[^}]+}', spf)
             if macros_found:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"SPF macros used: {', '.join(macros_found[:5])}",
                     type="SPF Macro Usage",
                     source="DNS SPF Validator",
@@ -240,7 +240,7 @@ async def crawl(target: str, client=None):
                 if not any(r.startswith("v=spf1") for r in inc_records):
                     void_lookups += 1
             if void_lookups > 0:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{void_lookups} void lookup(s) - included domains without SPF",
                     type="SPF Void Lookups",
                     source="DNS SPF Validator",
@@ -252,9 +252,9 @@ async def crawl(target: str, client=None):
                 ))
 
             if not all_mech:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity="SPF record has NO 'all' mechanism - policy is incomplete!",
-                    type="SPF Missing All Mechanism",
+                    ftype="SPF Missing All Mechanism",
                     source="DNS SPF Validator",
                     confidence="High",
                     color="red",
@@ -284,9 +284,9 @@ async def crawl(target: str, client=None):
                     depth += 1
                 total_chain = len(seen_includes)
                 if total_chain > 0:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"SPF include chain depth: {depth}, total unique domains: {total_chain}",
-                        type="SPF Include Chain Depth",
+                        ftype="SPF Include Chain Depth",
                         source="DNS SPF Validator",
                         confidence="High",
                         color="orange" if depth >= 5 else "slate",
@@ -295,9 +295,9 @@ async def crawl(target: str, client=None):
                         tags=["spf", "chain-depth"]
                     ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"SPF validation complete for {domain}",
-        type="SPF Validation Summary",
+        ftype="SPF Validation Summary",
         source="DNS SPF Validator",
         confidence="High",
         color="blue",

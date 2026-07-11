@@ -4,6 +4,7 @@ import json
 from datetime import datetime
 from collections import defaultdict
 from typing import List
+from module_common import safe_fetch, safe_fetch_json, make_finding
 from models import IntelligenceFinding
 
 OTX_API = "https://otx.alienvault.com/api/v1"
@@ -19,7 +20,7 @@ async def query_pulses(target: str, client: httpx.AsyncClient) -> dict:
     result = {"pulses": [], "indicators": [], "count": 0}
     for itype in ["IPv4", "domain", "hostname", "URL"]:
         try:
-            resp = await client.get(
+            resp = await safe_fetch(client, 
                 f"{OTX_API}/indicators/{itype}/{target}/general",
                 headers={"User-Agent": UA, "Accept": "application/json"},
                 timeout=15.0
@@ -37,7 +38,7 @@ async def query_pulses(target: str, client: httpx.AsyncClient) -> dict:
 
 async def query_pulse_details(pulse_id: str, client: httpx.AsyncClient) -> dict:
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"{OTX_API}/pulses/{pulse_id}",
             headers={"User-Agent": UA, "Accept": "application/json"},
             timeout=15.0
@@ -50,7 +51,7 @@ async def query_pulse_details(pulse_id: str, client: httpx.AsyncClient) -> dict:
 
 async def query_subscribed(client: httpx.AsyncClient) -> list:
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"{OTX_API}/pulses/subscribed?limit=20",
             headers={"User-Agent": UA, "Accept": "application/json"},
             timeout=15.0
@@ -63,7 +64,7 @@ async def query_subscribed(client: httpx.AsyncClient) -> list:
 
 async def query_indicators_by_type(target: str, indicator_type: str, client: httpx.AsyncClient) -> dict:
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"{OTX_API}/indicators/{indicator_type}/{target}/general",
             headers={"User-Agent": UA, "Accept": "application/json"},
             timeout=15.0
@@ -76,7 +77,7 @@ async def query_indicators_by_type(target: str, indicator_type: str, client: htt
 
 async def query_geo(target: str, client: httpx.AsyncClient) -> dict:
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"{OTX_API}/indicators/IPv4/{target}/geo",
             headers={"User-Agent": UA, "Accept": "application/json"},
             timeout=10.0
@@ -89,7 +90,7 @@ async def query_geo(target: str, client: httpx.AsyncClient) -> dict:
 
 async def query_malware(target: str, client: httpx.AsyncClient) -> dict:
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"{OTX_API}/indicators/IPv4/{target}/malware",
             headers={"User-Agent": UA, "Accept": "application/json"},
             timeout=10.0
@@ -102,7 +103,7 @@ async def query_malware(target: str, client: httpx.AsyncClient) -> dict:
 
 async def query_url_list(target: str, client: httpx.AsyncClient) -> dict:
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"{OTX_API}/indicators/IPv4/{target}/url_list",
             headers={"User-Agent": UA, "Accept": "application/json"},
             timeout=10.0
@@ -124,7 +125,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
     geo_data = await query_geo(query, client)
     if geo_data:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"OTX Geo data available for {query}",
             type="OTX Geolocation",
             source="AlienVault OTX",
@@ -140,7 +141,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
     if malware_data:
         samples = malware_data.get("data", [])
         if samples:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{len(samples)} malware samples associated with {query}",
                 type="OTX Malware Samples",
                 source="AlienVault OTX",
@@ -156,7 +157,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
     if url_list_data:
         urls = url_list_data.get("url_list", [])
         if urls:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{len(urls)} URLs associated with {query}",
                 type="OTX URL List",
                 source="AlienVault OTX",
@@ -169,7 +170,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             ))
 
     if pulse_count > 0:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{pulse_count} associated OTX pulses across indicator types",
             type="OTX Pulse Count",
             source="AlienVault OTX",
@@ -191,7 +192,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             author = pulse.get("author", {}).get("username", "Unknown")
             adversary = pulse.get("adversary", "")
 
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=pulse_name[:200],
                 type="OTX Pulse",
                 source="AlienVault OTX",
@@ -205,7 +206,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             ))
 
             if adversary:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Adversary: {adversary}",
                     type="OTX Threat Actor",
                     source="AlienVault OTX",
@@ -218,7 +219,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                 ))
 
             if pulse_desc:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Pulse description: {pulse_desc[:200]}",
                     type="OTX Pulse Detail",
                     source="AlienVault OTX",
@@ -232,7 +233,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
             if tags:
                 for tag in tags[:3]:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Tag: {tag}",
                         type="OTX Pulse Tag",
                         source="AlienVault OTX",
@@ -250,7 +251,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             pulse_types[t] += 1
         if pulse_types:
             pt_summary = ", ".join(f"{k}: {v}" for k, v in sorted(pulse_types.items(), key=lambda x: -x[1]))
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Threat type distribution: {pt_summary}",
                 type="OTX Threat Type Distribution",
                 source="AlienVault OTX",
@@ -263,7 +264,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             ))
 
     if indicators:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{len(indicators)} indicators associated with {query}",
             type="OTX Indicator Count",
             source="AlienVault OTX",
@@ -278,7 +279,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
     for itype in INDICATOR_TYPES:
         ind_data = await query_indicators_by_type(query, itype, client)
         if ind_data:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{itype} indicator data available",
                 type=f"OTX Indicator: {itype}",
                 source="AlienVault OTX",
@@ -291,7 +292,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             ))
 
     if not findings:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="No OTX data found for target",
             type="OTX Check Complete",
             source="AlienVault OTX",

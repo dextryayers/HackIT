@@ -7,9 +7,9 @@ import struct
 import hashlib
 import ssl
 from urllib.parse import urlparse, quote
-from models import IntelligenceFinding
 from typing import List, Dict, Optional, Set
 from datetime import datetime
+from module_common import safe_fetch, make_finding
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
@@ -203,7 +203,7 @@ async def get_historical_dns(client: httpx.AsyncClient, domain: str) -> List[Dic
     try:
         url = f"https://api.securitytrails.com/v1/domain/{domain}/history/dns"
         headers = {"User-Agent": UA, "Accept": "application/json", "APIKEY": "demo"}
-        resp = await client.get(url, headers=headers, timeout=20.0)
+        resp = await safe_fetch(client, url, headers=headers, timeout=20.0)
         if resp.status_code == 200:
             data = resp.json()
             for record in data.get("records", [])[:50]:
@@ -220,7 +220,7 @@ async def get_historical_dns(client: httpx.AsyncClient, domain: str) -> List[Dic
     try:
         url = f"https://api.securitytrails.com/v1/domain/{domain}/subdomains"
         headers = {"User-Agent": UA, "Accept": "application/json", "APIKEY": "demo"}
-        resp = await client.get(url, headers=headers, timeout=20.0)
+        resp = await safe_fetch(client, url, headers=headers, timeout=20.0)
         if resp.status_code == 200:
             data = resp.json()
             subdomains = data.get("subdomains", [])
@@ -243,7 +243,7 @@ async def get_crtsh_certs(client: httpx.AsyncClient, domain: str) -> List[Dict]:
     try:
         url = f"https://crt.sh/?q=%25.{quote(domain)}&output=json"
         headers = {"User-Agent": UA}
-        resp = await client.get(url, headers=headers, timeout=30.0)
+        resp = await safe_fetch(client, url, headers=headers, timeout=30.0)
         if resp.status_code == 200:
             data = resp.json()
             for entry in data[:200]:
@@ -268,7 +268,7 @@ async def get_wayback_machine(client: httpx.AsyncClient, domain: str) -> List[st
     try:
         url = f"https://web.archive.org/cdx/search/cdx?url={domain}&output=json&limit=20&fl=original,statuscode,timestamp"
         headers = {"User-Agent": UA}
-        resp = await client.get(url, headers=headers, timeout=30.0)
+        resp = await safe_fetch(client, url, headers=headers, timeout=30.0)
         if resp.status_code == 200:
             data = resp.json()
             for entry in data[1:]:
@@ -291,7 +291,7 @@ async def get_securitytrails_history(client: httpx.AsyncClient, domain: str) -> 
     try:
         url = f"https://api.securitytrails.com/v1/history/{domain}/dns/a"
         headers = {"User-Agent": UA, "APIKEY": "demo"}
-        resp = await client.get(url, headers=headers, timeout=20.0)
+        resp = await safe_fetch(client, url, headers=headers, timeout=20.0)
         if resp.status_code == 200:
             data = resp.json()
             for record in data.get("records", []):
@@ -380,12 +380,12 @@ async def shodan_favicon_search(client: httpx.AsyncClient, domain: str) -> List[
     ips = []
     try:
         fav_url = f"https://{domain}/favicon.ico"
-        resp = await client.get(fav_url, headers={"User-Agent": UA}, timeout=15.0)
+        resp = await safe_fetch(client, fav_url, headers={"User-Agent": UA}, timeout=15.0)
         if resp.status_code == 200:
             fav_hash = hashlib.md5(resp.content).hexdigest()
             url = f"https://www.shodan.io/search?query=http.favicon.hash:{fav_hash}"
             headers = {"User-Agent": UA}
-            search_resp = await client.get(url, headers=headers, timeout=20.0)
+            search_resp = await safe_fetch(client, url, headers=headers, timeout=20.0)
             if search_resp.status_code == 200:
                 found_ips = re.findall(r'(?:\b(?:\d{1,3}\.){3}\d{1,3})\b', search_resp.text)
                 for found_ip in set(found_ips):
@@ -400,7 +400,7 @@ async def shodan_hostname_search(client: httpx.AsyncClient, domain: str) -> List
     try:
         url = f"https://www.shodan.io/search?query=hostname%3A{quote(domain)}"
         headers = {"User-Agent": UA}
-        resp = await client.get(url, headers=headers, timeout=20.0)
+        resp = await safe_fetch(client, url, headers=headers, timeout=20.0)
         if resp.status_code == 200:
             found_ips = re.findall(r'(?:\b(?:\d{1,3}\.){3}\d{1,3})\b', resp.text)
             for ip in set(found_ips):
@@ -415,7 +415,7 @@ async def censys_search(client: httpx.AsyncClient, domain: str) -> List[str]:
     try:
         url = f"https://search.censys.io/search?resource=hosts&q={quote(domain)}"
         headers = {"User-Agent": UA}
-        resp = await client.get(url, headers=headers, timeout=20.0)
+        resp = await safe_fetch(client, url, headers=headers, timeout=20.0)
         if resp.status_code == 200:
             found_ips = re.findall(r'(?:\b(?:\d{1,3}\.){3}\d{1,3})\b', resp.text)
             for ip in set(found_ips):
@@ -430,7 +430,7 @@ async def shodan_cert_search(client: httpx.AsyncClient, domain: str) -> List[str
     try:
         url = f"https://www.shodan.io/search?query=ssl.cert.subject.cn%3A{quote(domain)}"
         headers = {"User-Agent": UA}
-        resp = await client.get(url, headers=headers, timeout=20.0)
+        resp = await safe_fetch(client, url, headers=headers, timeout=20.0)
         if resp.status_code == 200:
             found_ips = re.findall(r'(?:\b(?:\d{1,3}\.){3}\d{1,3})\b', resp.text)
             for ip in set(found_ips):
@@ -443,13 +443,13 @@ async def shodan_cert_search(client: httpx.AsyncClient, domain: str) -> List[str
 async def compare_headers(client: httpx.AsyncClient, domain: str, ip: str) -> Dict:
     result = {"origin_indicators": [], "is_origin": False}
     try:
-        domain_resp = await client.get(f"https://{domain}", headers={"User-Agent": UA}, timeout=15.0, follow_redirects=False)
+        domain_resp = await safe_fetch(client, f"https://{domain}", headers={"User-Agent": UA}, timeout=15.0, follow_redirects=False)
         domain_headers = {k.lower(): v for k, v in dict(domain_resp.headers).items()}
         ip_headers = {}
         for port in [80, 443, 8080, 8443]:
             try:
                 proto = "https" if port in [443, 8443] else "http"
-                ip_resp = await client.get(f"{proto}://{ip}:{port}", headers={"User-Agent": UA, "Host": domain}, timeout=10.0, follow_redirects=False)
+                ip_resp = await safe_fetch(client, f"{proto}://{ip}:{port}", headers={"User-Agent": UA, "Host": domain}, timeout=10.0, follow_redirects=False)
                 ip_headers = {k.lower(): v for k, v in dict(ip_resp.headers).items()}
                 break
             except Exception:
@@ -477,7 +477,7 @@ async def scan_alt_ports(client: httpx.AsyncClient, ip: str) -> List[Dict]:
     for port in ALT_PORTS[:8]:
         try:
             proto = "https" if port in [443, 8443, 4443, 2083, 2087, 2096, 7443] else "http"
-            resp = await client.get(
+            resp = await safe_fetch(client, 
                 f"{proto}://{ip}:{port}",
                 headers={"User-Agent": UA},
                 timeout=5.0,
@@ -517,7 +517,7 @@ async def scan_ip_range(client: httpx.AsyncClient, base_ip: str) -> List[str]:
 
 async def check_host_banner(client: httpx.AsyncClient, ip: str) -> Optional[str]:
     try:
-        resp = await client.get(f"http://{ip}:80", headers={"User-Agent": UA}, timeout=5.0, follow_redirects=False)
+        resp = await safe_fetch(client, f"http://{ip}:80", headers={"User-Agent": UA}, timeout=5.0, follow_redirects=False)
         server = resp.headers.get("server", "")
         if server and not is_cdn_ip(ip):
             return ip
@@ -533,7 +533,7 @@ async def rtt_proximity_check(client: httpx.AsyncClient, domain: str, edge_ips: 
         for _ in range(2):
             t1 = time.time()
             try:
-                resp = await client.get(f"https://{domain}", headers={"User-Agent": UA}, timeout=10.0)
+                resp = await safe_fetch(client, f"https://{domain}", headers={"User-Agent": UA}, timeout=10.0)
                 t2 = time.time()
                 rtt = (t2 - t1) * 1000
                 if base_rtt is None or rtt < base_rtt:
@@ -551,7 +551,7 @@ async def rtt_proximity_check(client: httpx.AsyncClient, domain: str, edge_ips: 
                             continue
                         t1 = time.time()
                         try:
-                            resp = await client.get(f"http://{test_ip}:80", headers={"User-Agent": UA}, timeout=3.0)
+                            resp = await safe_fetch(client, f"http://{test_ip}:80", headers={"User-Agent": UA}, timeout=3.0)
                             t2 = time.time()
                             test_rtt = (t2 - t1) * 1000
                             if test_rtt < base_rtt * 0.3:
@@ -572,15 +572,15 @@ async def crawl(target: str, client: httpx.AsyncClient):
     edge_ips = []
 
     try:
-        resp = await client.get(f"https://{domain}", headers={"User-Agent": UA}, timeout=15.0, follow_redirects=True)
+        resp = await safe_fetch(client, f"https://{domain}", headers={"User-Agent": UA}, timeout=15.0, follow_redirects=True)
         headers = dict(resp.headers)
         detected = detect_cdn_from_headers(headers)
         detected_cdns = detected
         if detected:
             for cdn in detected:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"CDN detected: {cdn.capitalize()}",
-                    type=f"CDN: {cdn.capitalize()}",
+                    ftype=f"CDN: {cdn.capitalize()}",
                     source="CDNOriginFinder",
                     confidence="High",
                     color="blue",
@@ -598,9 +598,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         if not is_cdn_ip(ip):
             source = record.get("source", "Historical DNS")
             hostname = record.get("hostname", "")
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Origin IP: {ip}",
-                type=f"CDN: Pre-CDN IP",
+                ftype=f"CDN: Pre-CDN IP",
                 source=f"CDNOriginFinder/{source}",
                 confidence="Medium",
                 color="orange",
@@ -616,9 +616,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         ip = record.get("ip", "")
         hostname = record.get("hostname", "")
         if ip and not is_cdn_ip(ip):
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Origin IP: {ip}",
-                type="CDN: SSL SAN Origin",
+                ftype="CDN: SSL SAN Origin",
                 source="CDNOriginFinder/CRT.sh",
                 confidence="Medium",
                 color="orange",
@@ -632,9 +632,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
     wayback_ips = await get_wayback_machine(client, domain)
     for ip in wayback_ips:
         if ip not in [f.entity.replace("Origin IP: ", "") for f in findings if f.type.startswith("CDN:")]:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Origin IP: {ip}",
-                type="CDN: Wayback Historical IP",
+                ftype="CDN: Wayback Historical IP",
                 source="CDNOriginFinder/Wayback",
                 confidence="Medium",
                 color="orange",
@@ -646,9 +646,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
     sec_trails_ips = await get_securitytrails_history(client, domain)
     for ip in sec_trails_ips:
         if ip not in [f.entity.replace("Origin IP: ", "") for f in findings if f.type.startswith("CDN:")]:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Origin IP: {ip}",
-                type="CDN: SecurityTrails Historical A",
+                ftype="CDN: SecurityTrails Historical A",
                 source="CDNOriginFinder/SecurityTrails",
                 confidence="Medium",
                 color="orange",
@@ -658,9 +658,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
     shodan_ips = await shodan_favicon_search(client, domain)
     for ip in shodan_ips:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Origin IP: {ip}",
-            type="CDN: Favicon Hash Match",
+            ftype="CDN: Favicon Hash Match",
             source="CDNOriginFinder/Shodan",
             confidence="Medium",
             color="orange",
@@ -672,9 +672,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
     shodan_host_ips = await shodan_hostname_search(client, domain)
     for ip in shodan_host_ips:
         if ip not in [f.entity.replace("Origin IP: ", "") for f in findings if f.type.startswith("CDN:")]:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Origin IP: {ip}",
-                type="CDN: Shodan Hostname Search",
+                ftype="CDN: Shodan Hostname Search",
                 source="CDNOriginFinder/Shodan",
                 confidence="Low",
                 color="slate",
@@ -686,9 +686,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
     shodan_cert_ips = await shodan_cert_search(client, domain)
     for ip in shodan_cert_ips:
         if ip not in [f.entity.replace("Origin IP: ", "") for f in findings if f.type.startswith("CDN:")]:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Origin IP: {ip}",
-                type="CDN: Shodan Certificate Search",
+                ftype="CDN: Shodan Certificate Search",
                 source="CDNOriginFinder/Shodan",
                 confidence="Low",
                 color="slate",
@@ -700,9 +700,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
     censys_ips = await censys_search(client, domain)
     for ip in censys_ips:
         if ip not in [f.entity.replace("Origin IP: ", "") for f in findings if f.type.startswith("CDN:")]:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Origin IP: {ip}",
-                type="CDN: Censys Search",
+                ftype="CDN: Censys Search",
                 source="CDNOriginFinder/Censys",
                 confidence="Low",
                 color="slate",
@@ -717,9 +717,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ip = sr.get("ip", "")
             hostname = sr.get("hostname", "")
             if ip and not is_cdn_ip(ip) and ip not in [f.entity.replace("Origin IP: ", "") for f in findings if f.type.startswith("CDN:")]:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Origin IP: {ip}",
-                    type="CDN: Subdomain Discovery",
+                    ftype="CDN: Subdomain Discovery",
                     source=f"CDNOriginFinder/{sr.get('source', 'Subdomain Brute')}",
                     confidence="Medium",
                     color="orange",
@@ -732,9 +732,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             hostname = sr.get("hostname", "")
             cname = sr.get("cname", "")
             cdn = sr.get("cdn", "Unknown")
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"CDN CNAME: {hostname} -> {cname}",
-                type=f"CDN: CNAME ({cdn})",
+                ftype=f"CDN: CNAME ({cdn})",
                 source="CDNOriginFinder/Subdomain CNAME",
                 confidence="High",
                 color="blue",
@@ -745,9 +745,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
     sans = await check_ssl_sans(client, domain)
     for san in sans:
         if san != domain and san != f"*.{domain.split('.')[-2]}.{domain.split('.')[-1]}" if len(domain.split('.')) >= 2 else True:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"SSL SAN: {san}",
-                type="CDN: SSL SAN Discovery",
+                ftype="CDN: SSL SAN Discovery",
                 source="CDNOriginFinder/SSL SAN",
                 confidence="Medium",
                 color="slate",
@@ -773,9 +773,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         alt_port_results = await scan_alt_ports(client, ip)
         for apr in alt_port_results:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Origin service on {ip}:{apr['port']}",
-                type=f"CDN: Origin Port ({apr['server'][:30]})",
+                ftype=f"CDN: Origin Port ({apr['server'][:30]})",
                 source="CDNOriginFinder/Alt Port",
                 confidence="High" if apr.get("server") else "Medium",
                 color="orange",
@@ -790,9 +790,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
     if detected_cdns and len(all_origin_ips) == 0:
         for cdn in detected_cdns:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"No origin IP found behind {cdn}",
-                type=f"CDN: Origin Not Found",
+                ftype=f"CDN: Origin Not Found",
                 source="CDNOriginFinder",
                 confidence="Medium",
                 color="slate",
@@ -804,9 +804,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
     for dr in dns_records:
         rtype = dr.get("type", "")
         value = dr.get("value", "")
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{rtype} record: {value[:200]}",
-            type=f"DNS: {rtype} Record",
+            ftype=f"DNS: {rtype} Record",
             source="CDNOriginFinder/DNS",
             confidence="High",
             color="slate",
@@ -816,9 +816,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
     crtsh_hosts = await crtsh_domain_search(client, domain)
     for host in crtsh_hosts[:30]:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"CRT.sh host: {host}",
-            type="CDN: CRT.sh Host Discovery",
+            ftype="CDN: CRT.sh Host Discovery",
             source="CDNOriginFinder/CRT.sh",
             confidence="Medium",
             color="slate",
@@ -828,9 +828,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
     http_check = await check_http_origin(client, domain)
     if http_check:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"HTTP origin: {http_check[:200]}",
-            type="CDN: HTTP Origin Check",
+            ftype="CDN: HTTP Origin Check",
             source="CDNOriginFinder/HTTP",
             confidence="High",
             color="orange",
@@ -840,9 +840,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
     caa_records = await check_caa_record(client, domain)
     for caa in caa_records:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"CAA record: {caa[:200]}",
-            type="DNS: CAA Record",
+            ftype="DNS: CAA Record",
             source="CDNOriginFinder/DNS",
             confidence="High",
             color="slate",
@@ -861,9 +861,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     f.threat_level = "High Risk"
 
         hosting_type = classify_hosting_type(ip)
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Hosting: {ip} -> {hosting_type}",
-            type="CDN: Origin Hosting Analysis",
+            ftype="CDN: Origin Hosting Analysis",
             source="CDNOriginFinder",
             confidence="Medium",
             color="slate",
@@ -873,9 +873,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         reverse_domains = await find_origin_via_reverse_ip(ip)
         for rd in reverse_domains:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Reverse PTR: {ip} -> {rd}",
-                type="CDN: Reverse DNS",
+                ftype="CDN: Reverse DNS",
                 source="CDNOriginFinder",
                 confidence="Medium",
                 color="slate",
@@ -885,9 +885,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         vhosts = await detect_vhosts_on_ip(client, ip)
         for vh in vhosts:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"VHost on {ip}: {vh[:200]}",
-                type="CDN: Virtual Host Detection",
+                ftype="CDN: Virtual Host Detection",
                 source="CDNOriginFinder",
                 confidence="Medium",
                 color="orange",
@@ -896,9 +896,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ))
 
     if not detected_cdns and all_origin_ips:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"No CDN detected - {len(all_origin_ips)} IP(s) likely direct origin servers",
-            type="CDN: No CDN Detected",
+            ftype="CDN: No CDN Detected",
             source="CDNOriginFinder",
             confidence="High",
             color="emerald",
@@ -909,9 +909,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
     for ip in edge_ips:
         cloud_info = detect_cloud_from_ip(ip)
         if cloud_info:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Edge IP {ip}: {cloud_info}",
-                type="CDN: Edge IP Cloud Analysis",
+                ftype="CDN: Edge IP Cloud Analysis",
                 source="CDNOriginFinder",
                 confidence="High",
                 color="slate",
@@ -924,9 +924,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         medium_origin = sum(1 for f in findings if "Origin IP" in f.entity and f.confidence == "Medium")
         low_origin = sum(1 for f in findings if "Origin IP" in f.entity and f.confidence == "Low")
         cdn_names = list(set(detected_cdns))
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"CDN Origin Scan: {origin_count + medium_origin + low_origin} candidates ({origin_count} high, {medium_origin} medium, {low_origin} low)",
-            type="CDN: Summary",
+            ftype="CDN: Summary",
             source="CDNOriginFinder",
             confidence="Medium",
             color="red" if origin_count > 0 else "orange",
@@ -936,7 +936,6 @@ async def crawl(target: str, client: httpx.AsyncClient):
         ))
 
     return findings
-
 
 # === EXTENDED UPGRADE: More subdomains, ASN/IP-range analysis, favicon comparison, reverse-IP, confidence scoring ===
 
@@ -1198,7 +1197,7 @@ async def crtsh_domain_search(client: httpx.AsyncClient, domain: str) -> List[st
     try:
         url = f"https://crt.sh/?q=%25.{quote(domain)}&output=json&limit=500"
         headers = {"User-Agent": UA}
-        resp = await client.get(url, headers=headers, timeout=30.0)
+        resp = await safe_fetch(client, url, headers=headers, timeout=30.0)
         if resp.status_code == 200:
             data = resp.json()
             for entry in data[:500]:
@@ -1214,7 +1213,7 @@ async def crtsh_domain_search(client: httpx.AsyncClient, domain: str) -> List[st
 async def check_http_origin(client: httpx.AsyncClient, domain: str) -> Optional[str]:
     try:
         url = f"http://{domain}"
-        resp = await client.get(url, headers={"User-Agent": UA}, timeout=10.0, follow_redirects=False)
+        resp = await safe_fetch(client, url, headers={"User-Agent": UA}, timeout=10.0, follow_redirects=False)
         if resp.status_code not in (301, 302, 307, 308):
             return f"HTTP direct accessible on port 80 (status {resp.status_code})"
         location = resp.headers.get("location", "")
@@ -1269,7 +1268,7 @@ async def find_origin_via_reverse_ip(ip: str) -> List[str]:
 async def detect_vhosts_on_ip(client: httpx.AsyncClient, ip: str) -> List[str]:
     hosts = []
     try:
-        resp = await client.get(f"http://{ip}", headers={"User-Agent": UA}, timeout=8.0, follow_redirects=False)
+        resp = await safe_fetch(client, f"http://{ip}", headers={"User-Agent": UA}, timeout=8.0, follow_redirects=False)
         body = resp.text[:10000]
         title_m = re.search(r'<title>([^<]+)</title>', body, re.IGNORECASE)
         if title_m:

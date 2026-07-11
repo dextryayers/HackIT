@@ -1,7 +1,7 @@
 import httpx
 import asyncio
 import re
-import socket
+from module_common import safe_fetch, safe_fetch_json, make_finding, resolve_ip, is_ip
 from models import IntelligenceFinding
 
 LINODE_SERVICES = {
@@ -65,16 +65,13 @@ OBJECT_STORAGE_URLS = [
 DNS_MANAGER_NS = ["ns1.linode.com", "ns2.linode.com", "ns3.linode.com", "ns4.linode.com", "ns5.linode.com"]
 
 async def _resolve_target(target: str) -> tuple:
-    try:
-        socket.inet_aton(target)
-        return target, True
-    except OSError:
-        pass
-    try:
-        ip = socket.gethostbyname(target)
+    t = target.strip()
+    if is_ip(t):
+        return t, True
+    ip = resolve_ip(t)
+    if ip:
         return ip, False
-    except Exception as e:
-        return None, str(e)
+    return None, "DNS resolution failed"
 
 async def _check_ip_ranges(ip: str) -> list:
     findings = []
@@ -89,7 +86,7 @@ async def _check_ip_ranges(ip: str) -> list:
             si = (int(sp[0])<<24)+(int(sp[1])<<16)+(int(sp[2])<<8)+int(sp[3])
             ei = (int(ep[0])<<24)+(int(ep[1])<<16)+(int(ep[2])<<8)+int(ep[3])
             if si <= ip_int <= ei:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Linode {region}",
                     type="Linode IP Range Match",
                     source="LinodeCloudScanner",
@@ -112,7 +109,7 @@ async def _check_ip_ranges(ip: str) -> list:
                 si = (int(sp[0])<<24)+(int(sp[1])<<16)+(int(sp[2])<<8)+int(sp[3])
                 ei = (int(ep[0])<<24)+(int(ep[1])<<16)+(int(ep[2])<<8)+int(ep[3])
                 if si <= ip_int <= ei:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Linode Region: {region}",
                         type="Linode Region Detected (IP)",
                         source="LinodeCloudScanner",
@@ -141,7 +138,7 @@ async def _check_dns_services(target: str) -> list:
                 for svc, patterns in LINODE_SERVICES.items():
                     for pat in patterns:
                         if pat in cname:
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=f"Linode {svc}",
                                 type="Linode Service (CNAME)",
                                 source="LinodeCloudScanner",
@@ -162,7 +159,7 @@ async def _check_dns_services(target: str) -> list:
             for r in answers_ns:
                 ns = str(r.target).rstrip('.').lower()
                 if ns in DNS_MANAGER_NS or "linode" in ns:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity="Linode DNS Manager",
                         type="Linode DNS Service (NS)",
                         source="LinodeCloudScanner",
@@ -185,14 +182,14 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
     findings = []
     base = f"https://{target}" if not target.startswith("http") else target
     try:
-        resp = await client.get(base, follow_redirects=True, timeout=10.0,
+        resp = await safe_fetch(client, base, follow_redirects=True, timeout=10.0,
             headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"})
         headers = dict(resp.headers)
         server = headers.get("server", "").lower()
         all_vals = " ".join(str(v).lower() for v in headers.values())
 
         if "linode" in server or "linode" in all_vals:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="Linode (Server Header)",
                 type="Linode Infrastructure",
                 source="LinodeCloudScanner",
@@ -206,7 +203,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
             ))
         html = resp.text[:50000].lower() if hasattr(resp, "text") else ""
         if "linode" in html or "linodeusercontent" in html:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="Linode (HTML Indicator)",
                 type="Linode Cloud (HTML)",
                 source="LinodeCloudScanner",
@@ -219,7 +216,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
                 tags=["cloud", "linode"]
             ))
     except Exception as e:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Header analysis error: {str(e)[:100]}",
             type="Linode Scan Error",
             source="LinodeCloudScanner",
@@ -244,12 +241,12 @@ async def _check_linode_object_storage(target: str, client: httpx.AsyncClient) -
         for url_tmpl in OBJECT_STORAGE_URLS:
             url = url_tmpl.format(name=name)
             try:
-                resp = await client.get(url, timeout=5.0,
+                resp = await safe_fetch(client, url, timeout=5.0,
                     headers={"User-Agent": "Mozilla/5.0"})
                 if resp.status_code == 200:
                     body = resp.text[:200]
                     is_listing = "ListBucketResult" in body or "<Contents>" in body
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"linode-obj://{name}",
                         type="Linode Object Storage (Public)",
                         source="LinodeCloudScanner",
@@ -264,7 +261,7 @@ async def _check_linode_object_storage(target: str, client: httpx.AsyncClient) -
                     ))
                     break
                 elif resp.status_code == 403:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"linode-obj://{name}",
                         type="Linode Object Storage (Exists)",
                         source="LinodeCloudScanner",
@@ -291,11 +288,11 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     ip, is_ip = await _resolve_target(target)
     if ip is None:
-        findings.append(IntelligenceFinding(entity=f"DNS resolution failed: {target}", type="DNS Error", source="LinodeCloudScanner", confidence="Low", color="red", category="Cloud / Infrastructure OSINT", raw_data=str(is_ip)[:200], tags=["error"]))
+        findings.append(make_finding(entity=f"DNS resolution failed: {target}", type="DNS Error", source="LinodeCloudScanner", confidence="Low", color="red", category="Cloud / Infrastructure OSINT", raw_data=str(is_ip)[:200], tags=["error"]))
         return findings
 
     if not is_ip:
-        findings.append(IntelligenceFinding(entity=f"{target} -> {ip}", type="DNS Resolution", source="LinodeCloudScanner", confidence="High", color="slate", category="Cloud / Infrastructure OSINT", threat_level="Informational", status="Resolved", resolution=ip, tags=["dns", "resolution"]))
+        findings.append(make_finding(entity=f"{target} -> {ip}", type="DNS Resolution", source="LinodeCloudScanner", confidence="High", color="slate", category="Cloud / Infrastructure OSINT", threat_level="Informational", status="Resolved", resolution=ip, tags=["dns", "resolution"]))
 
     findings.extend(await _check_ip_ranges(ip))
     findings.extend(await _check_dns_services(target))
@@ -306,11 +303,11 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     linode_ip = sum(1 for f in findings if "Linode IP Range" in f.type)
     storage = sum(1 for f in findings if "Object Storage" in f.type or "linode-obj" in f.entity)
 
-    findings.append(IntelligenceFinding(entity=f"Linode services detected: {services}", type="Linode Service Count", source="LinodeCloudScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["linode", "summary"]))
-    findings.append(IntelligenceFinding(entity=f"Linode IP match: {'Yes' if linode_ip else 'No'}", type="Linode Hosting Status", source="LinodeCloudScanner", confidence="Medium", color="slate", category="Cloud / Infrastructure OSINT", tags=["linode", "summary"]))
-    findings.append(IntelligenceFinding(entity=f"Linode object storage: {storage}", type="Linode Storage Count", source="LinodeCloudScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["linode", "summary"]))
-    findings.append(IntelligenceFinding(entity=f"Target: {target}", type="Linode Scan Target", source="LinodeCloudScanner", confidence="High", color="slate", category="Cloud / Infrastructure OSINT", tags=["linode", "target"]))
-    findings.append(IntelligenceFinding(entity=f"Resolved IP: {ip}", type="Linode Resolved Address", source="LinodeCloudScanner", confidence="High", color="slate", category="Cloud / Infrastructure OSINT", tags=["linode", "ip"]))
-    findings.append(IntelligenceFinding(entity=f"Total Linode findings: {len(findings)}", type="Linode Scan Summary", source="LinodeCloudScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["linode", "summary"]))
+    findings.append(make_finding(entity=f"Linode services detected: {services}", type="Linode Service Count", source="LinodeCloudScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["linode", "summary"]))
+    findings.append(make_finding(entity=f"Linode IP match: {'Yes' if linode_ip else 'No'}", type="Linode Hosting Status", source="LinodeCloudScanner", confidence="Medium", color="slate", category="Cloud / Infrastructure OSINT", tags=["linode", "summary"]))
+    findings.append(make_finding(entity=f"Linode object storage: {storage}", type="Linode Storage Count", source="LinodeCloudScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["linode", "summary"]))
+    findings.append(make_finding(entity=f"Target: {target}", type="Linode Scan Target", source="LinodeCloudScanner", confidence="High", color="slate", category="Cloud / Infrastructure OSINT", tags=["linode", "target"]))
+    findings.append(make_finding(entity=f"Resolved IP: {ip}", type="Linode Resolved Address", source="LinodeCloudScanner", confidence="High", color="slate", category="Cloud / Infrastructure OSINT", tags=["linode", "ip"]))
+    findings.append(make_finding(entity=f"Total Linode findings: {len(findings)}", type="Linode Scan Summary", source="LinodeCloudScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["linode", "summary"]))
 
     return findings

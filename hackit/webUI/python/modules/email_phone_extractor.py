@@ -1,7 +1,6 @@
 import httpx
 import re
-import asyncio
-from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 
@@ -76,7 +75,7 @@ async def scrape_domain_for_phones(domain: str, client: httpx.AsyncClient) -> li
         for proto in ["https", "http"]:
             url = f"{proto}://{domain}{path}"
             try:
-                resp = await client.get(url, timeout=10.0,
+                resp = await safe_fetch(client, url, timeout=10.0,
                     headers={"User-Agent": UA}, follow_redirects=True)
                 if resp.status_code == 200 and len(resp.text) > 200:
                     text = resp.text
@@ -161,7 +160,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                 v_color = "orange"
                 v_threat = "Elevated Risk"
 
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Phone: {phone['number']} (Country: {country})",
                 type="Phone: Number Extraction",
                 source="EmailPhoneExtractor",
@@ -176,9 +175,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             ))
 
             if carrier != "Unknown":
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Carrier: {carrier}",
-                    type="Phone: Carrier Detection",
+                    ftype="Phone: Carrier Detection",
                     source="EmailPhoneExtractor",
                     confidence="Low",
                     color="slate",
@@ -188,9 +187,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                 ))
 
             if is_voip:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"VoIP number detected: {phone['number']}",
-                    type="Phone: VoIP Detection",
+                    ftype="Phone: VoIP Detection",
                     source="EmailPhoneExtractor",
                     confidence="Medium",
                     color="orange",
@@ -201,9 +200,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
             if not validation["valid"]:
                 for issue in validation["issues"]:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Validation issue for {phone['number']}: {issue}",
-                        type="Phone: Validation Issue",
+                        ftype="Phone: Validation Issue",
                         source="EmailPhoneExtractor",
                         confidence="Medium",
                         color="orange",
@@ -212,9 +211,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                         tags=["phone", "validation"]
                     ))
     else:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"No phone numbers found on {domain}",
-            type="Phone: No Numbers Found",
+            ftype="Phone: No Numbers Found",
             source="EmailPhoneExtractor",
             confidence="Medium",
             color="slate",
@@ -224,7 +223,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             tags=["phone", "no-results"]
         ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Phone extraction complete for {domain}: {len(phones)} numbers found",
         type="Phone: Extraction Summary",
         source="EmailPhoneExtractor",

@@ -4,6 +4,7 @@ import json
 from urllib.parse import urlparse, quote
 from typing import List
 from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash
 
 BREACH_SOURCES = [
     ("HaveIBeenPwned", "https://haveibeenpwned.com/api/v3/breachedaccount/{}"),
@@ -64,61 +65,42 @@ COMMON_PASSWORDS = {"123456", "password", "123456789", "12345678", "12345", "qwe
 
 async def check_hibp(target: str, client: httpx.AsyncClient) -> list:
     results = []
-    try:
-        resp = await client.get(
-            f"https://haveibeenpwned.com/api/v3/breachedaccount/{quote(target)}",
-            headers={"User-Agent": "OSINT-Module/1.0", "hibp-api-key": ""},
-            timeout=15.0
-        )
-        if resp.status_code == 200:
-            for breach in resp.json():
-                results.append({
-                    "source": "HaveIBeenPwned",
-                    "name": breach.get("Name", ""),
-                    "domain": breach.get("Domain", ""),
-                    "date": breach.get("BreachDate", ""),
-                    "data_classes": breach.get("DataClasses", []),
-                    "description": breach.get("Description", "")[:200],
-                })
-    except:
-        pass
+    data = await safe_fetch_json(client,
+        f"https://haveibeenpwned.com/api/v3/breachedaccount/{quote(target)}",
+        headers={"hibp-api-key": ""})
+    if data:
+        for breach in data:
+            results.append({
+                "source": "HaveIBeenPwned",
+                "name": breach.get("Name", ""),
+                "domain": breach.get("Domain", ""),
+                "date": breach.get("BreachDate", ""),
+                "data_classes": breach.get("DataClasses", []),
+                "description": breach.get("Description", "")[:200],
+            })
     return results
 
 async def check_dehashed(target: str, client: httpx.AsyncClient) -> list:
     results = []
-    try:
-        resp = await client.get(
-            f"https://dehashed.com/search?query={quote(target)}",
-            headers={"User-Agent": "Mozilla/5.0"},
-            timeout=15.0
-        )
-        if resp.status_code == 200:
-            text = resp.text
-            result_count = len(re.findall(r'class=["\']result["\']', text))
-            if result_count > 0:
-                results.append({"source": "DeHashed", "count": result_count})
-    except:
-        pass
+    resp = await safe_fetch(client,
+        f"https://dehashed.com/search?query={quote(target)}")
+    if resp and resp.status_code == 200:
+        text = resp.text
+        result_count = len(re.findall(r'class=["\']result["\']', text))
+        if result_count > 0:
+            results.append({"source": "DeHashed", "count": result_count})
     return results
 
 async def check_leakcheck(target: str, client: httpx.AsyncClient) -> list:
     results = []
-    try:
-        resp = await client.get(
-            f"https://leakcheck.io/api/public?check={quote(target)}",
-            headers={"User-Agent": "OSINT-Module/1.0"},
-            timeout=15.0
-        )
-        if resp.status_code == 200:
-            data = resp.json()
-            if data.get("success"):
-                results.append({
-                    "source": "LeakCheck",
-                    "found": data.get("found", False),
-                    "count": data.get("count", 0),
-                })
-    except:
-        pass
+    data = await safe_fetch_json(client,
+        f"https://leakcheck.io/api/public?check={quote(target)}")
+    if data and data.get("success"):
+        results.append({
+            "source": "LeakCheck",
+            "found": data.get("found", False),
+            "count": data.get("count", 0),
+        })
     return results
 
 async def classify_password_strength(password: str) -> str:
@@ -150,9 +132,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
     hibp_results = await check_hibp(t, client)
     for breach in hibp_results:
         data_classes = ", ".join(breach.get("data_classes", []))
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Breach: {breach['name']} ({breach['domain']}) - {breach['date']}",
-            type="Breach: Known Breach",
+            ftype="Breach: Known Breach",
             source="BreachCredChecker",
             confidence="Very High",
             color="red",
@@ -163,9 +145,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             raw_data=f"Data exposed: {data_classes}",
             tags=["breach", "hibp", breach['name'].lower().replace(" ", "-")],
         ))
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Data types exposed in {breach['name']}: {data_classes}",
-            type="Breach: Exposed Data Types",
+            ftype="Breach: Exposed Data Types",
             source="BreachCredChecker",
             confidence="High",
             color="orange",
@@ -178,9 +160,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
     dehashed_results = await check_dehashed(t, client)
     for result in dehashed_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"DeHashed: {result['count']} results for {t}",
-            type="Breach: DeHashed Results",
+            ftype="Breach: DeHashed Results",
             source="BreachCredChecker",
             confidence="Medium",
             color="red",
@@ -194,9 +176,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
     leakcheck_results = await check_leakcheck(t, client)
     for result in leakcheck_results:
         if result.get("found"):
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"LeakCheck: {result['count']} entries found for {t}",
-                type="Breach: LeakCheck Results",
+                ftype="Breach: LeakCheck Results",
                 source="BreachCredChecker",
                 confidence="High",
                 color="red",
@@ -209,9 +191,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
     public_breaches_containing = [b for b in BREACH_DATABASES if any(term in b.lower() for term in t.split(".") if len(term) > 3)]
     if public_breaches_containing:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Target may be in {len(public_breaches_containing)} public breach databases",
-            type="Breach: Database Match Estimate",
+            ftype="Breach: Database Match Estimate",
             source="BreachCredChecker",
             confidence="Low",
             color="yellow",
@@ -222,9 +204,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             tags=["breach", "database", "estimate"],
         ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Credential risk assessment for {t}",
-        type="Breach: Credential Risk",
+        ftype="Breach: Credential Risk",
         source="BreachCredChecker",
         confidence="Medium",
         color="orange" if hibp_results else "emerald",
@@ -242,9 +224,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             data_types_seen.add(dt)
 
     if data_types_seen:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Exposed data types: {', '.join(sorted(data_types_seen))}",
-            type="Breach: Data Type Inventory",
+            ftype="Breach: Data Type Inventory",
             source="BreachCredChecker",
             confidence="High",
             color="orange",
@@ -257,9 +239,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
     breach_timeline = sorted([b["date"] for b in hibp_results if b.get("date")])
     if breach_timeline:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Breach timeline: {breach_timeline[0]} to {breach_timeline[-1]} ({len(breach_timeline)} breaches)",
-            type="Breach: Timeline Analysis",
+            ftype="Breach: Timeline Analysis",
             source="BreachCredChecker",
             confidence="High",
             color="orange",
@@ -271,9 +253,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         ))
 
     if not hibp_results and not dehashed_results and not leakcheck_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="No breaches found for target in checked databases",
-            type="Breach: Scan Complete",
+            ftype="Breach: Scan Complete",
             source="BreachCredChecker",
             confidence="Low",
             color="emerald",
@@ -284,9 +266,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             tags=["breach", "clean"],
         ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Breach scan complete: {total_breaches} breach records found",
-        type="Breach: Scan Summary",
+        ftype="Breach: Scan Summary",
         source="BreachCredChecker",
         confidence="High",
         color="slate",

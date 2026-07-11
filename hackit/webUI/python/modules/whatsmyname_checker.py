@@ -1,11 +1,10 @@
-import httpx
 import asyncio
 import re
 import unicodedata
 import json
 from typing import List, Optional, Tuple, Dict, Any
 from urllib.parse import urlparse, urljoin
-from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash, IntelligenceFinding
 
 USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
 
@@ -428,8 +427,8 @@ async def enrich_profile(client: httpx.AsyncClient, platform: str, username: str
     if platform == "GitHub":
         api_url = f"https://api.github.com/users/{username}"
         try:
-            resp = await client.get(api_url, timeout=8.0, headers={"User-Agent": USER_AGENT, "Accept": "application/vnd.github.v3+json"})
-            if resp.status_code == 200:
+            resp = await safe_fetch(client, api_url, timeout=8.0, headers={"User-Agent": USER_AGENT, "Accept": "application/vnd.github.v3+json"})
+            if resp and resp.status_code == 200:
                 data = resp.json()
                 enrichment["api_data"] = {
                     "name": data.get("name"),
@@ -453,8 +452,8 @@ async def enrich_profile(client: httpx.AsyncClient, platform: str, username: str
     elif platform == "Reddit":
         about_url = f"https://www.reddit.com/user/{username}/about.json"
         try:
-            resp = await client.get(about_url, timeout=8.0, headers={"User-Agent": f"{USER_AGENT} (by /u/{username})"})
-            if resp.status_code == 200:
+            resp = await safe_fetch(client, about_url, timeout=8.0, headers={"User-Agent": f"{USER_AGENT} (by /u/{username})"})
+            if resp and resp.status_code == 200:
                 data = resp.json().get("data", {})
                 enrichment["api_data"] = {
                     "name": data.get("name"),
@@ -477,8 +476,8 @@ async def enrich_profile(client: httpx.AsyncClient, platform: str, username: str
     elif platform == "HackerNews":
         api_url = f"https://hacker-news.firebaseio.com/v0/user/{username}.json"
         try:
-            resp = await client.get(api_url, timeout=8.0)
-            if resp.status_code == 200:
+            resp = await safe_fetch(client, api_url, timeout=8.0)
+            if resp and resp.status_code == 200:
                 data = resp.json()
                 if data:
                     enrichment["api_data"] = {
@@ -497,8 +496,8 @@ async def enrich_profile(client: httpx.AsyncClient, platform: str, username: str
             if channel_match:
                 channel_id = channel_match.group(1)
                 oembed_url = f"https://www.youtube.com/oembed?url=https://www.youtube.com/channel/{channel_id}&format=json"
-                resp = await client.get(oembed_url, timeout=8.0)
-                if resp.status_code == 200:
+                resp = await safe_fetch(client, oembed_url, timeout=8.0)
+                if resp and resp.status_code == 200:
                     data = resp.json()
                     enrichment["api_data"] = {
                         "title": data.get("title"),
@@ -513,8 +512,8 @@ async def enrich_profile(client: httpx.AsyncClient, platform: str, username: str
     elif platform == "StackOverflow":
         api_url = f"https://api.stackexchange.com/2.3/users?inname={username}&order=desc&sort=reputation&site=stackoverflow"
         try:
-            resp = await client.get(api_url, timeout=8.0, headers={"User-Agent": USER_AGENT})
-            if resp.status_code == 200:
+            resp = await safe_fetch(client, api_url, timeout=8.0, headers={"User-Agent": USER_AGENT})
+            if resp and resp.status_code == 200:
                 data = resp.json().get("items", [])
                 if data:
                     enrichment["api_data"] = {
@@ -562,12 +561,11 @@ async def enrich_profile(client: httpx.AsyncClient, platform: str, username: str
 async def check_platform(client: httpx.AsyncClient, username: str, platform: str, url_template: str, do_extract: bool = True):
     url = url_template.replace("{username}", username)
     try:
-        resp = await client.get(
-            url,
-            timeout=8.0,
-            follow_redirects=True,
+        resp = await safe_fetch(client, url, timeout=8.0,
             headers={"User-Agent": USER_AGENT}
         )
+        if not resp:
+            return None
         status_code = resp.status_code
         final_url = str(resp.url)
         content_len = len(resp.text)
@@ -614,9 +612,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
     primary_username = re.sub(r'[^a-zA-Z0-9_.\-\p{L}]', '', primary_username.split("@")[0].split("/")[0]) if primary_username else primary_username
 
     if not primary_username or len(primary_username) < 1:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="Could not extract username from target",
-            type="Username Error",
+            ftype="Username Error",
             source="WhatsMyName",
             confidence="Low",
             color="red",
@@ -630,9 +628,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
     used_alias = False
     if len(extracted_usernames) > 1:
         used_alias = True
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Extracted {len(extracted_usernames)} username candidates: {', '.join(extracted_usernames)} — using '{username}' as primary",
-            type="Username Extraction",
+            ftype="Username Extraction",
             source="WhatsMyName",
             confidence="Medium",
             color="blue",
@@ -759,9 +757,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             if enrichment_map.get(platform):
                 tags.append("enriched")
 
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"@{username} on {platform}{display_name_str}{bio_str}{followers_str}{completeness_str}{ver_str}{activity_hint}",
-                type=f"Username Found: {platform}",
+                ftype=f"Username Found: {platform}",
                 source="WhatsMyName",
                 confidence="High" if status_code == 200 else "Medium",
                 color="emerald",
@@ -774,9 +772,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         elif status_type == "maybe":
             maybe_count += 1
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"@{username} possibly on {platform} (HTTP {status_code})",
-                type=f"Username Possibly: {platform}",
+                ftype=f"Username Possibly: {platform}",
                 source="WhatsMyName",
                 confidence="Low",
                 color="orange",
@@ -788,9 +786,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         elif status_type == "rate-limited":
             rate_limited_count += 1
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Rate-limited checking {platform}",
-                type="Rate Limited",
+                ftype="Rate Limited",
                 source="WhatsMyName",
                 confidence="Low",
                 color="red",
@@ -802,9 +800,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
     for cat, cat_count in sorted(category_found.items(), key=lambda x: -x[1]):
         cat_label = CATEGORY_MAP.get(cat, cat)
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{cat_label}: {cat_count} profiles found",
-            type=f"Username Category: {cat_label}",
+            ftype=f"Username Category: {cat_label}",
             source="WhatsMyName",
             confidence="Medium",
             color="purple",
@@ -819,9 +817,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
     score_level = "High" if score > 30 else ("Medium" if score > 10 else "Low")
     score_color = "red" if score > 30 else ("orange" if score > 10 else "emerald")
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Username '{username}' availability score: {score}% ({found_count} found / {maybe_count} maybe / {total_checked} checked)",
-        type="Username Availability Score",
+        ftype="Username Availability Score",
         source="WhatsMyName",
         confidence="High",
         color=score_color,
@@ -838,9 +836,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
     if categories_with_results:
         found_categories = [CATEGORY_MAP.get(c, c) for c in sorted(categories_with_results)]
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Platform categories with presence: {', '.join(found_categories)}",
-            type="Username Platform Categories",
+            ftype="Username Platform Categories",
             source="WhatsMyName",
             confidence="Medium",
             color="purple",
@@ -886,9 +884,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         breakdown_parts.append(f"Crypto: {crypto_count}")
 
     if breakdown_parts:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Type breakdown: {' | '.join(breakdown_parts)}",
-            type="Username Type Breakdown",
+            ftype="Username Type Breakdown",
             source="WhatsMyName",
             confidence="Medium",
             color="slate",
@@ -900,9 +898,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
     weighted = compute_category_weighted_score(category_found)
     weighted_pct = weighted["percentage"]
     w_color = "red" if weighted_pct > 50 else ("orange" if weighted_pct > 20 else "emerald")
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Category weighted presence: {weighted_pct}% (raw: {weighted['weighted_score']} / max: {weighted['max_possible']})",
-        type="Category Weighted Analysis",
+        ftype="Category Weighted Analysis",
         source="WhatsMyName",
         confidence="Medium",
         color=w_color,
@@ -921,9 +919,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         high_value_cats = [p["platform"] for p in found_platforms_info if p["category"] in ("dev", "professional", "social") and p["completeness"] >= 50]
 
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Profile enrichment: {enriched_count} platforms enriched via API | {verified_count} verified badges | avg completeness {avg_completeness}% | {len(high_value_cats)} high-value profiles",
-            type="Profile Enrichment Summary",
+            ftype="Profile Enrichment Summary",
             source="WhatsMyName",
             confidence="Medium",
             color="blue",
@@ -957,9 +955,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         if total_followers > 0:
             identity_report_parts.append(f"Total estimated audience reach: {total_followers:,} followers")
 
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="Identity Footprint Analysis Report",
-            type="Identity Footprint Report",
+            ftype="Identity Footprint Report",
             source="WhatsMyName",
             confidence="High",
             color="blue",
@@ -971,9 +969,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
     verified_platforms = [info["platform"] for info in found_platforms_info if info.get("verified")]
     if verified_platforms:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Verified accounts detected on: {', '.join(verified_platforms)}",
-            type="Account Verification Detection",
+            ftype="Account Verification Detection",
             source="WhatsMyName",
             confidence="Medium",
             color="emerald",
@@ -988,9 +986,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         all_from_extraction = set(extracted_usernames)
         all_from_extraction.discard(username)
         if all_from_extraction:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Extracted alias variants from target: {', '.join(sorted(all_from_extraction))}",
-                type="Username Extraction Variants",
+                ftype="Username Extraction Variants",
                 source="WhatsMyName",
                 confidence="Medium",
                 color="teal",
@@ -1019,9 +1017,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             sim_parts = []
             for sim_username, sim_platforms in similar_found.items():
                 sim_parts.append(f"'{sim_username}' → {', '.join(sim_platforms[:5])}")
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Similar username variants with existing profiles: {'; '.join(sim_parts)}",
-                type="Username Similarity Detection",
+                ftype="Username Similarity Detection",
                 source="WhatsMyName",
                 confidence="Low",
                 color="teal",
@@ -1037,15 +1035,15 @@ async def crawl(target: str, client: httpx.AsyncClient):
             has_upper = any(c.isupper() for c in username)
             has_digit = any(c.isdigit() for c in username)
             has_special = any(not c.isalnum() for c in username)
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Username '{username}': {length} chars, upper={has_upper}, digit={has_digit}, special={has_special}",
-                type="Username Characteristics",
+                ftype="Username Characteristics",
                 source="WhatsMyName", confidence="High",
                 color="slate", tags=["analysis"]))
             pattern_type = "complex (mixed)" if has_upper and has_digit else "simple"
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Pattern: {pattern_type}",
-                type="Username Pattern Type",
+                ftype="Username Pattern Type",
                 source="WhatsMyName", confidence="Medium",
                 color="slate", tags=["analysis"]))
 
@@ -1056,15 +1054,15 @@ async def crawl(target: str, client: httpx.AsyncClient):
             cat_counts[label] = count
         if cat_counts:
             for label, count in list(cat_counts.items())[:6]:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{label}: {count} profile(s)",
-                    type="Category Presence",
+                    ftype="Category Presence",
                     source="WhatsMyName", confidence="Medium",
                     color="purple", tags=["category"]))
         diversity = len(category_found)
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Category diversity: {diversity} categories",
-            type="Category Diversity",
+            ftype="Category Diversity",
             source="WhatsMyName", confidence="Medium",
             color="slate", tags=["diversity"]))
 
@@ -1078,43 +1076,43 @@ async def crawl(target: str, client: httpx.AsyncClient):
             recs.append("Moderate online presence detected")
             recs.append("Use unique passwords for each platform")
         for i, r in enumerate(recs[:3]):
-            findings.append(IntelligenceFinding(entity=f"Rec {i+1}: {r}", type="Identity Recommendation", source="WhatsMyName", confidence="Medium", color="orange", tags=["recommendation"]))
+            findings.append(make_finding(entity=f"Rec {i+1}: {r}", ftype="Identity Recommendation", source="WhatsMyName", confidence="Medium", color="orange", tags=["recommendation"]))
 
     async def analyze_verification_stats():
         if verified_platforms:
-            findings.append(IntelligenceFinding(entity=f"{len(verified_platforms)} verified account(s): {', '.join(verified_platforms)}", type="Verified Account Summary", source="WhatsMyName", confidence="Medium", color="emerald", tags=["verified"]))
+            findings.append(make_finding(entity=f"{len(verified_platforms)} verified account(s): {', '.join(verified_platforms)}", ftype="Verified Account Summary", source="WhatsMyName", confidence="Medium", color="emerald", tags=["verified"]))
         if enrichment_map:
-            findings.append(IntelligenceFinding(entity=f"{len(enrichment_map)} platform(s) enriched via API", type="API Enrichment Summary", source="WhatsMyName", confidence="Medium", color="slate", tags=["enrichment"]))
+            findings.append(make_finding(entity=f"{len(enrichment_map)} platform(s) enriched via API", ftype="API Enrichment Summary", source="WhatsMyName", confidence="Medium", color="slate", tags=["enrichment"]))
 
     async def analyze_error_profile():
         errors = sum(1 for f in findings if f.status in ("Timeout", "Error", "Rate Limited"))
         ok_count = sum(1 for f in findings if f.status == "Found")
         total = errors + ok_count + sum(1 for f in findings if f.status in ("Not Found", "Info"))
         error_rate = round((errors / total) * 100, 1) if total else 0
-        findings.append(IntelligenceFinding(entity=f"Error rate: {error_rate}% ({errors}/{total} requests)", type="Error Analysis", source="WhatsMyName", confidence="Medium", color="orange" if error_rate > 20 else "emerald", tags=["error-analysis"]))
-        findings.append(IntelligenceFinding(entity=f"Successful lookups: {ok_count}", type="Success Rate", source="WhatsMyName", confidence="Medium", color="slate", tags=["error-analysis"]))
+        findings.append(make_finding(entity=f"Error rate: {error_rate}% ({errors}/{total} requests)", ftype="Error Analysis", source="WhatsMyName", confidence="Medium", color="orange" if error_rate > 20 else "emerald", tags=["error-analysis"]))
+        findings.append(make_finding(entity=f"Successful lookups: {ok_count}", ftype="Success Rate", source="WhatsMyName", confidence="Medium", color="slate", tags=["error-analysis"]))
 
     async def analyze_enriched_details():
         if enrichment_map:
             domains = set(e.get("domain", "") for e in enrichment_map.values())
-            findings.append(IntelligenceFinding(entity=f"Enriched domains: {len(domains)}", type="Enrichment Domain Coverage", source="WhatsMyName", confidence="Medium", color="slate", tags=["enrichment"]))
-        findings.append(IntelligenceFinding(entity=f"Total platforms checked: {len(PLATFORMS)} across {len(similarity_variants) if similarity_variants else 1} variant(s)", type="Platform Coverage", source="WhatsMyName", confidence="High", color="slate", tags=["coverage"]))
+            findings.append(make_finding(entity=f"Enriched domains: {len(domains)}", ftype="Enrichment Domain Coverage", source="WhatsMyName", confidence="Medium", color="slate", tags=["enrichment"]))
+        findings.append(make_finding(entity=f"Total platforms checked: {len(PLATFORMS)} across {len(similarity_variants) if similarity_variants else 1} variant(s)", ftype="Platform Coverage", source="WhatsMyName", confidence="High", color="slate", tags=["coverage"]))
 
     async def analyze_threat_assessment():
         high_impact = sum(1 for f in findings if f.threat_level in ("Elevated Risk", "High Risk"))
-        findings.append(IntelligenceFinding(entity=f"High-risk profile(s): {high_impact}", type="Threat Assessment", source="WhatsMyName", confidence="Medium", color="red" if high_impact else "emerald", tags=["threat"]))
+        findings.append(make_finding(entity=f"High-risk profile(s): {high_impact}", ftype="Threat Assessment", source="WhatsMyName", confidence="Medium", color="red" if high_impact else "emerald", tags=["threat"]))
         profile_spread = len(category_found)
         if profile_spread >= 5:
-            findings.append(IntelligenceFinding(entity=f"Wide digital footprint ({profile_spread} categories)", type="Footprint Analysis", source="WhatsMyName", confidence="Medium", color="orange", tags=["footprint"]))
+            findings.append(make_finding(entity=f"Wide digital footprint ({profile_spread} categories)", ftype="Footprint Analysis", source="WhatsMyName", confidence="Medium", color="orange", tags=["footprint"]))
         else:
-            findings.append(IntelligenceFinding(entity=f"Narrow digital footprint ({profile_spread} categories)", type="Footprint Analysis", source="WhatsMyName", confidence="Medium", color="emerald", tags=["footprint"]))
+            findings.append(make_finding(entity=f"Narrow digital footprint ({profile_spread} categories)", ftype="Footprint Analysis", source="WhatsMyName", confidence="Medium", color="emerald", tags=["footprint"]))
 
     async def analyze_variant_effectiveness():
         if similarity_variants:
             variant_count = len(similarity_variants)
-            findings.append(IntelligenceFinding(entity=f"Similarity variants checked: {variant_count}", type="Variant Analysis", source="WhatsMyName", confidence="Medium", color="slate", tags=["variants"]))
+            findings.append(make_finding(entity=f"Similarity variants checked: {variant_count}", ftype="Variant Analysis", source="WhatsMyName", confidence="Medium", color="slate", tags=["variants"]))
             sim_found = sum(1 for f in findings if "similar" in (f.raw_data or "").lower())
-            findings.append(IntelligenceFinding(entity=f"Matches from similarity: {sim_found}", type="Similarity Matches", source="WhatsMyName", confidence="Low", color="slate", tags=["variants"]))
+            findings.append(make_finding(entity=f"Matches from similarity: {sim_found}", ftype="Similarity Matches", source="WhatsMyName", confidence="Low", color="slate", tags=["variants"]))
 
     async def analyze_profile_breadth():
         platform_types = {}
@@ -1124,21 +1122,21 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     platform_types[tag] = platform_types.get(tag, 0) + 1
         if platform_types:
             for pt, pc in sorted(platform_types.items(), key=lambda x: -x[1])[:3]:
-                findings.append(IntelligenceFinding(entity=f"{pt}: {pc}", type="Profile Type Breakdown", source="WhatsMyName", confidence="Medium", color="slate", tags=["breadth"]))
+                findings.append(make_finding(entity=f"{pt}: {pc}", ftype="Profile Type Breakdown", source="WhatsMyName", confidence="Medium", color="slate", tags=["breadth"]))
 
     async def analyze_discovery_efficiency():
         total_checked = sum(1 for f in findings if f.type.startswith("Social Profile:"))
-        findings.append(IntelligenceFinding(entity=f"Total platform checks: {total_checked}", type="Discovery Efficiency", source="WhatsMyName", confidence="Medium", color="slate", tags=["efficiency"]))
+        findings.append(make_finding(entity=f"Total platform checks: {total_checked}", ftype="Discovery Efficiency", source="WhatsMyName", confidence="Medium", color="slate", tags=["efficiency"]))
         if found_count and total_checked:
-            findings.append(IntelligenceFinding(entity=f"Hit rate: {round(found_count/total_checked*100,1)}%", type="Hit Rate", source="WhatsMyName", confidence="Medium", color="purple" if found_count/total_checked > 0.1 else "slate", tags=["efficiency"]))
-        findings.append(IntelligenceFinding(entity=f"Primary username: '{username}'", type="Primary Identity", source="WhatsMyName", confidence="High", color="slate", tags=["identity"]))
+            findings.append(make_finding(entity=f"Hit rate: {round(found_count/total_checked*100,1)}%", ftype="Hit Rate", source="WhatsMyName", confidence="Medium", color="purple" if found_count/total_checked > 0.1 else "slate", tags=["efficiency"]))
+        findings.append(make_finding(entity=f"Primary username: '{username}'", ftype="Primary Identity", source="WhatsMyName", confidence="High", color="slate", tags=["identity"]))
 
     async def analyze_mfa_exposure():
-        findings.append(IntelligenceFinding(entity=f"Total platforms in database: {len(PLATFORMS)}", type="Platform Inventory", source="WhatsMyName", confidence="High", color="slate", tags=["coverage"]))
-        findings.append(IntelligenceFinding(entity="Enable MFA on all identified accounts", type="Security Recommendation", source="WhatsMyName", confidence="Medium", color="orange", tags=["coverage"]))
-        findings.append(IntelligenceFinding(entity="Check for account recovery options on each platform", type="Recovery Recommendation", source="WhatsMyName", confidence="Medium", color="orange", tags=["coverage"]))
-        findings.append(IntelligenceFinding(entity=f"Total findings: {sum(1 for f in findings if f.type.startswith('Social Profile:'))}", type="Finding Volume", source="WhatsMyName", confidence="Medium", color="slate", tags=["coverage"]))
-        findings.append(IntelligenceFinding(entity="Monitor for credential leaks using this username", type="Monitoring Recommendation", source="WhatsMyName", confidence="Medium", color="orange", tags=["coverage"]))
+        findings.append(make_finding(entity=f"Total platforms in database: {len(PLATFORMS)}", ftype="Platform Inventory", source="WhatsMyName", confidence="High", color="slate", tags=["coverage"]))
+        findings.append(make_finding(entity="Enable MFA on all identified accounts", ftype="Security Recommendation", source="WhatsMyName", confidence="Medium", color="orange", tags=["coverage"]))
+        findings.append(make_finding(entity="Check for account recovery options on each platform", ftype="Recovery Recommendation", source="WhatsMyName", confidence="Medium", color="orange", tags=["coverage"]))
+        findings.append(make_finding(entity=f"Total findings: {sum(1 for f in findings if f.type.startswith('Social Profile:'))}", ftype="Finding Volume", source="WhatsMyName", confidence="Medium", color="slate", tags=["coverage"]))
+        findings.append(make_finding(entity="Monitor for credential leaks using this username", ftype="Monitoring Recommendation", source="WhatsMyName", confidence="Medium", color="orange", tags=["coverage"]))
 
     await asyncio.gather(
         analyze_username_characteristics(),

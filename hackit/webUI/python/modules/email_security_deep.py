@@ -4,8 +4,8 @@ import re
 import dns.resolver
 import ssl
 import socket
-from models import IntelligenceFinding
 from urllib.parse import urlparse
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash
 
 COMMON_DKIM_SELECTORS = [
     "default", "google", "mail", "k1", "dkim", "mx", "selector1", "selector2",
@@ -247,7 +247,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 if any(d in mx_host.lower() for d in domains):
                     mx_provider = provider
                     break
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{mx_host} (priority {mx_prio})",
                 type=f"Email Security - MX Server ({mx_provider})",
                 source="EmailSecurityDeep",
@@ -259,7 +259,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ))
 
         if mx_hosts:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{len(mx_hosts)} MX servers, primary: {mx_hosts[0][1]}",
                 type="Email Security - MX Summary",
                 source="EmailSecurityDeep",
@@ -271,7 +271,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ))
     except Exception as e:
         mx_hosts = []
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"No MX records: {str(e)[:60]}",
             type="Email Security - MX Error",
             source="EmailSecurityDeep",
@@ -292,9 +292,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 for r in tlsa_records:
                     tlsa_count += 1
                     tlsa_str = str(r)
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"DANE TLSA for {mx_host}: {tlsa_str[:200]}",
-                        type="Email Security - DANE/TLSA Record",
+                        ftype="Email Security - DANE/TLSA Record",
                         source="EmailSecurityDeep",
                         confidence="High",
                         color="emerald",
@@ -302,7 +302,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         tags=["email-security", "dane", "tlsa"]
                     ))
                 if tlsa_count > 0:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"{mx_host}: {tlsa_count} TLSA record(s)",
                         type="Email Security - DANE/TLSA Summary",
                         source="EmailSecurityDeep",
@@ -320,9 +320,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         for mx_prio, mx_host in mx_hosts:
             smtp_result = await loop.run_in_executor(None, _check_mx_smtp_sync, mx_host)
             if smtp_result.get("error") and not smtp_result.get("banner"):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"SMTP {mx_host}:25 - {smtp_result['error']}",
-                    type="Email Security - SMTP Connection Error",
+                    ftype="Email Security - SMTP Connection Error",
                     source="EmailSecurityDeep",
                     confidence="Medium",
                     color="orange",
@@ -330,9 +330,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 ))
                 continue
             if smtp_result["banner"]:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"SMTP Banner: {smtp_result['banner'][:150]}",
-                    type=f"Email Security - SMTP Banner ({mx_host})",
+                    ftype=f"Email Security - SMTP Banner ({mx_host})",
                     source="EmailSecurityDeep",
                     confidence="High",
                     color="slate",
@@ -340,18 +340,18 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     tags=["email-security", "smtp"]
                 ))
             if smtp_result["starttls"]:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"STARTTLS supported on {mx_host}",
-                    type="Email Security - SMTP STARTTLS",
+                    ftype="Email Security - SMTP STARTTLS",
                     source="EmailSecurityDeep",
                     confidence="High",
                     color="emerald",
                     tags=["email-security", "smtp", "tls"]
                 ))
             else:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"No STARTTLS on {mx_host} - traffic sent in plaintext",
-                    type="Email Security - SMTP No TLS",
+                    ftype="Email Security - SMTP No TLS",
                     source="EmailSecurityDeep",
                     confidence="High",
                     color="red",
@@ -359,9 +359,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     tags=["email-security", "smtp", "tls"]
                 ))
             if smtp_result["tls_version"] and isinstance(smtp_result["tls_version"], str) and smtp_result["tls_version"].startswith("TLS"):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"TLS version on {mx_host}: {smtp_result['tls_version']}",
-                    type="Email Security - SMTP TLS Version",
+                    ftype="Email Security - SMTP TLS Version",
                     source="EmailSecurityDeep",
                     confidence="High",
                     color="emerald" if "1.2" in smtp_result["tls_version"] or "1.3" in smtp_result["tls_version"] else "orange",
@@ -370,7 +370,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 ))
             if smtp_result["ehlo_caps"]:
                 auth_str = ", ".join(smtp_result.get("auth_mechs", [])) or "None"
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"EHLO capabilities on {mx_host}: {len(smtp_result['ehlo_caps'])} extensions",
                     type="Email Security - SMTP EHLO Extensions",
                     source="EmailSecurityDeep",
@@ -380,7 +380,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     tags=["email-security", "smtp", "ehlo"]
                 ))
                 if smtp_result.get("auth_mechs"):
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"SMTP AUTH mechanisms on {mx_host}: {', '.join(smtp_result['auth_mechs'])}",
                         type="Email Security - SMTP Authentication Mechanisms",
                         source="EmailSecurityDeep",
@@ -390,25 +390,25 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         tags=["email-security", "smtp", "auth"]
                     ))
                 if "PIPELINING" in smtp_result.get("extensions", {}):
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"PIPELINING supported on {mx_host}",
-                        type="Email Security - SMTP Extension",
+                        ftype="Email Security - SMTP Extension",
                         source="EmailSecurityDeep",
                         confidence="High",
                         color="slate",
                         tags=["email-security", "smtp", "extension"]
                     ))
                 if "SMTPUTF8" in smtp_result.get("extensions", {}):
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"SMTPUTF8 supported on {mx_host}",
-                        type="Email Security - SMTP Extension",
+                        ftype="Email Security - SMTP Extension",
                         source="EmailSecurityDeep",
                         confidence="High",
                         color="slate",
                         tags=["email-security", "smtp", "extension"]
                     ))
                 if "DSN" in smtp_result.get("extensions", {}):
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"DSN (Delivery Status Notification) on {mx_host}",
                         type="Email Security - SMTP Extension",
                         source="EmailSecurityDeep",
@@ -418,9 +418,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     ))
                 ext_size = smtp_result.get("extensions", {}).get("SIZE")
                 if ext_size:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Max message size on {mx_host}: {ext_size} bytes",
-                        type="Email Security - SMTP Max Size",
+                        ftype="Email Security - SMTP Max Size",
                         source="EmailSecurityDeep",
                         confidence="High",
                         color="slate",
@@ -434,9 +434,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             if txt.startswith("v=spf1"):
                 spf_raw = txt
                 spf_mechs = parse_spf_mechanisms(txt)
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=txt[:250],
-                    type="Email Security - SPF Record",
+                    ftype="Email Security - SPF Record",
                     source="EmailSecurityDeep",
                     confidence="High",
                     color="emerald",
@@ -446,7 +446,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 for mech_type, mech_val in spf_mechs:
                     if mech_type == "all":
                         if mech_val == "-all" or mech_val == "-":
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity="SPF HardFail (-all) - Strong protection",
                                 type="Email Security - SPF Policy",
                                 source="EmailSecurityDeep",
@@ -456,7 +456,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                                 tags=["email-security", "spf"]
                             ))
                         elif mech_val == "~all" or mech_val == "~":
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity="SPF SoftFail (~all) - Emails may be spoofed",
                                 type="Email Security - SPF Weakness",
                                 source="EmailSecurityDeep",
@@ -466,7 +466,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                                 tags=["email-security", "spf"]
                             ))
                         elif mech_val == "?all" or mech_val == "?":
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity="SPF Neutral (?all) - No enforcement",
                                 type="Email Security - SPF Vulnerability",
                                 source="EmailSecurityDeep",
@@ -476,9 +476,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                                 tags=["email-security", "spf"]
                             ))
                     elif mech_type == "include":
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"Include: {mech_val}",
-                            type="Email Security - SPF Include Mechanism",
+                            ftype="Email Security - SPF Include Mechanism",
                             source="EmailSecurityDeep",
                             confidence="High",
                             color="slate",
@@ -493,9 +493,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                                 if itxt.startswith("v=spf1"):
                                     sub_mechs = parse_spf_mechanisms(itxt)
                                     for smt, smv in sub_mechs:
-                                        findings.append(IntelligenceFinding(
+                                        findings.append(make_finding(
                                             entity=f"{smt}:{smv[:100]}",
-                                            type="Email Security - SPF Inherited ({mech_val})",
+                                            ftype="Email Security - SPF Inherited ({mech_val})",
                                             source="EmailSecurityDeep",
                                             confidence="Medium",
                                             color="slate",
@@ -505,27 +505,27 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         except Exception:
                             pass
                     elif mech_type in ("ip4", "ip6"):
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"{mech_type}: {mech_val}",
-                            type="Email Security - SPF IP Allow",
+                            ftype="Email Security - SPF IP Allow",
                             source="EmailSecurityDeep",
                             confidence="High",
                             color="slate",
                             raw_data=f"Authorized sender: {mech_type}:{mech_val}"
                         ))
                     elif mech_type == "redirect":
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"Redirect: {mech_val}",
-                            type="Email Security - SPF Redirect",
+                            ftype="Email Security - SPF Redirect",
                             source="EmailSecurityDeep",
                             confidence="High",
                             color="slate"
                         ))
 
                 if re.search(r'[%{}]', txt):
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"SPF macros detected - complex expansion may cause misconfiguration",
-                        type="Email Security - SPF Macro Expansion",
+                        ftype="Email Security - SPF Macro Expansion",
                         source="EmailSecurityDeep",
                         confidence="High",
                         color="orange",
@@ -536,7 +536,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
                 dns_lookups = sum(1 for m in spf_mechs if m[0] in ("include", "redirect", "a", "mx", "ptr", "exists"))
                 if dns_lookups > 8:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"SPF requires ~{dns_lookups} DNS lookups (limit: 10) - risk of PermError",
                         type="Email Security - SPF DNS Lookup Limit",
                         source="EmailSecurityDeep",
@@ -547,7 +547,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         tags=["email-security", "spf", "dns-limit"]
                     ))
                 elif dns_lookups >= 10:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"SPF exceeds recommended 10 DNS lookup limit (~{dns_lookups} lookups) - risk of PermError",
                         type="Email Security - SPF DNS Lookup Limit Exceeded",
                         source="EmailSecurityDeep",
@@ -560,9 +560,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
                 break
         if not spf_raw:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"No SPF record for {domain}",
-                type="Email Security - Missing SPF",
+                ftype="Email Security - Missing SPF",
                 source="EmailSecurityDeep",
                 confidence="High",
                 color="red",
@@ -571,7 +571,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 tags=["email-security", "spf"]
             ))
     except Exception as e:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"SPF query error: {str(e)[:60]}",
             type="Email Security - SPF Error",
             source="EmailSecurityDeep",
@@ -586,9 +586,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         )
         for r in dmarc_records:
             dmarc_raw = str(r)
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=dmarc_raw[:250],
-                type="Email Security - DMARC Record",
+                ftype="Email Security - DMARC Record",
                 source="EmailSecurityDeep",
                 confidence="High",
                 color="emerald",
@@ -599,9 +599,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             if policy_match:
                 policy = policy_match.group(1)
                 if policy == "reject":
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity="DMARC Policy: reject - Strong protection",
-                        type="Email Security - DMARC Policy",
+                        ftype="Email Security - DMARC Policy",
                         source="EmailSecurityDeep",
                         confidence="High",
                         color="emerald",
@@ -609,9 +609,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         tags=["email-security", "dmarc"]
                     ))
                 elif policy == "quarantine":
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity="DMARC Policy: quarantine - Moderate protection",
-                        type="Email Security - DMARC Policy",
+                        ftype="Email Security - DMARC Policy",
                         source="EmailSecurityDeep",
                         confidence="High",
                         color="orange",
@@ -619,9 +619,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         tags=["email-security", "dmarc"]
                     ))
                 elif policy == "none":
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity="DMARC Policy: none - Monitoring only, no protection",
-                        type="Email Security - DMARC Weakness",
+                        ftype="Email Security - DMARC Weakness",
                         source="EmailSecurityDeep",
                         confidence="High",
                         color="red",
@@ -633,9 +633,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             sp_match = re.search(r"sp\s*=\s*(\w+)", dmarc_raw)
             if sp_match:
                 sp_policy = sp_match.group(1)
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"DMARC Subdomain Policy: {sp_policy}",
-                    type="Email Security - DMARC Subdomain Policy",
+                    ftype="Email Security - DMARC Subdomain Policy",
                     source="EmailSecurityDeep",
                     confidence="High",
                     color="slate",
@@ -645,9 +645,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             rua_match = re.search(r"rua\s*=\s*(mailto:\S+)", dmarc_raw)
             if rua_match:
                 rua_addr = rua_match.group(1)
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=rua_addr[:200],
-                    type="Email Security - DMARC RUA (Aggregate Reports)",
+                    ftype="Email Security - DMARC RUA (Aggregate Reports)",
                     source="EmailSecurityDeep",
                     confidence="High",
                     color="slate",
@@ -691,9 +691,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                             rua_format = "BIMI/IETF Standard (local-part!domain@reporter)"
                         elif "!" in rua_local:
                             rua_format = "Tagged reporting format"
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"DMARC aggregate report format: {rua_format}",
-                        type="Email Security - DMARC RUA Format Analysis",
+                        ftype="Email Security - DMARC RUA Format Analysis",
                         source="EmailSecurityDeep",
                         confidence="Medium",
                         color="slate",
@@ -701,7 +701,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         tags=["email-security", "dmarc", "reporting"]
                     ))
             else:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity="No DMARC reporting (rua) configured",
                     type="Email Security - DMARC Reporting Gap",
                     source="EmailSecurityDeep",
@@ -714,9 +714,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ruf_match = re.search(r"ruf\s*=\s*(mailto:\S+)", dmarc_raw)
             if ruf_match:
                 ruf_addr = ruf_match.group(1)
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=ruf_addr[:200],
-                    type="Email Security - DMARC RUF (Forensic Reports)",
+                    ftype="Email Security - DMARC RUF (Forensic Reports)",
                     source="EmailSecurityDeep",
                     confidence="High",
                     color="slate",
@@ -728,9 +728,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             if pct_match:
                 pct_val = int(pct_match.group(1))
                 if pct_val < 100:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"DMARC applies to {pct_val}% of email",
-                        type="Email Security - DMARC Sampling",
+                        ftype="Email Security - DMARC Sampling",
                         source="EmailSecurityDeep",
                         confidence="High",
                         color="orange",
@@ -740,9 +740,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             fo_match = re.search(r"fo\s*=\s*([\d:]+)", dmarc_raw)
             if fo_match:
                 fo_val = fo_match.group(1)
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"DMARC Forensic options: {fo_val}",
-                    type="Email Security - DMARC FO",
+                    ftype="Email Security - DMARC FO",
                     source="EmailSecurityDeep",
                     confidence="High",
                     color="slate",
@@ -752,9 +752,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             rf_match = re.search(r"rf\s*=\s*(\w+)", dmarc_raw)
             if rf_match:
                 rf_val = rf_match.group(1)
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"DMARC Report Format: {rf_val}",
-                    type="Email Security - DMARC RF",
+                    ftype="Email Security - DMARC RF",
                     source="EmailSecurityDeep",
                     confidence="High",
                     color="slate"
@@ -763,9 +763,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         if not dmarc_raw:
             raise Exception("No DMARC")
     except Exception:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"No DMARC record for {domain}",
-            type="Email Security - Missing DMARC",
+            ftype="Email Security - Missing DMARC",
             source="EmailSecurityDeep",
             confidence="High",
             color="red",
@@ -782,7 +782,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             for r in dkim_records:
                 dkim_txt = str(r)
                 key_strength, key_conf, key_color = estimate_key_strength(dkim_txt)
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"DKIM (selector: {selector}) - {key_strength}",
                     type="Email Security - DKIM Record",
                     source="EmailSecurityDeep",
@@ -795,7 +795,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
                 if "h=sha256" in dkim_txt or "h=sha1" in dkim_txt:
                     if "h=sha1" in dkim_txt:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"DKIM {selector} uses SHA-1 (deprecated)",
                             type="Email Security - DKIM Weak Hash",
                             source="EmailSecurityDeep",
@@ -806,9 +806,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         ))
 
                 if "s=email" in dkim_txt:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"DKIM {selector} service type: email",
-                        type="Email Security - DKIM Service Type",
+                        ftype="Email Security - DKIM Service Type",
                         source="EmailSecurityDeep",
                         confidence="High",
                         color="slate"
@@ -820,9 +820,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             continue
 
     if not dkim_found:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"No DKIM records found",
-            type="Email Security - Missing DKIM",
+            ftype="Email Security - Missing DKIM",
             source="EmailSecurityDeep",
             confidence="High",
             color="red",
@@ -831,7 +831,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             tags=["email-security", "dkim"]
         ))
     else:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"DKIM active on {len(dkim_found)} selector(s): {', '.join(dkim_found[:5])}",
             type="Email Security - DKIM Summary",
             source="EmailSecurityDeep",
@@ -846,9 +846,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         )
         for r in bimi_records:
             bimi_txt = str(r)
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=bimi_txt[:250],
-                type="Email Security - BIMI Record",
+                ftype="Email Security - BIMI Record",
                 source="EmailSecurityDeep",
                 confidence="High",
                 color="purple",
@@ -857,7 +857,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ))
             logo_match = BIMI_PATTERN.search(bimi_txt)
             if logo_match:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"BIMI Logo: {logo_match.group(0)[2:]}",
                     type="Email Security - BIMI Logo URL",
                     source="EmailSecurityDeep",
@@ -876,9 +876,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         for r in vmc_records:
             vmc_target = str(r.target).rstrip('.')
             if vmc_target:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"BIMI VMC: {vmc_target}",
-                    type="Email Security - BIMI VMC (Verified Mark Certificate)",
+                    ftype="Email Security - BIMI VMC (Verified Mark Certificate)",
                     source="EmailSecurityDeep",
                     confidence="High",
                     color="purple",
@@ -895,9 +895,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         for r in mta_sts_txt:
             mta_txt = str(r)
             if "v=STSv1" in mta_txt:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=mta_txt[:250],
-                    type="Email Security - MTA-STS Record (DNS)",
+                    ftype="Email Security - MTA-STS Record (DNS)",
                     source="EmailSecurityDeep",
                     confidence="High",
                     color="emerald",
@@ -911,12 +911,12 @@ async def crawl(target: str, client: httpx.AsyncClient):
     mta_sts_mx_list = []
     try:
         mta_sts_url = f"https://mta-sts.{domain}/.well-known/mta-sts.txt"
-        mta_resp = await client.get(mta_sts_url, timeout=10.0, follow_redirects=True,
+        mta_resp = await safe_fetch(client, mta_sts_url, timeout=10.0, follow_redirects=True,
             headers={"User-Agent": "Mozilla/5.0"})
         if mta_resp.status_code == 200:
             mta_policy = mta_resp.text.strip()
             if "v=STSv1" in mta_policy:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"MTA-STS Policy Active (HTTP endpoint)",
                     type="Email Security - MTA-STS Policy",
                     source="EmailSecurityDeep",
@@ -929,32 +929,32 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 if mode_match:
                     mode = mode_match.group(1)
                     if mode == "enforce":
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity="MTA-STS Mode: enforce",
-                            type="Email Security - MTA-STS Mode",
+                            ftype="Email Security - MTA-STS Mode",
                             source="EmailSecurityDeep",
                             confidence="High",
                             color="emerald"
                         ))
                     elif mode == "testing":
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity="MTA-STS Mode: testing",
-                            type="Email Security - MTA-STS Mode",
+                            ftype="Email Security - MTA-STS Mode",
                             source="EmailSecurityDeep",
                             confidence="High",
                             color="orange"
                         ))
                     elif mode == "none":
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity="MTA-STS Mode: none",
-                            type="Email Security - MTA-STS Mode",
+                            ftype="Email Security - MTA-STS Mode",
                             source="EmailSecurityDeep",
                             confidence="High",
                             color="red"
                         ))
                 mx_match = re.search(r"mx:\s*(\S+)", mta_policy)
                 if mx_match:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"MTA-STS MX: {mx_match.group(1)}",
                         type="Email Security - MTA-STS Allowed MX",
                         source="EmailSecurityDeep",
@@ -974,7 +974,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                             mismatch_parts.append(f"DNS MX not in policy: {', '.join(sorted(missing_in_sts))}")
                         if extra_in_sts:
                             mismatch_parts.append(f"Policy lists unknown MX: {', '.join(sorted(extra_in_sts))}")
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"MTA-STS policy MX mismatch: {'; '.join(mismatch_parts)}",
                             type="Email Security - MTA-STS Policy Mismatch",
                             source="EmailSecurityDeep",
@@ -985,9 +985,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                             tags=["email-security", "mta-sts"]
                         ))
                     else:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"MTA-STS policy MXes match DNS MX servers",
-                            type="Email Security - MTA-STS Policy Validated",
+                            ftype="Email Security - MTA-STS Policy Validated",
                             source="EmailSecurityDeep",
                             confidence="High",
                             color="emerald",
@@ -1003,9 +1003,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         for r in tls_rpt_records:
             tls_txt = str(r)
             if "v=TLSRPT" in tls_txt:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=tls_txt[:250],
-                    type="Email Security - TLS-RPT Record",
+                    ftype="Email Security - TLS-RPT Record",
                     source="EmailSecurityDeep",
                     confidence="High",
                     color="emerald",
@@ -1014,7 +1014,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 ))
                 rua_mat = re.search(r"rua\s*=\s*(mailto:\S+)", tls_txt)
                 if rua_mat:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"TLS-RPT Reporting: {rua_mat.group(1)}",
                         type="Email Security - TLS-RPT RUA",
                         source="EmailSecurityDeep",
@@ -1031,9 +1031,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         )
         for r in arc_records:
             arc_txt = str(r)
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=arc_txt[:200],
-                type="Email Security - ARC Record",
+                ftype="Email Security - ARC Record",
                 source="EmailSecurityDeep",
                 confidence="High",
                 color="slate",
@@ -1056,9 +1056,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     pass
                 pbanner_str = pbanner.decode("utf-8", errors="ignore").strip()
                 if pbanner_str:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"SMTP on port {port}: {pbanner_str[:150]}",
-                        type=f"Email Security - SMTP Alternate Port ({port})",
+                        ftype=f"Email Security - SMTP Alternate Port ({port})",
                         source="EmailSecurityDeep",
                         confidence="High",
                         color="slate",
@@ -1082,9 +1082,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     if vresp and not vresp.startswith("5") and not vresp.startswith("2"):
                         continue
                     if vresp.startswith("2"):
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"{cmd} succeeded on {mx_host}: {vresp[:100]}",
-                            type="Email Security - SMTP User Enumeration Risk",
+                            ftype="Email Security - SMTP User Enumeration Risk",
                             source="EmailSecurityDeep",
                             confidence="High",
                             color="red",
@@ -1107,7 +1107,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         dnssec_result = await dnssec_loop.run_in_executor(None, lambda: dns.resolver.resolve(domain, 'DNSKEY'))
         if dnssec_result:
             key_count = len(dnssec_result)
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"DNSSEC enabled: {key_count} DNSKEY record(s)",
                 type="Email Security - DNSSEC Status",
                 source="EmailSecurityDeep",
@@ -1117,9 +1117,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 tags=["email-security", "dnssec"]
             ))
     except dns.resolver.NoAnswer:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="DNSSEC not enabled",
-            type="Email Security - DNSSEC Status",
+            ftype="Email Security - DNSSEC Status",
             source="EmailSecurityDeep",
             confidence="High",
             color="orange",
@@ -1141,7 +1141,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         rev = dns.resolver.resolve_address(ip)
                         rev_name = str(rev[0]).rstrip('.')
                         if rev_name:
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=f"MX {mx_host} ({ip}) rDNS: {rev_name}",
                                 type="Email Security - MX Reverse DNS",
                                 source="EmailSecurityDeep",
@@ -1151,9 +1151,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                                 tags=["email-security", "mx", "rdns"]
                             ))
                             if mx_host.lower() not in rev_name.lower() and mx_host.lower().rstrip('.') not in rev_name.lower():
-                                findings.append(IntelligenceFinding(
+                                findings.append(make_finding(
                                     entity=f"MX {mx_host} rDNS mismatch: {rev_name}",
-                                    type="Email Security - MX rDNS Mismatch",
+                                    ftype="Email Security - MX rDNS Mismatch",
                                     source="EmailSecurityDeep",
                                     confidence="Medium",
                                     color="orange",
@@ -1185,9 +1185,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     issuer = dict(cert.get("issuer", [[["", ""]]])[0]).get("commonName", "")
                     sans = [v for _, v in cert.get("subjectAltName", [])]
                     not_after = cert.get("notAfter", "")
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"SSL cert on {mx_host}:465 - CN: {cn}, TLS: {tls_version}",
-                        type="Email Security - MX SSL Certificate (port 465)",
+                        ftype="Email Security - MX SSL Certificate (port 465)",
                         source="EmailSecurityDeep",
                         confidence="High",
                         color="emerald" if "TLSv1.2" in str(tls_version) or "TLSv1.3" in str(tls_version) else "orange",
@@ -1195,7 +1195,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         tags=["email-security", "ssl", "certificate"]
                     ))
             except Exception as e:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"SSL error for {mx_host}:465 - {str(e)[:60]}",
                     type="Email Security - MX SSL Handshake Error",
                     source="EmailSecurityDeep",
@@ -1216,7 +1216,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             aspf = re.search(r"aspf\s*=\s*([rs])", dmarc_check)
             adkim = re.search(r"adkim\s*=\s*([rs])", dmarc_check)
             if aspf:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"DMARC SPF Alignment: {'Strict (r)' if aspf.group(1) == 'r' else 'Relaxed (s)'}",
                     type="Email Security - DMARC Alignment (SPF)",
                     source="EmailSecurityDeep",
@@ -1225,7 +1225,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     tags=["email-security", "dmarc", "alignment"]
                 ))
             if adkim:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"DMARC DKIM Alignment: {'Strict (r)' if adkim.group(1) == 'r' else 'Relaxed (s)'}",
                     type="Email Security - DMARC Alignment (DKIM)",
                     source="EmailSecurityDeep",
@@ -1372,7 +1372,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         risk_level = "High Risk"
         risk_color = "red"
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Email Security Grade: {grade} (Score: {score}/{max_score}, {score_pct}%)",
         type="Email Security - Composite Score",
         source="EmailSecurityDeep",
@@ -1383,7 +1383,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         tags=["email-security", "summary"]
     ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Email authentication chain: {auth_chain_count}/5 pillars (SPF, DKIM, DMARC, MTA-STS, TLS-RPT)",
         type="Email Security - Authentication Chain",
         source="EmailSecurityDeep",

@@ -1,7 +1,7 @@
 import asyncio
 import dns.resolver
 import re
-from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash
 
 DKIM_SELECTORS = [
     "default", "google", "mail", "k1", "dkim", "mx", "selector1", "selector2",
@@ -97,9 +97,9 @@ async def crawl(target: str, client=None):
     for selector, records in found_selectors:
         dkim_domain = f"{selector}._domainkey.{domain}"
         for record in records:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{selector}._domainkey.{domain}",
-                type="DKIM Record Found",
+                ftype="DKIM Record Found",
                 source="DNS DKIM Scanner",
                 confidence="High",
                 color="emerald",
@@ -118,9 +118,9 @@ async def crawl(target: str, client=None):
                 flags = parsed.get('t', '')
                 hash_algo = parsed.get('h', 'sha256')
 
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"DKIM key type: {key_type}, hash: {hash_algo}, service: {service}",
-                    type="DKIM Key Parameters",
+                    ftype="DKIM Key Parameters",
                     source="DNS DKIM Scanner",
                     confidence="High",
                     color="blue",
@@ -131,9 +131,9 @@ async def crawl(target: str, client=None):
                 ))
 
                 if key_type.lower() == 'ed25519':
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Modern ED25519 key on {selector}",
-                        type="DKIM Modern Algorithm",
+                        ftype="DKIM Modern Algorithm",
                         source="DNS DKIM Scanner",
                         confidence="High",
                         color="emerald",
@@ -150,7 +150,7 @@ async def crawl(target: str, client=None):
                         key_bits = len(key_bytes) * 8
                         if key_type.lower() == 'rsa':
                             if key_bits < 1024:
-                                findings.append(IntelligenceFinding(
+                                findings.append(make_finding(
                                     entity=f"DKIM key size: {key_bits} bits (WEAK - below 1024)",
                                     type="DKIM Key Size Warning",
                                     source="DNS DKIM Scanner",
@@ -163,7 +163,7 @@ async def crawl(target: str, client=None):
                                     tags=["dkim", "key-size", "weak"]
                                 ))
                             elif key_bits < 2048:
-                                findings.append(IntelligenceFinding(
+                                findings.append(make_finding(
                                     entity=f"DKIM key size: {key_bits} bits (acceptable, 2048+ recommended)",
                                     type="DKIM Key Size",
                                     source="DNS DKIM Scanner",
@@ -175,7 +175,7 @@ async def crawl(target: str, client=None):
                                     tags=["dkim", "key-size"]
                                 ))
                             else:
-                                findings.append(IntelligenceFinding(
+                                findings.append(make_finding(
                                     entity=f"DKIM key size: {key_bits} bits (strong)",
                                     type="DKIM Key Size",
                                     source="DNS DKIM Scanner",
@@ -190,7 +190,7 @@ async def crawl(target: str, client=None):
                         pass
 
                 if 'y' in flags:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"DKIM key with t=y (testing mode) on {selector}",
                         type="DKIM Testing Mode",
                         source="DNS DKIM Scanner",
@@ -203,9 +203,9 @@ async def crawl(target: str, client=None):
                     ))
 
                 if service and service != '*':
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"DKIM service type: {service} on {selector}",
-                        type="DKIM Service Type",
+                        ftype="DKIM Service Type",
                         source="DNS DKIM Scanner",
                         confidence="High",
                         color="slate",
@@ -217,7 +217,7 @@ async def crawl(target: str, client=None):
 
     if found_selectors:
         selectors_list = [s for s, _ in found_selectors]
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Found {len(found_selectors)} DKIM selector(s): {', '.join(selectors_list)}",
             type="DKIM Discovery Summary",
             source="DNS DKIM Scanner",
@@ -231,9 +231,9 @@ async def crawl(target: str, client=None):
 
         provider = identify_dkim_provider(found_selectors)
         if provider:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"DKIM provider detected: {provider}",
-                type="DKIM Provider Detection",
+                ftype="DKIM Provider Detection",
                 source="DNS DKIM Scanner",
                 confidence="Medium",
                 color="purple",
@@ -242,9 +242,9 @@ async def crawl(target: str, client=None):
                 tags=["dkim", "provider", provider.lower().replace(" ", "-")]
             ))
     else:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"No DKIM records found among {total_tested} selectors for {domain}",
-            type="DKIM Discovery Summary",
+            ftype="DKIM Discovery Summary",
             source="DNS DKIM Scanner",
             confidence="High",
             color="orange",
@@ -254,7 +254,7 @@ async def crawl(target: str, client=None):
             tags=["dkim", "missing"]
         ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"DKIM scan: tested {total_tested} selectors, found {len(found_selectors)} active",
         type="DKIM Scan Summary",
         source="DNS DKIM Scanner",

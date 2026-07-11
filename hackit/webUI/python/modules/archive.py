@@ -6,6 +6,7 @@ from datetime import datetime
 from urllib.parse import urlparse, urljoin
 from typing import List, Optional
 from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash
 
 WAYBACK_API = "https://web.archive.org"
 CDX_API = f"{WAYBACK_API}/cdx/search/cdx"
@@ -31,72 +32,57 @@ SENSITIVE_PATHS = [
 
 async def query_cdx(domain: str, client: httpx.AsyncClient, limit: int = 200) -> list:
     results = []
-    try:
-        params = {
-            "url": f"*.{domain}/*",
-            "output": "json",
-            "fl": "original,timestamp,statuscode,mimetype,length",
-            "limit": str(limit),
-            "filter": "statuscode:200",
-            "collapse": "urlkey",
-        }
-        resp = await client.get(CDX_API, params=params, timeout=30.0,
-            headers={"User-Agent": UA})
-        if resp.status_code == 200:
-            lines = resp.text.strip().splitlines()
-            for line in lines[1:]:
-                try:
-                    parts = json.loads(line) if line.startswith("[") else line.split(" ")
-                    if isinstance(parts, list) and len(parts) >= 4:
-                        results.append({
-                            "url": parts[0] if len(parts) > 0 else "",
-                            "timestamp": parts[1] if len(parts) > 1 else "",
-                            "status": parts[2] if len(parts) > 2 else "",
-                            "mime": parts[3] if len(parts) > 3 else "",
-                            "length": parts[4] if len(parts) > 4 else "0",
-                        })
-                except:
-                    continue
-    except:
-        pass
+    params = {
+        "url": f"*.{domain}/*",
+        "output": "json",
+        "fl": "original,timestamp,statuscode,mimetype,length",
+        "limit": str(limit),
+        "filter": "statuscode:200",
+        "collapse": "urlkey",
+    }
+    resp = await safe_fetch(client, CDX_API, params=params, timeout=30.0)
+    if resp and resp.status_code == 200:
+        lines = resp.text.strip().splitlines()
+        for line in lines[1:]:
+            try:
+                parts = json.loads(line) if line.startswith("[") else line.split(" ")
+                if isinstance(parts, list) and len(parts) >= 4:
+                    results.append({
+                        "url": parts[0] if len(parts) > 0 else "",
+                        "timestamp": parts[1] if len(parts) > 1 else "",
+                        "status": parts[2] if len(parts) > 2 else "",
+                        "mime": parts[3] if len(parts) > 3 else "",
+                        "length": parts[4] if len(parts) > 4 else "0",
+                    })
+            except:
+                continue
     return results
 
 async def query_available(domain: str, client: httpx.AsyncClient) -> dict:
-    try:
-        resp = await client.get(
-            f"{WAYBACK_API}/available?url={domain}",
-            timeout=15.0,
-            headers={"User-Agent": UA}
-        )
-        if resp.status_code == 200:
-            return resp.json()
-    except:
-        pass
+    resp = await safe_fetch(client, f"{WAYBACK_API}/available?url={domain}")
+    if resp and resp.status_code == 200:
+        return resp.json()
     return {}
 
 async def query_cdx_raw(domain: str, client: httpx.AsyncClient, limit: int = 500) -> list:
     results = []
-    try:
-        params = {
-            "url": f"*.{domain}/*",
-            "output": "text",
-            "fl": "original,timestamp,statuscode,mimetype,length",
-            "limit": str(limit),
-            "collapse": "urlkey",
-        }
-        resp = await client.get(CDX_API, params=params, timeout=30.0,
-            headers={"User-Agent": UA})
-        if resp.status_code == 200:
-            lines = resp.text.strip().splitlines()
-            for line in lines:
-                parts = line.strip().split(" ")
-                if len(parts) >= 5:
-                    results.append({
-                        "url": parts[0], "timestamp": parts[1],
-                        "status": parts[2], "mime": parts[3], "length": parts[4],
-                    })
-    except:
-        pass
+    params = {
+        "url": f"*.{domain}/*",
+        "output": "text",
+        "fl": "original,timestamp,statuscode,mimetype,length",
+        "limit": str(limit),
+        "collapse": "urlkey",
+    }
+    resp = await safe_fetch(client, CDX_API, params=params, timeout=30.0)
+    if resp and resp.status_code == 200:
+        lines = resp.text.strip().splitlines()
+        for line in lines:
+            parts = line.strip().split(" ")
+            if len(parts) >= 5:
+                results.append({
+                    "url": parts[0], "timestamp": parts[1],
+                    "status": parts[2], "mime": parts[3], "length": parts[4],
+                })
     return results
 
 async def analyze_url_structure(urls: list) -> list:
@@ -112,9 +98,9 @@ async def analyze_url_structure(urls: list) -> list:
             path_depths[depth] = path_depths.get(depth, 0) + 1
         if path_depths:
             avg_depth = sum(k * v for k, v in path_depths.items()) / sum(path_depths.values())
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Avg URL path depth: {avg_depth:.1f} (query URLs: {query_count})",
-                type="Archive: URL Structure Analysis",
+                ftype="Archive: URL Structure Analysis",
                 source="Wayback Machine",
                 confidence="Medium",
                 color="slate",
@@ -147,9 +133,9 @@ async def detect_technology_archived(urls: list, client: httpx.AsyncClient) -> l
                 if p.lower() in url:
                     found_techs.add(tech)
     for tech in found_techs:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Technology detected: {tech}",
-            type="Archive: Technology Detection",
+            ftype="Archive: Technology Detection",
             source="Wayback Machine",
             confidence="Medium",
             color="slate",
@@ -168,9 +154,9 @@ async def check_redirect_chain_archived(urls: list) -> list:
     redirect_count = sum(v for k, v in statuses.items() if k.startswith("3"))
     error_count = sum(v for k, v in statuses.items() if k.startswith(("4", "5")))
     if redirect_count:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{redirect_count} redirects (3xx) in archive",
-            type="Archive: Redirect Analysis",
+            ftype="Archive: Redirect Analysis",
             source="Wayback Machine",
             confidence="Medium",
             color="orange",
@@ -180,9 +166,9 @@ async def check_redirect_chain_archived(urls: list) -> list:
             tags=["archive", "redirect"]
         ))
     if error_count:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{error_count} error responses (4xx/5xx) in archive",
-            type="Archive: Error Analysis",
+            ftype="Archive: Error Analysis",
             source="Wayback Machine",
             confidence="Medium",
             color="orange",
@@ -203,9 +189,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
     archived_snapshots = available.get("archived_snapshots", {})
     closest = archived_snapshots.get("closest", {})
     if closest:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Archived snapshot available: {closest.get('url', '')[:200]}",
-            type="Archive: Snapshot Available",
+            ftype="Archive: Snapshot Available",
             source="Wayback Machine",
             confidence="High",
             color="slate",
@@ -227,9 +213,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
         redirect_results = await check_redirect_chain_archived(cdx_results)
         findings.extend(redirect_results)
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{len(cdx_results)} historical URLs archived",
-            type="Archive: Historical URL Count",
+            ftype="Archive: Historical URL Count",
             source="Wayback CDX",
             confidence="High",
             color="slate",
@@ -248,9 +234,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             status_codes[status] = status_codes.get(status, 0) + 1
 
         for mime, count in sorted(mime_types.items(), key=lambda x: -x[1])[:5]:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"MIME type '{mime}': {count} URLs",
-                type="Archive: MIME Type Distribution",
+                ftype="Archive: MIME Type Distribution",
                 source="Wayback CDX",
                 confidence="Medium",
                 color="slate",
@@ -260,9 +246,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             ))
 
         for status, count in sorted(status_codes.items(), key=lambda x: -x[1])[:5]:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Status {status}: {count} URLs",
-                type="Archive: Status Code Distribution",
+                ftype="Archive: Status Code Distribution",
                 source="Wayback CDX",
                 confidence="Medium",
                 color="slate",
@@ -283,9 +269,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
         if sensitive_urls:
             for su in sensitive_urls[:10]:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Sensitive URL archived: {su[:200]}",
-                    type="Archive: Sensitive File Found",
+                    ftype="Archive: Sensitive File Found",
                     source="Wayback CDX",
                     confidence="Medium",
                     color="red",
@@ -302,9 +288,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                 years[ts] = years.get(ts, 0) + 1
         if years:
             for year, count in sorted(years.items())[:10]:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Year {year}: {count} snapshots",
-                    type="Archive: Yearly Snapshot Distribution",
+                    ftype="Archive: Yearly Snapshot Distribution",
                     source="Wayback CDX",
                     confidence="Medium",
                     color="slate",
@@ -314,9 +300,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                 ))
 
     if not findings:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="No archive data found for target",
-            type="Archive: Check Complete",
+            ftype="Archive: Check Complete",
             source="Wayback Machine",
             confidence="Low",
             color="emerald",

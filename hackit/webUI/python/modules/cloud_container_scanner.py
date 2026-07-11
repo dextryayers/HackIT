@@ -1,7 +1,7 @@
 import httpx
 import asyncio
 import re
-import socket
+from module_common import safe_fetch, safe_fetch_json, make_finding, resolve_ip, is_ip
 from models import IntelligenceFinding
 
 CONTAINER_ORCHESTRATORS = {
@@ -96,16 +96,13 @@ HELM_PATHS = [
 ]
 
 async def _resolve_target(target: str) -> tuple:
-    try:
-        socket.inet_aton(target)
-        return target, True
-    except OSError:
-        pass
-    try:
-        ip = socket.gethostbyname(target)
+    t = target.strip()
+    if is_ip(t):
+        return t, True
+    ip = resolve_ip(t)
+    if ip:
         return ip, False
-    except Exception as e:
-        return None, str(e)
+    return None, "DNS resolution failed"
 
 async def _check_dns_orchestration(target: str) -> list:
     findings = []
@@ -118,7 +115,7 @@ async def _check_dns_orchestration(target: str) -> list:
                 for orch, patterns in CONTAINER_ORCHESTRATORS.items():
                     for pat in patterns:
                         if pat in cname:
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=orch,
                                 type="Container Orchestrator (CNAME)",
                                 source="ContainerScanner",
@@ -141,7 +138,7 @@ async def _check_dns_orchestration(target: str) -> list:
                 for reg, patterns in REGISTRY_PATTERNS.items():
                     for pat in patterns:
                         if pat in txt:
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=reg,
                                 type="Container Registry (TXT)",
                                 source="ContainerScanner",
@@ -166,12 +163,12 @@ async def _check_api_endpoints(target: str, client: httpx.AsyncClient) -> list:
     for path in K8S_API_PATHS:
         url = f"{base}{path}"
         try:
-            resp = await client.get(url, timeout=5.0,
+            resp = await safe_fetch(client, url, timeout=5.0,
                 headers={"User-Agent": "Mozilla/5.0"})
             if resp.status_code == 200:
                 body = resp.text[:200].lower()
                 if "apiVersion" in body or "kind" in body or "kubernetes" in body or "namespaces" in body:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"K8s API: {url}",
                         type="Kubernetes API Endpoint (Exposed)",
                         source="ContainerScanner",
@@ -185,7 +182,7 @@ async def _check_api_endpoints(target: str, client: httpx.AsyncClient) -> list:
                         tags=["cloud", "kubernetes", "api", "exposed"]
                     ))
                 else:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"K8s Path Responds: {url}",
                         type="Kubernetes Path Response",
                         source="ContainerScanner",
@@ -209,10 +206,10 @@ async def _check_config_paths(target: str, client: httpx.AsyncClient) -> list:
     for path in all_paths:
         url = f"{base}{path}"
         try:
-            resp = await client.get(url, timeout=5.0,
+            resp = await safe_fetch(client, url, timeout=5.0,
                 headers={"User-Agent": "Mozilla/5.0"})
             if resp.status_code == 200:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Config Exposed: {path}",
                     type="Container Config Exposure",
                     source="ContainerScanner",
@@ -233,7 +230,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
     findings = []
     base = f"https://{target}" if not target.startswith("http") else target
     try:
-        resp = await client.get(base, follow_redirects=True, timeout=10.0,
+        resp = await safe_fetch(client, base, follow_redirects=True, timeout=10.0,
             headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"})
         headers = dict(resp.headers)
         server = headers.get("server", "").lower()
@@ -242,7 +239,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
         for runtime, patterns in CONTAINER_RUNTIMES.items():
             for pat in patterns:
                 if pat in server or pat in all_vals:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Container Runtime: {runtime}",
                         type="Container Runtime Detection",
                         source="ContainerScanner",
@@ -259,7 +256,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
         for orch, patterns in CONTAINER_ORCHESTRATORS.items():
             for pat in patterns:
                 if pat in server or pat in all_vals:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=orch,
                         type="Container Orchestrator (Header)",
                         source="ContainerScanner",
@@ -276,7 +273,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
         for reg, patterns in REGISTRY_PATTERNS.items():
             for pat in patterns:
                 if pat in all_vals:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=reg,
                         type="Container Registry (Header)",
                         source="ContainerScanner",
@@ -294,7 +291,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
         for reg, patterns in REGISTRY_PATTERNS.items():
             for pat in patterns:
                 if pat in html:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=reg,
                         type="Container Registry (HTML)",
                         source="ContainerScanner",
@@ -309,7 +306,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
                     break
 
     except Exception as e:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Header analysis error: {str(e)[:100]}",
             type="Container Scan Error",
             source="ContainerScanner",
@@ -331,11 +328,11 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     ip, is_ip = await _resolve_target(target)
     if ip is None:
-        findings.append(IntelligenceFinding(entity=f"DNS resolution failed: {target}", type="DNS Error", source="ContainerScanner", confidence="Low", color="red", category="Cloud / Infrastructure OSINT", raw_data=str(is_ip)[:200], tags=["error"]))
+        findings.append(make_finding(entity=f"DNS resolution failed: {target}", type="DNS Error", source="ContainerScanner", confidence="Low", color="red", category="Cloud / Infrastructure OSINT", raw_data=str(is_ip)[:200], tags=["error"]))
         return findings
 
     if not is_ip:
-        findings.append(IntelligenceFinding(entity=f"{target} -> {ip}", type="DNS Resolution", source="ContainerScanner", confidence="High", color="slate", category="Cloud / Infrastructure OSINT", threat_level="Informational", status="Resolved", resolution=ip, tags=["dns", "resolution"]))
+        findings.append(make_finding(entity=f"{target} -> {ip}", type="DNS Resolution", source="ContainerScanner", confidence="High", color="slate", category="Cloud / Infrastructure OSINT", threat_level="Informational", status="Resolved", resolution=ip, tags=["dns", "resolution"]))
 
     findings.extend(await _check_dns_orchestration(target))
     findings.extend(await _analyze_headers(target, client))
@@ -348,12 +345,12 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     registry_count = sum(1 for f in findings if "Registry" in f.type)
     config_count = sum(1 for f in findings if "Config Exposure" in f.type)
 
-    findings.append(IntelligenceFinding(entity=f"Orchestrators detected: {orch_count}", type="Orchestrator Count", source="ContainerScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["container", "summary"]))
-    findings.append(IntelligenceFinding(entity=f"Container runtimes: {runtime_count}", type="Runtime Count", source="ContainerScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["container", "summary"]))
-    findings.append(IntelligenceFinding(entity=f"K8s API endpoints: {api_count}", type="K8s API Count", source="ContainerScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["container", "summary"]))
-    findings.append(IntelligenceFinding(entity=f"Container registries: {registry_count}", type="Registry Count", source="ContainerScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["container", "summary"]))
-    findings.append(IntelligenceFinding(entity=f"Config exposures: {config_count}", type="Config Exposure Count", source="ContainerScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["container", "summary"]))
-    findings.append(IntelligenceFinding(entity=f"Target: {target}", type="Container Scan Target", source="ContainerScanner", confidence="High", color="slate", category="Cloud / Infrastructure OSINT", tags=["container", "target"]))
-    findings.append(IntelligenceFinding(entity=f"Total container findings: {len(findings)}", type="Container Scan Summary", source="ContainerScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["container", "summary"]))
+    findings.append(make_finding(entity=f"Orchestrators detected: {orch_count}", type="Orchestrator Count", source="ContainerScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["container", "summary"]))
+    findings.append(make_finding(entity=f"Container runtimes: {runtime_count}", type="Runtime Count", source="ContainerScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["container", "summary"]))
+    findings.append(make_finding(entity=f"K8s API endpoints: {api_count}", type="K8s API Count", source="ContainerScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["container", "summary"]))
+    findings.append(make_finding(entity=f"Container registries: {registry_count}", type="Registry Count", source="ContainerScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["container", "summary"]))
+    findings.append(make_finding(entity=f"Config exposures: {config_count}", type="Config Exposure Count", source="ContainerScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["container", "summary"]))
+    findings.append(make_finding(entity=f"Target: {target}", type="Container Scan Target", source="ContainerScanner", confidence="High", color="slate", category="Cloud / Infrastructure OSINT", tags=["container", "target"]))
+    findings.append(make_finding(entity=f"Total container findings: {len(findings)}", type="Container Scan Summary", source="ContainerScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["container", "summary"]))
 
     return findings

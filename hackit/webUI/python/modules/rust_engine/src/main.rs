@@ -33,9 +33,29 @@ mod email_security;
 mod asn_network;
 mod js_analysis;
 mod dir_enum;
+mod email_breach_check;
+mod cdn_discovery;
+mod web_performance;
+mod dns_sec_check;
+mod ip_reputation;
+mod leak_detection;
+mod csp_analyzer;
+mod graph_api_scan;
+mod firebase_scanner;
+mod mobile_app_scan;
 
 use clap::{Parser, Subcommand};
+use std::collections::HashSet;
 use std::time::Instant;
+
+const ALL_MODULES: &[&str] = &[
+    "subdomain","ports","dns","email","webtech","crawl","sensitive","secret","waf","social",
+    "crtsh","vuln","cloud","whois","ssl_tls","http_headers","cve_search","breach_check",
+    "subdomain_takeover","tech_fingerprint","api_discovery","cloud_buckets","social_search",
+    "paste_scan","git_discovery","dns_zone_transfer","cors_check","redirect_trace",
+    "cookie_audit","email_security","asn_network","js_analysis","dir_enum","cdn_discovery","web_performance",
+    "dns_sec_check","ip_reputation","email_breach_check","graph_api_scan","mobile_app_scan","firebase_scanner","leak_detection","csp_analyzer",
+];
 
 #[derive(Parser)]
 #[command(name = "hackit_engine", version = "1.0.0")]
@@ -85,6 +105,16 @@ enum Commands {
     AsnNetwork { target: String },
     JsAnalysis { url: String },
     DirEnum { url: String },
+    CdnDiscovery { target: String },
+    WebPerformance { url: String },
+    DnsSecCheck { domain: String },
+    IpReputation { ip: String },
+    EmailBreachCheck { email: String },
+    GraphApiScan { target: String },
+    MobileAppScan { target: String },
+    FirebaseScan { target: String },
+    LeakDetection { target: String },
+    CspAnalyze { url: String },
     All { target: String, modules: Option<String> },
     ListModules,
 }
@@ -105,15 +135,22 @@ fn emit_result(module: &str, data: &serde_json::Value) {
     }
 }
 
+fn safe_json<T: serde::Serialize>(val: &T) -> String {
+    serde_json::to_string(val).unwrap_or_else(|_| "{}".to_string())
+}
+
+fn safe_json_value<T: serde::Serialize>(val: &T) -> serde_json::Value {
+    serde_json::to_value(val).unwrap_or(serde_json::Value::Object(Default::default()))
+}
+
 async fn run_module_async<T: serde::Serialize>(label: &str, f: impl std::future::Future<Output = T>) -> T {
     emit("progress", label, "running");
     let r = f.await;
     if progress_enabled() {
-        let json = serde_json::to_value(&r).unwrap_or_default();
-        emit_result(label, &json);
+        emit_result(label, &safe_json_value(&r));
         emit("progress", label, "done");
     } else {
-        println!("{}", serde_json::to_string(&r).unwrap());
+        println!("{}", safe_json(&r));
     }
     r
 }
@@ -124,8 +161,8 @@ async fn main() {
 
     match cli.command {
         Commands::ListModules => {
-            let modules = vec!["subdomain","ports","dns","email","webtech","crawl","sensitive","secret","waf","social","crtsh","vuln","cloud","whois","ssl_tls","http_headers","cve_search","breach_check","subdomain_takeover","tech_fingerprint","api_discovery","cloud_buckets","social_search","paste_scan","git_discovery","dns_zone_transfer","cors_check","redirect_trace","cookie_audit","email_security","asn_network","js_analysis","dir_enum"];
-            println!("{}", serde_json::to_string(&modules).unwrap());
+            let modules = ALL_MODULES.to_vec();
+            println!("{}", safe_json(&modules));
         }
         Commands::Subdomain { domain } => { run_module_async("subdomain", subdomain::enumerate(&domain)).await; }
         Commands::Ports { host } => {
@@ -164,13 +201,29 @@ async fn main() {
         Commands::AsnNetwork { target } => { run_module_async("asn_network", asn_network::lookup(&target)).await; }
         Commands::JsAnalysis { url } => { run_module_async("js_analysis", js_analysis::analyze(&url)).await; }
         Commands::DirEnum { url } => { run_module_async("dir_enum", dir_enum::enumerate(&url)).await; }
-        Commands::All { target, modules: _ } => {
+        Commands::WebPerformance { url } => { run_module_async("web_performance", web_performance::analyze(&url)).await; }
+        Commands::DnsSecCheck { domain } => { run_module_async("dns_sec_check", dns_sec_check::check(&domain)).await; }
+        Commands::IpReputation { ip } => { run_module_async("ip_reputation", ip_reputation::check(&ip)).await; }
+        Commands::CdnDiscovery { target } => { run_module_async("cdn_discovery", cdn_discovery::discover(&target)).await; }
+        Commands::GraphApiScan { target } => { run_module_async("graph_api_scan", graph_api_scan::scan(&target)).await; }
+        Commands::EmailBreachCheck { email } => { run_module_async("email_breach_check", email_breach_check::check(&email)).await; }
+        Commands::MobileAppScan { target } => { run_module_async("mobile_app_scan", mobile_app_scan::scan(&target)).await; }
+        Commands::FirebaseScan { target } => { run_module_async("firebase_scanner", firebase_scanner::scan(&target)).await; }
+        Commands::LeakDetection { target } => { run_module_async("leak_detection", leak_detection::detect(&target)).await; }
+        Commands::CspAnalyze { url } => { run_module_async("csp_analyzer", csp_analyzer::analyze(&url)).await; }
+        Commands::All { target, modules } => {
             let start = Instant::now();
             let _config: common::ScanConfig = cli.config.as_ref()
                 .and_then(|s| serde_json::from_str(s).ok())
                 .unwrap_or_default();
 
-            let (subs, prts, bann, dns_res, eml, web, crw, sen, sec, wf, soc, crt, vln, cld, who, stls, hh, cve, brch, sto, tf, ad, cb, ss, ps, gd, dzt, crsch, rtrace, caudit, es, asn, jsa, de) = tokio::join!(
+            let selected: HashSet<&str> = modules.as_ref()
+                .map(|m| m.split(',').map(|s| s.trim()).collect())
+                .unwrap_or_else(|| ALL_MODULES.iter().copied().collect());
+
+            let sel = |name: &str| -> bool { selected.is_empty() || selected.contains(name) };
+
+            let (subs, prts, bann, dns_res, eml, web, crw, sen, sec, wf, soc, crt, vln, cld, who, stls, hh, cve, brch, sto, tf, ad, cb, ss, ps, gd, dzt, crsch, rtrace, caudit, es, asn, jsa, de, wp, dsc, ipr, cd, ebc, mas, gas, fb, csa, ld) = tokio::join!(
                 subdomain::enumerate(&target),
                 ports::scan(&target),
                 ports::banner_grab(&target),
@@ -205,32 +258,73 @@ async fn main() {
                 asn_network::lookup(&target),
                 js_analysis::analyze(&target),
                 dir_enum::enumerate(&target),
+                web_performance::analyze(&target),
+                dns_sec_check::check(&target),
+                ip_reputation::check(&target),
+                cdn_discovery::discover(&target),
+                email_breach_check::check(&target),
+                mobile_app_scan::scan(&target),
+                graph_api_scan::scan(&target),
+                firebase_scanner::scan(&target),
+                csp_analyzer::analyze(&target),
+                leak_detection::detect(&target),
             );
 
             let elapsed = start.elapsed().as_millis() as u64;
-            let result = serde_json::json!({
-                "target": target, "duration_ms": elapsed,
-                "subdomains": subs, "ports": prts, "banners": bann,
-                "dns": dns_res, "emails": eml, "webtech": web,
-                "crawl": crw, "sensitive": sen, "secrets": sec,
-                "waf": wf, "social": soc, "crtsh": crt,
-                "vulns": vln, "cloud": cld,
-                "whois": who, "ssl_tls": stls, "http_headers": hh,
-                "cve_search": cve, "breach_check": brch,
-                "subdomain_takeover": sto, "tech_fingerprint": tf,
-                "api_discovery": ad, "cloud_buckets": cb,
-                "social_search": ss, "paste_scan": ps,
-                "git_discovery": gd, "dns_zone_transfer": dzt,
-                "cors_check": crsch, "redirect_trace": rtrace,
-                "cookie_audit": caudit, "email_security": es,
-                "asn_network": asn, "js_analysis": jsa,
-                "dir_enum": de,
-            });
+            let mut result = serde_json::json!({"target": target, "duration_ms": elapsed});
+
+            let insert = |r: &mut serde_json::Value, k: &str, v: serde_json::Value| {
+                if !v.is_null() { r[k] = v; }
+            };
+            if sel("subdomain") { insert(&mut result, "subdomains", safe_json_value(&subs)); }
+            if sel("ports") { insert(&mut result, "ports", safe_json_value(&prts)); insert(&mut result, "banners", safe_json_value(&bann)); }
+            if sel("dns") { insert(&mut result, "dns", safe_json_value(&dns_res)); }
+            if sel("email") { insert(&mut result, "emails", safe_json_value(&eml)); }
+            if sel("webtech") { insert(&mut result, "webtech", safe_json_value(&web)); }
+            if sel("crawl") { insert(&mut result, "crawl", safe_json_value(&crw)); }
+            if sel("sensitive") { insert(&mut result, "sensitive", safe_json_value(&sen)); }
+            if sel("secret") { insert(&mut result, "secrets", safe_json_value(&sec)); }
+            if sel("waf") { insert(&mut result, "waf", safe_json_value(&wf)); }
+            if sel("social") { insert(&mut result, "social", safe_json_value(&soc)); }
+            if sel("crtsh") { insert(&mut result, "crtsh", safe_json_value(&crt)); }
+            if sel("vuln") { insert(&mut result, "vulns", safe_json_value(&vln)); }
+            if sel("cloud") { insert(&mut result, "cloud", safe_json_value(&cld)); }
+            if sel("whois") { insert(&mut result, "whois", safe_json_value(&who)); }
+            if sel("ssl_tls") { insert(&mut result, "ssl_tls", safe_json_value(&stls)); }
+            if sel("http_headers") { insert(&mut result, "http_headers", safe_json_value(&hh)); }
+            if sel("cve_search") { insert(&mut result, "cve_search", safe_json_value(&cve)); }
+            if sel("breach_check") { insert(&mut result, "breach_check", safe_json_value(&brch)); }
+            if sel("subdomain_takeover") { insert(&mut result, "subdomain_takeover", safe_json_value(&sto)); }
+            if sel("tech_fingerprint") { insert(&mut result, "tech_fingerprint", safe_json_value(&tf)); }
+            if sel("api_discovery") { insert(&mut result, "api_discovery", safe_json_value(&ad)); }
+            if sel("cloud_buckets") { insert(&mut result, "cloud_buckets", safe_json_value(&cb)); }
+            if sel("social_search") { insert(&mut result, "social_search", safe_json_value(&ss)); }
+            if sel("paste_scan") { insert(&mut result, "paste_scan", safe_json_value(&ps)); }
+            if sel("git_discovery") { insert(&mut result, "git_discovery", safe_json_value(&gd)); }
+            if sel("dns_zone_transfer") { insert(&mut result, "dns_zone_transfer", safe_json_value(&dzt)); }
+            if sel("cors_check") { insert(&mut result, "cors_check", safe_json_value(&crsch)); }
+            if sel("redirect_trace") { insert(&mut result, "redirect_trace", safe_json_value(&rtrace)); }
+            if sel("cookie_audit") { insert(&mut result, "cookie_audit", safe_json_value(&caudit)); }
+            if sel("email_security") { insert(&mut result, "email_security", safe_json_value(&es)); }
+            if sel("asn_network") { insert(&mut result, "asn_network", safe_json_value(&asn)); }
+            if sel("js_analysis") { insert(&mut result, "js_analysis", safe_json_value(&jsa)); }
+            if sel("dir_enum") { insert(&mut result, "dir_enum", safe_json_value(&de)); }
+            if sel("web_performance") { insert(&mut result, "web_performance", safe_json_value(&wp)); }
+            if sel("dns_sec_check") { insert(&mut result, "dns_sec_check", safe_json_value(&dsc)); }
+            if sel("ip_reputation") { insert(&mut result, "ip_reputation", safe_json_value(&ipr)); }
+            if sel("cdn_discovery") { insert(&mut result, "cdn_discovery", safe_json_value(&cd)); }
+            if sel("email_breach_check") { insert(&mut result, "email_breach_check", safe_json_value(&ebc)); }
+            if sel("mobile_app_scan") { insert(&mut result, "mobile_app_scan", safe_json_value(&mas)); }
+            if sel("graph_api_scan") { insert(&mut result, "graph_api_scan", safe_json_value(&gas)); }
+            if sel("firebase_scanner") { insert(&mut result, "firebase_scanner", safe_json_value(&fb)); }
+            if sel("csp_analyzer") { insert(&mut result, "csp_analyzer", safe_json_value(&csa)); }
+            if sel("leak_detection") { insert(&mut result, "leak_detection", safe_json_value(&ld)); }
+
             if progress_enabled() {
                 emit("progress", "all", "done");
                 println!("{}", serde_json::json!({"event": "complete", "data": result}));
             } else {
-                println!("{}", serde_json::to_string(&result).unwrap());
+                println!("{}", safe_json(&result));
             }
         }
     }

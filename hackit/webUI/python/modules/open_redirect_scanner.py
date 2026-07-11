@@ -1,7 +1,6 @@
 import httpx
 from urllib.parse import urlparse, urlencode, quote, parse_qs, urljoin
-from models import IntelligenceFinding
-
+from module_common import safe_fetch, make_finding
 REDIRECT_PARAMS = [
     "url", "redirect", "return", "next", "target", "dest", "destination",
     "go", "forward", "to", "link", "linkto", "page", "file", "doc",
@@ -250,7 +249,7 @@ DOMAIN_BYPASS_PATTERNS = {
 async def test_redirect_param(base_url, param, payload, client):
     test_url = f"{base_url}?{param}={quote(payload)}"
     try:
-        resp = await client.get(test_url, timeout=5.0,
+        resp = await safe_fetch(client, test_url, timeout=5.0,
             headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"},
             follow_redirects=False)
         location = resp.headers.get("location", "")
@@ -271,7 +270,7 @@ async def test_redirect_param(base_url, param, payload, client):
 
 async def check_redirect_footprint(base_url, client):
     try:
-        resp = await client.get(base_url, follow_redirects=False, timeout=5.0,
+        resp = await safe_fetch(client, base_url, follow_redirects=False, timeout=5.0,
             headers={"User-Agent": "Mozilla/5.0"})
         return resp.status_code, dict(resp.headers)
     except Exception:
@@ -300,9 +299,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         for bypass_name, bypass_pattern in DOMAIN_BYPASS_PATTERNS.items():
                             if re.search(bypass_pattern, payload, re.IGNORECASE):
                                 bypass_types_found.add(bypass_name)
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"Open redirect: ?{param}={payload[:80]} -> {location[:200]}",
-                            type="Open Redirect Vulnerability",
+                            ftype="Open Redirect Vulnerability",
                             source="OpenRedirectScanner",
                             confidence="High",
                             color="red",
@@ -317,13 +316,13 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 if status in (301, 302, 303, 307, 308) and location:
                     check_url = f"{base_url}?{param}={quote(payload)}"
                     try:
-                        verify = await client.get(check_url, timeout=5.0,
+                        verify = await safe_fetch(client, check_url, timeout=5.0,
                             headers={"User-Agent": "Mozilla/5.0"}, follow_redirects=False)
                         verify_headers = dict(verify.headers)
                         if "X-Injected" in verify_headers or "Set-Cookie" in verify_headers:
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=f"CRLF injection via ?{param}",
-                                type="CRLF Injection (Header Splitting)",
+                                ftype="CRLF Injection (Header Splitting)",
                                 source="OpenRedirectScanner",
                                 confidence="High",
                                 color="red",
@@ -339,9 +338,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 status, location, is_open = await test_redirect_param(base_url, param, payload, client)
                 if status == 200 and location:
                     if "root:x" in location or "etc/passwd" in location or "[extensions]" in location:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"Path traversal via ?{param} - file content leaked",
-                            type="Path Traversal via Redirect",
+                            ftype="Path Traversal via Redirect",
                             source="OpenRedirectScanner",
                             confidence="High",
                             color="red",
@@ -360,14 +359,14 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         redirect_chain_check_url = f"{base_url}?redirect=https://evil.com"
         try:
-            chain_resp = await client.get(redirect_chain_check_url, follow_redirects=True, timeout=10.0,
+            chain_resp = await safe_fetch(client, redirect_chain_check_url, follow_redirects=True, timeout=10.0,
                 headers={"User-Agent": "Mozilla/5.0"})
             if chain_resp.status_code == 200:
                 final_url = str(chain_resp.url)
                 if "evil.com" in final_url.lower() or "127.0.0.1" in final_url:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Redirect chain leads to: {final_url[:200]}",
-                        type="Open Redirect Chain Detected",
+                        ftype="Open Redirect Chain Detected",
                         source="OpenRedirectScanner",
                         confidence="High",
                         color="red",
@@ -380,9 +379,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         dom_redirects = detect_dom_redirect(html if 'html' in dir() else "")
         for dr in dom_redirects[:10]:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"DOM redirect: {dr['pattern']} (context: {dr['context']})",
-                type="DOM-Based Open Redirect",
+                ftype="DOM-Based Open Redirect",
                 source="OpenRedirectScanner",
                 confidence="Medium",
                 color="orange",
@@ -393,9 +392,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         header_redirects = detect_header_redirect(headers if 'headers' in dir() else {})
         for hr in header_redirects:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Redirect header: {hr['header']}: {hr['value'][:100]}",
-                type=f"HTTP Redirect Header: {hr['description']}",
+                ftype=f"HTTP Redirect Header: {hr['description']}",
                 source="OpenRedirectScanner",
                 confidence="High",
                 color="slate",
@@ -409,13 +408,13 @@ async def crawl(target: str, client: httpx.AsyncClient):
         html_endpoints = ["/logout", "/login", "/redirect", "/goto", "/link", "/out"]
         for ep in html_endpoints:
             try:
-                ep_resp = await client.get(f"{base_url}{ep}", follow_redirects=False, timeout=5.0,
+                ep_resp = await safe_fetch(client, f"{base_url}{ep}", follow_redirects=False, timeout=5.0,
                     headers={"User-Agent": "Mozilla/5.0"})
                 if ep_resp.status_code in (301, 302, 303, 307, 308):
                     loc = ep_resp.headers.get("location", "")
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"{ep} redirects to: {loc[:200]}",
-                        type="Endpoint Redirect",
+                        ftype="Endpoint Redirect",
                         source="OpenRedirectScanner",
                         confidence="Medium",
                         color="slate",
@@ -427,9 +426,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 pass
 
         if found_vulnerabilities:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{len(found_vulnerabilities)} open redirect vectors found ({len(bypass_types_found)} bypass types)",
-                type="Open Redirect Summary",
+                ftype="Open Redirect Summary",
                 source="OpenRedirectScanner",
                 confidence="High",
                 color="red",
@@ -440,9 +439,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         else:
             combined_params = list(set(REDIRECT_PARAMS + MORE_REDIRECT_PARAMS))
             combined_payloads = list(set(OPEN_REDIRECT_PAYLOADS + MORE_OPEN_REDIRECT_PAYLOADS))
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"No open redirect found on {len(combined_params)} parameters, {len(combined_payloads)} payloads",
-                type="Open Redirect Summary",
+                ftype="Open Redirect Summary",
                 source="OpenRedirectScanner",
                 confidence="Medium",
                 color="emerald",
@@ -452,9 +451,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ))
 
     except Exception as e:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Open Redirect error: {str(e)[:100]}",
-            type="Open Redirect Error",
+            ftype="Open Redirect Error",
             source="OpenRedirectScanner",
             confidence="Low",
             color="red",
@@ -463,7 +462,6 @@ async def crawl(target: str, client: httpx.AsyncClient):
         ))
 
     return findings
-
 
 # === EXTENDED UPGRADE: 200+ payloads, DOM-based redirect detection, more header redirects ===
 
@@ -746,7 +744,7 @@ def analyze_redirect_chain(client, url, max_depth=5):
     try:
         current = url
         for _ in range(max_depth):
-            resp = client.get(current, follow_redirects=False, timeout=5.0,
+            resp = safe_fetch(client, current, follow_redirects=False, timeout=5.0,
                 headers={"User-Agent": "Mozilla/5.0"})
             status = resp.status_code
             location = resp.headers.get("location", "")

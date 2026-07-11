@@ -2,12 +2,12 @@ import httpx
 import re
 import json
 from urllib.parse import urlparse, quote
-from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash
 
 async def query_viewdns_reverse_whois(query: str, qtype: str, client: httpx.AsyncClient):
     try:
         search_type = {"email": "1", "name": "2", "organization": "3"}.get(qtype, "2")
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://viewdns.info/reversewhois/?q={quote(query)}&t={search_type}",
             headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"},
             timeout=15.0
@@ -21,7 +21,7 @@ async def query_viewdns_reverse_whois(query: str, qtype: str, client: httpx.Asyn
 
 async def query_whoxy(query: str, qtype: str, client: httpx.AsyncClient):
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://www.whoxy.com/reverse-whois/?q={quote(query)}",
             headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"},
             timeout=15.0
@@ -36,7 +36,7 @@ async def query_whoxy(query: str, qtype: str, client: httpx.AsyncClient):
 
 async def query_whoisxmlapi_free(domain: str, client: httpx.AsyncClient):
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://www.whoisxmlapi.com/whoisserver/WhoisService?domainName={domain}&outputFormat=json",
             headers={"User-Agent": "Mozilla/5.0"},
             timeout=15.0
@@ -70,7 +70,7 @@ async def query_whoisxmlapi_free(domain: str, client: httpx.AsyncClient):
 
 async def extract_whois_info(domain: str, client: httpx.AsyncClient):
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://www.whois.com/whois/{domain}",
             headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"},
             timeout=15.0
@@ -109,9 +109,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
     emails_from_whois = whoisxml.get("emails", [])
 
     if registrant_org:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=registrant_org,
-            type="WHOIS Registrant Organization",
+            ftype="WHOIS Registrant Organization",
             source="DNS Reverse WHOIS",
             confidence="High",
             color="slate",
@@ -121,9 +121,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             tags=["whois", "organization"]
         ))
     if registrant_email:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=registrant_email,
-            type="WHOIS Registrant Email",
+            ftype="WHOIS Registrant Email",
             source="DNS Reverse WHOIS",
             confidence="High",
             color="blue",
@@ -133,9 +133,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             tags=["whois", "email"]
         ))
     if registrant_name:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=registrant_name,
-            type="WHOIS Registrant Name",
+            ftype="WHOIS Registrant Name",
             source="DNS Reverse WHOIS",
             confidence="Medium",
             color="slate",
@@ -145,9 +145,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             tags=["whois", "name"]
         ))
     if registrant_phone:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=registrant_phone,
-            type="WHOIS Registrant Phone",
+            ftype="WHOIS Registrant Phone",
             source="DNS Reverse WHOIS",
             confidence="Medium",
             color="slate",
@@ -176,7 +176,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         if vd_domains:
             all_related_domains.update(vd_domains)
             sources_for_reverse.append(f"ViewDNS({qtype})")
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"ViewDNS reverse WHOIS by {qtype}: {len(vd_domains)} domains",
                 type="Reverse WHOIS Source",
                 source="ViewDNS.info",
@@ -193,7 +193,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             before = len(all_related_domains)
             all_related_domains.update(wx_domains)
             sources_for_reverse.append(f"WhoXY({qtype})")
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"WhoXY reverse WHOIS by {qtype}: {len(wx_domains)} domains",
                 type="Reverse WHOIS Source",
                 source="WhoXY.com",
@@ -207,7 +207,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
     if all_related_domains:
         all_related_domains.discard(domain)
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Total: {len(all_related_domains)} related domains from {len(set(sources_for_reverse))} source(s)",
             type="Reverse WHOIS Summary",
             source="DNS Reverse WHOIS",
@@ -221,7 +221,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         ))
 
         if len(all_related_domains) > 5:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Large domain portfolio: {len(all_related_domains)} domains owned by same registrant",
                 type="Domain Portfolio Size",
                 source="DNS Reverse WHOIS",
@@ -239,9 +239,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             if domain in related and domain != related:
                 category = "Sibling Domain (same SLD)"
                 threat = "Standard Target"
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=related,
-                type=category,
+                ftype=category,
                 source="DNS Reverse WHOIS",
                 confidence="Medium",
                 color="slate",
@@ -253,7 +253,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         similar_endings = [d for d in all_related_domains if d.endswith(domain.rsplit('.', 1)[-1]) and d != domain]
         if similar_endings:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Same-TLD siblings: {', '.join(similar_endings[:10])}",
                 type="Registrant Domain Cluster",
                 source="DNS Reverse WHOIS",
@@ -266,9 +266,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ))
 
     if not all_related_domains:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"No related domains found via reverse WHOIS for {domain}",
-            type="Reverse WHOIS No Results",
+            ftype="Reverse WHOIS No Results",
             source="DNS Reverse WHOIS",
             confidence="Low",
             color="slate",
@@ -278,9 +278,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             tags=["reverse-whois", "no-results"]
         ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Reverse WHOIS complete for {domain}",
-        type="Reverse WHOIS Overall Summary",
+        ftype="Reverse WHOIS Overall Summary",
         source="DNS Reverse WHOIS",
         confidence="High",
         color="blue",

@@ -1,8 +1,7 @@
 import httpx
 import re
 import dns.resolver
-import asyncio
-from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash
 
 SPF_RESULTS = {
     "pass": "emerald",
@@ -210,9 +209,9 @@ X-Spam-Score: -2.3"""
         if display_match:
             from_email = display_match.group(1) if not display_match.group(2) else display_match.group(2)
             from_domain = from_email.split("@")[1] if "@" in from_email else ""
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"From header domain: {from_domain}",
-                type="Header: From Domain",
+                ftype="Header: From Domain",
                 source="EmailHeaderValidator",
                 confidence="High",
                 color="slate",
@@ -223,7 +222,7 @@ X-Spam-Score: -2.3"""
                 tags=["email-header", "from-header", from_domain]
             ))
             if from_domain != domain:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"From domain ({from_domain}) does not match target domain ({domain})",
                     type="Header: Domain Mismatch",
                     source="EmailHeaderValidator",
@@ -239,9 +238,9 @@ X-Spam-Score: -2.3"""
         rp = parsed_headers["Return-Path"]
         rp_email = rp.strip("<>").strip()
         rp_domain = rp_email.split("@")[1] if "@" in rp_email else ""
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Return-Path domain: {rp_domain}",
-            type="Header: Return-Path",
+            ftype="Header: Return-Path",
             source="EmailHeaderValidator",
             confidence="High",
             color="slate",
@@ -257,7 +256,7 @@ X-Spam-Score: -2.3"""
         if rt_email:
             rt_domain = rt_email.group(1).split("@")[1] if "@" in rt_email.group(1) else ""
             if rt_domain and rt_domain != domain:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Reply-To domain ({rt_domain}) differs from From domain ({domain})",
                     type="Header: Reply-To Mismatch",
                     source="EmailHeaderValidator",
@@ -274,9 +273,9 @@ X-Spam-Score: -2.3"""
         spf_color = "emerald" if spf_check["all_mechanism"] == "hardfail" else "orange"
         if spf_check["all_mechanism"] == "allowall":
             spf_color = "red"
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"SPF Record: {spf_check['all_mechanism']}",
-            type="Header: SPF Validation",
+            ftype="Header: SPF Validation",
             source="EmailHeaderValidator",
             confidence="High",
             color=spf_color,
@@ -287,9 +286,9 @@ X-Spam-Score: -2.3"""
             tags=["email-header", "spf", f"spf-{spf_check['all_mechanism']}"]
         ))
     else:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="No SPF record found for domain",
-            type="Header: SPF Missing",
+            ftype="Header: SPF Missing",
             source="EmailHeaderValidator",
             confidence="High",
             color="red",
@@ -302,9 +301,9 @@ X-Spam-Score: -2.3"""
     dkim_found = await check_dkim_for_domain(domain)
     if dkim_found:
         for dk in dkim_found:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"DKIM selector '{dk['selector']}' found",
-                type="Header: DKIM Key Discovery",
+                ftype="Header: DKIM Key Discovery",
                 source="EmailHeaderValidator",
                 confidence="High",
                 color="emerald",
@@ -316,9 +315,9 @@ X-Spam-Score: -2.3"""
                 tags=["email-header", "dkim", f"selector-{dk['selector']}"]
             ))
     else:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="No DKIM keys found for domain",
-            type="Header: DKIM Missing",
+            ftype="Header: DKIM Missing",
             source="EmailHeaderValidator",
             confidence="High",
             color="orange",
@@ -331,9 +330,9 @@ X-Spam-Score: -2.3"""
     dmarc_check = await check_dmarc_for_domain(domain)
     if dmarc_check["has_dmarc"]:
         dmarc_color = "emerald" if dmarc_check["policy"] == "reject" else "orange" if dmarc_check["policy"] == "quarantine" else "red"
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"DMARC Record: policy={dmarc_check['policy']}",
-            type="Header: DMARC Validation",
+            ftype="Header: DMARC Validation",
             source="EmailHeaderValidator",
             confidence="High",
             color=dmarc_color,
@@ -344,9 +343,9 @@ X-Spam-Score: -2.3"""
             tags=["email-header", "dmarc", f"dmarc-{dmarc_check['policy']}"]
         ))
     else:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="No DMARC record found for domain",
-            type="Header: DMARC Missing",
+            ftype="Header: DMARC Missing",
             source="EmailHeaderValidator",
             confidence="High",
             color="red",
@@ -360,7 +359,7 @@ X-Spam-Score: -2.3"""
         mid = parsed_headers["Message-ID"]
         mid_check = check_message_id_format(mid)
         if mid_check["valid"]:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Message-ID: valid ({mid_check.get('format', 'standard')})",
                 type="Header: Message-ID Validation",
                 source="EmailHeaderValidator",
@@ -372,7 +371,7 @@ X-Spam-Score: -2.3"""
                 tags=["email-header", "message-id"]
             ))
         else:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Message-ID: invalid ({mid_check.get('reason', 'unknown')})",
                 type="Header: Message-ID Validation",
                 source="EmailHeaderValidator",
@@ -387,7 +386,7 @@ X-Spam-Score: -2.3"""
     if "Received" in parsed_headers:
         hops = extract_received_chain(parsed_headers.get("Received", ""))
         hop_count = len(hops)
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Received chain: {hop_count} hop(s)",
             type="Header: Received Chain Analysis",
             source="EmailHeaderValidator",
@@ -400,9 +399,9 @@ X-Spam-Score: -2.3"""
             tags=["email-header", "received-chain"]
         ))
         if hop_count == 0:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="No Received hops - possible direct delivery or spoofing",
-                type="Header: Suspicious Received Chain",
+                ftype="Header: Suspicious Received Chain",
                 source="EmailHeaderValidator",
                 confidence="Medium",
                 color="orange",
@@ -414,9 +413,9 @@ X-Spam-Score: -2.3"""
 
     if "Date" in parsed_headers:
         date_str = parsed_headers["Date"]
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Date header: {date_str[:50]}",
-            type="Header: Date Check",
+            ftype="Header: Date Check",
             source="EmailHeaderValidator",
             confidence="Low",
             color="slate",
@@ -431,7 +430,7 @@ X-Spam-Score: -2.3"""
         for mechanism, result in auth_parsed.items():
             if result and mechanism != "dkim_selector":
                 color_map = {"pass": "emerald", "fail": "red", "none": "slate", "neutral": "slate", "softfail": "orange", "hardfail": "red"}
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Auth Results: {mechanism.upper()}={result}",
                     type=f"Header: {mechanism.upper()} Authentication",
                     source="EmailHeaderValidator",
@@ -443,9 +442,9 @@ X-Spam-Score: -2.3"""
                     tags=["email-header", "authentication-results", mechanism]
                 ))
         if auth_parsed.get("dkim_selector"):
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"DKIM signing domain: {auth_parsed['dkim_selector']}",
-                type="Header: DKIM Signer",
+                ftype="Header: DKIM Signer",
                 source="EmailHeaderValidator",
                 confidence="High",
                 color="slate",
@@ -461,7 +460,7 @@ X-Spam-Score: -2.3"""
         sig_canon = re.search(r'c=([^;\s]+)', dkim_sig)
         sig_domain = re.search(r'd=([^;\s]+)', dkim_sig)
         if sig_ver:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"DKIM version: {sig_ver.group(1)}",
                 type="Header: DKIM Version",
                 source="EmailHeaderValidator",
@@ -472,7 +471,7 @@ X-Spam-Score: -2.3"""
                 tags=["email-header", "dkim-version"]
             ))
         if sig_algo:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"DKIM algorithm: {sig_algo.group(1)}",
                 type="Header: DKIM Algorithm",
                 source="EmailHeaderValidator",
@@ -483,7 +482,7 @@ X-Spam-Score: -2.3"""
                 tags=["email-header", "dkim-algorithm"]
             ))
         if sig_canon:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"DKIM canonicalization: {sig_canon.group(1)}",
                 type="Header: DKIM Canonicalization",
                 source="EmailHeaderValidator",
@@ -494,7 +493,7 @@ X-Spam-Score: -2.3"""
                 tags=["email-header", "dkim-canon"]
             ))
         if sig_domain:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"DKIM domain: {sig_domain.group(1)}",
                 type="Header: DKIM Domain",
                 source="EmailHeaderValidator",
@@ -512,7 +511,7 @@ X-Spam-Score: -2.3"""
             if re.search(pattern, auth_results_text, re.IGNORECASE):
                 forgery_detected.append(desc)
         if forgery_detected:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Forgery indicators: {'; '.join(forgery_detected)}",
                 type="Header: Forgery Detection",
                 source="EmailHeaderValidator",
@@ -524,9 +523,9 @@ X-Spam-Score: -2.3"""
                 tags=["email-header", "forgery", "spoof-detected"]
             ))
         else:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="No forgery indicators detected in authentication results",
-                type="Header: Forgery Check",
+                ftype="Header: Forgery Check",
                 source="EmailHeaderValidator",
                 confidence="Medium",
                 color="emerald",
@@ -537,9 +536,9 @@ X-Spam-Score: -2.3"""
             ))
 
     total_headers = len(parsed_headers)
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Email headers analyzed for {email}: {total_headers} headers parsed",
-        type="Header: Analysis Summary",
+        ftype="Header: Analysis Summary",
         source="EmailHeaderValidator",
         confidence="High",
         color="purple",
@@ -550,9 +549,9 @@ X-Spam-Score: -2.3"""
         tags=["email-header", "summary"]
     ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Spoofing protection: SPF={'OK' if spf_check['has_spf'] else 'MISSING'}, DKIM={'OK' if dkim_found else 'MISSING'}, DMARC={'OK' if dmarc_check['has_dmarc'] else 'MISSING'}",
-        type="Header: Spoof Protection Overview",
+        ftype="Header: Spoof Protection Overview",
         source="EmailHeaderValidator",
         confidence="High",
         color="emerald" if spf_check["has_spf"] and dkim_found and dmarc_check["has_dmarc"] else "red",

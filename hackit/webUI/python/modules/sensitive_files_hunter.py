@@ -2,8 +2,7 @@ import httpx
 import re
 import asyncio
 from urllib.parse import urljoin
-from models import IntelligenceFinding
-
+from module_common import safe_fetch, make_finding
 SENSITIVE_PATHS = [
     "/.env", "/.env.production", "/.env.development", "/.env.local", "/.env.staging",
     "/.env.example", "/env", "/environment", "/.env.prod", "/.env.dev", "/.env.test",
@@ -371,14 +370,13 @@ DIRECTORY_LISTING_INDICATORS = [
     "Directory listing for",
 ]
 
-
 async def _check_error_indicators(url: str, body: str, findings: list):
     for pat in ERROR_INDICATORS_EXTRA:
         try:
             if re.search(pat, body, re.I):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Error indicator: {pat[:80]}...",
-                    type="Error Page Detection",
+                    ftype="Error Page Detection",
                     source="SensitiveFilesHunter",
                     confidence="High",
                     color="red",
@@ -390,12 +388,11 @@ async def _check_error_indicators(url: str, body: str, findings: list):
         except Exception:
             pass
 
-
 async def _check_path(path: str, base_url: str, domain: str, client: httpx.AsyncClient) -> list:
     findings = []
     url = urljoin(base_url, path)
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             url, timeout=8.0, follow_redirects=False,
             headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"},
         )
@@ -466,9 +463,9 @@ async def _check_path(path: str, base_url: str, domain: str, client: httpx.Async
                 redirect_location = resp.headers.get("location", "")
                 raw_parts.append(f"Redirect: {redirect_location[:80]}")
 
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=url,
-                type="Sensitive File/Path",
+                ftype="Sensitive File/Path",
                 source="SensitiveFilesHunter",
                 confidence="High",
                 color=color,
@@ -479,9 +476,9 @@ async def _check_path(path: str, base_url: str, domain: str, client: httpx.Async
             ))
 
             if content_length == 0 and status == 200:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Empty response: {url}",
-                    type="Empty Response",
+                    ftype="Empty Response",
                     source="SensitiveFilesHunter",
                     confidence="Medium",
                     color="yellow",
@@ -492,9 +489,9 @@ async def _check_path(path: str, base_url: str, domain: str, client: httpx.Async
 
             if exposed_data_types:
                 for edt in exposed_data_types[:3]:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"{url} - {edt}",
-                        type=f"Exposed Data: {edt}",
+                        ftype=f"Exposed Data: {edt}",
                         source="SensitiveFilesHunter",
                         confidence="High",
                         color="red",
@@ -506,9 +503,9 @@ async def _check_path(path: str, base_url: str, domain: str, client: httpx.Async
 
         elif status in (301, 302, 307, 308):
             location = resp.headers.get("location", "")
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=url,
-                type="Sensitive Path (Redirect)",
+                ftype="Sensitive Path (Redirect)",
                 source="SensitiveFilesHunter",
                 confidence="Medium",
                 color="slate",
@@ -520,7 +517,6 @@ async def _check_path(path: str, base_url: str, domain: str, client: httpx.Async
     except Exception:
         pass
     return findings
-
 
 SENSITIVE_PATHS_EXTRA = [
     "/.env.backup", "/.env.orig", "/.env.save", "/.env.swp", "/.env.old",
@@ -1105,7 +1101,6 @@ ERROR_INDICATORS_EXTRA = [
     r"In /opt/",
 ]
 
-
 async def crawl(target: str, client: httpx.AsyncClient):
     findings = []
     domain = target.strip().lower()
@@ -1129,7 +1124,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
     if not any(f.status not in ("Redirect",) and f.threat_level != "Informational" for f in findings):
         http_url = f"http://{domain}"
         try:
-            resp = await client.get(
+            resp = await safe_fetch(client, 
                 http_url, timeout=5.0,
                 headers={"User-Agent": "Mozilla/5.0"},
             )
@@ -1151,9 +1146,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
     if summary_type_counts:
         categories = ", ".join([f"{k}({v})" for k, v in list(summary_type_counts.items())[:5]])
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Sensitive files scan complete: {len(findings)} hits for {domain}. Categories: {categories}",
-            type="SensitiveFilesHunter Summary",
+            ftype="SensitiveFilesHunter Summary",
             source="SensitiveFilesHunter",
             confidence="High",
             color="purple",
@@ -1161,9 +1156,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             tags=["summary"],
         ))
     elif findings:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Sensitive files scan complete: {len(findings)} paths found for {domain}",
-            type="SensitiveFilesHunter Summary",
+            ftype="SensitiveFilesHunter Summary",
             source="SensitiveFilesHunter",
             confidence="Medium",
             color="purple",

@@ -2,8 +2,7 @@ import httpx
 import socket
 import asyncio
 import re
-from models import IntelligenceFinding
-
+from module_common import safe_fetch, make_finding
 CLOUD_METADATA_ENDPOINTS = {
     "AWS": {
         "urls": ["http://169.254.169.254/latest/meta-data/",
@@ -588,11 +587,9 @@ CLOUD_PROVIDER_IP_RANGES = {
     ],
 }
 
-
 def _ip_to_int(ip_str: str) -> int:
     parts = ip_str.split(".")
     return (int(parts[0]) << 24) + (int(parts[1]) << 16) + (int(parts[2]) << 8) + int(parts[3])
-
 
 def _check_ip_in_ranges(ip_str: str) -> list:
     try:
@@ -611,7 +608,6 @@ def _check_ip_in_ranges(ip_str: str) -> list:
             except Exception:
                 continue
     return results
-
 
 async def crawl(target: str, client: httpx.AsyncClient):
     findings = []
@@ -634,9 +630,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         try:
             loop = asyncio.get_event_loop()
             target_ip = await loop.run_in_executor(None, lambda: socket.gethostbyname(target))
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=target_ip,
-                type="IP Resolution",
+                ftype="IP Resolution",
                 source="CloudFingerprintDeep",
                 confidence="High",
                 color="slate",
@@ -646,9 +642,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 tags=["dns", "resolution"]
             ))
         except Exception as e:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"DNS resolution failed: {target}",
-                type="DNS Error",
+                ftype="DNS Error",
                 source="CloudFingerprintDeep",
                 confidence="Low",
                 color="red",
@@ -663,7 +659,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
     base = f"https://{target}"
     try:
-        resp = await client.get(base, follow_redirects=True, timeout=10.0,
+        resp = await safe_fetch(client, base, follow_redirects=True, timeout=10.0,
             headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"})
         headers = dict(resp.headers)
         server = (headers.get("server") or "").lower()
@@ -679,9 +675,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             if sig in server or sig in via or sig in all_header_vals or sig in x_powered:
                 if any(f.type == "Cloud Provider (Header)" and f.entity.startswith(provider_name) for f in findings):
                     continue
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{provider_name}",
-                    type="Cloud Provider (Header)",
+                    ftype="Cloud Provider (Header)",
                     source="CloudFingerprintDeep",
                     confidence="High",
                     color="orange",
@@ -692,9 +688,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 ))
 
         if cf_ray:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="Cloudflare",
-                type="CDN Detected",
+                ftype="CDN Detected",
                 source="CloudFingerprintDeep",
                 confidence="High",
                 color="orange",
@@ -706,9 +702,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ))
 
         if amz_cf:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="AWS CloudFront",
-                type="CDN Detected",
+                ftype="CDN Detected",
                 source="CloudFingerprintDeep",
                 confidence="High",
                 color="orange",
@@ -720,9 +716,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ))
 
         if fastly:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="Fastly",
-                type="CDN Detected",
+                ftype="CDN Detected",
                 source="CloudFingerprintDeep",
                 confidence="High",
                 color="orange",
@@ -734,9 +730,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         for cdn_key, cdn_info in CLOUD_CDN_HEADERS.items():
             if cdn_info["header"] in headers:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=cdn_info["name"],
-                    type="CDN Detected",
+                    ftype="CDN Detected",
                     source="CloudFingerprintDeep",
                     confidence="High",
                     color=cdn_info["color"],
@@ -748,9 +744,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         x_robots = headers.get("x-robots-tag", "")
         if x_robots:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"X-Robots-Tag: {x_robots[:100]}",
-                type="Cloud Response Header",
+                ftype="Cloud Response Header",
                 source="CloudFingerprintDeep",
                 confidence="Medium",
                 color="slate",
@@ -760,9 +756,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ))
 
         if "x-amz-" in all_header_vals or "aws" in all_header_vals:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="AWS",
-                type="Cloud Provider (Header)",
+                ftype="Cloud Provider (Header)",
                 source="CloudFingerprintDeep",
                 confidence="Medium",
                 color="orange",
@@ -773,9 +769,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ))
 
         if "google" in all_header_vals or "gfe" in server:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="Google Cloud / GFE",
-                type="Cloud Provider (Header)",
+                ftype="Cloud Provider (Header)",
                 source="CloudFingerprintDeep",
                 confidence="Medium",
                 color="orange",
@@ -786,9 +782,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ))
 
         if "azure" in all_header_vals or "x-ms-" in all_header_vals:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="Microsoft Azure",
-                type="Cloud Provider (Header)",
+                ftype="Cloud Provider (Header)",
                 source="CloudFingerprintDeep",
                 confidence="Medium",
                 color="orange",
@@ -799,9 +795,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ))
 
     except Exception as e:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Header analysis error: {str(e)[:100]}",
-            type="Cloud Fingerprint Error",
+            ftype="Cloud Fingerprint Error",
             source="CloudFingerprintDeep",
             confidence="Low",
             color="red",
@@ -846,9 +842,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                                               ("midomain", "Microsoft 365"),
                                               ("apple-domain-verification", "Apple")]:
             if provider_key in txt_combined:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{provider_name}",
-                    type="Cloud Provider (DNS TXT)",
+                    ftype="Cloud Provider (DNS TXT)",
                     source="CloudFingerprintDeep",
                     confidence="High",
                     color="orange",
@@ -882,9 +878,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                                                        ("mailgun.org", "Mailgun"),
                                                        ("spf.hostedemail.com", "Open-Xchange")]:
                             if cloud_key in inc_lower:
-                                findings.append(IntelligenceFinding(
+                                findings.append(make_finding(
                                     entity=f"{cloud_name}",
-                                    type="Cloud Service (SPF Include)",
+                                    ftype="Cloud Service (SPF Include)",
                                     source="CloudFingerprintDeep",
                                     confidence="High",
                                     color="blue",
@@ -921,9 +917,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
             for pattern, provider_name in CLOUD_STORAGE_PATTERNS.items():
                 if pattern in dt:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"{provider_name}",
-                        type="Cloud Storage (DNS)",
+                        ftype="Cloud Storage (DNS)",
                         source="CloudFingerprintDeep",
                         confidence="High",
                         color="orange",
@@ -973,9 +969,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                                              ("kinsta.com", "Kinsta"),
                                              ("liquidweb.com", "Liquid Web")]:
                 if paas_pattern in dt:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"{paas_name}",
-                        type="PaaS Platform (DNS)",
+                        ftype="PaaS Platform (DNS)",
                         source="CloudFingerprintDeep",
                         confidence="High",
                         color="purple",
@@ -987,9 +983,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     ))
 
             if any(asn_keyword in dt for asn_keyword in ["amazonaws", "cloudfront", "azure", "google", "gcp", "gce"]):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Cloud-associated DNS record: {dt[:80]}",
-                    type="DNS Cloud Indicator",
+                    ftype="DNS Cloud Indicator",
                     source="CloudFingerprintDeep",
                     confidence="Medium",
                     color="slate",
@@ -1004,9 +1000,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
     if cloud_providers or cdns:
         providers_str = ", ".join(cloud_providers) if cloud_providers else "None"
         cdns_str = ", ".join(cdns) if cdns else "None"
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Cloud Providers: {providers_str} | CDNs: {cdns_str}",
-            type="Cloud Fingerprint Summary",
+            ftype="Cloud Fingerprint Summary",
             source="CloudFingerprintDeep",
             confidence="High",
             color="purple",
@@ -1017,7 +1013,6 @@ async def crawl(target: str, client: httpx.AsyncClient):
         ))
 
     return findings
-
 
 EXTRA_CLOUD_IP_RANGES = {
     "Vercel": [
@@ -1104,7 +1099,6 @@ EXTRA_CLOUD_IP_RANGES = {
     ],
 }
 
-
 async def _check_ip_in_ranges_extra(ip_str: str) -> list:
     try:
         ip_int = _ip_to_int(ip_str)
@@ -1123,7 +1117,6 @@ async def _check_ip_in_ranges_extra(ip_str: str) -> list:
                 continue
     return results
 
-
 async def _fetch_cloud_ip_ranges(target_ip: str, client: httpx.AsyncClient) -> list:
     findings = []
     try:
@@ -1135,9 +1128,9 @@ async def _fetch_cloud_ip_ranges(target_ip: str, client: httpx.AsyncClient) -> l
             key = f"{provider}-{region}"
             if key not in seen:
                 seen.add(key)
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{provider} ({region})",
-                    type="Cloud Provider (IP Range)",
+                    ftype="Cloud Provider (IP Range)",
                     source="CloudFingerprintDeep",
                     confidence="High",
                     color="orange",

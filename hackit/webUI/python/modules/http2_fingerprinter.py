@@ -4,8 +4,7 @@ import socket
 import struct
 import re
 import ssl
-from models import IntelligenceFinding
-
+from module_common import safe_fetch, make_finding
 HTTP2_PREFACE = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
 
 SETTINGS_IDS = {
@@ -218,7 +217,7 @@ async def try_http2_direct_tls13_only(host):
 async def get_http_response_details(client, base_url):
     info = {}
     try:
-        resp = await client.get(base_url, timeout=10.0,
+        resp = await safe_fetch(client, base_url, timeout=10.0,
             headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
                      "Accept": "*/*", "Accept-Encoding": "gzip, deflate, br"})
         info["http_version"] = getattr(resp, "http_version", "")
@@ -245,9 +244,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         if alpn_protocol:
             http2_supported = alpn_protocol == "h2"
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"ALPN: {alpn_protocol}",
-                type="HTTP ALPN Protocol",
+                ftype="HTTP ALPN Protocol",
                 source="HTTP2Fingerprinter",
                 confidence="High",
                 color="emerald" if http2_supported else "orange",
@@ -256,9 +255,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 tags=["alpn", "http2", "tls"]
             ))
             if http2_supported:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity="HTTP/2 support confirmed via ALPN h2 negotiation",
-                    type="HTTP/2 Support",
+                    ftype="HTTP/2 Support",
                     source="HTTP2Fingerprinter",
                     confidence="High",
                     color="cyan",
@@ -267,9 +266,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     tags=["http2", "alpn"]
                 ))
         else:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="ALPN negotiation failed or not available",
-                type="HTTP ALPN Protocol",
+                ftype="HTTP ALPN Protocol",
                 source="HTTP2Fingerprinter",
                 confidence="Medium",
                 color="slate",
@@ -284,9 +283,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         if http_version:
             is_h2 = "h2" in str(http_version) or "2" in str(http_version)
             is_h3 = "h3" in str(http_version) or "3" in str(http_version)
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"HTTP version: {http_version}",
-                type="HTTP Protocol Version",
+                ftype="HTTP Protocol Version",
                 source="HTTP2Fingerprinter",
                 confidence="High",
                 color="emerald" if is_h2 or http2_supported else "slate",
@@ -295,9 +294,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 tags=["http-version"]
             ))
             if is_h3:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity="HTTP/3 (QUIC) currently in use",
-                    type="HTTP/3 Active",
+                    ftype="HTTP/3 Active",
                     source="HTTP2Fingerprinter",
                     confidence="High",
                     color="cyan",
@@ -311,9 +310,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         if alt_svc:
             has_h3 = bool(HTTP3_ALT_SVC_PATTERN.search(alt_svc))
             http3_advertised = has_h3
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Alt-Svc: {alt_svc[:200]}",
-                type="HTTP Alternative Services",
+                ftype="HTTP Alternative Services",
                 source="HTTP2Fingerprinter",
                 confidence="High",
                 color="cyan" if has_h3 else "slate",
@@ -322,9 +321,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 tags=["alt-svc", "http3" if has_h3 else "http-alternative"]
             ))
             if has_h3:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity="HTTP/3 (QUIC) advertised via Alt-Svc",
-                    type="HTTP/3 Support",
+                    ftype="HTTP/3 Support",
                     source="HTTP2Fingerprinter",
                     confidence="High",
                     color="cyan",
@@ -334,9 +333,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 ))
                 quic_versions = re.findall(r'h3[=-](\d+)', alt_svc)
                 if quic_versions:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"QUIC versions advertised: {', '.join(quic_versions)}",
-                        type="HTTP/3 QUIC Versions",
+                        ftype="HTTP/3 QUIC Versions",
                         source="HTTP2Fingerprinter",
                         confidence="Medium",
                         color="slate",
@@ -344,9 +343,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         tags=["http3", "quic-version"]
                     ))
         else:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="No Alt-Svc header present",
-                type="HTTP Alternative Services",
+                ftype="HTTP Alternative Services",
                 source="HTTP2Fingerprinter",
                 confidence="Medium",
                 color="slate",
@@ -356,7 +355,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         try:
             async with await client.build_client() as c:
-                dns_resp = await client.get(
+                dns_resp = await safe_fetch(client, 
                     f"https://dns.google/resolve?name={host}&type=HTTPS",
                     timeout=10.0,
                     headers={"User-Agent": "Mozilla/5.0"}
@@ -367,9 +366,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     for ans in answers:
                         rdata = ans.get("data", "")
                         if "alpn=" in rdata.lower() or "h2" in rdata.lower() or "h3" in rdata.lower() or "quic" in rdata.lower():
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=f"HTTPS/SVCB DNS record: {rdata[:200]}",
-                                type="DNS HTTPS/SVCB Record",
+                                ftype="DNS HTTPS/SVCB Record",
                                 source="HTTP2Fingerprinter",
                                 confidence="Medium",
                                 color="cyan",
@@ -378,9 +377,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                                 tags=["dns", "svcb", "https-record"]
                             ))
                             if "h3" in rdata.lower():
-                                findings.append(IntelligenceFinding(
+                                findings.append(make_finding(
                                     entity="HTTP/3 via SVCB/HTTPS DNS record",
-                                    type="HTTP/3 SVCB DNS",
+                                    ftype="HTTP/3 SVCB DNS",
                                     source="HTTP2Fingerprinter",
                                     confidence="Medium",
                                     color="cyan",
@@ -419,9 +418,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
                         for sid, sname in SETTINGS_IDS.items():
                             if sid in settings:
-                                findings.append(IntelligenceFinding(
+                                findings.append(make_finding(
                                     entity=f"{sname} = {settings[sid]}",
-                                    type="HTTP/2 Setting",
+                                    ftype="HTTP/2 Setting",
                                     source="HTTP2Fingerprinter",
                                     confidence="High",
                                     color="slate",
@@ -432,9 +431,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
                         profile_name, match_count, total_count = match_profile(settings)
                         if profile_name:
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=f"Server profile: {profile_name} ({match_count}/{total_count} settings match)",
-                                type="HTTP/2 Server Fingerprint",
+                                ftype="HTTP/2 Server Fingerprint",
                                 source="HTTP2Fingerprinter",
                                 confidence="High",
                                 color="purple",
@@ -443,9 +442,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                                 tags=["http2", "fingerprint", profile_name]
                             ))
                         else:
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=f"Unknown server profile: {match_count}/{total_count} matched generic",
-                                type="HTTP/2 Server Fingerprint",
+                                ftype="HTTP/2 Server Fingerprint",
                                 source="HTTP2Fingerprinter",
                                 confidence="Medium",
                                 color="slate",
@@ -455,9 +454,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
                         enable_push = settings.get(0x2, -1)
                         if enable_push == 1:
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity="Server Push is ENABLED",
-                                type="HTTP/2 Server Push",
+                                ftype="HTTP/2 Server Push",
                                 source="HTTP2Fingerprinter",
                                 confidence="High",
                                 color="orange",
@@ -466,9 +465,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                                 tags=["http2", "server-push"]
                             ))
                         elif enable_push == 0:
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity="Server Push is DISABLED",
-                                type="HTTP/2 Server Push",
+                                ftype="HTTP/2 Server Push",
                                 source="HTTP2Fingerprinter",
                                 confidence="High",
                                 color="slate",
@@ -481,9 +480,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         max_concurrent = settings.get(0x3, -1)
                         if max_frame:
                             window_info = f"Initial window: {initial_window} bytes, Max frame: {max_frame} bytes, Max concurrent streams: {max_concurrent}"
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=f"Flow control: {window_info}",
-                                type="HTTP/2 Flow Control",
+                                ftype="HTTP/2 Flow Control",
                                 source="HTTP2Fingerprinter",
                                 confidence="High",
                                 color="slate",
@@ -505,9 +504,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                                        11: "ENHANCE_YOUR_CALM", 12: "INADEQUATE_SECURITY",
                                        13: "HTTP_1_1_REQUIRED"}
                         error_name = error_names.get(error_code, f"UNKNOWN({error_code})")
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"GOAWAY last_stream_id={last_stream}, error={error_name}",
-                            type="HTTP/2 GOAWAY Frame",
+                            ftype="HTTP/2 GOAWAY Frame",
                             source="HTTP2Fingerprinter",
                             confidence="High",
                             color="slate",
@@ -526,9 +525,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         if http2_supported and settings:
             hpack = analyze_hpack_efficiency(settings)
             if hpack:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"HPACK: table_size={hpack.get('table_size', '?')}, efficiency={hpack.get('efficiency', '?')} ({hpack.get('profile', '?')})",
-                    type="HTTP/2 HPACK Analysis",
+                    ftype="HTTP/2 HPACK Analysis",
                     source="HTTP2Fingerprinter",
                     confidence="Medium",
                     color="slate",
@@ -538,9 +537,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
             tls_fp = detect_tls_fingerprint(alpn_protocol, headers.get("server", ""), settings)
             if tls_fp.get("likely_server"):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Likely server: {tls_fp['likely_server']} (TLS fingerprint match)",
-                    type="HTTP/2 TLS Fingerprint",
+                    ftype="HTTP/2 TLS Fingerprint",
                     source="HTTP2Fingerprinter",
                     confidence="Medium",
                     color="purple",
@@ -550,9 +549,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         push_indicators = detect_push_promise_via_headers(headers)
         for ind in push_indicators:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Server push indicator: {ind}",
-                type="HTTP/2 Push Indicator",
+                ftype="HTTP/2 Push Indicator",
                 source="HTTP2Fingerprinter",
                 confidence="Medium",
                 color="orange",
@@ -563,9 +562,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         h3_details = check_h3_alt_svc_advanced(alt_svc_header)
         if h3_details:
             for k, v in h3_details.items():
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"HTTP/3 detail - {k}: {v}",
-                    type="HTTP/3 Detail",
+                    ftype="HTTP/3 Detail",
                     source="HTTP2Fingerprinter",
                     confidence="Medium",
                     color="cyan",
@@ -575,9 +574,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         tls13_h2 = await try_http2_direct_tls13_only(host)
         if tls13_h2:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"HTTP/2 over TLS 1.3: {tls13_h2}",
-                type="HTTP/2 TLS 1.3 Support",
+                ftype="HTTP/2 TLS 1.3 Support",
                 source="HTTP2Fingerprinter",
                 confidence="High",
                 color="emerald",
@@ -614,9 +613,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         if "litespeed" in server:
             platform["LiteSpeed"] = "Web Server"
         for plat, ptype in platform.items():
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{plat} ({ptype})",
-                type="HTTP/2 Platform Detection",
+                ftype="HTTP/2 Platform Detection",
                 source="HTTP2Fingerprinter",
                 confidence="High",
                 color="purple",
@@ -624,9 +623,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 tags=["platform", plat.lower()]
             ))
 
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"HTTP/2: {'Supported' if http2_supported else 'Not supported'}, HTTP/3: {'Advertised' if http3_advertised else 'Not detected'}",
-            type="HTTP/2 & HTTP/3 Summary",
+            ftype="HTTP/2 & HTTP/3 Summary",
             source="HTTP2Fingerprinter",
             confidence="High",
             color="cyan" if http2_supported else "slate",
@@ -636,9 +635,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         ))
 
     except Exception as e:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"HTTP2 Fingerprint error: {str(e)[:100]}",
-            type="HTTP2 Fingerprint Error",
+            ftype="HTTP2 Fingerprint Error",
             source="HTTP2Fingerprinter",
             confidence="Low",
             color="red",
@@ -647,7 +646,6 @@ async def crawl(target: str, client: httpx.AsyncClient):
         ))
 
     return findings
-
 
 # === EXTENDED UPGRADE: HPACK analysis, priority frames, WINDOW_UPDATE, more profiles ===
 

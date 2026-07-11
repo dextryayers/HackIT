@@ -1,7 +1,7 @@
 import asyncio
 import dns.resolver
 import re
-from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash
 
 async def get_txt(domain: str):
     loop = asyncio.get_event_loop()
@@ -23,9 +23,9 @@ async def crawl(target: str, client=None):
     dmarc_records = [r for r in txt_records if r.startswith("v=DMARC1")]
 
     if not dmarc_records:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"No DMARC record for {domain}",
-            type="DMARC Record Missing",
+            ftype="DMARC Record Missing",
             source="DNS DMARC Analyzer",
             confidence="High",
             color="red",
@@ -34,9 +34,9 @@ async def crawl(target: str, client=None):
             raw_data="Missing DMARC means anyone can spoof email from this domain with no detection",
             tags=["dmarc", "missing", "email-security"]
         ))
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"DMARC domain: {dmarc_domain}",
-            type="DMARC Domain Check",
+            ftype="DMARC Domain Check",
             source="DNS DMARC Analyzer",
             confidence="High",
             color="slate",
@@ -48,9 +48,9 @@ async def crawl(target: str, client=None):
 
     for dmarc in dmarc_records:
         dmarc_clean = dmarc.strip('"')
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=dmarc_clean[:300],
-            type="DMARC Record Raw",
+            ftype="DMARC Record Raw",
             source="DNS DMARC Analyzer",
             confidence="High",
             color="emerald",
@@ -62,9 +62,9 @@ async def crawl(target: str, client=None):
 
         parsed = parse_dmarc(dmarc_clean)
         if not parsed:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Failed to parse DMARC record",
-                type="DMARC Parse Error",
+                ftype="DMARC Parse Error",
                 source="DNS DMARC Analyzer",
                 confidence="Medium",
                 color="red",
@@ -87,7 +87,7 @@ async def crawl(target: str, client=None):
 
         policy_color = "green" if policy == 'reject' else "orange" if policy == 'quarantine' else "red"
         policy_threat = "Informational" if policy == 'reject' else "Standard Target" if policy == 'quarantine' else "Elevated Risk"
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"DMARC policy: p={policy} ({'Reject' if policy == 'reject' else 'Quarantine' if policy == 'quarantine' else 'None'})",
             type="DMARC Policy",
             source="DNS DMARC Analyzer",
@@ -101,9 +101,9 @@ async def crawl(target: str, client=None):
 
         if sp_policy:
             sp_color = "green" if sp_policy == 'reject' else "orange" if sp_policy == 'quarantine' else "red"
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Subdomain policy: sp={sp_policy}",
-                type="DMARC Subdomain Policy",
+                ftype="DMARC Subdomain Policy",
                 source="DNS DMARC Analyzer",
                 confidence="High",
                 color=sp_color,
@@ -112,7 +112,7 @@ async def crawl(target: str, client=None):
                 tags=["dmarc", "subdomain", sp_policy]
             ))
         else:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"No subdomain policy (sp=missing, defaults to p={policy})",
                 type="DMARC Subdomain Policy",
                 source="DNS DMARC Analyzer",
@@ -125,7 +125,7 @@ async def crawl(target: str, client=None):
 
         pct_val = int(pct) if pct.isdigit() else 100
         if pct_val < 100:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"DMARC policy applies to {pct_val}% of email (pct={pct})",
                 type="DMARC Policy Percentage",
                 source="DNS DMARC Analyzer",
@@ -137,7 +137,7 @@ async def crawl(target: str, client=None):
                 tags=["dmarc", "pct"]
             ))
         else:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"DMARC applies to 100% of email (pct={pct})",
                 type="DMARC Full Coverage",
                 source="DNS DMARC Analyzer",
@@ -149,7 +149,7 @@ async def crawl(target: str, client=None):
             ))
 
         adkim_label = "Strict" if adkim == 's' else "Relaxed"
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"DKIM alignment: adkim={adkim} ({adkim_label})",
             type="DMARC DKIM Alignment",
             source="DNS DMARC Analyzer",
@@ -161,7 +161,7 @@ async def crawl(target: str, client=None):
         ))
 
         aspf_label = "Strict" if aspf == 's' else "Relaxed"
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"SPF alignment: aspf={aspf} ({aspf_label})",
             type="DMARC SPF Alignment",
             source="DNS DMARC Analyzer",
@@ -173,7 +173,7 @@ async def crawl(target: str, client=None):
         ))
 
         if rua:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"RUA (Aggregate Reports): {rua[:200]}",
                 type="DMARC Reporting (RUA)",
                 source="DNS DMARC Analyzer",
@@ -185,9 +185,9 @@ async def crawl(target: str, client=None):
                 tags=["dmarc", "rua", "reporting"]
             ))
         else:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"No RUA configured - no aggregate reports",
-                type="DMARC Reporting (RUA)",
+                ftype="DMARC Reporting (RUA)",
                 source="DNS DMARC Analyzer",
                 confidence="High",
                 color="orange",
@@ -197,7 +197,7 @@ async def crawl(target: str, client=None):
             ))
 
         if ruf:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"RUF (Forensic Reports): {ruf[:200]}",
                 type="DMARC Forensic Reporting (RUF)",
                 source="DNS DMARC Analyzer",
@@ -209,9 +209,9 @@ async def crawl(target: str, client=None):
                 tags=["dmarc", "ruf", "forensic"]
             ))
         else:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"No RUF configured - no forensic reports",
-                type="DMARC Forensic Reporting (RUF)",
+                ftype="DMARC Forensic Reporting (RUF)",
                 source="DNS DMARC Analyzer",
                 confidence="High",
                 color="slate",
@@ -226,7 +226,7 @@ async def crawl(target: str, client=None):
         if '1' in fo_val: fo_desc.append("Generate report if any alignment fails")
         if 'd' in fo_val: fo_desc.append("Generate report if DKIM fails")
         if 's' in fo_val: fo_desc.append("Generate report if SPF fails")
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"FO (Failure Options): {fo_val} - {'; '.join(fo_desc)}",
             type="DMARC Failure Options (FO)",
             source="DNS DMARC Analyzer",
@@ -238,7 +238,7 @@ async def crawl(target: str, client=None):
         ))
 
         ri_val = ri
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Report interval: {ri_val}s ({int(ri_val)//3600}h)",
             type="DMARC Report Interval",
             source="DNS DMARC Analyzer",
@@ -250,9 +250,9 @@ async def crawl(target: str, client=None):
         ))
 
         rf_val = rf
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Report format: {rf_val}",
-            type="DMARC Report Format",
+            ftype="DMARC Report Format",
             source="DNS DMARC Analyzer",
             confidence="High",
             color="slate",
@@ -262,9 +262,9 @@ async def crawl(target: str, client=None):
         ))
 
         if policy == 'none':
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"DMARC policy is 'none' - domain is NOT protected from spoofing!",
-                type="DMARC Protection Level",
+                ftype="DMARC Protection Level",
                 source="DNS DMARC Analyzer",
                 confidence="High",
                 color="red",
@@ -273,9 +273,9 @@ async def crawl(target: str, client=None):
                 tags=["dmarc", "none", "unprotected"]
             ))
         elif policy == 'quarantine':
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"DMARC policy is 'quarantine' - spoofed email sent to spam",
-                type="DMARC Protection Level",
+                ftype="DMARC Protection Level",
                 source="DNS DMARC Analyzer",
                 confidence="High",
                 color="orange",
@@ -284,9 +284,9 @@ async def crawl(target: str, client=None):
                 tags=["dmarc", "quarantine"]
             ))
         else:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"DMARC policy is 'reject' - domain is protected against spoofing",
-                type="DMARC Protection Level",
+                ftype="DMARC Protection Level",
                 source="DNS DMARC Analyzer",
                 confidence="High",
                 color="emerald",
@@ -297,9 +297,9 @@ async def crawl(target: str, client=None):
 
         dmarc_check = check_dmarc_failures(policy, sp_policy, rua, ruf, pct_val, adkim, aspf)
         for check in dmarc_check:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=check['msg'],
-                type="DMARC Compliance Issue",
+                ftype="DMARC Compliance Issue",
                 source="DNS DMARC Analyzer",
                 confidence=check['confidence'],
                 color=check['color'],
@@ -308,9 +308,9 @@ async def crawl(target: str, client=None):
                 tags=["dmarc", "compliance"]
             ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"DMARC analysis complete for {domain}",
-        type="DMARC Analysis Summary",
+        ftype="DMARC Analysis Summary",
         source="DNS DMARC Analyzer",
         confidence="High",
         color="blue",

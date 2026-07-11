@@ -5,7 +5,7 @@ import ssl
 import json
 import re
 from urllib.parse import urlparse
-from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash
 
 FULLHUNT_BASE = "https://fullhunt.io"
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -85,7 +85,7 @@ async def check_http_service(hostname: str, client: httpx.AsyncClient) -> dict:
     result = {}
     for scheme in ["https", "http"]:
         try:
-            resp = await client.get(f"{scheme}://{hostname}", timeout=10.0, follow_redirects=True,
+            resp = await safe_fetch(client, f"{scheme}://{hostname}", timeout=10.0, follow_redirects=True,
                                     headers={"User-Agent": UA})
             result[f"{scheme}_status"] = resp.status_code
             result[f"{scheme}_headers"] = dict(resp.headers)
@@ -125,7 +125,7 @@ async def get_ssl_info(hostname: str) -> dict:
 async def probe_subdomain_http(subdomain: str, client: httpx.AsyncClient) -> dict:
     result = {"alive": False, "status": None, "title": "", "server": "", "tech": []}
     try:
-        resp = await client.get(f"https://{subdomain}", timeout=8.0, follow_redirects=True,
+        resp = await safe_fetch(client, f"https://{subdomain}", timeout=8.0, follow_redirects=True,
                                 headers={"User-Agent": UA})
         result["alive"] = True
         result["status"] = resp.status_code
@@ -144,7 +144,7 @@ async def probe_subdomain_http(subdomain: str, client: httpx.AsyncClient) -> dic
                 result["tech"].append(f"Header:{hdr}={val}")
     except:
         try:
-            resp = await client.get(f"http://{subdomain}", timeout=8.0, follow_redirects=True,
+            resp = await safe_fetch(client, f"http://{subdomain}", timeout=8.0, follow_redirects=True,
                                     headers={"User-Agent": UA})
             result["alive"] = True
             result["status"] = resp.status_code
@@ -195,7 +195,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
     api_data = {}
     for ep in api_endpoints:
         try:
-            resp = await client.get(ep["url"], timeout=15.0,
+            resp = await safe_fetch(client, ep["url"], timeout=15.0,
                                     headers={"User-Agent": UA, "Accept": "application/json"})
             if resp.status_code == 200:
                 data = resp.json()
@@ -219,7 +219,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 subdomains_found.add(name.lower())
 
     if subdomains_found:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{len(subdomains_found)} subdomains found via FullHunt API",
             type="FullHunt: Subdomain Discovery",
             source="FullHunt",
@@ -235,9 +235,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         ips = await resolve_ip(sub)
         ipv6s = await resolve_ipv6(sub)
         ip_str = f" [{', '.join(ips[:3])}]" if ips else ""
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{sub}{ip_str}",
-            type="FullHunt: Subdomain",
+            ftype="FullHunt: Subdomain",
             source="FullHunt",
             confidence="High" if ips else "Medium",
             color="emerald",
@@ -249,9 +249,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         if ips:
             for ip in ips[:2]:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{sub} -> {ip}",
-                    type="FullHunt: Subdomain Resolution",
+                    ftype="FullHunt: Subdomain Resolution",
                     source="FullHunt",
                     confidence="High",
                     color="blue",
@@ -265,7 +265,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         probe_result = await probe_subdomain_http(sub, client)
         if probe_result["alive"]:
             status_color = "emerald" if probe_result["status"] and probe_result["status"] < 400 else "red"
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"HTTP Probe: {sub} (Status: {probe_result['status']})",
                 type="FullHunt: Subdomain HTTP Probe",
                 source="FullHunt",
@@ -278,9 +278,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 tags=["fullhunt", "http-probe"]
             ))
             if probe_result.get("title"):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Page Title: {probe_result['title'][:200]}",
-                    type="FullHunt: HTTP Probe Title",
+                    ftype="FullHunt: HTTP Probe Title",
                     source="FullHunt",
                     confidence="High",
                     color="slate",
@@ -290,9 +290,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 ))
             if probe_result.get("tech"):
                 for tech in probe_result["tech"][:5]:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=tech,
-                        type="FullHunt: HTTP Probe Tech",
+                        ftype="FullHunt: HTTP Probe Tech",
                         source="FullHunt",
                         confidence="Medium",
                         color="purple",
@@ -303,39 +303,39 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
     for tech_entry in api_data.get("Technologies", [])[:20]:
         if isinstance(tech_entry, str):
-            findings.append(IntelligenceFinding(
-                entity=tech_entry, type="FullHunt: Technology", source="FullHunt",
+            findings.append(make_finding(
+                entity=tech_entry, ftype="FullHunt: Technology", source="FullHunt",
                 confidence="Medium", color="orange", threat_level="Informational",
                 status="Detected", tags=["fullhunt", "technology"]
             ))
             for key, tech_label in TECH_STACK_INDICATORS.items():
                 if key in tech_entry.lower():
-                    findings.append(IntelligenceFinding(
-                        entity=tech_label, type="FullHunt: Tech Stack", source="FullHunt",
+                    findings.append(make_finding(
+                        entity=tech_label, ftype="FullHunt: Tech Stack", source="FullHunt",
                         confidence="Medium", color="purple", threat_level="Informational",
                         status="Categorized", tags=["fullhunt", "technology"]
                     ))
         elif isinstance(tech_entry, dict):
             name = tech_entry.get("name", tech_entry.get("tech", ""))
             if name:
-                findings.append(IntelligenceFinding(
-                    entity=name, type="FullHunt: Technology", source="FullHunt",
+                findings.append(make_finding(
+                    entity=name, ftype="FullHunt: Technology", source="FullHunt",
                     confidence="Medium", color="orange", threat_level="Informational",
                     status="Detected", tags=["fullhunt", "technology"]
                 ))
                 version = tech_entry.get("version", "")
                 if version:
-                    findings.append(IntelligenceFinding(
-                        entity=f"{name} v{version}", type="FullHunt: Tech Version",
+                    findings.append(make_finding(
+                        entity=f"{name} v{version}", ftype="FullHunt: Tech Version",
                         source="FullHunt", confidence="Medium", color="slate",
                         threat_level="Informational", status="Versioned",
                         tags=["fullhunt", "technology"]
                     ))
                 category = tech_entry.get("category", "")
                 if category:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"{name} -> Category: {category}",
-                        type="FullHunt: Tech Category",
+                        ftype="FullHunt: Tech Category",
                         source="FullHunt", confidence="Medium", color="slate",
                         threat_level="Informational", tags=["fullhunt", "technology"]
                     ))
@@ -348,14 +348,14 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 rtype = dns_entry.get("type", "Record")
                 value = dns_entry.get("value", dns_entry.get("data", str(dns_entry)))
                 dns_type_count[rtype] = dns_type_count.get(rtype, 0) + 1
-                findings.append(IntelligenceFinding(
-                    entity=str(value)[:200], type=f"FullHunt: DNS {rtype}",
+                findings.append(make_finding(
+                    entity=str(value)[:200], ftype=f"FullHunt: DNS {rtype}",
                     source="FullHunt", confidence="High", color="blue",
                     threat_level="Informational", status="DNS Record",
                     tags=["fullhunt", "dns"]
                 ))
         if dns_type_count:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"DNS Summary: {', '.join(f'{k}: {v}' for k, v in dns_type_count.items())}",
                 type="FullHunt: DNS Summary",
                 source="FullHunt",
@@ -367,9 +367,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
     whois_data = api_data.get("WHOIS", [])
     if whois_data:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"WHOIS data retrieved via FullHunt API",
-            type="FullHunt: WHOIS",
+            ftype="FullHunt: WHOIS",
             source="FullHunt",
             confidence="Medium",
             color="slate",
@@ -383,9 +383,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
     if ips_data:
         for ip_entry in ips_data[:10]:
             if isinstance(ip_entry, str):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=ip_entry,
-                    type="FullHunt: Associated IP",
+                    ftype="FullHunt: Associated IP",
                     source="FullHunt",
                     confidence="Medium",
                     color="blue",
@@ -396,9 +396,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
     http_info = await check_http_service(domain, client)
     if http_info.get("https_status"):
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"HTTPS {http_info['https_status']}",
-            type="FullHunt: HTTP Service",
+            ftype="FullHunt: HTTP Service",
             source="FullHunt",
             confidence="High",
             color="emerald" if http_info["https_status"] < 400 else "red",
@@ -409,9 +409,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         if http_info.get("https_history"):
             redirect_chain = " -> ".join(http_info["https_history"])
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Redirect chain: {redirect_chain}",
-                type="FullHunt: HTTP Redirect Chain",
+                ftype="FullHunt: HTTP Redirect Chain",
                 source="FullHunt",
                 confidence="High",
                 color="slate",
@@ -423,9 +423,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         for hdr in ["server", "x-powered-by", "x-aspnet-version", "x-generator"]:
             val = headers.get(hdr, "")
             if val:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{hdr}: {val[:100]}",
-                    type="FullHunt: HTTP Header",
+                    ftype="FullHunt: HTTP Header",
                     source="FullHunt",
                     confidence="High",
                     color="slate",
@@ -437,9 +437,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         for sec_hdr in ADDITIONAL_HTTP_HEADERS:
             val = headers.get(sec_hdr, "")
             if val:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{sec_hdr}: {val[:100]}",
-                    type="FullHunt: Security Header",
+                    ftype="FullHunt: Security Header",
                     source="FullHunt",
                     confidence="High",
                     color="emerald" if "deny" in val.lower() or val.lower() in ("sameorigin", "1; mode=block") else "orange",
@@ -452,8 +452,8 @@ async def crawl(target: str, client: httpx.AsyncClient):
         html_lower = html.lower()
         for sig, tech_label in TECH_STACK_INDICATORS.items():
             if sig in html_lower:
-                findings.append(IntelligenceFinding(
-                    entity=tech_label, type="FullHunt: Tech from HTML",
+                findings.append(make_finding(
+                    entity=tech_label, ftype="FullHunt: Tech from HTML",
                     source="FullHunt", confidence="Medium", color="purple",
                     threat_level="Informational", status="Detected in HTML",
                     tags=["fullhunt", "technology"]
@@ -462,18 +462,18 @@ async def crawl(target: str, client: httpx.AsyncClient):
         csp = headers.get("content-security-policy", "")
         if csp:
             if "unsafe-inline" in csp or "unsafe-eval" in csp:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity="CSP allows unsafe-inline/eval",
-                    type="FullHunt: CSP Weakness",
+                    ftype="FullHunt: CSP Weakness",
                     source="FullHunt", confidence="High", color="red",
                     threat_level="Elevated Risk",
                     status="Weak CSP",
                     tags=["fullhunt", "security"]
                 ))
             if "default-src 'none'" in csp or "default-src 'self'" in csp:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity="CSP uses restrictive defaults",
-                    type="FullHunt: CSP Good Practice",
+                    ftype="FullHunt: CSP Good Practice",
                     source="FullHunt", confidence="High", color="emerald",
                     threat_level="Informational",
                     status="Good CSP",
@@ -483,7 +483,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
     ssl_info = await get_ssl_info(domain)
     if ssl_info:
         if ssl_info.get("issuer"):
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=str(ssl_info["issuer"]),
                 type="FullHunt: SSL Issuer",
                 source="FullHunt", confidence="High", color="emerald",
@@ -492,25 +492,25 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ))
         if ssl_info.get("sans"):
             san_count = len(ssl_info["sans"])
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{san_count} SAN entries on live cert",
-                type="FullHunt: SSL SAN Count",
+                ftype="FullHunt: SSL SAN Count",
                 source="FullHunt", confidence="High", color="blue",
                 threat_level="Informational", status=f"{san_count} SANs",
                 tags=["fullhunt", "ssl"]
             ))
             for san in ssl_info["sans"][:5]:
-                findings.append(IntelligenceFinding(
-                    entity=san, type="FullHunt: SSL SAN",
+                findings.append(make_finding(
+                    entity=san, ftype="FullHunt: SSL SAN",
                     source="FullHunt", confidence="High", color="blue",
                     threat_level="Informational", status="SAN",
                     tags=["fullhunt", "ssl"]
                 ))
         if ssl_info.get("protocol"):
             protocol = ssl_info["protocol"]
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=protocol,
-                type="FullHunt: SSL/TLS Protocol",
+                ftype="FullHunt: SSL/TLS Protocol",
                 source="FullHunt", confidence="High",
                 color="emerald" if "1.3" in protocol or "1.2" in protocol else "orange",
                 threat_level="Informational",
@@ -520,9 +520,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         if ssl_info.get("cipher"):
             cipher_name = ssl_info["cipher"][0] if isinstance(ssl_info["cipher"], tuple) else str(ssl_info["cipher"])
             is_weak = any(w in cipher_name.upper() for w in ["RC4", "DES", "MD5", "SHA1", "EXPORT", "NULL"])
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=cipher_name[:100],
-                type="FullHunt: SSL/TLS Cipher",
+                ftype="FullHunt: SSL/TLS Cipher",
                 source="FullHunt", confidence="High",
                 color="red" if is_weak else "slate",
                 threat_level="Elevated Risk" if is_weak else "Informational",
@@ -533,7 +533,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
     total_items = (len(subdomains_found) + len(api_data.get("Technologies", [])) +
                    len(dns_items if isinstance(dns_items, list) else []))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"FullHunt scan complete: {len(subdomains_found)} subdomains, "
                f"{len(api_data.get('Technologies', []))} technologies, "
                f"{len(dns_items if isinstance(dns_items, list) else [])} DNS records, "

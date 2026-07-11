@@ -1,6 +1,8 @@
-import asyncio, httpx, os, importlib.util, sys, dns.resolver
+import asyncio, httpx, os, importlib.util, sys, dns.resolver, hashlib
 from datetime import datetime
 from collections import defaultdict, Counter
+from functools import lru_cache
+from typing import Optional
 from models import IntelligenceFinding, SummaryItem
 from osint_common import normalize_target
 from rust_bridge import SCAN_FUNCTIONS, EngineResult, scan_all
@@ -18,6 +20,25 @@ MODULE_CATEGORIES = {
     "geolocation_network": ["geo_recon","ip_geolocation","network_topology_mapper","port_scanner","device_search","financial_recon","wigle"],
 }
 ALL_MODULES = {f for files in MODULE_CATEGORIES.values() for f in files}
+
+# Module cache to avoid re-loading modules on every scan
+_module_cache: dict = {}
+
+def get_cached_module(mod_path: str):
+    mod_name = os.path.basename(mod_path)[:-3]
+    cache_key = f"{mod_name}:{os.path.getmtime(mod_path)}"
+    if cache_key in _module_cache:
+        return _module_cache[cache_key]
+    try:
+        spec = importlib.util.spec_from_file_location(mod_name, mod_path)
+        if not spec or not spec.loader:
+            return None
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        _module_cache[cache_key] = m
+        return m
+    except Exception:
+        return None
 
 
 class OSINTOrchestrator:
@@ -95,19 +116,24 @@ class OSINTOrchestrator:
                 mod_name = filename[:-3]
                 if enabled_categories:
                     if not any(mod_name in MODULE_CATEGORIES.get(c,[]) for c in enabled_categories): continue
-                try:
-                    module = self._load_module(os.path.join(modules_path, filename))
-                except Exception as e:
-                    self.log(f"Module {mod_name} import failed: {str(e)[:80]}", "ERROR")
-                    self.logs.append({"module":mod_name,"status":"Error","error":f"Import: {str(e)[:80]}","time":datetime.now().strftime("%H:%M:%S")})
+                if mod_name not in ALL_MODULES:
+                    continue
+                module = get_cached_module(os.path.join(modules_path, filename))
+                if module is None:
+                    self.log(f"Module {mod_name} import failed", "ERROR")
+                    self.logs.append({"module":mod_name,"status":"Error","error":"Import failed","time":datetime.now().strftime("%H:%M:%S")})
                     continue
                 if hasattr(module, 'crawl'):
                     self.log(f"Engaging: {mod_name}", "INFO")
-                    tasks.append(self._safe_crawl(module, client, timeout_val))
+                    tasks.append(self._safe_crawl(module, client, timeout_val, mod_name))
 
             if tasks:
-                for r in await asyncio.gather(*tasks):
-                    if r: findings.extend(r)
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                for r in results:
+                    if isinstance(r, Exception):
+                        continue
+                    if r:
+                        findings.extend(r)
 
         if max_findings > 0 and len(findings) > max_findings:
             findings = findings[:max_findings]
@@ -489,50 +515,53 @@ class OSINTOrchestrator:
             }
         }
 
-    def _load_module(self, path):
-        mod_name = os.path.basename(path)[:-3]
-        spec = importlib.util.spec_from_file_location(mod_name, path)
-        m = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(m)
-        return m
-
-    async def _safe_crawl(self, module, client, timeout_val=10):
+    async def _safe_crawl(self, module, client, timeout_val=10, mod_name=""):
         async with self.semaphore:
             try:
                 if hasattr(module, 'SUPPORTED_TYPES') and self.target_type not in module.SUPPORTED_TYPES:
                     return []
-                if not hasattr(module, 'crawl'): return []
                 coro = module.crawl(self.target, client)
                 mf = await asyncio.wait_for(coro, timeout=timeout_val + 5)
-                self.log(f"Module {module.__name__}: {len(mf)} findings", "SUCCESS")
-                self.logs.append({"module":module.__name__,"status":"Success","found":str(len(mf)),"time":datetime.now().strftime("%H:%M:%S")})
+                if mf:
+                    self.log(f"Module {mod_name}: {len(mf)} findings", "SUCCESS")
+                self.logs.append({"module":mod_name,"status":"Success","found":str(len(mf)),"time":datetime.now().strftime("%H:%M:%S")})
                 return mf
             except asyncio.TimeoutError:
-                self.log(f"Module {module.__name__} timed out", "ERROR")
-                self.logs.append({"module":module.__name__,"status":"Error","error":"Timeout","time":datetime.now().strftime("%H:%M:%S")})
+                self.log(f"Module {mod_name} timed out", "ERROR")
+                self.logs.append({"module":mod_name,"status":"Error","error":"Timeout","time":datetime.now().strftime("%H:%M:%S")})
             except Exception as e:
-                self.log(f"Module {module.__name__}: {str(e)[:80]}", "ERROR")
-                self.logs.append({"module":module.__name__,"status":"Error","error":str(e)[:80],"time":datetime.now().strftime("%H:%M:%S")})
+                self.log(f"Module {mod_name}: {str(e)[:80]}", "ERROR")
+                self.logs.append({"module":mod_name,"status":"Error","error":str(e)[:80],"time":datetime.now().strftime("%H:%M:%S")})
             return []
 
     def _dedup(self, findings):
         seen = {}
+        order = []
         for f in findings:
-            key = f"{f.entity}|{f.type}"
-            if key not in seen: seen[key] = f
-        return list(seen.values())
+            entity = getattr(f, 'entity', str(f))
+            ftype = getattr(f, 'type', 'Unknown')
+            key = f"{entity}|{ftype}"
+            if key not in seen:
+                seen[key] = f
+                order.append(f)
+        return order
 
     def _correlate(self, findings):
         derived = []
         by_resolution, type_counts, email_domains, cloud_tags = defaultdict(list), Counter(), Counter(), Counter()
         high_risk = []
         for f in findings:
-            type_counts[f.type] += 1
-            if f.resolution and f.type == "Subdomain": by_resolution[f.resolution].append(f.entity)
-            if f.type == "Email Address" and "@" in f.entity: email_domains[f.entity.split("@")[-1].lower()] += 1
-            for tag in f.tags:
+            type_counts[getattr(f, 'type', 'Unknown')] += 1
+            resolution = getattr(f, 'resolution', '')
+            entity = getattr(f, 'entity', '')
+            ftype = getattr(f, 'type', '')
+            tags = getattr(f, 'tags', [])
+            threat_level = getattr(f, 'threat_level', '')
+            if resolution and ftype == "Subdomain": by_resolution[resolution].append(entity)
+            if ftype == "Email Address" and "@" in entity: email_domains[entity.split("@")[-1].lower()] += 1
+            for tag in tags:
                 if tag in ("AWS","Azure","Google Cloud","Cloudflare","Vercel","Netlify","Heroku"): cloud_tags[tag] += 1
-            if f.threat_level in ("High Risk","Critical","Elevated Risk"): high_risk.append(f)
+            if threat_level in ("High Risk","Critical","Elevated Risk"): high_risk.append(f)
         for ip, hosts in by_resolution.items():
             if len(hosts) >= 2:
                 derived.append(IntelligenceFinding(entity=f"{len(hosts)} hosts share {ip}",type="Relationship",source="Correlation Engine",confidence="High",color="purple",threat_level="Informational",status="Correlated",resolution=", ".join(sorted(hosts)[:10]),tags=["shared-infrastructure"]))
@@ -550,7 +579,7 @@ class OSINTOrchestrator:
         if not self.settings.get("toggles",{}).get("verify_findings",True):
             return
         async def resolve(f):
-            if f.type == "Subdomain" and not f.resolution:
+            if getattr(f, 'type', '') == "Subdomain" and not getattr(f, 'resolution', ''):
                 try:
                     answers = await asyncio.get_event_loop().run_in_executor(None, lambda: dns.resolver.resolve(f.entity, 'A'))
                     f.status, f.resolution, f.color = "Live", str(answers[0]), "emerald"

@@ -1,7 +1,7 @@
 import httpx
 import asyncio
 import re
-import socket
+from module_common import safe_fetch, safe_fetch_json, make_finding, resolve_ip, is_ip
 from models import IntelligenceFinding
 
 OCI_SERVICES = {
@@ -61,16 +61,13 @@ WAF_HEADERS = ["x-oci-waf", "x-oracle-waf"]
 LB_HEADERS = ["x-oci-lb", "x-oracle-lb"]
 
 async def _resolve_target(target: str) -> tuple:
-    try:
-        socket.inet_aton(target)
-        return target, True
-    except OSError:
-        pass
-    try:
-        ip = socket.gethostbyname(target)
+    t = target.strip()
+    if is_ip(t):
+        return t, True
+    ip = resolve_ip(t)
+    if ip:
         return ip, False
-    except Exception as e:
-        return None, str(e)
+    return None, "DNS resolution failed"
 
 async def _check_ip_ranges(ip: str) -> list:
     findings = []
@@ -85,7 +82,7 @@ async def _check_ip_ranges(ip: str) -> list:
             si = (int(sp[0])<<24)+(int(sp[1])<<16)+(int(sp[2])<<8)+int(sp[3])
             ei = (int(ep[0])<<24)+(int(ep[1])<<16)+(int(ep[2])<<8)+int(ep[3])
             if si <= ip_int <= ei:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"OCI {region}",
                     type="OCI IP Range Match",
                     source="OracleCloudScanner",
@@ -108,7 +105,7 @@ async def _check_ip_ranges(ip: str) -> list:
                 si = (int(sp[0])<<24)+(int(sp[1])<<16)+(int(sp[2])<<8)+int(sp[3])
                 ei = (int(ep[0])<<24)+(int(ep[1])<<16)+(int(ep[2])<<8)+int(ep[3])
                 if si <= ip_int <= ei:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"OCI Region: {region}",
                         type="OCI Region Detected (IP)",
                         source="OracleCloudScanner",
@@ -137,7 +134,7 @@ async def _check_dns_services(target: str) -> list:
                 for svc, patterns in OCI_SERVICES.items():
                     for pat in patterns:
                         if pat in cname:
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=f"OCI {svc}",
                                 type="OCI Service (CNAME)",
                                 source="OracleCloudScanner",
@@ -158,7 +155,7 @@ async def _check_dns_services(target: str) -> list:
             for r in answers_ns:
                 ns = str(r.target).rstrip('.').lower()
                 if "dynect" in ns or "dyn.com" in ns or "oracle" in ns:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity="Oracle Dyn DNS",
                         type="OCI DNS Service (NS)",
                         source="OracleCloudScanner",
@@ -178,7 +175,7 @@ async def _check_dns_services(target: str) -> list:
             for r in answers_txt:
                 txt = str(r).lower()
                 if "oracle" in txt or "oraclecloud" in txt or "_oracle" in txt:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity="Oracle Cloud (TXT)",
                         type="OCI Service (TXT)",
                         source="OracleCloudScanner",
@@ -200,14 +197,14 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
     findings = []
     base = f"https://{target}" if not target.startswith("http") else target
     try:
-        resp = await client.get(base, follow_redirects=True, timeout=10.0,
+        resp = await safe_fetch(client, base, follow_redirects=True, timeout=10.0,
             headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"})
         headers = dict(resp.headers)
         server = headers.get("server", "").lower()
         all_vals = " ".join(str(v).lower() for v in headers.values())
 
         if "oracle" in server or "oracle" in all_vals:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="Oracle Cloud (Server Header)",
                 type="OCI Infrastructure",
                 source="OracleCloudScanner",
@@ -220,7 +217,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
                 tags=["cloud", "oci"]
             ))
         if "x-oci-" in all_vals:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="OCI Headers Present",
                 type="OCI Service (Header)",
                 source="OracleCloudScanner",
@@ -233,7 +230,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
                 tags=["cloud", "oci"]
             ))
         if "x-oci-request-id" in headers:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="OCI Request ID",
                 type="OCI Service (Header)",
                 source="OracleCloudScanner",
@@ -247,7 +244,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
             ))
         if "x-oci-region" in headers:
             region = headers.get("x-oci-region", "")
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"OCI Region: {region}",
                 type="OCI Region (Header)",
                 source="OracleCloudScanner",
@@ -262,7 +259,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
             ))
         html = resp.text[:50000].lower() if hasattr(resp, "text") else ""
         if "oracle" in html or "oraclecloud" in html:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="OCI (HTML Indicator)",
                 type="OCI Cloud (HTML)",
                 source="OracleCloudScanner",
@@ -275,7 +272,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
                 tags=["cloud", "oci"]
             ))
     except Exception as e:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Header analysis error: {str(e)[:100]}",
             type="OCI Scan Error",
             source="OracleCloudScanner",
@@ -300,11 +297,11 @@ async def _check_oci_object_storage(target: str, client: httpx.AsyncClient) -> l
         for region in OCI_REGION_LIST[:5]:
             url = OBJECT_STORAGE_URL.format(region=region, name=name)
             try:
-                resp = await client.get(url, timeout=5.0,
+                resp = await safe_fetch(client, url, timeout=5.0,
                     headers={"User-Agent": "Mozilla/5.0"})
                 if resp.status_code == 200 or resp.status_code == 403:
                     status = "Public" if resp.status_code == 200 else "Exists (Denied)"
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"oci://{name} ({region})",
                         type="OCI Object Storage",
                         source="OracleCloudScanner",
@@ -331,11 +328,11 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     ip, is_ip = await _resolve_target(target)
     if ip is None:
-        findings.append(IntelligenceFinding(entity=f"DNS resolution failed: {target}", type="DNS Error", source="OracleCloudScanner", confidence="Low", color="red", category="Cloud / Infrastructure OSINT", raw_data=str(is_ip)[:200], tags=["error"]))
+        findings.append(make_finding(entity=f"DNS resolution failed: {target}", type="DNS Error", source="OracleCloudScanner", confidence="Low", color="red", category="Cloud / Infrastructure OSINT", raw_data=str(is_ip)[:200], tags=["error"]))
         return findings
 
     if not is_ip:
-        findings.append(IntelligenceFinding(entity=f"{target} -> {ip}", type="DNS Resolution", source="OracleCloudScanner", confidence="High", color="slate", category="Cloud / Infrastructure OSINT", threat_level="Informational", status="Resolved", resolution=ip, tags=["dns", "resolution"]))
+        findings.append(make_finding(entity=f"{target} -> {ip}", type="DNS Resolution", source="OracleCloudScanner", confidence="High", color="slate", category="Cloud / Infrastructure OSINT", threat_level="Informational", status="Resolved", resolution=ip, tags=["dns", "resolution"]))
 
     findings.extend(await _check_ip_ranges(ip))
     findings.extend(await _check_dns_services(target))
@@ -346,11 +343,11 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     oci_ip = sum(1 for f in findings if "OCI IP Range" in f.type)
     storage = sum(1 for f in findings if "Object Storage" in f.type or "oci://" in f.entity)
 
-    findings.append(IntelligenceFinding(entity=f"OCI services detected: {services}", type="OCI Service Count", source="OracleCloudScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["oci", "summary"]))
-    findings.append(IntelligenceFinding(entity=f"OCI IP match: {'Yes' if oci_ip else 'No'}", type="OCI Hosting Status", source="OracleCloudScanner", confidence="Medium", color="slate", category="Cloud / Infrastructure OSINT", tags=["oci", "summary"]))
-    findings.append(IntelligenceFinding(entity=f"OCI storage buckets: {storage}", type="OCI Storage Count", source="OracleCloudScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["oci", "summary"]))
-    findings.append(IntelligenceFinding(entity=f"Target: {target}", type="OCI Scan Target", source="OracleCloudScanner", confidence="High", color="slate", category="Cloud / Infrastructure OSINT", tags=["oci", "target"]))
-    findings.append(IntelligenceFinding(entity=f"Resolved IP: {ip}", type="OCI Resolved Address", source="OracleCloudScanner", confidence="High", color="slate", category="Cloud / Infrastructure OSINT", tags=["oci", "ip"]))
-    findings.append(IntelligenceFinding(entity=f"Total OCI findings: {len(findings)}", type="OCI Scan Summary", source="OracleCloudScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["oci", "summary"]))
+    findings.append(make_finding(entity=f"OCI services detected: {services}", type="OCI Service Count", source="OracleCloudScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["oci", "summary"]))
+    findings.append(make_finding(entity=f"OCI IP match: {'Yes' if oci_ip else 'No'}", type="OCI Hosting Status", source="OracleCloudScanner", confidence="Medium", color="slate", category="Cloud / Infrastructure OSINT", tags=["oci", "summary"]))
+    findings.append(make_finding(entity=f"OCI storage buckets: {storage}", type="OCI Storage Count", source="OracleCloudScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["oci", "summary"]))
+    findings.append(make_finding(entity=f"Target: {target}", type="OCI Scan Target", source="OracleCloudScanner", confidence="High", color="slate", category="Cloud / Infrastructure OSINT", tags=["oci", "target"]))
+    findings.append(make_finding(entity=f"Resolved IP: {ip}", type="OCI Resolved Address", source="OracleCloudScanner", confidence="High", color="slate", category="Cloud / Infrastructure OSINT", tags=["oci", "ip"]))
+    findings.append(make_finding(entity=f"Total OCI findings: {len(findings)}", type="OCI Scan Summary", source="OracleCloudScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["oci", "summary"]))
 
     return findings

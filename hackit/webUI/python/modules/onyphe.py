@@ -1,8 +1,7 @@
 import httpx
 import json
 import re
-from models import IntelligenceFinding
-
+from module_common import safe_fetch, make_finding
 ONYPHE_BASE = "https://www.onyphe.io/api/v2"
 ONYPHE_KEY = ""
 UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -97,7 +96,7 @@ async def query_onyphe(target: str, scan_type: str, config: dict, client: httpx.
         "X-API-Key": ONYPHE_KEY,
     }
     try:
-        resp = await client.get(url, timeout=20.0, headers=headers)
+        resp = await safe_fetch(client, url, timeout=20.0, headers=headers)
         if resp.status_code == 200:
             data = resp.json()
             items = data.get("results", [data]) if isinstance(data, dict) else data
@@ -142,9 +141,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
     for result in all_results:
         if result["type"] == "summary":
             scanned_types.add(result["scan_type"])
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Onyphe {result['description']}: {result['total']} results",
-                type=f"Onyphe: {result['scan_type'].title()} Summary",
+                ftype=f"Onyphe: {result['scan_type'].title()} Summary",
                 source="Onyphe",
                 confidence="High",
                 color="purple",
@@ -155,9 +154,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ))
 
         if result["type"] == "error":
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Onyphe {result['scan_type']} error: {result['message']}",
-                type="Onyphe: Scan Error",
+                ftype="Onyphe: Scan Error",
                 source="Onyphe",
                 confidence="Low",
                 color="red",
@@ -203,9 +202,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             vuln_sev = item.get("severity", item.get("cvss_score", "")).lower()
             sev_info = VULN_SEVERITY_MAP.get(vuln_sev, ("High Risk", "red"))
             entity = f"{vuln_id}" if vuln_id else f"Vulnerability on {ip}:{port}"
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=entity[:200],
-                type=f"Onyphe: Vulnerability ({sev_info[0]})",
+                ftype=f"Onyphe: Vulnerability ({sev_info[0]})",
                 source="Onyphe",
                 confidence="High",
                 color=sev_info[1],
@@ -227,9 +226,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 entity = f"Paste: {title[:80]}" if title else f"Paste ID: {paste_id[:16]}"
                 if paste_date:
                     entity += f" ({paste_date})"
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=entity[:200],
-                    type="Onyphe: Pastrie/Paste Leak",
+                    ftype="Onyphe: Pastrie/Paste Leak",
                     source="Onyphe",
                     confidence="High",
                     color="red",
@@ -245,9 +244,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             entity = f"{ip} flagged as {classification['type']}"
             if threat:
                 entity += f" ({threat})"
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=entity[:200],
-                type=f"Onyphe: {classification['type']}",
+                ftype=f"Onyphe: {classification['type']}",
                 source="Onyphe",
                 confidence="High",
                 color=classification["color"],
@@ -261,9 +260,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         if scan_type == "synscan" or scan_type == "ports":
             open_ports = item.get("ports", item.get("open_ports", ""))
             if open_ports:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{ip}: Open ports: {open_ports}",
-                    type="Onyphe: Port Scan",
+                    ftype="Onyphe: Port Scan",
                     source="Onyphe",
                     confidence="High",
                     color="orange",
@@ -278,9 +277,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             org_name = item.get("org", item.get("organization", ""))
             abuse_email = item.get("abuse_email", "")
             if org_name or abuse_email:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"WHOIS: {org_name or domain}",
-                    type="Onyphe: WHOIS",
+                    ftype="Onyphe: WHOIS",
                     source="Onyphe",
                     confidence="High",
                     color="slate",
@@ -293,9 +292,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         if scan_type == "resolver" or scan_type == "forward" or scan_type == "reverse":
             hostname = item.get("hostname", item.get("forward", item.get("reverse", "")))
             if hostname:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"DNS: {hostname}",
-                    type="Onyphe: DNS Resolution",
+                    ftype="Onyphe: DNS Resolution",
                     source="Onyphe",
                     confidence="High",
                     color="blue",
@@ -313,9 +312,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 entity += f" ({service_name})"
             if country:
                 entity += f" [{country}]"
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=entity[:200],
-                type=f"Onyphe: {threat_info['description']}",
+                ftype=f"Onyphe: {threat_info['description']}",
                 source="Onyphe",
                 confidence="High",
                 color=threat_info["color"],
@@ -337,9 +336,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             if org:
                 loc_parts.append(f"({org})")
             loc_str = " ".join(loc_parts)
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=loc_str[:200],
-                type="Onyphe: Geolocation/ASN",
+                ftype="Onyphe: Geolocation/ASN",
                 source="Onyphe",
                 confidence="High",
                 color="slate",
@@ -351,9 +350,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         if category and scan_type not in ("pastries", "threatlist", "vulnerabilities", "synscan", "ports", "whois", "ip", "domain"):
             classification = classify_threat(item)
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{ip}:{port} categorized as {category}",
-                type=f"Onyphe: {classification['type']}",
+                ftype=f"Onyphe: {classification['type']}",
                 source="Onyphe",
                 confidence="Medium",
                 color=classification["color"],
@@ -366,9 +365,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
     # Threat intelligence summary
     if any(threat_summary.values()):
         threat_parts = [f"{k}: {v}" for k, v in threat_summary.items() if v > 0]
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Threat intelligence: {', '.join(threat_parts)}",
-            type="Onyphe: Threat Intelligence Summary",
+            ftype="Onyphe: Threat Intelligence Summary",
             source="Onyphe",
             confidence="High",
             color="red" if threat_summary.get("Malware", 0) or threat_summary.get("Botnet", 0) else "orange",
@@ -384,9 +383,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             [r["data"] for r in all_items if isinstance(r.get("data"), dict)]
         )
         risk_color = "red" if "Critical" in risk_level else "orange"
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Onyphe scan complete: {len(scanned_types)} scans, {len(all_items)} items, risk: {risk_level}",
-            type="Onyphe: Complete Scan Summary",
+            ftype="Onyphe: Complete Scan Summary",
             source="Onyphe",
             confidence="High",
             color=risk_color,
@@ -396,9 +395,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             tags=["scan-complete", "onyphe-summary"],
         ))
     else:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"No Onyphe results found for {target}",
-            type="Onyphe: Empty",
+            ftype="Onyphe: Empty",
             source="Onyphe",
             confidence="Low",
             color="emerald",

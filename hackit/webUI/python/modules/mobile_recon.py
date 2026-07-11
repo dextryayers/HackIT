@@ -1,11 +1,9 @@
 import httpx
 import re
-import socket
 import asyncio
 import json
-from models import IntelligenceFinding
-from urllib.parse import urlparse
-from urllib.parse import quote
+from urllib.parse import urlparse, quote
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash
 
 ITUNES_SEARCH = "https://itunes.apple.com/search"
 ITUNES_LOOKUP = "https://itunes.apple.com/lookup"
@@ -225,9 +223,9 @@ def extract_mobile_domains(html: str, domain: str) -> list:
     for pattern, label in patterns:
         matches = re.findall(pattern, html)
         for m in matches[:3]:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=m.strip("\"'")[:200],
-                type=f"Mobile: {label}",
+                ftype=f"Mobile: {label}",
                 source="MobileRecon",
                 confidence="Medium",
                 color="cyan",
@@ -244,9 +242,9 @@ def detect_mobile_sdks(html: str, js_vars: dict) -> list:
     for sdk, signatures in MOBILE_SDKS.items():
         found = [sig for sig in signatures if sig.lower() in html_lower]
         if found:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{sdk} detected ({len(found)} signatures)",
-                type=f"Mobile SDK: {sdk}",
+                ftype=f"Mobile SDK: {sdk}",
                 source="MobileRecon",
                 confidence="High",
                 color="orange",
@@ -264,9 +262,9 @@ def detect_mobile_frameworks(html: str, headers: dict) -> list:
     for framework, signatures in MOBILE_FRAMEWORKS.items():
         found = [sig for sig in signatures if sig in html_lower]
         if found:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{framework} detected ({len(found)} signatures)",
-                type=f"Mobile Framework: {framework.title()}",
+                ftype=f"Mobile Framework: {framework.title()}",
                 source="MobileRecon",
                 confidence="High",
                 color="orange",
@@ -285,9 +283,9 @@ def detect_mobile_frameworks(html: str, headers: dict) -> list:
     ]
     for pattern, label in mobile_ua_patterns:
         if pattern in ua:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=label,
-                type="Mobile User-Agent",
+                ftype="Mobile User-Agent",
                 source="MobileRecon",
                 confidence="Medium",
                 color="slate",
@@ -296,9 +294,9 @@ def detect_mobile_frameworks(html: str, headers: dict) -> list:
             ))
             break
     if "mobile" in html_lower and "viewport" in html_lower:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="Mobile-responsive design detected",
-            type="Mobile Optimization",
+            ftype="Mobile Optimization",
             source="MobileRecon",
             confidence="High",
             color="emerald",
@@ -320,9 +318,9 @@ def extract_app_store_ids(html: str) -> list:
         matches = re.findall(pattern, html)
         for m in matches[:5]:
             app_id = m if isinstance(m, str) else m
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{app_id} ({platform})",
-                type=f"Mobile App: {label}",
+                ftype=f"Mobile App: {label}",
                 source="MobileRecon",
                 confidence="High",
                 color="purple",
@@ -349,9 +347,9 @@ async def check_mobile_dns(target: str) -> list:
                 None, lambda: dns.resolver.resolve(name, rtype)
             )
             for ans in answers:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=str(ans)[:200],
-                    type=f"Mobile DNS: {label}",
+                    ftype=f"Mobile DNS: {label}",
                     source="MobileRecon",
                     confidence="High",
                     color="blue",
@@ -369,9 +367,9 @@ async def check_mobile_dns(target: str) -> list:
                 resp = await ac.get(f"https://{domain}{path}", timeout=8.0,
                     headers={"User-Agent": "Mozilla/5.0"})
                 if resp.status_code == 200 and len(resp.text) > 10:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"https://{domain}{path}",
-                        type="iOS Universal Link (AASA)",
+                        ftype="iOS Universal Link (AASA)",
                         source="MobileRecon",
                         confidence="High",
                         color="emerald",
@@ -388,9 +386,9 @@ async def check_mobile_dns(target: str) -> list:
             resp = await ac.get(f"https://{domain}/.well-known/assetlinks.json", timeout=8.0,
                 headers={"User-Agent": "Mozilla/5.0"})
             if resp.status_code == 200 and len(resp.text) > 10:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"https://{domain}/.well-known/assetlinks.json",
-                    type="Android App Link (Asset Links)",
+                    ftype="Android App Link (Asset Links)",
                     source="MobileRecon",
                     confidence="High",
                     color="emerald",
@@ -409,12 +407,12 @@ async def search_mobile_clients(target: str, client: httpx.AsyncClient) -> list:
     findings = []
     domain_short = target.split(".")[0] if "." in target else target
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"{ITUNES_SEARCH}?term={quote(domain_short)}&entity=software&limit=10",
             timeout=10.0,
             headers={"User-Agent": "Mozilla/5.0"}
         )
-        if resp.status_code == 200:
+        if resp and resp.status_code == 200:
             data = resp.json()
             results = data.get("results", [])
             for app in results[:5]:
@@ -422,9 +420,9 @@ async def search_mobile_clients(target: str, client: httpx.AsyncClient) -> list:
                 review_count = app.get("userRatingCount", "N/A")
                 avg_rating = app.get("averageUserRating", "N/A")
                 price = app.get("price", "N/A")
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=app.get("trackName", "")[:200],
-                    type="iOS App Store Entry",
+                    ftype="iOS App Store Entry",
                     source="MobileRecon (iTunes)",
                     confidence="Medium",
                     color="purple",
@@ -440,19 +438,19 @@ async def search_mobile_clients(target: str, client: httpx.AsyncClient) -> list:
 
                 if track_id:
                     try:
-                        lookup = await client.get(
+                        lookup = await safe_fetch(client, 
                             f"{ITUNES_LOOKUP}?id={track_id}&country=us",
                             timeout=8.0,
                             headers={"User-Agent": "Mozilla/5.0"}
                         )
-                        if lookup.status_code == 200:
+                        if lookup and lookup.status_code == 200:
                             ldata = lookup.json()
                             lresults = ldata.get("results", [])
                             if lresults:
                                 details = lresults[0]
-                                findings.append(IntelligenceFinding(
+                                findings.append(make_finding(
                                     entity=f"{details.get('trackName', '')} - Full Details",
-                                    type="iOS App Store Detail",
+                                    ftype="iOS App Store Detail",
                                     source="MobileRecon (iTunes)",
                                     confidence="Medium",
                                     color="purple",
@@ -492,9 +490,9 @@ async def check_mobile_viewport_meta(html: str, target: str) -> list:
     webapp_capable = re.search('<meta\\s+name=["\x27]apple-mobile-web-app-capable["\x27]', html, re.IGNORECASE)
 
     if viewport_match:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="Mobile viewport meta tag present",
-            type="Mobile Meta: Viewport",
+            ftype="Mobile Meta: Viewport",
             source="MobileRecon",
             confidence="High",
             color="emerald",
@@ -503,9 +501,9 @@ async def check_mobile_viewport_meta(html: str, target: str) -> list:
             tags=["mobile-meta", "viewport"]
         ))
     if apple_touch:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{len(apple_touch)} apple-touch-icon link(s)",
-            type="Mobile Meta: Apple Touch Icon",
+            ftype="Mobile Meta: Apple Touch Icon",
             source="MobileRecon",
             confidence="High",
             color="slate",
@@ -514,9 +512,9 @@ async def check_mobile_viewport_meta(html: str, target: str) -> list:
             tags=["mobile-meta", "apple-touch"]
         ))
     if status_bar:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="Apple status bar style defined",
-            type="Mobile Meta: Status Bar",
+            ftype="Mobile Meta: Status Bar",
             source="MobileRecon",
             confidence="Medium",
             color="slate",
@@ -524,9 +522,9 @@ async def check_mobile_viewport_meta(html: str, target: str) -> list:
             tags=["mobile-meta", "status-bar"]
         ))
     if webapp_capable:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="PWA capable (apple-mobile-web-app-capable)",
-            type="Mobile Meta: PWA",
+            ftype="Mobile Meta: PWA",
             source="MobileRecon",
             confidence="Medium",
             color="emerald",
@@ -536,9 +534,9 @@ async def check_mobile_viewport_meta(html: str, target: str) -> list:
 
     manifest = re.search('<link\\s+rel=["\x27]manifest["\x27][^>]*href=["\x27]([^"\\x27]+)["\x27]', html, re.IGNORECASE)
     if manifest:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Web App Manifest: {manifest.group(1)}",
-            type="PWA Manifest",
+            ftype="PWA Manifest",
             source="MobileRecon",
             confidence="High",
             color="emerald",
@@ -549,9 +547,9 @@ async def check_mobile_viewport_meta(html: str, target: str) -> list:
 
     service_worker = re.search(r'navigator\s*\.\s*serviceWorker', html)
     if service_worker:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="Service Worker detected",
-            type="PWA Service Worker",
+            ftype="PWA Service Worker",
             source="MobileRecon",
             confidence="Medium",
             color="emerald",
@@ -568,9 +566,9 @@ def detect_deep_links(html: str) -> list:
         matches = re.findall(pattern, html, re.IGNORECASE)
         for m in matches[:5]:
             matched_str = m if isinstance(m, str) else m[0]
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=matched_str[:200],
-                type=f"Deep Link: {label}",
+                ftype=f"Deep Link: {label}",
                 source="MobileRecon",
                 confidence="Medium",
                 color="blue",
@@ -591,9 +589,9 @@ def detect_sms_mms(html: str) -> list:
     )
     combined = set(sms_links[:5] + tel_links[:5] + [f"tel:{p}" for p in phone_numbers[:5]])
     for link in combined:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=link[:200],
-            type="Mobile: SMS/Phone Link",
+            ftype="Mobile: SMS/Phone Link",
             source="MobileRecon",
             confidence="Medium",
             color="cyan",
@@ -617,9 +615,9 @@ def detect_qr_code(html: str, target: str) -> list:
     for pattern in qr_patterns:
         matches = re.findall(pattern, html, re.IGNORECASE)
         for m in matches[:3]:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"QR code reference: {m[:200]}",
-                type="Mobile: QR Code",
+                ftype="Mobile: QR Code",
                 source="MobileRecon",
                 confidence="Low",
                 color="slate",
@@ -649,9 +647,9 @@ def detect_notification_config(html: str, target: str) -> list:
     for pattern, label in firebase_patterns:
         m = re.search(pattern, html, re.IGNORECASE)
         if m:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=m.group(0)[:200] if m.group(0) else label,
-                type=f"Push Notification: {label}",
+                ftype=f"Push Notification: {label}",
                 source="MobileRecon",
                 confidence="High",
                 color="orange",
@@ -671,9 +669,9 @@ def detect_notification_config(html: str, target: str) -> list:
     for pattern, label in onesignal_patterns:
         m = re.search(pattern, html, re.IGNORECASE)
         if m:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=m.group(0)[:200] if m.group(0) else label,
-                type=f"Push Notification: {label}",
+                ftype=f"Push Notification: {label}",
                 source="MobileRecon",
                 confidence="High",
                 color="orange",
@@ -686,9 +684,9 @@ def detect_notification_config(html: str, target: str) -> list:
     if service_worker_reg:
         sw_path = service_worker_reg.group(1)
         if "firebase" in sw_path.lower() or "onesignal" in sw_path.lower():
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Push-capable Service Worker: {sw_path}",
-                type="Push Notification: Service Worker",
+                ftype="Push Notification: Service Worker",
                 source="MobileRecon",
                 confidence="High",
                 color="orange",
@@ -725,9 +723,9 @@ async def check_mobile_headers(target: str) -> list:
 
         vary = desktop_headers.get("vary", "")
         if "user-agent" in vary.lower() or "user-agent" in vary.lower():
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Vary: User-Agent header present",
-                type="Mobile Headers: Vary",
+                ftype="Mobile Headers: Vary",
                 source="MobileRecon",
                 confidence="High",
                 color="slate",
@@ -751,9 +749,9 @@ async def check_mobile_headers(target: str) -> list:
                 content_differs = desktop_status != mobile_status or diff_size > 500
 
                 if content_differs or mobile_status != desktop_status:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Content differs for {label} UA",
-                        type="Mobile Headers: UA Differentiation",
+                        ftype="Mobile Headers: UA Differentiation",
                         source="MobileRecon",
                         confidence="Medium",
                         color="blue",
@@ -768,9 +766,9 @@ async def check_mobile_headers(target: str) -> list:
 
                 mobile_vary = mobile_resp.headers.get("vary", "")
                 if "user-agent" in mobile_vary.lower():
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Vary: User-Agent in mobile response ({label})",
-                        type="Mobile Headers: Vary Mobile",
+                        ftype="Mobile Headers: Vary Mobile",
                         source="MobileRecon",
                         confidence="Medium",
                         color="slate",
@@ -804,9 +802,9 @@ def detect_developer_accounts(html: str, target: str) -> list:
     for pattern, label in dev_account_patterns:
         matches = re.findall(pattern, html, re.IGNORECASE)
         for m in matches[:3]:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=m[:200] if isinstance(m, str) else label,
-                type=f"Mobile Dev Account: {label}",
+                ftype=f"Mobile Dev Account: {label}",
                 source="MobileRecon",
                 confidence="Low",
                 color="purple",
@@ -840,9 +838,9 @@ def detect_sdk_versions(html: str) -> list:
         matches = re.findall(pattern, html, re.IGNORECASE)
         for m in matches[:3]:
             version = m if isinstance(m, str) else m[0]
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{sdk_name} v{version}",
-                type=f"Mobile SDK Version: {sdk_name}",
+                ftype=f"Mobile SDK Version: {sdk_name}",
                 source="MobileRecon",
                 confidence="Medium",
                 color="slate",
@@ -906,9 +904,9 @@ def compute_mobile_presence_score(findings: list) -> list:
         color = "red"
         level = "Minimal"
 
-    return [IntelligenceFinding(
+    return [make_finding(
         entity=f"Mobile Presence Score: {score}/{max_score} ({level})",
-        type="Mobile Presence Score",
+        ftype="Mobile Presence Score",
         source="MobileRecon",
         confidence="High",
         color=color,
@@ -930,14 +928,16 @@ async def crawl(target: str, client: httpx.AsyncClient):
     headers = {}
 
     try:
-        resp = await client.get(base_url, follow_redirects=True, timeout=15.0,
+        resp = await safe_fetch(client, base_url, follow_redirects=True, timeout=15.0,
             headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"})
-        html = resp.text[:150000] if hasattr(resp, 'text') else ""
+        if not resp:
+            return findings
+        html = resp.text[:150000]
         headers = dict(resp.headers)
     except Exception as e:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"MobileRecon HTTP error: {str(e)[:100]}",
-            type="MobileRecon Error",
+            ftype="MobileRecon Error",
             source="MobileRecon",
             confidence="Low",
             color="red",
@@ -976,29 +976,29 @@ async def crawl(target: str, client: httpx.AsyncClient):
         framework_count = sum(1 for f in findings if "Framework" in (f.type or ""))
         version_count = sum(1 for f in findings if "SDK Version" in (f.type or ""))
         if sdk_count:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Mobile SDKs: {sdk_count} SDK(s), {framework_count} framework(s), {version_count} version(s)",
-                type="Mobile SDK Coverage",
+                ftype="Mobile SDK Coverage",
                 source="MobileRecon", confidence="Medium",
                 color="slate", tags=["sdk"]))
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"SDK diversity: {sdk_count + framework_count} unique SDK/framework(s)",
-            type="Mobile SDK Diversity",
+            ftype="Mobile SDK Diversity",
             source="MobileRecon", confidence="Medium",
             color="slate", tags=["sdk"]))
 
     async def analyze_deep_link_coverage():
         deep_count = sum(1 for f in findings if "Deep Link" in (f.type or ""))
         if deep_count:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Deep links: {deep_count} across app/social/media categories",
-                type="Deep Link Analysis",
+                ftype="Deep Link Analysis",
                 source="MobileRecon", confidence="Medium",
                 color="blue", tags=["deep-link"]))
         else:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="No deep links detected",
-                type="Deep Link Analysis",
+                ftype="Deep Link Analysis",
                 source="MobileRecon", confidence="Low",
                 color="slate", tags=["deep-link"]))
 
@@ -1007,30 +1007,30 @@ async def crawl(target: str, client: httpx.AsyncClient):
         manifest_count = sum(1 for f in findings if "Manifest" in (f.type or ""))
         viewport_count = sum(1 for f in findings if "Viewport" in (f.type or ""))
         if pwa_count > 0:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"PWA: {pwa_count} PWA feature(s), manifest={manifest_count > 0}, viewport={viewport_count > 0}",
-                type="PWA Capability Analysis",
+                ftype="PWA Capability Analysis",
                 source="MobileRecon", confidence="Medium",
                 color="emerald", tags=["pwa"]))
         else:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="No PWA features detected",
-                type="PWA Capability Analysis",
+                ftype="PWA Capability Analysis",
                 source="MobileRecon", confidence="Low",
                 color="slate", tags=["pwa"]))
 
     async def analyze_push_notifications():
         push_count = sum(1 for f in findings if "Push Notification" in (f.type or ""))
         if push_count:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Push notification infrastructure: {push_count} component(s)",
-                type="Push Notification Analysis",
+                ftype="Push Notification Analysis",
                 source="MobileRecon", confidence="Medium",
                 color="orange", tags=["push"]))
         else:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="No push notification infrastructure detected",
-                type="Push Notification Analysis",
+                ftype="Push Notification Analysis",
                 source="MobileRecon", confidence="Low",
                 color="slate", tags=["push"]))
 
@@ -1038,14 +1038,14 @@ async def crawl(target: str, client: httpx.AsyncClient):
         ios_count = sum(1 for f in findings if "iOS" in (f.type or "") or "Apple App" in (f.type or ""))
         android_count = sum(1 for f in findings if "Google Play" in (f.type or "") or "Android" in (f.type or ""))
         if ios_count or android_count:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"App store presence: iOS={ios_count > 0}, Android={android_count > 0}",
-                type="App Store Analysis",
+                ftype="App Store Analysis",
                 source="MobileRecon", confidence="Medium",
                 color="purple", tags=["app-store"]))
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Mobile header differentiation: {sum(1 for f in findings if 'UA Differentiation' in (f.type or ''))} UA(s) show different content",
-            type="Mobile Headers Analysis",
+            ftype="Mobile Headers Analysis",
             source="MobileRecon", confidence="Medium",
             color="slate", tags=["headers"]))
 
@@ -1057,9 +1057,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         analyze_app_store_presence(),
     )
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Mobile reconnaissance complete: {len(findings)} findings",
-        type="Mobile Recon Summary",
+        ftype="Mobile Recon Summary",
         source="MobileRecon",
         confidence="Medium",
         color="purple",

@@ -3,7 +3,7 @@ import asyncio
 import socket
 import re
 from urllib.parse import urlparse
-from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash
 
 BL_CHECKERS = [
     ("Spamhaus ZEN", "zen.spamhaus.org", lambda ip: ip),
@@ -56,7 +56,7 @@ async def check_dnsbl(ip_or_domain: str, dnsbl_host: str, query_func):
 
 async def query_otx(domain: str, client: httpx.AsyncClient):
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://otx.alienvault.com/api/v1/indicators/domain/{domain}/reputation",
             headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
             timeout=15.0
@@ -68,12 +68,10 @@ async def query_otx(domain: str, client: httpx.AsyncClient):
 
 async def query_urlhaus(domain: str, client: httpx.AsyncClient):
     try:
-        resp = await client.post(
-            "https://urlhaus-api.abuse.ch/v1/host/",
+        resp = await safe_fetch(client, "https://urlhaus-api.abuse.ch/v1/host/",
             data={"host": domain},
             headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
-            timeout=15.0
-        )
+            timeout=15.0, method="POST")
         if resp.status_code == 200:
             return resp.json()
     except: pass
@@ -81,7 +79,7 @@ async def query_urlhaus(domain: str, client: httpx.AsyncClient):
 
 async def query_phishtank(domain: str, client: httpx.AsyncClient):
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://checkurl.phishtank.com/checkurl/index.php?url={domain}&format=json",
             headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
             timeout=15.0
@@ -93,7 +91,7 @@ async def query_phishtank(domain: str, client: httpx.AsyncClient):
 
 async def query_ibm_xforce(domain: str, client: httpx.AsyncClient):
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://api.xforce.ibmcloud.com/api/url/{domain}",
             headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
             timeout=15.0
@@ -105,7 +103,7 @@ async def query_ibm_xforce(domain: str, client: httpx.AsyncClient):
 
 async def query_cisco_talos(domain: str, client: httpx.AsyncClient):
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://talosintelligence.com/sb_api/query_lookup?query=%2Fapi%2Fv2%2Fdetails%2Fdomain%2F{domain}&query_type=domain",
             headers={"User-Agent": "Mozilla/5.0"},
             timeout=15.0
@@ -117,7 +115,7 @@ async def query_cisco_talos(domain: str, client: httpx.AsyncClient):
 
 async def query_abuseipdb(ip: str, client: httpx.AsyncClient):
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://www.abuseipdb.com/check/{ip}",
             headers={"User-Agent": "Mozilla/5.0"},
             timeout=15.0
@@ -148,9 +146,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 if listed:
                     blacklist_hits += 1
                     blacklist_details.append(bl_name)
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"LISTED on {bl_name}",
-                        type="Blacklist Hit",
+                        ftype="Blacklist Hit",
                         source="Domain Reputation",
                         confidence="High",
                         color="red",
@@ -164,7 +162,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 pass
 
     if blacklist_hits == 0:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Domain NOT listed on any tested blacklist (clean)",
             type="Blacklist Status",
             source="Domain Reputation",
@@ -177,7 +175,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             tags=["blacklist", "clean"]
         ))
     else:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Listed on {blacklist_hits}/{len(BL_CHECKERS)} blacklists: {', '.join(blacklist_details[:8])}",
             type="Blacklist Summary",
             source="Domain Reputation",
@@ -192,7 +190,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
     if otx:
         pulses = otx.get("pulse_info", {}).get("pulses", [])
         if pulses:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"AlienVault OTX: {len(pulses)} associated pulses",
                 type="Threat Intelligence (OTX)",
                 source="AlienVault OTX",
@@ -206,7 +204,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
     urlhaus = await query_urlhaus(domain, client)
     if urlhaus and urlhaus.get("query_status") == "ok":
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"URLhaus: {urlhaus.get('url_count', 0)} malicious URLs, status={urlhaus.get('threat', '')}",
             type="Threat Intelligence (URLhaus)",
             source="URLhaus",
@@ -220,9 +218,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
     phishtank = await query_phishtank(domain, client)
     if phishtank and phishtank.get("results", {}).get("in_phish_tank") == True:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"PhishTank: domain verified as phishing",
-            type="Threat Intelligence (PhishTank)",
+            ftype="Threat Intelligence (PhishTank)",
             source="PhishTank",
             confidence="High",
             color="red",
@@ -237,7 +235,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         score = ibm.get("score", 0)
         cats = ibm.get("categoryDescriptions", [])
         if score > 0 or cats:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"IBM X-Force: score={score}, categories={', '.join(cats[:3])}",
                 type="Threat Intelligence (X-Force)",
                 source="IBM X-Force",
@@ -254,9 +252,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         talos_score = talos.get("score", 0) if isinstance(talos, dict) else 0
         talos_category = talos.get("category", talos.get("classification", "")) if isinstance(talos, dict) else ""
         if talos_score or talos_category:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Cisco Talos: score={talos_score}, category={talos_category}",
-                type="Threat Intelligence (Talos)",
+                ftype="Threat Intelligence (Talos)",
                 source="Cisco Talos",
                 confidence="Medium",
                 color="orange" if talos_score > 0 else "slate",
@@ -269,7 +267,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
     for ip in ips[:3]:
         ab = await query_abuseipdb(ip, client)
         if ab:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"AbuseIPDB: {ab.get('threat', '')} threat for {ip}",
                 type="IP Reputation (AbuseIPDB)",
                 source="AbuseIPDB",
@@ -285,7 +283,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
     if reputation_score < 0: reputation_score = 0
     rep_color = "green" if reputation_score >= 80 else "orange" if reputation_score >= 50 else "red"
     rep_threat = "Informational" if reputation_score >= 80 else "Standard Target" if reputation_score >= 50 else "Elevated Risk"
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Reputation Score: {reputation_score}/100 ({'Low Risk' if reputation_score >= 80 else 'Medium Risk' if reputation_score >= 50 else 'High Risk'})",
         type="Domain Reputation Score",
         source="Domain Reputation",
@@ -297,9 +295,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         tags=["reputation", "score"]
     ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Reputation analysis complete for {domain}",
-        type="Reputation Summary",
+        ftype="Reputation Summary",
         source="Domain Reputation",
         confidence="High",
         color="blue",

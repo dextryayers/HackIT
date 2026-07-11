@@ -3,9 +3,8 @@ import asyncio
 import dns.resolver
 import dns.message
 import dns.rdatatype
-import socket
 import time
-from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash
 
 DOH_ENDPOINTS = [
     {"name": "Cloudflare", "url": "https://cloudflare-dns.com/dns-query", "ip": "1.1.1.1"},
@@ -35,16 +34,14 @@ async def doh_query(domain: str, doh_url: str, client: httpx.AsyncClient):
         msg.flags |= dns.flags.AD
         wire = msg.to_wire()
         start = time.monotonic()
-        resp = await client.post(
-            doh_url,
+        resp = await safe_fetch(client, doh_url,
             content=wire,
             headers={
                 "Content-Type": "application/dns-message",
                 "Accept": "application/dns-message",
                 "User-Agent": "Mozilla/5.0"
             },
-            timeout=10.0
-        )
+            timeout=10.0, method="POST")
         elapsed = time.monotonic() - start
         if resp.status_code == 200:
             response = dns.message.from_wire(resp.content)
@@ -101,12 +98,10 @@ async def check_edns_padding(domain: str, client: httpx.AsyncClient):
             msg = dns.message.make_query(domain, dns.rdatatype.A)
             msg.use_edns(0, dns.flags.DO, 4096, [dns.edns.GenericOption(0, b'\x00' * 128)])
             wire = msg.to_wire()
-            resp = await client.post(
-                doh["url"],
+            resp = await safe_fetch(client, doh["url"],
                 content=wire,
                 headers={"Content-Type": "application/dns-message", "Accept": "application/dns-message"},
-                timeout=10.0
-            )
+                timeout=10.0, method="POST")
             if resp.status_code == 200:
                 req_size = len(wire)
                 resp_size = len(resp.content)
@@ -131,7 +126,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         if answers:
             doh_supported += 1
             doh_results.append((doh["name"], answers, elapsed, ad_flag))
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"DoH via {doh['name']}: {', '.join(answers[:3])} ({elapsed:.3f}s)",
                 type="DNS over HTTPS (DoH)",
                 source="DNS Do Analyzer",
@@ -144,9 +139,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 tags=["doh", "dns-over-https", doh["name"].lower().replace(" ", "-")]
             ))
         else:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"DoH via {doh['name']}: not available",
-                type="DNS over HTTPS (DoH) Unavailable",
+                ftype="DNS over HTTPS (DoH) Unavailable",
                 source="DNS Do Analyzer",
                 confidence="Medium",
                 color="slate",
@@ -157,9 +152,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
     for doh_name, answers, elapsed, ad_flag in doh_results:
         if ad_flag:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"DNSSEC over DoH via {doh_name}: AD-bit set, validation OK",
-                type="DNSSEC over DoH",
+                ftype="DNSSEC over DoH",
                 source="DNS Do Analyzer",
                 confidence="High",
                 color="emerald",
@@ -173,7 +168,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         answers, elapsed = await dot_query(domain, dot["host"], dot["tls_host"])
         if answers:
             dot_supported += 1
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"DoT via {dot['name']}: {', '.join(answers[:3])} ({elapsed:.3f}s)",
                 type="DNS over TLS (DoT)",
                 source="DNS Do Analyzer",
@@ -184,9 +179,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 tags=["dot", "dns-over-tls", dot["name"].lower().replace(" ", "-")]
             ))
         else:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"DoT via {dot['name']}: not available",
-                type="DNS over TLS (DoT) Unavailable",
+                ftype="DNS over TLS (DoT) Unavailable",
                 source="DNS Do Analyzer",
                 confidence="Medium",
                 color="slate",
@@ -198,7 +193,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
     if doh_supported > 0:
         avg_time = sum(r[2] for r in doh_results) / len(doh_results) if doh_results else 0
         fastest = min(doh_results, key=lambda x: x[2]) if doh_results else None
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"DoH: {doh_supported}/{doh_total} endpoints work, avg {avg_time:.3f}s, fastest: {fastest[0] if fastest else 'N/A'} ({fastest[2]:.3f}s)" if fastest else "N/A",
             type="DoH Availability Summary",
             source="DNS Do Analyzer",
@@ -210,7 +205,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         ))
 
     if dot_supported > 0:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"DoT: {dot_supported}/{len(DOT_ENDPOINTS)} endpoints work",
             type="DoT Availability Summary",
             source="DNS Do Analyzer",
@@ -236,9 +231,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 break
         if udp_name in udp_results and doh_answers:
             if set(udp_results[udp_name]) != set(doh_answers):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"UDP vs DoH inconsistency at {udp_name}: UDP={udp_results[udp_name]}, DoH={doh_answers}",
-                    type="DNS Protocol Inconsistency",
+                    ftype="DNS Protocol Inconsistency",
                     source="DNS Do Analyzer",
                     confidence="Medium",
                     color="red",
@@ -250,9 +245,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
     edns_pad = await check_edns_padding(domain, client)
     for name, data in edns_pad.items():
         if isinstance(data, dict) and data.get("padded"):
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"EDNS padding via {name}: req={data['req_size']}B, resp={data['resp_size']}B",
-                type="EDNS Padding Test",
+                ftype="EDNS Padding Test",
                 source="DNS Do Analyzer",
                 confidence="High",
                 color="emerald",
@@ -264,7 +259,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
     privacy_available = doh_supported + dot_supported
     total_protocols = doh_total + len(DOT_ENDPOINTS)
     privacy_level = "High" if privacy_available > total_protocols * 0.5 else "Medium" if privacy_available > 0 else "Low"
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"DNS privacy level: {privacy_level} ({doh_supported} DoH, {dot_supported} DoT endpoints available)",
         type="DNS Privacy Assessment",
         source="DNS Do Analyzer",
@@ -275,9 +270,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         tags=["dns", "privacy", "doh", "dot"]
     ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"DNS over HTTPS/TLS/QUIC analysis complete for {domain}",
-        type="DNS Do Analysis Summary",
+        ftype="DNS Do Analysis Summary",
         source="DNS Do Analyzer",
         confidence="High",
         color="blue",

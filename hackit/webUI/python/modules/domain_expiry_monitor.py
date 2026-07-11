@@ -2,7 +2,7 @@ import httpx
 import re
 from datetime import datetime, timezone
 from urllib.parse import urlparse
-from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash
 
 DOMAIN_STATUS_CODES = [
     "addPeriod", "autoRenewPeriod", "inactive", "ok", "pendingCreate",
@@ -18,7 +18,7 @@ DOMAIN_STATUS_CODES = [
 
 async def scrape_whois(domain: str, client: httpx.AsyncClient):
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://www.whois.com/whois/{domain}",
             headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"},
             timeout=15.0
@@ -30,12 +30,10 @@ async def scrape_whois(domain: str, client: httpx.AsyncClient):
 
 async def scrape_whois_interface(domain: str, client: httpx.AsyncClient):
     try:
-        resp = await client.post(
-            "https://www.whois.com/whois",
+        resp = await safe_fetch(client, "https://www.whois.com/whois",
             data={"domainName": domain},
             headers={"User-Agent": "Mozilla/5.0", "Content-Type": "application/x-www-form-urlencoded"},
-            timeout=15.0
-        )
+            timeout=15.0, method="POST")
         if resp.status_code == 200:
             return resp.text
     except: pass
@@ -43,7 +41,7 @@ async def scrape_whois_interface(domain: str, client: httpx.AsyncClient):
 
 async def scrape_whois_json(domain: str, client: httpx.AsyncClient):
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://www.whoisjson.com/whois/{domain}",
             headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
             timeout=15.0
@@ -111,9 +109,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         if m_sc: status_codes = [s.strip() for s in m_sc if s.strip()]
 
     if registrar:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=registrar,
-            type="Domain Registrar",
+            ftype="Domain Registrar",
             source="Domain Expiry Monitor",
             confidence="High",
             color="blue",
@@ -124,9 +122,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         ))
 
     if creation_date:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=creation_date[:20],
-            type="Domain Creation Date",
+            ftype="Domain Creation Date",
             source="Domain Expiry Monitor",
             confidence="High",
             color="slate",
@@ -137,9 +135,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         ))
 
     if updated_date:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=updated_date[:20],
-            type="Domain Last Updated",
+            ftype="Domain Last Updated",
             source="Domain Expiry Monitor",
             confidence="High",
             color="slate",
@@ -151,9 +149,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
     if expiration_date:
         exp_clean = expiration_date[:20]
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=exp_clean,
-            type="Domain Expiration Date",
+            ftype="Domain Expiration Date",
             source="Domain Expiry Monitor",
             confidence="High",
             color="emerald",
@@ -182,7 +180,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 now = datetime.now()
                 days_left = (exp_dt - now).days
                 if days_left < 0:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Domain EXPIRED {abs(days_left)} days ago!",
                         type="Domain Expiry Alert",
                         source="Domain Expiry Monitor",
@@ -194,7 +192,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         tags=["whois", "expired", "critical"]
                     ))
                 elif days_left < 30:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Domain expires in {days_left} days (CRITICAL)",
                         type="Domain Expiry Alert",
                         source="Domain Expiry Monitor",
@@ -206,7 +204,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         tags=["whois", "expiring", "critical"]
                     ))
                 elif days_left < 90:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Domain expires in {days_left} days (Warning)",
                         type="Domain Expiry Alert",
                         source="Domain Expiry Monitor",
@@ -218,9 +216,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         tags=["whois", "expiring"]
                     ))
                 else:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Domain expires in {days_left} days",
-                        type="Domain Expiry Countdown",
+                        ftype="Domain Expiry Countdown",
                         source="Domain Expiry Monitor",
                         confidence="High",
                         color="green",
@@ -232,7 +230,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         except: pass
 
     if name_servers:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Nameservers: {', '.join(name_servers[:5])}",
             type="Domain Nameservers",
             source="Domain Expiry Monitor",
@@ -245,7 +243,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         ))
 
     if status_codes:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Status codes: {', '.join(status_codes[:8])}",
             type="Domain Status Codes",
             source="Domain Expiry Monitor",
@@ -259,9 +257,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         dangerous_states = ["pendingDelete", "redemptionPeriod", "pendingRestore", "serverHold", "clientHold"]
         for ds in dangerous_states:
             if any(ds in sc.lower().replace(" ", "") for sc in status_codes):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Domain in {ds} state - action required!",
-                    type="Domain Status Warning",
+                    ftype="Domain Status Warning",
                     source="Domain Expiry Monitor",
                     confidence="High",
                     color="red",
@@ -272,9 +270,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 ))
 
     if dnssec_info:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"DNSSEC: {dnssec_info}",
-            type="Domain DNSSEC Status",
+            ftype="Domain DNSSEC Status",
             source="Domain Expiry Monitor",
             confidence="Medium",
             color="emerald" if dnssec_info.lower() == "signed" or "yes" in dnssec_info.lower() else "slate",
@@ -285,9 +283,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         ))
 
     if registrant_org:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=registrant_org,
-            type="Registrant Organization",
+            ftype="Registrant Organization",
             source="Domain Expiry Monitor",
             confidence="Medium",
             color="slate",
@@ -297,9 +295,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             tags=["whois", "organization"]
         ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"WHOIS/expiry analysis complete for {domain}",
-        type="Domain Expiry Summary",
+        ftype="Domain Expiry Summary",
         source="Domain Expiry Monitor",
         confidence="High",
         color="blue",

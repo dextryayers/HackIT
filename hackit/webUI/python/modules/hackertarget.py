@@ -1,8 +1,8 @@
 import httpx
 import asyncio
 import json
-from models import IntelligenceFinding
 from urllib.parse import urlparse
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash
 
 HT_API_BASE = "https://api.hackertarget.com"
 
@@ -33,7 +33,7 @@ RETRY_DELAY = 2.0
 async def call_endpoint(url: str, client: httpx.AsyncClient, retries: int = MAX_RETRIES) -> str | None:
     for attempt in range(retries):
         try:
-            resp = await client.get(url, timeout=15.0,
+            resp = await safe_fetch(client, url, timeout=15.0,
                 headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"})
             if resp.status_code == 200 and "error" not in resp.text.lower()[:50]:
                 return resp.text.strip()
@@ -53,9 +53,9 @@ def parse_hostsearch(text: str, findings: list, source: str, ftype: str, color: 
             sub_clean = sub.strip().lower()
             if sub_clean not in seen:
                 seen.add(sub_clean)
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=sub_clean,
-                    type=ftype,
+                    ftype=ftype,
                     source=source,
                     confidence="High",
                     color=color,
@@ -86,9 +86,9 @@ def parse_whois(text: str, findings: list, source: str, color: str):
                 val = line.split(':', 1)[1].strip()
                 if val and key not in found_keys:
                     found_keys[key] = True
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=val[:200],
-                        type=ftype_name,
+                        ftype=ftype_name,
                         source=source,
                         confidence="High",
                         color=color,
@@ -100,7 +100,7 @@ def parse_dnslookup(text: str, findings: list, source: str, color: str):
     for line in text.split("\n"):
         if ':' in line:
             parts = line.split(':', 1)
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=parts[1].strip()[:200],
                 type=f"DNS {parts[0].strip()}",
                 source=source,
@@ -117,9 +117,9 @@ def parse_reverseip(text: str, findings: list, source: str, color: str):
             host_clean = host.strip().lower()
             if host_clean not in seen:
                 seen.add(host_clean)
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=host_clean[:200],
-                    type="Reverse IP Host",
+                    ftype="Reverse IP Host",
                     source=source,
                     confidence="High",
                     color=color,
@@ -136,9 +136,9 @@ def parse_httpheaders(text: str, findings: list, source: str, color: str):
             v_clean = v.strip()
             if k_clean and v_clean and k_clean not in seen:
                 seen.add(k_clean)
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=v_clean[:200],
-                    type=f"HTTP Header: {k_clean}",
+                    ftype=f"HTTP Header: {k_clean}",
                     source=source,
                     confidence="High",
                     color=color,
@@ -149,7 +149,7 @@ def parse_geoip(text: str, findings: list, source: str, color: str):
     for line in text.split("\n"):
         if ':' in line:
             k, v = line.split(':', 1)
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=v.strip()[:200],
                 type=f"GeoIP: {k.strip()}",
                 source=source,
@@ -162,9 +162,9 @@ def parse_mxtest(text: str, findings: list, source: str, color: str):
     for line in text.split("\n"):
         line = line.strip()
         if line and not line.startswith("API") and not line.startswith("#"):
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=line[:200],
-                type="Mail Server (MX Test)",
+                ftype="Mail Server (MX Test)",
                 source=source,
                 confidence="Medium",
                 color=color,
@@ -177,9 +177,9 @@ def parse_nmap(text: str, findings: list, source: str, color: str):
         line = line.strip()
         if line and not line.startswith("API") and not line.startswith("#"):
             is_open = "open" in line.lower()
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=line[:200],
-                type="NMAP Port Scan" if not is_open else "NMAP Open Port",
+                ftype="NMAP Port Scan" if not is_open else "NMAP Open Port",
                 source=source,
                 confidence="High",
                 color="red" if is_open else color,
@@ -189,7 +189,7 @@ def parse_nmap(text: str, findings: list, source: str, color: str):
             if is_open:
                 open_ports.append(line[:100])
     if open_ports:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Open ports: {'; '.join(open_ports[:5])}",
             type="NMAP Open Ports Summary",
             source=source,
@@ -203,7 +203,7 @@ def parse_aslookup(text: str, findings: list, source: str, color: str):
     for line in text.split("\n"):
         if ':' in line:
             k, v = line.split(':', 1)
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=v.strip()[:200],
                 type=f"AS Lookup: {k.strip()}",
                 source=source,
@@ -218,18 +218,18 @@ def parse_dnstracer(text: str, findings: list, source: str, color: str):
         line = line.strip()
         if line and not line.startswith("API") and not line.startswith("#"):
             hop_count += 1
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=line[:200],
-                type="DNS Traceroute Hop",
+                ftype="DNS Traceroute Hop",
                 source=source,
                 confidence="Medium",
                 color=color,
                 raw_data=line[:500]
             ))
     if hop_count > 0:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"DNS Traceroute: {hop_count} hops",
-            type="DNS Traceroute Summary",
+            ftype="DNS Traceroute Summary",
             source=source,
             confidence="Medium",
             color="purple",
@@ -240,7 +240,7 @@ def parse_ssltest(text: str, findings: list, source: str, color: str):
     for line in text.split("\n"):
         if ':' in line:
             k, v = line.split(':', 1)
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{k.strip()}: {v.strip()[:200]}",
                 type="SSL Test Result",
                 source=source,
@@ -287,9 +287,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     for line in text.split("\n")[:20]:
                         line_stripped = line.strip()
                         if line_stripped and not line_stripped.startswith("API"):
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=line_stripped[:200],
-                                type=ftype,
+                                ftype=ftype,
                                 source=source,
                                 confidence="Medium",
                                 color=color,
@@ -300,9 +300,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             results_summary[name] = "Failed"
             continue
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"HackerTarget scan complete: {success_count}/{total_endpoints} endpoints succeeded",
-        type="HackerTarget Scan Summary",
+        ftype="HackerTarget Scan Summary",
         source="HackerTarget",
         confidence="High",
         color="purple",

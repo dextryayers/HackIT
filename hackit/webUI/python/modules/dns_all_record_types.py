@@ -1,7 +1,7 @@
 import asyncio
 import dns.resolver
 import dns.rdatatype
-from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash
 
 ALL_RECORD_TYPES = [
     ('A', 'IPv4 Address'),
@@ -101,16 +101,16 @@ async def crawl(target: str, client=None):
             color = "emerald" if rtype in ("DNSKEY", "DS", "RRSIG", "NSEC", "NSEC3", "CDS", "CDNSKEY") else color_map.get(rtype, "slate")
 
             for i, record in enumerate(records[:3]):
-                ftype = rtype.upper()
+                ftype= rtype.upper()
                 if rtype == "TXT":
                     lower = record.lower()
-                    if lower.startswith("v=spf1"): ftype = "SPF"
-                    elif lower.startswith("v=dmarc1"): ftype = "DMARC"
-                    elif "dkim" in lower.lower() or "v=dkim1" in lower.lower(): ftype = "DKIM"
+                    if lower.startswith("v=spf1"): ftype= "SPF"
+                    elif lower.startswith("v=dmarc1"): ftype= "DMARC"
+                    elif "dkim" in lower.lower() or "v=dkim1" in lower.lower(): ftype= "DKIM"
 
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=record[:300],
-                    type=f"DNS {ftype} Record ({rdesc})",
+                    ftype=f"DNS {ftype} Record ({rdesc})",
                     source="DNS All Record Types",
                     confidence="High",
                     color=color,
@@ -122,7 +122,7 @@ async def crawl(target: str, client=None):
                 ))
 
             if len(records) > 3:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{len(records)} total {rtype.upper()} records ({rdesc})",
                     type=f"DNS {rtype.upper()} Record Count",
                     source="DNS All Record Types",
@@ -140,9 +140,9 @@ async def crawl(target: str, client=None):
                         caa_tag = parts[1].lower()
                         caa_val = parts[2].strip('"')
                         if caa_tag == "issue":
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=f"CAA issue: {caa_val}",
-                                type="DNS CAA Issue Permission",
+                                ftype="DNS CAA Issue Permission",
                                 source="DNS All Record Types",
                                 confidence="High",
                                 color="yellow",
@@ -151,9 +151,9 @@ async def crawl(target: str, client=None):
                                 tags=["dns", "caa", "issue"]
                             ))
                 elif rtype == "TLSA":
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"DANE TLSA: {record[:100]}",
-                        type="DNS DANE TLSA Record",
+                        ftype="DNS DANE TLSA Record",
                         source="DNS All Record Types",
                         confidence="High",
                         color="emerald",
@@ -162,9 +162,9 @@ async def crawl(target: str, client=None):
                         tags=["dns", "dane", "tlsa"]
                     ))
                 elif rtype == "SSHFP":
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"SSH Fingerprint: {record[:100]}",
-                        type="DNS SSHFP Record",
+                        ftype="DNS SSHFP Record",
                         source="DNS All Record Types",
                         confidence="High",
                         color="cyan",
@@ -173,9 +173,9 @@ async def crawl(target: str, client=None):
                         tags=["dns", "sshfp"]
                     ))
                 elif rtype == "LOC":
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Location: {record}",
-                        type="DNS LOC Record",
+                        ftype="DNS LOC Record",
                         source="DNS All Record Types",
                         confidence="High",
                         color="orange",
@@ -184,9 +184,9 @@ async def crawl(target: str, client=None):
                         tags=["dns", "loc", "geo"]
                     ))
                 elif rtype == "HINFO":
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Host Info: {record}",
-                        type="DNS HINFO Record",
+                        ftype="DNS HINFO Record",
                         source="DNS All Record Types",
                         confidence="High",
                         color="orange",
@@ -195,9 +195,9 @@ async def crawl(target: str, client=None):
                         tags=["dns", "hinfo", "leak"]
                     ))
                 elif rtype == "RP":
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Responsible Person: {record}",
-                        type="DNS RP Record",
+                        ftype="DNS RP Record",
                         source="DNS All Record Types",
                         confidence="High",
                         color="slate",
@@ -208,7 +208,7 @@ async def crawl(target: str, client=None):
 
     dnssec_types = [t for t in resolved_types if t in ("DNSKEY", "DS", "RRSIG", "NSEC", "NSEC3", "NSEC3PARAM", "CDS", "CDNSKEY")]
     if dnssec_types:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"DNSSEC records: {', '.join(dnssec_types)}",
             type="DNS DNSSEC Record Summary",
             source="DNS All Record Types",
@@ -221,7 +221,7 @@ async def crawl(target: str, client=None):
 
     security_types = [t for t in resolved_types if t in ("CAA", "TLSA", "SSHFP", "SMIMEA", "OPENPGPKEY")]
     if security_types:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Security records: {', '.join(security_types)}",
             type="DNS Security Record Summary",
             source="DNS All Record Types",
@@ -232,9 +232,9 @@ async def crawl(target: str, client=None):
             tags=["dns", "security"]
         ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Resolved {rtype_count}/{total_types} record types for {domain}",
-        type="DNS All Record Types Summary",
+        ftype="DNS All Record Types Summary",
         source="DNS All Record Types",
         confidence="High",
         color="blue",

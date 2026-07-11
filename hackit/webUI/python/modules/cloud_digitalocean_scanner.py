@@ -1,7 +1,7 @@
 import httpx
 import asyncio
 import re
-import socket
+from module_common import safe_fetch, safe_fetch_json, make_finding, resolve_ip, is_ip
 from models import IntelligenceFinding
 
 DO_SERVICES = {
@@ -72,16 +72,13 @@ LB_PATTERNS = [".digitalocean.com", "lb-", "loadbalancer"]
 FLOATING_IP_URL = "https://api.digitalocean.com/v2/floating_ips"
 
 async def _resolve_target(target: str) -> tuple:
-    try:
-        socket.inet_aton(target)
-        return target, True
-    except OSError:
-        pass
-    try:
-        ip = socket.gethostbyname(target)
+    t = target.strip()
+    if is_ip(t):
+        return t, True
+    ip = resolve_ip(t)
+    if ip:
         return ip, False
-    except Exception as e:
-        return None, str(e)
+    return None, "DNS resolution failed"
 
 async def _check_ip_ranges(ip: str) -> list:
     findings = []
@@ -96,7 +93,7 @@ async def _check_ip_ranges(ip: str) -> list:
             si = (int(sp[0])<<24)+(int(sp[1])<<16)+(int(sp[2])<<8)+int(sp[3])
             ei = (int(ep[0])<<24)+(int(ep[1])<<16)+(int(ep[2])<<8)+int(ep[3])
             if si <= ip_int <= ei:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"DigitalOcean {region}",
                     type="DO IP Range Match",
                     source="DigitalOceanCloudScanner",
@@ -119,7 +116,7 @@ async def _check_ip_ranges(ip: str) -> list:
                 si = (int(sp[0])<<24)+(int(sp[1])<<16)+(int(sp[2])<<8)+int(sp[3])
                 ei = (int(ep[0])<<24)+(int(ep[1])<<16)+(int(ep[2])<<8)+int(ep[3])
                 if si <= ip_int <= ei:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"DO Region: {region}",
                         type="DO Region Detected (IP)",
                         source="DigitalOceanCloudScanner",
@@ -148,7 +145,7 @@ async def _check_dns_services(target: str) -> list:
                 for svc, patterns in DO_SERVICES.items():
                     for pat in patterns:
                         if pat in cname:
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=f"DigitalOcean {svc}",
                                 type="DO Service (CNAME)",
                                 source="DigitalOceanCloudScanner",
@@ -169,7 +166,7 @@ async def _check_dns_services(target: str) -> list:
             for r in answers_ns:
                 ns = str(r.target).rstrip('.').lower()
                 if "digitalocean" in ns:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity="DigitalOcean DNS",
                         type="DO DNS Service (NS)",
                         source="DigitalOceanCloudScanner",
@@ -192,14 +189,14 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
     findings = []
     base = f"https://{target}" if not target.startswith("http") else target
     try:
-        resp = await client.get(base, follow_redirects=True, timeout=10.0,
+        resp = await safe_fetch(client, base, follow_redirects=True, timeout=10.0,
             headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"})
         headers = dict(resp.headers)
         server = headers.get("server", "").lower()
         all_vals = " ".join(str(v).lower() for v in headers.values())
 
         if "digitalocean" in server or "do-" in server:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="DigitalOcean (Server Header)",
                 type="DO Infrastructure",
                 source="DigitalOceanCloudScanner",
@@ -212,7 +209,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
                 tags=["cloud", "digitalocean"]
             ))
         if "x-do-" in all_vals or "x-digitalocean-" in all_vals:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="DigitalOcean Headers Present",
                 type="DO Service (Header)",
                 source="DigitalOceanCloudScanner",
@@ -226,7 +223,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
             ))
         html = resp.text[:50000].lower() if hasattr(resp, "text") else ""
         if "digitalocean" in html or "digitalocean" in html:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="DO (HTML Indicator)",
                 type="DO Cloud (HTML)",
                 source="DigitalOceanCloudScanner",
@@ -239,7 +236,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
                 tags=["cloud", "digitalocean"]
             ))
     except Exception as e:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Header analysis error: {str(e)[:100]}",
             type="DO Scan Error",
             source="DigitalOceanCloudScanner",
@@ -264,12 +261,12 @@ async def _check_do_spaces(target: str, client: httpx.AsyncClient) -> list:
         for url_tmpl in DO_SPACES_URLS:
             url = url_tmpl.format(name=name)
             try:
-                resp = await client.get(url, timeout=5.0,
+                resp = await safe_fetch(client, url, timeout=5.0,
                     headers={"User-Agent": "Mozilla/5.0"})
                 if resp.status_code == 200:
                     body = resp.text[:200]
                     is_listing = "ListBucketResult" in body or "<Contents>" in body or "Key>" in body
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"do-spaces://{name}",
                         type="DO Space (Public)",
                         source="DigitalOceanCloudScanner",
@@ -286,7 +283,7 @@ async def _check_do_spaces(target: str, client: httpx.AsyncClient) -> list:
                 elif resp.status_code == 403:
                     body = resp.text[:200]
                     if "AccessDenied" in body:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"do-spaces://{name}",
                             type="DO Space (Exists)",
                             source="DigitalOceanCloudScanner",
@@ -313,11 +310,11 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     ip, is_ip = await _resolve_target(target)
     if ip is None:
-        findings.append(IntelligenceFinding(entity=f"DNS resolution failed: {target}", type="DNS Error", source="DigitalOceanCloudScanner", confidence="Low", color="red", category="Cloud / Infrastructure OSINT", raw_data=str(is_ip)[:200], tags=["error"]))
+        findings.append(make_finding(entity=f"DNS resolution failed: {target}", type="DNS Error", source="DigitalOceanCloudScanner", confidence="Low", color="red", category="Cloud / Infrastructure OSINT", raw_data=str(is_ip)[:200], tags=["error"]))
         return findings
 
     if not is_ip:
-        findings.append(IntelligenceFinding(entity=f"{target} -> {ip}", type="DNS Resolution", source="DigitalOceanCloudScanner", confidence="High", color="slate", category="Cloud / Infrastructure OSINT", threat_level="Informational", status="Resolved", resolution=ip, tags=["dns", "resolution"]))
+        findings.append(make_finding(entity=f"{target} -> {ip}", type="DNS Resolution", source="DigitalOceanCloudScanner", confidence="High", color="slate", category="Cloud / Infrastructure OSINT", threat_level="Informational", status="Resolved", resolution=ip, tags=["dns", "resolution"]))
 
     findings.extend(await _check_ip_ranges(ip))
     findings.extend(await _check_dns_services(target))
@@ -328,11 +325,11 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     do_ip = sum(1 for f in findings if "DO IP Range" in f.type)
     spaces = sum(1 for f in findings if "DO Space" in f.type or "do-spaces" in f.entity)
 
-    findings.append(IntelligenceFinding(entity=f"DO services detected: {services}", type="DO Service Count", source="DigitalOceanCloudScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["digitalocean", "summary"]))
-    findings.append(IntelligenceFinding(entity=f"DO IP match: {'Yes' if do_ip else 'No'}", type="DO Hosting Status", source="DigitalOceanCloudScanner", confidence="Medium", color="slate", category="Cloud / Infrastructure OSINT", tags=["digitalocean", "summary"]))
-    findings.append(IntelligenceFinding(entity=f"DO Spaces: {spaces}", type="DO Space Count", source="DigitalOceanCloudScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["digitalocean", "summary"]))
-    findings.append(IntelligenceFinding(entity=f"Target: {target}", type="DO Scan Target", source="DigitalOceanCloudScanner", confidence="High", color="slate", category="Cloud / Infrastructure OSINT", tags=["digitalocean", "target"]))
-    findings.append(IntelligenceFinding(entity=f"Resolved IP: {ip}", type="DO Resolved Address", source="DigitalOceanCloudScanner", confidence="High", color="slate", category="Cloud / Infrastructure OSINT", tags=["digitalocean", "ip"]))
-    findings.append(IntelligenceFinding(entity=f"Total DO findings: {len(findings)}", type="DO Scan Summary", source="DigitalOceanCloudScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["digitalocean", "summary"]))
+    findings.append(make_finding(entity=f"DO services detected: {services}", type="DO Service Count", source="DigitalOceanCloudScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["digitalocean", "summary"]))
+    findings.append(make_finding(entity=f"DO IP match: {'Yes' if do_ip else 'No'}", type="DO Hosting Status", source="DigitalOceanCloudScanner", confidence="Medium", color="slate", category="Cloud / Infrastructure OSINT", tags=["digitalocean", "summary"]))
+    findings.append(make_finding(entity=f"DO Spaces: {spaces}", type="DO Space Count", source="DigitalOceanCloudScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["digitalocean", "summary"]))
+    findings.append(make_finding(entity=f"Target: {target}", type="DO Scan Target", source="DigitalOceanCloudScanner", confidence="High", color="slate", category="Cloud / Infrastructure OSINT", tags=["digitalocean", "target"]))
+    findings.append(make_finding(entity=f"Resolved IP: {ip}", type="DO Resolved Address", source="DigitalOceanCloudScanner", confidence="High", color="slate", category="Cloud / Infrastructure OSINT", tags=["digitalocean", "ip"]))
+    findings.append(make_finding(entity=f"Total DO findings: {len(findings)}", type="DO Scan Summary", source="DigitalOceanCloudScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["digitalocean", "summary"]))
 
     return findings

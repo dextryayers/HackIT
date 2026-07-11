@@ -1,7 +1,7 @@
 import httpx
 import asyncio
 import re
-import socket
+from module_common import safe_fetch, safe_fetch_json, make_finding, resolve_ip, is_ip
 from models import IntelligenceFinding
 
 GCP_SERVICES = {
@@ -53,16 +53,13 @@ COMMON_BUCKET_SUFFIXES = [
 CLOUD_ARMOR_HEADERS = ["x-goog-armor", "x-cloud-armor", "x-gfe-"]
 
 async def _resolve_target(target: str) -> tuple:
-    try:
-        socket.inet_aton(target)
-        return target, True
-    except OSError:
-        pass
-    try:
-        ip = socket.gethostbyname(target)
+    t = target.strip()
+    if is_ip(t):
+        return t, True
+    ip = resolve_ip(t)
+    if ip:
         return ip, False
-    except Exception as e:
-        return None, str(e)
+    return None, "DNS resolution failed"
 
 async def _check_ip_ranges(ip: str) -> list:
     findings = []
@@ -89,7 +86,7 @@ async def _check_ip_ranges(ip: str) -> list:
             si = (int(sp[0])<<24)+(int(sp[1])<<16)+(int(sp[2])<<8)+int(sp[3])
             ei = (int(ep[0])<<24)+(int(ep[1])<<16)+(int(ep[2])<<8)+int(ep[3])
             if si <= ip_int <= ei:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"GCP {region}",
                     type="GCP IP Range Match",
                     source="GCPCloudScanner",
@@ -112,7 +109,7 @@ async def _check_ip_ranges(ip: str) -> list:
                 si = (int(sp[0])<<24)+(int(sp[1])<<16)+(int(sp[2])<<8)+int(sp[3])
                 ei = (int(ep[0])<<24)+(int(ep[1])<<16)+(int(ep[2])<<8)+int(ep[3])
                 if si <= ip_int <= ei:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"GCP Region: {region}",
                         type="GCP Region Detected (IP)",
                         source="GCPCloudScanner",
@@ -141,7 +138,7 @@ async def _check_dns_services(target: str) -> list:
                 for svc, patterns in GCP_SERVICES.items():
                     for pat in patterns:
                         if pat in cname:
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=f"GCP {svc}",
                                 type="GCP Service (CNAME)",
                                 source="GCPCloudScanner",
@@ -162,7 +159,7 @@ async def _check_dns_services(target: str) -> list:
             for r in answers_ns:
                 ns = str(r.target).rstrip('.').lower()
                 if "google" in ns or "googledomains" in ns or "dns.google" in ns:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity="Google Cloud DNS",
                         type="GCP DNS Service (NS)",
                         source="GCPCloudScanner",
@@ -182,7 +179,7 @@ async def _check_dns_services(target: str) -> list:
             for r in answers_txt:
                 txt = str(r).lower()
                 if "google-site-verification" in txt:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity="Google Workspace Verified",
                         type="GCP Service (TXT)",
                         source="GCPCloudScanner",
@@ -195,7 +192,7 @@ async def _check_dns_services(target: str) -> list:
                         tags=["cloud", "gcp", "workspace"]
                     ))
                 if "_spf.google.com" in txt or "_spf.google.com" in txt:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity="Google Workspace (SPF)",
                         type="GCP Service (TXT)",
                         source="GCPCloudScanner",
@@ -217,7 +214,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
     findings = []
     base = f"https://{target}" if not target.startswith("http") else target
     try:
-        resp = await client.get(base, follow_redirects=True, timeout=10.0,
+        resp = await safe_fetch(client, base, follow_redirects=True, timeout=10.0,
             headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"})
         headers = dict(resp.headers)
         server = headers.get("server", "").lower()
@@ -225,7 +222,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
         all_vals = " ".join(str(v).lower() for v in headers.values())
 
         if "gfe" in server or "gfe" in all_vals:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="Google Front End (GFE)",
                 type="GCP Service (Header)",
                 source="GCPCloudScanner",
@@ -238,7 +235,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
                 tags=["cloud", "gcp", "gfe"]
             ))
         if "google" in server or "google" in via:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="Google Cloud (Server Header)",
                 type="GCP Infrastructure",
                 source="GCPCloudScanner",
@@ -251,7 +248,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
                 tags=["cloud", "gcp"]
             ))
         if "x-google-" in all_vals or "x-gfe-" in all_vals:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="Google Cloud Headers Present",
                 type="GCP Service (Header)",
                 source="GCPCloudScanner",
@@ -264,7 +261,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
                 tags=["cloud", "gcp"]
             ))
         if "x-gfe-request-id" in headers:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="GFE Request ID Present",
                 type="GCP Service (Header)",
                 source="GCPCloudScanner",
@@ -277,7 +274,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
                 tags=["cloud", "gcp"]
             ))
         if "x-cloud-trace-context" in headers:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="Cloud Trace Context",
                 type="GCP Service (Header)",
                 source="GCPCloudScanner",
@@ -290,7 +287,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
                 tags=["cloud", "gcp", "cloud-trace"]
             ))
         if server in ("", "-") and "google" in via:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="Google Cloud (Serverless)",
                 type="GCP Serverless",
                 source="GCPCloudScanner",
@@ -304,7 +301,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
             ))
         html = resp.text[:50000].lower() if hasattr(resp, "text") else ""
         if "googleapis" in html or "gstatic" in html or "googlecloud" in html:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="GCP (HTML Indicator)",
                 type="GCP Cloud (HTML)",
                 source="GCPCloudScanner",
@@ -317,7 +314,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
                 tags=["cloud", "gcp"]
             ))
     except Exception as e:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Header analysis error: {str(e)[:100]}",
             type="GCP Scan Error",
             source="GCPCloudScanner",
@@ -343,12 +340,12 @@ async def _check_gcp_storage(target: str, client: httpx.AsyncClient) -> list:
         for tmpl in GCP_STORAGE_URLS:
             url = tmpl.format(name=b)
             try:
-                resp = await client.get(url, timeout=5.0,
+                resp = await safe_fetch(client, url, timeout=5.0,
                     headers={"User-Agent": "Mozilla/5.0"})
                 if resp.status_code == 200:
                     body = resp.text[:300]
                     is_listing = "ListBucketResult" in body or "<Contents>" in body or "storage" in body.lower()
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"gcs://{b}",
                         type="GCP Storage Bucket (Public)",
                         source="GCPCloudScanner",
@@ -365,7 +362,7 @@ async def _check_gcp_storage(target: str, client: httpx.AsyncClient) -> list:
                 elif resp.status_code == 403:
                     body = resp.text[:200]
                     if "AccessDenied" in body or "access_denied" in body.lower():
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"gcs://{b}",
                             type="GCP Storage Bucket (Exists)",
                             source="GCPCloudScanner",
@@ -392,11 +389,11 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     ip, is_ip = await _resolve_target(target)
     if ip is None:
-        findings.append(IntelligenceFinding(entity=f"DNS resolution failed: {target}", type="DNS Error", source="GCPCloudScanner", confidence="Low", color="red", category="Cloud / Infrastructure OSINT", raw_data=str(is_ip)[:200], tags=["error"]))
+        findings.append(make_finding(entity=f"DNS resolution failed: {target}", type="DNS Error", source="GCPCloudScanner", confidence="Low", color="red", category="Cloud / Infrastructure OSINT", raw_data=str(is_ip)[:200], tags=["error"]))
         return findings
 
     if not is_ip:
-        findings.append(IntelligenceFinding(entity=f"{target} -> {ip}", type="DNS Resolution", source="GCPCloudScanner", confidence="High", color="slate", category="Cloud / Infrastructure OSINT", threat_level="Informational", status="Resolved", resolution=ip, tags=["dns", "resolution"]))
+        findings.append(make_finding(entity=f"{target} -> {ip}", type="DNS Resolution", source="GCPCloudScanner", confidence="High", color="slate", category="Cloud / Infrastructure OSINT", threat_level="Informational", status="Resolved", resolution=ip, tags=["dns", "resolution"]))
 
     ip_findings = await _check_ip_ranges(ip)
     findings.extend(ip_findings)
@@ -414,12 +411,12 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     gcp_infra = sum(1 for f in findings if "GCP Infrastructure" in f.type or "GCP IP Range" in f.type)
     gcp_storage = sum(1 for f in findings if "Storage" in f.entity or "gcs://" in f.entity)
 
-    findings.append(IntelligenceFinding(entity=f"GCP services detected: {gcp_services}", type="GCP Service Count", source="GCPCloudScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["gcp", "summary"]))
-    findings.append(IntelligenceFinding(entity=f"GCP infrastructure indicators: {gcp_infra}", type="GCP Infrastructure Count", source="GCPCloudScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["gcp", "summary"]))
-    findings.append(IntelligenceFinding(entity=f"GCP storage buckets: {gcp_storage}", type="GCP Storage Count", source="GCPCloudScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["gcp", "summary"]))
-    findings.append(IntelligenceFinding(entity=f"GCP hosted: {'Yes' if any('GCP IP Range' in f.type for f in findings) else 'No'}", type="GCP Hosting Status", source="GCPCloudScanner", confidence="Medium", color="slate", category="Cloud / Infrastructure OSINT", tags=["gcp", "summary"]))
-    findings.append(IntelligenceFinding(entity=f"Target: {target}", type="GCP Scan Target", source="GCPCloudScanner", confidence="High", color="slate", category="Cloud / Infrastructure OSINT", tags=["gcp", "target"]))
-    findings.append(IntelligenceFinding(entity=f"Resolved IP: {ip}", type="GCP Resolved Address", source="GCPCloudScanner", confidence="High", color="slate", category="Cloud / Infrastructure OSINT", tags=["gcp", "ip"]))
-    findings.append(IntelligenceFinding(entity=f"Total GCP findings: {len(findings)}", type="GCP Scan Summary", source="GCPCloudScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["gcp", "summary"]))
+    findings.append(make_finding(entity=f"GCP services detected: {gcp_services}", type="GCP Service Count", source="GCPCloudScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["gcp", "summary"]))
+    findings.append(make_finding(entity=f"GCP infrastructure indicators: {gcp_infra}", type="GCP Infrastructure Count", source="GCPCloudScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["gcp", "summary"]))
+    findings.append(make_finding(entity=f"GCP storage buckets: {gcp_storage}", type="GCP Storage Count", source="GCPCloudScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["gcp", "summary"]))
+    findings.append(make_finding(entity=f"GCP hosted: {'Yes' if any('GCP IP Range' in f.type for f in findings) else 'No'}", type="GCP Hosting Status", source="GCPCloudScanner", confidence="Medium", color="slate", category="Cloud / Infrastructure OSINT", tags=["gcp", "summary"]))
+    findings.append(make_finding(entity=f"Target: {target}", type="GCP Scan Target", source="GCPCloudScanner", confidence="High", color="slate", category="Cloud / Infrastructure OSINT", tags=["gcp", "target"]))
+    findings.append(make_finding(entity=f"Resolved IP: {ip}", type="GCP Resolved Address", source="GCPCloudScanner", confidence="High", color="slate", category="Cloud / Infrastructure OSINT", tags=["gcp", "ip"]))
+    findings.append(make_finding(entity=f"Total GCP findings: {len(findings)}", type="GCP Scan Summary", source="GCPCloudScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["gcp", "summary"]))
 
     return findings

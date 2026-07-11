@@ -3,6 +3,7 @@ import asyncio
 import socket
 import re
 import json
+from module_common import safe_fetch, safe_fetch_json, make_finding
 from models import IntelligenceFinding
 
 UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
@@ -186,14 +187,14 @@ async def resolve_to_asn_cymru(ip: str) -> dict:
 
 async def query_ripe_stat(endpoint: str, client: httpx.AsyncClient, params: dict = None) -> dict:
     try:
-        resp = await client.get(f"{RIPE_STAT_API}/{endpoint}", params=params or {}, timeout=15.0)
+        resp = await safe_fetch(client, f"{RIPE_STAT_API}/{endpoint}", params=params or {}, timeout=15.0)
         return resp.json() if resp.status_code == 200 else {}
     except:
         return {}
 
 async def scrape_bgp_he_asn(asn: str, client: httpx.AsyncClient) -> dict:
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://bgp.he.net/AS{asn}",
             headers={"User-Agent": UA},
             timeout=15.0,
@@ -224,7 +225,7 @@ async def scrape_bgp_he_asn(asn: str, client: httpx.AsyncClient) -> dict:
 
 async def query_bgp_tools(asn: str, client: httpx.AsyncClient) -> dict:
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://bgp.tools/as/{asn}.json",
             headers={"User-Agent": UA},
             timeout=15.0,
@@ -237,7 +238,7 @@ async def query_bgp_tools(asn: str, client: httpx.AsyncClient) -> dict:
 
 async def query_cloudflare_radar(asn: str, client: httpx.AsyncClient) -> dict:
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://radar.cloudflare.com/api/v1/asns/{asn}",
             headers={"User-Agent": UA},
             timeout=15.0,
@@ -273,7 +274,7 @@ async def search_bgp_he_prefix(ip: str, client: httpx.AsyncClient) -> dict:
 
 async def scrape_bgp_he_irv(ip: str, client: httpx.AsyncClient) -> dict:
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://bgp.he.net/irv.cgi?ip={ip}",
             headers={"User-Agent": UA},
             timeout=15.0,
@@ -306,7 +307,7 @@ async def scrape_bgp_he_irv(ip: str, client: httpx.AsyncClient) -> dict:
 
 async def query_peeringdb(asn: str, client: httpx.AsyncClient) -> dict:
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"{PEERINGDB_API}/net/asn/{asn}",
             headers={"User-Agent": UA, "Accept": "application/json"},
             timeout=15.0,
@@ -341,7 +342,7 @@ async def query_peeringdb(asn: str, client: httpx.AsyncClient) -> dict:
                 org_id = net.get("org_id")
                 if org_id:
                     try:
-                        org_resp = await client.get(
+                        org_resp = await safe_fetch(client, 
                             f"{PEERINGDB_API}/org/{org_id}",
                             headers={"User-Agent": UA, "Accept": "application/json"},
                             timeout=10.0,
@@ -362,7 +363,7 @@ async def query_peeringdb(asn: str, client: httpx.AsyncClient) -> dict:
 
 async def query_cidr_report(asn: str, client: httpx.AsyncClient) -> dict:
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"http://www.cidr-report.org/as2.0/AS{asn}/index.html",
             headers={"User-Agent": UA},
             timeout=15.0,
@@ -385,7 +386,7 @@ async def query_cidr_report(asn: str, client: httpx.AsyncClient) -> dict:
             return result
         else:
             try:
-                resp2 = await client.get(
+                resp2 = await safe_fetch(client, 
                     f"http://www.cidr-report.org/cgi-bin/as_report?as=AS{asn}",
                     headers={"User-Agent": UA},
                     timeout=15.0,
@@ -408,7 +409,7 @@ async def query_cidr_report(asn: str, client: httpx.AsyncClient) -> dict:
 
 async def query_bgpview(asn: str, client: httpx.AsyncClient) -> dict:
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"{BGPVIEW_API}/asn/{asn}",
             headers={"User-Agent": UA, "Accept": "application/json"},
             timeout=15.0,
@@ -452,7 +453,7 @@ async def query_bgpview(asn: str, client: httpx.AsyncClient) -> dict:
 
 async def query_ipinfo(ip: str, client: httpx.AsyncClient) -> dict:
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"{IPINFO_API}/{ip}/json",
             headers={"User-Agent": UA},
             timeout=10.0,
@@ -483,7 +484,7 @@ async def query_ipinfo(ip: str, client: httpx.AsyncClient) -> dict:
 
 async def query_ripe_routing_status(asn: str, client: httpx.AsyncClient) -> dict:
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"{RIPE_STAT_API}/routing-status/data.json",
             params={"resource": asn},
             timeout=15.0,
@@ -511,7 +512,7 @@ async def query_ripe_routing_status(asn: str, client: httpx.AsyncClient) -> dict
 
 async def query_ripe_abuse_contact(asn: str, client: httpx.AsyncClient) -> dict:
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"{RIPE_STAT_API}/abuse-contact-finder/data.json",
             params={"resource": asn},
             timeout=15.0,
@@ -529,7 +530,7 @@ async def query_ripe_abuse_contact(asn: str, client: httpx.AsyncClient) -> dict:
 
 async def query_ripe_prefix_count(asn: str, client: httpx.AsyncClient) -> dict:
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"{RIPE_STAT_API}/prefix-count/data.json",
             params={"resource": asn},
             timeout=15.0,
@@ -564,7 +565,7 @@ async def query_ripe_prefix_count(asn: str, client: httpx.AsyncClient) -> dict:
 
 async def query_ripe_asn_neighbours(asn: str, client: httpx.AsyncClient) -> dict:
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"{RIPE_STAT_API}/asn-neighbours/data.json",
             params={"resource": asn},
             timeout=15.0,
@@ -602,7 +603,7 @@ async def query_ripe_asn_neighbours(asn: str, client: httpx.AsyncClient) -> dict
 
 async def check_rpki_for_prefixes(asn: str, client: httpx.AsyncClient) -> dict:
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"{RIPE_STAT_API}/rpki-validation/data.json",
             params={"resource": asn},
             timeout=15.0,
@@ -683,7 +684,7 @@ async def generate_summary_report(asn: str, asn_data: dict, ip: str) -> Intellig
     else:
         color = "slate"
 
-    return IntelligenceFinding(
+    return make_finding(
         entity=f"AS{asn} | {asn_data.get('asn_name', asn_data.get('organization', 'Unknown'))}",
         type="ASN: Summary Report",
         source="ASN-BGP-Radar",
@@ -719,7 +720,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             all_asn_data[asn]["ipinfo_org"] = ipinfo_data.get("org", "")
             if not all_asn_data[asn].get("ip_resolved"):
                 all_asn_data[asn]["ip_resolved"] = ip
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"AS{asn} | {ipinfo_data.get('org', '')}",
                 type="ASN: IPInfo Mapping",
                 source="IPInfo.io",
@@ -731,7 +732,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 tags=["asn", "ipinfo", "network"],
             ))
             if ipinfo_data.get("country"):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=ipinfo_data["country"],
                     type="ASN: IPInfo Country",
                     source="IPInfo.io",
@@ -742,7 +743,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     tags=["asn", "geo"],
                 ))
             if ipinfo_data.get("city"):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=ipinfo_data["city"],
                     type="ASN: IPInfo City",
                     source="IPInfo.io",
@@ -767,7 +768,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 all_asn_data[asn]["allocated"] = cymru_data.get("allocated", "")
                 if not all_asn_data[asn].get("ip_resolved"):
                     all_asn_data[asn]["ip_resolved"] = ip
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"AS{asn} | {cymru_data.get('name', 'Unknown')}",
                     type="ASN: Organization",
                     source="Team Cymru",
@@ -778,7 +779,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     raw_data=f"ASN={asn} Prefix={cymru_data.get('prefix', '')} Registry={cymru_data.get('registry', '')}",
                     tags=["asn", "network"],
                 ))
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=cymru_data.get("country", ""),
                     type="ASN: Country",
                     source="Team Cymru",
@@ -788,7 +789,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     resolution=f"AS{asn}",
                     tags=["asn", "geo"],
                 ))
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=cymru_data.get("registry", ""),
                     type="ASN: Registry",
                     source="Team Cymru",
@@ -798,7 +799,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     resolution=f"AS{asn}",
                     tags=["asn", "registry"],
                 ))
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=cymru_data.get("prefix", ""),
                     type="ASN: Prefix",
                     source="Team Cymru",
@@ -817,7 +818,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     if s_asn not in all_asn_data:
                         all_asn_data[s_asn] = {}
                     all_asn_data[s_asn]["ip_resolved"] = ip
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"AS{s_asn}",
                         type="ASN: Discovered via HE Search",
                         source="BGP.HE.net Search",
@@ -828,7 +829,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         tags=["asn", "bgp", "discovery"],
                     ))
             for prefix in he_search.get("prefixes", [])[:10]:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=prefix,
                     type="ASN: Prefix (HE Search)",
                     source="BGP.HE.net Search",
@@ -841,7 +842,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         irv_data = await scrape_bgp_he_irv(ip, client)
         if irv_data:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"IRV Lookup for {ip}",
                 type="ASN: IRV Routing Info",
                 source="BGP.HE.net IRV",
@@ -859,7 +860,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     if oasn not in all_asn_data:
                         all_asn_data[oasn] = {}
                     all_asn_data[oasn]["ip_resolved"] = ip
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"AS{oasn}",
                     type="ASN: Origin from IRV",
                     source="BGP.HE.net IRV",
@@ -872,7 +873,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             if irv_data.get("as_path"):
                 path_asns = re.findall(r'(\d+)', irv_data["as_path"])
                 if path_asns:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=" -> ".join([f"AS{a}" for a in path_asns[:15]]),
                         type="ASN: AS Path",
                         source="BGP.HE.net IRV",
@@ -899,7 +900,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 0, 0
             )
             all_asn_data[asn]["network_role"] = role
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{he_data.get('name', '')} ({role})",
                 type="ASN: HE.net Enrichment",
                 source="BGP.HE.net",
@@ -912,7 +913,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
             he_country = he_data.get("country", "")
             if he_country:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=he_country,
                     type="ASN: HE Country",
                     source="BGP.HE.net",
@@ -924,7 +925,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 ))
 
             for peer_asn in he_data.get("peers", [])[:15]:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"AS{peer_asn}",
                     type="ASN: Peer",
                     source="BGP.HE.net",
@@ -936,7 +937,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 ))
 
             for prefix in he_data.get("prefixes", [])[:10]:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=prefix,
                     type="ASN: Advertised Prefix",
                     source="BGP.HE.net",
@@ -953,7 +954,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             asn_holder = rd.get("holder", "")
             if asn_holder:
                 all_asn_data[asn]["ripe_holder"] = asn_holder
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=asn_holder,
                     type="ASN: RIPE Holder",
                     source="RIPE Stat",
@@ -969,7 +970,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             first_seen = bt_data.get("first_seen", "")
             if first_seen:
                 all_asn_data[asn]["first_seen"] = first_seen
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=first_seen,
                     type="ASN: First Seen (BGP.tools)",
                     source="BGP.tools",
@@ -982,7 +983,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             full_name = bt_data.get("name", "") or bt_data.get("as_name", "")
             if full_name:
                 all_asn_data[asn]["asn_name"] = full_name
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=full_name,
                     type="ASN: Full Name (BGP.tools)",
                     source="BGP.tools",
@@ -1013,7 +1014,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 bgpview_data.get("downstream_count", 0),
             )
             all_asn_data[asn]["network_role_from_bgpview"] = role
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{bgpview_data.get('name', '')} ({role})",
                 type="ASN: BGPView Details",
                 source="BGPView.io",
@@ -1034,7 +1035,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ))
 
             if bgpview_data.get("prefix_count", 0):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{bgpview_data['prefix_count']} prefixes (v4) + {bgpview_data.get('prefix_count6', 0)} prefixes (v6)",
                     type="ASN: Prefix Count (BGPView)",
                     source="BGPView.io",
@@ -1046,7 +1047,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 ))
 
             if bgpview_data.get("peer_count", 0):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{bgpview_data['peer_count']} peers",
                     type="ASN: Peer Count (BGPView)",
                     source="BGPView.io",
@@ -1060,7 +1061,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             up_count = bgpview_data.get("upstream_count", 0)
             down_count = bgpview_data.get("downstream_count", 0)
             if up_count or down_count:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{up_count} upstream(s), {down_count} downstream(s)",
                     type="ASN: Relationship Analysis (BGPView)",
                     source="BGPView.io",
@@ -1073,7 +1074,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 ))
 
             for up in bgpview_data.get("upstreams", [])[:10]:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"AS{up.get('asn', '')} | {up.get('name', '')}",
                     type="ASN: Upstream (Transit Provider)",
                     source="BGPView.io",
@@ -1085,7 +1086,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 ))
 
             for down in bgpview_data.get("downstreams", [])[:10]:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"AS{down.get('asn', '')} | {down.get('name', '')}",
                     type="ASN: Downstream (Customer)",
                     source="BGPView.io",
@@ -1110,7 +1111,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         if known_ixp.lower() in ix_name.lower():
                             ixp_color = "purple"
                             break
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=ix_name,
                         type="ASN: IXP Membership",
                         source="PeeringDB",
@@ -1124,7 +1125,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             org_name = peeringdb_data.get("org_name", "")
             if org_name:
                 all_asn_data[asn]["org_name"] = org_name
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=org_name,
                     type="ASN: PeeringDB Organization",
                     source="PeeringDB",
@@ -1137,7 +1138,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             policy = peeringdb_data.get("policy_general", "")
             if policy:
                 all_asn_data[asn]["peering_policy"] = policy
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=policy,
                     type="ASN: Peering Policy",
                     source="PeeringDB",
@@ -1153,7 +1154,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         if cidr_data:
             all_asn_data[asn]["cidr_prefix_count"] = cidr_data.get("prefix_count", "")
             all_asn_data[asn]["cidr_ranking"] = cidr_data.get("ranking", "")
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Prefix Count: {cidr_data.get('prefix_count', 'N/A')} | Rank: #{cidr_data.get('ranking', 'N/A')}",
                 type="ASN: CIDR Report Stats",
                 source="CIDR-Report.org",
@@ -1169,7 +1170,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         if ripe_routing:
             all_asn_data[asn]["rpki_stats"] = f"Valid: {ripe_routing.get('rpki_valid', 0)}, Invalid: {ripe_routing.get('rpki_invalid', 0)}, Not Found: {ripe_routing.get('rpki_not_found', 0)}"
             all_asn_data[asn]["visibility_pct"] = ripe_routing.get("visibility_percentage", 0)
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Visibility: {ripe_routing.get('visibility_percentage', 'N/A')}% | RPKI Valid: {ripe_routing.get('rpki_valid', 0)} Invalid: {ripe_routing.get('rpki_invalid', 0)}",
                 type="ASN: Routing Status",
                 source="RIPE Stat",
@@ -1186,7 +1187,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             contacts = ripe_abuse.get("abuse_contacts", [])
             all_asn_data[asn]["abuse_contacts"] = contacts
             for contact in contacts[:3]:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=contact,
                     type="ASN: Abuse Contact",
                     source="RIPE Stat",
@@ -1202,7 +1203,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             all_asn_data[asn]["ripe_prefix_current"] = ripe_pcount.get("current_count", "")
             all_asn_data[asn]["ripe_first_seen"] = ripe_pcount.get("first_seen", "")
             all_asn_data[asn]["ripe_last_changed"] = ripe_pcount.get("last_changed", "")
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Current: {ripe_pcount.get('current_count', 'N/A')} | Min: {ripe_pcount.get('min_count', 'N/A')} Max: {ripe_pcount.get('max_count', 'N/A')} Avg: {ripe_pcount.get('avg_count', 'N/A')}",
                 type="ASN: Prefix Count Timeline",
                 source="RIPE Stat",
@@ -1219,7 +1220,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             all_asn_data[asn]["ripe_upstream_count"] = ripe_neighbours.get("upstream_count", 0)
             all_asn_data[asn]["ripe_peer_count"] = ripe_neighbours.get("peer_count", 0)
             all_asn_data[asn]["ripe_downstream_count"] = ripe_neighbours.get("downstream_count", 0)
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Upstreams: {ripe_neighbours.get('upstream_count', 0)} | Peers: {ripe_neighbours.get('peer_count', 0)} | Downstreams: {ripe_neighbours.get('downstream_count', 0)}",
                 type="ASN: RIPE Neighbourhood",
                 source="RIPE Stat",
@@ -1232,7 +1233,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ))
 
             for n_up in ripe_neighbours.get("upstreams", [])[:10]:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"AS{n_up.get('asn', '')} (power: {n_up.get('power', 0)})",
                     type="ASN: RIPE Upstream",
                     source="RIPE Stat",
@@ -1244,7 +1245,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 ))
 
             for n_down in ripe_neighbours.get("downstreams", [])[:10]:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"AS{n_down.get('asn', '')} (power: {n_down.get('power', 0)})",
                     type="ASN: RIPE Downstream",
                     source="RIPE Stat",
@@ -1260,7 +1261,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             rank = cf_data.get("rank", 0)
             if rank:
                 all_asn_data[asn]["cf_rank"] = rank
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Rank #{rank}",
                     type="ASN: Cloudflare Radar Rank",
                     source="Cloudflare Radar",
@@ -1283,7 +1284,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             elif rpki_check.get("hijack_status") == "critical_rpki_invalid":
                 hijack_color = "red"
 
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=rpki_check.get("hijack_status", "clean").replace("_", " ").title(),
                 type="ASN: RPKI / Hijack Detection",
                 source="RIPE Stat RPKI",
@@ -1298,7 +1299,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             invalid_prefixes = rpki_check.get("invalid_prefixes", [])
             if invalid_prefixes:
                 for inv_pfx in invalid_prefixes[:5]:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=inv_pfx,
                         type="ASN: RPKI Invalid Prefix",
                         source="RIPE Stat RPKI",
@@ -1316,7 +1317,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             last_day = rd.get("last_day", "")
             if first_day:
                 all_asn_data[asn]["ripe_first_day"] = first_day
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=first_day,
                     type="ASN: RIPE First Day",
                     source="RIPE Stat",
@@ -1328,7 +1329,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 ))
             if last_day:
                 all_asn_data[asn]["ripe_last_day"] = last_day
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=last_day,
                     type="ASN: RIPE Last Day",
                     source="RIPE Stat",
@@ -1342,7 +1343,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         if all_asn_data.get(asn, {}).get("first_seen") or all_asn_data.get(asn, {}).get("ripe_first_seen"):
             first = all_asn_data[asn].get("first_seen") or all_asn_data[asn].get("ripe_first_seen") or "unknown"
             last_changed = all_asn_data[asn].get("ripe_last_changed") or "unknown"
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"First Seen: {first} | Last Change: {last_changed}",
                 type="ASN: Historical Data Summary",
                 source="BGP.tools / RIPE Stat",
@@ -1358,7 +1359,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             findings.append(summary)
 
     if not seen_asns:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Could not resolve ASN for {t}",
             type="ASN Lookup Status",
             source="ASNBGPRadar",

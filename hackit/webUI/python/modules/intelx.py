@@ -1,7 +1,7 @@
 import httpx
 import json
 import re
-from models import IntelligenceFinding
+from module_common import safe_fetch, make_finding
 
 INTELX_BASE = "https://2.intelx.io"
 UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -83,8 +83,8 @@ def classify_intelx_result(selector_value: str, selector_type: int) -> dict:
 async def phonebook_search(target: str, client: httpx.AsyncClient) -> list:
     results = []
     try:
-        resp = await client.post(
-            f"{INTELX_BASE}/phonebook/search",
+        resp = await safe_fetch(client, 
+            f"{INTELX_BASE}/phonebook/search", method="POST",
             json={"term": target, "maxresults": 100, "browseentries": 1},
             timeout=20.0,
             headers={
@@ -148,7 +148,7 @@ async def phonebook_search(target: str, client: httpx.AsyncClient) -> list:
 async def pastebin_search(target: str, client: httpx.AsyncClient) -> list:
     results = []
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"{INTELX_BASE}/paste/search?term={target}&limit=50",
             timeout=15.0,
             headers={
@@ -207,7 +207,7 @@ async def pastebin_search(target: str, client: httpx.AsyncClient) -> list:
 async def darknet_search(target: str, client: httpx.AsyncClient) -> list:
     results = []
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"{INTELX_BASE}/darknet/search?term={target}&limit=50",
             timeout=15.0,
             headers={
@@ -272,8 +272,8 @@ async def intelligence_search(target: str, client: httpx.AsyncClient) -> list:
     ]
     for payload in search_payloads:
         try:
-            resp = await client.post(
-                f"{INTELX_BASE}/intelligent/search",
+            resp = await safe_fetch(client, 
+                f"{INTELX_BASE}/intelligent/search", method="POST",
                 json=payload,
                 timeout=20.0,
                 headers={
@@ -367,9 +367,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             if result.get("type_name") in ("Paste", "Darknet Entry") and result.get("content"):
                 entity_text += f" | Content: {result['content'][:100]}"
 
-            finding = IntelligenceFinding(
+            finding = make_finding(
                 entity=entity_text,
-                type=result.get("classification", "IntelX Data"),
+                ftype=result.get("classification", "IntelX Data"),
                 source=result.get("source", "IntelligenceX"),
                 confidence="Medium",
                 color=sev_color,
@@ -388,9 +388,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         diversity = score_source_diversity(pb_count, paste_count, darknet_count, intel_count)
         overall_threat = categorize_threat(all_results)
         color_map = {"Critical": "red", "High": "orange", "Medium": "orange", "Low": "slate", "Informational": "emerald"}
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"IntelX summary: {pb_count} phonebook + {paste_count} paste + {darknet_count} darknet + {intel_count} intel (threat: {overall_threat}, diversity: {diversity})",
-            type="IntelX Intelligence Summary",
+            ftype="IntelX Intelligence Summary",
             source="IntelligenceX",
             confidence="High",
             color=color_map.get(overall_threat, "purple"),

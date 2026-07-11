@@ -6,10 +6,10 @@ import dns.rdatatype
 import httpx
 import json
 import time
-from models import IntelligenceFinding
 from datetime import datetime
 from collections import defaultdict
 from urllib.parse import urlparse
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash
 
 RECORD_TYPES = ['A', 'AAAA', 'MX', 'NS', 'TXT', 'SOA', 'CNAME', 'SRV', 'CAA', 'DS', 'TLSA', 'NAPTR', 'LOC', 'HINFO', 'RP', 'SSHFP', 'DNSKEY', 'RRSIG', 'NSEC', 'NSEC3', 'SVCB', 'HTTPS', 'ZONEMD', 'OPENPGPKEY']
 
@@ -44,16 +44,14 @@ async def resolve_doh(domain: str, rtype: str, doh_url: str, client: httpx.Async
         rtype_num = dns.rdatatype.from_text(rtype)
         msg = dns.message.make_query(domain, rtype_num)
         wire = msg.to_wire()
-        resp = await client.post(
-            doh_url,
+        resp = await safe_fetch(client, doh_url,
             content=wire,
             headers={
                 "Content-Type": "application/dns-message",
                 "Accept": "application/dns-message",
                 "User-Agent": "Mozilla/5.0"
             },
-            timeout=10.0
-        )
+            timeout=10.0, method="POST")
         if resp.status_code == 200:
             response = dns.message.from_wire(resp.content)
             return [str(r) for r in response.answer] if response.answer else []
@@ -105,9 +103,9 @@ async def crawl(target: str, client=None):
 
         if data["ips"]:
             for ip in data["ips"]:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"A record via {resolver_name}: {ip}",
-                    type=f"DNS A Record ({resolver_name})",
+                    ftype=f"DNS A Record ({resolver_name})",
                     source="DNS Full Enumeration",
                     confidence="High",
                     color="emerald",
@@ -125,7 +123,7 @@ async def crawl(target: str, client=None):
     if len(resolver_signatures) >= 2:
         for name, ips in resolver_signatures.items():
             if ips and set(ips) != all_ips:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Resolver inconsistency: {name} returns {ips}, others see {all_ips - set(ips)}",
                     type="DNS Resolver Inconsistency",
                     source="DNS Full Enumeration",
@@ -138,7 +136,7 @@ async def crawl(target: str, client=None):
 
         all_match = all(set(ips) == all_ips for ips in resolver_signatures.values() if ips)
         if all_match and all_ips:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"All {len(resolver_comparison)} resolvers agree: {domain} -> {', '.join(sorted(all_ips))}",
                 type="DNS Resolver Consensus",
                 source="DNS Full Enumeration",
@@ -155,7 +153,7 @@ async def crawl(target: str, client=None):
         if valid_times:
             fastest = min(valid_times, key=valid_times.get)
             slowest = max(valid_times, key=valid_times.get)
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Fastest resolver: {fastest} ({valid_times[fastest]}s), Slowest: {slowest} ({valid_times[slowest]}s)",
                 type="DNS Resolver Speed Benchmark",
                 source="DNS Full Enumeration",
@@ -173,7 +171,7 @@ async def crawl(target: str, client=None):
             for rdata in primary_answers:
                 value = str(rdata)
                 color = "blue"
-                ftype = f"DNS {rtype}"
+                ftype= f"DNS {rtype}"
                 threat = "Informational"
 
                 if rtype == "A": color = "emerald"
@@ -182,20 +180,20 @@ async def crawl(target: str, client=None):
                 elif rtype == "NS": color = "slate"
                 elif rtype == "TXT":
                     color = "orange"
-                    if value.startswith("v=spf1"): ftype = "SPF Record"
-                    elif value.startswith("v=DMARC1"): ftype = "DMARC Record"
+                    if value.startswith("v=spf1"): ftype= "SPF Record"
+                    elif value.startswith("v=DMARC1"): ftype= "DMARC Record"
                 elif rtype == "SOA": color = "indigo"
                 elif rtype == "CAA": color = "yellow"
-                elif rtype == "DS": color = "emerald"; ftype = "DNSSEC DS"
-                elif rtype == "TLSA": color = "emerald"; ftype = "DANE TLSA"
-                elif rtype == "SSHFP": color = "cyan"; ftype = "SSH Fingerprint"
+                elif rtype == "DS": color = "emerald"; ftype= "DNSSEC DS"
+                elif rtype == "TLSA": color = "emerald"; ftype= "DANE TLSA"
+                elif rtype == "SSHFP": color = "cyan"; ftype= "SSH Fingerprint"
                 elif rtype in ("DNSKEY", "RRSIG", "NSEC", "NSEC3"):
                     color = "emerald"
                     threat = "Informational"
 
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=value[:300],
-                    type=ftype,
+                    ftype=ftype,
                     source="DNS Full Enumeration",
                     confidence="High",
                     color=color,
@@ -210,9 +208,9 @@ async def crawl(target: str, client=None):
                     for sec_resolver in ["1.1.1.1", "8.8.8.8"][:1]:
                         sec_answers = await resolve_with_resolver(domain, rtype, sec_resolver)
                         if sec_answers and value not in sec_answers:
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=f"{rtype} mismatch: Primary {value} vs {sec_resolver} gives {sec_answers}",
-                                type=f"DNS {rtype} Resolver Discrepancy",
+                                ftype=f"DNS {rtype} Resolver Discrepancy",
                                 source="DNS Full Enumeration",
                                 confidence="Low",
                                 color="yellow",
@@ -229,9 +227,9 @@ async def crawl(target: str, client=None):
             doh_results = await resolve_doh(domain, "A", doh["url"], client)
             if doh_results:
                 for result in doh_results:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"DoH via {doh['name']}: {result}",
-                        type="DNS over HTTPS (DoH) Result",
+                        ftype="DNS over HTTPS (DoH) Result",
                         source="DNS Full Enumeration",
                         confidence="High",
                         color="purple",
@@ -244,7 +242,7 @@ async def crawl(target: str, client=None):
     # 6. ANY query
     any_results = await resolve_any(domain, loop)
     if any_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"ANY query returned {len(any_results)} records for {domain}",
             type="DNS ANY Query",
             source="DNS Full Enumeration",
@@ -255,9 +253,9 @@ async def crawl(target: str, client=None):
             tags=["dns", "any-query"]
         ))
     else:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"ANY query returned NO results for {domain}",
-            type="DNS ANY Query (Filtered)",
+            ftype="DNS ANY Query (Filtered)",
             source="DNS Full Enumeration",
             confidence="Medium",
             color="orange",
@@ -272,7 +270,7 @@ async def crawl(target: str, client=None):
         dnskey_answers = await loop.run_in_executor(None, lambda: dns.resolver.resolve(domain, 'DNSKEY'))
         if dnskey_answers:
             dnssec_valid = True
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"DNSSEC enabled: {len(dnskey_answers)} DNSKEY records",
                 type="DNSSEC Validation",
                 source="DNS Full Enumeration",
@@ -284,9 +282,9 @@ async def crawl(target: str, client=None):
                 tags=["dnssec", "valid"]
             ))
     except:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"DNSSEC NOT enabled for {domain}",
-            type="DNSSEC Validation",
+            ftype="DNSSEC Validation",
             source="DNS Full Enumeration",
             confidence="High",
             color="orange",
@@ -300,7 +298,7 @@ async def crawl(target: str, client=None):
     try:
         caa_answers = await loop.run_in_executor(None, lambda: dns.resolver.resolve(domain, 'CAA'))
         for caa in caa_answers:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"CAA: {str(caa)}",
                 type="CAA Record (CA Authorization)",
                 source="DNS Full Enumeration",
@@ -311,9 +309,9 @@ async def crawl(target: str, client=None):
                 tags=["dns", "caa", "certificate"]
             ))
     except:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"No CAA records for {domain}",
-            type="CAA Record Status",
+            ftype="CAA Record Status",
             source="DNS Full Enumeration",
             confidence="Medium",
             color="slate",
@@ -326,7 +324,7 @@ async def crawl(target: str, client=None):
     try:
         aaaa_answers = await loop.run_in_executor(None, lambda: dns.resolver.resolve(domain, 'AAAA'))
         if aaaa_answers:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{domain} has IPv6: {len(aaaa_answers)} AAAA records",
                 type="IPv6 DNS Availability",
                 source="DNS Full Enumeration",
@@ -345,7 +343,7 @@ async def crawl(target: str, client=None):
         try:
             answers = await loop.run_in_executor(None, lambda: dns.resolver.resolve(f"{sel}.{domain}", "TXT"))
             for r in answers:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=str(r)[:300],
                     type="DMARC Policy",
                     source="DNS Full Enumeration",
@@ -356,9 +354,9 @@ async def crawl(target: str, client=None):
                     tags=["dns", "dmarc", "email-security"]
                 ))
         except:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"No DMARC record for {domain}",
-                type="DMARC Status",
+                ftype="DMARC Status",
                 source="DNS Full Enumeration",
                 confidence="Medium",
                 color="orange",
@@ -372,9 +370,9 @@ async def crawl(target: str, client=None):
         try:
             answers = await loop.run_in_executor(None, lambda: dns.resolver.resolve(f"{selector}._domainkey.{domain}", "TXT"))
             for r in answers:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{selector}._domainkey.{domain}",
-                    type="DKIM Public Key",
+                    ftype="DKIM Public Key",
                     source="DNS Full Enumeration",
                     confidence="High",
                     color="emerald",
@@ -390,7 +388,7 @@ async def crawl(target: str, client=None):
     try:
         wc_test = f"xwcz-{abs(hash(domain)) % 99999}.{domain}"
         wild = await loop.run_in_executor(None, lambda: dns.resolver.resolve(wc_test, "A"))
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"*.{domain} -> {str(wild[0])}",
             type="Wildcard DNS Detected",
             source="DNS Full Enumeration",
@@ -401,9 +399,9 @@ async def crawl(target: str, client=None):
             tags=["dns", "wildcard"]
         ))
     except:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"No wildcard DNS for {domain}",
-            type="Wildcard DNS Check",
+            ftype="Wildcard DNS Check",
             source="DNS Full Enumeration",
             confidence="High",
             color="green",
@@ -421,7 +419,7 @@ async def crawl(target: str, client=None):
                 try:
                     ips = await loop.run_in_executor(None, lambda: dns.resolver.resolve(mx, ip_type))
                     for ip in ips:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"{mx} -> {str(ip)}",
                             type="MX Server IP",
                             source="DNS Full Enumeration",
@@ -445,7 +443,7 @@ async def crawl(target: str, client=None):
                 try:
                     ips = await loop.run_in_executor(None, lambda: dns.resolver.resolve(ns, ip_type))
                     for ip in ips:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"{ns} -> {str(ip)}",
                             type="Nameserver IP",
                             source="DNS Full Enumeration",
@@ -466,9 +464,9 @@ async def crawl(target: str, client=None):
         for r in soa:
             mname = str(r.mname).rstrip('.')
             rname = str(r.rname).rstrip('.')
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Primary NS: {mname}, Admin: {rname}",
-                type="Primary Nameserver (SOA)",
+                ftype="Primary Nameserver (SOA)",
                 source="DNS Full Enumeration",
                 confidence="High",
                 color="indigo",
@@ -476,9 +474,9 @@ async def crawl(target: str, client=None):
                 raw_data=f"SOA MNAME: {mname}, RNAME: {rname}",
                 tags=["dns", "soa", "authority"]
             ))
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Serial: {r.serial}, Refresh: {r.refresh}, Retry: {r.retry}, Expire: {r.expire}, MinTTL: {r.minimum}",
-                type="SOA Timing Parameters",
+                ftype="SOA Timing Parameters",
                 source="DNS Full Enumeration",
                 confidence="High",
                 color="indigo",
@@ -491,9 +489,9 @@ async def crawl(target: str, client=None):
 
     # 16. Summary
     record_count = len([f for f in findings if f.type.startswith("DNS ")])
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"{record_count} DNS records enumerated for {domain}",
-        type="DNS Enumeration Summary",
+        ftype="DNS Enumeration Summary",
         source="DNS Full Enumeration",
         confidence="High",
         color="blue",

@@ -7,6 +7,7 @@ import math
 from datetime import datetime
 from typing import List
 from collections import defaultdict
+from module_common import safe_fetch, safe_fetch_json, make_finding
 from models import IntelligenceFinding
 
 LEAK_SOURCES = [
@@ -90,7 +91,7 @@ async def check_source(client: httpx.AsyncClient, name: str, url_builder, target
     results = []
     try:
         url = url_builder(target)
-        resp = await client.get(url, timeout=10.0,
+        resp = await safe_fetch(client, url, timeout=10.0,
             headers={"User-Agent": "Mozilla/5.0"})
         if resp.status_code == 200 and len(resp.text) > 100:
             results.append({"source": name, "url": url, "content": resp.text[:2000]})
@@ -172,7 +173,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
     for name, url_builder in all_sources:
         results = await check_source(client, name, url_builder, t)
         for r in results:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Leak source: {name} returned data",
                 type="Leak Source Access",
                 source=name,
@@ -191,7 +192,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         for pii_type, values in pii.items():
             severity_info = SEVERITY_CLASSIFICATION.get(pii_type.replace("_", " ").strip().split()[0], {"level": "High Risk", "color": "red"})
             if values:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{len(values)} {pii_type} exposed across leak sources",
                     type=f"PII Exposure: {pii_type.replace('_', ' ').title()}",
                     source="LeakCheckerPro",
@@ -210,7 +211,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                 pwd_analysis = await analyze_password_strength(passwd)
                 if pwd_analysis["strength"] == "Weak":
                     weak_passwords += 1
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{len(creds)} email:password credentials leaked ({weak_passwords} weak passwords)",
                 type="Credential Leak Detected",
                 source="LeakCheckerPro",
@@ -225,7 +226,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
         username_creds = USERNAME_PASS_PATTERN.findall(all_text)
         if username_creds:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{len(username_creds)} username:password credentials leaked",
                 type="Credential Leak: Username:Password",
                 source="LeakCheckerPro",
@@ -244,7 +245,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                 cat_counts[cat] += 1
             for cat, count in cat_counts.items():
                 severity = SEVERITY_CLASSIFICATION.get(cat, {"level": "Elevated Risk", "color": "orange"})
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Data classification: {cat.title()} ({count} indicators) - {severity['level']}",
                     type=f"Data Classification: {cat.title()}",
                     source="LeakCheckerPro",
@@ -258,7 +259,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
         total_pii_types = len(pii)
         if total_pii_types >= 3:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{total_pii_types} distinct PII data types exposed - MULTIPLE DATA TYPES AT RISK",
                 type="Data Breach Severity: Multiple PII Types",
                 source="LeakCheckerPro",
@@ -274,7 +275,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
     extra_source_count = len([f for f in findings if f.source in dict(EXTRA_LEAK_SOURCES)])
     if source_count > 0:
         total_sources = len(all_sources)
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Leak check complete: {source_count}/{total_sources} sources returned data ({extra_source_count} additional)",
             type="Leak Check Summary",
             source="LeakCheckerPro",
@@ -287,7 +288,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         ))
 
     if not findings:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="No leaks found across any sources",
             type="Leak Check Complete",
             source="LeakCheckerPro",

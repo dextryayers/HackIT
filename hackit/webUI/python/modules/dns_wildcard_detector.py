@@ -3,7 +3,7 @@ import dns.resolver
 import random
 import string
 from collections import defaultdict
-from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash
 
 PUBLIC_RESOLVERS = [
     ("Google", "8.8.8.8"),
@@ -54,7 +54,7 @@ async def crawl(target: str, client=None):
         wildcard_found = True
         for name, ips in wildcard_ips_per_resolver.items():
             if ips:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Wildcard detected via {name}: {', '.join(ips)}",
                     type="Wildcard DNS Detection",
                     source="DNS Wildcard Detector",
@@ -69,7 +69,7 @@ async def crawl(target: str, client=None):
         all_ips = set()
         for ips in wildcard_ips_per_resolver.values():
             all_ips.update(ips)
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Wildcard resolves to {len(all_ips)} unique IP(s): {', '.join(all_ips)}",
             type="Wildcard IP Analysis",
             source="DNS Wildcard Detector",
@@ -85,9 +85,9 @@ async def crawl(target: str, client=None):
             resolver_consistency[name] = ips == all_ips if ips else False
         consistent = all(v for v in resolver_consistency.values() if isinstance(v, bool))
         if not consistent:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Wildcard responses differ across resolvers - possible geo-wildcard",
-                type="Wildcard Resolver Inconsistency",
+                ftype="Wildcard Resolver Inconsistency",
                 source="DNS Wildcard Detector",
                 confidence="High",
                 color="red",
@@ -113,7 +113,7 @@ async def crawl(target: str, client=None):
         for _, ips in long_resolved:
             long_ips.update(ips)
         if long_ips != all_ips:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Long prefix bypass: {len(long_resolved)}/{len(long_prefix_subs)} resolved differently",
                 type="Wildcard Bypass Attempt",
                 source="DNS Wildcard Detector",
@@ -123,7 +123,7 @@ async def crawl(target: str, client=None):
                 status="Partial Bypass",
                 tags=["wildcard", "bypass"]
             ))
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Long prefix ({length}+ chars) wildcard test: {len(long_resolved)} resolved",
             type="Wildcard Long Prefix Test",
             source="DNS Wildcard Detector",
@@ -135,9 +135,9 @@ async def crawl(target: str, client=None):
         ))
 
     if not wildcard_found:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"No wildcard DNS detected for {domain}",
-            type="Wildcard DNS Status",
+            ftype="Wildcard DNS Status",
             source="DNS Wildcard Detector",
             confidence="High",
             color="green",
@@ -162,9 +162,9 @@ async def crawl(target: str, client=None):
             admin_ips.update(ips)
 
     if cd_ips and admin_ips and cd_ips != admin_ips:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Different wildcard IPs for 'cdn-*' vs 'admin-*' patterns - CDN/hosting routing",
-            type="Wildcard Pattern Analysis",
+            ftype="Wildcard Pattern Analysis",
             source="DNS Wildcard Detector",
             confidence="Medium",
             color="purple",
@@ -175,9 +175,9 @@ async def crawl(target: str, client=None):
         ))
 
     if wildcard_found:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Wildcard DNS ACTIVE for {domain} - subdomain enumeration will have false positives",
-            type="Wildcard Impact Assessment",
+            ftype="Wildcard Impact Assessment",
             source="DNS Wildcard Detector",
             confidence="High",
             color="red",
@@ -187,9 +187,9 @@ async def crawl(target: str, client=None):
             tags=["wildcard", "impact"]
         ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Wildcard detection complete for {domain}",
-        type="Wildcard Detection Summary",
+        ftype="Wildcard Detection Summary",
         source="DNS Wildcard Detector",
         confidence="High",
         color="blue",

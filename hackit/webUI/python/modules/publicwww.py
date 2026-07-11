@@ -1,8 +1,8 @@
 import httpx
 import re
 import asyncio
-from models import IntelligenceFinding
 from urllib.parse import urlparse, quote
+from module_common import safe_fetch, make_finding
 
 BUILTWITH_API = "https://api.builtwith.com/free1/api.json"
 SIMILAR_WEB_CSS_PATTERNS = [
@@ -155,21 +155,20 @@ FRAMEWORK_SIGNATURES = {
     "sharepoint": "SharePoint",
 }
 
-
 async def scrape_publicwww(target: str, client: httpx.AsyncClient) -> list:
     findings = []
     try:
         search_url = f"https://publicwww.com/websites/{quote(target)}/?export=csv"
-        resp = await client.get(search_url, timeout=15.0,
+        resp = await safe_fetch(client, search_url, timeout=15.0,
             headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"})
         if resp.status_code == 200:
             text = resp.text
             count_match = re.search(r'(\d[\d,]*)\s+(?:result|pages?)', text, re.IGNORECASE)
             if count_match:
                 count = count_match.group(1).replace(",", "")
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{count} indexed pages on PublicWWW",
-                    type="PublicWWW Index Count",
+                    ftype="PublicWWW Index Count",
                     source="PublicWWW",
                     confidence="Medium",
                     color="slate",
@@ -182,9 +181,9 @@ async def scrape_publicwww(target: str, client: httpx.AsyncClient) -> list:
                 text
             )[:8]
             for snippet in snippet_matches:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=snippet[:150],
-                    type="PublicWWW Code Snippet",
+                    ftype="PublicWWW Code Snippet",
                     source="PublicWWW",
                     confidence="Low",
                     color="slate",
@@ -193,9 +192,9 @@ async def scrape_publicwww(target: str, client: httpx.AsyncClient) -> list:
                     tags=["publicwww", "snippet"]
                 ))
         elif resp.status_code == 503 or resp.status_code == 429:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="PublicWWW: Rate limited or blocked",
-                type="PublicWWW Status",
+                ftype="PublicWWW Status",
                 source="PublicWWW",
                 confidence="Low",
                 color="orange",
@@ -206,7 +205,6 @@ async def scrape_publicwww(target: str, client: httpx.AsyncClient) -> list:
     except:
         pass
     return findings
-
 
 async def analyze_html(html: str, target: str) -> list:
     findings = []
@@ -220,9 +218,9 @@ async def analyze_html(html: str, target: str) -> list:
             domain = parsed.netloc.lower()
             if domain and domain not in seen_domains and domain not in target:
                 seen_domains.add(domain)
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=domain,
-                    type="Third-Party JS Include",
+                    ftype="Third-Party JS Include",
                     source="PublicWWW (HTML)",
                     confidence="High",
                     color="blue",
@@ -239,9 +237,9 @@ async def analyze_html(html: str, target: str) -> list:
         m = re.search(pattern, html, re.IGNORECASE)
         if m:
             lib = m.group(1)
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=lib[:100],
-                type=f"CDN Library: {label}",
+                ftype=f"CDN Library: {label}",
                 source="PublicWWW (HTML)",
                 confidence="High",
                 color="orange",
@@ -254,9 +252,9 @@ async def analyze_html(html: str, target: str) -> list:
     for pattern, label in ANALYTICS_ID_PATTERNS:
         matches = re.findall(pattern, html)
         for m in set(matches[:3]):
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=m[:50],
-                type=f"Analytics ID: {label}",
+                ftype=f"Analytics ID: {label}",
                 source="PublicWWW (HTML)",
                 confidence="High",
                 color="purple",
@@ -267,9 +265,9 @@ async def analyze_html(html: str, target: str) -> list:
     # Third-party integrations
     for pattern, label in SIMILAR_WEB_CSS_PATTERNS:
         if re.search(pattern, html, re.IGNORECASE):
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=label,
-                type="Third-Party Integration",
+                ftype="Third-Party Integration",
                 source="PublicWWW (HTML)",
                 confidence="High",
                 color="purple",
@@ -279,15 +277,14 @@ async def analyze_html(html: str, target: str) -> list:
 
     return findings
 
-
 async def check_inline_exposed_secrets(html: str, target: str) -> list:
     findings = []
     for pattern, label in EXPOSED_PATTERNS:
         matches = re.findall(pattern, html)
         for m in set(matches[:3]):
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{label}: {m[:30]}...",
-                type=f"Exposed Secret/Key: {label}",
+                ftype=f"Exposed Secret/Key: {label}",
                 source="PublicWWW (HTML)",
                 confidence="High",
                 color="red",
@@ -298,7 +295,6 @@ async def check_inline_exposed_secrets(html: str, target: str) -> list:
             ))
     return findings
 
-
 async def check_email_exposure(html: str, target: str) -> list:
     findings = []
     emails = re.findall(r'[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}', html)
@@ -306,9 +302,9 @@ async def check_email_exposure(html: str, target: str) -> list:
     for email in set(emails[:20]):
         email_domain = email.split("@")[-1].lower()
         if email_domain == domain:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=email,
-                type="Public Email (Same Domain)",
+                ftype="Public Email (Same Domain)",
                 source="PublicWWW (HTML)",
                 confidence="High",
                 color="cyan",
@@ -319,9 +315,9 @@ async def check_email_exposure(html: str, target: str) -> list:
     unique_domains = set(e.split("@")[-1].lower() for e in emails if e.split("@")[-1].lower() != domain)
     for em_domain in unique_domains:
         if em_domain:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=em_domain,
-                type="Email Domain (Third Party)",
+                ftype="Email Domain (Third Party)",
                 source="PublicWWW (HTML)",
                 confidence="Medium",
                 color="slate",
@@ -330,11 +326,10 @@ async def check_email_exposure(html: str, target: str) -> list:
             ))
     return findings
 
-
 async def check_builtwith(target: str, client: httpx.AsyncClient) -> list:
     findings = []
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://api.builtwith.com/free1/api.json?LOOKUP={target}",
             timeout=10.0,
             headers={"User-Agent": "Mozilla/5.0"}
@@ -348,9 +343,9 @@ async def check_builtwith(target: str, client: httpx.AsyncClient) -> list:
                 if isinstance(techs, list):
                     for tech in techs[:3]:
                         t_name = tech.get("name") if isinstance(tech, dict) else str(tech)
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=t_name[:200] if t_name else "",
-                            type=f"Technology Stack: {name}",
+                            ftype=f"Technology Stack: {name}",
                             source="PublicWWW (BuiltWith)",
                             confidence="Medium",
                             color="orange",
@@ -361,16 +356,15 @@ async def check_builtwith(target: str, client: httpx.AsyncClient) -> list:
         pass
     return findings
 
-
 async def check_comment_references(html: str, target: str) -> list:
     findings = []
     html_comments = re.findall(r'<!--(.*?)-->', html, re.DOTALL)
     for comment in html_comments[:15]:
         stripped = comment.strip()
         if len(stripped) > 5 and any(x in stripped.lower() for x in ["todo", "fixme", "hack", "bug", "temp", "note", "author", "developer"]):
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=stripped[:150],
-                type="HTML Comment with Context",
+                ftype="HTML Comment with Context",
                 source="PublicWWW (HTML)",
                 confidence="Medium",
                 color="orange",
@@ -381,16 +375,15 @@ async def check_comment_references(html: str, target: str) -> list:
             ))
     return findings
 
-
 async def detect_technology_from_source(html: str, target: str) -> list:
     findings = []
     html_lower = html.lower()
     meta_generator = re.search(r'<meta\s+name=["\']generator["\'][^>]*content=["\']([^"\']+)["\']', html, re.IGNORECASE)
     if meta_generator:
         generator = meta_generator.group(1).strip()
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Meta Generator: {generator}",
-            type="Technology Source: Meta Generator",
+            ftype="Technology Source: Meta Generator",
             source="PublicWWW (HTML)",
             confidence="High",
             color="orange",
@@ -404,9 +397,9 @@ async def detect_technology_from_source(html: str, target: str) -> list:
         if sig in html_lower:
             detected_techs.add(tech_name)
     for tech in sorted(detected_techs)[:15]:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=tech,
-            type="Technology Detection: Source Code",
+            ftype="Technology Detection: Source Code",
             source="PublicWWW (HTML)",
             confidence="Medium",
             color="orange",
@@ -419,9 +412,9 @@ async def detect_technology_from_source(html: str, target: str) -> list:
         if sig in html_lower:
             detected_frameworks.add(framework)
     for fw in sorted(detected_frameworks)[:10]:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=fw,
-            type="Framework Detection: Source Code",
+            ftype="Framework Detection: Source Code",
             source="PublicWWW (HTML)",
             confidence="Medium",
             color="blue",
@@ -431,7 +424,6 @@ async def detect_technology_from_source(html: str, target: str) -> list:
 
     return findings
 
-
 async def crawl(target: str, client: httpx.AsyncClient):
     findings = []
     domain = target.strip().lower()
@@ -440,7 +432,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
     html = ""
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://{domain}",
             follow_redirects=True, timeout=15.0,
             headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
@@ -471,9 +463,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
     secrets = sum(1 for f in findings if "Secret" in f.type or "Key" in f.type)
     tech = sum(1 for f in findings if "Technology" in f.type or "Framework" in f.type)
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Public Code Search: {third_party} integrations, {analytics} analytics, {secrets} secrets, {tech} tech/framework",
-        type="PublicWWW Summary",
+        ftype="PublicWWW Summary",
         source="PublicWWW",
         confidence="Medium",
         color="purple",

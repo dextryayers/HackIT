@@ -1,7 +1,7 @@
-import httpx
 import re
 from urllib.parse import urlparse
 from models import IntelligenceFinding
+from module_common import safe_fetch, make_finding
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 
@@ -27,13 +27,14 @@ PAGE_CATEGORIES = [
     ("/sites/all/", "Drupal All"),
 ]
 
-async def extract_comments_from_url(client: httpx.AsyncClient, url: str) -> dict:
+async def extract_comments_from_url(client, url: str) -> dict:
     result = {"comments": [], "inline_comments": [], "url": url, "status": 0, "content_type": ""}
     try:
-        resp = await client.get(url, timeout=10.0, follow_redirects=True, headers={"User-Agent": UA})
-        result["status"] = resp.status_code
-        result["content_type"] = dict(resp.headers).get("content-type", "")
-        html = resp.text
+        resp = await safe_fetch(client, url, timeout=10.0)
+        if resp:
+            result["status"] = resp.status_code
+            result["content_type"] = dict(resp.headers).get("content-type", "")
+            html = resp.text
 
         html_comments = re.findall(r"<!--(.*?)-->", html, re.DOTALL)
         for c in html_comments:
@@ -71,7 +72,7 @@ def analyze_comment(comment: str) -> list:
             findings.append({"match": m.strip(), "category": category})
     return findings
 
-async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFinding]:
+async def crawl(target: str, client) -> list[IntelligenceFinding]:
     findings = []
     domain = target.strip().lower()
     if domain.startswith("http"):
@@ -88,9 +89,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                 total_comments = len(result["comments"]) + len(result["inline_comments"])
                 all_comments.append({"url": url, "comments": result["comments"], "inline": result["inline_comments"], "status": result["status"]})
 
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Found {total_comments} comment(s) in {url} (HTTP {result['status']})",
-                    type="Comment: Page Comments",
+                    ftype="Comment: Page Comments",
                     source="CommentMiner",
                     confidence="High",
                     color="blue",
@@ -101,9 +102,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                 break
 
     if not all_comments:
-        findings.append(IntelligenceFinding(
-            entity=f"No HTML/JS comments found on {domain}",
-            type="Comment: None Found",
+                findings.append(make_finding(
+                    entity=f"No HTML/JS comments found on {domain}",
+                    ftype="Comment: None Found",
             source="CommentMiner",
             confidence="Medium",
             color="emerald",
@@ -121,9 +122,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                 if cat not in summary_counts:
                     summary_counts[cat] = 0
                 summary_counts[cat] += 1
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Comment contains {cat}: {cf['match'][:80]}",
-                    type=f"Comment: {cat}",
+                    ftype=f"Comment: {cat}",
                     source="CommentMiner",
                     confidence="Medium",
                     color="red" if cat in ("Credential/Secret", "File Path") else ("orange" if cat in ("IP Address", "Email Address") else "yellow"),
@@ -138,9 +139,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             total_secrets += cnt
 
     if total_secrets > 0:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"SECURITY ISSUE: {total_secrets} potential secret(s)/path(s) found in comments!",
-            type="Comment: Security Alert",
+            ftype="Comment: Security Alert",
             source="CommentMiner",
             confidence="High",
             color="red",
@@ -149,9 +150,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             tags=["comments", "security", "secret-leak"]
         ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Comment Mining Summary: {sum(len(e['comments']) + len(e['inline']) for e in all_comments)} comments, {sum(summary_counts.values())} interesting matches",
-        type="Comment: Summary",
+        ftype="Comment: Summary",
         source="CommentMiner",
         confidence="High",
         color="red" if total_secrets else "blue",

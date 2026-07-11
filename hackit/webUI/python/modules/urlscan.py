@@ -1,8 +1,7 @@
 import httpx
 import json
 import asyncio
-from models import IntelligenceFinding
-
+from module_common import safe_fetch, make_finding
 URLSCAN_API = "https://urlscan.io/api/v1"
 USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
 
@@ -14,7 +13,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         domain = urlparse(domain).netloc
 
     try:
-        ip_resp = await client.get(f"https://dns.google/resolve?name={domain}&type=A", timeout=10.0)
+        ip_resp = await safe_fetch(client, f"https://dns.google/resolve?name={domain}&type=A", timeout=10.0)
         resolved_ip = ""
         if ip_resp.status_code == 200:
             ip_data = ip_resp.json()
@@ -23,9 +22,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 resolved_ip = answers[0].get("data", "")
 
         if resolved_ip:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=resolved_ip,
-                type="Resolved IP",
+                ftype="Resolved IP",
                 source="urlscan.io",
                 confidence="High",
                 color="blue",
@@ -46,7 +45,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         for search_url in search_urls:
             try:
-                resp = await client.get(search_url, timeout=20.0, headers={"User-Agent": USER_AGENT})
+                resp = await safe_fetch(client, search_url, timeout=20.0, headers={"User-Agent": USER_AGENT})
                 if resp.status_code != 200:
                     continue
                 data = resp.json()
@@ -122,9 +121,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         if scan_result:
                             raw_parts.append(f"Result: {scan_result[:80]}")
 
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=url[:200] if url else ip,
-                            type=f"urlscan.io {classification}",
+                            ftype=f"urlscan.io {classification}",
                             source="urlscan.io",
                             confidence="High" if ip else "Medium",
                             color=scan_color,
@@ -136,9 +135,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         ))
 
                     if screenshot_url:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=screenshot_url[:200],
-                            type="urlscan.io Screenshot",
+                            ftype="urlscan.io Screenshot",
                             source="urlscan.io",
                             confidence="Medium",
                             color="slate",
@@ -149,9 +148,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         ))
 
                     if scan_result:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=scan_result[:200],
-                            type="urlscan.io Result Link",
+                            ftype="urlscan.io Result Link",
                             source="urlscan.io",
                             confidence="Medium",
                             color="slate",
@@ -162,9 +161,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         ))
 
                     if country:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"{ip or domain} ({country})",
-                            type="Host Country",
+                            ftype="Host Country",
                             source="urlscan.io",
                             confidence="Medium",
                             color="slate",
@@ -176,9 +175,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
                     if asn_name or asn:
                         entity = f"{asn_name} ({asn})" if asn_name and asn else (asn_name or asn)
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=entity[:200],
-                            type="ASN / Organization",
+                            ftype="ASN / Organization",
                             source="urlscan.io",
                             confidence="Medium",
                             color="purple",
@@ -189,9 +188,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         ))
 
                     if server:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=server[:200],
-                            type="Server / Technology",
+                            ftype="Server / Technology",
                             source="urlscan.io",
                             confidence="High",
                             color="orange",
@@ -204,9 +203,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     stats = r.get("stats", {}) or {}
                     console_msgs = stats.get("consoleMsgs", 0)
                     if console_msgs > 0:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"{console_msgs} console messages",
-                            type="Page Console Activity",
+                            ftype="Page Console Activity",
                             source="urlscan.io",
                             confidence="Low",
                             color="slate",
@@ -217,9 +216,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
                     domain_stats = stats.get("domainStats", [])
                     if domain_stats:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"{len(domain_stats)} unique domains loaded",
-                            type="Page Domain Stats",
+                            ftype="Page Domain Stats",
                             source="urlscan.io",
                             confidence="Low",
                             color="slate",
@@ -229,9 +228,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
                     server_stats = stats.get("serverStats", [])
                     if server_stats:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"{len(server_stats)} servers contacted",
-                            type="Page Server Stats",
+                            ftype="Page Server Stats",
                             source="urlscan.io",
                             confidence="Low",
                             color="slate",
@@ -241,9 +240,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
                     ip_stats = stats.get("ipStats", [])
                     if ip_stats:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"{len(ip_stats)} unique IPs contacted",
-                            type="Page IP Stats",
+                            ftype="Page IP Stats",
                             source="urlscan.io",
                             confidence="Low",
                             color="slate",
@@ -272,9 +271,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             if not summary_parts:
                 summary_parts.append("all benign")
 
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{len(results)} urlscan results for {domain} ({', '.join(summary_parts)})",
-                type="urlscan.io Summary",
+                ftype="urlscan.io Summary",
                 source="urlscan.io",
                 confidence="High",
                 color="purple",
@@ -284,9 +283,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 tags=["summary", "urlscan"]
             ))
     except Exception as e:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"urlscan.io API error: {str(e)[:100]}",
-            type="urlscan.io Error",
+            ftype="urlscan.io Error",
             source="urlscan.io",
             confidence="Low",
             color="red",
@@ -296,7 +295,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         ))
 
     try:
-        uuid_resp = await client.get(
+        uuid_resp = await safe_fetch(client, 
             f"{URLSCAN_API}/search/?q=domain:{domain}&size=1",
             timeout=10.0,
             headers={"User-Agent": USER_AGENT}
@@ -307,7 +306,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             if uuid_results:
                 scan_uuid = uuid_results[0].get("_id", "")
                 if scan_uuid:
-                    detail_resp = await client.get(
+                    detail_resp = await safe_fetch(client, 
                         f"{URLSCAN_API}/result/{scan_uuid}/",
                         timeout=15.0,
                         headers={"User-Agent": USER_AGENT}
@@ -325,9 +324,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                             unique_countries = set(c.get("name", "") for c in countries_list if isinstance(c, dict))
                             for country_name in list(unique_countries)[:5]:
                                 if country_name:
-                                    findings.append(IntelligenceFinding(
+                                    findings.append(make_finding(
                                         entity=f"Request routed through: {country_name}",
-                                        type="Request Path Country",
+                                        ftype="Request Path Country",
                                         source="urlscan.io",
                                         confidence="Medium",
                                         color="slate",
@@ -343,9 +342,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                                 elif isinstance(ip_entry, str):
                                     response_ips.append(ip_entry)
                             if response_ips:
-                                findings.append(IntelligenceFinding(
+                                findings.append(make_finding(
                                     entity=f"Connected IPs: {', '.join(response_ips[:8])}",
-                                    type="Connected Hosts / IPs",
+                                    ftype="Connected Hosts / IPs",
                                     source="urlscan.io",
                                     confidence="Medium",
                                     color="blue",
@@ -355,9 +354,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                                 ))
 
                         if hashes_list:
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=f"{len(hashes_list)} resource hashes captured",
-                                type="Page Resource Hashes",
+                                ftype="Page Resource Hashes",
                                 source="urlscan.io",
                                 confidence="Low",
                                 color="slate",
@@ -369,9 +368,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                             external_urls = [u for u in urls_list[:20] if isinstance(u, str) and domain not in u]
                             if external_urls:
                                 for ext_url in external_urls[:8]:
-                                    findings.append(IntelligenceFinding(
+                                    findings.append(make_finding(
                                         entity=ext_url[:200],
-                                        type="External Resource URL",
+                                        ftype="External Resource URL",
                                         source="urlscan.io",
                                         confidence="Medium",
                                         color="slate",
@@ -382,9 +381,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         verdicts_detail = detail.get("verdicts", {}) or {}
                         urlscan_score = verdicts_detail.get("urlscan", {}).get("score", 0)
                         if urlscan_score:
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=f"urlscan threat score: {urlscan_score}/100",
-                                type="Threat Score",
+                                ftype="Threat Score",
                                 source="urlscan.io",
                                 confidence="Medium",
                                 color="red" if urlscan_score > 50 else ("orange" if urlscan_score > 20 else "slate"),
@@ -403,9 +402,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         page_server = page_data.get("server", "")
 
                         if page_city and page_country:
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=f"{page_city}, {page_country}",
-                                type="Server Location",
+                                ftype="Server Location",
                                 source="urlscan.io",
                                 confidence="High",
                                 color="slate",
@@ -416,9 +415,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                             ))
 
                         if page_server:
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=page_server[:200],
-                                type="Server (Detailed)",
+                                ftype="Server (Detailed)",
                                 source="urlscan.io",
                                 confidence="High",
                                 color="orange",
@@ -442,7 +441,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         pass
 
     try:
-        sub_resp = await client.get(
+        sub_resp = await safe_fetch(client, 
             f"{URLSCAN_API}/search/?q=domain:{domain}&size=100",
             timeout=15.0,
             headers={"User-Agent": USER_AGENT}
@@ -457,9 +456,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     subdomains_found.add(pg_domain)
             if subdomains_found:
                 for sd in sorted(subdomains_found)[:15]:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=sd,
-                        type="urlscan.io Subdomain",
+                        ftype="urlscan.io Subdomain",
                         source="urlscan.io",
                         confidence="Medium",
                         color="emerald",
@@ -467,9 +466,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         tags=["subdomain"]
                     ))
                 if len(subdomains_found) > 15:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"... and {len(subdomains_found) - 15} more subdomains",
-                        type="urlscan.io Subdomains Summary",
+                        ftype="urlscan.io Subdomains Summary",
                         source="urlscan.io",
                         confidence="Medium",
                         color="slate",
@@ -481,7 +480,6 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
     return findings
 
-
 async def _submit_urlscan(domain: str, client: httpx.AsyncClient) -> str | None:
     try:
         payload = {
@@ -489,8 +487,8 @@ async def _submit_urlscan(domain: str, client: httpx.AsyncClient) -> str | None:
             "public": "on",
             "useragent": USER_AGENT,
         }
-        resp = await client.post(
-            "https://urlscan.io/api/v1/scan/",
+        resp = await safe_fetch(client, 
+            "https://urlscan.io/api/v1/scan/", method="POST",
             json=payload,
             timeout=15.0,
             headers={"User-Agent": USER_AGENT},
@@ -502,11 +500,10 @@ async def _submit_urlscan(domain: str, client: httpx.AsyncClient) -> str | None:
         pass
     return None
 
-
 async def _poll_urlscan_result(uuid: str, client: httpx.AsyncClient) -> dict | None:
     for attempt in range(5):
         try:
-            resp = await client.get(
+            resp = await safe_fetch(client, 
                 f"https://urlscan.io/api/v1/result/{uuid}/",
                 timeout=10.0,
                 headers={"User-Agent": USER_AGENT},
@@ -518,7 +515,6 @@ async def _poll_urlscan_result(uuid: str, client: httpx.AsyncClient) -> dict | N
         if attempt < 4:
             await asyncio.sleep(3)
     return None
-
 
 async def _analyze_dom_element(data: dict, findings: list, domain: str):
     try:
@@ -540,9 +536,9 @@ async def _analyze_dom_element(data: dict, findings: list, domain: str):
                 if not c_http_only:
                     missing_attrs.append("HttpOnly")
                 if missing_attrs:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Cookie: {c_name} (missing: {', '.join(missing_attrs)})",
-                        type="Insecure Cookie",
+                        ftype="Insecure Cookie",
                         source="urlscan.io",
                         confidence="Medium",
                         color="orange",
@@ -551,9 +547,9 @@ async def _analyze_dom_element(data: dict, findings: list, domain: str):
                     ))
 
                 if c_domain and c_domain.startswith("."):
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Wildcard cookie domain: {c_name} -> {c_domain}",
-                        type="Wildcard Cookie Domain",
+                        ftype="Wildcard Cookie Domain",
                         source="urlscan.io",
                         confidence="Medium",
                         color="orange",
@@ -567,9 +563,9 @@ async def _analyze_dom_element(data: dict, findings: list, domain: str):
                 ls_key = ls.get("name", "")
                 ls_val = ls.get("value", "")
                 if any(k in (ls_key + ls_val).lower() for k in ("token", "secret", "key", "password", "credential")):
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Sensitive localStorage: {ls_key}",
-                        type="Sensitive Client Storage",
+                        ftype="Sensitive Client Storage",
                         source="urlscan.io",
                         confidence="Medium",
                         color="red",
@@ -583,9 +579,9 @@ async def _analyze_dom_element(data: dict, findings: list, domain: str):
                 ss_key = ss.get("name", "")
                 ss_val = ss.get("value", "")
                 if any(k in (ss_key + ss_val).lower() for k in ("token", "secret", "key", "password", "credential")):
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Sensitive sessionStorage: {ss_key}",
-                        type="Sensitive Client Storage",
+                        ftype="Sensitive Client Storage",
                         source="urlscan.io",
                         confidence="Medium",
                         color="red",
@@ -594,7 +590,6 @@ async def _analyze_dom_element(data: dict, findings: list, domain: str):
                     ))
     except Exception:
         pass
-
 
 async def _analyze_redirects(data: dict, findings: list, domain: str):
     try:
@@ -608,9 +603,9 @@ async def _analyze_redirects(data: dict, findings: list, domain: str):
             if resp_status in (301, 302, 303, 307, 308):
                 chain.append(f"{resp_status} -> {req_url[:120]}")
         if len(chain) > 1:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=" -> ".join(chain[:5]),
-                type="Redirect Chain",
+                ftype="Redirect Chain",
                 source="urlscan.io",
                 confidence="Medium",
                 color="orange",
@@ -618,9 +613,9 @@ async def _analyze_redirects(data: dict, findings: list, domain: str):
                 tags=["redirect", "chain"],
             ))
         if len(chain) > 3:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Long redirect chain: {len(chain)} hops",
-                type="Excessive Redirects",
+                ftype="Excessive Redirects",
                 source="urlscan.io",
                 confidence="Medium",
                 color="red",
@@ -629,7 +624,6 @@ async def _analyze_redirects(data: dict, findings: list, domain: str):
             ))
     except Exception:
         pass
-
 
 async def _analyze_cookies_from_lists(data: dict, findings: list):
     try:
@@ -640,9 +634,9 @@ async def _analyze_cookies_from_lists(data: dict, findings: list):
                 c_name = c.get("name", "")
                 c_val = c.get("value", "")
                 if any(s in (c_val or "").lower() for s in ("session", "token", "auth", "sid", "jwt")):
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Auth-related cookie value: {c_name}",
-                        type="Authentication Cookie",
+                        ftype="Authentication Cookie",
                         source="urlscan.io",
                         confidence="Medium",
                         color="orange",
@@ -651,7 +645,6 @@ async def _analyze_cookies_from_lists(data: dict, findings: list):
                     ))
     except Exception:
         pass
-
 
 async def _analyze_tech_from_scan(data: dict, findings: list):
     try:
@@ -666,9 +659,9 @@ async def _analyze_tech_from_scan(data: dict, findings: list):
                 if t_name:
                     entity = f"{t_name} {t_version}" if t_version else t_name
                     color_tech = "blue" if t_confidence > 80 else "slate"
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=entity,
-                        type="Detected Technology",
+                        ftype="Detected Technology",
                         source="urlscan.io",
                         confidence="Medium",
                         color=color_tech,

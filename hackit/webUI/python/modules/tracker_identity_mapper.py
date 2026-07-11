@@ -1,9 +1,9 @@
 import httpx
 import re
 import json
-from urllib.parse import urlparse, parse_qs
-from collections import defaultdict, Counter
-from models import IntelligenceFinding
+from urllib.parse import urlparse
+from collections import defaultdict
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash
 
 TRACKER_SIGNATURES = [
     (r'google-analytics\.com/(ga|analytics|collect|g\b)', "Google Analytics", "analytics"),
@@ -767,10 +767,12 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
     try:
         url = f"https://{domain}"
-        resp = await client.get(url, timeout=15.0, follow_redirects=True, headers={
+        resp = await safe_fetch(client, url, timeout=15.0, headers={
             "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         })
+        if not resp:
+            return findings
         html = resp.text
 
         found_trackers = defaultdict(list)
@@ -782,9 +784,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         tracker_network_edges = []
 
         for tracker_name in found_trackers.get("analytics", []):
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=tracker_name,
-                type="Analytics / Tracking",
+                ftype="Analytics / Tracking",
                 source="TrackerMapper",
                 confidence="High",
                 color="slate",
@@ -794,9 +796,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ))
             tracker_network_edges.append({"source": "page", "target": tracker_name, "relation": "analytics"})
         for tracker_name in found_trackers.get("tag-manager", []):
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=tracker_name,
-                type="Tag Manager",
+                ftype="Tag Manager",
                 source="TrackerMapper",
                 confidence="High",
                 color="slate",
@@ -806,9 +808,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ))
             tracker_network_edges.append({"source": "page", "target": tracker_name, "relation": "tag-manager"})
         for tracker_name in found_trackers.get("advertising", []):
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=tracker_name,
-                type="Advertising / Ad Tech",
+                ftype="Advertising / Ad Tech",
                 source="TrackerMapper",
                 confidence="High",
                 color="orange",
@@ -818,9 +820,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ))
             tracker_network_edges.append({"source": "page", "target": tracker_name, "relation": "advertising"})
         for tracker_name in found_trackers.get("social", []):
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=tracker_name,
-                type="Social Media Tracking",
+                ftype="Social Media Tracking",
                 source="TrackerMapper",
                 confidence="High",
                 color="purple",
@@ -830,9 +832,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ))
             tracker_network_edges.append({"source": "page", "target": tracker_name, "relation": "social"})
         for tracker_name in found_trackers.get("marketing", []):
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=tracker_name,
-                type="Marketing Automation",
+                ftype="Marketing Automation",
                 source="TrackerMapper",
                 confidence="High",
                 color="blue",
@@ -842,9 +844,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ))
             tracker_network_edges.append({"source": "page", "target": tracker_name, "relation": "marketing"})
         for tracker_name in found_trackers.get("crm", []):
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=tracker_name,
-                type="CRM / Customer Platform",
+                ftype="CRM / Customer Platform",
                 source="TrackerMapper",
                 confidence="High",
                 color="emerald",
@@ -854,9 +856,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ))
             tracker_network_edges.append({"source": "page", "target": tracker_name, "relation": "crm"})
         for tracker_name in found_trackers.get("email", []):
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=tracker_name,
-                type="Email Marketing",
+                ftype="Email Marketing",
                 source="TrackerMapper",
                 confidence="High",
                 color="cyan",
@@ -866,9 +868,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ))
             tracker_network_edges.append({"source": "page", "target": tracker_name, "relation": "email"})
         for tracker_name in found_trackers.get("cdn", []):
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=tracker_name,
-                type="CDN / Performance",
+                ftype="CDN / Performance",
                 source="TrackerMapper",
                 confidence="High",
                 color="sky",
@@ -878,9 +880,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ))
             tracker_network_edges.append({"source": "page", "target": tracker_name, "relation": "cdn"})
         for tracker_name in found_trackers.get("consent", []):
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=tracker_name,
-                type="Consent Management",
+                ftype="Consent Management",
                 source="TrackerMapper",
                 confidence="High",
                 color="slate",
@@ -890,9 +892,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ))
             tracker_network_edges.append({"source": "page", "target": tracker_name, "relation": "consent"})
         for tracker_name in found_trackers.get("identity", []):
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=tracker_name,
-                type="Identity / SSO",
+                ftype="Identity / SSO",
                 source="TrackerMapper",
                 confidence="High",
                 color="violet",
@@ -902,9 +904,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ))
             tracker_network_edges.append({"source": "page", "target": tracker_name, "relation": "identity"})
         for tracker_name in found_trackers.get("security", []):
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=tracker_name,
-                type="Security / Anti-Bot",
+                ftype="Security / Anti-Bot",
                 source="TrackerMapper",
                 confidence="High",
                 color="red",
@@ -918,9 +920,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             matches = re.findall(pattern, html, re.IGNORECASE)
             for mid in matches[:3]:
                 fid = mid if isinstance(mid, str) else mid[0]
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{id_name}: {fid[:60]}",
-                    type="Tracking ID",
+                    ftype="Tracking ID",
                     source="TrackerMapper",
                     confidence="High",
                     color="orange",
@@ -937,9 +939,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 sharing_domains_found.append(sname)
         if sharing_domains_found:
             for sname in sharing_domains_found:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=sname,
-                    type="Data Sharing / Third-Party",
+                    ftype="Data Sharing / Third-Party",
                     source="TrackerMapper",
                     confidence="High",
                     color="yellow",
@@ -955,9 +957,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         cookie_names.extend(re.findall(r'["\']([\w]+_utm[a-z]+)["\']', html, re.IGNORECASE))
         if cookie_names:
             unique_cookies = list(set(cookie_names))[:10]
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Cookies: {', '.join(unique_cookies)}",
-                type="Tracking Cookies",
+                ftype="Tracking Cookies",
                 source="TrackerMapper",
                 confidence="Medium",
                 color="slate",
@@ -1000,9 +1002,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     seen.add(c)
                     unique_consent.append(c)
             for cname in unique_consent:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=cname,
-                    type="Consent Management",
+                    ftype="Consent Management",
                     source="TrackerMapper",
                     confidence="Medium",
                     color="slate",
@@ -1013,9 +1015,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         csp_directives, csp_domains = parse_csp_header(resp.headers)
         if csp_domains:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"CSP: {len(csp_domains)} external domains allowed ({', '.join(sorted(set(csp_domains))[:8])})",
-                type="CSP Header Analysis",
+                ftype="CSP Header Analysis",
                 source="TrackerMapper",
                 confidence="High",
                 color="sky",
@@ -1031,9 +1033,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         storage_usage = detect_dom_storage(html)
         if storage_usage:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"DOM Storage: {', '.join(storage_usage[:5])}",
-                type="DOM Storage Detection",
+                ftype="DOM Storage Detection",
                 source="TrackerMapper",
                 confidence="Medium",
                 color="amber",
@@ -1047,9 +1049,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         cookie_categories = classify_cookies(html, resp.headers)
         if cookie_categories:
             cat_summary = {k: len(v) for k, v in cookie_categories.items() if v}
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Cookie Categories: {cat_summary}",
-                type="Cookie Classification",
+                ftype="Cookie Classification",
                 source="TrackerMapper",
                 confidence="Medium",
                 color="slate",
@@ -1079,9 +1081,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             elif total_weight >= 5:
                 fp_risk = "Moderate"
 
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Fingerprinting: {len(fingerprint_findings)} techniques across {len(fp_by_type)} categories",
-                type="Browser Fingerprinting",
+                ftype="Browser Fingerprinting",
                 source="TrackerMapper",
                 confidence="High",
                 color="red",
@@ -1098,9 +1100,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             found_trackers, len(fingerprint_findings), len(storage_usage)
         )
 
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Tracking Intensity: {intensity_score} ({intensity_level})",
-            type="Tracker Intensity Score",
+            ftype="Tracker Intensity Score",
             source="TrackerMapper",
             confidence="High",
             color="red" if intensity_level in ("High", "Very High") else "amber" if intensity_level == "Moderate" else "slate",
@@ -1116,9 +1118,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             consent_platforms, has_cmp, cookie_categories
         )
 
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Privacy Compliance: {compliance_level} ({compliance_score}/10)",
-            type="Privacy Compliance Analysis",
+            ftype="Privacy Compliance Analysis",
             source="TrackerMapper",
             confidence="Medium",
             color="green" if compliance_level == "Strong" else "amber" if compliance_level == "Moderate" else "red",
@@ -1155,9 +1157,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         total_sharing = len(sharing_domains_found)
 
         if total_trackers > 0 or total_ids > 0:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{domain}: {total_trackers} trackers, {total_ids} tracking IDs, {total_sharing} data-sharing partners",
-                type="Tracker Summary",
+                ftype="Tracker Summary",
                 source="TrackerMapper",
                 confidence="High",
                 color="purple",
@@ -1180,26 +1182,26 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 all_trackers[f.type] = all_trackers.get(f.type, 0) + 1
         if all_trackers:
             for ftype, count in sorted(all_trackers.items(), key=lambda x: -x[1])[:6]:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{ftype}: {count} tracker(s)",
-                    type="Tracker Category Summary",
+                    ftype="Tracker Category Summary",
                     source="TrackerMapper", confidence="Medium",
                     color="slate", tags=["category-summary"]))
 
     async def analyze_tracking_ids():
         id_count = sum(1 for f in findings if f.type == "Tracking ID")
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Tracking IDs found: {id_count}",
-            type="Tracking ID Summary",
+            ftype="Tracking ID Summary",
             source="TrackerMapper", confidence="Medium",
             color="orange", tags=["ids"]))
 
     async def analyze_data_sharing():
         sharing_count = sum(1 for f in findings if f.type == "Data Sharing / Third-Party")
         if sharing_count:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Third-party data sharing partners: {sharing_count}",
-                type="Data Sharing Summary",
+                ftype="Data Sharing Summary",
                 source="TrackerMapper", confidence="Medium",
                 color="yellow", tags=["data-sharing"]))
 
@@ -1207,9 +1209,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         fp_count = sum(1 for f in findings if f.type == "Browser Fingerprinting")
         storage_count = sum(1 for f in findings if f.type == "DOM Storage Detection")
         if fp_count or storage_count:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Privacy impact: {fp_count} fingerprinting techniques, {storage_count} storage methods, {len(cookie_categories) if 'cookie_categories' in dir() else 0} cookie categories",
-                type="Privacy Impact Analysis",
+                ftype="Privacy Impact Analysis",
                 source="TrackerMapper", confidence="Medium",
                 color="red" if fp_count > 0 else "orange",
                 threat_level="Elevated Risk" if fp_count > 0 else "Informational",
@@ -1234,35 +1236,35 @@ async def crawl(target: str, client: httpx.AsyncClient):
         if not recs:
             recs.append("Moderate tracking profile - review cookie settings")
         for i, r in enumerate(recs[:3]):
-            findings.append(IntelligenceFinding(entity=f"Rec {i+1}: {r}", type="Privacy Recommendation", source="TrackerMapper", confidence="Medium", color="orange", tags=["recommendation"]))
+            findings.append(make_finding(entity=f"Rec {i+1}: {r}", ftype="Privacy Recommendation", source="TrackerMapper", confidence="Medium", color="orange", tags=["recommendation"]))
 
     async def analyze_cookie_landscape():
         cookie_count = sum(1 for f in findings if f.type == "Cookie Consent / Banner")
-        findings.append(IntelligenceFinding(entity=f"Cookie consent mechanisms: {cookie_count}", type="Cookie Analysis", source="TrackerMapper", confidence="Medium", color="slate", tags=["cookies"]))
+        findings.append(make_finding(entity=f"Cookie consent mechanisms: {cookie_count}", ftype="Cookie Analysis", source="TrackerMapper", confidence="Medium", color="slate", tags=["cookies"]))
 
     async def analyze_dom_storage():
         storage_count = sum(1 for f in findings if f.type == "DOM Storage Detection")
         if storage_count:
-            findings.append(IntelligenceFinding(entity=f"DOM storage entries: {storage_count}", type="Storage Analysis", source="TrackerMapper", confidence="Medium", color="orange", tags=["storage"]))
+            findings.append(make_finding(entity=f"DOM storage entries: {storage_count}", ftype="Storage Analysis", source="TrackerMapper", confidence="Medium", color="orange", tags=["storage"]))
 
     async def analyze_total_exposure():
         tracker_count = sum(1 for f in findings if f.type in ("Analytics / Tracking", "Advertising / Ad Tech", "Social Media Tracking", "Marketing Automation", "CRM / Customer Platform", "Email Marketing"))
-        findings.append(IntelligenceFinding(entity=f"Total marketing/tracking services: {tracker_count}", type="Exposure Summary", source="TrackerMapper", confidence="Medium", color="purple", tags=["exposure"]))
+        findings.append(make_finding(entity=f"Total marketing/tracking services: {tracker_count}", ftype="Exposure Summary", source="TrackerMapper", confidence="Medium", color="purple", tags=["exposure"]))
         fingerprint_count = sum(1 for f in findings if f.type == "Browser Fingerprinting")
-        findings.append(IntelligenceFinding(entity=f"Fingerprinting scripts: {fingerprint_count}", type="Fingerprinting Summary", source="TrackerMapper", confidence="Medium", color="red" if fingerprint_count else "emerald", tags=["exposure"]))
+        findings.append(make_finding(entity=f"Fingerprinting scripts: {fingerprint_count}", ftype="Fingerprinting Summary", source="TrackerMapper", confidence="Medium", color="red" if fingerprint_count else "emerald", tags=["exposure"]))
 
     async def analyze_consent_mechanisms():
         consent_count = sum(1 for f in findings if f.type == "Consent Management")
-        findings.append(IntelligenceFinding(entity=f"Consent management platforms: {consent_count}", type="Consent Analysis", source="TrackerMapper", confidence="Medium", color="slate", tags=["consent"]))
+        findings.append(make_finding(entity=f"Consent management platforms: {consent_count}", ftype="Consent Analysis", source="TrackerMapper", confidence="Medium", color="slate", tags=["consent"]))
 
     async def analyze_third_party_scope():
         third_party_count = sum(1 for f in findings if f.type == "Data Sharing / Third-Party")
-        findings.append(IntelligenceFinding(entity=f"Third-party data recipients: {third_party_count}", type="Third-Party Scope", source="TrackerMapper", confidence="Medium", color="orange" if third_party_count else "emerald", tags=["third-party"]))
-        findings.append(IntelligenceFinding(entity="Review data processing agreements with each third party", type="Compliance Recommendation", source="TrackerMapper", confidence="Medium", color="orange", tags=["recommendation"]))
+        findings.append(make_finding(entity=f"Third-party data recipients: {third_party_count}", ftype="Third-Party Scope", source="TrackerMapper", confidence="Medium", color="orange" if third_party_count else "emerald", tags=["third-party"]))
+        findings.append(make_finding(entity="Review data processing agreements with each third party", ftype="Compliance Recommendation", source="TrackerMapper", confidence="Medium", color="orange", tags=["recommendation"]))
 
     async def analyze_security_headers():
         security_findings = [f for f in findings if f.type == "Security / Anti-Bot"]
-        findings.append(IntelligenceFinding(entity=f"Security/anti-bot services: {len(security_findings)}", type="Security Analysis", source="TrackerMapper", confidence="Medium", color="slate", tags=["security"]))
+        findings.append(make_finding(entity=f"Security/anti-bot services: {len(security_findings)}", ftype="Security Analysis", source="TrackerMapper", confidence="Medium", color="slate", tags=["security"]))
 
     async def analyze_tracker_velocity():
         tracker_names = set()
@@ -1270,14 +1272,14 @@ async def crawl(target: str, client: httpx.AsyncClient):
             if f.type in ("Analytics / Tracking", "Advertising / Ad Tech"):
                 for t in f.tags:
                     tracker_names.add(t)
-        findings.append(IntelligenceFinding(entity=f"Unique tracker technologies: {len(tracker_names)}", type="Tracker Velocity", source="TrackerMapper", confidence="Medium", color="slate", tags=["velocity"]))
+        findings.append(make_finding(entity=f"Unique tracker technologies: {len(tracker_names)}", ftype="Tracker Velocity", source="TrackerMapper", confidence="Medium", color="slate", tags=["velocity"]))
 
     async def analyze_privacy_tier():
         all_findings_count = len(findings)
-        findings.append(IntelligenceFinding(entity=f"Total tracking entries: {all_findings_count}", type="Privacy Tier", source="TrackerMapper", confidence="Medium", color="purple", tags=["privacy-tier"]))
-        findings.append(IntelligenceFinding(entity="Review consent management platform for GDPR compliance", type="GDPR Recommendation", source="TrackerMapper", confidence="Medium", color="orange", tags=["privacy-tier"]))
-        findings.append(IntelligenceFinding(entity="Use browser extensions to limit third-party tracking", type="Browser Recommendation", source="TrackerMapper", confidence="Medium", color="orange", tags=["privacy-tier"]))
-        findings.append(IntelligenceFinding(entity="Audit third-party scripts regularly for privacy compliance", type="Audit Recommendation", source="TrackerMapper", confidence="Medium", color="orange", tags=["privacy-tier"]))
+        findings.append(make_finding(entity=f"Total tracking entries: {all_findings_count}", ftype="Privacy Tier", source="TrackerMapper", confidence="Medium", color="purple", tags=["privacy-tier"]))
+        findings.append(make_finding(entity="Review consent management platform for GDPR compliance", ftype="GDPR Recommendation", source="TrackerMapper", confidence="Medium", color="orange", tags=["privacy-tier"]))
+        findings.append(make_finding(entity="Use browser extensions to limit third-party tracking", ftype="Browser Recommendation", source="TrackerMapper", confidence="Medium", color="orange", tags=["privacy-tier"]))
+        findings.append(make_finding(entity="Audit third-party scripts regularly for privacy compliance", ftype="Audit Recommendation", source="TrackerMapper", confidence="Medium", color="orange", tags=["privacy-tier"]))
 
     await asyncio.gather(
         analyze_tracker_categories(),

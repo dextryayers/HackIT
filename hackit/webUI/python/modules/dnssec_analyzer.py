@@ -1,7 +1,7 @@
 import asyncio
 import dns.resolver
 import dns.name
-from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash
 
 ALGORITHM_MAP = {
     5: "RSASHA1", 7: "RSASHA1-NSEC3", 8: "RSASHA256", 10: "RSASHA512",
@@ -49,9 +49,9 @@ async def crawl(target: str, client=None):
         secure_entry = bool(flags & 512)
         key_len = len(getattr(key, 'key', b'')) * 8 if hasattr(key, 'key') else 0
         key_sizes.append(key_len)
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"DNSKEY: algorithm={algo_name}, flags={flags}, key_tag={key_tag}, key_size={key_len}bits",
-            type="DNSSEC DNSKEY Record",
+            ftype="DNSSEC DNSKEY Record",
             source="DNSSEC Analyzer",
             confidence="High",
             color="emerald",
@@ -63,7 +63,7 @@ async def crawl(target: str, client=None):
 
     if dnskey_records:
         if algorithms_used:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Algorithms used: {', '.join(sorted(algorithms_used))}",
                 type="DNSSEC Algorithm Analysis",
                 source="DNSSEC Analyzer",
@@ -76,7 +76,7 @@ async def crawl(target: str, client=None):
             ))
         modern = {'ECDSA-P256', 'ECDSA-P384', 'Ed25519', 'Ed448'}
         if algorithms_used & modern:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Modern algorithms detected: {', '.join(sorted(algorithms_used & modern))}",
                 type="DNSSEC Modern Algorithm",
                 source="DNSSEC Analyzer",
@@ -88,7 +88,7 @@ async def crawl(target: str, client=None):
             ))
         weak = {'RSASHA1', 'RSASHA1-NSEC3', 'DSA'}
         if algorithms_used & weak:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Weak algorithm detected: {', '.join(sorted(algorithms_used & weak))}",
                 type="DNSSEC Weak Algorithm",
                 source="DNSSEC Analyzer",
@@ -101,7 +101,7 @@ async def crawl(target: str, client=None):
         if key_sizes:
             small_keys = [s for s in key_sizes if s < 1024]
             if small_keys:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Small DNSKEY sizes: {', '.join(map(str, small_keys))} bits",
                     type="DNSSEC Key Size Warning",
                     source="DNSSEC Analyzer",
@@ -120,9 +120,9 @@ async def crawl(target: str, client=None):
         digest_type = getattr(ds, 'digest_type', 0)
         digest_bytes = getattr(ds, 'digest', b'')
         digest_hex = digest_bytes.hex() if digest_bytes else ''
-        findings.append(IntelligenceFinding(
-            entity=f"DS: key_tag={key_tag_ds}, algo={algo_ds_name}, digest_type={digest_type}, digest={digest_hex[:32]}",
-            type="DNSSEC DS Record",
+        findings.append(make_finding(
+            entity=f"DS: key_tag={key_tag_ds}, algo={algo_ds_name}, digest_ftype={digest_type}, digest={digest_hex[:32]}",
+            ftype="DNSSEC DS Record",
             source="DNSSEC Analyzer",
             confidence="High",
             color="emerald",
@@ -137,7 +137,7 @@ async def crawl(target: str, client=None):
         dnskey_tags = {getattr(k, 'key_tag', 0) for k in dnskey_records if getattr(k, 'flags', 0) & 512}
         matching = ds_tags & dnskey_tags
         if matching:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"DS/DNSKEY chain valid: {len(matching)} KSK(s) matched",
                 type="DNSSEC Chain Validation",
                 source="DNSSEC Analyzer",
@@ -149,9 +149,9 @@ async def crawl(target: str, client=None):
                 tags=["dnssec", "chain", "valid"]
             ))
         else:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"DS/DNSKEY chain mismatch! DS tags: {ds_tags}, SEP tags: {dnskey_tags}",
-                type="DNSSEC Chain Mismatch",
+                ftype="DNSSEC Chain Mismatch",
                 source="DNSSEC Analyzer",
                 confidence="High",
                 color="red",
@@ -172,9 +172,9 @@ async def crawl(target: str, client=None):
         key_tag_sig = getattr(sig, 'key_tag', 0)
         covered_name = dns.rdatatype.to_text(type_covered) if type_covered else '?'
         if sig_count <= 5:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"RRSIG: covers {covered_name}, algo={algo_sig_name}, key_tag={key_tag_sig}, labels={labels}",
-                type="DNSSEC RRSIG Record",
+                ftype="DNSSEC RRSIG Record",
                 source="DNSSEC Analyzer",
                 confidence="High",
                 color="emerald",
@@ -185,9 +185,9 @@ async def crawl(target: str, client=None):
             ))
 
     if rrsig_records:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Total RRSIGs: {sig_count} covering zone records",
-            type="DNSSEC Signature Count",
+            ftype="DNSSEC Signature Count",
             source="DNSSEC Analyzer",
             confidence="High",
             color="blue",
@@ -200,7 +200,7 @@ async def crawl(target: str, client=None):
         for nsec in nsec_records[:3]:
             next_domain = getattr(nsec, 'next', '')
             type_bitmaps = getattr(nsec, 'bitmap', [])
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"NSEC: {domain} -> {next_domain}, types: {len(type_bitmaps)}",
                 type="DNSSEC NSEC Record",
                 source="DNSSEC Analyzer",
@@ -210,7 +210,7 @@ async def crawl(target: str, client=None):
                 status="Active",
                 tags=["dnssec", "nsec"]
             ))
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"NSEC (denial of existence) enabled - zone walking possible",
             type="DNSSEC NSEC Warning",
             source="DNSSEC Analyzer",
@@ -226,7 +226,7 @@ async def crawl(target: str, client=None):
             salt = getattr(nsec3, 'salt', b'')
             iterations = getattr(nsec3, 'iterations', 0)
             algo_nsec3 = getattr(nsec3, 'algorithm', 0)
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"NSEC3: algo={algo_nsec3}, iterations={iterations}, salt_len={len(salt)}",
                 type="DNSSEC NSEC3 Record",
                 source="DNSSEC Analyzer",
@@ -238,7 +238,7 @@ async def crawl(target: str, client=None):
             ))
         if nsec3param:
             for p in nsec3param:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"NSEC3PARAM: algo={getattr(p, 'algorithm', 0)}, iterations={getattr(p, 'iterations', 0)}, salt={getattr(p, 'salt', b'').hex()[:16]}",
                     type="DNSSEC NSEC3PARAM",
                     source="DNSSEC Analyzer",
@@ -251,8 +251,8 @@ async def crawl(target: str, client=None):
 
     if cds_records:
         for cds in cds_records:
-            findings.append(IntelligenceFinding(
-                entity=f"CDS: key_tag={getattr(cds, 'key_tag', 0)}, algo={getattr(cds, 'algorithm', 0)}, digest_type={getattr(cds, 'digest_type', 0)}",
+            findings.append(make_finding(
+                entity=f"CDS: key_tag={getattr(cds, 'key_tag', 0)}, algo={getattr(cds, 'algorithm', 0)}, digest_ftype={getattr(cds, 'digest_type', 0)}",
                 type="DNSSEC CDS Record",
                 source="DNSSEC Analyzer",
                 confidence="High",
@@ -264,7 +264,7 @@ async def crawl(target: str, client=None):
 
     if cdnskey_records:
         for ck in cdnskey_records:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"CDNSKEY: algo={getattr(ck, 'algorithm', 0)}, flags={getattr(ck, 'flags', 0)}, key_tag={getattr(ck, 'key_tag', 0)}",
                 type="DNSSEC CDNSKEY Record",
                 source="DNSSEC Analyzer",
@@ -280,7 +280,7 @@ async def crawl(target: str, client=None):
     has_rrsig = len(rrsig_records) > 0
 
     if has_dnskey and has_ds and has_rrsig:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Full DNSSEC chain: {len(dnskey_records)} DNSKEY, {len(ds_records)} DS, {sig_count} RRSIG",
             type="DNSSEC Status: Complete",
             source="DNSSEC Analyzer",
@@ -292,9 +292,9 @@ async def crawl(target: str, client=None):
             tags=["dnssec", "complete"]
         ))
     elif has_dnskey and has_rrsig and not has_ds:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"DNSSEC partially enabled: DNSKEY+RRSIG present but NO DS in parent zone",
-            type="DNSSEC Status: Partial (Missing DS)",
+            ftype="DNSSEC Status: Partial (Missing DS)",
             source="DNSSEC Analyzer",
             confidence="High",
             color="orange",
@@ -303,9 +303,9 @@ async def crawl(target: str, client=None):
             tags=["dnssec", "partial", "missing-ds"]
         ))
     else:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"No DNSSEC records found for {domain}",
-            type="DNSSEC Status: Not Enabled",
+            ftype="DNSSEC Status: Not Enabled",
             source="DNSSEC Analyzer",
             confidence="High",
             color="red",
@@ -316,9 +316,9 @@ async def crawl(target: str, client=None):
         ))
 
     if not nsec_records and not nsec3_records:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"No NSEC/NSEC3 records - cannot verify denial of existence",
-            type="DNSSEC Denial of Existence",
+            ftype="DNSSEC Denial of Existence",
             source="DNSSEC Analyzer",
             confidence="Medium",
             color="orange",

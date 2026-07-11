@@ -1,9 +1,8 @@
 import httpx
 import re
-import socket
 import asyncio
-from models import IntelligenceFinding
 from urllib.parse import urlparse
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash
 
 RAPIDDNS_BASE = "https://rapiddns.io"
 RAPIDDNS_ALT = "https://rapiddns.io"
@@ -38,7 +37,7 @@ SUBDOMAIN_PATTERNS = {
 async def _fetch_page(url: str, client: httpx.AsyncClient, max_retries: int = 2) -> str | None:
     for attempt in range(max_retries):
         try:
-            resp = await client.get(url, timeout=15.0,
+            resp = await safe_fetch(client, url, timeout=15.0,
                 headers={"User-Agent": USER_AGENT, "Accept": "text/html,application/xhtml+xml"})
             if resp.status_code == 200:
                 return resp.text
@@ -94,7 +93,7 @@ def _extract_ips(text: str) -> set:
 
 async def _resolve_dns(hostname: str) -> str | None:
     try:
-        return socket.gethostbyname(hostname)
+        return resolve_ip(hostname)
     except Exception:
         return None
 
@@ -102,7 +101,7 @@ async def _resolve_dns(hostname: str) -> str | None:
 async def _check_http_service(hostname: str, client: httpx.AsyncClient) -> tuple:
     for proto in ["https", "http"]:
         try:
-            resp = await client.get(f"{proto}://{hostname}", timeout=8.0,
+            resp = await safe_fetch(client, f"{proto}://{hostname}", timeout=8.0,
                 headers={"User-Agent": USER_AGENT}, follow_redirects=False)
             server = resp.headers.get("server", "")
             ctype = resp.headers.get("content-type", "")
@@ -128,7 +127,7 @@ def _classify_subdomain(subdomain: str) -> str:
 async def _check_crtsh_for_comparison(domain: str, client: httpx.AsyncClient) -> set:
     subs = set()
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://crt.sh/?q=%25.{domain}&output=json",
             timeout=15.0,
             headers={"User-Agent": USER_AGENT}
@@ -150,7 +149,7 @@ async def _check_crtsh_for_comparison(domain: str, client: httpx.AsyncClient) ->
 async def _check_securitytrails_for_comparison(domain: str, client: httpx.AsyncClient) -> set:
     subs = set()
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://api.securitytrails.com/v1/domain/{domain}/subdomains",
             timeout=10.0,
             headers={"User-Agent": USER_AGENT, "Accept": "application/json"}
@@ -192,9 +191,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             source_subs_map["rapiddns"].add(sub)
             ip = await _resolve_dns(sub)
             sub_class = _classify_subdomain(sub)
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=sub,
-                type=f"RapidDNS {record_type}",
+                ftype=f"RapidDNS {record_type}",
                 source="RapidDNS",
                 confidence="Medium",
                 color="emerald",
@@ -212,9 +211,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 seen_subs.add(hostname)
                 source_subs_map["rapiddns"].add(hostname)
                 sub_class = _classify_subdomain(hostname)
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=hostname,
-                    type=f"RapidDNS Table {record_type}",
+                    ftype=f"RapidDNS Table {record_type}",
                     source="RapidDNS",
                     confidence="High",
                     color="slate",
@@ -237,9 +236,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             source_subs_map["rapiddns"].add(sub)
             ip = await _resolve_dns(sub)
             sub_class = _classify_subdomain(sub)
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=sub,
-                type="RapidDNS SameIP",
+                ftype="RapidDNS SameIP",
                 source="RapidDNS",
                 confidence="Medium",
                 color="blue",
@@ -250,9 +249,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 tags=["subdomain", "sameip", domain.replace('.', '_'), sub_class.lower().replace('/', '-').replace(' ', '-')]
             ))
         for ip in ips:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=ip,
-                type="RapidDNS Related IP",
+                ftype="RapidDNS Related IP",
                 source="RapidDNS",
                 confidence="Medium",
                 color="slate",
@@ -272,9 +271,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             seen_subs.add(entry)
             source_subs_map["rapiddns"].add(entry)
             sub_class = _classify_subdomain(entry)
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=entry,
-                type="RapidDNS Reverse DNS",
+                ftype="RapidDNS Reverse DNS",
                 source="RapidDNS",
                 confidence="Medium",
                 color="purple",
@@ -292,9 +291,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             if hs not in seen_subs:
                 seen_subs.add(hs)
                 source_subs_map["rapiddns"].add(hs)
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=hs,
-                    type="RapidDNS DNS History",
+                    ftype="RapidDNS DNS History",
                     source="RapidDNS",
                     confidence="Low",
                     color="slate",
@@ -311,9 +310,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             try:
                 status_code, server, title, ctype, location = await _check_http_service(sub, client)
                 if status_code:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"{sub}:{status_code}",
-                        type="RapidDNS HTTP Verify",
+                        ftype="RapidDNS HTTP Verify",
                         source="RapidDNS",
                         confidence="High",
                         color="orange" if status_code < 400 else "slate",
@@ -324,9 +323,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         tags=["http_verify", "live", domain.replace('.', '_')]
                     ))
                     if title:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"Page Title: {title}",
-                            type="RapidDNS HTTP Title",
+                            ftype="RapidDNS HTTP Title",
                             source="RapidDNS",
                             confidence="Medium",
                             color="slate",
@@ -337,9 +336,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                             tags=["title", domain.replace('.', '_')]
                         ))
                     if server:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=server[:200],
-                            type="RapidDNS Server Banner",
+                            ftype="RapidDNS Server Banner",
                             source="RapidDNS",
                             confidence="Medium",
                             color="slate",
@@ -350,9 +349,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                             tags=["server", "banner", domain.replace('.', '_')]
                         ))
                     if ctype:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"Content-Type: {ctype}",
-                            type="RapidDNS Content Type",
+                            ftype="RapidDNS Content Type",
                             source="RapidDNS",
                             confidence="Low",
                             color="slate",
@@ -371,7 +370,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
     both_rapiddns = seen_subs & crt_subs & st_subs
 
     if only_crt:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{len(only_crt)} subdomains found ONLY in crt.sh (not in RapidDNS)",
             type="Source Comparison - crt.sh Exclusive",
             source="RapidDNS",
@@ -383,7 +382,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             tags=["comparison", "crtsh", "exclusive"]
         ))
     if only_st:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{len(only_st)} subdomains found ONLY in SecurityTrails (not in RapidDNS)",
             type="Source Comparison - SecurityTrails Exclusive",
             source="RapidDNS",
@@ -395,7 +394,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             tags=["comparison", "securitytrails", "exclusive"]
         ))
     if both_rapiddns:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{len(both_rapiddns)} subdomains found across ALL sources (RapidDNS + crt.sh + SecurityTrails)",
             type="Source Comparison - Cross-Source Confirmed",
             source="RapidDNS",
@@ -413,7 +412,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             cat = _classify_subdomain(s)
             sub_categories[cat] = sub_categories.get(cat, 0) + 1
         for cat, count in sorted(sub_categories.items(), key=lambda x: -x[1])[:5]:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Subdomain Category: {cat} ({count})",
                 type="RapidDNS Subdomain Classification",
                 source="RapidDNS",
@@ -431,7 +430,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             t = f.type.split("RapidDNS ")[-1] if "RapidDNS " in f.type else f.type
             types_present[t] = types_present.get(t, 0) + 1
         summary_str = ", ".join([f"{k}: {v}" for k, v in sorted(types_present.items(), key=lambda x: -x[1])[:5]])
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"RapidDNS scan: {len(seen_subs)} unique subdomains across {len(summary_data)} findings",
             type="RapidDNS Summary",
             source="RapidDNS",

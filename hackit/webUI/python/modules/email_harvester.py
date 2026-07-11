@@ -5,6 +5,7 @@ import base64
 from collections import defaultdict
 from urllib.parse import urlparse
 from module_base import BaseScanner
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash
 
 EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
 OBFUSCATED_EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+\-]+\s*\[?@?at\]?\s*[a-zA-Z0-9.\-]+\s*\[?\.?dot?\]?\.[a-zA-Z]{2,}", re.IGNORECASE)

@@ -2,8 +2,7 @@ import httpx
 import json
 import re
 from urllib.parse import urljoin, parse_qs, urlencode
-from models import IntelligenceFinding
-
+from module_common import safe_fetch, make_finding
 API_BASE_PATHS = [
     "", "api", "api/v1", "api/v2", "api/v3", "api/v4", "api/v5", "v1", "v2", "v3", "latest",
     "rest", "rest/v1", "rest/v2", "graphql", "swagger", "docs", "api/docs", "api/swagger",
@@ -195,9 +194,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
                     if resp.status_code == 429 or resp.status_code == 503:
                         rate_limited = True
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"Rate limited (429/503) on {url}",
-                            type="API Rate Limiting",
+                            ftype="API Rate Limiting",
                             source="APIFuzzer",
                             confidence="High",
                             color="orange",
@@ -223,9 +222,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                                     break
 
                         if resp.status_code == 401 and method == "GET" and not path:
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=f"Auth required: {url}",
-                                type="API Authentication Required",
+                                ftype="API Authentication Required",
                                 source="APIFuzzer",
                                 confidence="High",
                                 color="orange",
@@ -246,9 +245,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                                     follow_redirects=False)
                                 if test_resp.status_code in (200, 201, 202) and resp.status_code in (401, 403):
                                     auth_bypass_found = True
-                                    findings.append(IntelligenceFinding(
+                                    findings.append(make_finding(
                                         entity=f"Auth bypass on {url} ({method})",
-                                        type="API Auth Bypass",
+                                        ftype="API Auth Bypass",
                                         source="APIFuzzer",
                                         confidence="Medium",
                                         color="red",
@@ -268,9 +267,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                                     follow_redirects=False)
                                 if qp_resp.status_code not in (0, 404) and qp_resp.status_code not in (resp.status_code,):
                                     params_str = ", ".join(qp_payload.keys())
-                                    findings.append(IntelligenceFinding(
+                                    findings.append(make_finding(
                                         entity=f"Parameter fuzzing: ?{params_str} on {method} {url} -> {qp_resp.status_code}",
-                                        type="API Parameter Fuzzing",
+                                        ftype="API Parameter Fuzzing",
                                         source="APIFuzzer",
                                         confidence="Medium",
                                         color="slate",
@@ -295,9 +294,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                                 elif is_json or is_api:
                                     color = "cyan"
 
-                                findings.append(IntelligenceFinding(
+                                findings.append(make_finding(
                                     entity=f"{method} {url} [{resp.status_code}] ({response_time:.2f}s)",
-                                    type="API Endpoint",
+                                    ftype="API Endpoint",
                                     source="APIFuzzer",
                                     confidence="High",
                                     color=color,
@@ -307,9 +306,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                                 ))
 
                                 if resp.status_code == 405 and method != "OPTIONS":
-                                    findings.append(IntelligenceFinding(
+                                    findings.append(make_finding(
                                         entity=f"Method {method} not allowed on {url} (405)",
-                                        type="API Method Discovery",
+                                        ftype="API Method Discovery",
                                         source="APIFuzzer",
                                         confidence="High",
                                         color="purple",
@@ -319,9 +318,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                                     ))
 
                                 if method == "TRACE" and resp.status_code == 200:
-                                    findings.append(IntelligenceFinding(
+                                    findings.append(make_finding(
                                         entity=f"TRACE method enabled on {url}",
-                                        type="API TRACE Method Enabled",
+                                        ftype="API TRACE Method Enabled",
                                         source="APIFuzzer",
                                         confidence="High",
                                         color="red",
@@ -333,9 +332,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                                 if method == "OPTIONS" and resp.status_code == 200:
                                     allow = resp.headers.get("allow", "")
                                     if allow:
-                                        findings.append(IntelligenceFinding(
+                                        findings.append(make_finding(
                                             entity=f"Allowed methods: {allow} on {url}",
-                                            type="API Allowed Methods",
+                                            ftype="API Allowed Methods",
                                             source="APIFuzzer",
                                             confidence="High",
                                             color="slate",
@@ -349,9 +348,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                                     json_body = json.loads(body)
                                     if isinstance(json_body, dict):
                                         keys = ", ".join(list(json_body.keys())[:10])
-                                        findings.append(IntelligenceFinding(
+                                        findings.append(make_finding(
                                             entity=f"JSON response keys: {keys}",
-                                            type="API JSON Response Structure",
+                                            ftype="API JSON Response Structure",
                                             source="APIFuzzer",
                                             confidence="Medium",
                                             color="slate",
@@ -361,9 +360,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                                         ))
                                         total_count = json_body.get("total_count") or json_body.get("total") or json_body.get("count")
                                         if total_count is not None:
-                                            findings.append(IntelligenceFinding(
+                                            findings.append(make_finding(
                                                 entity=f"Paginated response: total={total_count}",
-                                                type="API Paginated Response",
+                                                ftype="API Paginated Response",
                                                 source="APIFuzzer",
                                                 confidence="Medium",
                                                 color="slate",
@@ -381,9 +380,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         all_api_paths = API_BASE_PATHS + MORE_API_PATHS
         rate_limit_info = await detect_rate_limiting(client, base_url)
         if rate_limit_info.get("rate_limited"):
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="Rate limiting active (429 responses)",
-                type="API Rate Limiting Confirmed",
+                ftype="API Rate Limiting Confirmed",
                 source="APIFuzzer",
                 confidence="High",
                 color="orange",
@@ -393,9 +392,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ))
         if rate_limit_info.get("rate_limit_headers"):
             for k, v in rate_limit_info["rate_limit_headers"].items():
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Rate limit header: {k}: {v[:100]}",
-                    type="API Rate Limit Header",
+                    ftype="API Rate Limit Header",
                     source="APIFuzzer",
                     confidence="High",
                     color="slate",
@@ -405,9 +404,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         common_auth = analyze_auth_methods(headers if 'headers' in dir() else {}, str(resp.headers) if 'resp' in dir() else "")
         if common_auth.get("type"):
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Auth method: {common_auth['type']}",
-                type="API Authentication Method",
+                ftype="API Authentication Method",
                 source="APIFuzzer",
                 confidence="High",
                 color="orange",
@@ -421,9 +420,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"},
                     follow_redirects=False)
                 if resp.status_code not in (0, 405, 404):
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"{method} {base_url} -> {resp.status_code}",
-                        type="API Method Discovery",
+                        ftype="API Method Discovery",
                         source="APIFuzzer",
                         confidence="Medium",
                         color="slate",
@@ -435,12 +434,12 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 continue
 
         try:
-            query_resp = await client.get(f"{base_url}/api/users?limit=1&offset=1&page=1&filter=test&sort=id&order=asc",
+            query_resp = await safe_fetch(client, f"{base_url}/api/users?limit=1&offset=1&page=1&filter=test&sort=id&order=asc",
                 timeout=5.0, headers={"User-Agent": "Mozilla/5.0"}, follow_redirects=False)
             if query_resp.status_code not in (0, 404):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Common API params accepted: {base_url} -> {query_resp.status_code}",
-                    type="API Common Parameters Accepted",
+                    ftype="API Common Parameters Accepted",
                     source="APIFuzzer",
                     confidence="Medium",
                     color="slate",
@@ -451,9 +450,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             pass
 
         for fw_name, count in sorted(frameworks_detected.items(), key=lambda x: -x[1])[:5]:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=fw_name,
-                type="API Framework",
+                ftype="API Framework",
                 source="APIFuzzer",
                 confidence="Medium",
                 color="purple",
@@ -464,9 +463,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         if discovered_endpoints:
             allowed_methods = sum(1 for f in findings if f.type == "API Allowed Methods")
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{len(discovered_endpoints)} API endpoints discovered, {len(frameworks_detected)} frameworks, {allowed_methods} method configs",
-                type="API Fuzzing Summary",
+                ftype="API Fuzzing Summary",
                 source="APIFuzzer",
                 confidence="High",
                 color="cyan",
@@ -475,9 +474,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 tags=["api", "summary"]
             ))
         else:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="No API endpoints discovered",
-                type="API Fuzzing Summary",
+                ftype="API Fuzzing Summary",
                 source="APIFuzzer",
                 confidence="Low",
                 color="slate",
@@ -486,9 +485,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ))
 
     except Exception as e:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"API Fuzzer error: {str(e)[:100]}",
-            type="API Fuzzer Error",
+            ftype="API Fuzzer Error",
             source="APIFuzzer",
             confidence="Low",
             color="red",
@@ -497,7 +496,6 @@ async def crawl(target: str, client: httpx.AsyncClient):
         ))
 
     return findings
-
 
 # === EXTENDED UPGRADE: 500+ API paths, param fuzzing, auth detection, response analysis ===
 
@@ -705,7 +703,7 @@ async def detect_rate_limiting(client, base_url):
     results = {}
     try:
         for _ in range(10):
-            resp = await client.get(base_url, timeout=5.0,
+            resp = await safe_fetch(client, base_url, timeout=5.0,
                 headers={"User-Agent": "Mozilla/5.0"})
             if resp.status_code == 429:
                 results["rate_limited"] = True
@@ -713,7 +711,7 @@ async def detect_rate_limiting(client, base_url):
                 return results
         headers = {}
         for _ in range(5):
-            resp = await client.get(base_url, timeout=5.0,
+            resp = await safe_fetch(client, base_url, timeout=5.0,
                 headers={"User-Agent": "Mozilla/5.0"})
             h = dict(resp.headers)
             for k, v in h.items():

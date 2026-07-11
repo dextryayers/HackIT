@@ -2,7 +2,7 @@ import httpx
 import re
 import hashlib
 import json
-from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash
 
 SOCIAL_SITES = [
     ("GitHub", "https://api.github.com/search/commits?q={email}",
@@ -48,7 +48,7 @@ UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 async def search_github_commits(email: str, client: httpx.AsyncClient) -> dict:
     result = {"usernames": [], "repos": [], "found": False}
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://api.github.com/search/commits?q={email}&per_page=5",
             timeout=15.0,
             headers={"User-Agent": UA, "Accept": "application/vnd.github.cloak-preview"}
@@ -75,7 +75,7 @@ async def search_paste_sites(email: str, client: httpx.AsyncClient) -> list:
     results = []
     for name, url in PASTE_PATTERNS:
         try:
-            resp = await client.get(url.format(email=email), timeout=10.0,
+            resp = await safe_fetch(client, url.format(email=email), timeout=10.0,
                 headers={"User-Agent": UA}, follow_redirects=True)
             if resp.status_code == 200 and len(resp.text) > 200:
                 if email.lower() in resp.text.lower():
@@ -88,7 +88,7 @@ async def check_gravatar(email: str, client: httpx.AsyncClient) -> dict:
     result = {"found": False, "profile_url": "", "display_name": "", "avatar_url": ""}
     email_hash = hashlib.md5(email.lower().encode()).hexdigest()
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://www.gravatar.com/{email_hash}.json",
             timeout=10.0,
             headers={"User-Agent": UA}
@@ -112,7 +112,7 @@ async def search_forum_profiles(email: str, client: httpx.AsyncClient) -> list:
     results = []
     for name, url in FORUM_PATTERNS:
         try:
-            resp = await client.get(url.format(email=email), timeout=10.0,
+            resp = await safe_fetch(client, url.format(email=email), timeout=10.0,
                 headers={"User-Agent": UA})
             if resp.status_code == 200:
                 text_lower = resp.text.lower()
@@ -126,9 +126,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     findings = []
     email = target.strip().lower()
     if "@" not in email:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="Not a valid email",
-            type="Social Correlation Error",
+            ftype="Social Correlation Error",
             source="EmailSocialCorrelation",
             confidence="High", color="red", category="General OSINT",
             threat_level="Informational", status="Error",
@@ -141,9 +141,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     gravatar = await check_gravatar(email, client)
     if gravatar["found"]:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Gravatar profile: {gravatar['display_name'] or 'Unknown'}",
-            type="Social: Gravatar Profile",
+            ftype="Social: Gravatar Profile",
             source="EmailSocialCorrelation",
             confidence="High",
             color="purple",
@@ -156,9 +156,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         ))
         if gravatar.get("urls"):
             for u in gravatar["urls"][:5]:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Associated URL: {u}",
-                    type="Social: Gravatar Associated URL",
+                    ftype="Social: Gravatar Associated URL",
                     source="EmailSocialCorrelation",
                     confidence="Medium",
                     color="slate",
@@ -168,9 +168,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                     tags=["gravatar", "associated-url"]
                 ))
     else:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="No Gravatar profile found",
-            type="Social: Gravatar Check",
+            ftype="Social: Gravatar Check",
             source="EmailSocialCorrelation",
             confidence="High",
             color="slate",
@@ -183,7 +183,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     github = await search_github_commits(email, client)
     if github["found"]:
         for username in github["usernames"]:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"GitHub commit author: {username} (email: {email})",
                 type="Social: GitHub Commit Association",
                 source="EmailSocialCorrelation",
@@ -196,9 +196,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                 tags=["github", "commit", "code-correlation"]
             ))
         for repo in github["repos"][:5]:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"GitHub repository: {repo}",
-                type="Social: GitHub Repository",
+                ftype="Social: GitHub Repository",
                 source="EmailSocialCorrelation",
                 confidence="High",
                 color="slate",
@@ -207,9 +207,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                 tags=["github", "repository"]
             ))
     else:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="No GitHub commits found for this email",
-            type="Social: GitHub Commit Search",
+            ftype="Social: GitHub Commit Search",
             source="EmailSocialCorrelation",
             confidence="Medium",
             color="slate",
@@ -221,9 +221,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     paste_results = await search_paste_sites(email, client)
     for pr in paste_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Email found on {pr['site']}",
-            type="Social: Paste Site Presence",
+            ftype="Social: Paste Site Presence",
             source="EmailSocialCorrelation",
             confidence="Medium",
             color="orange",
@@ -237,9 +237,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     forum_results = await search_forum_profiles(email, client)
     for fr in forum_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Email {email} possibly associated with {fr['forum']}",
-            type="Social: Forum Profile Correlation",
+            ftype="Social: Forum Profile Correlation",
             source="EmailSocialCorrelation",
             confidence="Low",
             color="slate",
@@ -250,9 +250,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             tags=["forum", "profile-correlation", fr['forum'].lower().replace(" ", "-")]
         ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Email domain: {domain}",
-        type="Social: Domain Extraction",
+        ftype="Social: Domain Extraction",
         source="EmailSocialCorrelation",
         confidence="High",
         color="slate",
@@ -269,7 +269,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         associated_usernames.extend(github["usernames"])
 
     if associated_usernames:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Cross-referenced usernames from email {email}: {', '.join(set(associated_usernames))}",
             type="Social: Username Cross-Reference",
             source="EmailSocialCorrelation",
@@ -282,9 +282,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         ))
 
     social_count = sum(1 for f in findings if f.type.startswith("Social:"))
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Social correlation scan complete for {email}: {social_count} social links found",
-        type="Social: Correlation Summary",
+        ftype="Social: Correlation Summary",
         source="EmailSocialCorrelation",
         confidence="High",
         color="purple",

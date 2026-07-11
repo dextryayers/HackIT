@@ -3,8 +3,9 @@ import socket
 import asyncio
 import re
 from typing import List
+from osint_common import normalize_target
 from models import IntelligenceFinding
-from osint_common import normalize_target, make_finding
+from module_common import safe_fetch, make_finding
 
 CENSYS_V2_HOSTS = "https://search.censys.io/api/v2/hosts"
 CENSYS_V2_CERTS = "https://search.censys.io/api/v2/certificates/search"
@@ -33,7 +34,7 @@ async def query_hosts(target: str, client: httpx.AsyncClient) -> List[dict]:
             ip = await loop.run_in_executor(None, lambda: socket.gethostbyname(target))
         except:
             return []
-        resp = await client.get(f"{CENSYS_V2_HOSTS}/{ip}", timeout=15.0,
+        resp = await safe_fetch(client, f"{CENSYS_V2_HOSTS}/{ip}", timeout=15.0,
             headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"})
         if resp.status_code == 403:
             return []
@@ -45,7 +46,7 @@ async def query_hosts(target: str, client: httpx.AsyncClient) -> List[dict]:
 
 async def query_certificates(target: str, client: httpx.AsyncClient, page_size: int = 50) -> List[dict]:
     try:
-        resp = await client.get(f"{CENSYS_V2_CERTS}?q=names:{target}&per_page={page_size}",
+        resp = await safe_fetch(client, f"{CENSYS_V2_CERTS}?q=names:{target}&per_page={page_size}",
             timeout=15.0, headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"})
         if resp.status_code == 200:
             data = resp.json()
@@ -56,7 +57,7 @@ async def query_certificates(target: str, client: httpx.AsyncClient, page_size: 
 
 async def query_subdomains(target: str, client: httpx.AsyncClient) -> List[dict]:
     try:
-        resp = await client.get(f"{CENSYS_V2_SUBDOMAINS}/{target}/subdomains",
+        resp = await safe_fetch(client, f"{CENSYS_V2_SUBDOMAINS}/{target}/subdomains",
             timeout=15.0, headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"})
         if resp.status_code == 200:
             data = resp.json()
@@ -68,7 +69,7 @@ async def query_subdomains(target: str, client: httpx.AsyncClient) -> List[dict]
 async def query_host_search(target: str, client: httpx.AsyncClient) -> List[dict]:
     results = []
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"{CENSYS_V2_HOSTS}/search",
             params={"q": target, "per_page": 20},
             timeout=15.0,

@@ -1,4 +1,3 @@
-import httpx
 import asyncio
 import dns.resolver
 import dns.query
@@ -6,11 +5,10 @@ import dns.zone
 import dns.name
 import dns.dnssec
 import re
-import socket
 import struct
 import base64
-from models import IntelligenceFinding
 from collections import defaultdict
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash
 
 DNSSEC_ALGORITHMS = {
     1: "RSAMD5", 2: "DH", 3: "DSA", 4: "ECC",
@@ -32,9 +30,9 @@ async def check_zone_transfer(domain):
         ns_records = dns.resolver.resolve(domain, 'NS')
         for ns in ns_records:
             ns_server = str(ns.target)
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Testing zone transfer on {ns_server}",
-                type="Zone Transfer Attempt",
+                ftype="Zone Transfer Attempt",
                 source="DNS Deep Forensics",
                 confidence="High",
                 color="blue",
@@ -46,9 +44,9 @@ async def check_zone_transfer(domain):
                 zone = dns.zone.from_xfr(dns.query.xfr(ns_server, domain, timeout=10))
                 if zone:
                     records = list(zone.nodes.keys())[:20]
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=domain,
-                        type="DNS Zone Transfer",
+                        ftype="DNS Zone Transfer",
                         source="DNS Deep Forensics",
                         confidence="Certain",
                         color="red",
@@ -58,9 +56,9 @@ async def check_zone_transfer(domain):
                         tags=["zone-transfer", "vulnerable", "critical"]
                     ))
                 else:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Zone transfer denied by {ns_server}",
-                        type="Zone Transfer Attempt",
+                        ftype="Zone Transfer Attempt",
                         source="DNS Deep Forensics",
                         confidence="High",
                         color="green",
@@ -70,9 +68,9 @@ async def check_zone_transfer(domain):
                         tags=["zone-transfer", "secure"]
                     ))
             except:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Zone transfer DENIED by {ns_server}",
-                    type="Zone Transfer Attempt",
+                    ftype="Zone Transfer Attempt",
                     source="DNS Deep Forensics",
                     confidence="High",
                     color="green",
@@ -91,7 +89,7 @@ async def check_dnssec_analysis(domain):
         dnskey_answers = dns.resolver.resolve(domain, 'DNSKEY')
         dnskey_records = list(dnskey_answers)
         if dnskey_records:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{len(dnskey_records)} DNSKEY records found for {domain}",
                 type="DNSSEC DNSKEY Records",
                 source="DNS Deep Forensics",
@@ -110,9 +108,9 @@ async def check_dnssec_analysis(domain):
                     key_tag = dns.dnssec.key_id(key) if hasattr(dns.dnssec, 'key_id') else 0
                     key_text = base64.b64encode(key.key).decode()[:60]
                     zsk = "ZSK" if flags == 256 else "KSK" if flags == 257 else "Unknown"
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"DNSKEY #{i+1}: {zsk}, algo={algo}, flags={flags}, tag={key_tag}",
-                        type="DNSSEC DNSKEY Detail",
+                        ftype="DNSSEC DNSKEY Detail",
                         source="DNS Deep Forensics",
                         confidence="High",
                         color="emerald",
@@ -126,7 +124,7 @@ async def check_dnssec_analysis(domain):
         ds_answers = dns.resolver.resolve(domain, 'DS')
         ds_records = list(ds_answers)
         if ds_records:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{len(ds_records)} DS records found for {domain}",
                 type="DNSSEC DS Records",
                 source="DNS Deep Forensics",
@@ -141,14 +139,14 @@ async def check_dnssec_analysis(domain):
                 try:
                     digest_type = DIGEST_TYPES.get(ds.digest_type, f"Unknown({ds.digest_type})")
                     algo_str = DNSSEC_ALGORITHMS.get(ds.algorithm, f"Unknown({ds.algorithm})")
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"DS: key_tag={ds.key_tag}, algo={algo_str}, digest={ds.digest[:20]}...",
-                        type="DNSSEC DS Detail",
+                        ftype="DNSSEC DS Detail",
                         source="DNS Deep Forensics",
                         confidence="High",
                         color="emerald",
                         threat_level="Informational",
-                        raw_data=f"DS record: key_tag={ds.key_tag}, algorithm={ds.algorithm}, digest_type={digest_type}, digest={ds.digest.hex()}",
+                        raw_data=f"DS record: key_tag={ds.key_tag}, algorithm={ds.algorithm}, digest_ftype={digest_type}, digest={ds.digest.hex()}",
                         tags=["dnssec", "ds"]
                     ))
                 except:
@@ -157,7 +155,7 @@ async def check_dnssec_analysis(domain):
         rrsig_answers = dns.resolver.resolve(domain, 'RRSIG')
         rrsig_records = list(rrsig_answers)
         if rrsig_records:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{len(rrsig_records)} RRSIG records found for {domain}",
                 type="DNSSEC RRSIG Records",
                 source="DNS Deep Forensics",
@@ -171,9 +169,9 @@ async def check_dnssec_analysis(domain):
             for sig in rrsig_records[:5]:
                 try:
                     algo_str = DNSSEC_ALGORITHMS.get(sig.algorithm, f"Unknown({sig.algorithm})")
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"RRSIG: {sig.type_covered} by {sig.signer}, algo={algo_str}, expires={sig.expiration}",
-                        type="DNSSEC RRSIG Detail",
+                        ftype="DNSSEC RRSIG Detail",
                         source="DNS Deep Forensics",
                         confidence="High",
                         color="emerald",
@@ -185,9 +183,9 @@ async def check_dnssec_analysis(domain):
                     pass
 
         if not dnskey_records and not ds_records and not rrsig_records:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"No DNSSEC records found for {domain}",
-                type="DNSSEC Status",
+                ftype="DNSSEC Status",
                 source="DNS Deep Forensics",
                 confidence="High",
                 color="orange",
@@ -197,9 +195,9 @@ async def check_dnssec_analysis(domain):
                 tags=["dnssec", "missing"]
             ))
     except:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"DNSSEC not configured for {domain}",
-            type="DNSSEC Status",
+            ftype="DNSSEC Status",
             source="DNS Deep Forensics",
             confidence="Medium",
             color="orange",
@@ -222,9 +220,9 @@ async def check_cname_chain(domain):
             cname_answers = dns.resolver.resolve(current, 'CNAME')
             cname_target = str(cname_answers[0].target).rstrip('.')
             chain.append((current, "CNAME", cname_target))
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{current} -> CNAME -> {cname_target}",
-                type="CNAME Chain Link",
+                ftype="CNAME Chain Link",
                 source="DNS Deep Forensics",
                 confidence="High",
                 color="purple",
@@ -239,7 +237,7 @@ async def check_cname_chain(domain):
                 a_answers = dns.resolver.resolve(current, 'A')
                 ip = str(a_answers[0])
                 chain.append((current, "A", ip))
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{current} -> A -> {ip} (FINAL)",
                     type="CNAME Chain Final Resolution",
                     source="DNS Deep Forensics",
@@ -257,7 +255,7 @@ async def check_cname_chain(domain):
                     aaaa_answers = dns.resolver.resolve(current, 'AAAA')
                     ip = str(aaaa_answers[0])
                     chain.append((current, "AAAA", ip))
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"{current} -> AAAA -> {ip} (FINAL)",
                         type="CNAME Chain Final Resolution (IPv6)",
                         source="DNS Deep Forensics",
@@ -273,7 +271,7 @@ async def check_cname_chain(domain):
                 except:
                     break
     if len(chain) > 1:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"CNAME chain for {domain}: {len(chain)} hops",
             type="CNAME Chain Summary",
             source="DNS Deep Forensics",
@@ -290,7 +288,7 @@ async def check_ns_delegation(domain):
     try:
         ns_answers = dns.resolver.resolve(domain, 'NS')
         ns_hosts = [str(r).rstrip('.') for r in ns_answers]
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{len(ns_hosts)} nameservers: {', '.join(ns_hosts)}",
             type="NS Delegation Records",
             source="DNS Deep Forensics",
@@ -306,7 +304,7 @@ async def check_ns_delegation(domain):
             try:
                 glue_a = dns.resolver.resolve(ns, 'A')
                 for ip in glue_a:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Glue: {ns} -> {str(ip)}",
                         type="NS Glue Record (A)",
                         source="DNS Deep Forensics",
@@ -318,9 +316,9 @@ async def check_ns_delegation(domain):
                         tags=["ns", "glue", "a-record"]
                     ))
             except:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Missing glue A record for {ns}!",
-                    type="Missing NS Glue Record",
+                    ftype="Missing NS Glue Record",
                     source="DNS Deep Forensics",
                     confidence="Medium",
                     color="orange",
@@ -332,7 +330,7 @@ async def check_ns_delegation(domain):
             try:
                 glue_aaaa = dns.resolver.resolve(ns, 'AAAA')
                 for ip in glue_aaaa:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Glue (IPv6): {ns} -> {str(ip)}",
                         type="NS Glue Record (AAAA)",
                         source="DNS Deep Forensics",
@@ -362,9 +360,9 @@ async def check_soa_analysis(domain):
             expire = soa.expire
             minimum = soa.minimum
 
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"SOA: mname={mname}, rname={rname}",
-                type="SOA Record (Authority)",
+                ftype="SOA Record (Authority)",
                 source="DNS Deep Forensics",
                 confidence="High",
                 color="indigo",
@@ -373,9 +371,9 @@ async def check_soa_analysis(domain):
                 tags=["soa", "authority"]
             ))
 
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Serial: {serial}",
-                type="SOA Serial Number",
+                ftype="SOA Serial Number",
                 source="DNS Deep Forensics",
                 confidence="High",
                 color="indigo",
@@ -384,7 +382,7 @@ async def check_soa_analysis(domain):
                 tags=["soa", "serial"]
             ))
 
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Refresh: {refresh}s ({refresh//60}min), Retry: {retry}s ({retry//60}min)",
                 type="SOA Timing: Refresh/Retry",
                 source="DNS Deep Forensics",
@@ -395,7 +393,7 @@ async def check_soa_analysis(domain):
                 tags=["soa", "timing"]
             ))
 
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Expire: {expire}s ({expire//3600}h), MinTTL: {minimum}s ({minimum//60}min)",
                 type="SOA Timing: Expire/Minimum",
                 source="DNS Deep Forensics",
@@ -408,7 +406,7 @@ async def check_soa_analysis(domain):
 
             # Security recommendations
             if minimum < 60:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Low minimum TTL ({minimum}s) may indicate dynamic DNS",
                     type="SOA Security Suggestion",
                     source="DNS Deep Forensics",
@@ -419,7 +417,7 @@ async def check_soa_analysis(domain):
                     tags=["soa", "ttl", "suggestion"]
                 ))
             if expire < 604800:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Low expire time ({expire}s) - secondary NS may drop zone quickly",
                     type="SOA Security Suggestion",
                     source="DNS Deep Forensics",
@@ -436,9 +434,9 @@ async def check_soa_analysis(domain):
                 year = serial_str[:4]
                 month = serial_str[4:6]
                 day = serial_str[6:8]
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Serial {serial} possibly date-based: {year}-{month}-{day}",
-                    type="SOA Serial Date Interpretation",
+                    ftype="SOA Serial Date Interpretation",
                     source="DNS Deep Forensics",
                     confidence="Low",
                     color="slate",
@@ -466,9 +464,9 @@ async def check_dmarc_dkim_spf_deep(domain):
                 spf_status = "STRICT" if has_hard_fail else "SOFT" if soft_fail else "WEAK" if has_all else "NEUTRAL"
                 spf_color = "green" if has_hard_fail else "yellow" if soft_fail else "red" if has_all else "orange"
 
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"SPF: {txt[:200]}",
-                    type=f"SPF Record ({spf_status})",
+                    ftype=f"SPF Record ({spf_status})",
                     source="DNS Deep Forensics",
                     confidence="High",
                     color=spf_color,
@@ -479,9 +477,9 @@ async def check_dmarc_dkim_spf_deep(domain):
 
                 if includes:
                     for inc in includes[:3]:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"SPF includes: {inc}",
-                            type="SPF Include Mechanism",
+                            ftype="SPF Include Mechanism",
                             source="DNS Deep Forensics",
                             confidence="Medium",
                             color="blue",
@@ -491,9 +489,9 @@ async def check_dmarc_dkim_spf_deep(domain):
                         ))
 
                 if has_all:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"DANGEROUS SPF '+all' on {domain}! Any server can send email as this domain",
-                        type="SPF Critical Weakness",
+                        ftype="SPF Critical Weakness",
                         source="DNS Deep Forensics",
                         confidence="Certain",
                         color="red",
@@ -521,9 +519,9 @@ async def check_dmarc_dkim_spf_deep(domain):
             dmarc_color = "green" if policy_val == "reject" else "yellow" if policy_val == "quarantine" else "red"
             dmarc_level = "Informational" if policy_val == "reject" else "Elevated Risk" if policy_val == "none" else "Standard Target"
 
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"DMARC: p={policy_val}, sp={sp_val}, pct={pct_val}",
-                type=f"DMARC Policy ({policy_val.upper()})",
+                ftype=f"DMARC Policy ({policy_val.upper()})",
                 source="DNS Deep Forensics",
                 confidence="High",
                 color=dmarc_color,
@@ -533,7 +531,7 @@ async def check_dmarc_dkim_spf_deep(domain):
             ))
 
             if rua:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"DMARC reports sent to: {rua.group(1)}",
                     type="DMARC Reporting",
                     source="DNS Deep Forensics",
@@ -544,7 +542,7 @@ async def check_dmarc_dkim_spf_deep(domain):
                     tags=["dmarc", "reporting"]
                 ))
             if ruf:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"DMARC forensic reports to: {ruf.group(1)}",
                     type="DMARC Forensic Reporting",
                     source="DNS Deep Forensics",
@@ -556,9 +554,9 @@ async def check_dmarc_dkim_spf_deep(domain):
                 ))
 
             if policy_val == "none":
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"DMARC policy is 'none' on {domain} - no email protection!",
-                    type="DMARC Weakness",
+                    ftype="DMARC Weakness",
                     source="DNS Deep Forensics",
                     confidence="High",
                     color="red",
@@ -580,7 +578,7 @@ async def check_dmarc_dkim_spf_deep(domain):
                 dkim_color = "emerald"
                 if "v=DKIM1" in dkim_text or "v=DKIM1" in dkim_text.upper():
                     dkim_type = "DKIM v1"
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"DKIM ({selector}): {dkim_text[:200]}",
                     type=dkim_type,
                     source="DNS Deep Forensics",
@@ -603,7 +601,7 @@ async def check_nsec_walking(domain):
         for nsec in nsec_answers:
             next_domain = str(nsec.next).rstrip('.')
             type_bitmaps = str(nsec.rdtypes) if hasattr(nsec, 'rdtypes') else "?"
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"NSEC: {domain} -> {next_domain} ({type_bitmaps})",
                 type="NSEC Record (Zone Walking Possible)",
                 source="DNS Deep Forensics",
@@ -621,9 +619,9 @@ async def check_nsec_walking(domain):
                     salt = nsec3.salt.hex() if nsec3.salt else "none"
                     iterations = nsec3.iterations
                     next_hashed = nsec3.next.hex() if hasattr(nsec3, 'next') else "?"
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"NSEC3: salt={salt}, iterations={iterations}",
-                        type="NSEC3 Record (NSEC3 Present)",
+                        ftype="NSEC3 Record (NSEC3 Present)",
                         source="DNS Deep Forensics",
                         confidence="High",
                         color="blue",
@@ -631,7 +629,7 @@ async def check_nsec_walking(domain):
                         raw_data=f"NSEC3 parameters: salt={salt}, iterations={iterations}, algorithm={nsec3.algorithm}",
                         tags=["nsec3", "dnssec"]
                     ))
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"NSEC3 mitigated zone walking (salt={salt}, iter={iterations})",
                         type="NSEC3 Mitigation Status",
                         source="DNS Deep Forensics",
@@ -654,9 +652,9 @@ async def check_mx_security(domain):
         for mx in mx_answers:
             mx_host = str(mx.exchange).rstrip('.')
             mx_pref = mx.preference
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"MX {mx_pref}: {mx_host}",
-                type="MX Record",
+                ftype="MX Record",
                 source="DNS Deep Forensics",
                 confidence="High",
                 color="slate",
@@ -667,7 +665,7 @@ async def check_mx_security(domain):
             try:
                 mx_a = dns.resolver.resolve(mx_host, 'A')
                 for ip in mx_a:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"MX {mx_host} -> {str(ip)}",
                         type="MX Server IP Resolution",
                         source="DNS Deep Forensics",
@@ -681,7 +679,7 @@ async def check_mx_security(domain):
                     try:
                         ptr = dns.resolver.resolve(dns.reversename.from_address(str(ip)), 'PTR')
                         for p in ptr:
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=f"PTR: {ip} -> {str(p)}",
                                 type="MX Server PTR Record",
                                 source="DNS Deep Forensics",
@@ -692,9 +690,9 @@ async def check_mx_security(domain):
                                 tags=["mx", "ptr", "email"]
                             ))
                     except:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"No PTR record for MX IP {ip}",
-                            type="Missing MX PTR Record",
+                            ftype="Missing MX PTR Record",
                             source="DNS Deep Forensics",
                             confidence="Medium",
                             color="yellow",
@@ -737,9 +735,9 @@ async def crawl(target, client):
             answers = await asyncio.get_event_loop().run_in_executor(None, lambda: dns.resolver.resolve(target, rtype))
             for rdata in answers:
                 val = str(rdata)
-                recs.append(IntelligenceFinding(
+                recs.append(make_finding(
                     entity=val[:300],
-                    type=f"DNS {rtype} Record",
+                    ftype=f"DNS {rtype} Record",
                     source="DNS Deep Forensics",
                     confidence="High",
                     color="blue",

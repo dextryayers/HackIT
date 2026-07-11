@@ -6,6 +6,7 @@ import hashlib
 from datetime import datetime
 from collections import defaultdict
 from urllib.parse import quote
+from module_common import safe_fetch, safe_fetch_json, make_finding
 from models import IntelligenceFinding
 
 CREDENTIAL_PATTERN = re.compile(
@@ -144,7 +145,7 @@ async def identify_hash_type(hash_str: str) -> list:
 
 async def fetch_paste_content(client, url):
     try:
-        resp = await client.get(url, timeout=10.0,
+        resp = await safe_fetch(client, url, timeout=10.0,
             headers={"User-Agent": "Mozilla/5.0"})
         if resp.status_code == 200:
             return resp.text
@@ -156,7 +157,7 @@ async def check_leakix(client, target):
     findings = []
     try:
         headers = {"Accept": "application/json"}
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://leakix.net/search?scope=leak&q={target}",
             headers=headers, timeout=15.0
         )
@@ -172,7 +173,7 @@ async def check_leakix(client, target):
                 if leak_date:
                     leak_dates.append(leak_date)
 
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=target,
                     type="Data Breach / Leak",
                     source="LeakIX Forensics",
@@ -188,7 +189,7 @@ async def check_leakix(client, target):
                 if summary:
                     classified = await classify_leak(summary)
                     if classified != "unknown":
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=target,
                             type=f"Leak Classification: {classified.title()}",
                             source="LeakIX Forensics",
@@ -211,7 +212,7 @@ async def check_leakix(client, target):
                     if dates_parsed:
                         earliest = min(dates_parsed).isoformat()[:10]
                         latest = max(dates_parsed).isoformat()[:10]
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=target,
                             type="Leak Timeline",
                             source="LeakIX Forensics",
@@ -232,7 +233,7 @@ async def check_leakix(client, target):
 async def check_psbdmp(client, target):
     findings = []
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://psbdmp.ws/api/search/{target}",
             timeout=12.0
         )
@@ -246,7 +247,7 @@ async def check_psbdmp(client, target):
                     tags = p.get("tags", [])
                     raw = p.get("raw", "")
 
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=target,
                         type="Paste Mention",
                         source="PSBDMP.ws",
@@ -264,7 +265,7 @@ async def check_psbdmp(client, target):
                         all_text += raw + "\n"
                         creds = await extract_credentials(raw)
                         for cred in creds[:3]:
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=cred["email"][:200],
                                 type="Credential Exposure",
                                 source="PSBDMP.ws",
@@ -281,7 +282,7 @@ async def check_psbdmp(client, target):
                 if all_text:
                     api_keys = API_KEY_PATTERN.findall(all_text)
                     for ak in api_keys[:3]:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"API Key: {ak[:30]}...",
                             type="API Key Exposure",
                             source="PSBDMP.ws",
@@ -296,7 +297,7 @@ async def check_psbdmp(client, target):
                     emails = EMAIL_PATTERN.findall(all_text)
                     unique_emails = list(set(emails))
                     if unique_emails:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"{len(unique_emails)} unique emails found in pastes",
                             type="Email Exposure Count",
                             source="PSBDMP.ws",
@@ -310,7 +311,7 @@ async def check_psbdmp(client, target):
 
                     phones = PHONE_PATTERN.findall(all_text)
                     if phones:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"{len(set(phones))} unique phone numbers found",
                             type="Phone Exposure",
                             source="PSBDMP.ws",
@@ -324,7 +325,7 @@ async def check_psbdmp(client, target):
 
                     ssns = SSN_PATTERN.findall(all_text)
                     if ssns:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"{len(set(ssns))} SSNs found in pastes",
                             type="SSN Exposure",
                             source="PSBDMP.ws",
@@ -338,7 +339,7 @@ async def check_psbdmp(client, target):
 
                     ccs = CC_PATTERN.findall(all_text)
                     if ccs:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"{len(set(ccs))} credit card numbers found",
                             type="Financial Data Exposure",
                             source="PSBDMP.ws",
@@ -352,7 +353,7 @@ async def check_psbdmp(client, target):
 
                     ips = IP_PATTERN.findall(all_text)
                     if ips:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"{len(set(ips))} IP addresses found in pastes",
                             type="IP Address Exposure",
                             source="PSBDMP.ws",
@@ -379,12 +380,12 @@ async def check_pastebinpro(client, target):
     ]:
         try:
             url = url_builder(target)
-            resp = await client.get(url, timeout=10.0,
+            resp = await safe_fetch(client, url, timeout=10.0,
                 headers={"User-Agent": "Mozilla/5.0"})
             if resp.status_code == 200:
                 text = resp.text.lower()
                 if "found" in text or "result" in text or target.lower() in text:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=target,
                         type="Paste Site Mention",
                         source=site_name,
@@ -403,7 +404,7 @@ async def check_pastebinpro(client, target):
 async def check_hibp_breaches(client, target):
     findings = []
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://haveibeenpwned.com/api/v3/breaches?domain={target}",
             timeout=10.0,
             headers={"User-Agent": "Mozilla/5.0", "hibp-api-key": ""}
@@ -415,7 +416,7 @@ async def check_hibp_breaches(client, target):
                 for br in breaches[:15]:
                     pwn_count = br.get("PwnCount", 0) or 0
                     total_records += pwn_count
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=br.get("Title", target),
                         type="Known Breach (HIBP)",
                         source="HaveIBeenPwned",
@@ -431,7 +432,7 @@ async def check_hibp_breaches(client, target):
                         tags=["hibp", "breach"]
                     ))
                 if total_records:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"{total_records:,} total records exposed across {len(breaches)} breaches",
                         type="Total Exposure Volume",
                         source="HaveIBeenPwned",
@@ -460,7 +461,7 @@ async def check_breach_directory(client, target):
             breaches = data.get("breaches", data.get("results", []))
             for breach in breaches[:10]:
                 if isinstance(breach, dict):
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=breach.get("name", breach.get("title", target)),
                         type="Breach Directory Entry",
                         source="BreachDirectory",
@@ -481,7 +482,7 @@ async def analyze_credential_hashes(text: str) -> list:
     for name, pattern in HASH_PATTERNS.items():
         matches = pattern.findall(text)
         if matches:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{len(set(matches))} potential {name} hashes found",
                 type=f"Hash Identification: {name}",
                 source="Breach Forensics",
@@ -503,10 +504,10 @@ async def check_clear_web_breach_sources(client, target):
     ]
     for name, url in sources:
         try:
-            resp = await client.get(url, timeout=10.0,
+            resp = await safe_fetch(client, url, timeout=10.0,
                 headers={"User-Agent": "Mozilla/5.0"})
             if resp.status_code == 200 and len(resp.text) > 500:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Source: {name} returned results",
                     type="Breach Source Accessible",
                     source=name,
@@ -542,7 +543,7 @@ async def analyze_data_impact_level(text: str) -> list:
     if data_types_found:
         impact_score = len(data_types_found)
         impact = "Critical" if impact_score >= 4 else ("High Risk" if impact_score >= 3 else "Medium")
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Data types exposed: {', '.join(sorted(data_types_found))}",
             type="Data Impact Assessment",
             source="Breach Forensics",
@@ -561,7 +562,7 @@ async def analyze_jwt_tokens(text: str) -> list:
         matches = JWT_PATTERN.findall(text)
         if matches:
             for jwt in matches[:5]:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"JWT token found: {jwt[:60]}...",
                     type="JWT Token Exposure",
                     source="Breach Forensics",
@@ -582,7 +583,7 @@ async def analyze_crypto_wallets(text: str) -> list:
     try:
         btc_matches = BTC_PATTERN.findall(text)
         if btc_matches:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{len(set(btc_matches))} Bitcoin address(es) found",
                 type="Crypto Wallet Exposure: BTC",
                 source="Breach Forensics",
@@ -595,7 +596,7 @@ async def analyze_crypto_wallets(text: str) -> list:
             ))
         eth_matches = ETH_PATTERN.findall(text)
         if eth_matches:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{len(set(eth_matches))} Ethereum address(es) found",
                 type="Crypto Wallet Exposure: ETH",
                 source="Breach Forensics",
@@ -622,7 +623,7 @@ async def analyze_password_strength(credentials: list) -> list:
             elif PASSWORD_STRENGTH_PATTERNS["weak"].match(secret):
                 weak_passwords += 1
         if very_weak_passwords:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{very_weak_passwords} very weak passwords (1-6 chars)",
                 type="Password Strength: Very Weak",
                 source="Breach Forensics",
@@ -634,7 +635,7 @@ async def analyze_password_strength(credentials: list) -> list:
                 tags=["password", "weak", "strength"]
             ))
         if weak_passwords:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{weak_passwords} weak passwords (7-10 chars)",
                 type="Password Strength: Weak",
                 source="Breach Forensics",
@@ -670,7 +671,7 @@ async def analyze_credential_stuffing_risk(credentials: list) -> list:
             elif total_creds >= 3:
                 risk = "Elevated Risk"
                 color = "orange"
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Credential stuffing risk: {total_creds} credentials from {len(domains)} domains",
                 type="Credential Stuffing Risk Assessment",
                 source="Breach Forensics",
@@ -691,10 +692,10 @@ async def check_additional_breach_sources(client, target):
     for name, url_builder, _ in ADDITIONAL_BREACH_SOURCES:
         try:
             url = url_builder(base_url)
-            resp = await client.get(url, timeout=10.0,
+            resp = await safe_fetch(client, url, timeout=10.0,
                 headers={"User-Agent": "Mozilla/5.0"})
             if resp.status_code == 200 and len(resp.text) > 50:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Source {name} returned results for {target}",
                     type="Additional Breach Source Hit",
                     source=name,
@@ -715,7 +716,7 @@ async def analyze_hash_types_advanced(text: str) -> list:
         matches = pattern.findall(text)
         if matches:
             unique = set(matches)
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{len(unique)} potential {name} hashes found",
                 type=f"Advanced Hash Identification: {name}",
                 source="Breach Forensics",
@@ -788,7 +789,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
     breach_count = len([f for f in findings if "breach" in f.type.lower() or "credential" in f.type.lower() or "exposure" in f.type.lower()])
     if breach_count:
         risk = "Critical" if breach_count >= 10 else ("High Risk" if breach_count >= 5 else "Elevated Risk")
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=target,
             type="Breach Risk Summary",
             source="Breach Forensics",
@@ -806,7 +807,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         source_dist[f.source] += 1
     if source_dist:
         source_summary = ", ".join(f"{k}: {v}" for k, v in sorted(source_dist.items(), key=lambda x: -x[1]))
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=source_summary,
             type="Breach Source Distribution",
             source="Breach Forensics",
@@ -819,7 +820,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         ))
 
     if not findings:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"No breaches/leaks found for {target}",
             type="Breach Check Complete",
             source="Breach Forensics",

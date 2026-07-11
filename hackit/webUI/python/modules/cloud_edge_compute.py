@@ -1,7 +1,7 @@
 import httpx
 import asyncio
 import re
-import socket
+from module_common import safe_fetch, safe_fetch_json, make_finding, resolve_ip, is_ip
 from models import IntelligenceFinding
 
 EDGE_PLATFORMS = {
@@ -104,16 +104,13 @@ WORKER_URL_PATTERNS = [
 ]
 
 async def _resolve_target(target: str) -> tuple:
-    try:
-        socket.inet_aton(target)
-        return target, True
-    except OSError:
-        pass
-    try:
-        ip = socket.gethostbyname(target)
+    t = target.strip()
+    if is_ip(t):
+        return t, True
+    ip = resolve_ip(t)
+    if ip:
         return ip, False
-    except Exception as e:
-        return None, str(e)
+    return None, "DNS resolution failed"
 
 async def _check_dns_edge(target: str) -> list:
     findings = []
@@ -126,7 +123,7 @@ async def _check_dns_edge(target: str) -> list:
                 for plat, config in EDGE_PLATFORMS.items():
                     for cname_pat in config.get("cname", []):
                         if cname_pat in cname:
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=plat,
                                 type=f"Edge Platform (CNAME): {config['type']}",
                                 source="EdgeComputeScanner",
@@ -148,7 +145,7 @@ async def _check_dns_edge(target: str) -> list:
                 for db_name, pats in EDGE_DB_PATTERNS.items():
                     for p in pats:
                         if p in txt:
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=db_name,
                                 type="Edge Database (TXT)",
                                 source="EdgeComputeScanner",
@@ -164,7 +161,7 @@ async def _check_dns_edge(target: str) -> list:
                 for kv_name, pats in EDGE_KV_PATTERNS.items():
                     for p in pats:
                         if p in txt:
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=kv_name,
                                 type="Edge KV Store (TXT)",
                                 source="EdgeComputeScanner",
@@ -187,7 +184,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
     findings = []
     base = f"https://{target}" if not target.startswith("http") else target
     try:
-        resp = await client.get(base, follow_redirects=True, timeout=10.0,
+        resp = await safe_fetch(client, base, follow_redirects=True, timeout=10.0,
             headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"})
         headers = dict(resp.headers)
         server = headers.get("server", "").lower()
@@ -205,7 +202,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
                         found = True
                         break
             if found:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=plat,
                     type=f"Edge Platform: {config['type']}",
                     source="EdgeComputeScanner",
@@ -221,7 +218,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
         for ch in CACHE_BEHAVIOR_HEADERS:
             if ch in headers:
                 val = headers[ch]
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Cache Status ({ch}): {val}",
                     type="Edge Cache Behavior",
                     source="EdgeComputeScanner",
@@ -236,7 +233,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
 
         if "x-amz-cf-pop" in headers:
             pop = headers["x-amz-cf-pop"]
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Lambda@Edge POP: {pop}",
                 type="Edge Compute Location",
                 source="EdgeComputeScanner",
@@ -254,7 +251,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
         html_lower = html.lower()
         for pat in WORKER_URL_PATTERNS:
             if re.search(pat, html_lower):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Edge Worker URL: {pat[:40]}",
                     type="Edge Worker URL Pattern",
                     source="EdgeComputeScanner",
@@ -270,7 +267,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
         for db_name, pats in EDGE_DB_PATTERNS.items():
             for p in pats:
                 if p in html_lower:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=db_name,
                         type="Edge Database (HTML)",
                         source="EdgeComputeScanner",
@@ -287,7 +284,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
         for kv_name, pats in EDGE_KV_PATTERNS.items():
             for p in pats:
                 if p in html_lower:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=kv_name,
                         type="Edge KV Store (HTML)",
                         source="EdgeComputeScanner",
@@ -302,7 +299,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
                     break
 
     except Exception as e:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Edge scan error: {str(e)[:100]}",
             type="Edge Scan Error",
             source="EdgeComputeScanner",
@@ -324,11 +321,11 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     ip, is_ip = await _resolve_target(target)
     if ip is None:
-        findings.append(IntelligenceFinding(entity=f"DNS resolution failed: {target}", type="DNS Error", source="EdgeComputeScanner", confidence="Low", color="red", category="Cloud / Infrastructure OSINT", raw_data=str(is_ip)[:200], tags=["error"]))
+        findings.append(make_finding(entity=f"DNS resolution failed: {target}", type="DNS Error", source="EdgeComputeScanner", confidence="Low", color="red", category="Cloud / Infrastructure OSINT", raw_data=str(is_ip)[:200], tags=["error"]))
         return findings
 
     if not is_ip:
-        findings.append(IntelligenceFinding(entity=f"{target} -> {ip}", type="DNS Resolution", source="EdgeComputeScanner", confidence="High", color="slate", category="Cloud / Infrastructure OSINT", threat_level="Informational", status="Resolved", resolution=ip, tags=["dns", "resolution"]))
+        findings.append(make_finding(entity=f"{target} -> {ip}", type="DNS Resolution", source="EdgeComputeScanner", confidence="High", color="slate", category="Cloud / Infrastructure OSINT", threat_level="Informational", status="Resolved", resolution=ip, tags=["dns", "resolution"]))
 
     findings.extend(await _check_dns_edge(target))
     findings.extend(await _analyze_headers(target, client))
@@ -338,11 +335,11 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     edge_kv = sum(1 for f in findings if "Edge KV" in f.type)
     edge_cache = sum(1 for f in findings if "Cache" in f.type)
 
-    findings.append(IntelligenceFinding(entity=f"Edge platforms detected: {edge_plat}", type="Edge Platform Count", source="EdgeComputeScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["edge", "summary"]))
-    findings.append(IntelligenceFinding(entity=f"Edge databases: {edge_db}", type="Edge DB Count", source="EdgeComputeScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["edge", "summary"]))
-    findings.append(IntelligenceFinding(entity=f"Edge KV stores: {edge_kv}", type="Edge KV Count", source="EdgeComputeScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["edge", "summary"]))
-    findings.append(IntelligenceFinding(entity=f"Cache behavior indicators: {edge_cache}", type="Edge Cache Count", source="EdgeComputeScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["edge", "summary"]))
-    findings.append(IntelligenceFinding(entity=f"Target: {target}", type="Edge Scan Target", source="EdgeComputeScanner", confidence="High", color="slate", category="Cloud / Infrastructure OSINT", tags=["edge", "target"]))
-    findings.append(IntelligenceFinding(entity=f"Total edge compute findings: {len(findings)}", type="Edge Scan Summary", source="EdgeComputeScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["edge", "summary"]))
+    findings.append(make_finding(entity=f"Edge platforms detected: {edge_plat}", type="Edge Platform Count", source="EdgeComputeScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["edge", "summary"]))
+    findings.append(make_finding(entity=f"Edge databases: {edge_db}", type="Edge DB Count", source="EdgeComputeScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["edge", "summary"]))
+    findings.append(make_finding(entity=f"Edge KV stores: {edge_kv}", type="Edge KV Count", source="EdgeComputeScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["edge", "summary"]))
+    findings.append(make_finding(entity=f"Cache behavior indicators: {edge_cache}", type="Edge Cache Count", source="EdgeComputeScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["edge", "summary"]))
+    findings.append(make_finding(entity=f"Target: {target}", type="Edge Scan Target", source="EdgeComputeScanner", confidence="High", color="slate", category="Cloud / Infrastructure OSINT", tags=["edge", "target"]))
+    findings.append(make_finding(entity=f"Total edge compute findings: {len(findings)}", type="Edge Scan Summary", source="EdgeComputeScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["edge", "summary"]))
 
     return findings

@@ -1,7 +1,7 @@
 import httpx
 import re
 import json
-from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash, IntelligenceFinding
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 
@@ -19,18 +19,18 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     html = None
     try:
-        resp = await client.get(profile_url, timeout=15.0,
+        resp = await safe_fetch(client, profile_url, timeout=15.0,
             headers={"User-Agent": UA, "Accept-Language": "en-US,en;q=0.9"},
             follow_redirects=True)
-        if resp.status_code == 200:
+        if resp and resp.status_code == 200:
             html = resp.text
     except Exception:
         pass
 
     if not html:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Could not access Instagram profile: {username}",
-            type="Instagram: Profile Not Accessible",
+            ftype="Instagram: Profile Not Accessible",
             source="SocialInstagramIntel",
             confidence="High", color="orange",
             category="Social Media Intelligence",
@@ -42,9 +42,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     title_m = re.search(r'<title>([^<]+)</title>', html, re.IGNORECASE)
     title = title_m.group(1).strip() if title_m else username
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Instagram profile: {title}",
-        type="Instagram: Profile Found",
+        ftype="Instagram: Profile Found",
         source="SocialInstagramIntel",
         confidence="High",
         color="purple",
@@ -56,7 +56,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     ))
 
     json_data = None
-    json_m = re.search(r'<script[^>]*type="application\/ld\+json"[^>]*>([^<]+)</script>', html, re.IGNORECASE)
+    json_m = re.search(r'<script[^>]*ftype="application\/ld\+json"[^>]*>([^<]+)</script>', html, re.IGNORECASE)
     if json_m:
         try:
             json_data = json.loads(json_m.group(1))
@@ -82,9 +82,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     bio_m = re.search(r'<meta[^>]+name="description"[^>]+content="([^"]+)"', html, re.IGNORECASE)
     if bio_m:
         bio_text = bio_m.group(1)
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Bio: {bio_text[:200]}",
-            type="Instagram: Bio",
+            ftype="Instagram: Bio",
             source="SocialInstagramIntel",
             confidence="High",
             color="slate",
@@ -100,9 +100,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     if not follower_count_m:
         follower_count_m = re.search(r'(?:followers|followed_by)\s*[:\s]*(\d[\d,.]*[KkMmBb]?)', html, re.IGNORECASE)
     if follower_count_m:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Followers: {follower_count_m.group(1)}",
-            type="Instagram: Follower Count",
+            ftype="Instagram: Follower Count",
             source="SocialInstagramIntel",
             confidence="Medium",
             color="slate",
@@ -115,9 +115,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     if not following_count_m:
         following_count_m = re.search(r'(?:following|follows)\s*[:\s]*(\d[\d,.]*[KkMmBb]?)', html, re.IGNORECASE)
     if following_count_m:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Following: {following_count_m.group(1)}",
-            type="Instagram: Following Count",
+            ftype="Instagram: Following Count",
             source="SocialInstagramIntel",
             confidence="Medium",
             color="slate",
@@ -130,9 +130,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     if not post_count_m:
         post_count_m = re.search(r'(\d[\d,.]*[KkMmBb]?)\s*(?:post|Post|Posts)', html)
     if post_count_m:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Posts: {post_count_m.group(1)}",
-            type="Instagram: Post Count",
+            ftype="Instagram: Post Count",
             source="SocialInstagramIntel",
             confidence="Medium",
             color="slate",
@@ -145,9 +145,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     if not full_name_m:
         full_name_m = re.search(r'<meta[^>]+property="og:title"[^>]+content="([^"]+)"', html, re.IGNORECASE)
     if full_name_m:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Full Name: {full_name_m.group(1)[:100]}",
-            type="Instagram: Full Name",
+            ftype="Instagram: Full Name",
             source="SocialInstagramIntel",
             confidence="High",
             color="slate",
@@ -159,9 +159,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     external_url_m = re.search(r'"external_url"\s*:\s*"([^"]+)"', html)
     if external_url_m:
         url_val = external_url_m.group(1).replace('\\/', '/')
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Website/URL: {url_val[:100]}",
-            type="Instagram: External URL",
+            ftype="Instagram: External URL",
             source="SocialInstagramIntel",
             confidence="High",
             color="slate",
@@ -172,9 +172,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     category_m = re.search(r'"category_name"\s*:\s*"([^"]+)"', html)
     if category_m:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Business category: {category_m.group(1)}",
-            type="Instagram: Business Category",
+            ftype="Instagram: Business Category",
             source="SocialInstagramIntel",
             confidence="Medium",
             color="slate",
@@ -185,9 +185,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     is_business_m = re.search(r'"is_business_account"\s*:\s*true', html)
     if is_business_m:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="Business/creator account detected",
-            type="Instagram: Account Type",
+            ftype="Instagram: Account Type",
             source="SocialInstagramIntel",
             confidence="High",
             color="slate",
@@ -199,9 +199,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     is_verified_m = re.search(r'"is_verified"\s*:\s*true', html)
     if is_verified_m:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="Account is verified",
-            type="Instagram: Verification Status",
+            ftype="Instagram: Verification Status",
             source="SocialInstagramIntel",
             confidence="High",
             color="emerald",
@@ -213,9 +213,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     is_private_m = re.search(r'"is_private"\s*:\s*true', html)
     if is_private_m:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="Account is private",
-            type="Instagram: Privacy Status",
+            ftype="Instagram: Privacy Status",
             source="SocialInstagramIntel",
             confidence="High",
             color="orange",
@@ -229,9 +229,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     if not profile_pic_m:
         profile_pic_m = re.search(r'<meta[^>]+property="og:image"[^>]+content="([^"]+)"', html, re.IGNORECASE)
     if profile_pic_m:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Profile picture URL: {profile_pic_m.group(1).replace('\\/', '/')[:100]}",
-            type="Instagram: Profile Image",
+            ftype="Instagram: Profile Image",
             source="SocialInstagramIntel",
             confidence="High",
             color="slate",
@@ -243,9 +243,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     hashtags = re.findall(r'#(\w+)', html)
     if hashtags:
         unique_hashtags = list(set(hashtags))[:15]
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Hashtags used: {', '.join(unique_hashtags[:10])}",
-            type="Instagram: Hashtag Analysis",
+            ftype="Instagram: Hashtag Analysis",
             source="SocialInstagramIntel",
             confidence="Medium",
             color="slate",
@@ -256,9 +256,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     location_m = re.search(r'"location_name"\s*:\s*"([^"]+)"', html)
     if location_m:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Location: {location_m.group(1)}",
-            type="Instagram: Location Tag",
+            ftype="Instagram: Location Tag",
             source="SocialInstagramIntel",
             confidence="Low",
             color="slate",
@@ -269,9 +269,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     contact_phone = re.search(r'"contact_phone_number"\s*:\s*"([^"]+)"', html)
     if contact_phone:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Contact phone: {contact_phone.group(1)}",
-            type="Instagram: Contact Phone",
+            ftype="Instagram: Contact Phone",
             source="SocialInstagramIntel",
             confidence="Medium",
             color="orange",
@@ -283,9 +283,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     contact_email = re.search(r'"public_email"\s*:\s*"([^"]+)"', html)
     if contact_email:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Contact email: {contact_email.group(1)}",
-            type="Instagram: Contact Email",
+            ftype="Instagram: Contact Email",
             source="SocialInstagramIntel",
             confidence="Medium",
             color="orange",
@@ -300,9 +300,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         unique_links = list(set(biography_links))[:5]
         for link in unique_links:
             if "instagram.com" not in link:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Bio link: {link[:100]}",
-                    type="Instagram: Bio Link",
+                    ftype="Instagram: Bio Link",
                     source="SocialInstagramIntel",
                     confidence="Medium",
                     color="slate",
@@ -313,9 +313,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     story_m = re.search(r'"has_highlight_reels"\s*:\s*true', html)
     if story_m:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="Profile has story highlights",
-            type="Instagram: Story Highlights",
+            ftype="Instagram: Story Highlights",
             source="SocialInstagramIntel",
             confidence="Medium",
             color="slate",
@@ -326,9 +326,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     business_contact_method = re.search(r'"business_contact_method"\s*:\s*"([^"]+)"', html)
     if business_contact_method:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Business contact method: {business_contact_method.group(1)}",
-            type="Instagram: Contact Method",
+            ftype="Instagram: Contact Method",
             source="SocialInstagramIntel",
             confidence="Medium",
             color="slate",
@@ -337,9 +337,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             tags=["instagram", "contact-method"]
         ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Instagram intelligence gathering complete for @{username}",
-        type="Instagram: Intel Summary",
+        ftype="Instagram: Intel Summary",
         source="SocialInstagramIntel",
         confidence="Medium",
         color="purple",

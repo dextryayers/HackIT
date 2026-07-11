@@ -1,7 +1,7 @@
 import httpx
 import asyncio
 import re
-import socket
+from module_common import safe_fetch, safe_fetch_json, make_finding, resolve_ip, is_ip
 from models import IntelligenceFinding
 
 SERVERLESS_PLATFORMS = {
@@ -66,16 +66,13 @@ DB_PATTERNS = {
 }
 
 async def _resolve_target(target: str) -> tuple:
-    try:
-        socket.inet_aton(target)
-        return target, True
-    except OSError:
-        pass
-    try:
-        ip = socket.gethostbyname(target)
+    t = target.strip()
+    if is_ip(t):
+        return t, True
+    ip = resolve_ip(t)
+    if ip:
         return ip, False
-    except Exception as e:
-        return None, str(e)
+    return None, "DNS resolution failed"
 
 async def _check_dns_platforms(target: str) -> list:
     findings = []
@@ -88,7 +85,7 @@ async def _check_dns_platforms(target: str) -> list:
                 for plat, patterns in SERVERLESS_PLATFORMS.items():
                     for pat in patterns:
                         if pat in cname:
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=plat,
                                 type="Serverless Platform (CNAME)",
                                 source="ServerlessScanner",
@@ -112,7 +109,7 @@ async def _check_dns_platforms(target: str) -> list:
                         for r in answers:
                             cname = str(r.target).rstrip('.').lower()
                             if pat in cname:
-                                findings.append(IntelligenceFinding(
+                                findings.append(make_finding(
                                     entity=plat,
                                     type="Serverless CDN Platform",
                                     source="ServerlessScanner",
@@ -134,7 +131,7 @@ async def _check_dns_platforms(target: str) -> list:
                 for plat, patterns in SERVERLESS_PLATFORMS.items():
                     for pat in patterns:
                         if pat in txt:
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=f"{plat} (TXT)",
                                 type=f"Serverless Platform (TXT)",
                                 source="ServerlessScanner",
@@ -157,7 +154,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
     findings = []
     base = f"https://{target}" if not target.startswith("http") else target
     try:
-        resp = await client.get(base, follow_redirects=True, timeout=10.0,
+        resp = await safe_fetch(client, base, follow_redirects=True, timeout=10.0,
             headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"})
         headers = dict(resp.headers)
         server = headers.get("server", "").lower()
@@ -165,7 +162,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
 
         for ch in COLD_START_HEADERS:
             if ch in headers:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Cold Start Indicator ({ch})",
                     type="Serverless Cold Start",
                     source="ServerlessScanner",
@@ -181,7 +178,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
         for plat_name, patterns in SERVERLESS_PLATFORMS.items():
             for pat in patterns:
                 if pat in server or pat in all_vals:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=plat_name,
                         type="Serverless Platform (Header)",
                         source="ServerlessScanner",
@@ -211,7 +208,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
                     platform_hint = "cloudflare"
                 elif "supabase" in pat:
                     platform_hint = "supabase"
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Function URL pattern: {pat}",
                     type=f"Serverless Function URL ({platform_hint})",
                     source="ServerlessScanner",
@@ -227,7 +224,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
         for db_name, db_patterns in DB_PATTERNS.items():
             for p in db_patterns:
                 if p in html_lower:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"{db_name} Database",
                         type="Serverless Database",
                         source="ServerlessScanner",
@@ -242,7 +239,7 @@ async def _analyze_headers(target: str, client: httpx.AsyncClient) -> list:
                     break
 
     except Exception as e:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Header analysis error: {str(e)[:100]}",
             type="Serverless Scan Error",
             source="ServerlessScanner",
@@ -264,11 +261,11 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     ip, is_ip = await _resolve_target(target)
     if ip is None:
-        findings.append(IntelligenceFinding(entity=f"DNS resolution failed: {target}", type="DNS Error", source="ServerlessScanner", confidence="Low", color="red", category="Cloud / Infrastructure OSINT", raw_data=str(is_ip)[:200], tags=["error"]))
+        findings.append(make_finding(entity=f"DNS resolution failed: {target}", type="DNS Error", source="ServerlessScanner", confidence="Low", color="red", category="Cloud / Infrastructure OSINT", raw_data=str(is_ip)[:200], tags=["error"]))
         return findings
 
     if not is_ip:
-        findings.append(IntelligenceFinding(entity=f"{target} -> {ip}", type="DNS Resolution", source="ServerlessScanner", confidence="High", color="slate", category="Cloud / Infrastructure OSINT", threat_level="Informational", status="Resolved", resolution=ip, tags=["dns", "resolution"]))
+        findings.append(make_finding(entity=f"{target} -> {ip}", type="DNS Resolution", source="ServerlessScanner", confidence="High", color="slate", category="Cloud / Infrastructure OSINT", threat_level="Informational", status="Resolved", resolution=ip, tags=["dns", "resolution"]))
 
     findings.extend(await _check_dns_platforms(target))
     findings.extend(await _analyze_headers(target, client))
@@ -277,11 +274,11 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     fn_count = sum(1 for f in findings if "Function URL" in f.type)
     db_count = sum(1 for f in findings if "Serverless Database" in f.type)
 
-    findings.append(IntelligenceFinding(entity=f"Serverless platforms: {plat_count}", type="Serverless Platform Count", source="ServerlessScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["serverless", "summary"]))
-    findings.append(IntelligenceFinding(entity=f"Function URL patterns: {fn_count}", type="Serverless Function Count", source="ServerlessScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["serverless", "summary"]))
-    findings.append(IntelligenceFinding(entity=f"Serverless DBs detected: {db_count}", type="Serverless DB Count", source="ServerlessScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["serverless", "summary"]))
-    findings.append(IntelligenceFinding(entity=f"Target: {target}", type="Serverless Scan Target", source="ServerlessScanner", confidence="High", color="slate", category="Cloud / Infrastructure OSINT", tags=["serverless", "target"]))
-    findings.append(IntelligenceFinding(entity=f"Resolved IP: {ip}", type="Serverless Resolved IP", source="ServerlessScanner", confidence="High", color="slate", category="Cloud / Infrastructure OSINT", tags=["serverless", "ip"]))
-    findings.append(IntelligenceFinding(entity=f"Total serverless findings: {len(findings)}", type="Serverless Scan Summary", source="ServerlessScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["serverless", "summary"]))
+    findings.append(make_finding(entity=f"Serverless platforms: {plat_count}", type="Serverless Platform Count", source="ServerlessScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["serverless", "summary"]))
+    findings.append(make_finding(entity=f"Function URL patterns: {fn_count}", type="Serverless Function Count", source="ServerlessScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["serverless", "summary"]))
+    findings.append(make_finding(entity=f"Serverless DBs detected: {db_count}", type="Serverless DB Count", source="ServerlessScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["serverless", "summary"]))
+    findings.append(make_finding(entity=f"Target: {target}", type="Serverless Scan Target", source="ServerlessScanner", confidence="High", color="slate", category="Cloud / Infrastructure OSINT", tags=["serverless", "target"]))
+    findings.append(make_finding(entity=f"Resolved IP: {ip}", type="Serverless Resolved IP", source="ServerlessScanner", confidence="High", color="slate", category="Cloud / Infrastructure OSINT", tags=["serverless", "ip"]))
+    findings.append(make_finding(entity=f"Total serverless findings: {len(findings)}", type="Serverless Scan Summary", source="ServerlessScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["serverless", "summary"]))
 
     return findings

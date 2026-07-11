@@ -1,9 +1,7 @@
 import httpx
 import re
-import socket
-import asyncio
-from models import IntelligenceFinding
 from urllib.parse import urlparse
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash
 
 ST_API_BASE = "https://api.securitytrails.com/v1"
 ST_SUBDOMAIN_ENDPOINT = f"{ST_API_BASE}/domain/{{domain}}/subdomains"
@@ -50,7 +48,7 @@ SUBDOMAIN_CATEGORIES = {
 
 async def _st_api_get(endpoint: str, client: httpx.AsyncClient, params: dict = None) -> dict | None:
     try:
-        resp = await client.get(endpoint, params=params, timeout=15.0,
+        resp = await safe_fetch(client, endpoint, params=params, timeout=15.0,
             headers={"User-Agent": USER_AGENT, "Accept": "application/json"})
         if resp.status_code == 200:
             return resp.json()
@@ -61,7 +59,7 @@ async def _st_api_get(endpoint: str, client: httpx.AsyncClient, params: dict = N
 
 async def _resolve_ip(hostname: str) -> str | None:
     try:
-        return socket.gethostbyname(hostname)
+        return resolve_ip(hostname)
     except Exception:
         return None
 
@@ -111,7 +109,7 @@ def _classify_subdomain(subdomain: str) -> str:
 async def _check_http_service(hostname: str, client: httpx.AsyncClient) -> tuple:
     for proto in ["https", "http"]:
         try:
-            resp = await client.get(f"{proto}://{hostname}", timeout=8.0,
+            resp = await safe_fetch(client, f"{proto}://{hostname}", timeout=8.0,
                 headers={"User-Agent": USER_AGENT}, follow_redirects=False)
             server = resp.headers.get("server", "")
             title_m = re.search(r'<title[^>]*>(.*?)</title>', resp.text[:5000], re.DOTALL | re.IGNORECASE)
@@ -130,9 +128,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
     domain = domain.strip().lower()
 
     if not domain or "." not in domain:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Invalid domain: {target}",
-            type="SecurityTrails Error",
+            ftype="SecurityTrails Error",
             source="SecurityTrails",
             confidence="Low",
             color="red",
@@ -152,9 +150,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             tags = _extract_tags_domain(full_domain)
             sub_class = _classify_subdomain(full_domain)
             sub_classification[sub_class] = sub_classification.get(sub_class, 0) + 1
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=full_domain,
-                type="SecurityTrails Subdomain",
+                ftype="SecurityTrails Subdomain",
                 source="SecurityTrails",
                 confidence="High",
                 color="emerald",
@@ -165,7 +163,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 tags=["subdomain"] + tags
             ))
         if subs:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{len(subs)} subdomains via SecurityTrails",
                 type="SecurityTrails Subdomain Summary",
                 source="SecurityTrails",
@@ -177,9 +175,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 tags=["summary", "subdomain_count"]
             ))
         for cat, count in sorted(sub_classification.items(), key=lambda x: -x[1])[:5]:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Category '{cat}': {count} subdomains",
-                type="Subdomain Category",
+                ftype="Subdomain Category",
                 source="SecurityTrails",
                 confidence="Medium",
                 color="purple",
@@ -206,7 +204,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         value = rec.get("value", rec.get("target", rec.get("ip", "")))
                         ttl = rec.get("ttl", "")
                         if value:
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=str(value)[:200],
                                 type=f"SecurityTrails DNS {display_key}",
                                 source="SecurityTrails",
@@ -241,9 +239,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             val = whois_enriched.get(key)
             if val:
                 val_str = str(val)[:200] if isinstance(val, str) else ", ".join([str(v)[:100] for v in val[:5]])[:200]
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=val_str,
-                    type=ftype,
+                    ftype=ftype,
                     source="SecurityTrails",
                     confidence="High",
                     color=color,
@@ -266,9 +264,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         threat_label = "Suspicious"
                         threat_color = "orange"
                         break
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=tag_str,
-                    type="SecurityTrails Domain Tag",
+                    ftype="SecurityTrails Domain Tag",
                     source="SecurityTrails",
                     confidence="Medium",
                     color=threat_color,
@@ -287,7 +285,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     nb_host = neighbor.get("hostname", neighbor.get("host", neighbor.get("ip", "")))
                     nb_ip = neighbor.get("ip", neighbor.get("value", ""))
                     if nb_host:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=str(nb_host)[:200],
                             type="SecurityTrails IP Neighbor",
                             source="SecurityTrails",
@@ -310,7 +308,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     assoc_ip = assoc.get("ip", "")
                     assoc_asn = assoc.get("asn", "")
                     if assoc_domain:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=str(assoc_domain)[:200],
                             type="SecurityTrails Associated Domain",
                             source="SecurityTrails",
@@ -323,9 +321,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                             tags=["associated", "related", "domain"]
                         ))
                         if assoc_asn:
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=f"ASN: {assoc_asn}",
-                                type="SecurityTrails ASN Info",
+                                ftype="SecurityTrails ASN Info",
                                 source="SecurityTrails",
                                 confidence="Medium",
                                 color="slate",
@@ -336,9 +334,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
     threat_indicators = _detect_threat_indicators(domain, domain)
     for keyword, label in threat_indicators:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{domain} flagged: {label}",
-            type="SecurityTrails Threat Indicator",
+            ftype="SecurityTrails Threat Indicator",
             source="SecurityTrails",
             confidence="Medium",
             color="red",
@@ -354,7 +352,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         if isinstance(history_types, dict):
             for rtype, hrecords in history_types.items():
                 if isinstance(hrecords, list):
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"{len(hrecords)} historical {rtype.upper()} records",
                         type=f"DNS History - {rtype.upper()}",
                         source="SecurityTrails (History)",
@@ -369,7 +367,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                             hval = hrec.get("value", hrec.get("ip", hrec.get("data", "")))
                             hdate = hrec.get("first_seen", hrec.get("date", hrec.get("last_seen", "")))
                             if hval:
-                                findings.append(IntelligenceFinding(
+                                findings.append(make_finding(
                                     entity=str(hval)[:200],
                                     type=f"DNS History - {rtype.upper()} Change",
                                     source="SecurityTrails (History)",
@@ -389,9 +387,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 status_code, server, title = await _check_http_service(s_probe, client)
                 if status_code:
                     sub_class = _classify_subdomain(s_probe)
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"{s_probe}: HTTP {status_code}",
-                        type="SecurityTrails HTTP Probe",
+                        ftype="SecurityTrails HTTP Probe",
                         source="SecurityTrails",
                         confidence="High",
                         color="orange" if status_code < 400 else "slate",
@@ -402,9 +400,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         tags=["http-probe", sub_class.lower().replace(' ', '-'), domain.replace('.', '_')]
                     ))
                     if server:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"Server: {server}",
-                            type="SecurityTrails Server Banner",
+                            ftype="SecurityTrails Server Banner",
                             source="SecurityTrails",
                             confidence="Medium",
                             color="slate",
@@ -422,7 +420,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             t = f.type.replace("SecurityTrails ", "")
             type_dist[t] = type_dist.get(t, 0) + 1
         summary_str = "; ".join([f"{k}: {v}" for k, v in sorted(type_dist.items(), key=lambda x: -x[1])[:6]])
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"SecurityTrails scan: {len(findings)} findings for {domain}",
             type="SecurityTrails Summary",
             source="SecurityTrails",

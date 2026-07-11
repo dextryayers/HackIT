@@ -1,5 +1,67 @@
 use serde::{Serialize, Deserialize};
-use std::time::Instant;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use tokio::sync::Semaphore;
+
+/// Token-bucket rate limiter
+pub struct RateLimiter {
+    tokens: Arc<Semaphore>,
+    interval: Duration,
+    last_refill: std::sync::Mutex<Instant>,
+    max_tokens: usize,
+}
+
+impl RateLimiter {
+    pub fn new(tokens_per_sec: usize) -> Arc<Self> {
+        Arc::new(Self {
+            tokens: Arc::new(Semaphore::new(tokens_per_sec)),
+            interval: Duration::from_secs(1),
+            last_refill: std::sync::Mutex::new(Instant::now()),
+            max_tokens: tokens_per_sec,
+        })
+    }
+    pub async fn acquire(&self) {
+        let permit = self.tokens.acquire().await;
+        if let Ok(p) = permit {
+            p.forget();
+        }
+        let mut last = self.last_refill.lock().unwrap();
+        if last.elapsed() >= self.interval {
+            let to_add = self.max_tokens.saturating_sub(self.tokens.available_permits());
+            if to_add > 0 {
+                self.tokens.add_permits(to_add);
+            }
+            *last = Instant::now();
+        }
+    }
+}
+
+/// Pool of reusable HTTP clients with different configurations
+pub struct ClientPool {
+    default: reqwest::Client,
+    default_timeout: u64,
+}
+
+impl ClientPool {
+    pub fn new() -> Self {
+        Self {
+            default: reqwest::Client::builder()
+                .pool_max_idle_per_host(10)
+                .timeout(Duration::from_secs(30))
+                .build().unwrap_or_else(|_| reqwest::Client::builder().build().unwrap()),
+            default_timeout: 30,
+        }
+    }
+    pub fn with_timeout(timeout: u64) -> Self {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(timeout))
+            .pool_max_idle_per_host(10)
+            .build().unwrap_or_else(|_| reqwest::Client::new());
+        Self { default: client, default_timeout: timeout }
+    }
+    pub fn client(&self) -> &reqwest::Client { &self.default }
+    pub fn timeout(&self) -> u64 { self.default_timeout }
+}
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct ProgressEvent {
@@ -67,7 +129,7 @@ pub struct PortResult { pub port: u16, pub service: String, pub state: String }
 pub struct PortBanner { pub port: u16, pub service: String, pub banner: Option<String>, pub os_hint: Option<String> }
 
 #[derive(Serialize, Deserialize, Default)]
-pub struct DnsResult { pub a: Vec<String>, pub aaaa: Vec<String>, pub mx: Vec<String>, pub ns: Vec<String>, pub txt: Vec<String>, pub cname: Vec<String>, pub soa: Option<String>, pub srv: Vec<String>, pub ptr: Vec<String>, pub caa: Vec<String>, pub zone_transfer: Option<String> }
+pub struct DnsResult { pub a: Vec<String>, pub aaaa: Vec<String>, pub mx: Vec<String>, pub ns: Vec<String>, pub txt: Vec<String>, pub cname: Vec<String>, pub soa: Option<String>, pub srv: Vec<String>, pub ptr: Vec<String>, pub caa: Vec<String>, pub sshfp: Vec<String>, pub tlsa: Vec<String>, pub ds: Vec<String>, pub dnskey: Vec<String>, pub nsec: Vec<String>, pub nsec3: Vec<String>, pub dnssec: Option<String>, pub zone_transfer: Option<String> }
 
 #[derive(Serialize, Deserialize)]
 pub struct WebtechResult { pub url: String, pub status: Option<u16>, pub server: Option<String>, pub tech: Vec<String>, pub headers: Vec<(String, String)> }
@@ -97,7 +159,15 @@ pub struct WafResult { pub url: String, pub waf: Option<String>, pub cdn: Option
 #[derive(Serialize, Deserialize)]
 pub struct SocialResult { pub username: String, pub profiles: Vec<SocialProfile> }
 #[derive(Serialize, Deserialize)]
-pub struct SocialProfile { pub platform: String, pub url: String, pub exists: bool, pub status: Option<u16> }
+pub struct SocialProfile {
+    pub platform: String,
+    pub url: String,
+    pub exists: bool,
+    pub status: Option<u16>,
+    pub category: String,
+    #[serde(default)]
+    pub rate_limited: bool,
+}
 
 #[derive(Serialize, Deserialize)]
 pub struct CrtshResult { pub domain: String, pub certificates: Vec<CrtshEntry>, pub total: usize }
@@ -133,6 +203,7 @@ pub struct ScanConfig {
     pub depth: Option<String>,           // "quick", "normal", "deep", "exhaustive"
     pub concurrency: Option<u32>,
     pub max_results: Option<u32>,
+    pub insecure_tls: Option<bool>,
     pub module_config: Option<std::collections::HashMap<String, serde_json::Value>>,
 }
 
@@ -312,6 +383,7 @@ pub struct SocialProfileInfo {
     pub platform: String,
     pub url: String,
     pub exists: bool,
+    pub category: String,
 }
 
 // 11. paste_scan
@@ -437,19 +509,231 @@ pub struct DirEntry {
     pub size: Option<u64>,
 }
 
+// 21. web_performance
+#[derive(Serialize, Deserialize, Clone, Default)]
+pub struct WebPerformanceResult {
+    pub url: String,
+    pub load_time_ms: u64,
+    pub first_byte_time_ms: u64,
+    pub total_size_bytes: u64,
+    pub request_count: u32,
+    pub resource_sizes: Vec<ResourceSize>,
+    pub performance_score: u32,
+    pub suggestions: Vec<String>,
+    pub error: Option<String>,
+}
+#[derive(Serialize, Deserialize, Clone)]
+pub struct ResourceSize {
+    pub url: String,
+    pub size_bytes: u64,
+    pub resource_type: String,
+}
+
+// 22. dns_sec_check
+#[derive(Serialize, Deserialize, Clone, Default)]
+pub struct DnsSecCheckResult {
+    pub domain: String,
+    pub dnssec_enabled: bool,
+    pub has_dnskey: bool,
+    pub has_ds: bool,
+    pub has_rrsig: bool,
+    pub algorithms: Vec<String>,
+    pub nssec_algo: Option<String>,
+    pub dane_enabled: bool,
+    pub caa_policy: Option<String>,
+    pub spf_strong: Option<bool>,
+    pub dmarc_policy: Option<String>,
+    pub txt_issues: Vec<String>,
+    pub error: Option<String>,
+}
+
+// 23. ip_reputation
+#[derive(Serialize, Deserialize, Clone, Default)]
+pub struct IpReputationResult {
+    pub ip: String,
+    pub is_malicious: bool,
+    pub threat_score: u32,
+    pub total_reports: u32,
+    pub sources: Vec<IpReputationSource>,
+    pub categories: Vec<String>,
+    pub last_report: Option<String>,
+    pub error: Option<String>,
+}
+#[derive(Serialize, Deserialize, Clone)]
+pub struct IpReputationSource {
+    pub name: String,
+    pub is_malicious: bool,
+    pub confidence: String,
+    pub reports: u32,
+}
+
+// 21. cdn_discovery
+#[derive(Serialize, Deserialize, Clone, Default)]
+pub struct CdnDiscoveryResult {
+    pub target: String,
+    pub cdn_providers: Vec<CdnProvider>,
+    pub origin_ips: Vec<String>,
+    pub error: Option<String>,
+}
+#[derive(Serialize, Deserialize, Clone)]
+pub struct CdnProvider {
+    pub name: String,
+    pub detected_by: String,
+    pub confidence: String,
+}
+
+// 25. leak_detection
+#[derive(Serialize, Deserialize, Clone, Default)]
+pub struct LeakDetectionResult {
+    pub target: String,
+    pub has_leaks: bool,
+    pub total_findings: u32,
+    pub leaks: Vec<LeakFinding>,
+    pub error: Option<String>,
+}
+#[derive(Serialize, Deserialize, Clone)]
+pub struct LeakFinding {
+    pub leak_type: String,
+    pub severity: String,
+    pub description: String,
+    pub location: Option<String>,
+    pub value_preview: Option<String>,
+}
+
+// 24. email_breach_check
+#[derive(Serialize, Deserialize, Clone, Default)]
+pub struct EmailBreachCheckResult {
+    pub email: String,
+    pub is_breached: bool,
+    pub breach_count: u32,
+    pub breaches: Vec<EmailBreachEntry>,
+    pub pwned_password: bool,
+    pub error: Option<String>,
+}
+#[derive(Serialize, Deserialize, Clone)]
+pub struct EmailBreachEntry {
+    pub name: String,
+    pub date: Option<String>,
+    pub data_types: Vec<String>,
+}
+
+// 25. mobile_app_scan
+#[derive(Serialize, Deserialize, Clone, Default)]
+pub struct MobileAppScanResult {
+    pub target: String,
+    pub has_mobile_apps: bool,
+    pub platforms: Vec<MobilePlatform>,
+    pub api_endpoints: Vec<String>,
+    pub deep_links: Vec<String>,
+    pub sdk_usage: Vec<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct MobilePlatform {
+    pub platform: String,
+    pub app_id: String,
+    pub store_url: Option<String>,
+    pub detected_from: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Default)]
+pub struct GraphApiScanResult {
+    pub target: String,
+    pub has_office365: bool,
+    pub has_google_workspace: bool,
+    pub domains: Vec<String>,
+    pub endpoints: Vec<GraphEndpoint>,
+    pub security_issues: Vec<String>,
+    pub error: Option<String>,
+}
+#[derive(Serialize, Deserialize, Clone)]
+pub struct GraphEndpoint {
+    pub url: String,
+    pub service: String,
+    pub accessible: bool,
+    pub requires_auth: bool,
+    pub provider: String,
+}
+
+// 25. csp_analyzer
+#[derive(Serialize, Deserialize, Clone, Default)]
+pub struct CspAnalysisResult {
+    pub url: String,
+    pub has_csp: bool,
+    pub csp_header: Option<String>,
+    pub csp_in_meta: Option<String>,
+    pub directives: Vec<CspDirective>,
+    pub issues: Vec<CspIssue>,
+    pub security_score: u32,
+    pub error: Option<String>,
+}
+#[derive(Serialize, Deserialize, Clone)]
+pub struct CspDirective {
+    pub name: String,
+    pub sources: Vec<String>,
+    pub is_unsafe: bool,
+}
+#[derive(Serialize, Deserialize, Clone)]
+pub struct CspIssue {
+    pub issue_type: String,
+    pub severity: String,
+    pub description: String,
+}
+
 pub fn build_client_timeout(timeout_secs: u64, config: &ScanConfig) -> Option<reqwest::Client> {
     let t = config.timeout.unwrap_or(timeout_secs);
-    reqwest::Client::builder()
-        .danger_accept_invalid_certs(true)
-        .timeout(std::time::Duration::from_secs(t))
-        .build().ok()
+    let mut builder = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(t));
+    if config.insecure_tls.unwrap_or(false) {
+        builder = builder.danger_accept_invalid_certs(true);
+    }
+    builder.build().ok()
 }
 
 pub fn build_client(timeout_secs: u64) -> Option<reqwest::Client> {
     reqwest::Client::builder()
-        .danger_accept_invalid_certs(true)
         .timeout(std::time::Duration::from_secs(timeout_secs))
         .build().ok()
+}
+
+/// Build client with custom headers and optional insecure TLS
+pub fn build_client_advanced(timeout_secs: u64, config: &ScanConfig,
+                              headers: Vec<(&str, &str)>) -> Option<reqwest::Client> {
+    let t = config.timeout.unwrap_or(timeout_secs);
+    let mut map = reqwest::header::HeaderMap::new();
+    for (k, v) in headers {
+        if let (Ok(name), Ok(val)) = (
+            reqwest::header::HeaderName::from_bytes(k.as_bytes()),
+            reqwest::header::HeaderValue::from_str(v)
+        ) {
+            map.insert(name, val);
+        }
+    }
+    let mut builder = reqwest::Client::builder()
+        .default_headers(map)
+        .timeout(std::time::Duration::from_secs(t));
+    if config.insecure_tls.unwrap_or(false) {
+        builder = builder.danger_accept_invalid_certs(true);
+    }
+    builder.build().ok()
+}
+
+#[derive(Serialize, Deserialize, Clone, Default)]
+pub struct FirebaseScanResult {
+    pub project_id: String,
+    pub databases: Vec<FirebaseDatabase>,
+    pub vulnerable: bool,
+    pub issues: Vec<String>,
+    pub error: Option<String>,
+}
+#[derive(Serialize, Deserialize, Clone)]
+pub struct FirebaseDatabase {
+    pub url: String,
+    pub accessible: bool,
+    pub has_data: bool,
+    pub data_preview: Option<String>,
+    pub security: String,
 }
 
 pub fn normalize_url(url: &str) -> String {

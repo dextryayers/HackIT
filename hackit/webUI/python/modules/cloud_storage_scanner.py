@@ -1,7 +1,7 @@
 import httpx
 import asyncio
 import re
-import socket
+from module_common import safe_fetch, safe_fetch_json, make_finding
 from models import IntelligenceFinding
 
 PROVIDER_CONFIGS = {
@@ -149,7 +149,7 @@ async def _check_bucket(provider: str, config: dict, bucket_name: str, client: h
     for url_tmpl in config["urls"]:
         url = url_tmpl.format(name=bucket_name)
         try:
-            resp = await client.get(url, timeout=5.0,
+            resp = await safe_fetch(client, url, timeout=5.0,
                 headers={"User-Agent": "Mozilla/5.0"})
             if resp.status_code == 200:
                 body = resp.text[:500]
@@ -166,7 +166,7 @@ async def _check_bucket(provider: str, config: dict, bucket_name: str, client: h
                 elif "json" in content_type: ct_category = "json"
                 elif "xml" in content_type: ct_category = "xml"
 
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{provider}://{bucket_name}",
                     type=f"Cloud Storage Public ({provider})",
                     source="CloudStorageScanner",
@@ -180,7 +180,7 @@ async def _check_bucket(provider: str, config: dict, bucket_name: str, client: h
                     tags=["cloud-storage", "public"] + config["tag"]
                 ))
                 if is_listing:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"{provider}://{bucket_name} - Directory Listing",
                         type="Cloud Storage Listing Enabled",
                         source="CloudStorageScanner",
@@ -197,7 +197,7 @@ async def _check_bucket(provider: str, config: dict, bucket_name: str, client: h
             elif resp.status_code == 403:
                 body = resp.text[:200]
                 if "AccessDenied" in body or "access_denied" in body.lower():
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"{provider}://{bucket_name}",
                         type=f"Cloud Storage Exists ({provider})",
                         source="CloudStorageScanner",
@@ -225,7 +225,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     base = target.split(".")[0] if "." in target else target
     base = re.sub(r"[^a-zA-Z0-9\-]", "", base).strip("-").lower()
     if not base:
-        findings.append(IntelligenceFinding(entity="Invalid target for storage scan", type="Storage Scan Error", source="CloudStorageScanner", confidence="Low", color="red", category="Cloud / Infrastructure OSINT", tags=["error"]))
+        findings.append(make_finding(entity="Invalid target for storage scan", type="Storage Scan Error", source="CloudStorageScanner", confidence="Low", color="red", category="Cloud / Infrastructure OSINT", tags=["error"]))
         return findings
 
     bucket_names = [f"{base}{s}" for s in BUCKET_SUFFIXES]
@@ -250,11 +250,11 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             if tag in [p.lower().replace(" ", "-") for p in PROVIDER_CONFIGS.keys()]:
                 provider_set.add(tag)
 
-    findings.append(IntelligenceFinding(entity=f"Total public buckets: {public_buckets}", type="Storage Summary: Public", source="CloudStorageScanner", confidence="Medium", color="red" if public_buckets else "emerald", category="Cloud / Infrastructure OSINT", tags=["storage", "summary"]))
-    findings.append(IntelligenceFinding(entity=f"Buckets with listing: {listing_buckets}", type="Storage Summary: Listing", source="CloudStorageScanner", confidence="Medium", color="red" if listing_buckets else "emerald", category="Cloud / Infrastructure OSINT", tags=["storage", "summary"]))
-    findings.append(IntelligenceFinding(entity=f"Existing buckets (denied): {exists_buckets}", type="Storage Summary: Exists", source="CloudStorageScanner", confidence="Medium", color="orange" if exists_buckets else "slate", category="Cloud / Infrastructure OSINT", tags=["storage", "summary"]))
-    findings.append(IntelligenceFinding(entity=f"Bucket names tested: {len(bucket_names)}", type="Storage Summary: Tested", source="CloudStorageScanner", confidence="Medium", color="slate", category="Cloud / Infrastructure OSINT", tags=["storage", "summary"]))
-    findings.append(IntelligenceFinding(entity=f"Providers with matches: {len(provider_set)}", type="Storage Summary: Providers", source="CloudStorageScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["storage", "summary"]))
-    findings.append(IntelligenceFinding(entity=f"Total findings: {len(findings)}", type="Storage Summary: Total", source="CloudStorageScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["storage", "summary"]))
+    findings.append(make_finding(entity=f"Total public buckets: {public_buckets}", type="Storage Summary: Public", source="CloudStorageScanner", confidence="Medium", color="red" if public_buckets else "emerald", category="Cloud / Infrastructure OSINT", tags=["storage", "summary"]))
+    findings.append(make_finding(entity=f"Buckets with listing: {listing_buckets}", type="Storage Summary: Listing", source="CloudStorageScanner", confidence="Medium", color="red" if listing_buckets else "emerald", category="Cloud / Infrastructure OSINT", tags=["storage", "summary"]))
+    findings.append(make_finding(entity=f"Existing buckets (denied): {exists_buckets}", type="Storage Summary: Exists", source="CloudStorageScanner", confidence="Medium", color="orange" if exists_buckets else "slate", category="Cloud / Infrastructure OSINT", tags=["storage", "summary"]))
+    findings.append(make_finding(entity=f"Bucket names tested: {len(bucket_names)}", type="Storage Summary: Tested", source="CloudStorageScanner", confidence="Medium", color="slate", category="Cloud / Infrastructure OSINT", tags=["storage", "summary"]))
+    findings.append(make_finding(entity=f"Providers with matches: {len(provider_set)}", type="Storage Summary: Providers", source="CloudStorageScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["storage", "summary"]))
+    findings.append(make_finding(entity=f"Total findings: {len(findings)}", type="Storage Summary: Total", source="CloudStorageScanner", confidence="Medium", color="purple", category="Cloud / Infrastructure OSINT", tags=["storage", "summary"]))
 
     return findings

@@ -4,7 +4,7 @@ import json
 import base64
 import hashlib
 from datetime import datetime
-from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash
 
 BREACH_SOURCES = [
     {
@@ -136,7 +136,7 @@ KNOWN_DATA_TYPES = [
 async def check_firefox_monitor(email: str, client: httpx.AsyncClient) -> list:
     results = []
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://monitor.firefox.com/api/v1/breaches/{email}",
             timeout=15.0,
             headers={"User-Agent": UA, "Accept": "application/json"}
@@ -162,7 +162,7 @@ async def check_firefox_monitor(email: str, client: httpx.AsyncClient) -> list:
 async def check_emailrep(email: str, client: httpx.AsyncClient) -> dict:
     result = {}
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://emailrep.io/{email}",
             timeout=15.0,
             headers={"User-Agent": UA, "Accept": "application/json", "Key": ""}
@@ -181,7 +181,7 @@ async def check_emailrep(email: str, client: httpx.AsyncClient) -> dict:
 async def check_breachdirectory(email: str, client: httpx.AsyncClient) -> list:
     results = []
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://breachdirectory.org/api/v1/search?email={email}",
             timeout=15.0,
             headers={"User-Agent": UA, "Accept": "application/json"}
@@ -207,7 +207,7 @@ async def check_scrape_sources(email: str, client: httpx.AsyncClient) -> list:
             continue
         try:
             url = src["url"].format(email=email)
-            resp = await client.get(url, timeout=10.0, headers={"User-Agent": UA})
+            resp = await safe_fetch(client, url, timeout=10.0, headers={"User-Agent": UA})
             if resp.status_code == 200:
                 text = resp.text.lower()
                 breach_indicators = [
@@ -273,9 +273,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     email = target.strip().lower()
     email_re = re.compile(r"^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$")
     if not email_re.match(email):
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Invalid email format: {email}",
-            type="Breach Detection Error",
+            ftype="Breach Detection Error",
             source="EmailBreachDetector",
             confidence="High",
             color="red",
@@ -288,7 +288,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     domain = email.split("@")[1]
 
     try:
-        resp = await client.get(f"https://haveibeenpwned.com/unifiedsearch/{email}", timeout=15.0,
+        resp = await safe_fetch(client, f"https://haveibeenpwned.com/unifiedsearch/{email}", timeout=15.0,
             headers={"User-Agent": UA, "Accept": "application/json"})
         if resp.status_code == 200:
             data = resp.json()
@@ -301,7 +301,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                     dtypes = ", ".join(dtypes)
                 has_password = "password" in dtypes.lower()
                 severity = "Critical" if has_password else "High"
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"HIBP Breach: {name} ({date})",
                     type="Breach Record",
                     source="EmailBreachDetector/HIBP",
@@ -320,7 +320,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     fm_results = await check_firefox_monitor(email, client)
     for r in fm_results:
         has_password = "password" in r.get("data_types", "").lower()
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Firefox Monitor Breach: {r['breach_name']} ({r['date']})",
             type="Breach Record",
             source="EmailBreachDetector/FirefoxMonitor",
@@ -336,7 +336,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     bd_results = await check_breachdirectory(email, client)
     for r in bd_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Breach Directory Entry: {r['breach_name']} ({r['date']})",
             type="Breach Record",
             source="EmailBreachDetector/BreachDirectory",
@@ -353,9 +353,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     emailrep_data = await check_emailrep(email, client)
     if emailrep_data:
         if emailrep_data.get("credentials_leaked"):
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="EmailRep: Credentials confirmed leaked",
-                type="Credential Leak Confirmation",
+                ftype="Credential Leak Confirmation",
                 source="EmailBreachDetector/EmailRep",
                 confidence="High",
                 color="red",
@@ -366,9 +366,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                 tags=["credential-leak", "emailrep", "critical"]
             ))
         if emailrep_data.get("spam"):
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="EmailRep: Email associated with spam activity",
-                type="Spam Activity Detection",
+                ftype="Spam Activity Detection",
                 source="EmailBreachDetector/EmailRep",
                 confidence="Medium",
                 color="orange",
@@ -378,9 +378,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                 tags=["spam", "emailrep", "reputation"]
             ))
         if emailrep_data.get("malicious_activity"):
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="EmailRep: Email associated with malicious activity",
-                type="Malicious Activity Detection",
+                ftype="Malicious Activity Detection",
                 source="EmailBreachDetector/EmailRep",
                 confidence="Medium",
                 color="red",
@@ -391,9 +391,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             ))
         breaches_list = emailrep_data.get("breaches", [])
         for b in breaches_list:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"EmailRep Breach: {b}",
-                type="Breach Record",
+                ftype="Breach Record",
                 source="EmailBreachDetector/EmailRep",
                 confidence="Medium",
                 color="orange",
@@ -406,9 +406,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     scrape_results = await check_scrape_sources(email, client)
     for r in scrape_results:
         indicators = ", ".join(r.get("indicators", []))
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Suspicious activity on {r['source']}",
-            type="Scrape Source Signal",
+            ftype="Scrape Source Signal",
             source=f"EmailBreachDetector/{r['source']}",
             confidence="Low",
             color="orange",
@@ -422,7 +422,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     password_hash = hashlib.sha1(email.encode()).hexdigest().upper()
     try:
-        pw_resp = await client.get(
+        pw_resp = await safe_fetch(client, 
             f"https://api.pwnedpasswords.com/range/{password_hash[:5]}",
             timeout=10.0,
             headers={"User-Agent": UA}
@@ -437,7 +437,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                     break
             if match:
                 count = match.split(":")[1] if ":" in match else "unknown"
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Email hash found in Pwned Passwords ({count} times)",
                     type="Password Hash Exposure",
                     source="EmailBreachDetector/PwnedPasswords",
@@ -456,7 +456,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     all_breaches = fm_results + bd_results
     risk = calculate_credential_risk(all_breaches, emailrep_data)
     risk_color = "red" if risk["level"] == "Critical" else "orange" if risk["level"] == "High" else "yellow" if risk["level"] == "Medium" else "emerald"
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Credential Risk Score: {risk['score']}/100 ({risk['level']})",
         type="Credential Risk Assessment",
         source="EmailBreachDetector",
@@ -471,9 +471,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     ))
 
     domain_re = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Email domain: {domain}",
-        type="Domain Extraction",
+        ftype="Domain Extraction",
         source="EmailBreachDetector",
         confidence="High",
         color="slate",
@@ -494,7 +494,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         "Army Hangout", "Home Chef", "Chegg", "Truecaller",
         "Coinmama", "BitcoinTalk", "Crypto.com", "Binance",
     ]
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Checking against {len(known_breach_databases)} known breach databases",
         type="Breach Database Coverage",
         source="EmailBreachDetector",
@@ -506,7 +506,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         tags=["coverage", "breach-databases"]
     ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Searched {len(BREACH_SOURCES)} breach sources for {email}",
         type="Breach Search Summary",
         source="EmailBreachDetector",

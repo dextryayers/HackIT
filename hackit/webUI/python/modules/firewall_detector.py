@@ -4,8 +4,8 @@ import re
 import socket
 import time
 from urllib.parse import urlparse, quote
-from models import IntelligenceFinding
 from typing import List, Dict, Optional
+from module_common import safe_fetch, make_finding
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
@@ -412,7 +412,6 @@ MALICIOUS_PATH_PATTERNS = [
     "/vendor/", "/storage/", "/bootstrap/",
 ]
 
-
 async def detect_waf_by_headers(headers: Dict, resp_text: str, status_code: int, cookies: Dict) -> List[Dict]:
     detections = []
     headers_lower = {k.lower(): v for k, v in headers.items()}
@@ -453,7 +452,6 @@ async def detect_waf_by_headers(headers: Dict, resp_text: str, status_code: int,
 
     return detections
 
-
 async def detect_challenge(resp_text: str, headers: Dict) -> List[Dict]:
     challenges = []
     text_lower = resp_text.lower()[:3000]
@@ -466,7 +464,6 @@ async def detect_challenge(resp_text: str, headers: Dict) -> List[Dict]:
             })
 
     return challenges
-
 
 async def probe_paths(client: httpx.AsyncClient, base_url: str, target: str) -> List[Dict]:
     results = []
@@ -488,7 +485,7 @@ async def probe_paths(client: httpx.AsyncClient, base_url: str, target: str) -> 
     for path in test_paths:
         try:
             url = f"{base_url}{path}"
-            resp = await client.get(url, headers={"User-Agent": UA}, timeout=10.0, follow_redirects=False)
+            resp = await safe_fetch(client, url, headers={"User-Agent": UA}, timeout=10.0, follow_redirects=False)
             results.append({
                 "path": path,
                 "status": resp.status_code,
@@ -501,7 +498,6 @@ async def probe_paths(client: httpx.AsyncClient, base_url: str, target: str) -> 
         await asyncio.sleep(0.3)
 
     return results
-
 
 async def check_ip_based_waf(target: str) -> List[Dict]:
     results = []
@@ -528,14 +524,13 @@ async def check_ip_based_waf(target: str) -> List[Dict]:
         pass
     return results
 
-
 async def check_delay_behavior(client: httpx.AsyncClient, base_url: str) -> Dict:
     result = {"delayed_responses": False, "avg_normal": 0, "avg_suspicious": 0}
     try:
         normal_times = []
         for _ in range(3):
             t1 = asyncio.get_event_loop().time()
-            resp = await client.get(base_url, headers={"User-Agent": UA}, timeout=15.0)
+            resp = await safe_fetch(client, base_url, headers={"User-Agent": UA}, timeout=15.0)
             t2 = asyncio.get_event_loop().time()
             normal_times.append(t2 - t1)
         result["avg_normal"] = sum(normal_times) / len(normal_times)
@@ -551,7 +546,7 @@ async def check_delay_behavior(client: httpx.AsyncClient, base_url: str) -> Dict
         for param in suspicious_params:
             try:
                 t1 = asyncio.get_event_loop().time()
-                resp = await client.get(param, headers={"User-Agent": UA}, timeout=30.0)
+                resp = await safe_fetch(client, param, headers={"User-Agent": UA}, timeout=30.0)
                 t2 = asyncio.get_event_loop().time()
                 suspicious_times.append(t2 - t1)
             except Exception:
@@ -564,7 +559,6 @@ async def check_delay_behavior(client: httpx.AsyncClient, base_url: str) -> Dict
         pass
     return result
 
-
 async def check_rate_limiting(client: httpx.AsyncClient, base_url: str) -> Dict:
     result = {"rate_limited": False, "status_codes": [], "avg_time": 0}
     try:
@@ -572,7 +566,7 @@ async def check_rate_limiting(client: httpx.AsyncClient, base_url: str) -> Dict:
         statuses = []
         for i in range(10):
             t1 = asyncio.get_event_loop().time()
-            resp = await client.get(base_url, headers={"User-Agent": UA}, timeout=10.0)
+            resp = await safe_fetch(client, base_url, headers={"User-Agent": UA}, timeout=10.0)
             t2 = asyncio.get_event_loop().time()
             times.append(t2 - t1)
             statuses.append(resp.status_code)
@@ -590,7 +584,6 @@ async def check_rate_limiting(client: httpx.AsyncClient, base_url: str) -> Dict:
         pass
     return result
 
-
 async def crawl(target: str, client: httpx.AsyncClient):
     findings = []
     domain = target.strip().lower()
@@ -603,7 +596,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
     challenge_detections = []
 
     try:
-        resp = await client.get(base_url, headers={"User-Agent": UA}, timeout=15.0, follow_redirects=True)
+        resp = await safe_fetch(client, base_url, headers={"User-Agent": UA}, timeout=15.0, follow_redirects=True)
         status_code = resp.status_code
         headers = dict(resp.headers)
         text = resp.text
@@ -616,9 +609,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         challenge_detections.extend(challenges)
 
     except Exception as e:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"WAF check error: {str(e)[:100]}",
-            type="WAF: Error",
+            ftype="WAF: Error",
             source="FirewallDetector",
             confidence="Low",
             color="red",
@@ -655,9 +648,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             threat = "Elevated Risk"
             tags.append("blocking-requests")
 
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"WAF: {waf_name} (confidence: {confidence})",
-            type=f"WAF: {waf_name}",
+            ftype=f"WAF: {waf_name}",
             source="FirewallDetector",
             confidence=confidence,
             color=color,
@@ -670,9 +663,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
     if challenge_detections:
         for cd in challenge_detections:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Challenge detected: {cd['type']}",
-                type="WAF: Challenge Page",
+                ftype="WAF: Challenge Page",
                 source="FirewallDetector",
                 confidence="High",
                 color="orange",
@@ -693,9 +686,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
     if different_path_behaviors:
         for behavior in different_path_behaviors:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=behavior[:200],
-                type="WAF: Behavior Analysis",
+                ftype="WAF: Behavior Analysis",
                 source="FirewallDetector",
                 confidence="Medium",
                 color="slate",
@@ -705,9 +698,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
     delay_analysis = await check_delay_behavior(client, base_url)
     if delay_analysis.get("delayed_responses"):
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Suspicious delayed responses: normal {delay_analysis['avg_normal']:.2f}s vs suspicious {delay_analysis['avg_suspicious']:.2f}s",
-            type="WAF: Delay Analysis",
+            ftype="WAF: Delay Analysis",
             source="FirewallDetector",
             confidence="Medium",
             color="orange",
@@ -718,9 +711,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
     # Rate limiting detection
     rate_limit_check = await check_rate_limiting(client, base_url)
     if rate_limit_check.get("rate_limited"):
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Rate limiting detected: {rate_limit_check['status_codes'][-3:]} after multiple requests",
-            type="WAF: Rate Limiting",
+            ftype="WAF: Rate Limiting",
             source="FirewallDetector",
             confidence="Medium",
             color="orange",
@@ -729,9 +722,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             tags=["waf", "rate-limit", "throttling"]
         ))
     else:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="No rate limiting detected",
-            type="WAF: Rate Limiting Check",
+            ftype="WAF: Rate Limiting Check",
             source="FirewallDetector",
             confidence="Medium",
             color="emerald",
@@ -741,12 +734,12 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
     # Server header detection
     try:
-        resp = await client.get(base_url, headers={"User-Agent": UA}, timeout=10.0)
+        resp = await safe_fetch(client, base_url, headers={"User-Agent": UA}, timeout=10.0)
         server = resp.headers.get("Server", "")
         if server:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Server: {server}",
-                type="WAF: Server Header",
+                ftype="WAF: Server Header",
                 source="FirewallDetector",
                 confidence="High",
                 color="slate",
@@ -758,7 +751,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
     # Set-Cookie analysis for WAF cookies
     try:
-        resp = await client.get(base_url, headers={"User-Agent": UA}, timeout=10.0)
+        resp = await safe_fetch(client, base_url, headers={"User-Agent": UA}, timeout=10.0)
         set_cookie = resp.headers.get("Set-Cookie", "")
         if set_cookie:
             waf_cookies_found = []
@@ -768,9 +761,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         waf_cookies_found.append(waf_name)
                         break
             if waf_cookies_found:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"WAF cookies detected: {', '.join(waf_cookies_found)}",
-                    type="WAF: Cookie Detection",
+                    ftype="WAF: Cookie Detection",
                     source="FirewallDetector",
                     confidence="High",
                     color="orange",
@@ -781,9 +774,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         pass
 
     if not waf_detections and not challenge_detections:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="No WAF detected",
-            type="WAF: Not Detected",
+            ftype="WAF: Not Detected",
             source="FirewallDetector",
             confidence="Medium",
             color="emerald",
@@ -791,9 +784,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             tags=["waf", "none"]
         ))
         if different_path_behaviors:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="Potential custom firewall (non-standard signatures)",
-                type="WAF: Custom / Generic",
+                ftype="WAF: Custom / Generic",
                 source="FirewallDetector",
                 confidence="Low",
                 color="slate",
@@ -813,9 +806,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
     if rate_limit_check.get("rate_limited"):
         summary_lines.append("Rate limiting: Detected")
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"WAF Scan: {len(waf_names_seen)} WAF(s) detected",
-        type="WAF: Summary",
+        ftype="WAF: Summary",
         source="FirewallDetector",
         confidence="Medium",
         color="red" if waf_names_seen else "emerald",

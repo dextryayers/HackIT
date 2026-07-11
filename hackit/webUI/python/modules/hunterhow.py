@@ -4,8 +4,8 @@ import asyncio
 import socket
 import xml.etree.ElementTree as ET
 import math
-from models import IntelligenceFinding
 from urllib.parse import urlparse, urldefrag, urljoin
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash
 
 COMMON_MAILBOXES = [
     "admin", "info", "contact", "support", "sales", "marketing", "billing",
@@ -237,7 +237,7 @@ async def check_smtp(host: str, email: str) -> dict:
 
 async def fetch_url(client: httpx.AsyncClient, url: str, timeout: float = 15.0) -> str:
     try:
-        resp = await client.get(url, timeout=timeout, follow_redirects=True,
+        resp = await safe_fetch(client, url, timeout=timeout, follow_redirects=True,
             headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"})
         if resp.status_code == 200:
             return resp.text if hasattr(resp, "text") else ""
@@ -337,7 +337,7 @@ async def pgp_keyserver_lookup(client: httpx.AsyncClient, domain: str) -> list:
     emails = []
     try:
         search_url = f"https://keyserver.ubuntu.com/pks/lookup?op=index&search={domain}"
-        resp = await client.get(search_url, timeout=10.0,
+        resp = await safe_fetch(client, search_url, timeout=10.0,
             headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"})
         if resp.status_code == 200:
             text = resp.text if hasattr(resp, "text") else ""
@@ -482,13 +482,13 @@ async def crawl(target: str, client: httpx.AsyncClient):
     secondary_pages_html = []
 
     try:
-        resp = await client.get(base_url, timeout=15.0, follow_redirects=True,
+        resp = await safe_fetch(client, base_url, timeout=15.0, follow_redirects=True,
             headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"})
         if resp.status_code == 200:
             html = resp.text if hasattr(resp, "text") else ""
     except Exception:
         try:
-            resp = await client.get(f"http://{domain}", timeout=15.0, follow_redirects=True,
+            resp = await safe_fetch(client, f"http://{domain}", timeout=15.0, follow_redirects=True,
                 headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"})
             if resp.status_code == 200:
                 html = resp.text if hasattr(resp, "text") else ""
@@ -501,7 +501,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
     # robots.txt crawling
     robots_paths = await crawl_robots_txt(client, base_url)
     if robots_paths:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Robots.txt paths: {len(robots_paths)}",
             type="HunterHOW - Robots.txt Crawl",
             source="HunterHOW",
@@ -519,7 +519,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
     # sitemap.xml crawling
     sitemap_urls = await crawl_sitemap_xml(client, base_url)
     if sitemap_urls:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Sitemap URLs: {len(sitemap_urls)}",
             type="HunterHOW - Sitemap Crawl",
             source="HunterHOW",
@@ -554,9 +554,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
     pgp_emails = await pgp_keyserver_lookup(client, domain)
     for email in pgp_emails:
         if not any(f.entity == email and "PGP" in f.type for f in findings):
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=email,
-                type="HunterHOW - Email (PGP Keyserver)",
+                ftype="HunterHOW - Email (PGP Keyserver)",
                 source="HunterHOW",
                 confidence="High",
                 color="emerald",
@@ -574,9 +574,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
     for email in mailto_emails:
         if email.endswith("." + domain) or email.endswith(domain):
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=email,
-                type="HunterHOW - Email (mailto: link)",
+                ftype="HunterHOW - Email (mailto: link)",
                 source="HunterHOW",
                 confidence="High",
                 color="emerald",
@@ -594,9 +594,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
     non_mailto = text_emails - mailto_emails
     for email in list(non_mailto)[:15]:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=email,
-            type="HunterHOW - Email (in page text)",
+            ftype="HunterHOW - Email (in page text)",
             source="HunterHOW",
             confidence="Medium",
             color="cyan",
@@ -612,7 +612,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
     for js_src in list(all_js_srcs)[:10]:
         try:
             js_url = js_src if js_src.startswith("http") else f"{base_url.rstrip('/')}/{js_src.lstrip('/')}"
-            js_resp = await client.get(js_url, timeout=8.0,
+            js_resp = await safe_fetch(client, js_url, timeout=8.0,
                 headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"})
             if js_resp.status_code == 200:
                 js_content += (js_resp.text or "")
@@ -626,9 +626,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             if email.endswith("." + domain) or email.endswith(domain):
                 js_emails.add(email)
         for email in list(js_emails)[:10]:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=email,
-                type="HunterHOW - Email (in JavaScript)",
+                ftype="HunterHOW - Email (in JavaScript)",
                 source="HunterHOW",
                 confidence="Medium",
                 color="cyan",
@@ -676,9 +676,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         test_email = f"{mailbox}@{domain}"
         if test_email not in all_found_emails:
             prob_pct = f"{prob*100:.0f}%"
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=test_email,
-                type="HunterHOW - Common Mailbox (likely)",
+                ftype="HunterHOW - Common Mailbox (likely)",
                 source="HunterHOW",
                 confidence="High" if prob >= 0.7 else "Medium" if prob >= 0.4 else "Low",
                 color="emerald" if prob >= 0.7 else "blue" if prob >= 0.4 else "slate",
@@ -690,9 +690,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
     if not verified_mailboxes and not all_found_emails:
         for mailbox in ["info", "contact", "admin", "support"]:
             test_email = f"{mailbox}@{domain}"
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=test_email,
-                type="HunterHOW - Common Mailbox (suggested)",
+                ftype="HunterHOW - Common Mailbox (suggested)",
                 source="HunterHOW",
                 confidence="Low",
                 color="slate",
@@ -707,7 +707,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             local_part = email.split("@")[0]
             for pattern, pattern_name in EMAIL_PATTERN_ANALYSIS:
                 if re.match(pattern, local_part):
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Email format: {pattern_name} (from {email})",
                         type="HunterHOW - Email Naming Pattern",
                         source="HunterHOW",
@@ -720,7 +720,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         local_parts = [e.split("@")[0] for e in all_emails]
         if len(set(local_parts)) >= 2:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{len(set(local_parts))} different local parts found",
                 type="HunterHOW - Email Diversity",
                 source="HunterHOW",
@@ -733,9 +733,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         # Email format consistency check
         detected_format = detect_email_format_pattern(local_parts)
         if detected_format != "unknown":
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Detected email format: {detected_format}",
-                type="HunterHOW - Email Format Consistency",
+                ftype="HunterHOW - Email Format Consistency",
                 source="HunterHOW",
                 confidence="Medium",
                 color="indigo",
@@ -744,7 +744,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ))
             variations = suggest_email_variations(detected_format, local_parts, domain)
             if variations:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Suggested variations: {', '.join(variations)}",
                     type="HunterHOW - Email Format Variations",
                     source="HunterHOW",
@@ -765,7 +765,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             mx_hosts.sort()
             smtp_host = mx_hosts[0][1]
             for prio, mx in mx_hosts:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{mx} (priority {prio})",
                     type="HunterHOW - Mail Server (MX)",
                     source="HunterHOW",
@@ -778,9 +778,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             # Email source prediction from MX
             email_service = predict_email_service(mx_hosts)
             if email_service != "Self-Hosted / Unknown":
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Email service: {email_service}",
-                    type="HunterHOW - Email Service Prediction",
+                    ftype="HunterHOW - Email Service Prediction",
                     source="HunterHOW",
                     confidence="High",
                     color="blue",
@@ -788,9 +788,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     tags=["email", "provider", "mx"]
                 ))
             else:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity="Self-Hosted / Unknown email service",
-                    type="HunterHOW - Email Service Prediction",
+                    ftype="HunterHOW - Email Service Prediction",
                     source="HunterHOW",
                     confidence="Medium",
                     color="slate",
@@ -819,7 +819,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 if variant != domain:
                     domain_variations.append(variant)
     if domain_variations:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Possible domain variations: {', '.join(domain_variations[:8])}",
             type="HunterHOW - Domain Variation Analysis",
             source="HunterHOW",
@@ -839,9 +839,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         if len(phone) >= 7 and len(phone) <= 20:
             phone_numbers.add(phone)
     for phone in list(phone_numbers)[:8]:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=phone,
-            type="HunterHOW - Phone Number",
+            ftype="HunterHOW - Phone Number",
             source="HunterHOW",
             confidence="Medium",
             color="cyan",
@@ -855,7 +855,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         smtp_result = await check_smtp(smtp_host, verify_email)
 
         if smtp_result.get("valid") is True:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{verify_email} is VERIFIED (SMTP confirmed)",
                 type="HunterHOW - Email Verification",
                 source="HunterHOW",
@@ -866,9 +866,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 tags=["email", "verified", "smtp"]
             ))
         elif smtp_result.get("valid") is False:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{verify_email} REJECTED by mail server",
-                type="HunterHOW - Email Verification",
+                ftype="HunterHOW - Email Verification",
                 source="HunterHOW",
                 confidence="Medium",
                 color="red",
@@ -877,9 +877,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 tags=["email", "invalid", "smtp"]
             ))
         else:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"SMTP check inconclusive for {verify_email}",
-                type="HunterHOW - Email Verification",
+                ftype="HunterHOW - Email Verification",
                 source="HunterHOW",
                 confidence="Low",
                 color="orange",
@@ -892,9 +892,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         if banner:
             banner_lower = banner.lower()
             if "catch" in banner_lower or "catch-all" in banner_lower:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Catch-all detected: {banner[:100]}",
-                    type="HunterHOW - Catch-All Detection",
+                    ftype="HunterHOW - Catch-All Detection",
                     source="HunterHOW",
                     confidence="Medium",
                     color="orange",
@@ -920,9 +920,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     break
 
             if banner_provider != "Unknown":
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Mail server: {banner_provider}",
-                    type="HunterHOW - Mail Server Provider",
+                    ftype="HunterHOW - Mail Server Provider",
                     source="HunterHOW",
                     confidence="High",
                     color="blue",
@@ -933,7 +933,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         catch_all_test = f"catchalltest{abs(hash(domain)) % 10000}@{domain}"
         smtp_result = await check_smtp(smtp_host, catch_all_test)
         if smtp_result.get("valid") is True:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Server accepts ALL email at {domain} (Catch-All)",
                 type="HunterHOW - Catch-All Detected",
                 source="HunterHOW",
@@ -949,9 +949,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         for url, page_text in secondary_pages_html:
             social_matches.extend(re.findall(pattern, page_text, re.IGNORECASE))
         for sm in list(dict.fromkeys(social_matches))[:3]:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=sm[:200],
-                type=f"HOW - {platform} Profile",
+                ftype=f"HOW - {platform} Profile",
                 source="HunterHOW",
                 confidence="High",
                 color="purple" if "linkedin" in platform.lower() else "slate",
@@ -972,7 +972,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         if total >= 10: email_confidence += 10
         if total >= 25: email_confidence += 10
         conf_label = "Low" if email_confidence < 40 else "Medium" if email_confidence < 70 else "High"
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Email data confidence: {email_confidence}/100 ({conf_label})",
             type="HunterHOW - Email Confidence Score",
             source="HunterHOW",
@@ -989,9 +989,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         for r in spf_txt:
             txt = str(r)
             if txt.startswith("v=spf1"):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=txt[:200],
-                    type="HunterHOW - SPF Record Discovery",
+                    ftype="HunterHOW - SPF Record Discovery",
                     source="HunterHOW",
                     confidence="High",
                     color="emerald",
@@ -1007,9 +1007,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         for r in dmarc_txt:
             txt = str(r)
             if "v=DMARC" in txt:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=txt[:200],
-                    type="HunterHOW - DMARC Record Discovery",
+                    ftype="HunterHOW - DMARC Record Discovery",
                     source="HunterHOW",
                     confidence="High",
                     color="emerald",
@@ -1024,9 +1024,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         try:
             dkim_txt = await dns_loop.run_in_executor(None, lambda: dns_res.resolve(f"{sel}._domainkey.{domain}", 'TXT'))
             for r in dkim_txt:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"DKIM selector '{sel}' found",
-                    type="HunterHOW - DKIM Discovery",
+                    ftype="HunterHOW - DKIM Discovery",
                     source="HunterHOW",
                     confidence="High",
                     color="emerald",
@@ -1039,11 +1039,11 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
     if all_found_emails:
         try:
-            paste1 = await client.get(f"https://psbdmp.ws/api/search/{domain}", timeout=10.0)
+            paste1 = await safe_fetch(client, f"https://psbdmp.ws/api/search/{domain}", timeout=10.0)
             if paste1.status_code == 200 and paste1.text.strip():
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Paste site results for {domain}",
-                    type="HunterHOW - Breach/Paste Mention",
+                    ftype="HunterHOW - Breach/Paste Mention",
                     source="HunterHOW",
                     confidence="Medium",
                     color="orange",
@@ -1053,7 +1053,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         except:
             pass
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Total emails found: {len(all_found_emails)}",
         type="HunterHOW - Summary",
         source="HunterHOW",
@@ -1067,17 +1067,17 @@ async def crawl(target: str, client: httpx.AsyncClient):
     async def check_security_headers_how():
         for proto in ["https", "http"]:
             try:
-                resp = await client.get(f"{proto}://{domain}", timeout=8.0, follow_redirects=False, headers={"User-Agent": "Mozilla/5.0"})
+                resp = await safe_fetch(client, f"{proto}://{domain}", timeout=8.0, follow_redirects=False, headers={"User-Agent": "Mozilla/5.0"})
                 hdrs = {k.lower(): v for k, v in dict(resp.headers).items()}
                 for hdr in ["strict-transport-security", "x-content-type-options", "x-frame-options", "content-security-policy", "referrer-policy"]:
                     if hdr in hdrs:
-                        findings.append(IntelligenceFinding(
-                            entity=f"{hdr}: {hdrs[hdr][:100]}", type="HOW - HTTP Security Header",
+                        findings.append(make_finding(
+                            entity=f"{hdr}: {hdrs[hdr][:100]}", ftype="HOW - HTTP Security Header",
                             source="HunterHOW", confidence="High", color="emerald", threat_level="Informational",
                             tags=["http", "security"]))
                 if "server" in hdrs:
-                    findings.append(IntelligenceFinding(
-                        entity=f"Server: {hdrs['server'][:80]}", type="HOW - HTTP Server Header",
+                    findings.append(make_finding(
+                        entity=f"Server: {hdrs['server'][:80]}", ftype="HOW - HTTP Server Header",
                         source="HunterHOW", confidence="Medium", color="slate", threat_level="Informational",
                         tags=["http", "server"]))
                 break
@@ -1091,22 +1091,22 @@ async def crawl(target: str, client: httpx.AsyncClient):
                  f"https://{domain}/ads.txt", f"https://{domain}/crossdomain.xml"]
         async def check_path(path):
             try:
-                resp = await client.get(path, timeout=8.0, follow_redirects=True, headers=headers)
+                resp = await safe_fetch(client, path, timeout=8.0, follow_redirects=True, headers=headers)
                 if resp.status_code == 200:
                     pname = path.split("/")[-1]
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"{pname} accessible ({len(resp.text)} bytes)",
                         type="HOW - File Discovery", source="HunterHOW",
                         confidence="High", color="slate", threat_level="Informational",
                         tags=["discovery", "file"]))
                     if "security.txt" in path and "Contact" in resp.text:
-                        findings.append(IntelligenceFinding(
-                            entity=f"Security contact info found", type="HOW - Security.txt",
+                        findings.append(make_finding(
+                            entity=f"Security contact info found", ftype="HOW - Security.txt",
                             source="HunterHOW", confidence="High", color="emerald",
                             raw_data=resp.text[:2000], tags=["security", "disclosure"]))
                         for m in EMAIL_REGEX.finditer(resp.text):
-                            findings.append(IntelligenceFinding(
-                                entity=m.group(0).lower(), type="HOW - Security.txt Email",
+                            findings.append(make_finding(
+                                entity=m.group(0).lower(), ftype="HOW - Security.txt Email",
                                 source="HunterHOW", confidence="High", color="blue",
                                 tags=["email", "security"]))
             except: pass
@@ -1122,24 +1122,24 @@ async def crawl(target: str, client: httpx.AsyncClient):
             if 3 <= len(full) <= 40 and not any(x in full.lower() for x in ["the ", "this ", "that ", "with ", "from "]):
                 people.add(full)
         for name in list(people)[:5]:
-            findings.append(IntelligenceFinding(
-                entity=name, type="HOW - Person Name",
+            findings.append(make_finding(
+                entity=name, ftype="HOW - Person Name",
                 source="HunterHOW", confidence="Low", color="slate", threat_level="Informational",
                 tags=["people", "name"]))
 
     async def check_cookie_analysis():
         try:
-            resp = await client.get(f"https://{domain}", timeout=8.0, follow_redirects=True, headers={"User-Agent": "Mozilla/5.0"})
+            resp = await safe_fetch(client, f"https://{domain}", timeout=8.0, follow_redirects=True, headers={"User-Agent": "Mozilla/5.0"})
             cookies = resp.cookies
             if cookies:
                 for name in list(cookies.keys())[:5]:
-                    findings.append(IntelligenceFinding(
-                        entity=f"Cookie: {name}", type="HOW - Cookie Discovery",
+                    findings.append(make_finding(
+                        entity=f"Cookie: {name}", ftype="HOW - Cookie Discovery",
                         source="HunterHOW", confidence="Medium", color="slate", threat_level="Informational",
                         tags=["http", "cookie"]))
                 trackers = [c for c in cookies if c.lower().startswith(("__cf","__utm","_ga","_gid","_fbp","_hjid"))]
                 if trackers:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Tracking cookies: {', '.join(trackers)[:100]}",
                         type="HOW - Tracking Cookie", source="HunterHOW",
                         confidence="Medium", color="orange", threat_level="Informational",
@@ -1149,13 +1149,13 @@ async def crawl(target: str, client: httpx.AsyncClient):
     async def check_page_metadata():
         title = re.search(r'<title[^>]*>(.*?)</title>', html, re.IGNORECASE | re.DOTALL)
         if title:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Title: {title.group(1).strip()[:100]}",
                 type="HOW - Page Title", source="HunterHOW",
                 confidence="High", color="slate", threat_level="Informational",
                 tags=["page", "metadata"]))
         for m in list(re.finditer(r'<meta[^>]+name=["\']([^"\']+)["\'][^>]+content=["\']([^"\']+)["\']', html, re.IGNORECASE))[:5]:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Meta {m.group(1)}: {m.group(2)[:80]}",
                 type="HOW - Meta Tag", source="HunterHOW",
                 confidence="High", color="slate", threat_level="Informational",
@@ -1169,14 +1169,14 @@ async def crawl(target: str, client: httpx.AsyncClient):
             "GA/GTM":["google-analytics","gtag","gtm.js"]}
         detected = [tech for tech, pats in indicators.items() if any(p in html.lower() for p in pats)]
         if detected:
-            findings.append(IntelligenceFinding(
-                entity=f"Tech: {', '.join(detected[:8])}", type="HOW - Technology Stack",
+            findings.append(make_finding(
+                entity=f"Tech: {', '.join(detected[:8])}", ftype="HOW - Technology Stack",
                 source="HunterHOW", confidence="Medium", color="purple",
                 tags=["tech", "stack"]))
         ga = re.search(r'UA-\d{4,10}-\d{1,4}|G-[A-Z0-9]{10,12}', html)
         if ga:
-            findings.append(IntelligenceFinding(
-                entity=f"Analytics: {ga.group(0)}", type="HOW - Analytics ID",
+            findings.append(make_finding(
+                entity=f"Analytics: {ga.group(0)}", ftype="HOW - Analytics ID",
                 source="HunterHOW", confidence="High", color="slate",
                 tags=["analytics", "tracking"]))
 

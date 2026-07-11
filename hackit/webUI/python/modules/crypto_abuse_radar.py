@@ -5,6 +5,7 @@ import json
 from datetime import datetime
 from typing import List
 from collections import defaultdict
+from module_common import safe_fetch, safe_fetch_json, make_finding
 from models import IntelligenceFinding
 
 SCAM_WALLETS = [
@@ -149,7 +150,7 @@ async def query_blockchain_explorers(address: str, client: httpx.AsyncClient) ->
     for name, url_builder in BLOCKCHAIN_EXPLORERS:
         try:
             url = url_builder(address)
-            resp = await client.get(url, timeout=10.0,
+            resp = await safe_fetch(client, url, timeout=10.0,
                 headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"})
             if resp.status_code == 200:
                 results.append({"explorer": name, "data": resp.json()})
@@ -182,7 +183,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
     all_wallets = SCAM_WALLETS + EXTRA_SCAM_WALLETS
     for wallet in all_wallets:
         if wallet.lower()[:10] in t or wallet.lower() in t:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Known scam wallet reference: {wallet[:20]}...",
                 type="Crypto: Known Scam Wallet",
                 source="CryptoAbuseRadar",
@@ -197,7 +198,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
     scam_domains = await detect_scam_domain(t)
     for d in scam_domains:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Scam domain pattern detected: {d[:100]}",
             type="Crypto: Scam Domain",
             source="CryptoAbuseRadar",
@@ -211,7 +212,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
     detected_wallets = await detect_wallet_addresses(t)
     for chain, addrs in detected_wallets.items():
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Detected {len(addrs)} {chain.upper()} wallet address(es)",
             type=f"Crypto: {chain.upper()} Wallet Detection",
             source="CryptoAbuseRadar",
@@ -231,7 +232,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
     
     for exp in wallet_explorer_results[:5]:
         explorer_name = exp.get("explorer", "Unknown")
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Blockchain explorer data from {explorer_name}",
             type="Crypto: Blockchain Explorer Query",
             source=explorer_name,
@@ -244,14 +245,14 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         ))
 
     try:
-        resp = await client.get(f"https://{t}", timeout=10.0,
+        resp = await safe_fetch(client, f"https://{t}", timeout=10.0,
             headers={"User-Agent": "Mozilla/5.0"})
         if resp.status_code == 200:
             html = resp.text.lower()
 
             defi_scams = await detect_defi_scam(html)
             if defi_scams:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"DeFi scam indicators: {', '.join(defi_scams[:5])}",
                     type="Crypto: DeFi Scam Detection",
                     source="CryptoAbuseRadar",
@@ -265,7 +266,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
             nft_scams = await detect_nft_scam(html)
             if nft_scams:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"NFT scam indicators: {', '.join(nft_scams[:5])}",
                     type="Crypto: NFT Scam Detection",
                     source="CryptoAbuseRadar",
@@ -280,7 +281,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             page_wallets = await detect_wallet_addresses(html)
             total_wallets = sum(len(v) for v in page_wallets.values())
             if total_wallets > 0:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{total_wallets} wallet addresses found on page across {len(page_wallets)} chains",
                     type="Crypto: Wallet Address Discovery",
                     source="CryptoAbuseRadar",
@@ -297,7 +298,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                                "claim airdrop", "free nft", "mint now", "presale", "whitelist"]
             found_phrases = [p for p in giveaway_phrases if p in html]
             if found_phrases:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Giveaway scam phrases: {', '.join(found_phrases[:5])}",
                     type="Crypto: Giveaway Scam Detection",
                     source="CryptoAbuseRadar",
@@ -315,7 +316,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                                  "minimum investment", "referral bonus", "matrix"]
             found_investment = [p for p in investment_phrases if p in html]
             if found_investment:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Investment scam phrases: {', '.join(found_investment[:3])}",
                     type="Crypto: Investment Scam Detection",
                     source="CryptoAbuseRadar",
@@ -330,7 +331,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         pass
 
     if not findings:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="No crypto abuse indicators detected",
             type="Crypto Abuse Check Complete",
             source="CryptoAbuseRadar",
@@ -343,7 +344,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         ))
 
     source_count = len(set(f.source for f in findings))
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Crypto abuse scan using {source_count} detection methods across {len(BLOCKCHAIN_EXPLORERS)} blockchain explorers",
         type="Crypto: Scan Coverage Summary",
         source="CryptoAbuseRadar",

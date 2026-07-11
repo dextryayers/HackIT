@@ -8,7 +8,7 @@ import socket
 import time
 import re
 from collections import defaultdict
-from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash
 
 async def resolve_rtype(domain: str, rtype: str):
     loop = asyncio.get_event_loop()
@@ -132,9 +132,9 @@ async def crawl(target: str, client=None):
 
     ns_list = await resolve_rtype(domain, 'NS')
     if not ns_list:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"No NS records found for {domain}",
-            type="Nameserver Analysis",
+            ftype="Nameserver Analysis",
             source="DNS NS Analyzer",
             confidence="High",
             color="red",
@@ -148,7 +148,7 @@ async def crawl(target: str, client=None):
         ns = ns.rstrip('.')
         ns_ips = await resolve_a(ns)
         ips_str = ', '.join(ns_ips) if ns_ips else "Unresolvable"
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{ns} ({ips_str})",
             type="Nameserver Record",
             source="DNS NS Analyzer",
@@ -166,7 +166,7 @@ async def crawl(target: str, client=None):
                 try:
                     ptr = await resolve_rtype(ip, 'PTR')
                     if ptr:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"PTR: {ip} -> {', '.join(ptr)}",
                             type="NS PTR Record (rDNS)",
                             source="DNS NS Analyzer",
@@ -182,7 +182,7 @@ async def crawl(target: str, client=None):
 
         zt_result = await test_zone_transfer(ns, domain)
         if zt_result:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Zone transfer (AXFR) ALLOWED on {ns} - CRITICAL!",
                 type="NS Zone Transfer Vulnerability",
                 source="DNS NS Analyzer",
@@ -194,7 +194,7 @@ async def crawl(target: str, client=None):
                 tags=["ns", "zone-transfer", "vulnerability", "critical"]
             ))
         else:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Zone transfer (AXFR) blocked on {ns}",
                 type="NS Zone Transfer Secure",
                 source="DNS NS Analyzer",
@@ -207,9 +207,9 @@ async def crawl(target: str, client=None):
 
         version_info = await get_ns_version(ns)
         if version_info:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{ns} version: {version_info}",
-                type="NS Version Disclosure",
+                ftype="NS Version Disclosure",
                 source="DNS NS Analyzer",
                 confidence="High",
                 color="orange",
@@ -219,9 +219,9 @@ async def crawl(target: str, client=None):
                 tags=["ns", "version", "disclosure"]
             ))
         else:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{ns}: version hidden",
-                type="NS Version Hiding",
+                ftype="NS Version Hiding",
                 source="DNS NS Analyzer",
                 confidence="Medium",
                 color="green",
@@ -232,9 +232,9 @@ async def crawl(target: str, client=None):
 
         rec_open = await check_recursion(ns)
         if rec_open:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Recursion ENABLED on {ns} - open resolver!",
-                type="NS Open Recursion",
+                ftype="NS Open Recursion",
                 source="DNS NS Analyzer",
                 confidence="High",
                 color="red",
@@ -244,9 +244,9 @@ async def crawl(target: str, client=None):
                 tags=["ns", "recursion", "open-resolver", "abuse"]
             ))
         else:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Recursion disabled on {ns}",
-                type="NS Recursion Status",
+                ftype="NS Recursion Status",
                 source="DNS NS Analyzer",
                 confidence="High",
                 color="green",
@@ -258,9 +258,9 @@ async def crawl(target: str, client=None):
         latency = await measure_ns_latency(ns)
         if latency:
             lcolor = "green" if latency < 0.05 else "orange" if latency < 0.2 else "red"
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{ns}: {latency}s avg response time",
-                type="NS Response Latency",
+                ftype="NS Response Latency",
                 source="DNS NS Analyzer",
                 confidence="High",
                 color=lcolor,
@@ -272,9 +272,9 @@ async def crawl(target: str, client=None):
 
         software = await detect_ns_software(ns)
         if software and software != "Unknown":
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{ns}: {software}",
-                type="NS Software Detection",
+                ftype="NS Software Detection",
                 source="DNS NS Analyzer",
                 confidence="Medium",
                 color="purple",
@@ -286,9 +286,9 @@ async def crawl(target: str, client=None):
         try:
             dnskey = await resolve_rtype(ns, 'DNSKEY')
             if dnskey:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"DNSSEC enabled on nameserver {ns}",
-                    type="NS DNSSEC Status",
+                    ftype="NS DNSSEC Status",
                     source="DNS NS Analyzer",
                     confidence="High",
                     color="emerald",
@@ -300,7 +300,7 @@ async def crawl(target: str, client=None):
             pass
 
     if len(ns_list) >= 2:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{len(ns_list)} nameservers provide redundancy",
             type="NS Redundancy Analysis",
             source="DNS NS Analyzer",
@@ -316,7 +316,7 @@ async def crawl(target: str, client=None):
         ns_clean = ns.rstrip('.')
         if ns_clean.endswith(domain):
             glue_tested = True
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{ns_clean} is in-zone (glue record may be needed)",
                 type="NS Glue Record Check",
                 source="DNS NS Analyzer",
@@ -327,7 +327,7 @@ async def crawl(target: str, client=None):
                 tags=["ns", "glue"]
             ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Analyzed {len(ns_list)} nameservers for {domain}",
         type="NS Analysis Summary",
         source="DNS NS Analyzer",

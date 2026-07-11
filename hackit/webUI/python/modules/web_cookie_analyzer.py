@@ -2,8 +2,7 @@ import httpx
 import re
 import hashlib
 from datetime import datetime
-from models import IntelligenceFinding
-
+from module_common import safe_fetch, make_finding
 SESSION_COOKIE_NAMES = [
     "PHPSESSID", "JSESSIONID", "ASP.NET_SessionId", "laravel_session",
     "connect.sid", "_session_id", "sid", "token", "session",
@@ -179,7 +178,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
     base_url = f"https://{target}" if not target.startswith("http") else target
 
     try:
-        resp = await client.get(base_url, follow_redirects=True,
+        resp = await safe_fetch(client, base_url, follow_redirects=True,
             headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"})
         set_cookie_headers = resp.headers.get_list("set-cookie") if hasattr(resp.headers, "get_list") else []
         if not set_cookie_headers:
@@ -253,9 +252,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             color = "red" if issues else "emerald"
             threat = "Elevated Risk" if issues else "Informational"
 
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{name}={value[:30]}...",
-                type=f"Cookie: {cookie_class}",
+                ftype=f"Cookie: {cookie_class}",
                 source="WebCookieAnalyzer",
                 confidence="High",
                 color=color,
@@ -265,9 +264,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ))
 
             if framework:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Framework cookie: {name} -> {framework}",
-                    type="Cookie Framework Detection",
+                    ftype="Cookie Framework Detection",
                     source="WebCookieAnalyzer",
                     confidence="High",
                     color="purple",
@@ -277,9 +276,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 ))
 
             if not httponly:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{name} - missing HttpOnly (XSS-accessible)",
-                    type="Cookie Security Issue",
+                    ftype="Cookie Security Issue",
                     source="WebCookieAnalyzer",
                     confidence="High",
                     color="red",
@@ -289,9 +288,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 ))
 
             if cookie_class == "Session" and not secure:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{name} - session cookie without Secure flag",
-                    type="Cookie Security Issue",
+                    ftype="Cookie Security Issue",
                     source="WebCookieAnalyzer",
                     confidence="High",
                     color="red",
@@ -301,9 +300,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 ))
 
             if domain and not domain.startswith("."):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Cookie domain restricted: {domain}",
-                    type="Cookie Scope: Domain",
+                    ftype="Cookie Scope: Domain",
                     source="WebCookieAnalyzer",
                     confidence="High",
                     color="emerald",
@@ -312,9 +311,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 ))
 
             if is_tp_cookie:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Third-party cookie: {domain}{path} {name}",
-                    type="Third-Party Cookie",
+                    ftype="Third-Party Cookie",
                     source="WebCookieAnalyzer",
                     confidence="High",
                     color="orange",
@@ -324,9 +323,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 ))
 
             if is_encrypted and cookie_class == "Session":
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Session cookie appears encrypted/hashed: {name}",
-                    type="Cookie Encryption Detected",
+                    ftype="Cookie Encryption Detected",
                     source="WebCookieAnalyzer",
                     confidence="Medium",
                     color="emerald",
@@ -334,9 +333,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     tags=["cookie", "security", "encryption"]
                 ))
             elif cookie_class == "Session" and not is_encrypted and len(value) < 16:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Session cookie appears weak: {name}={value[:20]}",
-                    type="Weak Session Cookie",
+                    ftype="Weak Session Cookie",
                     source="WebCookieAnalyzer",
                     confidence="Medium",
                     color="orange",
@@ -347,9 +346,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         for c in cookie_list:
             prefix_issues = analyze_cookie_prefix(c.get("name", ""), c)
             for issue in prefix_issues:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=issue[:200],
-                    type="Cookie Prefix Violation",
+                    ftype="Cookie Prefix Violation",
                     source="WebCookieAnalyzer",
                     confidence="High",
                     color="red",
@@ -359,9 +358,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         jwt_cookies = detect_jwt_in_cookies(cookie_list)
         for jc in jwt_cookies:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"JWT token in cookie: {jc}",
-                type="JWT Cookie Detected",
+                ftype="JWT Cookie Detected",
                 source="WebCookieAnalyzer",
                 confidence="High",
                 color="orange",
@@ -373,9 +372,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         for c in cookie_list:
             samesite_analysis = analyze_samesite_protection(c.get("samesite", ""), c.get("secure", False))
             if samesite_analysis.get("risk"):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"SameSite={c.get('samesite', 'none')} on {c.get('name', '?')}: {samesite_analysis.get('risk', '')[:100]}",
-                    type="Cookie SameSite Analysis",
+                    ftype="Cookie SameSite Analysis",
                     source="WebCookieAnalyzer",
                     confidence="High",
                     color="orange" if samesite_analysis.get("value") == "none" else "emerald",
@@ -385,9 +384,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
             privacy_risk, privacy_score = categorize_privacy_risk(c)
             if privacy_risk == "High":
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"High privacy risk: {c.get('name', '?')} (score: {privacy_score})",
-                    type="Cookie Privacy Risk",
+                    ftype="Cookie Privacy Risk",
                     source="WebCookieAnalyzer",
                     confidence="Medium",
                     color="red",
@@ -397,9 +396,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
             entropy = detect_cookie_entropy(c.get("value", ""))
             if entropy > 3.5:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"High entropy cookie: {c.get('name', '?')} (entropy: {entropy})",
-                    type="Cookie Entropy Analysis",
+                    ftype="Cookie Entropy Analysis",
                     source="WebCookieAnalyzer",
                     confidence="Medium",
                     color="slate",
@@ -409,9 +408,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
             exp_analysis = analyze_expiration(c.get("expires", ""), c.get("max_age", ""))
             if exp_analysis.get("type"):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{c.get('name', '?')}: {exp_analysis['type']}",
-                    type="Cookie Expiration Analysis",
+                    ftype="Cookie Expiration Analysis",
                     source="WebCookieAnalyzer",
                     confidence="High",
                     color="slate",
@@ -419,9 +418,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     tags=["cookie", "expiration", "persistence"]
                 ))
             if exp_analysis.get("risk"):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{c.get('name', '?')}: {exp_analysis['risk']}",
-                    type="Cookie Persistence Warning",
+                    ftype="Cookie Persistence Warning",
                     source="WebCookieAnalyzer",
                     confidence="High",
                     color="orange",
@@ -433,9 +432,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             for pat in patterns:
                 for c in cookie_list:
                     if re.search(pat, c.get("name", ""), re.IGNORECASE):
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"Framework cookie: {c.get('name', '')} -> {fw_name}",
-                            type="Cookie Framework Detection",
+                            ftype="Cookie Framework Detection",
                             source="WebCookieAnalyzer",
                             confidence="High",
                             color="purple",
@@ -445,9 +444,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         break
 
         if len(cookie_list) > 15:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{len(cookie_list)} cookies set - possible cookie inflation",
-                type="Cookie Inflation",
+                ftype="Cookie Inflation",
                 source="WebCookieAnalyzer",
                 confidence="Medium",
                 color="orange",
@@ -460,9 +459,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         if persistent_cookies:
             for c in persistent_cookies[:3]:
                 persistence = c.get("max_age") or c.get("expires")
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Persistent cookie: {c['name']} (max-age: {persistence})",
-                    type="Persistent Cookie",
+                    ftype="Persistent Cookie",
                     source="WebCookieAnalyzer",
                     confidence="High",
                     color=("red" if "session" in c.get("name", "").lower() else "orange"),
@@ -494,9 +493,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         score = max(0, min(100, score))
 
         color_score = "emerald" if score >= 80 else ("orange" if score >= 50 else "red")
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Cookie Security Score: {score}/100 ({len(cookie_list)} cookies, {session_count} session, {tracking_count} tracking, {third_party_count} 3rd-party)",
-            type="Cookie Security Summary",
+            ftype="Cookie Security Summary",
             source="WebCookieAnalyzer",
             confidence="High",
             color=color_score,
@@ -506,9 +505,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         ))
 
     except Exception as e:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Cookie Analyzer error: {str(e)[:100]}",
-            type="Cookie Analyzer Error",
+            ftype="Cookie Analyzer Error",
             source="WebCookieAnalyzer",
             confidence="Low",
             color="red",
@@ -517,7 +516,6 @@ async def crawl(target: str, client: httpx.AsyncClient):
         ))
 
     return findings
-
 
 # === EXTENDED UPGRADE: Cookie prefix analysis, JWT detection, SameSite analysis, more patterns ===
 

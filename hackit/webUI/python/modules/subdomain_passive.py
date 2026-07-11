@@ -1,9 +1,8 @@
 import httpx
-from models import IntelligenceFinding
 import re
 import asyncio
-import socket
 from collections import defaultdict
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash
 
 SOURCE_RELIABILITY = {
     "crt.sh": 0.95,
@@ -72,7 +71,7 @@ SUBDOMAIN_CLASSIFIER = {
 
 async def _resolve_dns(hostname: str) -> str | None:
     try:
-        return socket.gethostbyname(hostname)
+        return resolve_ip(hostname)
     except Exception:
         return None
 
@@ -85,7 +84,7 @@ async def _http_probe(subdomain: str, client: httpx.AsyncClient) -> dict:
         return result
     for proto in ["https", "http"]:
         try:
-            resp = await client.get(
+            resp = await safe_fetch(client, 
                 f"{proto}://{subdomain}", timeout=8.0,
                 headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"},
                 follow_redirects=False
@@ -128,7 +127,7 @@ async def crawl(target, client):
         nonlocal source_reliability_total, source_reliability_count
         try:
             url = f"https://crt.sh/?q=%25.{domain}&output=json"
-            resp = await client.get(url, timeout=20.0)
+            resp = await safe_fetch(client, url, timeout=20.0)
             if resp.status_code == 200:
                 data = resp.json() if isinstance(resp.text, str) and resp.text.startswith("[") else []
                 for entry in data:
@@ -139,8 +138,8 @@ async def crawl(target, client):
                             if sub not in seen:
                                 seen.add(sub)
                                 source_counts["crt.sh"] += 1
-                                findings.append(IntelligenceFinding(
-                                    entity=sub, type="Subdomain (Passive)", source="crt.sh",
+                                findings.append(make_finding(
+                                    entity=sub, ftype="Subdomain (Passive)", source="crt.sh",
                                     confidence="High", color="emerald",
                                     category="Domain & DNS Enumeration",
                                     threat_level="Standard Target", status="Existing",
@@ -155,7 +154,7 @@ async def crawl(target, client):
         nonlocal source_reliability_total, source_reliability_count
         try:
             url = f"https://api.hackertarget.com/hostsearch/?q={domain}"
-            resp = await client.get(url, timeout=15.0)
+            resp = await safe_fetch(client, url, timeout=15.0)
             if resp.status_code == 200:
                 for line in resp.text.split("\n"):
                     if "," in line:
@@ -164,8 +163,8 @@ async def crawl(target, client):
                         if sub not in seen:
                             seen.add(sub)
                             source_counts["HackerTarget"] += 1
-                            findings.append(IntelligenceFinding(
-                                entity=sub, type="Subdomain (Passive)", source="HackerTarget",
+                            findings.append(make_finding(
+                                entity=sub, ftype="Subdomain (Passive)", source="HackerTarget",
                                 confidence="High", color="emerald",
                                 category="Domain & DNS Enumeration",
                                 threat_level="Standard Target", status="Existing",
@@ -180,7 +179,7 @@ async def crawl(target, client):
     async def from_bufferover():
         nonlocal source_reliability_total, source_reliability_count
         try:
-            resp = await client.get(
+            resp = await safe_fetch(client, 
                 f"https://dns.bufferover.run/dns?q=.{domain}",
                 timeout=15.0,
                 headers={"User-Agent": "Mozilla/5.0"}
@@ -196,8 +195,8 @@ async def crawl(target, client):
                             if sub.endswith("." + domain) and sub not in seen:
                                 seen.add(sub)
                                 source_counts["BufferOver"] += 1
-                                findings.append(IntelligenceFinding(
-                                    entity=sub, type="Subdomain (Passive)", source="BufferOver",
+                                findings.append(make_finding(
+                                    entity=sub, ftype="Subdomain (Passive)", source="BufferOver",
                                     confidence="High", color="emerald",
                                     category="Domain & DNS Enumeration",
                                     threat_level="Standard Target",
@@ -213,7 +212,7 @@ async def crawl(target, client):
         nonlocal source_reliability_total, source_reliability_count
         try:
             url = f"https://rapiddns.io/subdomain/{domain}?full=1"
-            resp = await client.get(url, timeout=15.0,
+            resp = await safe_fetch(client, url, timeout=15.0,
                 headers={"User-Agent": "Mozilla/5.0"})
             if resp.status_code == 200:
                 pattern = re.compile(rf'([\w.-]+\.{re.escape(domain)})', re.IGNORECASE)
@@ -222,8 +221,8 @@ async def crawl(target, client):
                     if sub not in seen:
                         seen.add(sub)
                         source_counts["RapidDNS"] += 1
-                        findings.append(IntelligenceFinding(
-                            entity=sub, type="Subdomain (Passive)", source="RapidDNS",
+                        findings.append(make_finding(
+                            entity=sub, ftype="Subdomain (Passive)", source="RapidDNS",
                             confidence="Medium", color="emerald",
                             category="Domain & DNS Enumeration",
                             threat_level="Standard Target",
@@ -237,7 +236,7 @@ async def crawl(target, client):
     async def from_alienvault():
         nonlocal source_reliability_total, source_reliability_count
         try:
-            resp = await client.get(
+            resp = await safe_fetch(client, 
                 f"https://otx.alienvault.com/api/v1/indicators/domain/{domain}/passive_dns",
                 timeout=15.0,
                 headers={"User-Agent": "Mozilla/5.0"}
@@ -249,8 +248,8 @@ async def crawl(target, client):
                     if sub.endswith("." + domain) and sub not in seen:
                         seen.add(sub)
                         source_counts["AlienVault OTX"] += 1
-                        findings.append(IntelligenceFinding(
-                            entity=sub, type="Subdomain (Passive)", source="AlienVault OTX",
+                        findings.append(make_finding(
+                            entity=sub, ftype="Subdomain (Passive)", source="AlienVault OTX",
                             confidence="High", color="emerald",
                             category="Domain & DNS Enumeration",
                             threat_level="Standard Target",
@@ -265,7 +264,7 @@ async def crawl(target, client):
     async def from_threatcrowd():
         nonlocal source_reliability_total, source_reliability_count
         try:
-            resp = await client.get(
+            resp = await safe_fetch(client, 
                 f"https://www.threatcrowd.org/searchApi/v2/domain/report/?domain={domain}",
                 timeout=15.0,
                 headers={"User-Agent": "Mozilla/5.0"}
@@ -277,8 +276,8 @@ async def crawl(target, client):
                     if sub not in seen:
                         seen.add(sub)
                         source_counts["ThreatCrowd"] += 1
-                        findings.append(IntelligenceFinding(
-                            entity=sub, type="Subdomain (Passive)", source="ThreatCrowd",
+                        findings.append(make_finding(
+                            entity=sub, ftype="Subdomain (Passive)", source="ThreatCrowd",
                             confidence="Medium", color="emerald",
                             category="Domain & DNS Enumeration",
                             threat_level="Standard Target",
@@ -292,7 +291,7 @@ async def crawl(target, client):
     async def from_anubis():
         nonlocal source_reliability_total, source_reliability_count
         try:
-            resp = await client.get(
+            resp = await safe_fetch(client, 
                 f"https://jldc.me/anubis/subdomains/{domain}",
                 timeout=15.0,
                 headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
@@ -304,8 +303,8 @@ async def crawl(target, client):
                         sub = sub.lower()
                         seen.add(sub)
                         source_counts["Anubis"] += 1
-                        findings.append(IntelligenceFinding(
-                            entity=sub, type="Subdomain (Passive)", source="Anubis",
+                        findings.append(make_finding(
+                            entity=sub, ftype="Subdomain (Passive)", source="Anubis",
                             confidence="Medium", color="emerald",
                             category="Domain & DNS Enumeration",
                             threat_level="Standard Target",
@@ -319,7 +318,7 @@ async def crawl(target, client):
     async def from_urlscan():
         nonlocal source_reliability_total, source_reliability_count
         try:
-            resp = await client.get(
+            resp = await safe_fetch(client, 
                 f"https://urlscan.io/api/v1/search/?q=domain:{domain}&size=100",
                 timeout=15.0,
                 headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
@@ -332,8 +331,8 @@ async def crawl(target, client):
                     if sub.endswith("." + domain) and sub not in seen:
                         seen.add(sub)
                         source_counts["URLScan.io"] += 1
-                        findings.append(IntelligenceFinding(
-                            entity=sub, type="Subdomain (Passive)", source="URLScan.io",
+                        findings.append(make_finding(
+                            entity=sub, ftype="Subdomain (Passive)", source="URLScan.io",
                             confidence="Medium", color="emerald",
                             category="Domain & DNS Enumeration",
                             threat_level="Standard Target",
@@ -348,7 +347,7 @@ async def crawl(target, client):
     async def from_riddler():
         nonlocal source_reliability_total, source_reliability_count
         try:
-            resp = await client.get(
+            resp = await safe_fetch(client, 
                 f"https://riddler.io/api/search?q=host:{domain}",
                 timeout=15.0,
                 headers={"User-Agent": "Mozilla/5.0"}
@@ -361,8 +360,8 @@ async def crawl(target, client):
                     if sub.endswith("." + domain) and sub not in seen:
                         seen.add(sub)
                         source_counts["Riddler"] += 1
-                        findings.append(IntelligenceFinding(
-                            entity=sub, type="Subdomain (Passive)", source="Riddler",
+                        findings.append(make_finding(
+                            entity=sub, ftype="Subdomain (Passive)", source="Riddler",
                             confidence="Medium", color="emerald",
                             category="Domain & DNS Enumeration",
                             threat_level="Standard Target",
@@ -376,7 +375,7 @@ async def crawl(target, client):
     async def from_sonar_omnisint():
         nonlocal source_reliability_total, source_reliability_count
         try:
-            resp = await client.get(
+            resp = await safe_fetch(client, 
                 f"https://sonar.omnisint.io/subdomains/{domain}",
                 timeout=15.0,
                 headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
@@ -388,8 +387,8 @@ async def crawl(target, client):
                         sub = sub.lower()
                         seen.add(sub)
                         source_counts["Sonar Omnisint"] += 1
-                        findings.append(IntelligenceFinding(
-                            entity=sub, type="Subdomain (Passive)", source="Sonar Omnisint",
+                        findings.append(make_finding(
+                            entity=sub, ftype="Subdomain (Passive)", source="Sonar Omnisint",
                             confidence="Medium", color="emerald",
                             category="Domain & DNS Enumeration",
                             threat_level="Standard Target",
@@ -403,7 +402,7 @@ async def crawl(target, client):
     async def from_web_archive():
         nonlocal source_reliability_total, source_reliability_count
         try:
-            resp = await client.get(
+            resp = await safe_fetch(client, 
                 f"http://web.archive.org/cdx/search/cdx?url=*.{domain}/*&output=json&fl=original&collapse=urlkey",
                 timeout=20.0,
                 headers={"User-Agent": "Mozilla/5.0"}
@@ -420,8 +419,8 @@ async def crawl(target, client):
                             if sub not in seen:
                                 seen.add(sub)
                                 source_counts["Wayback Machine"] += 1
-                                findings.append(IntelligenceFinding(
-                                    entity=sub, type="Subdomain (Passive)", source="Wayback Machine",
+                                findings.append(make_finding(
+                                    entity=sub, ftype="Subdomain (Passive)", source="Wayback Machine",
                                     confidence="Medium", color="emerald",
                                     category="Domain & DNS Enumeration",
                                     threat_level="Standard Target",
@@ -435,7 +434,7 @@ async def crawl(target, client):
     async def from_shodan():
         nonlocal source_reliability_total, source_reliability_count
         try:
-            resp = await client.get(
+            resp = await safe_fetch(client, 
                 f"https://www.shodan.io/search?query=hostname%3A.{domain}",
                 timeout=15.0,
                 headers={"User-Agent": "Mozilla/5.0"}
@@ -447,8 +446,8 @@ async def crawl(target, client):
                     if sub not in seen:
                         seen.add(sub)
                         source_counts["Shodan"] += 1
-                        findings.append(IntelligenceFinding(
-                            entity=sub, type="Subdomain (Passive)", source="Shodan",
+                        findings.append(make_finding(
+                            entity=sub, ftype="Subdomain (Passive)", source="Shodan",
                             confidence="High", color="emerald",
                             category="Domain & DNS Enumeration",
                             threat_level="Standard Target",
@@ -462,7 +461,7 @@ async def crawl(target, client):
     async def from_censys():
         nonlocal source_reliability_total, source_reliability_count
         try:
-            resp = await client.get(
+            resp = await safe_fetch(client, 
                 f"https://search.censys.io/search?resource=hosts&q=services.service_name%3A%22HTTP%22+AND+dns.names%3A.{domain}",
                 timeout=15.0,
                 headers={"User-Agent": "Mozilla/5.0"}
@@ -474,8 +473,8 @@ async def crawl(target, client):
                     if sub not in seen:
                         seen.add(sub)
                         source_counts["Censys"] += 1
-                        findings.append(IntelligenceFinding(
-                            entity=sub, type="Subdomain (Passive)", source="Censys",
+                        findings.append(make_finding(
+                            entity=sub, ftype="Subdomain (Passive)", source="Censys",
                             confidence="High", color="emerald",
                             category="Domain & DNS Enumeration",
                             threat_level="Standard Target",
@@ -489,7 +488,7 @@ async def crawl(target, client):
     async def from_fofa():
         nonlocal source_reliability_total, source_reliability_count
         try:
-            resp = await client.get(
+            resp = await safe_fetch(client, 
                 f"https://en.fofa.info/result?qbase64=Ym9keT0iJTI1Lntkb21haW59IiYm",  # placeholder
                 timeout=15.0,
                 headers={"User-Agent": "Mozilla/5.0"}
@@ -501,8 +500,8 @@ async def crawl(target, client):
                     if sub not in seen:
                         seen.add(sub)
                         source_counts["FOFA"] += 1
-                        findings.append(IntelligenceFinding(
-                            entity=sub, type="Subdomain (Passive)", source="FOFA",
+                        findings.append(make_finding(
+                            entity=sub, ftype="Subdomain (Passive)", source="FOFA",
                             confidence="Medium", color="emerald",
                             category="Domain & DNS Enumeration",
                             threat_level="Standard Target",
@@ -516,7 +515,7 @@ async def crawl(target, client):
     async def from_zoomeye():
         nonlocal source_reliability_total, source_reliability_count
         try:
-            resp = await client.get(
+            resp = await safe_fetch(client, 
                 f"https://www.zoomeye.org/searchResult?q=hostname%3A.{domain}",
                 timeout=15.0,
                 headers={"User-Agent": "Mozilla/5.0"}
@@ -528,8 +527,8 @@ async def crawl(target, client):
                     if sub not in seen:
                         seen.add(sub)
                         source_counts["ZoomEye"] += 1
-                        findings.append(IntelligenceFinding(
-                            entity=sub, type="Subdomain (Passive)", source="ZoomEye",
+                        findings.append(make_finding(
+                            entity=sub, ftype="Subdomain (Passive)", source="ZoomEye",
                             confidence="Medium", color="emerald",
                             category="Domain & DNS Enumeration",
                             threat_level="Standard Target",
@@ -543,7 +542,7 @@ async def crawl(target, client):
     async def from_binaryedge():
         nonlocal source_reliability_total, source_reliability_count
         try:
-            resp = await client.get(
+            resp = await safe_fetch(client, 
                 f"https://app.binaryedge.io/api/v2/query/search?query=domain%3A{domain}",
                 timeout=15.0,
                 headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
@@ -556,8 +555,8 @@ async def crawl(target, client):
                         if sub.endswith("." + domain) and sub not in seen:
                             seen.add(sub)
                             source_counts["BinaryEdge"] += 1
-                            findings.append(IntelligenceFinding(
-                                entity=sub, type="Subdomain (Passive)", source="BinaryEdge",
+                            findings.append(make_finding(
+                                entity=sub, ftype="Subdomain (Passive)", source="BinaryEdge",
                                 confidence="Medium", color="emerald",
                                 category="Domain & DNS Enumeration",
                                 threat_level="Standard Target",
@@ -572,7 +571,7 @@ async def crawl(target, client):
     async def from_netlas():
         nonlocal source_reliability_total, source_reliability_count
         try:
-            resp = await client.get(
+            resp = await safe_fetch(client, 
                 f"https://app.netlas.io/domains/?q=domain%3A.{domain}&source_type=include",
                 timeout=15.0,
                 headers={"User-Agent": "Mozilla/5.0"}
@@ -584,8 +583,8 @@ async def crawl(target, client):
                     if sub not in seen:
                         seen.add(sub)
                         source_counts["Netlas"] += 1
-                        findings.append(IntelligenceFinding(
-                            entity=sub, type="Subdomain (Passive)", source="Netlas",
+                        findings.append(make_finding(
+                            entity=sub, ftype="Subdomain (Passive)", source="Netlas",
                             confidence="Medium", color="emerald",
                             category="Domain & DNS Enumeration",
                             threat_level="Standard Target",
@@ -599,7 +598,7 @@ async def crawl(target, client):
     async def from_fullhunt():
         nonlocal source_reliability_total, source_reliability_count
         try:
-            resp = await client.get(
+            resp = await safe_fetch(client, 
                 f"https://fullhunt.io/api/v1/domain/{domain}/subdomains",
                 timeout=15.0,
                 headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
@@ -610,8 +609,8 @@ async def crawl(target, client):
                     if isinstance(sub, str) and sub.endswith("." + domain) and sub not in seen:
                         seen.add(sub)
                         source_counts["FullHunt"] += 1
-                        findings.append(IntelligenceFinding(
-                            entity=sub, type="Subdomain (Passive)", source="FullHunt",
+                        findings.append(make_finding(
+                            entity=sub, ftype="Subdomain (Passive)", source="FullHunt",
                             confidence="Medium", color="emerald",
                             category="Domain & DNS Enumeration",
                             threat_level="Standard Target",
@@ -625,7 +624,7 @@ async def crawl(target, client):
     async def from_leakix():
         nonlocal source_reliability_total, source_reliability_count
         try:
-            resp = await client.get(
+            resp = await safe_fetch(client, 
                 f"https://leakix.net/search?q=domain%3A{domain}",
                 timeout=15.0,
                 headers={"User-Agent": "Mozilla/5.0"}
@@ -637,8 +636,8 @@ async def crawl(target, client):
                     if sub not in seen:
                         seen.add(sub)
                         source_counts["LeakIX"] += 1
-                        findings.append(IntelligenceFinding(
-                            entity=sub, type="Subdomain (Passive)", source="LeakIX",
+                        findings.append(make_finding(
+                            entity=sub, ftype="Subdomain (Passive)", source="LeakIX",
                             confidence="Low", color="emerald",
                             category="Domain & DNS Enumeration",
                             threat_level="Standard Target",
@@ -652,7 +651,7 @@ async def crawl(target, client):
     async def from_intelx():
         nonlocal source_reliability_total, source_reliability_count
         try:
-            resp = await client.get(
+            resp = await safe_fetch(client, 
                 f"https://intelx.io/?s={domain}&t=domain",
                 timeout=15.0,
                 headers={"User-Agent": "Mozilla/5.0"}
@@ -664,8 +663,8 @@ async def crawl(target, client):
                     if sub not in seen:
                         seen.add(sub)
                         source_counts["IntelX"] += 1
-                        findings.append(IntelligenceFinding(
-                            entity=sub, type="Subdomain (Passive)", source="IntelX",
+                        findings.append(make_finding(
+                            entity=sub, ftype="Subdomain (Passive)", source="IntelX",
                             confidence="Low", color="emerald",
                             category="Domain & DNS Enumeration",
                             threat_level="Standard Target",
@@ -679,7 +678,7 @@ async def crawl(target, client):
     async def from_onyphe():
         nonlocal source_reliability_total, source_reliability_count
         try:
-            resp = await client.get(
+            resp = await safe_fetch(client, 
                 f"https://www.onyphe.io/search?query=domain%3A{domain}",
                 timeout=15.0,
                 headers={"User-Agent": "Mozilla/5.0"}
@@ -691,8 +690,8 @@ async def crawl(target, client):
                     if sub not in seen:
                         seen.add(sub)
                         source_counts["ONYPHE"] += 1
-                        findings.append(IntelligenceFinding(
-                            entity=sub, type="Subdomain (Passive)", source="ONYPHE",
+                        findings.append(make_finding(
+                            entity=sub, ftype="Subdomain (Passive)", source="ONYPHE",
                             confidence="Medium", color="emerald",
                             category="Domain & DNS Enumeration",
                             threat_level="Standard Target",
@@ -733,7 +732,7 @@ async def crawl(target, client):
             sources_used[f.source] += 1
         source_str = ", ".join(f"{s}: {c}" for s, c in sorted(sources_used.items(), key=lambda x: -x[1]))
 
-        findings.insert(0, IntelligenceFinding(
+        findings.insert(0, make_finding(
             entity=f"Total: {len(seen)} passive subdomains from {len(sources_used)} sources",
             type="Passive Subdomain Summary",
             source="Passive Recon",
@@ -745,7 +744,7 @@ async def crawl(target, client):
 
         avg_reliability = (source_reliability_total / source_reliability_count) if source_reliability_count > 0 else 0
         reliability_score = f"{avg_reliability:.0%}" if avg_reliability > 0 else "N/A"
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Source Reliability Score: {reliability_score} (avg of {source_reliability_count} signals)",
             type="Source Reliability Assessment",
             source="Passive Recon",
@@ -764,7 +763,7 @@ async def crawl(target, client):
             classification_counts[sub_class] += 1
 
         for cat, count in sorted(classification_counts.items(), key=lambda x: -x[1])[:8]:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Classification: {cat} ({count} subdomains)",
                 type="Subdomain Classification",
                 source="Passive Recon",
@@ -785,9 +784,9 @@ async def crawl(target, client):
                 if probe.get("ip") and probe["ip"] not in seen_ips:
                     seen_ips.add(probe["ip"])
 
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{sub}: HTTP {probe['status']}",
-                    type="HTTP Probe (Live Check)",
+                    ftype="HTTP Probe (Live Check)",
                     source="Passive Recon",
                     confidence="High",
                     color="emerald" if probe["status"] < 400 else "slate",
@@ -798,9 +797,9 @@ async def crawl(target, client):
                     tags=["http-probe", "live"]
                 ))
                 if probe.get("title"):
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Title: {probe['title']}",
-                        type="Page Title (HTTP Probe)",
+                        ftype="Page Title (HTTP Probe)",
                         source="Passive Recon",
                         confidence="Medium",
                         color="slate",
@@ -811,9 +810,9 @@ async def crawl(target, client):
                         tags=["title", "http-probe"]
                     ))
                 if probe.get("server"):
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Server: {probe['server']}",
-                        type="Server Banner (HTTP Probe)",
+                        ftype="Server Banner (HTTP Probe)",
                         source="Passive Recon",
                         confidence="Medium",
                         color="slate",
@@ -826,7 +825,7 @@ async def crawl(target, client):
         if ip_clusters:
             for ip, subs in sorted(ip_clusters.items(), key=lambda x: -len(x[1]))[:10]:
                 if len(subs) > 1:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"IP {ip} hosts {len(subs)} subdomains",
                         type="IP Cluster (Shared Hosting Detected)",
                         source="Passive Recon",
@@ -840,7 +839,7 @@ async def crawl(target, client):
 
         live_count = sum(1 for _, p in probe_results if p.get("status") and p["status"] < 400)
         if probe_results:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"HTTP Probe Summary: {len(probe_results)} resolved, {live_count} live (HTTP <400)",
                 type="HTTP Probe Summary",
                 source="Passive Recon",
