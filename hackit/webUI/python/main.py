@@ -174,6 +174,9 @@ async def start_scan(
     user_agent: str = "",
     webhook_url: str = "",
     module_toggles: str = "",
+    concurrency: int = 50,
+    brute_depth: int = 500,
+    port_range: int = 1000,
     background_tasks: BackgroundTasks = None
 ):
     for existing in jobs.values():
@@ -210,7 +213,12 @@ async def start_scan(
         "dns_resolver": dns_resolver,
         "user_agent": user_agent,
         "webhook_url": webhook_url,
-        "module_toggles": parsed_module_toggles
+        "module_toggles": parsed_module_toggles,
+        "performance": {
+            "concurrency": concurrency,
+            "brute_depth": brute_depth,
+            "port_range": port_range,
+        }
     }
     jobs[job_id] = job
     if background_tasks:

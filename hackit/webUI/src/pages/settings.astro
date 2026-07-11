@@ -356,6 +356,51 @@ const MODULE_CATEGORIES = {
           </div>
         </div>
 
+        <!-- Engine Performance -->
+        <div class="bg-sf-card border border-sf-border rounded-lg p-6">
+          <h3 class="text-sm font-semibold text-sf-text mb-5 flex items-center gap-2"><i class="fas fa-tachometer-alt text-sf-tabActive"></i> Engine Performance</h3>
+          <div class="space-y-4">
+            <div>
+              <div class="flex justify-between items-center mb-1">
+                <div class="text-xs font-medium text-sf-text">Connection Concurrency</div>
+                <span class="text-[10px] font-mono text-sf-muted" id="perf-concurrency-val">50</span>
+              </div>
+              <input type="range" id="perf-concurrency" min="5" max="200" value="50" class="w-full accent-sf-tabActive h-1.5">
+              <div class="flex justify-between text-[9px] text-sf-muted"><span>5 (Stealth)</span><span>200 (Max)</span></div>
+            </div>
+            <div>
+              <div class="flex justify-between items-center mb-1">
+                <div class="text-xs font-medium text-sf-text">Subdomain Brute Depth</div>
+                <span class="text-[10px] font-mono text-sf-muted" id="perf-brute-val">500</span>
+              </div>
+              <input type="range" id="perf-brute-depth" min="50" max="2000" value="500" step="50" class="w-full accent-sf-tabActive h-1.5">
+              <div class="flex justify-between text-[9px] text-sf-muted"><span>50 (Quick)</span><span>2000 (Exhaustive)</span></div>
+            </div>
+            <div>
+              <div class="flex justify-between items-center mb-1">
+                <div class="text-xs font-medium text-sf-text">Port Scan Range</div>
+                <span class="text-[10px] font-mono text-sf-muted" id="perf-ports-val">1000</span>
+              </div>
+              <input type="range" id="perf-port-range" min="100" max="10000" value="1000" step="100" class="w-full accent-sf-tabActive h-1.5">
+              <div class="flex justify-between text-[9px] text-sf-muted"><span>100 (Top)</span><span>10000 (All)</span></div>
+            </div>
+            <div>
+              <div class="text-xs font-medium text-sf-text mb-1">Max Redirect Chain</div>
+              <select id="perf-redirect-depth" class="w-full bg-sf-lightbg border border-sf-border text-xs text-sf-text rounded-lg px-3 py-2 focus:outline-none focus:border-sf-tabActive">
+                <option value="5">5 hops (Quick)</option>
+                <option value="10" selected>10 hops (Normal)</option>
+                <option value="20">20 hops (Deep)</option>
+              </select>
+            </div>
+            <label class="flex items-center justify-between cursor-pointer pt-2 border-t border-sf-border">
+              <div><div class="text-xs font-medium text-sf-text">Rate Limiting</div><div class="text-[9px] text-sf-muted">Delay between requests (ethical)</div></div>
+              <div class="relative w-9 h-5 bg-sf-border rounded-full" data-setting="rate_limiting" onclick="toggleSwitch(this)">
+                <div class="absolute left-0.5 top-0.5 w-4 h-4 bg-white/20 rounded-full transition-all"></div>
+              </div>
+            </label>
+          </div>
+        </div>
+
         <!-- Save / Reset -->
         <div class="bg-sf-card border border-sf-border rounded-lg p-6">
           <div class="space-y-3">
@@ -492,6 +537,15 @@ const MODULE_CATEGORIES = {
       // Automation
       settings.automation.webhookUrl = document.getElementById('setting-webhook-url')?.value?.trim() || '';
 
+      // Performance
+      settings.performance = {
+        concurrency: parseInt(document.getElementById('perf-concurrency')?.value || '50'),
+        bruteDepth: parseInt(document.getElementById('perf-brute-depth')?.value || '500'),
+        portRange: parseInt(document.getElementById('perf-port-range')?.value || '1000'),
+        redirectDepth: parseInt(document.getElementById('perf-redirect-depth')?.value || '10'),
+        rateLimiting: document.querySelector('[data-setting="rate_limiting"]')?.querySelector('div')?.classList.contains('bg-sf-green') || false,
+      };
+
       return settings;
     }
 
@@ -580,6 +634,15 @@ const MODULE_CATEGORIES = {
       if (settings.automation?.webhookUrl) {
         document.getElementById('setting-webhook-url').value = settings.automation.webhookUrl;
       }
+
+      // Performance
+      if (settings.performance) {
+        const p = settings.performance;
+        if (p.concurrency) { document.getElementById('perf-concurrency').value = p.concurrency; document.getElementById('perf-concurrency-val').textContent = p.concurrency; }
+        if (p.bruteDepth) { document.getElementById('perf-brute-depth').value = p.bruteDepth; document.getElementById('perf-brute-val').textContent = p.bruteDepth; }
+        if (p.portRange) { document.getElementById('perf-port-range').value = p.portRange; document.getElementById('perf-ports-val').textContent = p.portRange; }
+        if (p.redirectDepth) document.getElementById('perf-redirect-depth').value = p.redirectDepth;
+      }
     }
 
     function saveSettingsToStorage() {
@@ -627,6 +690,10 @@ const MODULE_CATEGORIES = {
       document.getElementById('setting-dns-resolver').value = '';
       document.getElementById('setting-user-agent').value = '';
       document.getElementById('setting-webhook-url').value = '';
+      document.getElementById('perf-concurrency').value = '50'; document.getElementById('perf-concurrency-val').textContent = '50';
+      document.getElementById('perf-brute-depth').value = '500'; document.getElementById('perf-brute-val').textContent = '500';
+      document.getElementById('perf-port-range').value = '1000'; document.getElementById('perf-ports-val').textContent = '1000';
+      document.getElementById('perf-redirect-depth').value = '10';
 
       const btn = document.getElementById('reset-settings');
       if (btn) {
@@ -692,6 +759,13 @@ const MODULE_CATEGORIES = {
 
       document.getElementById('save-settings')?.addEventListener('click', saveSettingsToStorage);
       document.getElementById('reset-settings')?.addEventListener('click', resetSettingsToDefault);
+
+      // Live update performance slider values
+      ['concurrency', 'brute-depth', 'port-range'].forEach(id => {
+        const el = document.getElementById(`perf-${id}`);
+        const valEl = document.getElementById(`perf-${id}-val`);
+        if (el && valEl) el.addEventListener('input', () => { valEl.textContent = el.value; });
+      });
 
       // Show unsaved indicator on any change
       document.querySelectorAll('input, select').forEach(el => {

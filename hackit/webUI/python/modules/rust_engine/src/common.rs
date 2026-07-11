@@ -126,17 +126,323 @@ pub struct InputField { pub name: String, pub type_field: String, pub required: 
 #[derive(Serialize, Deserialize)]
 pub struct CertInfo { pub subject: String, pub issuer: String, pub valid_from: String, pub valid_to: String, pub sans: Vec<String>, pub fingerprint: String, pub self_signed: bool }
 
-#[derive(Serialize, Deserialize)]
-pub struct AllDeepResult {
-    pub target: String, pub duration_ms: u64,
-    pub subdomains: Vec<SubdomainResult>, pub ports: Vec<PortResult>,
-    pub banners: Vec<PortBanner>, pub dns: DnsResult,
-    pub emails: EmailResult, pub webtech: WebtechResult,
-    pub crawl: CrawlResult, pub sensitive: SensitiveResult,
-    pub secrets: SecretResult, pub waf: WafResult,
-    pub social: SocialResult, pub crtsh: CrtshResult,
-    pub vulns: VulnResult, pub cloud: CloudResult,
-    pub cert_info: Option<CertInfo>,
+// ── Scan configuration (passed from Python via --config JSON) ──
+#[derive(Serialize, Deserialize, Clone, Default)]
+pub struct ScanConfig {
+    pub timeout: Option<u64>,
+    pub depth: Option<String>,           // "quick", "normal", "deep", "exhaustive"
+    pub concurrency: Option<u32>,
+    pub max_results: Option<u32>,
+    pub module_config: Option<std::collections::HashMap<String, serde_json::Value>>,
+}
+
+impl ScanConfig {
+    pub fn module_timeout(&self, module: &str, default: u64) -> u64 {
+        if let Some(ref mc) = self.module_config {
+            if let Some(v) = mc.get(module) {
+                if let Some(t) = v.get("timeout").and_then(|x| x.as_u64()) { return t; }
+            }
+        }
+        self.timeout.unwrap_or(default)
+    }
+    pub fn module_max(&self, module: &str, default: u32) -> u32 {
+        if let Some(ref mc) = self.module_config {
+            if let Some(v) = mc.get(module) {
+                if let Some(m) = v.get("max_results").and_then(|x| x.as_u64()) { return m as u32; }
+            }
+        }
+        self.max_results.unwrap_or(default)
+    }
+    pub fn is_deep(&self) -> bool {
+        self.depth.as_deref().unwrap_or("normal") == "deep" || self.depth.as_deref().unwrap_or("normal") == "exhaustive"
+    }
+}
+
+// ── New module result types ──────────────────────────────────
+
+// 01. whois
+#[derive(Serialize, Deserialize, Clone, Default)]
+pub struct WhoisResult {
+    pub domain: String,
+    pub registrar: Option<String>,
+    pub registrant_org: Option<String>,
+    pub registrant_country: Option<String>,
+    pub creation_date: Option<String>,
+    pub expiration_date: Option<String>,
+    pub updated_date: Option<String>,
+    pub name_servers: Vec<String>,
+    pub abuse_email: Option<String>,
+    pub error: Option<String>,
+}
+
+// 02. ssl_tls
+#[derive(Serialize, Deserialize, Clone, Default)]
+pub struct SslTlsResult {
+    pub hostname: String,
+    pub grade: Option<String>,
+    pub score: Option<u32>,
+    pub issuer: Option<String>,
+    pub subject: Option<String>,
+    pub valid_from: Option<String>,
+    pub valid_to: Option<String>,
+    pub days_remaining: Option<i64>,
+    pub self_signed: bool,
+    pub expired: bool,
+    pub protocol: Option<String>,
+    pub cipher: Option<String>,
+    pub chain_length: Option<u32>,
+    pub alt_names: Vec<String>,
+    pub error: Option<String>,
+}
+
+// 03. http_headers
+#[derive(Serialize, Deserialize, Clone, Default)]
+pub struct HttpHeadersResult {
+    pub url: String,
+    pub status_code: Option<u16>,
+    pub server: Option<String>,
+    pub security_score: Option<u32>,
+    pub missing_headers: Vec<String>,
+    pub csp: Option<String>,
+    pub hsts: Option<String>,
+    pub cors: Option<String>,
+    pub x_frame: Option<String>,
+    pub x_content_type: Option<String>,
+    pub referrer_policy: Option<String>,
+    pub all_headers: Vec<(String, String)>,
+    pub error: Option<String>,
+}
+
+// 04. cve_search
+#[derive(Serialize, Deserialize, Clone, Default)]
+pub struct CveSearchResult {
+    pub target: String,
+    pub matches: Vec<CveMatch>,
+}
+#[derive(Serialize, Deserialize, Clone)]
+pub struct CveMatch {
+    pub cve_id: String,
+    pub severity: String,
+    pub description: String,
+    pub affected_tech: String,
+    pub remediation: Option<String>,
+}
+
+// 05. breach_check
+#[derive(Serialize, Deserialize, Clone, Default)]
+pub struct BreachCheckResult {
+    pub target: String,
+    pub checks: Vec<BreachEntry>,
+}
+#[derive(Serialize, Deserialize, Clone)]
+pub struct BreachEntry {
+    pub source: String,
+    pub data_type: String,
+    pub exposed: bool,
+    pub description: Option<String>,
+}
+
+// 06. subdomain_takeover
+#[derive(Serialize, Deserialize, Clone, Default)]
+pub struct SubdomainTakeoverResult {
+    pub target: String,
+    pub checks: Vec<TakeoverCheck>,
+}
+#[derive(Serialize, Deserialize, Clone)]
+pub struct TakeoverCheck {
+    pub subdomain: String,
+    pub cname: Option<String>,
+    pub service: Option<String>,
+    pub vulnerable: bool,
+    pub description: Option<String>,
+}
+
+// 07. tech_fingerprint (deep)
+#[derive(Serialize, Deserialize, Clone, Default)]
+pub struct TechFingerprintResult {
+    pub url: String,
+    pub cms: Option<String>,
+    pub cms_version: Option<String>,
+    pub frameworks: Vec<String>,
+    pub analytics: Vec<String>,
+    pub js_libraries: Vec<String>,
+    pub cdn: Option<String>,
+    pub hosting: Option<String>,
+    pub os: Option<String>,
+    pub webserver: Option<String>,
+    pub languages: Vec<String>,
+    pub error: Option<String>,
+}
+
+// 08. api_discovery
+#[derive(Serialize, Deserialize, Clone, Default)]
+pub struct ApiDiscoveryResult {
+    pub url: String,
+    pub endpoints: Vec<ApiEndpoint>,
+}
+#[derive(Serialize, Deserialize, Clone)]
+pub struct ApiEndpoint {
+    pub path: String,
+    pub method: String,
+    pub status: u16,
+}
+
+// 09. cloud_buckets
+#[derive(Serialize, Deserialize, Clone, Default)]
+pub struct CloudBucketsResult {
+    pub target: String,
+    pub buckets: Vec<BucketInfo>,
+}
+#[derive(Serialize, Deserialize, Clone)]
+pub struct BucketInfo {
+    pub url: String,
+    pub provider: String,
+    pub exists: bool,
+    pub accessible: bool,
+}
+
+// 10. social_search
+#[derive(Serialize, Deserialize, Clone, Default)]
+pub struct SocialSearchResult {
+    pub username: String,
+    pub profiles: Vec<SocialProfileInfo>,
+}
+#[derive(Serialize, Deserialize, Clone)]
+pub struct SocialProfileInfo {
+    pub platform: String,
+    pub url: String,
+    pub exists: bool,
+}
+
+// 11. paste_scan
+#[derive(Serialize, Deserialize, Clone, Default)]
+pub struct PasteScanResult {
+    pub target: String,
+    pub matches: Vec<PasteEntry>,
+}
+#[derive(Serialize, Deserialize, Clone)]
+pub struct PasteEntry {
+    pub source: String,
+    pub title: Option<String>,
+    pub snippet: Option<String>,
+    pub contains_credentials: bool,
+}
+
+// 12. git_discovery
+#[derive(Serialize, Deserialize, Clone, Default)]
+pub struct GitDiscoveryResult {
+    pub url: String,
+    pub git_exposed: bool,
+    pub files: Vec<String>,
+    pub has_config: bool,
+    pub has_head: bool,
+}
+
+// 13. dns_zone_transfer
+#[derive(Serialize, Deserialize, Clone, Default)]
+pub struct DnsZoneTransferResult {
+    pub domain: String,
+    pub nameservers: Vec<String>,
+    pub zone_transfer_possible: bool,
+    pub records: Vec<String>,
+    pub dnssec_enabled: bool,
+}
+
+// 14. cors_check
+#[derive(Serialize, Deserialize, Clone, Default)]
+pub struct CorsCheckResult {
+    pub url: String,
+    pub vulnerable: bool,
+    pub origin_reflection: bool,
+    pub wildcard_origin: bool,
+    pub credentials_allowed: bool,
+    pub error: Option<String>,
+}
+
+// 15. redirect_trace
+#[derive(Serialize, Deserialize, Clone, Default)]
+pub struct RedirectTraceResult {
+    pub url: String,
+    pub final_url: String,
+    pub chain: Vec<RedirectHop>,
+}
+#[derive(Serialize, Deserialize, Clone)]
+pub struct RedirectHop {
+    pub url: String,
+    pub status: u16,
+}
+
+// 16. cookie_audit
+#[derive(Serialize, Deserialize, Clone, Default)]
+pub struct CookieAuditResult {
+    pub url: String,
+    pub cookies: Vec<CookieInfo>,
+    pub issues: Vec<String>,
+    pub score: Option<u32>,
+}
+#[derive(Serialize, Deserialize, Clone)]
+pub struct CookieInfo {
+    pub name: String,
+    pub secure: bool,
+    pub http_only: bool,
+    pub same_site: Option<String>,
+}
+
+// 17. email_security
+#[derive(Serialize, Deserialize, Clone, Default)]
+pub struct EmailSecurityResult {
+    pub domain: String,
+    pub spf_record: Option<String>,
+    pub spf_valid: bool,
+    pub dkim_record: Option<String>,
+    pub dkim_valid: bool,
+    pub dmarc_record: Option<String>,
+    pub dmarc_valid: bool,
+    pub dmarc_policy: Option<String>,
+    pub score: Option<u32>,
+}
+
+// 18. asn_network
+#[derive(Serialize, Deserialize, Clone, Default)]
+pub struct AsnNetworkResult {
+    pub target: String,
+    pub asn: Option<String>,
+    pub asn_org: Option<String>,
+    pub ip_ranges: Vec<String>,
+    pub country: Option<String>,
+    pub org: Option<String>,
+}
+
+// 19. js_analysis
+#[derive(Serialize, Deserialize, Clone, Default)]
+pub struct JsAnalysisResult {
+    pub url: String,
+    pub files_analyzed: u32,
+    pub api_keys: Vec<String>,
+    pub endpoints: Vec<String>,
+    pub urls: Vec<String>,
+    pub suspicious: Vec<String>,
+}
+
+// 20. dir_enum
+#[derive(Serialize, Deserialize, Clone, Default)]
+pub struct DirEnumResult {
+    pub url: String,
+    pub directories: Vec<DirEntry>,
+}
+#[derive(Serialize, Deserialize, Clone)]
+pub struct DirEntry {
+    pub path: String,
+    pub status: u16,
+    pub size: Option<u64>,
+}
+
+pub fn build_client_timeout(timeout_secs: u64, config: &ScanConfig) -> Option<reqwest::Client> {
+    let t = config.timeout.unwrap_or(timeout_secs);
+    reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(std::time::Duration::from_secs(t))
+        .build().ok()
 }
 
 pub fn build_client(timeout_secs: u64) -> Option<reqwest::Client> {

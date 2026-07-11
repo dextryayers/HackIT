@@ -57,7 +57,8 @@ class OSINTOrchestrator:
 
         # Phase 1: Rust engine (primary, fast)
         self.log("Phase 1: Rust engine scan", "INFO")
-        rust_result = await scan_all(self.target)
+        rust_config = self._build_rust_config()
+        rust_result = await scan_all(self.target, config=rust_config)
         if rust_result.success:
             rust_findings = self._parse_rust_results(rust_result.raw)
             findings.extend(rust_findings)
@@ -242,7 +243,251 @@ class OSINTOrchestrator:
                 source="Rust Engine", confidence="High", color="green",
                 status="Detected", tags=["rust","spa"],
             ))
+
+        # ── 01. WHOIS ──
+        wh = raw.get("whois") or {}
+        if wh.get("registrar"):
+            findings.append(IntelligenceFinding(entity=wh["registrar"], type="Domain Registrar",
+                source="Rust:WHOIS", confidence="High", color="slate", status="Identified", tags=["rust","whois"]))
+        for ns in wh.get("name_servers") or []:
+            findings.append(IntelligenceFinding(entity=ns, type="DNS Nameserver",
+                source="Rust:WHOIS", confidence="High", color="slate", status="Authoritative", tags=["rust","whois","dns"]))
+        if wh.get("registrant_org"):
+            findings.append(IntelligenceFinding(entity=wh["registrant_org"], type="Registrant Organization",
+                source="Rust:WHOIS", confidence="Medium", color="slate", status="Registered", tags=["rust","whois"]))
+        if wh.get("creation_date"):
+            findings.append(IntelligenceFinding(entity=f"Created: {wh['creation_date']}", type="Domain Registration",
+                source="Rust:WHOIS", confidence="High", color="slate", status="Historical", tags=["rust","whois"]))
+        if wh.get("expiration_date"):
+            findings.append(IntelligenceFinding(entity=f"Expires: {wh['expiration_date']}", type="Domain Registration",
+                source="Rust:WHOIS", confidence="High", color="slate", status="Historical", tags=["rust","whois"]))
+
+        # ── 02. SSL/TLS ──
+        tls = raw.get("ssl_tls") or {}
+        if tls.get("grade"):
+            findings.append(IntelligenceFinding(entity=f"SSL Grade: {tls['grade']}", type="SSL/TLS Certificate",
+                source="Rust:SSL", confidence="High", color="green" if str(tls.get("grade","")).startswith(("A","B")) else "orange",
+                status=tls.get("protocol","TLS"), tags=["rust","ssl"]))
+        if tls.get("issuer"):
+            findings.append(IntelligenceFinding(entity=f"Issuer: {tls['issuer']}", type="SSL/TLS Certificate",
+                source="Rust:SSL", confidence="High", color="slate", status="Verified", tags=["rust","ssl"]))
+        if tls.get("self_signed"):
+            findings.append(IntelligenceFinding(entity="Self-Signed Certificate", type="SSL/TLS Warning",
+                source="Rust:SSL", confidence="High", color="red", threat_level="Elevated Risk",
+                status="Self-Signed", tags=["rust","ssl"]))
+        if tls.get("expired"):
+            findings.append(IntelligenceFinding(entity="Expired Certificate", type="SSL/TLS Warning",
+                source="Rust:SSL", confidence="High", color="red", threat_level="High Risk",
+                status="Expired", tags=["rust","ssl"]))
+        for alt in tls.get("alt_names") or []:
+            findings.append(IntelligenceFinding(entity=alt, type="Subdomain",
+                source="Rust:SSL", confidence="High", color="blue",
+                status="SAN Listed", tags=["rust","ssl","subdomain"]))
+
+        # ── 03. HTTP Headers ──
+        hh = raw.get("http_headers") or {}
+        if hh.get("server"):
+            findings.append(IntelligenceFinding(entity=hh["server"], type="Web Technology",
+                source="Rust:HTTP Headers", confidence="High", color="green",
+                status="Detected", tags=["rust","http"]))
+        if hh.get("missing_headers"):
+            for h in hh["missing_headers"]:
+                findings.append(IntelligenceFinding(entity=f"Missing: {h}", type="Security Header",
+                    source="Rust:HTTP Headers", confidence="Medium", color="orange",
+                    threat_level="Elevated Risk", status="Missing", tags=["rust","http","security"]))
+        if hh.get("security_score") is not None:
+            findings.append(IntelligenceFinding(entity=f"Security Score: {hh['security_score']}/100", type="Security Header",
+                source="Rust:HTTP Headers", confidence="High", color="slate", status="Scored", tags=["rust","http"]))
+
+        # ── 04. CVE Search ──
+        for cve in (raw.get("cve_search") or {}).get("matches") or []:
+            severity = str(cve.get("severity","Medium"))
+            color = "red" if severity in ("Critical","High") else "orange"
+            findings.append(IntelligenceFinding(entity=cve.get("cve_id","?"), type="CVE",
+                source="Rust:CVE Search", confidence="High", color=color,
+                threat_level=severity, status=cve.get("affected_tech","?"),
+                raw_data=cve.get("description",""), tags=["rust","cve"]))
+
+        # ── 05. Breach Check ──
+        for b in (raw.get("breach_check") or {}).get("checks") or []:
+            if b.get("exposed"):
+                findings.append(IntelligenceFinding(entity=f"Breach: {b['source']}", type="Data Breach",
+                    source="Rust:Breach Check", confidence="Medium", color="red",
+                    threat_level="High Risk", status=b.get("data_type","?"),
+                    raw_data=b.get("description",""), tags=["rust","breach"]))
+
+        # ── 06. Subdomain Takeover ──
+        for t in (raw.get("subdomain_takeover") or {}).get("checks") or []:
+            if t.get("vulnerable"):
+                findings.append(IntelligenceFinding(entity=t.get("subdomain","?"), type="Subdomain Takeover",
+                    source="Rust:Takeover", confidence="High", color="red",
+                    threat_level="High Risk", status=f"Vulnerable: {t.get('service','?')}",
+                    raw_data=t.get("description",""), tags=["rust","takeover"]))
+
+        # ── 07. Tech Fingerprint ──
+        tf = raw.get("tech_fingerprint") or {}
+        if tf.get("cms"):
+            findings.append(IntelligenceFinding(entity=tf["cms"], type="CMS",
+                source="Rust:Tech Fingerprint", confidence="High", color="green",
+                status="Detected", tags=["rust","tech"]))
+        for fw in tf.get("frameworks") or []:
+            findings.append(IntelligenceFinding(entity=fw, type="Web Framework",
+                source="Rust:Tech Fingerprint", confidence="High", color="green",
+                status="Detected", tags=["rust","tech"]))
+        for al in tf.get("analytics") or []:
+            findings.append(IntelligenceFinding(entity=al, type="Analytics",
+                source="Rust:Tech Fingerprint", confidence="Medium", color="slate",
+                status="Detected", tags=["rust","tech"]))
+        for lib in tf.get("js_libraries") or []:
+            findings.append(IntelligenceFinding(entity=lib, type="JavaScript Library",
+                source="Rust:Tech Fingerprint", confidence="Medium", color="slate",
+                status="Detected", tags=["rust","tech"]))
+
+        # ── 08. API Discovery ──
+        for ep in (raw.get("api_discovery") or {}).get("endpoints") or []:
+            findings.append(IntelligenceFinding(entity=ep.get("path","?"), type="API Endpoint",
+                source="Rust:API Discovery", confidence="Medium", color="indigo",
+                status=f"HTTP {ep.get('status','?')}", tags=["rust","api"]))
+
+        # ── 09. Cloud Buckets ──
+        for b in (raw.get("cloud_buckets") or {}).get("buckets") or []:
+            findings.append(IntelligenceFinding(entity=b.get("url",""), type="Cloud Bucket",
+                source="Rust:Cloud Buckets", confidence="Medium", color="cyan",
+                status="Accessible" if b.get("accessible") else "Exists",
+                tags=["rust","cloud","bucket"]))
+
+        # ── 10. Social Search ──
+        for p in (raw.get("social_search") or {}).get("profiles") or []:
+            if p.get("exists"):
+                findings.append(IntelligenceFinding(entity=p.get("url",""), type="Social Profile",
+                    source="Rust:Social Search", confidence="Medium", color="purple",
+                    status=f"Found on {p.get('platform','?')}", tags=["rust","social"]))
+
+        # ── 11. Paste Scan ──
+        for p in (raw.get("paste_scan") or {}).get("matches") or []:
+            findings.append(IntelligenceFinding(entity=f"Paste: {p.get('source','?')}", type="Leak",
+                source="Rust:Paste Scan", confidence="Low", color="red",
+                threat_level="Elevated Risk", status="Found",
+                raw_data=p.get("snippet","")[:500], tags=["rust","paste","leak"]))
+
+        # ── 12. Git Discovery ──
+        gd = raw.get("git_discovery") or {}
+        if gd.get("git_exposed"):
+            for gf in gd.get("files") or []:
+                findings.append(IntelligenceFinding(entity=f".git/{gf}", type="Exposed VCS",
+                    source="Rust:Git Discovery", confidence="High", color="red",
+                    threat_level="High Risk", status="Exposed", tags=["rust","git","exposure"]))
+
+        # ── 13. DNS Zone Transfer ──
+        dzt = raw.get("dns_zone_transfer") or {}
+        if dzt.get("zone_transfer_possible"):
+            findings.append(IntelligenceFinding(entity=f"Zone Transfer Possible: {dzt.get('domain','?')}",
+                type="DNS Vulnerability", source="Rust:DNS Zone Transfer",
+                confidence="High", color="red", threat_level="High Risk",
+                status="Vulnerable", tags=["rust","dns","zone-transfer"]))
+        if not dzt.get("dnssec_enabled"):
+            findings.append(IntelligenceFinding(entity=f"DNSSEC Not Enabled: {dzt.get('domain','?')}",
+                type="DNS Vulnerability", source="Rust:DNS Zone Transfer",
+                confidence="Medium", color="orange", threat_level="Elevated Risk",
+                status="Missing DNSSEC", tags=["rust","dns","dnssec"]))
+
+        # ── 14. CORS Check ──
+        cors = raw.get("cors_check") or {}
+        if cors.get("vulnerable") or cors.get("origin_reflection") or cors.get("wildcard_origin"):
+            findings.append(IntelligenceFinding(entity="CORS Misconfiguration",
+                type="Web Vulnerability", source="Rust:CORS Check",
+                confidence="High", color="red", threat_level="High Risk",
+                status=f"Origin Reflection: {cors.get('origin_reflection')} | Wildcard: {cors.get('wildcard_origin')}",
+                tags=["rust","cors","vuln"]))
+
+        # ── 15. Redirect Trace ──
+        rt = raw.get("redirect_trace") or {}
+        chain = rt.get("chain") or []
+        if len(chain) > 1:
+            findings.append(IntelligenceFinding(entity=f"Redirect Chain: {len(chain)} hops → {rt.get('final_url','')[:60]}",
+                type="Web Behavior", source="Rust:Redirect Trace",
+                confidence="Medium", color="slate", status=f"{len(chain)} hops",
+                tags=["rust","redirect"]))
+
+        # ── 16. Cookie Audit ──
+        ca = raw.get("cookie_audit") or {}
+        for c in ca.get("cookies") or []:
+            if not c.get("secure") or not c.get("http_only"):
+                findings.append(IntelligenceFinding(entity=f"Insecure Cookie: {c.get('name','?')}",
+                    type="Cookie Vulnerability", source="Rust:Cookie Audit",
+                    confidence="Medium", color="orange", threat_level="Elevated Risk",
+                    status=f"Secure={c.get('secure')} HttpOnly={c.get('http_only')} SameSite={c.get('same_site','?')}",
+                    tags=["rust","cookie","vuln"]))
+
+        # ── 17. Email Security ──
+        es = raw.get("email_security") or {}
+        if es.get("spf_record"):
+            findings.append(IntelligenceFinding(entity=f"SPF: {'Valid' if es.get('spf_valid') else 'Invalid'}",
+                type="Email Security", source="Rust:Email Security",
+                confidence="High", color="green" if es.get("spf_valid") else "red",
+                status=es.get("spf_record","")[:80], tags=["rust","email","spf"]))
+        if es.get("dkim_record"):
+            findings.append(IntelligenceFinding(entity=f"DKIM: {'Valid' if es.get('dkim_valid') else 'Invalid'}",
+                type="Email Security", source="Rust:Email Security",
+                confidence="High", color="green" if es.get("dkim_valid") else "red",
+                status=es.get("dkim_record","")[:80], tags=["rust","email","dkim"]))
+        if es.get("dmarc_record"):
+            findings.append(IntelligenceFinding(entity=f"DMARC: {es.get('dmarc_policy','?')}",
+                type="Email Security", source="Rust:Email Security",
+                confidence="High", color="green" if es.get("dmarc_valid") else "red",
+                status=es.get("dmarc_record","")[:80], tags=["rust","email","dmarc"]))
+
+        # ── 18. ASN Network ──
+        asn = raw.get("asn_network") or {}
+        if asn.get("asn"):
+            findings.append(IntelligenceFinding(entity=f"AS{asn['asn']} - {asn.get('asn_org','?')}",
+                type="ASN", source="Rust:ASN Network",
+                confidence="High", color="slate", status=asn.get("country","?"),
+                tags=["rust","asn","network"]))
+        if asn.get("org"):
+            findings.append(IntelligenceFinding(entity=asn["org"], type="Organization",
+                source="Rust:ASN Network", confidence="Medium", color="slate",
+                status="Identified", tags=["rust","asn"]))
+
+        # ── 19. JS Analysis ──
+        jsa = raw.get("js_analysis") or {}
+        for ak in jsa.get("api_keys") or []:
+            findings.append(IntelligenceFinding(entity=f"API Key: {ak[:40]}...", type="Hardcoded Secret",
+                source="Rust:JS Analysis", confidence="High", color="red",
+                threat_level="High Risk", status="Found in JS",
+                tags=["rust","js","secret"]))
+        for ep in jsa.get("endpoints") or []:
+            findings.append(IntelligenceFinding(entity=ep, type="API Endpoint",
+                source="Rust:JS Analysis", confidence="Medium", color="indigo",
+                status="Found in JS", tags=["rust","js","api"]))
+        for sus in jsa.get("suspicious") or []:
+            findings.append(IntelligenceFinding(entity=sus, type="Suspicious Pattern",
+                source="Rust:JS Analysis", confidence="Low", color="orange",
+                status="Found in JS", tags=["rust","js"]))
+
+        # ── 20. Directory Enumeration ──
+        for d in (raw.get("dir_enum") or {}).get("directories") or []:
+            findings.append(IntelligenceFinding(entity=d.get("path","?"), type="Directory",
+                source="Rust:Dir Enum", confidence="Medium", color="slate",
+                status=f"HTTP {d.get('status','?')}", tags=["rust","directory"]))
+
         return findings
+
+    def _build_rust_config(self) -> dict:
+        perf = self.settings.get("performance", {})
+        return {
+            "timeout": int(self.settings.get("timeout", 30)),
+            "depth": self.settings.get("depth", "deep"),
+            "concurrency": perf.get("concurrency") or int(
+                {"max": 50, "balanced": 25, "stealth": 10}.get(
+                    self.settings.get("sniper_ratio", "max"), 50)),
+            "max_results": int(self.settings.get("max_findings", 5000)),
+            "module_config": {
+                "subdomain": {"max_results": perf.get("brute_depth", 500)},
+                "dir_enum": {"max_results": perf.get("brute_depth", 500)},
+                "ports": {"max_results": perf.get("port_range", 1000)},
+            }
+        }
 
     def _load_module(self, path):
         mod_name = os.path.basename(path)[:-3]

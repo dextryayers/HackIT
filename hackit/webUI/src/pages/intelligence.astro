@@ -889,6 +889,11 @@ import Layout from '../layouts/Layout.astro';
 							if (s.moduleToggles && Object.keys(s.moduleToggles).length > 0) {
 								url += `&module_toggles=${encodeURIComponent(JSON.stringify(s.moduleToggles))}`;
 							}
+							if (s.performance) {
+								url += `&concurrency=${encodeURIComponent(s.performance.concurrency || 50)}`;
+								url += `&brute_depth=${encodeURIComponent(s.performance.bruteDepth || 500)}`;
+								url += `&port_range=${encodeURIComponent(s.performance.portRange || 1000)}`;
+							}
 						} catch(e) {}
 					}
 					const res = await fetch(url);
