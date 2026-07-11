@@ -93,8 +93,8 @@ import Layout from '../layouts/Layout.astro';
 		
 		<!-- TAB: OVERVIEW -->
 		<div id="tab-overview" class="tab-content space-y-6 block">
-			<!-- Metrics Cards -->
-			<div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+			<!-- Metrics & Mini Charts Row -->
+			<div class="grid grid-cols-1 md:grid-cols-4 gap-6">
 				<div class="bg-sf-card border border-sf-border rounded-lg p-6 relative overflow-hidden">
 					<h3 class="text-xs font-semibold text-sf-muted uppercase tracking-wider mb-6">Threat Metrics</h3>
 					<div class="space-y-4">
@@ -106,41 +106,63 @@ import Layout from '../layouts/Layout.astro';
 						</div>
 						<div class="flex justify-between items-end border-b border-sf-border pb-3">
 							<div class="space-y-1">
-								<span class="text-[11px] text-sf-muted font-medium">High Risk Anomalies</span>
+								<span class="text-[11px] text-sf-muted font-medium">High Risk</span>
 								<p class="text-2xl font-semibold text-red-500" id="overview-risk-count">0</p>
+							</div>
+						</div>
+						<div class="flex justify-between items-end border-b border-sf-border pb-3">
+							<div class="space-y-1">
+								<span class="text-[11px] text-sf-muted font-medium">Data Sources</span>
+								<p class="text-2xl font-semibold text-sf-text" id="overview-sources-count">0</p>
 							</div>
 						</div>
 						<div class="flex justify-between items-end">
 							<div class="space-y-1">
-								<span class="text-[11px] text-sf-muted font-medium">Correlation Strength</span>
-								<p class="text-2xl font-semibold text-sf-text" id="overview-correlation-count">0</p>
+								<span class="text-[11px] text-sf-muted font-medium">Categories</span>
+								<p class="text-2xl font-semibold text-sf-text" id="overview-categories-count">0</p>
 							</div>
 						</div>
 					</div>
 				</div>
 
 				<!-- Radar Chart -->
-				<div class="bg-sf-card border border-sf-border rounded-lg p-6 flex flex-col">
-					<h3 class="text-xs font-semibold text-sf-muted uppercase tracking-wider mb-4">Infiltration Vector Analysis</h3>
+				<div class="bg-sf-card border border-sf-border rounded-lg p-6 flex flex-col md:col-span-1">
+					<h3 class="text-xs font-semibold text-sf-muted uppercase tracking-wider mb-4">Infiltration Vectors</h3>
 					<div class="flex-1 relative w-full flex justify-center items-center min-h-[200px]">
 						<canvas id="radarChart"></canvas>
 					</div>
 				</div>
 
-				<!-- Data Volume -->
-				<div class="bg-sf-card border border-sf-border rounded-lg p-6 flex flex-col">
-					<h3 class="text-xs font-semibold text-sf-muted uppercase tracking-wider mb-4">Intelligence Volume</h3>
+				<!-- Risk Doughnut -->
+				<div class="bg-sf-card border border-sf-border rounded-lg p-6 flex flex-col md:col-span-1">
+					<h3 class="text-xs font-semibold text-sf-muted uppercase tracking-wider mb-4">Risk Distribution</h3>
+					<div class="flex-1 relative w-full flex justify-center items-center min-h-[200px]">
+						<canvas id="doughnutChart"></canvas>
+					</div>
+				</div>
+
+				<!-- Source Distribution -->
+				<div class="bg-sf-card border border-sf-border rounded-lg p-6 flex flex-col md:col-span-1">
+					<h3 class="text-xs font-semibold text-sf-muted uppercase tracking-wider mb-4">Top Sources</h3>
 					<div class="flex-1 relative w-full min-h-[200px]">
-						<canvas id="volChart"></canvas>
+						<canvas id="sourceChart"></canvas>
 					</div>
 				</div>
 			</div>
 
-			<!-- Large Chart -->
-			<div class="bg-sf-card border border-sf-border rounded-lg p-6">
-				<h3 class="text-xs font-semibold text-sf-muted uppercase tracking-wider mb-6">Evidence Distribution per Sector</h3>
-				<div class="w-full h-80 relative">
-					<canvas id="barChart"></canvas>
+			<!-- Charts Row 2 -->
+			<div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+				<div class="bg-sf-card border border-sf-border rounded-lg p-6">
+					<h3 class="text-xs font-semibold text-sf-muted uppercase tracking-wider mb-6">Evidence per Sector</h3>
+					<div class="w-full h-72 relative">
+						<canvas id="barChart"></canvas>
+					</div>
+				</div>
+				<div class="bg-sf-card border border-sf-border rounded-lg p-6">
+					<h3 class="text-xs font-semibold text-sf-muted uppercase tracking-wider mb-6">Findings Timeline</h3>
+					<div class="w-full h-72 relative">
+						<canvas id="timelineChart"></canvas>
+					</div>
 				</div>
 			</div>
 		</div>
@@ -500,6 +522,7 @@ import Layout from '../layouts/Layout.astro';
 		}
 
 		let networkInstance = null;
+		let chartInstances = {};
 		let latestFindings = [];
 		let currentSummary = [];
 
@@ -523,99 +546,184 @@ import Layout from '../layouts/Layout.astro';
 			document.getElementById('scan-duration').innerText = `${h}:${m}:${s}`;
 		}, 1000);
 
+		function destroyChart(key) {
+			if (chartInstances[key]) {
+				chartInstances[key].destroy();
+				delete chartInstances[key];
+			}
+		}
+
+		function chartColor(i) {
+			const palette = ['#38BDF8','#F59E0B','#10B981','#EF4444','#8B5CF6','#EC4899','#14B8A6','#F97316','#6366F1','#84CC16','#06B6D4','#D946EF','#0EA5E9','#EAB308','#22C55E'];
+			return palette[i % palette.length];
+		}
+
 		function renderCharts(stats) {
+			if (!stats) return;
 			const riskDist = stats.risk_distribution || {};
-			
-			const radarCtx = document.getElementById('radarChart').getContext('2d');
-			new Chart(radarCtx, {
-				type: 'radar',
-				data: {
-					labels: ['High', 'Medium', 'Low', 'Info'],
-					datasets: [{
-						label: 'Infiltration Vectors',
-						data: [riskDist['High Risk'] || 0, riskDist['Elevated Risk'] || 0, riskDist['Standard Target'] || 0, riskDist['Informational'] || 0],
-						backgroundColor: 'rgba(56, 189, 248, 0.2)', // HackIT Blue with transparency
-						borderColor: '#38BDF8',
-						pointBackgroundColor: '#38BDF8',
-						pointBorderColor: '#fff',
-						pointHoverBackgroundColor: '#fff',
-						pointHoverBorderColor: '#38BDF8',
-						borderWidth: 2
-					}]
-				},
-				options: { 
-					responsive: true, 
-					maintainAspectRatio: false, 
-					scales: { 
-						r: { 
+			const typeDist = stats.type_distribution || {};
+			const sourceDist = stats.source_distribution || {};
+			const catDist = stats.category_distribution || {};
+			const timeline = stats.timeline || [];
+			const isDark = document.documentElement.classList.contains('dark') || !document.documentElement.classList.contains('light');
+			const textColor = isDark ? '#888888' : '#64748b';
+			const gridColor = isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)';
+			const accent = '#38BDF8';
+
+			// ── Radar: 4 threat axes ──
+			destroyChart('radar');
+			const radarEl = document.getElementById('radarChart');
+			if (radarEl) {
+				const rLabels = ['High Risk', 'Elevated Risk', 'Standard Target', 'Informational'];
+				const rData = [riskDist['High Risk']||0, riskDist['Elevated Risk']||0, riskDist['Standard Target']||0, riskDist['Informational']||0];
+				chartInstances.radar = new Chart(radarEl.getContext('2d'), {
+					type: 'radar',
+					data: {
+						labels: rLabels,
+						datasets: [{
+							label: 'Findings',
+							data: rData,
+							backgroundColor: 'rgba(56, 189, 248, 0.15)',
+							borderColor: accent,
+							pointBackgroundColor: accent,
+							pointBorderColor: '#fff',
+							pointHoverBackgroundColor: '#fff',
+							pointHoverBorderColor: accent,
+							borderWidth: 2
+						}]
+					},
+					options: {
+						responsive: true, maintainAspectRatio: false,
+						scales: { r: {
 							beginAtZero: true,
 							ticks: { display: false, stepSize: 1 },
-							grid: { color: 'rgba(128, 128, 128, 0.1)' },
-							angleLines: { color: 'rgba(128, 128, 128, 0.1)' },
-							pointLabels: { color: 'var(--color-text-muted)', font: { size: 10, weight: 'bold', family: 'Inter' } }
-						} 
-					}, 
-					plugins: { legend: { display: false } } 
-				}
-			});
-
-			const volCtx = document.getElementById('volChart').getContext('2d');
-			new Chart(volCtx, {
-				type: 'bar',
-				data: {
-					labels: ['Unique Assets', 'High Risk', 'Cross-Links'],
-					datasets: [{ 
-						data: [stats.total_findings || 0, (riskDist['High Risk'] || 0), Math.floor((stats.total_findings || 0) / 8)], 
-						backgroundColor: ['#38BDF8', '#ef4444', '#94a3b8'], // Use Blue, Red, Muted Gray
-						borderRadius: 4
-					}]
-				},
-				options: { 
-					indexAxis: 'y', 
-					responsive: true, 
-					maintainAspectRatio: false, 
-					plugins: { legend: { display: false } }, 
-					scales: { 
-						x: { display: false }, 
-						y: { 
-							grid: { display: false }, 
-							ticks: { color: 'var(--color-text-muted)', font: { size: 10, weight: 'bold' } } 
-						} 
-					} 
-				}
-			});
-
-			const barCtx = document.getElementById('barChart').getContext('2d');
-			const typeDist = stats.type_distribution || {};
-			const labels = Object.keys(typeDist).length > 0 ? Object.keys(typeDist).slice(0, 15) : ['INFRA', 'USER', 'FILE', 'AUTH', 'CERT', 'CLOUD'];
-			const data = Object.values(typeDist).length > 0 ? Object.values(typeDist).slice(0, 15) : [0,0,0,0,0,0];
-
-			new Chart(barCtx, {
-				type: 'bar',
-				data: { 
-					labels: labels, 
-					datasets: [{ 
-						data: data, 
-						backgroundColor: '#38BDF8', // HackIT Blue
-						barPercentage: 0.5,
-						borderRadius: 4
-					}] 
-				},
-				options: {
-					responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } },
-					scales: { 
-						y: { 
-							beginAtZero: true, 
-							grid: { color: 'rgba(255,255,255,0.03)' },
-							ticks: { color: '#888888', font: {size: 10} }
-						}, 
-						x: { 
-							grid: { display: false }, 
-							ticks: { maxRotation: 45, minRotation: 45, font: { size: 9 }, color: '#888888' } 
-						} 
+							grid: { color: gridColor },
+							angleLines: { color: gridColor },
+							pointLabels: { color: textColor, font: { size: 9, weight: 'bold', family: 'Inter' } }
+						}},
+						plugins: { legend: { display: false } }
 					}
-				}
-			});
+				});
+			}
+
+			// ── Doughnut: risk distribution ──
+			destroyChart('doughnut');
+			const doughEl = document.getElementById('doughnutChart');
+			if (doughEl) {
+				const dLabels = Object.keys(riskDist).filter(k => riskDist[k] > 0);
+				const dData = dLabels.map(k => riskDist[k]);
+				const dColors = ['#EF4444','#F59E0B','#3B82F6','#6B7280'];
+				if (dLabels.length === 0) { dLabels.push('No Data'); dData.push(1); dColors.push('#333'); }
+				chartInstances.doughnut = new Chart(doughEl.getContext('2d'), {
+					type: 'doughnut',
+					data: {
+						labels: dLabels,
+						datasets: [{
+							data: dData,
+							backgroundColor: dColors.slice(0, dData.length),
+							borderWidth: 1,
+							borderColor: isDark ? '#1a1a2e' : '#fff'
+						}]
+					},
+					options: {
+						responsive: true, maintainAspectRatio: false,
+						plugins: {
+							legend: { position: 'bottom', labels: { color: textColor, font: { size: 9 }, boxWidth: 10, padding: 8 } }
+						},
+						cutout: '60%'
+					}
+				});
+			}
+
+			// ── Source (horizontal bar): top 8 sources ──
+			destroyChart('source');
+			const srcEl = document.getElementById('sourceChart');
+			if (srcEl) {
+				let srcEntries = Object.entries(sourceDist).sort((a,b) => b[1]-a[1]).slice(0, 8);
+				if (srcEntries.length === 0) srcEntries = [['No Data', 1]];
+				const srcLabels = srcEntries.map(e => e[0].length > 18 ? e[0].slice(0,16)+'…' : e[0]);
+				const srcData = srcEntries.map(e => e[1]);
+				chartInstances.source = new Chart(srcEl.getContext('2d'), {
+					type: 'bar',
+					data: {
+						labels: srcLabels,
+						datasets: [{ data: srcData, backgroundColor: srcData.map((_,i) => chartColor(i)), borderRadius: 3 }]
+					},
+					options: {
+						indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+						plugins: { legend: { display: false } },
+						scales: {
+							x: { display: false, grid: { display: false } },
+							y: { grid: { display: false }, ticks: { color: textColor, font: { size: 9 } } }
+						}
+					}
+				});
+			}
+
+			// ── Bar: type distribution, top 15 ──
+			destroyChart('bar');
+			const barEl = document.getElementById('barChart');
+			if (barEl) {
+				let typeEntries = Object.entries(typeDist).sort((a,b) => b[1]-a[1]).slice(0, 15);
+				if (typeEntries.length === 0) typeEntries = [['No Data', 0]];
+				const barLabels = typeEntries.map(e => e[0].length > 20 ? e[0].slice(0,18)+'…' : e[0]);
+				const barData = typeEntries.map(e => e[1]);
+				chartInstances.bar = new Chart(barEl.getContext('2d'), {
+					type: 'bar',
+					data: { labels: barLabels, datasets: [{ data: barData, backgroundColor: accent, borderRadius: 4, barPercentage: 0.6 }] },
+					options: {
+						responsive: true, maintainAspectRatio: false,
+						plugins: { legend: { display: false } },
+						scales: {
+							y: { beginAtZero: true, grid: { color: gridColor }, ticks: { color: textColor, font: { size: 9 } } },
+							x: { grid: { display: false }, ticks: { maxRotation: 45, color: textColor, font: { size: 8 } } }
+						}
+					}
+				});
+			}
+
+			// ── Timeline line chart ──
+			destroyChart('timeline');
+			const tlEl = document.getElementById('timelineChart');
+			if (tlEl && timeline.length > 0) {
+				const tlLabels = timeline.map(t => t.module ? (t.module.length > 12 ? t.module.slice(0,10)+'…' : t.module) : t.time || '');
+				const tlData = timeline.map(t => t.count || 0);
+				chartInstances.timeline = new Chart(tlEl.getContext('2d'), {
+					type: 'line',
+					data: {
+						labels: tlLabels,
+						datasets: [{
+							label: 'Findings Accumulated',
+							data: tlData,
+							borderColor: accent,
+							backgroundColor: 'rgba(56, 189, 248, 0.1)',
+							fill: true,
+							tension: 0.3,
+							pointBackgroundColor: accent,
+							pointRadius: 3,
+							pointHoverRadius: 5,
+							borderWidth: 2
+						}]
+					},
+					options: {
+						responsive: true, maintainAspectRatio: false,
+						plugins: {
+							legend: { labels: { color: textColor, font: { size: 9 }, boxWidth: 12 } }
+						},
+						scales: {
+							y: { beginAtZero: true, grid: { color: gridColor }, ticks: { color: textColor, font: { size: 9 } } },
+							x: { grid: { display: false }, ticks: { maxRotation: 45, color: textColor, font: { size: 7 } } }
+						},
+						interaction: { intersect: false, mode: 'index' }
+					}
+				});
+			} else if (tlEl) {
+				chartInstances.timeline = new Chart(tlEl.getContext('2d'), {
+					type: 'line',
+					data: { labels: ['Start','End'], datasets: [{ data: [0,0], borderColor: accent, borderWidth: 1 }] },
+					options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } }
+				});
+			}
 		}
 
 		function renderGraph(target, findings) {
@@ -800,6 +908,24 @@ import Layout from '../layouts/Layout.astro';
 						document.getElementById('raw-json-display').innerText = JSON.stringify(job, null, 4);
 						if (job.live_logs) renderLiveLogs(job.live_logs);
 
+						if (job.findings && job.findings.length > 0) {
+							document.getElementById('overview-total-count').innerText = job.findings.length;
+						}
+						if (job.summary && job.summary.length > 0) {
+							const prevSummary = currentSummary;
+							currentSummary = job.summary;
+							if (JSON.stringify(prevSummary) !== JSON.stringify(currentSummary)) {
+								renderBrowseSummary(currentSummary);
+							}
+						}
+						if (job.stats) {
+							const prevFindings = latestFindings.length;
+							latestFindings = job.findings || [];
+							if (prevFindings !== latestFindings.length && latestFindings.length > 0) {
+								renderGraph(targetName, latestFindings);
+							}
+						}
+
 						if (job.status === 'Completed' || job.status === 'Error') {
 							clearInterval(pollingInterval);
 							processResults(job, targetName);
@@ -814,6 +940,10 @@ import Layout from '../layouts/Layout.astro';
 				if (data && data.findings) {
 					latestFindings = data.findings;
 					currentSummary = data.summary || [];
+
+					Object.values(chartInstances).forEach(c => { try { c.destroy(); } catch(e) {} });
+					chartInstances = {};
+
 					renderBrowseSummary(currentSummary);
 					renderGraph(targetName, latestFindings);
 
@@ -821,8 +951,10 @@ import Layout from '../layouts/Layout.astro';
 						renderCharts(data.stats);
 						document.getElementById('overview-total-count').innerText = latestFindings.length;
 						document.getElementById('overview-risk-count').innerText = data.stats.risk_distribution['High Risk'] || 0;
-						const corrCount = latestFindings.filter(f => f.type === 'Relationship' || f.category.includes('CORRELATION')).length;
-						document.getElementById('overview-correlation-count').innerText = corrCount || Math.floor(latestFindings.length / 12);
+						const srcCount = Object.keys(data.stats.source_distribution || {}).length;
+						document.getElementById('overview-sources-count').innerText = srcCount || '0';
+						const catCount = Object.keys(data.stats.category_distribution || {}).length;
+						document.getElementById('overview-categories-count').innerText = catCount || '0';
 					}
 					document.getElementById('header-status').innerText = 'MISSION COMPLETE';
 					document.getElementById('header-status').className = 'px-2.5 py-1 bg-sf-green/10 text-sf-green rounded-sm text-[10px] font-medium border border-sf-green/20 tracking-wider uppercase';
@@ -891,6 +1023,35 @@ import Layout from '../layouts/Layout.astro';
 			});
 		}
 
+		function renderDetailTable(findings) {
+			const tbody = document.getElementById('browse-detail-tbody');
+			tbody.innerHTML = '';
+			findings.forEach(f => {
+				const tr = document.createElement('tr');
+				const isHigh = f.threat_level === 'High Risk';
+				tr.className = `hover:bg-sf-lightbg transition-colors ${isHigh ? 'bg-red-500/5' : ''}`;
+				const tagsHtml = (f.tags || []).map(t => `<span class="inline-block px-1.5 py-0.5 bg-sf-lightbg border border-sf-border rounded text-[8px] uppercase tracking-wider text-sf-muted mr-1">${t}</span>`).join('');
+				tr.innerHTML = `
+					<td class="px-6 py-3 font-mono text-xs ${isHigh ? 'text-red-400' : 'text-sf-text'}">
+						<div class="flex items-center gap-2">
+							${isHigh ? '<i class="fas fa-biohazard"></i>' : ''}
+							${f.entity}
+						</div>
+						<div class="mt-1 flex flex-wrap gap-1">${tagsHtml}</div>
+					</td>
+					<td class="px-6 py-3 text-sf-muted text-xs">${f.source}</td>
+					<td class="px-6 py-3">
+						<span class="text-[10px] font-medium tracking-wider uppercase ${f.status === 'Live' || f.status === 'Breached' ? 'text-emerald-500' : 'text-sf-muted'}">
+							${f.status || 'UNVERIFIED'}
+						</span>
+						<div class="text-[9px] text-sf-muted mt-0.5">${f.confidence || ''} ${f.threat_level !== 'Informational' ? '· ' + f.threat_level : ''}</div>
+					</td>
+					<td class="px-6 py-3 font-mono text-[10px] text-sf-muted truncate max-w-sm" title="${f.resolution || ''}">${f.resolution || '-'}</td>
+				`;
+				tbody.appendChild(tr);
+			});
+		}
+
 		function showBrowseDetail(type) {
 			const filtered = latestFindings.filter(f => f.type === type);
 			document.getElementById('browse-summary-container').classList.add('hidden');
@@ -904,31 +1065,7 @@ import Layout from '../layouts/Layout.astro';
 			document.getElementById('browse-summary-container').classList.remove('hidden');
 		};
 
-		function renderDetailTable(findings) {
-			const tbody = document.getElementById('browse-detail-tbody');
-			tbody.innerHTML = '';
-			findings.forEach(f => {
-				const tr = document.createElement('tr');
-				const isHigh = f.threat_level === 'High Risk';
-				tr.className = `hover:bg-sf-lightbg transition-colors ${isHigh ? 'bg-red-500/5' : ''}`;
-				tr.innerHTML = `
-					<td class="px-6 py-3 font-mono text-xs ${isHigh ? 'text-red-400' : 'text-sf-text'}">
-						<div class="flex items-center gap-2">
-							${isHigh ? '<i class="fas fa-biohazard"></i>' : ''}
-							${f.entity}
-						</div>
-					</td>
-					<td class="px-6 py-3 text-sf-muted text-xs">${f.source}</td>
-					<td class="px-6 py-3">
-						<span class="text-[10px] font-medium tracking-wider uppercase ${f.status === 'Live' || f.status === 'Breached' ? 'text-emerald-500' : 'text-sf-muted'}">
-							${f.status || 'UNVERIFIED'}
-						</span>
-					</td>
-					<td class="px-6 py-3 font-mono text-[10px] text-sf-muted truncate max-w-sm" title="${f.resolution || ''}">${f.resolution || '-'}</td>
-				`;
-				tbody.appendChild(tr);
-			});
-		}
+
 
 		document.getElementById('browse-detail-search').oninput = (e) => {
 			const term = e.target.value.toLowerCase();

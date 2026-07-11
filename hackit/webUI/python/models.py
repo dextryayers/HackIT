@@ -23,6 +23,8 @@ class IntelligenceStats(BaseModel):
     type_distribution: Dict[str, int]
     timeline: List[Dict[str, Any]]
     module_logs: List[Dict[str, str]] = []
+    source_distribution: Dict[str, int] = {}
+    category_distribution: Dict[str, int] = {}
 
 
 class SummaryItem(BaseModel):
@@ -30,6 +32,7 @@ class SummaryItem(BaseModel):
     unique_count: int
     total_count: int
     last_finding: Optional[str] = None
+    category: str = "UNCLASSIFIED"
 
 
 class RustSSLResponse(BaseModel):

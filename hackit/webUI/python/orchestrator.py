@@ -339,11 +339,16 @@ class OSINTOrchestrator:
     def generate_summary(self, findings):
         summary_map = {}
         for f in findings:
-            f.category = self.get_category(f.type)
-            if f.type not in summary_map: summary_map[f.type] = {"type":f.type,"count":0,"last":""}
+            cat = self.get_category(f.type)
+            f.category = cat
+            if f.type not in summary_map:
+                summary_map[f.type] = {"type":f.type,"count":0,"last":"","category":cat}
             summary_map[f.type]["count"] += 1
             summary_map[f.type]["last"] = f.entity
-        return [SummaryItem(type=v["type"],unique_count=v["count"],total_count=v["count"],last_finding=v["last"]) for v in summary_map.values()]
+        return [SummaryItem(
+            type=v["type"], unique_count=v["count"], total_count=v["count"],
+            last_finding=v["last"], category=v["category"]
+        ) for v in summary_map.values()]
 
 
 async def run_modular_scan(target, target_type="Domain", log_list=None, settings=None):

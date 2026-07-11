@@ -19,7 +19,6 @@ from orchestrator import run_modular_scan
 from models import RustSSLResponse, SettingsResponse
 from settings_store import load_settings, save_settings, get_api_key, DEFAULT_API_KEYS
 from typing import Dict, Optional, List, Any
-import random
 import httpx
 import dns.resolver
 from datetime import datetime, timezone
@@ -84,15 +83,40 @@ async def run_scan_task(job_id: str, target: str, target_type: str):
         )
         risk_dist = {"High Risk": 0, "Elevated Risk": 0, "Standard Target": 0, "Informational": 0}
         type_dist = {}
+        source_dist = {}
+        cat_dist = {}
         for f in findings:
             risk_dist[f.threat_level] = risk_dist.get(f.threat_level, 0) + 1
             type_dist[f.type] = type_dist.get(f.type, 0) + 1
+            src = f.source.split(":")[0].strip() if ":" in f.source else f.source
+            source_dist[src] = source_dist.get(src, 0) + 1
+            cat = f.category or "UNCLASSIFIED"
+            cat_dist[cat] = cat_dist.get(cat, 0) + 1
+        timeline = []
+        running_total = 0
+        found_total = len(findings)
+        if logs:
+            for log_entry in logs:
+                found_count = int(log_entry.get("found", 0))
+                running_total += found_count
+                timeline.append({
+                    "time": log_entry.get("time", ""),
+                    "count": min(running_total, found_total),
+                    "module": log_entry.get("module", "")
+                })
+        timeline.append({
+            "time": time.strftime("%H:%M:%S"),
+            "count": found_total,
+            "module": "COMPLETE"
+        })
         job.stats = IntelligenceStats(
             total_findings=len(findings),
             risk_distribution=risk_dist,
             type_distribution=type_dist,
-            timeline=[{"time": time.strftime("%H:%M:%S"), "count": random.randint(1, 15)} for _ in range(5)],
-            module_logs=logs
+            timeline=timeline,
+            module_logs=logs,
+            source_distribution=source_dist,
+            category_distribution=cat_dist
         )
         job.findings = findings
         job.summary = summary
