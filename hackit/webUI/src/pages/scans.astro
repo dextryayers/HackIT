@@ -2,33 +2,37 @@
 import Layout from '../layouts/Layout.astro';
 ---
 
-<Layout title="HackIt | Scan History">
-	<div class="p-8 lg:p-10 space-y-8">
-		<header>
-			<h2 class="text-xl font-bold text-white tracking-tight">MISSION HISTORY</h2>
-			<p class="text-slate-500 text-xs">Audit trail of all tactical reconnaissance and OSINT operations</p>
+<Layout title="HackIT OSINT | Scan History">
+	<div class="max-w-5xl mx-auto px-6 py-10 space-y-8">
+		<header class="flex items-center justify-between">
+			<div class="space-y-1">
+				<h2 class="text-xl font-bold tracking-tight text-sf-text">Mission History</h2>
+				<p class="text-xs text-sf-muted">Audit trail of all tactical reconnaissance and OSINT operations.</p>
+			</div>
+			<button id="refresh-btn" class="px-3 py-1.5 bg-sf-card border border-sf-border rounded-lg text-xs text-sf-muted hover:text-sf-text transition-all flex items-center gap-2">
+				<i class="fas fa-sync-alt text-[10px]"></i> Refresh
+			</button>
 		</header>
 
-		<div class="bg-[#0a0a0a] border border-white/5 rounded-2xl overflow-hidden shadow-2xl">
+		<div class="bg-sf-card border border-sf-border rounded-xl overflow-hidden">
 			<table class="w-full text-left border-collapse">
-				<thead class="bg-white/[0.02] border-b border-white/5">
+				<thead class="bg-sf-lightbg border-b border-sf-border">
 					<tr>
-						<th class="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">ID</th>
-						<th class="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Target</th>
-						<th class="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Profile</th>
-						<th class="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Findings</th>
-						<th class="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Duration</th>
-						<th class="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Status</th>
+						<th class="px-6 py-4 text-[10px] font-bold text-sf-muted uppercase tracking-widest">ID</th>
+						<th class="px-6 py-4 text-[10px] font-bold text-sf-muted uppercase tracking-widest">Target</th>
+						<th class="px-6 py-4 text-[10px] font-bold text-sf-muted uppercase tracking-widest">Type</th>
+						<th class="px-6 py-4 text-[10px] font-bold text-sf-muted uppercase tracking-widest">Findings</th>
+						<th class="px-6 py-4 text-[10px] font-bold text-sf-muted uppercase tracking-widest">Duration</th>
+						<th class="px-6 py-4 text-[10px] font-bold text-sf-muted uppercase tracking-widest">Status</th>
+						<th class="px-6 py-4 text-[10px] font-bold text-sf-muted uppercase tracking-widest">Actions</th>
 					</tr>
 				</thead>
-				<tbody class="divide-y divide-white/5 text-xs">
-					<!-- Empty State: No mission history -->
-					<tr>
-						<td colspan="6" class="px-6 py-24 text-center">
-							<div class="flex flex-col items-center gap-3 opacity-20">
-								<div class="text-3xl">📜</div>
-								<p class="text-[10px] font-bold tracking-[0.4em] uppercase text-slate-500">History Log Empty</p>
-								<p class="text-[10px] text-slate-700">No tactical engagements recorded in this session</p>
+				<tbody id="jobs-tbody" class="divide-y divide-sf-border text-xs">
+					<tr id="empty-row">
+						<td colspan="7" class="px-6 py-24 text-center">
+							<div class="flex flex-col items-center gap-3 text-sf-muted/30">
+								<i class="fas fa-scroll text-3xl"></i>
+								<p class="text-[10px] font-bold tracking-[0.3em] uppercase text-sf-muted/50">Loading...</p>
 							</div>
 						</td>
 					</tr>
@@ -36,4 +40,43 @@ import Layout from '../layouts/Layout.astro';
 			</table>
 		</div>
 	</div>
+
+	<script>
+		async function loadJobs() {
+			const tbody = document.getElementById('jobs-tbody');
+			const empty = document.getElementById('empty-row');
+			try {
+				const res = await fetch('/api/jobs');
+				const jobs = await res.json();
+				if (!Array.isArray(jobs) || jobs.length === 0) {
+					if (empty) empty.style.display = '';
+					tbody.innerHTML = `<tr id="empty-row"><td colspan="7" class="px-6 py-24 text-center"><div class="flex flex-col items-center gap-3 text-sf-muted/30"><i class="fas fa-scroll text-3xl"></i><p class="text-[10px] font-bold tracking-[0.3em] uppercase text-sf-muted/50">History Log Empty</p><p class="text-[10px] text-sf-muted/30">No tactical engagements recorded in this session.</p></div></td></tr>`;
+					return;
+				}
+				tbody.innerHTML = jobs.map(job => {
+					const duration = job.duration || '—';
+					const findings = job.finding_count || job.findings?.length || 0;
+					const statusClass = {
+						'completed': 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20',
+						'running': 'bg-sky-500/10 text-sky-400 border-sky-500/20 animate-pulse',
+						'error': 'bg-red-500/10 text-red-400 border-red-500/20',
+						'pending': 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20',
+					}[job.status?.toLowerCase()] || 'bg-gray-500/10 text-gray-400 border-gray-500/20';
+					return `<tr class="hover:bg-sf-lightbg/50 transition-colors">
+						<td class="px-6 py-3.5 font-mono text-[10px] text-sf-muted">${(job.job_id || '').slice(0, 8)}</td>
+						<td class="px-6 py-3.5 font-medium"><a href="/intelligence?target=${encodeURIComponent(job.target || '')}" class="hover:text-sf-tabActive transition-colors">${job.target || '—'}</a></td>
+						<td class="px-6 py-3.5 text-sf-muted">${job.target_type || 'Domain'}</td>
+						<td class="px-6 py-3.5 font-mono">${findings}</td>
+						<td class="px-6 py-3.5 text-sf-muted">${duration}</td>
+						<td class="px-6 py-3.5"><span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider border ${statusClass}">${job.status || 'Unknown'}</span></td>
+						<td class="px-6 py-3.5"><a href="/intelligence?target=${encodeURIComponent(job.target || '')}" class="text-sf-tabActive hover:underline text-[10px] font-medium">Review <i class="fas fa-arrow-right ml-1"></i></a></td>
+					</tr>`;
+				}).join('');
+			} catch (e) {
+				tbody.innerHTML = `<tr><td colspan="7" class="px-6 py-24 text-center"><div class="flex flex-col items-center gap-3 text-sf-muted/30"><i class="fas fa-exclamation-triangle text-3xl"></i><p class="text-[10px] font-bold tracking-[0.3em] uppercase text-sf-muted/50">Backend Unavailable</p><p class="text-[10px] text-sf-muted/30">Could not reach the API server.</p></div></td></tr>`;
+			}
+		}
+		document.getElementById('refresh-btn')?.addEventListener('click', loadJobs);
+		loadJobs();
+	</script>
 </Layout>

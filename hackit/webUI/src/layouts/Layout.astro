@@ -1,318 +1,179 @@
 ---
+import '../styles/global.css';
 interface Props {
 	title: string;
 }
-
 const { title } = Astro.props;
+const currentPath = Astro.url.pathname;
 ---
 
 <!doctype html>
-<html lang="en">
+<html lang="en" class="dark">
 	<head>
 		<meta charset="UTF-8" />
-		<meta name="description" content="Spiderfoot HX Clone Dashboard" />
+		<meta name="description" content="HackIT OSINT Engine – Multi-vector Intelligence Gathering Platform" />
 		<meta name="viewport" content="width=device-width" />
 		<link rel="icon" type="image/x-icon" href="/logo.ico" />
-<link rel="icon" type="image/svg+xml" href="/logo.svg" />
+		<link rel="icon" type="image/svg+xml" href="/logo.svg" />
 		<meta name="generator" content={Astro.generator} />
+		<meta name="astro-view-transitions-enabled" content="true" />
 		<title>{title}</title>
-		
-		<!-- CDNs -->
-		<script src="https://cdn.tailwindcss.com" is:inline></script>
-		<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js" is:inline></script>
-		<script is:inline>
-			tailwind.config = {
-				darkMode: 'class',
-				theme: {
-					extend: {
-						colors: {
-							sf: {
-								blue: 'var(--color-bg-primary)',
-								lightbg: 'var(--color-bg-secondary)',
-								card: 'var(--color-bg-card)',
-								text: 'var(--color-text-primary)',
-								muted: 'var(--color-text-muted)',
-								border: 'var(--color-border)',
-								tabActive: '#38BDF8',
-								green: '#10B981',
-								accent: '#6366F1'
-							}
-						},
-						fontFamily: {
-							sans: ['Inter', 'Outfit', 'sans-serif'],
-						}
-					}
-				}
-			}
 
-			// Theme Initialization
-			if (localStorage.theme === 'light' || (!('theme' in localStorage) && window.matchMedia('(prefers-color-scheme: light)').matches)) {
-				document.documentElement.classList.add('light')
-			} else {
-				document.documentElement.classList.remove('light')
-			}
+		<!-- Third-party -->
+		<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js" is:inline></script>
+		<script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js" is:inline defer></script>
+		<link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet" />
+		<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet" />
+
+		<!-- JS Helpers -->
+		<script src="/js/utils.js" type="module"></script>
+		<script src="/js/api.js" type="module"></script>
+		<script src="/js/ws.js" type="module"></script>
+		<script src="/js/scan-client.js" type="module"></script>
+
+		<script is:inline>
+			(function() {
+				const theme = localStorage.getItem('hackit_theme');
+				if (theme === 'light') {
+					document.documentElement.classList.remove('dark');
+					document.documentElement.classList.add('light');
+				} else if (theme === 'dark' || !window.matchMedia('(prefers-color-scheme: light)').matches) {
+					document.documentElement.classList.remove('light');
+					document.documentElement.classList.add('dark');
+				} else {
+					document.documentElement.classList.remove('dark');
+					document.documentElement.classList.add('light');
+				}
+			})();
 		</script>
-		<!-- Chart.js -->
-		<script src="https://cdn.jsdelivr.net/npm/chart.js" is:inline></script>
-		<!-- Vis Network for Graphs -->
-		<script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js" is:inline></script>
-		<link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet" />
-		<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet" />
 	</head>
-	<body class="bg-sf-lightbg text-sf-text overflow-x-hidden font-sans text-sm h-screen flex flex-col transition-colors duration-300">
-		<!-- Top Navigation Bar (Industrial Clean Style) -->
-		<header class="bg-sf-lightbg/90 backdrop-blur-md border-b border-sf-border text-sf-text z-50 sticky top-0">
-			<div class="px-8 h-16 flex items-center justify-between">
-				<!-- Left side -->
-				<div class="flex items-center gap-10">
-					<div class="flex items-center gap-3">
-						<div class="p-1.5 bg-sf-card border border-sf-border rounded-md shadow-sm">
-							<svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5 text-sf-text" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+	<body class="bg-sf-lightbg text-sf-text overflow-x-hidden text-sm h-screen flex flex-col">
+		<!-- Navbar -->
+		<header class="bg-sf-lightbg/80 backdrop-blur-lg border-b border-sf-border sticky top-0 z-50">
+			<div class="px-6 h-14 flex items-center justify-between max-w-7xl mx-auto w-full">
+				<div class="flex items-center gap-8">
+					<a href="/" class="flex items-center gap-2.5">
+						<div class="p-1.5 bg-sf-card border border-sf-border rounded-lg">
+							<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
 						</div>
-						<span class="text-lg font-semibold tracking-tight text-sf-text">HackIT <span class="font-normal text-sf-muted">OSINT</span></span>
-					</div>
-					
-					<nav class="hidden lg:flex items-center gap-2">
-						<a href="/" class="px-4 py-2 hover:bg-sf-card rounded-full flex items-center gap-2 text-sm font-medium transition-all hover:text-sf-tabActive group">
-							<i class="fas fa-rocket opacity-70 group-hover:scale-110 transition-transform"></i> Launch Pad
-						</a>
-						<a href="/intelligence" class="px-4 py-2 hover:bg-sf-card rounded-full flex items-center gap-2 text-sm font-medium transition-all hover:text-sf-tabActive group">
-							<i class="fas fa-brain opacity-70 group-hover:scale-110 transition-transform"></i> Intelligence
-						</a>
-						<a href="/settings" class="px-4 py-2 hover:bg-sf-card rounded-full flex items-center gap-2 text-sm font-medium transition-all hover:text-sf-tabActive group">
-							<i class="fas fa-cog opacity-70 group-hover:scale-110 transition-transform"></i> Settings
-						</a>
+						<span class="text-base font-semibold tracking-tight">HackIT <span class="font-normal text-sf-muted">OSINT</span></span>
+					</a>
+					<nav class="hidden md:flex items-center gap-1">
+						{[
+							{ href: '/', label: 'Launch Pad', icon: 'fa-rocket' },
+							{ href: '/intelligence', label: 'Intelligence', icon: 'fa-brain' },
+							{ href: '/scans', label: 'Scans', icon: 'fa-list' },
+							{ href: '/settings', label: 'Settings', icon: 'fa-cog' },
+						].map(item => (
+							<a href={item.href}
+								class:list={[
+									'px-3.5 py-1.5 rounded-lg flex items-center gap-2 text-sm font-medium transition-all',
+									currentPath === item.href
+										? 'bg-sf-card text-sf-tabActive'
+										: 'text-sf-muted hover:text-sf-text hover:bg-sf-card/50'
+								]}>
+								<i class={`fas ${item.icon} text-xs opacity-70`}></i>
+								{item.label}
+							</a>
+						))}
 					</nav>
 				</div>
-
-				<!-- Right side -->
-				<div class="flex items-center gap-4">
-					<!-- Theme Toggle -->
-					<button id="theme-toggle" class="w-9 h-9 rounded-md border border-sf-border bg-sf-card flex items-center justify-center hover:border-sf-muted transition-all">
+				<div class="flex items-center gap-3">
+					<button id="theme-toggle" class="w-8 h-8 rounded-lg border border-sf-border bg-sf-card flex items-center justify-center hover:border-sf-muted transition-all text-xs">
 						<i class="fas fa-moon dark:hidden"></i>
-						<i class="fas fa-sun hidden dark:block text-yellow-500"></i>
+						<i class="fas fa-sun hidden dark:block text-yellow-400"></i>
 					</button>
-
-					<div class="h-8 w-px bg-sf-border mx-2"></div>
-					<button class="px-4 py-2 bg-sf-card hover:bg-sf-border border border-sf-border rounded-lg flex items-center gap-2 text-sm font-medium transition-all shadow-sm">
-						<div class="w-2 h-2 rounded-full bg-sf-green animate-pulse"></div>
-						Engine: Online
-					</button>
-					<button class="w-10 h-10 rounded-full bg-sf-accent/20 border border-sf-accent/30 flex items-center justify-center text-sf-accent hover:bg-sf-accent hover:text-white transition-all">
+					<div class="h-6 w-px bg-sf-border"></div>
+					<div class="flex items-center gap-2 px-3 py-1.5 bg-sf-card border border-sf-border rounded-lg text-xs">
+						<div class="w-1.5 h-1.5 rounded-full bg-sf-green animate-pulse"></div>
+						<span class="text-sf-muted">Online</span>
+					</div>
+					<button class="w-8 h-8 rounded-full bg-sf-accent/20 border border-sf-accent/30 flex items-center justify-center text-sf-accent hover:bg-sf-accent hover:text-white transition-all text-xs">
 						<i class="fas fa-user-secret"></i>
 					</button>
 				</div>
 			</div>
 		</header>
 
-		<!-- Main Content Area -->
-		<main class="flex-1 overflow-y-auto p-0">
+		<!-- Mobile Nav -->
+		<nav class="md:hidden flex items-center gap-1 px-4 py-2 border-b border-sf-border bg-sf-lightbg/80 backdrop-blur-lg overflow-x-auto">
+			{[
+				{ href: '/', label: 'Launch', icon: 'fa-rocket' },
+				{ href: '/intelligence', label: 'Intel', icon: 'fa-brain' },
+				{ href: '/scans', label: 'Scans', icon: 'fa-list' },
+				{ href: '/settings', label: 'Settings', icon: 'fa-cog' },
+			].map(item => (
+				<a href={item.href}
+					class:list={[
+						'px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-all',
+						currentPath === item.href
+							? 'bg-sf-card text-sf-tabActive'
+							: 'text-sf-muted hover:text-sf-text'
+					]}>
+					<i class={`fas ${item.icon} mr-1.5`}></i>
+					{item.label}
+				</a>
+			))}
+		</nav>
+
+		<!-- Main -->
+		<main class="flex-1 overflow-y-auto">
 			<slot />
 		</main>
 
-		<!-- Page Transition Overlay -->
-		<div id="page-transition" class="fixed inset-0 z-[9999] pointer-events-none bg-sf-lightbg opacity-0"></div>
-
-		<!-- Copyright Footer -->
-		<footer class="border-t border-sf-border bg-sf-lightbg/80 backdrop-blur-sm py-3 px-8 text-center">
-			<p class="text-[11px] text-sf-muted tracking-wider">
-				&copy; 2026 <a href="https://haniipp.space" target="_blank" class="text-sf-tabActive hover:underline font-medium">Hanif Abdurrohim</a> &mdash; Built with experience, for the security community.
+		<!-- Footer -->
+		<footer class="border-t border-sf-border bg-sf-lightbg/50 py-2.5 px-6 text-center">
+			<p class="text-[10px] text-sf-muted tracking-wider">
+				&copy; 2026 <a href="https://haniipp.space" target="_blank" class="text-sf-tabActive hover:underline">Hanif Abdurrohim</a>
+				&mdash; Built for the security community.
 			</p>
 		</footer>
 
-		<!-- Cookie Consent Banner -->
-		<div id="cookie-banner" class="fixed bottom-6 left-1/2 -translate-x-1/2 z-[999] max-w-2xl w-[90%] bg-sf-card border border-sf-border rounded-2xl shadow-2xl p-5 hidden transition-all duration-500">
-			<div class="flex items-start gap-4">
-				<div class="w-10 h-10 rounded-full bg-sf-tabActive/10 flex items-center justify-center flex-shrink-0">
-					<svg class="w-5 h-5 text-sf-tabActive" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+		<!-- Cookie Banner -->
+		<div id="cookie-banner" class="fixed bottom-4 left-1/2 -translate-x-1/2 z-[999] max-w-lg w-[92%] bg-sf-card border border-sf-border rounded-xl shadow-2xl p-4 hidden">
+			<div class="flex items-center gap-3">
+				<div class="w-8 h-8 rounded-full bg-sf-tabActive/10 flex items-center justify-center shrink-0">
+					<svg class="w-4 h-4 text-sf-tabActive" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
 				</div>
-				<div class="flex-1">
-					<p class="text-xs text-sf-text leading-relaxed">
-						<strong class="text-sf-tabActive">Hi, I am Hanif Abdurrohim</strong> as the developer. This tool is built legally based on hands-on experience and real-world cybersecurity expertise. Use responsibly and only on targets you own or have explicit permission to test.
-					</p>
-				</div>
-				<button id="cookie-accept" class="flex-shrink-0 px-5 py-2 bg-sf-tabActive text-black text-xs font-bold rounded-lg hover:opacity-90 transition-all uppercase tracking-wider">
-					Acknowledge
+				<p class="text-xs text-sf-muted leading-relaxed flex-1">
+					Built by <strong class="text-sf-tabActive">Hanif Abdurrohim</strong>. Use responsibly on authorized targets only.
+				</p>
+				<button id="cookie-accept" class="shrink-0 px-4 py-1.5 bg-sf-tabActive text-black text-xs font-bold rounded-lg hover:opacity-90 transition-all">
+					OK
 				</button>
 			</div>
 		</div>
 
 		<script is:inline>
-			// Theme Toggle
-			const themeToggle = document.getElementById('theme-toggle');
-			themeToggle.addEventListener('click', () => {
-				document.documentElement.classList.toggle('light');
-				const isLight = document.documentElement.classList.contains('light');
-				localStorage.theme = isLight ? 'light' : 'dark';
+			// Theme toggle
+			document.getElementById('theme-toggle')?.addEventListener('click', () => {
+				const isLight = document.documentElement.classList.toggle('light');
+				document.documentElement.classList.toggle('dark', !isLight);
+				localStorage.setItem('hackit_theme', isLight ? 'light' : 'dark');
 			});
-			// Cookie Banner
+
+			// Cookie banner
 			(function() {
 				const banner = document.getElementById('cookie-banner');
-				const acceptBtn = document.getElementById('cookie-accept');
-				if (!localStorage.getItem('hackit_cookie_consent')) {
-					setTimeout(() => banner.classList.remove('hidden'), 500);
+				const btn = document.getElementById('cookie-accept');
+				if (banner && btn) {
+					if (!localStorage.getItem('hackit_consent')) {
+						setTimeout(() => banner.classList.remove('hidden'), 600);
+					}
+					btn.addEventListener('click', () => {
+						localStorage.setItem('hackit_consent', '1');
+						banner.style.opacity = '0';
+						setTimeout(() => banner.classList.add('hidden'), 300);
+					});
 				}
-				acceptBtn.addEventListener('click', () => {
-					localStorage.setItem('hackit_cookie_consent', 'acknowledged');
-					banner.classList.add('opacity-0');
-					setTimeout(() => banner.classList.add('hidden'), 300);
-				});
 			})();
-			// GSAP Page Entry Animation
+
+			// GSAP entry animations
 			window.addEventListener('load', () => {
 				if (typeof gsap !== 'undefined') {
-					gsap.from('main', { opacity: 0, y: 20, duration: 0.8, ease: 'power3.out' });
-					gsap.from('header', { opacity: 0, y: -10, duration: 0.6, delay: 0.1, ease: 'power2.out' });
-					gsap.from('footer', { opacity: 0, duration: 0.5, delay: 0.3 });
+					gsap.from('main > *', { opacity: 0, y: 16, duration: 0.6, ease: 'power2.out', stagger: 0.05 });
 				}
-			});
-			// Premium card hover effects
-			document.addEventListener('DOMContentLoaded', () => {
-				document.querySelectorAll('.bg-sf-card').forEach(card => {
-					card.addEventListener('mouseenter', () => {
-						if (typeof gsap !== 'undefined') {
-							gsap.to(card, { borderColor: 'rgba(56, 189, 248, 0.3)', duration: 0.3 });
-						}
-					});
-					card.addEventListener('mouseleave', () => {
-						if (typeof gsap !== 'undefined') {
-							gsap.to(card, { borderColor: 'var(--color-border)', duration: 0.3 });
-						}
-					});
-				});
-				// Nav link hover glow
-				document.querySelectorAll('nav a').forEach(link => {
-					link.addEventListener('mouseenter', () => {
-						if (typeof gsap !== 'undefined') {
-							gsap.to(link.querySelector('i'), { scale: 1.2, duration: 0.2 });
-						}
-					});
-					link.addEventListener('mouseleave', () => {
-						if (typeof gsap !== 'undefined') {
-							gsap.to(link.querySelector('i'), { scale: 1, duration: 0.2 });
-						}
-					});
-				});
 			});
 		</script>
 	</body>
 </html>
-
-<style is:global>
-	@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-	
-	:root {
-		--color-bg-primary: #0A0A0A;
-		--color-bg-secondary: #000000;
-		--color-bg-card: #111111;
-		--color-text-primary: #EDEDED;
-		--color-text-muted: #888888;
-		--color-border: #222222;
-	}
-
-	:root.light {
-		--color-bg-primary: #F8FAFC;
-		--color-bg-secondary: #FFFFFF;
-		--color-bg-card: #F1F5F9;
-		--color-text-primary: #0F172A;
-		--color-text-muted: #64748B;
-		--color-border: #E2E8F0;
-	}
-	
-	/* Smooth Scrollbar */
-	::-webkit-scrollbar {
-		width: 8px;
-		height: 8px;
-	}
-	::-webkit-scrollbar-track {
-		background: var(--color-bg-secondary);
-	}
-	::-webkit-scrollbar-thumb {
-		background: var(--color-border);
-		border-radius: 4px;
-	}
-	::-webkit-scrollbar-thumb:hover {
-		background: var(--color-text-muted);
-	}
-
-	body {
-		background-color: var(--color-bg-secondary);
-		color: var(--color-text-primary);
-	}
-
-	/* Dark mode overrides for Tailwind dark: classes */
-	.light .dark\:hidden { display: block !important; }
-	.light .dark\:block { display: none !important; }
-	
-	/* Fallback if not using .dark class on html but using .light */
-	html:not(.light) .dark\:hidden { display: none !important; }
-	html:not(.light) .dark\:block { display: block !important; }
-
-	/* Premium Glass Effect */
-	.glass {
-		background: rgba(17, 17, 17, 0.6);
-		backdrop-filter: blur(20px);
-		-webkit-backdrop-filter: blur(20px);
-		border: 1px solid rgba(255, 255, 255, 0.05);
-	}
-	.light .glass {
-		background: rgba(255, 255, 255, 0.7);
-		border: 1px solid rgba(0, 0, 0, 0.05);
-	}
-
-	/* Premium Gradient Borders */
-	.gradient-border {
-		position: relative;
-	}
-	.gradient-border::before {
-		content: '';
-		position: absolute;
-		inset: 0;
-		border-radius: inherit;
-		padding: 1px;
-		background: linear-gradient(135deg, rgba(56, 189, 248, 0.5), rgba(99, 102, 241, 0.5));
-		-webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
-		-webkit-mask-composite: xor;
-		mask-composite: exclude;
-		pointer-events: none;
-	}
-
-	/* Smooth glow on active elements */
-	.glow-hover:hover {
-		box-shadow: 0 0 20px rgba(56, 189, 248, 0.15);
-	}
-
-	/* Premium text gradient */
-	.text-gradient {
-		background: linear-gradient(135deg, #38BDF8, #818CF8);
-		-webkit-background-clip: text;
-		-webkit-text-fill-color: transparent;
-		background-clip: text;
-	}
-
-	/* Smooth transitions for all interactive elements */
-	a, button, input, select {
-		transition: all 0.2s ease;
-	}
-
-	/* Card premium hover */
-	.card-premium {
-		transition: transform 0.3s ease, box-shadow 0.3s ease, border-color 0.3s ease;
-	}
-	.card-premium:hover {
-		transform: translateY(-2px);
-		box-shadow: 0 8px 30px rgba(0, 0, 0, 0.3);
-	}
-	.light .card-premium:hover {
-		box-shadow: 0 8px 30px rgba(0, 0, 0, 0.1);
-	}
-
-	/* Animated gradient border for active elements */
-	@keyframes borderGlow {
-		0%, 100% { border-color: rgba(56, 189, 248, 0.3); }
-		50% { border-color: rgba(56, 189, 248, 0.6); }
-	}
-	.border-glow {
-		animation: borderGlow 2s ease-in-out infinite;
-	}
-</style>

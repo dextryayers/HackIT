@@ -1,4 +1,4 @@
-from fastapi import FastAPI, BackgroundTasks, HTTPException, Query
+from fastapi import FastAPI, BackgroundTasks, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
@@ -39,6 +39,22 @@ app.add_middleware(
 
 jobs: Dict[str, ScanJob] = {}
 
+class ConnectionManager:
+    def __init__(self):
+        self.active: Dict[str, list[WebSocket]] = {}
+    async def connect(self, ws: WebSocket, scan_id: str):
+        await ws.accept()
+        self.active.setdefault(scan_id, []).append(ws)
+    def disconnect(self, ws: WebSocket, scan_id: str):
+        if scan_id in self.active:
+            self.active[scan_id] = [w for w in self.active[scan_id] if w != ws]
+    async def broadcast(self, scan_id: str, msg: dict):
+        for ws in self.active.get(scan_id, []):
+            try: await ws.send_json(msg)
+            except: pass
+
+manager = ConnectionManager()
+
 # ─────────────────────────────────────────────
 #  HEALTH
 # ─────────────────────────────────────────────
@@ -60,6 +76,7 @@ async def ping():
 async def run_scan_task(job_id: str, target: str, target_type: str):
     job = jobs[job_id]
     start_time = time.time()
+    await manager.broadcast(job_id, {"type": "scan_start", "job_id": job_id, "target": target})
     try:
         findings, summary, logs = await run_modular_scan(
             target, target_type, job.live_logs,
@@ -81,9 +98,25 @@ async def run_scan_task(job_id: str, target: str, target_type: str):
         job.summary = summary
         job.status = "Completed"
         job.duration = f"{round(time.time() - start_time, 2)}s"
+        await manager.broadcast(job_id, {"type": "scan_done", "job_id": job_id, "findings": len(findings), "duration": job.duration})
     except Exception as e:
         job.status = "Error"
         print(f"Modular Scan Error: {str(e)}")
+        await manager.broadcast(job_id, {"type": "scan_error", "job_id": job_id, "error": str(e)})
+
+@app.websocket("/ws")
+async def websocket_endpoint(ws: WebSocket, scan_id: str = ""):
+    await manager.connect(ws, scan_id)
+    try:
+        while True:
+            data = await ws.receive_text()
+            msg = json.loads(data)
+            if msg.get("type") == "ping":
+                await ws.send_json({"type": "pong"})
+    except WebSocketDisconnect:
+        manager.disconnect(ws, scan_id)
+    except Exception:
+        manager.disconnect(ws, scan_id)
 
 
 @app.get("/api/job-by-target")

@@ -3,125 +3,218 @@ import Layout from '../layouts/Layout.astro';
 ---
 
 <Layout title="HackIT OSINT | Launch Pad">
-	<div class="max-w-5xl mx-auto p-12 space-y-10">
-		<header class="space-y-2">
-			<h2 class="text-3xl font-semibold text-sf-text tracking-tight">HackIT Command Center</h2>
-			<p class="text-sf-muted text-sm">Initialize industrial-grade intelligence gathering against your target.</p>
-		</header>
+	<div class="max-w-4xl mx-auto px-6 py-10 space-y-8">
+		<!-- Header -->
+		<div class="space-y-1">
+			<h1 class="text-2xl font-bold tracking-tight">Launch Pad</h1>
+			<p class="text-sm text-sf-muted">Initialize OSINT reconnaissance against your target.</p>
+		</div>
 
-		<div class="bg-sf-card border border-sf-border rounded-xl p-10 relative overflow-hidden group">
-			
-			<div class="max-w-3xl space-y-8 relative z-10">
-				<!-- Scan Target -->
-				<div class="space-y-3">
-					<label class="flex items-center gap-2 font-medium text-sm text-sf-text">
+		<!-- Scan Card -->
+		<div class="bg-sf-card border border-sf-border rounded-xl p-8 card-hover">
+			<div class="space-y-6">
+				<!-- Target Input -->
+				<div class="space-y-2">
+					<label for="target-input" class="text-sm font-medium flex items-center gap-2">
+						<i class="fas fa-crosshairs text-sf-tabActive text-xs"></i>
 						Target Identifier
 					</label>
 					<div class="relative">
-						<input 
-							type="text" 
+						<input
 							id="target-input"
-							placeholder="domain.com, IP, or Email" 
-							class="w-full bg-sf-lightbg border border-sf-border rounded-md px-4 py-3 text-sm text-sf-text focus:outline-none focus:border-sf-muted focus:ring-1 focus:ring-sf-muted transition-all placeholder:text-sf-muted/50"
+							type="text"
+							placeholder="domain.com, IP address, or email@example.com"
+							class="w-full bg-sf-lightbg border border-sf-border rounded-lg px-4 py-2.5 text-sm text-sf-text placeholder:text-sf-muted/40 focus:outline-none focus:border-sf-tabActive/50 focus:ring-1 focus:ring-sf-tabActive/20 transition-all"
 						/>
-						<div class="absolute right-4 top-1/2 -translate-y-1/2 text-sf-muted/30 pointer-events-none">
-							<i class="fas fa-keyboard"></i>
-						</div>
 					</div>
-					<p class="text-xs text-sf-muted flex items-center gap-2">
-						<i class="fas fa-info-circle opacity-50"></i> Supports Domains, IPv4/v6, Subnets, and Email addresses.
+					<p class="text-xs text-sf-muted flex items-center gap-1.5">
+						<i class="fas fa-info-circle opacity-50"></i>
+						Supports domains, IPv4/v6, subnets, and email addresses.
 					</p>
 				</div>
 
-				<!-- Scan Options -->
-				<div class="space-y-4 pt-2">
-					<label class="flex items-center gap-2 font-medium text-sm text-sf-text">
-						Mission Strategy
+				<!-- Scan Mode -->
+				<div class="space-y-3">
+					<label class="text-sm font-medium flex items-center gap-2">
+						<i class="fas fa-sliders-h text-sf-tabActive text-xs"></i>
+						Scan Mode
 					</label>
-					
-					<div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-						<!-- Option 1 -->
-						<label class="border border-sf-text bg-sf-lightbg rounded-md p-4 cursor-pointer flex flex-col gap-2 relative transition-all">
-							<div class="flex items-center justify-between">
-								<span class="font-semibold text-sm text-sf-text">HackIT Full Scan</span>
-								<input type="radio" name="scantype" checked class="w-4 h-4 accent-sf-text" />
-							</div>
-							<p class="text-[11px] text-sf-muted leading-relaxed">Engage all 100+ OSINT modules for total infrastructure transparency.</p>
-						</label>
-						
-						<!-- Option 2 -->
-						<label class="border border-sf-border bg-sf-lightbg hover:border-sf-muted rounded-md p-4 cursor-pointer flex flex-col gap-2 transition-all">
-							<div class="flex items-center justify-between">
-								<span class="font-medium text-sm text-sf-text">Passive Stealth</span>
-								<input type="radio" name="scantype" class="w-4 h-4 accent-sf-text" />
-							</div>
-							<p class="text-[11px] text-sf-muted leading-relaxed">Zero-touch reconnaissance using only third-party data aggregators.</p>
-						</label>
-
-						<!-- Option 3 -->
-						<label class="border border-sf-border bg-sf-lightbg hover:border-sf-muted rounded-md p-4 cursor-pointer flex flex-col gap-2 transition-all">
-							<div class="flex items-center justify-between">
-								<span class="font-medium text-sm text-sf-text">Threat Hunt</span>
-								<input type="radio" name="scantype" class="w-4 h-4 accent-sf-text" />
-							</div>
-							<p class="text-[11px] text-sf-muted leading-relaxed">Focus exclusively on data breaches, malware, and C2 infrastructure.</p>
-						</label>
+					<div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+						{[ 
+							{ id: 'full', label: 'Full Scan', desc: '100+ OSINT modules for total infrastructure discovery.', icon: 'fa-radiation' },
+							{ id: 'passive', label: 'Passive', desc: 'Zero-touch recon using third-party data only.', icon: 'fa-eye-slash' },
+							{ id: 'threat', label: 'Threat Hunt', desc: 'Focus on breaches, malware, and C2 infra.', icon: 'fa-skull' },
+						].map(mode => (
+							<label class="flex cursor-pointer border rounded-lg p-3.5 transition-all card-hover border-sf-border bg-sf-lightbg has-[:checked]:border-sf-tabActive has-[:checked]:bg-sf-tabActive/5">
+								<div class="flex flex-col gap-1.5 w-full">
+									<div class="flex items-center justify-between">
+										<span class="text-sm font-medium">{mode.label}</span>
+										<input type="radio" name="scanmode" value={mode.id} checked={mode.id === 'full'} class="accent-sf-tabActive" />
+									</div>
+									<p class="text-[11px] text-sf-muted leading-relaxed">{mode.desc}</p>
+								</div>
+							</label>
+						))}
 					</div>
 				</div>
 
 				<!-- Actions -->
-				<div class="pt-6 flex items-center gap-4 border-t border-sf-border">
-					<button id="run-scan-btn" class="bg-sf-text text-sf-lightbg hover:bg-white px-6 py-2.5 rounded-md text-sm font-medium transition-all flex items-center gap-2">
+				<div class="flex items-center gap-3 pt-2 border-t border-sf-border">
+					<button id="run-scan-btn" class="inline-flex items-center gap-2 px-5 py-2 bg-sf-tabActive text-black text-sm font-semibold rounded-lg hover:brightness-110 transition-all">
+						<i class="fas fa-play text-xs"></i>
 						Initiate Scan
 					</button>
-					<button id="verbose-scan-btn" class="bg-sf-card border border-sf-border text-sf-text hover:border-sf-muted px-6 py-2.5 rounded-md text-sm font-medium transition-all flex items-center gap-2">
-						Launch Verbose
+					<button id="verbose-scan-btn" class="inline-flex items-center gap-2 px-5 py-2 bg-sf-card border border-sf-border text-sf-text text-sm font-medium rounded-lg hover:border-sf-muted transition-all">
+						<i class="fas fa-terminal text-xs"></i>
+						Verbose
 					</button>
-					<button class="text-sf-muted hover:text-sf-text text-sm transition-colors font-medium">
-						Advanced Config
+					<button id="adv-settings-btn" class="text-sm text-sf-muted hover:text-sf-text transition-colors font-medium ml-auto">
+						<i class="fas fa-cog mr-1.5"></i>
+						Advanced
 					</button>
 				</div>
 			</div>
 		</div>
+
+		<!-- Stats row -->
+		<div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+			{[ 
+				{ label: 'Modules', value: '100+', icon: 'fa-puzzle-piece' },
+				{ label: 'Scans Today', value: '—', icon: 'fa-chart-line' },
+				{ label: 'Findings', value: '—', icon: 'fa-bolt' },
+				{ label: 'Engine', value: 'v3.0', icon: 'fa-code-branch' },
+			].map(stat => (
+				<div class="bg-sf-card border border-sf-border rounded-lg p-4 flex items-center gap-3">
+					<div class="w-9 h-9 rounded-lg bg-sf-tabActive/10 flex items-center justify-center text-sf-tabActive text-xs shrink-0">
+						<i class={`fas ${stat.icon}`}></i>
+					</div>
+					<div>
+						<p class="text-xs text-sf-muted">{stat.label}</p>
+						<p class="text-lg font-bold">{stat.value}</p>
+					</div>
+				</div>
+			))}
+		</div>
 	</div>
 
-	<script is:inline>
-		const runBtn = document.getElementById('run-scan-btn');
-		const verboseBtn = document.getElementById('verbose-scan-btn');
-		const targetInput = document.getElementById('target-input');
-		
-		function validateAndRun(redirectPath) {
-			const target = targetInput.value.trim();
-			if (!target) {
-				targetInput.focus();
-				targetInput.classList.add('border-red-500', 'ring-2', 'ring-red-500/20');
-				setTimeout(() => targetInput.classList.remove('border-red-500', 'ring-2', 'ring-red-500/20'), 2000);
-				return;
-			}
-			
-			window.location.href = `${redirectPath}?target=${encodeURIComponent(target)}`;
+	<!-- Scan Settings Drawer -->
+	<div id="settings-drawer-overlay" class="fixed inset-0 z-[100] bg-black/60 backdrop-blur-sm hidden transition-opacity duration-300" onclick="closeSettings()"></div>
+	<div id="settings-drawer" class="fixed top-0 right-0 z-[101] h-full w-full max-w-md bg-sf-card border-l border-sf-border shadow-2xl transform translate-x-full transition-transform duration-300 overflow-y-auto">
+		<div class="p-6 space-y-6">
+			<div class="flex items-center justify-between">
+				<h3 class="text-sm font-semibold flex items-center gap-2"><i class="fas fa-cog text-sf-tabActive"></i> Scan Settings</h3>
+				<button onclick="closeSettings()" class="w-7 h-7 rounded-lg border border-sf-border flex items-center justify-center hover:bg-sf-lightbg transition-all"><i class="fas fa-times text-xs"></i></button>
+			</div>
+			<div class="space-y-4">
+				<div><label class="text-xs font-medium text-sf-muted block mb-1.5">Depth</label>
+					<select id="adv-depth" class="w-full bg-sf-lightbg border border-sf-border rounded-lg px-3 py-2 text-xs">
+						<option value="quick">Quick (fast)</option><option value="normal">Normal</option><option value="deep" selected>Deep (thorough)</option><option value="exhaustive">Exhaustive (max)</option>
+					</select>
+				</div>
+				<div><label class="text-xs font-medium text-sf-muted block mb-1.5">Sniper Ratio</label>
+					<select id="adv-sniper" class="w-full bg-sf-lightbg border border-sf-border rounded-lg px-3 py-2 text-xs">
+						<option value="stealth">Stealth</option><option value="balanced">Balanced</option><option value="max" selected>Max (aggressive)</option>
+					</select>
+				</div>
+				<div><label class="text-xs font-medium text-sf-muted block mb-1.5">Timeout (seconds)</label>
+					<input type="number" id="adv-timeout" value="15" min="5" max="300" class="w-full bg-sf-lightbg border border-sf-border rounded-lg px-3 py-2 text-xs" />
+				</div>
+				<div><label class="text-xs font-medium text-sf-muted block mb-1.5">Max Findings</label>
+					<input type="number" id="adv-maxfindings" value="5000" min="100" max="999999" class="w-full bg-sf-lightbg border border-sf-border rounded-lg px-3 py-2 text-xs" />
+				</div>
+				<div><label class="text-xs font-medium text-sf-muted block mb-1.5">Verbosity</label>
+					<select id="adv-verbose" class="w-full bg-sf-lightbg border border-sf-border rounded-lg px-3 py-2 text-xs">
+						<option value="0">Minimal</option><option value="1" selected>Normal</option><option value="2">Verbose</option><option value="3">Debug</option>
+					</select>
+				</div>
+				<div class="space-y-2">
+					<label class="text-xs font-medium text-sf-muted">Module Categories</label>
+					<div id="adv-modules" class="space-y-1.5 max-h-48 overflow-y-auto">
+						{[['dns_domain','DNS & Domain'],['web_server','Web & Server'],['email_osint','Email OSINT'],['people_social','People & Social'],['cloud_infrastructure','Cloud & Infrastructure'],['threat_leaks','Threat & Leaks'],['historical_archive','Historical & Archive'],['geolocation_network','Geolocation & Network']].map(([k,v]) => (
+							<label class="flex items-center gap-2 text-xs cursor-pointer"><input type="checkbox" value={k} checked class="accent-sf-tabActive" />{v}</label>
+						))}
+					</div>
+				</div>
+				<div class="space-y-1.5">
+					<label class="text-xs font-medium text-sf-muted">Toggles</label>
+					{[['stealth','Stealth Mode'],['verify','Verify Findings'],['correlation','Correlation Engine'],['passive','Passive Only']].map(([k,v]) => (
+						<label class="flex items-center justify-between text-xs cursor-pointer"><span>{v}</span><input type="checkbox" data-toggle={k} checked class="accent-sf-tabActive" /></label>
+					))}
+				</div>
+				<button onclick="saveAdvSettings()" class="w-full py-2 bg-sf-tabActive text-black text-xs font-bold rounded-lg hover:brightness-110 transition-all">Save Settings</button>
+			</div>
+		</div>
+	</div>
+
+	<script>
+		function openSettings() {
+			const saved = localStorage.getItem('hackit_scan_settings');
+			if (saved) try {
+				const s = JSON.parse(saved);
+				if (s.depth) document.getElementById('adv-depth').value = s.depth;
+				if (s.sniperRatio) document.getElementById('adv-sniper').value = s.sniperRatio;
+				if (s.timeout) document.getElementById('adv-timeout').value = s.timeout;
+				if (s.maxFindings) document.getElementById('adv-maxfindings').value = s.maxFindings;
+				if (s.verbose !== undefined) document.getElementById('adv-verbose').value = s.verbose;
+				if (s.modules) {
+					document.querySelectorAll('#adv-modules input[type="checkbox"]').forEach(cb => {
+						cb.checked = !!s.modules[cb.value];
+					});
+				}
+				if (s.toggles) {
+					document.querySelectorAll('[data-toggle]').forEach(cb => {
+						cb.checked = !!s.toggles[cb.dataset.toggle];
+					});
+				}
+			} catch(e) {}
+			document.getElementById('settings-drawer').classList.remove('translate-x-full');
+			document.getElementById('settings-drawer-overlay').classList.remove('hidden');
+		}
+		function closeSettings() {
+			document.getElementById('settings-drawer').classList.add('translate-x-full');
+			document.getElementById('settings-drawer-overlay').classList.add('hidden');
+		}
+		function saveAdvSettings() {
+			let existing = {};
+			try { existing = JSON.parse(localStorage.getItem('hackit_scan_settings')) || {}; } catch {}
+			Object.assign(existing, {
+				depth: document.getElementById('adv-depth').value,
+				sniperRatio: document.getElementById('adv-sniper').value,
+				timeout: parseInt(document.getElementById('adv-timeout').value) || 15,
+				maxFindings: parseInt(document.getElementById('adv-maxfindings').value) || 5000,
+				verbose: parseInt(document.getElementById('adv-verbose').value) || 1,
+				modules: Object.fromEntries([...document.querySelectorAll('#adv-modules input[type="checkbox"]')].map(cb => [cb.value, cb.checked])),
+				toggles: Object.fromEntries([...document.querySelectorAll('[data-toggle]')].map(cb => [cb.dataset.toggle, cb.checked])),
+			});
+			localStorage.setItem('hackit_scan_settings', JSON.stringify(existing));
+			closeSettings();
 		}
 
-		runBtn.addEventListener('click', () => validateAndRun('/intelligence'));
-		verboseBtn.addEventListener('click', () => validateAndRun('/log'));
-
-		// Radio selection visual feedback
-		const radios = document.querySelectorAll('input[name="scantype"]');
-		radios.forEach(radio => {
-			radio.addEventListener('change', (e) => {
-				document.querySelectorAll('input[name="scantype"]').forEach(r => {
-					r.closest('label').classList.remove('border-sf-text');
-					r.closest('label').classList.add('border-sf-border');
-					r.querySelector('span').classList.remove('font-semibold');
-					r.querySelector('span').classList.add('font-medium');
-				});
-				if (e.target.checked) {
-					e.target.closest('label').classList.remove('border-sf-border');
-					e.target.closest('label').classList.add('border-sf-text');
-					e.target.closest('label').querySelector('span').classList.remove('font-medium');
-					e.target.closest('label').querySelector('span').classList.add('font-semibold');
-				}
-			});
+		document.getElementById('run-scan-btn')?.addEventListener('click', () => {
+			const target = document.getElementById('target-input')?.value?.trim();
+			if (!target) {
+				const input = document.getElementById('target-input');
+				input?.classList.add('border-red-500', 'ring-2', 'ring-red-500/20');
+				input?.focus();
+				setTimeout(() => input?.classList.remove('border-red-500', 'ring-2', 'ring-red-500/20'), 2000);
+				return;
+			}
+			window.location.href = `/intelligence?target=${encodeURIComponent(target)}`;
 		});
+		document.getElementById('verbose-scan-btn')?.addEventListener('click', () => {
+			const target = document.getElementById('target-input')?.value?.trim();
+			if (!target) {
+				const input = document.getElementById('target-input');
+				input?.classList.add('border-red-500', 'ring-2', 'ring-red-500/20');
+				input?.focus();
+				setTimeout(() => input?.classList.remove('border-red-500', 'ring-2', 'ring-red-500/20'), 2000);
+				return;
+			}
+			window.location.href = `/log?target=${encodeURIComponent(target)}`;
+		});
+		document.getElementById('adv-settings-btn')?.addEventListener('click', openSettings);
+
+		// Keyboard shortcut
+		document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeSettings(); });
 	</script>
 </Layout>
