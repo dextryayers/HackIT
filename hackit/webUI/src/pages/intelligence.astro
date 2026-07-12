@@ -358,13 +358,27 @@ import Layout from '../layouts/Layout.astro';
 		}
 
 		let seconds = 0;
-		setInterval(() => {
-			seconds++;
-			const h = Math.floor(seconds / 3600).toString().padStart(2, '0');
-			const m = Math.floor((seconds % 3600) / 60).toString().padStart(2, '0');
-			const s = (seconds % 60).toString().padStart(2, '0');
-			document.getElementById('scan-duration').innerText = `${h}:${m}:${s}`;
-		}, 1000);
+		let timerInterval = null;
+		function startTimer() {
+			seconds = 0;
+			if (timerInterval) clearInterval(timerInterval);
+			timerInterval = setInterval(() => {
+				seconds++;
+				const h = Math.floor(seconds / 3600).toString().padStart(2, '0');
+				const m = Math.floor((seconds % 3600) / 60).toString().padStart(2, '0');
+				const s = (seconds % 60).toString().padStart(2, '0');
+				document.getElementById('scan-duration').innerText = `${h}:${m}:${s}`;
+			}, 1000);
+		}
+		function stopTimer(duration) {
+			if (timerInterval) {
+				clearInterval(timerInterval);
+				timerInterval = null;
+			}
+			if (duration) {
+				document.getElementById('scan-duration').innerText = duration;
+			}
+		}
 
 		function destroyChart(key) {
 			if (chartInstances[key]) {
@@ -669,6 +683,7 @@ import Layout from '../layouts/Layout.astro';
 							processResults(existingJob, targetName);
 							return;
 						} else if (existingJob.status === 'Running') {
+							startTimer();
 							startPolling('/api/status', existingJob.job_id, targetName);
 							return;
 						}
@@ -722,6 +737,7 @@ import Layout from '../layouts/Layout.astro';
 					const res = await fetch(url);
 					const data = await res.json();
 					if (data.job_id) {
+						startTimer();
 						startPolling('/api/status', data.job_id, targetName);
 					}
 				} catch (err) { console.error(err); }
@@ -756,15 +772,15 @@ import Layout from '../layouts/Layout.astro';
 
 						if (job.status === 'Completed' || job.status === 'Error') {
 							clearInterval(pollingInterval);
+							stopTimer(job.duration);
 							processResults(job, targetName);
-						} else if (job.duration) {
-							document.getElementById('scan-duration').innerText = job.duration;
 						}
 					} catch (e) { console.error(e); }
 				}, 1000);
 			}
 
 			function processResults(data, targetName) {
+				stopTimer(data && data.duration);
 				const emptyOverview = document.getElementById('overview-empty');
 				if (data && data.findings && data.findings.length > 0) {
 					if (emptyOverview) emptyOverview.classList.add('hidden');
