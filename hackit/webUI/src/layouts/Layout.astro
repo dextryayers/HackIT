@@ -86,6 +86,10 @@ const currentPath = Astro.url.pathname;
 						<i class="fas fa-moon dark:hidden"></i>
 						<i class="fas fa-sun hidden dark:block text-yellow-400"></i>
 					</button>
+					<div id="navbar-clock" class="hidden md:flex items-center gap-2 px-3 py-1.5 bg-sf-card border border-sf-border rounded-lg text-xs font-mono text-sf-text">
+						<i class="fas fa-clock text-sf-muted text-[10px]"></i>
+						<span id="clock-display">--:--:--</span>
+					</div>
 					<div class="h-6 w-px bg-sf-border"></div>
 					<div class="flex items-center gap-2 px-3 py-1.5 bg-sf-card border border-sf-border rounded-lg text-xs">
 						<div class="w-1.5 h-1.5 rounded-full bg-sf-green animate-pulse"></div>
@@ -155,6 +159,24 @@ const currentPath = Astro.url.pathname;
 				document.documentElement.classList.toggle('dark', !isLight);
 				localStorage.setItem('hackit_theme', isLight ? 'light' : 'dark');
 			});
+
+			// Live clock
+			(function() {
+				const clockEl = document.getElementById('clock-display');
+				if (!clockEl) return;
+				function updateClock() {
+					const now = new Date();
+					const d = String(now.getDate()).padStart(2, '0');
+					const M = String(now.getMonth() + 1).padStart(2, '0');
+					const y = now.getFullYear();
+					const h = String(now.getHours()).padStart(2, '0');
+					const m = String(now.getMinutes()).padStart(2, '0');
+					const s = String(now.getSeconds()).padStart(2, '0');
+					clockEl.textContent = `${d}/${M}/${y} ${h}:${m}:${s}`;
+				}
+				updateClock();
+				setInterval(updateClock, 1000);
+			})();
 
 			// Cookie banner
 			(function() {

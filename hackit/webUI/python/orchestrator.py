@@ -762,7 +762,8 @@ class OSINTOrchestrator:
     def _correlate(self, findings):
         derived = []
         by_resolution, type_counts, email_domains, cloud_tags = defaultdict(list), Counter(), Counter(), Counter()
-        high_risk = []
+        high_risk, tech_stack, open_ports, cert_issuers, leak_entities = [], Counter(), defaultdict(list), Counter(), set()
+        tech_subdomains = defaultdict(set)
         for f in findings:
             type_counts[getattr(f, 'type', 'Unknown')] += 1
             resolution = getattr(f, 'resolution', '') or ''
@@ -770,22 +771,92 @@ class OSINTOrchestrator:
             ftype = getattr(f, 'type', '') or ''
             tags = getattr(f, 'tags', []) or []
             threat_level = getattr(f, 'threat_level', '') or ''
-            if resolution and ftype == "Subdomain": by_resolution[resolution].append(entity)
-            if ftype == "Email Address" and "@" in entity: email_domains[entity.split("@")[-1].lower()] += 1
+            source = getattr(f, 'source', '') or ''
+            if resolution and ftype == "Subdomain":
+                by_resolution[resolution].append(entity)
+            if ftype == "Email Address" and "@" in entity:
+                domain_part = entity.split("@")[-1].lower()
+                email_domains[domain_part] += 1
+                if threat_level in ("High Risk", "Critical"):
+                    leak_entities.add(entity)
+            if ftype in ("Web Technology", "CMS", "Web Framework") and entity:
+                for kw in ("Apache","Nginx","IIS","WordPress","Drupal","Joomla","Laravel","Django","React","Vue","Angular","Express","Flask"):
+                    if kw.lower() in entity.lower():
+                        tech_stack[kw] += 1
+                        break
+            if ftype == "Open Port":
+                parts = entity.split()
+                if parts:
+                    try:
+                        pn = int(parts[0])
+                        port_map = {21:"FTP",22:"SSH",23:"Telnet",25:"SMTP",53:"DNS",80:"HTTP",110:"POP3",
+                                    143:"IMAP",443:"HTTPS",445:"SMB",993:"IMAPS",995:"POP3S",1433:"MSSQL",
+                                    1521:"Oracle",2049:"NFS",3306:"MySQL",3389:"RDP",5432:"PostgreSQL",
+                                    5900:"VNC",6379:"Redis",8080:"HTTP-Alt",8443:"HTTPS-Alt",9090:"HTTP-Alt2",27017:"MongoDB"}
+                        svc = port_map.get(pn, "Unknown")
+                        open_ports[svc].append(entity)
+                    except ValueError:
+                        pass
             for tag in tags:
-                if tag in ("AWS","Azure","Google Cloud","Cloudflare","Vercel","Netlify","Heroku"): cloud_tags[tag] += 1
-            if threat_level in ("High Risk","Critical","Elevated Risk"): high_risk.append(f)
+                if tag in ("AWS","Azure","Google Cloud","Cloudflare","Vercel","Netlify","Heroku"):
+                    cloud_tags[tag] += 1
+                if tag == "certificate":
+                    cert_issuers[entity] += 1
+            if threat_level in ("High Risk","Critical","Elevated Risk"):
+                high_risk.append(f)
+
         for ip, hosts in by_resolution.items():
-            if len(hosts) >= 2:
-                derived.append(IntelligenceFinding(entity=f"{len(hosts)} hosts share {ip}",type="Relationship",source="Correlation Engine",confidence="High",color="purple",threat_level="Informational",status="Correlated",resolution=", ".join(sorted(hosts)[:10]),tags=["shared-infrastructure"]))
+            if len(hosts) >= 3:
+                derived.append(IntelligenceFinding(
+                    entity=f"{len(hosts)} subdomains hosted on {ip}",
+                    type="Relationship", source="Correlation Engine", confidence="High", color="purple",
+                    threat_level="Elevated Risk", status="Clustered",
+                    resolution=", ".join(sorted(hosts)[:10]),
+                    tags=["shared-infrastructure","spiderfoot"]))
+            elif len(hosts) >= 2:
+                derived.append(IntelligenceFinding(
+                    entity=f"{len(hosts)} hosts share {ip}", type="Relationship",
+                    source="Correlation Engine", confidence="High", color="purple",
+                    status="Correlated", resolution=", ".join(sorted(hosts)[:10]),
+                    tags=["shared-infrastructure"]))
         for domain, count in email_domains.items():
-            derived.append(IntelligenceFinding(entity=f"{count} email(s) for {domain}",type="Email Pattern",source="Correlation Engine",confidence="Medium",color="purple",status="Correlated",tags=["email-osint"]))
+            derived.append(IntelligenceFinding(
+                entity=f"{count} email(s) for {domain}", type="Email Pattern",
+                source="Correlation Engine", confidence="Medium", color="purple",
+                status="Correlated", tags=["email-osint","spiderfoot"]))
         for provider, count in cloud_tags.items():
-            derived.append(IntelligenceFinding(entity=f"{provider}: {count}",type="Cloud Relationship",source="Correlation Engine",confidence="High",color="orange",status="Correlated",tags=["cloud"]))
+            derived.append(IntelligenceFinding(
+                entity=f"{provider}: {count} service(s)", type="Cloud Relationship",
+                source="Correlation Engine", confidence="High", color="orange",
+                status="Correlated", tags=["cloud","spiderfoot"]))
+        for tech, count in tech_stack.most_common(8):
+            derived.append(IntelligenceFinding(
+                entity=f"{tech}: {count} detection(s)", type="Tech Pattern",
+                source="Correlation Engine", confidence="Medium", color="cyan",
+                status="Stack Identified", tags=["tech-stack","spiderfoot"]))
+        for svc, ports in open_ports.items():
+            if len(ports) >= 2:
+                derived.append(IntelligenceFinding(
+                    entity=f"{svc}: {len(ports)} instance(s)", type="Service Pattern",
+                    source="Correlation Engine", confidence="Medium", color="slate",
+                    status=f"{len(ports)} open", tags=["service-pattern","spiderfoot"]))
+        if leak_entities:
+            derived.append(IntelligenceFinding(
+                entity=f"{len(leak_entities)} breached entity(ies) detected",
+                type="Leak Correlation", source="Correlation Engine", confidence="High",
+                color="red", threat_level="High Risk", status="Confirmed",
+                tags=["leak","spiderfoot"]))
         if high_risk:
-            derived.append(IntelligenceFinding(entity=f"{len(high_risk)} high-risk signals",type="Risk Summary",source="Correlation Engine",confidence="High",color="red",threat_level="High Risk",status="Prioritize",tags=["risk"]))
+            derived.append(IntelligenceFinding(
+                entity=f"{len(high_risk)} high-risk signals across {len(set(getattr(f,'type','') for f in high_risk))} categories",
+                type="Risk Summary", source="Correlation Engine", confidence="High",
+                color="red", threat_level="High Risk", status="Prioritize", tags=["risk","spiderfoot"]))
         for ftype, count in type_counts.items():
-            if count >= 10: derived.append(IntelligenceFinding(entity=f"{count} {ftype}",type="Correlation",source="Correlation Engine",confidence="Medium",color="slate",status="Clustered",tags=["summary"]))
+            if count >= 10:
+                derived.append(IntelligenceFinding(
+                    entity=f"{count} {ftype} intelligence points",
+                    type="Correlation", source="Correlation Engine", confidence="Medium",
+                    color="slate", status="Clustered", tags=["summary","spiderfoot"]))
         return derived
 
     async def _verify(self, findings):
