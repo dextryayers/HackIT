@@ -43,6 +43,19 @@ mod csp_analyzer;
 mod graph_api_scan;
 mod firebase_scanner;
 mod mobile_app_scan;
+mod social_media_check;
+mod email_intel;
+mod dns_intel;
+mod darkweb_search;
+mod ssl_intel;
+mod web_intel;
+mod google_dorks;
+mod link_extractor;
+mod web_form_discovery;
+mod http_method_fuzzer;
+mod web_backup_scanner;
+mod domain_permutation;
+mod http_archive_scanner;
 
 use clap::{Parser, Subcommand};
 use std::collections::HashSet;
@@ -55,6 +68,8 @@ const ALL_MODULES: &[&str] = &[
     "paste_scan","git_discovery","dns_zone_transfer","cors_check","redirect_trace",
     "cookie_audit","email_security","asn_network","js_analysis","dir_enum","cdn_discovery","web_performance",
     "dns_sec_check","ip_reputation","email_breach_check","graph_api_scan","mobile_app_scan","firebase_scanner","leak_detection","csp_analyzer",
+    "social_media_check","email_intel","dns_intel","darkweb_search","ssl_intel","web_intel","google_dorks",
+    "link_extractor","web_form_discovery","http_method_fuzzer","web_backup_scanner","domain_permutation","http_archive_scanner",
 ];
 
 #[derive(Parser)]
@@ -115,6 +130,19 @@ enum Commands {
     FirebaseScan { target: String },
     LeakDetection { target: String },
     CspAnalyze { url: String },
+    SocialMediaCheck { username: String },
+    EmailIntel { domain: String },
+    DnsIntel { domain: String },
+    DarkwebSearch { query: String },
+    SslIntel { hostname: String },
+    WebIntel { domain: String },
+    GoogleDorks { domain: String },
+    LinkExtractor { target: String },
+    WebFormDiscovery { target: String },
+    HttpMethodFuzzer { target: String },
+    WebBackupScanner { target: String },
+    DomainPermutation { target: String },
+    HttpArchiveScanner { target: String },
     All { target: String, modules: Option<String> },
     ListModules,
 }
@@ -211,9 +239,22 @@ async fn main() {
         Commands::FirebaseScan { target } => { run_module_async("firebase_scanner", firebase_scanner::scan(&target)).await; }
         Commands::LeakDetection { target } => { run_module_async("leak_detection", leak_detection::detect(&target)).await; }
         Commands::CspAnalyze { url } => { run_module_async("csp_analyzer", csp_analyzer::analyze(&url)).await; }
+        Commands::SocialMediaCheck { username } => { run_module_async("social_media_check", social_media_check::scan(&username, &common::ScanConfig::default())).await; }
+        Commands::EmailIntel { domain } => { run_module_async("email_intel", email_intel::scan(&domain, &common::ScanConfig::default())).await; }
+        Commands::DnsIntel { domain } => { run_module_async("dns_intel", dns_intel::scan(&domain, &common::ScanConfig::default())).await; }
+        Commands::DarkwebSearch { query } => { run_module_async("darkweb_search", darkweb_search::scan(&query, &common::ScanConfig::default())).await; }
+        Commands::SslIntel { hostname } => { run_module_async("ssl_intel", ssl_intel::scan(&hostname, &common::ScanConfig::default())).await; }
+        Commands::WebIntel { domain } => { run_module_async("web_intel", web_intel::scan(&domain, &common::ScanConfig::default())).await; }
+        Commands::GoogleDorks { domain } => { run_module_async("google_dorks", google_dorks::scan(&domain, &common::ScanConfig::default())).await; }
+        Commands::LinkExtractor { target } => { run_module_async("link_extractor", link_extractor::scan(&target, &common::ScanConfig::default())).await; }
+        Commands::WebFormDiscovery { target } => { run_module_async("web_form_discovery", web_form_discovery::scan(&target, &common::ScanConfig::default())).await; }
+        Commands::HttpMethodFuzzer { target } => { run_module_async("http_method_fuzzer", http_method_fuzzer::scan(&target, &common::ScanConfig::default())).await; }
+        Commands::WebBackupScanner { target } => { run_module_async("web_backup_scanner", web_backup_scanner::scan(&target, &common::ScanConfig::default())).await; }
+        Commands::DomainPermutation { target } => { run_module_async("domain_permutation", domain_permutation::scan(&target, &common::ScanConfig::default())).await; }
+        Commands::HttpArchiveScanner { target } => { run_module_async("http_archive_scanner", http_archive_scanner::scan(&target, &common::ScanConfig::default())).await; }
         Commands::All { target, modules } => {
             let start = Instant::now();
-            let _config: common::ScanConfig = cli.config.as_ref()
+            let config: common::ScanConfig = cli.config.as_ref()
                 .and_then(|s| serde_json::from_str(s).ok())
                 .unwrap_or_default();
 
@@ -223,7 +264,7 @@ async fn main() {
 
             let sel = |name: &str| -> bool { selected.is_empty() || selected.contains(name) };
 
-            let (subs, prts, bann, dns_res, eml, web, crw, sen, sec, wf, soc, crt, vln, cld, who, stls, hh, cve, brch, sto, tf, ad, cb, ss, ps, gd, dzt, crsch, rtrace, caudit, es, asn, jsa, de, wp, dsc, ipr, cd, ebc, mas, gas, fb, csa, ld) = tokio::join!(
+            let (subs, prts, bann, dns_res, eml, web, crw, sen, sec, wf, soc, crt, vln, cld, who, stls, hh, cve, brch, sto, tf, ad, cb, ss, ps, gd, dzt, crsch, rtrace, caudit, es, asn, jsa, de, wp, dsc, ipr, cd, ebc, mas, gas, fb, csa, ld, smc, eil, di, dws, si, wi, gdk, le, wfd, hmf, wbs, dp, has) = tokio::join!(
                 subdomain::enumerate(&target),
                 ports::scan(&target),
                 ports::banner_grab(&target),
@@ -268,6 +309,19 @@ async fn main() {
                 firebase_scanner::scan(&target),
                 csp_analyzer::analyze(&target),
                 leak_detection::detect(&target),
+                social_media_check::scan(&target, &config),
+                email_intel::scan(&target, &config),
+                dns_intel::scan(&target, &config),
+                darkweb_search::scan(&target, &config),
+                ssl_intel::scan(&target, &config),
+                web_intel::scan(&target, &config),
+                google_dorks::scan(&target, &config),
+                link_extractor::scan(&target, &config),
+                web_form_discovery::scan(&target, &config),
+                http_method_fuzzer::scan(&target, &config),
+                web_backup_scanner::scan(&target, &config),
+                domain_permutation::scan(&target, &config),
+                http_archive_scanner::scan(&target, &config),
             );
 
             let elapsed = start.elapsed().as_millis() as u64;
@@ -319,6 +373,19 @@ async fn main() {
             if sel("firebase_scanner") { insert(&mut result, "firebase_scanner", safe_json_value(&fb)); }
             if sel("csp_analyzer") { insert(&mut result, "csp_analyzer", safe_json_value(&csa)); }
             if sel("leak_detection") { insert(&mut result, "leak_detection", safe_json_value(&ld)); }
+            if sel("social_media_check") { insert(&mut result, "social_media_check", safe_json_value(&smc)); }
+            if sel("email_intel") { insert(&mut result, "email_intel", safe_json_value(&eil)); }
+            if sel("dns_intel") { insert(&mut result, "dns_intel", safe_json_value(&di)); }
+            if sel("darkweb_search") { insert(&mut result, "darkweb_search", safe_json_value(&dws)); }
+            if sel("ssl_intel") { insert(&mut result, "ssl_intel", safe_json_value(&si)); }
+            if sel("web_intel") { insert(&mut result, "web_intel", safe_json_value(&wi)); }
+            if sel("google_dorks") { insert(&mut result, "google_dorks", safe_json_value(&gdk)); }
+            if sel("link_extractor") { insert(&mut result, "link_extractor", safe_json_value(&le)); }
+            if sel("web_form_discovery") { insert(&mut result, "web_form_discovery", safe_json_value(&wfd)); }
+            if sel("http_method_fuzzer") { insert(&mut result, "http_method_fuzzer", safe_json_value(&hmf)); }
+            if sel("web_backup_scanner") { insert(&mut result, "web_backup_scanner", safe_json_value(&wbs)); }
+            if sel("domain_permutation") { insert(&mut result, "domain_permutation", safe_json_value(&dp)); }
+            if sel("http_archive_scanner") { insert(&mut result, "http_archive_scanner", safe_json_value(&has)); }
 
             if progress_enabled() {
                 emit("progress", "all", "done");

@@ -1,8 +1,8 @@
-import re
-import json
+import re, asyncio
 from urllib.parse import urlparse, quote
 from typing import List
-from ..module_common import safe_fetch, make_finding
+from models import IntelligenceFinding
+from module_common import safe_fetch, make_finding
 
 PATENT_SOURCES = [
     ("Google Patents", "https://patents.google.com/?q={}&language=ENGLISH"),
@@ -11,6 +11,8 @@ PATENT_SOURCES = [
     ("WIPO PATENTSCOPE", "https://patentscope.wipo.int/search/en/search.jsf?query={}"),
     ("FPO", "https://www.freepatentsonline.com/result.html?p=1&srch={}&query_txt={}"),
     ("USPTO AppFT", "https://appft.uspto.gov/netacgi/nph-Parser?Sect1=PTO1&Sect2=HITOFF&d=PG01&p=1&u=/netahtml/PTO/srchnum.html&r=0&f=S&l=50&TERM1={}"),
+    ("Lens.org", "https://www.lens.org/lens/search/patent/list?q={}"),
+    ("Espacenet Worldwide", "https://worldwide.espacenet.com/patent/search?q={}"),
 ]
 
 TECHNOLOGY_AREAS = [
@@ -33,54 +35,68 @@ def extract_patent_ids(text: str) -> list:
             ids.add(match)
     return list(ids)
 
-async def crawl(target: str, client: AsyncClient) -> List[IntelligenceFinding]:
+async def crawl(target: str, client) -> List[IntelligenceFinding]:
     findings = []
     t = target.strip().lower()
     if t.startswith("http"):
         t = urlparse(t).netloc
 
+    sem = asyncio.Semaphore(8)
+
+    async def search_source(name, url_template):
+        async with sem:
+            try:
+                url = url_template.format(quote(t))
+                resp = await safe_fetch(client, url, timeout=15.0)
+                if resp and resp.status_code == 200 and len(resp.text) > 500:
+                    patent_ids = extract_patent_ids(resp.text)
+                    target_count = resp.text.lower().count(t.lower())
+                    return {"name": name, "patent_ids": patent_ids, "mentions": target_count}
+            except Exception:
+                pass
+            return None
+
+    tasks = [search_source(name, url_template) for name, url_template in PATENT_SOURCES]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
     all_patent_ids = []
     sources_with_data = 0
 
-    for name, url_template in PATENT_SOURCES:
-        try:
-            url = url_template.format(quote(t))
-            resp = await safe_fetch(client, url, timeout=20.0)
-            if resp.status_code == 200 and len(resp.text) > 500:
-                patent_ids = extract_patent_ids(resp.text)
-                target_count = resp.text.lower().count(t.lower())
-                sources_with_data += 1
+    for r in results:
+        if isinstance(r, Exception) or not r:
+            continue
+        sources_with_data += 1
+        name = r["name"]
+        patent_ids = r["patent_ids"]
 
+        findings.append(make_finding(
+            entity=f"{name}: {len(patent_ids)} patent IDs found referencing {t}",
+            ftype="Patent: Source Result",
+            source="PatentIntelligence",
+            confidence="Medium",
+            color="sky",
+            category="Patent Intelligence",
+            threat_level="Informational",
+            status="Found" if patent_ids else "Scanned",
+            resolution=t,
+            tags=["patent", name.lower().replace(" ", "-"), "search"],
+        ))
+
+        if patent_ids:
+            all_patent_ids.extend(patent_ids)
+            for pid in patent_ids[:3]:
                 findings.append(make_finding(
-                    entity=f"{name}: {len(patent_ids)} patent IDs found referencing {t}",
-                    ftype="Patent: Source Result",
+                    entity=f"Patent ID: {pid} from {name}",
+                    ftype="Patent: ID Discovery",
                     source="PatentIntelligence",
                     confidence="Medium",
-                    color="sky",
+                    color="blue",
                     category="Patent Intelligence",
                     threat_level="Informational",
-                    status="Found" if patent_ids else "Scanned",
+                    status="Discovered",
                     resolution=t,
-                    tags=["patent", name.lower().replace(" ", "-"), "search"],
+                    tags=["patent", "id", pid[:8]],
                 ))
-
-                if patent_ids:
-                    all_patent_ids.extend(patent_ids)
-                    for pid in patent_ids[:3]:
-                        findings.append(make_finding(
-                            entity=f"Patent ID: {pid} from {name}",
-                            ftype="Patent: ID Discovery",
-                            source="PatentIntelligence",
-                            confidence="Medium",
-                            color="blue",
-                            category="Patent Intelligence",
-                            threat_level="Informational",
-                            status="Discovered",
-                            resolution=t,
-                            tags=["patent", "id", pid[:8]],
-                        ))
-        except:
-            pass
 
     for area in TECHNOLOGY_AREAS:
         if area in t or any(word in t for word in area.split()):
@@ -149,7 +165,7 @@ async def crawl(target: str, client: AsyncClient) -> List[IntelligenceFinding]:
         ))
 
     findings.append(make_finding(
-        entity=f"Patent scan complete: {len(all_patent_ids)} patent IDs from {sources_with_data} sources",
+        entity=f"Patent scan complete: {len(all_patent_ids)} patent IDs from {sources_with_data}/{len(PATENT_SOURCES)} sources",
         ftype="Patent: Scan Summary",
         source="PatentIntelligence",
         confidence="High",

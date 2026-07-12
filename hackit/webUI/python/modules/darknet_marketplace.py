@@ -1,8 +1,8 @@
-import httpx
+import asyncio
 from urllib.parse import urlparse, quote
 from typing import List
 from models import IntelligenceFinding
-from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
+from module_common import safe_fetch, make_finding
 
 CLEARNET_MIRRORS = [
     ("Ransomware.live", "https://ransomware.live/search?q={}"),
@@ -40,55 +40,54 @@ MARKETPLACE_KEYWORDS = {
     "credentials": ["password", "email:password", "login", "account", "credential"],
     "pii": ["ssn", "dox", "personal info", "identity", "fullz", "id card"],
     "drugs": ["drugs", "pharma", "pills", "weed", "cocaine", "mdma"],
-    "services": "hacking service",
+    "services": ["hacking service", "ddos", "exploit sale"],
 }
 
-async def search_mirror(name: str, url_template: str, target: str, client: httpx.AsyncClient) -> dict:
+async def search_mirror(name: str, url_template: str, target: str, client) -> dict:
     try:
         url = url_template.format(quote(target))
-        resp = await safe_fetch(client, 
-            url,
-            timeout=20.0,
+        resp = await safe_fetch(client, url, timeout=15.0,
             headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"},
-            follow_redirects=True,
-        )
-        if resp.status_code == 200 and len(resp.text) > 200:
+            follow_redirects=True)
+        if resp and resp.status_code == 200 and len(resp.text) > 200:
             text = resp.text
             mentions = text.lower().count(target.lower())
             marketplace_hits = {}
             for category, keywords in MARKETPLACE_KEYWORDS.items():
-                if isinstance(keywords, str):
-                    keywords = [keywords]
                 for kw in keywords:
                     if kw in text.lower():
                         marketplace_hits[category] = marketplace_hits.get(category, 0) + 1
             return {
-                "name": name,
-                "url": url,
-                "mentions": mentions,
-                "marketplace_hits": marketplace_hits,
-                "content_length": len(text),
+                "name": name, "url": url, "mentions": mentions,
+                "marketplace_hits": marketplace_hits, "content_length": len(text),
             }
-    except:
+    except Exception:
         pass
     return None
 
 
-async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFinding]:
+async def crawl(target: str, client) -> List[IntelligenceFinding]:
     findings = []
     t = target.strip().lower()
     if t.startswith("http"):
         t = urlparse(t).netloc
 
-    all_results = []
-    sources_with_hits = 0
+    sem = asyncio.Semaphore(10)
 
-    for name, url_template in CLEARNET_MIRRORS:
-        result = await search_mirror(name, url_template, t, client)
-        if result:
-            all_results.append(result)
-            if result["mentions"] > 0 or result["marketplace_hits"]:
-                sources_with_hits += 1
+    async def search_with_sem(name, url_template):
+        async with sem:
+            return await search_mirror(name, url_template, t, client)
+
+    tasks = [search_with_sem(name, url_template) for name, url_template in CLEARNET_MIRRORS]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    all_results = []
+    for r in results:
+        if isinstance(r, Exception) or not r:
+            continue
+        all_results.append(r)
+
+    sources_with_hits = sum(1 for r in all_results if r.get("mentions", 0) > 0 or r.get("marketplace_hits"))
 
     if all_results:
         findings.append(make_finding(
@@ -125,7 +124,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             ))
 
         if hits:
-            for category, count in sorted(hits.items(), key=lambda x: x[1], reverse=True):
+            for category, count in sorted(hits.items(), key=lambda x: x[1], reverse=True)[:3]:
                 threat_map = {
                     "stolen_data": "Critical", "access_sales": "Critical", "exploit_sales": "Critical",
                     "ransomware": "Critical", "financial": "Critical", "credentials": "Critical",
@@ -133,10 +132,10 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                 }
                 threat = threat_map.get(category, "Medium Risk")
                 color_map = {"Critical": "red", "High Risk": "orange", "Medium Risk": "yellow"}
-                if most_critical_category is None or list(hits.keys()).index(category) < list(hits.keys()).index(most_critical_category):
+                if most_critical_category is None:
                     most_critical_category = category
                 findings.append(make_finding(
-                    entity=f"{name}: {category.replace('_', ' ').title()} activity detected ({count} indicators)",
+                    entity=f"{name}: {category.replace('_', ' ').title()} activity ({count} indicators)",
                     type=f"Darknet: {category.replace('_', ' ').title()}",
                     source="DarknetMarketplace",
                     confidence="Medium",
@@ -177,13 +176,13 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         ))
     else:
         findings.append(make_finding(
-            entity=f"Darknet scan complete: {sources_with_hits} sources had data on {t}",
+            entity=f"Darknet scan complete: {sources_with_hits}/{len(CLEARNET_MIRRORS)} sources with data on {t}",
             ftype="Darknet: Scan Summary",
             source="DarknetMarketplace",
             confidence="High",
-            color="slate",
+            color="red" if sources_with_hits > 0 else "emerald",
             category="Darknet Intelligence",
-            threat_level="Informational" if not sources_with_hits else "High Risk",
+            threat_level="High Risk" if sources_with_hits else "Informational",
             status="Complete",
             resolution=t,
             tags=["darknet", "summary"],

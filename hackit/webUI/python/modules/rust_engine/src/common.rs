@@ -1497,3 +1497,255 @@ pub const PLATFORMS: &[(&str, &str)] = &[
     ("Komoot", "https://komoot.com/user/{}"),
     ("AllTrails", "https://alltrails.com/members/{}"),
 ];
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SocialMediaCheckResult {
+    pub platform: String,
+    pub url: String,
+    pub username: String,
+    pub exists: bool,
+    pub status: u16,
+    pub category: String,
+    pub http_status: u16,
+    pub final_url: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct EmailIntelResult {
+    pub domain: String,
+    pub emails_found: Vec<String>,
+    pub total_count: usize,
+    pub role_based: Vec<String>,
+    pub sources: Vec<(String, usize)>,
+    pub patterns: Vec<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DnsIntelResult {
+    pub domain: String,
+    pub records: std::collections::HashMap<String, Vec<String>>,
+    pub a_records: Vec<String>,
+    pub aaaa_records: Vec<String>,
+    pub mx_records: Vec<String>,
+    pub ns_records: Vec<String>,
+    pub txt_records: Vec<String>,
+    pub cname_records: Vec<String>,
+    pub srv_records: Vec<String>,
+    pub caa_records: Vec<String>,
+    pub soa_records: Vec<String>,
+    pub ptr_records: Vec<String>,
+    pub cloud_provider: String,
+    pub dnssec_enabled: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DarkwebSearchResult {
+    pub query: String,
+    pub sources_checked: usize,
+    pub sources_found: usize,
+    pub total_mentions: usize,
+    pub sources: Vec<DarkwebSourceInfo>,
+    pub keywords_detected: Vec<String>,
+    pub risk_assessment: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DarkwebSourceInfo {
+    pub source: String,
+    pub url: String,
+    pub status: u16,
+    pub mentions: usize,
+    pub snippet: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SslIntelResult {
+    pub host: String,
+    pub open_ports: Vec<u16>,
+    pub certificate: Option<SslCertInfo>,
+    pub http_headers: Vec<(String, String)>,
+    pub security_headers: Vec<SslSecurityHeader>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SslCertInfo {
+    pub subject: String,
+    pub issuer: String,
+    pub not_before: String,
+    pub not_after: String,
+    pub alt_names: Vec<String>,
+    pub is_expired: bool,
+    pub is_self_signed: bool,
+    pub days_until_expiry: i64,
+    pub signature_algorithm: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SslSecurityHeader {
+    pub name: String,
+    pub header: String,
+    pub present: bool,
+    pub value: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct WebIntelResult {
+    pub domain: String,
+    pub sensitive_files: Vec<WebSensitiveFile>,
+    pub headers: Vec<WebHeaderInfo>,
+    pub technologies: Vec<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct WebSensitiveFile {
+    pub path: String,
+    pub name: String,
+    pub status: u16,
+    pub severity: String,
+    pub size: usize,
+    pub snippet: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct WebHeaderInfo {
+    pub name: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct GoogleDorkResult {
+    pub domain: String,
+    pub total_dorks_executed: usize,
+    pub dorks_with_results: usize,
+    pub total_results: usize,
+    pub unique_dorks_found: usize,
+    pub results: Vec<DorkResult>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DorkResult {
+    pub dork_name: String,
+    pub query: String,
+    pub engine: String,
+    pub results: usize,
+    pub snippet: String,
+}
+
+// ── Link Extractor ──
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct LinkExtractorResult {
+    pub domain: String,
+    pub pages_visited: usize,
+    pub total_internal_links: usize,
+    pub total_external_links: usize,
+    pub total_resources: usize,
+    pub total_emails: usize,
+    pub internal_links: Vec<String>,
+    pub external_links: Vec<String>,
+    pub resources: Vec<String>,
+    pub emails: Vec<String>,
+}
+
+// ── Web Form Discovery ──
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct FormInfo {
+    pub action: String,
+    pub method: String,
+    pub inputs: Vec<String>,
+    pub has_csrf: bool,
+    pub sensitive_inputs: Vec<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct WebFormDiscoveryResult {
+    pub domain: String,
+    pub pages_checked: usize,
+    pub pages_with_forms: usize,
+    pub total_forms: usize,
+    pub paths: Vec<String>,
+    pub forms: Vec<FormInfo>,
+}
+
+// ── HTTP Method Fuzzer ──
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct MethodTestResult {
+    pub method: String,
+    pub path: String,
+    pub status: u16,
+    pub content_length: usize,
+    pub allowed: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct HttpMethodFuzzResult {
+    pub domain: String,
+    pub paths_tested: usize,
+    pub methods_tested: usize,
+    pub total_requests: usize,
+    pub enabled_endpoints: usize,
+    pub enabled_methods: Vec<String>,
+    pub methods_by_path: Vec<(String, Vec<String>)>,
+    pub raw_results: Vec<MethodTestResult>,
+}
+
+// ── Web Backup Scanner ──
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BackupFileResult {
+    pub path: String,
+    pub file_name: String,
+    pub severity: String,
+    pub status: u16,
+    pub size: usize,
+    pub response_time_ms: u64,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct WebBackupScanResult {
+    pub domain: String,
+    pub paths_checked: usize,
+    pub files_found: usize,
+    pub critical_files: usize,
+    pub high_risk_files: usize,
+    pub files: Vec<BackupFileResult>,
+}
+
+// ── Domain Permutation ──
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PermutationResult {
+    pub domain: String,
+    pub resolves: bool,
+    pub ips: Vec<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DomainPermutationResult {
+    pub domain: String,
+    pub permutations_generated: usize,
+    pub registered_count: usize,
+    pub total_checked: usize,
+    pub registered: Vec<PermutationResult>,
+    pub tld_swaps_tested: usize,
+}
+
+// ── HTTP Archive Scanner ──
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ArchiveSnapshot {
+    pub timestamp: String,
+    pub original_url: String,
+    pub status_code: String,
+    pub length: usize,
+    pub mime_type: String,
+    pub wayback_url: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct HttpArchiveScanResult {
+    pub domain: String,
+    pub total_snapshots: usize,
+    pub years_covered: String,
+    pub unique_years: usize,
+    pub status_distribution: Vec<(String, usize)>,
+    pub snapshots: Vec<ArchiveSnapshot>,
+    pub archives_checked: usize,
+}

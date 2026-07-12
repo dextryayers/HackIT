@@ -21,7 +21,12 @@ SCAN_TIMEOUTS = {
     "paste_scan": 15, "git_discovery": 15, "dns_zone_transfer": 15,
     "cors_check": 15, "redirect_trace": 15, "cookie_audit": 15,
     "email_security": 15, "asn_network": 15, "js_analysis": 20,
-    "dir_enum": 45, "all": 180,
+    "dir_enum": 45, "social_media_check": 20, "email_intel": 20,
+    "dns_intel": 20, "darkweb_search": 20, "ssl_intel": 20,
+    "web_intel": 30, "google_dorks": 30,
+    "link_extractor": 30, "web_form_discovery": 20, "http_method_fuzzer": 30,
+    "web_backup_scanner": 40, "domain_permutation": 30, "http_archive_scanner": 25,
+    "all": 180,
 }
 
 @dataclass
@@ -179,6 +184,35 @@ async def scan_js_analysis(url: str, cb=None) -> EngineResult:
 async def scan_dir_enum(url: str, cb=None) -> EngineResult:
     return parse_result(await run_engine("dir_enum", url, progress_callback=cb))
 
+# ── New power module scan functions ──
+async def scan_social_media_check(username: str, cb=None) -> EngineResult:
+    return parse_result(await run_engine("social_media_check", username, progress_callback=cb))
+async def scan_email_intel(domain: str, cb=None) -> EngineResult:
+    return parse_result(await run_engine("email_intel", domain, progress_callback=cb))
+async def scan_dns_intel(domain: str, cb=None) -> EngineResult:
+    return parse_result(await run_engine("dns_intel", domain, progress_callback=cb))
+async def scan_darkweb_search(query: str, cb=None) -> EngineResult:
+    return parse_result(await run_engine("darkweb_search", query, progress_callback=cb))
+async def scan_ssl_intel(hostname: str, cb=None) -> EngineResult:
+    return parse_result(await run_engine("ssl_intel", hostname, progress_callback=cb))
+async def scan_web_intel(domain: str, cb=None) -> EngineResult:
+    return parse_result(await run_engine("web_intel", domain, progress_callback=cb))
+async def scan_google_dorks(domain: str, cb=None) -> EngineResult:
+    return parse_result(await run_engine("google_dorks", domain, progress_callback=cb))
+
+async def scan_link_extractor(target: str, cb=None) -> EngineResult:
+    return parse_result(await run_engine("link_extractor", target, progress_callback=cb))
+async def scan_web_form_discovery(target: str, cb=None) -> EngineResult:
+    return parse_result(await run_engine("web_form_discovery", target, progress_callback=cb))
+async def scan_http_method_fuzzer(target: str, cb=None) -> EngineResult:
+    return parse_result(await run_engine("http_method_fuzzer", target, 30, progress_callback=cb))
+async def scan_web_backup_scanner(target: str, cb=None) -> EngineResult:
+    return parse_result(await run_engine("web_backup_scanner", target, 40, progress_callback=cb))
+async def scan_domain_permutation(target: str, cb=None) -> EngineResult:
+    return parse_result(await run_engine("domain_permutation", target, progress_callback=cb))
+async def scan_http_archive_scanner(target: str, cb=None) -> EngineResult:
+    return parse_result(await run_engine("http_archive_scanner", target, 25, progress_callback=cb))
+
 async def scan_all(target: str, cb=None, config: dict = None) -> EngineResult:
     raw = await run_engine("all", target, 180, progress_callback=cb, config=config)
     r = parse_result(raw)
@@ -202,5 +236,12 @@ SCAN_FUNCTIONS = {
     "cookie_audit": scan_cookie_audit, "email_security": scan_email_security,
     "asn_network": scan_asn_network, "js_analysis": scan_js_analysis,
     "dir_enum": scan_dir_enum,
+    "social_media_check": scan_social_media_check, "email_intel": scan_email_intel,
+    "dns_intel": scan_dns_intel, "darkweb_search": scan_darkweb_search,
+    "ssl_intel": scan_ssl_intel, "web_intel": scan_web_intel,
+    "google_dorks": scan_google_dorks,
+    "link_extractor": scan_link_extractor, "web_form_discovery": scan_web_form_discovery,
+    "http_method_fuzzer": scan_http_method_fuzzer, "web_backup_scanner": scan_web_backup_scanner,
+    "domain_permutation": scan_domain_permutation, "http_archive_scanner": scan_http_archive_scanner,
     "all": scan_all,
 }

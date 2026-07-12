@@ -10,14 +10,14 @@ from rust_bridge import SCAN_FUNCTIONS, EngineResult, scan_all
 sys.path.append(os.path.dirname(__file__))
 
 MODULE_CATEGORIES = {
-    "dns_domain": ["crtsh","dns_brute","dns_deep_forensics","dns_enum_full","dns_resolver","dnsdumpster","dnshistory","dnstwister","domain_profile_deep","rapiddns","securitytrails","subdomain_passive","subdomain_takeover","viewdns","whois","certificate_search","certspotter","hackertarget","fullhunt"],
-    "web_server": ["api_scanner","builtwith","crawler_core","header_audit","js_secrets","secret_finder","sensitive_files_hunter","ssl_analyzer","urlscan","vulnerability_scanner_lite","web_surface_mapper","web_tech","cloud_fingerprint_deep","cve_exploit_lookup","publicwww","netlas","fofa","zoomeye","binaryedge","onyphe","intelx","leakix","leakix_scanner","censys","firewall_detector","javascript_deps_analyzer","ssl_chain_analyzer","http2_fingerprinter","api_endpoint_fuzzer","tracker_network_mapper","open_redirect_scanner","web_cookie_analyzer","technology_stack_profiler","cdn_origin_finder","vulnerability_db_scanner"],
-    "email_osint": ["email_harvester","email_security_deep","email_verifier","hunterhow","breach_directory","haveibeenpwned","email_reputation_checker","mail_server_analyzer","rust_email_finder"],
-    "people_social": ["people_org_osint","social_alias_hunter","social_search","tracker_identity_mapper","whatsmyname_checker","mobile_recon","reverse_image_search"],
+    "dns_domain": ["dnsdumpster","dnshistory","dnstwister","domain_profile_deep","rapiddns","viewdns","certificate_search","certspotter","hackertarget"],
+    "web_server": ["api_scanner","builtwith","crawler_core","js_secrets","secret_finder","sensitive_files_hunter","urlscan","vulnerability_scanner_lite","web_surface_mapper","web_tech","cloud_fingerprint_deep","cve_exploit_lookup","publicwww","fofa","binaryedge","leakix","leakix_scanner","firewall_detector","javascript_deps_analyzer","http2_fingerprinter","api_endpoint_fuzzer","tracker_network_mapper","open_redirect_scanner","web_cookie_analyzer","technology_stack_profiler","cdn_origin_finder","vulnerability_db_scanner","censys","whoisxmlapi"],
+    "email_osint": ["email_security_deep","email_verifier","hunterhow","breach_directory","haveibeenpwned","email_reputation_checker","mail_server_analyzer","rust_email_finder","emailrep"],
+    "people_social": ["people_org_osint","social_search","tracker_identity_mapper","mobile_recon","reverse_image_search"],
     "cloud_infrastructure": ["cloud_infrastructure_hunter","cloud_probe","cloud_recon","asn_bgp_radar","bgp_he_net","robtex","cloudflare_resolver"],
-    "threat_leaks": ["abuseipdb","breach_forensics","darkweb_intel","greynoise","malware_reputation_radar","otx","pastebin_monitor","shodan_full","shodan","threat_intel","threatminer","virustotal_full","virustotal","crypto_abuse_radar","leak_checker_pro","dark_web_scanner","malware_sandbox_check","phishing_detector"],
-    "historical_archive": ["archive_forensics","archive_url_miner","archive","wayback","dork_engine","git_leaks","exposure_surface_deep","google_dorks_deep"],
-    "geolocation_network": ["geo_recon","ip_geolocation","network_topology_mapper","port_scanner","device_search","financial_recon","wigle"],
+    "threat_leaks": ["abuseipdb","breach_forensics","greynoise","malware_reputation_radar","otx","pastebin_monitor","shodan_full","shodan","virustotal_full","virustotal","crypto_abuse_radar","leak_checker_pro","malware_sandbox_check","phishing_detector","dehashed","intelx"],
+    "historical_archive": ["archive_forensics","archive_url_miner","git_leaks","exposure_surface_deep"],
+    "geolocation_network": ["geo_recon","ip_geolocation","network_topology_mapper","device_search","financial_recon","ipinfo"],
 }
 ALL_MODULES = {f for files in MODULE_CATEGORIES.values() for f in files}
 
@@ -496,6 +496,217 @@ class OSINTOrchestrator:
             findings.append(IntelligenceFinding(entity=d.get("path","?"), type="Directory",
                 source="Rust:Dir Enum", confidence="Medium", color="slate",
                 status=f"HTTP {d.get('status','?')}", tags=["rust","directory"]))
+
+        # ── 21. Social Media Check (NEW) ──
+        for sm in raw.get("social_media_check") or []:
+            if sm.get("found"):
+                findings.append(IntelligenceFinding(entity=f"{sm.get('platform','?')}: {sm.get('url','')}",
+                    type="Social Account", source="Rust:Social Media Check",
+                    confidence="High", color="purple", status="Found",
+                    tags=["rust","social","username"]))
+
+        # ── 22. Email Intel (NEW) ──
+        ei = raw.get("email_intel") or {}
+        for em in ei.get("email_addresses") or []:
+            findings.append(IntelligenceFinding(entity=em, type="Email Address",
+                source="Rust:Email Intel", confidence="Medium", color="pink",
+                status="Harvested", tags=["rust","email","intel"]))
+        for src in ei.get("sources_found") or []:
+            findings.append(IntelligenceFinding(entity=f"Email source: {src}", type="Data Source",
+                source="Rust:Email Intel", confidence="Low", color="slate",
+                status="Leak Found", tags=["rust","email","leak"]))
+
+        # ── 23. DNS Intel (NEW) ──
+        di = raw.get("dns_intel") or {}
+        for rtype in ("a_records","aaaa_records","mx_records","ns_records","txt_records","cname_records","srv_records","ptr_records","caa_records"):
+            for val in di.get(rtype) or []:
+                tag = rtype.replace("_records","").upper()
+                findings.append(IntelligenceFinding(entity=val, type=f"DNS {tag}",
+                    source="Rust:DNS Intel", confidence="High", color="slate",
+                    status="Resolved", tags=["rust","dns","intel"]))
+        for prov in di.get("cloud_providers") or []:
+            findings.append(IntelligenceFinding(entity=f"Cloud: {prov}", type="Cloud Provider",
+                source="Rust:DNS Intel", confidence="Medium", color="cyan",
+                status="Detected", tags=["rust","dns","cloud"]))
+
+        # ── 24. Darkweb Search (NEW) ──
+        dw = raw.get("darkweb_search") or {}
+        for src in dw.get("sources") or []:
+            if src.get("mentions", 0) > 0:
+                findings.append(IntelligenceFinding(entity=f"{src.get('source','?')}: {src.get('mentions',0)} mentions",
+                    type="Darkweb Mention", source="Rust:Darkweb Search",
+                    confidence="Medium", color="red", threat_level="High Risk",
+                    status=src.get("url","")[:80], tags=["rust","darkweb","leak"]))
+        if dw.get("risk_assessment") and dw["risk_assessment"] != "NONE":
+            findings.append(IntelligenceFinding(entity=f"Darkweb Risk: {dw['risk_assessment']}", type="Risk Assessment",
+                source="Rust:Darkweb Search", confidence="Medium", color="red",
+                threat_level=dw["risk_assessment"], status="Assessed", tags=["rust","darkweb"]))
+
+        # ── 25. SSL Intel (NEW) ──
+        si = raw.get("ssl_intel") or {}
+        for port in si.get("open_ports") or []:
+            findings.append(IntelligenceFinding(entity=f"TLS Port: {port}", type="Open Port",
+                source="Rust:SSL Intel", confidence="High", color="green",
+                status="Open", tags=["rust","ssl","port"]))
+        for hdr in si.get("security_headers") or []:
+            if not hdr.get("present"):
+                findings.append(IntelligenceFinding(entity=f"Missing: {hdr.get('name','?')}",
+                    type="Security Header", source="Rust:SSL Intel",
+                    confidence="High", color="orange", threat_level="Elevated Risk",
+                    status="Missing", tags=["rust","ssl","security"]))
+        for h, v in si.get("http_headers") or []:
+            if h.lower() in ("server","x-powered-by"):
+                findings.append(IntelligenceFinding(entity=f"{h}: {v[:60]}", type="Web Technology",
+                    source="Rust:SSL Intel", confidence="High", color="green",
+                    status="Detected", tags=["rust","ssl","http"]))
+
+        # ── 26. Web Intel (NEW) ──
+        wi = raw.get("web_intel") or {}
+        for sf in wi.get("sensitive_files") or []:
+            severity = sf.get("severity","info")
+            color = "red" if severity in ("critical","high") else "orange" if severity == "medium" else "slate"
+            findings.append(IntelligenceFinding(entity=sf.get("path","?"), type="Sensitive File",
+                source="Rust:Web Intel", confidence="Medium", color=color,
+                status=f"HTTP {sf.get('status','?')}", tags=["rust","web","sensitive"]))
+        for h, v in wi.get("headers") or []:
+            if h.lower() in ("server","x-powered-by","x-aspnet-version","x-generator"):
+                findings.append(IntelligenceFinding(entity=f"{h}: {v[:60]}", type="Web Technology",
+                    source="Rust:Web Intel", confidence="High", color="green",
+                    status="Detected", tags=["rust","web","tech"]))
+
+        # ── 27. Google Dorks (NEW) ──
+        gd2 = raw.get("google_dorks") or {}
+        for dr in gd2.get("results") or []:
+            if dr.get("results", 0) > 0:
+                findings.append(IntelligenceFinding(
+                    entity=f"{dr.get('dork_name','?')}: {dr.get('query','')[:60]}",
+                    type="Google Dork", source="Rust:Google Dorks",
+                    confidence="Medium", color="orange", threat_level="Elevated Risk",
+                    status=f"{dr.get('results',0)} results via {dr.get('engine','?')}",
+                    tags=["rust","dork","osint"]))
+
+        # ── 28. Link Extractor (NEW) ──
+        le = raw.get("link_extractor") or {}
+        for url in le.get("internal_links") or []:
+            findings.append(IntelligenceFinding(entity=url, type="Internal Link",
+                source="Rust:Link Extractor", confidence="Medium", color="blue",
+                status="Discovered", tags=["rust","link","internal"]))
+        for url in le.get("external_links") or []:
+            findings.append(IntelligenceFinding(entity=url, type="External Link",
+                source="Rust:Link Extractor", confidence="Low", color="slate",
+                status="Referenced", tags=["rust","link","external"]))
+        for em in le.get("emails") or []:
+            findings.append(IntelligenceFinding(entity=em, type="Email Address",
+                source="Rust:Link Extractor", confidence="Medium", color="pink",
+                status="Extracted", tags=["rust","link","email"]))
+        if le.get("total_internal_links", 0) > 0:
+            findings.append(IntelligenceFinding(
+                entity=f"Link Extractor: {le.get('pages_visited',0)} pages, {le.get('total_internal_links',0)} internal, {le.get('total_external_links',0)} external, {le.get('total_emails',0)} emails",
+                type="Link Extractor Summary", source="Rust:Link Extractor",
+                confidence="High", color="slate", status="Complete",
+                tags=["rust","link","summary"]))
+
+        # ── 29. Web Form Discovery (NEW) ──
+        wfd = raw.get("web_form_discovery") or {}
+        for f in wfd.get("forms") or []:
+            action = f.get("action","")
+            method = f.get("method","GET")
+            has_csrf = f.get("has_csrf", False)
+            sensitive = f.get("sensitive_inputs", [])
+            color = "green" if has_csrf else "red"
+            findings.append(IntelligenceFinding(
+                entity=f"Form: {action} [{method}] CSRF={has_csrf} Sensitive={len(sensitive)}",
+                type="Web Form", source="Rust:Form Discovery",
+                confidence="Medium", color=color,
+                threat_level="Informational" if has_csrf else "High Risk",
+                status=f"{method} {action[:40]}", tags=["rust","form"]))
+            for si in sensitive:
+                findings.append(IntelligenceFinding(
+                    entity=f"Sensitive input: {si} in {action}",
+                    type="Form Sensitive Input", source="Rust:Form Discovery",
+                    confidence="High", color="red", threat_level="High Risk",
+                    status="Detected", tags=["rust","form","sensitive"]))
+        if wfd.get("total_forms", 0) > 0:
+            findings.append(IntelligenceFinding(
+                entity=f"Form Discovery: {wfd.get('total_forms',0)} forms on {wfd.get('pages_with_forms',0)}/{wfd.get('pages_checked',0)} pages",
+                type="Form Discovery Summary", source="Rust:Form Discovery",
+                confidence="High", color="slate", status="Complete",
+                tags=["rust","form","summary"]))
+
+        # ── 30. HTTP Method Fuzzer (NEW) ──
+        hmf = raw.get("http_method_fuzzer") or {}
+        for em in hmf.get("enabled_methods") or []:
+            findings.append(IntelligenceFinding(
+                entity=em, type="HTTP Method Enabled",
+                source="Rust:HTTP Method Fuzzer",
+                confidence="High", color="orange", threat_level="Elevated Risk",
+                status="Enabled", tags=["rust","http","method"]))
+        if hmf.get("enabled_endpoints", 0) > 0:
+            findings.append(IntelligenceFinding(
+                entity=f"HTTP Method Fuzzer: {hmf.get('enabled_endpoints',0)} enabled methods across {hmf.get('paths_tested',0)} paths",
+                type="Method Fuzzer Summary", source="Rust:HTTP Method Fuzzer",
+                confidence="High", color="red" if hmf.get("enabled_endpoints",0) > 10 else "orange",
+                threat_level="High Risk" if hmf.get("enabled_endpoints",0) > 10 else "Elevated Risk",
+                status=f"{hmf.get('enabled_endpoints',0)} enabled", tags=["rust","http","method","summary"]))
+
+        # ── 31. Web Backup Scanner (NEW) ──
+        wbs = raw.get("web_backup_scanner") or {}
+        for f in wbs.get("files") or []:
+            severity = f.get("severity","medium")
+            color = "red" if severity == "critical" else "orange" if severity == "high" else "yellow"
+            threat = "Critical" if severity == "critical" else "High Risk" if severity == "high" else "Elevated Risk"
+            findings.append(IntelligenceFinding(
+                entity=f"{f.get('path','?')} ({f.get('file_name','?')}) - HTTP {f.get('status','?')}",
+                type=f"Backup File: {severity.title()}",
+                source="Rust:Backup Scanner", confidence="High", color=color,
+                threat_level=threat, status=f"HTTP {f.get('status','?')}",
+                raw_data=f"size={f.get('size',0)}, response_ms={f.get('response_time_ms',0)}",
+                tags=["rust","backup",severity]))
+        if wbs.get("files_found", 0) > 0:
+            findings.append(IntelligenceFinding(
+                entity=f"Backup Scanner: {wbs.get('files_found',0)} files found ({wbs.get('critical_files',0)} critical, {wbs.get('high_risk_files',0)} high) from {wbs.get('paths_checked',0)} paths",
+                type="Backup Scanner Summary", source="Rust:Backup Scanner",
+                confidence="High", color="red", threat_level="Critical" if wbs.get('critical_files',0) > 0 else "High Risk",
+                status=f"{wbs.get('files_found',0)} files", tags=["rust","backup","summary"]))
+
+        # ── 32. Domain Permutation (NEW) ──
+        dp = raw.get("domain_permutation") or {}
+        for reg in dp.get("registered") or []:
+            ips = ", ".join(reg.get("ips", []))
+            findings.append(IntelligenceFinding(
+                entity=f"{reg.get('domain','?')} resolves to {ips}",
+                type="Domain Permutation",
+                source="Rust:Domain Permutation",
+                confidence="High", color="blue",
+                threat_level="Elevated Risk" if ips else "Informational",
+                status="Registered", tags=["rust","permutation","typosquat"]))
+        if dp.get("registered_count", 0) > 0:
+            findings.append(IntelligenceFinding(
+                entity=f"Domain Permutation: {dp.get('registered_count',0)}/{dp.get('permutations_generated',0)} permutations registered",
+                type="Permutation Summary", source="Rust:Domain Permutation",
+                confidence="High", color="orange", threat_level="Elevated Risk",
+                status=f"{dp.get('registered_count',0)} registered",
+                tags=["rust","permutation","summary"]))
+
+        # ── 33. HTTP Archive Scanner (NEW) ──
+        has_ = raw.get("http_archive_scanner") or {}
+        for snap in has_.get("snapshots") or []:
+            findings.append(IntelligenceFinding(
+                entity=f"{snap.get('original_url','?')} ({snap.get('timestamp','?')})",
+                type="Archive Snapshot",
+                source="Rust:HTTP Archive",
+                confidence="Medium", color="slate",
+                threat_level="Informational",
+                status=f"HTTP {snap.get('status_code','?')} {snap.get('mime_type','?')}",
+                raw_data=snap.get("wayback_url",""),
+                tags=["rust","archive","wayback"]))
+        if has_.get("total_snapshots", 0) > 0:
+            findings.append(IntelligenceFinding(
+                entity=f"Archive Scanner: {has_.get('total_snapshots',0)} snapshots across {has_.get('unique_years',0)} years ({has_.get('years_covered','?')})",
+                type="Archive Summary", source="Rust:HTTP Archive",
+                confidence="Medium", color="slate",
+                threat_level="Informational", status="Complete",
+                tags=["rust","archive","summary"]))
 
         return findings
 

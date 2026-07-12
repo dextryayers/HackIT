@@ -1,4 +1,4 @@
-import re
+import re, asyncio
 import json
 from urllib.parse import urlparse, quote
 from typing import List
@@ -74,15 +74,22 @@ async def crawl(target: str, client) -> List:
     if t.startswith("http"):
         t = urlparse(t).netloc
 
-    all_results = []
-    sources_with_data = 0
+    sem = asyncio.Semaphore(10)
 
-    for name, url_template in FRAUD_SOURCES:
-        result = await search_fraud_source(name, url_template, t, client)
-        if result:
-            all_results.append(result)
-            if result["mentions"] > 0 or result["risk_hits"]:
-                sources_with_data += 1
+    async def search_with_sem(name, url_template):
+        async with sem:
+            return await search_fraud_source(name, url_template, t, client)
+
+    tasks = [search_with_sem(name, url_template) for name, url_template in FRAUD_SOURCES]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    all_results = []
+    for r in results:
+        if isinstance(r, Exception) or not r:
+            continue
+        all_results.append(r)
+
+    sources_with_data = sum(1 for r in all_results if r.get("mentions", 0) > 0 or r.get("risk_hits"))
 
     total_risk_score = 0
     total_positive = 0

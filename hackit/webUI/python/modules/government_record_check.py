@@ -1,4 +1,4 @@
-import re
+import re, asyncio
 from urllib.parse import urlparse, quote
 from typing import List
 from module_common import safe_fetch, make_finding
@@ -19,7 +19,9 @@ GOVERNMENT_SOURCES = [
     ("US Courts PACER", "https://pacer.uscourts.gov/search?q={}"),
     ("US Copyright", "https://cocatalog.loc.gov/cgi-bin/Pwebrecon.cgi?Search_Arg={}&Search_Code=FT"),
     ("State Registrations", "https://www.sos.state.gov/search?q={}"),
-]
+    ("EU EUIPO", "https://euipo.europa.eu/eSearch/#basic/1+1+1+1/1000+1000+1000+1000/{}"),
+    ("WIPO Global Brand", "https://branddb.wipo.int/en/quicksearch?by=brandName&v={}&_c=G"),
+    ("German DPMA", "https://register.dpma.de/DPMAregister/pat/search?query={}")]
 
 
 async def search_source(name: str, url_template: str, target: str, client) -> dict:
@@ -58,14 +60,22 @@ async def crawl(target: str, client) -> List:
     if t.startswith("http"):
         t = urlparse(t).netloc
 
-    all_results = []
-    sources_with_data = 0
+    sem = asyncio.Semaphore(8)
 
-    for name, url_template in GOVERNMENT_SOURCES:
-        result = await search_source(name, url_template, t, client)
-        if result:
-            all_results.append(result)
-            sources_with_data += 1
+    async def search_with_sem(name, url_template):
+        async with sem:
+            return await search_source(name, url_template, t, client)
+
+    tasks = [search_with_sem(name, url_template) for name, url_template in GOVERNMENT_SOURCES]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    all_results = []
+    for r in results:
+        if isinstance(r, Exception) or not r:
+            continue
+        all_results.append(r)
+
+    sources_with_data = len(all_results)
 
     if all_results:
         findings.append(make_finding(

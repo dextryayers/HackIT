@@ -1,7 +1,7 @@
-import re
+import re, asyncio, time
 import httpx
 from urllib.parse import urlparse
-from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
+from module_common import safe_fetch, make_finding
 from models import IntelligenceFinding
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
@@ -15,6 +15,9 @@ HONEYPOT_FIELD_PATTERNS = [
     r"position\s*:\s*fixed;\s*(top|left)\s*:\s*-\d+",
     r"type\s*=\s*['\"]?hidden['\"]?",
     r"aria-hidden\s*=\s*['\"]?true['\"]?",
+    r"tabindex\s*=\s*['\"]?-1['\"]?",
+    r"height\s*:\s*0(?!important)",
+    r"width\s*:\s*0(?!important)",
 ]
 
 TRAP_DIRECTORIES = [
@@ -22,6 +25,15 @@ TRAP_DIRECTORIES = [
     "/phpmyadmin", "/conftest", "/shell", "/cmd", "/exec",
     "/debug", "/test", "/dev", "/.git", "/.env", "/.aws",
     "/private", "/protected", "/secret", "/hidden",
+    "/config", "/configuration", "/setting", "/settings",
+    "/cgi-bin", "/scripts", "/bin", "/tmp", "/temp",
+    "/.svn", "/.hg", "/.bzr", "/.cvs",
+    "/_debug", "/_profiler", "/telescope",
+    "/actuator", "/jolokia", "/metrics",
+    "/phpinfo", "/info", "/status",
+    "/db", "/database", "/sql", "/dump",
+    "/log", "/logs", "/audit", "/error",
+    "/old", "/new", "/bak", "/backup",
 ]
 
 SUSPICIOUS_EMAIL_PATTERNS = [
@@ -32,22 +44,31 @@ SUSPICIOUS_EMAIL_PATTERNS = [
     r"trap@\S+",
     r"honeypot@\S+",
     r"fake@\S+",
+    r"decoy@\S+",
 ]
 
-async def check_directory(client: httpx.AsyncClient, base_url: str, path: str) -> dict:
-    result = {"path": path, "status": 0, "is_honeypot": False, "indicators": []}
+CONCURRENT_LIMIT = 25
+
+async def check_directory(client, base_url, path, baseline_time):
+    result = {"path": path, "status": 0, "is_honeypot": False, "indicators": [], "response_time": 0}
     try:
-        resp = await safe_fetch(client,f"{base_url}{path}", timeout=8.0, follow_redirects=False, headers={"User-Agent": UA})
-        result["status"] = resp.status_code
-        if resp.status_code == 200:
+        start = time.monotonic()
+        resp = await safe_fetch(client, f"{base_url}{path}", timeout=6.0, follow_redirects=False, headers={"User-Agent": UA})
+        elapsed = time.monotonic() - start
+        result["response_time"] = elapsed
+        if resp:
+            result["status"] = resp.status_code
             content = resp.text.lower()
             if "honeypot" in content or "decoy" in content or "trapped" in content:
                 result["is_honeypot"] = True
-                result["indicators"].append("Page content mentions honeypot/decoy/trap")
-            if resp.elapsed and resp.elapsed.total_seconds() > 5:
-                result["indicators"].append(f"Slow response ({resp.elapsed.total_seconds():.1f}s) - possible honeypot")
+                result["indicators"].append("Content mentions honeypot/decoy")
+            if elapsed > baseline_time * 3:
+                result["indicators"].append(f"Very slow response ({elapsed:.1f}s vs {baseline_time:.1f}s baseline)")
             if len(resp.headers) > 20:
-                result["indicators"].append(f"Unusually many headers ({len(resp.headers)})")
+                result["indicators"].append(f"Many headers ({len(resp.headers)})")
+            server = resp.headers.get("server", "").lower()
+            if any(w in server for w in ["cloudflare", "akamai", "incapsula", "sucuri"]):
+                result["indicators"].append(f"WAF/CDN detected: {server}")
     except Exception:
         pass
     return result
@@ -58,29 +79,30 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     if domain.startswith("http"):
         domain = urlparse(domain).netloc
 
-    html = ""
     base_url = f"https://{domain}"
 
+    start = time.monotonic()
     for proto in ["https", "http"]:
         try:
-            resp = await safe_fetch(client,f"{proto}://{domain}", timeout=10.0, follow_redirects=True, headers={"User-Agent": UA})
-            html = resp.text
-            base_url = f"{proto}://{domain}"
-            break
+            resp = await safe_fetch(client, f"{proto}://{domain}", timeout=8.0, follow_redirects=True, headers={"User-Agent": UA})
+            if resp:
+                base_url = f"{proto}://{domain}"
+                break
         except Exception:
             continue
+    baseline_time = time.monotonic() - start
 
+    html = resp.text if resp else ""
+    hidden_fields = []
     if html:
-        hidden_fields = []
         for pattern in HONEYPOT_FIELD_PATTERNS:
             matches = re.findall(pattern, html, re.I)
-            for m in matches:
-                hidden_fields.append(m)
+            hidden_fields.extend(matches)
 
         if hidden_fields:
             findings.append(make_finding(
-                entity=f"Detected {len(hidden_fields)} potential honeypot field indicators",
-                ftype="Honeypot: Hidden Field Patterns",
+                entity=f"Detected {len(hidden_fields)} honeypot field indicators",
+                ftype="Honeypot: Hidden Fields",
                 source="HoneypotDetector",
                 confidence="Medium",
                 color="orange",
@@ -88,25 +110,14 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                 raw_data="\n".join(hidden_fields[:10]),
                 tags=["honeypot", "hidden-fields", "anti-bot"]
             ))
-        else:
-            findings.append(make_finding(
-                entity="No obvious honeypot field patterns detected in page source",
-                ftype="Honeypot: Field Check",
-                source="HoneypotDetector",
-                confidence="Medium",
-                color="emerald",
-                threat_level="Informational",
-                tags=["honeypot", "clean"]
-            ))
 
         fake_emails = []
         for pat in SUSPICIOUS_EMAIL_PATTERNS:
-            matches = re.findall(pat, html, re.I)
-            fake_emails.extend(matches)
+            fake_emails.extend(re.findall(pat, html, re.I))
         if fake_emails:
             findings.append(make_finding(
-                entity=f"Found {len(set(fake_emails))} suspicious/honeypot email addresses",
-                ftype="Honeypot: Suspicious Emails",
+                entity=f"Found {len(set(fake_emails))} suspicious email addresses in HTML",
+                ftype="Honeypot: Fake Emails",
                 source="HoneypotDetector",
                 confidence="Medium",
                 color="orange",
@@ -115,90 +126,59 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                 tags=["honeypot", "fake-emails"]
             ))
 
-        honeypot_link_patterns = re.findall(
-            r'href\s*=\s*["\']([^"\']*(?:honeypot|decoy|trap|fake|spam)[^"\']*?)["\']',
-            html, re.I
-        )
-        if honeypot_link_patterns:
-            findings.append(make_finding(
-                entity=f"Found {len(honeypot_link_patterns)} links containing honeypot/decoy/trap keywords",
-                ftype="Honeypot: Suspicious Links",
-                source="HoneypotDetector",
-                confidence="Medium",
-                color="red",
-                threat_level="High Risk",
-                raw_data="\n".join(honeypot_link_patterns[:10]),
-                tags=["honeypot", "suspicious-links"]
-            ))
+    sem = asyncio.Semaphore(CONCURRENT_LIMIT)
 
-    findings.append(make_finding(
-        entity=f"Testing {len(TRAP_DIRECTORIES)} common directories for honeypot behavior",
-        ftype="Honeypot: Directory Scan Started",
-        source="HoneypotDetector",
-        confidence="Medium",
-        color="slate",
-        threat_level="Informational",
-        tags=["honeypot", "directory-scan"]
-    ))
+    async def check_dir(path):
+        async with sem:
+            return await check_directory(client, base_url, path, baseline_time)
 
-    trap_results = []
-    for path in TRAP_DIRECTORIES:
-        result = await check_directory(client, base_url, path)
-        trap_results.append(result)
+    tasks = [check_dir(path) for path in TRAP_DIRECTORIES]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
 
-    trap_dirs = [r for r in trap_results if r["is_honeypot"]]
-    if trap_dirs:
-        for t in trap_dirs:
-            findings.append(make_finding(
-                entity=f"Potential honeypot directory: {t['path']} (HTTP {t['status']})",
-                ftype="Honeypot: Trap Directory",
-                source="HoneypotDetector",
-                confidence="Low",
-                color="orange",
-                threat_level="Elevated Risk",
-                raw_data=f"path={t['path']}, status={t['status']}, indicators={'; '.join(t['indicators'])}",
-                tags=["honeypot", "trap-directory"]
-            ))
+    trap_dirs = []
+    interesting_paths = []
+    for r in results:
+        if isinstance(r, Exception) or not isinstance(r, dict):
+            continue
+        if r["is_honeypot"]:
+            trap_dirs.append(r)
+        elif r["status"] in (200, 401, 403):
+            interesting_paths.append(r)
+        elif r["response_time"] > baseline_time * 5:
+            interesting_paths.append(r)
 
-    interesting_responses = [r for r in trap_results if r["status"] in (200, 401, 403) and not r["is_honeypot"]]
-    if interesting_responses:
+    for t in trap_dirs:
         findings.append(make_finding(
-            entity=f"{len(interesting_responses)} directories returned HTTP {interesting_responses[0]['status']} (may be monitored)",
-            ftype="Honeypot: Interesting Directories",
+            entity=f"Potential honeypot directory: {t['path']} (HTTP {t['status']})",
+            ftype="Honeypot: Trap Directory",
+            source="HoneypotDetector",
+            confidence="Medium",
+            color="red",
+            threat_level="High Risk",
+            raw_data=f"path={t['path']}, indicators={'; '.join(t['indicators'])}",
+            tags=["honeypot", "trap-directory"]
+        ))
+
+    if interesting_paths:
+        findings.append(make_finding(
+            entity=f"{len(interesting_paths)} directories may be monitored/honeypotted",
+            ftype="Honeypot: Monitored Paths",
             source="HoneypotDetector",
             confidence="Low",
             color="yellow",
             threat_level="Elevated Risk",
-            raw_data="\n".join([f"{r['path']} -> {r['status']}" for r in interesting_responses[:10]]),
+            raw_data="\n".join([f"{r['path']} -> {r['status']}" for r in interesting_paths[:15]]),
             tags=["honeypot", "interesting-paths"]
         ))
 
-    suspicious_ports = [22, 23, 3389, 5900, 8080, 8443, 4443, 2222, 10000, 31337]
-    for port in suspicious_ports[:5]:
-        try:
-            resp = await safe_fetch(client,f"http://{domain}:{port}", timeout=5.0, headers={"User-Agent": UA})
-            if resp.status_code < 500:
-                findings.append(make_finding(
-                    entity=f"Service on port {port} (HTTP {resp.status_code}) - possible honeyport",
-                    ftype="Honeypot: Unusual Port",
-                    source="HoneypotDetector",
-                    confidence="Low",
-                    color="orange",
-                    threat_level="Informational",
-                    raw_data=f"port={port}, http_status={resp.status_code}",
-                    tags=["honeypot", "honeyport"]
-                ))
-        except Exception:
-            continue
-
     findings.append(make_finding(
-        entity=f"Honeypot Analysis: {len(hidden_fields) if 'hidden_fields' in dir() else 0} field patterns, {len(trap_dirs)} trap directories, {len(interesting_responses)} interesting paths",
+        entity=f"Honeypot Analysis: {len(hidden_fields)} field patterns, {len(trap_dirs)} trap dirs, {len(interesting_paths)} monitored paths, {len(TRAP_DIRECTORIES)} tested",
         ftype="Honeypot: Summary",
         source="HoneypotDetector",
         confidence="Medium",
-        color="orange" if trap_dirs else "emerald",
-        threat_level="Elevated Risk" if trap_dirs else "Informational",
-        raw_data=f"field_patterns={len(hidden_fields) if 'hidden_fields' in dir() else 0}, trap_dirs={len(trap_dirs)}, interesting={len(interesting_responses)}",
+        color="red" if trap_dirs else "emerald",
+        threat_level="High Risk" if trap_dirs else "Informational",
+        raw_data=f"fields={len(hidden_fields)}, traps={len(trap_dirs)}, monitored={len(interesting_paths)}",
         tags=["honeypot", "summary"]
     ))
 

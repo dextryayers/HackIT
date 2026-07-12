@@ -18,6 +18,11 @@ DEFAULT_API_KEYS = {
     "hunter": "",
     "haveibeenpwned": "",
     "securitytrails": "",
+    "ipinfo": "",
+    "dehashed": "",
+    "whoisxmlapi": "",
+    "censys": "",
+    "intelx": "",
 }
 
 DEFAULT_SETTINGS = {
