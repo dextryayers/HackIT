@@ -86,9 +86,12 @@ async def run_scan_task(job_id: str, target: str, target_type: str):
         source_dist = {}
         cat_dist = {}
         for f in findings:
-            risk_dist[f.threat_level] = risk_dist.get(f.threat_level, 0) + 1
-            type_dist[f.type] = type_dist.get(f.type, 0) + 1
-            src = f.source.split(":")[0].strip() if ":" in f.source else f.source
+            f_threat = f.threat_level if f.threat_level else "Informational"
+            risk_dist[f_threat] = risk_dist.get(f_threat, 0) + 1
+            ftype = f.type if f.type else "Unknown"
+            type_dist[ftype] = type_dist.get(ftype, 0) + 1
+            fsrc = f.source if f.source else ""
+            src = fsrc.split(":")[0].strip() if ":" in fsrc else fsrc
             source_dist[src] = source_dist.get(src, 0) + 1
             cat = f.category or "UNCLASSIFIED"
             cat_dist[cat] = cat_dist.get(cat, 0) + 1
@@ -97,7 +100,10 @@ async def run_scan_task(job_id: str, target: str, target_type: str):
         found_total = len(findings)
         if logs:
             for log_entry in logs:
-                found_count = int(log_entry.get("found", 0))
+                if not isinstance(log_entry, dict):
+                    continue
+                raw_found = log_entry.get("found", 0)
+                found_count = int(raw_found) if raw_found is not None else 0
                 running_total += found_count
                 timeline.append({
                     "time": log_entry.get("time", ""),
@@ -105,7 +111,7 @@ async def run_scan_task(job_id: str, target: str, target_type: str):
                     "module": log_entry.get("module", "")
                 })
         timeline.append({
-            "time": time.strftime("%H:%M:%S"),
+            "time": time.strftime("%H:%M:%S") if hasattr(time, 'strftime') else "",
             "count": found_total,
             "module": "COMPLETE"
         })

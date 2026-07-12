@@ -733,6 +733,8 @@ class OSINTOrchestrator:
                     return []
                 coro = module.crawl(self.target, client)
                 mf = await asyncio.wait_for(coro, timeout=timeout_val + 5)
+                if mf is None:
+                    mf = []
                 if mf:
                     self.log(f"Module {mod_name}: {len(mf)} findings", "SUCCESS")
                 self.logs.append({"module":mod_name,"status":"Success","found":str(len(mf)),"time":datetime.now().strftime("%H:%M:%S")})
@@ -749,8 +751,8 @@ class OSINTOrchestrator:
         seen = {}
         order = []
         for f in findings:
-            entity = getattr(f, 'entity', str(f))
-            ftype = getattr(f, 'type', 'Unknown')
+            entity = getattr(f, 'entity', str(f)) or str(f)
+            ftype = getattr(f, 'type', 'Unknown') or 'Unknown'
             key = f"{entity}|{ftype}"
             if key not in seen:
                 seen[key] = f
@@ -763,11 +765,11 @@ class OSINTOrchestrator:
         high_risk = []
         for f in findings:
             type_counts[getattr(f, 'type', 'Unknown')] += 1
-            resolution = getattr(f, 'resolution', '')
-            entity = getattr(f, 'entity', '')
-            ftype = getattr(f, 'type', '')
-            tags = getattr(f, 'tags', [])
-            threat_level = getattr(f, 'threat_level', '')
+            resolution = getattr(f, 'resolution', '') or ''
+            entity = getattr(f, 'entity', '') or ''
+            ftype = getattr(f, 'type', '') or ''
+            tags = getattr(f, 'tags', []) or []
+            threat_level = getattr(f, 'threat_level', '') or ''
             if resolution and ftype == "Subdomain": by_resolution[resolution].append(entity)
             if ftype == "Email Address" and "@" in entity: email_domains[entity.split("@")[-1].lower()] += 1
             for tag in tags:
@@ -824,12 +826,14 @@ class OSINTOrchestrator:
     def generate_summary(self, findings):
         summary_map = {}
         for f in findings:
-            cat = self.get_category(f.type)
+            ftype = getattr(f, 'type', '') or ''
+            fentity = getattr(f, 'entity', '') or ''
+            cat = self.get_category(ftype)
             f.category = cat
-            if f.type not in summary_map:
-                summary_map[f.type] = {"type":f.type,"count":0,"last":"","category":cat}
-            summary_map[f.type]["count"] += 1
-            summary_map[f.type]["last"] = f.entity
+            if ftype not in summary_map:
+                summary_map[ftype] = {"type": ftype, "count": 0, "last": "", "category": cat}
+            summary_map[ftype]["count"] += 1
+            summary_map[ftype]["last"] = fentity
         return [SummaryItem(
             type=v["type"], unique_count=v["count"], total_count=v["count"],
             last_finding=v["last"], category=v["category"]
