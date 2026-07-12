@@ -1,6 +1,9 @@
 import sys
 import os
 import shlex
+import termios
+import tty
+import select
 try:
     import readline
 except ImportError:
@@ -36,6 +39,17 @@ class HackItConsole:
         self.current_context = "main"
         self.user = "aniipID"
         self.hostname = "hackit"
+
+        # Build set of all known command names (all nesting levels)
+        self._known_cmds = set()
+        def _walk(group):
+            for name in group.commands:
+                self._known_cmds.add(name)
+                child = group.commands.get(name)
+                if child and hasattr(child, 'commands'):
+                    _walk(child)
+        _walk(self.cli_group)
+        self._known_cmds.update(['exit', 'quit', 'help', 'clear', 'banner', 'back', 'whoami', 'config', 'osint', 'hackit', 'run'])
         
         # Setup history
         if readline:
@@ -64,15 +78,6 @@ class HackItConsole:
             return options[state]
         else:
             return None
-
-    def start(self):
-        """Start the interactive loop."""
-        # Show banner once on start
-        os.environ['HACKIT_NO_BANNER'] = '1' # Prevent double banner from cli() calls
-        display_banner()
-        
-        print(_colored("\n  [*] Welcome to the HackIt Interactive Console", DIM))
-        print(_colored("  [*] Type 'help' for commands or 'exit' to quit\n", DIM))
 
     def get_prompt(self):
         """Generate the prompt based on the selected theme (15 creative modes)."""
@@ -166,6 +171,75 @@ class HackItConsole:
             l2 = f"{_colored('└─$ ', B_BLUE)}"
             return f"{l1}\n{l2}"
 
+    def _get_cmd_color(self, buffer_text):
+        first_word = buffer_text.strip().split()[0].lower() if buffer_text.strip() else ''
+        if first_word in ('help', 'config'):
+            return B_GREEN
+        elif first_word in self._known_cmds:
+            return BLUE
+        return RED
+
+    def _redraw_input(self, prompt_suffix, buf, color):
+        sys.stdout.write(f'\r\033[K{prompt_suffix}{_colored("".join(buf), color)}')
+        sys.stdout.flush()
+
+    def _read_colored_input(self, prompt):
+        fd = sys.stdin.fileno()
+        old = termios.tcgetattr(fd)
+        suffix = prompt[prompt.rfind('\n') + 1:] if '\n' in prompt else prompt
+        buf = []
+        hist = []
+        hist_idx = -1
+        try:
+            tty.setraw(fd)
+            sys.stdout.write(prompt)
+            sys.stdout.flush()
+            while True:
+                r, _, _ = select.select([sys.stdin], [], [], 0.05)
+                if not r:
+                    continue
+                ch = sys.stdin.read(1)
+                if ch in ('\r', '\n'):
+                    sys.stdout.write('\r\n')
+                    break
+                elif ch in ('\x7f', '\b'):
+                    if buf:
+                        buf.pop()
+                elif ch == '\t':
+                    text = ''.join(buf)
+                    cmds = list(self.cli_group.commands.keys()) + ['exit', 'quit', 'help', 'clear', 'banner', 'back', 'whoami', 'config', 'osint', 'run']
+                    matches = [c for c in cmds if c.startswith(text)]
+                    if len(matches) == 1:
+                        buf = list(matches[0] + ' ')
+                elif ch == '\x03':
+                    sys.stdout.write('\r\n')
+                    raise KeyboardInterrupt
+                elif ch == '\x04':
+                    sys.stdout.write('\r\n')
+                    raise EOFError
+                elif ch == '\x1b':
+                    seq = ch + sys.stdin.read(2)
+                    if seq == '\x1b[A':
+                        if hist_idx < len(hist):
+                            hist_idx += 1
+                        if hist_idx <= len(hist) - 1:
+                            buf = list(hist[-(hist_idx + 1)])
+                        else:
+                            hist_idx = len(hist)
+                    elif seq == '\x1b[B':
+                        if hist_idx > 0:
+                            hist_idx -= 1
+                            buf = list(hist[-(hist_idx + 1)])
+                        else:
+                            hist_idx = -1
+                            buf = []
+                elif ord(ch) >= 32:
+                    buf.append(ch)
+                self._redraw_input(suffix, buf, self._get_cmd_color(''.join(buf)))
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        return ''.join(buf)
+
     def start(self):
         """Start the interactive loop."""
         # Show banner once on start
@@ -179,9 +253,15 @@ class HackItConsole:
         while True:
             try:
                 prompt = self.get_prompt()
-                line = input(prompt).strip()
+                line = self._read_colored_input(prompt).strip()
                 if not line:
                     continue
+
+                if readline:
+                    try:
+                        readline.add_history(line)
+                    except Exception:
+                        pass
                 
                 # Handle universal /AI commands
                 from hackit.agent import handle_ai_command
@@ -240,7 +320,7 @@ class HackItConsole:
 
                 # Parse and execute using click
                 args = shlex.split(line)
-                
+
                 # Special Case: hackit [options] to set global state from within console
                 if args[0] == 'hackit':
                     # This allows setting --proxy, --no-verify, etc. dynamically
