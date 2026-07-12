@@ -1,6 +1,7 @@
-import httpx
 import re
+import httpx
 from urllib.parse import urlparse
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 from models import IntelligenceFinding
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
@@ -34,7 +35,7 @@ METHOD_COLORS = {
 async def test_method(client: httpx.AsyncClient, url: str, method: str) -> dict:
     result = {"method": method, "status": 0, "allowed": False, "headers": {}, "body_preview": "", "elapsed": 0.0}
     try:
-        resp = await client.request(method, url, timeout=10.0, follow_redirects=False, headers={"User-Agent": UA})
+        resp = await safe_fetch(client, url, method=method, timeout=10.0, follow_redirects=False, headers={"User-Agent": UA})
         result["status"] = resp.status_code
         result["headers"] = {k.lower(): v for k, v in dict(resp.headers).items()}
         result["body_preview"] = resp.text[:200]
@@ -56,16 +57,16 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     base_url = f"https://{domain}"
     for proto in ["https", "http"]:
         try:
-            r = await client.get(f"{proto}://{domain}", timeout=10.0, follow_redirects=True, headers={"User-Agent": UA})
+            r = await safe_fetch(client,f"{proto}://{domain}", timeout=10.0, follow_redirects=True, headers={"User-Agent": UA})
             if r.status_code < 500:
                 base_url = f"{proto}://{domain}"
                 break
         except Exception:
             continue
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Testing HTTP methods on {base_url}",
-        type="HTTP Method: Scan Started",
+        ftype="HTTP Method: Scan Started",
         source="HTTPMethodAnalyzer",
         confidence="High",
         color="slate",
@@ -98,9 +99,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                     threat = threat_level
                     break
 
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"HTTP {method} enabled on {entry['path']} -> HTTP {entry['status']} ({risk})",
-                type=f"HTTP Method: {method}",
+                ftype=f"HTTP Method: {method}",
                 source="HTTPMethodAnalyzer",
                 confidence="High",
                 color=color,
@@ -118,9 +119,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         allow_header = opt_result["headers"].get("allow", "")
         if allow_header:
             allowed_methods = [m.strip() for m in allow_header.split(",")]
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"OPTIONS response: Allowed methods: {', '.join(allowed_methods)}",
-                type="HTTP Method: OPTIONS Discovery",
+                ftype="HTTP Method: OPTIONS Discovery",
                 source="HTTPMethodAnalyzer",
                 confidence="High",
                 color="blue",
@@ -131,9 +132,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     trace_result = await test_method(client, base_url, "TRACE")
     if trace_result["allowed"] and trace_result["status"] == 200:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="HTTP TRACE method enabled - XST (Cross-Site Tracing) vulnerability possible",
-            type="HTTP Method: TRACE XST",
+            ftype="HTTP Method: TRACE XST",
             source="HTTPMethodAnalyzer",
             confidence="High",
             color="red",
@@ -147,11 +148,11 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     if put_result["allowed"]:
         put_body = "test_upload_content"
         try:
-            put_resp = await client.put(f"{base_url}/test_put_{domain.replace('.', '_')}.txt", content=put_body, headers={"User-Agent": UA, "Content-Type": "text/plain"})
+            put_resp = await safe_fetch(client, f"{base_url}/test_put_{domain.replace('.', '_')}.txt", method="PUT", content=put_body, headers={"User-Agent": UA, "Content-Type": "text/plain"})
             if put_resp.status_code in (200, 201, 204):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"PUT method allows file upload (HTTP {put_resp.status_code})",
-                    type="HTTP Method: PUT Upload",
+                    ftype="HTTP Method: PUT Upload",
                     source="HTTPMethodAnalyzer",
                     confidence="High",
                     color="red",
@@ -165,9 +166,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     connect_result = await test_method(client, base_url, "CONNECT")
     if connect_result["allowed"]:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="HTTP CONNECT method enabled - possible proxy functionality",
-            type="HTTP Method: CONNECT Proxy",
+            ftype="HTTP Method: CONNECT Proxy",
             source="HTTPMethodAnalyzer",
             confidence="High",
             color="red",
@@ -177,9 +178,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         ))
 
     if not all_methods_status:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="Only standard HTTP methods (GET/HEAD/POST) appear to be enabled",
-            type="HTTP Method: Standard Only",
+            ftype="HTTP Method: Standard Only",
             source="HTTPMethodAnalyzer",
             confidence="Medium",
             color="emerald",
@@ -187,9 +188,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             tags=["http-methods", "secure"]
         ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"HTTP Method Analysis: {len(all_methods_status)} methods enabled, {len(risky_methods_enabled)} risky ({', '.join(risky_methods_enabled) if risky_methods_enabled else 'None'})",
-        type="HTTP Method: Summary",
+        ftype="HTTP Method: Summary",
         source="HTTPMethodAnalyzer",
         confidence="High",
         color="red" if risky_methods_enabled else "emerald",

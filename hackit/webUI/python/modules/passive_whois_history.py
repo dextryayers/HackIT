@@ -1,9 +1,8 @@
-import httpx
 import re
 import json
 from datetime import datetime
 from urllib.parse import urlparse
-from models import IntelligenceFinding
+from ..module_common import safe_fetch, make_finding
 
 WHOIS_HISTORY_SOURCES = [
     {"name": "WhoisXML Sample", "url": "https://www.whoisxmlapi.com/whoisserver/WhoisService?domainName={domain}&outputFormat=json", "type": "json"},
@@ -46,20 +45,16 @@ COUNTRY_NAMES = {
     "ES": "Spain", "ZA": "South Africa",
 }
 
-async def _fetch_viewdns_whois_history(domain: str, client: httpx.AsyncClient) -> list:
+async def _fetch_viewdns_whois_history(domain: str, client: AsyncClient) -> list:
     findings = []
     try:
-        resp = await client.get(
-            f"https://viewdns.info/whoishistory/?domain={domain}",
-            timeout=20.0,
-            headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}
-        )
+        resp = await safe_fetch(client, f"https://viewdns.info/whoishistory/?domain={domain}", timeout=20.0)
         if resp.status_code == 200:
             entries = re.findall(r'<tr[^>]*>.*?<td[^>]*>(.*?)</td>.*?<td[^>]*>(.*?)</td>.*?<td[^>]*>(.*?)</td>.*?</tr>', resp.text, re.DOTALL)
             if entries:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Found {len(entries)} WHOIS history entries from ViewDNS",
-                    type="WHOIS History - ViewDNS Summary",
+                    ftype="WHOIS History - ViewDNS Summary",
                     source="ViewDNS",
                     confidence="Medium",
                     color="blue",
@@ -70,9 +65,9 @@ async def _fetch_viewdns_whois_history(domain: str, client: httpx.AsyncClient) -
                 for entry in entries[:30]:
                     date = entry[0].strip()[:20]
                     detail = entry[1].strip()[:200] if len(entry) > 1 else ""
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=detail if detail else f"WHOIS change on {date}",
-                        type=f"WHOIS History Change ({date})" if date else "WHOIS History Change",
+                        ftype=f"WHOIS History Change ({date})" if date else "WHOIS History Change",
                         source="ViewDNS",
                         confidence="Medium",
                         color="slate",
@@ -85,14 +80,10 @@ async def _fetch_viewdns_whois_history(domain: str, client: httpx.AsyncClient) -
         pass
     return findings
 
-async def _fetch_whoisxml_history(domain: str, client: httpx.AsyncClient) -> list:
+async def _fetch_whoisxml_history(domain: str, client: AsyncClient) -> list:
     findings = []
     try:
-        resp = await client.get(
-            f"https://www.whoisxmlapi.com/whoisserver/WhoisService?domainName={domain}&outputFormat=json",
-            timeout=15.0,
-            headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
-        )
+        resp = await safe_fetch(client, f"https://www.whoisxmlapi.com/whoisserver/WhoisService?domainName={domain}&outputFormat=json", timeout=15.0)
         if resp.status_code == 200:
             data = resp.json()
             whois_record = data.get("whoisRecord", data)
@@ -106,9 +97,9 @@ async def _fetch_whoisxml_history(domain: str, client: httpx.AsyncClient) -> lis
                 country = registrant.get("country", "")
                 email = registrant.get("email", "")
                 if org:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=org[:200],
-                        type="WHOIS History - Registrant Organization",
+                        ftype="WHOIS History - Registrant Organization",
                         source="WhoisXML",
                         confidence="High",
                         color="slate",
@@ -117,9 +108,9 @@ async def _fetch_whoisxml_history(domain: str, client: httpx.AsyncClient) -> lis
                     ))
                 if country:
                     country_full = COUNTRY_NAMES.get(country.upper(), country)
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=country_full,
-                        type="WHOIS History - Registrant Country",
+                        ftype="WHOIS History - Registrant Country",
                         source="WhoisXML",
                         confidence="High",
                         color="slate",
@@ -127,9 +118,9 @@ async def _fetch_whoisxml_history(domain: str, client: httpx.AsyncClient) -> lis
                         tags=["whois-history", "country"]
                     ))
                 if email:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=email[:200],
-                        type="WHOIS History - Registrant Email",
+                        ftype="WHOIS History - Registrant Email",
                         source="WhoisXML",
                         confidence="High",
                         color="orange",
@@ -137,9 +128,9 @@ async def _fetch_whoisxml_history(domain: str, client: httpx.AsyncClient) -> lis
                         tags=["whois-history", "email"]
                     ))
             if registrar:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=registrar[:200],
-                    type="WHOIS History - Registrar",
+                    ftype="WHOIS History - Registrar",
                     source="WhoisXML",
                     confidence="High",
                     color="slate",
@@ -151,9 +142,9 @@ async def _fetch_whoisxml_history(domain: str, client: httpx.AsyncClient) -> lis
                     cd = datetime.strptime(created[:10], "%Y-%m-%d") if created[:10].count("-") == 2 else None
                     if cd:
                         age = (datetime.now() - cd).days
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"Domain created: {created[:10]} ({age} days ago)",
-                            type="WHOIS History - Creation Date",
+                            ftype="WHOIS History - Creation Date",
                             source="WhoisXML",
                             confidence="High",
                             color="emerald" if age > 365 else "orange",
@@ -163,9 +154,9 @@ async def _fetch_whoisxml_history(domain: str, client: httpx.AsyncClient) -> lis
                 except Exception:
                     pass
             if updated:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Last updated: {updated[:10]}",
-                    type="WHOIS History - Last Update",
+                    ftype="WHOIS History - Last Update",
                     source="WhoisXML",
                     confidence="High",
                     color="slate",
@@ -173,9 +164,9 @@ async def _fetch_whoisxml_history(domain: str, client: httpx.AsyncClient) -> lis
                     tags=["whois-history", "updated"]
                 ))
             if expires:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Expires: {expires[:10]}",
-                    type="WHOIS History - Expiry Date",
+                    ftype="WHOIS History - Expiry Date",
                     source="WhoisXML",
                     confidence="High",
                     color="red" if "202" in expires[:7] else "emerald",
@@ -186,14 +177,10 @@ async def _fetch_whoisxml_history(domain: str, client: httpx.AsyncClient) -> lis
         pass
     return findings
 
-async def _detect_registrar_transfers(domain: str, client: httpx.AsyncClient) -> list:
+async def _detect_registrar_transfers(domain: str, client: AsyncClient) -> list:
     findings = []
     try:
-        resp = await client.get(
-            f"https://api.hackertarget.com/whois/?q={domain}",
-            timeout=12.0,
-            headers={"User-Agent": "Mozilla/5.0"}
-        )
+        resp = await safe_fetch(client, f"https://api.hackertarget.com/whois/?q={domain}", timeout=12.0)
         if resp.status_code == 200:
             text = resp.text
             registrars_found = []
@@ -204,9 +191,9 @@ async def _detect_registrar_transfers(domain: str, client: httpx.AsyncClient) ->
                         registrars_found.append(val)
             if registrars_found:
                 unique_regs = list(set(registrars_found))
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Current registrar(s): {', '.join(unique_regs[:3])}",
-                    type="WHOIS History - Current Registrar",
+                    ftype="WHOIS History - Current Registrar",
                     source="WHOIS History",
                     confidence="High",
                     color="slate",
@@ -224,9 +211,9 @@ async def _detect_registrar_transfers(domain: str, client: httpx.AsyncClient) ->
                     creation_line = line.split(":", 1)[1].strip()[:20]
                     break
             if creation_line and updated_line:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Created: {creation_line}, Last Updated: {updated_line}",
-                    type="WHOIS History - Timeline Span",
+                    ftype="WHOIS History - Timeline Span",
                     source="WHOIS History",
                     confidence="High",
                     color="blue",
@@ -240,9 +227,9 @@ async def _detect_registrar_transfers(domain: str, client: httpx.AsyncClient) ->
                     org_name = line.split(":", 1)[1].strip()
                     break
             if org_name:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=org_name[:200],
-                    type="WHOIS History - Organization",
+                    ftype="WHOIS History - Organization",
                     source="WHOIS History",
                     confidence="High",
                     color="slate",
@@ -256,9 +243,9 @@ async def _detect_registrar_transfers(domain: str, client: httpx.AsyncClient) ->
                     if "@" in val:
                         emails_found.add(val)
             for email in emails_found:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=email[:200],
-                    type="WHOIS History - Contact Email",
+                    ftype="WHOIS History - Contact Email",
                     source="WHOIS History",
                     confidence="High",
                     color="orange",
@@ -269,23 +256,19 @@ async def _detect_registrar_transfers(domain: str, client: httpx.AsyncClient) ->
         pass
     return findings
 
-async def _check_privacy_protection(domain: str, client: httpx.AsyncClient) -> list:
+async def _check_privacy_protection(domain: str, client: AsyncClient) -> list:
     findings = []
     try:
-        resp = await client.get(
-            f"https://api.hackertarget.com/whois/?q={domain}",
-            timeout=12.0,
-            headers={"User-Agent": "Mozilla/5.0"}
-        )
+        resp = await safe_fetch(client, f"https://api.hackertarget.com/whois/?q={domain}", timeout=12.0)
         if resp.status_code == 200:
             text = resp.text.lower()
             privacy_keywords = ["privacy", "whois guard", "whoisguard", "redacted", "private",
                                "proxy", "data protected", "protection", "GDPR", "REDACTED FOR PRIVACY"]
             for kw in privacy_keywords:
                 if kw in text:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Privacy/Protection service detected: '{kw}' in WHOIS",
-                        type="WHOIS History - Privacy Protection",
+                        ftype="WHOIS History - Privacy Protection",
                         source="WHOIS History",
                         confidence="High",
                         color="orange",
@@ -297,9 +280,9 @@ async def _check_privacy_protection(domain: str, client: httpx.AsyncClient) -> l
                     break
             whois_guard = re.search(r'Whois\s*Guard|WhoisGuard|Privacy\s*Protect', resp.text, re.I)
             if whois_guard:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity="WhoisGuard/PrivacyProtection service active",
-                    type="WHOIS History - Privacy Service Identified",
+                    ftype="WHOIS History - Privacy Service Identified",
                     source="WHOIS History",
                     confidence="High",
                     color="orange",
@@ -313,9 +296,9 @@ async def _check_privacy_protection(domain: str, client: httpx.AsyncClient) -> l
                     registrant_org = line.split(":", 1)[1].strip()
                     break
             if registrant_org and "privacy" in registrant_org.lower():
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Organization field contains privacy wording: '{registrant_org}'",
-                    type="WHOIS History - Obfuscated Registrant",
+                    ftype="WHOIS History - Obfuscated Registrant",
                     source="WHOIS History",
                     confidence="High",
                     color="orange",
@@ -326,15 +309,15 @@ async def _check_privacy_protection(domain: str, client: httpx.AsyncClient) -> l
         pass
     return findings
 
-async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFinding]:
+async def crawl(target: str, client: AsyncClient) -> list[IntelligenceFinding]:
     findings = []
     domain = target.strip().lower()
     if "://" in domain:
         domain = urlparse(domain).netloc
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Building WHOIS history timeline for {domain}",
-        type="WHOIS History - Start",
+        ftype="WHOIS History - Start",
         source="WHOIS History",
         confidence="High", color="blue",
         status="Started",
@@ -355,9 +338,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     if findings:
         entity_types = set(f.type for f in findings)
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"WHOIS History analysis complete: {len(findings)} findings across {len(entity_types)} categories",
-            type="WHOIS History - Summary",
+            ftype="WHOIS History - Summary",
             source="WHOIS History",
             confidence="High", color="purple",
             status="Complete",

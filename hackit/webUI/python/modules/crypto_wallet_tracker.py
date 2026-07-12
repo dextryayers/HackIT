@@ -1,8 +1,8 @@
 import httpx
 import re
 import json
-from urllib.parse import urlparse, quote
 from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 
 BLOCKCHAIN_EXPLORERS = {
     "BTC": ["https://blockchain.info/address/{}", "https://blockchair.com/bitcoin/address/{}"],
@@ -79,7 +79,7 @@ async def check_blockchain_explorer(client: httpx.AsyncClient, chain: str, addre
             for url_template in BLOCKCHAIN_EXPLORERS[chain][:1]:
                 try:
                     url = url_template.format(address)
-                    resp = await client.get(url, timeout=10.0,
+                    resp = await safe_fetch(client, url, timeout=10.0,
                         headers={"User-Agent": "Mozilla/5.0"})
                     if resp.status_code == 200:
                         results.append({
@@ -174,9 +174,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     wallet_addresses = await detect_wallet_addresses(query)
     for w in wallet_addresses:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Wallet address detected: {w['chain']} - {w['address'][:16]}...",
-            type="Wallet Address Detection",
+            ftype="Wallet Address Detection",
             source="Wallet Tracker",
             confidence="High",
             color="yellow",
@@ -189,7 +189,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
         explorer_results = await check_blockchain_explorer(client, w['chain'], w['address'])
         for r in explorer_results:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Blockchain explorer: {r['chain']} - {r['explorer_url']} ({r['response_length']} bytes)",
                 type="Blockchain Explorer Check",
                 source=r['chain'],
@@ -204,9 +204,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     mixing_results = await detect_mixing_usage(query)
     for r in mixing_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Mixing/tumbler pattern detected: {r['match']}",
-            type="Mixing Service Detection",
+            ftype="Mixing Service Detection",
             source="Wallet Tracker",
             confidence="Medium",
             color="red",
@@ -219,9 +219,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     exchange_results = await detect_exchange_addresses(query)
     for r in exchange_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Exchange association detected: {r['match']}",
-            type="Exchange Address Detection",
+            ftype="Exchange Address Detection",
             source="Wallet Tracker",
             confidence="Medium",
             color="yellow",
@@ -234,9 +234,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     darknet_results = await detect_darknet_interactions(query)
     for r in darknet_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Darknet market interaction detected: {r['match']}",
-            type="Darknet Interaction Detection",
+            ftype="Darknet Interaction Detection",
             source="Wallet Tracker",
             confidence="High",
             color="red",
@@ -248,9 +248,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         ))
 
     for chain in list(BLOCKCHAIN_EXPLORERS.keys())[:15]:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Blockchain monitored: {chain}",
-            type="Blockchain Coverage",
+            ftype="Blockchain Coverage",
             source="Wallet Tracker",
             confidence="Low",
             color="slate",
@@ -262,7 +262,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         ))
 
     risk = await calculate_risk_score(wallet_addresses, mixing_results, exchange_results, darknet_results)
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Wallet risk score: {risk['score']}/100 ({risk['level']})",
         type="Wallet Risk Assessment",
         source="Wallet Tracker",
@@ -276,7 +276,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         tags=["risk-score", "wallet", risk['level'].lower().replace(" ", "-")]
     ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Wallet tracking complete for {query[:32]}: detected {len(wallet_addresses)} wallets, checked {len(BLOCKCHAIN_EXPLORERS)} chains",
         type="Wallet Tracking Summary",
         source="Wallet Tracker",

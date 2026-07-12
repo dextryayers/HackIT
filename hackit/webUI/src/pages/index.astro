@@ -24,6 +24,7 @@ import Layout from '../layouts/Layout.astro';
 							id="target-input"
 							type="text"
 							placeholder="domain.com, IP address, or email@example.com"
+							aria-label="Target identifier input"
 							class="w-full bg-sf-lightbg border border-sf-border rounded-lg px-4 py-2.5 text-sm text-sf-text placeholder:text-sf-muted/40 focus:outline-none focus:border-sf-tabActive/50 focus:ring-1 focus:ring-sf-tabActive/20 transition-all"
 						/>
 					</div>
@@ -49,7 +50,7 @@ import Layout from '../layouts/Layout.astro';
 								<div class="flex flex-col gap-1.5 w-full">
 									<div class="flex items-center justify-between">
 										<span class="text-sm font-medium">{mode.label}</span>
-										<input type="radio" name="scanmode" value={mode.id} checked={mode.id === 'full'} class="accent-sf-tabActive" />
+										<input type="radio" name="scanmode" value={mode.id} checked={mode.id === 'full'} class="accent-sf-tabActive" aria-label={`${mode.label} scan mode`} />
 									</div>
 									<p class="text-[11px] text-sf-muted leading-relaxed">{mode.desc}</p>
 								</div>
@@ -60,15 +61,15 @@ import Layout from '../layouts/Layout.astro';
 
 				<!-- Actions -->
 				<div class="flex items-center gap-3 pt-2 border-t border-sf-border">
-					<button id="run-scan-btn" class="inline-flex items-center gap-2 px-5 py-2 bg-sf-tabActive text-black text-sm font-semibold rounded-lg hover:brightness-110 transition-all">
+					<button id="run-scan-btn" aria-label="Initiate scan" class="inline-flex items-center gap-2 px-5 py-2 bg-sf-tabActive text-black text-sm font-semibold rounded-lg hover:brightness-110 transition-all">
 						<i class="fas fa-play text-xs"></i>
 						Initiate Scan
 					</button>
-					<button id="verbose-scan-btn" class="inline-flex items-center gap-2 px-5 py-2 bg-sf-card border border-sf-border text-sf-text text-sm font-medium rounded-lg hover:border-sf-muted transition-all">
+					<button id="verbose-scan-btn" aria-label="Run verbose scan" class="inline-flex items-center gap-2 px-5 py-2 bg-sf-card border border-sf-border text-sf-text text-sm font-medium rounded-lg hover:border-sf-muted transition-all">
 						<i class="fas fa-terminal text-xs"></i>
 						Verbose
 					</button>
-					<button id="adv-settings-btn" class="text-sm text-sf-muted hover:text-sf-text transition-colors font-medium ml-auto">
+					<button id="adv-settings-btn" aria-label="Open advanced settings" class="text-sm text-sf-muted hover:text-sf-text transition-colors font-medium ml-auto">
 						<i class="fas fa-cog mr-1.5"></i>
 						Advanced
 					</button>
@@ -98,32 +99,32 @@ import Layout from '../layouts/Layout.astro';
 	</div>
 
 	<!-- Scan Settings Drawer -->
-	<div id="settings-drawer-overlay" class="fixed inset-0 z-[100] bg-black/60 backdrop-blur-sm hidden transition-opacity duration-300" onclick="closeSettings()"></div>
-	<div id="settings-drawer" class="fixed top-0 right-0 z-[101] h-full w-full max-w-md bg-sf-card border-l border-sf-border shadow-2xl transform translate-x-full transition-transform duration-300 overflow-y-auto">
+			<div id="settings-drawer-overlay" class="fixed inset-0 z-[100] bg-black/60 backdrop-blur-sm hidden transition-opacity duration-300" onclick="closeSettings()" aria-hidden="true"></div>
+	<div id="settings-drawer" class="fixed top-0 right-0 z-[101] h-full w-full max-w-md bg-sf-card border-l border-sf-border shadow-2xl transform translate-x-full transition-transform duration-300 overflow-y-auto" aria-label="Scan settings drawer">
 		<div class="p-6 space-y-6">
 			<div class="flex items-center justify-between">
 				<h3 class="text-sm font-semibold flex items-center gap-2"><i class="fas fa-cog text-sf-tabActive"></i> Scan Settings</h3>
-				<button onclick="closeSettings()" class="w-7 h-7 rounded-lg border border-sf-border flex items-center justify-center hover:bg-sf-lightbg transition-all"><i class="fas fa-times text-xs"></i></button>
+				<button onclick="closeSettings()" aria-label="Close settings drawer" class="w-7 h-7 rounded-lg border border-sf-border flex items-center justify-center hover:bg-sf-lightbg transition-all"><i class="fas fa-times text-xs"></i></button>
 			</div>
 			<div class="space-y-4">
 				<div><label class="text-xs font-medium text-sf-muted block mb-1.5">Depth</label>
-					<select id="adv-depth" class="w-full bg-sf-lightbg border border-sf-border rounded-lg px-3 py-2 text-xs">
+					<select id="adv-depth" aria-label="Scan depth" class="w-full bg-sf-lightbg border border-sf-border rounded-lg px-3 py-2 text-xs">
 						<option value="quick">Quick (fast)</option><option value="normal">Normal</option><option value="deep" selected>Deep (thorough)</option><option value="exhaustive">Exhaustive (max)</option>
 					</select>
 				</div>
 				<div><label class="text-xs font-medium text-sf-muted block mb-1.5">Sniper Ratio</label>
-					<select id="adv-sniper" class="w-full bg-sf-lightbg border border-sf-border rounded-lg px-3 py-2 text-xs">
+					<select id="adv-sniper" aria-label="Sniper ratio" class="w-full bg-sf-lightbg border border-sf-border rounded-lg px-3 py-2 text-xs">
 						<option value="stealth">Stealth</option><option value="balanced">Balanced</option><option value="max" selected>Max (aggressive)</option>
 					</select>
 				</div>
 				<div><label class="text-xs font-medium text-sf-muted block mb-1.5">Timeout (seconds)</label>
-					<input type="number" id="adv-timeout" value="15" min="5" max="300" class="w-full bg-sf-lightbg border border-sf-border rounded-lg px-3 py-2 text-xs" />
+					<input type="number" id="adv-timeout" value="15" min="5" max="300" aria-label="Scan timeout in seconds" class="w-full bg-sf-lightbg border border-sf-border rounded-lg px-3 py-2 text-xs" />
 				</div>
 				<div><label class="text-xs font-medium text-sf-muted block mb-1.5">Max Findings</label>
-					<input type="number" id="adv-maxfindings" value="5000" min="100" max="999999" class="w-full bg-sf-lightbg border border-sf-border rounded-lg px-3 py-2 text-xs" />
+					<input type="number" id="adv-maxfindings" value="5000" min="100" max="999999" aria-label="Maximum findings" class="w-full bg-sf-lightbg border border-sf-border rounded-lg px-3 py-2 text-xs" />
 				</div>
 				<div><label class="text-xs font-medium text-sf-muted block mb-1.5">Verbosity</label>
-					<select id="adv-verbose" class="w-full bg-sf-lightbg border border-sf-border rounded-lg px-3 py-2 text-xs">
+					<select id="adv-verbose" aria-label="Verbosity level" class="w-full bg-sf-lightbg border border-sf-border rounded-lg px-3 py-2 text-xs">
 						<option value="0">Minimal</option><option value="1" selected>Normal</option><option value="2">Verbose</option><option value="3">Debug</option>
 					</select>
 				</div>
@@ -141,7 +142,7 @@ import Layout from '../layouts/Layout.astro';
 						<label class="flex items-center justify-between text-xs cursor-pointer"><span>{v}</span><input type="checkbox" data-toggle={k} checked class="accent-sf-tabActive" /></label>
 					))}
 				</div>
-				<button onclick="saveAdvSettings()" class="w-full py-2 bg-sf-tabActive text-black text-xs font-bold rounded-lg hover:brightness-110 transition-all">Save Settings</button>
+				<button onclick="saveAdvSettings()" aria-label="Save advanced settings" class="w-full py-2 bg-sf-tabActive text-black text-xs font-bold rounded-lg hover:brightness-110 transition-all">Save Settings</button>
 			</div>
 		</div>
 	</div>
@@ -199,6 +200,9 @@ import Layout from '../layouts/Layout.astro';
 				setTimeout(() => input?.classList.remove('border-red-500', 'ring-2', 'ring-red-500/20'), 2000);
 				return;
 			}
+			const btn = document.getElementById('run-scan-btn');
+			btn.disabled = true;
+			btn.innerHTML = '<i class="fas fa-spinner fa-spin text-xs"></i> Scanning...';
 			window.location.href = `/intelligence?target=${encodeURIComponent(target)}`;
 		});
 		document.getElementById('verbose-scan-btn')?.addEventListener('click', () => {
@@ -214,7 +218,8 @@ import Layout from '../layouts/Layout.astro';
 		});
 		document.getElementById('adv-settings-btn')?.addEventListener('click', openSettings);
 
-		// Keyboard shortcut
+		// Keyboard shortcuts
 		document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeSettings(); });
+		document.addEventListener('keydown', (e) => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { document.getElementById('run-scan-btn')?.click(); } });
 	</script>
 </Layout>

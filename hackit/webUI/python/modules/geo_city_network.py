@@ -1,8 +1,6 @@
-import httpx
-import asyncio
 import re
 import socket
-from models import IntelligenceFinding
+from module_common import safe_fetch_json, make_finding, is_ip, resolve_ip
 
 ISP_URLS = [
     "https://ipinfo.io/{}/json",
@@ -79,86 +77,78 @@ PEERING_POINTS = {
 }
 
 async def _resolve_target(target: str) -> tuple:
-    try:
-        socket.inet_aton(target)
+    if is_ip(target):
         return target, True
-    except OSError:
-        pass
-    try:
-        ip = socket.gethostbyname(target)
+    ip = resolve_ip(target)
+    if ip:
         return ip, False
-    except Exception as e:
-        return None, str(e)
+    return None, "DNS resolution failed"
 
-async def _get_city_isp_info(ip: str, client: httpx.AsyncClient) -> list:
+async def _get_city_isp_info(ip: str, client) -> list:
     findings = []
-    try:
-        resp = await client.get(f"https://ipinfo.io/{ip}/json", timeout=8.0,
-            headers={"User-Agent": "Mozilla/5.0"})
-        if resp.status_code == 200:
-            data = resp.json()
-            city = data.get("city", "")
-            region = data.get("region", "")
-            country = data.get("country", "")
-            org = data.get("org", "")
-            loc = data.get("loc", "")
+    data = await safe_fetch_json(client, f"https://ipinfo.io/{ip}/json",
+        headers={"User-Agent": "Mozilla/5.0"})
+    if data:
+        city = data.get("city", "")
+        region = data.get("region", "")
+        country = data.get("country", "")
+        org = data.get("org", "")
+        loc = data.get("loc", "")
 
-            if city:
-                findings.append(IntelligenceFinding(
-                    entity=f"City: {city}",
-                    type="City Network Location",
+        if city:
+            findings.append(make_finding(
+                entity=f"City: {city}",
+                ftype="City Network Location",
+                source="CityNetworkScanner",
+                confidence="High",
+                color="blue",
+                category="Geo / Network OSINT",
+                threat_level="Informational",
+                status="Located",
+                resolution=ip,
+                raw_data=f"City: {city}, Region: {region}, Country: {country}",
+                tags=["geo", "city", city.lower().replace(" ", "-")]
+            ))
+        if org:
+            findings.append(make_finding(
+                entity=f"Local ISP: {org}",
+                ftype="ISP in City Region",
+                source="CityNetworkScanner",
+                confidence="High",
+                color="blue",
+                category="Geo / Network OSINT",
+                threat_level="Informational",
+                status="Identified",
+                resolution=ip,
+                raw_data=f"Organization/ISP serving this city region: {org}",
+                tags=["geo", "isp", "network"]
+            ))
+        if loc:
+            lat_lon = loc.split(",")
+            if len(lat_lon) == 2:
+                findings.append(make_finding(
+                    entity=f"Region center: {loc}",
+                    ftype="City Coordinates",
                     source="CityNetworkScanner",
                     confidence="High",
-                    color="blue",
+                    color="slate",
                     category="Geo / Network OSINT",
                     threat_level="Informational",
-                    status="Located",
+                    status="Locatable",
                     resolution=ip,
-                    raw_data=f"City: {city}, Region: {region}, Country: {country}",
-                    tags=["geo", "city", city.lower().replace(" ", "-")]
+                    raw_data=f"Lat/Lon: {loc}",
+                    tags=["geo", "coordinates"]
                 ))
-            if org:
-                findings.append(IntelligenceFinding(
-                    entity=f"Local ISP: {org}",
-                    type="ISP in City Region",
-                    source="CityNetworkScanner",
-                    confidence="High",
-                    color="blue",
-                    category="Geo / Network OSINT",
-                    threat_level="Informational",
-                    status="Identified",
-                    resolution=ip,
-                    raw_data=f"Organization/ISP serving this city region: {org}",
-                    tags=["geo", "isp", "network"]
-                ))
-            if loc:
-                lat_lon = loc.split(",")
-                if len(lat_lon) == 2:
-                    findings.append(IntelligenceFinding(
-                        entity=f"Region center: {loc}",
-                        type="City Coordinates",
-                        source="CityNetworkScanner",
-                        confidence="High",
-                        color="slate",
-                        category="Geo / Network OSINT",
-                        threat_level="Informational",
-                        status="Locatable",
-                        resolution=ip,
-                        raw_data=f"Lat/Lon: {loc}",
-                        tags=["geo", "coordinates"]
-                    ))
-    except Exception:
-        pass
     return findings
 
-async def _map_city_ixps(city: str, client: httpx.AsyncClient) -> list:
+async def _map_city_ixps(city: str, client) -> list:
     findings = []
     city_lower = city.lower()
     for ixp_name, ixp_info in KNOWN_IXPS.items():
         if ixp_info["city"].lower() in city_lower or city_lower in ixp_info["city"].lower():
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{ixp_name} - {ixp_info['city']}, {ixp_info['country']}",
-                type="IXP Near Target City",
+                ftype="IXP Near Target City",
                 source="CityNetworkScanner",
                 confidence="High",
                 color="purple",
@@ -170,9 +160,9 @@ async def _map_city_ixps(city: str, client: httpx.AsyncClient) -> list:
             ))
     for pp_name, pp_info in PEERING_POINTS.items():
         if pp_info["city"].lower() in city_lower:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Peering Point: {pp_info['city']}",
-                type="City Peering Point",
+                ftype="City Peering Point",
                 source="CityNetworkScanner",
                 confidence="Medium",
                 color="purple",
@@ -187,9 +177,9 @@ async def _map_city_ixps(city: str, client: httpx.AsyncClient) -> list:
 async def _list_city_ixps_global(city_hint: str) -> list:
     findings = []
     for ixp_name, ixp_info in KNOWN_IXPS.items():
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{ixp_name} - {ixp_info['city']}, {ixp_info['country']}",
-            type="IXP Reference",
+            ftype="IXP Reference",
             source="CityNetworkScanner",
             confidence="Medium",
             color="slate",
@@ -200,9 +190,9 @@ async def _list_city_ixps_global(city_hint: str) -> list:
             tags=["geo", "ixp", ixp_name.lower().replace(" ", "-")]
         ))
     for pp_name, pp_info in PEERING_POINTS.items():
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Peering Hub: {pp_info['city']}",
-            type="Global Peering Hub Reference",
+            ftype="Global Peering Hub Reference",
             source="CityNetworkScanner",
             confidence="Medium",
             color="slate",
@@ -217,9 +207,9 @@ async def _list_city_ixps_global(city_hint: str) -> list:
 async def _analyze_last_mile(ip: str) -> list:
     findings = []
     for lm_name, lm_desc in LAST_MILE_TYPES:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Last Mile: {lm_name}",
-            type="Last Mile Infrastructure",
+            ftype="Last Mile Infrastructure",
             source="CityNetworkScanner",
             confidence="Low",
             color="slate",
@@ -231,20 +221,20 @@ async def _analyze_last_mile(ip: str) -> list:
         ))
     return findings
 
-async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFinding]:
+async def crawl(target: str, client) -> list:
     findings = []
     target = target.strip().lower()
     if target.startswith("http"):
         from urllib.parse import urlparse
         target = urlparse(target).netloc
 
-    ip, is_ip = await _resolve_target(target)
+    ip, is_ip_flag = await _resolve_target(target)
     if ip is None:
-        findings.append(IntelligenceFinding(entity=f"DNS resolution failed: {target}", type="DNS Error", source="CityNetworkScanner", confidence="Low", color="red", category="Geo / Network OSINT", raw_data=str(is_ip)[:200], tags=["error"]))
+        findings.append(make_finding(entity=f"DNS resolution failed: {target}", ftype="DNS Error", source="CityNetworkScanner", confidence="Low", color="red", category="Geo / Network OSINT", raw_data=str(is_ip_flag)[:200], tags=["error"]))
         return findings
 
-    if not is_ip:
-        findings.append(IntelligenceFinding(entity=f"{target} -> {ip}", type="DNS Resolution", source="CityNetworkScanner", confidence="High", color="slate", category="Geo / Network OSINT", threat_level="Informational", status="Resolved", resolution=ip, tags=["dns", "resolution"]))
+    if not is_ip_flag:
+        findings.append(make_finding(entity=f"{target} -> {ip}", ftype="DNS Resolution", source="CityNetworkScanner", confidence="High", color="slate", category="Geo / Network OSINT", threat_level="Informational", status="Resolved", resolution=ip, tags=["dns", "resolution"]))
 
     city_info = await _get_city_isp_info(ip, client)
     findings.extend(city_info)
@@ -259,7 +249,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     findings.extend(await _analyze_last_mile(ip))
     findings.extend(await _list_city_ixps_global(city_name))
 
-    findings.append(IntelligenceFinding(entity=f"Target: {target}", type="City Network Target", source="CityNetworkScanner", confidence="High", color="slate", category="Geo / Network OSINT", tags=["geo", "target"]))
-    findings.append(IntelligenceFinding(entity=f"Total city network findings: {len(findings)}", type="City Network Summary", source="CityNetworkScanner", confidence="Medium", color="purple", category="Geo / Network OSINT", tags=["geo", "summary"]))
+    findings.append(make_finding(entity=f"Target: {target}", ftype="City Network Target", source="CityNetworkScanner", confidence="High", color="slate", category="Geo / Network OSINT", tags=["geo", "target"]))
+    findings.append(make_finding(entity=f"Total city network findings: {len(findings)}", ftype="City Network Summary", source="CityNetworkScanner", confidence="Medium", color="purple", category="Geo / Network OSINT", tags=["geo", "summary"]))
 
     return findings

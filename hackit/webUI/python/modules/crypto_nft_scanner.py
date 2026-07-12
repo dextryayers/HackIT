@@ -1,8 +1,7 @@
 import httpx
 import re
-import json
-from urllib.parse import urlparse, quote
 from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 
 MARKETPLACES = {
     "OpenSea": ["opensea", "opensea.io", "opensea.com"],
@@ -134,9 +133,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     impersonation_results = await detect_nft_brand_impersonation(query)
     for r in impersonation_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Potential brand impersonation: {r['collection']} detected",
-            type="NFT Brand Impersonation",
+            ftype="NFT Brand Impersonation",
             source="NFT Scanner",
             confidence="Medium",
             color="red",
@@ -149,7 +148,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     marketplace_results = await check_nft_marketplace_listings(client, query)
     for r in marketplace_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"NFT marketplace reference: {r['marketplace']} ({r['domain']})",
             type="NFT Marketplace Detection",
             source="NFT Scanner",
@@ -164,9 +163,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     contract_results = await analyze_smart_contract_patterns(query)
     for r in contract_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Honeypot smart contract pattern: {r['pattern'][:50]}...",
-            type="Smart Contract Honeypot",
+            ftype="Smart Contract Honeypot",
             source="NFT Scanner",
             confidence="Low",
             color="red",
@@ -179,9 +178,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     rug_pull_results = await detect_rug_pull_indicators(query)
     for r in rug_pull_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Rug pull indicator: {r['match']}",
-            type="Rug Pull Detection",
+            ftype="Rug Pull Detection",
             source="NFT Scanner",
             confidence="Medium",
             color="red",
@@ -194,9 +193,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     wash_trading_results = await detect_wash_trading(query)
     for r in wash_trading_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Wash trading pattern detected: {r['pattern'][:50]}...",
-            type="Wash Trading Detection",
+            ftype="Wash Trading Detection",
             source="NFT Scanner",
             confidence="Low",
             color="orange",
@@ -209,7 +208,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     phishing_results = await check_phishing_nft_sites(client, query)
     for r in phishing_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"NFT phishing site: {r['domain']} ({r['type']})",
             type="NFT Phishing Detection",
             source="NFT Scanner",
@@ -224,7 +223,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     team_wallet_results = await analyze_team_wallet_patterns(query)
     for r in team_wallet_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Team wallet pattern: {r['keyword']} ({r['category']})",
             type="Team Wallet Analysis",
             source="NFT Scanner",
@@ -238,9 +237,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         ))
 
     for marketplace in MARKETPLACES:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"NFT marketplace monitored: {marketplace}",
-            type="Marketplace Coverage",
+            ftype="Marketplace Coverage",
             source="NFT Scanner",
             confidence="Low",
             color="slate",
@@ -252,9 +251,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         ))
 
     if not impersonation_results and not rug_pull_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"No NFT scam indicators found for {query}",
-            type="NFT Scan Result",
+            ftype="NFT Scan Result",
             source="NFT Scanner",
             confidence="Low",
             color="emerald",
@@ -265,7 +264,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             tags=["nft", "clean", "no-scam"]
         ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"NFT scan complete for {query}: checked {len(MARKETPLACES)} marketplaces, {len(RUG_PULL_INDICATORS)} rug indicators, {len(HONEYPOT_PATTERNS)} honeypot patterns",
         type="NFT Scan Summary",
         source="NFT Scanner",

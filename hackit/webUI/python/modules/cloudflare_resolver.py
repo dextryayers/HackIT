@@ -332,7 +332,7 @@ async def search_dnsdumpster(client: httpx.AsyncClient, domain: str) -> List[Dic
         }
         data = {"csrfmiddlewaretoken": csrf_match.group(1) if csrf_match else "", "targetip": domain}
 
-        resp2 = await client.post(url, headers=headers, data=data, timeout=30.0)
+        resp2 = await safe_fetch(client, url, headers=headers, data=data, timeout=30.0)
         if resp2.status_code == 200:
             html = resp2.text
             ip_matches = re.findall(r'(?:\b(?:\d{1,3}\.){3}\d{1,3})\b', html)

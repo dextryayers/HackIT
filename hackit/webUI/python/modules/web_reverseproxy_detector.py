@@ -1,6 +1,7 @@
-import httpx
 import re
+import httpx
 from urllib.parse import urlparse
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 from models import IntelligenceFinding
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
@@ -47,14 +48,14 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     for proto in ["https", "http"]:
         try:
-            resp = await client.get(f"{proto}://{domain}", timeout=10.0, follow_redirects=True, headers={"User-Agent": UA})
+            resp = await safe_fetch(client,f"{proto}://{domain}", timeout=10.0, follow_redirects=True, headers={"User-Agent": UA})
             headers = {k.lower(): v for k, v in dict(resp.headers).items()}
             full_headers = dict(resp.headers)
             status = resp.status_code
 
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Initial response: HTTP {status} ({len(resp.content)} bytes)",
-                type="Proxy: Initial Response",
+                ftype="Proxy: Initial Response",
                 source="ReverseProxyDetector",
                 confidence="High",
                 color="slate",
@@ -66,9 +67,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             for ph in PROXY_HEADERS:
                 if ph in headers:
                     found_proxy_headers.append((ph, headers[ph]))
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Proxy header found: {ph}: {headers[ph][:60]}",
-                        type="Proxy: Proxy Header",
+                        ftype="Proxy: Proxy Header",
                         source="ReverseProxyDetector",
                         confidence="High",
                         color="blue",
@@ -78,9 +79,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                     ))
 
             if not found_proxy_headers:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity="No reverse proxy headers detected",
-                    type="Proxy: No Proxy Headers",
+                    ftype="Proxy: No Proxy Headers",
                     source="ReverseProxyDetector",
                     confidence="Medium",
                     color="slate",
@@ -94,9 +95,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                         if re.search(pattern, hdr_val, re.I) or re.search(pattern, hdr_name, re.I):
                             if sw_name not in detected_proxies:
                                 detected_proxies.add(sw_name)
-                                findings.append(IntelligenceFinding(
+                                findings.append(make_finding(
                                     entity=f"Reverse proxy software detected: {sw_name} (via {hdr_name}: {hdr_val[:60]})",
-                                    type="Proxy: Software Detection",
+                                    ftype="Proxy: Software Detection",
                                     source="ReverseProxyDetector",
                                     confidence="High",
                                     color="purple",
@@ -112,9 +113,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                         if re.search(pattern, server_header, re.I):
                             if sw_name not in detected_proxies:
                                 detected_proxies.add(sw_name)
-                                findings.append(IntelligenceFinding(
+                                findings.append(make_finding(
                                     entity=f"Reverse proxy: {sw_name} (via Server header: {server_header})",
-                                    type="Proxy: Software from Server Header",
+                                    ftype="Proxy: Software from Server Header",
                                     source="ReverseProxyDetector",
                                     confidence="Medium",
                                     color="purple",
@@ -126,11 +127,11 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             test_paths = ["/", "/admin", "/api", "/static", "/images", "/test"]
             for path in test_paths:
                 try:
-                    r = await client.get(f"{proto}://{domain}{path}", timeout=5.0, follow_redirects=False, headers={"User-Agent": UA})
+                    r = await safe_fetch(client,f"{proto}://{domain}{path}", timeout=5.0, follow_redirects=False, headers={"User-Agent": UA})
                     if r.status_code != status:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"Path-based routing: {path} -> HTTP {r.status_code} (different from root {status})",
-                            type="Proxy: Path Routing",
+                            ftype="Proxy: Path Routing",
                             source="ReverseProxyDetector",
                             confidence="Medium",
                             color="yellow",
@@ -141,13 +142,13 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                 except Exception:
                     continue
 
-            resp2 = await client.get(f"{proto}://{domain}", timeout=10.0, follow_redirects=False, headers={"User-Agent": UA, "X-Forwarded-For": "127.0.0.1", "X-Real-IP": "127.0.0.1", "X-Original-URL": "/admin", "X-Rewrite-URL": "/admin"})
+            resp2 = await safe_fetch(client,f"{proto}://{domain}", timeout=10.0, follow_redirects=False, headers={"User-Agent": UA, "X-Forwarded-For": "127.0.0.1", "X-Real-IP": "127.0.0.1", "X-Original-URL": "/admin", "X-Rewrite-URL": "/admin"})
             headers2 = dict(resp2.headers)
 
             if headers2 != full_headers:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity="Server behavior changes with proxy headers (e.g., X-Forwarded-For, X-Original-URL)",
-                    type="Proxy: Header Injection Response",
+                    ftype="Proxy: Header Injection Response",
                     source="ReverseProxyDetector",
                     confidence="Medium",
                     color="orange",
@@ -161,9 +162,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             continue
 
     if not detected_proxies:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"No reverse proxy software detected for {domain}",
-            type="Proxy: No Proxy Detected",
+            ftype="Proxy: No Proxy Detected",
             source="ReverseProxyDetector",
             confidence="Low",
             color="slate",
@@ -171,9 +172,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             tags=["proxy", "none"]
         ))
     else:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Reverse Proxy Assessment: {', '.join(detected_proxies)} ({len(detected_proxies)} software(s))",
-            type="Proxy: Assessment",
+            ftype="Proxy: Assessment",
             source="ReverseProxyDetector",
             confidence="High",
             color="purple",

@@ -1,8 +1,8 @@
 import httpx
 import re
 import json
-from urllib.parse import urlparse, quote
 from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 
 SCAM_PATTERNS = {
     "Ponzi Scheme": [
@@ -56,7 +56,7 @@ async def check_scam_databases(client: httpx.AsyncClient, target: str) -> list:
     try:
         for db_url in SCAM_DATABASE_URLS:
             try:
-                resp = await client.get(db_url, timeout=15.0,
+                resp = await safe_fetch(client, db_url, timeout=15.0,
                     headers={"User-Agent": "Mozilla/5.0"})
                 if resp.status_code == 200:
                     content = resp.text.lower()
@@ -175,9 +175,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     db_results = await check_scam_databases(client, query)
     for r in db_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Target found in scam database: {r['database']}",
-            type="Scam Database Hit",
+            ftype="Scam Database Hit",
             source=r['database'],
             confidence="High",
             color="red",
@@ -190,7 +190,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     ponzi_results = await detect_ponzi_patterns(query)
     for r in ponzi_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Scam pattern detected: {r['scam_type']} (matched: {r['matched']})",
             type="Scam Pattern Detection",
             source="Scam Detector",
@@ -205,9 +205,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     ico_results = await check_fake_ico_patterns(query)
     for r in ico_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Fake ICO indicator: {r['keyword']}",
-            type="Fake ICO Detection",
+            ftype="Fake ICO Detection",
             source="Scam Detector",
             confidence="Medium",
             color="orange",
@@ -220,9 +220,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     airdrop_results = await check_fake_airdrop_patterns(query)
     for r in airdrop_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Fake airdrop indicator: {r['keyword']}",
-            type="Fake Airdrop Detection",
+            ftype="Fake Airdrop Detection",
             source="Scam Detector",
             confidence="Medium",
             color="orange",
@@ -235,9 +235,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     investment_results = await check_investment_scam_patterns(query)
     for r in investment_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Investment scam indicator: {r['keyword']}",
-            type="Investment Scam Detection",
+            ftype="Investment Scam Detection",
             source="Scam Detector",
             confidence="Medium",
             color="orange",
@@ -250,9 +250,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     dapp_results = await check_phishing_dapp_patterns(query)
     for r in dapp_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Phishing dApp indicator: {r['keyword']}",
-            type="Phishing dApp Detection",
+            ftype="Phishing dApp Detection",
             source="Scam Detector",
             confidence="High",
             color="red",
@@ -265,7 +265,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     all_detections = ponzi_results + ico_results + airdrop_results + investment_results + dapp_results
     risk_score = await calculate_scam_risk_score(all_detections, db_results)
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Scam risk score: {risk_score['score']}/100 ({risk_score['level']}) - {risk_score['detections']} detections, {risk_score['types']} scam types",
         type="Scam Risk Assessment",
         source="Scam Detector",
@@ -280,9 +280,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     ))
 
     for scam_type in SCAM_PATTERNS.keys():
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Scam type monitored: {scam_type}",
-            type="Scam Coverage",
+            ftype="Scam Coverage",
             source="Scam Detector",
             confidence="Low",
             color="slate",
@@ -293,7 +293,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             tags=["scam", "coverage", scam_type.lower().replace("/", "-").replace(" ", "-")]
         ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Scam detection complete for {query}: checked {len(SCAM_PATTERNS)} scam types, {len(SCAM_DATABASE_URLS)} databases, {sum(len(v) for v in SCAM_PATTERNS.values())} patterns",
         type="Scam Detection Summary",
         source="Scam Detector",

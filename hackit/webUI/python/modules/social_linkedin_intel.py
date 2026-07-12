@@ -1,7 +1,6 @@
-import httpx
 import re
 import json
-from models import IntelligenceFinding
+from ..module_common import safe_fetch, make_finding
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 
@@ -11,7 +10,7 @@ LINKEDIN_PUBLIC_PREFIXES = [
     "https://www.linkedin.com/company/",
 ]
 
-async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFinding]:
+async def crawl(target: str, client: AsyncClient) -> list[IntelligenceFinding]:
     findings = []
     identifier = target.strip()
 
@@ -36,9 +35,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     html = None
     for url in [google_cache_url, textise_url, textise_url2, profile_url]:
         try:
-            resp = await client.get(url, timeout=15.0,
-                headers={"User-Agent": UA, "Accept-Language": "en-US,en;q=0.9"},
-                follow_redirects=True)
+            resp = await safe_fetch(client, url, timeout=15.0)
             if resp.status_code == 200 and len(resp.text) > 500:
                 html = resp.text
                 break
@@ -46,9 +43,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             pass
 
     if not html:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Could not access LinkedIn profile: {identifier}",
-            type="LinkedIn: Profile Not Accessible",
+            ftype="LinkedIn: Profile Not Accessible",
             source="SocialLinkedInIntel",
             confidence="High", color="orange",
             category="Social Media Intelligence",
@@ -60,9 +57,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     title_m = re.search(r'<title>([^<]+)</title>', html, re.IGNORECASE)
     title = title_m.group(1).strip() if title_m else ""
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"{'Company' if is_company else 'Profile'}: {title or identifier}",
-        type=f"LinkedIn: {'Company' if is_company else 'Profile'} Found",
+        ftype=f"LinkedIn: {'Company' if is_company else 'Profile'} Found",
         source="SocialLinkedInIntel",
         confidence="Medium",
         color="purple",
@@ -79,9 +76,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     if not name_m:
         name_m = re.search(r'<title>([^|]+)', html)
     if name_m:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Name: {name_m.group(1).strip()[:100]}",
-            type="LinkedIn: Name",
+            ftype="LinkedIn: Name",
             source="SocialLinkedInIntel",
             confidence="Medium",
             color="slate",
@@ -96,9 +93,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     if not headline_m:
         headline_m = re.search(r'<title>[^|]+\|\s*([^|]+)', html)
     if headline_m:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Headline: {headline_m.group(1).strip()[:200]}",
-            type="LinkedIn: Headline",
+            ftype="LinkedIn: Headline",
             source="SocialLinkedInIntel",
             confidence="Medium",
             color="slate",
@@ -111,9 +108,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     if not location_m:
         location_m = re.search(r'(?:Location|location)[:\s]*([^<]{3,50})', html)
     if location_m:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Location: {location_m.group(1).strip()[:100]}",
-            type="LinkedIn: Location",
+            ftype="LinkedIn: Location",
             source="SocialLinkedInIntel",
             confidence="Medium",
             color="slate",
@@ -124,9 +121,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     industry_m = re.search(r'"industry"\s*:\s*"([^"]+)"', html)
     if industry_m:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Industry: {industry_m.group(1)}",
-            type="LinkedIn: Industry",
+            ftype="LinkedIn: Industry",
             source="SocialLinkedInIntel",
             confidence="Medium",
             color="slate",
@@ -139,9 +136,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     if not about_m:
         about_m = re.search(r'(?:About|Summary|about)[:\s]*([^<]{30,500})', html)
     if about_m:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"About/Summary: {about_m.group(1)[:200]}",
-            type="LinkedIn: About",
+            ftype="LinkedIn: About",
             source="SocialLinkedInIntel",
             confidence="Low",
             color="slate",
@@ -158,9 +155,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             skills.append(s.strip())
     if skills:
         unique_skills = list(set(skills))[:15]
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Skills ({len(unique_skills)}): {', '.join(unique_skills)}",
-            type="LinkedIn: Skills",
+            ftype="LinkedIn: Skills",
             source="SocialLinkedInIntel",
             confidence="Medium",
             color="slate",
@@ -172,9 +169,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     experience = re.findall(r'"companyName"\s*:\s*"([^"]+)"', html)
     if experience:
         unique_experience = list(set(experience))[:8]
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Companies: {', '.join(unique_experience)}",
-            type="LinkedIn: Experience",
+            ftype="LinkedIn: Experience",
             source="SocialLinkedInIntel",
             confidence="Medium",
             color="slate",
@@ -186,9 +183,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     positions = re.findall(r'"title"\s*:\s*"([^"]+)"', html)
     if positions:
         unique_positions = list(set(positions))[:8]
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Job titles: {', '.join(unique_positions)}",
-            type="LinkedIn: Positions",
+            ftype="LinkedIn: Positions",
             source="SocialLinkedInIntel",
             confidence="Medium",
             color="slate",
@@ -202,9 +199,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         edu_data = education_m.group(1)
         schools = re.findall(r'"schoolName"\s*:\s*"([^"]+)"', edu_data)
         if schools:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Education: {', '.join(schools)}",
-                type="LinkedIn: Education",
+                ftype="LinkedIn: Education",
                 source="SocialLinkedInIntel",
                 confidence="Medium",
                 color="slate",
@@ -215,9 +212,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     connections_m = re.search(r'(\d[\d,.]*[KkMmBb]?)\s*(?:connection|Connection|Connections)', html)
     if connections_m:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Connections: {connections_m.group(1)}",
-            type="LinkedIn: Connections",
+            ftype="LinkedIn: Connections",
             source="SocialLinkedInIntel",
             confidence="Low",
             color="slate",
@@ -228,9 +225,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     profile_pic_m = re.search(r'<meta[^>]+property="og:image"[^>]+content="([^"]+)"', html, re.IGNORECASE)
     if profile_pic_m:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Profile image: {profile_pic_m.group(1)[:100]}",
-            type="LinkedIn: Profile Image",
+            ftype="LinkedIn: Profile Image",
             source="SocialLinkedInIntel",
             confidence="Medium",
             color="slate",
@@ -247,9 +244,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         }
         for key, m in company_info.items():
             if m:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{key.replace('_', ' ').title()}: {m.group(1).strip()[:100]}",
-                    type=f"LinkedIn: Company {key.replace('_', ' ').title()}",
+                    ftype=f"LinkedIn: Company {key.replace('_', ' ').title()}",
                     source="SocialLinkedInIntel",
                     confidence="Low",
                     color="slate",
@@ -258,9 +255,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                     tags=["linkedin", "company", key]
                 ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"LinkedIn {'company' if is_company else 'profile'} intelligence complete: {title}",
-        type="LinkedIn: Intel Summary",
+        ftype="LinkedIn: Intel Summary",
         source="SocialLinkedInIntel",
         confidence="Medium",
         color="purple",

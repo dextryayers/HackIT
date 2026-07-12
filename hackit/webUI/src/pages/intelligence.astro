@@ -10,7 +10,7 @@ import Layout from '../layouts/Layout.astro';
 				<h2 class="text-3xl font-bold text-sf-text tracking-tight">Mission History</h2>
 				<p class="text-sf-muted text-sm">Review past and active intelligence gathering missions.</p>
 			</div>
-			<a href="/" class="bg-sf-text text-sf-lightbg px-6 py-2.5 rounded-md text-sm font-bold hover:bg-white transition-all">New Mission</a>
+			<a href="/" aria-label="Start new mission" class="bg-sf-text text-sf-lightbg px-6 py-2.5 rounded-md text-sm font-bold hover:bg-white transition-all">New Mission</a>
 		</header>
 
 		<div class="bg-sf-card border border-sf-border rounded-xl overflow-hidden shadow-2xl">
@@ -37,6 +37,18 @@ import Layout from '../layouts/Layout.astro';
 
 	<!-- Active Intelligence Dashboard -->
 	<div id="active-dashboard" class="hidden">
+	<!-- Loading Skeleton -->
+	<div id="loading-skeleton" class="p-8 space-y-6">
+		<div class="animate-pulse space-y-6">
+			<div class="h-8 bg-sf-card rounded w-1/3"></div>
+			<div class="grid grid-cols-4 gap-6">
+				<div class="h-32 bg-sf-card rounded-lg"></div>
+				<div class="h-32 bg-sf-card rounded-lg"></div>
+				<div class="h-32 bg-sf-card rounded-lg"></div>
+				<div class="h-32 bg-sf-card rounded-lg"></div>
+			</div>
+		</div>
+	</div>
 	<!-- Page Header & Tab Navigation (Sticky Container) -->
 	<div class="sticky top-16 z-30 bg-sf-lightbg">
 		<!-- Page Header -->
@@ -56,7 +68,7 @@ import Layout from '../layouts/Layout.astro';
 					<span class="font-mono text-sm text-sf-text" id="scan-duration">00:00:00</span>
 				</div>
 				<div class="h-8 w-px bg-sf-border"></div>
-				<button id="btn-export-hackit" class="bg-sf-text hover:bg-white text-sf-lightbg px-4 py-2 rounded-md text-xs font-semibold flex items-center gap-2 transition-all">
+				<button id="btn-export-hackit" aria-label="Export intelligence report" class="bg-sf-text hover:bg-white text-sf-lightbg px-4 py-2 rounded-md text-xs font-semibold flex items-center gap-2 transition-all">
 					<i class="fas fa-file-export"></i> Export Intelligence
 				</button>
 			</div>
@@ -65,24 +77,24 @@ import Layout from '../layouts/Layout.astro';
 		<!-- Tab Navigation -->
 		<div class="border-b border-sf-border px-8 flex justify-between items-center relative">
 		<nav class="flex gap-6 pt-3" id="tab-nav">
-			<button class="pb-3 text-sm font-medium border-b-2 border-sf-text text-sf-text transition-all flex items-center gap-2" data-target="tab-overview">
+			<button class="pb-3 text-sm font-medium border-b-2 border-sf-text text-sf-text transition-all flex items-center gap-2" data-target="tab-overview" aria-label="Overview tab">
 				Overview
 			</button>
-			<button class="pb-3 text-sm font-medium border-b-2 border-transparent text-sf-muted hover:text-sf-text transition-all flex items-center gap-2" data-target="tab-browse">
+			<button class="pb-3 text-sm font-medium border-b-2 border-transparent text-sf-muted hover:text-sf-text transition-all flex items-center gap-2" data-target="tab-browse" aria-label="Browse findings tab">
 				Browse
 			</button>
-			<button class="pb-3 text-sm font-medium border-b-2 border-transparent text-sf-muted hover:text-sf-text transition-all flex items-center gap-2" data-target="tab-graph">
+			<button class="pb-3 text-sm font-medium border-b-2 border-transparent text-sf-muted hover:text-sf-text transition-all flex items-center gap-2" data-target="tab-graph" aria-label="Graph visualization tab">
 				Graph
 			</button>
-			<button class="pb-3 text-sm font-medium border-b-2 border-transparent text-sf-muted hover:text-sf-text transition-all flex items-center gap-2" data-target="tab-settings">
+			<button class="pb-3 text-sm font-medium border-b-2 border-transparent text-sf-muted hover:text-sf-text transition-all flex items-center gap-2" data-target="tab-settings" aria-label="Scan settings tab">
 				Scan Settings
 			</button>
-			<button onclick="window.location.href='/log?target=' + new URLSearchParams(window.location.search).get('target')" class="pb-3 text-sm font-medium border-b-2 border-transparent text-sf-muted hover:text-sf-text transition-all flex items-center gap-2">
+			<button onclick="window.location.href='/log?target=' + new URLSearchParams(window.location.search).get('target')" aria-label="View mission logs" class="pb-3 text-sm font-medium border-b-2 border-transparent text-sf-muted hover:text-sf-text transition-all flex items-center gap-2">
 				Log
 			</button>
 		</nav>
 		<div class="flex gap-3">
-			<button class="text-sf-muted hover:text-sf-text transition-all mb-3">
+			<button class="text-sf-muted hover:text-sf-text transition-all mb-3" aria-label="Refresh data">
 				<i class="fas fa-sync-alt text-xs"></i>
 			</button>
 		</div>
@@ -93,6 +105,12 @@ import Layout from '../layouts/Layout.astro';
 		
 		<!-- TAB: OVERVIEW -->
 		<div id="tab-overview" class="tab-content space-y-6 block">
+			<!-- Empty State -->
+			<div id="overview-empty" class="hidden p-16 text-center space-y-4">
+				<i class="fas fa-search text-sf-muted/20 text-5xl"></i>
+				<p class="text-sf-muted font-mono text-xs uppercase tracking-widest">No findings discovered for this target yet.</p>
+				<p class="text-sf-muted text-[10px]">Data will populate as the scan progresses.</p>
+			</div>
 			<!-- Metrics & Mini Charts Row -->
 			<div class="grid grid-cols-1 md:grid-cols-4 gap-6">
 				<div class="bg-sf-card border border-sf-border rounded-lg p-6 relative overflow-hidden">
@@ -190,14 +208,14 @@ import Layout from '../layouts/Layout.astro';
 			<div id="browse-detail-container" class="hidden flex-1 flex flex-col bg-sf-card border border-sf-border rounded-lg overflow-hidden">
 				<div class="p-4 bg-sf-card border-b border-sf-border flex justify-between items-center">
 					<div class="flex items-center gap-4">
-						<button id="browse-back-btn" class="flex items-center gap-2 text-sf-text hover:text-white font-medium text-sm transition-colors">
+						<button id="browse-back-btn" aria-label="Back to browse summary" class="flex items-center gap-2 text-sf-text hover:text-white font-medium text-sm transition-colors">
 							<i class="fas fa-chevron-left text-xs"></i> Back
 						</button>
 						<span id="browse-detail-type" class="px-3 py-1 bg-sf-lightbg text-sf-text rounded-md text-[11px] font-medium border border-sf-border uppercase"></span>
 					</div>
 					<div class="relative">
 						<i class="fas fa-search absolute left-3 top-1/2 -translate-y-1/2 text-sf-muted text-xs"></i>
-						<input type="text" id="browse-detail-search" placeholder="Search..." class="pl-8 pr-4 py-1.5 text-xs border border-sf-border rounded-md bg-sf-lightbg w-64 text-sf-text focus:outline-none focus:border-sf-muted transition-all">
+						<input type="text" id="browse-detail-search" placeholder="Search..." aria-label="Search findings" class="pl-8 pr-4 py-1.5 text-xs border border-sf-border rounded-md bg-sf-lightbg w-64 text-sf-text focus:outline-none focus:border-sf-muted transition-all">
 					</div>
 				</div>
 				<div class="flex-1 overflow-auto">
@@ -222,10 +240,10 @@ import Layout from '../layouts/Layout.astro';
 		<div id="tab-graph" class="tab-content hidden h-[calc(100vh-280px)]">
 			<div class="bg-sf-lightbg border border-sf-border rounded-lg w-full h-full relative overflow-hidden">
 				<div class="absolute top-4 right-4 z-10 flex gap-2">
-					<button id="graph-pause" class="bg-sf-card border border-sf-border hover:bg-sf-border p-2 rounded-md text-sf-text transition-all text-xs">
+					<button id="graph-pause" aria-label="Pause graph simulation" class="bg-sf-card border border-sf-border hover:bg-sf-border p-2 rounded-md text-sf-text transition-all text-xs">
 						<i class="fas fa-pause"></i>
 					</button>
-					<button id="graph-recenter" class="bg-sf-card border border-sf-border hover:bg-sf-border p-2 rounded-md text-sf-text transition-all text-xs">
+					<button id="graph-recenter" aria-label="Recenter graph view" class="bg-sf-card border border-sf-border hover:bg-sf-border p-2 rounded-md text-sf-text transition-all text-xs">
 						<i class="fas fa-expand-arrows-alt"></i>
 					</button>
 				</div>
@@ -420,10 +438,10 @@ import Layout from '../layouts/Layout.astro';
 
 					<div class="bg-sf-card border border-sf-border rounded-lg p-6">
 						<div class="space-y-3">
-							<button id="save-settings" class="w-full bg-sf-tabActive hover:bg-sky-400 text-black text-xs font-bold py-3 rounded-lg transition-all uppercase tracking-widest flex items-center justify-center gap-2">
-								<i class="fas fa-check"></i> Save Settings
-							</button>
-							<button id="reset-settings" class="w-full bg-sf-border hover:bg-sf-muted/20 text-sf-muted text-xs font-medium py-2 rounded-lg transition-all uppercase tracking-widest flex items-center justify-center gap-2">
+						<button id="save-settings" aria-label="Save scan settings" class="w-full bg-sf-tabActive hover:bg-sky-400 text-black text-xs font-bold py-3 rounded-lg transition-all uppercase tracking-widest flex items-center justify-center gap-2">
+							<i class="fas fa-check"></i> Save Settings
+						</button>
+						<button id="reset-settings" aria-label="Reset settings to defaults" class="w-full bg-sf-border hover:bg-sf-muted/20 text-sf-muted text-xs font-medium py-2 rounded-lg transition-all uppercase tracking-widest flex items-center justify-center gap-2">
 								<i class="fas fa-undo"></i> Reset Defaults
 							</button>
 						</div>
@@ -436,7 +454,7 @@ import Layout from '../layouts/Layout.astro';
 			<div class="bg-sf-lightbg text-green-500 p-6 rounded-lg font-mono text-[11px] overflow-auto h-[calc(100vh-280px)] border border-sf-border">
 				<div class="flex justify-between items-center mb-4 border-b border-sf-border pb-3">
 					<span class="font-medium text-sf-text tracking-wider uppercase">Raw JSON Stream</span>
-					<button class="text-[10px] bg-sf-card border border-sf-border hover:bg-sf-border px-3 py-1.5 rounded-md text-sf-text transition-all font-medium" id="copy-raw">Copy Stream</button>
+					<button class="text-[10px] bg-sf-card border border-sf-border hover:bg-sf-border px-3 py-1.5 rounded-md text-sf-text transition-all font-medium" id="copy-raw" aria-label="Copy raw JSON stream">Copy Stream</button>
 				</div>
 				<pre id="raw-json-display" class="whitespace-pre-wrap break-all leading-relaxed">System standby...</pre>
 			</div>
@@ -837,6 +855,9 @@ import Layout from '../layouts/Layout.astro';
 			}
 
 			async function initDashboard(targetName) {
+				// Hide loading skeleton once dashboard is ready
+				const skeleton = document.getElementById('loading-skeleton');
+				if (skeleton) skeleton.classList.add('hidden');
 				try {
 					// Check for existing job first
 					const existingRes = await fetch(`/api/job-by-target?target=${encodeURIComponent(targetName)}`);
@@ -942,6 +963,12 @@ import Layout from '../layouts/Layout.astro';
 			}
 
 			function processResults(data, targetName) {
+				const emptyOverview = document.getElementById('overview-empty');
+				if (data && data.findings && data.findings.length > 0) {
+					if (emptyOverview) emptyOverview.classList.add('hidden');
+				} else if (emptyOverview) {
+					emptyOverview.classList.remove('hidden');
+				}
 				if (data && data.findings) {
 					latestFindings = data.findings;
 					currentSummary = data.summary || [];

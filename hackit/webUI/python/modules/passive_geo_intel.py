@@ -1,10 +1,7 @@
-import httpx
 import re
 import json
-import socket
-import asyncio
 from urllib.parse import urlparse
-from models import IntelligenceFinding
+from ..module_common import safe_fetch, make_finding, resolve_ip
 
 ASN_ORG_PATTERNS = {
     "amazon": "Amazon Web Services", "aws": "Amazon Web Services",
@@ -56,68 +53,44 @@ LANGUAGE_TLD_MAP = {
     "il": "Hebrew", "sa": "Arabic", "ae": "Arabic", "eg": "Arabic",
 }
 
-async def _resolve_ip(domain: str, client: httpx.AsyncClient) -> str | None:
+async def _fetch_ip_geo(ip: str, client: AsyncClient) -> dict | None:
     try:
-        loop = asyncio.get_event_loop()
-        ip = await loop.run_in_executor(None, lambda: socket.gethostbyname(domain))
-        return ip
-    except Exception:
-        return None
-
-async def _fetch_ip_geo(ip: str, client: httpx.AsyncClient) -> dict | None:
-    try:
-        resp = await client.get(
-            f"https://ipapi.co/{ip}/json/",
-            timeout=10.0,
-            headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}
-        )
+        resp = await safe_fetch(client, f"https://ipapi.co/{ip}/json/", timeout=10.0)
         if resp.status_code == 200:
             return resp.json()
     except Exception:
         pass
     try:
-        resp = await client.get(
-            f"http://ip-api.com/json/{ip}",
-            timeout=10.0,
-            headers={"User-Agent": "Mozilla/5.0"}
-        )
+        resp = await safe_fetch(client, f"http://ip-api.com/json/{ip}", timeout=10.0)
         if resp.status_code == 200:
             return resp.json()
     except Exception:
         pass
     return None
 
-async def _fetch_rdap_ip(ip: str, client: httpx.AsyncClient) -> dict | None:
+async def _fetch_rdap_ip(ip: str, client: AsyncClient) -> dict | None:
     try:
-        resp = await client.get(
-            f"https://rdap.arin.net/registry/ip/{ip}",
-            timeout=10.0,
-            headers={"Accept": "application/json"}
-        )
+        resp = await safe_fetch(client, f"https://rdap.arin.net/registry/ip/{ip}", timeout=10.0)
         if resp.status_code == 200:
             return resp.json()
     except Exception:
         pass
     try:
-        resp = await client.get(
-            f"https://rdap.db.ripe.net/ip/{ip}",
-            timeout=10.0,
-            headers={"Accept": "application/json"}
-        )
+        resp = await safe_fetch(client, f"https://rdap.db.ripe.net/ip/{ip}", timeout=10.0)
         if resp.status_code == 200:
             return resp.json()
     except Exception:
         pass
     return None
 
-async def _ip_geo_intel(domain: str, client: httpx.AsyncClient) -> list:
+async def _ip_geo_intel(domain: str, client: AsyncClient) -> list:
     findings = []
-    ip = await _resolve_ip(domain, client)
+    ip = resolve_ip(domain)
     if not ip:
         return findings
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=ip,
-        type="IP Geolocation - Resolved IP",
+        ftype="IP Geolocation - Resolved IP",
         source="Passive Geo Intel",
         confidence="High",
         color="blue",
@@ -137,9 +110,9 @@ async def _ip_geo_intel(domain: str, client: httpx.AsyncClient) -> list:
         timezone = geo.get("timezone", "")
         if country:
             risk = COUNTRY_RISK.get(country_code.upper(), "Informational")
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=country,
-                type="IP Geolocation - Country",
+                ftype="IP Geolocation - Country",
                 source="Passive Geo Intel",
                 confidence="High",
                 color="red" if risk != "Informational" else "slate",
@@ -157,9 +130,9 @@ async def _ip_geo_intel(domain: str, client: httpx.AsyncClient) -> list:
                 location_parts.append(region)
             if country:
                 location_parts.append(country)
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=", ".join(location_parts),
-                type="IP Geolocation - City/Region",
+                ftype="IP Geolocation - City/Region",
                 source="Passive Geo Intel",
                 confidence="High",
                 color="slate",
@@ -168,9 +141,9 @@ async def _ip_geo_intel(domain: str, client: httpx.AsyncClient) -> list:
                 tags=["geo", "location"]
             ))
         if org:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=org[:200],
-                type="IP Geolocation - ISP/Organization",
+                ftype="IP Geolocation - ISP/Organization",
                 source="Passive Geo Intel",
                 confidence="High",
                 color="slate",
@@ -180,9 +153,9 @@ async def _ip_geo_intel(domain: str, client: httpx.AsyncClient) -> list:
             ))
             for key, label in ASN_ORG_PATTERNS.items():
                 if key in org.lower():
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=label,
-                        type="IP Geolocation - Cloud Provider",
+                        ftype="IP Geolocation - Cloud Provider",
                         source="Passive Geo Intel",
                         confidence="High",
                         color="orange",
@@ -192,9 +165,9 @@ async def _ip_geo_intel(domain: str, client: httpx.AsyncClient) -> list:
                     ))
                     break
         if asn:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=str(asn)[:100],
-                type="IP Geolocation - ASN",
+                ftype="IP Geolocation - ASN",
                 source="Passive Geo Intel",
                 confidence="High",
                 color="slate",
@@ -203,9 +176,9 @@ async def _ip_geo_intel(domain: str, client: httpx.AsyncClient) -> list:
                 tags=["geo", "asn"]
             ))
         if lat and lon:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Lat: {lat}, Lon: {lon}",
-                type="IP Geolocation - Coordinates",
+                ftype="IP Geolocation - Coordinates",
                 source="Passive Geo Intel",
                 confidence="High",
                 color="slate",
@@ -214,9 +187,9 @@ async def _ip_geo_intel(domain: str, client: httpx.AsyncClient) -> list:
                 tags=["geo", "coordinates"]
             ))
         if timezone:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=timezone,
-                type="IP Geolocation - Timezone",
+                ftype="IP Geolocation - Timezone",
                 source="Passive Geo Intel",
                 confidence="High",
                 color="slate",
@@ -240,9 +213,9 @@ async def _ip_geo_intel(domain: str, client: httpx.AsyncClient) -> list:
                                     break
         if rdap_entities:
             for ent in rdap_entities[:3]:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=ent[:200],
-                    type="IP Geolocation - RDAP Entity",
+                    ftype="IP Geolocation - RDAP Entity",
                     source="Passive Geo Intel",
                     confidence="High",
                     color="slate",
@@ -256,9 +229,9 @@ async def _tld_geo_analysis(domain: str) -> list:
     tld = domain.split(".")[-1] if "." in domain else ""
     if tld in TLD_GEO_HINTS:
         country_hint = TLD_GEO_HINTS[tld]
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"TLD '.{tld}' suggests {country_hint}",
-            type="IP Geolocation - TLD Geographic Hint",
+            ftype="IP Geolocation - TLD Geographic Hint",
             source="Passive Geo Intel",
             confidence="Medium",
             color="slate",
@@ -268,9 +241,9 @@ async def _tld_geo_analysis(domain: str) -> list:
         ))
     if tld in LANGUAGE_TLD_MAP:
         lang_hint = LANGUAGE_TLD_MAP[tld]
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"TLD '.{tld}' suggests language: {lang_hint}",
-            type="IP Geolocation - Language Hint",
+            ftype="IP Geolocation - Language Hint",
             source="Passive Geo Intel",
             confidence="Low",
             color="slate",
@@ -279,14 +252,10 @@ async def _tld_geo_analysis(domain: str) -> list:
         ))
     return findings
 
-async def _whois_geo_analysis(domain: str, client: httpx.AsyncClient) -> list:
+async def _whois_geo_analysis(domain: str, client: AsyncClient) -> list:
     findings = []
     try:
-        resp = await client.get(
-            f"https://api.hackertarget.com/whois/?q={domain}",
-            timeout=12.0,
-            headers={"User-Agent": "Mozilla/5.0"}
-        )
+        resp = await safe_fetch(client, f"https://api.hackertarget.com/whois/?q={domain}", timeout=12.0)
         if resp.status_code == 200:
             text = resp.text
             country_match = re.search(r'Registrant\s*Country:\s*(\w+)', text, re.I)
@@ -294,9 +263,9 @@ async def _whois_geo_analysis(domain: str, client: httpx.AsyncClient) -> list:
                 cc = country_match.group(1).upper()
                 country_full = TLD_GEO_HINTS.get(cc.lower(), cc)
                 risk = COUNTRY_RISK.get(cc, "Informational")
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Registrant country: {country_full} ({cc})",
-                    type="IP Geolocation - WHOIS Country",
+                    ftype="IP Geolocation - WHOIS Country",
                     source="Passive Geo Intel",
                     confidence="High",
                     color="red" if risk != "Informational" else "slate",
@@ -308,9 +277,9 @@ async def _whois_geo_analysis(domain: str, client: httpx.AsyncClient) -> list:
             state_match = re.search(r'Registrant\s*State/Province:\s*(.+)', text, re.I)
             if state_match:
                 state_val = state_match.group(1).strip()
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=state_val[:200],
-                    type="IP Geolocation - WHOIS State/Province",
+                    ftype="IP Geolocation - WHOIS State/Province",
                     source="Passive Geo Intel",
                     confidence="High",
                     color="slate",
@@ -320,9 +289,9 @@ async def _whois_geo_analysis(domain: str, client: httpx.AsyncClient) -> list:
             city_match = re.search(r'Registrant\s*City:\s*(.+)', text, re.I)
             if city_match:
                 city_val = city_match.group(1).strip()
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=city_val[:200],
-                    type="IP Geolocation - WHOIS City",
+                    ftype="IP Geolocation - WHOIS City",
                     source="Passive Geo Intel",
                     confidence="High",
                     color="slate",
@@ -333,14 +302,10 @@ async def _whois_geo_analysis(domain: str, client: httpx.AsyncClient) -> list:
         pass
     return findings
 
-async def _ssl_geo_analysis(domain: str, client: httpx.AsyncClient) -> list:
+async def _ssl_geo_analysis(domain: str, client: AsyncClient) -> list:
     findings = []
     try:
-        crt_resp = await client.get(
-            f"https://crt.sh/?q=%25.{domain}&output=json",
-            timeout=15.0,
-            headers={"User-Agent": "Mozilla/5.0"}
-        )
+        crt_resp = await safe_fetch(client, f"https://crt.sh/?q=%25.{domain}&output=json", timeout=15.0)
         if crt_resp.status_code == 200:
             certs = crt_resp.json() if isinstance(crt_resp.text, str) and crt_resp.text.startswith("[") else []
             countries_found = set()
@@ -351,9 +316,9 @@ async def _ssl_geo_analysis(domain: str, client: httpx.AsyncClient) -> list:
                     countries_found.add(country_m.group(1).upper())
             for cc in countries_found:
                 country_full = TLD_GEO_HINTS.get(cc.lower(), cc)
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"SSL Certificate issuer country: {country_full} ({cc})",
-                    type="IP Geolocation - SSL Issuer Country",
+                    ftype="IP Geolocation - SSL Issuer Country",
                     source="Passive Geo Intel",
                     confidence="Medium",
                     color="slate",
@@ -364,7 +329,7 @@ async def _ssl_geo_analysis(domain: str, client: httpx.AsyncClient) -> list:
         pass
     return findings
 
-async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFinding]:
+async def crawl(target: str, client: AsyncClient) -> list[IntelligenceFinding]:
     findings = []
     domain = target.strip().lower()
     if "://" in domain:
@@ -383,9 +348,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     findings.extend(ssl_findings)
 
     if findings:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"IP Geolocation Intelligence complete: {len(findings)} findings",
-            type="IP Geolocation - Summary",
+            ftype="IP Geolocation - Summary",
             source="Passive Geo Intel",
             confidence="High", color="purple",
             status="Complete",

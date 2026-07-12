@@ -1,10 +1,9 @@
-import httpx
 import re
 import json
 import asyncio
 from collections import defaultdict
 from urllib.parse import urlparse
-from models import IntelligenceFinding
+from ..module_common import safe_fetch, make_finding
 
 SOURCE_RELIABILITY = {
     "crt.sh": 0.95, "HackerTarget": 0.90, "BufferOver": 0.85, "RapidDNS": 0.80,
@@ -20,13 +19,9 @@ SOURCE_RELIABILITY = {
     "GoogleDorks": 0.60, "BingSearch": 0.55, "DuckDuckGo": 0.50,
 }
 
-async def _from_crtsh(domain: str, client: httpx.AsyncClient, seen: set, findings: list, counts: dict):
+async def _from_crtsh(domain: str, client: AsyncClient, seen: set, findings: list, counts: dict):
     try:
-        resp = await client.get(
-            f"https://crt.sh/?q=%25.{domain}&output=json",
-            timeout=20.0,
-            headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}
-        )
+        resp = await safe_fetch(client, f"https://crt.sh/?q=%25.{domain}&output=json", timeout=20.0)
         if resp.status_code == 200:
             certs = resp.json() if isinstance(resp.text, str) and resp.text.startswith("[") else []
             for entry in certs:
@@ -36,8 +31,8 @@ async def _from_crtsh(domain: str, client: httpx.AsyncClient, seen: set, finding
                     if (sub.endswith("." + domain) or sub == domain) and "*" not in sub and sub not in seen:
                         seen.add(sub)
                         counts["crt.sh"] += 1
-                        findings.append(IntelligenceFinding(
-                            entity=sub, type="Subdomain (Passive Discovery)", source="crt.sh",
+                        findings.append(make_finding(
+                            entity=sub, ftype="Subdomain (Passive Discovery)", source="crt.sh",
                             confidence="High", color="emerald", category="Domain Reconnaissance",
                             threat_level="Informational", status="Discovered",
                             raw_data="Found in Certificate Transparency logs", tags=["subdomain", "ct-log"]
@@ -45,13 +40,9 @@ async def _from_crtsh(domain: str, client: httpx.AsyncClient, seen: set, finding
     except Exception:
         pass
 
-async def _from_hackertarget(domain: str, client: httpx.AsyncClient, seen: set, findings: list, counts: dict):
+async def _from_hackertarget(domain: str, client: AsyncClient, seen: set, findings: list, counts: dict):
     try:
-        resp = await client.get(
-            f"https://api.hackertarget.com/hostsearch/?q={domain}",
-            timeout=15.0,
-            headers={"User-Agent": "Mozilla/5.0"}
-        )
+        resp = await safe_fetch(client, f"https://api.hackertarget.com/hostsearch/?q={domain}", timeout=15.0)
         if resp.status_code == 200:
             for line in resp.text.split("\n"):
                 if "," in line:
@@ -59,8 +50,8 @@ async def _from_hackertarget(domain: str, client: httpx.AsyncClient, seen: set, 
                     if sub not in seen:
                         seen.add(sub)
                         counts["HackerTarget"] += 1
-                        findings.append(IntelligenceFinding(
-                            entity=sub, type="Subdomain (Passive Discovery)", source="HackerTarget",
+                        findings.append(make_finding(
+                            entity=sub, ftype="Subdomain (Passive Discovery)", source="HackerTarget",
                             confidence="High", color="emerald", category="Domain Reconnaissance",
                             threat_level="Informational", status="Discovered",
                             raw_data="Found via passive DNS", tags=["subdomain", "passive-dns"]
@@ -68,13 +59,9 @@ async def _from_hackertarget(domain: str, client: httpx.AsyncClient, seen: set, 
     except Exception:
         pass
 
-async def _from_bufferover(domain: str, client: httpx.AsyncClient, seen: set, findings: list, counts: dict):
+async def _from_bufferover(domain: str, client: AsyncClient, seen: set, findings: list, counts: dict):
     try:
-        resp = await client.get(
-            f"https://dns.bufferover.run/dns?q=.{domain}",
-            timeout=15.0,
-            headers={"User-Agent": "Mozilla/5.0"}
-        )
+        resp = await safe_fetch(client, f"https://dns.bufferover.run/dns?q=.{domain}", timeout=15.0)
         if resp.status_code == 200:
             data = resp.json()
             for entry_type in ["FDNS_A", "RDNS"]:
@@ -85,8 +72,8 @@ async def _from_bufferover(domain: str, client: httpx.AsyncClient, seen: set, fi
                         if sub.endswith("." + domain) and sub not in seen:
                             seen.add(sub)
                             counts["BufferOver"] += 1
-                            findings.append(IntelligenceFinding(
-                                entity=sub, type="Subdomain (Passive Discovery)", source="BufferOver",
+                            findings.append(make_finding(
+                                entity=sub, ftype="Subdomain (Passive Discovery)", source="BufferOver",
                                 confidence="High", color="emerald", category="Domain Reconnaissance",
                                 threat_level="Informational", status="Discovered",
                                 raw_data=f"Found via {entry_type} ", tags=["subdomain", "bufferover"]
@@ -94,13 +81,9 @@ async def _from_bufferover(domain: str, client: httpx.AsyncClient, seen: set, fi
     except Exception:
         pass
 
-async def _from_rapiddns(domain: str, client: httpx.AsyncClient, seen: set, findings: list, counts: dict):
+async def _from_rapiddns(domain: str, client: AsyncClient, seen: set, findings: list, counts: dict):
     try:
-        resp = await client.get(
-            f"https://rapiddns.io/subdomain/{domain}?full=1",
-            timeout=15.0,
-            headers={"User-Agent": "Mozilla/5.0"}
-        )
+        resp = await safe_fetch(client, f"https://rapiddns.io/subdomain/{domain}?full=1", timeout=15.0)
         if resp.status_code == 200:
             pattern = re.compile(rf'([\w.-]+\.{re.escape(domain)})', re.IGNORECASE)
             for m in pattern.finditer(resp.text):
@@ -108,8 +91,8 @@ async def _from_rapiddns(domain: str, client: httpx.AsyncClient, seen: set, find
                 if sub not in seen:
                     seen.add(sub)
                     counts["RapidDNS"] += 1
-                    findings.append(IntelligenceFinding(
-                        entity=sub, type="Subdomain (Passive Discovery)", source="RapidDNS",
+                    findings.append(make_finding(
+                        entity=sub, ftype="Subdomain (Passive Discovery)", source="RapidDNS",
                         confidence="Medium", color="emerald", category="Domain Reconnaissance",
                         threat_level="Informational", status="Discovered",
                         tags=["subdomain", "rapiddns"]
@@ -117,13 +100,9 @@ async def _from_rapiddns(domain: str, client: httpx.AsyncClient, seen: set, find
     except Exception:
         pass
 
-async def _from_alienvault(domain: str, client: httpx.AsyncClient, seen: set, findings: list, counts: dict):
+async def _from_alienvault(domain: str, client: AsyncClient, seen: set, findings: list, counts: dict):
     try:
-        resp = await client.get(
-            f"https://otx.alienvault.com/api/v1/indicators/domain/{domain}/passive_dns",
-            timeout=15.0,
-            headers={"User-Agent": "Mozilla/5.0"}
-        )
+        resp = await safe_fetch(client, f"https://otx.alienvault.com/api/v1/indicators/domain/{domain}/passive_dns", timeout=15.0)
         if resp.status_code == 200:
             data = resp.json()
             for entry in data.get("passive_dns", []):
@@ -131,8 +110,8 @@ async def _from_alienvault(domain: str, client: httpx.AsyncClient, seen: set, fi
                 if sub.endswith("." + domain) and sub not in seen:
                     seen.add(sub)
                     counts["AlienVault OTX"] += 1
-                    findings.append(IntelligenceFinding(
-                        entity=sub, type="Subdomain (Passive Discovery)", source="AlienVault OTX",
+                    findings.append(make_finding(
+                        entity=sub, ftype="Subdomain (Passive Discovery)", source="AlienVault OTX",
                         confidence="High", color="emerald", category="Domain Reconnaissance",
                         threat_level="Informational", status="Discovered",
                         raw_data="Found via OTX passive DNS", tags=["subdomain", "otx"]
@@ -140,13 +119,9 @@ async def _from_alienvault(domain: str, client: httpx.AsyncClient, seen: set, fi
     except Exception:
         pass
 
-async def _from_threatcrowd(domain: str, client: httpx.AsyncClient, seen: set, findings: list, counts: dict):
+async def _from_threatcrowd(domain: str, client: AsyncClient, seen: set, findings: list, counts: dict):
     try:
-        resp = await client.get(
-            f"https://www.threatcrowd.org/searchApi/v2/domain/report/?domain={domain}",
-            timeout=15.0,
-            headers={"User-Agent": "Mozilla/5.0"}
-        )
+        resp = await safe_fetch(client, f"https://www.threatcrowd.org/searchApi/v2/domain/report/?domain={domain}", timeout=15.0)
         if resp.status_code == 200:
             data = resp.json()
             for sub in data.get("subdomains", []):
@@ -154,8 +129,8 @@ async def _from_threatcrowd(domain: str, client: httpx.AsyncClient, seen: set, f
                 if sub not in seen:
                     seen.add(sub)
                     counts["ThreatCrowd"] += 1
-                    findings.append(IntelligenceFinding(
-                        entity=sub, type="Subdomain (Passive Discovery)", source="ThreatCrowd",
+                    findings.append(make_finding(
+                        entity=sub, ftype="Subdomain (Passive Discovery)", source="ThreatCrowd",
                         confidence="Medium", color="emerald", category="Domain Reconnaissance",
                         threat_level="Informational", status="Discovered",
                         tags=["subdomain", "threatcrowd"]
@@ -163,13 +138,9 @@ async def _from_threatcrowd(domain: str, client: httpx.AsyncClient, seen: set, f
     except Exception:
         pass
 
-async def _from_anubis(domain: str, client: httpx.AsyncClient, seen: set, findings: list, counts: dict):
+async def _from_anubis(domain: str, client: AsyncClient, seen: set, findings: list, counts: dict):
     try:
-        resp = await client.get(
-            f"https://jldc.me/anubis/subdomains/{domain}",
-            timeout=15.0,
-            headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
-        )
+        resp = await safe_fetch(client, f"https://jldc.me/anubis/subdomains/{domain}", timeout=15.0)
         if resp.status_code == 200 and resp.text.strip().startswith("["):
             data = resp.json()
             for sub in data:
@@ -177,8 +148,8 @@ async def _from_anubis(domain: str, client: httpx.AsyncClient, seen: set, findin
                     sub = sub.lower()
                     seen.add(sub)
                     counts["Anubis"] += 1
-                    findings.append(IntelligenceFinding(
-                        entity=sub, type="Subdomain (Passive Discovery)", source="Anubis",
+                    findings.append(make_finding(
+                        entity=sub, ftype="Subdomain (Passive Discovery)", source="Anubis",
                         confidence="Medium", color="emerald", category="Domain Reconnaissance",
                         threat_level="Informational", status="Discovered",
                         tags=["subdomain", "anubis"]
@@ -186,13 +157,9 @@ async def _from_anubis(domain: str, client: httpx.AsyncClient, seen: set, findin
     except Exception:
         pass
 
-async def _from_urlscan(domain: str, client: httpx.AsyncClient, seen: set, findings: list, counts: dict):
+async def _from_urlscan(domain: str, client: AsyncClient, seen: set, findings: list, counts: dict):
     try:
-        resp = await client.get(
-            f"https://urlscan.io/api/v1/search/?q=domain:{domain}&size=100",
-            timeout=15.0,
-            headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
-        )
+        resp = await safe_fetch(client, f"https://urlscan.io/api/v1/search/?q=domain:{domain}&size=100", timeout=15.0)
         if resp.status_code == 200:
             data = resp.json()
             for result in data.get("results", []):
@@ -201,8 +168,8 @@ async def _from_urlscan(domain: str, client: httpx.AsyncClient, seen: set, findi
                 if sub.endswith("." + domain) and sub not in seen:
                     seen.add(sub)
                     counts["URLScan.io"] += 1
-                    findings.append(IntelligenceFinding(
-                        entity=sub, type="Subdomain (Passive Discovery)", source="URLScan.io",
+                    findings.append(make_finding(
+                        entity=sub, ftype="Subdomain (Passive Discovery)", source="URLScan.io",
                         confidence="Medium", color="emerald", category="Domain Reconnaissance",
                         threat_level="Informational", status="Discovered",
                         tags=["subdomain", "urlscan"]
@@ -210,13 +177,9 @@ async def _from_urlscan(domain: str, client: httpx.AsyncClient, seen: set, findi
     except Exception:
         pass
 
-async def _from_sonar_omnisint(domain: str, client: httpx.AsyncClient, seen: set, findings: list, counts: dict):
+async def _from_sonar_omnisint(domain: str, client: AsyncClient, seen: set, findings: list, counts: dict):
     try:
-        resp = await client.get(
-            f"https://sonar.omnisint.io/subdomains/{domain}",
-            timeout=15.0,
-            headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
-        )
+        resp = await safe_fetch(client, f"https://sonar.omnisint.io/subdomains/{domain}", timeout=15.0)
         if resp.status_code == 200 and resp.text.strip().startswith("["):
             data = resp.json()
             for sub in data:
@@ -224,8 +187,8 @@ async def _from_sonar_omnisint(domain: str, client: httpx.AsyncClient, seen: set
                     sub = sub.lower()
                     seen.add(sub)
                     counts["Sonar Omnisint"] += 1
-                    findings.append(IntelligenceFinding(
-                        entity=sub, type="Subdomain (Passive Discovery)", source="Sonar Omnisint",
+                    findings.append(make_finding(
+                        entity=sub, ftype="Subdomain (Passive Discovery)", source="Sonar Omnisint",
                         confidence="Medium", color="emerald", category="Domain Reconnaissance",
                         threat_level="Informational", status="Discovered",
                         tags=["subdomain", "omnisint"]
@@ -233,13 +196,9 @@ async def _from_sonar_omnisint(domain: str, client: httpx.AsyncClient, seen: set
     except Exception:
         pass
 
-async def _from_wayback(domain: str, client: httpx.AsyncClient, seen: set, findings: list, counts: dict):
+async def _from_wayback(domain: str, client: AsyncClient, seen: set, findings: list, counts: dict):
     try:
-        resp = await client.get(
-            f"http://web.archive.org/cdx/search/cdx?url=*.{domain}/*&output=json&fl=original&collapse=urlkey",
-            timeout=25.0,
-            headers={"User-Agent": "Mozilla/5.0"}
-        )
+        resp = await safe_fetch(client, f"http://web.archive.org/cdx/search/cdx?url=*.{domain}/*&output=json&fl=original&collapse=urlkey", timeout=25.0)
         if resp.status_code == 200:
             data = resp.json()
             sub_pattern = re.compile(rf'https?://([\w.-]+\.{re.escape(domain)})', re.IGNORECASE)
@@ -251,8 +210,8 @@ async def _from_wayback(domain: str, client: httpx.AsyncClient, seen: set, findi
                         if sub not in seen:
                             seen.add(sub)
                             counts["Wayback Machine"] += 1
-                            findings.append(IntelligenceFinding(
-                                entity=sub, type="Subdomain (Passive Discovery)", source="Wayback Machine",
+                            findings.append(make_finding(
+                                entity=sub, ftype="Subdomain (Passive Discovery)", source="Wayback Machine",
                                 confidence="Medium", color="emerald", category="Domain Reconnaissance",
                                 threat_level="Informational", status="Discovered",
                                 tags=["subdomain", "wayback"]
@@ -260,13 +219,9 @@ async def _from_wayback(domain: str, client: httpx.AsyncClient, seen: set, findi
     except Exception:
         pass
 
-async def _from_shodan(domain: str, client: httpx.AsyncClient, seen: set, findings: list, counts: dict):
+async def _from_shodan(domain: str, client: AsyncClient, seen: set, findings: list, counts: dict):
     try:
-        resp = await client.get(
-            f"https://www.shodan.io/search?query=hostname%3A.{domain}",
-            timeout=15.0,
-            headers={"User-Agent": "Mozilla/5.0"}
-        )
+        resp = await safe_fetch(client, f"https://www.shodan.io/search?query=hostname%3A.{domain}", timeout=15.0)
         if resp.status_code == 200:
             pattern = re.compile(rf'([\w.-]+\.{re.escape(domain)})', re.IGNORECASE)
             for m in pattern.finditer(resp.text):
@@ -274,8 +229,8 @@ async def _from_shodan(domain: str, client: httpx.AsyncClient, seen: set, findin
                 if sub not in seen:
                     seen.add(sub)
                     counts["Shodan"] += 1
-                    findings.append(IntelligenceFinding(
-                        entity=sub, type="Subdomain (Passive Discovery)", source="Shodan",
+                    findings.append(make_finding(
+                        entity=sub, ftype="Subdomain (Passive Discovery)", source="Shodan",
                         confidence="High", color="emerald", category="Domain Reconnaissance",
                         threat_level="Informational", status="Discovered",
                         tags=["subdomain", "shodan"]
@@ -283,13 +238,9 @@ async def _from_shodan(domain: str, client: httpx.AsyncClient, seen: set, findin
     except Exception:
         pass
 
-async def _from_censys(domain: str, client: httpx.AsyncClient, seen: set, findings: list, counts: dict):
+async def _from_censys(domain: str, client: AsyncClient, seen: set, findings: list, counts: dict):
     try:
-        resp = await client.get(
-            f"https://search.censys.io/search?resource=hosts&q=services.service_name%3A%22HTTP%22+AND+dns.names%3A.{domain}",
-            timeout=15.0,
-            headers={"User-Agent": "Mozilla/5.0"}
-        )
+        resp = await safe_fetch(client, f"https://search.censys.io/search?resource=hosts&q=services.service_name%3A%22HTTP%22+AND+dns.names%3A.{domain}", timeout=15.0)
         if resp.status_code == 200:
             pattern = re.compile(rf'([\w.-]+\.{re.escape(domain)})', re.IGNORECASE)
             for m in pattern.finditer(resp.text):
@@ -297,8 +248,8 @@ async def _from_censys(domain: str, client: httpx.AsyncClient, seen: set, findin
                 if sub not in seen:
                     seen.add(sub)
                     counts["Censys"] += 1
-                    findings.append(IntelligenceFinding(
-                        entity=sub, type="Subdomain (Passive Discovery)", source="Censys",
+                    findings.append(make_finding(
+                        entity=sub, ftype="Subdomain (Passive Discovery)", source="Censys",
                         confidence="High", color="emerald", category="Domain Reconnaissance",
                         threat_level="Informational", status="Discovered",
                         tags=["subdomain", "censys"]
@@ -306,13 +257,9 @@ async def _from_censys(domain: str, client: httpx.AsyncClient, seen: set, findin
     except Exception:
         pass
 
-async def _from_zoomeye(domain: str, client: httpx.AsyncClient, seen: set, findings: list, counts: dict):
+async def _from_zoomeye(domain: str, client: AsyncClient, seen: set, findings: list, counts: dict):
     try:
-        resp = await client.get(
-            f"https://www.zoomeye.org/searchResult?q=hostname%3A.{domain}",
-            timeout=15.0,
-            headers={"User-Agent": "Mozilla/5.0"}
-        )
+        resp = await safe_fetch(client, f"https://www.zoomeye.org/searchResult?q=hostname%3A.{domain}", timeout=15.0)
         if resp.status_code == 200:
             pattern = re.compile(rf'([\w.-]+\.{re.escape(domain)})', re.IGNORECASE)
             for m in pattern.finditer(resp.text):
@@ -320,8 +267,8 @@ async def _from_zoomeye(domain: str, client: httpx.AsyncClient, seen: set, findi
                 if sub not in seen:
                     seen.add(sub)
                     counts["ZoomEye"] += 1
-                    findings.append(IntelligenceFinding(
-                        entity=sub, type="Subdomain (Passive Discovery)", source="ZoomEye",
+                    findings.append(make_finding(
+                        entity=sub, ftype="Subdomain (Passive Discovery)", source="ZoomEye",
                         confidence="Medium", color="emerald", category="Domain Reconnaissance",
                         threat_level="Informational", status="Discovered",
                         tags=["subdomain", "zoomeye"]
@@ -329,13 +276,9 @@ async def _from_zoomeye(domain: str, client: httpx.AsyncClient, seen: set, findi
     except Exception:
         pass
 
-async def _from_binaryedge(domain: str, client: httpx.AsyncClient, seen: set, findings: list, counts: dict):
+async def _from_binaryedge(domain: str, client: AsyncClient, seen: set, findings: list, counts: dict):
     try:
-        resp = await client.get(
-            f"https://app.binaryedge.io/api/v2/query/search?query=domain%3A{domain}",
-            timeout=15.0,
-            headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
-        )
+        resp = await safe_fetch(client, f"https://app.binaryedge.io/api/v2/query/search?query=domain%3A{domain}", timeout=15.0)
         if resp.status_code == 200:
             data = resp.json()
             for event in data.get("events", data.get("results", [])):
@@ -344,8 +287,8 @@ async def _from_binaryedge(domain: str, client: httpx.AsyncClient, seen: set, fi
                     if sub.endswith("." + domain) and sub not in seen:
                         seen.add(sub)
                         counts["BinaryEdge"] += 1
-                        findings.append(IntelligenceFinding(
-                            entity=sub, type="Subdomain (Passive Discovery)", source="BinaryEdge",
+                        findings.append(make_finding(
+                            entity=sub, ftype="Subdomain (Passive Discovery)", source="BinaryEdge",
                             confidence="Medium", color="emerald", category="Domain Reconnaissance",
                             threat_level="Informational", status="Discovered",
                             tags=["subdomain", "binaryedge"]
@@ -353,13 +296,9 @@ async def _from_binaryedge(domain: str, client: httpx.AsyncClient, seen: set, fi
     except Exception:
         pass
 
-async def _from_netlas(domain: str, client: httpx.AsyncClient, seen: set, findings: list, counts: dict):
+async def _from_netlas(domain: str, client: AsyncClient, seen: set, findings: list, counts: dict):
     try:
-        resp = await client.get(
-            f"https://app.netlas.io/domains/?q=domain%3A.{domain}&source_type=include",
-            timeout=15.0,
-            headers={"User-Agent": "Mozilla/5.0"}
-        )
+        resp = await safe_fetch(client, f"https://app.netlas.io/domains/?q=domain%3A.{domain}&source_type=include", timeout=15.0)
         if resp.status_code == 200:
             pattern = re.compile(rf'([\w.-]+\.{re.escape(domain)})', re.IGNORECASE)
             for m in pattern.finditer(resp.text):
@@ -367,8 +306,8 @@ async def _from_netlas(domain: str, client: httpx.AsyncClient, seen: set, findin
                 if sub not in seen:
                     seen.add(sub)
                     counts["Netlas"] += 1
-                    findings.append(IntelligenceFinding(
-                        entity=sub, type="Subdomain (Passive Discovery)", source="Netlas",
+                    findings.append(make_finding(
+                        entity=sub, ftype="Subdomain (Passive Discovery)", source="Netlas",
                         confidence="Medium", color="emerald", category="Domain Reconnaissance",
                         threat_level="Informational", status="Discovered",
                         tags=["subdomain", "netlas"]
@@ -376,21 +315,17 @@ async def _from_netlas(domain: str, client: httpx.AsyncClient, seen: set, findin
     except Exception:
         pass
 
-async def _from_fullhunt(domain: str, client: httpx.AsyncClient, seen: set, findings: list, counts: dict):
+async def _from_fullhunt(domain: str, client: AsyncClient, seen: set, findings: list, counts: dict):
     try:
-        resp = await client.get(
-            f"https://fullhunt.io/api/v1/domain/{domain}/subdomains",
-            timeout=15.0,
-            headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
-        )
+        resp = await safe_fetch(client, f"https://fullhunt.io/api/v1/domain/{domain}/subdomains", timeout=15.0)
         if resp.status_code == 200:
             data = resp.json()
             for sub in data.get("subdomains", data.get("domains", data.get("results", []))):
                 if isinstance(sub, str) and sub.endswith("." + domain) and sub not in seen:
                     seen.add(sub)
                     counts["FullHunt"] += 1
-                    findings.append(IntelligenceFinding(
-                        entity=sub, type="Subdomain (Passive Discovery)", source="FullHunt",
+                    findings.append(make_finding(
+                        entity=sub, ftype="Subdomain (Passive Discovery)", source="FullHunt",
                         confidence="Medium", color="emerald", category="Domain Reconnaissance",
                         threat_level="Informational", status="Discovered",
                         tags=["subdomain", "fullhunt"]
@@ -398,13 +333,9 @@ async def _from_fullhunt(domain: str, client: httpx.AsyncClient, seen: set, find
     except Exception:
         pass
 
-async def _from_onyphe(domain: str, client: httpx.AsyncClient, seen: set, findings: list, counts: dict):
+async def _from_onyphe(domain: str, client: AsyncClient, seen: set, findings: list, counts: dict):
     try:
-        resp = await client.get(
-            f"https://www.onyphe.io/search?query=domain%3A{domain}",
-            timeout=15.0,
-            headers={"User-Agent": "Mozilla/5.0"}
-        )
+        resp = await safe_fetch(client, f"https://www.onyphe.io/search?query=domain%3A{domain}", timeout=15.0)
         if resp.status_code == 200:
             pattern = re.compile(rf'([\w.-]+\.{re.escape(domain)})', re.IGNORECASE)
             for m in pattern.finditer(resp.text):
@@ -412,8 +343,8 @@ async def _from_onyphe(domain: str, client: httpx.AsyncClient, seen: set, findin
                 if sub not in seen:
                     seen.add(sub)
                     counts["ONYPHE"] += 1
-                    findings.append(IntelligenceFinding(
-                        entity=sub, type="Subdomain (Passive Discovery)", source="ONYPHE",
+                    findings.append(make_finding(
+                        entity=sub, ftype="Subdomain (Passive Discovery)", source="ONYPHE",
                         confidence="Medium", color="emerald", category="Domain Reconnaissance",
                         threat_level="Informational", status="Discovered",
                         tags=["subdomain", "onyphe"]
@@ -421,13 +352,9 @@ async def _from_onyphe(domain: str, client: httpx.AsyncClient, seen: set, findin
     except Exception:
         pass
 
-async def _from_publicwww(domain: str, client: httpx.AsyncClient, seen: set, findings: list, counts: dict):
+async def _from_publicwww(domain: str, client: AsyncClient, seen: set, findings: list, counts: dict):
     try:
-        resp = await client.get(
-            f"https://publicwww.com/websites/{domain}/",
-            timeout=15.0,
-            headers={"User-Agent": "Mozilla/5.0"}
-        )
+        resp = await safe_fetch(client, f"https://publicwww.com/websites/{domain}/", timeout=15.0)
         if resp.status_code == 200:
             pattern = re.compile(rf'([\w.-]+\.{re.escape(domain)})', re.IGNORECASE)
             for m in pattern.finditer(resp.text):
@@ -435,8 +362,8 @@ async def _from_publicwww(domain: str, client: httpx.AsyncClient, seen: set, fin
                 if sub not in seen:
                     seen.add(sub)
                     counts["PublicWWW"] += 1
-                    findings.append(IntelligenceFinding(
-                        entity=sub, type="Subdomain (Passive Discovery)", source="PublicWWW",
+                    findings.append(make_finding(
+                        entity=sub, ftype="Subdomain (Passive Discovery)", source="PublicWWW",
                         confidence="Low", color="emerald", category="Domain Reconnaissance",
                         threat_level="Informational", status="Discovered",
                         tags=["subdomain", "publicwww"]
@@ -444,13 +371,9 @@ async def _from_publicwww(domain: str, client: httpx.AsyncClient, seen: set, fin
     except Exception:
         pass
 
-async def _from_dnsdumpster(domain: str, client: httpx.AsyncClient, seen: set, findings: list, counts: dict):
+async def _from_dnsdumpster(domain: str, client: AsyncClient, seen: set, findings: list, counts: dict):
     try:
-        resp = await client.get(
-            f"https://dnsdumpster.com/",
-            timeout=15.0,
-            headers={"User-Agent": "Mozilla/5.0"}
-        )
+        resp = await safe_fetch(client, f"https://dnsdumpster.com/", timeout=15.0)
         if resp.status_code == 200:
             pattern = re.compile(rf'([\w.-]+\.{re.escape(domain)})', re.IGNORECASE)
             for m in pattern.finditer(resp.text):
@@ -458,8 +381,8 @@ async def _from_dnsdumpster(domain: str, client: httpx.AsyncClient, seen: set, f
                 if sub not in seen:
                     seen.add(sub)
                     counts["DNSDumpster"] += 1
-                    findings.append(IntelligenceFinding(
-                        entity=sub, type="Subdomain (Passive Discovery)", source="DNSDumpster",
+                    findings.append(make_finding(
+                        entity=sub, ftype="Subdomain (Passive Discovery)", source="DNSDumpster",
                         confidence="Medium", color="emerald", category="Domain Reconnaissance",
                         threat_level="Informational", status="Discovered",
                         tags=["subdomain", "dnsdumpster"]
@@ -467,13 +390,9 @@ async def _from_dnsdumpster(domain: str, client: httpx.AsyncClient, seen: set, f
     except Exception:
         pass
 
-async def _from_certspotter(domain: str, client: httpx.AsyncClient, seen: set, findings: list, counts: dict):
+async def _from_certspotter(domain: str, client: AsyncClient, seen: set, findings: list, counts: dict):
     try:
-        resp = await client.get(
-            f"https://certspotter.com/api/v1/issuances?domain={domain}&include_subdomains=true",
-            timeout=15.0,
-            headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
-        )
+        resp = await safe_fetch(client, f"https://certspotter.com/api/v1/issuances?domain={domain}&include_subdomains=true", timeout=15.0)
         if resp.status_code == 200:
             data = resp.json()
             for entry in data if isinstance(data, list) else data.get("results", []):
@@ -483,8 +402,8 @@ async def _from_certspotter(domain: str, client: httpx.AsyncClient, seen: set, f
                         if sub.endswith("." + domain) and "*" not in sub and sub not in seen:
                             seen.add(sub)
                             counts["CertSpotter"] += 1
-                            findings.append(IntelligenceFinding(
-                                entity=sub, type="Subdomain (Passive Discovery)", source="CertSpotter",
+                            findings.append(make_finding(
+                                entity=sub, ftype="Subdomain (Passive Discovery)", source="CertSpotter",
                                 confidence="High", color="emerald", category="Domain Reconnaissance",
                                 threat_level="Informational", status="Discovered",
                                 tags=["subdomain", "certspotter"]
@@ -492,13 +411,9 @@ async def _from_certspotter(domain: str, client: httpx.AsyncClient, seen: set, f
     except Exception:
         pass
 
-async def _from_google_ct(domain: str, client: httpx.AsyncClient, seen: set, findings: list, counts: dict):
+async def _from_google_ct(domain: str, client: AsyncClient, seen: set, findings: list, counts: dict):
     try:
-        resp = await client.get(
-            f"https://certificate.transparency.google.com/?domain={domain}",
-            timeout=15.0,
-            headers={"User-Agent": "Mozilla/5.0"}
-        )
+        resp = await safe_fetch(client, f"https://certificate.transparency.google.com/?domain={domain}", timeout=15.0)
         if resp.status_code == 200:
             pattern = re.compile(rf'([\w.-]+\.{re.escape(domain)})', re.IGNORECASE)
             for m in pattern.finditer(resp.text):
@@ -506,8 +421,8 @@ async def _from_google_ct(domain: str, client: httpx.AsyncClient, seen: set, fin
                 if sub not in seen:
                     seen.add(sub)
                     counts["GoogleCT"] += 1
-                    findings.append(IntelligenceFinding(
-                        entity=sub, type="Subdomain (Passive Discovery)", source="Google CT",
+                    findings.append(make_finding(
+                        entity=sub, ftype="Subdomain (Passive Discovery)", source="Google CT",
                         confidence="High", color="emerald", category="Domain Reconnaissance",
                         threat_level="Informational", status="Discovered",
                         tags=["subdomain", "google-ct"]
@@ -515,13 +430,9 @@ async def _from_google_ct(domain: str, client: httpx.AsyncClient, seen: set, fin
     except Exception:
         pass
 
-async def _from_threatminer(domain: str, client: httpx.AsyncClient, seen: set, findings: list, counts: dict):
+async def _from_threatminer(domain: str, client: AsyncClient, seen: set, findings: list, counts: dict):
     try:
-        resp = await client.get(
-            f"https://api.threatminer.org/v2/domain.php?q={domain}&rt=5",
-            timeout=15.0,
-            headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
-        )
+        resp = await safe_fetch(client, f"https://api.threatminer.org/v2/domain.php?q={domain}&rt=5", timeout=15.0)
         if resp.status_code == 200:
             data = resp.json()
             for entry in data.get("results", []):
@@ -530,8 +441,8 @@ async def _from_threatminer(domain: str, client: httpx.AsyncClient, seen: set, f
                     if sub.endswith("." + domain) and sub not in seen:
                         seen.add(sub)
                         counts["ThreatMiner"] += 1
-                        findings.append(IntelligenceFinding(
-                            entity=sub, type="Subdomain (Passive Discovery)", source="ThreatMiner",
+                        findings.append(make_finding(
+                            entity=sub, ftype="Subdomain (Passive Discovery)", source="ThreatMiner",
                             confidence="Medium", color="emerald", category="Domain Reconnaissance",
                             threat_level="Informational", status="Discovered",
                             tags=["subdomain", "threatminer"]
@@ -539,7 +450,7 @@ async def _from_threatminer(domain: str, client: httpx.AsyncClient, seen: set, f
     except Exception:
         pass
 
-async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFinding]:
+async def crawl(target: str, client: AsyncClient) -> list[IntelligenceFinding]:
     findings = []
     domain = target.strip().lower()
     if "://" in domain:
@@ -575,9 +486,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     if findings:
         source_summary = ", ".join(f"{s}: {c}" for s, c in sorted(source_counts.items(), key=lambda x: -x[1]))
-        findings.insert(0, IntelligenceFinding(
+        findings.insert(0, make_finding(
             entity=f"Total: {len(seen)} unique passive subdomains from {len(source_counts)} sources",
-            type="Passive Subdomain Discovery - Summary",
+            ftype="Passive Subdomain Discovery - Summary",
             source="Passive Subdomain Discovery",
             confidence="High", color="blue", category="Domain Reconnaissance",
             threat_level="Informational", status="Summary",
@@ -587,9 +498,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         reliability_total = sum(SOURCE_RELIABILITY.get(s, 0.7) for s in source_counts for _ in range(source_counts[s]))
         reliability_count = sum(source_counts.values())
         avg_reliability = reliability_total / reliability_count if reliability_count > 0 else 0
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Source Reliability Score: {avg_reliability:.0%} (avg of {reliability_count} signals)",
-            type="Passive Subdomain Discovery - Reliability",
+            ftype="Passive Subdomain Discovery - Reliability",
             source="Passive Subdomain Discovery",
             confidence="High",
             color="emerald" if avg_reliability >= 0.8 else "orange",
@@ -600,9 +511,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
         sources_used = len(source_counts)
         domain_coverage = "Comprehensive" if sources_used >= 15 else "Moderate" if sources_used >= 8 else "Limited"
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Source coverage: {sources_used}/22 sources ({domain_coverage})",
-            type="Passive Subdomain Discovery - Coverage",
+            ftype="Passive Subdomain Discovery - Coverage",
             source="Passive Subdomain Discovery",
             confidence="High", color="purple",
             threat_level="Informational", status=domain_coverage,

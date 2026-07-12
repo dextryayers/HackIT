@@ -1,7 +1,8 @@
-import httpx
 import re
 import time
+import httpx
 from urllib.parse import urlparse, urljoin
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 from models import IntelligenceFinding
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
@@ -38,7 +39,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                 visited.add(current)
 
                 t0 = time.time()
-                resp = await client.get(current, timeout=10.0, follow_redirects=False, headers={"User-Agent": UA})
+                resp = await safe_fetch(client,current, timeout=10.0, follow_redirects=False, headers={"User-Agent": UA})
                 latency = time.time() - t0
                 total_latency += latency
 
@@ -67,9 +68,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             all_redirects[start_url] = chain
 
     if not all_redirects:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"No redirect chains found for {domain}",
-            type="Redirect: No Redirects",
+            ftype="Redirect: No Redirects",
             source="RedirectAnalyzer",
             confidence="Low",
             color="slate",
@@ -83,9 +84,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         chain_length = len(chain)
         final_status = chain[-1]["status"]
 
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Redirect chain for {start_url}: {chain_length} hop(s) -> {final_url} (HTTP {final_status})",
-            type="Redirect: Chain Overview",
+            ftype="Redirect: Chain Overview",
             source="RedirectAnalyzer",
             confidence="High",
             color="blue",
@@ -101,9 +102,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
             if status in REDIRECT_CODES:
                 redirect_type = REDIRECT_CODES[status]
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Hop {idx+1}: {step['url']} -> HTTP {status} ({redirect_type}) -> {location[:80] or 'Final'}",
-                    type="Redirect: Hop Detail",
+                    ftype="Redirect: Hop Detail",
                     source="RedirectAnalyzer",
                     confidence="High",
                     color="slate" if status in (301, 308) else "yellow",
@@ -114,9 +115,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
             if step["cookies"]:
                 for cookie_name, cookie_val in step["cookies"].items():
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Cookie set during redirect: {cookie_name}={cookie_val[:30]}",
-                        type="Redirect: Cookie Tracked",
+                        ftype="Redirect: Cookie Tracked",
                         source="RedirectAnalyzer",
                         confidence="Medium",
                         color="orange",
@@ -126,9 +127,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                     ))
 
             response_time = latency
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Hop {idx+1} latency: {response_time:.3f}s",
-                type="Redirect: Hop Latency",
+                ftype="Redirect: Hop Latency",
                 source="RedirectAnalyzer",
                 confidence="Medium",
                 color="slate",
@@ -150,9 +151,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                 continue
 
         if cross_domain_redirects:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Cross-domain redirects detected: {len(cross_domain_redirects)} hop(s) leave original domain",
-                type="Redirect: Cross-Domain",
+                ftype="Redirect: Cross-Domain",
                 source="RedirectAnalyzer",
                 confidence="High",
                 color="red",
@@ -162,9 +163,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             ))
 
         if chain_length > 3:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Long redirect chain ({chain_length} hops). Each hop adds latency and attack surface.",
-                type="Redirect: Long Chain Warning",
+                ftype="Redirect: Long Chain Warning",
                 source="RedirectAnalyzer",
                 confidence="High",
                 color="red",
@@ -175,9 +176,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     if redirect_loops:
         for loop in redirect_loops:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Redirect LOOP detected: {loop['start']} loops at {loop['loop_url']} (hop {loop['hop']})",
-                type="Redirect: Loop Detected",
+                ftype="Redirect: Loop Detected",
                 source="RedirectAnalyzer",
                 confidence="High",
                 color="red",
@@ -187,9 +188,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                 tags=["redirect", "loop", "critical"]
             ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Redirect Analysis: {len(all_redirects)} chain(s), {sum(len(c) for c in all_redirects.values())} total hops, {len(redirect_loops)} loops",
-        type="Redirect: Summary",
+        ftype="Redirect: Summary",
         source="RedirectAnalyzer",
         confidence="High",
         color="red" if redirect_loops else ("orange" if any(len(c) > 3 for c in all_redirects.values()) else "blue"),

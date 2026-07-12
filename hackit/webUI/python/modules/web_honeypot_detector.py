@@ -1,6 +1,7 @@
-import httpx
 import re
+import httpx
 from urllib.parse import urlparse
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 from models import IntelligenceFinding
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
@@ -36,7 +37,7 @@ SUSPICIOUS_EMAIL_PATTERNS = [
 async def check_directory(client: httpx.AsyncClient, base_url: str, path: str) -> dict:
     result = {"path": path, "status": 0, "is_honeypot": False, "indicators": []}
     try:
-        resp = await client.get(f"{base_url}{path}", timeout=8.0, follow_redirects=False, headers={"User-Agent": UA})
+        resp = await safe_fetch(client,f"{base_url}{path}", timeout=8.0, follow_redirects=False, headers={"User-Agent": UA})
         result["status"] = resp.status_code
         if resp.status_code == 200:
             content = resp.text.lower()
@@ -62,7 +63,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     for proto in ["https", "http"]:
         try:
-            resp = await client.get(f"{proto}://{domain}", timeout=10.0, follow_redirects=True, headers={"User-Agent": UA})
+            resp = await safe_fetch(client,f"{proto}://{domain}", timeout=10.0, follow_redirects=True, headers={"User-Agent": UA})
             html = resp.text
             base_url = f"{proto}://{domain}"
             break
@@ -77,9 +78,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                 hidden_fields.append(m)
 
         if hidden_fields:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Detected {len(hidden_fields)} potential honeypot field indicators",
-                type="Honeypot: Hidden Field Patterns",
+                ftype="Honeypot: Hidden Field Patterns",
                 source="HoneypotDetector",
                 confidence="Medium",
                 color="orange",
@@ -88,9 +89,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                 tags=["honeypot", "hidden-fields", "anti-bot"]
             ))
         else:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="No obvious honeypot field patterns detected in page source",
-                type="Honeypot: Field Check",
+                ftype="Honeypot: Field Check",
                 source="HoneypotDetector",
                 confidence="Medium",
                 color="emerald",
@@ -103,9 +104,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             matches = re.findall(pat, html, re.I)
             fake_emails.extend(matches)
         if fake_emails:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Found {len(set(fake_emails))} suspicious/honeypot email addresses",
-                type="Honeypot: Suspicious Emails",
+                ftype="Honeypot: Suspicious Emails",
                 source="HoneypotDetector",
                 confidence="Medium",
                 color="orange",
@@ -119,9 +120,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             html, re.I
         )
         if honeypot_link_patterns:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Found {len(honeypot_link_patterns)} links containing honeypot/decoy/trap keywords",
-                type="Honeypot: Suspicious Links",
+                ftype="Honeypot: Suspicious Links",
                 source="HoneypotDetector",
                 confidence="Medium",
                 color="red",
@@ -130,9 +131,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                 tags=["honeypot", "suspicious-links"]
             ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Testing {len(TRAP_DIRECTORIES)} common directories for honeypot behavior",
-        type="Honeypot: Directory Scan Started",
+        ftype="Honeypot: Directory Scan Started",
         source="HoneypotDetector",
         confidence="Medium",
         color="slate",
@@ -148,9 +149,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     trap_dirs = [r for r in trap_results if r["is_honeypot"]]
     if trap_dirs:
         for t in trap_dirs:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Potential honeypot directory: {t['path']} (HTTP {t['status']})",
-                type="Honeypot: Trap Directory",
+                ftype="Honeypot: Trap Directory",
                 source="HoneypotDetector",
                 confidence="Low",
                 color="orange",
@@ -161,9 +162,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     interesting_responses = [r for r in trap_results if r["status"] in (200, 401, 403) and not r["is_honeypot"]]
     if interesting_responses:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{len(interesting_responses)} directories returned HTTP {interesting_responses[0]['status']} (may be monitored)",
-            type="Honeypot: Interesting Directories",
+            ftype="Honeypot: Interesting Directories",
             source="HoneypotDetector",
             confidence="Low",
             color="yellow",
@@ -175,11 +176,11 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     suspicious_ports = [22, 23, 3389, 5900, 8080, 8443, 4443, 2222, 10000, 31337]
     for port in suspicious_ports[:5]:
         try:
-            resp = await client.get(f"http://{domain}:{port}", timeout=5.0, headers={"User-Agent": UA})
+            resp = await safe_fetch(client,f"http://{domain}:{port}", timeout=5.0, headers={"User-Agent": UA})
             if resp.status_code < 500:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Service on port {port} (HTTP {resp.status_code}) - possible honeyport",
-                    type="Honeypot: Unusual Port",
+                    ftype="Honeypot: Unusual Port",
                     source="HoneypotDetector",
                     confidence="Low",
                     color="orange",
@@ -190,9 +191,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         except Exception:
             continue
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Honeypot Analysis: {len(hidden_fields) if 'hidden_fields' in dir() else 0} field patterns, {len(trap_dirs)} trap directories, {len(interesting_responses)} interesting paths",
-        type="Honeypot: Summary",
+        ftype="Honeypot: Summary",
         source="HoneypotDetector",
         confidence="Medium",
         color="orange" if trap_dirs else "emerald",

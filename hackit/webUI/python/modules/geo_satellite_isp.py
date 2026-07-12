@@ -1,8 +1,5 @@
-import httpx
-import asyncio
 import re
-import socket
-from models import IntelligenceFinding
+from module_common import safe_fetch_json, make_finding, is_ip, resolve_ip
 
 SATELLITE_PROVIDERS = {
     "Starlink": {
@@ -85,140 +82,132 @@ FWA_PROVIDERS = {
 MESH_NETWORKS = ["guifi.net", "nycmesh.net", "freifunk", "ninux", "battlemesh", "commotion", "altheamesh", "qmp"]
 
 async def _resolve_target(target: str) -> tuple:
-    try:
-        socket.inet_aton(target)
+    if is_ip(target):
         return target, True
-    except OSError:
-        pass
-    try:
-        ip = socket.gethostbyname(target)
+    ip = resolve_ip(target)
+    if ip:
         return ip, False
-    except Exception as e:
-        return None, str(e)
+    return None, "DNS resolution failed"
 
-async def _check_satellite_provider(ip: str, client: httpx.AsyncClient) -> list:
+async def _check_satellite_provider(ip: str, client) -> list:
     findings = []
-    try:
-        resp = await client.get(f"https://ipinfo.io/{ip}/json", timeout=8.0,
-            headers={"User-Agent": "Mozilla/5.0"})
-        if resp.status_code == 200:
-            data = resp.json()
-            org = data.get("org", "").lower()
-            asn_raw = data.get("asn", "")
-            asn_num = 0
-            if asn_raw:
-                try:
-                    asn_num = int(asn_raw.replace("AS", ""))
-                except ValueError:
-                    pass
+    data = await safe_fetch_json(client, f"https://ipinfo.io/{ip}/json",
+        headers={"User-Agent": "Mozilla/5.0"})
+    if data:
+        org = data.get("org", "").lower()
+        asn_raw = data.get("asn", "")
+        asn_num = 0
+        if asn_raw:
+            try:
+                asn_num = int(asn_raw.replace("AS", ""))
+            except ValueError:
+                pass
 
-            for name, info in SATELLITE_PROVIDERS.items():
-                matched = False
-                if info["asns"] and asn_num in info["asns"]:
-                    matched = True
-                if not matched:
-                    for pat in info["org_patterns"]:
-                        if pat in org:
-                            matched = True
-                            break
-                if matched:
-                    findings.append(IntelligenceFinding(
-                        entity=f"{name}",
-                        type=f"Satellite ISP ({info['type']})",
-                        source="SatelliteISPScanner",
-                        confidence="High",
-                        color="purple",
-                        category="Geo / Network OSINT",
-                        threat_level="Informational",
-                        status="Detected",
-                        resolution=ip,
-                        raw_data=f"Satellite ISP: {name}. Type: {info['type']}. Latency: {info['latency']}. {info['desc']}",
-                        tags=["satellite", info["type"].lower(), name.lower().replace(" ", "-")]
-                    ))
-
-                    if info["type"] == "GEO":
-                        findings.append(IntelligenceFinding(
-                            entity=f"{name} - High Latency Expected ({info['latency']})",
-                            type="Satellite Latency Pattern",
-                            source="SatelliteISPScanner",
-                            confidence="High",
-                            color="orange",
-                            category="Geo / Network OSINT",
-                            threat_level="Informational",
-                            status="Analyzed",
-                            resolution=ip,
-                            raw_data=f"{name} ({info['type']}) typical latency: {info['latency']}",
-                            tags=["satellite", "latency", "geo"]
-                        ))
-                    elif info["type"] == "LEO":
-                        findings.append(IntelligenceFinding(
-                            entity=f"{name} - Low Latency Expected ({info['latency']})",
-                            type="Satellite Latency Pattern",
-                            source="SatelliteISPScanner",
-                            confidence="High",
-                            color="blue",
-                            category="Geo / Network OSINT",
-                            threat_level="Informational",
-                            status="Analyzed",
-                            resolution=ip,
-                            raw_data=f"{name} ({info['type']}) typical latency: {info['latency']}",
-                            tags=["satellite", "latency", "leo"]
-                        ))
-                    break
-
-            for fwa_name, fwa_pats in FWA_PROVIDERS.items():
-                for pat in fwa_pats:
+        for name, info in SATELLITE_PROVIDERS.items():
+            matched = False
+            if info["asns"] and asn_num in info["asns"]:
+                matched = True
+            if not matched:
+                for pat in info["org_patterns"]:
                     if pat in org:
-                        findings.append(IntelligenceFinding(
-                            entity=fwa_name,
-                            type="Fixed Wireless / 5G ISP",
-                            source="SatelliteISPScanner",
-                            confidence="High",
-                            color="blue",
-                            category="Geo / Network OSINT",
-                            threat_level="Informational",
-                            status="Detected",
-                            resolution=ip,
-                            raw_data=f"Fixed wireless/5G provider: {fwa_name}",
-                            tags=["fwa", "5g", fwa_name.lower().replace(" ", "-")]
-                        ))
+                        matched = True
                         break
+            if matched:
+                findings.append(make_finding(
+                    entity=f"{name}",
+                    ftype=f"Satellite ISP ({info['type']})",
+                    source="SatelliteISPScanner",
+                    confidence="High",
+                    color="purple",
+                    category="Geo / Network OSINT",
+                    threat_level="Informational",
+                    status="Detected",
+                    resolution=ip,
+                    raw_data=f"Satellite ISP: {name}. Type: {info['type']}. Latency: {info['latency']}. {info['desc']}",
+                    tags=["satellite", info["type"].lower(), name.lower().replace(" ", "-")]
+                ))
 
-            for mesh in MESH_NETWORKS:
-                if mesh in org:
-                    findings.append(IntelligenceFinding(
-                        entity=f"Community/Mesh Network: {mesh}",
-                        type="Community Mesh Network",
+                if info["type"] == "GEO":
+                    findings.append(make_finding(
+                        entity=f"{name} - High Latency Expected ({info['latency']})",
+                        ftype="Satellite Latency Pattern",
                         source="SatelliteISPScanner",
                         confidence="High",
-                        color="green",
+                        color="orange",
+                        category="Geo / Network OSINT",
+                        threat_level="Informational",
+                        status="Analyzed",
+                        resolution=ip,
+                        raw_data=f"{name} ({info['type']}) typical latency: {info['latency']}",
+                        tags=["satellite", "latency", "geo"]
+                    ))
+                elif info["type"] == "LEO":
+                    findings.append(make_finding(
+                        entity=f"{name} - Low Latency Expected ({info['latency']})",
+                        ftype="Satellite Latency Pattern",
+                        source="SatelliteISPScanner",
+                        confidence="High",
+                        color="blue",
+                        category="Geo / Network OSINT",
+                        threat_level="Informational",
+                        status="Analyzed",
+                        resolution=ip,
+                        raw_data=f"{name} ({info['type']}) typical latency: {info['latency']}",
+                        tags=["satellite", "latency", "leo"]
+                    ))
+                break
+
+        for fwa_name, fwa_pats in FWA_PROVIDERS.items():
+            for pat in fwa_pats:
+                if pat in org:
+                    findings.append(make_finding(
+                        entity=fwa_name,
+                        ftype="Fixed Wireless / 5G ISP",
+                        source="SatelliteISPScanner",
+                        confidence="High",
+                        color="blue",
                         category="Geo / Network OSINT",
                         threat_level="Informational",
                         status="Detected",
                         resolution=ip,
-                        raw_data=f"Community/mesh network detected: {mesh}",
-                        tags=["mesh", "community", mesh.lower().replace(" ", "-")]
+                        raw_data=f"Fixed wireless/5G provider: {fwa_name}",
+                        tags=["fwa", "5g", fwa_name.lower().replace(" ", "-")]
                     ))
                     break
 
-    except Exception:
-        pass
+        for mesh in MESH_NETWORKS:
+            if mesh in org:
+                findings.append(make_finding(
+                    entity=f"Community/Mesh Network: {mesh}",
+                    ftype="Community Mesh Network",
+                    source="SatelliteISPScanner",
+                    confidence="High",
+                    color="green",
+                    category="Geo / Network OSINT",
+                    threat_level="Informational",
+                    status="Detected",
+                    resolution=ip,
+                    raw_data=f"Community/mesh network detected: {mesh}",
+                    tags=["mesh", "community", mesh.lower().replace(" ", "-")]
+                ))
+                break
+
     return findings
 
-async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFinding]:
+async def crawl(target: str, client) -> list:
     findings = []
     target = target.strip().lower()
     if target.startswith("http"):
         from urllib.parse import urlparse
         target = urlparse(target).netloc
 
-    ip, is_ip = await _resolve_target(target)
+    ip, is_ip_flag = await _resolve_target(target)
     if ip is None:
-        findings.append(IntelligenceFinding(entity=f"DNS resolution failed: {target}", type="DNS Error", source="SatelliteISPScanner", confidence="Low", color="red", category="Geo / Network OSINT", raw_data=str(is_ip)[:200], tags=["error"]))
+        findings.append(make_finding(entity=f"DNS resolution failed: {target}", ftype="DNS Error", source="SatelliteISPScanner", confidence="Low", color="red", category="Geo / Network OSINT", raw_data=str(is_ip_flag)[:200], tags=["error"]))
         return findings
 
-    if not is_ip:
-        findings.append(IntelligenceFinding(entity=f"{target} -> {ip}", type="DNS Resolution", source="SatelliteISPScanner", confidence="High", color="slate", category="Geo / Network OSINT", threat_level="Informational", status="Resolved", resolution=ip, tags=["dns", "resolution"]))
+    if not is_ip_flag:
+        findings.append(make_finding(entity=f"{target} -> {ip}", ftype="DNS Resolution", source="SatelliteISPScanner", confidence="High", color="slate", category="Geo / Network OSINT", threat_level="Informational", status="Resolved", resolution=ip, tags=["dns", "resolution"]))
 
     findings.extend(await _check_satellite_provider(ip, client))
 
@@ -226,10 +215,10 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     fwa_count = sum(1 for f in findings if f.type == "Fixed Wireless / 5G ISP")
     mesh_count = sum(1 for f in findings if f.type == "Community Mesh Network")
 
-    findings.append(IntelligenceFinding(entity=f"Satellite ISPs detected: {sat_count}", type="Satellite ISP Count", source="SatelliteISPScanner", confidence="Medium", color="purple", category="Geo / Network OSINT", tags=["satellite", "summary"]))
-    findings.append(IntelligenceFinding(entity=f"Fixed Wireless/5G ISPs: {fwa_count}", type="FWA Count", source="SatelliteISPScanner", confidence="Medium", color="purple", category="Geo / Network OSINT", tags=["satellite", "summary"]))
-    findings.append(IntelligenceFinding(entity=f"Mesh networks: {mesh_count}", type="Mesh Network Count", source="SatelliteISPScanner", confidence="Medium", color="purple", category="Geo / Network OSINT", tags=["satellite", "summary"]))
-    findings.append(IntelligenceFinding(entity=f"Target: {target}", type="Satellite ISP Target", source="SatelliteISPScanner", confidence="High", color="slate", category="Geo / Network OSINT", tags=["satellite", "target"]))
-    findings.append(IntelligenceFinding(entity=f"Total satellite/FWA findings: {len(findings)}", type="Satellite ISP Summary", source="SatelliteISPScanner", confidence="Medium", color="purple", category="Geo / Network OSINT", tags=["satellite", "summary"]))
+    findings.append(make_finding(entity=f"Satellite ISPs detected: {sat_count}", ftype="Satellite ISP Count", source="SatelliteISPScanner", confidence="Medium", color="purple", category="Geo / Network OSINT", tags=["satellite", "summary"]))
+    findings.append(make_finding(entity=f"Fixed Wireless/5G ISPs: {fwa_count}", ftype="FWA Count", source="SatelliteISPScanner", confidence="Medium", color="purple", category="Geo / Network OSINT", tags=["satellite", "summary"]))
+    findings.append(make_finding(entity=f"Mesh networks: {mesh_count}", ftype="Mesh Network Count", source="SatelliteISPScanner", confidence="Medium", color="purple", category="Geo / Network OSINT", tags=["satellite", "summary"]))
+    findings.append(make_finding(entity=f"Target: {target}", ftype="Satellite ISP Target", source="SatelliteISPScanner", confidence="High", color="slate", category="Geo / Network OSINT", tags=["satellite", "target"]))
+    findings.append(make_finding(entity=f"Total satellite/FWA findings: {len(findings)}", ftype="Satellite ISP Summary", source="SatelliteISPScanner", confidence="Medium", color="purple", category="Geo / Network OSINT", tags=["satellite", "summary"]))
 
     return findings

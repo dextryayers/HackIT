@@ -1,6 +1,7 @@
-import httpx
 import re
+import httpx
 from urllib.parse import urlparse
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 from models import IntelligenceFinding
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
@@ -17,7 +18,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     for proto in ["https", "http"]:
         try:
-            resp = await client.get(f"{proto}://{domain}", timeout=10.0, follow_redirects=True, headers={"User-Agent": UA})
+            resp = await safe_fetch(client,f"{proto}://{domain}", timeout=10.0, follow_redirects=True, headers={"User-Agent": UA})
             html = resp.text
             status = resp.status_code
             headers = {k.lower(): v for k, v in dict(resp.headers).items()}
@@ -26,9 +27,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             continue
 
     if not html:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Could not fetch {domain}",
-            type="Frame: Fetch Failed",
+            ftype="Frame: Fetch Failed",
             source="FrameAnalyzer",
             confidence="Low",
             color="red",
@@ -41,9 +42,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     if xfo:
         xfo_upper = xfo.upper()
         color_map = {"DENY": "emerald", "SAMEORIGIN": "yellow", "ALLOW-FROM": "orange"}
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"X-Frame-Options: {xfo}",
-            type="Frame: X-Frame-Options",
+            ftype="Frame: X-Frame-Options",
             source="FrameAnalyzer",
             confidence="High",
             color=color_map.get(xfo_upper, "orange"),
@@ -53,9 +54,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             tags=["frame", "x-frame-options", "clickjacking"]
         ))
     else:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="X-Frame-Options header MISSING - vulnerable to clickjacking",
-            type="Frame: X-Frame-Options Missing",
+            ftype="Frame: X-Frame-Options Missing",
             source="FrameAnalyzer",
             confidence="High",
             color="red",
@@ -70,9 +71,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         fa_match = re.search(r"frame-ancestors\s+([^;]+)", csp, re.I)
         if fa_match:
             frame_ancestors = fa_match.group(1).strip()
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"CSP frame-ancestors: {frame_ancestors}",
-                type="Frame: CSP frame-ancestors",
+                ftype="Frame: CSP frame-ancestors",
                 source="FrameAnalyzer",
                 confidence="High",
                 color="emerald" if "'none'" in frame_ancestors or "'self'" in frame_ancestors else "orange",
@@ -81,9 +82,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                 tags=["frame", "csp", "clickjacking"]
             ))
         else:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="CSP header present but no frame-ancestors directive",
-                type="Frame: CSP Missing Directive",
+                ftype="Frame: CSP Missing Directive",
                 source="FrameAnalyzer",
                 confidence="Medium",
                 color="orange",
@@ -91,9 +92,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                 tags=["frame", "csp", "clickjacking"]
             ))
     else:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="No Content-Security-Policy header - no frame-ancestors protection",
-            type="Frame: CSP Missing",
+            ftype="Frame: CSP Missing",
             source="FrameAnalyzer",
             confidence="High",
             color="red",
@@ -106,9 +107,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     iframes = iframe_pattern.findall(html)
 
     if iframes:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Found {len(iframes)} iframe(s) on the page",
-            type="Frame: Iframes Detected",
+            ftype="Frame: Iframes Detected",
             source="FrameAnalyzer",
             confidence="High",
             color="slate",
@@ -120,9 +121,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         for idx, ifr in enumerate(iframes[:10]):
             src_m = re.search(r'src\s*=\s*["\'](.*?)["\']', ifr, re.I)
             src = src_m.group(1) if src_m else "(no src)"
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Iframe {idx+1}: src={src[:80]}",
-                type="Frame: Iframe Detail",
+                ftype="Frame: Iframe Detail",
                 source="FrameAnalyzer",
                 confidence="High",
                 color="slate",
@@ -131,9 +132,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                 tags=["frame", "iframe", "embed"]
             ))
 
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Iframe count: {len(iframes)} - verify iframe content source for security",
-            type="Frame: Iframe Assessment",
+            ftype="Frame: Iframe Assessment",
             source="FrameAnalyzer",
             confidence="Medium",
             color="orange" if len(iframes) > 3 else "yellow",
@@ -141,9 +142,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             tags=["frame", "iframe", "assessment"]
         ))
     else:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="No iframes detected on the page",
-            type="Frame: No Iframes",
+            ftype="Frame: No Iframes",
             source="FrameAnalyzer",
             confidence="High",
             color="emerald",
@@ -157,9 +158,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     )
 
     if framebusting_scripts:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Framebusting script(s) detected ({len(framebusting_scripts)} instances)",
-            type="Frame: Framebusting",
+            ftype="Frame: Framebusting",
             source="FrameAnalyzer",
             confidence="High",
             color="blue",
@@ -168,9 +169,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             tags=["frame", "framebusting", "protection"]
         ))
     else:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="No framebusting scripts detected",
-            type="Frame: No Framebusting",
+            ftype="Frame: No Framebusting",
             source="FrameAnalyzer",
             confidence="Medium",
             color="orange",
@@ -179,9 +180,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         ))
 
     clickjacking_vulnerable = not xfo and (not frame_ancestors or "self" not in frame_ancestors)
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Clickjacking Risk: {'VULNERABLE' if clickjacking_vulnerable else 'Protected'}",
-        type="Frame: Clickjacking Assessment",
+        ftype="Frame: Clickjacking Assessment",
         source="FrameAnalyzer",
         confidence="High",
         color="red" if clickjacking_vulnerable else "emerald",
@@ -191,9 +192,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         tags=["frame", "clickjacking", "vulnerability"]
     ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Frame Security Analysis: XFO={'OK' if xfo else 'MISSING'}, CSP-FA={'OK' if frame_ancestors else 'MISSING'}, Iframes={len(iframes)}",
-        type="Frame: Summary",
+        ftype="Frame: Summary",
         source="FrameAnalyzer",
         confidence="High",
         color="emerald" if not clickjacking_vulnerable else "red",

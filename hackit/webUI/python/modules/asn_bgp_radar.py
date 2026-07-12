@@ -250,7 +250,7 @@ async def query_cloudflare_radar(asn: str, client: httpx.AsyncClient) -> dict:
 
 async def search_bgp_he_prefix(ip: str, client: httpx.AsyncClient) -> dict:
     try:
-        resp = await client.post(
+        resp = await safe_fetch(client, 
             "https://bgp.he.net/search",
             headers={"User-Agent": UA},
             data={"search[search]": ip, "search[commit]": "Search"},

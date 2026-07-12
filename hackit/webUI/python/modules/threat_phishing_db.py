@@ -1,8 +1,8 @@
-import httpx
 import re
 import json
 from urllib.parse import urlparse, quote
 from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 
 PHISHING_FEEDS = [
     ("OpenPhish", "https://openphish.com/feed.txt"),
@@ -44,7 +44,7 @@ PHISHING_TLDS = [".xyz", ".top", ".club", ".work", ".life", ".live", ".online",
 async def fetch_openphish(client: httpx.AsyncClient) -> list:
     results = []
     try:
-        resp = await client.get("https://openphish.com/feed.txt", timeout=15.0,
+        resp = await safe_fetch(client,"https://openphish.com/feed.txt", timeout=15.0,
             headers={"User-Agent": "Mozilla/5.0"})
         if resp.status_code == 200:
             for line in resp.text.splitlines():
@@ -58,7 +58,7 @@ async def fetch_openphish(client: httpx.AsyncClient) -> list:
 async def fetch_phishtank(client: httpx.AsyncClient) -> list:
     results = []
     try:
-        resp = await client.get("http://data.phishtank.com/data/online-valid.csv", timeout=15.0,
+        resp = await safe_fetch(client,"http://data.phishtank.com/data/online-valid.csv", timeout=15.0,
             headers={"User-Agent": "Mozilla/5.0"})
         if resp.status_code == 200:
             lines = resp.text.splitlines()
@@ -78,7 +78,7 @@ async def fetch_phishtank(client: httpx.AsyncClient) -> list:
 async def fetch_phishstats(client: httpx.AsyncClient) -> list:
     results = []
     try:
-        resp = await client.get("https://phishstats.info/phish_stats.csv", timeout=15.0,
+        resp = await safe_fetch(client,"https://phishstats.info/phish_stats.csv", timeout=15.0,
             headers={"User-Agent": "Mozilla/5.0"})
         if resp.status_code == 200:
             lines = resp.text.splitlines()
@@ -99,7 +99,7 @@ async def check_phishing_feeds(client: httpx.AsyncClient, target: str) -> list:
     try:
         for feed_name, feed_url in PHISHING_FEEDS:
             try:
-                resp = await client.get(feed_url, timeout=15.0,
+                resp = await safe_fetch(client,feed_url, timeout=15.0,
                     headers={"User-Agent": "Mozilla/5.0"})
                 if resp.status_code == 200:
                     content = resp.text.lower()
@@ -176,9 +176,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     openphish_data = await fetch_openphish(client)
     target_in_openphish = [u for u in openphish_data if query in u["url"].lower()]
     for r in target_in_openphish[:10]:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"OpenPhish: {r['url']}",
-            type="Phishing URL Detection",
+            ftype="Phishing URL Detection",
             source="OpenPhish",
             confidence="High",
             color="red",
@@ -192,9 +192,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     phishtank_data = await fetch_phishtank(client)
     target_in_phishtank = [u for u in phishtank_data if query in u["url"].lower()] if phishtank_data else []
     for r in target_in_phishtank[:10]:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"PhishTank: {r['url']} (ID: {r['phish_id']}, verified: {r['verified']})",
-            type="Phishing URL Detection",
+            ftype="Phishing URL Detection",
             source="PhishTank",
             confidence="High",
             color="red",
@@ -208,9 +208,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     phishstats_data = await fetch_phishstats(client)
     target_in_phishstats = [u for u in phishstats_data if query in u["url"].lower()] if phishstats_data else []
     for r in target_in_phishstats[:10]:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"PhishStats: {r['url']} (IP: {r.get('ip', 'N/A')})",
-            type="Phishing URL Detection",
+            ftype="Phishing URL Detection",
             source="PhishStats",
             confidence="Medium",
             color="orange",
@@ -223,9 +223,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     feed_results = await check_phishing_feeds(client, query)
     for r in feed_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Phishing feed match: {r['feed']}",
-            type="Phishing Feed Detection",
+            ftype="Phishing Feed Detection",
             source=r['feed'],
             confidence="Medium",
             color="orange",
@@ -238,9 +238,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     category_results = await classify_phishing_category(query)
     for r in category_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Phishing category: {r['category']} (keyword: {r['matched_keyword']})",
-            type="Phishing Category Classification",
+            ftype="Phishing Category Classification",
             source="Phishing DB",
             confidence="Medium",
             color="yellow",
@@ -253,9 +253,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     tld_results = await detect_phishing_tld(query)
     for r in tld_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Phishing TLD detected: {r['tld']} for domain {r['domain']}",
-            type="Phishing TLD Detection",
+            ftype="Phishing TLD Detection",
             source="Phishing DB",
             confidence="Medium",
             color="yellow",
@@ -268,9 +268,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     kit_results = await detect_phishing_kit_fingerprints(query)
     for r in kit_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Phishing kit fingerprint: {r['fingerprint']}",
-            type="Phishing Kit Detection",
+            ftype="Phishing Kit Detection",
             source="Phishing DB",
             confidence="High",
             color="red",
@@ -283,9 +283,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     url_pattern_results = await analyze_phishing_url_patterns(query)
     for r in url_pattern_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Phishing URL pattern: {r['pattern']}",
-            type="Phishing URL Analysis",
+            ftype="Phishing URL Analysis",
             source="Phishing DB",
             confidence="Low",
             color="yellow",
@@ -297,9 +297,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         ))
 
     if not target_in_openphish and not target_in_phishtank and not target_in_phishstats:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"No phishing database hits for {query}",
-            type="Phishing Database Check",
+            ftype="Phishing Database Check",
             source="Phishing DB",
             confidence="Low",
             color="emerald",
@@ -310,9 +310,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             tags=["phishing", "clean", "no-hits"]
         ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Phishing intelligence complete for {query}: checked {len(PHISHING_FEEDS)} feeds, {len(PHISHING_CATEGORIES)} categories, {len(PHISHING_KIT_FINGERPRINTS)} kit fingerprints",
-        type="Phishing Intelligence Summary",
+        ftype="Phishing Intelligence Summary",
         source="Phishing DB",
         confidence="Medium",
         color="slate",

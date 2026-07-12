@@ -1,9 +1,8 @@
-import httpx
 import re
 import json
 from urllib.parse import urlparse, quote
 from typing import List
-from models import IntelligenceFinding
+from module_common import safe_fetch, make_finding
 
 FRAUD_SOURCES = [
     ("ScamAdviser", "https://www.scamadviser.com/check-website/{}"),
@@ -42,37 +41,34 @@ RISK_KEYWORDS = {
 POSITIVE_KEYWORDS = ["trusted", "verified", "legitimate", "reliable", "recommended", "authentic", "safe", "secure", "top-rated", "certified"]
 
 
-async def search_fraud_source(name: str, url_template: str, target: str, client: httpx.AsyncClient) -> dict:
-    try:
-        url = url_template.format(quote(target))
-        resp = await client.get(url, timeout=15.0, headers={"User-Agent": "Mozilla/5.0"}, follow_redirects=True)
-        if resp.status_code == 200 and len(resp.text) > 200:
-            text = resp.text.lower()
-            mentions = text.count(target.lower())
-            risk_hits = {}
-            for category, keywords in RISK_KEYWORDS.items():
-                for kw in keywords:
-                    if kw in text:
-                        risk_hits[category] = risk_hits.get(category, 0) + 1
-                        break
-            positive_signals = sum(1 for kw in POSITIVE_KEYWORDS if kw in text)
-            rating_matches = re.findall(r'(\d+(?:\.\d+)?)\s*/\s*10', text)
-            ratings = [float(r) for r in rating_matches if float(r) <= 10]
-            avg_rating = sum(ratings) / len(ratings) if ratings else 0
-            return {
-                "name": name,
-                "mentions": mentions,
-                "risk_hits": risk_hits,
-                "positive_signals": positive_signals,
-                "avg_rating": avg_rating,
-                "has_ratings": len(ratings) > 0,
-            }
-    except:
-        pass
+async def search_fraud_source(name: str, url_template: str, target: str, client) -> dict:
+    url = url_template.format(quote(target))
+    resp = await safe_fetch(client, url, headers={"User-Agent": "Mozilla/5.0"}, follow_redirects=True)
+    if resp and resp.status_code == 200 and len(resp.text) > 200:
+        text = resp.text.lower()
+        mentions = text.count(target.lower())
+        risk_hits = {}
+        for category, keywords in RISK_KEYWORDS.items():
+            for kw in keywords:
+                if kw in text:
+                    risk_hits[category] = risk_hits.get(category, 0) + 1
+                    break
+        positive_signals = sum(1 for kw in POSITIVE_KEYWORDS if kw in text)
+        rating_matches = re.findall(r'(\d+(?:\.\d+)?)\s*/\s*10', text)
+        ratings = [float(r) for r in rating_matches if float(r) <= 10]
+        avg_rating = sum(ratings) / len(ratings) if ratings else 0
+        return {
+            "name": name,
+            "mentions": mentions,
+            "risk_hits": risk_hits,
+            "positive_signals": positive_signals,
+            "avg_rating": avg_rating,
+            "has_ratings": len(ratings) > 0,
+        }
     return None
 
 
-async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFinding]:
+async def crawl(target: str, client) -> List:
     findings = []
     t = target.strip().lower()
     if t.startswith("http"):
@@ -105,9 +101,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                     "regulatory": ("High Risk", "orange"), "blacklist": ("High Risk", "orange"),
                 }
                 threat, color = threat_map.get(category, ("Medium Risk", "yellow"))
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{result['name']}: {category.replace('_', ' ').title()} detected ({count} indicators)",
-                    type=f"Fraud: {category.replace('_', ' ').title()}",
+                    ftype=f"Fraud: {category.replace('_', ' ').title()}",
                     source="FraudDetection",
                     confidence="Medium",
                     color=color,
@@ -120,9 +116,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
         if result["has_ratings"]:
             rating = result["avg_rating"]
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{result['name']}: Rating {rating:.1f}/10 for {t}",
-                type="Fraud: Rating Check",
+                ftype="Fraud: Rating Check",
                 source="FraudDetection",
                 confidence="Medium",
                 color="emerald" if rating >= 7 else "orange" if rating >= 4 else "red",
@@ -134,9 +130,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             ))
 
     if all_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Fraud detection scan: {sources_with_data}/{len(FRAUD_SOURCES)} sources had data on {t}",
-            type="Fraud: Coverage Report",
+            ftype="Fraud: Coverage Report",
             source="FraudDetection",
             confidence="High",
             color="slate",
@@ -148,9 +144,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         ))
 
     if total_risk_score > total_positive:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Overall fraud risk: HIGH ({total_risk_score} risk signals vs {total_positive} positive signals)",
-            type="Fraud: Overall Assessment",
+            ftype="Fraud: Overall Assessment",
             source="FraudDetection",
             confidence="Medium",
             color="red",
@@ -161,9 +157,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             tags=["fraud", "assessment", "high-risk"],
         ))
     elif total_positive > total_risk_score:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Overall fraud risk: LOW ({total_positive} positive signals vs {total_risk_score} risk signals)",
-            type="Fraud: Overall Assessment",
+            ftype="Fraud: Overall Assessment",
             source="FraudDetection",
             confidence="Medium",
             color="emerald",
@@ -175,9 +171,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         ))
 
     if not all_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="No fraud reports found for target",
-            type="Fraud: Scan Complete",
+            ftype="Fraud: Scan Complete",
             source="FraudDetection",
             confidence="Low",
             color="emerald",

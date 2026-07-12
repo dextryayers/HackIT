@@ -1,9 +1,10 @@
 import httpx
 import re
-import json
+import asyncio
 from urllib.parse import urlparse, quote
 from typing import List
 from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 
 CODE_PLATFORMS = [
     ("GitHub", "https://api.github.com/search/code?q={}&per_page=10"),
@@ -49,7 +50,7 @@ DOMAIN_PATTERN = re.compile(r'\b(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?
 async def search_github(target: str, client: httpx.AsyncClient) -> list:
     results = []
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://api.github.com/search/code",
             params={"q": target, "per_page": 10},
             headers={"Accept": "application/vnd.github.v3+json", "User-Agent": "OSINT-Module/1.0"},
@@ -69,7 +70,7 @@ async def search_github(target: str, client: httpx.AsyncClient) -> list:
         pass
 
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://api.github.com/search/repositories",
             params={"q": target, "per_page": 10},
             headers={"Accept": "application/vnd.github.v3+json", "User-Agent": "OSINT-Module/1.0"},
@@ -91,7 +92,7 @@ async def search_github(target: str, client: httpx.AsyncClient) -> list:
         pass
 
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://api.github.com/search/gist",
             params={"q": target, "per_page": 10},
             headers={"Accept": "application/vnd.github.v3+json", "User-Agent": "OSINT-Module/1.0"},
@@ -116,7 +117,7 @@ async def search_github(target: str, client: httpx.AsyncClient) -> list:
 async def search_gitlab(target: str, client: httpx.AsyncClient) -> list:
     results = []
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             "https://gitlab.com/api/v4/search",
             params={"scope": "blobs", "search": target, "per_page": 10},
             headers={"User-Agent": "OSINT-Module/1.0"},
@@ -137,7 +138,7 @@ async def search_gitlab(target: str, client: httpx.AsyncClient) -> list:
         pass
 
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             "https://gitlab.com/api/v4/search",
             params={"scope": "projects", "search": target, "per_page": 10},
             headers={"User-Agent": "OSINT-Module/1.0"},
@@ -162,7 +163,7 @@ async def search_gitlab(target: str, client: httpx.AsyncClient) -> list:
 async def search_other_platforms(target: str, client: httpx.AsyncClient) -> list:
     results = []
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://api.bitbucket.org/2.0/repositories?q={quote(target)}&pagelen=10",
             headers={"User-Agent": "OSINT-Module/1.0"},
             timeout=15.0
@@ -183,7 +184,7 @@ async def search_other_platforms(target: str, client: httpx.AsyncClient) -> list
         pass
 
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://codeberg.org/api/v1/repos/search?q={quote(target)}&limit=10",
             headers={"User-Agent": "OSINT-Module/1.0"},
             timeout=15.0
@@ -201,7 +202,7 @@ async def search_other_platforms(target: str, client: httpx.AsyncClient) -> list
         pass
 
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://search.gitee.com/?type=repository&q={quote(target)}",
             headers={"User-Agent": "OSINT-Module/1.0"},
             timeout=15.0
@@ -244,9 +245,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
     gh_results = await search_github(t, client)
     for result in gh_results:
         if "total" in result:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{result['source']}: {result['total']} code results for {t}",
-                type="Code Repo: Search Results",
+                ftype="Code Repo: Search Results",
                 source="CodeRepoScanner",
                 confidence="Medium",
                 color="orange" if result['total'] > 0 else "slate",
@@ -257,7 +258,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                 tags=["code", result['source'].lower().replace(" ", "-"), "search"]
             ))
             for item in result.get("items", []):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"File: {item.get('path', '')} in {item.get('repo', '')}",
                     type="Code Repo: File Reference",
                     source="CodeRepoScanner",
@@ -270,7 +271,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                     tags=["code", "file", item.get('repo', '').replace("/", "-").lower()]
                 ))
         else:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{result.get('source', '')}: {result.get('name', '')} - {result.get('desc', '')[:100]}",
                 type="Code Repo: Repository Found",
                 source="CodeRepoScanner",
@@ -287,9 +288,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
     gl_results = await search_gitlab(t, client)
     for result in gl_results:
         if "total" in result:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{result['source']}: {result['total']} blob results for {t}",
-                type="Code Repo: GitLab Blobs",
+                ftype="Code Repo: GitLab Blobs",
                 source="CodeRepoScanner",
                 confidence="Medium",
                 color="orange" if result['total'] > 0 else "slate",
@@ -300,7 +301,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                 tags=["code", "gitlab", "blob"]
             ))
         else:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"GitLab Project: {result.get('name', '')}",
                 type="Code Repo: GitLab Project",
                 source="CodeRepoScanner",
@@ -317,9 +318,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
     for result in other_results:
         label = result.get("source", "Unknown")
         count = result.get("total", result.get("count", 0))
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{label}: {count} repositories referencing {t}",
-            type="Code Repo: Platform Match",
+            ftype="Code Repo: Platform Match",
             source="CodeRepoScanner",
             confidence="Medium",
             color="blue",
@@ -334,7 +335,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
     for result in gh_results:
         for item in result.get("items", []):
             try:
-                resp = await client.get(
+                resp = await safe_fetch(client, 
                     f"https://raw.githubusercontent.com/{item.get('repo', '')}/main/{item.get('path', '')}",
                     headers={"User-Agent": "OSINT-Module/1.0"}, timeout=10.0
                 )
@@ -347,7 +348,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
     if all_content:
         secrets_found = await scan_content_for_secrets(all_content, "GitHub")
         for s in secrets_found:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Secret in code: {s['label']} ({s['count']} occurrences)",
                 type=f"Code Repo: {s['severity']} Secret",
                 source="CodeRepoScanner",
@@ -364,7 +365,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
     emails = EMAIL_PATTERN.findall(all_content)
     unique_emails = set(emails) - {t}
     if unique_emails:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{len(unique_emails)} emails found in code: {', '.join(list(unique_emails)[:5])}",
             type="Code Repo: Email Disclosure",
             source="CodeRepoScanner",
@@ -380,7 +381,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
     domains = DOMAIN_PATTERN.findall(all_content)
     unique_domains = set(domains) - {t}
     if unique_domains:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{len(unique_domains)} internal domains referenced in code",
             type="Code Repo: Domain Disclosure",
             source="CodeRepoScanner",
@@ -396,7 +397,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
     ips = IP_PATTERN.findall(all_content)
     private_ips = [ip for ip in ips if ip.startswith(("10.", "172.16.", "192.168."))]
     if private_ips:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{len(set(private_ips))} internal IPs exposed in code: {', '.join(set(private_ips)[:5])}",
             type="Code Repo: Internal IP Leak",
             source="CodeRepoScanner",
@@ -411,7 +412,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
     commits = COMMIT_PATTERN.findall(all_content)
     if commits:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{len(set(commits))} commit hashes referenced in code content",
             type="Code Repo: Commit References",
             source="CodeRepoScanner",
@@ -424,9 +425,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             tags=["code", "commit", "hash"]
         ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Code repository scan complete for {t}",
-        type="Code Repo: Scan Summary",
+        ftype="Code Repo: Scan Summary",
         source="CodeRepoScanner",
         confidence="High",
         color="slate",

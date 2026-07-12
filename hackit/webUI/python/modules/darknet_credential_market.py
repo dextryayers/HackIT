@@ -1,9 +1,9 @@
 import httpx
 import re
-import json
 from urllib.parse import urlparse, quote
 from typing import List
 from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 
 CREDENTIAL_SOURCES = [
     ("LeakCheck", "https://leakcheck.io/api/public?check={}"),
@@ -61,7 +61,7 @@ PII_CATEGORIES = {
 async def search_source(name: str, url_template: str, target: str, client: httpx.AsyncClient) -> dict:
     try:
         url = url_template.format(quote(target))
-        resp = await client.get(url, timeout=20.0, headers={"User-Agent": "Mozilla/5.0"}, follow_redirects=True)
+        resp = await safe_fetch(client, url, timeout=20.0, headers={"User-Agent": "Mozilla/5.0"}, follow_redirects=True)
         if resp.status_code == 200 and len(resp.text) > 200:
             text = resp.text.lower()
             mentions = text.count(target.lower())
@@ -110,9 +110,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
     for result in all_results:
         if result["mentions"] > 0:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{result['name']}: {result['mentions']} mentions of {t}",
-                type="CredMarket: Source Mention",
+                ftype="CredMarket: Source Mention",
                 source="CredMarketMonitor",
                 confidence="Medium",
                 color="red",
@@ -124,9 +124,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             ))
 
         if result["email_pairs"] > 0:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{result['name']}: {result['email_pairs']} credential pairs found",
-                type="CredMarket: Credential Pairs",
+                ftype="CredMarket: Credential Pairs",
                 source="CredMarketMonitor",
                 confidence="High",
                 color="red",
@@ -139,9 +139,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
         if result["prices"]:
             for price in result["prices"][:3]:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{result['name']}: Data priced at {price}",
-                    type="CredMarket: Pricing Info",
+                    ftype="CredMarket: Pricing Info",
                     source="CredMarketMonitor",
                     confidence="Medium",
                     color="orange",
@@ -154,9 +154,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
         if result["access_types"]:
             at_str = ", ".join(result["access_types"])
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{result['name']}: Access types for sale - {at_str}",
-                type="CredMarket: Access Sales",
+                ftype="CredMarket: Access Sales",
                 source="CredMarketMonitor",
                 confidence="Medium",
                 color="red",
@@ -169,9 +169,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
         if result["pii_types"]:
             pii_str = ", ".join(result["pii_types"])
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{result['name']}: PII data types - {pii_str}",
-                type="CredMarket: PII Sales",
+                ftype="CredMarket: PII Sales",
                 source="CredMarketMonitor",
                 confidence="Medium",
                 color="red",
@@ -191,7 +191,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         total_pairs += r.get("email_pairs", 0)
 
     if all_access_types:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Total access types in market: {', '.join(sorted(all_access_types))}",
             type="CredMarket: Access Inventory",
             source="CredMarketMonitor",
@@ -205,7 +205,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         ))
 
     if all_pii_types:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"PII data categories in market: {', '.join(sorted(all_pii_types))}",
             type="CredMarket: PII Inventory",
             source="CredMarketMonitor",
@@ -219,9 +219,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         ))
 
     if total_pairs > 0:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Total {total_pairs} credential pairs found across darknet markets",
-            type="CredMarket: Total Exposure",
+            ftype="CredMarket: Total Exposure",
             source="CredMarketMonitor",
             confidence="High",
             color="red",
@@ -233,9 +233,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         ))
 
     if not all_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="No credential market mentions found for target",
-            type="CredMarket: Scan Complete",
+            ftype="CredMarket: Scan Complete",
             source="CredMarketMonitor",
             confidence="Low",
             color="emerald",
@@ -246,9 +246,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             tags=["credential", "clean"],
         ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Credential market scan complete: {sources_with_data} sources had data",
-        type="CredMarket: Scan Summary",
+        ftype="CredMarket: Scan Summary",
         source="CredMarketMonitor",
         confidence="High",
         color="slate",

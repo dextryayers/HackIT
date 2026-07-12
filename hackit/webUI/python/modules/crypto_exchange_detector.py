@@ -1,8 +1,7 @@
 import httpx
 import re
-import json
-from urllib.parse import urlparse, quote
 from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 
 CENTRALIZED_EXCHANGES = {
     "Binance": ["binance", "binance.com", "b-nance", "biance"],
@@ -103,7 +102,7 @@ async def check_exchange_endpoints(client: httpx.AsyncClient, target: str) -> li
                 if not path:
                     continue
                 url = f"{base}/{path}"
-                resp = await client.get(url, timeout=5.0,
+                resp = await safe_fetch(client, url, timeout=5.0,
                     headers={"User-Agent": "Mozilla/5.0"})
                 if resp.status_code < 500:
                     results.append({
@@ -150,7 +149,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     exchange_results = await detect_exchange_association(query)
     for r in exchange_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Exchange detected: {r['exchange']} ({r['type']}) - matched: {r['matched']}",
             type="Exchange Association",
             source="Exchange Detector",
@@ -165,7 +164,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     api_results = await check_exchange_endpoints(client, query)
     for r in api_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Exchange API endpoint: {r['endpoint']} (HTTP {r['status']})",
             type="Exchange API Detection",
             source="Exchange Detector",
@@ -180,9 +179,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     trading_pair_results = await extract_trading_pairs(query)
     for r in trading_pair_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Trading pair detected: {r['pair']}",
-            type="Trading Pair Detection",
+            ftype="Trading Pair Detection",
             source="Exchange Detector",
             confidence="Low",
             color="slate",
@@ -195,7 +194,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     wallet_results = await check_exchange_wallet_patterns(query)
     for r in wallet_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Exchange wallet pattern: {r['exchange']} (prefixes: {', '.join(r['wallet_prefixes'])})",
             type="Exchange Wallet Detection",
             source="Exchange Detector",
@@ -209,9 +208,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         ))
 
     for exchange, indicators in list(CENTRALIZED_EXCHANGES.items())[:10]:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"CEX monitored: {exchange}",
-            type="Exchange Coverage (CEX)",
+            ftype="Exchange Coverage (CEX)",
             source="Exchange Detector",
             confidence="Low",
             color="slate",
@@ -223,9 +222,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         ))
 
     for exchange, indicators in list(DECENTRALIZED_EXCHANGES.items())[:10]:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"DEX monitored: {exchange}",
-            type="Exchange Coverage (DEX)",
+            ftype="Exchange Coverage (DEX)",
             source="Exchange Detector",
             confidence="Low",
             color="slate",
@@ -236,7 +235,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             tags=["dex", exchange.lower().replace(" ", "-").replace(".", "-")]
         ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Exchange detection complete for {query}: checked {len(CENTRALIZED_EXCHANGES)} CEX + {len(DECENTRALIZED_EXCHANGES)} DEX = {len(CENTRALIZED_EXCHANGES) + len(DECENTRALIZED_EXCHANGES)} total exchanges",
         type="Exchange Detection Summary",
         source="Exchange Detector",

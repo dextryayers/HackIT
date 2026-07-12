@@ -102,9 +102,9 @@ async def crawl(target: str, client) -> list[IntelligenceFinding]:
                 break
 
     if not all_comments:
-                findings.append(make_finding(
-                    entity=f"No HTML/JS comments found on {domain}",
-                    ftype="Comment: None Found",
+        findings.append(make_finding(
+            entity=f"No HTML/JS comments found on {domain}",
+            ftype="Comment: None Found",
             source="CommentMiner",
             confidence="Medium",
             color="emerald",

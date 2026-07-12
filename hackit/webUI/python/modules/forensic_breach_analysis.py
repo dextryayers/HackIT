@@ -1,9 +1,8 @@
 import httpx
 import re
-import json
-from collections import Counter
 from urllib.parse import urlparse
 from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 
 HASH_PATTERNS = [
     (r'^[a-f0-9]{32}$', "MD5", 32),
@@ -67,7 +66,7 @@ async def _analyze_breach_patterns(domain: str, client: httpx.AsyncClient) -> li
     ]
     for term in search_terms:
         try:
-            resp = await client.get(
+            resp = await safe_fetch(client, 
                 f"https://www.google.com/search?q={term.replace(' ', '+')}&num=10",
                 timeout=15.0,
                 headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}
@@ -75,9 +74,9 @@ async def _analyze_breach_patterns(domain: str, client: httpx.AsyncClient) -> li
             if resp.status_code == 200:
                 result_count = len(re.findall(r'<div[^>]*class="[^"]*g[^"]*"', resp.text))
                 if result_count > 0:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Search: '{term[:80]}...' returned {result_count} results",
-                        type="Forensic Breach - Search Signal",
+                        ftype="Forensic Breach - Search Signal",
                         source="Google Search",
                         confidence="Low",
                         color="orange" if result_count > 50 else "slate",
@@ -92,7 +91,7 @@ async def _analyze_breach_patterns(domain: str, client: httpx.AsyncClient) -> li
 async def _hash_type_analysis(findings_sofar: list) -> list:
     findings = []
     for pattern, hash_name, length in HASH_PATTERNS:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Hash type identifiable: {hash_name} (pattern: {pattern[:60]}...)",
             type="Forensic Breach - Hash Pattern Signature",
             source="Forensic Breach Analysis",
@@ -100,7 +99,7 @@ async def _hash_type_analysis(findings_sofar: list) -> list:
             raw_data=f"Hash pattern: {pattern}, Type: {hash_name}, Length: {length}",
             tags=["forensic", "breach", "hash", hash_name.lower()]
         ))
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"{len(HASH_PATTERNS)} hash type signatures loaded for identification",
         type="Forensic Breach - Hash Identification Capability",
         source="Forensic Breach Analysis",
@@ -125,7 +124,7 @@ async def _password_analysis(findings_sofar: list) -> list:
                 variety += 1
         entropy_score = min(length * variety, 100)
         strength = "Strong" if entropy_score >= 60 else ("Medium" if entropy_score >= 30 else "Weak")
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Password example: {pw} (len={length}, variety={variety}, score={entropy_score}, {strength})",
             type="Forensic Breach - Password Strength Analysis",
             source="Forensic Breach Analysis",
@@ -136,9 +135,9 @@ async def _password_analysis(findings_sofar: list) -> list:
             tags=["forensic", "breach", "password", strength.lower()]
         ))
     for common_pw in COMMON_PASSWORDS_TOP[:10]:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Common password in breach data: '{common_pw}'",
-            type="Forensic Breach - Common Password Pattern",
+            ftype="Forensic Breach - Common Password Pattern",
             source="Forensic Breach Analysis",
             confidence="High", color="red",
             threat_level="High Risk",
@@ -146,7 +145,7 @@ async def _password_analysis(findings_sofar: list) -> list:
             raw_data=f"'{common_pw}' is among most common passwords",
             tags=["forensic", "breach", "common-password"]
         ))
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"{len(COMMON_PASSWORDS_TOP)} common password patterns loaded for matching",
         type="Forensic Breach - Common Password Database",
         source="Forensic Breach Analysis",
@@ -159,9 +158,9 @@ async def _password_analysis(findings_sofar: list) -> list:
 async def _breach_source_correlation(findings_sofar: list) -> list:
     findings = []
     for breach in BREACH_SOURCES_EXAMPLES:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=breach,
-            type="Forensic Breach - Reference Breach Source",
+            ftype="Forensic Breach - Reference Breach Source",
             source="Forensic Breach Analysis",
             confidence="Medium", color="orange",
             threat_level="Elevated Risk",
@@ -169,7 +168,7 @@ async def _breach_source_correlation(findings_sofar: list) -> list:
             raw_data=f"Historical breach: {breach}",
             tags=["forensic", "breach", "reference", breach.split("(")[0].strip().lower().replace(" ", "-")]
         ))
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"{len(BREACH_SOURCES_EXAMPLES)} historical breach sources available for correlation",
         type="Forensic Breach - Breach Correlation Database",
         source="Forensic Breach Analysis",
@@ -187,9 +186,9 @@ async def _credential_pair_analysis(findings_sofar: list) -> list:
         ("webmaster", "webmaster1"), ("noreply", "noreply1"),
     ]
     for username, password in sample_pairs:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Credential pair: {username}:{password}",
-            type="Forensic Breach - Common Credential Pair",
+            ftype="Forensic Breach - Common Credential Pair",
             source="Forensic Breach Analysis",
             confidence="High", color="red",
             threat_level="High Risk",
@@ -197,9 +196,9 @@ async def _credential_pair_analysis(findings_sofar: list) -> list:
             raw_data=f"Username: {username}, Password: {password}",
             tags=["forensic", "breach", "credential-pair", "weak"]
         ))
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity="Credential pair analysis: username and password patterns correlate",
-        type="Forensic Breach - Credential Correlation Summary",
+        ftype="Forensic Breach - Credential Correlation Summary",
         source="Forensic Breach Analysis",
         confidence="High", color="orange",
         status="Analyzed",
@@ -229,7 +228,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     findings.extend(pair_findings)
 
     if findings:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Forensic Breach Analysis complete: {len(findings)} findings",
             type="Forensic Breach - Summary",
             source="Forensic Breach Analysis",

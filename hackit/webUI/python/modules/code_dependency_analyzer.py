@@ -1,9 +1,9 @@
 import httpx
 import re
-import json
 from urllib.parse import urlparse, quote
 from typing import List
 from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 
 PACKAGE_REGISTRIES = [
     ("npm", "https://registry.npmjs.org/-/v1/search?text={}&size=10"),
@@ -35,7 +35,7 @@ ADVISORY_DBS = [
 async def search_npm(target: str, client: httpx.AsyncClient) -> list:
     results = []
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://registry.npmjs.org/-/v1/search?text={quote(target)}&size=10",
             headers={"User-Agent": "OSINT-Module/1.0"},
             timeout=15.0
@@ -60,13 +60,13 @@ async def search_npm(target: str, client: httpx.AsyncClient) -> list:
 async def search_pypi(target: str, client: httpx.AsyncClient) -> list:
     results = []
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://pypi.org/simple/{quote(target)}/",
             headers={"User-Agent": "OSINT-Module/1.0"},
             timeout=15.0
         )
         if resp.status_code == 200:
-            resp2 = await client.get(
+            resp2 = await safe_fetch(client, 
                 f"https://pypi.org/pypi/{quote(target)}/json",
                 headers={"User-Agent": "OSINT-Module/1.0"},
                 timeout=15.0
@@ -92,7 +92,7 @@ async def search_pypi(target: str, client: httpx.AsyncClient) -> list:
 async def search_rubygems(target: str, client: httpx.AsyncClient) -> list:
     results = []
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://rubygems.org/api/v1/search.json?query={quote(target)}",
             headers={"User-Agent": "OSINT-Module/1.0"},
             timeout=15.0
@@ -114,7 +114,7 @@ async def search_rubygems(target: str, client: httpx.AsyncClient) -> list:
 async def search_maven(target: str, client: httpx.AsyncClient) -> list:
     results = []
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://search.maven.org/solrsearch/select?q={quote(target)}&rows=10&wt=json",
             headers={"User-Agent": "OSINT-Module/1.0"},
             timeout=15.0
@@ -135,7 +135,7 @@ async def search_maven(target: str, client: httpx.AsyncClient) -> list:
 async def search_nuget(target: str, client: httpx.AsyncClient) -> list:
     results = []
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://azuresearch-usnc.nuget.org/query?q={quote(target)}&prerel=false&take=10",
             headers={"User-Agent": "OSINT-Module/1.0"},
             timeout=15.0
@@ -157,7 +157,7 @@ async def search_nuget(target: str, client: httpx.AsyncClient) -> list:
 async def search_packagist(target: str, client: httpx.AsyncClient) -> list:
     results = []
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://packagist.org/search.json?q={quote(target)}",
             headers={"User-Agent": "OSINT-Module/1.0"},
             timeout=15.0
@@ -178,7 +178,7 @@ async def search_packagist(target: str, client: httpx.AsyncClient) -> list:
 async def search_cargo(target: str, client: httpx.AsyncClient) -> list:
     results = []
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://crates.io/api/v1/crates?q={quote(target)}&per_page=10",
             headers={"User-Agent": "OSINT-Module/1.0"},
             timeout=15.0
@@ -199,9 +199,9 @@ async def search_cargo(target: str, client: httpx.AsyncClient) -> list:
 async def check_vulnerabilities(package_name: str, ecosystem: str, client: httpx.AsyncClient) -> list:
     results = []
     try:
-        resp = await client.post(
-            VULN_API,
-            json={"package": {"name": package_name, "ecosystem": ecosystem}},
+        resp = await safe_fetch(client, VULN_API,
+            method="POST",
+            data=json.dumps({"package": {"name": package_name, "ecosystem": ecosystem}}),
             headers={"User-Agent": "OSINT-Module/1.0"},
             timeout=15.0
         )
@@ -229,9 +229,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
     npm_results = await search_npm(t, client)
     for pkg in npm_results[:5]:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"npm: {pkg['name']} v{pkg['version']} - {pkg['desc'][:100]}",
-            type="Dependency: npm Package",
+            ftype="Dependency: npm Package",
             source="DepAnalyzer",
             confidence="High",
             color="blue",
@@ -244,9 +244,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
     pypi_results = await search_pypi(t, client)
     for pkg in pypi_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"PyPI: {pkg['name']} v{pkg['version']} - {pkg['summary'][:100]}",
-            type="Dependency: PyPI Package",
+            ftype="Dependency: PyPI Package",
             source="DepAnalyzer",
             confidence="High",
             color="blue",
@@ -257,9 +257,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             tags=["pypi", "python", "package"],
         ))
         if pkg.get("author_email"):
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"PyPI Maintainer: {pkg['author']} <{pkg['author_email']}>",
-                type="Dependency: Maintainer Info",
+                ftype="Dependency: Maintainer Info",
                 source="DepAnalyzer",
                 confidence="Medium",
                 color="slate",
@@ -272,7 +272,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
     gem_results = await search_rubygems(t, client)
     for gem in gem_results[:5]:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"RubyGems: {gem['name']} v{gem['version']} ({gem['downloads']} downloads)",
             type="Dependency: RubyGem",
             source="DepAnalyzer",
@@ -287,9 +287,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
     maven_results = await search_maven(t, client)
     for art in maven_results[:5]:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Maven: {art['name']} v{art['version']}",
-            type="Dependency: Maven Artifact",
+            ftype="Dependency: Maven Artifact",
             source="DepAnalyzer",
             confidence="High",
             color="blue",
@@ -302,7 +302,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
     nuget_results = await search_nuget(t, client)
     for pkg in nuget_results[:5]:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"NuGet: {pkg['name']} v{pkg['version']} ({pkg['total_downloads']} downloads)",
             type="Dependency: NuGet Package",
             source="DepAnalyzer",
@@ -317,9 +317,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
     packagist_results = await search_packagist(t, client)
     for pkg in packagist_results[:5]:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Packagist: {pkg['name']} - {pkg['desc'][:100]}",
-            type="Dependency: Packagist Package",
+            ftype="Dependency: Packagist Package",
             source="DepAnalyzer",
             confidence="High",
             color="blue",
@@ -332,7 +332,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
     cargo_results = await search_cargo(t, client)
     for crate in cargo_results[:5]:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Cargo: {crate['name']} v{crate['version']} ({crate['downloads']} downloads)",
             type="Dependency: Cargo Crate",
             source="DepAnalyzer",
@@ -361,7 +361,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         for eco in ecosystems_map.values():
             vulns = await check_vulnerabilities(pkg_name, eco, client)
             for v in vulns:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Vulnerability: {v['id']} in {pkg_name} ({eco})",
                     type="Dependency: Known Vulnerability",
                     source="DepAnalyzer",
@@ -377,9 +377,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                 vuln_count += 1
 
     if not all_package_names and not pypi_results and not npm_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="No packages found for target across registries",
-            type="Dependency: Scan Complete",
+            ftype="Dependency: Scan Complete",
             source="DepAnalyzer",
             confidence="Low",
             color="emerald",
@@ -390,7 +390,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             tags=["dependency", "clean"],
         ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Dependency scan complete: {len(all_package_names)} packages found, {vuln_count} vulnerabilities",
         type="Dependency: Scan Summary",
         source="DepAnalyzer",

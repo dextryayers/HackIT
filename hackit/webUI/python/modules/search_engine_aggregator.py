@@ -1,9 +1,8 @@
-import httpx
 import re
 import json
 from urllib.parse import urlparse, quote
 from typing import List
-from models import IntelligenceFinding
+from ..module_common import safe_fetch, make_finding
 
 SEARCH_ENGINES = [
     ("DuckDuckGo", "https://lite.duckduckgo.com/lite/?q={}"),
@@ -45,16 +44,10 @@ CENSORSHIP_INDICATORS = [
     "not available in your country", "403", "forbidden",
 ]
 
-
-async def search_engine_query(name: str, url_template: str, target: str, client: httpx.AsyncClient) -> dict:
+async def search_engine_query(name: str, url_template: str, target: str, client: AsyncClient) -> dict:
     try:
         url = url_template.format(quote(target))
-        resp = await client.get(
-            url,
-            timeout=15.0,
-            headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"},
-            follow_redirects=True,
-        )
+        resp = await safe_fetch(client, url, timeout=15.0)
         if resp.status_code == 200 and len(resp.text) > 200:
             text = resp.text
             titles = TITLE_PATTERN.findall(text)
@@ -90,8 +83,7 @@ async def search_engine_query(name: str, url_template: str, target: str, client:
         pass
     return None
 
-
-async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFinding]:
+async def crawl(target: str, client: AsyncClient) -> List[IntelligenceFinding]:
     findings = []
     t = target.strip().lower()
     if t.startswith("http"):
@@ -107,9 +99,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             engines_working += 1
 
     if all_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Search engine scan: {engines_working}/{len(SEARCH_ENGINES)} engines returned results for {t}",
-            type="Search: Coverage Report",
+            ftype="Search: Coverage Report",
             source="SearchAggregator",
             confidence="High",
             color="slate",
@@ -125,9 +117,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         mention_count = result["target_mentions"]
         types_str = ", ".join(result["result_types"]) if result["result_types"] else "general"
 
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{result['name']}: {mention_count} mentions, {title_count} result titles for {t}",
-            type="Search: Engine Result",
+            ftype="Search: Engine Result",
             source="SearchAggregator",
             confidence="Medium",
             color="sky",
@@ -140,9 +132,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
         if result["titles"]:
             for i, title in enumerate(result["titles"][:3]):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Result title: {title[:120]}",
-                    type="Search: Title Extract",
+                    ftype="Search: Title Extract",
                     source="SearchAggregator",
                     confidence="Medium",
                     color="slate",
@@ -155,9 +147,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
         if result["urls_found"]:
             for url in result["urls_found"][:3]:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"URL: {url[:150]}",
-                    type="Search: URL Discovery",
+                    ftype="Search: URL Discovery",
                     source="SearchAggregator",
                     confidence="Medium",
                     color="slate",
@@ -169,9 +161,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                 ))
 
         if result["result_types"]:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{result['name']} result types: {types_str}",
-                type="Search: Result Classification",
+                ftype="Search: Result Classification",
                 source="SearchAggregator",
                 confidence="Medium",
                 color="slate",
@@ -183,9 +175,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             ))
 
         if result["censored"]:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{result['name']} results may be censored for {t}",
-                type="Search: Censorship Detection",
+                ftype="Search: Censorship Detection",
                 source="SearchAggregator",
                 confidence="Medium",
                 color="orange",
@@ -204,9 +196,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
     if all_titles:
         deduped_titles = list(set(all_titles))
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{len(deduped_titles)} unique result titles across all search engines",
-            type="Search: Aggregated Titles",
+            ftype="Search: Aggregated Titles",
             source="SearchAggregator",
             confidence="Medium",
             color="slate",
@@ -219,9 +211,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
     total_mentions = sum(r.get("target_mentions", 0) for r in all_results)
     if total_mentions > 0:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Total search mentions: {total_mentions} across {engines_working} engines",
-            type="Search: Mention Count",
+            ftype="Search: Mention Count",
             source="SearchAggregator",
             confidence="Medium",
             color="slate",
@@ -240,9 +232,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
     if result_type_distribution:
         top_types = sorted(result_type_distribution.items(), key=lambda x: x[1], reverse=True)[:5]
         type_summary = ", ".join(f"{t}({c})" for t, c in top_types)
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Result type distribution: {type_summary}",
-            type="Search: Type Distribution",
+            ftype="Search: Type Distribution",
             source="SearchAggregator",
             confidence="Medium",
             color="slate",
@@ -254,9 +246,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         ))
 
     if not all_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="No search engine results found for target",
-            type="Search: Scan Complete",
+            ftype="Search: Scan Complete",
             source="SearchAggregator",
             confidence="Low",
             color="emerald",

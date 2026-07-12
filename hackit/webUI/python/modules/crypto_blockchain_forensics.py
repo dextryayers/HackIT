@@ -1,8 +1,8 @@
 import httpx
 import re
 import json
-from urllib.parse import urlparse, quote
 from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 
 TRANSACTION_PATTERNS = {
     "high_velocity": re.compile(r'multi(ple)?\s*(tx|transaction|send|transfer)', re.I),
@@ -133,9 +133,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     velocity_results = await analyze_transaction_velocity(query)
     for r in velocity_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Transaction velocity pattern: {r['type']}",
-            type="Transaction Velocity Analysis",
+            ftype="Transaction Velocity Analysis",
             source="Blockchain Forensics",
             confidence="Low",
             color="yellow",
@@ -149,9 +149,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     cluster_results = await cluster_analysis(query)
     for r in cluster_results:
         color_map = {"darknet": "red", "mixer": "red", "gambling": "orange", "bridge": "yellow", "defi": "slate", "exchange": "slate"}
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Behavior cluster: {r['cluster_type']}",
-            type="Cluster Analysis",
+            ftype="Cluster Analysis",
             source="Blockchain Forensics",
             confidence="Medium",
             color=color_map.get(r['cluster_type'], "yellow"),
@@ -164,9 +164,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     dusting_results = await detect_dusting(query)
     for r in dusting_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Dusting attack pattern detected: {r['pattern'][:50]}...",
-            type="Dusting Attack Detection",
+            ftype="Dusting Attack Detection",
             source="Blockchain Forensics",
             confidence="Medium",
             color="orange",
@@ -179,7 +179,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     protocol_results = await identify_protocol_usage(query)
     for r in protocol_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Protocol usage: {r['protocol']} ({r['count']} instances)",
             type="Protocol Identification",
             source="Blockchain Forensics",
@@ -194,7 +194,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     counterparty_results = await analyze_counterparties(query)
     for r in counterparty_results[:10]:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Transaction counterparty: {r['address']} ({r['role']})",
             type="Counterparty Analysis",
             source="Blockchain Forensics",
@@ -209,9 +209,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     timeline_results = await timeline_reconstruction(query)
     for r in timeline_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Transaction timeline: {r['date']}",
-            type="Timeline Reconstruction",
+            ftype="Timeline Reconstruction",
             source="Blockchain Forensics",
             confidence="Low",
             color="slate",
@@ -223,7 +223,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         ))
 
     risk = await calculate_forensic_risk(cluster_results, dusting_results, velocity_results)
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Forensic risk score: {risk['score']}/100 ({risk['level']})",
         type="Forensic Risk Score",
         source="Blockchain Forensics",
@@ -237,9 +237,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         tags=["forensics", "risk-score", risk['level'].lower().replace(" ", "-")]
     ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Blockchain forensics complete for {query[:32]}: analyzed velocity, clusters, dusting, protocols, counterparties, timeline",
-        type="Blockchain Forensics Summary",
+        ftype="Blockchain Forensics Summary",
         source="Blockchain Forensics",
         confidence="Medium",
         color="slate",

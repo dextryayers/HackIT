@@ -1,10 +1,8 @@
-import httpx
 import asyncio
-import json
 import socket
 from datetime import datetime
 from typing import List, Optional
-from models import IntelligenceFinding
+from module_common import safe_fetch, make_finding, is_ip, resolve_ip
 
 GEO_SOURCES = {
     "ip-api": "http://ip-api.com/json/{}",
@@ -21,22 +19,22 @@ GEO_SOURCES = {
 
 UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
 
-async def query_source(ip: str, name: str, url_tmpl: str, client: httpx.AsyncClient) -> Optional[dict]:
+async def query_source(ip: str, name: str, url_tmpl: str, client) -> Optional[dict]:
     try:
         url = url_tmpl.format(ip)
-        resp = await client.get(url, timeout=10.0,
+        resp = await safe_fetch(client, url, timeout=10.0,
             headers={"User-Agent": UA, "Accept": "application/json"})
-        if resp.status_code == 200:
+        if resp and resp.status_code == 200:
             return {"source": name, "data": resp.json()}
     except:
         pass
     return None
 
-async def rdap_lookup(ip: str, client: httpx.AsyncClient) -> Optional[dict]:
+async def rdap_lookup(ip: str, client) -> Optional[dict]:
     try:
-        resp = await client.get(f"https://rdap.arin.net/registry/ip/{ip}", timeout=10.0,
+        resp = await safe_fetch(client, f"https://rdap.arin.net/registry/ip/{ip}", timeout=10.0,
             headers={"Accept": "application/json"})
-        if resp.status_code == 200:
+        if resp and resp.status_code == 200:
             return resp.json()
     except:
         pass
@@ -74,17 +72,17 @@ ASN_LOOKUP_URLS = [
     ("IPWhois", lambda ip: f"https://ipwhois.io/ip/{ip}"),
 ]
 
-async def extract_asn_info(ip: str, client: httpx.AsyncClient) -> list:
+async def extract_asn_info(ip: str, client) -> list:
     findings = []
     for name, url_builder in ASN_LOOKUP_URLS:
         try:
             url = url_builder(ip)
-            resp = await client.get(url, timeout=10.0,
+            resp = await safe_fetch(client, url, timeout=10.0,
                 headers={"User-Agent": UA})
-            if resp.status_code == 200 and len(resp.text) > 200:
-                findings.append(IntelligenceFinding(
-                    entity=f"ASN data available from {name}",
-                    type=f"IP Geo: ASN Lookup ({name})",
+            if resp and resp.status_code == 200 and len(resp.text) > 200:
+                findings.append(make_finding(
+                    f"ASN data available from {name}",
+                    ftype=f"IP Geo: ASN Lookup ({name})",
                     source=name,
                     confidence="Medium",
                     color="slate",
@@ -99,9 +97,9 @@ async def extract_asn_info(ip: str, client: httpx.AsyncClient) -> list:
 async def calculate_geo_confidence(successful_sources: int) -> list:
     findings = []
     if successful_sources >= 5:
-        findings.append(IntelligenceFinding(
-            entity=f"High geo confidence: {successful_sources} sources agree",
-            type="IP Geo: Confidence Score",
+        findings.append(make_finding(
+            f"High geo confidence: {successful_sources} sources agree",
+            ftype="IP Geo: Confidence Score",
             source="IPGeolocation",
             confidence="High",
             color="emerald",
@@ -110,9 +108,9 @@ async def calculate_geo_confidence(successful_sources: int) -> list:
             tags=["geo", "confidence", "high"]
         ))
     elif successful_sources >= 3:
-        findings.append(IntelligenceFinding(
-            entity=f"Medium geo confidence: {successful_sources} sources",
-            type="IP Geo: Confidence Score",
+        findings.append(make_finding(
+            f"Medium geo confidence: {successful_sources} sources",
+            ftype="IP Geo: Confidence Score",
             source="IPGeolocation",
             confidence="Medium",
             color="slate",
@@ -122,19 +120,18 @@ async def calculate_geo_confidence(successful_sources: int) -> list:
         ))
     return findings
 
-async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFinding]:
+async def crawl(target: str, client) -> List:
     findings = []
     ip = target.strip().lower()
 
-    try:
-        socket.inet_aton(ip)
-    except:
-        try:
-            ip = socket.gethostbyname(ip)
-        except:
-            findings.append(IntelligenceFinding(
-                entity="Invalid IP target",
-                type="IP Geo: Invalid",
+    if not is_ip(ip):
+        resolved = resolve_ip(ip)
+        if resolved:
+            ip = resolved[0]
+        else:
+            findings.append(make_finding(
+                "Invalid IP target",
+                ftype="IP Geo: Invalid",
                 source="IPGeolocation",
                 confidence="Low",
                 color="emerald",
@@ -167,9 +164,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
             loc_parts = [p for p in [city, region, country] if p]
             if loc_parts:
-                findings.append(IntelligenceFinding(
-                    entity=f"Location: {', '.join(loc_parts)}",
-                    type=f"IP Geo: Location ({source})",
+                findings.append(make_finding(
+                    f"Location: {', '.join(loc_parts)}",
+                    ftype=f"IP Geo: Location ({source})",
                     source=source,
                     confidence="High",
                     color="slate",
@@ -179,9 +176,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                 ))
 
             if lat and lon:
-                findings.append(IntelligenceFinding(
-                    entity=f"Coordinates: {lat}, {lon}",
-                    type=f"IP Geo: Coordinates ({source})",
+                findings.append(make_finding(
+                    f"Coordinates: {lat}, {lon}",
+                    ftype=f"IP Geo: Coordinates ({source})",
                     source=source,
                     confidence="High",
                     color="slate",
@@ -191,9 +188,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                 ))
 
             if org or isp:
-                findings.append(IntelligenceFinding(
-                    entity=f"Network: {org or isp}",
-                    type=f"IP Geo: Network ({source})",
+                findings.append(make_finding(
+                    f"Network: {org or isp}",
+                    ftype=f"IP Geo: Network ({source})",
                     source=source,
                     confidence="Medium",
                     color="slate",
@@ -203,9 +200,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                 ))
 
             if timezone:
-                findings.append(IntelligenceFinding(
-                    entity=f"Timezone: {timezone}",
-                    type=f"IP Geo: Timezone ({source})",
+                findings.append(make_finding(
+                    f"Timezone: {timezone}",
+                    ftype=f"IP Geo: Timezone ({source})",
                     source=source,
                     confidence="Medium",
                     color="slate",
@@ -215,9 +212,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                 ))
 
     if successful:
-        findings.append(IntelligenceFinding(
-            entity=f"Geolocation successful from {successful}/{len(all_sources)} sources",
-            type="IP Geo: Source Coverage",
+        findings.append(make_finding(
+            f"Geolocation successful from {successful}/{len(all_sources)} sources",
+            ftype="IP Geo: Source Coverage",
             source="IPGeolocation",
             confidence="Medium",
             color="slate",
@@ -235,9 +232,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
     rdap_data = await rdap_lookup(ip, client)
     if rdap_data:
-        findings.append(IntelligenceFinding(
-            entity="RDAP data available for IP",
-            type="IP Geo: RDAP Lookup",
+        findings.append(make_finding(
+            "RDAP data available for IP",
+            ftype="IP Geo: RDAP Lookup",
             source="ARIN RDAP",
             confidence="Medium",
             color="slate",
@@ -248,9 +245,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
     net_boundary = await network_boundary(ip)
     if net_boundary:
-        findings.append(IntelligenceFinding(
-            entity=f"Network boundary: {net_boundary}",
-            type="IP Geo: Network Boundary",
+        findings.append(make_finding(
+            f"Network boundary: {net_boundary}",
+            ftype="IP Geo: Network Boundary",
             source="IPGeolocation",
             confidence="Low",
             color="slate",
@@ -260,9 +257,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         ))
 
     if not findings:
-        findings.append(IntelligenceFinding(
-            entity="No geolocation data found",
-            type="IP Geo: Complete",
+        findings.append(make_finding(
+            "No geolocation data found",
+            ftype="IP Geo: Complete",
             source="IPGeolocation",
             confidence="Low",
             color="emerald",

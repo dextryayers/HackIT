@@ -1,111 +1,105 @@
-import httpx
-import asyncio
 import json
-import socket
 from datetime import datetime
 from urllib.parse import urlparse
 from typing import List
 from collections import defaultdict
-from models import IntelligenceFinding
 from settings_store import get_api_key
+from ..module_common import safe_fetch, make_finding, resolve_ip
 
 SHODAN_API = "https://api.shodan.io"
 SHODAN_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
 
-async def shodan_host(ip: str, client: httpx.AsyncClient) -> dict:
+async def shodan_host(ip: str, client) -> dict:
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client,
             f"{SHODAN_API}/shodan/host/{ip}",
             params={"key": get_api_key("shodan")},
-            headers={"User-Agent": SHODAN_UA, "Accept": "application/json"},
+            headers={"Accept": "application/json"},
             timeout=15.0
         )
-        if resp.status_code == 200:
+        if resp and resp.status_code == 200:
             return resp.json()
     except:
         pass
     return {}
 
-async def shodan_search(query: str, client: httpx.AsyncClient) -> dict:
+async def shodan_search(query: str, client) -> dict:
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client,
             f"{SHODAN_API}/shodan/host/search",
             params={"key": get_api_key("shodan"), "query": query, "limit": 20},
-            headers={"User-Agent": SHODAN_UA, "Accept": "application/json"},
+            headers={"Accept": "application/json"},
             timeout=15.0
         )
-        if resp.status_code == 200:
+        if resp and resp.status_code == 200:
             return resp.json()
     except:
         pass
     return {}
 
-async def shodan_ports(ip: str, client: httpx.AsyncClient) -> dict:
+async def shodan_ports(ip: str, client) -> dict:
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client,
             f"{SHODAN_API}/shodan/host/{ip}/ports",
             params={"key": get_api_key("shodan")},
-            headers={"User-Agent": SHODAN_UA, "Accept": "application/json"},
+            headers={"Accept": "application/json"},
             timeout=15.0
         )
-        if resp.status_code == 200:
+        if resp and resp.status_code == 200:
             return resp.json()
     except:
         pass
     return {}
 
-async def shodan_count(query: str, client: httpx.AsyncClient) -> dict:
+async def shodan_count(query: str, client) -> dict:
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client,
             f"{SHODAN_API}/shodan/host/count",
             params={"key": get_api_key("shodan"), "query": query},
-            headers={"User-Agent": SHODAN_UA, "Accept": "application/json"},
+            headers={"Accept": "application/json"},
             timeout=15.0
         )
-        if resp.status_code == 200:
+        if resp and resp.status_code == 200:
             return resp.json()
     except:
         pass
     return {}
 
-async def shodan_protocols(client: httpx.AsyncClient) -> dict:
+async def shodan_protocols(client) -> dict:
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client,
             f"{SHODAN_API}/shodan/protocols",
             params={"key": get_api_key("shodan")},
-            headers={"User-Agent": SHODAN_UA, "Accept": "application/json"},
+            headers={"Accept": "application/json"},
             timeout=10.0
         )
-        if resp.status_code == 200:
+        if resp and resp.status_code == 200:
             return resp.json()
     except:
         pass
     return {}
 
-async def shodan_services(client: httpx.AsyncClient) -> dict:
+async def shodan_services(client) -> dict:
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client,
             f"{SHODAN_API}/shodan/services",
             params={"key": get_api_key("shodan")},
-            headers={"User-Agent": SHODAN_UA, "Accept": "application/json"},
+            headers={"Accept": "application/json"},
             timeout=10.0
         )
-        if resp.status_code == 200:
+        if resp and resp.status_code == 200:
             return resp.json()
     except:
         pass
     return {}
 
-async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFinding]:
+async def crawl(target: str, client: AsyncClient) -> List[IntelligenceFinding]:
     findings = []
     t = target.strip().lower()
     if t.startswith("http"):
         t = urlparse(t).netloc
 
-    try:
-        ip = socket.gethostbyname(t)
-    except:
-        ip = t
+    ip = resolve_ip(t) or t
 
     host_data = await shodan_host(ip, client)
     search_data = await shodan_search(t, client)
@@ -118,9 +112,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         open_ports = host_data.get("ports", ports_data.get("ports", []))
         if open_ports:
             for port in sorted(open_ports)[:15]:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Port {port}/tcp open",
-                    type="Shodan Port Discovery",
+                    ftype="Shodan Port Discovery",
                     source="Shodan",
                     confidence="High",
                     color="slate",
@@ -136,9 +130,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                 if product:
                     service_breakdown[port] = product
             for port, product in service_breakdown.items():
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Port {port}: {product}",
-                    type="Shodan Service Identification",
+                    ftype="Shodan Service Identification",
                     source="Shodan",
                     confidence="High",
                     color="slate",
@@ -149,9 +143,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
         vulns = host_data.get("vulns", [])
         if vulns:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{len(vulns)} CVEs associated with {ip}",
-                type="Shodan Vulnerability Count",
+                ftype="Shodan Vulnerability Count",
                 source="Shodan",
                 confidence="High",
                 color="red",
@@ -162,9 +156,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                 tags=["shodan", "vulnerability", "cve"]
             ))
             for v in list(vulns)[:5]:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=v,
-                    type="Shodan CVE Details",
+                    ftype="Shodan CVE Details",
                     source="Shodan",
                     confidence="High",
                     color="red",
@@ -176,9 +170,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
         hostnames = host_data.get("hostnames", [])
         if hostnames:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Hostnames: {', '.join(hostnames[:5])}",
-                type="Shodan Hostnames",
+                ftype="Shodan Hostnames",
                 source="Shodan",
                 confidence="High",
                 color="slate",
@@ -189,9 +183,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
         os = host_data.get("os", "")
         if os:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"OS: {os}",
-                type="Shodan OS Detection",
+                ftype="Shodan OS Detection",
                 source="Shodan",
                 confidence="Medium",
                 color="slate",
@@ -203,9 +197,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         country = host_data.get("country_name", "")
         city = host_data.get("city", "")
         if country or city:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Location: {city}, {country}" if city else f"Country: {country}",
-                type="Shodan Geolocation",
+                ftype="Shodan Geolocation",
                 source="Shodan",
                 confidence="Medium",
                 color="slate",
@@ -217,9 +211,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         org = host_data.get("org", "")
         isp = host_data.get("isp", "")
         if org or isp:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Org: {org or isp}",
-                type="Shodan Organization",
+                ftype="Shodan Organization",
                 source="Shodan",
                 confidence="High",
                 color="slate",
@@ -230,9 +224,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
         domains = host_data.get("domains", [])
         if domains:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Domains: {', '.join(domains[:5])}",
-                type="Shodan Domain Resolution",
+                ftype="Shodan Domain Resolution",
                 source="Shodan",
                 confidence="Medium",
                 color="slate",
@@ -243,9 +237,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
         asn = host_data.get("asn", "")
         if asn:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"ASN: {asn}",
-                type="Shodan ASN",
+                ftype="Shodan ASN",
                 source="Shodan",
                 confidence="High",
                 color="slate",
@@ -256,9 +250,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
         data_entries = host_data.get("data", [])
         if data_entries:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{len(data_entries)} service banners collected",
-                type="Shodan Service Data",
+                ftype="Shodan Service Data",
                 source="Shodan",
                 confidence="High",
                 color="slate",
@@ -270,9 +264,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
     if count_data:
         total = count_data.get("total", 0)
         if total > 0:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{total} Shodan results for '{t}'",
-                type="Shodan Search Count",
+                ftype="Shodan Search Count",
                 source="Shodan",
                 confidence="Medium",
                 color="slate",
@@ -289,9 +283,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                 match_ip = match.get("ip_str", "")
                 match_port = match.get("port", 0)
                 match_data = match.get("data", "")[:200]
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Found: {match_ip}:{match_port}",
-                    type="Shodan Search Match",
+                    ftype="Shodan Search Match",
                     source="Shodan",
                     confidence="Medium",
                     color="slate",
@@ -302,9 +296,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                 ))
 
     if proto_data:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Shodan protocols available: {len(proto_data)}",
-            type="Shodan Protocol List",
+            ftype="Shodan Protocol List",
             source="Shodan",
             confidence="Low",
             color="slate",
@@ -314,9 +308,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         ))
 
     if svc_data:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Shodan services database: {len(svc_data)} services",
-            type="Shodan Services DB",
+            ftype="Shodan Services DB",
             source="Shodan",
             confidence="Low",
             color="slate",
@@ -326,9 +320,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         ))
 
     if not host_data and not search_data:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="No Shodan data available",
-            type="Shodan Full Check Complete",
+            ftype="Shodan Full Check Complete",
             source="Shodan",
             confidence="Low",
             color="slate",

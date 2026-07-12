@@ -1,9 +1,8 @@
 import httpx
-import re
-import json
 from urllib.parse import urlparse, quote
 from typing import List
 from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 
 CLEARNET_MIRRORS = [
     ("Ransomware.live", "https://ransomware.live/search?q={}"),
@@ -47,7 +46,7 @@ MARKETPLACE_KEYWORDS = {
 async def search_mirror(name: str, url_template: str, target: str, client: httpx.AsyncClient) -> dict:
     try:
         url = url_template.format(quote(target))
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             url,
             timeout=20.0,
             headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"},
@@ -92,7 +91,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                 sources_with_hits += 1
 
     if all_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Darknet scan: {sources_with_hits}/{len(CLEARNET_MIRRORS)} sources had mentions of {t}",
             type="Darknet: Coverage Report",
             source="DarknetMarketplace",
@@ -112,9 +111,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         hits = result["marketplace_hits"]
 
         if mentions > 0:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{name}: {mentions} mentions of {t} found",
-                type="Darknet: Source Mention",
+                ftype="Darknet: Source Mention",
                 source="DarknetMarketplace",
                 confidence="Medium",
                 color="orange",
@@ -136,7 +135,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                 color_map = {"Critical": "red", "High Risk": "orange", "Medium Risk": "yellow"}
                 if most_critical_category is None or list(hits.keys()).index(category) < list(hits.keys()).index(most_critical_category):
                     most_critical_category = category
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{name}: {category.replace('_', ' ').title()} activity detected ({count} indicators)",
                     type=f"Darknet: {category.replace('_', ' ').title()}",
                     source="DarknetMarketplace",
@@ -150,7 +149,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                 ))
 
     if most_critical_category:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Most significant darknet category: {most_critical_category.replace('_', ' ').title()}",
             type="Darknet: Risk Summary",
             source="DarknetMarketplace",
@@ -164,9 +163,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         ))
 
     if not all_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="No darknet mentions found for target",
-            type="Darknet: Scan Complete",
+            ftype="Darknet: Scan Complete",
             source="DarknetMarketplace",
             confidence="Low",
             color="emerald",
@@ -177,9 +176,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             tags=["darknet", "clean"],
         ))
     else:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Darknet scan complete: {sources_with_hits} sources had data on {t}",
-            type="Darknet: Scan Summary",
+            ftype="Darknet: Scan Summary",
             source="DarknetMarketplace",
             confidence="High",
             color="slate",

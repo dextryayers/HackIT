@@ -1,4 +1,3 @@
-import httpx
 import re
 import json
 import ssl
@@ -6,7 +5,7 @@ import socket
 import asyncio
 from datetime import datetime
 from urllib.parse import urlparse
-from models import IntelligenceFinding
+from module_common import safe_fetch_json, make_finding
 
 SSL_PORTS = [443, 8443, 993, 995, 465, 587, 636, 853]
 
@@ -28,7 +27,7 @@ KNOWN_CA_KEY_SIZES = {
     "GlobalSign": 2048, "GoDaddy": 2048, "Cloudflare": 2048,
 }
 
-async def _scan_certificate_chain(hostname: str, port: int, client: httpx.AsyncClient) -> list:
+async def _scan_certificate_chain(hostname: str, port: int, client) -> list:
     findings = []
     try:
         loop = asyncio.get_event_loop()
@@ -60,9 +59,9 @@ async def _scan_certificate_chain(hostname: str, port: int, client: httpx.AsyncC
         cert = result.get("cert", {})
         port_label = f":{port}" if port != 443 else ""
 
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"SSL/TLS Certificate on port {port}",
-            type=f"Forensic SSL - Certificate Present{port_label}",
+            ftype=f"Forensic SSL - Certificate Present{port_label}",
             source="Forensic SSL/TLS",
             confidence="High", color="emerald",
             status="Certificate Found",
@@ -78,25 +77,25 @@ async def _scan_certificate_chain(hostname: str, port: int, client: httpx.AsyncC
             org = subject_vals.get("organizationName", "")
             country = subject_vals.get("countryName", "")
             if cn:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=cn[:200],
-                    type=f"Forensic SSL - Subject CN{port_label}",
+                    ftype=f"Forensic SSL - Subject CN{port_label}",
                     source="Forensic SSL/TLS",
                     confidence="High", color="slate",
                     tags=["forensic", "subject", "cn"]
                 ))
             if org:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=org[:200],
-                    type=f"Forensic SSL - Subject Organization{port_label}",
+                    ftype=f"Forensic SSL - Subject Organization{port_label}",
                     source="Forensic SSL/TLS",
                     confidence="High", color="slate",
                     tags=["forensic", "subject", "org"]
                 ))
             if country:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=country,
-                    type=f"Forensic SSL - Subject Country{port_label}",
+                    ftype=f"Forensic SSL - Subject Country{port_label}",
                     source="Forensic SSL/TLS",
                     confidence="High", color="slate",
                     tags=["forensic", "subject", "country"]
@@ -109,9 +108,9 @@ async def _scan_certificate_chain(hostname: str, port: int, client: httpx.AsyncC
                     issuer_vals[key] = val
             issuer_org = issuer_vals.get("organizationName", "Unknown")
             issuer_cn = issuer_vals.get("commonName", "")
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"CA: {issuer_org} ({issuer_cn})",
-                type=f"Forensic SSL - Issuer / Certificate Authority{port_label}",
+                ftype=f"Forensic SSL - Issuer / Certificate Authority{port_label}",
                 source="Forensic SSL/TLS",
                 confidence="High", color="slate",
                 tags=["forensic", "issuer", "ca"]
@@ -119,9 +118,9 @@ async def _scan_certificate_chain(hostname: str, port: int, client: httpx.AsyncC
 
         serial = cert.get("serialNumber", "")
         if serial:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Serial: {serial[:40]}",
-                type=f"Forensic SSL - Serial Number{port_label}",
+                ftype=f"Forensic SSL - Serial Number{port_label}",
                 source="Forensic SSL/TLS",
                 confidence="High", color="slate",
                 tags=["forensic", "serial"]
@@ -130,9 +129,9 @@ async def _scan_certificate_chain(hostname: str, port: int, client: httpx.AsyncC
         valid_from = cert.get("notBefore", "")
         valid_to = cert.get("notAfter", "")
         if valid_from:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Valid from: {valid_from}",
-                type=f"Forensic SSL - Validity Start{port_label}",
+                ftype=f"Forensic SSL - Validity Start{port_label}",
                 source="Forensic SSL/TLS",
                 confidence="High", color="slate",
                 tags=["forensic", "validity"]
@@ -144,9 +143,9 @@ async def _scan_certificate_chain(hostname: str, port: int, client: httpx.AsyncC
             except Exception:
                 exp_str = valid_to[:25]
                 days = 0
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Expires: {valid_to} ({days} days remaining)",
-                type=f"Forensic SSL - Expiry{port_label}",
+                ftype=f"Forensic SSL - Expiry{port_label}",
                 source="Forensic SSL/TLS",
                 confidence="High",
                 color="emerald" if days > 90 else ("orange" if days > 30 else "red"),
@@ -157,17 +156,17 @@ async def _scan_certificate_chain(hostname: str, port: int, client: httpx.AsyncC
         sans = cert.get("subjectAltName", [])
         if sans:
             for san_type, san_val in sans[:15]:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=san_val[:200],
-                    type=f"Forensic SSL - Subject Alt Name ({san_type}){port_label}",
+                    ftype=f"Forensic SSL - Subject Alt Name ({san_type}){port_label}",
                     source="Forensic SSL/TLS",
                     confidence="High", color="blue",
                     tags=["forensic", "san"]
                 ))
             if len(sans) > 15:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"... and {len(sans) - 15} more SANs ({len(sans)} total)",
-                    type=f"Forensic SSL - SAN Summary{port_label}",
+                    ftype=f"Forensic SSL - SAN Summary{port_label}",
                     source="Forensic SSL/TLS",
                     confidence="High", color="slate",
                     tags=["forensic", "san", "summary"]
@@ -177,9 +176,9 @@ async def _scan_certificate_chain(hostname: str, port: int, client: httpx.AsyncC
         if cipher_info:
             cipher_name = cipher_info[0]
             bits = cipher_info[1]
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{cipher_name} ({bits} bits)",
-                type=f"Forensic SSL - Cipher Suite{port_label}",
+                ftype=f"Forensic SSL - Cipher Suite{port_label}",
                 source="Forensic SSL/TLS",
                 confidence="High", color="slate",
                 tags=["forensic", "cipher"]
@@ -187,9 +186,9 @@ async def _scan_certificate_chain(hostname: str, port: int, client: httpx.AsyncC
 
         proto = result.get("protocol", "")
         if proto:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=proto,
-                type=f"Forensic SSL - Protocol Version{port_label}",
+                ftype=f"Forensic SSL - Protocol Version{port_label}",
                 source="Forensic SSL/TLS",
                 confidence="High",
                 color="emerald" if "TLSv1.3" in proto else ("orange" if "SSL" in proto else "slate"),
@@ -199,9 +198,9 @@ async def _scan_certificate_chain(hostname: str, port: int, client: httpx.AsyncC
 
         sig_algo = cert.get("signatureAlgorithm", "")
         if sig_algo:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Signature: {sig_algo}",
-                type=f"Forensic SSL - Signature Algorithm{port_label}",
+                ftype=f"Forensic SSL - Signature Algorithm{port_label}",
                 source="Forensic SSL/TLS",
                 confidence="High",
                 color="orange" if "sha1" in sig_algo.lower() else "emerald",
@@ -216,9 +215,9 @@ async def _scan_certificate_chain(hostname: str, port: int, client: httpx.AsyncC
                 from cryptography.x509 import load_pem_x509_certificate
             except ImportError:
                 pass
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Public Key: {algo} ({size or '?'} bits)",
-                type=f"Forensic SSL - Public Key{port_label}",
+                ftype=f"Forensic SSL - Public Key{port_label}",
                 source="Forensic SSL/TLS",
                 confidence="High", color="slate",
                 tags=["forensic", "public-key"]
@@ -232,9 +231,9 @@ async def _scan_certificate_chain(hostname: str, port: int, client: httpx.AsyncC
                     ext_oids.add(ext.oid.dotted_string)
                 elif isinstance(ext, tuple) and len(ext) >= 1:
                     ext_oids.add(str(ext[0]))
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{len(ext_oids)} certificate extensions present",
-                type=f"Forensic SSL - Extensions Count{port_label}",
+                ftype=f"Forensic SSL - Extensions Count{port_label}",
                 source="Forensic SSL/TLS",
                 confidence="High", color="slate",
                 tags=["forensic", "extensions"]
@@ -258,9 +257,9 @@ async def _scan_certificate_chain(hostname: str, port: int, client: httpx.AsyncC
                         return None
                 fp = await loop2.run_in_executor(None, get_fingerprint)
                 if fp:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"SHA256: {fp}",
-                        type=f"Forensic SSL - SHA256 Fingerprint{port_label}",
+                        ftype=f"Forensic SSL - SHA256 Fingerprint{port_label}",
                         source="Forensic SSL/TLS",
                         confidence="High", color="slate",
                         tags=["forensic", "fingerprint"]
@@ -272,7 +271,7 @@ async def _scan_certificate_chain(hostname: str, port: int, client: httpx.AsyncC
         pass
     return findings
 
-async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFinding]:
+async def crawl(target: str, client) -> list:
     findings = []
     hostname = target.strip().lower()
     if "://" in hostname:
@@ -284,9 +283,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         findings.extend(pr)
 
     if findings:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Forensic SSL/TLS analysis complete: {len(findings)} findings across {len(SSL_PORTS)} ports",
-            type="Forensic SSL - Summary",
+            ftype="Forensic SSL - Summary",
             source="Forensic SSL/TLS",
             confidence="High", color="purple",
             status="Complete",

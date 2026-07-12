@@ -1,9 +1,9 @@
 import httpx
 import re
-import json
 from urllib.parse import urlparse, quote
 from typing import List
 from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 
 FINANCIAL_SOURCES = [
     ("SEC EDGAR", "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK={}&owner=exclude&count=10"),
@@ -33,7 +33,7 @@ YEAR_PATTERN = re.compile(r'\b(19[0-9]{2}|20[0-9]{2})\b')
 async def search_financial(name: str, url_template: str, target: str, client: httpx.AsyncClient) -> dict:
     try:
         url = url_template.format(quote(target))
-        resp = await client.get(url, timeout=15.0, headers={"User-Agent": "Mozilla/5.0"}, follow_redirects=True)
+        resp = await safe_fetch(client, url, timeout=15.0, headers={"User-Agent": "Mozilla/5.0"}, follow_redirects=True)
         if resp.status_code == 200 and len(resp.text) > 300:
             text = resp.text
             revenues = REVENUE_PATTERN.findall(text)
@@ -95,9 +95,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         all_stocks.extend(result.get("stocks", []))
 
         if result["mentions"] > 0:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{result['name']}: {result['mentions']} financial mentions of {t}",
-                type="Financial: Source Result",
+                ftype="Financial: Source Result",
                 source="CompanyFinancial",
                 confidence="Medium",
                 color="sky",
@@ -109,7 +109,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             ))
 
         if result["revenues"]:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{result['name']}: Revenue data found - {', '.join(result['revenues'][:2])}",
                 type="Financial: Revenue Data",
                 source="CompanyFinancial",
@@ -123,7 +123,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             ))
 
         if result["fundings"]:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{result['name']}: Funding data found - {', '.join(result['fundings'][:2])}",
                 type="Financial: Funding Data",
                 source="CompanyFinancial",
@@ -137,7 +137,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             ))
 
         if result["employees"]:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{result['name']}: Employee count data - {', '.join(result['employees'][:2])}",
                 type="Financial: Employee Data",
                 source="CompanyFinancial",
@@ -151,7 +151,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             ))
 
     if all_revenues:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Revenue estimates: {', '.join(all_revenues[:3])}",
             type="Financial: Revenue Summary",
             source="CompanyFinancial",
@@ -165,7 +165,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         ))
 
     if all_fundings:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Funding rounds: {', '.join(all_fundings[:3])}",
             type="Financial: Funding Summary",
             source="CompanyFinancial",
@@ -179,7 +179,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         ))
 
     if all_employees:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Employee estimates: {', '.join(all_employees[:3])}",
             type="Financial: Employee Summary",
             source="CompanyFinancial",
@@ -194,7 +194,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
     if all_stocks:
         unique_stocks = list(set(all_stocks))
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Stock tickers found: {', '.join(unique_stocks[:5])}",
             type="Financial: Stock Tickers",
             source="CompanyFinancial",
@@ -208,9 +208,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         ))
 
     if not all_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="No financial data found for target",
-            type="Financial: Scan Complete",
+            ftype="Financial: Scan Complete",
             source="CompanyFinancial",
             confidence="Low",
             color="emerald",
@@ -221,9 +221,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             tags=["financial", "clean"],
         ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Financial scan complete: {sources_with_data} sources had data",
-        type="Financial: Scan Summary",
+        ftype="Financial: Scan Summary",
         source="CompanyFinancial",
         confidence="High",
         color="slate",

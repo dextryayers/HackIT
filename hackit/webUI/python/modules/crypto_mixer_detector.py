@@ -1,8 +1,8 @@
 import httpx
 import re
 import json
-from urllib.parse import urlparse, quote
 from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 
 MIXING_SERVICES = {
     "Tornado Cash": ["tornado", "tornado.cash", "tornadocash", "tc", "0x", "torn"],
@@ -145,7 +145,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     mixing_results = await detect_mixing_service(query)
     for r in mixing_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Mixing service detected: {r['service']} (matched: {r['matched']})",
             type="Mixing Service Detection",
             source="Mixer Detector",
@@ -160,7 +160,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     privacy_coin_results = await detect_privacy_coin(query)
     for r in privacy_coin_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Privacy coin detected: {r['coin']} (matched: {r['matched']})",
             type="Privacy Coin Detection",
             source="Mixer Detector",
@@ -175,9 +175,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     coinjoin_results = await detect_coinjoin_patterns(query)
     for r in coinjoin_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Coinjoin pattern: {r['match']}",
-            type="Coinjoin Detection",
+            ftype="Coinjoin Detection",
             source="Mixer Detector",
             confidence="Medium",
             color="orange",
@@ -190,9 +190,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     contract_results = await check_mixer_contracts(query)
     for r in contract_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Known mixer contract: {r['contract'][:16]}...",
-            type="Mixer Contract Detection",
+            ftype="Mixer Contract Detection",
             source="Mixer Detector",
             confidence="High",
             color="red",
@@ -205,9 +205,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     atomic_swap_results = await check_atomic_swap_patterns(query)
     for r in atomic_swap_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Atomic swap pattern: {r['keyword']}",
-            type="Atomic Swap Detection",
+            ftype="Atomic Swap Detection",
             source="Mixer Detector",
             confidence="Low",
             color="yellow",
@@ -219,9 +219,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         ))
 
     for service in MIXING_SERVICES:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Mixing service monitored: {service}",
-            type="Mixing Service Coverage",
+            ftype="Mixing Service Coverage",
             source="Mixer Detector",
             confidence="Low",
             color="slate",
@@ -233,9 +233,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         ))
 
     for coin in PRIVACY_COINS:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Privacy coin monitored: {coin}",
-            type="Privacy Coin Coverage",
+            ftype="Privacy Coin Coverage",
             source="Mixer Detector",
             confidence="Low",
             color="slate",
@@ -247,7 +247,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         ))
 
     risk = await calculate_mixer_risk_score(mixing_results, privacy_coin_results, coinjoin_results, contract_results)
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Mixer risk score: {risk['score']}/100 ({risk['level']})",
         type="Mixing Risk Assessment",
         source="Mixer Detector",
@@ -261,7 +261,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         tags=["mixing", "risk-score", risk['level'].lower().replace(" ", "-").replace("-heavy-mixing", "")]
     ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Mixer detection complete for {query}: checked {len(MIXING_SERVICES)} services, {len(PRIVACY_COINS)} privacy coins, {len(COINJOIN_PATTERNS)} coinjoin patterns",
         type="Mixer Detection Summary",
         source="Mixer Detector",

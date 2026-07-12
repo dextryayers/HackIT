@@ -1,12 +1,11 @@
 import httpx
 import asyncio
 import re
-import socket
-import ssl
 from urllib.parse import urlparse
 from datetime import datetime
 from models import IntelligenceFinding
 from osint_common import resolve_dns, get_all_dns_records, get_ssl_cert_info, parse_cert_to_dict
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 
 CONTENT_CATEGORIES = [
     ("adult|porn|xxx|sex|nsfw", "Adult"),
@@ -172,7 +171,7 @@ async def check_http_service(domain: str, client: httpx.AsyncClient) -> dict:
     result = {}
     for scheme in ["https", "http"]:
         try:
-            resp = await client.get(f"{scheme}://{domain}", timeout=10.0, follow_redirects=True,
+            resp = await safe_fetch(client, f"{scheme}://{domain}", timeout=10.0, follow_redirects=True,
                                     headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"})
             result[f"{scheme}_status"] = resp.status_code
             result[f"{scheme}_server"] = resp.headers.get("server", "")
@@ -253,7 +252,7 @@ async def _check_domain_age_risk(domain: str, whois_data: dict) -> list:
             created = datetime.strptime(cd, "%Y-%m-%d")
             age_days = (datetime.now() - created).days
             age_years = age_days / 365.25
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Domain Age: {age_years:.1f} years ({age_days} days)",
                 type="Domain Age Analysis",
                 source="DomainProfileDeep",
@@ -265,9 +264,9 @@ async def _check_domain_age_risk(domain: str, whois_data: dict) -> list:
                 tags=["domain-age", "risk-assessment"]
             ))
             if age_days < 365:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity="NEWLY REGISTERED DOMAIN - higher phishing/malware risk",
-                    type="New Domain Risk Alert",
+                    ftype="New Domain Risk Alert",
                     source="DomainProfileDeep",
                     confidence="High",
                     color="red",
@@ -279,9 +278,9 @@ async def _check_domain_age_risk(domain: str, whois_data: dict) -> list:
         except:
             pass
     else:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="Creation date not available in WHOIS",
-            type="Domain Age Analysis",
+            ftype="Domain Age Analysis",
             source="DomainProfileDeep",
             confidence="Medium",
             color="orange",
@@ -307,7 +306,7 @@ async def _check_registrar_reputation(whois_data: dict) -> list:
         if matched_reg:
             rep_level = "Trusted" if rep_score >= 4 else ("Standard" if rep_score >= 2 else "Low Trust")
             rep_color = "emerald" if rep_score >= 4 else ("slate" if rep_score >= 2 else "orange")
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Registrar: {registrar} (Reputation: {matched_reg.title()} - {rep_level})",
                 type="Registrar Reputation Analysis",
                 source="DomainProfileDeep",
@@ -320,9 +319,9 @@ async def _check_registrar_reputation(whois_data: dict) -> list:
             ))
         for risky_reg in RISKY_REGISTRARS:
             if risky_reg in reg_lower:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Registrar {registrar} known for risky/poor verification",
-                    type="Risky Registrar Alert",
+                    ftype="Risky Registrar Alert",
                     source="DomainProfileDeep",
                     confidence="Medium",
                     color="red",
@@ -369,7 +368,7 @@ async def _check_nameserver_hosting(dns_records: dict) -> list:
             elif "dns" in ns_lower and "hosting" in ns_lower:
                 provider = "Custom Hosting DNS"
             if provider:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"NS: {ns} ({provider})",
                     type="Nameserver Provider Detection",
                     source="DomainProfileDeep",
@@ -380,9 +379,9 @@ async def _check_nameserver_hosting(dns_records: dict) -> list:
                     tags=["nameserver", "provider", "dns-hosting"]
                 ))
             else:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=ns,
-                    type="Nameserver (DNS Record)",
+                    ftype="Nameserver (DNS Record)",
                     source="DomainProfileDeep",
                     confidence="High",
                     color="slate",
@@ -408,9 +407,9 @@ async def _detect_email_hosting(dns_records: dict, client: httpx.AsyncClient) ->
                         break
         if detected_providers:
             for provider in sorted(detected_providers):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Email Hosting: {provider}",
-                    type="Email Hosting Provider",
+                    ftype="Email Hosting Provider",
                     source="DomainProfileDeep",
                     confidence="High",
                     color="emerald",
@@ -420,7 +419,7 @@ async def _detect_email_hosting(dns_records: dict, client: httpx.AsyncClient) ->
                 ))
         else:
             mx_strs = [str(mx) for mx in mx_records[:3]]
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Custom/Unknown email hosting (MX: {', '.join(mx_strs)})",
                 type="Email Hosting Provider",
                 source="DomainProfileDeep",
@@ -431,7 +430,7 @@ async def _detect_email_hosting(dns_records: dict, client: httpx.AsyncClient) ->
                 tags=["email", "custom-hosting"]
             ))
     else:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="No email hosting (no MX records)",
             type="Email Hosting Detection",
             source="DomainProfileDeep",
@@ -471,9 +470,9 @@ async def _detect_web_hosting(http_info: dict, dns_records: dict) -> list:
 
     if detected:
         for provider in sorted(detected):
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Web Infrastructure: {provider}",
-                type="Web Hosting/CDN Detection",
+                ftype="Web Hosting/CDN Detection",
                 source="DomainProfileDeep",
                 confidence="High",
                 color="purple",
@@ -492,7 +491,7 @@ async def _check_security_headers(http_info: dict) -> list:
     powered = http_info.get("https_powered", "")
 
     if hsts:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"HTTP Strict Transport Security: Enabled ({hsts[:100]})",
             type="Security Header - HSTS",
             source="DomainProfileDeep",
@@ -503,7 +502,7 @@ async def _check_security_headers(http_info: dict) -> list:
             tags=["security-header", "hsts"]
         ))
     else:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="HSTS not configured (Strict-Transport-Security missing)",
             type="Missing Security Header",
             source="DomainProfileDeep",
@@ -516,9 +515,9 @@ async def _check_security_headers(http_info: dict) -> list:
         ))
 
     if xframe:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"X-Frame-Options: {xframe}",
-            type="Security Header - ClickJacking Protection",
+            ftype="Security Header - ClickJacking Protection",
             source="DomainProfileDeep",
             confidence="High",
             color="emerald",
@@ -527,9 +526,9 @@ async def _check_security_headers(http_info: dict) -> list:
             tags=["security-header", "clickjacking"]
         ))
     else:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="X-Frame-Options not set - vulnerable to clickjacking",
-            type="Missing Security Header",
+            ftype="Missing Security Header",
             source="DomainProfileDeep",
             confidence="High",
             color="red",
@@ -540,9 +539,9 @@ async def _check_security_headers(http_info: dict) -> list:
         ))
 
     if csp:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Content-Security-Policy: {csp[:200]}",
-            type="Security Header - CSP",
+            ftype="Security Header - CSP",
             source="DomainProfileDeep",
             confidence="High",
             color="emerald",
@@ -551,9 +550,9 @@ async def _check_security_headers(http_info: dict) -> list:
             tags=["security-header", "csp"]
         ))
     if powered:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Technology: {powered}",
-            type="Technology Detection (X-Powered-By)",
+            ftype="Technology Detection (X-Powered-By)",
             source="DomainProfileDeep",
             confidence="High",
             color="slate",
@@ -574,9 +573,9 @@ async def _check_social_media(http_info: dict) -> list:
         if re.search(pattern, html, re.IGNORECASE):
             detected.add(platform)
     for platform in sorted(detected):
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Social Media Presence: {platform}",
-            type="Social Media Discovery",
+            ftype="Social Media Discovery",
             source="DomainProfileDeep",
             confidence="Medium",
             color="purple",
@@ -591,9 +590,9 @@ async def _check_tld_risk(domain: str) -> list:
     findings = []
     tld = domain.split(".")[-1].lower()
     if tld in RISKY_TLDS:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Risky TLD: .{tld} - frequently abused for spam/malware",
-            type="TLD Risk Assessment",
+            ftype="TLD Risk Assessment",
             source="DomainProfileDeep",
             confidence="High",
             color="red",
@@ -603,7 +602,7 @@ async def _check_tld_risk(domain: str) -> list:
             tags=["tld", "risk", "abuse"]
         ))
     if len(domain) > 50:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Very long domain ({len(domain)} chars) - potential DGA or algorithmically generated",
             type="Domain Length Anomaly",
             source="DomainProfileDeep",
@@ -628,9 +627,9 @@ async def _check_dns_records_extended(dns_records: dict, domain: str) -> list:
     cname_targets = [str(r) for r in dns_records.get("CNAME", [])]
     if cname_targets:
         for cname in cname_targets[:3]:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"CNAME: {domain} -> {cname}",
-                type="CNAME Record Analysis",
+                ftype="CNAME Record Analysis",
                 source="DomainProfileDeep",
                 confidence="High",
                 color="purple",
@@ -639,9 +638,9 @@ async def _check_dns_records_extended(dns_records: dict, domain: str) -> list:
                 tags=["dns", "cname", "alias"]
             ))
             if "s3" in cname.lower() or "amazonaws" in cname.lower():
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"CNAME points to AWS: {cname}",
-                    type="AWS Service Detection",
+                    ftype="AWS Service Detection",
                     source="DomainProfileDeep",
                     confidence="High",
                     color="orange",
@@ -650,9 +649,9 @@ async def _check_dns_records_extended(dns_records: dict, domain: str) -> list:
                     tags=["aws", "s3", "cloud"]
                 ))
             if "cloudfront" in cname.lower():
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"CNAME points to CloudFront CDN",
-                    type="CDN Detection via CNAME",
+                    ftype="CDN Detection via CNAME",
                     source="DomainProfileDeep",
                     confidence="High",
                     color="emerald",
@@ -663,7 +662,7 @@ async def _check_dns_records_extended(dns_records: dict, domain: str) -> list:
 
     a_records = [str(r) for r in dns_records.get("A", [])]
     if len(a_records) > 3:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Multiple A records ({len(a_records)}): {', '.join(a_records)}",
             type="Multiple A Records - Load Balancing",
             source="DomainProfileDeep",
@@ -686,7 +685,7 @@ async def _check_ssl_cert_info(domain: str) -> list:
             if parsed.get("issuer"):
                 org = parsed["issuer"].get("organizationName", "Unknown")
                 cn = parsed["issuer"].get("commonName", "")
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{org} ({cn})" if cn else org,
                     type="SSL Certificate Authority",
                     source="DomainProfileDeep",
@@ -701,7 +700,7 @@ async def _check_ssl_cert_info(domain: str) -> list:
                 days = parsed["days_remaining"]
                 color = "emerald" if days > 30 else ("orange" if days > 7 else "red")
                 risk = "Informational" if days > 30 else ("Elevated Risk" if days > 7 else "High Risk")
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{days} days remaining ({parsed.get('valid_to', '')})",
                     type="SSL Expiry",
                     source="DomainProfileDeep",
@@ -712,9 +711,9 @@ async def _check_ssl_cert_info(domain: str) -> list:
                     tags=["ssl", "certificate"]
                 ))
             if parsed.get("is_expired"):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity="SSL Certificate EXPIRED",
-                    type="SSL Expired",
+                    ftype="SSL Expired",
                     source="DomainProfileDeep",
                     confidence="High",
                     color="red",
@@ -724,8 +723,8 @@ async def _check_ssl_cert_info(domain: str) -> list:
                 ))
             if parsed.get("subject_alt_names"):
                 for san in parsed["subject_alt_names"][:8]:
-                    findings.append(IntelligenceFinding(
-                        entity=san, type="SSL SAN", source="DomainProfileDeep",
+                    findings.append(make_finding(
+                        entity=san, ftype="SSL SAN", source="DomainProfileDeep",
                         confidence="High", color="blue", threat_level="Informational",
                         status="SAN", tags=["ssl", "san"]
                     ))
@@ -746,7 +745,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
     for rtype, records in dns_records.items():
         for rec in records[:5]:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=str(rec)[:200],
                 type=f"DNS: {rtype} Record",
                 source="DomainProfileDeep",
@@ -759,9 +758,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ))
 
     if whois_data.get("creation_date"):
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=whois_data["creation_date"],
-            type="Domain Creation Date",
+            ftype="Domain Creation Date",
             source="DomainProfileDeep",
             confidence="High",
             color="emerald",
@@ -771,9 +770,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             tags=["whois"]
         ))
     if whois_data.get("updated_date"):
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=whois_data["updated_date"],
-            type="Domain Last Updated",
+            ftype="Domain Last Updated",
             source="DomainProfileDeep",
             confidence="High",
             color="slate",
@@ -783,9 +782,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             tags=["whois", "updated"]
         ))
     if whois_data.get("expiration_date"):
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=whois_data["expiration_date"],
-            type="Domain Expiration Date",
+            ftype="Domain Expiration Date",
             source="DomainProfileDeep",
             confidence="High",
             color="orange",
@@ -795,9 +794,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             tags=["whois"]
         ))
     if whois_data.get("registrar"):
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=whois_data["registrar"],
-            type="Domain Registrar",
+            ftype="Domain Registrar",
             source="DomainProfileDeep",
             confidence="High",
             color="slate",
@@ -807,9 +806,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             tags=["whois"]
         ))
     if whois_data.get("org"):
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=whois_data["org"],
-            type="Registrant Organization",
+            ftype="Registrant Organization",
             source="DomainProfileDeep",
             confidence="High",
             color="slate",
@@ -817,9 +816,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             tags=["whois", "organization"]
         ))
     if whois_data.get("country"):
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Registrant Country: {whois_data['country']}",
-            type="Registrant Geolocation",
+            ftype="Registrant Geolocation",
             source="DomainProfileDeep",
             confidence="High",
             color="slate",
@@ -827,9 +826,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             tags=["whois", "geo"]
         ))
     if whois_data.get("email"):
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=whois_data["email"],
-            type="Registrant Email Contact",
+            ftype="Registrant Email Contact",
             source="DomainProfileDeep",
             confidence="High",
             color="orange",
@@ -838,9 +837,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         ))
     if whois_data.get("statuses"):
         for st in whois_data["statuses"][:5]:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=st,
-                type="Domain Status",
+                ftype="Domain Status",
                 source="DomainProfileDeep",
                 confidence="High",
                 color="slate",
@@ -850,9 +849,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
     if whois_data.get("nameservers"):
         for ns in whois_data["nameservers"][:5]:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=ns,
-                type="Name Server (WHOIS)",
+                ftype="Name Server (WHOIS)",
                 source="DomainProfileDeep",
                 confidence="High",
                 color="slate",
@@ -865,9 +864,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
     html_sample = http_info.get("html_sample", "")
     categories = categorize_content(domain, https_title, html_sample)
     for cat in categories:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Content Category: {cat}",
-            type="Domain Category",
+            ftype="Domain Category",
             source="DomainProfileDeep",
             confidence="Medium",
             color="purple",
@@ -882,7 +881,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         if status_key in http_info:
             title_key = f"{scheme}_title"
             title_str = f" - {http_info.get(title_key, '')}" if http_info.get(title_key) else ""
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{scheme.upper()} {http_info[status_key]}{title_str}",
                 type=f"Web Service ({scheme.upper()})",
                 source="DomainProfileDeep",
@@ -894,9 +893,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 tags=["web-service"]
             ))
         if server_key in http_info and http_info[server_key]:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=http_info[server_key],
-                type="Web Server",
+                ftype="Web Server",
                 source="DomainProfileDeep",
                 confidence="High",
                 color="slate",
@@ -911,7 +910,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
     email_security = False
     if dns_records.get("MX"):
         for mx in dns_records["MX"][:5]:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=str(mx), type="Mail Server (MX)", source="DomainProfileDeep",
                 confidence="High", color="slate", threat_level="Informational",
                 status="Resolved", tags=["email", "mx"]
@@ -921,8 +920,8 @@ async def crawl(target: str, client: httpx.AsyncClient):
         for txt in dns_records["TXT"]:
             txt_str = str(txt)
             if txt_str.startswith("v=spf1"):
-                findings.append(IntelligenceFinding(
-                    entity=txt_str[:200], type="SPF Record", source="DomainProfileDeep",
+                findings.append(make_finding(
+                    entity=txt_str[:200], ftype="SPF Record", source="DomainProfileDeep",
                     confidence="High", color="emerald", threat_level="Informational",
                     status="Email Security", tags=["email-security"]
                 ))
@@ -936,26 +935,26 @@ async def crawl(target: str, client: httpx.AsyncClient):
             for r in dmarc_records:
                 dmarc = str(r)
                 if "v=DMARC1" in dmarc:
-                    findings.append(IntelligenceFinding(
-                        entity=dmarc[:200], type="DMARC Record", source="DomainProfileDeep",
+                    findings.append(make_finding(
+                        entity=dmarc[:200], ftype="DMARC Record", source="DomainProfileDeep",
                         confidence="High", color="emerald", threat_level="Informational",
                         status="Email Security", tags=["email-security"]
                     ))
                     email_security = True
                     if "p=reject" in dmarc:
-                        findings.append(IntelligenceFinding(
-                            entity="DMARC Policy: Reject", type="DMARC Policy",
+                        findings.append(make_finding(
+                            entity="DMARC Policy: Reject", ftype="DMARC Policy",
                             source="DomainProfileDeep", confidence="High", color="emerald",
                             threat_level="Informational", status="Strong", tags=["email-security"]
                         ))
                     elif "p=quarantine" in dmarc:
-                        findings.append(IntelligenceFinding(
-                            entity="DMARC Policy: Quarantine", type="DMARC Policy",
+                        findings.append(make_finding(
+                            entity="DMARC Policy: Quarantine", ftype="DMARC Policy",
                             source="DomainProfileDeep", confidence="High", color="emerald",
                             threat_level="Informational", status="Moderate", tags=["email-security"]
                         ))
                     elif "p=none" in dmarc:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity="DMARC Policy: None (no protection)", type="DMARC Weakness",
                             source="DomainProfileDeep", confidence="High", color="red",
                             threat_level="Elevated Risk", status="Weak", tags=["email-security"]
@@ -963,7 +962,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         except:
             pass
     if not email_security:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="No email security configured (SPF/DKIM/DMARC)",
             type="Missing Email Security",
             source="DomainProfileDeep",
@@ -1004,7 +1003,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
     rep_score = score_reputation(domain, categories, whois_data, dns_records)
     rep_level = "Good" if rep_score >= 70 else ("Fair" if rep_score >= 40 else "Poor")
     rep_color = "emerald" if rep_score >= 70 else ("orange" if rep_score >= 40 else "red")
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Domain Reputation Score: {rep_score}/100 ({rep_level})",
         type="Domain Reputation",
         source="DomainProfileDeep",
@@ -1015,7 +1014,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         tags=["reputation", "summary"]
     ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Domain profile complete: {len(dns_records)} DNS types, {len(categories)} categories, {len(whois_data)} WHOIS fields",
         type="Domain Profile Summary",
         source="DomainProfileDeep",

@@ -1,9 +1,9 @@
-import httpx
 import re
 import json
 import socket
-from urllib.parse import urlparse, quote
+from urllib.parse import urlparse
 from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 
 COMMON_SUBDOMAINS = [
     "www", "mail", "remote", "blog", "webmail", "server", "ns1", "ns2",
@@ -62,7 +62,7 @@ async def check_subdomains(client: httpx.AsyncClient, target: str) -> list:
         for sub in COMMON_SUBDOMAINS[:40]:
             domain = f"{sub}.{target}"
             try:
-                socket.gethostbyname(domain)
+                resolve_ip(domain)
                 results.append({"subdomain": domain})
             except:
                 pass
@@ -80,7 +80,7 @@ async def check_exposed_paths(client: httpx.AsyncClient, target: str) -> list:
         for path in EXPOSED_PANEL_PATHS:
             try:
                 url = f"{base}{path}"
-                resp = await client.get(url, timeout=5.0,
+                resp = await safe_fetch(client,url, timeout=5.0,
                     headers={"User-Agent": "Mozilla/5.0"},
                     follow_redirects=False)
                 if resp.status_code in [200, 201, 202, 204, 301, 302, 403]:
@@ -115,7 +115,7 @@ async def scan_open_ports(client: httpx.AsyncClient, target: str) -> list:
 async def check_dns_records(client: httpx.AsyncClient, target: str) -> list:
     results = []
     try:
-        resp = await client.get(f"https://dns.google/resolve?name={target}&type=ANY",
+        resp = await safe_fetch(client,f"https://dns.google/resolve?name={target}&ftype=ANY",
             timeout=10.0, headers={"User-Agent": "Mozilla/5.0"})
         if resp.status_code == 200:
             data = resp.json()
@@ -141,7 +141,7 @@ async def check_shadow_it(client: httpx.AsyncClient, target: str) -> list:
         for svc in shadow_services:
             domain = f"{target.replace('.','-')}.{svc}"
             try:
-                socket.gethostbyname(domain)
+                resolve_ip(domain)
                 results.append({"domain": domain, "service": svc, "exists": True})
             except:
                 pass
@@ -156,7 +156,7 @@ async def check_third_party_risk(client: httpx.AsyncClient, target: str) -> list
             url = f"https://{target}"
         else:
             url = target
-        resp = await client.get(url, timeout=10.0,
+        resp = await safe_fetch(client,url, timeout=10.0,
             headers={"User-Agent": "Mozilla/5.0"})
         if resp.status_code == 200:
             text = resp.text
@@ -175,9 +175,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     subdomain_results = await check_subdomains(client, query)
     for r in subdomain_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Subdomain discovered: {r['subdomain']}",
-            type="Subdomain Discovery",
+            ftype="Subdomain Discovery",
             source="Attack Surface Scanner",
             confidence="High",
             color="yellow",
@@ -190,9 +190,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     exposed_path_results = await check_exposed_paths(client, query)
     for r in exposed_path_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Exposed path: {r['path']} (HTTP {r['status']}) - {r['url']}",
-            type="Exposed Path Detection",
+            ftype="Exposed Path Detection",
             source="Attack Surface Scanner",
             confidence="Medium",
             color="red" if r['status'] == 200 else "yellow",
@@ -205,9 +205,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     port_results = await scan_open_ports(client, query)
     for r in port_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Open port: {r['port']}/{r['service']} ({r['state']})",
-            type="Open Port Detection",
+            ftype="Open Port Detection",
             source="Attack Surface Scanner",
             confidence="High",
             color="yellow" if r['port'] in [21,23,25,445,3389,3306,5432,6379,27017] else "slate",
@@ -227,9 +227,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             rtype = type_names.get(rtype, str(rtype))
         if rtype not in dns_types_found:
             dns_types_found.add(rtype)
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"DNS record type: {rtype} - {r.get('name', '')} -> {r.get('data', '')}",
-                type="DNS Record Discovery",
+                ftype="DNS Record Discovery",
                 source="Attack Surface Scanner",
                 confidence="High",
                 color="slate",
@@ -242,9 +242,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     shadow_it_results = await check_shadow_it(client, query)
     for r in shadow_it_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Shadow IT detected: {r['domain']} (hosted on {r['service']})",
-            type="Shadow IT Detection",
+            ftype="Shadow IT Detection",
             source="Attack Surface Scanner",
             confidence="Medium",
             color="red",
@@ -257,9 +257,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     third_party_results = await check_third_party_risk(client, query)
     for r in third_party_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Third-party dependency: {r['service']} (indicator: {r['indicator']})",
-            type="Third-Party Risk",
+            ftype="Third-Party Risk",
             source="Attack Surface Scanner",
             confidence="Medium",
             color="yellow",
@@ -277,9 +277,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                 exposed_db_results.append({"database": db_name, "port": port})
                 break
     for r in exposed_db_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Exposed database indicator: {r['database']} (port {r['port']})",
-            type="Exposed Database Detection",
+            ftype="Exposed Database Detection",
             source="Attack Surface Scanner",
             confidence="Low",
             color="red",
@@ -290,9 +290,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             tags=["database", "exposed", r['database'].lower()]
         ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Attack surface scan complete for {query}: discovered {len(subdomain_results)} subdomains, {len(port_results)} open ports, {len(exposed_path_results)} exposed paths",
-        type="Attack Surface Scan Summary",
+        ftype="Attack Surface Scan Summary",
         source="Attack Surface Scanner",
         confidence="Medium",
         color="slate",

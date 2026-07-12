@@ -1,8 +1,6 @@
-import httpx
-import re
 import json
-from urllib.parse import urlparse, quote
 from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 
 MITRE_ATTACK_TACTICS = [
     "Reconnaissance", "Resource Development", "Initial Access", "Execution",
@@ -70,7 +68,7 @@ THREAT_ACTOR_GROUPS = {
 async def fetch_mitre_attack_data(client: httpx.AsyncClient, target: str) -> list:
     results = []
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client,
             f"https://raw.githubusercontent.com/mitre/cti/master/enterprise-attack/enterprise-attack.json",
             timeout=20.0,
             headers={"User-Agent": "Mozilla/5.0"}
@@ -122,7 +120,7 @@ async def check_ioc_overlap_with_campaigns(client: httpx.AsyncClient, target: st
         ]
         for feed_url in campaign_feeds:
             try:
-                resp = await client.get(feed_url, timeout=15.0,
+                resp = await safe_fetch(client,feed_url, timeout=15.0,
                     headers={"User-Agent": "Mozilla/5.0"})
                 if resp.status_code == 200:
                     content = resp.text.lower()
@@ -208,9 +206,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     mitre_results = await fetch_mitre_attack_data(client, query)
     for r in mitre_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"MITRE ATT&CK: {r['name']} ({r['id']}) - {r['description'][:100]}",
-            type="MITRE ATT&CK Mapping",
+            ftype="MITRE ATT&CK Mapping",
             source="MITRE CTI",
             confidence="Medium",
             color="slate",
@@ -224,9 +222,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     actor_results = await check_threat_actor_overlap(query)
     for r in actor_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Threat actor group: {r['group']} (indicator: {r['matched_indicator']})",
-            type="Threat Actor Attribution",
+            ftype="Threat Actor Attribution",
             source="OSINT Attribution",
             confidence=r['confidence'],
             color="red",
@@ -239,9 +237,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     campaign_results = await check_ioc_overlap_with_campaigns(client, query)
     for r in campaign_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"IoC overlap with known campaigns: {r['feed']}",
-            type="Campaign Overlap Detection",
+            ftype="Campaign Overlap Detection",
             source=r['feed'],
             confidence="High",
             color="red",
@@ -254,9 +252,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     ttp_results = await analyze_ttp_patterns(query)
     for r in ttp_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"TTP detected: {r['technique_id']} - {r['technique_name']}",
-            type="TTP Identification",
+            ftype="TTP Identification",
             source="OSINT Attribution",
             confidence="Low",
             color="yellow",
@@ -269,9 +267,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     malware_attr_results = await check_malware_family_attribution(query)
     for r in malware_attr_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Malware attribution: {r['malware']} (matched: {r['matched']})",
-            type="Malware Attribution",
+            ftype="Malware Attribution",
             source="OSINT Attribution",
             confidence="Medium",
             color="orange",
@@ -284,9 +282,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     geo_results = await analyze_geography_timing(query)
     for r in geo_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Geography indicator: {r['geography']} (matched: {r['matched']})",
-            type="Geography Attribution",
+            ftype="Geography Attribution",
             source="OSINT Attribution",
             confidence="Low",
             color="slate",
@@ -298,9 +296,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         ))
 
     for tactic in MITRE_ATTACK_TACTICS:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"MITRE ATT&CK tactic coverage: {tactic}",
-            type="MITRE Tactic Coverage",
+            ftype="MITRE Tactic Coverage",
             source="OSINT Attribution",
             confidence="Low",
             color="slate",
@@ -311,9 +309,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             tags=["mitre-attack", "tactic", tactic.lower().replace(" ", "-")]
         ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Threat attribution complete for {query}: checked {len(THREAT_ACTOR_GROUPS)} groups, {len(MITRE_ATTACK_TECHNIQUES)} techniques, {len(MITRE_ATTACK_TACTICS)} tactics",
-        type="Threat Attribution Summary",
+        ftype="Threat Attribution Summary",
         source="OSINT Attribution",
         confidence="Medium",
         color="slate",

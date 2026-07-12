@@ -1,8 +1,7 @@
-import httpx
 import re
-import json
-from urllib.parse import urlparse, quote
+from urllib.parse import urlparse
 from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 
 DEFACEMENT_ARCHIVES = [
     "https://zone-h.org/archive/domain={}",
@@ -44,7 +43,7 @@ async def check_zone_h(client: httpx.AsyncClient, target: str) -> list:
     results = []
     try:
         url = f"https://zone-h.org/archive/domain={target}"
-        resp = await client.get(url, timeout=15.0,
+        resp = await safe_fetch(client,url, timeout=15.0,
             headers={"User-Agent": "Mozilla/5.0"})
         if resp.status_code == 200:
             text = resp.text.lower()
@@ -63,7 +62,7 @@ async def check_archive_org(client: httpx.AsyncClient, target: str) -> list:
     results = []
     try:
         url = f"https://web.archive.org/cdx/search/cdx?url={target}&output=json&limit=100"
-        resp = await client.get(url, timeout=15.0,
+        resp = await safe_fetch(client,url, timeout=15.0,
             headers={"User-Agent": "Mozilla/5.0"})
         if resp.status_code == 200 and len(resp.text) > 10:
             data = resp.json()
@@ -80,7 +79,7 @@ async def check_archive_is(client: httpx.AsyncClient, target: str) -> list:
     results = []
     try:
         url = f"https://archive.is/{target}"
-        resp = await client.get(url, timeout=15.0,
+        resp = await safe_fetch(client,url, timeout=15.0,
             headers={"User-Agent": "Mozilla/5.0"})
         if resp.status_code == 200 and len(resp.text) > 200:
             results.append({
@@ -125,7 +124,7 @@ async def check_current_mirror(client: httpx.AsyncClient, target: str) -> list:
             url = f"https://{target}"
         else:
             url = target
-        resp = await client.get(url, timeout=10.0,
+        resp = await safe_fetch(client,url, timeout=10.0,
             headers={"User-Agent": "Mozilla/5.0"})
         content = resp.text.lower()
         for sig in DEFACEMENT_SIGNATURES:
@@ -160,9 +159,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     zone_h_results = await check_zone_h(client, query)
     for r in zone_h_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Zone-H defacement archive: {r['url']} ({r['content_length']} bytes, has_data: {r['has_defacement_data']})",
-            type="Defacement Archive Check",
+            ftype="Defacement Archive Check",
             source="Zone-H",
             confidence="Medium",
             color="red" if r['has_defacement_data'] else "slate",
@@ -175,9 +174,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     archive_org_results = await check_archive_org(client, query)
     for r in archive_org_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Wayback Machine: {r['snapshot_count']} snapshots archived for {query}",
-            type="Wayback Machine Check",
+            ftype="Wayback Machine Check",
             source="Wayback Machine",
             confidence="Medium",
             color="slate",
@@ -190,9 +189,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     archive_is_results = await check_archive_is(client, query)
     for r in archive_is_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Archive.is: snapshot available ({r['content_length']} bytes)",
-            type="Archive.is Check",
+            ftype="Archive.is Check",
             source="Archive.is",
             confidence="Medium",
             color="slate",
@@ -205,9 +204,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     sig_results = await detect_defacement_signatures(query)
     for r in sig_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Defacement signature: {r['match']}",
-            type="Defacement Signature Detection",
+            ftype="Defacement Signature Detection",
             source="Defacement Tracker",
             confidence="Medium",
             color="red",
@@ -220,9 +219,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     group_results = await detect_hacker_group(query)
     for r in group_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Hacker group attribution: {r['group']} (matched: {r['matched']})",
-            type="Hacker Group Attribution",
+            ftype="Hacker Group Attribution",
             source="Defacement Tracker",
             confidence="Medium",
             color="orange",
@@ -236,9 +235,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     current_status = await check_current_mirror(client, query)
     for r in current_status:
         if r.get("currently_defaced"):
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Target CURRENTLY defaced! (signature: {r.get('signature_matched', 'N/A')[:50]}...)",
-                type="Current Defacement Status",
+                ftype="Current Defacement Status",
                 source="Defacement Tracker",
                 confidence="High",
                 color="red",
@@ -249,9 +248,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                 tags=["defacement", "active", "critical"]
             ))
         else:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Target appears clean (HTTP {r.get('status_code', 0)})",
-                type="Current Defacement Status",
+                ftype="Current Defacement Status",
                 source="Defacement Tracker",
                 confidence="Low",
                 color="emerald",
@@ -265,9 +264,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     timeline = await build_defacement_timeline(zone_h_results, archive_org_results)
     for t in timeline:
         if "event" in t and t["event"] == "archive_snapshot":
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Archive timeline: {t['count']} snapshots from {t['source']}",
-                type="Defacement Timeline",
+                ftype="Defacement Timeline",
                 source="Defacement Tracker",
                 confidence="Low",
                 color="slate",
@@ -279,9 +278,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             ))
 
     for group in HACKER_GROUP_PATTERNS:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Hacker group monitored: {group}",
-            type="Hacker Group Coverage",
+            ftype="Hacker Group Coverage",
             source="Defacement Tracker",
             confidence="Low",
             color="slate",
@@ -292,9 +291,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             tags=["defacement", "group", group.lower().replace(" ", "-")]
         ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Defacement tracking complete for {query}: checked {len(DEFACEMENT_ARCHIVES)} archives, {len(HACKER_GROUP_PATTERNS)} groups, {len(DEFACEMENT_SIGNATURES)} signatures",
-        type="Defacement Tracking Summary",
+        ftype="Defacement Tracking Summary",
         source="Defacement Tracker",
         confidence="Medium",
         color="slate",

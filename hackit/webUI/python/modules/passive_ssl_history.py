@@ -1,9 +1,8 @@
-import httpx
 import re
 import json
 from datetime import datetime
 from urllib.parse import urlparse
-from models import IntelligenceFinding
+from ..module_common import safe_fetch, make_finding
 
 CA_ORGANIZATIONS = [
     "Let's Encrypt", "DigiCert", "Comodo", "GlobalSign", "Sectigo", "GoDaddy",
@@ -29,14 +28,10 @@ KNOWN_CA_OWNERS = {
 
 RISKY_CA_PATTERNS = ["self-signed", "self signed", "untrusted", "unknown"]
 
-async def _fetch_ct_certificates(domain: str, client: httpx.AsyncClient) -> list:
+async def _fetch_ct_certificates(domain: str, client: AsyncClient) -> list:
     findings = []
     try:
-        resp = await client.get(
-            f"https://crt.sh/?q=%25.{domain}&output=json",
-            timeout=25.0,
-            headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}
-        )
+        resp = await safe_fetch(client, f"https://crt.sh/?q=%25.{domain}&output=json", timeout=25.0)
         if resp.status_code == 200:
             certs = resp.json() if isinstance(resp.text, str) and resp.text.startswith("[") else []
             cert_timeline = []
@@ -74,9 +69,9 @@ async def _fetch_ct_certificates(domain: str, client: httpx.AsyncClient) -> list
 
             cert_timeline_sorted = sorted(cert_timeline, key=lambda x: x["not_before"])
             for i, entry in enumerate(cert_timeline_sorted[:20]):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Cert {i+1}: Issued {entry['not_before']}, Expires {entry['not_after']}",
-                    type="SSL Certificate History - Timeline Entry",
+                    ftype="SSL Certificate History - Timeline Entry",
                     source="crt.sh",
                     confidence="High",
                     color="emerald" if entry['not_after'] >= datetime.now().strftime("%Y-%m-%d") else "orange",
@@ -98,9 +93,9 @@ async def _fetch_ct_certificates(domain: str, client: httpx.AsyncClient) -> list
                         years_span = (ld - fd).days / 365.25
                 except Exception:
                     pass
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{total} certificates issued over {years_span:.1f} years ({first_date} to {last_date})",
-                    type="SSL Certificate History - Timeline Span",
+                    ftype="SSL Certificate History - Timeline Span",
                     source="crt.sh",
                     confidence="High",
                     color="blue",
@@ -122,9 +117,9 @@ async def _fetch_ct_certificates(domain: str, client: httpx.AsyncClient) -> list
                 if gaps:
                     avg_gap = sum(gaps) / len(gaps)
                     freq_label = "frequent reissuance" if avg_gap < 30 else "normal" if avg_gap < 90 else "infrequent"
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Cert issuance frequency: avg {avg_gap:.0f} days between certs ({freq_label})",
-                        type="SSL Certificate History - Issuance Frequency",
+                        ftype="SSL Certificate History - Issuance Frequency",
                         source="crt.sh",
                         confidence="High",
                         color="orange" if avg_gap < 30 else "emerald",
@@ -135,9 +130,9 @@ async def _fetch_ct_certificates(domain: str, client: httpx.AsyncClient) -> list
                     ))
 
             for ca_name, count in sorted(issuer_counts.items(), key=lambda x: -x[1])[:10]:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{ca_name} ({count} certs)",
-                    type="SSL Certificate History - Certificate Authority",
+                    ftype="SSL Certificate History - Certificate Authority",
                     source="crt.sh",
                     confidence="High",
                     color="slate",
@@ -147,9 +142,9 @@ async def _fetch_ct_certificates(domain: str, client: httpx.AsyncClient) -> list
                 ))
 
             if len(issuer_counts) > 3:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Multiple CA changes detected: {len(issuer_counts)} different issuers",
-                    type="SSL Certificate History - CA Rotation",
+                    ftype="SSL Certificate History - CA Rotation",
                     source="crt.sh",
                     confidence="High",
                     color="orange",
@@ -160,9 +155,9 @@ async def _fetch_ct_certificates(domain: str, client: httpx.AsyncClient) -> list
                 ))
 
             for san, sdata in sorted(san_sets.items(), key=lambda x: x[1]["first"])[:40]:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=san,
-                    type="SSL Certificate History - Subdomain via SAN",
+                    ftype="SSL Certificate History - Subdomain via SAN",
                     source="crt.sh",
                     confidence="High",
                     color="cyan",
@@ -173,9 +168,9 @@ async def _fetch_ct_certificates(domain: str, client: httpx.AsyncClient) -> list
                 ))
 
             if san_sets:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{len(san_sets)} unique subdomains discovered from historical SANs",
-                    type="SSL Certificate History - SAN Discovery Summary",
+                    ftype="SSL Certificate History - SAN Discovery Summary",
                     source="crt.sh",
                     confidence="High",
                     color="purple",
@@ -188,14 +183,10 @@ async def _fetch_ct_certificates(domain: str, client: httpx.AsyncClient) -> list
         pass
     return findings
 
-async def _analyze_cert_algorithm_history(domain: str, client: httpx.AsyncClient) -> list:
+async def _analyze_cert_algorithm_history(domain: str, client: AsyncClient) -> list:
     findings = []
     try:
-        resp = await client.get(
-            f"https://crt.sh/?q=%25.{domain}&output=json",
-            timeout=20.0,
-            headers={"User-Agent": "Mozilla/5.0"}
-        )
+        resp = await safe_fetch(client, f"https://crt.sh/?q=%25.{domain}&output=json", timeout=20.0)
         if resp.status_code == 200:
             certs = resp.json() if isinstance(resp.text, str) and resp.text.startswith("[") else []
             algo_history = []
@@ -217,9 +208,9 @@ async def _analyze_cert_algorithm_history(domain: str, client: httpx.AsyncClient
             ca_progression = list(dict.fromkeys(e["ca"] for e in algo_history_sorted if e["ca"] != "Unknown"))
             if len(ca_progression) > 1:
                 ca_chain = " -> ".join(ca_progression[:10])
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"CA progression: {ca_chain}",
-                    type="SSL Certificate History - CA Change Timeline",
+                    ftype="SSL Certificate History - CA Change Timeline",
                     source="crt.sh",
                     confidence="High",
                     color="blue",
@@ -228,9 +219,9 @@ async def _analyze_cert_algorithm_history(domain: str, client: httpx.AsyncClient
                     tags=["ssl-history", "ca-progression", "timeline"]
                 ))
             if ca_progression:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Current/latest CA: {ca_progression[-1]}",
-                    type="SSL Certificate History - Current Certificate Authority",
+                    ftype="SSL Certificate History - Current Certificate Authority",
                     source="crt.sh",
                     confidence="High",
                     color="emerald",
@@ -241,14 +232,10 @@ async def _analyze_cert_algorithm_history(domain: str, client: httpx.AsyncClient
         pass
     return findings
 
-async def _check_expired_certs(domain: str, client: httpx.AsyncClient) -> list:
+async def _check_expired_certs(domain: str, client: AsyncClient) -> list:
     findings = []
     try:
-        resp = await client.get(
-            f"https://crt.sh/?q=%25.{domain}&output=json",
-            timeout=20.0,
-            headers={"User-Agent": "Mozilla/5.0"}
-        )
+        resp = await safe_fetch(client, f"https://crt.sh/?q=%25.{domain}&output=json", timeout=20.0)
         if resp.status_code == 200:
             certs = resp.json() if isinstance(resp.text, str) and resp.text.startswith("[") else []
             now = datetime.now()
@@ -276,9 +263,9 @@ async def _check_expired_certs(domain: str, client: httpx.AsyncClient) -> list:
                 else:
                     active_count += 1
             if expired_count > 0:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{expired_count} expired certificates found ({active_count} active)",
-                    type="SSL Certificate History - Expired Certificates",
+                    ftype="SSL Certificate History - Expired Certificates",
                     source="crt.sh",
                     confidence="High",
                     color="orange",
@@ -289,9 +276,9 @@ async def _check_expired_certs(domain: str, client: httpx.AsyncClient) -> list:
                 ))
             if expired_sans:
                 for san in list(expired_sans)[:15]:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=san,
-                        type="SSL Certificate History - Subdomain from Expired Cert",
+                        ftype="SSL Certificate History - Subdomain from Expired Cert",
                         source="crt.sh",
                         confidence="High",
                         color="orange",
@@ -299,9 +286,9 @@ async def _check_expired_certs(domain: str, client: httpx.AsyncClient) -> list:
                         raw_data=f"Discovered from expired certificate SAN: {san}",
                         tags=["ssl-history", "expired-san", "subdomain"]
                     ))
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{len(expired_sans)} subdomains discovered from expired certificates",
-                    type="SSL Certificate History - Expired Cert Discovery",
+                    ftype="SSL Certificate History - Expired Cert Discovery",
                     source="crt.sh",
                     confidence="High",
                     color="purple",
@@ -313,7 +300,7 @@ async def _check_expired_certs(domain: str, client: httpx.AsyncClient) -> list:
         pass
     return findings
 
-async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFinding]:
+async def crawl(target: str, client: AsyncClient) -> list[IntelligenceFinding]:
     findings = []
     raw_target = target.strip().lower()
     if "://" in raw_target:
@@ -331,9 +318,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     findings.extend(expired_findings)
 
     if findings:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"SSL Certificate History analysis complete: {len(findings)} total findings",
-            type="SSL Certificate History - Summary",
+            ftype="SSL Certificate History - Summary",
             source="Passive SSL History",
             confidence="High",
             color="purple",

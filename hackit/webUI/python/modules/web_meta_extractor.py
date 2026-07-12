@@ -1,7 +1,8 @@
-import httpx
 import re
 import json
+import httpx
 from urllib.parse import urlparse
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 from models import IntelligenceFinding
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
@@ -38,16 +39,16 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     html = ""
     for proto in ["https", "http"]:
         try:
-            resp = await client.get(f"{proto}://{domain}", timeout=10.0, follow_redirects=True, headers={"User-Agent": UA})
+            resp = await safe_fetch(client,f"{proto}://{domain}", timeout=10.0, follow_redirects=True, headers={"User-Agent": UA})
             html = resp.text
             break
         except Exception:
             continue
 
     if not html:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Could not fetch {domain}",
-            type="Meta: Fetch Failed",
+            ftype="Meta: Fetch Failed",
             source="MetaExtractor",
             confidence="Low",
             color="red",
@@ -58,9 +59,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     meta_tags = re.findall(r'<meta[^>]+>', html, re.I)
     if not meta_tags:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="No meta tags found on the page",
-            type="Meta: None Found",
+            ftype="Meta: None Found",
             source="MetaExtractor",
             confidence="Low",
             color="slate",
@@ -69,9 +70,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         ))
         return findings
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Found {len(meta_tags)} meta tag(s) on {domain}",
-        type="Meta: Total Tags",
+        ftype="Meta: Total Tags",
         source="MetaExtractor",
         confidence="High",
         color="blue",
@@ -102,9 +103,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     generator = all_meta.get("generator", "")
     if generator:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Generator: {generator}",
-            type="Meta: Generator",
+            ftype="Meta: Generator",
             source="MetaExtractor",
             confidence="High",
             color="purple",
@@ -115,9 +116,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     author = all_meta.get("author", "")
     if author:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Author/Creator: {author}",
-            type="Meta: Author",
+            ftype="Meta: Author",
             source="MetaExtractor",
             confidence="High",
             color="blue",
@@ -128,9 +129,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     description = all_meta.get("description", "")
     if description:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Description: {description[:120]}",
-            type="Meta: Description",
+            ftype="Meta: Description",
             source="MetaExtractor",
             confidence="High",
             color="slate",
@@ -142,9 +143,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     keywords = all_meta.get("keywords", "")
     if keywords:
         kw_list = [k.strip() for k in keywords.split(",")]
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Keywords: {', '.join(kw_list[:10])}",
-            type="Meta: Keywords",
+            ftype="Meta: Keywords",
             source="MetaExtractor",
             confidence="High",
             color="slate",
@@ -159,9 +160,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             og_data[og_prop] = all_meta[og_prop]
 
     if og_data:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Open Graph tags: {len(og_data)} found",
-            type="Meta: Open Graph",
+            ftype="Meta: Open Graph",
             source="MetaExtractor",
             confidence="High",
             color="blue",
@@ -171,9 +172,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         ))
 
         if og_data.get("og:title"):
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"OG Title: {og_data['og:title'][:100]}",
-                type="Meta: OG Title",
+                ftype="Meta: OG Title",
                 source="MetaExtractor",
                 confidence="High",
                 color="slate",
@@ -181,9 +182,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                 tags=["meta", "opengraph"]
             ))
         if og_data.get("og:description"):
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"OG Description: {og_data['og:description'][:120]}",
-                type="Meta: OG Description",
+                ftype="Meta: OG Description",
                 source="MetaExtractor",
                 confidence="High",
                 color="slate",
@@ -191,9 +192,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                 tags=["meta", "opengraph"]
             ))
         if og_data.get("og:image"):
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"OG Image: {og_data['og:image'][:100]}",
-                type="Meta: OG Image",
+                ftype="Meta: OG Image",
                 source="MetaExtractor",
                 confidence="High",
                 color="slate",
@@ -201,9 +202,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                 tags=["meta", "opengraph"]
             ))
         if og_data.get("og:type"):
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"OG Type: {og_data['og:type']}",
-                type="Meta: OG Type",
+                ftype="Meta: OG Type",
                 source="MetaExtractor",
                 confidence="High",
                 color="slate",
@@ -217,9 +218,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             twitter_data[tw_prop] = all_meta[tw_prop]
 
     if twitter_data:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Twitter Card tags: {len(twitter_data)} found",
-            type="Meta: Twitter Card",
+            ftype="Meta: Twitter Card",
             source="MetaExtractor",
             confidence="High",
             color="blue",
@@ -228,12 +229,12 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             tags=["meta", "twitter"]
         ))
 
-    json_ld_pattern = re.compile(r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', re.I | re.DOTALL)
+    json_ld_pattern = re.compile(r'<script[^>]*ftype=["\']application/ld\+json["\'][^>]*>(.*?)</script>', re.I | re.DOTALL)
     json_ld_items = json_ld_pattern.findall(html)
     if json_ld_items:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"JSON-LD structured data: {len(json_ld_items)} block(s) found",
-            type="Meta: JSON-LD",
+            ftype="Meta: JSON-LD",
             source="MetaExtractor",
             confidence="High",
             color="purple",
@@ -245,9 +246,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             try:
                 parsed = json.loads(item)
                 schema_type = parsed.get("@type", "Unknown")
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"JSON-LD type: {schema_type}",
-                    type="Meta: JSON-LD Type",
+                    ftype="Meta: JSON-LD Type",
                     source="MetaExtractor",
                     confidence="High",
                     color="purple",
@@ -258,13 +259,13 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             except Exception:
                 continue
 
-    schema_pattern = re.compile(r'itemscope|itemprop|itemtype=["\']https?://schema\.org/([^"\']+)["\']', re.I)
+    schema_pattern = re.compile(r'itemscope|itemprop|itemftype=["\']https?://schema\.org/([^"\']+)["\']', re.I)
     schema_matches = schema_pattern.findall(html)
     unique_schemas = set(schema_matches)
     if unique_schemas:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Schema.org markup types found: {', '.join(list(unique_schemas)[:5])}",
-            type="Meta: Schema.org",
+            ftype="Meta: Schema.org",
             source="MetaExtractor",
             confidence="High",
             color="purple",
@@ -279,9 +280,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             geo_tags[geo_key] = all_meta[geo_key]
 
     if geo_tags:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Geographic meta tags: {json.dumps(geo_tags)}",
-            type="Meta: Geographic",
+            ftype="Meta: Geographic",
             source="MetaExtractor",
             confidence="High",
             color="green",
@@ -296,9 +297,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             verification_tags[v_key] = all_meta[v_key]
 
     if verification_tags:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Verification tags: {', '.join(verification_tags.keys())}",
-            type="Meta: Verification",
+            ftype="Meta: Verification",
             source="MetaExtractor",
             confidence="High",
             color="blue",
@@ -307,9 +308,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             tags=["meta", "verification"]
         ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Meta Extraction Summary: {len(meta_tags)} tags, {len(og_data)} OG, {len(twitter_data)} Twitter, {len(json_ld_items)} JSON-LD, {len(unique_schemas)} Schema",
-        type="Meta: Summary",
+        ftype="Meta: Summary",
         source="MetaExtractor",
         confidence="High",
         color="blue",

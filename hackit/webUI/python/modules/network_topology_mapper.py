@@ -1,12 +1,10 @@
-import httpx
 import asyncio
-import json
 import re
 import socket
 from datetime import datetime
 from typing import List, Optional
 from collections import defaultdict
-from models import IntelligenceFinding
+from module_common import safe_fetch, make_finding, is_ip, resolve_ip
 
 CDN_PROVIDERS = {
     "Cloudflare": ["cloudflare.com", "cdn.cloudflare.net", "cloudflare.net"],
@@ -23,30 +21,30 @@ CDN_PROVIDERS = {
     "CacheFly": ["cachefly.net", "cachefly.com"],
 }
 
-async def trace_asn(ip: str, client: httpx.AsyncClient) -> Optional[dict]:
+async def trace_asn(ip: str, client) -> Optional[dict]:
     try:
-        resp = await client.get(f"https://ipinfo.io/{ip}/json", timeout=10.0)
-        if resp.status_code == 200:
+        resp = await safe_fetch(client, f"https://ipinfo.io/{ip}/json", timeout=10.0)
+        if resp and resp.status_code == 200:
             return resp.json()
     except:
         pass
     return None
 
-async def bgp_route(ip: str, client: httpx.AsyncClient) -> Optional[dict]:
+async def bgp_route(ip: str, client) -> Optional[dict]:
     try:
-        resp = await client.get(f"https://bgp.he.net/ip/{ip}", timeout=10.0)
-        if resp.status_code == 200:
+        resp = await safe_fetch(client, f"https://bgp.he.net/ip/{ip}", timeout=10.0)
+        if resp and resp.status_code == 200:
             return {"html": resp.text[:2000]}
     except:
         pass
     return None
 
-async def detect_cdn(domain: str, client: httpx.AsyncClient) -> list:
+async def detect_cdn(domain: str, client) -> list:
     results = []
     try:
-        resp = await client.get(f"https://{domain}", timeout=10.0,
+        resp = await safe_fetch(client, f"https://{domain}", timeout=10.0,
             headers={"User-Agent": "Mozilla/5.0"})
-        if resp.status_code in (200, 301, 302):
+        if resp and resp.status_code in (200, 301, 302):
             headers = dict(resp.headers)
             server = headers.get("Server", "")
             via = headers.get("Via", "")
@@ -126,7 +124,7 @@ ADDITIONAL_CDN_PROVIDERS = {
 
 ALL_CDN_PROVIDERS = {**CDN_PROVIDERS, **ADDITIONAL_CDN_PROVIDERS}
 
-async def check_tls_certificate(domain: str, client: httpx.AsyncClient) -> list:
+async def check_tls_certificate(domain: str, client) -> list:
     findings = []
     try:
         import ssl
@@ -145,9 +143,9 @@ async def check_tls_certificate(domain: str, client: httpx.AsyncClient) -> list:
                 org = issuer.get("organizationName", "")
                 expires = cert.get("notAfter", "")
                 serial = str(cert.get("serialNumber", ""))
-                findings.append(IntelligenceFinding(
-                    entity=f"TLS cert: CN={cn}, issuer={org}, expires={expires[:10]}",
-                    type="Network Topology: TLS Certificate",
+                findings.append(make_finding(
+                    f"TLS cert: CN={cn}, issuer={org}, expires={expires[:10]}",
+                    ftype="Network Topology: TLS Certificate",
                     source="NetworkTopologyMapper",
                     confidence="High",
                     color="slate",
@@ -158,9 +156,9 @@ async def check_tls_certificate(domain: str, client: httpx.AsyncClient) -> list:
                 san = cert.get("subjectAltName", [])
                 if san:
                     names = [x[1] for x in san if x[0] == "DNS"]
-                    findings.append(IntelligenceFinding(
-                        entity=f"TLS SAN: {', '.join(names[:5])}",
-                        type="Network Topology: TLS SAN",
+                    findings.append(make_finding(
+                        f"TLS SAN: {', '.join(names[:5])}",
+                        ftype="Network Topology: TLS SAN",
                         source="NetworkTopologyMapper",
                         confidence="High",
                         color="slate",
@@ -172,42 +170,44 @@ async def check_tls_certificate(domain: str, client: httpx.AsyncClient) -> list:
         pass
     return findings
 
-async def check_load_balancer(domain: str, client: httpx.AsyncClient) -> list:
+async def check_load_balancer(domain: str, client) -> list:
     findings = []
     lb_headers = ["x-load-balancer", "x-lb", "x-forwarded-for", "x-forwarded-host",
                   "x-forwarded-proto", "x-real-ip", "x-originating-ip", "x-nuxt-load-balancer"]
     try:
-        resp = await client.get(f"https://{domain}", timeout=10.0,
+        resp = await safe_fetch(client, f"https://{domain}", timeout=10.0,
             headers={"User-Agent": "Mozilla/5.0"})
-        headers = dict(resp.headers)
-        for h in lb_headers:
-            if h in {k.lower() for k in headers}:
-                findings.append(IntelligenceFinding(
-                    entity=f"Load balancer header present: {h}",
-                    type="Network Topology: Load Balancer",
-                    source="NetworkTopologyMapper",
-                    confidence="Medium",
-                    color="slate",
-                    status="Detected",
-                    resolution=domain,
-                    tags=["network", "load-balancer", h]
-                ))
+        if resp:
+            headers = dict(resp.headers)
+            for h in lb_headers:
+                if h in {k.lower() for k in headers}:
+                    findings.append(make_finding(
+                        f"Load balancer header present: {h}",
+                        ftype="Network Topology: Load Balancer",
+                        source="NetworkTopologyMapper",
+                        confidence="Medium",
+                        color="slate",
+                        status="Detected",
+                        resolution=domain,
+                        tags=["network", "load-balancer", h]
+                    ))
     except:
         pass
     return findings
 
-async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFinding]:
+async def crawl(target: str, client) -> List:
     findings = []
     t = target.strip().lower()
     if t.startswith("http"):
         from urllib.parse import urlparse
         t = urlparse(t).netloc
 
-    try:
-        ip = socket.gethostbyname(t)
-        findings.append(IntelligenceFinding(
-            entity=f"{t} resolves to {ip}",
-            type="Network Topology: DNS Resolution",
+    resolved = resolve_ip(t)
+    if resolved:
+        ip = resolved[0]
+        findings.append(make_finding(
+            f"{t} resolves to {ip}",
+            ftype="Network Topology: DNS Resolution",
             source="NetworkTopologyMapper",
             confidence="High",
             color="slate",
@@ -220,9 +220,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         if asn_data:
             asn = asn_data.get("org", "")
             if asn:
-                findings.append(IntelligenceFinding(
-                    entity=f"ASN/ISP: {asn}",
-                    type="Network Topology: ASN Discovery",
+                findings.append(make_finding(
+                    f"ASN/ISP: {asn}",
+                    ftype="Network Topology: ASN Discovery",
                     source="NetworkTopologyMapper",
                     confidence="High",
                     color="slate",
@@ -230,15 +230,13 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                     resolution=t,
                     tags=["network", "asn", "isp"]
                 ))
-    except:
-        pass
 
     cdns = await detect_cdn(t, client)
     if cdns:
         for cdn in cdns[:5]:
-            findings.append(IntelligenceFinding(
-                entity=f"CDN: {cdn}",
-                type="Network Topology: CDN Detection",
+            findings.append(make_finding(
+                f"CDN: {cdn}",
+                ftype="Network Topology: CDN Detection",
                 source="NetworkTopologyMapper",
                 confidence="High",
                 color="slate",
@@ -255,9 +253,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
     bgp_data = await bgp_route(t, client)
     if bgp_data:
-        findings.append(IntelligenceFinding(
-            entity="BGP routing data available",
-            type="Network Topology: BGP Route",
+        findings.append(make_finding(
+            "BGP routing data available",
+            ftype="Network Topology: BGP Route",
             source="NetworkTopologyMapper",
             confidence="Low",
             color="slate",
@@ -267,9 +265,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         ))
 
     if not findings:
-        findings.append(IntelligenceFinding(
-            entity="No network topology data found",
-            type="Network Topology: Complete",
+        findings.append(make_finding(
+            "No network topology data found",
+            ftype="Network Topology: Complete",
             source="NetworkTopologyMapper",
             confidence="Low",
             color="emerald",

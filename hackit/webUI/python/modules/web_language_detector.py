@@ -1,6 +1,7 @@
-import httpx
 import re
+import httpx
 from urllib.parse import urlparse
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 from models import IntelligenceFinding
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
@@ -85,7 +86,7 @@ URL_PATTERNS = {
 async def detect_language_from_urls(client: httpx.AsyncClient, base_url: str) -> list:
     detections = []
     try:
-        resp = await client.get(base_url, timeout=10.0, follow_redirects=True, headers={"User-Agent": UA})
+        resp = await safe_fetch(client,base_url, timeout=10.0, follow_redirects=True, headers={"User-Agent": UA})
         html = resp.text
 
         found_extensions = set(re.findall(r'\.(php|phtml|php[34578]|asp|aspx|asmx|ashx|jsp|jspx|do|action|py|rb|cfm|cfml|shtml|pl|cgi|fcgi|go)\b', html, re.I))
@@ -113,15 +114,15 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     for proto in ["https", "http"]:
         try:
-            resp = await client.get(f"{proto}://{domain}", timeout=10.0, follow_redirects=True, headers={"User-Agent": UA})
+            resp = await safe_fetch(client,f"{proto}://{domain}", timeout=10.0, follow_redirects=True, headers={"User-Agent": UA})
             headers = {k.lower(): v for k, v in dict(resp.headers).items()}
             cookies = dict(resp.cookies)
             html = resp.text
             status = resp.status_code
 
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Initial fetch: HTTP {status} ({len(resp.content)} bytes)",
-                type="Lang: Initial Fetch",
+                ftype="Lang: Initial Fetch",
                 source="LanguageDetector",
                 confidence="High",
                 color="slate",
@@ -161,9 +162,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                     if detected_lang and detected_lang not in all_languages:
                         all_languages.add(detected_lang)
                         detection_sources[detected_lang] = f"Header: {hdr_name}"
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"Language detected via header: {detected_lang} ({hdr_name}: {hdr_val[:60]})",
-                            type="Lang: Header Detection",
+                            ftype="Lang: Header Detection",
                             source="LanguageDetector",
                             confidence="High",
                             color="purple",
@@ -178,9 +179,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                         if lang not in all_languages and lang != "Generic":
                             all_languages.add(lang)
                             detection_sources[lang] = f"Cookie: {cookie_name}"
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=f"Language detected via cookie: {lang} ({cookie_name})",
-                                type="Lang: Cookie Detection",
+                                ftype="Lang: Cookie Detection",
                                 source="LanguageDetector",
                                 confidence="High",
                                 color="purple",
@@ -194,9 +195,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                 if lang not in all_languages:
                     all_languages.add(lang)
                     detection_sources[lang] = source
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Language detected via content: {lang} ({source})",
-                        type="Lang: Content Detection",
+                        ftype="Lang: Content Detection",
                         source="LanguageDetector",
                         confidence="Medium",
                         color="purple",
@@ -219,9 +220,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                         if lang not in all_languages:
                             all_languages.add(lang)
                             detection_sources[lang] = f"Server header: {server_header}"
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=f"Language inferred from Server header: {lang} ({server_header})",
-                                type="Lang: Server Inference",
+                                ftype="Lang: Server Inference",
                                 source="LanguageDetector",
                                 confidence="Medium",
                                 color="purple",
@@ -235,9 +236,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             continue
 
     if not all_languages:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Could not determine programming language for {domain}",
-            type="Lang: No Detection",
+            ftype="Lang: No Detection",
             source="LanguageDetector",
             confidence="Low",
             color="slate",
@@ -245,9 +246,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             tags=["language", "unknown"]
         ))
     else:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Detected {len(all_languages)} language(s): {', '.join(all_languages)}",
-            type="Lang: Detection Summary",
+            ftype="Lang: Detection Summary",
             source="LanguageDetector",
             confidence="High",
             color="purple",

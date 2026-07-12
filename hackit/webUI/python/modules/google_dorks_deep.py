@@ -1,11 +1,9 @@
-import httpx
-import asyncio
 import re
 import json
 from urllib.parse import quote, urlparse
 from typing import List, Optional
 from collections import defaultdict
-from models import IntelligenceFinding
+from module_common import make_finding
 
 DORK_GROUPS = {
     "Sensitive Directories": [
@@ -157,14 +155,14 @@ ADDITIONAL_DORK_GROUPS = {
     ],
 }
 
-async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFinding]:
+async def crawl(target: str, client) -> List:
     findings = []
     t = target.strip().lower()
 
     total_dorks = sum(len(dorks) for dorks in DORK_GROUPS.values())
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Google Dorks: {total_dorks} dork queries in {len(DORK_GROUPS)} categories",
-        type="Google Dorks: Configuration",
+        ftype="Google Dorks: Configuration",
         source="GoogleDorksDeep",
         confidence="Medium",
         color="slate",
@@ -175,9 +173,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
     ))
 
     for group_name, dorks in DORK_GROUPS.items():
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Dork group: {group_name} ({len(dorks)} dorks)",
-            type=f"Google Dorks: {group_name}",
+            ftype=f"Google Dorks: {group_name}",
             source="GoogleDorksDeep",
             confidence="Medium",
             color="slate",
@@ -188,9 +186,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         ))
         for i, dork in enumerate(dorks[:3]):
             example = dork.replace("site:{}", f"site:{t}")
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Example dork [{i+1}]: {example[:150]}",
-                type=f"Google Dorks: {group_name} Example",
+                ftype=f"Google Dorks: {group_name} Example",
                 source="GoogleDorksDeep",
                 confidence="Low",
                 color="slate",
@@ -201,9 +199,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             ))
 
     for group_name, dorks in ADDITIONAL_DORK_GROUPS.items():
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Extra dork group: {group_name} ({len(dorks)} dorks)",
-            type=f"Google Dorks: {group_name}",
+            ftype=f"Google Dorks: {group_name}",
             source="GoogleDorksDeep",
             confidence="Medium",
             color="slate",
@@ -214,9 +212,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         ))
         for i, dork in enumerate(dorks[:2]):
             example = dork.replace("site:{}", f"site:{t}")
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Dork [{i+1}]: {example[:150]}",
-                type=f"Google Dorks: {group_name} Example",
+                ftype=f"Google Dorks: {group_name} Example",
                 source="GoogleDorksDeep",
                 confidence="Low",
                 color="slate",
@@ -227,9 +225,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             ))
 
     if not findings:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="Google dorks engine configured",
-            type="Google Dorks: Ready",
+            ftype="Google Dorks: Ready",
             source="GoogleDorksDeep",
             confidence="Low",
             color="emerald",

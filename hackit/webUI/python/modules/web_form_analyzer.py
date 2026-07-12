@@ -1,6 +1,7 @@
-import httpx
 import re
-from urllib.parse import urlparse, urljoin
+import httpx
+from urllib.parse import urlparse
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 from models import IntelligenceFinding
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
@@ -34,7 +35,7 @@ HIDDEN_FIELD_INDICATORS = [
 async def extract_forms(client: httpx.AsyncClient, url: str) -> list:
     forms = []
     try:
-        resp = await client.get(url, timeout=10.0, follow_redirects=True, headers={"User-Agent": UA})
+        resp = await safe_fetch(client,url, timeout=10.0, follow_redirects=True, headers={"User-Agent": UA})
         if resp.status_code == 200:
             html = resp.text
             form_pattern = re.compile(r"<form\s[^>]*>(.*?)</form\s*>", re.I | re.DOTALL)
@@ -108,9 +109,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             forms_data[url] = forms
 
     if not forms_data:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"No forms found on {domain}",
-            type="Form: No Forms",
+            ftype="Form: No Forms",
             source="FormAnalyzer",
             confidence="Low",
             color="slate",
@@ -122,9 +123,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     total_forms = sum(len(forms) for forms in forms_data.values())
     total_fields = sum(len(f["fields"]) for f_list in forms_data.values() for f in f_list)
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Found {total_forms} form(s) with {total_fields} field(s) on {domain}",
-        type="Form: Overview",
+        ftype="Form: Overview",
         source="FormAnalyzer",
         confidence="High",
         color="blue",
@@ -152,9 +153,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
             action = form.get("action", "")
             form_method = form.get("method", "get")
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Form: {form_method.upper()} -> {action or '(same page)'} ({len(form['fields'])} fields)",
-                type="Form: Form Found",
+                ftype="Form: Form Found",
                 source="FormAnalyzer",
                 confidence="High",
                 color="slate",
@@ -164,9 +165,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             ))
 
     if password_forms > 0:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Found {password_forms} form(s) with password fields",
-            type="Form: Login Forms",
+            ftype="Form: Login Forms",
             source="FormAnalyzer",
             confidence="High",
             color="purple",
@@ -176,9 +177,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         ))
 
     if file_upload_forms > 0:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Found {file_upload_forms} form(s) with file upload capability",
-            type="Form: File Upload",
+            ftype="Form: File Upload",
             source="FormAnalyzer",
             confidence="High",
             color="orange",
@@ -187,9 +188,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             tags=["forms", "file-upload", "attack-surface"]
         ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"CSRF Protection: {csrf_protected}/{total_forms} forms have CSRF tokens",
-        type="Form: CSRF Protection",
+        ftype="Form: CSRF Protection",
         source="FormAnalyzer",
         confidence="High",
         color="emerald" if csrf_protected == total_forms else "red",
@@ -202,9 +203,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         pii_types = {}
         for p in all_pii:
             pii_types[p["pii_type"]] = pii_types.get(p["pii_type"], 0) + 1
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"PII collection detected: {', '.join([f'{k}={v}' for k, v in pii_types.items()])}",
-            type="Form: PII Collection",
+            ftype="Form: PII Collection",
             source="FormAnalyzer",
             confidence="High",
             color="red",
@@ -214,9 +215,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         ))
 
     if all_hidden:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Found {len(all_hidden)} hidden form fields (some may be honeypots)",
-            type="Form: Hidden Fields",
+            ftype="Form: Hidden Fields",
             source="FormAnalyzer",
             confidence="Medium",
             color="orange",
@@ -225,9 +226,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             tags=["forms", "hidden", "honeypot"]
         ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Form Analysis: {total_forms} forms, {password_forms} login, {file_upload_forms} upload, {csrf_protected} CSRF",
-        type="Form: Summary",
+        ftype="Form: Summary",
         source="FormAnalyzer",
         confidence="High",
         color="blue",

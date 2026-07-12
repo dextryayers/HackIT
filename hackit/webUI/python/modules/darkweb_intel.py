@@ -221,7 +221,7 @@ async def search_darksearch(target: str, client: httpx.AsyncClient) -> List[dict
     results = []
     try:
         payload = {"query": target, "page": 1}
-        resp = await client.post(DARKSEARCH_API, json=payload, timeout=15.0,
+        resp = await safe_fetch(client, DARKSEARCH_API, json=payload, timeout=15.0,
             headers={"User-Agent": "Mozilla/5.0", "Content-Type": "application/json"})
         if resp.status_code == 200:
             data = resp.json()

@@ -1,6 +1,7 @@
-import httpx
 import re
+import httpx
 from urllib.parse import urlparse
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 from models import IntelligenceFinding
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
@@ -22,7 +23,7 @@ async def query_cdx(target: str, filters: dict = None) -> list:
         if filters:
             params.update(filters)
         async with httpx.AsyncClient(timeout=30.0) as c:
-            resp = await c.get(CDX_API, params=params)
+            resp = await safe_fetch(c, CDX_API, params=params)
             if resp.status_code == 200:
                 data = resp.json()
                 for row in data[1:]:
@@ -46,7 +47,7 @@ async def check_current_status(target: str, path: str, client: httpx.AsyncClient
             full_url = path
         else:
             full_url = f"https://{target}{path}"
-        resp = await client.get(full_url, timeout=10.0, follow_redirects=False)
+        resp = await safe_fetch(client,full_url, timeout=10.0, follow_redirects=False)
         return resp.status_code
     except Exception:
         return 0
@@ -59,9 +60,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     snapshots = await query_cdx(domain)
     if not snapshots:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"No archive snapshots found for {domain}",
-            type="Archive: No Data",
+            ftype="Archive: No Data",
             source="ArchiveDeep",
             confidence="Low",
             color="slate",
@@ -70,9 +71,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         ))
         return findings
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Found {len(snapshots)} archived snapshots for {domain}",
-        type="Archive: Snapshot Count",
+        ftype="Archive: Snapshot Count",
         source="ArchiveDeep",
         confidence="High",
         color="blue",
@@ -88,9 +89,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         mimetypes[s["mimetype"]] = mimetypes.get(s["mimetype"], 0) + 1
 
     for status, count in sorted(status_codes.items(), key=lambda x: -x[1])[:5]:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"HTTP {status}: {count} snapshots",
-            type="Archive: Status Code Distribution",
+            ftype="Archive: Status Code Distribution",
             source="ArchiveDeep",
             confidence="High",
             color="slate",
@@ -100,14 +101,14 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         ))
 
     for mt, count in sorted(mimetypes.items(), key=lambda x: -x[1])[:5]:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"MIME {mt}: {count} snapshots",
-            type="Archive: MIME Type Distribution",
+            ftype="Archive: MIME Type Distribution",
             source="ArchiveDeep",
             confidence="High",
             color="slate",
             threat_level="Informational",
-            raw_data=f"mimetype={mt}, count={count}",
+            raw_data=f"mimeftype={mt}, count={count}",
             tags=["archive", "mimetypes"]
         ))
 
@@ -121,9 +122,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             pass
 
     if unique_paths:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Found {len(unique_paths)} unique paths in archive history",
-            type="Archive: Unique Paths",
+            ftype="Archive: Unique Paths",
             source="ArchiveDeep",
             confidence="High",
             color="blue",
@@ -134,9 +135,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     sensitive_paths = [p for p in unique_paths if any(x in p.lower() for x in ["admin", "api", "backup", "config", "db", "sql", "wp-", ".env", "secret", "private", "internal", ".git", "debug", "test", "dev"])]
     if sensitive_paths:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Found {len(sensitive_paths)} potentially sensitive paths in archive",
-            type="Archive: Sensitive Paths",
+            ftype="Archive: Sensitive Paths",
             source="ArchiveDeep",
             confidence="Medium",
             color="red",
@@ -153,9 +154,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                 gone_pages.append({"url": s["url"], "last_seen": s["timestamp"], "current_status": current})
 
     if gone_pages:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Found {len(gone_pages)} removed pages (existed in archive, now {gone_pages[0]['current_status']})",
-            type="Archive: Removed Pages",
+            ftype="Archive: Removed Pages",
             source="ArchiveDeep",
             confidence="Medium",
             color="red",
@@ -171,9 +172,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     if len(years) > 1:
         sorted_years = sorted(years.items())
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Archive history spans {len(years)} years ({sorted_years[0][0]}-{sorted_years[-1][0]})",
-            type="Archive: Historical Span",
+            ftype="Archive: Historical Span",
             source="ArchiveDeep",
             confidence="High",
             color="blue",
@@ -198,9 +199,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         for tech, ts in tech_changes:
             if tech not in seen_techs:
                 seen_techs.add(tech)
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Technology detected in archive: {tech} (first seen {ts})",
-                    type="Archive: Tech History",
+                    ftype="Archive: Tech History",
                     source="ArchiveDeep",
                     confidence="Medium",
                     color="purple",
@@ -211,9 +212,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     first_snap = snapshots[0]
     last_snap = snapshots[-1]
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"First snapshot: {first_snap['timestamp']} | Latest: {last_snap['timestamp']}",
-        type="Archive: Snapshot Timeline",
+        ftype="Archive: Snapshot Timeline",
         source="ArchiveDeep",
         confidence="High",
         color="slate",
@@ -222,9 +223,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         tags=["archive", "timeline"]
     ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Archive Deep Analysis complete: {len(snapshots)} snapshots, {len(unique_paths)} paths, {len(gone_pages)} removed",
-        type="Archive: Summary",
+        ftype="Archive: Summary",
         source="ArchiveDeep",
         confidence="High",
         color="blue",

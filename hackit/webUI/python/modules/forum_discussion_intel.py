@@ -1,9 +1,8 @@
-import httpx
 import re
 import json
 from urllib.parse import urlparse, quote
 from typing import List
-from models import IntelligenceFinding
+from module_common import safe_fetch, make_finding
 
 FORUM_SOURCES = [
     ("Stack Overflow", "https://api.stackexchange.com/2.3/search?order=desc&sort=relevance&intitle={}&site=stackoverflow&filter=withbody"),
@@ -51,58 +50,48 @@ SENTIMENT_TECHNICAL = {
     "discussion": ["anyone else", "thoughts", "opinion", "experience", "review", "compare"],
 }
 
-async def search_reddit(target: str, client: httpx.AsyncClient) -> dict:
-    try:
-        resp = await client.get(
-            f"https://www.reddit.com/search.json",
-            params={"q": target, "limit": 10, "sort": "relevance"},
-            headers={"User-Agent": "OSINT-Module/1.0"},
-            timeout=15.0,
-        )
-        if resp.status_code == 200:
-            data = resp.json()
-            posts = []
-            for child in data.get("data", {}).get("children", []):
-                d = child.get("data", {})
-                posts.append({
-                    "title": d.get("title", ""),
-                    "subreddit": d.get("subreddit", ""),
-                    "score": d.get("score", 0),
-                    "url": d.get("url", ""),
-                    "num_comments": d.get("num_comments", 0),
-                    "created": d.get("created_utc", 0),
-                })
-            return {
-                "source": "Reddit",
-                "posts": posts,
-                "total": len(posts),
-            }
-    except:
-        pass
+async def search_reddit(target: str, client) -> dict:
+    resp = await safe_fetch(client,
+        "https://www.reddit.com/search.json",
+        params={"q": target, "limit": 10, "sort": "relevance"},
+        headers={"User-Agent": "OSINT-Module/1.0"})
+    if resp and resp.status_code == 200:
+        data = resp.json()
+        posts = []
+        for child in data.get("data", {}).get("children", []):
+            d = child.get("data", {})
+            posts.append({
+                "title": d.get("title", ""),
+                "subreddit": d.get("subreddit", ""),
+                "score": d.get("score", 0),
+                "url": d.get("url", ""),
+                "num_comments": d.get("num_comments", 0),
+                "created": d.get("created_utc", 0),
+            })
+        return {
+            "source": "Reddit",
+            "posts": posts,
+            "total": len(posts),
+        }
     return None
 
 
-async def search_hackernews(target: str, client: httpx.AsyncClient) -> dict:
-    try:
-        resp = await client.get(
-            f"https://hn.algolia.com/api/v1/search",
-            params={"query": target, "hitsPerPage": 10},
-            headers={"User-Agent": "OSINT-Module/1.0"},
-            timeout=15.0,
-        )
-        if resp.status_code == 200:
-            hits = resp.json().get("hits", [])
-            return {
-                "source": "Hacker News",
-                "posts": [{"title": h.get("title", ""), "url": h.get("url", "") or h.get("story_url", ""), "points": h.get("points", 0), "author": h.get("author", "")} for h in hits],
-                "total": len(hits),
-            }
-    except:
-        pass
+async def search_hackernews(target: str, client) -> dict:
+    resp = await safe_fetch(client,
+        "https://hn.algolia.com/api/v1/search",
+        params={"query": target, "hitsPerPage": 10},
+        headers={"User-Agent": "OSINT-Module/1.0"})
+    if resp and resp.status_code == 200:
+        hits = resp.json().get("hits", [])
+        return {
+            "source": "Hacker News",
+            "posts": [{"title": h.get("title", ""), "url": h.get("url", "") or h.get("story_url", ""), "points": h.get("points", 0), "author": h.get("author", "")} for h in hits],
+            "total": len(hits),
+        }
     return None
 
 
-async def search_stackexchange(target: str, client: httpx.AsyncClient) -> list:
+async def search_stackexchange(target: str, client) -> list:
     results = []
     sites = [
         ("Stack Overflow", "stackoverflow"),
@@ -110,23 +99,18 @@ async def search_stackexchange(target: str, client: httpx.AsyncClient) -> list:
         ("Super User", "superuser"),
     ]
     for site_name, site_param in sites:
-        try:
-            resp = await client.get(
-                f"https://api.stackexchange.com/2.3/search",
-                params={"order": "desc", "sort": "relevance", "intitle": target, "site": site_param, "filter": "withbody"},
-                headers={"User-Agent": "OSINT-Module/1.0"},
-                timeout=15.0,
-            )
-            if resp.status_code == 200:
-                items = resp.json().get("items", [])
-                if items:
-                    results.append({
-                        "source": site_name,
-                        "questions": [{"title": i.get("title", ""), "score": i.get("score", 0), "view_count": i.get("view_count", 0), "answer_count": i.get("answer_count", 0)} for i in items[:5]],
-                        "total": len(items),
-                    })
-        except:
-            pass
+        resp = await safe_fetch(client,
+            "https://api.stackexchange.com/2.3/search",
+            params={"order": "desc", "sort": "relevance", "intitle": target, "site": site_param, "filter": "withbody"},
+            headers={"User-Agent": "OSINT-Module/1.0"})
+        if resp and resp.status_code == 200:
+            items = resp.json().get("items", [])
+            if items:
+                results.append({
+                    "source": site_name,
+                    "questions": [{"title": i.get("title", ""), "score": i.get("score", 0), "view_count": i.get("view_count", 0), "answer_count": i.get("answer_count", 0)} for i in items[:5]],
+                    "total": len(items),
+                })
     return results
 
 
@@ -138,7 +122,7 @@ def classify_discussion(text: str) -> list:
     return categories
 
 
-async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFinding]:
+async def crawl(target: str, client) -> List:
     findings = []
     t = target.strip().lower()
     if t.startswith("http"):
@@ -149,9 +133,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
     se_results = await search_stackexchange(t, client)
 
     if reddit and reddit["posts"]:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Reddit: {reddit['total']} posts mentioning {t}",
-            type="Forum: Reddit Mentions",
+            ftype="Forum: Reddit Mentions",
             source="ForumIntel",
             confidence="High",
             color="orange",
@@ -163,9 +147,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         ))
         for post in reddit["posts"][:5]:
             categories = classify_discussion(post["title"])
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Reddit r/{post['subreddit']}: {post['title'][:120]}",
-                type="Forum: Reddit Post",
+                ftype="Forum: Reddit Post",
                 source="ForumIntel",
                 confidence="High",
                 color="blue",
@@ -178,9 +162,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             ))
 
     if hn and hn["posts"]:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Hacker News: {hn['total']} posts mentioning {t}",
-            type="Forum: HN Mentions",
+            ftype="Forum: HN Mentions",
             source="ForumIntel",
             confidence="High",
             color="orange",
@@ -191,9 +175,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             tags=["forum", "hacker-news", "mention"],
         ))
         for post in hn["posts"][:5]:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"HN: {post['title'][:120]} by {post['author']} ({post['points']} pts)",
-                type="Forum: HN Post",
+                ftype="Forum: HN Post",
                 source="ForumIntel",
                 confidence="High",
                 color="blue",
@@ -205,9 +189,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             ))
 
     for se in se_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{se['source']}: {se['total']} questions mentioning {t}",
-            type="Forum: StackExchange Mentions",
+            ftype="Forum: StackExchange Mentions",
             source="ForumIntel",
             confidence="High",
             color="orange",
@@ -218,9 +202,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             tags=["forum", se['source'].lower().replace(" ", "-"), "question"],
         ))
         for q in se["questions"][:3]:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{se['source']}: {q['title'][:120]}",
-                type="Forum: StackExchange Question",
+                ftype="Forum: StackExchange Question",
                 source="ForumIntel",
                 confidence="High",
                 color="blue",
@@ -234,33 +218,30 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
     for name, url_template in FORUM_SOURCES:
         if name in ["Reddit", "Hacker News"]:
             continue
-        try:
-            if "stackexchange" in name.lower() or "stackoverflow" in name.lower() or "serverfault" in name.lower() or "superuser" in name.lower():
-                continue
-            url = url_template.format(quote(t))
-            resp = await client.get(url, timeout=15.0, headers={"User-Agent": "Mozilla/5.0"}, follow_redirects=True)
-            if resp.status_code == 200 and len(resp.text) > 300:
-                mentions = resp.text.lower().count(t.lower())
-                if mentions > 0:
-                    findings.append(IntelligenceFinding(
-                        entity=f"{name}: {mentions} mentions of {t}",
-                        type="Forum: Source Mention",
-                        source="ForumIntel",
-                        confidence="Low",
-                        color="sky",
-                        category="Forum Intelligence",
-                        threat_level="Informational",
-                        status="Found",
-                        resolution=t,
-                        tags=["forum", name.lower().replace(" ", "-")],
-                    ))
-        except:
-            pass
+        if "stackexchange" in name.lower() or "stackoverflow" in name.lower() or "serverfault" in name.lower() or "superuser" in name.lower():
+            continue
+        url = url_template.format(quote(t))
+        resp = await safe_fetch(client, url, headers={"User-Agent": "Mozilla/5.0"}, follow_redirects=True)
+        if resp and resp.status_code == 200 and len(resp.text) > 300:
+            mentions = resp.text.lower().count(t.lower())
+            if mentions > 0:
+                findings.append(make_finding(
+                    entity=f"{name}: {mentions} mentions of {t}",
+                    ftype="Forum: Source Mention",
+                    source="ForumIntel",
+                    confidence="Low",
+                    color="sky",
+                    category="Forum Intelligence",
+                    threat_level="Informational",
+                    status="Found",
+                    resolution=t,
+                    tags=["forum", name.lower().replace(" ", "-")],
+                ))
 
     if not reddit and not hn and not se_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="No forum discussions found for target",
-            type="Forum: Scan Complete",
+            ftype="Forum: Scan Complete",
             source="ForumIntel",
             confidence="Low",
             color="emerald",
@@ -271,9 +252,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             tags=["forum", "clean"],
         ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Forum scan complete for {t}",
-        type="Forum: Scan Summary",
+        ftype="Forum: Scan Summary",
         source="ForumIntel",
         confidence="Medium",
         color="slate",

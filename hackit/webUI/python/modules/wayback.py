@@ -1,11 +1,9 @@
-import httpx
-import asyncio
 import re
 import json
-from datetime import datetime
+import httpx
 from urllib.parse import urlparse
-from typing import List, Optional
-from collections import defaultdict
+from typing import List
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 from models import IntelligenceFinding
 
 WAYBACK_API = "https://web.archive.org"
@@ -23,7 +21,7 @@ async def query_cdx(domain: str, client: httpx.AsyncClient, limit: int = 200) ->
             "filter": "statuscode:200",
             "collapse": "urlkey",
         }
-        resp = await client.get(CDX_API, params=params, timeout=30.0,
+        resp = await safe_fetch(client,CDX_API, params=params, timeout=30.0,
             headers={"User-Agent": UA})
         if resp.status_code == 200:
             lines = resp.text.strip().splitlines()
@@ -46,7 +44,7 @@ async def query_cdx(domain: str, client: httpx.AsyncClient, limit: int = 200) ->
 
 async def get_archived_content(url: str, ts: str, client: httpx.AsyncClient) -> str:
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client,
             f"{WAYBACK_API}/web/{ts}/{url}",
             timeout=20.0,
             headers={"User-Agent": UA}
@@ -69,7 +67,7 @@ async def query_cdx_timeline(domain: str, client: httpx.AsyncClient) -> dict:
             "limit": "50000",
             "collapse": "timestamp:4",
         }
-        resp = await client.get(CDX_API, params=params, timeout=30.0,
+        resp = await safe_fetch(client,CDX_API, params=params, timeout=30.0,
             headers={"User-Agent": UA})
         if resp.status_code == 200:
             lines = resp.text.strip().splitlines()
@@ -95,9 +93,9 @@ async def analyze_snapshot_gaps(yearly_counts: dict) -> list:
             if yr2 - yr1 > 1:
                 gaps.append(f"{yr1+1}-{yr2-1}")
         if gaps:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Snapshot gaps: {', '.join(gaps[:5])}",
-                type="Wayback: Archival Gaps",
+                ftype="Wayback: Archival Gaps",
                 source="Wayback Machine",
                 confidence="Medium",
                 color="orange",
@@ -107,9 +105,9 @@ async def analyze_snapshot_gaps(yearly_counts: dict) -> list:
             ))
     total = sum(yearly_counts.values())
     avg_per_year = total / max(len(yearly_counts), 1)
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Snapshot frequency: avg {avg_per_year:.0f} per year over {len(yearly_counts)} years",
-        type="Wayback: Archival Frequency",
+        ftype="Wayback: Archival Frequency",
         source="Wayback Machine",
         confidence="Medium",
         color="slate",
@@ -121,7 +119,7 @@ async def analyze_snapshot_gaps(yearly_counts: dict) -> list:
 async def query_specific_snapshots(domain: str, client: httpx.AsyncClient) -> list:
     results = []
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client,
             f"{WAYBACK_API}/web/2010/{domain}",
             timeout=10.0, headers={"User-Agent": UA}
         )
@@ -131,7 +129,7 @@ async def query_specific_snapshots(domain: str, client: httpx.AsyncClient) -> li
     except:
         pass
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client,
             f"{WAYBACK_API}/web/2020/{domain}",
             timeout=10.0, headers={"User-Agent": UA}
         )
@@ -140,7 +138,7 @@ async def query_specific_snapshots(domain: str, client: httpx.AsyncClient) -> li
     except:
         pass
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client,
             f"{WAYBACK_API}/web/2024/{domain}",
             timeout=10.0, headers={"User-Agent": UA}
         )
@@ -164,9 +162,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
     snap_years = await query_specific_snapshots(t, client)
     for yr in snap_years:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Snapshot exists for year {yr}",
-            type="Wayback: Yearly Snapshot Check",
+            ftype="Wayback: Yearly Snapshot Check",
             source="Wayback Machine",
             confidence="High",
             color="slate",
@@ -177,9 +175,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
     if cdx_results:
         url_count = len(cdx_results)
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Total archived pages: {url_count}",
-            type="Wayback: Page Count",
+            ftype="Wayback: Page Count",
             source="Wayback Machine",
             confidence="High",
             color="slate",
@@ -193,9 +191,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         if page_sizes:
             avg_size = sum(page_sizes) // len(page_sizes)
             max_size = max(page_sizes)
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Page size: avg {avg_size} bytes, max {max_size} bytes",
-                type="Wayback: Page Size Analysis",
+                ftype="Wayback: Page Size Analysis",
                 source="Wayback Machine",
                 confidence="Medium",
                 color="slate",
@@ -208,9 +206,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             url = r.get("url", "")
             ts = r.get("timestamp", "")
             mime = r.get("mime", "")
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Archived: {url[:200]} ({ts[:10]})",
-                type="Wayback: Archived URL",
+                ftype="Wayback: Archived URL",
                 source="Wayback Machine",
                 confidence="High",
                 color="slate",
@@ -228,9 +226,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                 title = re.search(r'<title[^>]*>(.*?)</title>', content, re.IGNORECASE | re.DOTALL)
                 if title:
                     ttl = title.group(1).strip()[:200]
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Page title ({ts[:10]}): {ttl}",
-                        type="Wayback: Archived Page Title",
+                        ftype="Wayback: Archived Page Title",
                         source="Wayback Machine",
                         confidence="Medium",
                         color="slate",
@@ -240,9 +238,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                     ))
 
     if not findings:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="No Wayback Machine data found",
-            type="Wayback: Check Complete",
+            ftype="Wayback: Check Complete",
             source="Wayback Machine",
             confidence="Low",
             color="emerald",

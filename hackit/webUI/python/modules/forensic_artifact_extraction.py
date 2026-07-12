@@ -1,9 +1,9 @@
 import httpx
 import re
 import json
-import hashlib
 from urllib.parse import urlparse, urljoin
 from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 
 OG_TAGS = [
     "og:title", "og:type", "og:url", "og:image", "og:description",
@@ -64,7 +64,7 @@ META_NAMES = [
 async def _extract_html_comments(domain: str, client: httpx.AsyncClient) -> list:
     findings = []
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"http://web.archive.org/cdx/search/cdx?url={domain}/*&output=json&fl=original,timestamp&limit=10&filter=statuscode:200",
             timeout=20.0,
             headers={"User-Agent": "Mozilla/5.0"}
@@ -78,7 +78,7 @@ async def _extract_html_comments(domain: str, client: httpx.AsyncClient) -> list
                     orig = row[0]
                     ts = row[1]
                     try:
-                        snap = await client.get(
+                        snap = await safe_fetch(client, 
                             f"http://web.archive.org/web/{ts}if_/{orig}",
                             timeout=15.0,
                             headers={"User-Agent": "Mozilla/5.0"}
@@ -90,9 +90,9 @@ async def _extract_html_comments(domain: str, client: httpx.AsyncClient) -> list
                                     content = m.group(1).strip()[:200]
                                     if content and len(content) > 5:
                                         comments_found += 1
-                                        findings.append(IntelligenceFinding(
+                                        findings.append(make_finding(
                                             entity=f"[{ts[:8]}] {comment_type}: {content[:200]}",
-                                            type=f"Forensic Artifact - {comment_type}",
+                                            ftype=f"Forensic Artifact - {comment_type}",
                                             source="Wayback Machine",
                                             confidence="High", color="slate",
                                             status="Extracted",
@@ -102,9 +102,9 @@ async def _extract_html_comments(domain: str, client: httpx.AsyncClient) -> list
                                         for sens_pat in SENSITIVE_IN_COMMENTS:
                                             if re.search(sens_pat, content, re.I):
                                                 sensitive_found += 1
-                                                findings.append(IntelligenceFinding(
+                                                findings.append(make_finding(
                                                     entity=f"Sensitive in comment: {content[:200]}",
-                                                    type="Forensic Artifact - Sensitive Data in Comment",
+                                                    ftype="Forensic Artifact - Sensitive Data in Comment",
                                                     source="Wayback Machine",
                                                     confidence="High", color="red",
                                                     threat_level="High Risk",
@@ -115,7 +115,7 @@ async def _extract_html_comments(domain: str, client: httpx.AsyncClient) -> list
                     except Exception:
                         pass
             if comments_found > 0:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Found {comments_found} comments ({sensitive_found} with sensitive data)",
                     type="Forensic Artifact - Comment Mining Summary",
                     source="Wayback Machine",
@@ -130,7 +130,7 @@ async def _extract_html_comments(domain: str, client: httpx.AsyncClient) -> list
 async def _extract_js_sourcemaps(domain: str, client: httpx.AsyncClient) -> list:
     findings = []
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"http://web.archive.org/cdx/search/cdx?url={domain}/*&output=json&fl=original,timestamp&limit=10&filter=statuscode:200&filter=mimetype:text/javascript&filter=mimetype:application/javascript",
             timeout=20.0,
             headers={"User-Agent": "Mozilla/5.0"}
@@ -143,7 +143,7 @@ async def _extract_js_sourcemaps(domain: str, client: httpx.AsyncClient) -> list
                     js_url = row[0]
                     ts = row[1]
                     try:
-                        js_resp = await client.get(
+                        js_resp = await safe_fetch(client, 
                             f"http://web.archive.org/web/{ts}if_/{js_url}",
                             timeout=15.0,
                             headers={"User-Agent": "Mozilla/5.0"}
@@ -155,9 +155,9 @@ async def _extract_js_sourcemaps(domain: str, client: httpx.AsyncClient) -> list
                                 if not map_url.startswith("http"):
                                     map_url = urljoin(js_url, map_url)
                                 map_count += 1
-                                findings.append(IntelligenceFinding(
+                                findings.append(make_finding(
                                     entity=f"SourceMap: {map_url} [from {ts[:8]}]",
-                                    type="Forensic Artifact - Source Map URL",
+                                    ftype="Forensic Artifact - Source Map URL",
                                     source="Wayback Machine",
                                     confidence="High", color="orange",
                                     status="Discovered",
@@ -166,9 +166,9 @@ async def _extract_js_sourcemaps(domain: str, client: httpx.AsyncClient) -> list
                                 ))
                             for m in SOURCE_URL_PATTERN.finditer(js):
                                 source_url = m.group(1)
-                                findings.append(IntelligenceFinding(
+                                findings.append(make_finding(
                                     entity=f"SourceURL: {source_url} [from {ts[:8]}]",
-                                    type="Forensic Artifact - Source URL Reference",
+                                    ftype="Forensic Artifact - Source URL Reference",
                                     source="Wayback Machine",
                                     confidence="High", color="slate",
                                     tags=["forensic", "artifact", "sourceurl"]
@@ -176,9 +176,9 @@ async def _extract_js_sourcemaps(domain: str, client: httpx.AsyncClient) -> list
                     except Exception:
                         pass
             if map_count > 0:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Found {map_count} source map references",
-                    type="Forensic Artifact - Source Map Summary",
+                    ftype="Forensic Artifact - Source Map Summary",
                     source="Wayback Machine",
                     confidence="High", color="purple",
                     tags=["forensic", "artifact", "sourcemap-summary"]
@@ -190,7 +190,7 @@ async def _extract_js_sourcemaps(domain: str, client: httpx.AsyncClient) -> list
 async def _extract_structured_data(domain: str, client: httpx.AsyncClient) -> list:
     findings = []
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"http://web.archive.org/cdx/search/cdx?url={domain}/*&output=json&fl=original,timestamp&limit=5&filter=statuscode:200&collapse=urlkey",
             timeout=15.0,
             headers={"User-Agent": "Mozilla/5.0"}
@@ -202,7 +202,7 @@ async def _extract_structured_data(domain: str, client: httpx.AsyncClient) -> li
                     orig = row[0]
                     ts = row[1]
                     try:
-                        snap = await client.get(
+                        snap = await safe_fetch(client, 
                             f"http://web.archive.org/web/{ts}if_/{orig}",
                             timeout=15.0,
                             headers={"User-Agent": "Mozilla/5.0"}
@@ -216,9 +216,9 @@ async def _extract_structured_data(domain: str, client: httpx.AsyncClient) -> li
                                     jd_type = jd.get("@type", "Unknown")
                                     if jd_type in JSONLD_TYPES:
                                         name = jd.get("name", jd.get("legalName", ""))
-                                        findings.append(IntelligenceFinding(
+                                        findings.append(make_finding(
                                             entity=f"JSON-LD: {jd_type} - {name[:200] if name else 'Unnamed'}",
-                                            type=f"Forensic Artifact - JSON-LD ({jd_type})",
+                                            ftype=f"Forensic Artifact - JSON-LD ({jd_type})",
                                             source=f"Wayback Machine [{ts[:8]}]",
                                             confidence="High", color="blue",
                                             raw_data=json.dumps(jd, indent=2)[:2000],
@@ -230,9 +230,9 @@ async def _extract_structured_data(domain: str, client: httpx.AsyncClient) -> li
                                 m = re.search(rf'<meta[^>]+(?:property|name)=["\']{re.escape(tag)}["\'][^>]+content=["\']([^"\']+)["\']', html, re.I)
                                 if m:
                                     content = m.group(1).strip()[:200]
-                                    findings.append(IntelligenceFinding(
+                                    findings.append(make_finding(
                                         entity=f"OG: {tag} = {content}",
-                                        type="Forensic Artifact - Open Graph Tag",
+                                        ftype="Forensic Artifact - Open Graph Tag",
                                         source=f"Wayback Machine [{ts[:8]}]",
                                         confidence="High", color="slate",
                                         tags=["forensic", "artifact", "opengraph", tag.replace(":", "-")]
@@ -241,9 +241,9 @@ async def _extract_structured_data(domain: str, client: httpx.AsyncClient) -> li
                                 m = re.search(rf'<meta[^>]+name=["\']{re.escape(tag)}["\'][^>]+content=["\']([^"\']+)["\']', html, re.I)
                                 if m:
                                     content = m.group(1).strip()[:200]
-                                    findings.append(IntelligenceFinding(
+                                    findings.append(make_finding(
                                         entity=f"Twitter: {tag} = {content}",
-                                        type="Forensic Artifact - Twitter Card Tag",
+                                        ftype="Forensic Artifact - Twitter Card Tag",
                                         source=f"Wayback Machine [{ts[:8]}]",
                                         confidence="High", color="slate",
                                         tags=["forensic", "artifact", "twitter-card", tag.replace(":", "-")]
@@ -252,9 +252,9 @@ async def _extract_structured_data(domain: str, client: httpx.AsyncClient) -> li
                                 m = re.search(rf'<meta[^>]+name=["\']{re.escape(meta_name)}["\'][^>]+content=["\']([^"\']+)["\']', html, re.I)
                                 if m:
                                     content = m.group(1).strip()[:200]
-                                    findings.append(IntelligenceFinding(
+                                    findings.append(make_finding(
                                         entity=f"Meta {meta_name}: {content}",
-                                        type="Forensic Artifact - Meta Tag",
+                                        ftype="Forensic Artifact - Meta Tag",
                                         source=f"Wayback Machine [{ts[:8]}]",
                                         confidence="High", color="slate",
                                         tags=["forensic", "artifact", "meta", meta_name]
@@ -266,9 +266,9 @@ async def _extract_structured_data(domain: str, client: httpx.AsyncClient) -> li
                                     if ep:
                                         api_endpoints.add(ep)
                             for ep in list(api_endpoints)[:15]:
-                                findings.append(IntelligenceFinding(
+                                findings.append(make_finding(
                                     entity=f"API Endpoint: {ep}",
-                                    type="Forensic Artifact - API Endpoint Discovery",
+                                    ftype="Forensic Artifact - API Endpoint Discovery",
                                     source=f"Wayback Machine [{ts[:8]}]",
                                     confidence="Medium", color="orange",
                                     status="Discovered",
@@ -277,9 +277,9 @@ async def _extract_structured_data(domain: str, client: httpx.AsyncClient) -> li
                             rss_feeds = re.findall(r'<link[^>]+type="application/rss\+xml"[^>]+href=["\']([^"\']+)["\']', html, re.I)
                             atom_feeds = re.findall(r'<link[^>]+type="application/atom\+xml"[^>]+href=["\']([^"\']+)["\']', html, re.I)
                             for feed in rss_feeds + atom_feeds:
-                                findings.append(IntelligenceFinding(
+                                findings.append(make_finding(
                                     entity=f"RSS/Atom Feed: {feed}",
-                                    type="Forensic Artifact - Feed Discovery",
+                                    ftype="Forensic Artifact - Feed Discovery",
                                     source=f"Wayback Machine [{ts[:8]}]",
                                     confidence="High", color="slate",
                                     tags=["forensic", "artifact", "feed"]
@@ -289,9 +289,9 @@ async def _extract_structured_data(domain: str, client: httpx.AsyncClient) -> li
                                 fav_url = favicon.group(1)
                                 if not fav_url.startswith("http"):
                                     fav_url = urljoin(orig, fav_url)
-                                findings.append(IntelligenceFinding(
+                                findings.append(make_finding(
                                     entity=f"Favicon: {fav_url}",
-                                    type="Forensic Artifact - Favicon URL",
+                                    ftype="Forensic Artifact - Favicon URL",
                                     source=f"Wayback Machine [{ts[:8]}]",
                                     confidence="High", color="slate",
                                     tags=["forensic", "artifact", "favicon"]
@@ -312,7 +312,7 @@ async def _extract_error_pages(domain: str, client: httpx.AsyncClient) -> list:
         "503": ["Service Unavailable", "503"],
     }
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"http://web.archive.org/cdx/search/cdx?url={domain}/*&output=json&fl=original,timestamp,statuscode&limit=20",
             timeout=15.0,
             headers={"User-Agent": "Mozilla/5.0"}
@@ -330,7 +330,7 @@ async def _extract_error_pages(domain: str, client: httpx.AsyncClient) -> list:
                             error_pages[sc] = []
                         error_pages[sc].append((orig, ts))
             for sc, pages in error_pages.items():
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"HTTP {sc} ({error_patterns[sc][1]}) on {len(pages)} pages",
                     type="Forensic Artifact - Error Page Signature",
                     source="Wayback Machine",
@@ -341,7 +341,7 @@ async def _extract_error_pages(domain: str, client: httpx.AsyncClient) -> list:
                 ))
                 for page_url, page_ts in pages[:5]:
                     try:
-                        snap = await client.get(
+                        snap = await safe_fetch(client, 
                             f"http://web.archive.org/web/{page_ts}if_/{page_url}",
                             timeout=10.0,
                             headers={"User-Agent": "Mozilla/5.0"}
@@ -350,9 +350,9 @@ async def _extract_error_pages(domain: str, client: httpx.AsyncClient) -> list:
                             html = snap.text[:20000]
                             path_info = re.findall(r'(?:path|file|script|line)\s*[:=]\s*([^\s<]+)', html, re.I)
                             for p in path_info[:5]:
-                                findings.append(IntelligenceFinding(
+                                findings.append(make_finding(
                                     entity=f"Path disclosure in error page: {p}",
-                                    type="Forensic Artifact - Path Disclosure",
+                                    ftype="Forensic Artifact - Path Disclosure",
                                     source="Wayback Machine",
                                     confidence="High", color="red",
                                     threat_level="Elevated Risk",
@@ -361,9 +361,9 @@ async def _extract_error_pages(domain: str, client: httpx.AsyncClient) -> list:
                                 ))
                             versions = re.findall(r'(?:version|v)[\s:]*(\d+\.\d+(?:\.\d+)?)', html, re.I)
                             for v in versions[:3]:
-                                findings.append(IntelligenceFinding(
+                                findings.append(make_finding(
                                     entity=f"Version disclosure in error page: {v}",
-                                    type="Forensic Artifact - Version Disclosure",
+                                    ftype="Forensic Artifact - Version Disclosure",
                                     source="Wayback Machine",
                                     confidence="High", color="orange",
                                     threat_level="Standard Target",
@@ -394,7 +394,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     findings.extend(error_findings)
 
     if findings:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Forensic Artifact Extraction complete: {len(findings)} artifacts",
             type="Forensic Artifact - Summary",
             source="Forensic Artifact Extraction",

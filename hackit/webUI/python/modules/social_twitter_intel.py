@@ -1,8 +1,8 @@
-import httpx
 import re
 import json
-from models import IntelligenceFinding
 from datetime import datetime
+from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 
@@ -33,7 +33,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     source = ""
     for url, name in [(profile_url, "Twitter"), (nitter_url, "Nitter")]:
         try:
-            resp = await client.get(url, timeout=15.0,
+            resp = await safe_fetch(client,url, timeout=15.0,
                 headers={"User-Agent": UA, "Accept-Language": "en-US,en;q=0.9"},
                 follow_redirects=True)
             if resp.status_code == 200:
@@ -44,9 +44,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             pass
 
     if not html:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Could not access Twitter/X profile: {username}",
-            type="Twitter: Profile Not Accessible",
+            ftype="Twitter: Profile Not Accessible",
             source="SocialTwitterIntel",
             confidence="High", color="orange",
             category="Social Media Intelligence",
@@ -58,9 +58,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     title_m = re.search(r'<title>([^<]+)</title>', html, re.IGNORECASE)
     title = title_m.group(1).strip() if title_m else username
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Twitter/X profile: {title}",
-        type="Twitter: Profile Found",
+        ftype="Twitter: Profile Found",
         source="SocialTwitterIntel",
         confidence="High",
         color="purple",
@@ -74,9 +74,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     display_name_m = re.search(r'<meta[^>]+property="og:title"[^>]+content="([^"]+)"', html, re.IGNORECASE)
     if display_name_m:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Display name: {display_name_m.group(1).strip()[:100]}",
-            type="Twitter: Display Name",
+            ftype="Twitter: Display Name",
             source="SocialTwitterIntel",
             confidence="High",
             color="slate",
@@ -89,9 +89,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     if bio_m:
         bio_text = bio_m.group(1)
         bio_text = re.sub(r'\s+', ' ', bio_text).strip()
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Bio: {bio_text[:200]}",
-            type="Twitter: Bio",
+            ftype="Twitter: Bio",
             source="SocialTwitterIntel",
             confidence="High",
             color="slate",
@@ -103,9 +103,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     avatar_url_m = re.search(r'<meta[^>]+property="og:image"[^>]+content="([^"]+)"', html, re.IGNORECASE)
     if avatar_url_m:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Avatar URL: {avatar_url_m.group(1)[:100]}",
-            type="Twitter: Profile Image",
+            ftype="Twitter: Profile Image",
             source="SocialTwitterIntel",
             confidence="Medium",
             color="slate",
@@ -116,9 +116,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     followers_count_m = re.search(r'(\d[\d,.]*[KkMmBb]?)\s*(?:Follower|follower|Followers)', html)
     if followers_count_m:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Followers: {followers_count_m.group(1)}",
-            type="Twitter: Follower Count",
+            ftype="Twitter: Follower Count",
             source="SocialTwitterIntel",
             confidence="Medium",
             color="slate",
@@ -129,9 +129,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     following_count_m = re.search(r'(\d[\d,.]*[KkMmBb]?)\s*(?:Following|following)', html)
     if following_count_m:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Following: {following_count_m.group(1)}",
-            type="Twitter: Following Count",
+            ftype="Twitter: Following Count",
             source="SocialTwitterIntel",
             confidence="Medium",
             color="slate",
@@ -142,9 +142,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     tweet_count_m = re.search(r'(\d[\d,.]*[KkMmBb]?)\s*(?:Tweets|tweets|Posts|posts)', html)
     if tweet_count_m:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Tweets: {tweet_count_m.group(1)}",
-            type="Twitter: Tweet Count",
+            ftype="Twitter: Tweet Count",
             source="SocialTwitterIntel",
             confidence="Medium",
             color="slate",
@@ -155,9 +155,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     likes_count_m = re.search(r'(\d[\d,.]*[KkMmBb]?)\s*(?:Likes|likes)', html)
     if likes_count_m:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Likes: {likes_count_m.group(1)}",
-            type="Twitter: Like Count",
+            ftype="Twitter: Like Count",
             source="SocialTwitterIntel",
             confidence="Medium",
             color="slate",
@@ -169,9 +169,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     join_date_m = re.search(r'(?:Joined|joined)\s*(?:\(\))?\s*([A-Za-z]+\s+\d{4})', html)
     if join_date_m:
         join_str = join_date_m.group(1).strip()
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Joined: {join_str}",
-            type="Twitter: Join Date",
+            ftype="Twitter: Join Date",
             source="SocialTwitterIntel",
             confidence="Medium",
             color="slate",
@@ -183,9 +183,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             join_dt = datetime.strptime(join_str, "%B %Y")
             account_age_days = (datetime.now() - join_dt).days
             age_color = "emerald" if account_age_days > 365 else "orange"
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Account age: {account_age_days} days ({account_age_days // 365} years)",
-                type="Twitter: Account Age",
+                ftype="Twitter: Account Age",
                 source="SocialTwitterIntel",
                 confidence="Medium",
                 color=age_color,
@@ -199,9 +199,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     location_m = re.search(r'(?:Location|location)[:\s]*([^<]{2,40})', html)
     if location_m:
         loc = location_m.group(1).strip()
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Location: {loc}",
-            type="Twitter: Location",
+            ftype="Twitter: Location",
             source="SocialTwitterIntel",
             confidence="Medium",
             color="slate",
@@ -212,9 +212,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     website_m = re.search(r'(?:Website|website)[:\s]*<a[^>]*href="([^"]+)"', html)
     if website_m:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Website: {website_m.group(1)[:100]}",
-            type="Twitter: Website",
+            ftype="Twitter: Website",
             source="SocialTwitterIntel",
             confidence="Medium",
             color="slate",
@@ -225,9 +225,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     verified_m = re.search(r'(?:Verified|verified|is_verified["\']:\s*true)', html)
     if verified_m:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="Account is verified",
-            type="Twitter: Verification Status",
+            ftype="Twitter: Verification Status",
             source="SocialTwitterIntel",
             confidence="High",
             color="emerald",
@@ -239,9 +239,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     protected_m = re.search(r'(?:Protected|protected|is_protected["\']:\s*true)', html)
     if protected_m:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="Account is protected (private tweets)",
-            type="Twitter: Privacy Status",
+            ftype="Twitter: Privacy Status",
             source="SocialTwitterIntel",
             confidence="High",
             color="orange",
@@ -259,9 +259,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     if tweets:
         for i, tweet in enumerate(tweets[:8]):
             tweet_clean = re.sub(r'\s+', ' ', tweet).strip()[:150]
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Tweet {i+1}: {tweet_clean}",
-                type="Twitter: Recent Tweet",
+                ftype="Twitter: Recent Tweet",
                 source="SocialTwitterIntel",
                 confidence="Low",
                 color="slate",
@@ -273,9 +273,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     hashtags = re.findall(r'#(\w+)', html)
     if hashtags:
         unique_tags = list(set(hashtags))[:10]
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Hashtags used: {', '.join(unique_tags)}",
-            type="Twitter: Hashtag Usage",
+            ftype="Twitter: Hashtag Usage",
             source="SocialTwitterIntel",
             confidence="Medium",
             color="slate",
@@ -290,9 +290,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         if username in unique_mentions:
             unique_mentions.remove(username)
         if unique_mentions:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Accounts mentioned/replied: @{', @'.join(unique_mentions[:10])}",
-                type="Twitter: Mention Analysis",
+                ftype="Twitter: Mention Analysis",
                 source="SocialTwitterIntel",
                 confidence="Low",
                 color="slate",
@@ -304,9 +304,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     if source == "Nitter":
         nitter_pic = re.search(r'<img[^>]+class="[^"]*avatar[^"]*"[^>]+src="([^"]+)"', html)
         if nitter_pic:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Avatar (Nitter): {nitter_pic.group(1)[:100]}",
-                type="Twitter: Profile Image (Nitter)",
+                ftype="Twitter: Profile Image (Nitter)",
                 source="SocialTwitterIntel",
                 confidence="Medium",
                 color="slate",
@@ -319,9 +319,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         if nitter_bio:
             bio_text = nitter_bio.group(1).strip()
             if bio_text:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Bio (Nitter): {bio_text[:200]}",
-                    type="Twitter: Bio (Nitter)",
+                    ftype="Twitter: Bio (Nitter)",
                     source="SocialTwitterIntel",
                     confidence="Medium",
                     color="slate",
@@ -335,9 +335,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             labels = ["Tweets", "Following", "Followers", "Likes"]
             for i, stat in enumerate(nitter_stats[:4]):
                 if i < len(labels):
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"{labels[i]} (Nitter): {stat.strip()}",
-                        type=f"Twitter: {labels[i]} (Nitter)",
+                        ftype=f"Twitter: {labels[i]} (Nitter)",
                         source="SocialTwitterIntel",
                         confidence="High",
                         color="slate",
@@ -346,9 +346,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                         tags=["twitter", labels[i].lower(), "nitter"]
                     ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Twitter/X intelligence gathering complete for @{username}",
-        type="Twitter: Intel Summary",
+        ftype="Twitter: Intel Summary",
         source="SocialTwitterIntel",
         confidence="Medium",
         color="purple",

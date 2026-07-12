@@ -1,8 +1,8 @@
-import httpx
 import re
 import json
-from models import IntelligenceFinding
 from datetime import datetime
+from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 
@@ -28,7 +28,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     source_url = ""
     for url in profile_urls:
         try:
-            resp = await client.get(url, timeout=15.0,
+            resp = await safe_fetch(client,url, timeout=15.0,
                 headers={"User-Agent": UA, "Accept-Language": "en-US,en;q=0.9"},
                 follow_redirects=True)
             if resp.status_code == 200 and len(resp.text) > 500:
@@ -39,9 +39,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             pass
 
     if not html:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Could not access Reddit profile: u/{username}",
-            type="Reddit: Profile Not Accessible",
+            ftype="Reddit: Profile Not Accessible",
             source="SocialRedditIntel",
             confidence="High", color="orange",
             category="Social Media Intelligence",
@@ -53,9 +53,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     title_m = re.search(r'<title>([^<]+)</title>', html, re.IGNORECASE)
     title = title_m.group(1).strip() if title_m else f"u/{username}"
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Reddit profile: {title}",
-        type="Reddit: Profile Found",
+        ftype="Reddit: Profile Found",
         source="SocialRedditIntel",
         confidence="High",
         color="purple",
@@ -78,9 +78,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                 cake_day_m = None
     if cake_day_m:
         cd_val = cake_day_m.group(1) if hasattr(cake_day_m, 'groups') and cake_day_m.groups() else str(cake_day_m)
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Account created: {cd_val[:50]}",
-            type="Reddit: Account Age",
+            ftype="Reddit: Account Age",
             source="SocialRedditIntel",
             confidence="Medium",
             color="slate",
@@ -91,9 +91,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     karma_m = re.search(r'(\d[\d,.]*[KkMmBb]?)\s*(?:karma|Karma)', html)
     if karma_m:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Karma: {karma_m.group(1)}",
-            type="Reddit: Karma Total",
+            ftype="Reddit: Karma Total",
             source="SocialRedditIntel",
             confidence="Medium",
             color="slate",
@@ -104,9 +104,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     post_karma_m = re.search(r'(?:Post Karma|post karma)[:\s]*(\d[\d,.]*[KkMmBb]?)', html, re.IGNORECASE)
     if post_karma_m:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Post karma: {post_karma_m.group(1)}",
-            type="Reddit: Post Karma",
+            ftype="Reddit: Post Karma",
             source="SocialRedditIntel",
             confidence="Medium",
             color="slate",
@@ -117,9 +117,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     comment_karma_m = re.search(r'(?:Comment Karma|comment karma)[:\s]*(\d[\d,.]*[KkMmBb]?)', html, re.IGNORECASE)
     if comment_karma_m:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Comment karma: {comment_karma_m.group(1)}",
-            type="Reddit: Comment Karma",
+            ftype="Reddit: Comment Karma",
             source="SocialRedditIntel",
             confidence="Medium",
             color="slate",
@@ -131,9 +131,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     subreddits = re.findall(r'/r/(\w+)', html)
     if subreddits:
         unique_subs = list(set(subreddits))[:15]
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Subreddits ({len(unique_subs)}): r/{', r/'.join(unique_subs)}",
-            type="Reddit: Subreddit Participation",
+            ftype="Reddit: Subreddit Participation",
             source="SocialRedditIntel",
             confidence="Medium",
             color="slate",
@@ -150,9 +150,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     if posts_comments:
         for i, content in enumerate(posts_comments[:6]):
             content_clean = re.sub(r'\s+', ' ', content).strip()[:150]
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Content {i+1}: {content_clean}",
-                type="Reddit: User Content",
+                ftype="Reddit: User Content",
                 source="SocialRedditIntel",
                 confidence="Low",
                 color="slate",
@@ -163,9 +163,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     awards_m = re.findall(r'(?:Award|award|trophy|Trophy)[:\s]*([^<]{5,30})', html)
     if awards_m:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Awards: {', '.join(awards_m[:5])}",
-            type="Reddit: Awards/Trophies",
+            ftype="Reddit: Awards/Trophies",
             source="SocialRedditIntel",
             confidence="Low",
             color="slate",
@@ -177,9 +177,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     gold_m = re.search(r'(?:Gold|gold)', html)
     platinum_m = re.search(r'(?:Platinum|platinum)', html)
     if gold_m or platinum_m:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Premium awards: {'Gold' if gold_m else ''} {'Platinum' if platinum_m else ''}",
-            type="Reddit: Premium Awards",
+            ftype="Reddit: Premium Awards",
             source="SocialRedditIntel",
             confidence="Low",
             color="slate",
@@ -190,9 +190,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     is_mod_m = re.search(r'(?:Moderator|moderator|is_mod["\']:\s*true)', html)
     if is_mod_m:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="User is a moderator",
-            type="Reddit: Moderator Status",
+            ftype="Reddit: Moderator Status",
             source="SocialRedditIntel",
             confidence="Medium",
             color="orange",
@@ -204,9 +204,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     is_employee_m = re.search(r'(?:is_employee["\']:\s*true)', html)
     if is_employee_m:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="User is a Reddit employee",
-            type="Reddit: Employee Status",
+            ftype="Reddit: Employee Status",
             source="SocialRedditIntel",
             confidence="Medium",
             color="orange",
@@ -218,9 +218,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     verified_m = re.search(r'(?:Verified|verified|is_verified["\']:\s*true)', html)
     if verified_m:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="User is verified",
-            type="Reddit: Verification",
+            ftype="Reddit: Verification",
             source="SocialRedditIntel",
             confidence="Medium",
             color="emerald",
@@ -232,9 +232,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     has_gold_m = re.search(r'(?:has_gold["\']:\s*true|is_gold["\']:\s*true)', html)
     if has_gold_m:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="User has Reddit Premium/Gold",
-            type="Reddit: Premium Status",
+            ftype="Reddit: Premium Status",
             source="SocialRedditIntel",
             confidence="Medium",
             color="slate",
@@ -252,9 +252,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         extracted_info.append(f"phone: {pm}")
 
     if extracted_info:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Personal info extracted: {'; '.join(extracted_info)}",
-            type="Reddit: Personal Information",
+            ftype="Reddit: Personal Information",
             source="SocialRedditIntel",
             confidence="Low",
             color="orange",
@@ -267,9 +267,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     interests = re.findall(r'\b(hobby|interest|love|enjoy|favorite|passion)[:\s]*([^.]{5,50})', html, re.IGNORECASE)
     if interests:
         interest_texts = [f"{i[0]}: {i[1].strip()}" for i in interests[:5]]
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Interests: {'; '.join(interest_texts)}",
-            type="Reddit: Interest Extraction",
+            ftype="Reddit: Interest Extraction",
             source="SocialRedditIntel",
             confidence="Low",
             color="slate",
@@ -280,9 +280,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     op_m = re.search(r'(?:Original Poster|OP)', html)
     if op_m:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="User frequently posts as OP in subreddits",
-            type="Reddit: Posting Pattern",
+            ftype="Reddit: Posting Pattern",
             source="SocialRedditIntel",
             confidence="Low",
             color="slate",
@@ -291,9 +291,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             tags=["reddit", "posting-pattern"]
         ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Reddit intelligence gathering complete for u/{username}",
-        type="Reddit: Intel Summary",
+        ftype="Reddit: Intel Summary",
         source="SocialRedditIntel",
         confidence="Medium",
         color="purple",

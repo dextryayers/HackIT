@@ -1,8 +1,7 @@
-import httpx
 import re
 import json
 from urllib.parse import urlparse
-from models import IntelligenceFinding
+from ..module_common import safe_fetch, make_finding
 
 COOKIE_TECH_PATTERNS = {
     "PHPSESSID": "PHP", "ASP.NET_SessionId": "ASP.NET", "JSESSIONID": "Java/J2EE",
@@ -77,14 +76,10 @@ META_GENERATORS = {
     "Strapi": r'<meta[^>]+name="generator"[^>]+content="Strapi',
 }
 
-async def _fetch_archive_snapshots(domain: str, client: httpx.AsyncClient) -> list:
+async def _fetch_archive_snapshots(domain: str, client: AsyncClient) -> list:
     findings = []
     try:
-        resp = await client.get(
-            f"http://web.archive.org/cdx/search/cdx?url={domain}/*&output=json&fl=original,timestamp,statuscode&limit=30&filter=statuscode:200&collapse=urlkey",
-            timeout=20.0,
-            headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}
-        )
+        resp = await safe_fetch(client, f"http://web.archive.org/cdx/search/cdx?url={domain}/*&output=json&fl=original,timestamp,statuscode&limit=30&filter=statuscode:200&collapse=urlkey", timeout=20.0)
         if resp.status_code == 200:
             data = resp.json()
             snapshots_taken = set()
@@ -96,20 +91,16 @@ async def _fetch_archive_snapshots(domain: str, client: httpx.AsyncClient) -> li
                         continue
                     snapshots_taken.add(ts[:8])
                     try:
-                        snap = await client.get(
-                            f"http://web.archive.org/web/{ts}if_/{orig_url}",
-                            timeout=15.0,
-                            headers={"User-Agent": "Mozilla/5.0"}
-                        )
+                        snap = await safe_fetch(client, f"http://web.archive.org/web/{ts}if_/{orig_url}", timeout=15.0)
                         if snap.status_code == 200:
                             html = snap.text[:80000]
                             hdrs = snap.headers
                             server = hdrs.get("server", "")
                             powered = hdrs.get("x-powered-by", "")
                             if server:
-                                findings.append(IntelligenceFinding(
+                                findings.append(make_finding(
                                     entity=f"Server: {server} [{ts[:8]}]",
-                                    type="Tech Stack - Server Header (Archive)",
+                                    ftype="Tech Stack - Server Header (Archive)",
                                     source="Wayback Machine",
                                     confidence="High",
                                     color="orange",
@@ -118,9 +109,9 @@ async def _fetch_archive_snapshots(domain: str, client: httpx.AsyncClient) -> li
                                     tags=["tech-stack", "server", "historical"]
                                 ))
                             if powered:
-                                findings.append(IntelligenceFinding(
+                                findings.append(make_finding(
                                     entity=f"X-Powered-By: {powered} [{ts[:8]}]",
-                                    type="Tech Stack - Platform Header (Archive)",
+                                    ftype="Tech Stack - Platform Header (Archive)",
                                     source="Wayback Machine",
                                     confidence="High",
                                     color="orange",
@@ -131,9 +122,9 @@ async def _fetch_archive_snapshots(domain: str, client: httpx.AsyncClient) -> li
                             if cookie:
                                 for pattern, tech in COOKIE_TECH_PATTERNS.items():
                                     if pattern.lower() in cookie.lower():
-                                        findings.append(IntelligenceFinding(
+                                        findings.append(make_finding(
                                             entity=f"{tech} (via cookie pattern: {pattern}) [{ts[:8]}]",
-                                            type="Tech Stack - Cookie Pattern (Archive)",
+                                            ftype="Tech Stack - Cookie Pattern (Archive)",
                                             source="Wayback Machine",
                                             confidence="High",
                                             color="slate",
@@ -142,9 +133,9 @@ async def _fetch_archive_snapshots(domain: str, client: httpx.AsyncClient) -> li
                                         ))
                             for pattern, tech in URL_TECH_PATTERNS.items():
                                 if re.search(pattern, orig_url, re.I):
-                                    findings.append(IntelligenceFinding(
+                                    findings.append(make_finding(
                                         entity=f"{tech} (URL pattern: {pattern})",
-                                        type="Tech Stack - URL Extension (Archive)",
+                                        ftype="Tech Stack - URL Extension (Archive)",
                                         source="Wayback Machine",
                                         confidence="High",
                                         color="slate",
@@ -153,9 +144,9 @@ async def _fetch_archive_snapshots(domain: str, client: httpx.AsyncClient) -> li
                                     ))
                             for gen_name, gen_pattern in META_GENERATORS.items():
                                 if re.search(gen_pattern, html, re.I):
-                                    findings.append(IntelligenceFinding(
+                                    findings.append(make_finding(
                                         entity=f"{gen_name} (generator meta tag) [{ts[:8]}]",
-                                        type="Tech Stack - CMS/Generator (Archive)",
+                                        ftype="Tech Stack - CMS/Generator (Archive)",
                                         source="Wayback Machine",
                                         confidence="High",
                                         color="blue",
@@ -164,9 +155,9 @@ async def _fetch_archive_snapshots(domain: str, client: httpx.AsyncClient) -> li
                                     ))
                             for class_pattern, tech in HTML_CLASS_PATTERNS.items():
                                 if class_pattern in html.lower():
-                                    findings.append(IntelligenceFinding(
+                                    findings.append(make_finding(
                                         entity=f"{tech} (CSS/HTML pattern: {class_pattern})",
-                                        type="Tech Stack - CSS Framework (Archive)",
+                                        ftype="Tech Stack - CSS Framework (Archive)",
                                         source="Wayback Machine",
                                         confidence="Medium",
                                         color="purple",
@@ -175,9 +166,9 @@ async def _fetch_archive_snapshots(domain: str, client: httpx.AsyncClient) -> li
                                     ))
                             for err_pattern, err_desc in ERROR_PAGE_SIGNATURES.items():
                                 if err_pattern.lower() in html.lower():
-                                    findings.append(IntelligenceFinding(
+                                    findings.append(make_finding(
                                         entity=f"Error page signature: {err_desc}",
-                                        type="Tech Stack - Error Page Fingerprint",
+                                        ftype="Tech Stack - Error Page Fingerprint",
                                         source="Wayback Machine",
                                         confidence="Medium",
                                         color="slate",
@@ -189,9 +180,9 @@ async def _fetch_archive_snapshots(domain: str, client: httpx.AsyncClient) -> li
                                 if "cdnjs.cloudflare.com" in src:
                                     lib_m = re.search(r'ajax/libs/([\w-]+)/([\d.]+)', src)
                                     if lib_m:
-                                        findings.append(IntelligenceFinding(
+                                        findings.append(make_finding(
                                             entity=f"CDN Library: {lib_m.group(1)} v{lib_m.group(2)}",
-                                            type="Tech Stack - CDN JS Library",
+                                            ftype="Tech Stack - CDN JS Library",
                                             source="Wayback Machine",
                                             confidence="High",
                                             color="slate",
@@ -201,9 +192,9 @@ async def _fetch_archive_snapshots(domain: str, client: httpx.AsyncClient) -> li
                                 elif "unpkg.com" in src:
                                     lib_m = re.search(r'unpkg\.com/([\w-]+)@?([\d.]+)?', src)
                                     if lib_m:
-                                        findings.append(IntelligenceFinding(
+                                        findings.append(make_finding(
                                             entity=f"UNPKG Library: {lib_m.group(1)} v{lib_m.group(2) or 'latest'}",
-                                            type="Tech Stack - UNPKG Library",
+                                            ftype="Tech Stack - UNPKG Library",
                                             source="Wayback Machine",
                                             confidence="High",
                                             color="slate",
@@ -215,7 +206,7 @@ async def _fetch_archive_snapshots(domain: str, client: httpx.AsyncClient) -> li
         pass
     return findings
 
-async def _fetch_sitemap_analysis(domain: str, client: httpx.AsyncClient) -> list:
+async def _fetch_sitemap_analysis(domain: str, client: AsyncClient) -> list:
     findings = []
     sitemap_urls = [
         f"https://{domain}/sitemap.xml",
@@ -223,12 +214,12 @@ async def _fetch_sitemap_analysis(domain: str, client: httpx.AsyncClient) -> lis
     ]
     for url in sitemap_urls:
         try:
-            resp = await client.get(url, timeout=10.0, headers={"User-Agent": "Mozilla/5.0"})
+            resp = await safe_fetch(client, url, timeout=10.0)
             if resp.status_code == 200:
                 content = resp.text[:30000]
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{url} accessible ({len(content)} bytes)",
-                    type="Tech Stack - Sitemap/Robots Found",
+                    ftype="Tech Stack - Sitemap/Robots Found",
                     source="Passive Technology Stack",
                     confidence="High",
                     color="slate",
@@ -237,9 +228,9 @@ async def _fetch_sitemap_analysis(domain: str, client: httpx.AsyncClient) -> lis
                 ))
                 for pattern, tech in URL_TECH_PATTERNS.items():
                     if re.search(pattern, content, re.I):
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"{tech} (from sitemap URL pattern: {pattern})",
-                            type="Tech Stack - Sitemap Tech Indicator",
+                            ftype="Tech Stack - Sitemap Tech Indicator",
                             source="Passive Technology Stack",
                             confidence="High",
                             color="slate",
@@ -249,7 +240,7 @@ async def _fetch_sitemap_analysis(domain: str, client: httpx.AsyncClient) -> lis
             pass
     return findings
 
-async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFinding]:
+async def crawl(target: str, client: AsyncClient) -> list[IntelligenceFinding]:
     findings = []
     domain = target.strip().lower()
     if "://" in domain:
@@ -262,9 +253,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     findings.extend(sitemap_findings)
 
     if findings:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Technology Stack Reconstruction complete: {len(findings)} findings",
-            type="Tech Stack - Summary",
+            ftype="Tech Stack - Summary",
             source="Passive Technology Stack",
             confidence="High", color="purple",
             status="Complete",

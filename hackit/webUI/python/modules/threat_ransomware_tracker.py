@@ -1,8 +1,8 @@
-import httpx
 import re
 import json
 from urllib.parse import urlparse, quote
 from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 
 RANSOMWARE_GROUPS = [
     "LockBit", "BlackCat", "Clop", "Black Basta", "Play", "BianLian",
@@ -50,7 +50,7 @@ async def fetch_ransomware_news(client: httpx.AsyncClient, target: str) -> list:
         ]
         for url in urls_to_check:
             try:
-                resp = await client.get(url, timeout=15.0,
+                resp = await safe_fetch(client,url, timeout=15.0,
                     headers={"User-Agent": "Mozilla/5.0"})
                 if resp.status_code == 200 and len(resp.text) > 100:
                     results.append({"url": url, "length": len(resp.text)})
@@ -71,7 +71,7 @@ async def check_ransomware_feeds(client: httpx.AsyncClient, target: str) -> list
         ]
         for feed_url in feeds:
             try:
-                resp = await client.get(feed_url, timeout=15.0,
+                resp = await safe_fetch(client,feed_url, timeout=15.0,
                     headers={"User-Agent": "Mozilla/5.0"})
                 if resp.status_code == 200:
                     content = resp.text.lower()
@@ -143,7 +143,7 @@ async def check_ransomware_group_leaks(client: httpx.AsyncClient, target: str) -
         ]
         for domain in leak_domains:
             try:
-                resp = await client.get(domain, timeout=10.0,
+                resp = await safe_fetch(client,domain, timeout=10.0,
                     headers={"User-Agent": "Mozilla/5.0"})
                 if resp.status_code == 200 and len(resp.text) > 100:
                     if target.lower() in resp.text.lower():
@@ -163,7 +163,7 @@ async def check_ransomware_timeline(client: httpx.AsyncClient, target: str) -> l
         ]
         for url in timeline_urls:
             try:
-                resp = await client.get(url, timeout=15.0,
+                resp = await safe_fetch(client,url, timeout=15.0,
                     headers={"User-Agent": "Mozilla/5.0"})
                 if resp.status_code == 200:
                     try:
@@ -190,9 +190,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     news_results = await fetch_ransomware_news(client, query)
     for r in news_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Ransomware news source checked: {r['url']} ({r['length']} bytes)",
-            type="Ransomware News Intelligence",
+            ftype="Ransomware News Intelligence",
             source="Ransomware Tracker",
             confidence="Low",
             color="slate",
@@ -206,9 +206,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     feed_results = await check_ransomware_feeds(client, query)
     for r in feed_results:
         for match in r.get("matches", []):
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Ransomware feed match: {r['feed']} - {match[:100]}",
-                type="Ransomware IOC Match",
+                ftype="Ransomware IOC Match",
                 source=r['feed'],
                 confidence="High",
                 color="red",
@@ -221,9 +221,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     group_results = await check_ransomware_group_association(query)
     for r in group_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Ransomware group association: {r['group']} (confidence: {r['confidence']})",
-            type="Ransomware Group Identification",
+            ftype="Ransomware Group Identification",
             source="Ransomware Tracker",
             confidence=r['confidence'],
             color="red",
@@ -236,9 +236,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     note_results = await analyze_ransom_note_content(query)
     for r in note_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Ransom note pattern detected: {r['matched_text']}",
-            type="Ransomware Note Pattern",
+            ftype="Ransomware Note Pattern",
             source="Ransomware Tracker",
             confidence="Medium",
             color="orange",
@@ -251,9 +251,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     ext_results = await check_ransomware_extensions(query)
     for r in ext_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Ransomware file extension: {r['extension']}",
-            type="Ransomware File Extension",
+            ftype="Ransomware File Extension",
             source="Ransomware Tracker",
             confidence="Medium",
             color="yellow",
@@ -266,9 +266,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     leak_results = await check_ransomware_group_leaks(client, query)
     for r in leak_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Target found on ransomware leak site: {r['domain']}",
-            type="Ransomware Leak Site Match",
+            ftype="Ransomware Leak Site Match",
             source="Ransomware Tracker",
             confidence="High",
             color="red",
@@ -281,9 +281,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     timeline_results = await check_ransomware_timeline(client, query)
     for r in timeline_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Ransomware group timeline data: {r['group']} (source: {r['url']})",
-            type="Ransomware Timeline Intelligence",
+            ftype="Ransomware Timeline Intelligence",
             source="Ransomware Tracker",
             confidence="Medium",
             color="orange",
@@ -295,9 +295,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         ))
 
     for group in RANSOMWARE_GROUPS[:10]:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Ransomware group monitoring: {group}",
-            type="Ransomware Group Profile",
+            ftype="Ransomware Group Profile",
             source="Ransomware Tracker",
             confidence="Low",
             color="slate",
@@ -308,9 +308,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             tags=["ransomware", "group-profile", group.lower().replace(" ", "-")]
         ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Ransomware intelligence complete for {query}: tracked {len(RANSOMWARE_GROUPS)} groups, checked {len(RANSOM_NOTE_PATTERNS)} note patterns, {len(RANSOMWARE_EXTENSIONS)} extensions",
-        type="Ransomware Intelligence Summary",
+        ftype="Ransomware Intelligence Summary",
         source="Ransomware Tracker",
         confidence="Medium",
         color="slate",

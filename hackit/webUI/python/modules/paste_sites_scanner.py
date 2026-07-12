@@ -2,7 +2,6 @@ import re
 import json
 from urllib.parse import urlparse, quote
 from typing import List
-from models import IntelligenceFinding
 from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash
 
 PASTE_SITES = [
@@ -79,8 +78,8 @@ SEVERITY_KEYWORDS = {
 async def search_paste_site(name: str, url_template: str, target: str, client: httpx.AsyncClient) -> dict:
     try:
         url = url_template.format(quote(target))
-        resp = await client.get(url, timeout=15.0, headers={"User-Agent": "Mozilla/5.0"})
-        if resp.status_code == 200 and len(resp.text) > 100:
+        resp = await safe_fetch(client, url, timeout=15.0, headers={"User-Agent": "Mozilla/5.0"})
+        if resp and resp.status_code == 200 and len(resp.text) > 100:
             text = resp.text.lower()
             mentions = text.count(target.lower())
             return {"name": name, "url": url, "status": resp.status_code, "mentions": mentions, "text": resp.text}
@@ -181,9 +180,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         if result:
             all_found_data.append(result)
             sites_with_data += 1
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Paste site {name} returned results for {t}",
-                type="Paste: Site Mention",
+                ftype="Paste: Site Mention",
                 source="PasteSitesScanner",
                 confidence="Medium",
                 color="sky",
@@ -197,9 +196,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             extracted = await extract_findings_from_text(result["text"], name, t)
             for ext in extracted[:5]:
                 severity = ext["severity"]
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{ext['type']}: {ext['data'][:100]}",
-                    type=f"Paste: {ext['type']}",
+                    ftype=f"Paste: {ext['type']}",
                     source="PasteSitesScanner",
                     confidence="High" if severity == "critical" else "Medium",
                     color="red" if severity == "critical" else "orange" if severity == "high" else "yellow",
@@ -214,9 +213,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
     all_creds = CREDENTIAL_PATTERN.findall(combined_text)
     if all_creds:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{len(all_creds)} credential pairs found across paste sites",
-            type="Paste: Credential Summary",
+            ftype="Paste: Credential Summary",
             source="PasteSitesScanner",
             confidence="High",
             color="red",
@@ -229,9 +228,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
     all_keys = API_KEY_PATTERN.findall(combined_text)
     if all_keys:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{len(all_keys)} API keys/tokens exposed in paste sites",
-            type="Paste: API Key Summary",
+            ftype="Paste: API Key Summary",
             source="PasteSitesScanner",
             confidence="High",
             color="red",
@@ -245,9 +244,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
     all_emails = EMAIL_PATTERN.findall(combined_text)
     unique_emails = set(all_emails) - {t}
     if unique_emails:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{len(unique_emails)} unique emails exposed: {', '.join(list(unique_emails)[:5])}",
-            type="Paste: Email Exposure",
+            ftype="Paste: Email Exposure",
             source="PasteSitesScanner",
             confidence="Medium",
             color="orange",
@@ -260,9 +259,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
     private_ips = [ip for ip in IP_PATTERN.findall(combined_text) if ip.startswith(("10.", "172.16.", "192.168."))]
     if private_ips:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{len(set(private_ips))} internal IPs exposed on paste sites",
-            type="Paste: Internal IP Leak",
+            ftype="Paste: Internal IP Leak",
             source="PasteSitesScanner",
             confidence="High",
             color="red",
@@ -274,9 +273,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         ))
 
     if not all_found_data:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="No paste site mentions found for target",
-            type="Paste: Scan Complete",
+            ftype="Paste: Scan Complete",
             source="PasteSitesScanner",
             confidence="Low",
             color="emerald",
@@ -287,9 +286,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             tags=["paste", "clean"],
         ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Paste scan complete: {sites_with_data}/{len(PASTE_SITES)} sites had data",
-        type="Paste: Coverage Summary",
+        ftype="Paste: Coverage Summary",
         source="PasteSitesScanner",
         confidence="Medium",
         color="slate",

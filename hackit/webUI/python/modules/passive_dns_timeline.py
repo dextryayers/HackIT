@@ -1,9 +1,8 @@
-import httpx
 import re
 import json
 from datetime import datetime
 from urllib.parse import urlparse
-from models import IntelligenceFinding
+from ..module_common import safe_fetch, make_finding
 
 PDNS_SOURCES = [
     ("crt.sh", "https://crt.sh/?q=%25.{domain}&output=json"),
@@ -20,14 +19,10 @@ MALWARE_DOMAINS_DB = {
     "malwarepatrol", "malwaredomains", "abuse.ch", "cybercrime", "phishtank", "openphish", "vxunderground"
 }
 
-async def _fetch_ct_logs(domain: str, client: httpx.AsyncClient) -> list:
+async def _fetch_ct_logs(domain: str, client: AsyncClient) -> list:
     findings = []
     try:
-        resp = await client.get(
-            f"https://crt.sh/?q=%25.{domain}&output=json",
-            timeout=20.0,
-            headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}
-        )
+        resp = await safe_fetch(client, f"https://crt.sh/?q=%25.{domain}&output=json", timeout=20.0)
         if resp.status_code == 200:
             certs = resp.json() if isinstance(resp.text, str) and resp.text.startswith("[") else []
             timeline = {}
@@ -47,9 +42,9 @@ async def _fetch_ct_logs(domain: str, client: httpx.AsyncClient) -> list:
                         timeline[single]["last"] = na
                     timeline[single]["count"] += 1
             for name, data in sorted(timeline.items(), key=lambda x: x[1]["first"])[:50]:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=name,
-                    type="Passive DNS Timeline - CT Log Entry",
+                    ftype="Passive DNS Timeline - CT Log Entry",
                     source="crt.sh",
                     confidence="High",
                     color="emerald",
@@ -61,9 +56,9 @@ async def _fetch_ct_logs(domain: str, client: httpx.AsyncClient) -> list:
             if timeline:
                 earliest = min(d["first"] for d in timeline.values() if d["first"])
                 latest = max(d["last"] for d in timeline.values() if d["last"])
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"CT timeline: {earliest} to {latest} ({len(timeline)} unique hostnames)",
-                    type="Passive DNS Timeline - CT Summary",
+                    ftype="Passive DNS Timeline - CT Summary",
                     source="crt.sh",
                     confidence="High",
                     color="blue",
@@ -75,14 +70,10 @@ async def _fetch_ct_logs(domain: str, client: httpx.AsyncClient) -> list:
         pass
     return findings
 
-async def _fetch_otx_pdns(domain: str, client: httpx.AsyncClient) -> list:
+async def _fetch_otx_pdns(domain: str, client: AsyncClient) -> list:
     findings = []
     try:
-        resp = await client.get(
-            f"https://otx.alienvault.com/api/v1/indicators/domain/{domain}/passive_dns",
-            timeout=15.0,
-            headers={"User-Agent": "Mozilla/5.0"}
-        )
+        resp = await safe_fetch(client, f"https://otx.alienvault.com/api/v1/indicators/domain/{domain}/passive_dns", timeout=15.0)
         if resp.status_code == 200:
             data = resp.json()
             pdns_entries = data.get("passive_dns", [])
@@ -103,9 +94,9 @@ async def _fetch_otx_pdns(domain: str, client: httpx.AsyncClient) -> list:
                     if last and (last > ip_changes[key]["last"] or not ip_changes[key]["last"]):
                         ip_changes[key]["last"] = last
             for key, data in sorted(ip_changes.items(), key=lambda x: x[1]["first"])[:40]:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{data['hostname']} -> {data['ip']}",
-                    type=f"Passive DNS - {data['type']} Record",
+                    ftype=f"Passive DNS - {data['type']} Record",
                     source="AlienVault OTX",
                     confidence="High",
                     color="cyan",
@@ -116,9 +107,9 @@ async def _fetch_otx_pdns(domain: str, client: httpx.AsyncClient) -> list:
                 ))
             if len(ip_changes) > 5:
                 ip_count = len(set(d["ip"] for d in ip_changes.values()))
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{len(ip_changes)} passive DNS entries, {ip_count} unique IPs across timeline",
-                    type="Passive DNS - OTX Summary",
+                    ftype="Passive DNS - OTX Summary",
                     source="AlienVault OTX",
                     confidence="High",
                     color="slate",
@@ -130,21 +121,17 @@ async def _fetch_otx_pdns(domain: str, client: httpx.AsyncClient) -> list:
         pass
     return findings
 
-async def _fetch_viewdns_history(domain: str, client: httpx.AsyncClient) -> list:
+async def _fetch_viewdns_history(domain: str, client: AsyncClient) -> list:
     findings = []
     try:
-        resp = await client.get(
-            f"https://viewdns.info/iphistory/?domain={domain}",
-            timeout=20.0,
-            headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}
-        )
+        resp = await safe_fetch(client, f"https://viewdns.info/iphistory/?domain={domain}", timeout=20.0)
         if resp.status_code == 200:
             ip_dates = re.findall(r'>(\d+\.\d+\.\d+\.\d+)</td><td>(\d{4}-\d{2}-\d{2})', resp.text)
             unique_ips = list(set(ip_dates))
             if unique_ips:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{len(unique_ips)} historical IP changes from ViewDNS",
-                    type="Passive DNS Timeline - IP History Summary",
+                    ftype="Passive DNS Timeline - IP History Summary",
                     source="ViewDNS",
                     confidence="Medium",
                     color="blue",
@@ -157,9 +144,9 @@ async def _fetch_viewdns_history(domain: str, client: httpx.AsyncClient) -> list
                     ip_freq[ip] = ip_freq.get(ip, 0) + 1
                 for ip, cnt in sorted(ip_freq.items(), key=lambda x: -x[1])[:10]:
                     dates_for_ip = sorted(set(d for i, d in unique_ips if i == ip))
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=ip,
-                        type="Passive DNS Timeline - Historical IP",
+                        ftype="Passive DNS Timeline - Historical IP",
                         source="ViewDNS",
                         confidence="Medium",
                         color="slate",
@@ -169,9 +156,9 @@ async def _fetch_viewdns_history(domain: str, client: httpx.AsyncClient) -> list
                         tags=["pdns", "ip", "historical-ip"]
                     ))
                 if len(ip_freq) >= 5:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"High IP volatility: {len(ip_freq)} unique IPs over time",
-                        type="Passive DNS Timeline - IP Volatility Alert",
+                        ftype="Passive DNS Timeline - IP Volatility Alert",
                         source="ViewDNS",
                         confidence="Medium",
                         color="orange",
@@ -184,14 +171,14 @@ async def _fetch_viewdns_history(domain: str, client: httpx.AsyncClient) -> list
         pass
     return findings
 
-async def _check_fast_flux_patterns(domain: str, client: httpx.AsyncClient) -> list:
+async def _check_fast_flux_patterns(domain: str, client: AsyncClient) -> list:
     findings = []
     try:
         tld = domain.split(".")[-1] if "." in domain else ""
         if tld in FAST_FLUX_TLDS:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"TLD '{tld}' commonly used in fast-flux / DGAs",
-                type="Passive DNS Timeline - Risky TLD Detection",
+                ftype="Passive DNS Timeline - Risky TLD Detection",
                 source="Passive DNS Timeline",
                 confidence="High",
                 color="orange",
@@ -200,11 +187,7 @@ async def _check_fast_flux_patterns(domain: str, client: httpx.AsyncClient) -> l
                 raw_data=f"TLD {tld} is in known fast-flux/DGA list",
                 tags=["pdns", "fast-flux", "dga", "risky-tld"]
             ))
-        doh_resp = await client.get(
-            f"https://dns.google/resolve?name={domain}&type=A",
-            timeout=10.0,
-            headers={"Accept": "application/json"}
-        )
+        doh_resp = await safe_fetch(client, f"https://dns.google/resolve?name={domain}&type=A", timeout=10.0)
         if doh_resp.status_code == 200:
             data = doh_resp.json()
             answers = data.get("Answer", [])
@@ -217,9 +200,9 @@ async def _check_fast_flux_patterns(domain: str, client: httpx.AsyncClient) -> l
             if ttl_values:
                 avg_ttl = sum(ttl_values) / len(ttl_values)
                 if avg_ttl < 300:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Low avg TTL: {avg_ttl:.0f}s - possible fast-flux",
-                        type="Passive DNS Timeline - Fast Flux Indicator",
+                        ftype="Passive DNS Timeline - Fast Flux Indicator",
                         source="Passive DNS Timeline",
                         confidence="Medium",
                         color="red",
@@ -229,9 +212,9 @@ async def _check_fast_flux_patterns(domain: str, client: httpx.AsyncClient) -> l
                         tags=["pdns", "fast-flux", "low-ttl"]
                     ))
                 if len(ips) > 3:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"{len(ips)} IPs for single domain: {', '.join(sorted(ips)[:5])}...",
-                        type="Passive DNS Timeline - Multi-IP Detection",
+                        ftype="Passive DNS Timeline - Multi-IP Detection",
                         source="Passive DNS Timeline",
                         confidence="High",
                         color="orange",
@@ -244,23 +227,19 @@ async def _check_fast_flux_patterns(domain: str, client: httpx.AsyncClient) -> l
         pass
     return findings
 
-async def _check_malware_association(domain: str, client: httpx.AsyncClient) -> list:
+async def _check_malware_association(domain: str, client: AsyncClient) -> list:
     findings = []
     try:
-        otx_resp = await client.get(
-            f"https://otx.alienvault.com/api/v1/indicators/domain/{domain}/reputation",
-            timeout=15.0,
-            headers={"User-Agent": "Mozilla/5.0"}
-        )
+        otx_resp = await safe_fetch(client, f"https://otx.alienvault.com/api/v1/indicators/domain/{domain}/reputation", timeout=15.0)
         if otx_resp.status_code == 200:
             rep = otx_resp.json()
             pulse_count = rep.get("pulse_info", {}).get("count", 0)
             if pulse_count > 0:
                 pulses = rep.get("pulse_info", {}).get("pulses", [])
                 for pulse in pulses[:10]:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=pulse.get("name", "Unknown"),
-                        type="Passive DNS Timeline - Malware Threat Intel",
+                        ftype="Passive DNS Timeline - Malware Threat Intel",
                         source="AlienVault OTX",
                         confidence="High" if pulse_count > 5 else "Medium",
                         color="red",
@@ -270,9 +249,9 @@ async def _check_malware_association(domain: str, client: httpx.AsyncClient) -> 
                         raw_data=f"Threat name: {pulse.get('name', 'Unknown')}, Tags: {', '.join(pulse.get('tags', []))}",
                         tags=["pdns", "malware", "threat-intel", "otx"]
                     ))
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Domain associated with {pulse_count} threat pulses",
-                    type="Passive DNS Timeline - Malware Association Summary",
+                    ftype="Passive DNS Timeline - Malware Association Summary",
                     source="AlienVault OTX",
                     confidence="High",
                     color="red",
@@ -285,7 +264,7 @@ async def _check_malware_association(domain: str, client: httpx.AsyncClient) -> 
         pass
     return findings
 
-async def _check_dns_record_types_timeline(domain: str, client: httpx.AsyncClient) -> list:
+async def _check_dns_record_types_timeline(domain: str, client: AsyncClient) -> list:
     findings = []
     record_types = {
         "A": 1, "AAAA": 28, "MX": 15, "NS": 2, "CNAME": 5,
@@ -293,20 +272,16 @@ async def _check_dns_record_types_timeline(domain: str, client: httpx.AsyncClien
     }
     for rtype_name, rtype_num in record_types.items():
         try:
-            resp = await client.get(
-                f"https://dns.google/resolve?name={domain}&type={rtype_name}",
-                timeout=10.0,
-                headers={"Accept": "application/json"}
-            )
+            resp = await safe_fetch(client, f"https://dns.google/resolve?name={domain}&type={rtype_name}", timeout=10.0)
             if resp.status_code == 200:
                 data = resp.json()
                 answers = data.get("Answer", [])
                 matching = [a for a in answers if a.get("type") == rtype_num]
                 if matching:
                     for ans in matching[:3]:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"{rtype_name}: {ans.get('data', '')[:200]}",
-                            type=f"DNS Record - {rtype_name}",
+                            ftype=f"DNS Record - {rtype_name}",
                             source="Passive DNS Timeline",
                             confidence="High",
                             color="slate",
@@ -318,14 +293,10 @@ async def _check_dns_record_types_timeline(domain: str, client: httpx.AsyncClien
             pass
     return findings
 
-async def _check_ip_change_frequency(domain: str, client: httpx.AsyncClient) -> list:
+async def _check_ip_change_frequency(domain: str, client: AsyncClient) -> list:
     findings = []
     try:
-        ht_resp = await client.get(
-            f"https://api.hackertarget.com/hostsearch/?q={domain}",
-            timeout=12.0,
-            headers={"User-Agent": "Mozilla/5.0"}
-        )
+        ht_resp = await safe_fetch(client, f"https://api.hackertarget.com/hostsearch/?q={domain}", timeout=12.0)
         if ht_resp.status_code == 200:
             lines = ht_resp.text.strip().split("\n")
             sub_ip_map = {}
@@ -339,9 +310,9 @@ async def _check_ip_change_frequency(domain: str, client: httpx.AsyncClient) -> 
                     sub_ip_map[sub].add(ip)
             multi_ip_subs = {s: ips for s, ips in sub_ip_map.items() if len(ips) > 1}
             for sub, ips in list(multi_ip_subs.items())[:15]:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{sub} -> {', '.join(sorted(ips))}",
-                    type="Passive DNS Timeline - Multi-IP Subdomain",
+                    ftype="Passive DNS Timeline - Multi-IP Subdomain",
                     source="Passive DNS Timeline",
                     confidence="High",
                     color="orange",
@@ -351,9 +322,9 @@ async def _check_ip_change_frequency(domain: str, client: httpx.AsyncClient) -> 
                     tags=["pdns", "multi-ip", "subdomain", "ip-change"]
                 ))
             if multi_ip_subs:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{len(multi_ip_subs)} subdomains have multiple IPs - possible load balancing or flux",
-                    type="Passive DNS Timeline - IP Change Frequency",
+                    ftype="Passive DNS Timeline - IP Change Frequency",
                     source="Passive DNS Timeline",
                     confidence="High",
                     color="orange",
@@ -366,7 +337,7 @@ async def _check_ip_change_frequency(domain: str, client: httpx.AsyncClient) -> 
         pass
     return findings
 
-async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFinding]:
+async def crawl(target: str, client: AsyncClient) -> list[IntelligenceFinding]:
     findings = []
     raw_target = target.strip().lower()
     if "://" in raw_target:
@@ -374,9 +345,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     else:
         domain = raw_target
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Starting passive DNS timeline reconstruction for {domain}",
-        type="Passive DNS Timeline - Start",
+        ftype="Passive DNS Timeline - Start",
         source="Passive DNS Timeline",
         confidence="High",
         color="blue",
@@ -407,9 +378,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     summary_count = len(findings)
     if summary_count > 0:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Passive DNS Timeline complete: {summary_count} findings across multiple sources",
-            type="Passive DNS Timeline - Summary",
+            ftype="Passive DNS Timeline - Summary",
             source="Passive DNS Timeline",
             confidence="High",
             color="purple",

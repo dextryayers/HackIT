@@ -1,8 +1,7 @@
-import httpx
 import re
 import json
 from urllib.parse import urlparse
-from models import IntelligenceFinding
+from ..module_common import safe_fetch, make_finding
 
 SPF_ALL_MECHANISMS = {
     "-all": "HardFail (reject all)",
@@ -29,14 +28,10 @@ KNOWN_EMAIL_PROVIDERS = {
     "icloud": "Apple iCloud", "mx.cloudflare": "Cloudflare Email",
 }
 
-async def _analyze_spf(domain: str, client: httpx.AsyncClient) -> list:
+async def _analyze_spf(domain: str, client: AsyncClient) -> list:
     findings = []
     try:
-        resp = await client.get(
-            f"https://dns.google/resolve?name={domain}&type=TXT",
-            timeout=10.0,
-            headers={"Accept": "application/json"}
-        )
+        resp = await safe_fetch(client, f"https://dns.google/resolve?name={domain}&type=TXT", timeout=10.0)
         if resp.status_code == 200:
             data = resp.json()
             answers = data.get("Answer", [])
@@ -48,9 +43,9 @@ async def _analyze_spf(domain: str, client: httpx.AsyncClient) -> list:
                         spf_records.append(txt)
             if spf_records:
                 for i, spf in enumerate(spf_records):
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"SPF: {spf[:300]}",
-                        type="Email Security - SPF Record",
+                        ftype="Email Security - SPF Record",
                         source="Passive Email Security",
                         confidence="High",
                         color="slate",
@@ -60,9 +55,9 @@ async def _analyze_spf(domain: str, client: httpx.AsyncClient) -> list:
                     ))
                     for mech, desc in SPF_ALL_MECHANISMS.items():
                         if mech in spf.split():
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=f"SPF {mech}: {desc}",
-                                type="Email Security - SPF All Mechanism",
+                                ftype="Email Security - SPF All Mechanism",
                                 source="Passive Email Security",
                                 confidence="High",
                                 color="emerald" if mech == "-all" else ("orange" if mech == "~all" else "red"),
@@ -73,9 +68,9 @@ async def _analyze_spf(domain: str, client: httpx.AsyncClient) -> list:
                             ))
                     includes = re.findall(r'include:([\w.]+)', spf)
                     for inc in includes:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"SPF include: {inc}",
-                            type="Email Security - SPF Include Chain",
+                            ftype="Email Security - SPF Include Chain",
                             source="Passive Email Security",
                             confidence="High",
                             color="slate",
@@ -85,9 +80,9 @@ async def _analyze_spf(domain: str, client: httpx.AsyncClient) -> list:
                         ))
                     ip4_ranges = re.findall(r'ip4:([\d./]+)', spf)
                     for ip_range in ip4_ranges:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"SPF authorized IP: {ip_range}",
-                            type="Email Security - SPF IP4 Range",
+                            ftype="Email Security - SPF IP4 Range",
                             source="Passive Email Security",
                             confidence="High",
                             color="slate",
@@ -96,9 +91,9 @@ async def _analyze_spf(domain: str, client: httpx.AsyncClient) -> list:
                         ))
                     redirect = re.search(r'redirect=([\w.]+)', spf)
                     if redirect:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"SPF redirect: {redirect.group(1)}",
-                            type="Email Security - SPF Redirect",
+                            ftype="Email Security - SPF Redirect",
                             source="Passive Email Security",
                             confidence="High",
                             color="orange",
@@ -107,9 +102,9 @@ async def _analyze_spf(domain: str, client: httpx.AsyncClient) -> list:
                             tags=["email", "spf", "redirect"]
                         ))
                 if len(spf_records) > 1:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"{len(spf_records)} SPF records found (should be exactly 1)",
-                        type="Email Security - Multiple SPF Records",
+                        ftype="Email Security - Multiple SPF Records",
                         source="Passive Email Security",
                         confidence="High",
                         color="red",
@@ -119,9 +114,9 @@ async def _analyze_spf(domain: str, client: httpx.AsyncClient) -> list:
                         tags=["email", "spf", "misconfiguration"]
                     ))
             else:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity="No SPF record configured",
-                    type="Email Security - Missing SPF",
+                    ftype="Email Security - Missing SPF",
                     source="Passive Email Security",
                     confidence="High",
                     color="red",
@@ -134,7 +129,7 @@ async def _analyze_spf(domain: str, client: httpx.AsyncClient) -> list:
         pass
     return findings
 
-async def _analyze_dkim(domain: str, client: httpx.AsyncClient) -> list:
+async def _analyze_dkim(domain: str, client: AsyncClient) -> list:
     findings = []
     common_selectors = ["default", "google", "dkim", "mail", "selector1", "selector2",
                         "s1", "s2", "k1", "k2", "2020", "2021", "2022", "2023", "2024",
@@ -142,11 +137,7 @@ async def _analyze_dkim(domain: str, client: httpx.AsyncClient) -> list:
                         "mandrill", "sparkpost", "postmark", "amazonses", "dkim1", "dkim2"]
     for selector in common_selectors:
         try:
-            resp = await client.get(
-                f"https://dns.google/resolve?name={selector}._domainkey.{domain}&type=TXT",
-                timeout=8.0,
-                headers={"Accept": "application/json"}
-            )
+            resp = await safe_fetch(client, f"https://dns.google/resolve?name={selector}._domainkey.{domain}&type=TXT", timeout=8.0)
             if resp.status_code == 200:
                 data = resp.json()
                 answers = data.get("Answer", [])
@@ -154,9 +145,9 @@ async def _analyze_dkim(domain: str, client: httpx.AsyncClient) -> list:
                     if ans.get("type") == 16:
                         dkim_val = ans.get("data", "")
                         if "v=dkim1" in dkim_val.lower() or "v=DKIM1" in dkim_val:
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=f"DKIM selector '{selector}' found",
-                                type="Email Security - DKIM Record",
+                                ftype="Email Security - DKIM Record",
                                 source="Passive Email Security",
                                 confidence="High",
                                 color="emerald",
@@ -167,9 +158,9 @@ async def _analyze_dkim(domain: str, client: httpx.AsyncClient) -> list:
                             key_size_m = re.search(r'k=(\w+)', dkim_val)
                             if key_size_m:
                                 key_type = key_size_m.group(1)
-                                findings.append(IntelligenceFinding(
+                                findings.append(make_finding(
                                     entity=f"DKIM key type: {key_type}",
-                                    type="Email Security - DKIM Key Type",
+                                    ftype="Email Security - DKIM Key Type",
                                     source="Passive Email Security",
                                     confidence="High",
                                     color="slate",
@@ -185,9 +176,9 @@ async def _analyze_dkim(domain: str, client: httpx.AsyncClient) -> list:
                                     if key_length <= ks + 256 and key_length >= ks - 256:
                                         strength = label
                                         break
-                                findings.append(IntelligenceFinding(
+                                findings.append(make_finding(
                                     entity=f"DKIM key length: ~{key_length} bits ({strength})",
-                                    type="Email Security - DKIM Key Strength",
+                                    ftype="Email Security - DKIM Key Strength",
                                     source="Passive Email Security",
                                     confidence="Medium",
                                     color="emerald" if strength in ("Standard", "Strong") else "orange",
@@ -199,14 +190,10 @@ async def _analyze_dkim(domain: str, client: httpx.AsyncClient) -> list:
             pass
     return findings
 
-async def _analyze_dmarc(domain: str, client: httpx.AsyncClient) -> list:
+async def _analyze_dmarc(domain: str, client: AsyncClient) -> list:
     findings = []
     try:
-        resp = await client.get(
-            f"https://dns.google/resolve?name=_dmarc.{domain}&type=TXT",
-            timeout=10.0,
-            headers={"Accept": "application/json"}
-        )
+        resp = await safe_fetch(client, f"https://dns.google/resolve?name=_dmarc.{domain}&type=TXT", timeout=10.0)
         if resp.status_code == 200:
             data = resp.json()
             answers = data.get("Answer", [])
@@ -218,9 +205,9 @@ async def _analyze_dmarc(domain: str, client: httpx.AsyncClient) -> list:
                         dmarc_records.append(txt)
             if dmarc_records:
                 for dmarc in dmarc_records:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"DMARC: {dmarc[:300]}",
-                        type="Email Security - DMARC Record",
+                        ftype="Email Security - DMARC Record",
                         source="Passive Email Security",
                         confidence="High",
                         color="slate",
@@ -232,9 +219,9 @@ async def _analyze_dmarc(domain: str, client: httpx.AsyncClient) -> list:
                     if p_match:
                         policy = p_match.group(1)
                         full_policy = DMARC_POLICIES.get(f"p={policy}", f"Unknown ({policy})")
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"DMARC policy: p={policy} ({full_policy})",
-                            type="Email Security - DMARC Policy",
+                            ftype="Email Security - DMARC Policy",
                             source="Passive Email Security",
                             confidence="High",
                             color="emerald" if policy == "reject" else ("orange" if policy == "quarantine" else "red"),
@@ -246,9 +233,9 @@ async def _analyze_dmarc(domain: str, client: httpx.AsyncClient) -> list:
                     sp_match = re.search(r'sp=(\w+)', dmarc)
                     if sp_match:
                         sp_policy = sp_match.group(1)
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"DMARC subdomain policy: sp={sp_policy}",
-                            type="Email Security - DMARC Subdomain Policy",
+                            ftype="Email Security - DMARC Subdomain Policy",
                             source="Passive Email Security",
                             confidence="High",
                             color="slate",
@@ -258,9 +245,9 @@ async def _analyze_dmarc(domain: str, client: httpx.AsyncClient) -> list:
                     pct_match = re.search(r'pct=(\d+)', dmarc)
                     if pct_match:
                         pct = pct_match.group(1)
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"DMARC policy applies to {pct}% of email",
-                            type="Email Security - DMARC Sampling",
+                            ftype="Email Security - DMARC Sampling",
                             source="Passive Email Security",
                             confidence="High",
                             color="orange" if int(pct) < 100 else "emerald",
@@ -271,9 +258,9 @@ async def _analyze_dmarc(domain: str, client: httpx.AsyncClient) -> list:
                     rua_match = re.search(r'rua=mailto:([^;]+)', dmarc)
                     if rua_match:
                         rua = rua_match.group(1)
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"DMARC reporting (rua): {rua}",
-                            type="Email Security - DMARC RUA",
+                            ftype="Email Security - DMARC RUA",
                             source="Passive Email Security",
                             confidence="High",
                             color="slate",
@@ -283,9 +270,9 @@ async def _analyze_dmarc(domain: str, client: httpx.AsyncClient) -> list:
                     ruf_match = re.search(r'ruf=mailto:([^;]+)', dmarc)
                     if ruf_match:
                         ruf = ruf_match.group(1)
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"DMARC forensic reporting (ruf): {ruf}",
-                            type="Email Security - DMARC RUF",
+                            ftype="Email Security - DMARC RUF",
                             source="Passive Email Security",
                             confidence="High",
                             color="slate",
@@ -295,9 +282,9 @@ async def _analyze_dmarc(domain: str, client: httpx.AsyncClient) -> list:
                     fo_match = re.search(r'fo=(\d+)', dmarc)
                     if fo_match:
                         fo = fo_match.group(1)
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"DMARC forensic options: fo={fo}",
-                            type="Email Security - DMARC Forensic Options",
+                            ftype="Email Security - DMARC Forensic Options",
                             source="Passive Email Security",
                             confidence="High",
                             color="slate",
@@ -306,18 +293,18 @@ async def _analyze_dmarc(domain: str, client: httpx.AsyncClient) -> list:
                     ri_match = re.search(r'ri=(\d+)', dmarc)
                     if ri_match:
                         ri = ri_match.group(1)
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"DMARC report interval: {ri} seconds",
-                            type="Email Security - DMARC Report Interval",
+                            ftype="Email Security - DMARC Report Interval",
                             source="Passive Email Security",
                             confidence="High",
                             color="slate",
                             tags=["email", "dmarc", "ri"]
                         ))
             else:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity="No DMARC record configured",
-                    type="Email Security - Missing DMARC",
+                    ftype="Email Security - Missing DMARC",
                     source="Passive Email Security",
                     confidence="High",
                     color="red",
@@ -330,14 +317,10 @@ async def _analyze_dmarc(domain: str, client: httpx.AsyncClient) -> list:
         pass
     return findings
 
-async def _check_bimi(domain: str, client: httpx.AsyncClient) -> list:
+async def _check_bimi(domain: str, client: AsyncClient) -> list:
     findings = []
     try:
-        resp = await client.get(
-            f"https://dns.google/resolve?name=default._bimi.{domain}&type=TXT",
-            timeout=10.0,
-            headers={"Accept": "application/json"}
-        )
+        resp = await safe_fetch(client, f"https://dns.google/resolve?name=default._bimi.{domain}&type=TXT", timeout=10.0)
         if resp.status_code == 200:
             data = resp.json()
             answers = data.get("Answer", [])
@@ -345,9 +328,9 @@ async def _check_bimi(domain: str, client: httpx.AsyncClient) -> list:
                 if ans.get("type") == 16:
                     txt = ans.get("data", "").lower()
                     if "v=bimi1" in txt:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"BIMI: {txt[:300]}",
-                            type="Email Security - BIMI Record",
+                            ftype="Email Security - BIMI Record",
                             source="Passive Email Security",
                             confidence="High",
                             color="emerald",
@@ -357,9 +340,9 @@ async def _check_bimi(domain: str, client: httpx.AsyncClient) -> list:
                         ))
                         logo_match = re.search(r'l=([^;]+)', txt)
                         if logo_match:
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=f"BIMI logo: {logo_match.group(1)}",
-                                type="Email Security - BIMI Logo URL",
+                                ftype="Email Security - BIMI Logo URL",
                                 source="Passive Email Security",
                                 confidence="High",
                                 color="slate",
@@ -369,14 +352,10 @@ async def _check_bimi(domain: str, client: httpx.AsyncClient) -> list:
         pass
     return findings
 
-async def _check_mta_sts(domain: str, client: httpx.AsyncClient) -> list:
+async def _check_mta_sts(domain: str, client: AsyncClient) -> list:
     findings = []
     try:
-        resp = await client.get(
-            f"https://dns.google/resolve?name=_mta-sts.{domain}&type=TXT",
-            timeout=10.0,
-            headers={"Accept": "application/json"}
-        )
+        resp = await safe_fetch(client, f"https://dns.google/resolve?name=_mta-sts.{domain}&type=TXT", timeout=10.0)
         if resp.status_code == 200:
             data = resp.json()
             answers = data.get("Answer", [])
@@ -384,9 +363,9 @@ async def _check_mta_sts(domain: str, client: httpx.AsyncClient) -> list:
                 if ans.get("type") == 16:
                     txt = ans.get("data", "").lower()
                     if "v=sts" in txt:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"MTA-STS: {txt[:300]}",
-                            type="Email Security - MTA-STS Record",
+                            ftype="Email Security - MTA-STS Record",
                             source="Passive Email Security",
                             confidence="High",
                             color="emerald",
@@ -398,14 +377,10 @@ async def _check_mta_sts(domain: str, client: httpx.AsyncClient) -> list:
         pass
     return findings
 
-async def _check_mx_analysis(domain: str, client: httpx.AsyncClient) -> list:
+async def _check_mx_analysis(domain: str, client: AsyncClient) -> list:
     findings = []
     try:
-        resp = await client.get(
-            f"https://dns.google/resolve?name={domain}&type=MX",
-            timeout=10.0,
-            headers={"Accept": "application/json"}
-        )
+        resp = await safe_fetch(client, f"https://dns.google/resolve?name={domain}&type=MX", timeout=10.0)
         if resp.status_code == 200:
             data = resp.json()
             answers = data.get("Answer", [])
@@ -421,9 +396,9 @@ async def _check_mx_analysis(domain: str, client: httpx.AsyncClient) -> list:
             mx_entries.sort()
             if mx_entries:
                 priorities = [p for p, s in mx_entries]
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"MX: {len(mx_entries)} servers, priorities {min(priorities)}-{max(priorities)}",
-                    type="Email Security - MX Summary",
+                    ftype="Email Security - MX Summary",
                     source="Passive Email Security",
                     confidence="High",
                     color="slate",
@@ -437,9 +412,9 @@ async def _check_mx_analysis(domain: str, client: httpx.AsyncClient) -> list:
                         if keyword in server.lower():
                             provider = prov
                             break
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"MX (prio {prio}): {server}",
-                        type=f"Email Security - MX Server: {provider}",
+                        ftype=f"Email Security - MX Server: {provider}",
                         source="Passive Email Security",
                         confidence="High",
                         color="slate",
@@ -450,7 +425,7 @@ async def _check_mx_analysis(domain: str, client: httpx.AsyncClient) -> list:
         pass
     return findings
 
-async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFinding]:
+async def crawl(target: str, client: AsyncClient) -> list[IntelligenceFinding]:
     findings = []
     domain = target.strip().lower()
     if "://" in domain:
@@ -475,9 +450,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     findings.extend(mx_findings)
 
     if findings:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Email Security Assessment complete: {len(findings)} findings",
-            type="Email Security - Summary",
+            ftype="Email Security - Summary",
             source="Passive Email Security",
             confidence="High", color="purple",
             status="Complete",

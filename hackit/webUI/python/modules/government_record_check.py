@@ -1,9 +1,7 @@
-import httpx
 import re
-import json
 from urllib.parse import urlparse, quote
 from typing import List
-from models import IntelligenceFinding
+from module_common import safe_fetch, make_finding
 
 GOVERNMENT_SOURCES = [
     ("SEC EDGAR", "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK={}&owner=exclude&count=10"),
@@ -24,16 +22,17 @@ GOVERNMENT_SOURCES = [
 ]
 
 
-async def search_source(name: str, url_template: str, target: str, client: httpx.AsyncClient) -> dict:
+async def search_source(name: str, url_template: str, target: str, client) -> dict:
     try:
         url = url_template.format(quote(target))
-        resp = await client.get(
+        resp = await safe_fetch(
+            client,
             url,
             timeout=20.0,
             headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"},
             follow_redirects=True,
         )
-        if resp.status_code == 200 and len(resp.text) > 200:
+        if resp and resp.status_code == 200 and len(resp.text) > 200:
             text = resp.text
             target_count = text.lower().count(target.lower())
             emails = re.findall(r'[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}', text)
@@ -53,7 +52,7 @@ async def search_source(name: str, url_template: str, target: str, client: httpx
     return None
 
 
-async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFinding]:
+async def crawl(target: str, client) -> List:
     findings = []
     t = target.strip().lower()
     if t.startswith("http"):
@@ -69,9 +68,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             sources_with_data += 1
 
     if all_results:
-        findings.append(IntelligenceFinding(
-            entity=f"Government records scan: {sources_with_data}/{len(GOVERNMENT_SOURCES)} databases searched",
-            type="Government: Coverage Report",
+        findings.append(make_finding(
+            f"Government records scan: {sources_with_data}/{len(GOVERNMENT_SOURCES)} databases searched",
+            ftype="Government: Coverage Report",
             source="GovRecordCheck",
             confidence="High",
             color="slate",
@@ -85,9 +84,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
     for result in all_results:
         mention_count = result["target_mentions"]
 
-        findings.append(IntelligenceFinding(
-            entity=f"{result['name']}: {mention_count} mentions for {t}",
-            type="Government: Database Result",
+        findings.append(make_finding(
+            f"{result['name']}: {mention_count} mentions for {t}",
+            ftype="Government: Database Result",
             source="GovRecordCheck",
             confidence="Medium",
             color="sky" if mention_count > 0 else "slate",
@@ -100,9 +99,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
         if result["emails"]:
             for email in result["emails"][:2]:
-                findings.append(IntelligenceFinding(
-                    entity=f"Email in government records: {email}",
-                    type="Government: Email Discovery",
+                findings.append(make_finding(
+                    f"Email in government records: {email}",
+                    ftype="Government: Email Discovery",
                     source="GovRecordCheck",
                     confidence="Medium",
                     color="orange",
@@ -115,9 +114,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
         if result["addresses"]:
             for addr in result["addresses"][:2]:
-                findings.append(IntelligenceFinding(
-                    entity=f"Address in government records: {addr[:100]}",
-                    type="Government: Address Discovery",
+                findings.append(make_finding(
+                    f"Address in government records: {addr[:100]}",
+                    ftype="Government: Address Discovery",
                     source="GovRecordCheck",
                     confidence="Medium",
                     color="orange",
@@ -130,9 +129,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
         if result["phones"]:
             for phone in result["phones"][:2]:
-                findings.append(IntelligenceFinding(
-                    entity=f"Phone in government records: {phone}",
-                    type="Government: Phone Discovery",
+                findings.append(make_finding(
+                    f"Phone in government records: {phone}",
+                    ftype="Government: Phone Discovery",
                     source="GovRecordCheck",
                     confidence="Medium",
                     color="orange",
@@ -150,9 +149,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         all_addresses.extend(r.get("addresses", []))
 
     if all_emails:
-        findings.append(IntelligenceFinding(
-            entity=f"{len(set(all_emails))} unique emails found across government databases",
-            type="Government: Email Aggregation",
+        findings.append(make_finding(
+            f"{len(set(all_emails))} unique emails found across government databases",
+            ftype="Government: Email Aggregation",
             source="GovRecordCheck",
             confidence="Medium",
             color="orange",
@@ -164,9 +163,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         ))
 
     if all_addresses:
-        findings.append(IntelligenceFinding(
-            entity=f"{len(set(all_addresses))} unique addresses found across government databases",
-            type="Government: Address Aggregation",
+        findings.append(make_finding(
+            f"{len(set(all_addresses))} unique addresses found across government databases",
+            ftype="Government: Address Aggregation",
             source="GovRecordCheck",
             confidence="Medium",
             color="orange",
@@ -178,9 +177,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         ))
 
     if not all_results:
-        findings.append(IntelligenceFinding(
-            entity="No government records found for target",
-            type="Government: Scan Complete",
+        findings.append(make_finding(
+            "No government records found for target",
+            ftype="Government: Scan Complete",
             source="GovRecordCheck",
             confidence="Low",
             color="emerald",

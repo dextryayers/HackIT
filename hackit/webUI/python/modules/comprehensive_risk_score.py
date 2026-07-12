@@ -1,9 +1,8 @@
 import httpx
-import re
-import json
-from urllib.parse import urlparse, quote
+from urllib.parse import urlparse
 from typing import List
 from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 
 RISK_CATEGORIES = {
     "infrastructure": {
@@ -130,7 +129,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         category_scores.append(score)
         total_raw += score["raw_score"]
 
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Risk Category: {cat_name.replace('_', ' ').title()} - Score: {score['raw_score']}/{score['max_score']}",
             type="Risk: Category Assessment",
             source="RiskScoreEngine",
@@ -145,7 +144,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
         if cat_data["subcategories"]:
             for sub in cat_data["subcategories"][:3]:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Subcategory: {sub} (in {cat_name.replace('_', ' ').title()})",
                     type="Risk: Subcategory Check",
                     source="RiskScoreEngine",
@@ -161,7 +160,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
     total_score = min(int(total_raw), 1000)
     risk_label, risk_color = get_risk_level(total_score)
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"COMPREHENSIVE RISK SCORE: {total_score}/1000 - {risk_label.upper()}",
         type="Risk: Overall Score",
         source="RiskScoreEngine",
@@ -175,9 +174,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
     ))
 
     breakdown = ", ".join(f"{cs['category'].replace('_', ' ').title()}({cs['raw_score']})" for cs in sorted(category_scores, key=lambda x: x["raw_score"], reverse=True))
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Risk breakdown: {breakdown}",
-        type="Risk: Category Breakdown",
+        ftype="Risk: Category Breakdown",
         source="RiskScoreEngine",
         confidence="High",
         color="slate",
@@ -190,9 +189,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
     recommendations = generate_recommendations(category_scores, total_score)
     for i, rec in enumerate(recommendations):
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Recommendation {i+1}: {rec}",
-            type="Risk: Recommendation",
+            ftype="Risk: Recommendation",
             source="RiskScoreEngine",
             confidence="High",
             color="blue",
@@ -203,7 +202,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             tags=["risk", "recommendation", f"rec-{i+1}"],
         ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Executive Summary: {t} - Risk Level {risk_label} ({total_score}/1000)",
         type="Risk: Executive Summary",
         source="RiskScoreEngine",
@@ -232,9 +231,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             risk_distribution["Informational"] += 1
 
     dist_str = ", ".join(f"{k}({v})" for k, v in risk_distribution.items() if v > 0)
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Risk distribution across categories: {dist_str}",
-        type="Risk: Distribution",
+        ftype="Risk: Distribution",
         source="RiskScoreEngine",
         confidence="High",
         color="slate",
@@ -245,7 +244,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         tags=["risk", "distribution"],
     ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Benchmark: {t} risk score {total_score}/1000 ({risk_label})",
         type="Risk: Peer Benchmark",
         source="RiskScoreEngine",

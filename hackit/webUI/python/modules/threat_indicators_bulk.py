@@ -1,9 +1,9 @@
-import httpx
 import re
 import json
 import ipaddress
 from urllib.parse import urlparse, quote
 from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 
 IOC_PATTERNS = {
     "ipv4": re.compile(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$'),
@@ -66,7 +66,7 @@ async def classify_ioc_type(target: str) -> list:
 async def check_abuseipdb(client: httpx.AsyncClient, target: str) -> list:
     results = []
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client,
             f"https://www.abuseipdb.com/check/{target}/json",
             timeout=15.0,
             headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
@@ -93,7 +93,7 @@ async def check_detection_feeds(client: httpx.AsyncClient, target: str) -> list:
     try:
         for feed_url in DETECTION_FEEDS:
             try:
-                resp = await client.get(feed_url, timeout=15.0,
+                resp = await safe_fetch(client,feed_url, timeout=15.0,
                     headers={"User-Agent": "Mozilla/5.0"})
                 if resp.status_code == 200:
                     content = resp.text.lower()
@@ -109,7 +109,7 @@ async def check_detection_feeds(client: httpx.AsyncClient, target: str) -> list:
 async def check_alienvault_otx(client: httpx.AsyncClient, target: str) -> list:
     results = []
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client,
             f"https://otx.alienvault.com/api/v1/indicators/IPv4/{target}/general",
             timeout=15.0,
             headers={"User-Agent": "Mozilla/5.0"}
@@ -156,7 +156,7 @@ async def calculate_malicious_probability(feed_hits: list, abuseipdb_data: list,
 async def check_threatcrowd(client: httpx.AsyncClient, target: str) -> list:
     results = []
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client,
             f"https://threatcrowd.org/searchApi/v2/ip/report/?ip={target}",
             timeout=15.0,
             headers={"User-Agent": "Mozilla/5.0"}
@@ -193,9 +193,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     ioc_type_results = await classify_ioc_type(query)
     for r in ioc_type_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"IoC type classified: {r['type']} for target {r['target']}",
-            type="IoC Type Classification",
+            ftype="IoC Type Classification",
             source="Bulk IoC Analyzer",
             confidence="High",
             color="slate",
@@ -208,9 +208,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     abuseipdb_results = await check_abuseipdb(client, query)
     for r in abuseipdb_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"AbuseIPDB: {r.get('confidence', 0)}% confidence, {r.get('total_reports', 0)} reports, ISP: {r.get('isp', 'N/A')}",
-            type="IP Reputation Check",
+            ftype="IP Reputation Check",
             source="AbuseIPDB",
             confidence="High" if r.get("confidence", 0) > 50 else "Medium",
             color="red" if r.get("confidence", 0) > 50 else "yellow",
@@ -224,9 +224,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     feed_hits = await check_detection_feeds(client, query)
     for r in feed_hits:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Detection feed hit: {r['feed']}",
-            type="Bulk Feed Detection",
+            ftype="Bulk Feed Detection",
             source=r['feed'],
             confidence="Medium",
             color="orange",
@@ -239,9 +239,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     otx_results = await check_alienvault_otx(client, query)
     for r in otx_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"AlienVault OTX: {r.get('pulse_count', 0)} pulses related to target",
-            type="OTX Pulse Check",
+            ftype="OTX Pulse Check",
             source="AlienVault OTX",
             confidence="Medium",
             color="orange",
@@ -254,9 +254,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     threatcrowd_results = await check_threatcrowd(client, query)
     for r in threatcrowd_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"ThreatCrowd: {len(r.get('resolutions', []))} resolutions, {len(r.get('hashes', []))} hashes, {r.get('votes', 0)} votes",
-            type="ThreatCrowd Check",
+            ftype="ThreatCrowd Check",
             source="ThreatCrowd",
             confidence="Medium",
             color="orange",
@@ -268,9 +268,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         ))
 
     risk_score = await calculate_malicious_probability(feed_hits, abuseipdb_results, len(DETECTION_FEEDS))
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Malicious probability score: {risk_score['probability']}/100 ({risk_score['severity']}) - {risk_score['feeds_detected']}/{risk_score['total_feeds_checked']} feeds",
-        type="Malicious Probability Score",
+        ftype="Malicious Probability Score",
         source="Bulk IoC Analyzer",
         confidence="Medium",
         color="red" if risk_score['probability'] >= 50 else "yellow",
@@ -284,9 +284,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     timeline = await build_ioc_timeline(feed_hits, abuseipdb_results)
     for t in timeline:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"IoC timeline: {t['source']} - last seen: {t['date']}",
-            type="IoC Timeline",
+            ftype="IoC Timeline",
             source="Bulk IoC Analyzer",
             confidence="Low",
             color="slate",
@@ -298,9 +298,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         ))
 
     for ioc_type in IOC_PATTERNS.keys():
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"IoC type monitored: {ioc_type}",
-            type="IoC Type Coverage",
+            ftype="IoC Type Coverage",
             source="Bulk IoC Analyzer",
             confidence="Low",
             color="slate",
@@ -311,9 +311,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             tags=["ioc", "coverage", ioc_type]
         ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Bulk IoC analysis complete for {query}: checked {len(DETECTION_FEEDS)} feeds, {len(IOC_PATTERNS)} types, multiple sources",
-        type="Bulk IoC Analysis Summary",
+        ftype="Bulk IoC Analysis Summary",
         source="Bulk IoC Analyzer",
         confidence="Medium",
         color="slate",

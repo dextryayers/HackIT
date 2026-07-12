@@ -1,11 +1,9 @@
 import httpx
 import re
 import json
-import asyncio
-import socket
-from datetime import datetime
 from urllib.parse import urlparse
 from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 
 PUBLIC_DNS_RESOLVERS = [
     "https://dns.google/resolve",
@@ -22,7 +20,7 @@ WILDCARD_TEST_PREFIXES = [
 async def _check_dnssec_chain(domain: str, client: httpx.AsyncClient) -> list:
     findings = []
     try:
-        ds_resp = await client.get(
+        ds_resp = await safe_fetch(client, 
             f"https://dns.google/resolve?name={domain}&type=DS",
             timeout=10.0,
             headers={"Accept": "application/json"}
@@ -32,7 +30,7 @@ async def _check_dnssec_chain(domain: str, client: httpx.AsyncClient) -> list:
             ds_answers = ds_data.get("Answer", [])
             ds_records = [a for a in ds_answers if a.get("type") == 43]
             if ds_records:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{len(ds_records)} DS records found - DNSSEC chain exists",
                     type="Forensic DNS - DNSSEC DS Records",
                     source="Google DoH",
@@ -42,7 +40,7 @@ async def _check_dnssec_chain(domain: str, client: httpx.AsyncClient) -> list:
                     tags=["forensic", "dnssec", "ds"]
                 ))
                 for rec in ds_records[:5]:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=rec.get("data", "")[:200],
                         type="Forensic DNS - DS Record Detail",
                         source="Google DoH",
@@ -50,16 +48,16 @@ async def _check_dnssec_chain(domain: str, client: httpx.AsyncClient) -> list:
                         tags=["forensic", "dnssec", "ds-record"]
                     ))
             else:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity="No DS records found - DNSSEC not configured",
-                    type="Forensic DNS - Missing DNSSEC",
+                    ftype="Forensic DNS - Missing DNSSEC",
                     source="Google DoH",
                     confidence="High", color="orange",
                     threat_level="Standard Target",
                     status="No DNSSEC",
                     tags=["forensic", "dnssec", "missing"]
                 ))
-        dnskey_resp = await client.get(
+        dnskey_resp = await safe_fetch(client, 
             f"https://dns.google/resolve?name={domain}&type=DNSKEY",
             timeout=10.0,
             headers={"Accept": "application/json"}
@@ -70,7 +68,7 @@ async def _check_dnssec_chain(domain: str, client: httpx.AsyncClient) -> list:
             dnskey_records = [a for a in dk_answers if a.get("type") == 48]
             rrsig_records = [a for a in dk_answers if a.get("type") == 46]
             if dnskey_records:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{len(dnskey_records)} DNSKEY records",
                     type="Forensic DNS - DNSKEY Records",
                     source="Google DoH",
@@ -81,15 +79,15 @@ async def _check_dnssec_chain(domain: str, client: httpx.AsyncClient) -> list:
                 for dk in dnskey_records[:3]:
                     flag = dk.get("data", "").split()[0] if dk.get("data") else ""
                     zone_type = "KSK (Secure Entry Point)" if "257" in str(flag) else "ZSK (Zone Signing)"
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"DNSKEY flag={flag} - {zone_type}",
-                        type="Forensic DNS - DNSKEY Type",
+                        ftype="Forensic DNS - DNSKEY Type",
                         source="Google DoH",
                         confidence="High", color="slate",
                         tags=["forensic", "dnssec", dnskey_records.lower()]
                     ))
             if rrsig_records:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{len(rrsig_records)} RRSIG records - zone is signed",
                     type="Forensic DNS - RRSIG Validation",
                     source="Google DoH",
@@ -106,7 +104,7 @@ async def _check_wildcard_dns(domain: str, client: httpx.AsyncClient) -> list:
     try:
         for prefix in WILDCARD_TEST_PREFIXES[:3]:
             try:
-                resp = await client.get(
+                resp = await safe_fetch(client, 
                     f"https://dns.google/resolve?name={prefix}.{domain}&type=A",
                     timeout=10.0,
                     headers={"Accept": "application/json"}
@@ -116,7 +114,7 @@ async def _check_wildcard_dns(domain: str, client: httpx.AsyncClient) -> list:
                     answers = data.get("Answer", [])
                     a_records = [a for a in answers if a.get("type") == 1]
                     if a_records:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"Wildcard DNS DETECTED: {prefix}.{domain} resolves to {a_records[0].get('data', '')}",
                             type="Forensic DNS - Wildcard Detection",
                             source="Google DoH",
@@ -130,9 +128,9 @@ async def _check_wildcard_dns(domain: str, client: httpx.AsyncClient) -> list:
                         return findings
             except Exception:
                 pass
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="No wildcard DNS detected",
-            type="Forensic DNS - No Wildcard",
+            ftype="Forensic DNS - No Wildcard",
             source="Google DoH",
             confidence="High", color="emerald",
             status="No Wildcard",
@@ -145,7 +143,7 @@ async def _check_wildcard_dns(domain: str, client: httpx.AsyncClient) -> list:
 async def _check_nsec_enumeration(domain: str, client: httpx.AsyncClient) -> list:
     findings = []
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://dns.google/resolve?name={domain}&type=NSEC",
             timeout=10.0,
             headers={"Accept": "application/json"}
@@ -155,9 +153,9 @@ async def _check_nsec_enumeration(domain: str, client: httpx.AsyncClient) -> lis
             answers = data.get("Answer", [])
             nsec_records = [a for a in answers if a.get("type") == 47]
             if nsec_records:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"NSEC records found - zone might be enumerable via NSEC walking",
-                    type="Forensic DNS - NSEC Walking Risk",
+                    ftype="Forensic DNS - NSEC Walking Risk",
                     source="Google DoH",
                     confidence="Medium",
                     color="orange",
@@ -167,7 +165,7 @@ async def _check_nsec_enumeration(domain: str, client: httpx.AsyncClient) -> lis
                     tags=["forensic", "nsec", "enumeration"]
                 ))
             else:
-                nsec3_resp = await client.get(
+                nsec3_resp = await safe_fetch(client, 
                     f"https://dns.google/resolve?name={domain}&type=NSEC3PARAM",
                     timeout=10.0,
                     headers={"Accept": "application/json"}
@@ -177,9 +175,9 @@ async def _check_nsec_enumeration(domain: str, client: httpx.AsyncClient) -> lis
                     n3_answers = n3_data.get("Answer", [])
                     nsec3param = [a for a in n3_answers if a.get("type") == 61]
                     if nsec3param:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"NSEC3PARAM found - NSEC3 walking possible",
-                            type="Forensic DNS - NSEC3 Walking Risk",
+                            ftype="Forensic DNS - NSEC3 Walking Risk",
                             source="Google DoH",
                             confidence="Medium",
                             color="orange",
@@ -193,7 +191,7 @@ async def _check_nsec_enumeration(domain: str, client: httpx.AsyncClient) -> lis
 async def _check_ttl_anomalies(domain: str, client: httpx.AsyncClient) -> list:
     findings = []
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"https://dns.google/resolve?name={domain}&type=A",
             timeout=10.0,
             headers={"Accept": "application/json"}
@@ -207,7 +205,7 @@ async def _check_ttl_anomalies(domain: str, client: httpx.AsyncClient) -> list:
                     ttl_values.append(ans.get("TTL", 0))
             if ttl_values:
                 avg_ttl = sum(ttl_values) / len(ttl_values)
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"TTL analysis: avg={avg_ttl:.0f}s, min={min(ttl_values)}s, max={max(ttl_values)}s",
                     type="Forensic DNS - TTL Analysis",
                     source="Google DoH",
@@ -216,7 +214,7 @@ async def _check_ttl_anomalies(domain: str, client: httpx.AsyncClient) -> list:
                     tags=["forensic", "ttl"]
                 ))
                 if avg_ttl < 60:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Very low average TTL ({avg_ttl:.0f}s) - possible fast-flux",
                         type="Forensic DNS - Fast-Flux TTL Indicator",
                         source="Google DoH",
@@ -240,7 +238,7 @@ async def _check_cname_chain(domain: str, client: httpx.AsyncClient) -> list:
             break
         seen.add(current)
         try:
-            resp = await client.get(
+            resp = await safe_fetch(client, 
                 f"https://dns.google/resolve?name={current}&type=CNAME",
                 timeout=10.0,
                 headers={"Accept": "application/json"}
@@ -261,7 +259,7 @@ async def _check_cname_chain(domain: str, client: httpx.AsyncClient) -> list:
         except Exception:
             break
     if chain:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"CNAME chain ({len(chain)+1} hops): {' -> '.join([domain] + [c.split(' -> ')[1] for c in chain])}",
             type="Forensic DNS - CNAME Chain Analysis",
             source="Google DoH",
@@ -271,7 +269,7 @@ async def _check_cname_chain(domain: str, client: httpx.AsyncClient) -> list:
             tags=["forensic", "cname", "chain"]
         ))
         if len(chain) >= 3:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Long CNAME chain ({len(chain)} hops) - possible redirector domain",
                 type="Forensic DNS - Long CNAME Chain",
                 source="Google DoH",
@@ -288,7 +286,7 @@ async def _compare_dns_views(domain: str, client: httpx.AsyncClient) -> list:
     all_answers = {}
     for resolver_url in PUBLIC_DNS_RESOLVERS[:2]:
         try:
-            resp = await client.get(
+            resp = await safe_fetch(client, 
                 f"{resolver_url}?name={domain}&type=A",
                 timeout=10.0,
                 headers={"Accept": "application/json"}
@@ -309,9 +307,9 @@ async def _compare_dns_views(domain: str, client: httpx.AsyncClient) -> list:
             if ipsets[0] != ipsets[1]:
                 diff1 = ipsets[0] - ipsets[1]
                 diff2 = ipsets[1] - ipsets[0]
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"DNS view discrepancy: {diff1} vs {diff2}",
-                    type="Forensic DNS - DNS View Poisoning Check",
+                    ftype="Forensic DNS - DNS View Poisoning Check",
                     source="Forensic DNS Analysis",
                     confidence="High",
                     color="red",
@@ -321,9 +319,9 @@ async def _compare_dns_views(domain: str, client: httpx.AsyncClient) -> list:
                     tags=["forensic", "dns-poisoning", "view-discrepancy"]
                 ))
             else:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity="Consistent DNS responses across resolvers",
-                    type="Forensic DNS - View Consistency OK",
+                    ftype="Forensic DNS - View Consistency OK",
                     source="Forensic DNS Analysis",
                     confidence="High", color="emerald",
                     status="Consistent",
@@ -356,7 +354,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     findings.extend(view_findings)
 
     if findings:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Forensic DNS Analysis complete: {len(findings)} findings",
             type="Forensic DNS - Summary",
             source="Forensic DNS Analysis",

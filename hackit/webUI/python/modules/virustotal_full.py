@@ -1,8 +1,6 @@
-import httpx
-import asyncio
-import json
-from datetime import datetime
 from typing import List
+import httpx
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 from models import IntelligenceFinding
 from settings_store import get_api_key
 
@@ -13,7 +11,7 @@ REVIEWED_HASHES = set()
 
 async def vt_get(endpoint: str, client: httpx.AsyncClient) -> dict:
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client,
             f"{VT_API}/{endpoint}",
             headers={"User-Agent": VT_UA, "Accept": "application/json", "x-apikey": get_api_key("virustotal")},
             timeout=15.0
@@ -55,21 +53,15 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
     findings = []
     t = target.strip().lower()
 
-    is_ip = False
-    try:
-        import socket
-        socket.inet_aton(t)
-        is_ip = True
-    except:
-        pass
+    target_is_ip = is_ip(t)
 
-    if is_ip:
+    if target_is_ip:
         res_data = await vt_ip_resolutions(t, client)
         resolutions = res_data.get("data", [])
         if resolutions:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"DNS resolutions: {len(resolutions)} historical records",
-                type="VT IP Resolutions",
+                ftype="VT IP Resolutions",
                 source="VirusTotal (Full)",
                 confidence="Medium",
                 color="slate",
@@ -82,9 +74,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                 attrs = res.get("attributes", {})
                 hostname = attrs.get("host_name", "unknown")
                 date = attrs.get("date", "")
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Resolution: {hostname} ({date})",
-                    type="VT IP Resolution Detail",
+                    ftype="VT IP Resolution Detail",
                     source="VirusTotal (Full)",
                     confidence="Medium",
                     color="slate",
@@ -96,9 +88,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         whois_data = await vt_ip_historical_whois(t, client)
         data = whois_data.get("data", [])
         if data:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Historical WHOIS: {len(data)} records",
-                type="VT IP WHOIS",
+                ftype="VT IP WHOIS",
                 source="VirusTotal (Full)",
                 confidence="Medium",
                 color="slate",
@@ -108,9 +100,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                 tags=["virustotal", "whois"]
             ))
             for entry in data[:3]:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"WHOIS: {str(entry.get('attributes', {}))[:200]}",
-                    type="VT IP WHOIS Detail",
+                    ftype="VT IP WHOIS Detail",
                     source="VirusTotal (Full)",
                     confidence="Medium",
                     color="slate",
@@ -123,9 +115,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         sub_data = await vt_domain_subdomains(t, client)
         subdomains = sub_data.get("data", [])
         if subdomains:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Subdomains: {len(subdomains)} found",
-                type="VT Subdomain Discovery",
+                ftype="VT Subdomain Discovery",
                 source="VirusTotal (Full)",
                 confidence="High",
                 color="slate",
@@ -137,9 +129,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             for sub in subdomains[:5]:
                 attrs = sub.get("attributes", {})
                 sub_id = attrs.get("id", str(sub)[:100])
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Subdomain: {sub_id}",
-                    type="VT Subdomain Detail",
+                    ftype="VT Subdomain Detail",
                     source="VirusTotal (Full)",
                     confidence="Medium",
                     color="slate",
@@ -151,9 +143,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         res_data = await vt_domain_resolutions(t, client)
         resolutions = res_data.get("data", [])
         if resolutions:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Domain resolutions: {len(resolutions)} IP records",
-                type="VT Domain Resolutions",
+                ftype="VT Domain Resolutions",
                 source="VirusTotal (Full)",
                 confidence="Medium",
                 color="slate",
@@ -166,9 +158,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                 attrs = res.get("attributes", {})
                 ip_addr = attrs.get("ip_address", "unknown")
                 date = attrs.get("date", "")
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Resolved IP: {ip_addr} ({date})",
-                    type="VT Resolution Detail",
+                    ftype="VT Resolution Detail",
                     source="VirusTotal (Full)",
                     confidence="Medium",
                     color="slate",
@@ -180,9 +172,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         related_files = await vt_related_hashes(t, client)
         files_data = related_files.get("data", [])
         if files_data:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Related files: {len(files_data)} samples",
-                type="VT Related Files",
+                ftype="VT Related Files",
                 source="VirusTotal (Full)",
                 confidence="Medium",
                 color="orange",
@@ -195,9 +187,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                 attrs = f.get("attributes", {})
                 fhash = attrs.get("sha256", "")[:16]
                 det = attrs.get("last_analysis_stats", {}).get("malicious", 0)
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Related file {fhash}... (det: {det})",
-                    type="VT Related File Detail",
+                    ftype="VT Related File Detail",
                     source="VirusTotal (Full)",
                     confidence="Medium",
                     color="orange" if det > 0 else "slate",
@@ -213,9 +205,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         rel_data = await vt_url_relations(url_id, client)
         relations = rel_data.get("data", [])
         if relations:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"URL relations: {len(relations)} connected entities",
-                type="VT URL Relations",
+                ftype="VT URL Relations",
                 source="VirusTotal (Full)",
                 confidence="Medium",
                 color="slate",
@@ -225,9 +217,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                 tags=["virustotal", "relations"]
             ))
             for rel in relations[:5]:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Relation: {str(rel.get('attributes', {}).get('id', str(rel)))[:150]}",
-                    type="VT URL Relation Detail",
+                    ftype="VT URL Relation Detail",
                     source="VirusTotal (Full)",
                     confidence="Low",
                     color="slate",
@@ -239,9 +231,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         pass
 
     if not findings:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="No VirusTotal full intelligence data available",
-            type="VT Full Check Complete",
+            ftype="VT Full Check Complete",
             source="VirusTotal (Full)",
             confidence="Low",
             color="emerald",

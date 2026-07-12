@@ -1,10 +1,7 @@
-import httpx
 import re
 import json
-import asyncio
-import socket
 from urllib.parse import urlparse
-from models import IntelligenceFinding
+from ..module_common import safe_fetch, make_finding, resolve_ip
 
 ASN_DATABASE = {
     "15169": "Google", "16509": "Amazon", "8075": "Microsoft",
@@ -22,56 +19,49 @@ PEERING_LANS = {
     "IXP": ["Internet Exchange"],
 }
 
-async def _resolve_and_get_asn(domain: str, client: httpx.AsyncClient) -> list:
+async def _resolve_and_get_asn(domain: str, client: AsyncClient) -> list:
     findings = []
-    ip = None
-    try:
-        loop = asyncio.get_event_loop()
-        ip = await loop.run_in_executor(None, lambda: socket.gethostbyname(domain))
-    except Exception:
+    ip = resolve_ip(domain)
+    if not ip:
         return findings
     if ip:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=ip,
-            type="Network Map - Resolved IP",
+            ftype="Network Map - Resolved IP",
             source="Passive Network Map",
             confidence="High", color="blue",
             status="Resolved",
             tags=["network", "ip"]
         ))
     try:
-        geo_resp = await client.get(
-            f"https://ipapi.co/{ip}/json/",
-            timeout=10.0,
-            headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}
-        )
+        geo_resp = await safe_fetch(client, f"https://ipapi.co/{ip}/json/", timeout=10.0)
         if geo_resp.status_code == 200:
             geo = geo_resp.json()
             asn = geo.get("asn", "")
             org = geo.get("org", "")
             country = geo.get("country_name", "")
             if asn:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=asn,
-                    type="Network Map - ASN Number",
+                    ftype="Network Map - ASN Number",
                     source="ipapi.co",
                     confidence="High", color="slate",
                     status="Identified",
                     tags=["network", "asn"]
                 ))
                 if asn in ASN_DATABASE:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"AS{asn} -> {ASN_DATABASE[asn]}",
-                        type="Network Map - ASN Owner",
+                        ftype="Network Map - ASN Owner",
                         source="ipapi.co",
                         confidence="High", color="orange",
                         status=f"Owner: {ASN_DATABASE[asn]}",
                         tags=["network", "asn-owner"]
                     ))
             if org:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=org[:200],
-                    type="Network Map - ISP/Organization",
+                    ftype="Network Map - ISP/Organization",
                     source="ipapi.co",
                     confidence="High", color="slate",
                     tags=["network", "isp"]
@@ -79,11 +69,7 @@ async def _resolve_and_get_asn(domain: str, client: httpx.AsyncClient) -> list:
     except Exception:
         pass
     try:
-        rdap_resp = await client.get(
-            f"https://rdap.arin.net/registry/ip/{ip}",
-            timeout=10.0,
-            headers={"Accept": "application/json"}
-        )
+        rdap_resp = await safe_fetch(client, f"https://rdap.arin.net/registry/ip/{ip}", timeout=10.0)
         if rdap_resp.status_code == 200:
             rdap = rdap_resp.json()
             entities = rdap.get("entities", [])
@@ -94,18 +80,18 @@ async def _resolve_and_get_asn(domain: str, client: httpx.AsyncClient) -> list:
                         for item in vcard[1]:
                             if isinstance(item, list) and len(item) >= 3 and item[0] == "fn":
                                 name = str(item[3])
-                                findings.append(IntelligenceFinding(
+                                findings.append(make_finding(
                                     entity=name[:200],
-                                    type="Network Map - RDAP Org Name",
+                                    ftype="Network Map - RDAP Org Name",
                                     source="ARIN RDAP",
                                     confidence="High", color="slate",
                                     tags=["network", "rdap"]
                                 ))
             net_ranges = rdap.get("arin_ranges", rdap.get("startAddress", ""))
             if rdap.get("startAddress") and rdap.get("endAddress"):
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Range: {rdap['startAddress']} - {rdap['endAddress']}",
-                    type="Network Map - IP Range",
+                    ftype="Network Map - IP Range",
                     source="ARIN RDAP",
                     confidence="High", color="slate",
                     tags=["network", "ip-range"]
@@ -113,20 +99,16 @@ async def _resolve_and_get_asn(domain: str, client: httpx.AsyncClient) -> list:
     except Exception:
         pass
     try:
-        bgp_resp = await client.get(
-            f"https://api.hackertarget.com/aslookup/?q={ip}",
-            timeout=12.0,
-            headers={"User-Agent": "Mozilla/5.0"}
-        )
+        bgp_resp = await safe_fetch(client, f"https://api.hackertarget.com/aslookup/?q={ip}", timeout=12.0)
         if bgp_resp.status_code == 200:
             bgp_text = bgp_resp.text
             lines = bgp_text.strip().split("\n")
             for line in lines:
                 if ":" in line:
                     parts = line.split(":", 1)
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=parts[1].strip()[:200],
-                        type=f"Network Map - BGP: {parts[0].strip()}",
+                        ftype=f"Network Map - BGP: {parts[0].strip()}",
                         source="HackerTarget",
                         confidence="High", color="slate",
                         tags=["network", "bgp"]
@@ -135,7 +117,7 @@ async def _resolve_and_get_asn(domain: str, client: httpx.AsyncClient) -> list:
         pass
     return findings
 
-async def _map_dns_infrastructure(domain: str, client: httpx.AsyncClient) -> list:
+async def _map_dns_infrastructure(domain: str, client: AsyncClient) -> list:
     findings = []
     record_types = {
         "NS": 2, "MX": 15, "SOA": 6,
@@ -143,11 +125,7 @@ async def _map_dns_infrastructure(domain: str, client: httpx.AsyncClient) -> lis
     servers_by_type = {}
     for rtype_name, rtype_num in record_types.items():
         try:
-            resp = await client.get(
-                f"https://dns.google/resolve?name={domain}&type={rtype_name}",
-                timeout=10.0,
-                headers={"Accept": "application/json"}
-            )
+            resp = await safe_fetch(client, f"https://dns.google/resolve?name={domain}&type={rtype_name}", timeout=10.0)
             if resp.status_code == 200:
                 data = resp.json()
                 answers = data.get("Answer", [])
@@ -162,29 +140,26 @@ async def _map_dns_infrastructure(domain: str, client: httpx.AsyncClient) -> lis
     for rtype, servers in servers_by_type.items():
         for server in servers[:5]:
             try:
-                loop = asyncio.get_event_loop()
-                ip = await loop.run_in_executor(None, lambda: socket.gethostbyname(server))
-                findings.append(IntelligenceFinding(
+                ip = resolve_ip(server)
+                if not ip:
+                    continue
+                findings.append(make_finding(
                     entity=f"{rtype}: {server} -> {ip}",
-                    type=f"Network Map - {rtype} Server Location",
+                    ftype=f"Network Map - {rtype} Server Location",
                     source="Passive Network Map",
                     confidence="High", color="slate",
                     status="Resolved",
                     raw_data=f"{rtype} server {server} resolves to {ip}",
                     tags=["network", rtype.lower()]
                 ))
-                geo_resp = await client.get(
-                    f"https://ipapi.co/{ip}/json/",
-                    timeout=8.0,
-                    headers={"User-Agent": "Mozilla/5.0"}
-                )
+                geo_resp = await safe_fetch(client, f"https://ipapi.co/{ip}/json/", timeout=8.0)
                 if geo_resp.status_code == 200:
                     geo = geo_resp.json()
                     country = geo.get("country_name", "")
                     if country:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"{server} located in {country}",
-                            type=f"Network Map - {rtype} Geographic Distribution",
+                            ftype=f"Network Map - {rtype} Geographic Distribution",
                             source="Passive Network Map",
                             confidence="High", color="slate",
                             raw_data=f"{rtype} server {server} in {country}",
@@ -194,14 +169,10 @@ async def _map_dns_infrastructure(domain: str, client: httpx.AsyncClient) -> lis
                 pass
     return findings
 
-async def _check_reverse_dns_patterns(domain: str, client: httpx.AsyncClient) -> list:
+async def _check_reverse_dns_patterns(domain: str, client: AsyncClient) -> list:
     findings = []
     try:
-        resp = await client.get(
-            f"https://api.hackertarget.com/reverseip/?q={domain}",
-            timeout=12.0,
-            headers={"User-Agent": "Mozilla/5.0"}
-        )
+        resp = await safe_fetch(client, f"https://api.hackertarget.com/reverseip/?q={domain}", timeout=12.0)
         if resp.status_code == 200:
             lines = resp.text.strip().split("\n")
             host_patterns = {}
@@ -214,9 +185,9 @@ async def _check_reverse_dns_patterns(domain: str, client: httpx.AsyncClient) ->
                         host_patterns[pattern] = host_patterns.get(pattern, 0) + 1
             for pattern, count in sorted(host_patterns.items(), key=lambda x: -x[1])[:10]:
                 if count > 1:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Pattern: *.{pattern} ({count} hosts)",
-                        type="Network Map - Namespace/Naming Pattern",
+                        ftype="Network Map - Namespace/Naming Pattern",
                         source="Passive Network Map",
                         confidence="Medium",
                         color="slate",
@@ -227,7 +198,7 @@ async def _check_reverse_dns_patterns(domain: str, client: httpx.AsyncClient) ->
         pass
     return findings
 
-async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFinding]:
+async def crawl(target: str, client: AsyncClient) -> list[IntelligenceFinding]:
     findings = []
     domain = target.strip().lower()
     if "://" in domain:
@@ -243,9 +214,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     findings.extend(rdns_findings)
 
     if findings:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Network Map complete: {len(findings)} findings",
-            type="Network Map - Summary",
+            ftype="Network Map - Summary",
             source="Passive Network Map",
             confidence="High", color="purple",
             status="Complete",

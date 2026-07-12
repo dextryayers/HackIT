@@ -7,8 +7,7 @@ import socket
 import hashlib
 from datetime import datetime, timezone
 from typing import List, Optional
-from models import IntelligenceFinding
-from osint_common import normalize_target, make_finding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 
 CERTSPOTTER_API = "https://api.certspotter.com/v1/issuances"
 CERTSPOTTER_EXPIRING = "https://api.certspotter.com/v1/issuances/expiring"
@@ -41,7 +40,7 @@ WEAK_CIPHERS = [
 
 async def query_issuances(target: str, client: httpx.AsyncClient) -> List[dict]:
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"{CERTSPOTTER_API}?domain={target}&include_subdomains=true&expired=true&expand=dns_names",
             timeout=20.0,
             headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
@@ -55,7 +54,7 @@ async def query_issuances(target: str, client: httpx.AsyncClient) -> List[dict]:
 
 async def query_expiring(target: str, client: httpx.AsyncClient, days: int = 30) -> List[dict]:
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"{CERTSPOTTER_EXPIRING}?domain={target}&days={days}&expand=dns_names",
             timeout=15.0,
             headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
@@ -69,7 +68,7 @@ async def query_expiring(target: str, client: httpx.AsyncClient, days: int = 30)
 
 async def query_recent(target: str, client: httpx.AsyncClient, limit: int = 50) -> List[dict]:
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"{CERTSPOTTER_RECENT}?domain={target}&limit={limit}&expand=dns_names",
             timeout=15.0,
             headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
@@ -83,7 +82,7 @@ async def query_recent(target: str, client: httpx.AsyncClient, limit: int = 50) 
 
 async def query_domain_issuances(target: str, client: httpx.AsyncClient) -> List[dict]:
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"{CERTSPOTTER_DOMAIN}/{target}?include_subdomains=true&expand=dns_names",
             timeout=15.0,
             headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
@@ -97,7 +96,7 @@ async def query_domain_issuances(target: str, client: httpx.AsyncClient) -> List
 
 async def query_stats(target: str, client: httpx.AsyncClient) -> dict:
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client, 
             f"{CERTSPOTTER_STATS}?domain={target}",
             timeout=15.0,
             headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"}

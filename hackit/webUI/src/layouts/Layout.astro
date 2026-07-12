@@ -68,6 +68,7 @@ const currentPath = Astro.url.pathname;
 							{ href: '/settings', label: 'Settings', icon: 'fa-cog' },
 						].map(item => (
 							<a href={item.href}
+								aria-label={`Navigate to ${item.label}`}
 								class:list={[
 									'px-3.5 py-1.5 rounded-lg flex items-center gap-2 text-sm font-medium transition-all',
 									currentPath === item.href
@@ -81,7 +82,7 @@ const currentPath = Astro.url.pathname;
 					</nav>
 				</div>
 				<div class="flex items-center gap-3">
-					<button id="theme-toggle" class="w-8 h-8 rounded-lg border border-sf-border bg-sf-card flex items-center justify-center hover:border-sf-muted transition-all text-xs">
+					<button id="theme-toggle" aria-label="Toggle dark/light theme" class="w-8 h-8 rounded-lg border border-sf-border bg-sf-card flex items-center justify-center hover:border-sf-muted transition-all text-xs">
 						<i class="fas fa-moon dark:hidden"></i>
 						<i class="fas fa-sun hidden dark:block text-yellow-400"></i>
 					</button>
@@ -90,7 +91,7 @@ const currentPath = Astro.url.pathname;
 						<div class="w-1.5 h-1.5 rounded-full bg-sf-green animate-pulse"></div>
 						<span class="text-sf-muted">Online</span>
 					</div>
-					<button class="w-8 h-8 rounded-full bg-sf-accent/20 border border-sf-accent/30 flex items-center justify-center text-sf-accent hover:bg-sf-accent hover:text-white transition-all text-xs">
+					<button aria-label="User profile" class="w-8 h-8 rounded-full bg-sf-accent/20 border border-sf-accent/30 flex items-center justify-center text-sf-accent hover:bg-sf-accent hover:text-white transition-all text-xs">
 						<i class="fas fa-user-secret"></i>
 					</button>
 				</div>
@@ -106,6 +107,7 @@ const currentPath = Astro.url.pathname;
 				{ href: '/settings', label: 'Settings', icon: 'fa-cog' },
 			].map(item => (
 				<a href={item.href}
+					aria-label={`Navigate to ${item.label}`}
 					class:list={[
 						'px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-all',
 						currentPath === item.href
@@ -126,7 +128,7 @@ const currentPath = Astro.url.pathname;
 		<!-- Footer -->
 		<footer class="border-t border-sf-border bg-sf-lightbg/50 py-2.5 px-6 text-center">
 			<p class="text-[10px] text-sf-muted tracking-wider">
-				&copy; 2026 <a href="https://haniipp.space" target="_blank" class="text-sf-tabActive hover:underline">Hanif Abdurrohim</a>
+				&copy; 2026 			<a href="https://haniipp.space" target="_blank" aria-label="Hanif Abdurrohim's website" class="text-sf-tabActive hover:underline">Hanif Abdurrohim</a>
 				&mdash; Built for the security community.
 			</p>
 		</footer>
@@ -140,7 +142,7 @@ const currentPath = Astro.url.pathname;
 				<p class="text-xs text-sf-muted leading-relaxed flex-1">
 					Built by <strong class="text-sf-tabActive">Hanif Abdurrohim</strong>. Use responsibly on authorized targets only.
 				</p>
-				<button id="cookie-accept" class="shrink-0 px-4 py-1.5 bg-sf-tabActive text-black text-xs font-bold rounded-lg hover:opacity-90 transition-all">
+				<button id="cookie-accept" aria-label="Accept cookie notice" class="shrink-0 px-4 py-1.5 bg-sf-tabActive text-black text-xs font-bold rounded-lg hover:opacity-90 transition-all">
 					OK
 				</button>
 			</div>
@@ -176,6 +178,25 @@ const currentPath = Astro.url.pathname;
 					gsap.from('main > *', { opacity: 0, y: 16, duration: 0.6, ease: 'power2.out', stagger: 0.05 });
 				}
 			});
+		</script>
+
+		<!-- Toast Notification System -->
+		<div id="toast-container" class="fixed top-20 right-6 z-[200] space-y-3 pointer-events-none">
+		</div>
+		<script is:inline>
+		function showToast(message, type = 'info', duration = 4000) {
+			const container = document.getElementById('toast-container');
+			if (!container) return;
+			const colors = { success: 'border-emerald-500 bg-emerald-500/10', error: 'border-red-500 bg-red-500/10', info: 'border-sky-500 bg-sky-500/10', warning: 'border-amber-500 bg-amber-500/10' };
+			const icons = { success: 'fa-check-circle text-emerald-400', error: 'fa-exclamation-circle text-red-400', info: 'fa-info-circle text-sky-400', warning: 'fa-exclamation-triangle text-amber-400' };
+			const toast = document.createElement('div');
+			toast.className = `pointer-events-auto flex items-center gap-3 px-4 py-3 bg-sf-card border ${colors[type]} rounded-lg shadow-2xl transform translate-x-full transition-transform duration-300 max-w-sm`;
+			toast.innerHTML = `<i class="fas ${icons[type]} text-sm"></i><span class="text-xs text-sf-text font-medium">${message}</span>`;
+			container.appendChild(toast);
+			requestAnimationFrame(() => toast.classList.remove('translate-x-full'));
+			setTimeout(() => { toast.classList.add('translate-x-full'); setTimeout(() => toast.remove(), 300); }, duration);
+		}
+		window.showToast = showToast;
 		</script>
 	</body>
 </html>

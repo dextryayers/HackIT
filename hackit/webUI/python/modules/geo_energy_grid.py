@@ -1,8 +1,6 @@
-import httpx
-import asyncio
 import re
-import socket
-from models import IntelligenceFinding
+import asyncio
+from module_common import safe_fetch_json, make_finding, is_ip, resolve_ip
 
 ENERGY_SECTOR_PATTERNS = {
     "Utility (Power Grid)": ["power", "electric", "utility", "grid", "energy", "transmission", "distribution"],
@@ -76,96 +74,88 @@ RENEWABLE_MONITORING = {
 }
 
 async def _resolve_target(target: str) -> tuple:
-    try:
-        socket.inet_aton(target)
+    if is_ip(target):
         return target, True
-    except OSError:
-        pass
-    try:
-        ip = socket.gethostbyname(target)
+    ip = resolve_ip(target)
+    if ip:
         return ip, False
-    except Exception as e:
-        return None, str(e)
+    return None, "DNS resolution failed"
 
-async def _check_energy_org(ip: str, client: httpx.AsyncClient) -> list:
+async def _check_energy_org(ip: str, client) -> list:
     findings = []
-    try:
-        resp = await client.get(f"https://ipinfo.io/{ip}/json", timeout=8.0,
-            headers={"User-Agent": "Mozilla/5.0"})
-        if resp.status_code == 200:
-            data = resp.json()
-            org = data.get("org", "").lower()
-            for sector, keywords in ENERGY_SECTOR_PATTERNS.items():
-                for kw in keywords:
-                    if kw in org:
-                        findings.append(IntelligenceFinding(
-                            entity=sector,
-                            type="Energy Sector Detection",
-                            source="EnergyGridScanner",
-                            confidence="High",
-                            color="blue",
-                            category="Geo / Network OSINT",
-                            threat_level="Informational",
-                            status="Identified",
-                            resolution=ip,
-                            raw_data=f"Energy sector: {sector} (keyword '{kw}' in org '{org[:80]}')",
-                            tags=["energy", sector.lower().replace(" ", "-").replace("&", "and")]
-                        ))
-                        break
-            for vendor, pats in SCADA_VENDORS.items():
-                for p in pats:
-                    if p in org:
-                        findings.append(IntelligenceFinding(
-                            entity=vendor,
-                            type="SCADA / ICS Vendor",
-                            source="EnergyGridScanner",
-                            confidence="High",
-                            color="orange",
-                            category="Geo / Network OSINT",
-                            threat_level="Informational",
-                            status="Detected",
-                            resolution=ip,
-                            raw_data=f"SCADA vendor: {vendor} matched in org '{org[:80]}'",
-                            tags=["scada", "ics", vendor.lower().replace(" ", "-")]
-                        ))
-                        break
-            for name, pats in EV_CHARGING_PATTERNS.items():
-                for p in pats:
-                    if p in org:
-                        findings.append(IntelligenceFinding(
-                            entity=name,
-                            type="EV Charging Network",
-                            source="EnergyGridScanner",
-                            confidence="High",
-                            color="green",
-                            category="Geo / Network OSINT",
-                            threat_level="Informational",
-                            status="Detected",
-                            resolution=ip,
-                            raw_data=f"EV charging network: {name}",
-                            tags=["ev", "charging", name.lower().replace(" ", "-")]
-                        ))
-                        break
-            for name, pats in RENEWABLE_MONITORING.items():
-                for p in pats:
-                    if p in org:
-                        findings.append(IntelligenceFinding(
-                            entity=name,
-                            type="Renewable Energy Monitoring",
-                            source="EnergyGridScanner",
-                            confidence="High",
-                            color="green",
-                            category="Geo / Network OSINT",
-                            threat_level="Informational",
-                            status="Detected",
-                            resolution=ip,
-                            raw_data=f"Renewable monitoring: {name}",
-                            tags=["renewable", name.lower().replace(" ", "-").replace("(", "").replace(")", "")]
-                        ))
-                        break
+    data = await safe_fetch_json(client, f"https://ipinfo.io/{ip}/json",
+        headers={"User-Agent": "Mozilla/5.0"})
+    if data:
+        org = data.get("org", "").lower()
+        for sector, keywords in ENERGY_SECTOR_PATTERNS.items():
+            for kw in keywords:
+                if kw in org:
+                    findings.append(make_finding(
+                        entity=sector,
+                        ftype="Energy Sector Detection",
+                        source="EnergyGridScanner",
+                        confidence="High",
+                        color="blue",
+                        category="Geo / Network OSINT",
+                        threat_level="Informational",
+                        status="Identified",
+                        resolution=ip,
+                        raw_data=f"Energy sector: {sector} (keyword '{kw}' in org '{org[:80]}')",
+                        tags=["energy", sector.lower().replace(" ", "-").replace("&", "and")]
+                    ))
+                    break
+        for vendor, pats in SCADA_VENDORS.items():
+            for p in pats:
+                if p in org:
+                    findings.append(make_finding(
+                        entity=vendor,
+                        ftype="SCADA / ICS Vendor",
+                        source="EnergyGridScanner",
+                        confidence="High",
+                        color="orange",
+                        category="Geo / Network OSINT",
+                        threat_level="Informational",
+                        status="Detected",
+                        resolution=ip,
+                        raw_data=f"SCADA vendor: {vendor} matched in org '{org[:80]}'",
+                        tags=["scada", "ics", vendor.lower().replace(" ", "-")]
+                    ))
+                    break
+        for name, pats in EV_CHARGING_PATTERNS.items():
+            for p in pats:
+                if p in org:
+                    findings.append(make_finding(
+                        entity=name,
+                        ftype="EV Charging Network",
+                        source="EnergyGridScanner",
+                        confidence="High",
+                        color="green",
+                        category="Geo / Network OSINT",
+                        threat_level="Informational",
+                        status="Detected",
+                        resolution=ip,
+                        raw_data=f"EV charging network: {name}",
+                        tags=["ev", "charging", name.lower().replace(" ", "-")]
+                    ))
+                    break
+        for name, pats in RENEWABLE_MONITORING.items():
+            for p in pats:
+                if p in org:
+                    findings.append(make_finding(
+                        entity=name,
+                        ftype="Renewable Energy Monitoring",
+                        source="EnergyGridScanner",
+                        confidence="High",
+                        color="green",
+                        category="Geo / Network OSINT",
+                        threat_level="Informational",
+                        status="Detected",
+                        resolution=ip,
+                        raw_data=f"Renewable monitoring: {name}",
+                        tags=["renewable", name.lower().replace(" ", "-").replace("(", "").replace(")", "")]
+                    ))
+                    break
 
-    except Exception:
-        pass
     return findings
 
 async def _check_energy_dns(target: str) -> list:
@@ -178,9 +168,9 @@ async def _check_energy_dns(target: str) -> list:
                 txt = str(r).lower()
                 for pat in SMART_GRID_PATTERNS:
                     if pat in txt:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"Smart Grid Indicator: {pat}",
-                            type="Smart Grid / SCADA DNS",
+                            ftype="Smart Grid / SCADA DNS",
                             source="EnergyGridScanner",
                             confidence="Medium",
                             color="orange",
@@ -200,9 +190,9 @@ async def _check_energy_dns(target: str) -> list:
 async def _list_ics_protocols() -> list:
     findings = []
     for proto, ports in ICS_PROTOCOLS.items():
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{proto} (ports: {', '.join(str(p) for p in ports)})",
-            type="ICS/SCADA Protocol Reference",
+            ftype="ICS/SCADA Protocol Reference",
             source="EnergyGridScanner",
             confidence="Medium",
             color="slate",
@@ -214,20 +204,20 @@ async def _list_ics_protocols() -> list:
         ))
     return findings
 
-async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFinding]:
+async def crawl(target: str, client) -> list:
     findings = []
     target = target.strip().lower()
     if target.startswith("http"):
         from urllib.parse import urlparse
         target = urlparse(target).netloc
 
-    ip, is_ip = await _resolve_target(target)
+    ip, is_ip_flag = await _resolve_target(target)
     if ip is None:
-        findings.append(IntelligenceFinding(entity=f"DNS resolution failed: {target}", type="DNS Error", source="EnergyGridScanner", confidence="Low", color="red", category="Geo / Network OSINT", raw_data=str(is_ip)[:200], tags=["error"]))
+        findings.append(make_finding(entity=f"DNS resolution failed: {target}", ftype="DNS Error", source="EnergyGridScanner", confidence="Low", color="red", category="Geo / Network OSINT", raw_data=str(is_ip_flag)[:200], tags=["error"]))
         return findings
 
-    if not is_ip:
-        findings.append(IntelligenceFinding(entity=f"{target} -> {ip}", type="DNS Resolution", source="EnergyGridScanner", confidence="High", color="slate", category="Geo / Network OSINT", threat_level="Informational", status="Resolved", resolution=ip, tags=["dns", "resolution"]))
+    if not is_ip_flag:
+        findings.append(make_finding(entity=f"{target} -> {ip}", ftype="DNS Resolution", source="EnergyGridScanner", confidence="High", color="slate", category="Geo / Network OSINT", threat_level="Informational", status="Resolved", resolution=ip, tags=["dns", "resolution"]))
 
     findings.extend(await _check_energy_org(ip, client))
     findings.extend(await _check_energy_dns(target))
@@ -238,11 +228,11 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     ev = sum(1 for f in findings if "EV Charging" in f.type)
     renewable = sum(1 for f in findings if "Renewable" in f.type)
 
-    findings.append(IntelligenceFinding(entity=f"Energy sectors detected: {energy_sectors}", type="Energy Sector Count", source="EnergyGridScanner", confidence="Medium", color="purple", category="Geo / Network OSINT", tags=["energy", "summary"]))
-    findings.append(IntelligenceFinding(entity=f"SCADA/ICS vendors: {scada}", type="SCADA/ICS Count", source="EnergyGridScanner", confidence="Medium", color="purple", category="Geo / Network OSINT", tags=["energy", "summary"]))
-    findings.append(IntelligenceFinding(entity=f"EV networks: {ev}", type="EV Network Count", source="EnergyGridScanner", confidence="Medium", color="purple", category="Geo / Network OSINT", tags=["energy", "summary"]))
-    findings.append(IntelligenceFinding(entity=f"Renewable energy systems: {renewable}", type="Renewable Energy Count", source="EnergyGridScanner", confidence="Medium", color="purple", category="Geo / Network OSINT", tags=["energy", "summary"]))
-    findings.append(IntelligenceFinding(entity=f"Target: {target}", type="Energy Grid Target", source="EnergyGridScanner", confidence="High", color="slate", category="Geo / Network OSINT", tags=["energy", "target"]))
-    findings.append(IntelligenceFinding(entity=f"Total energy grid findings: {len(findings)}", type="Energy Grid Summary", source="EnergyGridScanner", confidence="Medium", color="purple", category="Geo / Network OSINT", tags=["energy", "summary"]))
+    findings.append(make_finding(entity=f"Energy sectors detected: {energy_sectors}", ftype="Energy Sector Count", source="EnergyGridScanner", confidence="Medium", color="purple", category="Geo / Network OSINT", tags=["energy", "summary"]))
+    findings.append(make_finding(entity=f"SCADA/ICS vendors: {scada}", ftype="SCADA/ICS Count", source="EnergyGridScanner", confidence="Medium", color="purple", category="Geo / Network OSINT", tags=["energy", "summary"]))
+    findings.append(make_finding(entity=f"EV networks: {ev}", ftype="EV Network Count", source="EnergyGridScanner", confidence="Medium", color="purple", category="Geo / Network OSINT", tags=["energy", "summary"]))
+    findings.append(make_finding(entity=f"Renewable energy systems: {renewable}", ftype="Renewable Energy Count", source="EnergyGridScanner", confidence="Medium", color="purple", category="Geo / Network OSINT", tags=["energy", "summary"]))
+    findings.append(make_finding(entity=f"Target: {target}", ftype="Energy Grid Target", source="EnergyGridScanner", confidence="High", color="slate", category="Geo / Network OSINT", tags=["energy", "target"]))
+    findings.append(make_finding(entity=f"Total energy grid findings: {len(findings)}", ftype="Energy Grid Summary", source="EnergyGridScanner", confidence="Medium", color="purple", category="Geo / Network OSINT", tags=["energy", "summary"]))
 
     return findings

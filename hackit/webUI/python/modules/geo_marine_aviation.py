@@ -81,7 +81,7 @@ async def _resolve_target(target: str) -> tuple:
 async def _check_marine_aviation(ip: str, client: httpx.AsyncClient) -> list:
     findings = []
     try:
-        resp = await client.get(f"https://ipinfo.io/{ip}/json", timeout=8.0,
+        resp = await safe_fetch(client, f"https://ipinfo.io/{ip}/json", timeout=8.0,
             headers={"User-Agent": "Mozilla/5.0"})
         if resp.status_code == 200:
             data = resp.json()

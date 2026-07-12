@@ -1,8 +1,7 @@
-import httpx
 import re
 import json
 from urllib.parse import urlparse, quote
-from models import IntelligenceFinding
+from ..module_common import safe_fetch, make_finding
 
 SOCIAL_USERNAME_PATTERNS = [
     (r'facebook\.com/([^/\s"?]+)', "Facebook"),
@@ -31,7 +30,7 @@ SOCIAL_MEDIA_META = [
     "article:author", "fb:app_id", "fb:profile_id",
 ]
 
-async def _search_google_social(domain: str, client: httpx.AsyncClient) -> list:
+async def _search_google_social(domain: str, client: AsyncClient) -> list:
     findings = []
     platforms_to_check = [
         ("facebook.com", "Facebook"), ("twitter.com", "Twitter"), ("linkedin.com", "LinkedIn"),
@@ -41,18 +40,14 @@ async def _search_google_social(domain: str, client: httpx.AsyncClient) -> list:
     ]
     for platform_url, platform_name in platforms_to_check:
         try:
-            resp = await client.get(
-                f"https://www.google.com/search?q=site:{platform_url}+{domain}",
-                timeout=15.0,
-                headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}
-            )
+            resp = await safe_fetch(client, f"https://www.google.com/search?q=site:{platform_url}+{domain}", timeout=15.0)
             if resp.status_code == 200:
                 mentions = re.findall(rf'href="(https?://(?:www\.)?{re.escape(platform_url)}[^"]*)"', resp.text)
                 unique_mentions = list(set(mentions))[:10]
                 if unique_mentions:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"{platform_name}: {len(unique_mentions)} mention(s) found",
-                        type=f"Social Intel - {platform_name} Mentions",
+                        ftype=f"Social Intel - {platform_name} Mentions",
                         source="Google Search",
                         confidence="Medium",
                         color="blue",
@@ -61,9 +56,9 @@ async def _search_google_social(domain: str, client: httpx.AsyncClient) -> list:
                         tags=["social", platform_name.lower(), "search"]
                     ))
                     for url in unique_mentions[:3]:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=url[:200],
-                            type=f"Social Intel - {platform_name} URL",
+                            ftype=f"Social Intel - {platform_name} URL",
                             source="Google Search",
                             confidence="Medium",
                             color="slate",
@@ -74,20 +69,16 @@ async def _search_google_social(domain: str, client: httpx.AsyncClient) -> list:
             pass
     return findings
 
-async def _check_linkedin_preview(domain: str, client: httpx.AsyncClient) -> list:
+async def _check_linkedin_preview(domain: str, client: AsyncClient) -> list:
     findings = []
     try:
-        resp = await client.get(
-            f"https://www.google.com/search?q=site:linkedin.com+{domain}",
-            timeout=15.0,
-            headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}
-        )
+        resp = await safe_fetch(client, f"https://www.google.com/search?q=site:linkedin.com+{domain}", timeout=15.0)
         if resp.status_code == 200:
             previews = re.findall(r'<span[^>]*class="[^"]*BNeawe[^"]*"[^>]*>([^<]*(?:company|employee|professional|profile|director|manager|engineer)[^<]*)</span>', resp.text, re.I)
             for preview in previews[:10]:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=preview.strip()[:200],
-                    type="Social Intel - LinkedIn Preview",
+                    ftype="Social Intel - LinkedIn Preview",
                     source="Google Search",
                     confidence="Low",
                     color="slate",
@@ -99,22 +90,18 @@ async def _check_linkedin_preview(domain: str, client: httpx.AsyncClient) -> lis
         pass
     return findings
 
-async def _check_reddit_mentions(domain: str, client: httpx.AsyncClient) -> list:
+async def _check_reddit_mentions(domain: str, client: AsyncClient) -> list:
     findings = []
     try:
-        resp = await client.get(
-            f"https://www.google.com/search?q=site:reddit.com+{domain}",
-            timeout=15.0,
-            headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}
-        )
+        resp = await safe_fetch(client, f"https://www.google.com/search?q=site:reddit.com+{domain}", timeout=15.0)
         if resp.status_code == 200:
             snippets = re.findall(r'<span[^>]*class="[^"]*BNeawe[^"]*"[^>]*>([^<]*)</span>', resp.text)
             unique_snippets = list(set(snippets))[:10]
             for snippet in unique_snippets:
                 if domain.lower() in snippet.lower():
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Reddit mention: {snippet.strip()[:200]}",
-                        type="Social Intel - Reddit Mention",
+                        ftype="Social Intel - Reddit Mention",
                         source="Google Search",
                         confidence="Low",
                         color="orange",
@@ -126,22 +113,18 @@ async def _check_reddit_mentions(domain: str, client: httpx.AsyncClient) -> list
         pass
     return findings
 
-async def _check_youtube_mentions(domain: str, client: httpx.AsyncClient) -> list:
+async def _check_youtube_mentions(domain: str, client: AsyncClient) -> list:
     findings = []
     try:
-        resp = await client.get(
-            f"https://www.google.com/search?q=site:youtube.com+{domain}",
-            timeout=15.0,
-            headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}
-        )
+        resp = await safe_fetch(client, f"https://www.google.com/search?q=site:youtube.com+{domain}", timeout=15.0)
         if resp.status_code == 200:
             video_titles = re.findall(r'<h3[^>]*class="[^"]*LC20lb[^"]*"[^>]*>(.*?)</h3>', resp.text)
             for title in video_titles[:10]:
                 title_clean = re.sub(r'<[^>]+>', '', title).strip()
                 if title_clean:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=title_clean[:200],
-                        type="Social Intel - YouTube Video Mention",
+                        ftype="Social Intel - YouTube Video Mention",
                         source="Google Search",
                         confidence="Low",
                         color="slate",
@@ -153,7 +136,7 @@ async def _check_youtube_mentions(domain: str, client: httpx.AsyncClient) -> lis
         pass
     return findings
 
-async def _check_review_platforms(domain: str, client: httpx.AsyncClient) -> list:
+async def _check_review_platforms(domain: str, client: AsyncClient) -> list:
     findings = []
     review_sites = [
         ("trustpilot.com", "Trustpilot"), ("g2.com", "G2"),
@@ -163,17 +146,13 @@ async def _check_review_platforms(domain: str, client: httpx.AsyncClient) -> lis
     ]
     for site_url, site_name in review_sites:
         try:
-            resp = await client.get(
-                f"https://www.google.com/search?q=site:{site_url}+{domain}",
-                timeout=15.0,
-                headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}
-            )
+            resp = await safe_fetch(client, f"https://www.google.com/search?q=site:{site_url}+{domain}", timeout=15.0)
             if resp.status_code == 200:
                 result_count = len(re.findall(rf'href="https?://(?:www\.)?{re.escape(site_url)}', resp.text))
                 if result_count > 0:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"{site_name}: {result_count} reference(s)",
-                        type=f"Social Intel - {site_name} Review",
+                        ftype=f"Social Intel - {site_name} Review",
                         source="Google Search",
                         confidence="Low",
                         color="slate",
@@ -185,21 +164,17 @@ async def _check_review_platforms(domain: str, client: httpx.AsyncClient) -> lis
             pass
     return findings
 
-async def _check_google_business(domain: str, client: httpx.AsyncClient) -> list:
+async def _check_google_business(domain: str, client: AsyncClient) -> list:
     findings = []
     try:
-        resp = await client.get(
-            f"https://www.google.com/search?q={domain}+reviews",
-            timeout=15.0,
-            headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}
-        )
+        resp = await safe_fetch(client, f"https://www.google.com/search?q={domain}+reviews", timeout=15.0)
         if resp.status_code == 200:
             ratings = re.findall(r'(\d+\.?\d*)\s*out of\s*5\s*stars', resp.text, re.I)
             if ratings:
                 avg_rating = ratings[0]
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Google rating: {avg_rating}/5 stars",
-                    type="Social Intel - Google Business Rating",
+                    ftype="Social Intel - Google Business Rating",
                     source="Google Search",
                     confidence="Low",
                     color="emerald" if float(avg_rating) >= 4 else "orange",
@@ -209,9 +184,9 @@ async def _check_google_business(domain: str, client: httpx.AsyncClient) -> list
             review_count_m = re.search(r'(\d[\d,]*)\s*reviews?', resp.text, re.I)
             if review_count_m:
                 count = review_count_m.group(1)
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{count} reviews on Google",
-                    type="Social Intel - Google Review Count",
+                    ftype="Social Intel - Google Review Count",
                     source="Google Search",
                     confidence="Low",
                     color="slate",
@@ -222,7 +197,7 @@ async def _check_google_business(domain: str, client: httpx.AsyncClient) -> list
         pass
     return findings
 
-async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFinding]:
+async def crawl(target: str, client: AsyncClient) -> list[IntelligenceFinding]:
     findings = []
     domain = target.strip().lower()
     if "://" in domain:
@@ -247,9 +222,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     findings.extend(biz_findings)
 
     if findings:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Social Media Intelligence complete: {len(findings)} findings",
-            type="Social Intel - Summary",
+            ftype="Social Intel - Summary",
             source="Passive Social Intel",
             confidence="High", color="purple",
             status="Complete",

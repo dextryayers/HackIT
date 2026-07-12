@@ -1,6 +1,7 @@
-import httpx
 import re
+import httpx
 from urllib.parse import urlparse
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 from models import IntelligenceFinding
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
@@ -39,14 +40,14 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     for proto in ["https", "http"]:
         try:
-            await client.get(f"{proto}://{domain}", timeout=10.0, follow_redirects=True, headers={"User-Agent": UA})
+            await safe_fetch(client,f"{proto}://{domain}", timeout=10.0, follow_redirects=True, headers={"User-Agent": UA})
             break
         except Exception:
             continue
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Triggering {len(ERROR_PATHS)} error-inducing requests on {domain}",
-        type="ErrorPage: Scan Started",
+        ftype="ErrorPage: Scan Started",
         source="ErrorPageAnalyzer",
         confidence="Medium",
         color="slate",
@@ -59,7 +60,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     for path in ERROR_PATHS:
         try:
-            resp = await client.get(f"https://{domain}{path}", timeout=8.0, follow_redirects=False, headers={"User-Agent": UA})
+            resp = await safe_fetch(client,f"https://{domain}{path}", timeout=8.0, follow_redirects=False, headers={"User-Agent": UA})
             content = resp.text
             status = resp.status_code
             error_info = {"path": path, "status": status, "size": len(resp.content), "findings": [], "framework_hits": []}
@@ -119,9 +120,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     for error in found_errors:
         if error.get("findings"):
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Error on {error['path']} (HTTP {error['status']}): {'; '.join(error['findings'][:3])}",
-                type="ErrorPage: Information Leak",
+                ftype="ErrorPage: Information Leak",
                 source="ErrorPageAnalyzer",
                 confidence="High",
                 color="red",
@@ -132,9 +133,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
         if error.get("framework_hits"):
             for fw in error["framework_hits"]:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Framework detected from error page: {fw}",
-                    type="ErrorPage: Framework Detection",
+                    ftype="ErrorPage: Framework Detection",
                     source="ErrorPageAnalyzer",
                     confidence="Medium",
                     color="purple",
@@ -144,9 +145,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                 ))
 
         if error.get("custom_error"):
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Custom error page: HTTP {error['status']} -> Title: {error['custom_error'][:80]}",
-                type="ErrorPage: Custom Page",
+                ftype="ErrorPage: Custom Page",
                 source="ErrorPageAnalyzer",
                 confidence="Medium",
                 color="yellow",
@@ -156,9 +157,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             ))
 
         if error.get("bare_error"):
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Bare/minimal error response on {error['path']}: {error['bare_error'][:80]}",
-                type="ErrorPage: Bare Response",
+                ftype="ErrorPage: Bare Response",
                 source="ErrorPageAnalyzer",
                 confidence="Medium",
                 color="orange",
@@ -168,9 +169,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             ))
 
     if not found_errors:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="No sensitive information found in error pages (good security posture)",
-            type="ErrorPage: Clean",
+            ftype="ErrorPage: Clean",
             source="ErrorPageAnalyzer",
             confidence="Medium",
             color="emerald",
@@ -178,9 +179,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             tags=["error-page", "clean", "secure"]
         ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Error Page Analysis: {len(found_errors)} error(s) with info leaks, {len(detected_frameworks)} framework(s) detected",
-        type="ErrorPage: Summary",
+        ftype="ErrorPage: Summary",
         source="ErrorPageAnalyzer",
         confidence="High",
         color="red" if found_errors else "emerald",

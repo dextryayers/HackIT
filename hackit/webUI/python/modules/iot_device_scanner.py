@@ -1,9 +1,7 @@
-import httpx
 import re
-import json
 from urllib.parse import urlparse, quote
 from typing import List
-from models import IntelligenceFinding
+from module_common import safe_fetch, make_finding
 
 IOT_SEARCH_ENGINES = [
     ("Shodan", "https://www.shodan.io/search?query={}"),
@@ -50,11 +48,11 @@ VULNERABLE_VERSIONS = {
 }
 
 
-async def query_iot_engine(name: str, url_template: str, target: str, client: httpx.AsyncClient) -> dict:
+async def query_iot_engine(name: str, url_template: str, target: str, client) -> dict:
     try:
         url = url_template.format(quote(target))
-        resp = await client.get(url, timeout=15.0, headers={"User-Agent": "Mozilla/5.0"}, follow_redirects=True)
-        if resp.status_code == 200 and len(resp.text) > 300:
+        resp = await safe_fetch(client, url, timeout=15.0, headers={"User-Agent": "Mozilla/5.0"}, follow_redirects=True)
+        if resp and resp.status_code == 200 and len(resp.text) > 300:
             text = resp.text.lower()
             mentions = text.count(target.lower())
             devices_found = {}
@@ -82,24 +80,25 @@ async def query_iot_engine(name: str, url_template: str, target: str, client: ht
     return None
 
 
-async def check_default_credentials(ip: str, client: httpx.AsyncClient) -> list:
+async def check_default_credentials(ip: str, client) -> list:
     results = []
     for path in ["/", "/login", "/admin", "/setup"]:
         for brand, (user, pwd) in DEFAULT_CREDENTIALS.items():
             try:
-                resp = await client.get(
+                resp = await safe_fetch(
+                    client,
                     f"http://{ip}{path}",
                     timeout=5.0,
                     headers={"User-Agent": "Mozilla/5.0"},
                 )
-                if resp.status_code == 200:
+                if resp and resp.status_code == 200:
                     results.append({"brand": brand, "path": path, "status": resp.status_code})
             except:
                 pass
     return results
 
 
-async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFinding]:
+async def crawl(target: str, client) -> List:
     findings = []
     t = target.strip().lower()
     if t.startswith("http"):
@@ -112,9 +111,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             all_results.append(result)
 
     if all_results:
-        findings.append(IntelligenceFinding(
-            entity=f"IoT scan: {len(all_results)}/{len(IOT_SEARCH_ENGINES)} engines queried",
-            type="IoT: Coverage Report",
+        findings.append(make_finding(
+            f"IoT scan: {len(all_results)}/{len(IOT_SEARCH_ENGINES)} engines queried",
+            ftype="IoT: Coverage Report",
             source="IoTScanner",
             confidence="High",
             color="slate",
@@ -131,9 +130,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
     for result in all_results:
         if result["mentions"] > 0:
-            findings.append(IntelligenceFinding(
-                entity=f"{result['name']}: {result['mentions']} IoT mentions for {t}",
-                type="IoT: Engine Result",
+            findings.append(make_finding(
+                f"{result['name']}: {result['mentions']} IoT mentions for {t}",
+                ftype="IoT: Engine Result",
                 source="IoTScanner",
                 confidence="Medium",
                 color="sky",
@@ -146,9 +145,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
         for dtype, indicators in result.get("devices", {}).items():
             all_devices[dtype] = all_devices.get(dtype, []) + indicators
-            findings.append(IntelligenceFinding(
-                entity=f"{dtype.replace('_', ' ').title()} detected: {', '.join(indicators[:3])}",
-                type=f"IoT: {dtype.replace('_', ' ').title()}",
+            findings.append(make_finding(
+                f"{dtype.replace('_', ' ').title()} detected: {', '.join(indicators[:3])}",
+                ftype=f"IoT: {dtype.replace('_', ' ').title()}",
                 source="IoTScanner",
                 confidence="Medium",
                 color="orange",
@@ -161,9 +160,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
         for brand, cred in result.get("default_creds", {}).items():
             all_creds[brand] = cred
-            findings.append(IntelligenceFinding(
-                entity=f"Default credentials possible: {brand} ({cred})",
-                type="IoT: Default Credentials",
+            findings.append(make_finding(
+                f"Default credentials possible: {brand} ({cred})",
+                ftype="IoT: Default Credentials",
                 source="IoTScanner",
                 confidence="Medium",
                 color="red",
@@ -176,9 +175,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
         for brand in result.get("vulnerable_brands", []):
             all_vuln_brands.add(brand)
-            findings.append(IntelligenceFinding(
-                entity=f"Known vulnerabilities for {brand} devices detected",
-                type="IoT: Known Vulnerabilities",
+            findings.append(make_finding(
+                f"Known vulnerabilities for {brand} devices detected",
+                ftype="IoT: Known Vulnerabilities",
                 source="IoTScanner",
                 confidence="Medium",
                 color="red",
@@ -191,9 +190,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
     if all_devices:
         device_summary = ", ".join(f"{d}({len(ind)})" for d, ind in sorted(all_devices.items(), key=lambda x: len(x[1]), reverse=True))
-        findings.append(IntelligenceFinding(
-            entity=f"Device types detected: {device_summary}",
-            type="IoT: Device Inventory",
+        findings.append(make_finding(
+            f"Device types detected: {device_summary}",
+            ftype="IoT: Device Inventory",
             source="IoTScanner",
             confidence="Medium",
             color="slate",
@@ -205,9 +204,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         ))
 
     if all_creds:
-        findings.append(IntelligenceFinding(
-            entity=f"{len(all_creds)} device brands with default credentials risk",
-            type="IoT: Credential Risk Summary",
+        findings.append(make_finding(
+            f"{len(all_creds)} device brands with default credentials risk",
+            ftype="IoT: Credential Risk Summary",
             source="IoTScanner",
             confidence="Medium",
             color="red",
@@ -219,9 +218,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         ))
 
     if not all_results:
-        findings.append(IntelligenceFinding(
-            entity="No IoT devices found for target",
-            type="IoT: Scan Complete",
+        findings.append(make_finding(
+            "No IoT devices found for target",
+            ftype="IoT: Scan Complete",
             source="IoTScanner",
             confidence="Low",
             color="emerald",

@@ -1,12 +1,11 @@
 import httpx
-import asyncio
 import re
 import json
-from datetime import datetime
-from urllib.parse import urlparse, urljoin
+from urllib.parse import urlparse
 from typing import List, Optional
 from collections import defaultdict
 from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 
 CDX_API = "https://web.archive.org/cdx/search/cdx"
 UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
@@ -39,7 +38,7 @@ async def query_cdx(domain: str, client: httpx.AsyncClient, limit: int = 500) ->
             "limit": str(limit),
             "collapse": "urlkey",
         }
-        resp = await client.get(CDX_API, params=params, timeout=30.0,
+        resp = await safe_fetch(client, CDX_API, params=params, timeout=30.0,
             headers={"User-Agent": UA})
         if resp.status_code == 200:
             lines = resp.text.strip().splitlines()
@@ -121,7 +120,7 @@ async def detect_technologies_in_urls(cdx_results: list) -> list:
                     detected[tech].append(url[:150])
                     break
     for tech, sample_urls in detected.items():
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Technology detected: {tech} ({len(sample_urls)} indicators)",
             type=f"Exposure Surface: Technology - {tech}",
             source="ExposureSurfaceDeep",
@@ -145,7 +144,7 @@ async def analyze_subdomain_structure(cdx_results: list, domain: str) -> list:
         except:
             pass
     if subdomains:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{len(subdomains)} unique subdomains found in archive ({', '.join(sorted(subdomains)[:5])}...)",
             type="Exposure Surface: Subdomain Discovery",
             source="ExposureSurfaceDeep",
@@ -157,9 +156,9 @@ async def analyze_subdomain_structure(cdx_results: list, domain: str) -> list:
             tags=["exposure", "subdomain", "discovery"]
         ))
         for sub in sorted(subdomains)[:5]:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Subdomain: {sub}",
-                type="Exposure Surface: Subdomain Detail",
+                ftype="Exposure Surface: Subdomain Detail",
                 source="ExposureSurfaceDeep",
                 confidence="High",
                 color="slate",
@@ -190,7 +189,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             for cat, extensions in EXPOSURE_CATEGORIES.items():
                 if any(url.endswith(ext) for ext in extensions):
                     exposure_count += 1
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"{cat.replace('_', ' ').title()}: {url[:200]}",
                         type=f"Exposure Surface: {cat.replace('_', ' ').title()}",
                         source="ExposureSurfaceDeep",
@@ -204,9 +203,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                     break
 
         if exposure_count:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{exposure_count} sensitive files exposed in archive",
-                type="Exposure Surface: Total Exposure Count",
+                ftype="Exposure Surface: Total Exposure Count",
                 source="ExposureSurfaceDeep",
                 confidence="High",
                 color="red",
@@ -217,9 +216,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             ))
 
     for path in COMMON_PATHS:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Common path: {path}",
-            type="Exposure Surface: Path Check",
+            ftype="Exposure Surface: Path Check",
             source="ExposureSurfaceDeep",
             confidence="Low",
             color="slate",
@@ -230,9 +229,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         ))
 
     for path in ADDITIONAL_COMMON_PATHS:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Additional path: {path}",
-            type="Exposure Surface: Extra Path Check",
+            ftype="Exposure Surface: Extra Path Check",
             source="ExposureSurfaceDeep",
             confidence="Low",
             color="slate",
@@ -248,7 +247,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
     unique_extra_paths = [p for p in MORE_COMMON_PATHS if p.lower() not in already_paths]
 
     for ext, ext_list in MORE_EXPOSURE_CATEGORIES.items():
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Extended category: {ext} ({len(ext_list)} patterns)",
             type="Exposure Surface: Extended Category",
             source="ExposureSurfaceDeep",
@@ -259,7 +258,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         ))
 
     for tech, patterns in MORE_TECHNOLOGY_PATTERNS.items():
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Tech signature: {tech} ({len(patterns)} patterns)",
             type="Exposure Surface: Extended Technology Pattern",
             source="ExposureSurfaceDeep",
@@ -270,9 +269,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         ))
 
     for path in unique_extra_paths:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Extended path: {path}",
-            type="Exposure Surface: Extended Path Check",
+            ftype="Exposure Surface: Extended Path Check",
             source="ExposureSurfaceDeep",
             confidence="Low",
             color="slate",
@@ -287,9 +286,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         risk_scores_list.append(score)
         if score >= 7:
             remediation = get_remediation(entity)
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"High risk exposure: {entity[:200]}",
-                type="Exposure Surface: High Risk Item",
+                ftype="Exposure Surface: High Risk Item",
                 source="ExposureSurfaceDeep",
                 confidence="High",
                 color="red",
@@ -302,7 +301,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
     total_items = sum(coverage.values())
     for cat, count in sorted(coverage.items(), key=lambda x: -x[1]):
         pct = round(count / total_items * 100, 1) if total_items > 0 else 0
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Coverage: {cat} ({count} items, {pct}%)",
             type="Exposure Surface: Coverage Analysis",
             source="ExposureSurfaceDeep",
@@ -316,9 +315,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         avg_risk = sum(risk_scores_list) / len(risk_scores_list)
         max_risk = max(risk_scores_list)
         high_risk_count = sum(1 for s in risk_scores_list if s >= 7)
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Attack surface: {total_items} items, avg risk {avg_risk:.1f}/10, max {max_risk}/10, {high_risk_count} high-risk",
-            type="Exposure Surface: Attack Surface Analysis",
+            ftype="Exposure Surface: Attack Surface Analysis",
             source="ExposureSurfaceDeep",
             confidence="High",
             color="red" if high_risk_count > 0 else "orange",
@@ -327,9 +326,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         ))
 
     if not findings:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"No exposure surface data for {t}",
-            type="Exposure Surface: Complete",
+            ftype="Exposure Surface: Complete",
             source="ExposureSurfaceDeep",
             confidence="Low",
             color="emerald",

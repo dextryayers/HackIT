@@ -1,10 +1,7 @@
-import httpx
-import asyncio
 import re
 import json
-from urllib.parse import urljoin, urlparse, quote
-from typing import List, Optional
-from models import IntelligenceFinding
+from urllib.parse import urlparse
+from module_common import safe_fetch, make_finding
 
 GIT_CONFIG_PATHS = [
     ".git/config",
@@ -44,17 +41,13 @@ SENSITIVE_PATTERNS = [
     (r'rediss?://[^\s]+', "Redis URI"),
 ]
 
-async def check_git_exposure(client: httpx.AsyncClient, domain: str) -> list:
+async def check_git_exposure(client, domain: str) -> list:
     results = []
     for path in GIT_CONFIG_PATHS:
-        try:
-            url = f"https://{domain}/{path}"
-            resp = await client.get(url, timeout=10.0,
-                headers={"User-Agent": "Mozilla/5.0"})
-            if resp.status_code == 200 and len(resp.text) > 20:
-                results.append({"path": path, "url": url, "content": resp.text[:1000]})
-        except:
-            pass
+        url = f"https://{domain}/{path}"
+        resp = await safe_fetch(client, url, headers={"User-Agent": "Mozilla/5.0"})
+        if resp and resp.status_code == 200 and len(resp.text) > 20:
+            results.append({"path": path, "url": url, "content": resp.text[:1000]})
     return results
 
 async def detect_sensitive_data(content: str) -> list:
@@ -92,7 +85,7 @@ ADDITIONAL_GIT_PATHS = [
 COMMIT_HASH_PATTERN = re.compile(r"\b[0-9a-f]{40}\b")
 URL_REF_PATTERN = re.compile(r"(?:github|gitlab|bitbucket)[.:][^\s\"'<>]+")
 
-async def check_git_dir_listing(domain: str, client: httpx.AsyncClient) -> list:
+async def check_git_dir_listing(domain: str, client) -> list:
     results = []
     base = f"https://{domain}"
     paths = [
@@ -100,63 +93,49 @@ async def check_git_dir_listing(domain: str, client: httpx.AsyncClient) -> list:
         ".git/hooks/", ".git/info/",
     ]
     for path in paths:
-        try:
-            url = f"{base}/{path}"
-            resp = await client.get(url, timeout=8.0,
-                headers={"User-Agent": "Mozilla/5.0"})
-            if resp.status_code == 200 and ("index" in resp.text.lower() or "parent directory" in resp.text.lower()):
-                results.append({"path": path, "url": url, "type": "directory_listing"})
-        except:
-            pass
+        url = f"{base}/{path}"
+        resp = await safe_fetch(client, url, headers={"User-Agent": "Mozilla/5.0"})
+        if resp and resp.status_code == 200 and ("index" in resp.text.lower() or "parent directory" in resp.text.lower()):
+            results.append({"path": path, "url": url, "type": "directory_listing"})
     return results
 
-async def check_github_search(domain: str, client: httpx.AsyncClient) -> list:
+async def check_github_search(domain: str, client) -> list:
     results = []
-    try:
-        resp = await client.get(
-            f"{GIT_HUB_API}/search/code",
-            params={"q": domain, "per_page": 5},
-            headers={"User-Agent": "Mozilla/5.0", "Accept": "application/vnd.github.v3+json"},
-            timeout=10.0
-        )
-        if resp.status_code == 200:
-            data = resp.json()
-            total = data.get("total_count", 0)
-            if total:
-                items = data.get("items", [])
-                for item in items[:5]:
-                    results.append({
-                        "repo": item.get("repository", {}).get("full_name", ""),
-                        "path": item.get("path", ""),
-                        "url": item.get("html_url", ""),
-                    })
-    except:
-        pass
+    resp = await safe_fetch(client,
+        f"{GIT_HUB_API}/search/code",
+        params={"q": domain, "per_page": 5},
+        headers={"User-Agent": "Mozilla/5.0", "Accept": "application/vnd.github.v3+json"})
+    if resp and resp.status_code == 200:
+        data = resp.json()
+        total = data.get("total_count", 0)
+        if total:
+            items = data.get("items", [])
+            for item in items[:5]:
+                results.append({
+                    "repo": item.get("repository", {}).get("full_name", ""),
+                    "path": item.get("path", ""),
+                    "url": item.get("html_url", ""),
+                })
     return results
 
-async def check_gitlab_search(domain: str, client: httpx.AsyncClient) -> list:
+async def check_gitlab_search(domain: str, client) -> list:
     results = []
-    try:
-        resp = await client.get(
-            f"{GIT_LAB_API}/search",
-            params={"scope": "blobs", "search": domain, "per_page": 5},
-            headers={"User-Agent": "Mozilla/5.0"},
-            timeout=10.0
-        )
-        if resp.status_code == 200:
-            items = resp.json()
-            if isinstance(items, list) and items:
-                for item in items[:5]:
-                    results.append({
-                        "project": item.get("project_id", ""),
-                        "path": item.get("filename", item.get("path", "")),
-                        "ref": item.get("ref", ""),
-                    })
-    except:
-        pass
+    resp = await safe_fetch(client,
+        f"{GIT_LAB_API}/search",
+        params={"scope": "blobs", "search": domain, "per_page": 5},
+        headers={"User-Agent": "Mozilla/5.0"})
+    if resp and resp.status_code == 200:
+        items = resp.json()
+        if isinstance(items, list) and items:
+            for item in items[:5]:
+                results.append({
+                    "project": item.get("project_id", ""),
+                    "path": item.get("filename", item.get("path", "")),
+                    "ref": item.get("ref", ""),
+                })
     return results
 
-async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFinding]:
+async def crawl(target: str, client) -> list:
     findings = []
     t = target.strip().lower()
     if t.startswith("http"):
@@ -166,9 +145,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
     if git_exposures:
         for exposure in git_exposures:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f".git exposure: {exposure['path']} accessible",
-                type="Git Leak: Exposure",
+                ftype="Git Leak: Exposure",
                 source="GitLeaks",
                 confidence="High",
                 color="red",
@@ -182,9 +161,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             sensitive = await detect_sensitive_data(exposure["content"])
             if sensitive:
                 for s in sensitive:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Sensitive data in .git: {s['label']} ({s['count']} occurrences)",
-                        type=f"Git Leak: {s['label']}",
+                        ftype=f"Git Leak: {s['label']}",
                         source="GitLeaks",
                         confidence="High",
                         color="red",
@@ -197,9 +176,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             all_git_content = " ".join(e["content"] for e in git_exposures)
             commits = COMMIT_HASH_PATTERN.findall(all_git_content)
             if commits:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{len(set(commits))} commit hashes found in .git data",
-                    type="Git Leak: Commit History",
+                    ftype="Git Leak: Commit History",
                     source="GitLeaks",
                     confidence="Medium",
                     color="orange",
@@ -212,9 +191,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
     dir_listings = await check_git_dir_listing(t, client)
     if dir_listings:
         for dl in dir_listings:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Git directory listing: {dl['path']}",
-                type="Git Leak: Directory Listing",
+                ftype="Git Leak: Directory Listing",
                 source="GitLeaks",
                 confidence="High",
                 color="red",
@@ -226,9 +205,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
     gh_results = await check_github_search(t, client)
     if gh_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"GitHub: {len(gh_results)} code results referencing {t}",
-            type="Git Leak: GitHub Code Search",
+            ftype="Git Leak: GitHub Code Search",
             source="GitLeaks",
             confidence="Medium",
             color="orange",
@@ -238,9 +217,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             tags=["git", "github", "code-search"]
         ))
         for r in gh_results[:3]:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"GitHub reference: {r['repo']}/{r['path']}",
-                type="Git Leak: GitHub Reference",
+                ftype="Git Leak: GitHub Reference",
                 source="GitLeaks",
                 confidence="Medium",
                 color="slate",
@@ -251,9 +230,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
     gl_results = await check_gitlab_search(t, client)
     if gl_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"GitLab: {len(gl_results)} code results referencing {t}",
-            type="Git Leak: GitLab Code Search",
+            ftype="Git Leak: GitLab Code Search",
             source="GitLeaks",
             confidence="Medium",
             color="orange",
@@ -264,9 +243,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         ))
 
     if not git_exposures:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="No .git exposure detected",
-            type="Git Leak: Check Complete",
+            ftype="Git Leak: Check Complete",
             source="GitLeaks",
             confidence="Low",
             color="emerald",

@@ -1,7 +1,7 @@
 import asyncio
 import dns.resolver
-import httpx
 from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 
 SUBDOMAIN_WORDLIST = [
     "www", "mail", "ftp", "admin", "api", "dev", "staging", "vpn", "cdn",
@@ -175,7 +175,7 @@ async def resolve_sub(domain: str, sub: str):
 
 async def http_probe(host: str, client: httpx.AsyncClient):
     try:
-        resp = await client.get(f"http://{host}", timeout=8.0, follow_redirects=False,
+        resp = await safe_fetch(client,f"http://{host}", timeout=8.0, follow_redirects=False,
                                 headers={"User-Agent": "Mozilla/5.0"})
         return resp.status_code, resp.headers.get("server", ""), resp.headers.get("content-type", "")
     except:
@@ -230,9 +230,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             status_code, server, _ = await http_probe(fqdn, client)
         except: pass
 
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=fqdn,
-            type=f"Subdomain ({cat})",
+            ftype=f"Subdomain ({cat})",
             source="Subdomain Brute Force Deep",
             confidence="High",
             color="green" if status_code == 200 else "blue" if status_code else "slate",
@@ -244,9 +244,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         ))
 
         if cname:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{fqdn} -> CNAME -> {cname}",
-                type="Subdomain CNAME Record",
+                ftype="Subdomain CNAME Record",
                 source="Subdomain Brute Force Deep",
                 confidence="High",
                 color="purple",
@@ -262,9 +262,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             cat = categorize_subdomain(sub)
             cat_counts[cat] = cat_counts.get(cat, 0) + 1
         cat_summary = " | ".join(f"{cat}: {cnt}" for cat, cnt in sorted(cat_counts.items(), key=lambda x: -x[1]))
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Resolved {len(resolved_subs)}/{len(SUBDOMAIN_WORDLIST)} subdomains",
-            type="Subdomain Brute Force Summary",
+            ftype="Subdomain Brute Force Summary",
             source="Subdomain Brute Force Deep",
             confidence="High",
             color="blue",
@@ -277,9 +277,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         for cat in sorted(cat_counts.keys()):
             cat_subs = [f"{sub}.{domain}" for sub, _, _ in resolved_subs if categorize_subdomain(sub) == cat]
             if cat_subs:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{cat}: {', '.join(cat_subs[:8])}",
-                    type=f"Subdomain Category: {cat}",
+                    ftype=f"Subdomain Category: {cat}",
                     source="Subdomain Brute Force Deep",
                     confidence="High",
                     color="blue",
@@ -288,9 +288,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     tags=["subdomain", cat, "category"]
                 ))
     else:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"No subdomains resolved from {len(SUBDOMAIN_WORDLIST)} wordlist",
-            type="Subdomain Brute Force Summary",
+            ftype="Subdomain Brute Force Summary",
             source="Subdomain Brute Force Deep",
             confidence="Low",
             color="slate",

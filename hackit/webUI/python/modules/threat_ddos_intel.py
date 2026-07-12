@@ -1,8 +1,8 @@
-import httpx
 import re
 import json
-from urllib.parse import urlparse, quote
+from urllib.parse import urlparse
 from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 
 DDOS_PROTECTION_SERVICES = {
     "Cloudflare": ["cloudflare", "cf-ray", "__cfduid", "cf-cache-status", "cloudflare-nginx"],
@@ -41,7 +41,7 @@ async def check_ddos_protection(client: httpx.AsyncClient, target: str) -> list:
             url = f"https://{target}"
         else:
             url = target
-        resp = await client.get(url, timeout=10.0,
+        resp = await safe_fetch(client,url, timeout=10.0,
             headers={"User-Agent": "Mozilla/5.0"})
         if resp.status_code == 200:
             headers = dict(resp.headers)
@@ -80,7 +80,7 @@ async def check_ddos_feeds(client: httpx.AsyncClient, target: str) -> list:
         ]
         for feed_url in ddos_feeds:
             try:
-                resp = await client.get(feed_url, timeout=15.0,
+                resp = await safe_fetch(client,feed_url, timeout=15.0,
                     headers={"User-Agent": "Mozilla/5.0"})
                 if resp.status_code == 200:
                     content = resp.text.lower()
@@ -122,7 +122,7 @@ async def check_ddos_campaign_botnet_size(client: httpx.AsyncClient, target: str
         ]
         for feed_url in botnet_size_feeds:
             try:
-                resp = await client.get(feed_url, timeout=15.0,
+                resp = await safe_fetch(client,feed_url, timeout=15.0,
                     headers={"User-Agent": "Mozilla/5.0"})
                 if resp.status_code == 200:
                     content = resp.text.lower()
@@ -141,9 +141,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     protection_results = await check_ddos_protection(client, query)
     for r in protection_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"DDoS protection service: {r['service']} (indicator: {r['indicator']})",
-            type="DDoS Protection Detection",
+            ftype="DDoS Protection Detection",
             source="DDoS Intel",
             confidence="Medium",
             color="green",
@@ -156,9 +156,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     amp_results = await check_amplification_vectors(query)
     for r in amp_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Amplification vector: {r['vector']} (port {r['port']})",
-            type="DDoS Amplification Vector",
+            ftype="DDoS Amplification Vector",
             source="DDoS Intel",
             confidence="Low",
             color="red",
@@ -171,9 +171,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     feed_results = await check_ddos_feeds(client, query)
     for r in feed_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"DDoS feed hit: {r['feed']}",
-            type="DDoS Feed Detection",
+            ftype="DDoS Feed Detection",
             source=r['feed'],
             confidence="Medium",
             color="orange",
@@ -186,9 +186,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     pattern_results = await analyze_ddos_patterns(query)
     for r in pattern_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"DDoS attack pattern: {r['attack_type']} (matched: {r['matched']})",
-            type="DDoS Attack Pattern",
+            ftype="DDoS Attack Pattern",
             source="DDoS Intel",
             confidence="Low",
             color="orange",
@@ -201,9 +201,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     botnet_results = await check_ddos_campaign_botnet_size(client, query)
     for r in botnet_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Botnet campaign association: {r['feed']} ({r['matches']} matches)",
-            type="Botnet Campaign Link",
+            ftype="Botnet Campaign Link",
             source="DDoS Intel",
             confidence="Low",
             color="orange",
@@ -215,9 +215,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         ))
 
     if not protection_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"No DDoS protection detected for {query} - target may be unprotected",
-            type="DDoS Protection Status",
+            ftype="DDoS Protection Status",
             source="DDoS Intel",
             confidence="Low",
             color="yellow",
@@ -229,9 +229,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         ))
 
     for vector in AMPLIFICATION_VECTORS:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Amplification vector monitored: {vector}",
-            type="Amplification Vector Coverage",
+            ftype="Amplification Vector Coverage",
             source="DDoS Intel",
             confidence="Low",
             color="slate",
@@ -243,9 +243,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         ))
 
     for service in DDOS_PROTECTION_SERVICES:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"DDoS protection service monitored: {service}",
-            type="Protection Service Coverage",
+            ftype="Protection Service Coverage",
             source="DDoS Intel",
             confidence="Low",
             color="slate",
@@ -256,9 +256,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             tags=["ddos", "protection", service.lower().replace(" ", "-")]
         ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"DDoS intelligence complete for {query}: checked {len(DDOS_PROTECTION_SERVICES)} protection services, {len(AMPLIFICATION_VECTORS)} amplification vectors, multiple feeds",
-        type="DDoS Intelligence Summary",
+        ftype="DDoS Intelligence Summary",
         source="DDoS Intel",
         confidence="Medium",
         color="slate",

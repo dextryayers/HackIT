@@ -450,7 +450,7 @@ async def check_hibp_breaches(client, target):
 async def check_breach_directory(client, target):
     findings = []
     try:
-        resp = await client.post(
+        resp = await safe_fetch(client, 
             "https://breachdirectory.org/api/v1/search",
             json={"query": target},
             timeout=10.0,

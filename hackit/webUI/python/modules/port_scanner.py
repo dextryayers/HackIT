@@ -1,10 +1,8 @@
-import httpx
 import asyncio
 import json
-import socket
 from datetime import datetime
 from typing import List, Optional
-from models import IntelligenceFinding
+from ..module_common import make_finding, resolve_ip
 
 COMMON_PORTS = {
     21: "FTP", 22: "SSH", 23: "Telnet", 25: "SMTP", 53: "DNS",
@@ -171,9 +169,9 @@ async def grab_banners(host: str, ports: list) -> list:
         if port in BANNER_PORTS:
             banner = await grab_banner(host, port)
             if banner:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Banner on port {port}: {banner[:200]}",
-                    type="Port Scanner: Banner Grabbing",
+                    ftype="Port Scanner: Banner Grabbing",
                     source="PortScanner",
                     confidence="Medium",
                     color="slate",
@@ -183,21 +181,18 @@ async def grab_banners(host: str, ports: list) -> list:
                 ))
     return findings
 
-async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFinding]:
+async def crawl(target: str, client: AsyncClient) -> List[IntelligenceFinding]:
     findings = []
     t = target.strip().lower()
     if t.startswith("http"):
         from urllib.parse import urlparse
         t = urlparse(t).netloc
 
-    try:
-        ip = socket.gethostbyname(t)
-    except:
-        ip = t
+    ip = resolve_ip(t) or t
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Scanning {len(SCAN_PORTS)} common ports on {t} ({ip})",
-        type="Port Scanner: Configuration",
+        ftype="Port Scanner: Configuration",
         source="PortScanner",
         confidence="Medium",
         color="slate",
@@ -207,9 +202,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         tags=["port", "scan", "configuration"]
     ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Port database: {len(COMMON_PORTS)} service definitions loaded",
-        type="Port Scanner: Service Database",
+        ftype="Port Scanner: Service Database",
         source="PortScanner",
         confidence="Medium",
         color="slate",
@@ -221,9 +216,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
     for cat_name, cat_ports in PORT_CATEGORIES.items():
         cat_detail = ", ".join(f"{p} ({COMMON_PORTS.get(p, 'Unknown')})" for p in cat_ports[:5])
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Category {cat_name}: {len(cat_ports)} ports ({cat_detail}...)",
-            type="Port Scanner: Port Category",
+            ftype="Port Scanner: Port Category",
             source="PortScanner",
             confidence="Medium",
             color="slate",
@@ -235,9 +230,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
     open_ports = await scan_live_ports(ip)
     if open_ports:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{len(open_ports)} open ports found on {t}",
-            type="Port Scanner: Open Ports",
+            ftype="Port Scanner: Open Ports",
             source="PortScanner",
             confidence="High",
             color="red",
@@ -247,9 +242,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             tags=["port", "open", str(len(open_ports))]
         ))
         for p in open_ports[:15]:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Open port {p}: {COMMON_PORTS.get(p, 'Unknown service')}",
-                type="Port Scanner: Open Port Detail",
+                ftype="Port Scanner: Open Port Detail",
                 source="PortScanner",
                 confidence="High",
                 color="orange",
@@ -263,9 +258,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         findings.extend(banner_results)
 
     for port, service in list(COMMON_PORTS.items())[:30]:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Port {port}: {service}",
-            type="Port Scanner: Common Service",
+            ftype="Port Scanner: Common Service",
             source="PortScanner",
             confidence="Medium",
             color="slate",
@@ -276,9 +271,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         ))
 
     if not findings:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="Port scanner initialized",
-            type="Port Scanner: Ready",
+            ftype="Port Scanner: Ready",
             source="PortScanner",
             confidence="Low",
             color="emerald",

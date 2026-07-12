@@ -1,8 +1,6 @@
-import httpx
-import asyncio
 import re
 import socket
-from models import IntelligenceFinding
+from module_common import safe_fetch_json, make_finding, is_ip, resolve_ip
 
 DATACENTER_PROVIDERS = {
     "Equinix": {
@@ -105,39 +103,50 @@ DATACENTER_PROVIDERS = {
 DC_KEYWORDS = ["datacenter", "data center", "colo", "colocation", "dc ", "colo-", "dc-", "colo."]
 
 async def _resolve_target(target: str) -> tuple:
-    try:
-        socket.inet_aton(target)
+    if is_ip(target):
         return target, True
-    except OSError:
-        pass
-    try:
-        ip = socket.gethostbyname(target)
+    ip = resolve_ip(target)
+    if ip:
         return ip, False
-    except Exception as e:
-        return None, str(e)
+    return None, "DNS resolution failed"
 
-async def _get_org_info(ip: str, client: httpx.AsyncClient) -> list:
+async def _get_org_info(ip: str, client) -> list:
     findings = []
-    try:
-        resp = await client.get(f"https://ipinfo.io/{ip}/json", timeout=8.0,
-            headers={"User-Agent": "Mozilla/5.0"})
-        if resp.status_code == 200:
-            data = resp.json()
-            org = data.get("org", "")
-            asn_str = data.get("asn", "")
-            asn_num = 0
-            if asn_str:
-                try:
-                    asn_num = int(asn_str.replace("AS", ""))
-                except ValueError:
-                    pass
+    data = await safe_fetch_json(client, f"https://ipinfo.io/{ip}/json",
+        headers={"User-Agent": "Mozilla/5.0"})
+    if data:
+        org = data.get("org", "")
+        asn_str = data.get("asn", "")
+        asn_num = 0
+        if asn_str:
+            try:
+                asn_num = int(asn_str.replace("AS", ""))
+            except ValueError:
+                pass
 
-            if org:
+        if org:
+            for dc_name, dc_info in DATACENTER_PROVIDERS.items():
+                if dc_info["asns"] and asn_num in dc_info["asns"]:
+                    findings.append(make_finding(
+                        entity=f"{dc_name} Data Center",
+                        ftype="Data Center Provider (ASN Match)",
+                        source="DataCenterHousingScanner",
+                        confidence="High",
+                        color="orange",
+                        category="Geo / Network OSINT",
+                        threat_level="Informational",
+                        status="Identified",
+                        resolution=ip,
+                        raw_data=f"Data center provider: {dc_name}. {dc_info['desc']}. Location: {dc_info['location']}",
+                        tags=["dc", "colocation", dc_name.lower().replace(" ", "-")]
+                    ))
+                    break
+            else:
                 for dc_name, dc_info in DATACENTER_PROVIDERS.items():
-                    if dc_info["asns"] and asn_num in dc_info["asns"]:
-                        findings.append(IntelligenceFinding(
-                            entity=f"{dc_name} Data Center",
-                            type="Data Center Provider (ASN Match)",
+                    if dc_name.lower() in org.lower():
+                        findings.append(make_finding(
+                            entity=f"{dc_name} Data Center (via org name)",
+                            ftype="Data Center Provider (Org Match)",
                             source="DataCenterHousingScanner",
                             confidence="High",
                             color="orange",
@@ -145,46 +154,27 @@ async def _get_org_info(ip: str, client: httpx.AsyncClient) -> list:
                             threat_level="Informational",
                             status="Identified",
                             resolution=ip,
-                            raw_data=f"Data center provider: {dc_name}. {dc_info['desc']}. Location: {dc_info['location']}",
+                            raw_data=f"Data center provider: {dc_name} matched via org '{org}'",
                             tags=["dc", "colocation", dc_name.lower().replace(" ", "-")]
                         ))
                         break
-                else:
-                    for dc_name, dc_info in DATACENTER_PROVIDERS.items():
-                        if dc_name.lower() in org.lower():
-                            findings.append(IntelligenceFinding(
-                                entity=f"{dc_name} Data Center (via org name)",
-                                type="Data Center Provider (Org Match)",
-                                source="DataCenterHousingScanner",
-                                confidence="High",
-                                color="orange",
-                                category="Geo / Network OSINT",
-                                threat_level="Informational",
-                                status="Identified",
-                                resolution=ip,
-                                raw_data=f"Data center provider: {dc_name} matched via org '{org}'",
-                                tags=["dc", "colocation", dc_name.lower().replace(" ", "-")]
-                            ))
-                            break
 
-                is_dc_keyword = any(kw in org.lower() for kw in DC_KEYWORDS)
-                if is_dc_keyword:
-                    findings.append(IntelligenceFinding(
-                        entity=f"Data Center Keyword in Org: {org[:80]}",
-                        type="Data Center Indicator",
-                        source="DataCenterHousingScanner",
-                        confidence="Medium",
-                        color="blue",
-                        category="Geo / Network OSINT",
-                        threat_level="Informational",
-                        status="Suspected",
-                        resolution=ip,
-                        raw_data=f"Organization '{org}' contains data center related keywords",
-                        tags=["dc", "indicator"]
-                    ))
+            is_dc_keyword = any(kw in org.lower() for kw in DC_KEYWORDS)
+            if is_dc_keyword:
+                findings.append(make_finding(
+                    entity=f"Data Center Keyword in Org: {org[:80]}",
+                    ftype="Data Center Indicator",
+                    source="DataCenterHousingScanner",
+                    confidence="Medium",
+                    color="blue",
+                    category="Geo / Network OSINT",
+                    threat_level="Informational",
+                    status="Suspected",
+                    resolution=ip,
+                    raw_data=f"Organization '{org}' contains data center related keywords",
+                    tags=["dc", "indicator"]
+                ))
 
-    except Exception:
-        pass
     return findings
 
 async def _check_dc_from_rdns(ip: str) -> list:
@@ -194,9 +184,9 @@ async def _check_dc_from_rdns(ip: str) -> list:
         ptr_name = ptr[0].lower()
         for dc_name in DATACENTER_PROVIDERS.keys():
             if dc_name.lower() in ptr_name:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{dc_name} Data Center (rDNS)",
-                    type="Data Center Provider (rDNS Match)",
+                    ftype="Data Center Provider (rDNS Match)",
                     source="DataCenterHousingScanner",
                     confidence="High",
                     color="orange",
@@ -210,9 +200,9 @@ async def _check_dc_from_rdns(ip: str) -> list:
                 break
         for kw in DC_KEYWORDS:
             if kw in ptr_name:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"DC keyword in rDNS: {ptr_name}",
-                    type="Data Center rDNS Indicator",
+                    ftype="Data Center rDNS Indicator",
                     source="DataCenterHousingScanner",
                     confidence="Medium",
                     color="slate",
@@ -231,9 +221,9 @@ async def _check_dc_from_rdns(ip: str) -> list:
 async def _list_all_dc_providers() -> list:
     findings = []
     for dc_name, dc_info in DATACENTER_PROVIDERS.items():
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{dc_name} - {dc_info['location']}",
-            type="Data Center Provider Reference",
+            ftype="Data Center Provider Reference",
             source="DataCenterHousingScanner",
             confidence="Medium",
             color="slate",
@@ -245,28 +235,28 @@ async def _list_all_dc_providers() -> list:
         ))
     return findings
 
-async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFinding]:
+async def crawl(target: str, client) -> list:
     findings = []
     target = target.strip().lower()
     if target.startswith("http"):
         from urllib.parse import urlparse
         target = urlparse(target).netloc
 
-    ip, is_ip = await _resolve_target(target)
+    ip, is_ip_flag = await _resolve_target(target)
     if ip is None:
-        findings.append(IntelligenceFinding(entity=f"DNS resolution failed: {target}", type="DNS Error", source="DataCenterHousingScanner", confidence="Low", color="red", category="Geo / Network OSINT", raw_data=str(is_ip)[:200], tags=["error"]))
+        findings.append(make_finding(entity=f"DNS resolution failed: {target}", ftype="DNS Error", source="DataCenterHousingScanner", confidence="Low", color="red", category="Geo / Network OSINT", raw_data=str(is_ip_flag)[:200], tags=["error"]))
         return findings
 
-    if not is_ip:
-        findings.append(IntelligenceFinding(entity=f"{target} -> {ip}", type="DNS Resolution", source="DataCenterHousingScanner", confidence="High", color="slate", category="Geo / Network OSINT", threat_level="Informational", status="Resolved", resolution=ip, tags=["dns", "resolution"]))
+    if not is_ip_flag:
+        findings.append(make_finding(entity=f"{target} -> {ip}", ftype="DNS Resolution", source="DataCenterHousingScanner", confidence="High", color="slate", category="Geo / Network OSINT", threat_level="Informational", status="Resolved", resolution=ip, tags=["dns", "resolution"]))
 
     findings.extend(await _get_org_info(ip, client))
     findings.extend(await _check_dc_from_rdns(ip))
     findings.extend(await _list_all_dc_providers())
 
     in_dc = any(f for f in findings if "Data Center Provider" in f.type)
-    findings.append(IntelligenceFinding(entity=f"Data Center Hosted: {'Yes' if in_dc else 'No / Unknown'}", type="Data Center Status", source="DataCenterHousingScanner", confidence="Medium" if in_dc else "Low", color="orange" if in_dc else "slate", category="Geo / Network OSINT", threat_level="Informational", status="Identified" if in_dc else "Unknown", resolution=ip, tags=["dc", "status"]))
-    findings.append(IntelligenceFinding(entity=f"Target: {target}", type="DC Scan Target", source="DataCenterHousingScanner", confidence="High", color="slate", category="Geo / Network OSINT", tags=["dc", "target"]))
-    findings.append(IntelligenceFinding(entity=f"Total DC findings: {len(findings)}", type="DC Scan Summary", source="DataCenterHousingScanner", confidence="Medium", color="purple", category="Geo / Network OSINT", tags=["dc", "summary"]))
+    findings.append(make_finding(entity=f"Data Center Hosted: {'Yes' if in_dc else 'No / Unknown'}", ftype="Data Center Status", source="DataCenterHousingScanner", confidence="Medium" if in_dc else "Low", color="orange" if in_dc else "slate", category="Geo / Network OSINT", threat_level="Informational", status="Identified" if in_dc else "Unknown", resolution=ip, tags=["dc", "status"]))
+    findings.append(make_finding(entity=f"Target: {target}", ftype="DC Scan Target", source="DataCenterHousingScanner", confidence="High", color="slate", category="Geo / Network OSINT", tags=["dc", "target"]))
+    findings.append(make_finding(entity=f"Total DC findings: {len(findings)}", ftype="DC Scan Summary", source="DataCenterHousingScanner", confidence="Medium", color="purple", category="Geo / Network OSINT", tags=["dc", "summary"]))
 
     return findings

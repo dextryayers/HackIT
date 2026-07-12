@@ -1,6 +1,7 @@
-import httpx
 import re
+import httpx
 from urllib.parse import urlparse
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 from models import IntelligenceFinding
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
@@ -26,7 +27,7 @@ SENSITIVE_IN_LISTING = [
 async def check_directory_listing(client: httpx.AsyncClient, base_url: str, path: str) -> dict:
     result = {"path": path, "listing_enabled": False, "files": [], "status": 0, "sensitive_files": []}
     try:
-        resp = await client.get(f"{base_url}/{path}/", timeout=8.0, follow_redirects=False, headers={"User-Agent": UA})
+        resp = await safe_fetch(client,f"{base_url}/{path}/", timeout=8.0, follow_redirects=False, headers={"User-Agent": UA})
         result["status"] = resp.status_code
         content = resp.text
 
@@ -55,7 +56,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     base_accessible = False
     for proto in ["https", "http"]:
         try:
-            r = await client.get(f"{proto}://{domain}", timeout=10.0, follow_redirects=True, headers={"User-Agent": UA})
+            r = await safe_fetch(client,f"{proto}://{domain}", timeout=10.0, follow_redirects=True, headers={"User-Agent": UA})
             if r.status_code == 200:
                 base_accessible = True
                 base_url = f"{proto}://{domain}"
@@ -64,9 +65,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             continue
 
     if not base_accessible:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Site {domain} not accessible",
-            type="DirListing: Unreachable",
+            ftype="DirListing: Unreachable",
             source="DirectoryListingCheck",
             confidence="Low",
             color="red",
@@ -75,9 +76,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         ))
         return findings
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Checking {len(COMMON_DIRECTORIES)} common directories for listing enabled",
-        type="DirListing: Scan Started",
+        ftype="DirListing: Scan Started",
         source="DirectoryListingCheck",
         confidence="Medium",
         color="slate",
@@ -97,9 +98,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     for ld in listing_dirs:
         sensitive_files = ld.get("sensitive_files", [])
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Directory listing ENABLED: /{ld['path']}/ ({len(ld['files'])} file(s))",
-            type="DirListing: Enabled",
+            ftype="DirListing: Enabled",
             source="DirectoryListingCheck",
             confidence="High",
             color="red",
@@ -110,9 +111,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         ))
 
         if ld["files"]:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Files in /{ld['path']}/: {', '.join(ld['files'][:10])}",
-                type="DirListing: File List",
+                ftype="DirListing: File List",
                 source="DirectoryListingCheck",
                 confidence="High",
                 color="orange",
@@ -122,9 +123,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             ))
 
         if sensitive_files:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Sensitive files in /{ld['path']}/: {', '.join(sensitive_files[:10])}",
-                type="DirListing: Sensitive Files Exposed",
+                ftype="DirListing: Sensitive Files Exposed",
                 source="DirectoryListingCheck",
                 confidence="High",
                 color="red",
@@ -134,9 +135,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             ))
 
     for nd in non_listing_accessible:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"/{nd['path']}/ returns HTTP {nd['status']} (responds but listing disabled)",
-            type="DirListing: No Listing",
+            ftype="DirListing: No Listing",
             source="DirectoryListingCheck",
             confidence="Medium",
             color="yellow",
@@ -145,9 +146,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         ))
 
     if not listing_dirs:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="No directory listings enabled on common paths (good security practice)",
-            type="DirListing: All Secure",
+            ftype="DirListing: All Secure",
             source="DirectoryListingCheck",
             confidence="Medium",
             color="emerald",
@@ -157,9 +158,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     total_sensitive = sum(len(ld.get("sensitive_files", [])) for ld in listing_dirs)
     listing_score = min(len(listing_dirs) * 20, 100)
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Directory Listing Score: {listing_score}/100 ({len(listing_dirs)} listing(s) enabled, {total_sensitive} sensitive file(s))",
-        type="DirListing: Score",
+        ftype="DirListing: Score",
         source="DirectoryListingCheck",
         confidence="High",
         color="red" if listing_score > 0 else "emerald",

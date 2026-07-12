@@ -1,9 +1,8 @@
-import httpx
-import asyncio
-import json
 import re
-from datetime import datetime
+import httpx
 from typing import List, Optional
+from collections import defaultdict
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 from models import IntelligenceFinding
 
 WIGLE_API_BASE = "https://api.wigle.net/api/v2"
@@ -21,7 +20,7 @@ async def wigle_search(query: str, client: httpx.AsyncClient) -> Optional[dict]:
         else:
             params["ssid"] = query
 
-        resp = await client.get(WIGLE_SEARCH_URL, params=params, timeout=10.0,
+        resp = await safe_fetch(client,WIGLE_SEARCH_URL, params=params, timeout=10.0,
             headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"})
         if resp.status_code == 200:
             return resp.json()
@@ -32,7 +31,7 @@ async def wigle_search(query: str, client: httpx.AsyncClient) -> Optional[dict]:
 async def wigle_network_details(netid: str, client: httpx.AsyncClient) -> Optional[dict]:
     try:
         url = f"{WIGLE_API_BASE}/network/{netid}"
-        resp = await client.get(url, timeout=10.0,
+        resp = await safe_fetch(client,url, timeout=10.0,
             headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"})
         if resp.status_code == 200:
             return resp.json()
@@ -44,7 +43,7 @@ async def wigle_statistics(query: str, client: httpx.AsyncClient) -> Optional[di
     try:
         url = f"{WIGLE_API_BASE}/stats/network"
         params = {"ssid": query} if not re.match(r'^[0-9.]+$', query) else {"ip": query}
-        resp = await client.get(url, params=params, timeout=10.0,
+        resp = await safe_fetch(client,url, params=params, timeout=10.0,
             headers={"User-Agent": "Mozilla/5.0"})
         if resp.status_code == 200:
             return resp.json()
@@ -141,9 +140,9 @@ async def classify_encryption(networks: list) -> list:
                     enc_counts[enc_type] += 1
                     break
     for enc_type, count in sorted(enc_counts.items(), key=lambda x: -x[1]):
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Encryption type '{enc_type}': {count} networks",
-            type="WiGLE: Encryption Distribution",
+            ftype="WiGLE: Encryption Distribution",
             source="WiGLE",
             confidence="Medium",
             color="emerald" if enc_type in ("WPA3", "WPA2") else ("red" if enc_type == "Open" else "orange"),
@@ -164,9 +163,9 @@ async def classify_ssid_patterns(networks: list) -> list:
                     pattern_counts[pattern_name] += 1
                     break
     for pattern, count in sorted(pattern_counts.items(), key=lambda x: -x[1]):
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"SSID pattern '{pattern}': {count} networks",
-            type="WiGLE: SSID Classification",
+            ftype="WiGLE: SSID Classification",
             source="WiGLE",
             confidence="Medium",
             color="slate",
@@ -188,9 +187,9 @@ async def analyze_signal_strength(networks: list) -> list:
     if signals:
         avg_signal = sum(signals) / len(signals)
         max_signal = max(signals)
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Signal strength: avg {avg_signal:.0f} dBm, max {max_signal:.0f} dBm over {len(signals)} networks",
-            type="WiGLE: Signal Analysis",
+            ftype="WiGLE: Signal Analysis",
             source="WiGLE",
             confidence="Medium",
             color="slate",
@@ -210,9 +209,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         total = search_results.get("totalResults", 0)
         results = search_results.get("results", [])
         if total > 0:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"WiGLE search returned {total} networks",
-                type="WiGLE: Search Summary",
+                ftype="WiGLE: Search Summary",
                 source="WiGLE",
                 confidence="Medium",
                 color="slate",
@@ -240,9 +239,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                 firsttime = network.get("firsttime", "")
                 lasttime = network.get("lasttime", "")
 
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Network: {ssid} ({netid}) on ch.{channel} - {encryption}",
-                    type="WiGLE: Network",
+                    ftype="WiGLE: Network",
                     source="WiGLE",
                     confidence="Medium",
                     color="slate",
@@ -255,9 +254,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                     oui = netid[:8]
                     vendor = ALL_WIFI_VENDORS.get(oui, "")
                     if vendor:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"Vendor OUI: {oui} -> {vendor}",
-                            type="WiGLE: Vendor Identification",
+                            ftype="WiGLE: Vendor Identification",
                             source="WiGLE",
                             confidence="Medium",
                             color="slate",
@@ -267,9 +266,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                         ))
 
                 if trilat and trilong:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Location: {trilat}, {trilong}",
-                        type="WiGLE: Geolocation",
+                        ftype="WiGLE: Geolocation",
                         source="WiGLE",
                         confidence="Medium",
                         color="slate",
@@ -279,9 +278,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                     ))
 
     if stats_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="WiGLE statistics available",
-            type="WiGLE: Statistics",
+            ftype="WiGLE: Statistics",
             source="WiGLE",
             confidence="Low",
             color="slate",
@@ -291,9 +290,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         ))
 
     if not findings:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="No WiGLE data found",
-            type="WiGLE: Complete",
+            ftype="WiGLE: Complete",
             source="WiGLE",
             confidence="Low",
             color="emerald",

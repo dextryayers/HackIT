@@ -1,7 +1,6 @@
-import httpx
 import re
 import asyncio
-from models import IntelligenceFinding
+from ..module_common import safe_fetch, make_finding
 
 PLATFORMS = [
     ("Facebook", "https://www.facebook.com/{u}", "social", "social-media"),
@@ -154,11 +153,9 @@ for _, _, _, cat in PLATFORMS:
     if cat not in CATEGORY_MAP:
         CATEGORY_MAP[cat] = len(CATEGORY_MAP)
 
-async def check_platform(username: str, platform_name: str, url: str, ptype: str, category: str, client: httpx.AsyncClient) -> IntelligenceFinding | None:
+async def check_platform(username: str, platform_name: str, url: str, ptype: str, category: str, client: AsyncClient) -> IntelligenceFinding | None:
     try:
-        resp = await client.get(url.format(u=username), timeout=10.0,
-            headers={"User-Agent": UA, "Accept-Language": "en-US,en;q=0.9"},
-            follow_redirects=True)
+        resp = await safe_fetch(client, url.format(u=username), timeout=10.0)
         if resp.status_code == 200:
             text_lower = resp.text.lower()
             not_found = ["page not found", "doesn't exist", "not found", "user not found",
@@ -171,9 +168,9 @@ async def check_platform(username: str, platform_name: str, url: str, ptype: str
             title_m = re.search(r'<title>([^<]+)</title>', resp.text, re.IGNORECASE)
             title = title_m.group(1).strip()[:100] if title_m else ""
 
-            return IntelligenceFinding(
+            return make_finding(
                 entity=f"{platform_name}: {title or username}",
-                type=f"Platform Discovery: {platform_name}",
+                ftype=f"Platform Discovery: {platform_name}",
                 source="SocialPlatformDiscovery",
                 confidence="High",
                 color="purple",
@@ -188,7 +185,7 @@ async def check_platform(username: str, platform_name: str, url: str, ptype: str
         pass
     return None
 
-async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFinding]:
+async def crawl(target: str, client: AsyncClient) -> list[IntelligenceFinding]:
     findings = []
     username = target.strip().lower()
     if target.startswith("http"):
@@ -216,9 +213,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                                "shopping", "reference", "funding", "dating", "education"]:
                         category_counts[tag] = category_counts.get(tag, 0) + 1
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Username '{username}' discovered on {found_count}/{len(PLATFORMS)} platforms",
-        type="Platform Discovery: Summary",
+        ftype="Platform Discovery: Summary",
         source="SocialPlatformDiscovery",
         confidence="High",
         color="purple",
@@ -230,9 +227,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     ))
 
     for cat, count in sorted(category_counts.items(), key=lambda x: -x[1]):
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{cat.title()}: {count} platform(s)",
-            type=f"Platform Discovery: {cat.title()} Coverage",
+            ftype=f"Platform Discovery: {cat.title()} Coverage",
             source="SocialPlatformDiscovery",
             confidence="Medium",
             color="slate",
@@ -244,9 +241,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     if found_count > 0:
         coverage_pct = round(found_count / len(PLATFORMS) * 100, 1)
         level = "Extensive" if coverage_pct > 20 else "Significant" if coverage_pct > 10 else "Moderate" if coverage_pct > 5 else "Limited"
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Cross-platform presence: {level} ({coverage_pct}% coverage)",
-            type="Platform Discovery: Presence Score",
+            ftype="Platform Discovery: Presence Score",
             source="SocialPlatformDiscovery",
             confidence="Medium",
             color="orange" if coverage_pct > 10 else "slate",

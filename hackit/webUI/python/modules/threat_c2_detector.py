@@ -1,11 +1,11 @@
-import httpx
 import re
 import json
 import ssl
 import socket
 from datetime import datetime
-from urllib.parse import urlparse, quote
+from urllib.parse import urlparse
 from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 
 C2_FEEDS = [
     "https://threatfox.abuse.ch/export/json/ip/",
@@ -59,7 +59,7 @@ C2_PATH_PATTERNS = [
 async def check_threatfox(client: httpx.AsyncClient, target: str) -> list:
     results = []
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client,
             f"https://threatfox.abuse.ch/api/v1/",
             params={"query": "search_ioc", "search_term": target},
             timeout=15.0,
@@ -84,7 +84,7 @@ async def check_threatfox(client: httpx.AsyncClient, target: str) -> list:
 async def check_feodo_tracker(client: httpx.AsyncClient, target: str) -> list:
     results = []
     try:
-        resp = await client.get("https://feodotracker.abuse.ch/downloads/ipblocklist.txt", timeout=15.0,
+        resp = await safe_fetch(client,"https://feodotracker.abuse.ch/downloads/ipblocklist.txt", timeout=15.0,
             headers={"User-Agent": "Mozilla/5.0"})
         if resp.status_code == 200:
             for line in resp.text.splitlines():
@@ -98,7 +98,7 @@ async def check_feodo_tracker(client: httpx.AsyncClient, target: str) -> list:
 async def check_ssl_blacklist(client: httpx.AsyncClient, target: str) -> list:
     results = []
     try:
-        resp = await client.get("https://sslbl.abuse.ch/blacklist/sslipblacklist.txt", timeout=15.0,
+        resp = await safe_fetch(client,"https://sslbl.abuse.ch/blacklist/sslipblacklist.txt", timeout=15.0,
             headers={"User-Agent": "Mozilla/5.0"})
         if resp.status_code == 200:
             for line in resp.text.splitlines():
@@ -112,7 +112,7 @@ async def check_ssl_blacklist(client: httpx.AsyncClient, target: str) -> list:
 async def check_cybercrime_tracker(client: httpx.AsyncClient, target: str) -> list:
     results = []
     try:
-        resp = await client.get("https://cybercrime-tracker.net/all.php", timeout=15.0,
+        resp = await safe_fetch(client,"https://cybercrime-tracker.net/all.php", timeout=15.0,
             headers={"User-Agent": "Mozilla/5.0"})
         if resp.status_code == 200:
             if target in resp.text:
@@ -181,7 +181,7 @@ async def check_c2_paths(client: httpx.AsyncClient, target: str) -> list:
         for path in C2_PATH_PATTERNS[:10]:
             try:
                 url = f"{base}{path}"
-                resp = await client.get(url, timeout=5.0,
+                resp = await safe_fetch(client,url, timeout=5.0,
                     headers={"User-Agent": "Mozilla/5.0"})
                 if resp.status_code in [200, 201, 202, 204]:
                     results.append({
@@ -236,7 +236,7 @@ async def check_c2_feeds(client: httpx.AsyncClient, target: str) -> list:
     try:
         for feed_url in C2_FEEDS:
             try:
-                resp = await client.get(feed_url, timeout=15.0,
+                resp = await safe_fetch(client,feed_url, timeout=15.0,
                     headers={"User-Agent": "Mozilla/5.0"})
                 if resp.status_code == 200:
                     feed_name = feed_url.split("/")[2] if "//" in feed_url else feed_url
@@ -259,9 +259,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     threatfox_results = await check_threatfox(client, query)
     for r in threatfox_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"ThreatFox C2 IOC: {r['ioc']} ({r['malware']})",
-            type="C2 IOC Detection",
+            ftype="C2 IOC Detection",
             source="ThreatFox",
             confidence="High" if r.get("confidence_level", 0) > 50 else "Medium",
             color="red",
@@ -275,9 +275,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     feodo_results = await check_feodo_tracker(client, query)
     for r in feodo_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Feodo Tracker: {r['ip']} listed as C2 server",
-            type="C2 IP Blocklist",
+            ftype="C2 IP Blocklist",
             source="Feodo Tracker",
             confidence="High",
             color="red",
@@ -290,9 +290,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     ssl_blacklist_results = await check_ssl_blacklist(client, query)
     for r in ssl_blacklist_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"SSL Blacklist: {r['ip']} associated with malicious SSL",
-            type="SSL C2 Detection",
+            ftype="SSL C2 Detection",
             source="SSL Blacklist (abuse.ch)",
             confidence="High",
             color="red",
@@ -305,9 +305,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     cybercrime_results = await check_cybercrime_tracker(client, query)
     for r in cybercrime_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Cybercrime Tracker: target found in C2 database",
-            type="Cybercrime C2 Detection",
+            ftype="Cybercrime C2 Detection",
             source="Cybercrime Tracker",
             confidence="Medium",
             color="red",
@@ -320,9 +320,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     dga_results = await check_dga_patterns(query)
     for r in dga_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"DGA Pattern Detected: {r['domain']} matches {r['description']}",
-            type="DGA Domain Detection",
+            ftype="DGA Domain Detection",
             source="C2 Detector",
             confidence="Medium",
             color="yellow",
@@ -335,9 +335,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     framework_results = await check_c2_framework_indicators(query)
     for r in framework_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"C2 Framework: {r['framework']} indicators detected ({', '.join(r['matched_indicators'])})",
-            type="C2 Framework Identification",
+            ftype="C2 Framework Identification",
             source="C2 Detector",
             confidence=r['confidence'],
             color="orange",
@@ -350,9 +350,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     port_results = await check_c2_ports(query)
     for r in port_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"C2 Port Detected: {r['port']} - {r['description']}",
-            type="C2 Port Detection",
+            ftype="C2 Port Detection",
             source="C2 Detector",
             confidence="Medium",
             color="yellow",
@@ -366,9 +366,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     ssl_results = await analyze_ssl_certificate(query)
     for r in ssl_results:
         if r.get("self_signed"):
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Self-signed SSL certificate detected for {query}",
-                type="Suspicious SSL Certificate",
+                ftype="Suspicious SSL Certificate",
                 source="C2 Detector",
                 confidence="Medium",
                 color="yellow",
@@ -380,9 +380,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                 tags=["ssl", "self-signed", "suspicious-cert"]
             ))
         if r.get("expired"):
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Expired SSL certificate for {query} (not_after: {r.get('not_after', 'N/A')})",
-                type="Expired SSL Certificate",
+                ftype="Expired SSL Certificate",
                 source="C2 Detector",
                 confidence="Medium",
                 color="orange",
@@ -395,9 +395,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     c2_feed_results = await check_c2_feeds(client, query)
     for r in c2_feed_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Target found in C2 feed: {r['feed']}",
-            type="C2 Feed Match",
+            ftype="C2 Feed Match",
             source=r['feed'],
             confidence="High",
             color="red",
@@ -410,9 +410,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     path_results = await check_c2_paths(client, query)
     for r in path_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Suspicious C2 path responds: {r['url']} (HTTP {r['status']}, {r['length']} bytes)",
-            type="C2 Path Discovery",
+            ftype="C2 Path Discovery",
             source="C2 Detector",
             confidence="Low",
             color="orange",
@@ -423,9 +423,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             tags=["c2-path", "suspicious-endpoint"]
         ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"C2 detection complete for {query}: checked ThreatFox, Feodo, SSL Blacklist, {len(C2_FRAMEWORKS)} frameworks, {len(C2_PORTS)} ports, {len(C2_PATH_PATTERNS)} paths",
-        type="C2 Detection Summary",
+        ftype="C2 Detection Summary",
         source="C2 Detector",
         confidence="Medium",
         color="slate",

@@ -1,7 +1,8 @@
-import httpx
 import re
-import socket
+import asyncio
+import httpx
 from urllib.parse import urlparse
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 from models import IntelligenceFinding
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
@@ -117,16 +118,7 @@ def ip_in_cidr(ip: str, cidr: str) -> bool:
         return False
 
 async def resolve_dns(domain: str) -> list:
-    ips = []
-    try:
-        addrs = await asyncio.get_event_loop().getaddrinfo(domain, 80)
-        for addr in addrs:
-            ip = addr[4][0]
-            if ip not in ips:
-                ips.append(ip)
-    except Exception:
-        pass
-    return ips
+    return resolve_ip(domain)
 
 async def get_cname(domain: str) -> str:
     try:
@@ -143,8 +135,6 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     if domain.startswith("http"):
         domain = urlparse(domain).netloc
 
-    import asyncio
-
     ips = await resolve_dns(domain)
     cname = await get_cname(domain)
 
@@ -156,9 +146,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                 if ip_in_cidr(ip, cidr):
                     if cdn_name not in found_cdns:
                         found_cdns.add(cdn_name)
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"CDN detected via IP range: {cdn_name} ({ip})",
-                            type="CDN: IP Range Match",
+                            ftype="CDN: IP Range Match",
                             source="CDNDetector",
                             confidence="High",
                             color="blue",
@@ -172,9 +162,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             if re.search(pattern, cname, re.I):
                 if cdn_name not in found_cdns:
                     found_cdns.add(cdn_name)
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"CDN detected via CNAME: {cdn_name} ({cname})",
-                        type="CDN: CNAME Match",
+                        ftype="CDN: CNAME Match",
                         source="CDNDetector",
                         confidence="High",
                         color="blue",
@@ -185,7 +175,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     for proto in ["https", "http"]:
         try:
-            resp = await client.get(f"{proto}://{domain}", timeout=10.0, follow_redirects=True, headers={"User-Agent": UA})
+            resp = await safe_fetch(client,f"{proto}://{domain}", timeout=10.0, follow_redirects=True, headers={"User-Agent": UA})
             hdrs = {k.lower(): v for k, v in dict(resp.headers).items()}
 
             for hdr_name, cdn_name in CDN_HEADERS.items():
@@ -206,9 +196,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
                     if actual_cdn not in found_cdns:
                         found_cdns.add(actual_cdn)
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"CDN detected via header: {actual_cdn} ({hdr_name}: {hdr_val[:60]})",
-                            type="CDN: Header Detection",
+                            ftype="CDN: Header Detection",
                             source="CDNDetector",
                             confidence="High" if actual_cdn != "Generic CDN" else "Medium",
                             color="blue",
@@ -218,9 +208,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                         ))
 
             if resp.status_code == 200:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"HTTP {resp.status_code} - Site is reachable via {proto.upper()}",
-                    type="CDN: Reachability",
+                    ftype="CDN: Reachability",
                     source="CDNDetector",
                     confidence="High",
                     color="emerald",
@@ -232,9 +222,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             continue
 
     if not found_cdns:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"No CDN detected for {domain}",
-            type="CDN: No CDN Found",
+            ftype="CDN: No CDN Found",
             source="CDNDetector",
             confidence="Medium",
             color="slate",
@@ -242,9 +232,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             tags=["cdn", "no-cdn"]
         ))
     elif len(found_cdns) > 1:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Multi-CDN detected: {', '.join(found_cdns)} ({len(found_cdns)} CDNs)",
-            type="CDN: Multi-CDN",
+            ftype="CDN: Multi-CDN",
             source="CDNDetector",
             confidence="High",
             color="purple",
@@ -253,9 +243,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             tags=["cdn", "multi-cdn"]
         ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"CDN Analysis: {len(found_cdns)} CDN(s) detected | IPs: {len(ips)} | CNAME: {cname or 'None'}",
-        type="CDN: Summary",
+        ftype="CDN: Summary",
         source="CDNDetector",
         confidence="High",
         color="blue" if found_cdns else "slate",

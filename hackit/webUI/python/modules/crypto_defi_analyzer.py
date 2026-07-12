@@ -1,8 +1,8 @@
 import httpx
 import re
-import json
-from urllib.parse import urlparse, quote
+from urllib.parse import quote
 from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 
 DEFI_PROTOCOLS = {
     "Uniswap": ["uniswap", "v2", "v3", "v4"],
@@ -87,7 +87,7 @@ async def check_audit_history(client: httpx.AsyncClient, target: str) -> list:
         ]
         for url in audit_sources:
             try:
-                resp = await client.get(url, timeout=10.0,
+                resp = await safe_fetch(client, url, timeout=10.0,
                     headers={"User-Agent": "Mozilla/5.0"})
                 if resp.status_code == 200 and len(resp.text) > 100:
                     results.append({"url": url, "audit_mentioned": True})
@@ -141,7 +141,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     protocol_results = await detect_defi_protocols(query)
     for r in protocol_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"DeFi protocol identified: {r['protocol']} (matched: {r['matched']})",
             type="DeFi Protocol Detection",
             source="DeFi Analyzer",
@@ -156,9 +156,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     token_results = await analyze_token_contract(query)
     for r in token_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Token contract: {r['standard']} - {r['address'][:16]}...",
-            type="Token Contract Detection",
+            ftype="Token Contract Detection",
             source="DeFi Analyzer",
             confidence="High",
             color="slate",
@@ -171,9 +171,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     audit_results = await check_audit_history(client, query)
     for r in audit_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Audit reference found: {r['url'][:80]}...",
-            type="Smart Contract Audit Check",
+            ftype="Smart Contract Audit Check",
             source="DeFi Analyzer",
             confidence="Low",
             color="yellow" if "audit" in r['url'].lower() else "slate",
@@ -186,9 +186,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     flash_loan_results = await check_flash_loan_vulnerability(query)
     for r in flash_loan_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Flash loan pattern detected: {r['pattern'][:50]}...",
-            type="Flash Loan Vulnerability Check",
+            ftype="Flash Loan Vulnerability Check",
             source="DeFi Analyzer",
             confidence="Low",
             color="orange",
@@ -201,9 +201,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     oracle_results = await check_oracle_manipulation(query)
     for r in oracle_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Oracle manipulation pattern: {r['pattern'][:50]}...",
-            type="Oracle Manipulation Risk",
+            ftype="Oracle Manipulation Risk",
             source="DeFi Analyzer",
             confidence="Low",
             color="orange",
@@ -215,7 +215,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         ))
 
     tvl_estimate = await estimate_tvl(query)
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"TVL estimate: {tvl_estimate['estimate']} (indicator: {tvl_estimate['indicator']})",
         type="TVL Estimation",
         source="DeFi Analyzer",
@@ -229,9 +229,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     ))
 
     for protocol in list(DEFI_PROTOCOLS.keys())[:15]:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"DeFi protocol monitored: {protocol}",
-            type="DeFi Protocol Coverage",
+            ftype="DeFi Protocol Coverage",
             source="DeFi Analyzer",
             confidence="Low",
             color="slate",
@@ -242,7 +242,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             tags=["defi", "protocol", protocol.lower().replace(" ", "-").replace(".", "-")]
         ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"DeFi analysis complete for {query}: checked {len(DEFI_PROTOCOLS)} protocols, flash loan patterns, oracle manipulation risks",
         type="DeFi Analysis Summary",
         source="DeFi Analyzer",

@@ -1,9 +1,8 @@
-import httpx
 import asyncio
-import socket
 import re
+import httpx
 from urllib.parse import urlparse
-from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 
 ALL_TLDS = [
     "com", "net", "org", "co", "io", "me", "tv", "info", "biz", "dev",
@@ -155,12 +154,10 @@ CC_TLDS = {
 NEW_GTLDS = [t for t in ALL_TLDS if t not in CC_TLDS and t not in ("com", "net", "org", "info", "biz")]
 
 async def check_dns(host: str):
-    loop = asyncio.get_event_loop()
-    try:
-        ais = await loop.run_in_executor(None, lambda: socket.getaddrinfo(host, 80, family=socket.AF_INET))
-        return True, list(set(a[4][0] for a in ais[:3]))
-    except:
-        return False, []
+    ips = resolve_ip(host)
+    if ips:
+        return True, ips
+    return False, []
 
 async def crawl(target: str, client: httpx.AsyncClient):
     findings = []
@@ -196,9 +193,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 is_cc = tld in CC_TLDS
                 is_new_gtld = tld in NEW_GTLDS
                 color = "blue" if is_cc else "orange" if is_new_gtld else "slate"
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{fqdn} -> {', '.join(ips[:2])}",
-                    type=f"Registered TLD ({'ccTLD' if is_cc else 'new gTLD' if is_new_gtld else 'legacy TLD'})",
+                    ftype=f"Registered TLD ({'ccTLD' if is_cc else 'new gTLD' if is_new_gtld else 'legacy TLD'})",
                     source="TLD Intelligence",
                     confidence="High",
                     color=color,
@@ -210,9 +207,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 ))
 
     if resolved_tlds:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{registered_count}/{len(ALL_TLDS)} TLD variants resolve ({registered_count} registered domains)",
-            type="TLD Registration Summary",
+            ftype="TLD Registration Summary",
             source="TLD Intelligence",
             confidence="High",
             color="blue",
@@ -225,9 +222,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         cc_resolved = [(t, ips) for t, ips in resolved_tlds if t in CC_TLDS]
         if cc_resolved:
             countries = [f"{CC_TLDS[t]} (.{t})" for t, _ in cc_resolved[:10]]
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"ccTLDs: {', '.join(countries[:10])}",
-                type="ccTLD Geographic Analysis",
+                ftype="ccTLD Geographic Analysis",
                 source="TLD Intelligence",
                 confidence="High",
                 color="purple",
@@ -239,9 +236,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
 
         new_gtld_resolved = [(t, ips) for t, ips in resolved_tlds if t in NEW_GTLDS]
         if new_gtld_resolved:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"New gTLDs: {', '.join(t for t, _ in new_gtld_resolved[:15])}",
-                type="New gTLD Registration",
+                ftype="New gTLD Registration",
                 source="TLD Intelligence",
                 confidence="High",
                 color="orange",
@@ -253,9 +250,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         suspect_tlds = ["tk", "ml", "ga", "cf", "gq", "click", "party", "top", "icu", "review", "trade", "bid", "win", "men", "loan", "download", "racing", "science", "date", "rest", "faith", "work", "webcam", "accountant"]
         suspect_resolved = [(t, ips) for t, ips in resolved_tlds if t in suspect_tlds]
         if suspect_resolved:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"High-risk/suspect TLDs: {', '.join(t for t, _ in suspect_resolved)}",
-                type="High-Risk TLD Alert",
+                ftype="High-Risk TLD Alert",
                 source="TLD Intelligence",
                 confidence="Medium",
                 color="red",
@@ -265,9 +262,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             ))
 
         if original_tld and len(resolved_tlds) > 1:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{sld} is registered in {registered_count} TLD(s) including non-{original_tld} variants",
-                type="TLD Squatting Analysis",
+                ftype="TLD Squatting Analysis",
                 source="TLD Intelligence",
                 confidence="High",
                 color="orange",
@@ -276,9 +273,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 tags=["tld", "squatting"]
             ))
     else:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"No registered TLD variants found for {sld}",
-            type="TLD Registration Summary",
+            ftype="TLD Registration Summary",
             source="TLD Intelligence",
             confidence="Medium",
             color="slate",
@@ -287,9 +284,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             tags=["tld", "summary"]
         ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"TLD intelligence scan complete for {sld}",
-        type="TLD Intelligence Summary",
+        ftype="TLD Intelligence Summary",
         source="TLD Intelligence",
         confidence="High",
         color="blue",

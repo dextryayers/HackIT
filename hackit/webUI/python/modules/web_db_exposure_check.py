@@ -1,6 +1,7 @@
-import httpx
 import re
+import httpx
 from urllib.parse import urlparse
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 from models import IntelligenceFinding
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
@@ -123,7 +124,7 @@ DB_CONFIG_FILES = [
 async def check_path(client: httpx.AsyncClient, base_url: str, path: str) -> dict:
     result = {"path": path, "status": 0, "accessible": False, "content_snippet": ""}
     try:
-        resp = await client.get(f"{base_url}{path}", timeout=8.0, follow_redirects=False, headers={"User-Agent": UA})
+        resp = await safe_fetch(client,f"{base_url}{path}", timeout=8.0, follow_redirects=False, headers={"User-Agent": UA})
         result["status"] = resp.status_code
         if resp.status_code in (200, 401, 403):
             result["accessible"] = True
@@ -141,16 +142,16 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     base_url = f"https://{domain}"
     for proto in ["https", "http"]:
         try:
-            r = await client.get(f"{proto}://{domain}", timeout=10.0, follow_redirects=True, headers={"User-Agent": UA})
+            r = await safe_fetch(client,f"{proto}://{domain}", timeout=10.0, follow_redirects=True, headers={"User-Agent": UA})
             if r.status_code == 200:
                 base_url = f"{proto}://{domain}"
                 break
         except Exception:
             continue
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Checking for exposed database interfaces on {domain}",
-        type="DB: Scan Started",
+        ftype="DB: Scan Started",
         source="DBExposureCheck",
         confidence="Medium",
         color="slate",
@@ -176,22 +177,22 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                 break
 
     for db_interface in exposed_interfaces:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Exposed DB Interface: {db_interface['name']} ({db_interface['type']}) at {db_interface['path']} (HTTP {db_interface['status']})",
-            type="DB: Exposed Interface",
+            ftype="DB: Exposed Interface",
             source="DBExposureCheck",
             confidence="High",
             color="red",
             threat_level="Critical",
             status="Exposed",
-            raw_data=f"interface={db_interface['name']}, path={db_interface['path']}, status={db_interface['status']}, type={db_interface['type']}",
+            raw_data=f"interface={db_interface['name']}, path={db_interface['path']}, status={db_interface['status']}, ftype={db_interface['type']}",
             tags=["database", "exposure", "critical", db_interface["name"].lower().replace(" ", "-")]
         ))
 
         if db_interface["default_creds"]:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Default credentials possible for {db_interface['name']}: {', '.join(db_interface['default_creds'][:5])}",
-                type="DB: Default Credentials",
+                ftype="DB: Default Credentials",
                 source="DBExposureCheck",
                 confidence="Medium",
                 color="red",
@@ -205,9 +206,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         result = await check_path(client, base_url, cf)
         if result["status"] == 200:
             config_files_found.append(cf)
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Database config file accessible: /{cf} ({len(result['content_snippet'])} chars)",
-                type="DB: Config File Exposed",
+                ftype="DB: Config File Exposed",
                 source="DBExposureCheck",
                 confidence="High",
                 color="red",
@@ -218,9 +219,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             ))
 
     if not exposed_interfaces and not config_files_found:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"No exposed database interfaces or config files found on {domain}",
-            type="DB: No Exposure",
+            ftype="DB: No Exposure",
             source="DBExposureCheck",
             confidence="Medium",
             color="emerald",
@@ -228,9 +229,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             tags=["database", "secure"]
         ))
     else:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Database Exposure: {len(exposed_interfaces)} interface(s), {len(config_files_found)} config file(s) exposed",
-            type="DB: Summary",
+            ftype="DB: Summary",
             source="DBExposureCheck",
             confidence="High",
             color="red",

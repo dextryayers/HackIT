@@ -1,11 +1,10 @@
 import httpx
-import asyncio
 import re
-import json
-from urllib.parse import quote, urlparse
+from urllib.parse import quote
 from typing import List, Optional
 from collections import defaultdict
 from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 
 DORK_CATEGORIES = {
     "Sensitive Files": [
@@ -115,7 +114,7 @@ async def execute_dork(client: httpx.AsyncClient, dork: str, domain: str) -> lis
     try:
         query = dork.format(domain)
         url = f"https://www.google.com/search?q={quote(query)}&num=10"
-        resp = await client.get(url, timeout=15.0,
+        resp = await safe_fetch(client, url, timeout=15.0,
             headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"})
         if resp.status_code == 200:
             links = re.findall(r'<a[^>]+href="(https?://[^"]+)"[^>]*>(?:<[^>]+>)*([^<]*)', resp.text)
@@ -131,7 +130,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
     t = target.strip().lower()
 
     total_dorks = sum(len(dorks) for dorks in DORK_CATEGORIES.values())
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Loaded {total_dorks} dork templates across {len(DORK_CATEGORIES)} categories",
         type="Dork Engine: Configuration",
         source="DorkEngine",
@@ -144,7 +143,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
     ))
 
     for category, dorks in DORK_CATEGORIES.items():
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Dork category: {category} ({len(dorks)} dorks)",
             type=f"Dork Category: {category}",
             source="DorkEngine",
@@ -161,7 +160,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
     total_dorks = sum(len(dorks) for dorks in all_categories.values())
     ext_categories = sum(1 for cat in all_categories if cat not in DORK_CATEGORIES)
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Dork Engine: {len(all_categories)} categories, {total_dorks} templates ({ext_categories} extended)",
         type="Dork Engine: Extended Configuration",
         source="DorkEngine",
@@ -176,7 +175,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         impact = classify_dork_impact(category)
         color_map = {"Critical": "red", "High Risk": "orange", "Elevated Risk": "yellow", "Informational": "slate"}
         threat_map = {"Critical": "Critical", "High Risk": "High Risk", "Elevated Risk": "Elevated Risk", "Informational": "Informational"}
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Dork category: {category} ({len(dorks)} dorks, {impact})",
             type=f"Dork Extended: {category}",
             source="DorkEngine",
@@ -193,7 +192,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
     for risk_level, count in sorted(risk_summary.items(), key=lambda x: {"Critical": 5, "High Risk": 4, "Elevated Risk": 3, "Medium": 2, "Informational": 1}.get(x[0], 0), reverse=True):
         if count > 0 and risk_level not in ("Informational",):
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"{count} categories with {risk_level} risk ({', '.join(c for c in all_categories if assess_dork_risk(c) == risk_level)[:100]})",
                 type=f"Dork Engine: Risk Assessment - {risk_level}",
                 source="DorkEngine",
@@ -204,9 +203,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             ))
 
     if not findings:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="Dork engine configured",
-            type="Dork Engine: Ready",
+            ftype="Dork Engine: Ready",
             source="DorkEngine",
             confidence="Low",
             color="emerald",

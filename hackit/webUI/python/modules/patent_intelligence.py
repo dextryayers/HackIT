@@ -1,9 +1,8 @@
-import httpx
 import re
 import json
 from urllib.parse import urlparse, quote
 from typing import List
-from models import IntelligenceFinding
+from ..module_common import safe_fetch, make_finding
 
 PATENT_SOURCES = [
     ("Google Patents", "https://patents.google.com/?q={}&language=ENGLISH"),
@@ -21,7 +20,6 @@ TECHNOLOGY_AREAS = [
     "medical devices", "software", "hardware", "networking", "data processing",
 ]
 
-
 def extract_patent_ids(text: str) -> list:
     patterns = [
         r'(?:US|EP|WO|CN|JP|KR|DE|FR|GB|CH|CA|AU)\d{4,12}[A-Z]?\d?',
@@ -35,8 +33,7 @@ def extract_patent_ids(text: str) -> list:
             ids.add(match)
     return list(ids)
 
-
-async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFinding]:
+async def crawl(target: str, client: AsyncClient) -> List[IntelligenceFinding]:
     findings = []
     t = target.strip().lower()
     if t.startswith("http"):
@@ -48,20 +45,15 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
     for name, url_template in PATENT_SOURCES:
         try:
             url = url_template.format(quote(t))
-            resp = await client.get(
-                url,
-                timeout=20.0,
-                headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"},
-                follow_redirects=True,
-            )
+            resp = await safe_fetch(client, url, timeout=20.0)
             if resp.status_code == 200 and len(resp.text) > 500:
                 patent_ids = extract_patent_ids(resp.text)
                 target_count = resp.text.lower().count(t.lower())
                 sources_with_data += 1
 
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{name}: {len(patent_ids)} patent IDs found referencing {t}",
-                    type="Patent: Source Result",
+                    ftype="Patent: Source Result",
                     source="PatentIntelligence",
                     confidence="Medium",
                     color="sky",
@@ -75,9 +67,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                 if patent_ids:
                     all_patent_ids.extend(patent_ids)
                     for pid in patent_ids[:3]:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"Patent ID: {pid} from {name}",
-                            type="Patent: ID Discovery",
+                            ftype="Patent: ID Discovery",
                             source="PatentIntelligence",
                             confidence="Medium",
                             color="blue",
@@ -92,9 +84,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
     for area in TECHNOLOGY_AREAS:
         if area in t or any(word in t for word in area.split()):
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Potential technology area: {area.title()}",
-                type="Patent: Technology Area",
+                ftype="Patent: Technology Area",
                 source="PatentIntelligence",
                 confidence="Medium",
                 color="slate",
@@ -107,9 +99,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
     if all_patent_ids:
         unique_ids = list(set(all_patent_ids))
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Total {len(unique_ids)} unique patent IDs found for {t}",
-            type="Patent: Portfolio Estimate",
+            ftype="Patent: Portfolio Estimate",
             source="PatentIntelligence",
             confidence="Medium",
             color="slate",
@@ -130,9 +122,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                     break
         if office_distribution:
             dist_str = ", ".join(f"{o}({c})" for o, c in sorted(office_distribution.items(), key=lambda x: x[1], reverse=True))
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Patent office distribution: {dist_str}",
-                type="Patent: Office Distribution",
+                ftype="Patent: Office Distribution",
                 source="PatentIntelligence",
                 confidence="Medium",
                 color="slate",
@@ -143,9 +135,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                 tags=["patent", "offices", "distribution"],
             ))
     else:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="No patents found for target",
-            type="Patent: Scan Complete",
+            ftype="Patent: Scan Complete",
             source="PatentIntelligence",
             confidence="Low",
             color="emerald",
@@ -156,9 +148,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             tags=["patent", "clean"],
         ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Patent scan complete: {len(all_patent_ids)} patent IDs from {sources_with_data} sources",
-        type="Patent: Scan Summary",
+        ftype="Patent: Scan Summary",
         source="PatentIntelligence",
         confidence="High",
         color="slate",

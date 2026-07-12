@@ -1,10 +1,8 @@
 import httpx
-import asyncio
-import json
 import re
-from datetime import datetime
 from typing import List, Optional
 from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 
 YAHOO_FINANCE_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{}"
 COINGECKO_URL = "https://api.coingecko.com/api/v3/coins/{}"
@@ -15,7 +13,7 @@ CRUNCHBASE_URL = "https://api.crunchbase.com/api/v4/entities/organizations/{}"
 async def yahoo_finance(symbol: str, client: httpx.AsyncClient) -> Optional[dict]:
     try:
         url = YAHOO_FINANCE_URL.format(symbol)
-        resp = await client.get(url, timeout=10.0,
+        resp = await safe_fetch(client, url, timeout=10.0,
             headers={"User-Agent": "Mozilla/5.0"})
         if resp.status_code == 200:
             return resp.json()
@@ -26,7 +24,7 @@ async def yahoo_finance(symbol: str, client: httpx.AsyncClient) -> Optional[dict
 async def coingecko(symbol: str, client: httpx.AsyncClient) -> Optional[dict]:
     try:
         url = COINGECKO_URL.format(symbol.lower().replace("$", ""))
-        resp = await client.get(url, timeout=10.0,
+        resp = await safe_fetch(client, url, timeout=10.0,
             headers={"User-Agent": "Mozilla/5.0"})
         if resp.status_code == 200:
             return resp.json()
@@ -37,7 +35,7 @@ async def coingecko(symbol: str, client: httpx.AsyncClient) -> Optional[dict]:
 async def sec_edgar_search(company: str, client: httpx.AsyncClient) -> Optional[str]:
     try:
         params = {"action": "getcompany", "CIK": company, "output": "atom"}
-        resp = await client.get(SEC_EDGAR_URL, params=params, timeout=10.0)
+        resp = await safe_fetch(client, SEC_EDGAR_URL, params=params, timeout=10.0)
         if resp.status_code == 200:
             return resp.text[:2000]
     except:
@@ -46,7 +44,7 @@ async def sec_edgar_search(company: str, client: httpx.AsyncClient) -> Optional[
 
 async def search_opencorporates(company: str, client: httpx.AsyncClient) -> Optional[dict]:
     try:
-        resp = await client.get(OPENCORPORATES_URL,
+        resp = await safe_fetch(client, OPENCORPORATES_URL,
             params={"q": company, "format": "json"}, timeout=10.0)
         if resp.status_code == 200:
             data = resp.json()
@@ -95,12 +93,12 @@ async def check_blockchain_wallet(addr: str, client: httpx.AsyncClient) -> list:
     for name, url_builder in BLOCKCHAIN_EXPLORERS:
         try:
             url = url_builder(addr)
-            resp = await client.get(url, timeout=10.0,
+            resp = await safe_fetch(client, url, timeout=10.0,
                 headers={"User-Agent": "Mozilla/5.0"})
             if resp.status_code == 200:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Blockchain data from {name} for {addr[:20]}...",
-                    type=f"Financial Recon: Blockchain ({name})",
+                    ftype=f"Financial Recon: Blockchain ({name})",
                     source=name,
                     confidence="Medium",
                     color="slate",
@@ -117,12 +115,12 @@ async def check_company_data(company: str, client: httpx.AsyncClient) -> list:
     for name, url_builder in COMPANY_DATA_ENDPOINTS:
         try:
             url = url_builder(company)
-            resp = await client.get(url, timeout=10.0,
+            resp = await safe_fetch(client, url, timeout=10.0,
                 headers={"User-Agent": "Mozilla/5.0"})
             if resp.status_code == 200 and len(resp.text) > 100:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Company data available from {name}",
-                    type=f"Financial Recon: Company Data ({name})",
+                    ftype=f"Financial Recon: Company Data ({name})",
                     source=name,
                     confidence="Medium",
                     color="slate",
@@ -139,7 +137,7 @@ async def extract_financial_patterns(text: str) -> list:
     for fin_type, pattern in FINANCIAL_KEYWORDS_EXTRA.items():
         matches = re.findall(pattern, text)
         if matches:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Potential {fin_type.replace('_', ' ').title()}: {matches[0][:30]}...",
                 type=f"Financial Recon: {fin_type.replace('_', ' ').title()}",
                 source="FinancialRecon",
@@ -161,9 +159,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         if cg_data and "error" not in cg_data:
             name = cg_data.get("name", symbol)
             price = cg_data.get("market_data", {}).get("current_price", {}).get("usd", "N/A")
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Crypto: {name} @ ${price} USD",
-                type="Financial Recon: Cryptocurrency",
+                ftype="Financial Recon: Cryptocurrency",
                 source="CoinGecko",
                 confidence="High",
                 color="slate",
@@ -176,7 +174,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         if yf_data and "chart" in yf_data:
             result = yf_data.get("chart", {}).get("result", [{}])[0]
             meta = result.get("meta", {})
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Yahoo Finance: {meta.get('symbol', symbol)} - {meta.get('regularMarketPrice', 'N/A')}",
                 type="Financial Recon: Stock Quote",
                 source="Yahoo Finance",
@@ -191,7 +189,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
     if company_match:
         corp_data = await search_opencorporates(company_match, client)
         if corp_data:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Corporate: {corp_data.get('name', company_match)}",
                 type="Financial Recon: Corporate Registry",
                 source="OpenCorporates",
@@ -204,9 +202,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
         sec_data = await sec_edgar_search(company_match, client)
         if sec_data and len(sec_data) > 200:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"SEC EDGAR filing data available for {company_match}",
-                type="Financial Recon: SEC Filing",
+                ftype="Financial Recon: SEC Filing",
                 source="SEC EDGAR",
                 confidence="High",
                 color="slate",
@@ -235,9 +233,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         matches = re.findall(pattern, t)
         if matches:
             for m in matches[:3]:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Potential {bank_type}: {m}",
-                    type=f"Financial Recon: {bank_type.title()}",
+                    ftype=f"Financial Recon: {bank_type.title()}",
                     source="FinancialRecon",
                     confidence="Low",
                     color="orange",
@@ -248,9 +246,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                 ))
 
     if not findings:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="No financial information found",
-            type="Financial Recon: Complete",
+            ftype="Financial Recon: Complete",
             source="FinancialRecon",
             confidence="Low",
             color="emerald",

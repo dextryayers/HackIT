@@ -1,8 +1,8 @@
-import httpx
 import re
-import json
+import httpx
 from urllib.parse import urlparse, quote
 from typing import List
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 from models import IntelligenceFinding
 
 TRADEMARK_SOURCES = [
@@ -58,7 +58,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
     for name, url_template in TRADEMARK_SOURCES:
         try:
             url = url_template.format(quote(t))
-            resp = await client.get(
+            resp = await safe_fetch(client,
                 url,
                 timeout=20.0,
                 headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"},
@@ -71,9 +71,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
                 if target_mentions > 0 or info:
                     sources_with_data += 1
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"{name}: Trademark results for {t}",
-                        type="Trademark: Source Result",
+                        ftype="Trademark: Source Result",
                         source="TrademarkSearch",
                         confidence="Medium",
                         color="sky",
@@ -85,9 +85,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                     ))
 
                     if info.get("serial_number"):
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"Trademark serial number: {info['serial_number']} from {name}",
-                            type="Trademark: Serial Number",
+                            ftype="Trademark: Serial Number",
                             source="TrademarkSearch",
                             confidence="High",
                             color="blue",
@@ -102,9 +102,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                         status_str = info["status"]
                         is_dead = "dead" in status_str.lower() or "abandon" in status_str.lower()
                         threat = "Medium Risk" if is_dead else "Informational"
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"Trademark status: {status_str}",
-                            type="Trademark: Status Check",
+                            ftype="Trademark: Status Check",
                             source="TrademarkSearch",
                             confidence="High",
                             color="orange" if is_dead else "emerald",
@@ -117,9 +117,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
                     if info.get("classes"):
                         all_classes_found.extend(info["classes"])
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"Trademark classes: {', '.join(info['classes'])}",
-                            type="Trademark: Class Identification",
+                            ftype="Trademark: Class Identification",
                             source="TrademarkSearch",
                             confidence="Medium",
                             color="slate",
@@ -141,9 +141,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                     class_descriptions.append(f"{tc_num}: {tc_desc}")
                     break
         if class_descriptions:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Trademark class descriptions: {'; '.join(class_descriptions[:3])}",
-                type="Trademark: Class Description",
+                ftype="Trademark: Class Description",
                 source="TrademarkSearch",
                 confidence="Medium",
                 color="slate",
@@ -155,9 +155,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             ))
 
     if sources_with_data > 0:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Trademark portfolio: {sources_with_data} databases had registrations for {t}",
-            type="Trademark: Portfolio Analysis",
+            ftype="Trademark: Portfolio Analysis",
             source="TrademarkSearch",
             confidence="Medium",
             color="slate",
@@ -171,9 +171,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         conflict_keywords = ["conflict", "opposition", "cancellation", "infringement", "dispute", "objection"]
         conflict_found = any(kw in t for kw in conflict_keywords)
         if conflict_found:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Potential trademark conflict indicators for {t}",
-                type="Trademark: Conflict Detection",
+                ftype="Trademark: Conflict Detection",
                 source="TrademarkSearch",
                 confidence="Low",
                 color="orange",
@@ -184,9 +184,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                 tags=["trademark", "conflict", "warning"],
             ))
     else:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="No trademark registrations found for target",
-            type="Trademark: Scan Complete",
+            ftype="Trademark: Scan Complete",
             source="TrademarkSearch",
             confidence="Low",
             color="emerald",
@@ -197,9 +197,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             tags=["trademark", "clean"],
         ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Trademark scan complete: {sources_with_data}/{len(TRADEMARK_SOURCES)} databases had results",
-        type="Trademark: Scan Summary",
+        ftype="Trademark: Scan Summary",
         source="TrademarkSearch",
         confidence="High",
         color="slate",

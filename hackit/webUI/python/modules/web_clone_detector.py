@@ -1,7 +1,8 @@
-import httpx
 import re
 import hashlib
+import httpx
 from urllib.parse import urlparse
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 from models import IntelligenceFinding
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
@@ -27,7 +28,7 @@ CLONE_PLATFORMS = [
 
 async def fetch_page_hash(client: httpx.AsyncClient, url: str) -> tuple:
     try:
-        resp = await client.get(url, timeout=10.0, follow_redirects=True, headers={"User-Agent": UA})
+        resp = await safe_fetch(client,url, timeout=10.0, follow_redirects=True, headers={"User-Agent": UA})
         if resp.status_code == 200:
             content = resp.text[:50000]
             content_hash = hashlib.md5(content.encode()).hexdigest()
@@ -44,7 +45,7 @@ async def fetch_favicon_hash(client: httpx.AsyncClient, url: str) -> str:
     try:
         for path in ["/favicon.ico", "/favicon.png", "/apple-touch-icon.png"]:
             try:
-                resp = await client.get(f"{url.rstrip('/')}{path}", timeout=5.0)
+                resp = await safe_fetch(client,f"{url.rstrip('/')}{path}", timeout=5.0)
                 if resp.status_code == 200 and len(resp.content) > 50:
                     return hashlib.md5(resp.content[:10000]).hexdigest()
             except Exception:
@@ -82,9 +83,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         orig_hash, orig_title, orig_status = await fetch_page_hash(client, f"http://{domain}")
 
     if not orig_hash:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Could not fetch original page for {domain}",
-            type="Clone: Fetch Failed",
+            ftype="Clone: Fetch Failed",
             source="CloneDetector",
             confidence="Low",
             color="red",
@@ -93,9 +94,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         ))
         return findings
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Original page hash: {orig_hash[:16]}... | Title: {orig_title[:80] or 'None'}",
-        type="Clone: Original Fingerprint",
+        ftype="Clone: Original Fingerprint",
         source="CloneDetector",
         confidence="High",
         color="slate",
@@ -106,9 +107,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     orig_fav_hash = await fetch_favicon_hash(client, f"https://{domain}")
     if orig_fav_hash:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Favicon hash: {orig_fav_hash[:16]}...",
-            type="Clone: Favicon Fingerprint",
+            ftype="Clone: Favicon Fingerprint",
             source="CloneDetector",
             confidence="High",
             color="slate",
@@ -146,9 +147,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                 attempts.append(result)
 
     if clones_found:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Found {len(clones_found)} potential clones of {domain}",
-            type="Clone: Clones Detected",
+            ftype="Clone: Clones Detected",
             source="CloneDetector",
             confidence="High",
             color="red",
@@ -157,9 +158,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             tags=["clone", "phishing", "typosquatting"]
         ))
         for clone in clones_found[:5]:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Clone found: {clone}",
-                type="Clone: Matched Clone",
+                ftype="Clone: Matched Clone",
                 source="CloneDetector",
                 confidence="High",
                 color="red",
@@ -169,9 +170,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                 tags=["clone", "phishing", "matched"]
             ))
     else:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"No clones detected on typo-squatted domains (checked {len(attempts)})",
-            type="Clone: No Clones Found",
+            ftype="Clone: No Clones Found",
             source="CloneDetector",
             confidence="Medium",
             color="emerald",
@@ -183,7 +184,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     for platform in CLONE_PLATFORMS:
         test_url = f"{domain.replace('.', '-')}.{platform}"
         try:
-            resp = await client.get(f"https://{test_url}", timeout=5.0, follow_redirects=True, headers={"User-Agent": UA})
+            resp = await safe_fetch(client,f"https://{test_url}", timeout=5.0, follow_redirects=True, headers={"User-Agent": UA})
             if resp.status_code == 200:
                 test_hash = hashlib.md5(resp.text[:50000].encode()).hexdigest()
                 clone_platform_findings.append((test_url, test_hash))
@@ -191,9 +192,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             continue
 
     for plat_url, plat_hash in clone_platform_findings:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Potential clone on platform: {plat_url}",
-            type="Clone: Platform Clone",
+            ftype="Clone: Platform Clone",
             source="CloneDetector",
             confidence="Medium",
             color="red",
@@ -202,9 +203,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             tags=["clone", "platform", "phishing"]
         ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Clone Detection summary: {len(clones_found)} clones, {len(clone_platform_findings)} platform copies",
-        type="Clone: Summary",
+        ftype="Clone: Summary",
         source="CloneDetector",
         confidence="High",
         color="red" if clones_found else "emerald",

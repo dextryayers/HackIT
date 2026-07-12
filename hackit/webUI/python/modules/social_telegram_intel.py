@@ -1,7 +1,6 @@
-import httpx
-import re
 import json
 from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 
@@ -28,7 +27,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         url = url_tpl.format(username=username)
         html = None
         try:
-            resp = await client.get(url, timeout=15.0,
+            resp = await safe_fetch(client,url, timeout=15.0,
                 headers={"User-Agent": UA, "Accept-Language": "en-US,en;q=0.9"},
                 follow_redirects=True)
             if resp.status_code == 200 and len(resp.text) > 300:
@@ -37,9 +36,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             continue
 
         if not html:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Could not access {username} on {frontend_name}",
-                type="Telegram: Unreachable",
+                ftype="Telegram: Unreachable",
                 source="SocialTelegramIntel",
                 confidence="Medium",
                 color="slate",
@@ -53,9 +52,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         title_m = re.search(r'<title>([^<]+)</title>', html, re.IGNORECASE)
         title = title_m.group(1).strip() if title_m else username
 
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Telegram: {title} (via {frontend_name})",
-            type="Telegram: Channel/Profile Found",
+            ftype="Telegram: Channel/Profile Found",
             source="SocialTelegramIntel",
             confidence="High",
             color="purple",
@@ -71,9 +70,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             description_m = re.search(r'<div[^>]*class="[^"]*(?:tgme_channel_info_description|channel_info_description)[^"]*"[^>]*>([^<]+)', html)
         if description_m:
             desc = description_m.group(1).strip()[:200]
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Description: {desc}",
-                type="Telegram: Description",
+                ftype="Telegram: Description",
                 source="SocialTelegramIntel",
                 confidence="High",
                 color="slate",
@@ -87,9 +86,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         if not member_m:
             member_m = re.search(r'(\d[\d,.]*)\s*(?:members?|subscribers?)', html, re.IGNORECASE)
         if member_m:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Members: {member_m.group(1)}",
-                type="Telegram: Member Count",
+                ftype="Telegram: Member Count",
                 source="SocialTelegramIntel",
                 confidence="Medium",
                 color="slate",
@@ -100,9 +99,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
         online_m = re.search(r'(\d[\d,.]*[KkMmBb]?)\s*(?:online|Online)', html)
         if online_m:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Online: {online_m.group(1)}",
-                type="Telegram: Online Status",
+                ftype="Telegram: Online Status",
                 source="SocialTelegramIntel",
                 confidence="Low",
                 color="slate",
@@ -115,9 +114,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         if not photo_m:
             photo_m = re.search(r'<meta[^>]+property="og:image"[^>]+content="([^"]+)"', html, re.IGNORECASE)
         if photo_m:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Channel photo: {photo_m.group(1)[:100]}",
-                type="Telegram: Channel Photo",
+                ftype="Telegram: Channel Photo",
                 source="SocialTelegramIntel",
                 confidence="Medium",
                 color="slate",
@@ -128,9 +127,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
         link_m = re.search(r'<meta[^>]+property="og:url"[^>]+content="([^"]+)"', html, re.IGNORECASE)
         if link_m:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Canonical URL: {link_m.group(1)[:100]}",
-                type="Telegram: Canonical Link",
+                ftype="Telegram: Canonical Link",
                 source="SocialTelegramIntel",
                 confidence="High",
                 color="slate",
@@ -142,9 +141,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         if frontend_name in ("tg.i-c-a.su", "tgstat.ru", "telemetr.io"):
             additional_data = extract_advanced_telegram_data(html, frontend_name)
             for key, val in additional_data.items():
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"{key}: {val[:100]}",
-                    type=f"Telegram: {key}",
+                    ftype=f"Telegram: {key}",
                     source="SocialTelegramIntel",
                     confidence="Low",
                     color="slate",
@@ -159,9 +158,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             if username in unique_refs:
                 unique_refs.remove(username)
             if unique_refs:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Referenced users/channels: @{', @'.join(unique_refs[:10])}",
-                    type="Telegram: User/Channel References",
+                    ftype="Telegram: User/Channel References",
                     source="SocialTelegramIntel",
                     confidence="Low",
                     color="slate",
@@ -173,9 +172,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         link_refs = re.findall(r'(https://t\.me/\w+)', html)
         if link_refs:
             unique_links = list(set(link_refs))[:10]
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Related Telegram links: {', '.join(unique_links)}",
-                type="Telegram: Related Links",
+                ftype="Telegram: Related Links",
                 source="SocialTelegramIntel",
                 confidence="Low",
                 color="slate",
@@ -188,9 +187,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         if external_links:
             unique_ext = list(set(external_links))[:5]
             for link in unique_ext:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"External link: {link[:100]}",
-                    type="Telegram: External Link",
+                    ftype="Telegram: External Link",
                     source="SocialTelegramIntel",
                     confidence="Low",
                     color="slate",
@@ -201,9 +200,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
         message_count_m = re.search(r'(\d+)\s*(?:message|Message|post|Post)', html)
         if message_count_m:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Messages/Posts: {message_count_m.group(1)}",
-                type="Telegram: Message Count",
+                ftype="Telegram: Message Count",
                 source="SocialTelegramIntel",
                 confidence="Low",
                 color="slate",
@@ -214,9 +213,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
         is_bot_m = re.search(r'(?:bot|Bot|BOT)', html)
         if is_bot_m and frontend_name == "t.me":
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="This may be a bot account (contains bot indicators)",
-                type="Telegram: Bot Detection",
+                ftype="Telegram: Bot Detection",
                 source="SocialTelegramIntel",
                 confidence="Low",
                 color="orange",
@@ -228,9 +227,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
         is_restricted_m = re.search(r'(?:restricted|private|Private|private group)', html)
         if is_restricted_m:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="Channel is private/restricted",
-                type="Telegram: Access Restriction",
+                ftype="Telegram: Access Restriction",
                 source="SocialTelegramIntel",
                 confidence="High",
                 color="orange",
@@ -242,9 +241,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
         break
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Telegram intelligence gathering complete for @{username}",
-        type="Telegram: Intel Summary",
+        ftype="Telegram: Intel Summary",
         source="SocialTelegramIntel",
         confidence="Medium",
         color="purple",

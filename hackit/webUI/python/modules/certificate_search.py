@@ -7,8 +7,7 @@ import ssl
 import socket
 from datetime import datetime
 from typing import List, Optional
-from models import IntelligenceFinding
-from osint_common import normalize_target, make_finding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 
 CRTSH_URL = "https://crt.sh"
 CENSYS_CERT_URL = "https://search.censys.io/api/v2/certificates/search"
@@ -37,7 +36,7 @@ def compute_sha256_fingerprint(cert_der: bytes) -> str:
 
 async def query_crtsh(target: str, client: httpx.AsyncClient) -> List[dict]:
     try:
-        resp = await client.get(f"{CRTSH_URL}/?q=%25.{target}&output=json",
+        resp = await safe_fetch(client, f"{CRTSH_URL}/?q=%25.{target}&output=json",
             timeout=20.0, headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"})
         if resp.status_code == 200:
             try:
@@ -52,7 +51,7 @@ async def query_crtsh(target: str, client: httpx.AsyncClient) -> List[dict]:
 
 async def query_censys_certs(target: str, client: httpx.AsyncClient) -> List[dict]:
     try:
-        resp = await client.get(f"{CENSYS_CERT_URL}?q=names:{target}&per_page=50",
+        resp = await safe_fetch(client, f"{CENSYS_CERT_URL}?q=names:{target}&per_page=50",
             timeout=15.0, headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"})
         if resp.status_code == 200:
             data = resp.json()
@@ -63,7 +62,7 @@ async def query_censys_certs(target: str, client: httpx.AsyncClient) -> List[dic
 
 async def query_certspotter(target: str, client: httpx.AsyncClient) -> List[dict]:
     try:
-        resp = await client.get(f"{CERTSPOTTER_URL}?domain={target}&include_subdomains=true&expired=true&expand=dns_names",
+        resp = await safe_fetch(client, f"{CERTSPOTTER_URL}?domain={target}&include_subdomains=true&expired=true&expand=dns_names",
             timeout=15.0, headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"})
         if resp.status_code == 200:
             data = resp.json()
@@ -74,7 +73,7 @@ async def query_certspotter(target: str, client: httpx.AsyncClient) -> List[dict
 
 async def query_google_ct(target: str, client: httpx.AsyncClient) -> List[dict]:
     try:
-        resp = await client.get(f"{GOOGLE_CT_URL}/logentries?domain={target}",
+        resp = await safe_fetch(client, f"{GOOGLE_CT_URL}/logentries?domain={target}",
             timeout=15.0, headers={"User-Agent": "Mozilla/5.0"})
         if resp.status_code == 200:
             try:
@@ -88,7 +87,7 @@ async def query_google_ct(target: str, client: httpx.AsyncClient) -> List[dict]:
 
 async def query_entrust_ct(target: str, client: httpx.AsyncClient) -> List[dict]:
     try:
-        resp = await client.get(f"{ENTRUST_CT_URL}/certificates?domain={target}",
+        resp = await safe_fetch(client, f"{ENTRUST_CT_URL}/certificates?domain={target}",
             timeout=15.0, headers={"User-Agent": "Mozilla/5.0"})
         if resp.status_code == 200:
             try:

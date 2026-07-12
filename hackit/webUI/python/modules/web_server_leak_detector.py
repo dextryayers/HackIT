@@ -1,6 +1,7 @@
-import httpx
 import re
+import httpx
 from urllib.parse import urlparse
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 from models import IntelligenceFinding
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
@@ -74,15 +75,15 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     for proto in ["https", "http"]:
         try:
-            resp = await client.get(f"{proto}://{domain}", timeout=10.0, follow_redirects=True, headers={"User-Agent": UA})
+            resp = await safe_fetch(client,f"{proto}://{domain}", timeout=10.0, follow_redirects=True, headers={"User-Agent": UA})
             headers = {k.lower(): v for k, v in dict(resp.headers).items()}
             html = resp.text
 
             leaks = await check_header_leak(headers)
             if leaks:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Information leaks from headers: {len(leaks)} found",
-                    type="Leak: Header Leaks",
+                    ftype="Leak: Header Leaks",
                     source="ServerLeakDetector",
                     confidence="High",
                     color="red",
@@ -91,9 +92,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                     tags=["leak", "header", "information-disclosure"]
                 ))
                 for leak in leaks[:8]:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Header leak: {leak['header']} = {leak['value'][:60]}",
-                        type="Leak: Header Detail",
+                        ftype="Leak: Header Detail",
                         source="ServerLeakDetector",
                         confidence="High",
                         color="orange",
@@ -102,9 +103,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                         tags=["leak", "header", leak["header"].lower().replace("-", "_")]
                     ))
             else:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity="No verbose information disclosure headers detected",
-                    type="Leak: No Header Leaks",
+                    ftype="Leak: No Header Leaks",
                     source="ServerLeakDetector",
                     confidence="Medium",
                     color="emerald",
@@ -118,9 +119,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                 comments_found.extend(comments)
 
             if comments_found:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Found {len(comments_found)} HTML/JS comments with TODO/FIXME/HACK/XXX/BUG keywords",
-                    type="Leak: Comment Leaks",
+                    ftype="Leak: Comment Leaks",
                     source="ServerLeakDetector",
                     confidence="Medium",
                     color="orange",
@@ -131,9 +132,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
             server_header = headers.get("server", "")
             if server_header:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Server header: {server_header}",
-                    type="Leak: Server Header",
+                    ftype="Leak: Server Header",
                     source="ServerLeakDetector",
                     confidence="High",
                     color="yellow",
@@ -142,9 +143,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                     tags=["leak", "server-header"]
                 ))
                 if re.search(r"[\d.]+\.[\d.]+\.[\d.]+", server_header):
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=f"Server header contains version number: {server_header}",
-                        type="Leak: Version Disclosure",
+                        ftype="Leak: Version Disclosure",
                         source="ServerLeakDetector",
                         confidence="High",
                         color="red",
@@ -155,9 +156,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
             via_header = headers.get("via", "")
             if via_header:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Via header: {via_header[:80]}",
-                    type="Leak: Via Header",
+                    ftype="Leak: Via Header",
                     source="ServerLeakDetector",
                     confidence="Medium",
                     color="yellow",
@@ -168,7 +169,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
             for path, expected_status in ERROR_PAGE_TESTS:
                 try:
-                    r = await client.get(f"{proto}://{domain}{path}", timeout=5.0, follow_redirects=False, headers={"User-Agent": UA})
+                    r = await safe_fetch(client,f"{proto}://{domain}{path}", timeout=5.0, follow_redirects=False, headers={"User-Agent": UA})
                     content = r.text.lower()
                     leaks_in_error = []
 
@@ -190,9 +191,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                         leaks_in_error.append("Exception detail in error page")
 
                     if leaks_in_error:
-                        findings.append(IntelligenceFinding(
+                        findings.append(make_finding(
                             entity=f"Error page leaks on {path} (HTTP {r.status_code}): {', '.join(leaks_in_error[:3])}",
-                            type="Leak: Error Page Leak",
+                            ftype="Leak: Error Page Leak",
                             source="ServerLeakDetector",
                             confidence="High",
                             color="red",
@@ -205,11 +206,11 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
             trace_url = f"{proto}://{domain}"
             try:
-                trace_resp = await client.request("TRACE", trace_url, timeout=5.0, headers={"User-Agent": UA})
+                trace_resp = await safe_fetch(client, trace_url, method="TRACE", timeout=5.0, headers={"User-Agent": UA})
                 if trace_resp.status_code == 200:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity="HTTP TRACE method enabled - XST vulnerability possible",
-                        type="Leak: TRACE Method",
+                        ftype="Leak: TRACE Method",
                         source="ServerLeakDetector",
                         confidence="High",
                         color="red",
@@ -229,12 +230,12 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     for path in SENSITIVE_FILE_PATTERNS[:20]:
         sensitive_checked += 1
         try:
-            resp = await client.get(f"https://{domain}/{path}", timeout=5.0, follow_redirects=False, headers={"User-Agent": UA})
+            resp = await safe_fetch(client,f"https://{domain}/{path}", timeout=5.0, follow_redirects=False, headers={"User-Agent": UA})
             if resp.status_code == 200:
                 sensitive_found += 1
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Sensitive file accessible: /{path} (HTTP {resp.status_code}, {len(resp.content)} bytes)",
-                    type="Leak: Sensitive File",
+                    ftype="Leak: Sensitive File",
                     source="ServerLeakDetector",
                     confidence="High",
                     color="red",
@@ -246,9 +247,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         except Exception:
             continue
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Server Leak Analysis: {len(leaks)} header leaks, {sensitive_found}/{sensitive_checked} sensitive files exposed",
-        type="Leak: Summary",
+        ftype="Leak: Summary",
         source="ServerLeakDetector",
         confidence="High",
         color="red" if (leaks or sensitive_found) else "emerald",

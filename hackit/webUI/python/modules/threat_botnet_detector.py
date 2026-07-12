@@ -1,8 +1,7 @@
-import httpx
 import re
-import json
-from urllib.parse import urlparse, quote
+from urllib.parse import urlparse
 from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 
 BOTNET_C2_FEEDS = [
     "https://sslbl.abuse.ch/blacklist/sslipblacklist.txt",
@@ -61,7 +60,7 @@ EXPLOIT_KIT_INDICATORS = [
 async def check_ssl_blacklist_botnet(client: httpx.AsyncClient, target: str) -> list:
     results = []
     try:
-        resp = await client.get("https://sslbl.abuse.ch/blacklist/sslipblacklist.txt", timeout=15.0,
+        resp = await safe_fetch(client,"https://sslbl.abuse.ch/blacklist/sslipblacklist.txt", timeout=15.0,
             headers={"User-Agent": "Mozilla/5.0"})
         if resp.status_code == 200:
             for line in resp.text.splitlines():
@@ -75,7 +74,7 @@ async def check_ssl_blacklist_botnet(client: httpx.AsyncClient, target: str) -> 
 async def check_feodo_tracker_botnet(client: httpx.AsyncClient, target: str) -> list:
     results = []
     try:
-        resp = await client.get("https://feodotracker.abuse.ch/downloads/ipblocklist.txt", timeout=15.0,
+        resp = await safe_fetch(client,"https://feodotracker.abuse.ch/downloads/ipblocklist.txt", timeout=15.0,
             headers={"User-Agent": "Mozilla/5.0"})
         if resp.status_code == 200:
             for line in resp.text.splitlines():
@@ -89,7 +88,7 @@ async def check_feodo_tracker_botnet(client: httpx.AsyncClient, target: str) -> 
 async def check_mirai_tracker(client: httpx.AsyncClient, target: str) -> list:
     results = []
     try:
-        resp = await client.get("https://mirai.securitytracker.com/mirai.txt", timeout=15.0,
+        resp = await safe_fetch(client,"https://mirai.securitytracker.com/mirai.txt", timeout=15.0,
             headers={"User-Agent": "Mozilla/5.0"})
         if resp.status_code == 200:
             for line in resp.text.splitlines():
@@ -103,7 +102,7 @@ async def check_mirai_tracker(client: httpx.AsyncClient, target: str) -> list:
 async def check_mozi_tracker(client: httpx.AsyncClient, target: str) -> list:
     results = []
     try:
-        resp = await client.get("https://mozi-tracker.net/mozi.txt", timeout=15.0,
+        resp = await safe_fetch(client,"https://mozi-tracker.net/mozi.txt", timeout=15.0,
             headers={"User-Agent": "Mozilla/5.0"})
         if resp.status_code == 200:
             for line in resp.text.splitlines():
@@ -119,7 +118,7 @@ async def check_botnet_feeds(client: httpx.AsyncClient, target: str) -> list:
     try:
         for feed_url in BOTNET_C2_FEEDS:
             try:
-                resp = await client.get(feed_url, timeout=15.0,
+                resp = await safe_fetch(client,feed_url, timeout=15.0,
                     headers={"User-Agent": "Mozilla/5.0"})
                 if resp.status_code == 200:
                     content = resp.text.lower()
@@ -197,9 +196,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     sslbl_results = await check_ssl_blacklist_botnet(client, query)
     for r in sslbl_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"SSL Blacklist: {r['ip']} - Botnet C2 server",
-            type="Botnet C2 Detection",
+            ftype="Botnet C2 Detection",
             source="SSL Blacklist (abuse.ch)",
             confidence="High",
             color="red",
@@ -212,9 +211,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     feodo_results = await check_feodo_tracker_botnet(client, query)
     for r in feodo_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Feodo Tracker: {r['ip']} - Botnet C2 (Dridex/Emotet infrastructure)",
-            type="Botnet C2 Detection",
+            ftype="Botnet C2 Detection",
             source="Feodo Tracker (abuse.ch)",
             confidence="High",
             color="red",
@@ -227,9 +226,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     mirai_results = await check_mirai_tracker(client, query)
     for r in mirai_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Mirai Tracker: {r['ip']} - IoT botnet member",
-            type="IoT Botnet Detection",
+            ftype="IoT Botnet Detection",
             source="Mirai Tracker",
             confidence="High",
             color="red",
@@ -242,9 +241,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     mozi_results = await check_mozi_tracker(client, query)
     for r in mozi_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Mozi Tracker: {r['ip']} - P2P botnet member",
-            type="P2P Botnet Detection",
+            ftype="P2P Botnet Detection",
             source="Mozi Tracker",
             confidence="High",
             color="red",
@@ -257,9 +256,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     feed_results = await check_botnet_feeds(client, query)
     for r in feed_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Botnet feed match: {r['feed']}",
-            type="Botnet Feed Detection",
+            ftype="Botnet Feed Detection",
             source=r['feed'],
             confidence="Medium",
             color="orange",
@@ -272,9 +271,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     port_results = await check_botnet_ports(query)
     for r in port_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Botnet port: {r['port']} - {r['details']}",
-            type="Botnet Port Detection",
+            ftype="Botnet Port Detection",
             source="Botnet Detector",
             confidence="Medium",
             color="yellow",
@@ -287,9 +286,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     dga_results = await detect_dga_patterns(query)
     for r in dga_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"DGA pattern detected: {r['target']} (pattern: {r['pattern'][:40]}...)",
-            type="DGA Detection",
+            ftype="DGA Detection",
             source="Botnet Detector",
             confidence="Medium",
             color="yellow",
@@ -302,9 +301,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     flux_results = await detect_fast_flux(query)
     for r in flux_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Fast-flux pattern detected: {r['target']}",
-            type="Fast-Flux Detection",
+            ftype="Fast-Flux Detection",
             source="Botnet Detector",
             confidence="Medium",
             color="orange",
@@ -317,9 +316,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     family_results = await classify_botnet_family(query)
     for r in family_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Botnet family: {r['family']} (matched: {r['matched']})",
-            type="Botnet Family Classification",
+            ftype="Botnet Family Classification",
             source="Botnet Detector",
             confidence=r['confidence'],
             color="orange",
@@ -332,9 +331,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     ek_results = await check_exploit_kit_indicators(query)
     for r in ek_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Exploit kit indicator: {r['indicator']}",
-            type="Exploit Kit Detection",
+            ftype="Exploit Kit Detection",
             source="Botnet Detector",
             confidence="Low",
             color="yellow",
@@ -345,9 +344,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             tags=["botnet", "exploit-kit", r['indicator'].replace(" ", "-")]
         ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Botnet detection complete for {query}: checked {len(BOTNET_C2_FEEDS)} feeds, {len(BOTNET_FAMILIES)} families, {len(BOTNET_PORTS)} ports",
-        type="Botnet Detection Summary",
+        ftype="Botnet Detection Summary",
         source="Botnet Detector",
         confidence="Medium",
         color="slate",

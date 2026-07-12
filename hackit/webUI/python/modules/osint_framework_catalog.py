@@ -1,9 +1,6 @@
-import httpx
-import re
-import json
-from urllib.parse import urlparse, quote
+from urllib.parse import urlparse
 from typing import List
-from models import IntelligenceFinding
+from module_common import make_finding
 
 OSINT_CATEGORIES = {
     "Search Engines": {
@@ -121,7 +118,7 @@ OSINT_CATEGORIES = {
 }
 
 
-async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFinding]:
+async def crawl(target: str, client) -> List:
     findings = []
     t = target.strip().lower()
     if t.startswith("http"):
@@ -134,9 +131,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         tools_str = ", ".join(cat_data["tools"])
         techniques_str = ", ".join(cat_data["techniques"])
 
-        findings.append(IntelligenceFinding(
-            entity=f"OSINT Category: {cat_name}",
-            type="Framework: Category",
+        findings.append(make_finding(
+            f"OSINT Category: {cat_name}",
+            ftype="Framework: Category",
             source="OSINTFramework",
             confidence="Very High",
             color="blue",
@@ -148,9 +145,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             tags=["osint", "framework", cat_name.lower().replace(" ", "-")],
         ))
 
-        findings.append(IntelligenceFinding(
-            entity=f"Techniques for {cat_name}: {techniques_str}",
-            type="Framework: Techniques",
+        findings.append(make_finding(
+            f"Techniques for {cat_name}: {techniques_str}",
+            ftype="Framework: Techniques",
             source="OSINTFramework",
             confidence="High",
             color="sky",
@@ -161,9 +158,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             tags=["osint", "techniques", cat_name.lower().replace(" ", "-")],
         ))
 
-        findings.append(IntelligenceFinding(
-            entity=f"Recommended tools for {cat_name}: {tools_str}",
-            type="Framework: Tools",
+        findings.append(make_finding(
+            f"Recommended tools for {cat_name}: {tools_str}",
+            ftype="Framework: Tools",
             source="OSINTFramework",
             confidence="High",
             color="indigo",
@@ -175,9 +172,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         ))
 
         mode = "Passive" if cat_data["passive"] else "Active"
-        findings.append(IntelligenceFinding(
-            entity=f"{cat_name}: {mode} collection ({cat_data['effectiveness']} effectiveness)",
-            type="Framework: Collection Mode",
+        findings.append(make_finding(
+            f"{cat_name}: {mode} collection ({cat_data['effectiveness']} effectiveness)",
+            ftype="Framework: Collection Mode",
             source="OSINTFramework",
             confidence="Very High",
             color="slate",
@@ -188,9 +185,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             tags=["osint", "mode", mode.lower(), cat_data["effectiveness"].lower().replace(" ", "-")],
         ))
 
-        findings.append(IntelligenceFinding(
-            entity=f"{cat_name}: {cat_data['description']}",
-            type="Framework: Description",
+        findings.append(make_finding(
+            f"{cat_name}: {cat_data['description']}",
+            ftype="Framework: Description",
             source="OSINTFramework",
             confidence="High",
             color="slate",
@@ -209,9 +206,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
     if not applicable_for_target:
         applicable_for_target = list(OSINT_CATEGORIES.keys())[:5]
 
-    findings.append(IntelligenceFinding(
-        entity=f"Most applicable categories for {t}: {', '.join(applicable_for_target[:5])}",
-        type="Framework: Priority Categories",
+    findings.append(make_finding(
+        f"Most applicable categories for {t}: {', '.join(applicable_for_target[:5])}",
+        ftype="Framework: Priority Categories",
         source="OSINTFramework",
         confidence="Medium",
         color="violet",
@@ -222,9 +219,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         tags=["osint", "priority", "applicable"],
     ))
 
-    findings.append(IntelligenceFinding(
-        entity=f"OSINT Framework coverage: {len(OSINT_CATEGORIES)} categories ({total_passive} passive, {total_active} active)",
-        type="Framework: Coverage Summary",
+    findings.append(make_finding(
+        f"OSINT Framework coverage: {len(OSINT_CATEGORIES)} categories ({total_passive} passive, {total_active} active)",
+        ftype="Framework: Coverage Summary",
         source="OSINTFramework",
         confidence="Very High",
         color="slate",

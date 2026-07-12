@@ -1,11 +1,9 @@
 import httpx
-import asyncio
-import json
 import re
-from datetime import datetime
 from typing import List, Optional
 from urllib.parse import urlparse
 from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 
 DEVICE_API_SOURCES = [
     ("shodan", "https://api.shodan.io/shodan/host/{}"),
@@ -19,7 +17,7 @@ async def device_fingerprint(ip: str, client: httpx.AsyncClient) -> dict:
     for name, url_tmpl in DEVICE_API_SOURCES:
         try:
             url = url_tmpl.format(ip)
-            resp = await client.get(url, timeout=10.0,
+            resp = await safe_fetch(client, url, timeout=10.0,
                 headers={"User-Agent": "Mozilla/5.0"})
             if resp.status_code == 200:
                 try:
@@ -65,7 +63,7 @@ async def response_headers(ip: str, client: httpx.AsyncClient) -> dict:
     try:
         for scheme in ("https", "http"):
             try:
-                resp = await client.get(f"{scheme}://{ip}", timeout=5.0,
+                resp = await safe_fetch(client, f"{scheme}://{ip}", timeout=5.0,
                     headers={"User-Agent": "Mozilla/5.0"})
                 if resp.status_code:
                     return {
@@ -132,9 +130,9 @@ async def detect_fingerprint_version(server_header: str) -> list:
         m = re.search(pat, server_lower)
         if m:
             ver = m.group(2) if m.lastindex >= 2 else m.group(1)
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Versioned: {name} {ver}",
-                type="Device Search: Software Version",
+                ftype="Device Search: Software Version",
                 source="DeviceSearch",
                 confidence="High",
                 color="slate",
@@ -148,9 +146,9 @@ async def check_vulnerability_headers(headers: dict) -> list:
     for hdr, patterns in VULNERABILITY_HEADERS.items():
         val = headers.get(hdr, "")
         if val:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Info leak header: {hdr}: {val}",
-                type="Device Search: Information Disclosure",
+                ftype="Device Search: Information Disclosure",
                 source="DeviceSearch",
                 confidence="Medium",
                 color="orange",
@@ -167,12 +165,12 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         ip = urlparse(ip).netloc
 
     try:
-        import socket
-        socket.inet_aton(ip)
+        if not is_ip(ip):
+            raise ValueError("Invalid IP")
     except:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="Invalid IP address for device search",
-            type="Device Search: Invalid Input",
+            ftype="Device Search: Invalid Input",
             source="DeviceSearch",
             confidence="Low",
             color="emerald",
@@ -185,7 +183,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
     headers = await response_headers(ip, client)
     if headers:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"HTTP {headers.get('scheme', 'http')}://{ip} - Status: {headers.get('status', 0)}",
             type="Device Search: HTTP Response",
             source="DeviceSearch",
@@ -201,9 +199,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             headers.get("headers", {})
         )
         for dt in device_types:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Device Type: {dt}",
-                type="Device Search: Device Classification",
+                ftype="Device Search: Device Classification",
                 source="DeviceSearch",
                 confidence="Medium",
                 color="slate",
@@ -214,9 +212,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
         srv = headers.get("headers", {}).get("Server", "")
         if srv:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Server: {srv}",
-                type="Device Search: Server Fingerprint",
+                ftype="Device Search: Server Fingerprint",
                 source="DeviceSearch",
                 confidence="High",
                 color="slate",
@@ -237,9 +235,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
     api_results = await device_fingerprint(ip, client)
     for source, data in api_results.items():
         if data:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Device data from {source}",
-                type=f"Device Search: {source.title()}",
+                ftype=f"Device Search: {source.title()}",
                 source=source,
                 confidence="Medium",
                 color="slate",
@@ -249,9 +247,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             ))
 
     if not findings:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="No device information found",
-            type="Device Search: Complete",
+            ftype="Device Search: Complete",
             source="DeviceSearch",
             confidence="Low",
             color="emerald",

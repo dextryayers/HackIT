@@ -1,6 +1,7 @@
-import httpx
 import re
+import httpx
 from urllib.parse import urlparse, urljoin
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 from models import IntelligenceFinding
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
@@ -26,7 +27,7 @@ async def parse_sitemap(content: str) -> list:
 async def fetch_and_parse_sitemap(client: httpx.AsyncClient, url: str) -> dict:
     result = {"url": url, "status": 0, "urls": [], "sub_sitemaps": [], "success": False}
     try:
-        resp = await client.get(url, timeout=10.0, follow_redirects=False, headers={"User-Agent": UA})
+        resp = await safe_fetch(client,url, timeout=10.0, follow_redirects=False, headers={"User-Agent": UA})
         result["status"] = resp.status_code
         if resp.status_code == 200:
             urls, sub_sitemaps = await parse_sitemap(resp.text)
@@ -40,7 +41,7 @@ async def fetch_and_parse_sitemap(client: httpx.AsyncClient, url: str) -> dict:
 async def get_robots_sitemaps(client: httpx.AsyncClient, base_url: str) -> list:
     sitemaps = []
     try:
-        resp = await client.get(f"{base_url}/robots.txt", timeout=8.0, follow_redirects=False, headers={"User-Agent": UA})
+        resp = await safe_fetch(client,f"{base_url}/robots.txt", timeout=8.0, follow_redirects=False, headers={"User-Agent": UA})
         if resp.status_code == 200:
             for line in resp.text.splitlines():
                 m = re.search(r"^Sitemap:\s*(\S+)", line, re.I)
@@ -79,7 +80,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     base_url = f"https://{domain}"
     for proto in ["https", "http"]:
         try:
-            r = await client.get(f"{proto}://{domain}", timeout=10.0, follow_redirects=True, headers={"User-Agent": UA})
+            r = await safe_fetch(client,f"{proto}://{domain}", timeout=10.0, follow_redirects=True, headers={"User-Agent": UA})
             if r.status_code == 200:
                 base_url = f"{proto}://{domain}"
                 break
@@ -91,9 +92,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     if robots_sitemaps:
         all_sitemap_urls.extend(robots_sitemaps)
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Found {len(robots_sitemaps)} sitemap reference(s) in robots.txt",
-            type="Sitemap: From Robots.txt",
+            ftype="Sitemap: From Robots.txt",
             source="SitemapAnalyzer",
             confidence="High",
             color="blue",
@@ -119,9 +120,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
         result = await fetch_and_parse_sitemap(client, sm_url)
         if result["success"]:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Sitemap found: {sm_url} ({len(result['urls'])} URLs, {len(result['sub_sitemaps'])} sub-sitemaps)",
-                type="Sitemap: Found",
+                ftype="Sitemap: Found",
                 source="SitemapAnalyzer",
                 confidence="High",
                 color="emerald",
@@ -138,9 +139,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                 pass
 
     if not all_urls:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"No sitemap found for {domain}",
-            type="Sitemap: None Found",
+            ftype="Sitemap: None Found",
             source="SitemapAnalyzer",
             confidence="Medium",
             color="slate",
@@ -150,9 +151,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         return findings
 
     unique_locs = list(set(all_urls))
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Total unique URLs in sitemaps: {len(unique_locs)}",
-        type="Sitemap: URL Count",
+        ftype="Sitemap: URL Count",
         source="SitemapAnalyzer",
         confidence="High",
         color="blue",
@@ -167,9 +168,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         categories[cat] = categories.get(cat, 0) + 1
 
     for cat, count in sorted(categories.items(), key=lambda x: -x[1]):
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Sitemap URL type: {cat}: {count} URL(s)",
-            type="Sitemap: URL Category",
+            ftype="Sitemap: URL Category",
             source="SitemapAnalyzer",
             confidence="High",
             color="slate",
@@ -182,9 +183,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     hidden_urls = [u for u in unique_locs if any(ind in urlparse(u).path.lower() for ind in hidden_indicators)]
 
     if hidden_urls:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Sensitive/hidden URLs in sitemap: {len(hidden_urls)} found",
-            type="Sitemap: Hidden URLs",
+            ftype="Sitemap: Hidden URLs",
             source="SitemapAnalyzer",
             confidence="High",
             color="red",
@@ -193,9 +194,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             tags=["sitemap", "hidden", "exposure"]
         ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Sitemap Analysis: {len(processed_sitemaps)} sitemap(s), {len(unique_locs)} unique URLs, {len(hidden_urls)} hidden",
-        type="Sitemap: Summary",
+        ftype="Sitemap: Summary",
         source="SitemapAnalyzer",
         confidence="High",
         color="red" if hidden_urls else "blue",

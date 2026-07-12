@@ -1,7 +1,6 @@
-import httpx
 import re
 import asyncio
-from models import IntelligenceFinding
+from ..module_common import safe_fetch, make_finding
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 
@@ -193,12 +192,10 @@ CATEGORY_CLASSIFICATION = {
     "Rarible": "crypto", "Zillow": "reference",
 }
 
-async def check_platform(username: str, platform_name: str, url_template: str, client: httpx.AsyncClient) -> tuple:
+async def check_platform(username: str, platform_name: str, url_template: str, client: AsyncClient) -> tuple:
     url = url_template.format(u=username)
     try:
-        resp = await client.get(url, timeout=10.0,
-            headers={"User-Agent": UA, "Accept-Language": "en-US,en;q=0.9"},
-            follow_redirects=True)
+        resp = await safe_fetch(client, url, timeout=10.0)
         if resp.status_code == 200:
             text_lower = resp.text.lower()
             not_found = ["page not found", "doesn't exist", "not found", "user not found",
@@ -252,7 +249,7 @@ def calculate_exposure_score(found_platforms: list, sensitive_findings: list) ->
     level = "Critical" if score >= 75 else "High" if score >= 50 else "Medium" if score >= 25 else "Low"
     return {"score": score, "level": level, "details": details}
 
-async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFinding]:
+async def crawl(target: str, client: AsyncClient) -> list[IntelligenceFinding]:
     findings = []
     identifier = target.strip().lower()
 
@@ -281,9 +278,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
                         platform_pages[pname] = page_content
 
     if not found_platforms:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"No social media accounts found for '{identifier}'",
-            type="Exposure: No Accounts Found",
+            ftype="Exposure: No Accounts Found",
             source="SocialMediaExposure",
             confidence="Medium",
             color="emerald",
@@ -297,9 +294,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     for platform in found_platforms:
         cat = CATEGORY_CLASSIFICATION.get(platform, "unknown")
         risk = "High" if platform in HIGH_RISK_PLATFORMS else "Medium" if cat in ("professional", "dating") else "Low"
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{platform} account active",
-            type=f"Exposure: {platform}",
+            ftype=f"Exposure: {platform}",
             source="SocialMediaExposure",
             confidence="High",
             color="red" if risk == "High" else "orange" if risk == "Medium" else "slate",
@@ -317,9 +314,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         if matches:
             for m in matches[:3]:
                 val = m if isinstance(m, str) else m[0]
-                sfind = IntelligenceFinding(
+                sfind = make_finding(
                     entity=f"{stype.upper()}: {val[:50]}",
-                    type=f"Exposure: {stype.upper()} Leaked",
+                    ftype=f"Exposure: {stype.upper()} Leaked",
                     source="SocialMediaExposure",
                     confidence="Low",
                     color="red" if stype in ("ssn", "creditcard", "password", "api_key") else "orange",
@@ -334,9 +331,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     score_data = calculate_exposure_score(found_platforms, sensitive_findings)
     s_color = "red" if score_data["level"] == "Critical" else "orange" if score_data["level"] == "High" else "yellow" if score_data["level"] == "Medium" else "emerald"
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Social Media Exposure Score: {score_data['score']}/100 ({score_data['level']})",
-        type="Exposure: Composite Score",
+        ftype="Exposure: Composite Score",
         source="SocialMediaExposure",
         confidence="Medium",
         color=s_color,
@@ -349,9 +346,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     for platform in found_platforms:
         if platform in HIGH_RISK_PLATFORMS:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"High-risk platform: {platform} - review privacy settings",
-                type="Exposure: Privacy Recommendation",
+                ftype="Exposure: Privacy Recommendation",
                 source="SocialMediaExposure",
                 confidence="Medium",
                 color="orange",
@@ -366,9 +363,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         categories_found[cat] = categories_found.get(cat, 0) + 1
 
     for cat, count in sorted(categories_found.items(), key=lambda x: -x[1]):
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{cat.title()} platforms: {count}",
-            type="Exposure: Category Breakdown",
+            ftype="Exposure: Category Breakdown",
             source="SocialMediaExposure",
             confidence="High",
             color="slate",
@@ -377,9 +374,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             tags=["exposure", "category", cat]
         ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Total platforms with accounts: {len(found_platforms)}",
-        type="Exposure: Account Count",
+        ftype="Exposure: Account Count",
         source="SocialMediaExposure",
         confidence="High",
         color="slate",
@@ -397,9 +394,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             "Limit cross-platform data sharing",
         ]
         for i, rec in enumerate(recs):
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Recommendation {i+1}: {rec}",
-                type="Exposure: Privacy Improvement",
+                ftype="Exposure: Privacy Improvement",
                 source="SocialMediaExposure",
                 confidence="Medium",
                 color="orange",
@@ -409,9 +406,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             ))
 
     if score_data["score"] >= 75:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="CRITICAL: Extensive digital footprint detected - oversharing personal information",
-            type="Exposure: Critical Alert",
+            ftype="Exposure: Critical Alert",
             source="SocialMediaExposure",
             confidence="High",
             color="red",
@@ -421,9 +418,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             tags=["exposure", "critical", "oversharing"]
         ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Social media exposure assessment complete for '{identifier}'",
-        type="Exposure: Assessment Summary",
+        ftype="Exposure: Assessment Summary",
         source="SocialMediaExposure",
         confidence="High",
         color="purple",

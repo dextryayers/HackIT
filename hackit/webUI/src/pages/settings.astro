@@ -24,7 +24,14 @@ const MODULE_CATEGORIES = {
         <p class="text-sf-muted text-sm mt-1">Configure the HackIT OSINT intelligence engine. Settings are saved to your browser.</p>
       </div>
       <div class="flex items-center gap-3">
-        <a href="/intelligence" class="px-5 py-2.5 bg-sf-tabActive text-black text-xs font-bold rounded-lg hover:bg-sky-400 transition-all uppercase tracking-widest flex items-center gap-2">
+        <button id="export-settings-btn" aria-label="Export all settings" class="px-4 py-2.5 bg-sf-card border border-sf-border text-sf-text text-xs font-bold rounded-lg hover:border-sf-muted transition-all uppercase tracking-widest flex items-center gap-2">
+          <i class="fas fa-file-export"></i> Export
+        </button>
+        <label class="px-4 py-2.5 bg-sf-card border border-sf-border text-sf-text text-xs font-bold rounded-lg hover:border-sf-muted transition-all uppercase tracking-widest flex items-center gap-2 cursor-pointer">
+          <i class="fas fa-file-import"></i> Import
+          <input type="file" id="import-settings-input" accept=".json" class="hidden" aria-label="Import settings from file">
+        </label>
+        <a href="/intelligence" aria-label="Go to intelligence dashboard" class="px-5 py-2.5 bg-sf-tabActive text-black text-xs font-bold rounded-lg hover:bg-sky-400 transition-all uppercase tracking-widest flex items-center gap-2">
           <i class="fas fa-brain"></i> Intelligence
         </a>
       </div>
@@ -41,7 +48,7 @@ const MODULE_CATEGORIES = {
           <h3 class="text-sm font-semibold text-sf-text mb-5 flex items-center gap-2"><i class="fas fa-sliders-h text-sf-tabActive"></i> Scan Profile</h3>
           <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
             <label class="cursor-pointer" data-setting="depth" data-value="quick">
-              <input type="radio" name="scan-depth" value="quick" class="hidden peer">
+              <input type="radio" name="scan-depth" value="quick" class="hidden peer" aria-label="Quick scan depth">
               <div class="p-4 rounded-xl border border-sf-border bg-sf-lightbg peer-checked:border-sf-tabActive peer-checked:bg-sf-tabActive/5 transition-all text-center">
                 <i class="fas fa-bolt text-lg text-yellow-500 mb-1"></i>
                 <div class="text-xs font-bold text-sf-text">Quick</div>
@@ -49,7 +56,7 @@ const MODULE_CATEGORIES = {
               </div>
             </label>
             <label class="cursor-pointer" data-setting="depth" data-value="normal">
-              <input type="radio" name="scan-depth" value="normal" class="hidden peer">
+              <input type="radio" name="scan-depth" value="normal" class="hidden peer" aria-label="Normal scan depth">
               <div class="p-4 rounded-xl border border-sf-border bg-sf-lightbg peer-checked:border-sf-tabActive peer-checked:bg-sf-tabActive/5 transition-all text-center">
                 <i class="fas fa-gauge text-lg text-emerald-500 mb-1"></i>
                 <div class="text-xs font-bold text-sf-text">Normal</div>
@@ -57,7 +64,7 @@ const MODULE_CATEGORIES = {
               </div>
             </label>
             <label class="cursor-pointer" data-setting="depth" data-value="deep">
-              <input type="radio" name="scan-depth" value="deep" class="hidden peer" checked>
+              <input type="radio" name="scan-depth" value="deep" class="hidden peer" checked aria-label="Deep scan depth">
               <div class="p-4 rounded-xl border border-sf-border bg-sf-lightbg peer-checked:border-sf-tabActive peer-checked:bg-sf-tabActive/5 transition-all text-center">
                 <i class="fas fa-water text-lg text-blue-500 mb-1"></i>
                 <div class="text-xs font-bold text-sf-text">Deep</div>
@@ -65,7 +72,7 @@ const MODULE_CATEGORIES = {
               </div>
             </label>
             <label class="cursor-pointer" data-setting="depth" data-value="exhaustive">
-              <input type="radio" name="scan-depth" value="exhaustive" class="hidden peer">
+              <input type="radio" name="scan-depth" value="exhaustive" class="hidden peer" aria-label="Exhaustive scan depth">
               <div class="p-4 rounded-xl border border-sf-border bg-sf-lightbg peer-checked:border-sf-tabActive peer-checked:bg-sf-tabActive/5 transition-all text-center">
                 <i class="fas fa-infinity text-lg text-purple-500 mb-1"></i>
                 <div class="text-xs font-bold text-sf-text">Exhaustive</div>
@@ -79,7 +86,7 @@ const MODULE_CATEGORIES = {
               <div class="text-xs text-sf-text font-medium">Sniper Ratio</div>
               <div class="text-[10px] text-sf-muted">Concurrency & resource profile</div>
             </div>
-            <select id="setting-sniper-ratio" class="bg-sf-card border border-sf-border text-xs text-sf-text rounded-lg px-3 py-2 focus:outline-none focus:border-sf-tabActive">
+            <select id="setting-sniper-ratio" aria-label="Sniper ratio" class="bg-sf-card border border-sf-border text-xs text-sf-text rounded-lg px-3 py-2 focus:outline-none focus:border-sf-tabActive">
               <option value="stealth">Stealth (30 threads)</option>
               <option value="balanced">Balanced (150 threads)</option>
               <option value="max" selected>MAX POWER (300 threads)</option>
@@ -91,7 +98,7 @@ const MODULE_CATEGORIES = {
               <div class="text-xs text-sf-text font-medium">Module Timeout</div>
               <div class="text-[10px] text-sf-muted">Seconds per module before timeout</div>
             </div>
-            <select id="setting-timeout" class="bg-sf-card border border-sf-border text-xs text-sf-text rounded-lg px-3 py-2 focus:outline-none focus:border-sf-tabActive">
+            <select id="setting-timeout" aria-label="Module timeout" class="bg-sf-card border border-sf-border text-xs text-sf-text rounded-lg px-3 py-2 focus:outline-none focus:border-sf-tabActive">
               <option value="5">5s</option>
               <option value="10">10s</option>
               <option value="15" selected>15s</option>
@@ -117,7 +124,7 @@ const MODULE_CATEGORIES = {
                   </div>
                   <div class="flex items-center gap-2">
                     <label class="flex items-center gap-1.5 text-[10px] text-sf-muted cursor-pointer" onclick="event.stopPropagation()">
-                      <input type="checkbox" class="category-toggle accent-sf-tabActive" data-category={key} checked onchange="toggleCategory(event)">
+                      <input type="checkbox" class="category-toggle accent-sf-tabActive" data-category={key} checked onchange="toggleCategory(event)" aria-label={`Toggle ${cat.label} category`}>
                       <span>{cat.modules.length} modules</span>
                     </label>
                     <i class="fas fa-chevron-down text-sf-muted text-[10px] transition-transform category-chevron"></i>
@@ -137,8 +144,8 @@ const MODULE_CATEGORIES = {
             ))}
           </div>
           <div class="flex gap-3 mt-4">
-            <button id="select-all-modules" class="text-[10px] bg-sf-lightbg border border-sf-border hover:border-sf-muted px-3 py-1.5 rounded text-sf-text transition-all font-medium">Select All</button>
-            <button id="deselect-all-modules" class="text-[10px] bg-sf-lightbg border border-sf-border hover:border-sf-muted px-3 py-1.5 rounded text-sf-text transition-all font-medium">Deselect All</button>
+            <button id="select-all-modules" aria-label="Select all modules" class="text-[10px] bg-sf-lightbg border border-sf-border hover:border-sf-muted px-3 py-1.5 rounded text-sf-text transition-all font-medium">Select All</button>
+            <button id="deselect-all-modules" aria-label="Deselect all modules" class="text-[10px] bg-sf-lightbg border border-sf-border hover:border-sf-muted px-3 py-1.5 rounded text-sf-text transition-all font-medium">Deselect All</button>
           </div>
         </div>
 
@@ -151,68 +158,68 @@ const MODULE_CATEGORIES = {
               <label class="text-[11px] text-sf-text font-medium flex items-center gap-2 mb-1">
                 <i class="fas fa-shield text-red-400 text-[10px]"></i> Shodan
               </label>
-              <input type="password" id="api-shodan" class="api-key-input w-full bg-sf-card border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text focus:outline-none focus:border-sf-tabActive font-mono" placeholder="shodan API key" spellcheck="false">
+              <input type="password" id="api-shodan" class="api-key-input w-full bg-sf-card border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text focus:outline-none focus:border-sf-tabActive font-mono" placeholder="shodan API key" spellcheck="false" aria-label="Shodan API key">
             </div>
             <div class="p-3 rounded-lg bg-sf-lightbg border border-sf-border">
               <label class="text-[11px] text-sf-text font-medium flex items-center gap-2 mb-1">
                 <i class="fas fa-bug text-emerald-400 text-[10px]"></i> VirusTotal
               </label>
-              <input type="password" id="api-virustotal" class="api-key-input w-full bg-sf-card border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text focus:outline-none focus:border-sf-tabActive font-mono" placeholder="virustotal API key" spellcheck="false">
+              <input type="password" id="api-virustotal" class="api-key-input w-full bg-sf-card border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text focus:outline-none focus:border-sf-tabActive font-mono" placeholder="virustotal API key" spellcheck="false" aria-label="VirusTotal API key">
             </div>
             <div class="p-3 rounded-lg bg-sf-lightbg border border-sf-border">
               <label class="text-[11px] text-sf-text font-medium flex items-center gap-2 mb-1">
                 <i class="fas fa-eye text-sky-400 text-[10px]"></i> SecurityTrails
               </label>
-              <input type="password" id="api-securitytrails" class="api-key-input w-full bg-sf-card border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text focus:outline-none focus:border-sf-tabActive font-mono" placeholder="securitytrails API key" spellcheck="false">
+              <input type="password" id="api-securitytrails" class="api-key-input w-full bg-sf-card border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text focus:outline-none focus:border-sf-tabActive font-mono" placeholder="securitytrails API key" spellcheck="false" aria-label="SecurityTrails API key">
             </div>
             <div class="p-3 rounded-lg bg-sf-lightbg border border-sf-border">
               <label class="text-[11px] text-sf-text font-medium flex items-center gap-2 mb-1">
                 <i class="fas fa-database text-cyan-400 text-[10px]"></i> AbuseIPDB
               </label>
-              <input type="password" id="api-abuseipdb" class="api-key-input w-full bg-sf-card border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text focus:outline-none focus:border-sf-tabActive font-mono" placeholder="abuseipdb API key" spellcheck="false">
+              <input type="password" id="api-abuseipdb" class="api-key-input w-full bg-sf-card border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text focus:outline-none focus:border-sf-tabActive font-mono" placeholder="abuseipdb API key" spellcheck="false" aria-label="AbuseIPDB API key">
             </div>
             <div class="p-3 rounded-lg bg-sf-lightbg border border-sf-border">
               <label class="text-[11px] text-sf-text font-medium flex items-center gap-2 mb-1">
                 <i class="fas fa-network-wired text-orange-400 text-[10px]"></i> BinaryEdge
               </label>
-              <input type="password" id="api-binaryedge" class="api-key-input w-full bg-sf-card border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text focus:outline-none focus:border-sf-tabActive font-mono" placeholder="binaryedge API key" spellcheck="false">
+              <input type="password" id="api-binaryedge" class="api-key-input w-full bg-sf-card border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text focus:outline-none focus:border-sf-tabActive font-mono" placeholder="binaryedge API key" spellcheck="false" aria-label="BinaryEdge API key">
             </div>
             <div class="p-3 rounded-lg bg-sf-lightbg border border-sf-border">
               <label class="text-[11px] text-sf-text font-medium flex items-center gap-2 mb-1">
                 <i class="fas fa-search text-purple-400 text-[10px]"></i> GreyNoise
               </label>
-              <input type="password" id="api-greynoise" class="api-key-input w-full bg-sf-card border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text focus:outline-none focus:border-sf-tabActive font-mono" placeholder="greynoise API key" spellcheck="false">
+              <input type="password" id="api-greynoise" class="api-key-input w-full bg-sf-card border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text focus:outline-none focus:border-sf-tabActive font-mono" placeholder="greynoise API key" spellcheck="false" aria-label="GreyNoise API key">
             </div>
             <div class="p-3 rounded-lg bg-sf-lightbg border border-sf-border">
               <label class="text-[11px] text-sf-text font-medium flex items-center gap-2 mb-1">
                 <i class="fas fa-bolt text-yellow-400 text-[10px]"></i> Hunter.io
               </label>
-              <input type="password" id="api-hunter" class="api-key-input w-full bg-sf-card border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text focus:outline-none focus:border-sf-tabActive font-mono" placeholder="hunter.io API key" spellcheck="false">
+              <input type="password" id="api-hunter" class="api-key-input w-full bg-sf-card border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text focus:outline-none focus:border-sf-tabActive font-mono" placeholder="hunter.io API key" spellcheck="false" aria-label="Hunter.io API key">
             </div>
             <div class="p-3 rounded-lg bg-sf-lightbg border border-sf-border">
               <label class="text-[11px] text-sf-text font-medium flex items-center gap-2 mb-1">
                 <i class="fas fa-database text-cyan-400 text-[10px]"></i> Have I Been Pwned
               </label>
-              <input type="password" id="api-haveibeenpwned" class="api-key-input w-full bg-sf-card border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text focus:outline-none focus:border-sf-tabActive font-mono" placeholder="hibp API key" spellcheck="false">
+              <input type="password" id="api-haveibeenpwned" class="api-key-input w-full bg-sf-card border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text focus:outline-none focus:border-sf-tabActive font-mono" placeholder="hibp API key" spellcheck="false" aria-label="Have I Been Pwned API key">
             </div>
             <div class="p-3 rounded-lg bg-sf-lightbg border border-sf-border">
               <label class="text-[11px] text-sf-text font-medium flex items-center gap-2 mb-1">
                 <i class="fas fa-envelope text-pink-400 text-[10px]"></i> EmailRep
               </label>
-              <input type="password" id="api-email_rep" class="api-key-input w-full bg-sf-card border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text focus:outline-none focus:border-sf-tabActive font-mono" placeholder="emailrep.io API key" spellcheck="false">
+              <input type="password" id="api-email_rep" class="api-key-input w-full bg-sf-card border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text focus:outline-none focus:border-sf-tabActive font-mono" placeholder="emailrep.io API key" spellcheck="false" aria-label="EmailRep API key">
             </div>
             <div class="p-3 rounded-lg bg-sf-lightbg border border-sf-border">
               <label class="text-[11px] text-sf-text font-medium flex items-center gap-2 mb-1">
                 <i class="fas fa-shield-halved text-lime-400 text-[10px]"></i> LeakCheck
               </label>
-              <input type="password" id="api-leakcheck" class="api-key-input w-full bg-sf-card border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text focus:outline-none focus:border-sf-tabActive font-mono" placeholder="leak-check.net API key" spellcheck="false">
+              <input type="password" id="api-leakcheck" class="api-key-input w-full bg-sf-card border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text focus:outline-none focus:border-sf-tabActive font-mono" placeholder="leak-check.net API key" spellcheck="false" aria-label="LeakCheck API key">
             </div>
           </div>
           <div class="flex gap-2 mt-4">
-            <button id="save-api-keys" class="bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold px-4 py-2 rounded-lg transition-all flex items-center gap-1.5">
+            <button id="save-api-keys" aria-label="Save API keys to server" class="bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold px-4 py-2 rounded-lg transition-all flex items-center gap-1.5">
               <i class="fas fa-cloud-upload-alt"></i> Save Keys to Server
             </button>
-            <button id="load-api-keys" class="bg-sf-border hover:bg-sf-muted/20 text-sf-text text-[10px] font-medium px-4 py-2 rounded-lg transition-all flex items-center gap-1.5">
+            <button id="load-api-keys" aria-label="Load API keys from server" class="bg-sf-border hover:bg-sf-muted/20 text-sf-text text-[10px] font-medium px-4 py-2 rounded-lg transition-all flex items-center gap-1.5">
               <i class="fas fa-cloud-download-alt"></i> Load from Server
             </button>
           </div>
@@ -227,28 +234,28 @@ const MODULE_CATEGORIES = {
               <label class="text-[11px] text-sf-text font-medium mb-1 flex items-center gap-2">
                 <i class="fas fa-shield-halved text-yellow-400 text-[10px]"></i> HTTP/HTTPS Proxy
               </label>
-              <input type="text" id="setting-proxy-http" class="w-full bg-sf-card border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text focus:outline-none focus:border-sf-tabActive font-mono" placeholder="http://proxy.example.com:8080" spellcheck="false">
+              <input type="text" id="setting-proxy-http" class="w-full bg-sf-card border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text focus:outline-none focus:border-sf-tabActive font-mono" placeholder="http://proxy.example.com:8080" spellcheck="false" aria-label="HTTP/HTTPS proxy URL">
               <p class="text-[9px] text-sf-muted mt-1">Leave empty for direct connection</p>
             </div>
             <div class="p-3 rounded-lg bg-sf-lightbg border border-sf-border">
               <label class="text-[11px] text-sf-text font-medium mb-1 flex items-center gap-2">
                 <i class="fas fa-socks text-blue-400 text-[10px]"></i> SOCKS5 Proxy
               </label>
-              <input type="text" id="setting-proxy-socks" class="w-full bg-sf-card border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text focus:outline-none focus:border-sf-tabActive font-mono" placeholder="socks5://127.0.0.1:9050" spellcheck="false">
+              <input type="text" id="setting-proxy-socks" class="w-full bg-sf-card border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text focus:outline-none focus:border-sf-tabActive font-mono" placeholder="socks5://127.0.0.1:9050" spellcheck="false" aria-label="SOCKS5 proxy URL">
               <p class="text-[9px] text-sf-muted mt-1">SOCKS proxy overrides HTTP proxy</p>
             </div>
             <div class="p-3 rounded-lg bg-sf-lightbg border border-sf-border">
               <label class="text-[11px] text-sf-text font-medium mb-1 flex items-center gap-2">
                 <i class="fas fa-server text-slate-400 text-[10px]"></i> Custom DNS Resolver
               </label>
-              <input type="text" id="setting-dns-resolver" class="w-full bg-sf-card border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text focus:outline-none focus:border-sf-tabActive font-mono" placeholder="8.8.8.8" spellcheck="false">
+              <input type="text" id="setting-dns-resolver" class="w-full bg-sf-card border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text focus:outline-none focus:border-sf-tabActive font-mono" placeholder="8.8.8.8" spellcheck="false" aria-label="Custom DNS resolver">
               <p class="text-[9px] text-sf-muted mt-1">Default: system DNS</p>
             </div>
             <div class="p-3 rounded-lg bg-sf-lightbg border border-sf-border">
               <label class="text-[11px] text-sf-text font-medium mb-1 flex items-center gap-2">
                 <i class="fas fa-user-secret text-sf-text text-[10px]"></i> Custom User-Agent
               </label>
-              <input type="text" id="setting-user-agent" class="w-full bg-sf-card border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text focus:outline-none focus:border-sf-tabActive font-mono" placeholder="Mozilla/5.0 (X11; Linux x86_64) ..." spellcheck="false">
+              <input type="text" id="setting-user-agent" class="w-full bg-sf-card border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text focus:outline-none focus:border-sf-tabActive font-mono" placeholder="Mozilla/5.0 (X11; Linux x86_64) ..." spellcheck="false" aria-label="Custom user agent">
               <p class="text-[9px] text-sf-muted mt-1">Browser user agent for HTTP requests</p>
             </div>
           </div>
@@ -264,37 +271,37 @@ const MODULE_CATEGORIES = {
           <div class="space-y-4">
             <label class="flex items-center justify-between cursor-pointer">
               <div><div class="text-xs font-medium text-sf-text">Stealth Mode</div><div class="text-[9px] text-sf-muted">Avoid intrusive probes</div></div>
-              <div class="relative w-9 h-5" data-setting="stealth_mode" onclick="toggleSwitch(this)">
+              <div class="relative w-9 h-5" data-setting="stealth_mode" onclick="toggleSwitch(this)" role="switch" aria-label="Stealth mode toggle" tabindex="0">
                 <div class="w-9 h-5 bg-sf-border rounded-full transition-colors"><div class="absolute left-0.5 top-0.5 w-4 h-4 bg-white/20 rounded-full transition-all"></div></div>
               </div>
             </label>
             <label class="flex items-center justify-between cursor-pointer">
               <div><div class="text-xs font-medium text-sf-text">Verify Findings</div><div class="text-[9px] text-sf-muted">Resolve & verify DNS</div></div>
-              <div class="relative w-9 h-5 bg-sf-green rounded-full" data-setting="verify_findings" onclick="toggleSwitch(this)">
+              <div class="relative w-9 h-5 bg-sf-green rounded-full" data-setting="verify_findings" onclick="toggleSwitch(this)" role="switch" aria-label="Verify findings toggle" tabindex="0">
                 <div class="absolute right-0.5 top-0.5 w-4 h-4 bg-white rounded-full transition-all"></div>
               </div>
             </label>
             <label class="flex items-center justify-between cursor-pointer">
               <div><div class="text-xs font-medium text-sf-text">Passive Only</div><div class="text-[9px] text-sf-muted">No direct connections</div></div>
-              <div class="relative w-9 h-5 bg-sf-border rounded-full" data-setting="passive_only" onclick="toggleSwitch(this)">
+              <div class="relative w-9 h-5 bg-sf-border rounded-full" data-setting="passive_only" onclick="toggleSwitch(this)" role="switch" aria-label="Passive only toggle" tabindex="0">
                 <div class="absolute left-0.5 top-0.5 w-4 h-4 bg-white/20 rounded-full transition-all"></div>
               </div>
             </label>
             <label class="flex items-center justify-between cursor-pointer">
               <div><div class="text-xs font-medium text-sf-text">Correlation Engine</div><div class="text-[9px] text-sf-muted">Cross-link findings</div></div>
-              <div class="relative w-9 h-5 bg-sf-green rounded-full" data-setting="correlation_engine" onclick="toggleSwitch(this)">
+              <div class="relative w-9 h-5 bg-sf-green rounded-full" data-setting="correlation_engine" onclick="toggleSwitch(this)" role="switch" aria-label="Correlation engine toggle" tabindex="0">
                 <div class="absolute right-0.5 top-0.5 w-4 h-4 bg-white rounded-full transition-all"></div>
               </div>
             </label>
             <label class="flex items-center justify-between cursor-pointer">
               <div><div class="text-xs font-medium text-sf-text">Screenshot Pages</div><div class="text-[9px] text-sf-muted">Capture visual recon</div></div>
-              <div class="relative w-9 h-5 bg-sf-border rounded-full" data-setting="screenshot_pages" onclick="toggleSwitch(this)">
+              <div class="relative w-9 h-5 bg-sf-border rounded-full" data-setting="screenshot_pages" onclick="toggleSwitch(this)" role="switch" aria-label="Screenshot pages toggle" tabindex="0">
                 <div class="absolute left-0.5 top-0.5 w-4 h-4 bg-white/20 rounded-full transition-all"></div>
               </div>
             </label>
             <label class="flex items-center justify-between cursor-pointer">
               <div><div class="text-xs font-medium text-sf-text">Rate Limiting</div><div class="text-[9px] text-sf-muted">Throttle requests</div></div>
-              <div class="relative w-9 h-5 bg-sf-border rounded-full" data-setting="rate_limiting" onclick="toggleSwitch(this)">
+              <div class="relative w-9 h-5 bg-sf-border rounded-full" data-setting="rate_limiting" onclick="toggleSwitch(this)" role="switch" aria-label="Rate limiting toggle" tabindex="0">
                 <div class="absolute left-0.5 top-0.5 w-4 h-4 bg-white/20 rounded-full transition-all"></div>
               </div>
             </label>
@@ -307,7 +314,7 @@ const MODULE_CATEGORIES = {
           <div class="space-y-4">
             <div>
               <div class="text-xs text-sf-text font-medium mb-1">Verbosity Level</div>
-              <select id="setting-verbose" class="w-full bg-sf-lightbg border border-sf-border text-xs text-sf-text rounded-lg px-3 py-2 focus:outline-none focus:border-sf-tabActive">
+              <select id="setting-verbose" aria-label="Verbosity level" class="w-full bg-sf-lightbg border border-sf-border text-xs text-sf-text rounded-lg px-3 py-2 focus:outline-none focus:border-sf-tabActive">
                 <option value="0">Silent</option>
                 <option value="1" selected>Normal</option>
                 <option value="2">Verbose</option>
@@ -316,7 +323,7 @@ const MODULE_CATEGORIES = {
             </div>
             <div>
               <div class="text-xs text-sf-text font-medium mb-1">Max Findings</div>
-              <select id="setting-max-findings" class="w-full bg-sf-lightbg border border-sf-border text-xs text-sf-text rounded-lg px-3 py-2 focus:outline-none focus:border-sf-tabActive">
+              <select id="setting-max-findings" aria-label="Maximum findings limit" class="w-full bg-sf-lightbg border border-sf-border text-xs text-sf-text rounded-lg px-3 py-2 focus:outline-none focus:border-sf-tabActive">
                 <option value="100">100</option>
                 <option value="500">500</option>
                 <option value="1000">1,000</option>
@@ -328,9 +335,9 @@ const MODULE_CATEGORIES = {
             <div>
               <div class="text-xs text-sf-text font-medium mb-1">Export Format</div>
               <div class="flex gap-2">
-                <label class="flex-1 cursor-pointer"><input type="radio" name="export-format" value="json" class="hidden peer" checked><div class="text-center p-2 rounded-lg border border-sf-border bg-sf-lightbg peer-checked:border-sf-tabActive peer-checked:bg-sf-tabActive/5 text-xs text-sf-text">JSON</div></label>
-                <label class="flex-1 cursor-pointer"><input type="radio" name="export-format" value="csv" class="hidden peer"><div class="text-center p-2 rounded-lg border border-sf-border bg-sf-lightbg peer-checked:border-sf-tabActive peer-checked:bg-sf-tabActive/5 text-xs text-sf-text">CSV</div></label>
-                <label class="flex-1 cursor-pointer"><input type="radio" name="export-format" value="html" class="hidden peer"><div class="text-center p-2 rounded-lg border border-sf-border bg-sf-lightbg peer-checked:border-sf-tabActive peer-checked:bg-sf-tabActive/5 text-xs text-sf-text">HTML</div></label>
+                <label class="flex-1 cursor-pointer"><input type="radio" name="export-format" value="json" class="hidden peer" checked aria-label="JSON export format"><div class="text-center p-2 rounded-lg border border-sf-border bg-sf-lightbg peer-checked:border-sf-tabActive peer-checked:bg-sf-tabActive/5 text-xs text-sf-text">JSON</div></label>
+                <label class="flex-1 cursor-pointer"><input type="radio" name="export-format" value="csv" class="hidden peer" aria-label="CSV export format"><div class="text-center p-2 rounded-lg border border-sf-border bg-sf-lightbg peer-checked:border-sf-tabActive peer-checked:bg-sf-tabActive/5 text-xs text-sf-text">CSV</div></label>
+                <label class="flex-1 cursor-pointer"><input type="radio" name="export-format" value="html" class="hidden peer" aria-label="HTML export format"><div class="text-center p-2 rounded-lg border border-sf-border bg-sf-lightbg peer-checked:border-sf-tabActive peer-checked:bg-sf-tabActive/5 text-xs text-sf-text">HTML</div></label>
               </div>
             </div>
           </div>
@@ -350,7 +357,7 @@ const MODULE_CATEGORIES = {
               <div class="text-xs text-sf-text font-medium mb-1 flex items-center gap-2">
                 <i class="fas fa-bell text-sf-muted"></i> Notification Webhook
               </div>
-              <input type="text" id="setting-webhook-url" class="w-full bg-sf-lightbg border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text font-mono focus:outline-none focus:border-sf-tabActive" placeholder="https://hooks.discord.com/..." spellcheck="false">
+              <input type="text" id="setting-webhook-url" class="w-full bg-sf-lightbg border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text font-mono focus:outline-none focus:border-sf-tabActive" placeholder="https://hooks.discord.com/..." spellcheck="false" aria-label="Notification webhook URL">
               <p class="text-[9px] text-sf-muted mt-1">POST JSON to this URL when scan completes</p>
             </div>
           </div>
@@ -365,7 +372,7 @@ const MODULE_CATEGORIES = {
                 <div class="text-xs font-medium text-sf-text">Connection Concurrency</div>
                 <span class="text-[10px] font-mono text-sf-muted" id="perf-concurrency-val">50</span>
               </div>
-              <input type="range" id="perf-concurrency" min="5" max="200" value="50" class="w-full accent-sf-tabActive h-1.5">
+              <input type="range" id="perf-concurrency" min="5" max="200" value="50" class="w-full accent-sf-tabActive h-1.5" aria-label="Connection concurrency">
               <div class="flex justify-between text-[9px] text-sf-muted"><span>5 (Stealth)</span><span>200 (Max)</span></div>
             </div>
             <div>
@@ -373,7 +380,7 @@ const MODULE_CATEGORIES = {
                 <div class="text-xs font-medium text-sf-text">Subdomain Brute Depth</div>
                 <span class="text-[10px] font-mono text-sf-muted" id="perf-brute-val">500</span>
               </div>
-              <input type="range" id="perf-brute-depth" min="50" max="2000" value="500" step="50" class="w-full accent-sf-tabActive h-1.5">
+              <input type="range" id="perf-brute-depth" min="50" max="2000" value="500" step="50" class="w-full accent-sf-tabActive h-1.5" aria-label="Subdomain brute depth">
               <div class="flex justify-between text-[9px] text-sf-muted"><span>50 (Quick)</span><span>2000 (Exhaustive)</span></div>
             </div>
             <div>
@@ -381,12 +388,12 @@ const MODULE_CATEGORIES = {
                 <div class="text-xs font-medium text-sf-text">Port Scan Range</div>
                 <span class="text-[10px] font-mono text-sf-muted" id="perf-ports-val">1000</span>
               </div>
-              <input type="range" id="perf-port-range" min="100" max="10000" value="1000" step="100" class="w-full accent-sf-tabActive h-1.5">
+              <input type="range" id="perf-port-range" min="100" max="10000" value="1000" step="100" class="w-full accent-sf-tabActive h-1.5" aria-label="Port scan range">
               <div class="flex justify-between text-[9px] text-sf-muted"><span>100 (Top)</span><span>10000 (All)</span></div>
             </div>
             <div>
               <div class="text-xs font-medium text-sf-text mb-1">Max Redirect Chain</div>
-              <select id="perf-redirect-depth" class="w-full bg-sf-lightbg border border-sf-border text-xs text-sf-text rounded-lg px-3 py-2 focus:outline-none focus:border-sf-tabActive">
+              <select id="perf-redirect-depth" aria-label="Max redirect chain depth" class="w-full bg-sf-lightbg border border-sf-border text-xs text-sf-text rounded-lg px-3 py-2 focus:outline-none focus:border-sf-tabActive">
                 <option value="5">5 hops (Quick)</option>
                 <option value="10" selected>10 hops (Normal)</option>
                 <option value="20">20 hops (Deep)</option>
@@ -404,10 +411,10 @@ const MODULE_CATEGORIES = {
         <!-- Save / Reset -->
         <div class="bg-sf-card border border-sf-border rounded-lg p-6">
           <div class="space-y-3">
-            <button id="save-settings" class="w-full bg-sf-tabActive hover:bg-sky-400 text-black text-xs font-bold py-3 rounded-lg transition-all uppercase tracking-widest flex items-center justify-center gap-2">
+            <button id="save-settings" aria-label="Save all settings" class="w-full bg-sf-tabActive hover:bg-sky-400 text-black text-xs font-bold py-3 rounded-lg transition-all uppercase tracking-widest flex items-center justify-center gap-2">
               <i class="fas fa-check"></i> Save Settings
             </button>
-            <button id="reset-settings" class="w-full bg-sf-border hover:bg-sf-muted/20 text-sf-muted text-xs font-medium py-2 rounded-lg transition-all uppercase tracking-widest flex items-center justify-center gap-2">
+            <button id="reset-settings" aria-label="Reset all settings to defaults" class="w-full bg-sf-border hover:bg-sf-muted/20 text-sf-muted text-xs font-medium py-2 rounded-lg transition-all uppercase tracking-widest flex items-center justify-center gap-2">
               <i class="fas fa-undo"></i> Reset Defaults
             </button>
           </div>
@@ -421,6 +428,86 @@ const MODULE_CATEGORIES = {
           </div>
         </div>
       </div>
+    </div>
+
+    <!-- API Key Management Section -->
+    <div class="bg-sf-card border border-sf-border rounded-xl p-6 space-y-5">
+      <div class="flex items-center justify-between">
+        <h3 class="text-sm font-semibold text-sf-text flex items-center gap-2"><i class="fas fa-key text-sf-tabActive"></i> API Key Management</h3>
+        <button id="test-all-keys-btn" aria-label="Test all API key connections" class="text-[10px] bg-sf-lightbg border border-sf-border hover:border-sf-muted px-3 py-1.5 rounded text-sf-text transition-all font-medium flex items-center gap-1.5">
+          <i class="fas fa-plug"></i> Test All Connections
+        </button>
+      </div>
+      <p class="text-[10px] text-sf-muted">Manage API keys stored locally in your browser. Keys are validated for format before saving.</p>
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <!-- AbuseIPDB -->
+        <div class="p-3 rounded-lg bg-sf-lightbg border border-sf-border space-y-2">
+          <label class="text-[11px] text-sf-text font-medium flex items-center gap-2">
+            <i class="fas fa-database text-cyan-400 text-[10px]"></i> AbuseIPDB
+          </label>
+          <div class="flex gap-2">
+            <input type="password" id="mgmt-abuseipdb" class="api-mgmt-input flex-1 bg-sf-card border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text focus:outline-none focus:border-sf-tabActive font-mono" placeholder="Enter key..." spellcheck="false" data-service="abuseipdb" aria-label="AbuseIPDB API key">
+            <button onclick="saveSingleKey('abuseipdb')" aria-label="Save AbuseIPDB key" class="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold rounded transition-all">Save</button>
+          </div>
+          <button onclick="testKeyConnection('abuseipdb')" aria-label="Test AbuseIPDB connection" class="text-[9px] text-sf-muted hover:text-sf-tabActive transition-colors flex items-center gap-1"><i class="fas fa-wifi"></i> Test Connection</button>
+        </div>
+        <!-- Shodan -->
+        <div class="p-3 rounded-lg bg-sf-lightbg border border-sf-border space-y-2">
+          <label class="text-[11px] text-sf-text font-medium flex items-center gap-2">
+            <i class="fas fa-shield text-red-400 text-[10px]"></i> Shodan
+          </label>
+          <div class="flex gap-2">
+            <input type="password" id="mgmt-shodan" class="api-mgmt-input flex-1 bg-sf-card border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text focus:outline-none focus:border-sf-tabActive font-mono" placeholder="Enter key..." spellcheck="false" data-service="shodan" aria-label="Shodan API key">
+            <button onclick="saveSingleKey('shodan')" aria-label="Save Shodan key" class="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold rounded transition-all">Save</button>
+          </div>
+          <button onclick="testKeyConnection('shodan')" aria-label="Test Shodan connection" class="text-[9px] text-sf-muted hover:text-sf-tabActive transition-colors flex items-center gap-1"><i class="fas fa-wifi"></i> Test Connection</button>
+        </div>
+        <!-- VirusTotal -->
+        <div class="p-3 rounded-lg bg-sf-lightbg border border-sf-border space-y-2">
+          <label class="text-[11px] text-sf-text font-medium flex items-center gap-2">
+            <i class="fas fa-bug text-emerald-400 text-[10px]"></i> VirusTotal
+          </label>
+          <div class="flex gap-2">
+            <input type="password" id="mgmt-virustotal" class="api-mgmt-input flex-1 bg-sf-card border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text focus:outline-none focus:border-sf-tabActive font-mono" placeholder="Enter key..." spellcheck="false" data-service="virustotal" aria-label="VirusTotal API key">
+            <button onclick="saveSingleKey('virustotal')" aria-label="Save VirusTotal key" class="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold rounded transition-all">Save</button>
+          </div>
+          <button onclick="testKeyConnection('virustotal')" aria-label="Test VirusTotal connection" class="text-[9px] text-sf-muted hover:text-sf-tabActive transition-colors flex items-center gap-1"><i class="fas fa-wifi"></i> Test Connection</button>
+        </div>
+        <!-- Hunter.io -->
+        <div class="p-3 rounded-lg bg-sf-lightbg border border-sf-border space-y-2">
+          <label class="text-[11px] text-sf-text font-medium flex items-center gap-2">
+            <i class="fas fa-bolt text-yellow-400 text-[10px]"></i> Hunter.io
+          </label>
+          <div class="flex gap-2">
+            <input type="password" id="mgmt-hunter" class="api-mgmt-input flex-1 bg-sf-card border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text focus:outline-none focus:border-sf-tabActive font-mono" placeholder="Enter key..." spellcheck="false" data-service="hunter" aria-label="Hunter.io API key">
+            <button onclick="saveSingleKey('hunter')" aria-label="Save Hunter.io key" class="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold rounded transition-all">Save</button>
+          </div>
+          <button onclick="testKeyConnection('hunter')" aria-label="Test Hunter.io connection" class="text-[9px] text-sf-muted hover:text-sf-tabActive transition-colors flex items-center gap-1"><i class="fas fa-wifi"></i> Test Connection</button>
+        </div>
+        <!-- SecurityTrails -->
+        <div class="p-3 rounded-lg bg-sf-lightbg border border-sf-border space-y-2">
+          <label class="text-[11px] text-sf-text font-medium flex items-center gap-2">
+            <i class="fas fa-eye text-sky-400 text-[10px]"></i> SecurityTrails
+          </label>
+          <div class="flex gap-2">
+            <input type="password" id="mgmt-securitytrails" class="api-mgmt-input flex-1 bg-sf-card border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text focus:outline-none focus:border-sf-tabActive font-mono" placeholder="Enter key..." spellcheck="false" data-service="securitytrails" aria-label="SecurityTrails API key">
+            <button onclick="saveSingleKey('securitytrails')" aria-label="Save SecurityTrails key" class="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold rounded transition-all">Save</button>
+          </div>
+          <button onclick="testKeyConnection('securitytrails')" aria-label="Test SecurityTrails connection" class="text-[9px] text-sf-muted hover:text-sf-tabActive transition-colors flex items-center gap-1"><i class="fas fa-wifi"></i> Test Connection</button>
+        </div>
+        <!-- Censys -->
+        <div class="p-3 rounded-lg bg-sf-lightbg border border-sf-border space-y-2">
+          <label class="text-[11px] text-sf-text font-medium flex items-center gap-2">
+            <i class="fas fa-network-wired text-purple-400 text-[10px]"></i> Censys
+          </label>
+          <div class="flex gap-2">
+            <input type="password" id="mgmt-censys" class="api-mgmt-input flex-1 bg-sf-card border border-sf-border rounded px-3 py-1.5 text-xs text-sf-text focus:outline-none focus:border-sf-tabActive font-mono" placeholder="Enter key..." spellcheck="false" data-service="censys" aria-label="Censys API key">
+            <button onclick="saveSingleKey('censys')" aria-label="Save Censys key" class="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold rounded transition-all">Save</button>
+          </div>
+          <button onclick="testKeyConnection('censys')" aria-label="Test Censys connection" class="text-[9px] text-sf-muted hover:text-sf-tabActive transition-colors flex items-center gap-1"><i class="fas fa-wifi"></i> Test Connection</button>
+        </div>
+      </div>
+      <p id="mgmt-key-status" class="text-[9px] text-sf-muted hidden"></p>
     </div>
   </div>
 
@@ -658,6 +745,7 @@ const MODULE_CATEGORIES = {
           btn.classList.remove('bg-emerald-500');
         }, 1500);
       }
+      if (window.showToast) window.showToast('Settings saved successfully', 'success');
     }
 
     function resetSettingsToDefault() {
@@ -701,6 +789,7 @@ const MODULE_CATEGORIES = {
         btn.innerHTML = '<i class="fas fa-check"></i> Defaults Restored';
         setTimeout(() => btn.innerHTML = orig, 1500);
       }
+      if (window.showToast) window.showToast('Settings reset to defaults', 'info');
     }
 
     /* ─── API Key Server Sync ─── */
@@ -774,6 +863,96 @@ const MODULE_CATEGORIES = {
           if (btn) btn.innerHTML = '<i class="fas fa-check"></i> Save Settings';
         });
       });
+
+      // Load API key management keys from localStorage
+      loadMgmtKeys();
+    });
+
+    /* ─── API Key Management (localStorage) ─── */
+    function getMgmtKeys() {
+      try { return JSON.parse(localStorage.getItem('hackit_api_keys')) || {}; } catch { return {}; }
+    }
+
+    function loadMgmtKeys() {
+      const keys = getMgmtKeys();
+      document.querySelectorAll('.api-mgmt-input').forEach(input => {
+        const service = input.dataset.service;
+        if (keys[service]) input.value = keys[service];
+      });
+    }
+
+    function saveSingleKey(service) {
+      const input = document.getElementById(`mgmt-${service}`);
+      if (!input || !input.value.trim()) return;
+      const keys = getMgmtKeys();
+      keys[service] = input.value.trim();
+      localStorage.setItem('hackit_api_keys', JSON.stringify(keys));
+      const statusEl = document.getElementById('mgmt-key-status');
+      statusEl.textContent = `✓ ${service} key saved successfully`;
+      statusEl.className = 'text-[9px] text-emerald-500 mt-2';
+      statusEl.classList.remove('hidden');
+      setTimeout(() => statusEl.classList.add('hidden'), 3000);
+    }
+
+    function testKeyConnection(service) {
+      const input = document.getElementById(`mgmt-${service}`);
+      const key = input?.value?.trim();
+      const statusEl = document.getElementById('mgmt-key-status');
+      if (!key) {
+        statusEl.textContent = `✗ No key provided for ${service}`;
+        statusEl.className = 'text-[9px] text-red-500 mt-2';
+        statusEl.classList.remove('hidden');
+        setTimeout(() => statusEl.classList.add('hidden'), 3000);
+        return;
+      }
+      const patterns = {
+        abuseipdb: /^[a-f0-9]{80}$/i,
+        shodan: /^[a-zA-Z0-9]{32}$/,
+        virustotal: /^[a-f0-9]{64}$/i,
+        hunter: /^[a-f0-9]{40}$/i,
+        securitytrails: /^[a-f0-9]{32}$/i,
+        censys: /^cs[a-zA-Z0-9_-]{20,}$/
+      };
+      if (patterns[service] && patterns[service].test(key)) {
+        statusEl.textContent = `✓ ${service} key format is valid`;
+        statusEl.className = 'text-[9px] text-emerald-500 mt-2';
+      } else {
+        statusEl.textContent = `⚠ ${service} key format may be incorrect — verify your key`;
+        statusEl.className = 'text-[9px] text-amber-500 mt-2';
+      }
+      statusEl.classList.remove('hidden');
+      setTimeout(() => statusEl.classList.add('hidden'), 4000);
+    }
+
+    /* ─── Import / Export Settings ─── */
+    document.getElementById('export-settings-btn')?.addEventListener('click', () => {
+      const settings = getSettings();
+      const blob = new Blob([JSON.stringify(settings, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `hackit_settings_${new Date().toISOString().slice(0,10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      if (window.showToast) window.showToast('Settings exported successfully', 'success');
+    });
+
+    document.getElementById('import-settings-input')?.addEventListener('change', (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        try {
+          const imported = JSON.parse(ev.target.result);
+          applySettings(imported);
+          localStorage.setItem('hackit_scan_settings', JSON.stringify(imported));
+          if (window.showToast) window.showToast('Settings imported successfully', 'success');
+        } catch (err) {
+          if (window.showToast) window.showToast('Failed to import settings — invalid JSON', 'error');
+        }
+      };
+      reader.readAsText(file);
+      e.target.value = '';
     });
   </script>
 </Layout>

@@ -7,8 +7,7 @@ import time
 import base64
 from typing import List, Optional, Dict
 from urllib.parse import urlparse
-from models import IntelligenceFinding
-from osint_common import normalize_target, make_finding, resolve_dns
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 
 DNSDUMPSTER_URL = "https://dnsdumpster.com"
 HACKERTARGET_URL = "https://api.hackertarget.com"
@@ -70,7 +69,7 @@ SERVICE_GUESS = {
 async def fetch_with_retry(client: httpx.AsyncClient, url: str, max_retries: int = 3, **kwargs) -> Optional[httpx.Response]:
     for attempt in range(max_retries):
         try:
-            resp = await client.get(url, **kwargs)
+            resp = await safe_fetch(client, url, **kwargs)
             if resp.status_code == 200:
                 return resp
             elif resp.status_code == 429:
@@ -89,7 +88,7 @@ async def fetch_with_retry(client: httpx.AsyncClient, url: str, max_retries: int
 async def post_with_retry(client: httpx.AsyncClient, url: str, data: dict, max_retries: int = 3, **kwargs) -> Optional[httpx.Response]:
     for attempt in range(max_retries):
         try:
-            resp = await client.post(url, data=data, **kwargs)
+            resp = await safe_fetch(client, url, data=data, **kwargs)
             if resp.status_code == 200:
                 return resp
             elif resp.status_code == 429:
@@ -181,7 +180,7 @@ async def query_yougetsignal(target: str, client: httpx.AsyncClient) -> Optional
             "Content-Type": "application/x-www-form-urlencoded",
             "Referer": f"{YOUGETSIGNAL_URL}/what-is-my-ip-address/",
         }
-        resp = await client.post(
+        resp = await safe_fetch(client, 
             f"{YOUGETSIGNAL_URL}/tools/web-sites-on-web-server/php/ip-check.php",
             data={"remoteAddress": target, "checktype": "domain"},
             timeout=20.0,

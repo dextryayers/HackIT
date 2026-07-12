@@ -1,9 +1,9 @@
-import httpx
 import re
 import json
 import socket
 from urllib.parse import urlparse, quote
 from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 
 DNSBL_LISTS = [
     "zen.spamhaus.org",
@@ -81,7 +81,7 @@ async def check_dnsbl(target: str) -> list:
     try:
         ip = target
         try:
-            ip = socket.gethostbyname(target)
+            ip = resolve_ip(target)
         except:
             if not re.match(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$', target):
                 return results
@@ -90,7 +90,7 @@ async def check_dnsbl(target: str) -> list:
         for dnsbl in DNSBL_LISTS[:20]:
             try:
                 lookup = f"{reversed_ip}.{dnsbl}"
-                socket.gethostbyname(lookup)
+                resolve_ip(lookup)
                 results.append({"dnsbl": dnsbl, "ip": ip, "listed": True})
             except:
                 pass
@@ -101,7 +101,7 @@ async def check_dnsbl(target: str) -> list:
 async def check_spamhaus_pbl(client: httpx.AsyncClient, target: str) -> list:
     results = []
     try:
-        resp = await client.get("https://www.spamhaus.org/drop/drop.txt", timeout=15.0,
+        resp = await safe_fetch(client,"https://www.spamhaus.org/drop/drop.txt", timeout=15.0,
             headers={"User-Agent": "Mozilla/5.0"})
         if resp.status_code == 200:
             for line in resp.text.splitlines():
@@ -118,7 +118,7 @@ async def check_email_reputation(client: httpx.AsyncClient, target: str) -> list
     results = []
     try:
         url = f"https://emailrep.io/{quote(target)}"
-        resp = await client.get(url, timeout=10.0,
+        resp = await safe_fetch(client,url, timeout=10.0,
             headers={"User-Agent": "Mozilla/5.0"})
         if resp.status_code == 200:
             data = resp.json()
@@ -165,7 +165,7 @@ async def check_spamtrap_hits(target: str) -> list:
         ]
         for url in spamtrap_sources:
             try:
-                resp = await client.get(url, timeout=15.0,
+                resp = await safe_fetch(client,url, timeout=15.0,
                     headers={"User-Agent": "Mozilla/5.0"})
                 if resp.status_code == 200:
                     content = resp.text.lower()
@@ -183,9 +183,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     dnsbl_results = await check_dnsbl(query)
     for r in dnsbl_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"DNSBL listed: {r['dnsbl']} for {r['ip']}",
-            type="DNSBL Listing",
+            ftype="DNSBL Listing",
             source=r['dnsbl'],
             confidence="High",
             color="red",
@@ -198,9 +198,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     spamhaus_results = await check_spamhaus_pbl(client, query)
     for r in spamhaus_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Spamhaus PBL/DROP: {r['list']} - {r['cidr']}",
-            type="Spamhaus Blocklist",
+            ftype="Spamhaus Blocklist",
             source="Spamhaus",
             confidence="High",
             color="red",
@@ -213,9 +213,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     email_reputation_results = await check_email_reputation(client, query)
     for r in email_reputation_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"EmailRep.io: reputation={r['reputation']}, suspicious={r['suspicious']}, blacklisted={r['blacklisted']}",
-            type="Email Reputation Check",
+            ftype="Email Reputation Check",
             source="EmailRep.io",
             confidence="Medium",
             color="red" if r.get("blacklisted") or r.get("malicious_activity") else "yellow",
@@ -229,9 +229,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     spam_pattern_results = await check_spam_patterns(query)
     for r in spam_pattern_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Spam content pattern: {r['spam_type']}",
-            type="Spam Pattern Detection",
+            ftype="Spam Pattern Detection",
             source="Spam Intel",
             confidence="Low",
             color="yellow",
@@ -244,9 +244,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     smtp_results = await extract_smtp_greeting(query)
     for r in smtp_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"SMTP greeting pattern detected: {r['pattern'][:40]}...",
-            type="SMTP Greeting Analysis",
+            ftype="SMTP Greeting Analysis",
             source="Spam Intel",
             confidence="Low",
             color="slate",
@@ -259,9 +259,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     spamtrap_results = await check_spamtrap_hits(client, query)
     for r in spamtrap_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Spamtrap hit: {r['source']}",
-            type="Spamtrap Detection",
+            ftype="Spamtrap Detection",
             source=r['source'],
             confidence="High",
             color="red",
@@ -273,9 +273,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         ))
 
     if not dnsbl_results:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"No DNSBL listings found for {query} - checked {min(len(DNSBL_LISTS), 20)} lists",
-            type="DNSBL Check Result",
+            ftype="DNSBL Check Result",
             source="Spam Intel",
             confidence="Low",
             color="emerald",
@@ -287,9 +287,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         ))
 
     for rule in SPAMASSASSIN_RULES[:15]:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"SpamAssassin rule monitored: {rule}",
-            type="SpamAssassin Rule Coverage",
+            ftype="SpamAssassin Rule Coverage",
             source="Spam Intel",
             confidence="Low",
             color="slate",
@@ -300,9 +300,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
             tags=["spam", "spamassassin", rule.lower()]
         ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Spam intelligence complete for {query}: checked {min(len(DNSBL_LISTS), 20)} DNSBL lists, {len(SPAM_PATTERNS)} pattern types, email reputation",
-        type="Spam Intelligence Summary",
+        ftype="Spam Intelligence Summary",
         source="Spam Intel",
         confidence="Medium",
         color="slate",

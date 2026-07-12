@@ -1,9 +1,7 @@
-import httpx
 import re
-import json
 from urllib.parse import urlparse, quote
 from typing import List
-from models import IntelligenceFinding
+from module_common import safe_fetch, make_finding
 
 NEWS_SOURCES = [
     ("Google News", "https://news.google.com/search?q={}&hl=en-US&gl=US&ceid=US:en"),
@@ -58,16 +56,17 @@ TOPIC_CATEGORIES = {
 }
 
 
-async def fetch_news_source(name: str, url_template: str, target: str, client: httpx.AsyncClient) -> dict:
+async def fetch_news_source(name: str, url_template: str, target: str, client) -> dict:
     try:
         url = url_template.format(quote(target))
-        resp = await client.get(
+        resp = await safe_fetch(
+            client,
             url,
             timeout=15.0,
             headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"},
             follow_redirects=True,
         )
-        if resp.status_code == 200 and len(resp.text) > 500:
+        if resp and resp.status_code == 200 and len(resp.text) > 500:
             text = resp.text
             headlines = re.findall(r'<h[1-4][^>]*>(.*?)</h[1-4]>', text, re.IGNORECASE | re.DOTALL)
             headlines = [re.sub(r'<[^>]+>', '', h).strip() for h in headlines if h.strip()]
@@ -109,7 +108,7 @@ def categorize_topics(text: str) -> list:
     return topics
 
 
-async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFinding]:
+async def crawl(target: str, client) -> List:
     findings = []
     t = target.strip().lower()
     if t.startswith("http"):
@@ -125,9 +124,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             sources_with_data += 1
 
     if all_results:
-        findings.append(IntelligenceFinding(
-            entity=f"News scan: {sources_with_data}/{len(NEWS_SOURCES)} sources had mentions of {t}",
-            type="News: Coverage Report",
+        findings.append(make_finding(
+            f"News scan: {sources_with_data}/{len(NEWS_SOURCES)} sources had mentions of {t}",
+            ftype="News: Coverage Report",
             source="NewsMonitor",
             confidence="High",
             color="slate",
@@ -142,9 +141,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         hl_count = len(result["headlines"])
         mention_count = result["target_mentions"]
 
-        findings.append(IntelligenceFinding(
-            entity=f"{result['name']}: {mention_count} mentions, {hl_count} headlines for {t}",
-            type="News: Source Result",
+        findings.append(make_finding(
+            f"{result['name']}: {mention_count} mentions, {hl_count} headlines for {t}",
+            ftype="News: Source Result",
             source="NewsMonitor",
             confidence="Medium",
             color="sky",
@@ -161,9 +160,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                 topics = categorize_topics(headline)
                 sentiment_color = {"Positive": "emerald", "Negative": "red", "Neutral": "slate"}.get(sentiment, "slate")
 
-                findings.append(IntelligenceFinding(
-                    entity=f"Headline: {headline[:150]}",
-                    type="News: Headline",
+                findings.append(make_finding(
+                    f"Headline: {headline[:150]}",
+                    ftype="News: Headline",
                     source="NewsMonitor",
                     confidence="Medium",
                     color=sentiment_color,
@@ -185,9 +184,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         neu_count = sentiments.count("Neutral")
 
         if neg_count > pos_count and neg_count > 0:
-            findings.append(IntelligenceFinding(
-                entity=f"Negative news sentiment detected ({neg_count}/{len(sentiments)} headlines negative)",
-                type="News: Sentiment Alert",
+            findings.append(make_finding(
+                f"Negative news sentiment detected ({neg_count}/{len(sentiments)} headlines negative)",
+                ftype="News: Sentiment Alert",
                 source="NewsMonitor",
                 confidence="Medium",
                 color="red",
@@ -198,9 +197,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                 tags=["news", "sentiment", "negative", "alert"],
             ))
 
-        findings.append(IntelligenceFinding(
-            entity=f"News sentiment: {pos_count} positive, {neg_count} negative, {neu_count} neutral headlines",
-            type="News: Sentiment Analysis",
+        findings.append(make_finding(
+            f"News sentiment: {pos_count} positive, {neg_count} negative, {neu_count} neutral headlines",
+            ftype="News: Sentiment Analysis",
             source="NewsMonitor",
             confidence="High",
             color="slate",
@@ -218,9 +217,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                 all_topics.add(topic)
 
     if all_topics:
-        findings.append(IntelligenceFinding(
-            entity=f"News topics covering {t}: {', '.join(sorted(all_topics))}",
-            type="News: Topic Coverage",
+        findings.append(make_finding(
+            f"News topics covering {t}: {', '.join(sorted(all_topics))}",
+            ftype="News: Topic Coverage",
             source="NewsMonitor",
             confidence="Medium",
             color="slate",
@@ -233,9 +232,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
     total_mentions = sum(r.get("target_mentions", 0) for r in all_results)
     if total_mentions > 0:
-        findings.append(IntelligenceFinding(
-            entity=f"Total news mentions: {total_mentions} across {sources_with_data} sources",
-            type="News: Mention Volume",
+        findings.append(make_finding(
+            f"Total news mentions: {total_mentions} across {sources_with_data} sources",
+            ftype="News: Mention Volume",
             source="NewsMonitor",
             confidence="Medium",
             color="slate",
@@ -247,9 +246,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         ))
 
     if not all_results:
-        findings.append(IntelligenceFinding(
-            entity="No news mentions found for target",
-            type="News: Scan Complete",
+        findings.append(make_finding(
+            "No news mentions found for target",
+            ftype="News: Scan Complete",
             source="NewsMonitor",
             confidence="Low",
             color="emerald",

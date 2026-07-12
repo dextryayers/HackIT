@@ -1,8 +1,7 @@
-import httpx
 import re
 import json
 from urllib.parse import urlparse
-from models import IntelligenceFinding
+from ..module_common import safe_fetch, make_finding
 
 SERVER_TECH_SIGNATURES = {
     "nginx": "Nginx", "apache": "Apache HTTP Server", "cloudflare": "Cloudflare",
@@ -52,14 +51,10 @@ CDNJS_PATTERN = re.compile(r'//cdnjs\.cloudflare\.com/ajax/libs/([\w-]+)/([\d.]+
 UNPKG_PATTERN = re.compile(r'//unpkg\.com/([\w-]+)@?([\d.]+)?')
 JSDELIVR_PATTERN = re.compile(r'//cdn\.jsdelivr\.net/(npm|gh)/([\w-]+)@?([\d.]+)?')
 
-async def _fetch_wayback_html(domain: str, client: httpx.AsyncClient) -> list:
+async def _fetch_wayback_html(domain: str, client: AsyncClient) -> list:
     findings = []
     try:
-        resp = await client.get(
-            f"http://web.archive.org/cdx/search/cdx?url={domain}/*&output=json&fl=original,timestamp,statuscode&limit=20&filter=statuscode:200",
-            timeout=20.0,
-            headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}
-        )
+        resp = await safe_fetch(client, f"http://web.archive.org/cdx/search/cdx?url={domain}/*&output=json&fl=original,timestamp,statuscode&limit=20&filter=statuscode:200", timeout=20.0)
         if resp.status_code == 200:
             data = resp.json()
             urls_to_check = []
@@ -72,10 +67,7 @@ async def _fetch_wayback_html(domain: str, client: httpx.AsyncClient) -> list:
                         urls_to_check.append((wb_url, ts))
             for wb_url, ts in urls_to_check[:10]:
                 try:
-                    snap = await client.get(
-                        wb_url, timeout=15.0,
-                        headers={"User-Agent": "Mozilla/5.0"}
-                    )
+                    snap = await safe_fetch(client, wb_url, timeout=15.0)
                     if snap.status_code == 200:
                         html = snap.text[:50000]
                         techs_found = set()
@@ -85,9 +77,9 @@ async def _fetch_wayback_html(domain: str, client: httpx.AsyncClient) -> list:
                                     techs_found.add(tech)
                                     break
                         for tech in techs_found:
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=tech,
-                                type=f"Technology Detected (Wayback - {ts[:8]})",
+                                ftype=f"Technology Detected (Wayback - {ts[:8]})",
                                 source="Passive Web Tech",
                                 confidence="Medium",
                                 color="orange",
@@ -100,9 +92,9 @@ async def _fetch_wayback_html(domain: str, client: httpx.AsyncClient) -> list:
                                 lib = m.group(1) if pattern_tuple != JSDELIVR_PATTERN else m.group(2)
                                 ver = m.group(2) if pattern_tuple == CDNJS_PATTERN else (m.group(2) if pattern_tuple == UNPKG_PATTERN and m.group(2) else (m.group(3) if pattern_tuple == JSDELIVR_PATTERN and m.group(3) else "unknown"))
                                 lib_entity = f"{lib} v{ver}" if ver and ver != "unknown" else lib
-                                findings.append(IntelligenceFinding(
+                                findings.append(make_finding(
                                     entity=lib_entity,
-                                    type="JavaScript Library (Wayback CDN Reference)",
+                                    ftype="JavaScript Library (Wayback CDN Reference)",
                                     source="Passive Web Tech",
                                     confidence="High",
                                     color="slate",
@@ -116,22 +108,18 @@ async def _fetch_wayback_html(domain: str, client: httpx.AsyncClient) -> list:
         pass
     return findings
 
-async def _fetch_builtwith_data(domain: str, client: httpx.AsyncClient) -> list:
+async def _fetch_builtwith_data(domain: str, client: AsyncClient) -> list:
     findings = []
     try:
-        resp = await client.get(
-            f"https://builtwith.com/{domain}",
-            timeout=15.0,
-            headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}
-        )
+        resp = await safe_fetch(client, f"https://builtwith.com/{domain}", timeout=15.0)
         if resp.status_code == 200:
             tech_sections = re.findall(r'<a[^>]*class="[^"]*tech[^"]*"[^>]*>([^<]+)</a>', resp.text, re.I)
             for tech in tech_sections[:20]:
                 tech = tech.strip()
                 if tech and len(tech) < 100:
-                    findings.append(IntelligenceFinding(
+                    findings.append(make_finding(
                         entity=tech[:100],
-                        type="Technology (BuiltWith)",
+                        ftype="Technology (BuiltWith)",
                         source="Passive Web Tech",
                         confidence="Medium",
                         color="orange",
@@ -141,9 +129,9 @@ async def _fetch_builtwith_data(domain: str, client: httpx.AsyncClient) -> list:
                     ))
             meta_gen = re.findall(r'<meta[^>]*name=["\']generator["\'][^>]*content=["\']([^"\']+)["\']', resp.text, re.I)
             for gen in meta_gen:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=gen.strip(),
-                    type="CMS Generator Tag (BuiltWith)",
+                    ftype="CMS Generator Tag (BuiltWith)",
                     source="Passive Web Tech",
                     confidence="High",
                     color="blue",
@@ -155,21 +143,17 @@ async def _fetch_builtwith_data(domain: str, client: httpx.AsyncClient) -> list:
         pass
     return findings
 
-async def _fetch_netcraft_data(domain: str, client: httpx.AsyncClient) -> list:
+async def _fetch_netcraft_data(domain: str, client: AsyncClient) -> list:
     findings = []
     try:
-        resp = await client.get(
-            f"https://sitereport.netcraft.com/?url=http://{domain}",
-            timeout=15.0,
-            headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}
-        )
+        resp = await safe_fetch(client, f"https://sitereport.netcraft.com/?url=http://{domain}", timeout=15.0)
         if resp.status_code == 200:
             server_match = re.search(r'Server\s*:\s*([^<\n]+)', resp.text, re.I)
             if server_match:
                 server_val = server_match.group(1).strip()
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=server_val[:200],
-                    type="Server Header (Netcraft)",
+                    ftype="Server Header (Netcraft)",
                     source="Passive Web Tech",
                     confidence="High",
                     color="orange",
@@ -179,9 +163,9 @@ async def _fetch_netcraft_data(domain: str, client: httpx.AsyncClient) -> list:
                 ))
             tech_matches = re.findall(r'<td[^>]*class="[^"]*tech[^"]*"[^>]*>([^<]+)</td>', resp.text, re.I)
             for t in tech_matches[:10]:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=t.strip()[:100],
-                    type="Technology (Netcraft)",
+                    ftype="Technology (Netcraft)",
                     source="Passive Web Tech",
                     confidence="Medium",
                     color="slate",
@@ -192,14 +176,10 @@ async def _fetch_netcraft_data(domain: str, client: httpx.AsyncClient) -> list:
         pass
     return findings
 
-async def _fetch_archive_headers(domain: str, client: httpx.AsyncClient) -> list:
+async def _fetch_archive_headers(domain: str, client: AsyncClient) -> list:
     findings = []
     try:
-        resp = await client.get(
-            f"http://web.archive.org/cdx/search/cdx?url={domain}/*&output=json&fl=original,timestamp,statuscode&limit=5&filter=statuscode:200",
-            timeout=15.0,
-            headers={"User-Agent": "Mozilla/5.0"}
-        )
+        resp = await safe_fetch(client, f"http://web.archive.org/cdx/search/cdx?url={domain}/*&output=json&fl=original,timestamp,statuscode&limit=5&filter=statuscode:200", timeout=15.0)
         if resp.status_code == 200:
             data = resp.json()
             for row in data[1:6]:
@@ -207,11 +187,7 @@ async def _fetch_archive_headers(domain: str, client: httpx.AsyncClient) -> list
                     orig_url = row[0]
                     ts = row[1]
                     try:
-                        resp_hdrs = await client.head(
-                            f"http://web.archive.org/web/{ts}if_/{orig_url}",
-                            timeout=10.0,
-                            headers={"User-Agent": "Mozilla/5.0"}
-                        )
+                        resp_hdrs = await safe_fetch(client, f"http://web.archive.org/web/{ts}if_/{orig_url}", timeout=10.0)
                         hdrs = resp_hdrs.headers
                         server = hdrs.get("server", "")
                         powered = hdrs.get("x-powered-by", "")
@@ -219,9 +195,9 @@ async def _fetch_archive_headers(domain: str, client: httpx.AsyncClient) -> list
                         if server:
                             for sig, label in SERVER_TECH_SIGNATURES.items():
                                 if sig in server.lower():
-                                    findings.append(IntelligenceFinding(
+                                    findings.append(make_finding(
                                         entity=label,
-                                        type=f"Server Technology (Archive - {ts[:8]})",
+                                        ftype=f"Server Technology (Archive - {ts[:8]})",
                                         source="Passive Web Tech",
                                         confidence="High",
                                         color="orange",
@@ -231,9 +207,9 @@ async def _fetch_archive_headers(domain: str, client: httpx.AsyncClient) -> list
                                     ))
                                     break
                             else:
-                                findings.append(IntelligenceFinding(
+                                findings.append(make_finding(
                                     entity=server[:200],
-                                    type=f"Server Header (Archive - {ts[:8]})",
+                                    ftype=f"Server Header (Archive - {ts[:8]})",
                                     source="Passive Web Tech",
                                     confidence="High",
                                     color="slate",
@@ -242,9 +218,9 @@ async def _fetch_archive_headers(domain: str, client: httpx.AsyncClient) -> list
                                     tags=["tech", "server", "historical"]
                                 ))
                         if powered:
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity=powered[:200],
-                                type=f"X-Powered-By (Archive - {ts[:8]})",
+                                ftype=f"X-Powered-By (Archive - {ts[:8]})",
                                 source="Passive Web Tech",
                                 confidence="High",
                                 color="orange",
@@ -253,9 +229,9 @@ async def _fetch_archive_headers(domain: str, client: httpx.AsyncClient) -> list
                                 tags=["tech", "x-powered-by", "historical"]
                             ))
                         if cf_ray:
-                            findings.append(IntelligenceFinding(
+                            findings.append(make_finding(
                                 entity="Cloudflare detected via cf-ray header",
-                                type=f"CDN Detection (Archive - {ts[:8]})",
+                                ftype=f"CDN Detection (Archive - {ts[:8]})",
                                 source="Passive Web Tech",
                                 confidence="High",
                                 color="orange",
@@ -265,9 +241,9 @@ async def _fetch_archive_headers(domain: str, client: httpx.AsyncClient) -> list
                             ))
                         for sig, label in CDN_SIGNATURES.items():
                             if sig in server.lower():
-                                findings.append(IntelligenceFinding(
+                                findings.append(make_finding(
                                     entity=label,
-                                    type=f"CDN Detected (Archive - {ts[:8]})",
+                                    ftype=f"CDN Detected (Archive - {ts[:8]})",
                                     source="Passive Web Tech",
                                     confidence="High",
                                     color="orange",
@@ -281,20 +257,16 @@ async def _fetch_archive_headers(domain: str, client: httpx.AsyncClient) -> list
         pass
     return findings
 
-async def _check_similarweb_similartech(domain: str, client: httpx.AsyncClient) -> list:
+async def _check_similarweb_similartech(domain: str, client: AsyncClient) -> list:
     findings = []
     try:
-        resp = await client.get(
-            f"https://www.similarweb.com/website/{domain}/",
-            timeout=15.0,
-            headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}
-        )
+        resp = await safe_fetch(client, f"https://www.similarweb.com/website/{domain}/", timeout=15.0)
         if resp.status_code == 200:
             tech_items = re.findall(r'<span[^>]*class="[^"]*techName[^"]*"[^>]*>([^<]+)</span>', resp.text, re.I)
             for item in tech_items[:15]:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=item.strip()[:100],
-                    type="Technology (SimilarTech)",
+                    ftype="Technology (SimilarTech)",
                     source="Passive Web Tech",
                     confidence="Medium",
                     color="slate",
@@ -306,15 +278,15 @@ async def _check_similarweb_similartech(domain: str, client: httpx.AsyncClient) 
         pass
     return findings
 
-async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFinding]:
+async def crawl(target: str, client: AsyncClient) -> list[IntelligenceFinding]:
     findings = []
     domain = target.strip().lower()
     if "://" in domain:
         domain = urlparse(domain).netloc
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Starting passive web technology profiling for {domain}",
-        type="Passive Web Tech - Start",
+        ftype="Passive Web Tech - Start",
         source="Passive Web Tech",
         confidence="High", color="blue",
         status="Started",
@@ -341,9 +313,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
         for f in findings:
             if " - " in f.entity:
                 tech_types.add(f.entity.split(" - ")[0])
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Passive Web Tech profiling complete: {len(findings)} findings",
-            type="Passive Web Tech - Summary",
+            ftype="Passive Web Tech - Summary",
             source="Passive Web Tech",
             confidence="High", color="purple",
             status="Complete",

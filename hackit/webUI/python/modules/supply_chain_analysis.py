@@ -1,9 +1,7 @@
-import httpx
-import re
-import json
-from urllib.parse import urlparse, quote
+from urllib.parse import urlparse
 from typing import List
 from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 
 THIRD_PARTY_CATEGORIES = {
     "CDN": ["cloudflare", "akamai", "fastly", "cloudfront", "cdn", "stackpath", "keycdn", "bunnycdn", "section.io"],
@@ -41,7 +39,7 @@ THIRD_PARTY_BREACHES = {
 async def identify_third_party_services(target: str, client: httpx.AsyncClient) -> dict:
     services_found = {}
     try:
-        resp = await client.get(
+        resp = await safe_fetch(client,
             f"https://{target}",
             timeout=15.0,
             headers={"User-Agent": "Mozilla/5.0"},
@@ -61,8 +59,8 @@ async def identify_third_party_services(target: str, client: httpx.AsyncClient) 
             if shadow_it_found:
                 services_found["shadow_it"] = shadow_it_found
 
-        dns_resp = await client.get(
-            f"https://dns.google/resolve?name={target}&type=MX",
+        dns_resp = await safe_fetch(client,
+            f"https://dns.google/resolve?name={target}&ftype=MX",
             timeout=10.0,
         )
         if dns_resp.status_code == 200:
@@ -117,9 +115,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                 display_cat = category
 
             if display_cat == "shadow_it":
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Shadow IT indicators: {', '.join(indicators[:5])}",
-                    type="SupplyChain: Shadow IT",
+                    ftype="SupplyChain: Shadow IT",
                     source="SupplyChainAnalysis",
                     confidence="Medium",
                     color="orange",
@@ -130,9 +128,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                     tags=["supply-chain", "shadow-it", "unsanctioned"],
                 ))
             else:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Third-party {display_cat}: {', '.join(indicators[:3])}",
-                    type=f"SupplyChain: {display_cat}",
+                    ftype=f"SupplyChain: {display_cat}",
                     source="SupplyChainAnalysis",
                     confidence="High",
                     color="blue",
@@ -145,9 +143,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
         spof = check_single_points_of_failure(services)
         if spof:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Critical single points of failure: {', '.join(spof)}",
-                type="SupplyChain: SPOF Analysis",
+                ftype="SupplyChain: SPOF Analysis",
                 source="SupplyChainAnalysis",
                 confidence="High",
                 color="red",
@@ -161,9 +159,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         vendor_breaches = get_vendor_breach_history(services)
         if vendor_breaches:
             for vb in vendor_breaches[:3]:
-                findings.append(IntelligenceFinding(
+                findings.append(make_finding(
                     entity=f"Vendor breach: {vb['vendor']} - {vb['breach']}",
-                    type="SupplyChain: Vendor Breach",
+                    ftype="SupplyChain: Vendor Breach",
                     source="SupplyChainAnalysis",
                     confidence="Medium",
                     color="red",
@@ -175,9 +173,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
                 ))
 
         total_services = sum(len(v) for v in services.values() if not v[0].startswith("MX:"))
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Total third-party services detected: {total_services} in {len(services)} categories",
-            type="SupplyChain: Service Map",
+            ftype="SupplyChain: Service Map",
             source="SupplyChainAnalysis",
             confidence="High",
             color="slate",
@@ -189,9 +187,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         ))
 
         dependency_chain = ", ".join(list(services.keys())[:8])
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"Dependency chain: {dependency_chain}",
-            type="SupplyChain: Dependency Map",
+            ftype="SupplyChain: Dependency Map",
             source="SupplyChainAnalysis",
             confidence="Medium",
             color="slate",
@@ -202,9 +200,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             tags=["supply-chain", "dependencies", "map"],
         ))
     else:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity="No external third-party services detected",
-            type="SupplyChain: Scan Complete",
+            ftype="SupplyChain: Scan Complete",
             source="SupplyChainAnalysis",
             confidence="Low",
             color="emerald",
@@ -215,9 +213,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             tags=["supply-chain", "clean"],
         ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Supply chain scan complete for {t}",
-        type="SupplyChain: Scan Summary",
+        ftype="SupplyChain: Scan Summary",
         source="SupplyChainAnalysis",
         confidence="High",
         color="slate",

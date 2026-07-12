@@ -342,7 +342,7 @@ async def _check_threat_intel(ip: str, domain: str | None, client: httpx.AsyncCl
         pass
     try:
         if domain:
-            urlhaus_url = await client.post(
+            urlhaus_url = await safe_fetch(client, 
                 "https://urlhaus-api.abuse.ch/v1/url/",
                 data={"url": f"http://{domain}"},
                 timeout=10.0,

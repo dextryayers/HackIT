@@ -1,10 +1,8 @@
 import asyncio
 import dns.resolver
-import httpx
-import re
-import json
 from urllib.parse import urlparse
 from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 
 ADDITIONAL_WORDLIST = [
     "www", "mail", "ftp", "admin", "api", "dev", "staging", "vpn", "cdn",
@@ -51,7 +49,7 @@ async def resolve_cname(host: str):
 
 async def crtsh_search(domain: str, client: httpx.AsyncClient):
     try:
-        resp = await client.get(f"https://crt.sh/?q=%25.{domain}&output=json", timeout=15.0)
+        resp = await safe_fetch(client,f"https://crt.sh/?q=%25.{domain}&output=json", timeout=15.0)
         if resp.status_code == 200:
             data = resp.json()
             subs = set()
@@ -121,9 +119,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
     for sub in sorted(initial_subs)[:30]:
         ips = await resolve_a(sub)
         cname = await resolve_cname(sub)
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=sub,
-            type="Discovered Subdomain",
+            ftype="Discovered Subdomain",
             source="Subdomain Recursive",
             confidence="High",
             color="blue" if ips else "slate",
@@ -135,9 +133,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         ))
 
     for parent, children in discovered_tree.items():
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"{parent} -> {len(children)} sub-subdomains: {', '.join(children[:5])}",
-            type="Recursive Subdomain Node",
+            ftype="Recursive Subdomain Node",
             source="Subdomain Recursive",
             confidence="Medium",
             color="purple",
@@ -155,9 +153,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             if cname:
                 cname_chains.append(f"{sub} -> {cname}")
         if cname_chains:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity="CNAME chains: " + " | ".join(cname_chains[:5]),
-                type="Subdomain CNAME Chain",
+                ftype="Subdomain CNAME Chain",
                 source="Subdomain Recursive",
                 confidence="High",
                 color="purple",
@@ -175,9 +173,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
             sub_depth_tree[depth_count].append(sub)
 
         for d, subs in sorted(sub_depth_tree.items()):
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Depth {d}: {len(subs)} subdomains (e.g., {', '.join(s[:3] for s in subs[:3])})",
-                type="Subdomain Depth Analysis",
+                ftype="Subdomain Depth Analysis",
                 source="Subdomain Recursive",
                 confidence="High",
                 color="blue",
@@ -186,9 +184,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 tags=["subdomain", "depth"]
             ))
 
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Recursive scan: {len(all_discovered)} subdomains found across {depth} depth levels",
-        type="Recursive Subdomain Summary",
+        ftype="Recursive Subdomain Summary",
         source="Subdomain Recursive",
         confidence="High",
         color="blue",

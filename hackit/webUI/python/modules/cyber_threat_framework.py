@@ -1,9 +1,8 @@
 import httpx
-import re
-import json
-from urllib.parse import urlparse, quote
+from urllib.parse import urlparse
 from typing import List
 from models import IntelligenceFinding
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
 
 MITRE_ATTACK_TECHNIQUES = {
     "Initial Access": ["T1078", "T1190", "T1133", "T1566", "T1091", "T1189", "T1195", "T1199", "T1200"],
@@ -77,7 +76,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
 
     tech_stack = {}
     try:
-        resp = await client.get(f"https://{t}", timeout=15.0, headers={"User-Agent": "Mozilla/5.0"}, follow_redirects=True)
+        resp = await safe_fetch(client, f"https://{t}", timeout=15.0, headers={"User-Agent": "Mozilla/5.0"}, follow_redirects=True)
         if resp.status_code == 200:
             text = resp.text.lower() + str(resp.headers).lower()
             for category, indicators in TECH_STACK_PATTERNS.items():
@@ -88,7 +87,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         pass
 
     for tactic, techniques in MITRE_ATTACK_TECHNIQUES.items():
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"MITRE ATT&CK Tactic: {tactic} - {len(techniques)} techniques applicable",
             type=f"Framework: MITRE ATT&CK {tactic}",
             source="CyberThreatFramework",
@@ -103,7 +102,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         ))
 
         for technique_id in techniques[:3]:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"MITRE ATT&CK Technique: {technique_id} ({tactic})",
                 type="Framework: MITRE Technique",
                 source="CyberThreatFramework",
@@ -117,7 +116,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             ))
 
     for capability, subs in MITRE_D3FEND_CAPABILITIES.items():
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"MITRE D3FEND: {capability} - {', '.join(subs[:3])}",
             type="Framework: D3FEND Defense",
             source="CyberThreatFramework",
@@ -131,9 +130,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         ))
 
     for cwe_id, cwe_name in OWASP_TOP_10_2021.items():
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"OWASP Top 10: {cwe_id} - {cwe_name}",
-            type="Framework: OWASP Risk",
+            ftype="Framework: OWASP Risk",
             source="CyberThreatFramework",
             confidence="High",
             color="orange",
@@ -147,9 +146,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
     if tech_stack:
         relevant_techniques = map_tech_to_techniques(tech_stack)
         for rt in relevant_techniques[:5]:
-            findings.append(IntelligenceFinding(
+            findings.append(make_finding(
                 entity=f"Tech-specific threat: {rt}",
-                type="Framework: Tech Threat Mapping",
+                ftype="Framework: Tech Threat Mapping",
                 source="CyberThreatFramework",
                 confidence="Medium",
                 color="orange",
@@ -161,9 +160,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
             ))
 
     for cwe in CWE_TOP_25_2024[:10]:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"CWE Top 25: {cwe}",
-            type="Framework: CWE Risk",
+            ftype="Framework: CWE Risk",
             source="CyberThreatFramework",
             confidence="High",
             color="orange",
@@ -175,9 +174,9 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         ))
 
     for category in NIST_CSF_CATEGORIES:
-        findings.append(IntelligenceFinding(
+        findings.append(make_finding(
             entity=f"NIST CSF Function: {category}",
-            type="Framework: NIST CSF",
+            ftype="Framework: NIST CSF",
             source="CyberThreatFramework",
             confidence="High",
             color="slate",
@@ -189,7 +188,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
         ))
 
     total_techniques = sum(len(v) for v in MITRE_ATTACK_TECHNIQUES.values())
-    findings.append(IntelligenceFinding(
+    findings.append(make_finding(
         entity=f"Complete framework mapping: {len(MITRE_ATTACK_TECHNIQUES)} tactics, {total_techniques} techniques, 10 OWASP risks, 25 CWE entries",
         type="Framework: Coverage Summary",
         source="CyberThreatFramework",
