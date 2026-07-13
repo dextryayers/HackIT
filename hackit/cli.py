@@ -701,6 +701,10 @@ ssl.add_command(analyze_ssl, name='check')
 # DDoS Tools
 cli.add_command(ddos_attack, name='ddos')
 
+# BruteForce Tools
+from hackit.bruteforcer import bruter as bruter_cmd
+cli.add_command(bruter_cmd, name='bruter')
+
 # Utility Tools
 @cli.group()
 def util():

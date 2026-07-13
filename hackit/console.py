@@ -336,7 +336,7 @@ class HackItConsole:
                 
                 # Track context (module being used)
                 # If command is a top-level group, set context
-                if args[0] in ['web', 'ports', 'recon', 'vuln', 'ssl', 'util', 'dirfinder']:
+                if args[0] in ['web', 'ports', 'recon', 'vuln', 'ssl', 'util', 'dirfinder', 'bruter']:
                     if self.current_context == "main":
                         self.current_context = args[0]
                     elif args[0] not in self.current_context:
