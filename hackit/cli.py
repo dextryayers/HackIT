@@ -882,6 +882,16 @@ GUIDE_SECTIONS = [
         ("config", "Change terminal theme, username, hostname, colors and prompt style."),
         ("whoami", "Show current system user, device and platform info."),
     ]),
+    ("CONSOLE BASICS (interactive shell only)", [
+        ("help", "Show the command list. Add a topic for details, for example 'help web'."),
+        ("guide", "Show this full beginner guide. Add a topic to focus, for example 'guide web'."),
+        ("clear", "Clear the terminal screen."),
+        ("back", "Go up one level when you are inside a group context such as web or vuln."),
+        ("exit", "Leave the console. 'quit' works the same."),
+        ("version", "Show the HackIt version and engine list."),
+        ("Tab", "Press Tab to autocomplete any command while typing."),
+        ("contexts", "Type a group name such as 'web' to enter it, then run its commands without the prefix. Type 'back' to return."),
+    ]),
     ("RECON (find targets and map the surface)", [
         ("recon subdomains", "Enumerate subdomains of a domain, passive plus active brute force."),
         ("recon ips", "Sweep an IP range in CIDR notation and list live hosts with open ports."),
