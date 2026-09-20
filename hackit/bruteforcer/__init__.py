@@ -133,7 +133,7 @@ def bruter(ctx):
         _keyconsole()
 
 
-@bruter.command()
+@bruter.command(name="list-protocols")
 def list_protocols_cmd():
     w = _box_w()
     _draw_protos(w)

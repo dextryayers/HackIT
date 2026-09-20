@@ -25,7 +25,7 @@ from hackit.osint import osint as osint_console
 from hackit.agent import agent
 from hackit.ddos import ddos as ddos_attack
 from hackit.ui import display_banner, _colored, YELLOW, GREEN, B_GREEN, B_CYAN, B_WHITE, DIM, RED, MAGENTA, BLUE, CYAN, B_MAGENTA, B_RED, B_BLUE, B_YELLOW, WHITE, BG_BLUE, BG_CYAN, BG_MAGENTA
-from hackit.config import load_config, save_config, set_theme, DEFAULT_CONFIG, VALID_THEMES, VALID_ACCENTS, VALID_BORDERS, VALID_PROMPTS, VALID_MASKING_LEVELS, MASKING_PROFILES, CONFIG_PATH, apply_masking_level, get_masking_info
+from hackit.config import load_config, save_config, set_theme, DEFAULT_CONFIG, VALID_THEMES, VALID_ACCENTS, VALID_BORDERS, VALID_PROMPTS, VALID_MASKING_LEVELS, MASKING_PROFILES, CONFIG_PATH, SCHEMA, apply_masking_level, get_masking_info
 
 import re as _re
 import json
@@ -869,6 +869,135 @@ def help_tools():
     • ddos         - DDoS stress testing (SYN/UDP/ACK/RST/ICMP/DNS/NTP)
     """
     click.echo(tools_text)
+
+
+GUIDE_SECTIONS = [
+    ("START HERE (new users read this first)", [
+        ("guide", "Show this full command guide. Use 'guide <topic>' to focus on one group, for example 'guide web'."),
+        ("run", "Launch the Web UI dashboard in your browser. Easiest way to use HackIt."),
+        ("console", "Enter the interactive framework console (Metasploit style shell)."),
+        ("examples", "Show copy paste usage examples for every tool."),
+        ("help-tools", "Show a short quick reference of the most used tools."),
+        ("banner", "Print the HackIt startup banner again."),
+        ("config", "Change terminal theme, username, hostname, colors and prompt style."),
+        ("whoami", "Show current system user, device and platform info."),
+    ]),
+    ("RECON (find targets and map the surface)", [
+        ("recon subdomains", "Enumerate subdomains of a domain, passive plus active brute force."),
+        ("recon ips", "Sweep an IP range in CIDR notation and list live hosts with open ports."),
+        ("recon tech-hunter", "Detect technologies, CMS, frameworks and servers on a target."),
+        ("recon osint", "Open the interactive OSINT console for public footprint scanning."),
+        ("osint", "Shortcut to the OSINT console. Scans usernames across hundreds of platforms."),
+        ("ports scan", "Scan TCP ports on a target, Nmap inspired engine with Go backend."),
+        ("dirfinder", "Discover hidden directories and files with the expert dir finder engine."),
+    ]),
+    ("WEB (analyze websites and APIs)", [
+        ("web headers", "Audit HTTP security headers and flag missing protections."),
+        ("web tech", "Fingerprint the web technology stack of a URL."),
+        ("web fuzz", "Fuzz paths and files on a web server to find hidden content."),
+        ("web js", "Mine JavaScript files for endpoints, API keys and secrets."),
+        ("web params", "Discover hidden URL parameters and test them for reflection."),
+        ("web 403bypass", "Try bypass techniques against 403 Forbidden pages and endpoints."),
+    ]),
+    ("VULN (test for vulnerabilities)", [
+        ("vuln xss", "Probe for reflected and stored cross site scripting with Go plus Python engines."),
+        ("vuln sqli", "SQL injection scanner group. Detects injection then enumerates the database."),
+        ("vuln sqli scan", "Test a URL for SQL injection and identify the DBMS."),
+        ("vuln sqli tables", "List tables of a database after injection is confirmed."),
+        ("vuln sqli columns", "List columns of a chosen table."),
+        ("vuln sqli dump", "Dump rows from a table, for example users and hashes."),
+        ("vuln sqli crawl", "Crawl the site for more injectable points."),
+        ("vuln sqli extract", "Extract data with a chosen technique such as blind or time based."),
+        ("vuln sqli network", "Pivot through the database server to reach internal hosts."),
+        ("vuln sqli readfile", "Read a remote file through SQL injection, for example /etc/passwd."),
+        ("vuln sqli exec", "Execute an OS command on the database server."),
+        ("vuln sqli bypass", "Bypass login forms with authentication bypass payloads."),
+        ("vuln sqli priv", "Check database user privileges and escalation paths."),
+        ("vuln sqli oob", "Exfiltrate data out of band via DNS or HTTP callbacks."),
+        ("vuln sqli report", "Generate a report of the SQLi findings."),
+        ("vuln sqli gui", "Open the graphical SQLi testing interface."),
+        ("vuln redirect", "Find open redirect vulnerabilities in URL parameters."),
+        ("vuln rce", "Detect and exploit remote command injection in parameters."),
+        ("vuln atomix", "Run Nuclei style YAML template scans against a target."),
+    ]),
+    ("SSL AND CVE (check crypto and known bugs)", [
+        ("ssl check", "Audit TLS certificate chain, expiry, ciphers and grade the setup."),
+        ("util cve", "Look up known CVEs for a software name and version."),
+    ]),
+    ("BRUTE FORCE (login attacks)", [
+        ("bruter scan", "Brute force logins on FTP, SSH, HTTP forms and more. Needs target, user and password lists."),
+        ("bruter list-protocols", "List all supported brute force protocols with default ports."),
+    ]),
+    ("AI AGENT (let the AI drive)", [
+        ("agent chat", "Talk to the HackIt AI assistant in the terminal."),
+        ("agent autopilot", "Launch the autonomous AI bug hunter against a target."),
+        ("agent swarm", "Launch the multi agent swarm recon with live TUI dashboard."),
+        ("agent dashboard", "Open the real time TUI dashboard for a running swarm."),
+        ("agent setting", "Configure AI provider, API key and model."),
+        ("agent status", "Show AI provider status and configuration."),
+        ("agent guide", "Show the AI agent usage guide."),
+        ("agent clear", "Clear AI conversation history."),
+        ("agent reset", "Reset AI keys, provider, models or everything."),
+        ("agent help", "Show AI agent help and slash commands."),
+    ]),
+    ("NETWORK STRESS AND WIRELESS (advanced, lab only)", [
+        ("ddos", "Open the DDoS stress testing terminal. Use only on systems you own or have written permission to test."),
+        ("wireless", "Open the interactive wireless penetration console for WiFi auditing."),
+    ]),
+]
+
+
+def _print_guide_section(title, items):
+    click.echo(_colored(f"\n  [{title}]", B_CYAN, bold=True))
+    for cmd, desc in items:
+        click.echo(f"    {_colored(cmd, B_GREEN)}")
+        click.echo(f"      {_colored(desc, DIM)}")
+
+
+@cli.command()
+@click.argument("topic", required=False)
+def guide(topic):
+    """Show the full HackIt command guide for beginners.
+
+    Prints every command grouped by purpose with a short English
+    explanation. Pass a topic to focus on one group.
+
+    Examples:
+
+      hackit guide           # Full guide
+
+      hackit guide web       # Only the web group
+
+      hackit guide sqli      # Only the SQLi subcommands
+    """
+    wanted = (topic or "").strip().lower()
+
+    click.echo(_colored("\n  HACKIT COMMAND GUIDE", B_CYAN, bold=True))
+    click.echo(_colored("  New here? Start with 'run' for the visual dashboard,", DIM))
+    click.echo(_colored("  or 'console' for the interactive shell.", DIM))
+    click.echo(_colored("  Pattern: hackit <group> <command> [options]", DIM))
+    click.echo(_colored("  Tip: add --help to any command for its options.", DIM))
+
+    shown = 0
+    for title, items in GUIDE_SECTIONS:
+        if wanted:
+            keep = [it for it in items if wanted in it[0].lower() or wanted in title.lower()]
+            if not keep:
+                continue
+            _print_guide_section(title, keep)
+            shown += len(keep)
+        else:
+            _print_guide_section(title, items)
+            shown += len(items)
+
+    if wanted and shown == 0:
+        groups = ["recon", "web", "vuln", "sqli", "ssl", "util", "bruter", "agent", "ports"]
+        click.echo(_colored(f"\n  [!] No guide entries match '{topic}'.", RED))
+        click.echo(_colored(f"  [*] Try one of: {', '.join(groups)}", DIM))
+        return
+
+    click.echo(_colored(f"\n  [*] {shown} commands listed. Next step: pick one and run it with --help.", DIM))
+    click.echo(_colored("  [*] Example: hackit ports scan --help\n", DIM))
 
 
 @cli.command()

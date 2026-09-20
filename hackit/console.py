@@ -49,7 +49,7 @@ class HackItConsole:
                 if child and hasattr(child, 'commands'):
                     _walk(child)
         _walk(self.cli_group)
-        self._known_cmds.update(['exit', 'quit', 'help', 'clear', 'banner', 'back', 'whoami', 'config', 'osint', 'hackit', 'run'])
+        self._known_cmds.update(['exit', 'quit', 'help', 'guide', 'version', 'clear', 'banner', 'back', 'whoami', 'config', 'osint', 'hackit', 'run'])
         
         # Setup history
         if readline:
@@ -71,7 +71,7 @@ class HackItConsole:
         """Tab completion for console commands."""
         # Get all top-level command names from the click group
         commands = list(self.cli_group.commands.keys())
-        commands.extend(["exit", "quit", "help", "clear", "banner", "back"])
+        commands.extend(["exit", "quit", "help", "guide", "version", "clear", "banner", "back"])
         
         options = [i for i in commands if i.startswith(text)]
         if state < len(options):
@@ -207,7 +207,7 @@ class HackItConsole:
                         buf.pop()
                 elif ch == '\t':
                     text = ''.join(buf)
-                    cmds = list(self.cli_group.commands.keys()) + ['exit', 'quit', 'help', 'clear', 'banner', 'back', 'whoami', 'config', 'osint', 'run']
+                    cmds = list(self.cli_group.commands.keys()) + ['exit', 'quit', 'help', 'guide', 'version', 'clear', 'banner', 'back', 'whoami', 'config', 'osint', 'run']
                     matches = [c for c in cmds if c.startswith(text)]
                     if len(matches) == 1:
                         buf = list(matches[0] + ' ')
@@ -248,6 +248,7 @@ class HackItConsole:
         
         print(_colored("\n  [*] Welcome to the HackIt Interactive Console", B_CYAN, bold=True))
         print(_colored("  [*] Type 'run' to launch Web Intelligence Dashboard", B_GREEN))
+        print(_colored("  [*] Type 'guide' for the full command guide (beginner friendly)", B_GREEN))
         print(_colored("  [*] Type 'help' for commands or 'exit' to quit\n", DIM))
 
         while True:
@@ -301,6 +302,12 @@ class HackItConsole:
                     print(f"  • Device   : " + _colored(node, B_GREEN))
                     print(f"  • Platform : " + _colored(system, YELLOW))
                     print()
+                    continue
+
+                if line.lower() == 'version':
+                    from hackit import __version__
+                    print(_colored(f"\n  HackIt v{__version__} (Hexa-Engine Framework)", B_CYAN, bold=True))
+                    print(_colored("  Engines: Go, Rust, C, Python, Ruby, Lua\n", DIM))
                     continue
 
                 if line.lower() in ['recon/osint', 'osint']:
@@ -371,27 +378,52 @@ class HackItConsole:
                     else:
                         final_args = parts + args
 
-                # Special case for help (Context-Aware)
+                # Special case for help (Context-Aware, supports topic)
                 if args[0] == 'help':
-                    if self.current_context == "main":
-                        with click.Context(self.cli_group) as ctx:
-                            click.echo(self.cli_group.get_help(ctx))
-                    else:
-                        # Find the command object for the current context
-                        parts = self.current_context.split('/')
-                        target_cmd = self.cli_group
-                        for p in parts:
-                            target_cmd = target_cmd.commands.get(p)
-                            if not target_cmd: break
-                        
-                        if target_cmd:
-                            from hackit.ui import display_tool_banner
-                            display_tool_banner(parts[-1])
-                            with click.Context(target_cmd) as ctx:
-                                click.echo(target_cmd.get_help(ctx))
-                        else:
-                            with click.Context(self.cli_group) as ctx:
-                                click.echo(self.cli_group.get_help(ctx))
+                    from hackit.ui import display_tool_banner
+                    topics = [a.lower() for a in args[1:]]
+                    # Base node is the current context group, or root at main
+                    base = self.cli_group
+                    base_label = []
+                    if self.current_context != "main":
+                        node = self.cli_group
+                        valid = True
+                        for p in self.current_context.split('/'):
+                            node = node.commands.get(p) if hasattr(node, 'commands') else None
+                            if node is None:
+                                valid = False
+                                break
+                        if valid:
+                            base = node
+                            base_label = self.current_context.split('/')
+                    target = base
+                    label = list(base_label)
+                    if topics:
+                        node = base
+                        ok = True
+                        for t in topics:
+                            child = node.commands.get(t) if hasattr(node, 'commands') else None
+                            if child is None:
+                                # Retry from root so 'help web' works in any context
+                                child = self.cli_group.commands.get(t)
+                                if child is None:
+                                    ok = False
+                                    break
+                                label = []
+                                node = self.cli_group
+                            node = child
+                            label.append(t)
+                        if not ok:
+                            print(_colored(f"  [!] No help topic: {' '.join(topics)}", YELLOW))
+                            print(_colored("  [*] Try 'help' alone, or 'guide' for the full command list\n", DIM))
+                            continue
+                        target = node
+                    if hasattr(target, 'commands') and label:
+                        display_tool_banner(label[-1])
+                    with click.Context(target) as ctx:
+                        click.echo(target.get_help(ctx))
+                    if not topics:
+                        print(_colored("  [*] Tip: 'help <command>' for details, 'guide' for the beginner guide\n", DIM))
                     continue
 
                 # Execute the command
