@@ -59,6 +59,9 @@
     - [Vulnerability Identification & Mapping](#72-vulnerability-identification--mapping)
     - [Active Exploitation & CVE Verification](#73-active-exploitation--cve-verification)
     - [Post-Exploitation & Data Exfiltration](#74-post-exploitation--data-exfiltration)
+    - [CLI Command Reference (all 64 commands)](#76-cli-command-reference)
+    - [Interactive Console Guide](#77-interactive-console-guide)
+    - [Web Intelligence UI (FastAPI + Astro)](#78-web-intelligence-ui)
 8. [AI Threat Scoring & Decision Matrix Mechanism](#8-ai-threat-scoring--decision-matrix-mechanism)
 9. [Ethical, Legal & Rules of Engagement](#9-ethical-legal--rules-of-engagement)
 10. [Comprehensive Installation & Getting Started](#10-comprehensive-installation--getting-started)
@@ -121,7 +124,7 @@ The entry point of the framework is built entirely on Python (`main.py`).
 ### 3.2 Go (Golang): The Autonomous Orchestrator & Muscle
 Go sits at the exact center of the execution framework. It is the central nervous system handling all heavy data routing.
 - **Role:** Massively concurrent networking and high-speed I/O. The `autonomous_hunter.go` binary spins up thousands of Goroutines to directly execute its 4 native engines (WAF Detection, SSL Auditing, Subdomain Takeover, and Deep Directory Fuzzing). 
-- **Location:** Resides entirely within `hackit/agent/go/` and compiled down to `ai_engine.exe`.
+- **Location:** Resides entirely within `hackit/agent/go/` and compiled down to `ai_engine` (`ai_engine.exe` on Windows).
 
 ### 3.3 C & C++: Low-Level Memory & Raw Packet Engine
 When interacting directly with the operating system kernel, C/C++ takes over.
@@ -224,7 +227,7 @@ flowchart TD
     Dec7-->|YES|Step7
     Dec7-->|NO|DecZ
     
-    Step7["Go: 15 Swarm AI Agents<br/>Planning → Recon → Discovery →<br/>Fingerprint → Enumeration →<br/>Vuln Analysis → Risk Scoring"]:::stepLeft
+    Step7["Go: 28 Swarm AI Agents<br/>Planning → Recon → Discovery →<br/>Fingerprint → Enumeration →<br/>Vuln Analysis → Risk Scoring"]:::stepLeft
     Step7-->DecZ
     
     StepB["C++: ARP Spoofing +<br/>Subnet Ping Sweep"]:::stepRight
@@ -275,7 +278,7 @@ flowchart TD
     StepM["Generate Final Report<br/>reporter.go / output.go"]:::stepRight
     StepN["XML / CSV / Markdown Export"]:::stepRight
     StepO["AI Mermaid Attack Flowchart"]:::stepRight
-    StepP["WebUI React Dashboard"]:::stepRight
+    StepP["WebUI Astro Dashboard"]:::stepRight
     
     DecZ-->|YES|StepM
     StepM-->StepN
@@ -337,52 +340,45 @@ The HackIT framework is not a single script. It is an arsenal. Below is the abso
 
 ```text
 HackIT/
-├── 🤖 hackit/                  [CORE FRAMEWORK DIRECTORY]
-│   ├── 🧠 agent/               # The AI Brain and Autonomous Logic
-│   │   └── 🐹 go/              # Native Go Micro-Engines (The Muscle)
-│   │       ├── native/         
-│   │       │   ├── fuzzer.go   # Ultra-fast sensitive endpoint fuzzer (bypass rate-limits)
-│   │       │   ├── portscan.go # Goroutine TCP worker pool (scans 65k ports in seconds)
-│   │       │   ├── ssl_tls.go  # SSL cert expiration, TLS downgrade, Self-signed checks
-│   │       │   ├── subdomain.go# Passive OSINT via crt.sh/RapidDNS (Zero API key needed)
-│   │       │   ├── takeover.go # CNAME dangling record analysis (AWS, Github, Heroku)
-│   │       │   └── waf.go      # Cloudflare/Akamai fingerprinting via dummy payloads
-│   │       ├── autonomous_hunter.go # Go orchestrator bridge (Executes native functions)
-│   │       └── ai_engine.exe   # Compiled Autonomous Agent Binary
-│   ├── 💥 cve/                 # Automated CVE Scanners (e.g., Log4j, Spring4Shell verify)
-│   ├── 📂 dir_finder/          # Python-based legacy directory brute-forcers (for complex auth)
-│   ├── 🛡️ header_audit/        # Evaluates missing CSP, HSTS, X-Frame-Options headers
-│   ├── 📜 js/                  # Static analysis of JavaScript files for AWS keys, API tokens
-│   ├── 🕸️ network_scanner/     # Local LAN attacks: ARP spoofing, subnet sweeps, MITM
-│   ├── 🐘 nse_scripts/         # Custom Lua scripts for the Nmap Scripting Engine
-│   ├── 🌍 osint/               # Deep intelligence gathering (Whois, Shodan, Github scraping)
-│   ├── ⚙️ params/              # Hidden HTTP parameter discovery (Arjun/ParamSpider clones)
-│   ├── 🚪 port_scanner/        # Python legacy port scanners (for environments lacking Go)
-│   ├── 🔄 redirect/            # Scanners for Open Redirect vulnerabilities (SSRF stepping stone)
-│   ├── 📜 scripts/             # Bash/Python setup scripts, environment validators
-│   ├── 💉 sqli/                # Advanced SQL Injection: Time-based, Error-based, Boolean Blind
-│   ├── 🔒 ssl_tool/            # Deep cipher suite analysis and Heartbleed checks
-│   ├── 🌐 subdomain/           # Legacy active DNS brute-forcers using large wordlists
-│   ├── 🕵️ tech_hunter/         # Web stack mapping (Detects PHP, LiteSpeed, Nginx, React)
-│   ├── 🖥️ webUI/               # Source code for the local React/Vue reporting dashboard
-│   ├── 💣 web_fuzzer/          # Neural payload fuzzers for REST APIs, SOAP, and GraphQL
-│   ├── 📡 wireless/            # 802.11 WiFi Auditing: Deauth packets, PMKID capture scripts
-│   ├── 🛑 xss/                 # XSS Payload injectors (Reflected, Stored, DOM manipulation)
-│   ├── anonymity.py            # Proxy routing, Tor (SOCKS5) integration, MAC spoofing
-│   ├── cli.py                  # Highly robust argparse Command-Line Interface router
-│   ├── config.py               # Global YAML configurations, timeouts, and API key manager
-│   ├── console.py              # Interactive Hacker Console (Provides the internal Shell)
-│   ├── logger.py               # Centralized logging, color-coded terminal output formatting
-│   ├── main.py                 # The master entry point of the framework (Start here)
-│   ├── nse_engine.py           # Python interface to execute and parse Lua Nmap scripts
-│   └── ui.py                   # Terminal User Interface (TUI), Ascii Art, loading animations
-├── 📝 wordlists/               # 100GB+ curated dictionaries (Subdomains, Passwords, Directories)
-├── 📊 AI_Report_*.md           # Automatically generated intelligence reports (Markdown + Mermaid)
-├── ⚙️ setup.py                 # Standard Python setuptools installer
-├── 📄 requirements.txt         # Massive list of Python dependencies (Requests, Scapy, etc.)
-├── 📄 LICENSE                  # MIT Licensing Information
-└── 📖 README.md                # This exact, exhaustive documentation file
+├── hackit.sh                # Recommended launcher: install, update, build, run
+├── main.py                  # Master entry point (calls hackit.cli:cli)
+├── requirements.txt         # Python dependencies (click, rich, scapy, httpx, ...)
+├── setup.py                 # Pip package definition
+├── hackit/                  [CORE FRAMEWORK DIRECTORY]
+│   ├── cli.py               # Click CLI router: 19 root commands + 6 groups
+│   ├── console.py           # Interactive framework console (Metasploit style)
+│   ├── config.py            # JSON config, 15 themes, masking, API keys
+│   ├── ui.py                # Banners, colors, tables, animations
+│   ├── logger.py            # Centralized logging
+│   ├── anonymity.py         # Proxy routing and identity helpers
+│   ├── main.py              # Thin entry that invokes the click CLI
+│   ├── nse_engine.py        # Loader and runner for 298 Lua NSE scripts
+│   ├── agent/               # AI Brain: chat, autopilot, 28-node swarm, TUI dashboard
+│   │   ├── workflow/        # LangGraph pentest pipeline (8 nodes)
+│   │   └── go/              # ai_engine, worker, chat_engine, swarm, hative binaries + source
+│   ├── osint/               # Username, email, phone, domain intel (600+ platforms)
+│   ├── sqli/                # SQLi scanner (14 subcommands) + GUI + Go engine
+│   ├── xss/                 # XSS scanner (Go + Python engines)
+│   ├── vuln extras/         # redirect, rce_modul, atomix (Nuclei style), cve
+│   ├── web pack/            # header_audit, tech_hunter, web_fuzzer, js, params, dir_finder
+│   ├── net pack/            # port_scanner, network_scanner, subdomain, ssl_tool
+│   ├── bruteforcer/         # Multi protocol login brute force (Rust engine)
+│   ├── 403bypass/           # 403 bypass engine (Go binary + wordlists)
+│   ├── ddos/                # Stress testing terminal + masking + C/Go engines
+│   ├── wireless/            # WiFi auditing console + C# engine (csharp_core)
+│   ├── nse_scripts/         # 298 custom .nse scripts + category map + runner
+│   ├── webUI/               # FastAPI backend (port 8080) + Astro frontend
+│   └── sosialengineer/      # Social engineering module wrappers
+├── wordlists/               # Curated lists: common.txt, subdomains.txt, dicc.txt, fuzzing_payloads.txt
+├── img/                     # README banner and demo assets
+├── LICENSE                  # MIT Licensing Information
+└── README.md                # This documentation file
 ```
+
+> Note: C, C++, and Rust port scanner sources are shipped as prebuilt
+> binaries in `hackit/port_scanner/bin/` bridged by the Go engine in
+> `hackit/port_scanner/go/` (which also carries `csrc/` and `cxxsrc/`).
+> Build them from source only if you modify native code (see 10.6).
 
 ---
 
@@ -567,7 +563,7 @@ flowchart TD
     end
 
     subgraph Swarm_Agents["Swarm Agents"]
-        Swarm["swarm/main.go<br/>20-Node DAG"]:::native
+        Swarm["swarm/main.go<br/>28-Node DAG"]:::native
         S1["Planning"]:::native
         S2["Recon"]:::native
         S3["Discovery"]:::native
@@ -885,7 +881,7 @@ flowchart TD
     classDef output fill:#666666,stroke:#444444,stroke-width:2px,color:#fff
 
     PyEngine["nse_engine.py<br/>Python NSE Loader"]:::py
-    NSE["250 .nse Scripts<br/>Service Discovery<br/>Brute-Force<br/>Vuln Probes"]:::lua
+    NSE["298 .nse Scripts<br/>Service Discovery<br/>Brute-Force<br/>Vuln Probes"]:::lua
     Validate["lua -e 'loadfile()'<br/>Syntax Validation"]:::lua
     OpenPort["Open Port Detected<br/>→ Dispatch Script"]:::py
     Result["Banner / Vuln / Credential Output"]:::output
@@ -898,7 +894,7 @@ flowchart TD
 
 | Location | Description |
 |----------|-------------|
-| `hackit/nse_scripts/` | 250 custom `.nse` scripts — service discovery, brute-force, vulnerability probes |
+| `hackit/nse_scripts/` | 298 custom `.nse` scripts — service discovery, brute-force, vulnerability probes |
 | `hackit/nse_engine.py` | Python engine — loads, validates, and executes `.nse` scripts against open ports |
 
 #### 7.5.7 C# — Wireless Attack & Packet Injection Engine
@@ -987,6 +983,147 @@ flowchart TD
 
 ---
 
+## 7.6 CLI Command Reference
+
+HackIT exposes 64 commands through one Click router (`hackit/cli.py`). The live
+reference is built in: run `hackit guide` for the full beginner friendly list,
+or `hackit guide <topic>` to focus, for example `hackit guide web`.
+
+Entry points (all equivalent):
+
+```bash
+./hackit.sh <command> [options]   # recommended launcher + installer
+python3 main.py <command>         # direct Python entry
+hackit <command>                  # global symlink after ./hackit.sh install
+```
+
+Global flags: `--proxy URL`, `--no-verify`, `--no-banner`, `--verbose`, `--version`.
+
+### Root commands
+
+| Command | Purpose |
+|---------|---------|
+| `guide` | Full command guide for beginners, with optional topic filter |
+| `run` | Launch the Web UI dashboard (Astro frontend + FastAPI backend) |
+| `console` | Enter the interactive framework console |
+| `agent` | AI companion group (chat, autopilot, swarm, dashboard, setting, status, guide, clear, reset, help) |
+| `recon` | Recon group: `subdomains`, `ips`, `tech-hunter`, `osint` |
+| `ports` | Port scanning group: `scan` (Nmap inspired engine, Go backend) |
+| `web` | Web group: `headers`, `tech`, `fuzz`, `js`, `params`, `403bypass` |
+| `vuln` | Vulnerability group: `xss`, `sqli` (14 subcommands), `redirect`, `rce`, `atomix` |
+| `ssl` | TLS group: `check` (cert chain, expiry, cipher grading) |
+| `util` | Utilities group: `cve` (local CVE lookup) |
+| `bruter` | Login brute force: `scan`, `list-protocols` (FTP, SSH, HTTP forms and more) |
+| `osint` | Username and profile discovery across hundreds of platforms |
+| `dirfinder` | Hidden directory and file discovery engine |
+| `ddos` | Stress testing terminal (lab and authorized targets only) |
+| `wireless` | Interactive wireless auditing console |
+| `config` | Terminal theme, user, host, colors, prompt (15 themes) |
+| `examples` | Copy paste usage examples for every tool |
+| `help-tools` | Short quick reference of the most used tools |
+| `banner` | Reprint the startup banner |
+| `whoami` | Current system user, device and platform info |
+
+### SQLi subcommands (`vuln sqli ...`)
+
+`scan`, `tables`, `columns`, `dump`, `crawl`, `extract`, `network`,
+`readfile`, `exec`, `bypass`, `priv`, `oob`, `report`, `gui`.
+Detect first with `scan`, enumerate with `tables` and `columns`,
+exfiltrate with `dump` or `extract`, escalate with `exec`, `priv`,
+`network`, and document with `report`.
+
+### Common recipes
+
+```bash
+hackit guide                        # full guide
+hackit ports scan -p 1-1000 --targets example.com
+hackit recon subdomains -d target.com
+hackit web headers --url https://example.com
+hackit vuln sqli --url "http://site.com?id=1" --dbs
+hackit vuln xss -u "http://site.com?q=test"
+hackit ssl check -t example.com
+hackit util cve --software apache --version 2.4.49
+hackit bruter list-protocols
+hackit agent autopilot target.com
+hackit run                           # web dashboard
+```
+
+> Tip: append `--help` to any command to see its exact options.
+
+---
+
+## 7.7 Interactive Console Guide
+
+Run `python3 main.py` with no arguments (or `hackit console`) to enter the
+framework shell. It behaves like a Metasploit style console with contexts,
+tab completion, and command coloring.
+
+### Console basics
+
+| Input | Effect |
+|-------|--------|
+| `help` | Command list for the current context |
+| `help <command>` | Details for one command, for example `help web` |
+| `guide` | Full 64 command beginner guide |
+| `guide <topic>` | Focused guide, for example `guide sqli` |
+| `clear` | Clear the screen |
+| `back` | Go up one level from a group context |
+| `exit` or `quit` | Leave the console |
+| `version` | Framework version and engine list |
+| `Tab` | Autocomplete the current input |
+
+### Contexts
+
+Type a group name such as `web` to enter it, then run its commands without
+the prefix (`headers --url ...` instead of `web headers --url ...`).
+Type `back` to return to `main`. The prompt always shows the active
+context, for example `[[ user@HackIT ]] [[ web ]] $`.
+
+The prompt itself is themeable: `config` offers 15 themes (kali, cyberpunk,
+minimalist, retro, gacor, powerline, modern, pill, nexus, zinc, vault,
+storm, drift, pulse, slash) plus accent, border, and prompt styles.
+
+---
+
+## 7.8 Web Intelligence UI
+
+The visual layer of HackIT: a FastAPI OSINT engine on port 8080 serving an
+Astro frontend (static `dist/` build or dev server).
+
+```bash
+hackit run              # production mode, opens the dashboard
+hackit run --dev        # dev mode with live reload
+hackit run --port 3000  # custom port
+```
+
+Windows users can also double click `hackit/webUI/run_engine.bat`.
+The launcher (`hackit/webUI/main.py`) rebuilds stale frontend assets,
+installs Python requirements, then starts the backend.
+
+### Pages
+
+| Page | Purpose |
+|------|---------|
+| `/` Launch Pad | Target input, scan mode (Full, Passive, Threat Hunt), advanced settings drawer |
+| `/intelligence` | Results dashboard: risk radar, charts, finding browser, module logs |
+| `/scans` | Job history from `/api/jobs` |
+| `/log` | Live mission log per target via polling and WebSocket |
+| `/settings` | API keys and scan defaults (persisted to `data/settings.json`) |
+| `/tools/ports`, `/tools/sqli`, `/tools/subdomains` | Focused single purpose scanners |
+
+### Backend highlights (`hackit/webUI/python/`)
+
+| Area | Detail |
+|------|--------|
+| `main.py` | 20+ endpoints: scan orchestration, DNS, SSL, WHOIS, IP geo, subdomains, emails, ports, SQLi detection, settings, static serving |
+| `orchestrator.py` | Two phase scan: Rust engine first, 85 registered Python modules as fallback, with dedup, DNS verification, and correlation |
+| `modules/` | 200+ OSINT modules in 8 categories: DNS and domain, web and server, email, people and social, cloud, threat and leaks, archive, geo and network |
+| `rust_bridge.py` | 40+ scan functions driving the native Rust engine with progress events |
+| `server.py` | Legacy minimal engine on port 8081 (kept for compatibility) |
+| WebSocket `/ws` | Live `scan_start`, progress, `scan_done`, and `scan_error` events |
+
+---
+
 ## 8. AI Threat Scoring & Decision Matrix Mechanism
 
 How does HackIT know what to do next? 
@@ -1015,7 +1152,22 @@ The Python orchestrator (`autonomous_hunter.py`) utilizes a dynamic Threat Scori
 
 ## 10. Comprehensive Installation & Getting Started
 
-Because HackIT relies on a highly advanced polyglot architecture, the installation process requires setting up multiple compiling environments. Do not skip any steps, or the AI orchestrator will fail to trigger specific payloads.
+### 10.0 Recommended path: one command installer
+
+```bash
+git clone https://github.com/dextryayers/HackIT.git
+cd HackIT
+./hackit.sh install
+```
+
+This installs system packages (Go, Nmap, Python, Ruby, Git), Python
+requirements, builds the Go engines, creates the global `hackit` symlink,
+verifies the setup, and launches the framework. Other launcher commands:
+`./hackit.sh build` (engines only), `./hackit.sh update`, `./hackit.sh version`.
+After install, every example below also works as `hackit <command>`.
+
+Because HackIT relies on a highly advanced polyglot architecture, the manual
+installation process requires setting up multiple compiling environments. Do not skip any steps, or the AI orchestrator will fail to trigger specific payloads.
 
 ### 10.1 General Prerequisites (All Platforms)
 Before proceeding with OS-specific instructions, ensure your system has Git installed to clone the repository.
@@ -1116,11 +1268,11 @@ cd ..\..\..\
 Once all compilers are installed, dependencies are met, and the native Go engine is compiled, return to the root directory (`HackIT/`) and launch the master console to verify the installation:
 ```bash
 # Ensure your Python virtual environment is active
-python main.py
+python3 main.py
 ```
 To immediately launch a fully autonomous scan against an authorized target:
 ```bash
-python main.py agent autopilot <target.com>
+python3 main.py agent autopilot <target.com>
 ```
 
 ### 10.6 Multi-Engine Build & Compilation (All Languages)
@@ -1241,7 +1393,7 @@ cd ../../../
 
 #### 10.6.5 Lua NSE Validation
 
-**Source:** `hackit/nse_scripts/` (250 .nse scripts)
+**Source:** `hackit/nse_scripts/` (298 .nse scripts)
 
 ```bash
 # Validate all NSE scripts with Lua 5.4
@@ -1283,7 +1435,7 @@ chmod +x ai_engine
 cd ../../../
 ```
 
-This builds the autonomous AI hunter binary that orchestrates all 20 swarm agents, LLM provider routing, and the MCP server.
+This builds the autonomous AI hunter binary that orchestrates all 28 swarm agents, LLM provider routing, and the MCP server.
 
 #### 10.6.7 C# Engine Build
 
@@ -1390,9 +1542,11 @@ HackIT is a living framework. Our roadmap dictates the evolution of the software
 - Successfully transitioning all legacy Python reconnaissance modules into ultra-fast Native Go binaries.
 - Finalizing the JSON IPC (Inter-Process Communication) between Go and Python.
 
-### Phase 2: Enterprise Dashboard & GUI
-- Developing a stunning, local web-based graphical user interface (GUI) inside the `webUI/` directory using React.js and TailwindCSS.
-- Visualizing the Mermaid attack flowcharts in real-time as the AI hacks.
+### Phase 2: Enterprise Dashboard & GUI (Delivered)
+
+- The local web GUI in `webUI/` is live: an Astro frontend with Tailwind styling
+  served by a FastAPI backend on port 8080 (see 7.8). Launch with `hackit run`.
+- Mermaid attack flowcharts render from the AI report output as the campaign runs.
 
 ### Phase 3: Cloud-Native Attack Vectors
 - Deep integration of modules targeting AWS IAM misconfigurations, GCP bucket enumeration, and Azure Active Directory (Entra ID) brute-forcing.
