@@ -4,6 +4,7 @@ import socket
 from urllib.parse import urlparse, quote
 from models import IntelligenceFinding
 from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
+import httpx
 
 DNSBL_LISTS = [
     "zen.spamhaus.org",

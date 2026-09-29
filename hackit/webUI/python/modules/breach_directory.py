@@ -975,7 +975,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                         entity=f"Paste site data found for {t}", ftype="Breach: Paste Site Mention",
                         source="BreachDirectory", confidence="Low", color="orange", threat_level="Elevated Risk",
                         raw_data=f"{url.split('/')[2]} returned results", tags=["breach", "paste"]))
-                    emails_in_paste = set(EMAIL_REGEX.findall(resp.text))
+                    emails_in_paste = set(EMAIL_RE.findall(resp.text))
                     for pe in list(emails_in_paste)[:5]:
                         if pe not in seen_emails:
                             findings.append(make_finding(

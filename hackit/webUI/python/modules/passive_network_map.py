@@ -2,6 +2,8 @@ import re
 import json
 from urllib.parse import urlparse
 from ..module_common import safe_fetch, make_finding, resolve_ip
+from httpx import AsyncClient
+from models import IntelligenceFinding
 
 ASN_DATABASE = {
     "15169": "Google", "16509": "Amazon", "8075": "Microsoft",

@@ -2,6 +2,7 @@ import httpx, json
 from typing import List
 from settings_store import get_api_key
 from module_common import safe_fetch_json, safe_fetch, is_ip, resolve_ip, make_finding
+from models import IntelligenceFinding
 
 ABUSEIPDB_API = "https://api.abuseipdb.com/api/v2"
 ABUSE_CATEGORIES = {

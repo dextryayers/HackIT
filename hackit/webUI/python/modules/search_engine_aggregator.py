@@ -3,6 +3,8 @@ import json
 from urllib.parse import urlparse, quote
 from typing import List
 from ..module_common import safe_fetch, make_finding
+from httpx import AsyncClient
+from models import IntelligenceFinding
 
 SEARCH_ENGINES = [
     ("DuckDuckGo", "https://lite.duckduckgo.com/lite/?q={}"),

@@ -2,6 +2,8 @@ import re
 import json
 from urllib.parse import urlparse
 from ..module_common import safe_fetch, make_finding
+from httpx import AsyncClient
+from models import IntelligenceFinding
 
 SPF_ALL_MECHANISMS = {
     "-all": "HardFail (reject all)",

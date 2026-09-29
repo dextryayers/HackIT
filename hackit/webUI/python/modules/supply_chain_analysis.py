@@ -2,6 +2,7 @@ from urllib.parse import urlparse
 from typing import List
 from models import IntelligenceFinding
 from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
+import httpx
 
 THIRD_PARTY_CATEGORIES = {
     "CDN": ["cloudflare", "akamai", "fastly", "cloudfront", "cdn", "stackpath", "keycdn", "bunnycdn", "section.io"],

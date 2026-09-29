@@ -1,6 +1,7 @@
 import httpx
 from urllib.parse import urlparse, urlencode, quote, parse_qs, urljoin
 from module_common import safe_fetch, make_finding
+import re
 REDIRECT_PARAMS = [
     "url", "redirect", "return", "next", "target", "dest", "destination",
     "go", "forward", "to", "link", "linkto", "page", "file", "doc",
@@ -278,6 +279,8 @@ async def check_redirect_footprint(base_url, client):
 
 async def crawl(target: str, client: httpx.AsyncClient):
     findings = []
+    html = ""
+    headers = {}
     base_url = f"https://{target}" if not target.startswith("http") else target
     if base_url.endswith("/"):
         base_url = base_url[:-1]
@@ -377,7 +380,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         except Exception:
             pass
 
-        dom_redirects = detect_dom_redirect(html if 'html' in dir() else "")
+        dom_redirects = detect_dom_redirect(html)
         for dr in dom_redirects[:10]:
             findings.append(make_finding(
                 entity=f"DOM redirect: {dr['pattern']} (context: {dr['context']})",
@@ -390,7 +393,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                 tags=["open-redirect", "dom-based", "javascript"]
             ))
 
-        header_redirects = detect_header_redirect(headers if 'headers' in dir() else {})
+        header_redirects = detect_header_redirect(headers)
         for hr in header_redirects:
             findings.append(make_finding(
                 entity=f"Redirect header: {hr['header']}: {hr['value'][:100]}",

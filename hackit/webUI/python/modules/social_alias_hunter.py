@@ -5,6 +5,7 @@ import math
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash, IntelligenceFinding
+import httpx
 
 SOCIAL_PLATFORMS = [
     ("Twitter/X", "https://x.com/{u}", "profile", "social"),

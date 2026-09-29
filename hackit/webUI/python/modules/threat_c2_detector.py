@@ -6,6 +6,7 @@ from datetime import datetime
 from urllib.parse import urlparse
 from models import IntelligenceFinding
 from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
+import httpx
 
 C2_FEEDS = [
     "https://threatfox.abuse.ch/export/json/ip/",

@@ -2,6 +2,7 @@ import httpx
 import re
 import dns.resolver
 from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash
+from models import IntelligenceFinding
 
 SPF_RESULTS = {
     "pass": "emerald",

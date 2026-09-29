@@ -1539,6 +1539,9 @@ async def crawl(target: str, client: httpx.AsyncClient):
         findings.append(make_finding(entity=f"Origin exposure status: {'HIGH RISK' if high_conf_count > 0 else 'Protected'}", type="CDN: Exposure Status", source="CloudflareResolver", confidence="Medium", color="red" if high_conf_count else "emerald", tags=["insight"]))
         findings.append(make_finding(entity=f"Origin candidates by source: {len(set(c['source'].split('(')[0].strip() for c in origin_candidates))}", type="CDN: Source Diversity", source="CloudflareResolver", confidence="Medium", color="slate", tags=["insight"]))
 
+    high_conf_count = sum(1 for c in origin_candidates if c.get('score', 0) >= 80)
+    med_conf_count = sum(1 for c in origin_candidates if 50 <= c.get('score', 0) < 80)
+
     await asyncio.gather(
         analyze_origin_landscape(),
         analyze_cdn_security(),

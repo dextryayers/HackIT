@@ -3,6 +3,7 @@ import hashlib
 import re
 from datetime import datetime, timezone, timedelta
 from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash
+import asyncio
 
 DATA_CLASS_SEVERITY = {
     "Email addresses": "Medium",

@@ -8,6 +8,7 @@ import hashlib
 from datetime import datetime, timezone
 from typing import List, Optional
 from module_common import safe_fetch, safe_fetch_json, make_finding, normalize_target, is_ip, resolve_ip
+from models import IntelligenceFinding
 
 CERTSPOTTER_API = "https://api.certspotter.com/v1/issuances"
 CERTSPOTTER_EXPIRING = "https://api.certspotter.com/v1/issuances/expiring"

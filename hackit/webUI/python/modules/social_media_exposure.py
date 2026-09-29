@@ -1,6 +1,8 @@
 import re
 import asyncio
 from ..module_common import safe_fetch, make_finding
+from httpx import AsyncClient
+from models import IntelligenceFinding
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 

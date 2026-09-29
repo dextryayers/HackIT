@@ -3,6 +3,8 @@ import json
 from datetime import datetime
 from urllib.parse import urlparse
 from ..module_common import safe_fetch, make_finding
+from httpx import AsyncClient
+from models import IntelligenceFinding
 
 CA_ORGANIZATIONS = [
     "Let's Encrypt", "DigiCert", "Comodo", "GlobalSign", "Sectigo", "GoDaddy",

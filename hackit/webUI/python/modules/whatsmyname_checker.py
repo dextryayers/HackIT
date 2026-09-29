@@ -350,9 +350,6 @@ def detect_verification(html: str) -> Dict[str, Any]:
     if count_matches:
         indicators["verification_count"] = int(count_matches[0])
 
-    if "verification" in details_key:
-        pass
-
     return indicators
 
 def compute_profile_completeness(html: str, details: Dict[str, Any]) -> int:

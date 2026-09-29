@@ -3,6 +3,8 @@ import json
 from datetime import datetime
 from urllib.parse import urlparse
 from ..module_common import safe_fetch, make_finding
+from httpx import AsyncClient
+from models import IntelligenceFinding
 
 WHOIS_HISTORY_SOURCES = [
     {"name": "WhoisXML Sample", "url": "https://www.whoisxmlapi.com/whoisserver/WhoisService?domainName={domain}&outputFormat=json", "type": "json"},

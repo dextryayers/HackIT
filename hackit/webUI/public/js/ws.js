@@ -1,123 +1,74 @@
-const WS_URL = 'ws://127.0.0.1:8000/ws';
+/**
+ * HackIT live scan WebSocket client.
+ * Connects same-origin to /ws?scan_id=... served by python/main.py.
+ * Server messages: scan_start, scan_done, scan_error, pong.
+ */
 
-export class WSClient {
-  constructor(url = WS_URL) {
-    this.url = url;
-    this.ws = null;
-    this.listeners = new Map();
-    this.reconnectTimer = null;
-    this.pingTimer = null;
-    this.messageQueue = [];
-    this.reconnectDelay = 1000;
-    this.maxReconnectDelay = 30000;
-    this.connected = false;
-    this.scanId = null;
-  }
-
-  connect(scanId) {
-    this.scanId = scanId;
-    if (this.ws?.readyState === WebSocket.OPEN) return;
-    const wsUrl = scanId ? `${this.url}?scan_id=${scanId}` : this.url;
-    this.ws = new WebSocket(wsUrl);
-
-    this.ws.onopen = () => {
-      this.connected = true;
-      this.reconnectDelay = 1000;
-      this._emit('connected', { scanId });
-      this._startHeartbeat();
-      this._flushQueue();
-    };
-
-    this.ws.onmessage = (event) => {
-      try {
-        const msg = JSON.parse(event.data);
-        this._emit(msg.type || 'message', msg);
-        this._emit('*', msg.type, msg);
-      } catch {
-        this._emit('raw', event.data);
-      }
-    };
-
-    this.ws.onclose = (event) => {
-      this.connected = false;
-      this._stopHeartbeat();
-      this._emit('disconnected', { code: event.code, reason: event.reason });
-      this._scheduleReconnect();
-    };
-
-    this.ws.onerror = () => {
-      this._emit('error', { message: 'WebSocket error' });
-    };
-  }
-
-  disconnect() {
-    this._stopHeartbeat();
-    this._clearReconnect();
-    if (this.ws) {
-      this.ws.onclose = null;
-      this.ws.close(1000, 'Client disconnect');
-      this.ws = null;
-    }
-    this.connected = false;
-  }
-
-  send(data) {
-    if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify(data));
-      return true;
-    }
-    this.messageQueue.push(data);
-    return false;
-  }
-
-  on(event, fn) {
-    if (!this.listeners.has(event)) this.listeners.set(event, []);
-    this.listeners.get(event).push(fn);
-    return () => this.off(event, fn);
-  }
-
-  off(event, fn) {
-    const arr = this.listeners.get(event);
-    if (arr) this.listeners.set(event, arr.filter(f => f !== fn));
-  }
-
-  _emit(event, ...args) {
-    (this.listeners.get(event) || []).forEach(fn => { try { fn(...args); } catch (e) { console.warn('[WS] listener error:', e); } });
-  }
-
-  _startHeartbeat() {
-    this._stopHeartbeat();
-    this.pingTimer = setInterval(() => {
-      if (this.ws?.readyState === WebSocket.OPEN) {
-        this.ws.send(JSON.stringify({ type: 'ping', ts: Date.now() }));
-      }
-    }, 15000);
-  }
-
-  _stopHeartbeat() {
-    if (this.pingTimer) { clearInterval(this.pingTimer); this.pingTimer = null; }
-  }
-
-  _scheduleReconnect() {
-    this._clearReconnect();
-    console.log(`[WS] Reconnecting in ${this.reconnectDelay}ms...`);
-    this.reconnectTimer = setTimeout(() => {
-      this.reconnectDelay = Math.min(this.reconnectDelay * 1.5, this.maxReconnectDelay);
-      if (this.scanId) this.connect(this.scanId);
-    }, this.reconnectDelay);
-  }
-
-  _clearReconnect() {
-    if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null; }
-  }
-
-  _flushQueue() {
-    while (this.messageQueue.length > 0) {
-      const msg = this.messageQueue.shift();
-      this.send(msg);
-    }
-  }
+function wsUrl(scanId) {
+  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${proto}//${window.location.host}/ws?scan_id=${encodeURIComponent(scanId)}`;
 }
 
-export const ws = new WSClient();
-export default ws;
+let ws = null;
+let reconnectTimer = null;
+const listeners = new Map();
+
+export function connect(scanId) {
+  if (typeof window === 'undefined' || typeof WebSocket === 'undefined') return;
+  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+  try {
+    ws = new WebSocket(wsUrl(scanId));
+  } catch (err) {
+    emit('error', err);
+    return;
+  }
+
+  ws.onopen = () => {
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+    emit('connected', { scanId });
+  };
+
+  ws.onmessage = (event) => {
+    try {
+      const msg = JSON.parse(event.data);
+      emit(msg.type || 'message', msg);
+    } catch {
+      emit('raw', event.data);
+    }
+  };
+
+  const schedule = () => {
+    emit('disconnected', {});
+    if (!reconnectTimer) reconnectTimer = setTimeout(() => { reconnectTimer = null; connect(scanId); }, 3000);
+  };
+  ws.onclose = schedule;
+
+  ws.onerror = (err) => {
+    emit('error', err);
+  };
+}
+
+export function disconnect() {
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+  if (ws) { try { ws.close(); } catch { /* already closed */ } ws = null; }
+}
+
+export function send(data) {
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(data));
+}
+
+export function on(event, fn) {
+  if (!listeners.has(event)) listeners.set(event, []);
+  listeners.get(event).push(fn);
+  return () => off(event, fn);
+}
+
+export function off(event, fn) {
+  const arr = listeners.get(event);
+  if (arr) listeners.set(event, arr.filter((f) => f !== fn));
+}
+
+function emit(event, data) {
+  (listeners.get(event) || []).forEach((fn) => fn(data));
+  (listeners.get('*') || []).forEach((fn) => fn(event, data));
+}

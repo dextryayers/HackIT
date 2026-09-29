@@ -4,6 +4,7 @@ from urllib.parse import urlparse, quote
 from typing import List
 from models import IntelligenceFinding
 from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
+import json
 
 PACKAGE_REGISTRIES = [
     ("npm", "https://registry.npmjs.org/-/v1/search?text={}&size=10"),

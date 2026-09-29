@@ -8,6 +8,7 @@ import socket
 from datetime import datetime
 from typing import List, Optional
 from module_common import safe_fetch, safe_fetch_json, make_finding, normalize_target, is_ip, resolve_ip
+from models import IntelligenceFinding
 
 CRTSH_URL = "https://crt.sh"
 CENSYS_CERT_URL = "https://search.censys.io/api/v2/certificates/search"

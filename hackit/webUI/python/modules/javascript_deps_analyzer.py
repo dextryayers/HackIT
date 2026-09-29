@@ -670,6 +670,40 @@ LINK_REGEX = re.compile(r'<link[^>]*href=["\']([^"\']+)["\']', re.IGNORECASE)
 IMPORT_REGEX = re.compile(r'(?:import|require)\s*\(?\s*["\']([^"\']+)["\']', re.IGNORECASE)
 WEBPACK_CHUNK = re.compile(r'webpackJsonp|__webpack_require__|webpackChunk')
 VERSION_IN_SCRIPT = re.compile(r'(?:version|v)=["\']?(\d[\d.]*\d)')
+
+INTEGRITY_REGEX = re.compile(r'integrity\s*=\s*["\'](sha\d+-[^"\']+)["\']', re.IGNORECASE)
+NOMODULE_REGEX = re.compile(r'<script[^>]+nomodule', re.IGNORECASE)
+CONSOLE_LOG_REGEX = re.compile(r'console\.(log|warn|error|info|debug)\s*\(', re.IGNORECASE)
+
+LINK_REL_MODULEPRELOAD = re.compile(r'<link[^>]+rel=["\']modulepreload["\'][^>]+href=["\']([^"\']+)["\']', re.IGNORECASE)
+LINK_REL_PREFETCH = re.compile(r'<link[^>]+rel=["\']prefetch["\'][^>]+href=["\']([^"\']+)["\']', re.IGNORECASE)
+LINK_REL_PRELOAD = re.compile(r'<link[^>]+rel=["\']preload["\'][^>]+href=["\']([^"\']+)["\']', re.IGNORECASE)
+LINK_REL_DNS_PREFETCH = re.compile(r'<link[^>]+rel=["\']dns-prefetch["\'][^>]+href=["\']([^"\']+)["\']', re.IGNORECASE)
+LINK_REL_PRECONNECT = re.compile(r'<link[^>]+rel=["\']preconnect["\'][^>]+href=["\']([^"\']+)["\']', re.IGNORECASE)
+
+LICENSE_DB = {
+    "jquery": "MIT", "react": "MIT", "vue": "MIT", "angular": "MIT",
+    "bootstrap": "MIT", "lodash": "MIT", "moment": "MIT", "axios": "MIT",
+    "express": "MIT", "next": "MIT", "nuxt": "MIT", "svelte": "MIT",
+    "ember": "MIT", "backbone": "MIT", "underscore": "MIT",
+    "handlebars": "MIT", "d3": "ISC", "three": "MIT", "chart": "MIT",
+    "tinymce": "MIT", "ckeditor": "GPL", "p5": "LGPL", "leaflet": "BSD-2-Clause",
+    "openlayers": "BSD-2-Clause", "socket.io": "MIT", "webpack": "MIT",
+    "babel": "MIT", "typescript": "Apache-2.0", "zone.js": "MIT",
+}
+
+BUNDLE_ANALYSIS_PATTERNS = {
+    "webpack": [r"webpack", r"__webpack_require__", r"webpackChunk"],
+    "vite": [r"vite", r"/@vite/client", r"import\.meta\.hot"],
+    "rollup": [r"rollup"],
+    "parcel": [r"parcel", r"parcelRequire"],
+    "esbuild": [r"esbuild"],
+    "browserify": [r"browserify", r"require\.register"],
+    "gulp": [r"gulp"],
+    "grunt": [r"grunt"],
+    "tsc": [r"\.tsbuildinfo"],
+    "babel": [r"babel", r"_babelPolyfill"],
+}
 NPM_REGEX = re.compile(r'["\']_requested["\']:\s*["\'][^/]+/([^@]+)(?:@([^"\']+))?')
 ESM_IMPORT_REGEX = re.compile(r'import\s+\{[^}]*\}\s*from\s*["\']([^"\']+)["\']', re.IGNORECASE)
 CJS_REQUIRE_REGEX = re.compile(r'(?:const|let|var)\s+\w+\s*=\s*require\s*\(\s*["\']([^"\']+)["\']', re.IGNORECASE)

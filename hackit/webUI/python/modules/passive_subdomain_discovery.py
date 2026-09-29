@@ -4,6 +4,8 @@ import asyncio
 from collections import defaultdict
 from urllib.parse import urlparse
 from ..module_common import safe_fetch, make_finding
+from httpx import AsyncClient
+from models import IntelligenceFinding
 
 SOURCE_RELIABILITY = {
     "crt.sh": 0.95, "HackerTarget": 0.90, "BufferOver": 0.85, "RapidDNS": 0.80,

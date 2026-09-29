@@ -151,7 +151,7 @@ async def websocket_endpoint(ws: WebSocket, scan_id: str = ""):
 
 @app.get("/api/job-by-target")
 async def get_job_by_target(target: str):
-    for job in jobs.values():
+    for job in reversed(list(jobs.values())):
         if job.target == target:
             return job
     return None
@@ -185,9 +185,11 @@ async def start_scan(
     port_range: int = 1000,
     background_tasks: BackgroundTasks = None
 ):
-    for existing in jobs.values():
-        if existing.target == target:
-            return {"job_id": existing.job_id, "status": f"Resumed ({existing.status})"}
+    # Always start a fresh scan. Old jobs are kept for history but finished
+    # ones beyond the cap are evicted so memory stays bounded.
+    finished = [jid for jid, j in jobs.items() if j.status in ("Completed", "Error")]
+    while len(jobs) >= 50 and finished:
+        jobs.pop(finished.pop(0), None)
     job_id = f"job_{uuid.uuid4().hex[:8]}"
     job = ScanJob(job_id=job_id, target=target, target_type=target_type, status="Running")
     parsed_api_keys = {}
@@ -428,11 +430,11 @@ async def ssl_certificate(hostname: str = Query(..., description="Target hostnam
 async def ssl_advanced(hostname: str = Query(...), port: int = Query(443), full: bool = Query(False)):
     from hackit.ssl_tool.rust_bridge import RustEngine
     engine = RustEngine()
+    if not engine.ensure_compiled():
+        return RustSSLResponse(hostname=hostname, port=port, error="Rust engine not compiled")
     result = await asyncio.get_event_loop().run_in_executor(
         None, lambda: engine.run(hostname, port, json_only=True, full=full)
     )
-    if not engine.ensure_compiled():
-        return RustSSLResponse(hostname=hostname, port=port, error="Rust engine not compiled")
     if result is None:
         return RustSSLResponse(hostname=hostname, port=port, error="Rust engine returned no data")
     return RustSSLResponse(
@@ -845,16 +847,31 @@ async def port_scan(target: str = Query(...), ports: Optional[str] = Query(None,
 
     async def check_port(port):
         loop = asyncio.get_event_loop()
+
+        def _probe(p):
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            try:
+                sock.settimeout(1.5)
+                is_open = sock.connect_ex((target, p)) == 0
+            finally:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+            return is_open
+
         try:
-            _, is_open = await loop.run_in_executor(None, lambda: (
-                port, socket.create_connection((target, port), timeout=1.5)
-            ))
+            is_open = await loop.run_in_executor(None, _probe, port)
+            if not is_open:
+                return
             service = ""
             try:
                 service = socket.getservbyport(port)
-            except: pass
+            except Exception:
+                pass
             open_ports.append({"port": port, "service": service, "state": "open"})
-        except: pass
+        except Exception:
+            pass
 
     batch_size = 20
     for i in range(0, len(port_list), batch_size):
@@ -932,18 +949,12 @@ async def detect_sqli(target_url: str) -> dict:
                 pass
 
     if vulnerable:
-        dbms_type = "MySQL"  # default assumption
-        databases = ["information_schema", "mysql", "performance_schema", "test"]
-        tables = {
-            "information_schema": ["CHARACTER_SETS", "COLLATIONS", "COLUMNS", "ENGINES", "SCHEMATA", "TABLES"],
-            "mysql": ["user", "db", "host", "tables_priv", "columns_priv"],
-            "test": ["users", "posts", "config"]
-        }
-        sample_data = [
-            {"id": 1, "username": "admin", "email": "admin@target.com", "password_hash": "5baa61e4c9b93f3f0682250b6cf8331b7ee68fd8"},
-            {"id": 2, "username": "user1", "email": "user1@target.com", "password_hash": "e38ad214943daad1d64c102faec29de4afe9da3d"},
-            {"id": 3, "username": "test", "email": "test@target.com", "password_hash": "a94a8fe5ccb19ba61c4c0873d391e987982fbbd3"},
-        ]
+        # Only report what the error signatures actually proved. Never invent
+        # database names, tables, or sample rows: unverified dumps mislead.
+        dbms_type = "MySQL (assumed from error signatures)"
+        databases = []
+        tables = {}
+        sample_data = []
 
     return {
         "vuln": vulnerable,

@@ -5,6 +5,8 @@ from typing import List
 from collections import defaultdict
 from settings_store import get_api_key
 from ..module_common import safe_fetch, make_finding, resolve_ip
+from httpx import AsyncClient
+from models import IntelligenceFinding
 
 SHODAN_API = "https://api.shodan.io"
 SHODAN_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"

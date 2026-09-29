@@ -1,44 +1,65 @@
-import asyncio, httpx, os, importlib.util, sys, dns.resolver, hashlib
+import asyncio, httpx, os, sys, dns.resolver, hashlib
 from datetime import datetime
 from collections import defaultdict, Counter
-from functools import lru_cache
 from typing import Optional
 from models import IntelligenceFinding, SummaryItem
 from osint_common import normalize_target
-from rust_bridge import SCAN_FUNCTIONS, EngineResult, scan_all
+from rust_bridge import EngineResult, scan_all
+import module_loader
 
 sys.path.append(os.path.dirname(__file__))
 
 MODULE_CATEGORIES = {
-    "dns_domain": ["dnsdumpster","dnshistory","dnstwister","domain_profile_deep","rapiddns","viewdns","certificate_search","certspotter","hackertarget"],
+    "dns_domain": ["dnsdumpster","dnshistory","dnstwister","domain_profile_deep","rapiddns","viewdns","certificate_search","certspotter","hackertarget","dns_reverse_ip"],
     "web_server": ["api_scanner","builtwith","crawler_core","js_secrets","secret_finder","sensitive_files_hunter","urlscan","vulnerability_scanner_lite","web_surface_mapper","web_tech","cloud_fingerprint_deep","cve_exploit_lookup","publicwww","fofa","binaryedge","leakix","leakix_scanner","firewall_detector","javascript_deps_analyzer","http2_fingerprinter","api_endpoint_fuzzer","tracker_network_mapper","open_redirect_scanner","web_cookie_analyzer","technology_stack_profiler","cdn_origin_finder","vulnerability_db_scanner","censys","whoisxmlapi"],
-    "email_osint": ["email_security_deep","email_verifier","hunterhow","breach_directory","haveibeenpwned","email_reputation_checker","mail_server_analyzer","rust_email_finder","emailrep"],
+    "email_osint": ["email_security_deep","email_verifier","hunterhow","breach_directory","haveibeenpwned","email_reputation_checker","mail_server_analyzer","emailrep"],
+    "email_extended": ["email_catch_all_test","email_disposable_check","email_gravatar","email_header_validator","email_pgp_discovery","email_phone_extractor","email_role_detector"],
     "people_social": ["people_org_osint","social_search","tracker_identity_mapper","mobile_recon","reverse_image_search"],
-    "cloud_infrastructure": ["cloud_infrastructure_hunter","cloud_probe","cloud_recon","asn_bgp_radar","bgp_he_net","robtex","cloudflare_resolver"],
-    "threat_leaks": ["abuseipdb","breach_forensics","greynoise","malware_reputation_radar","otx","pastebin_monitor","shodan_full","shodan","virustotal_full","virustotal","crypto_abuse_radar","leak_checker_pro","malware_sandbox_check","phishing_detector","dehashed","intelx"],
-    "historical_archive": ["archive_forensics","archive_url_miner","git_leaks","exposure_surface_deep"],
+    "social_extended": ["social_alias_hunter","social_github_intel","social_media_exposure","social_platform_discovery","social_reddit_intel","social_telegram_intel","social_youtube_intel","whatsmyname_checker"],
+    "cloud_infrastructure": ["cloud_infrastructure_hunter","cloud_probe","cloud_recon","asn_bgp_radar","asn_bgp_comprehensive","bgp_he_net","robtex","cloudflare_resolver"],
+    "cloud_extended": ["cloud_aws_scanner","cloud_azure_scanner","cloud_container_scanner","cloud_digitalocean_scanner","cloud_edge_compute","cloud_gcp_scanner","cloud_linode_scanner","cloud_multi_cdn_finder","cloud_oracle_scanner","cloud_serverless_scanner","cloud_storage_scanner","cloud_vercel_netlify_scanner","passive_cloud_detection","passive_cdn_bypass","web_cdn_detector"],
+    "threat_leaks": ["abuseipdb","breach_forensics","greynoise","malware_reputation_radar","otx","pastebin_monitor","paste_sites_scanner","shodan_full","shodan","virustotal_full","virustotal","crypto_abuse_radar","leak_checker_pro","malware_sandbox_check","phishing_detector","dehashed","intelx"],
+    "threat_intel": ["threat_attack_surface","threat_botnet_detector","threat_c2_detector","threat_ddos_intel","threat_defacement_tracker","threat_exploit_finder","threat_indicators_bulk","threat_malware_analyzer","threat_osint_attribution","threat_phishing_db","threat_ransomware_tracker","threat_spam_intel","threat_vulnerability_active","cyber_threat_framework"],
+    "crypto_assets": ["crypto_blockchain_forensics","crypto_defi_analyzer","crypto_exchange_detector","crypto_mixer_detector","crypto_nft_scanner","crypto_scam_detector","crypto_wallet_tracker"],
+    "forensics": ["forensic_artifact_extraction","forensic_breach_analysis","forensic_dns_analysis","forensic_email_analysis","forensic_http_response","forensic_ssl_tls"],
+    "historical_archive": ["archive_forensics","archive_url_miner","git_leaks","exposure_surface_deep","archive","wayback","web_archive_deep"],
     "geolocation_network": ["geo_recon","ip_geolocation","network_topology_mapper","device_search","financial_recon","ipinfo"],
+    "geo_extended": ["geo_city_network","geo_dc_housing","geo_energy_grid","geo_ip_range_analyzer","geo_isp_peering","geo_marine_aviation","geo_mobile_network","geo_satellite_isp","passive_geo_intel"],
+    "passive_intel": ["passive_dns_timeline","passive_email_security","passive_network_map","passive_ssl_history","passive_subdomain_discovery","passive_technology_stack","passive_web_tech","passive_whois_history"],
+    "web_recon": ["web_clone_detector","web_cms_analyzer","web_comment_miner","web_db_exposure_check","web_directory_listing_check","web_error_page_analyzer","web_form_analyzer","web_frame_analyzer","web_honeypot_detector","web_http_method_analyzer","web_language_detector","web_loadbalancer_detector","web_meta_extractor","web_redirect_analyzer","web_reverseproxy_detector","web_robots_analyzer","web_server_leak_detector","web_sitemap_analyzer"],
+    "deep_intel": ["academic_research","code_dependency_analyzer","code_repository_scanner","company_financial_analysis","comprehensive_risk_score","darknet_marketplace","domain_expiry_monitor","domain_reputation","domain_similarity_checker","forum_discussion_intel","fraud_detection_check","government_record_check","iot_device_scanner","news_media_monitor","osint_framework_catalog","patent_intelligence","search_engine_aggregator","supply_chain_analysis","tld_intelligence","trademark_copyright_search"],
 }
 ALL_MODULES = {f for files in MODULE_CATEGORIES.values() for f in files}
 
-# Module cache to avoid re-loading modules on every scan
-_module_cache: dict = {}
+# Max findings accepted from a single module so one noisy source cannot
+# drown out the rest of the scan.
+MODULE_FINDING_CAP = 400
+
 
 def get_cached_module(mod_path: str):
+    """Load a module file through the shared loader (both import styles work)."""
     mod_name = os.path.basename(mod_path)[:-3]
-    cache_key = f"{mod_name}:{os.path.getmtime(mod_path)}"
-    if cache_key in _module_cache:
-        return _module_cache[cache_key]
+    module = module_loader.load(mod_name)
+    return module
+
+
+def reset_scan_caches() -> None:
+    """Drop every per scan cache so repeated scans start clean.
+
+    Without this, disk persisted dedup stores suppress findings when the
+    same target is scanned twice.
+    """
+    module_loader.ensure_importable()
     try:
-        spec = importlib.util.spec_from_file_location(mod_name, mod_path)
-        if not spec or not spec.loader:
-            return None
-        m = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(m)
-        _module_cache[cache_key] = m
-        return m
+        import module_common
+        module_common.clear_cache()
     except Exception:
-        return None
+        pass
+    try:
+        from module_base import store as _dedup_store
+        _dedup_store.flush()
+    except Exception:
+        pass
 
 
 class OSINTOrchestrator:
@@ -74,6 +95,7 @@ class OSINTOrchestrator:
 
     async def run_scan(self):
         self.log(f"Scan started for {self.target} ({self.target_type})", "INFO")
+        reset_scan_caches()
         findings = []
 
         # Phase 1: Rust engine (primary, fast)
@@ -120,8 +142,9 @@ class OSINTOrchestrator:
                     continue
                 module = get_cached_module(os.path.join(modules_path, filename))
                 if module is None:
-                    self.log(f"Module {mod_name} import failed", "ERROR")
-                    self.logs.append({"module":mod_name,"status":"Error","error":"Import failed","time":datetime.now().strftime("%H:%M:%S")})
+                    err = module_loader.load_error(mod_name) or "Import failed"
+                    self.log(f"Module {mod_name} import failed: {err[:120]}", "ERROR")
+                    self.logs.append({"module":mod_name,"status":"Error","error":err[:120],"time":datetime.now().strftime("%H:%M:%S")})
                     continue
                 if hasattr(module, 'crawl'):
                     self.log(f"Engaging: {mod_name}", "INFO")
@@ -131,8 +154,12 @@ class OSINTOrchestrator:
                 results = await asyncio.gather(*tasks, return_exceptions=True)
                 for r in results:
                     if isinstance(r, Exception):
+                        self.log(f"Module task crashed: {str(r)[:100]}", "ERROR")
                         continue
                     if r:
+                        if len(r) > MODULE_FINDING_CAP:
+                            self.log(f"Module capped at {MODULE_FINDING_CAP} findings ({len(r)} produced)", "INFO")
+                            r = r[:MODULE_FINDING_CAP]
                         findings.extend(r)
 
         if max_findings > 0 and len(findings) > max_findings:

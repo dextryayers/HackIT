@@ -2,6 +2,8 @@ import re
 import json
 from urllib.parse import urlparse
 from ..module_common import safe_fetch, make_finding
+from httpx import AsyncClient
+from models import IntelligenceFinding
 
 SERVER_TECH_SIGNATURES = {
     "nginx": "Nginx", "apache": "Apache HTTP Server", "cloudflare": "Cloudflare",

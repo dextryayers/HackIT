@@ -2,6 +2,8 @@ import re
 import json
 from urllib.parse import urlparse
 from ..module_common import safe_fetch, make_finding
+from httpx import AsyncClient
+from models import IntelligenceFinding
 
 COOKIE_TECH_PATTERNS = {
     "PHPSESSID": "PHP", "ASP.NET_SessionId": "ASP.NET", "JSESSIONID": "Java/J2EE",

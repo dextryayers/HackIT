@@ -1,6 +1,8 @@
 import re
 import asyncio
 from ..module_common import safe_fetch, make_finding
+from httpx import AsyncClient
+from models import IntelligenceFinding
 
 PLATFORMS = [
     ("Facebook", "https://www.facebook.com/{u}", "social", "social-media"),

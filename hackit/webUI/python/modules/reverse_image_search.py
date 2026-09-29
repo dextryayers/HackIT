@@ -5,6 +5,8 @@ import io
 import json
 from urllib.parse import urljoin, urlparse
 from module_common import safe_fetch, safe_fetch_json, make_finding, normalize_target, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash
+import asyncio
+import httpx
 
 IMG_TAG_REGEX = re.compile(r'<img[^>]+src=["\']([^"\']+)["\']', re.IGNORECASE)
 CSS_BG_REGEX = re.compile(r'background(?:-image)?:\s*url\(["\']?([^"\')]+)["\']?\)', re.IGNORECASE)
@@ -259,7 +261,7 @@ def extract_image_dimensions(image_data):
         pass
     return None
 
-def detect_image_format(image_data, content_ftype=""):
+def detect_image_format(image_data, content_type=""):
     sig_map = {
         b'\xff\xd8\xff': "JPEG",
         b'\x89PNG\r\n\x1a\n': "PNG",

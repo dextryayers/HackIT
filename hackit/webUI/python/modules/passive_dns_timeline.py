@@ -3,6 +3,8 @@ import json
 from datetime import datetime
 from urllib.parse import urlparse
 from ..module_common import safe_fetch, make_finding
+from httpx import AsyncClient
+from models import IntelligenceFinding
 
 PDNS_SOURCES = [
     ("crt.sh", "https://crt.sh/?q=%25.{domain}&output=json"),

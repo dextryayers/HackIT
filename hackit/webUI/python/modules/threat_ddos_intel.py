@@ -3,6 +3,7 @@ import json
 from urllib.parse import urlparse
 from models import IntelligenceFinding
 from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
+import httpx
 
 DDOS_PROTECTION_SERVICES = {
     "Cloudflare": ["cloudflare", "cf-ray", "__cfduid", "cf-cache-status", "cloudflare-nginx"],

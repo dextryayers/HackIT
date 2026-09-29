@@ -152,6 +152,8 @@ API_RESPONSE_PATTERNS = [
 
 async def crawl(target: str, client: httpx.AsyncClient):
     findings = []
+    headers = {}
+    resp = None
     base_url = f"https://{target}" if not target.startswith("http") else target
     if base_url.endswith("/"):
         base_url = base_url[:-1]
@@ -402,7 +404,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
                     tags=["rate-limit", k]
                 ))
 
-        common_auth = analyze_auth_methods(headers if 'headers' in dir() else {}, str(resp.headers) if 'resp' in dir() else "")
+        common_auth = analyze_auth_methods(headers, str(resp.headers) if resp is not None else "")
         if common_auth.get("type"):
             findings.append(make_finding(
                 entity=f"Auth method: {common_auth['type']}",
