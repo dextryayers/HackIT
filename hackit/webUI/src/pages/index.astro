@@ -131,7 +131,7 @@ import Layout from '../layouts/Layout.astro';
 				<div class="space-y-2">
 					<label class="text-xs font-medium text-sf-muted">Module Categories</label>
 					<div id="adv-modules" class="space-y-1.5 max-h-48 overflow-y-auto">
-						{[['dns_domain','DNS & Domain'],['web_server','Web & Server'],['email_osint','Email OSINT'],['people_social','People & Social'],['cloud_infrastructure','Cloud & Infrastructure'],['threat_leaks','Threat & Leaks'],['historical_archive','Historical & Archive'],['geolocation_network','Geolocation & Network']].map(([k,v]) => (
+						{[['dns_domain','DNS and Domain'],['web_server','Web and Server'],['email_osint','Email OSINT'],['email_extended','Email Extended'],['people_social','People and Social'],['social_extended','Social Extended'],['cloud_infrastructure','Cloud and Infrastructure'],['cloud_extended','Cloud Extended'],['threat_leaks','Threat and Leaks'],['threat_intel','Threat Intel'],['crypto_assets','Crypto Assets'],['forensics','Forensics'],['historical_archive','Historical and Archive'],['geolocation_network','Geolocation and Network'],['geo_extended','Geo Extended'],['passive_intel','Passive Intel'],['web_recon','Web Recon'],['deep_intel','Deep Intel']].map(([k,v]) => (
 							<label class="flex items-center gap-2 text-xs cursor-pointer"><input type="checkbox" value={k} checked class="accent-sf-tabActive" />{v}</label>
 						))}
 					</div>

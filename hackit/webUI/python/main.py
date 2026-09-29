@@ -1,4 +1,4 @@
-from fastapi import FastAPI, BackgroundTasks, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, BackgroundTasks, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
@@ -183,6 +183,7 @@ async def start_scan(
     concurrency: int = 50,
     brute_depth: int = 500,
     port_range: int = 1000,
+    request: Request = None,
     background_tasks: BackgroundTasks = None
 ):
     # Always start a fresh scan. Old jobs are kept for history but finished
@@ -209,11 +210,12 @@ async def start_scan(
         "format": format,
         "modules": modules.split(",") if modules else [],
         "toggles": {
-            "stealth_mode": stealth_mode == "1",
-            "verify_findings": verify_findings == "1",
-            "passive_only": passive_only == "1",
-            "correlation_engine": correlation_engine == "1",
-            "screenshot_pages": screenshot_pages == "1"
+            # Accept both the canonical names and the short frontend names.
+            "stealth_mode": (stealth_mode == "1" or (request is not None and request.query_params.get("stealth") == "1")),
+            "verify_findings": (verify_findings == "1" or (request is not None and request.query_params.get("verify") == "1")),
+            "passive_only": (passive_only == "1" or (request is not None and request.query_params.get("passive") == "1")),
+            "correlation_engine": (correlation_engine == "1" or (request is not None and request.query_params.get("correlation") == "1")),
+            "screenshot_pages": screenshot_pages == "1",
         },
         "api_keys": parsed_api_keys,
         "proxy_http": proxy_http,
@@ -237,10 +239,41 @@ async def start_scan(
 
 
 @app.get("/api/status")
-async def get_status(job_id: str):
+async def get_status(job_id: str, light: bool = Query(False, description="Omit findings payload for cheap polling")):
     if job_id not in jobs:
         raise HTTPException(status_code=404, detail="Job not found")
-    return jobs[job_id]
+    job = jobs[job_id]
+    if not light:
+        return job
+    stats = job.stats
+    return {
+        "job_id": job.job_id,
+        "target": job.target,
+        "target_type": job.target_type,
+        "status": job.status,
+        "duration": job.duration,
+        "created_at": job.created_at,
+        "live_logs": job.live_logs,
+        "finding_count": len(job.findings),
+        "summary_count": len(job.summary),
+        "stats": stats.model_dump() if stats is not None and hasattr(stats, "model_dump") else stats,
+    }
+
+
+@app.get("/api/sysinfo")
+async def get_sysinfo():
+    """Live host stats for the terminal footer. Real numbers, no placeholders."""
+    info: dict = {"cpu_percent": None, "mem_mb": None, "threads": None}
+    try:
+        import psutil
+        proc = psutil.Process()
+        with proc.oneshot():
+            info["cpu_percent"] = proc.cpu_percent(interval=None)
+            info["mem_mb"] = round(proc.memory_info().rss / 1024 / 1024, 1)
+            info["threads"] = proc.num_threads()
+    except Exception:
+        pass
+    return info
 
 
 @app.get("/api/jobs")

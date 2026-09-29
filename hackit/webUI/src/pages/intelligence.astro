@@ -746,34 +746,45 @@ import Layout from '../layouts/Layout.astro';
 			function startPolling(statusUrl, id, targetName) {
 				let pollingInterval = setInterval(async () => {
 					try {
-						const res = await fetch(`${statusUrl}?job_id=${id}`);
+						// Light poll every second (no findings payload). Full job is
+						// fetched only when the finding count moves or on completion.
+						const res = await fetch(`${statusUrl}?job_id=${id}&light=1`);
 						const job = await res.json();
-						
-						document.getElementById('raw-json-display').innerText = JSON.stringify(job, null, 4);
+
 						if (job.live_logs) renderLiveLogs(job.live_logs);
 
-						if (job.findings && job.findings.length > 0) {
-							document.getElementById('overview-total-count').innerText = job.findings.length;
+						const count = job.finding_count || 0;
+						if (count > 0) {
+							document.getElementById('overview-total-count').innerText = count;
 						}
-						if (job.summary && job.summary.length > 0) {
-							const prevSummary = currentSummary;
-							currentSummary = job.summary;
-							if (JSON.stringify(prevSummary) !== JSON.stringify(currentSummary)) {
-								renderBrowseSummary(currentSummary);
-							}
-						}
-						if (job.stats) {
-							const prevFindings = latestFindings.length;
-							latestFindings = job.findings || [];
-							if (prevFindings !== latestFindings.length && latestFindings.length > 0) {
-								renderGraph(targetName, latestFindings);
-							}
+						if (count !== latestFindings.length) {
+							try {
+								const full = await (await fetch(`${statusUrl}?job_id=${id}`)).json();
+								document.getElementById('raw-json-display').innerText = JSON.stringify({job_id: full.job_id, status: full.status, finding_count: (full.findings || []).length}, null, 4);
+								if (full.summary && full.summary.length > 0) {
+									const prevSummary = currentSummary;
+									currentSummary = full.summary;
+									if (JSON.stringify(prevSummary) !== JSON.stringify(currentSummary)) {
+										renderBrowseSummary(currentSummary);
+									}
+								}
+								latestFindings = full.findings || [];
+								if (latestFindings.length > 0) {
+									renderGraph(targetName, latestFindings);
+								}
+							} catch (e) {}
 						}
 
 						if (job.status === 'Completed' || job.status === 'Error') {
 							clearInterval(pollingInterval);
-							stopTimer(job.duration);
-							processResults(job, targetName);
+							try {
+								const full = await (await fetch(`${statusUrl}?job_id=${id}`)).json();
+								stopTimer(full.duration);
+								processResults(full, targetName);
+							} catch (e) {
+								stopTimer(job.duration);
+								processResults(job, targetName);
+							}
 						}
 					} catch (e) { console.error(e); }
 				}, 1000);

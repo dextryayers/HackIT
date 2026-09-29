@@ -161,7 +161,7 @@ const target = ""; // We'll handle this in the client side to avoid SSR complexi
                         </div>
                     </div>
                     <div class="bg-sf-card border-t border-sf-border px-4 py-2 flex justify-between items-center text-[9px] font-mono text-sf-muted uppercase tracking-widest">
-                        <div class="flex gap-4"><span>CPU: 28%</span><span>MEM: 96MB</span><span>TRH: 50</span></div>
+                        <div class="flex gap-4"><span id="sys-cpu">CPU: --</span><span id="sys-mem">MEM: --</span><span id="sys-thr">TRH: --</span></div>
                         <div id="log-count">LOGS: 0</div>
                     </div>
                 </div>
@@ -190,7 +190,7 @@ const target = ""; // We'll handle this in the client side to avoid SSR complexi
 
             const poll = setInterval(async () => {
                 try {
-                    const res = await fetch(`/api/status?job_id=${jobId}`);
+                    const res = await fetch(`/api/status?job_id=${jobId}&light=1`);
                     const data = await res.json();
                     if (data.live_logs) {
                         data.live_logs.forEach(l => {
@@ -202,10 +202,24 @@ const target = ""; // We'll handle this in the client side to avoid SSR complexi
                     }
                     if (data.status === 'Completed' || data.status === 'Error') {
                         clearInterval(poll);
+                        clearInterval(sysPoll);
                         logStatus.innerHTML = '<div class="w-1.5 h-1.5 rounded-full bg-sf-muted"></div> HackIT Intelligence Gathering Completed...';
                     }
                 } catch (e) {}
             }, 1000);
+
+            const sysPoll = setInterval(async () => {
+                try {
+                    const res = await fetch('/api/sysinfo');
+                    const sys = await res.json();
+                    if (sys.cpu_percent !== null && sys.cpu_percent !== undefined)
+                        document.getElementById('sys-cpu').innerText = `CPU: ${sys.cpu_percent}%`;
+                    if (sys.mem_mb !== null && sys.mem_mb !== undefined)
+                        document.getElementById('sys-mem').innerText = `MEM: ${sys.mem_mb}MB`;
+                    if (sys.threads !== null && sys.threads !== undefined)
+                        document.getElementById('sys-thr').innerText = `TRH: ${sys.threads}`;
+                } catch (e) {}
+            }, 3000);
         }
 
 		initializeLogSession();
