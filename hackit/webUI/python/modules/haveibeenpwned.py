@@ -2,7 +2,7 @@ import httpx
 import hashlib
 import re
 from datetime import datetime, timezone, timedelta
-from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash, require_api_keys
 import asyncio
 
 DATA_CLASS_SEVERITY = {
@@ -311,6 +311,8 @@ async def query_hibp_pastes(email: str, client: httpx.AsyncClient) -> list:
 
 async def crawl(target: str, client: httpx.AsyncClient):
     findings = []
+    if require_api_keys("haveibeenpwned"):
+        return findings
     domain = target.strip().lower()
     if domain.startswith("http"):
         from urllib.parse import urlparse

@@ -10,12 +10,12 @@ import ssl
 import socket
 import json
 from models import (
-    ScanJob, IntelligenceFinding, IntelligenceStats, SummaryItem,
+    ScanJob, IntelligenceFinding, SummaryItem,
     DNSResponse, DNSRecord, SSLResponse, HTTPHeaderResponse,
     WHOISResponse, IPGeoResponse, SubdomainResponse,
     EmailResponse, PortScanResponse
 )
-from orchestrator import run_modular_scan
+from orchestrator import run_modular_scan, OSINTOrchestrator, build_stats_snapshot
 from models import RustSSLResponse, SettingsResponse
 from settings_store import load_settings, save_settings, get_api_key, DEFAULT_API_KEYS
 from typing import Dict, Optional, List, Any
@@ -37,6 +37,9 @@ app.add_middleware(
 )
 
 jobs: Dict[str, ScanJob] = {}
+
+# Live per job module progress, updated by the scan streaming callback.
+progress: Dict[str, Dict[str, int]] = {}
 
 class ConnectionManager:
     def __init__(self):
@@ -75,59 +78,45 @@ async def ping():
 async def run_scan_task(job_id: str, target: str, target_type: str):
     job = jobs[job_id]
     start_time = time.time()
+    progress[job_id] = {"done": 0, "total": 0}
     await manager.broadcast(job_id, {"type": "scan_start", "job_id": job_id, "target": target})
+
+    async def on_batch(batch, module_name, done, total, logs):
+        tracked = jobs.get(job_id)
+        if tracked is None:
+            return
+        progress[job_id] = {"done": done, "total": total}
+        if batch:
+            tracked.findings.extend(batch)
+            tracked.summary = OSINTOrchestrator.generate_summary(tracked.findings)
+        tracked.stats = build_stats_snapshot(tracked.findings, logs)
+        await manager.broadcast(job_id, {
+            "type": "scan_progress",
+            "job_id": job_id,
+            "module": module_name,
+            "modules_done": done,
+            "modules_total": total,
+            "found": len(tracked.findings),
+            "new_total": len(batch),
+            "new": [
+                f.model_dump() if hasattr(f, "model_dump") else f
+                for f in batch[:100]
+            ],
+        })
+
     try:
         findings, summary, logs = await run_modular_scan(
             target, target_type, job.live_logs,
-            settings=job.settings
+            settings=job.settings,
+            on_batch=on_batch,
         )
-        risk_dist = {"High Risk": 0, "Elevated Risk": 0, "Standard Target": 0, "Informational": 0}
-        type_dist = {}
-        source_dist = {}
-        cat_dist = {}
-        for f in findings:
-            f_threat = f.threat_level if f.threat_level else "Informational"
-            risk_dist[f_threat] = risk_dist.get(f_threat, 0) + 1
-            ftype = f.type if f.type else "Unknown"
-            type_dist[ftype] = type_dist.get(ftype, 0) + 1
-            fsrc = f.source if f.source else ""
-            src = fsrc.split(":")[0].strip() if ":" in fsrc else fsrc
-            source_dist[src] = source_dist.get(src, 0) + 1
-            cat = f.category or "UNCLASSIFIED"
-            cat_dist[cat] = cat_dist.get(cat, 0) + 1
-        timeline = []
-        running_total = 0
-        found_total = len(findings)
-        if logs:
-            for log_entry in logs:
-                if not isinstance(log_entry, dict):
-                    continue
-                raw_found = log_entry.get("found", 0)
-                found_count = int(raw_found) if raw_found is not None else 0
-                running_total += found_count
-                timeline.append({
-                    "time": log_entry.get("time", ""),
-                    "count": min(running_total, found_total),
-                    "module": log_entry.get("module", "")
-                })
-        timeline.append({
-            "time": time.strftime("%H:%M:%S") if hasattr(time, 'strftime') else "",
-            "count": found_total,
-            "module": "COMPLETE"
-        })
-        job.stats = IntelligenceStats(
-            total_findings=len(findings),
-            risk_distribution=risk_dist,
-            type_distribution=type_dist,
-            timeline=timeline,
-            module_logs=logs,
-            source_distribution=source_dist,
-            category_distribution=cat_dist
-        )
+        job.stats = build_stats_snapshot(findings, logs, final=True)
         job.findings = findings
         job.summary = summary
         job.status = "Completed"
         job.duration = f"{round(time.time() - start_time, 2)}s"
+        progress[job_id] = {"done": progress.get(job_id, {}).get("total", 0),
+                            "total": progress.get(job_id, {}).get("total", 0)}
         await manager.broadcast(job_id, {"type": "scan_done", "job_id": job_id, "findings": len(findings), "duration": job.duration})
     except Exception as e:
         job.status = "Error"
@@ -246,6 +235,7 @@ async def get_status(job_id: str, light: bool = Query(False, description="Omit f
     if not light:
         return job
     stats = job.stats
+    prog = progress.get(job_id, {"done": 0, "total": 0})
     return {
         "job_id": job.job_id,
         "target": job.target,
@@ -256,6 +246,8 @@ async def get_status(job_id: str, light: bool = Query(False, description="Omit f
         "live_logs": job.live_logs,
         "finding_count": len(job.findings),
         "summary_count": len(job.summary),
+        "modules_done": prog.get("done", 0),
+        "modules_total": prog.get("total", 0),
         "stats": stats.model_dump() if stats is not None and hasattr(stats, "model_dump") else stats,
     }
 

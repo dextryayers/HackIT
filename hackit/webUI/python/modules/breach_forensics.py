@@ -7,6 +7,7 @@ from datetime import datetime
 from collections import defaultdict
 from urllib.parse import quote
 from module_common import safe_fetch, safe_fetch_json, make_finding
+from settings_store import get_api_key
 from models import IntelligenceFinding
 
 CREDENTIAL_PATTERN = re.compile(
@@ -403,11 +404,14 @@ async def check_pastebinpro(client, target):
 
 async def check_hibp_breaches(client, target):
     findings = []
+    hibp_key = get_api_key("haveibeenpwned")
+    if not hibp_key:
+        return findings
     try:
-        resp = await safe_fetch(client, 
+        resp = await safe_fetch(client,
             f"https://haveibeenpwned.com/api/v3/breaches?domain={target}",
             timeout=10.0,
-            headers={"User-Agent": "Mozilla/5.0", "hibp-api-key": ""}
+            headers={"User-Agent": "Mozilla/5.0", "hibp-api-key": hibp_key}
         )
         if resp.status_code == 200:
             breaches = resp.json()

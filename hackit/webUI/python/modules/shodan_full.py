@@ -4,7 +4,7 @@ from urllib.parse import urlparse
 from typing import List
 from collections import defaultdict
 from settings_store import get_api_key
-from ..module_common import safe_fetch, make_finding, resolve_ip
+from ..module_common import safe_fetch, make_finding, resolve_ip, require_api_keys
 from httpx import AsyncClient
 from models import IntelligenceFinding
 
@@ -97,6 +97,8 @@ async def shodan_services(client) -> dict:
 
 async def crawl(target: str, client: AsyncClient) -> List[IntelligenceFinding]:
     findings = []
+    if require_api_keys("shodan"):
+        return findings
     t = target.strip().lower()
     if t.startswith("http"):
         t = urlparse(t).netloc

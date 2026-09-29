@@ -744,6 +744,7 @@ import Layout from '../layouts/Layout.astro';
 			}
 
 			function startPolling(statusUrl, id, targetName) {
+				let lastStatsSig = '';
 				let pollingInterval = setInterval(async () => {
 					try {
 						// Light poll every second (no findings payload). Full job is
@@ -756,6 +757,23 @@ import Layout from '../layouts/Layout.astro';
 						const count = job.finding_count || 0;
 						if (count > 0) {
 							document.getElementById('overview-total-count').innerText = count;
+						}
+						if (job.modules_total > 0) {
+							const pct = Math.round((job.modules_done || 0) / job.modules_total * 100);
+							const hs = document.getElementById('header-status');
+							if (hs && job.status === 'Running') {
+								hs.innerText = `Running ${job.modules_done || 0}/${job.modules_total} modules (${pct}%)`;
+							}
+						}
+						if (job.stats) {
+							const sig = JSON.stringify([job.stats.risk_distribution, job.stats.type_distribution]);
+							if (sig !== lastStatsSig) {
+								lastStatsSig = sig;
+								try { renderCharts(job.stats); } catch (e) {}
+								document.getElementById('overview-risk-count').innerText = job.stats.risk_distribution['High Risk'] || 0;
+								document.getElementById('overview-sources-count').innerText = Object.keys(job.stats.source_distribution || {}).length || '0';
+								document.getElementById('overview-categories-count').innerText = Object.keys(job.stats.category_distribution || {}).length || '0';
+							}
 						}
 						if (count !== latestFindings.length) {
 							try {

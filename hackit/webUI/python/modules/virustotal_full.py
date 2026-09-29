@@ -1,6 +1,6 @@
 from typing import List
 import httpx
-from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
+from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, require_api_keys
 from models import IntelligenceFinding
 from settings_store import get_api_key
 
@@ -51,6 +51,8 @@ async def vt_related_hashes(domain: str, client: httpx.AsyncClient) -> dict:
 
 async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFinding]:
     findings = []
+    if require_api_keys("virustotal"):
+        return findings
     t = target.strip().lower()
 
     target_is_ip = is_ip(t)

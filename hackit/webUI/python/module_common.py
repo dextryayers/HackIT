@@ -542,6 +542,23 @@ def response_ok(resp: Optional[httpx.Response]) -> bool:
     return resp is not None and resp.status_code < 400
 
 
+def require_api_keys(*services: str) -> List[str]:
+    """Return the subset of services that have no API key configured.
+
+    Modules that cannot work without a key call this first and return
+    immediately when the list is non empty, instead of burning a full
+    timeout on requests that are guaranteed to fail::
+
+        if require_api_keys("shodan"):
+            return findings
+    """
+    try:
+        from settings_store import get_api_key
+    except Exception:
+        return list(services)
+    return [s for s in services if not get_api_key(s)]
+
+
 def guess_base_url(target: str, prefer_tls: bool = True) -> str:
     """Build a fetchable base URL from any target form."""
     host = target_host(target)
@@ -570,6 +587,7 @@ __all__ = [
     "clear_cache", "normalize_target", "target_host", "target_port", "target_kind",
     "is_ip", "resolve_ip", "classify_email", "extract_emails", "compute_hash",
     "truncate", "category_for", "threat_for", "rank_finding", "make_finding",
+    "require_api_keys",
     "safe_fetch", "safe_fetch_json", "safe_fetch_text", "response_ok",
     "guess_base_url", "base_url_candidates",
     "CATEGORY_BY_TYPE", "COLOR_BY_THREAT", "THREAT_ORDER",

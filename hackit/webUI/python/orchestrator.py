@@ -1,8 +1,8 @@
-import asyncio, httpx, os, sys, dns.resolver, hashlib
+import asyncio, httpx, os, sys, time, dns.resolver, hashlib
 from datetime import datetime
 from collections import defaultdict, Counter
 from typing import Optional
-from models import IntelligenceFinding, SummaryItem
+from models import IntelligenceFinding, IntelligenceStats, SummaryItem
 from osint_common import normalize_target
 from rust_bridge import EngineResult, scan_all
 import module_loader
@@ -93,9 +93,21 @@ class OSINTOrchestrator:
         self.log_list.append(line)
         print(line)
 
-    async def run_scan(self):
+    async def run_scan(self, on_batch=None):
         self.log(f"Scan started for {self.target} ({self.target_type})", "INFO")
         reset_scan_caches()
+        try:
+            from settings_store import set_runtime_keys, active_api_keys
+            scan_keys = self.settings.get("api_keys") or {}
+            if scan_keys:
+                set_runtime_keys(scan_keys)
+            active = active_api_keys()
+            if active:
+                self.log(f"API keys active: {len(active)} ({', '.join(sorted(active))})", "SUCCESS")
+            else:
+                self.log("API keys: none configured (key-gated modules will skip)", "INFO")
+        except Exception:
+            pass
         findings = []
 
         # Phase 1: Rust engine (primary, fast)
@@ -132,7 +144,16 @@ class OSINTOrchestrator:
         if ua: client_kwargs["headers"] = {"User-Agent": ua}
 
         async with httpx.AsyncClient(**client_kwargs) as client:
-            tasks = []
+            async def _run_named(mod_name, coro):
+                try:
+                    return mod_name, await coro
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    self.log(f"Module {mod_name} crashed: {str(e)[:100]}", "ERROR")
+                    return mod_name, []
+
+            pending = []
             for filename in sorted(os.listdir(modules_path)):
                 if not filename.endswith(".py") or filename == "__init__.py": continue
                 mod_name = filename[:-3]
@@ -148,19 +169,34 @@ class OSINTOrchestrator:
                     continue
                 if hasattr(module, 'crawl'):
                     self.log(f"Engaging: {mod_name}", "INFO")
-                    tasks.append(self._safe_crawl(module, client, timeout_val, mod_name))
+                    pending.append(_run_named(mod_name, self._safe_crawl(module, client, timeout_val, mod_name)))
 
-            if tasks:
-                results = await asyncio.gather(*tasks, return_exceptions=True)
-                for r in results:
-                    if isinstance(r, Exception):
-                        self.log(f"Module task crashed: {str(r)[:100]}", "ERROR")
+            total_modules = len(pending)
+            done_modules = 0
+            if pending:
+                for fut in asyncio.as_completed(pending):
+                    try:
+                        mod_name, r = await fut
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:
+                        self.log(f"Module task failed: {str(e)[:100]}", "ERROR")
                         continue
+                    done_modules += 1
+                    batch = []
                     if r:
                         if len(r) > MODULE_FINDING_CAP:
-                            self.log(f"Module capped at {MODULE_FINDING_CAP} findings ({len(r)} produced)", "INFO")
+                            self.log(f"Module {mod_name} capped at {MODULE_FINDING_CAP} findings ({len(r)} produced)", "INFO")
                             r = r[:MODULE_FINDING_CAP]
                         findings.extend(r)
+                        batch = list(r)
+                    if on_batch is not None:
+                        try:
+                            maybe = on_batch(batch, mod_name, done_modules, total_modules, self.logs)
+                            if asyncio.iscoroutine(maybe):
+                                await maybe
+                        except Exception as e:
+                            self.log(f"Progress callback failed: {str(e)[:80]}", "ERROR")
 
         if max_findings > 0 and len(findings) > max_findings:
             findings = findings[:max_findings]
@@ -897,7 +933,8 @@ class OSINTOrchestrator:
                 except: f.status = "Inactive"
         await asyncio.gather(*[resolve(f) for f in findings])
 
-    def get_category(self, finding_type):
+    @staticmethod
+    def get_category(finding_type):
         mapping = {
             "Subdomain":"1. DOMAIN RECON","DNS Record":"1. DOMAIN RECON","IP Address":"2. IP / NETWORK RECON",
             "ASN":"2. IP / NETWORK RECON","Open Port":"2. IP / NETWORK RECON","Web Technology":"3. WEB APPLICATION ENUMERATION",
@@ -921,12 +958,13 @@ class OSINTOrchestrator:
             if key.lower() in finding_type.lower(): return cat
         return "MISCELLANEOUS"
 
-    def generate_summary(self, findings):
+    @staticmethod
+    def generate_summary(findings):
         summary_map = {}
         for f in findings:
             ftype = getattr(f, 'type', '') or ''
             fentity = getattr(f, 'entity', '') or ''
-            cat = self.get_category(ftype)
+            cat = OSINTOrchestrator.get_category(ftype)
             f.category = cat
             if ftype not in summary_map:
                 summary_map[ftype] = {"type": ftype, "count": 0, "last": "", "category": cat}
@@ -938,8 +976,65 @@ class OSINTOrchestrator:
         ) for v in summary_map.values()]
 
 
-async def run_modular_scan(target, target_type="Domain", log_list=None, settings=None):
+def build_stats_snapshot(findings, logs, final=False) -> IntelligenceStats:
+    """Assemble an IntelligenceStats view over the findings collected so far.
+
+    Called after every module batch during a live scan and once at the end,
+    so the web UI can render diagrams progressively instead of waiting for
+    the whole crawl to finish.
+    """
+    risk_dist = {"High Risk": 0, "Elevated Risk": 0, "Standard Target": 0, "Informational": 0}
+    type_dist: dict = {}
+    source_dist: dict = {}
+    cat_dist: dict = {}
+    for f in findings:
+        f_threat = getattr(f, "threat_level", None) or "Informational"
+        risk_dist[f_threat] = risk_dist.get(f_threat, 0) + 1
+        ftype = getattr(f, "type", None) or "Unknown"
+        type_dist[ftype] = type_dist.get(ftype, 0) + 1
+        fsrc = getattr(f, "source", None) or ""
+        src = fsrc.split(":")[0].strip() if ":" in fsrc else fsrc
+        source_dist[src] = source_dist.get(src, 0) + 1
+        cat = getattr(f, "category", None) or "UNCLASSIFIED"
+        cat_dist[cat] = cat_dist.get(cat, 0) + 1
+
+    timeline = []
+    running_total = 0
+    found_total = len(findings)
+    for log_entry in logs or []:
+        if not isinstance(log_entry, dict):
+            continue
+        raw_found = log_entry.get("found", 0)
+        try:
+            found_count = int(raw_found) if raw_found is not None else 0
+        except (ValueError, TypeError):
+            found_count = 0
+        running_total += found_count
+        timeline.append({
+            "time": log_entry.get("time", ""),
+            "count": min(running_total, found_total),
+            "module": log_entry.get("module", ""),
+        })
+    if final:
+        timeline.append({
+            "time": time.strftime("%H:%M:%S"),
+            "count": found_total,
+            "module": "COMPLETE",
+        })
+
+    return IntelligenceStats(
+        total_findings=len(findings),
+        risk_distribution=risk_dist,
+        type_distribution=type_dist,
+        timeline=timeline,
+        module_logs=[l for l in (logs or []) if isinstance(l, dict)],
+        source_distribution=source_dist,
+        category_distribution=cat_dist,
+    )
+
+
+async def run_modular_scan(target, target_type="Domain", log_list=None, settings=None, on_batch=None):
     o = OSINTOrchestrator(target, target_type, log_list, settings)
-    findings = await o.run_scan()
+    findings = await o.run_scan(on_batch=on_batch)
     summary = o.generate_summary(findings)
     return findings, summary, o.logs

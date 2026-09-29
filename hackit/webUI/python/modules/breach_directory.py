@@ -7,6 +7,7 @@ import math
 from datetime import datetime
 from collections import defaultdict
 from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash
+from settings_store import get_api_key
 
 UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
 
@@ -129,10 +130,13 @@ async def query_dehashed(query: str, client: httpx.AsyncClient, page: int = 1) -
         return {}
 
 async def query_haveibeenpwned(domain: str, client: httpx.AsyncClient) -> list:
+    hibp_key = get_api_key("haveibeenpwned")
+    if not hibp_key:
+        return []
     try:
-        resp = await safe_fetch(client, 
+        resp = await safe_fetch(client,
             f"https://haveibeenpwned.com/api/v3/breaches?domain={domain}",
-            headers={"User-Agent": UA, "hibp-api-key": ""},
+            headers={"User-Agent": UA, "hibp-api-key": hibp_key},
             timeout=15.0,
         )
         if resp.status_code == 200:

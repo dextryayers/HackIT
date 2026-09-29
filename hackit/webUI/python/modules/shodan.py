@@ -93,5 +93,7 @@ class ShodanScanner(BaseScanner):
 
 
 async def crawl(target: str, client: httpx.AsyncClient):
+    if not get_api_key("shodan"):
+        return []
     scanner = ShodanScanner(target, client)
     return await scanner.scan()

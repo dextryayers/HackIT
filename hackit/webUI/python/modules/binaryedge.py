@@ -5,7 +5,7 @@ import re
 import json
 from collections import defaultdict
 from settings_store import get_api_key
-from module_common import safe_fetch, make_finding
+from module_common import safe_fetch, make_finding, require_api_keys
 
 BINARYEDGE_API = "https://api.binaryedge.io/v2"
 UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
@@ -175,6 +175,8 @@ async def query_subdomains(domain: str, client: httpx.AsyncClient) -> list:
 
 async def crawl(target: str, client: httpx.AsyncClient):
     findings = []
+    if require_api_keys("binaryedge"):
+        return findings
     t = target.strip().lower()
     if t.startswith("http"):
         from urllib.parse import urlparse

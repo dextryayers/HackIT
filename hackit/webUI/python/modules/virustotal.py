@@ -94,5 +94,7 @@ class VirusTotalScanner(BaseScanner):
 
 
 async def crawl(target: str, client: httpx.AsyncClient):
+    if not get_api_key("virustotal"):
+        return []
     scanner = VirusTotalScanner(target, client)
     return await scanner.scan()
