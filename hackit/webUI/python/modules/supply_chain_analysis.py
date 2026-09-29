@@ -105,7 +105,7 @@ async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFind
     if t.startswith("http"):
         t = urlparse(t).netloc
 
-    services = await identify_third_party_services(t)
+    services = await identify_third_party_services(t, client)
 
     if services:
         for category, indicators in services.items():

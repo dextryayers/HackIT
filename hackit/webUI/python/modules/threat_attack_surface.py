@@ -272,7 +272,8 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
 
     exposed_db_results = []
     for db_name, (patterns, port) in EXPOSED_DB_PATTERNS.items():
-        for p in patterns:
+        pats = patterns if isinstance(patterns, (list, tuple)) else [patterns]
+        for p in pats:
             if p.search(query):
                 exposed_db_results.append({"database": db_name, "port": port})
                 break

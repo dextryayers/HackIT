@@ -4,7 +4,7 @@ import struct
 import io
 import json
 from urllib.parse import urljoin, urlparse
-from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash
+from module_common import safe_fetch, safe_fetch_json, make_finding, normalize_target, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash
 
 IMG_TAG_REGEX = re.compile(r'<img[^>]+src=["\']([^"\']+)["\']', re.IGNORECASE)
 CSS_BG_REGEX = re.compile(r'background(?:-image)?:\s*url\(["\']?([^"\')]+)["\']?\)', re.IGNORECASE)

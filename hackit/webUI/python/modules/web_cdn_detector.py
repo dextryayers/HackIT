@@ -118,7 +118,8 @@ def ip_in_cidr(ip: str, cidr: str) -> bool:
         return False
 
 async def resolve_dns(domain: str) -> list:
-    return resolve_ip(domain)
+    ip = resolve_ip(domain)
+    return [ip] if ip else []
 
 async def get_cname(domain: str) -> str:
     try:

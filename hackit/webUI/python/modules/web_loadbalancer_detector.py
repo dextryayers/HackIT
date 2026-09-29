@@ -53,9 +53,12 @@ async def crawl(target: str, client: httpx.AsyncClient) -> list[IntelligenceFind
     if domain.startswith("http"):
         domain = urlparse(domain).netloc
 
+    headers = {}
     for proto in ["https", "http"]:
         try:
             resp = await safe_fetch(client,f"{proto}://{domain}", timeout=10.0, follow_redirects=True, headers={"User-Agent": UA})
+            if resp is None:
+                continue
             headers = {k.lower(): v for k, v in dict(resp.headers).items()}
             cookies = dict(resp.cookies)
             status = resp.status_code

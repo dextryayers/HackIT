@@ -1,4 +1,5 @@
 import asyncio
+import httpx
 import re
 import unicodedata
 import json
@@ -239,7 +240,7 @@ def extract_usernames_from_target(target: str) -> List[str]:
     result = []
     for c in candidates:
         c = normalize_username(c)
-        c = re.sub(r'[^a-zA-Z0-9_.\-\p{L}]', '', c)
+        c = re.sub(r'[^\w.\-]', '', c)
         if c and len(c) >= 1:
             result.append(c)
 
@@ -609,7 +610,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
         primary_username = raw_username.lower()
 
     primary_username = normalize_username(primary_username)
-    primary_username = re.sub(r'[^a-zA-Z0-9_.\-\p{L}]', '', primary_username.split("@")[0].split("/")[0]) if primary_username else primary_username
+    primary_username = re.sub(r'[^\w.\-]', '', primary_username.split("@")[0].split("/")[0]) if primary_username else primary_username
 
     if not primary_username or len(primary_username) < 1:
         findings.append(make_finding(

@@ -3,7 +3,7 @@ import re
 import json
 from urllib.parse import urlparse
 from collections import defaultdict
-from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash
+from module_common import safe_fetch, safe_fetch_json, make_finding, normalize_target, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash
 
 TRACKER_SIGNATURES = [
     (r'google-analytics\.com/(ga|analytics|collect|g\b)', "Google Analytics", "analytics"),

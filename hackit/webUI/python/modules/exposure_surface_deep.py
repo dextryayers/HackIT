@@ -5,7 +5,7 @@ from urllib.parse import urlparse
 from typing import List, Optional
 from collections import defaultdict
 from models import IntelligenceFinding
-from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
+from module_common import safe_fetch, safe_fetch_json, make_finding, normalize_target, is_ip, resolve_ip
 
 CDX_API = "https://web.archive.org/cdx/search/cdx"
 UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
@@ -95,6 +95,12 @@ ADDITIONAL_COMMON_PATHS = [
     "/application.yml", "/bootstrap.yml", "/logback.xml",
 ]
 
+# Extended datasets referenced by the deep scan pass. Empty by default so the
+# module always runs on the base categories above; populate to widen coverage.
+MORE_EXPOSURE_CATEGORIES = {}
+MORE_COMMON_PATHS = []
+MORE_TECHNOLOGY_PATTERNS = {}
+
 async def extract_subdomains_from_cdx(cdx_results: list) -> list:
     subdomains = set()
     for r in cdx_results:
@@ -168,6 +174,60 @@ async def analyze_subdomain_structure(cdx_results: list, domain: str) -> list:
                 tags=["exposure", "subdomain", sub.replace(".", "-")]
             ))
     return findings
+
+_RISK_KEYWORDS = [
+    (("password", "passwd", "secret", "private key", ".pem", ".key", "credential"), 9.0),
+    (("backup", ".sql", ".dump", "database", ".bak", "dump"), 8.0),
+    (("admin", "phpmyadmin", "wp-admin", "manager", "console"), 7.0),
+    ((".git", ".env", "config", ".svn", "docker"), 7.5),
+    (("api", "graphql", "swagger", "actuator", "metrics"), 5.5),
+    (("test", "dev", "staging", "debug", "phpinfo"), 5.0),
+]
+
+
+def calculate_risk_score(entity: str) -> float:
+    """Score an exposure entity 0-10 by sensitive keywords in its text."""
+    text = (entity or "").lower()
+    score = 2.0
+    for keywords, value in _RISK_KEYWORDS:
+        if any(k in text for k in keywords):
+            score = max(score, value)
+    return round(min(score, 10.0), 1)
+
+
+def format_risk_label(score: float) -> str:
+    """Map a 0-10 score to the threat levels used across the codebase."""
+    if score >= 9:
+        return "Critical"
+    if score >= 7:
+        return "High Risk"
+    if score >= 4:
+        return "Elevated Risk"
+    return "Informational"
+
+
+def get_remediation(entity: str) -> str:
+    """Generic remediation advice for an exposure entity."""
+    text = (entity or "").lower()
+    if any(k in text for k in ("password", "secret", ".pem", ".key", "credential")):
+        return "Rotate exposed secrets immediately, revoke the credentials, and remove the file from public reach."
+    if any(k in text for k in ("backup", ".sql", ".dump", ".bak")):
+        return "Move backups out of the web root, restrict by IP allowlist, and require authentication."
+    if ".git" in text or ".svn" in text:
+        return "Block VCS metadata directories at the web server or remove them from production deploys."
+    if "admin" in text or "manager" in text or "console" in text:
+        return "Restrict admin panels by IP allowlist, enforce MFA, and rename default paths."
+    return "Review whether this path needs to be public; restrict or remove it when it does not."
+
+
+def analyze_coverage(findings: list) -> dict:
+    """Count findings per category for the coverage summary."""
+    coverage: dict = {}
+    for f in findings or []:
+        cat = getattr(f, "category", "") or getattr(f, "type", "") or "Unknown"
+        coverage[cat] = coverage.get(cat, 0) + 1
+    return coverage
+
 
 async def crawl(target: str, client: httpx.AsyncClient) -> List[IntelligenceFinding]:
     findings = []

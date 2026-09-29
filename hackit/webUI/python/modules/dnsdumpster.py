@@ -5,9 +5,10 @@ import asyncio
 import json
 import time
 import base64
+from collections import defaultdict
 from typing import List, Optional, Dict
 from urllib.parse import urlparse
-from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip
+from module_common import safe_fetch, safe_fetch_json, make_finding, normalize_target, is_ip, resolve_ip
 
 DNSDUMPSTER_URL = "https://dnsdumpster.com"
 HACKERTARGET_URL = "https://api.hackertarget.com"

@@ -156,7 +156,7 @@ async def extract_smtp_greeting(target: str) -> list:
         pass
     return results
 
-async def check_spamtrap_hits(target: str) -> list:
+async def check_spamtrap_hits(client, target: str) -> list:
     results = []
     try:
         spamtrap_sources = [
