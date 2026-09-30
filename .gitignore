@@ -1,39 +1,95 @@
-# Binaries and executables
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# C / C++ build artifacts and object files
+*.o
+*.obj
+*.a
+*.lib
+**/build/
+**/csrc/*.o
+**/cxxsrc/*.o
+**/c_core/build/
+**/c_core/src/*.o
+
+# Compiled Binaries and executables
 *.exe
 *.dll
-*.so
 *.dylib
 *.bin
 *.out
+worker
+*_worker
+**/worker
+**/bin/worker
 hackit/port_scanner/go/port_scanner
 hackit/cve/go/cve
 hackit/dir_finder/go/dir_finder
 
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
+# Archives and large bundles
+*.tar.gz
+*.tgz
+*.zip
+*.7z
+*.rar
+
+# Virtual environments
 venv/
+.venv/
+ENV/
+env/
+env.bak/
+venv.bak/
+
+# Environment and sensitive files
 .env
+.env.*
+!.env.example
 
 # Rust
 target/
+target_custom/
+**/target/
 **/*.rs.bk
+Cargo.lock.bk
 
 # Go
 go.sum
+
+# Node / Frontend (webUI)
+node_modules/
+dist/
+.astro/
+.vercel/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
 # Ruby
 .bundle/
 vendor/bundle
 
-# IDEs
+# IDEs & OS files
 .vscode/
 .idea/
 *.swp
 *.swo
+.DS_Store
+Thumbs.db
 
-# Logs
+# Output reports & logs
 *.log
 results.json
 results.xml
+osint_report_*.html
+*.html_report
+scan_output/
+scan_reports/
+temp/
+results/
