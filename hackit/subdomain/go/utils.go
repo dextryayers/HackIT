@@ -22,6 +22,23 @@ var defaultClient = &http.Client{
 	Transport: defaultTransport,
 }
 
+// isValidLabel reports whether s is a valid DNS label (1-63 chars, RFC 1034).
+func isValidLabel(s string) bool {
+	if len(s) == 0 || len(s) > 63 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-') {
+			return false
+		}
+	}
+	if s[0] == '-' || s[len(s)-1] == '-' {
+		return false
+	}
+	return true
+}
+
 // cleanSubdomain cleans and validates a subdomain
 func cleanSubdomain(sub, rootDomain string) string {
 	sub = strings.ToLower(strings.TrimSpace(sub))
@@ -42,7 +59,15 @@ func cleanSubdomain(sub, rootDomain string) string {
 		sub = sub[:idx]
 	}
 
+	if len(sub) > 253 {
+		return ""
+	}
 	if strings.HasSuffix(sub, "."+rootDomain) || sub == rootDomain {
+		for _, label := range strings.Split(sub, ".") {
+			if !isValidLabel(label) {
+				return ""
+			}
+		}
 		return sub
 	}
 	return ""
@@ -220,9 +245,11 @@ func CStrToGo(ptr uintptr) string {
 		return ""
 	}
 
-	// Assuming UTF-8/ASCII for C strings
+	// Assuming UTF-8/ASCII for C strings, capped so an
+	// unterminated pointer can never spin forever.
+	const maxCStrLen = 1 << 20
 	var length int
-	for {
+	for length < maxCStrLen {
 		if *(*byte)(unsafe.Pointer(ptr + uintptr(length))) == 0 {
 			break
 		}

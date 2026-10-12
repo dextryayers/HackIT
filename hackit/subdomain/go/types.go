@@ -54,7 +54,10 @@ type Result struct {
 	CDN           string   `json:"cdn,omitempty"`
 	ContentLength int      `json:"content_length,omitempty"`
 	ResponseTime  string   `json:"response_time,omitempty"`
+	mu            sync.Mutex `json:"-"`
 }
+
+var printMu sync.Mutex
 
 var (
 	results      = make(map[string]*Result)

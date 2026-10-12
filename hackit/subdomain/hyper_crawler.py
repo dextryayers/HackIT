@@ -111,7 +111,10 @@ class HyperCrawler:
                 
         return list(self.subdomains)
 
-def run_hyper_crawler(domain):
+def run_hyper_crawler(domain, timeout=300):
     crawler = HyperCrawler(domain, max_depth=3, max_concurrency=100)
     # Using asyncio.run directly (works in Python 3.7+)
-    return asyncio.run(crawler.run())
+    try:
+        return asyncio.run(asyncio.wait_for(crawler.run(), timeout=timeout))
+    except (asyncio.TimeoutError, TimeoutError):
+        return list(crawler.subdomains)

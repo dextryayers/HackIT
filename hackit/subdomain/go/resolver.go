@@ -20,7 +20,24 @@ var (
 // DetectWildcard checks if the domain has a wildcard DNS record
 func DetectWildcard(domain string) {
 	testSub := fmt.Sprintf("hackit-wildcard-%d.%s", rand.Intn(1000000), domain)
-	ips, err := net.LookupHost(testSub)
+	type lookupRes struct {
+		ips []string
+		err error
+	}
+	done := make(chan lookupRes, 1)
+	go func() {
+		ips, err := net.LookupHost(testSub)
+		done <- lookupRes{ips: ips, err: err}
+	}()
+	var ips []string
+	var err error
+	select {
+	case r := <-done:
+		ips, err = r.ips, r.err
+	case <-time.After(15 * time.Second):
+		fmt.Printf("[!] Wildcard check timed out for %s, continuing without filtering.\n", domain)
+		return
+	}
 	if err == nil && len(ips) > 0 {
 		wildcardMu.Lock()
 		for _, ip := range ips {

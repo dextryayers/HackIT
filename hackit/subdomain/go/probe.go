@@ -63,6 +63,15 @@ func runProbe(results []*Result, config Config) {
 				}(scheme)
 			}
 			pWg.Wait()
+			// Stream each result the moment its probes finish.
+			res.mu.Lock()
+			needsDetail := res.Status > 0 || len(res.Title) > 0 || len(res.Tech) > 0
+			res.mu.Unlock()
+			if needsDetail {
+				printMu.Lock()
+				printResultDetail(res, config)
+				printMu.Unlock()
+			}
 		}(r)
 	}
 	wg.Wait()
@@ -100,7 +109,9 @@ func probeURL(client *http.Client, res *Result, scheme string, config Config) {
 		if err == nil {
 			elapsed := time.Since(startTime)
 			elapsedMs := float64(elapsed.Microseconds()) / 1000.0
+			res.mu.Lock()
 			res.ResponseTime = fmt.Sprintf("%.3fs", elapsedMs/1000.0)
+			res.mu.Unlock()
 			break
 		}
 		if i < maxRetries-1 {
@@ -114,6 +125,7 @@ func probeURL(client *http.Client, res *Result, scheme string, config Config) {
 	defer resp.Body.Close()
 
 	isSuccessful := resp.StatusCode >= 200 && resp.StatusCode < 400
+	res.mu.Lock()
 	if res.Status == 0 || (isSuccessful && res.Status >= 400) {
 		res.Status = resp.StatusCode
 		res.Server = resp.Header.Get("Server")
@@ -124,12 +136,14 @@ func probeURL(client *http.Client, res *Result, scheme string, config Config) {
 
 	// CDN Detection from headers
 	res.CDN = detectCDN(resp.Header, scheme, res.Subdomain)
+	res.mu.Unlock()
 
 	if (config.ShowTitle || config.TechDetect) && method == "GET" {
-		bodyBytes, err := io.ReadAll(resp.Body)
+		bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 		if err == nil {
 			body := string(bodyBytes)
 
+			res.mu.Lock()
 			res.ContentLength = len(body)
 
 			if config.ShowTitle {
@@ -151,6 +165,7 @@ func probeURL(client *http.Client, res *Result, scheme string, config Config) {
 				}
 				res.Tech = cleanedTech
 			}
+			res.mu.Unlock()
 		}
 	}
 
@@ -158,7 +173,9 @@ func probeURL(client *http.Client, res *Result, scheme string, config Config) {
 	if runtime.GOOS == "linux" {
 		cname := linuxRustGetCname(res.Subdomain)
 		if cname != "" {
+			res.mu.Lock()
 			res.CNAME = cname
+			res.mu.Unlock()
 		}
 	} else if rustGetCname != nil && rustGetCname.Find() == nil {
 		cDomain := []byte(res.Subdomain + "\x00")
@@ -166,7 +183,9 @@ func probeURL(client *http.Client, res *Result, scheme string, config Config) {
 		if ptr != 0 {
 			cnameStr := strings.TrimSpace(CStrToGo(ptr))
 			if cnameStr != "" {
+				res.mu.Lock()
 				res.CNAME = cnameStr
+				res.mu.Unlock()
 			}
 		}
 	}

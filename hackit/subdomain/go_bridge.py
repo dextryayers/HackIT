@@ -55,7 +55,7 @@ class GoEngine:
             tech_detect=False, asn=False, probe=False, filter_codes=None,
             threads=100, output=None, verbose=False,
             common=False, all_flag=False, no_wildcard=False, doh=False,
-            resolve=True, output_format="text"):
+            resolve=True, output_format="text", wait_timeout=1800):
         if not self.ensure_compiled():
             raise RuntimeError("Go worker could not be compiled or Go is not installed.")
 
@@ -117,6 +117,7 @@ class GoEngine:
         if output:
             cmd.extend(['-o', output])
 
+        import time as _time
         try:
             process = subprocess.Popen(
                 cmd,
@@ -124,7 +125,20 @@ class GoEngine:
                 stderr=subprocess.PIPE,
                 text=False
             )
+            deadline = _time.time() + max(60, wait_timeout)
+            stderr_tail = b""
             while True:
+                if _time.time() > deadline:
+                    try:
+                        process.kill()
+                    except Exception:
+                        pass
+                    try:
+                        process.wait(timeout=10)
+                    except Exception:
+                        pass
+                    print(_colored("[!] Go worker exceeded its time budget and was stopped.", RED))
+                    return False
                 line_bytes = process.stdout.readline()
                 if not line_bytes and process.poll() is not None:
                     break
@@ -133,6 +147,13 @@ class GoEngine:
                     sys.stdout.write(line)
                     sys.stdout.flush()
             rc = process.poll()
+            if rc != 0:
+                try:
+                    stderr_tail = process.stderr.read(2048) if process.stderr else b""
+                except Exception:
+                    stderr_tail = b""
+                if stderr_tail:
+                    print(_colored("[!] Go worker stderr: " + stderr_tail.decode('utf-8', errors='replace')[:500], RED))
             return rc == 0
         except Exception as e:
             print(_colored(f"[!] Execution error: {e}", RED))

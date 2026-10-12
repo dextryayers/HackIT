@@ -170,8 +170,8 @@ func checkContent(domain string, signature string) bool {
 		if err != nil {
 			continue
 		}
-		defer resp.Body.Close()
-		body, err := io.ReadAll(resp.Body)
+		body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+		resp.Body.Close()
 		if err == nil && strings.Contains(string(body), signature) {
 			return true
 		}

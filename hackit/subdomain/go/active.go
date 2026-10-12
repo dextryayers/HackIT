@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 	"unsafe"
 )
 
@@ -17,12 +18,24 @@ func runActive(config Config, jobs chan string) {
 		fmt.Println("[*] Running Active Brute Force...")
 	}
 
-	// 1. Wildcard Detection
+	// 1. Wildcard Detection (bounded so a stalled resolver cannot hang the scan)
 	randName := fmt.Sprintf("hackit-%d.%s", rand.Intn(999999), config.Domain)
-	_, err := net.LookupHost(randName)
-	if err == nil {
-		if config.Verbose {
+	type lookupRes struct {
+		err error
+	}
+	done := make(chan lookupRes, 1)
+	go func() {
+		_, err := net.LookupHost(randName)
+		done <- lookupRes{err: err}
+	}()
+	select {
+	case r := <-done:
+		if r.err == nil && config.Verbose {
 			fmt.Println("[!] Wildcard DNS detected! Active brute force might produce false positives.")
+		}
+	case <-time.After(15 * time.Second):
+		if config.Verbose {
+			fmt.Println("[!] Wildcard pre-check timed out, continuing.")
 		}
 	}
 

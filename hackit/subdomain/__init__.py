@@ -62,7 +62,7 @@ def print_banner():
       ╚════██║██║   ██║██╔══██╗██║   ██║╚██╗ ██╔╝██╔══╝  ██╔══██╗
       ███████║╚██████╔╝██████╔╝╚██████╔╝ ╚████╔╝ ███████╗██║  ██║
       ╚══════╝ ╚═════╝ ╚═════╝  ╚═════╝   ╚═══╝  ╚══════╝╚═╝  ╚═╝
-[/bold cyan][bold magenta]                    HACKIT ENGINE v3.0                    [/bold magenta]
+[/bold cyan][bold magenta]                    HACKIT ENGINE v2.1                    [/bold magenta]
 [bold white]              Deep Crawl | Hyper-Spider | High Precision[/bold white]
     """
     console.print(Panel.fit(banner, border_style="bright_blue", padding=(1, 2)))
@@ -178,8 +178,9 @@ def passive_recon(domain):
             futures = []
             for url, parser in tasks:
                 futures.append(executor.submit(fetch_source, url, parser))
-            # Optional: wait with timeout in Python 3, but concurrent.futures automatically joins on exit.
-            # We rely on the request timeout to free up threads.
+            done, pending = concurrent.futures.wait(futures, timeout=150)
+            for f in pending:
+                f.cancel()
 
     # Initial ultra-fast resolution to weed out junk if too many results
     final_results = []
@@ -236,7 +237,10 @@ def extract_from_web(domain):
                 else: js_urls.append(f"https://{domain}/{js}")
 
             with ThreadPoolExecutor(max_workers=10) as executor:
-                list(executor.map(scrape_url, js_urls[:30])) # Limit to 30 JS files to avoid hanging
+                js_futures = [executor.submit(scrape_url, u) for u in js_urls[:30]]
+                done_js, pending_js = concurrent.futures.wait(js_futures, timeout=120)
+                for f in pending_js:
+                    f.cancel()
 
     return list(subs)
 
@@ -270,7 +274,7 @@ def extract_from_web(domain):
 @click.option('--no-resolve', is_flag=True, help='Skip DNS resolution for passive findings')
 def enumerate(domain, wordlist, passive_only, active_only, hyper, permutations, takeover, recursive, stealth, fast, sc, ip, title, server, tech_detect, asn, probe, filter_codes, threads, output, output_format, verbose, common, all_flag, no_wildcard, doh, no_resolve):
     """
-    Hackit SubOver v3.5: Deep Subdomain Enumeration & Takeover Scanner
+    Hackit SubOver v2.1: Deep Subdomain Enumeration & Takeover Scanner
     Flags: --all (max depth), --common (built-in WL), --doh, --no-wildcard
     """
     print_banner()
@@ -317,8 +321,14 @@ def enumerate(domain, wordlist, passive_only, active_only, hyper, permutations, 
         if hyper:
             from .hyper_crawler import run_hyper_crawler
             console.print("[bold magenta][*][/bold magenta] Initiating Massive Hyper-Crawler (API-less Scraper)...")
-            hyper_subs = run_hyper_crawler(domain)
-            for s in hyper_subs: all_passive_subs.add(s)
+            try:
+                hyper_subs = run_hyper_crawler(domain, timeout=300)
+            except Exception:
+                hyper_subs = []
+            for s in hyper_subs:
+                clean = normalize_hostname(s, domain)
+                if clean and is_valid_hostname(clean, domain):
+                    all_passive_subs.add(clean)
             console.print(f"[bold green][+][/bold green] Hyper-Crawler harvested [bold white]{len(hyper_subs)}[/bold white] unique subdomains.")
             
         console.print("[bold blue][*][/bold blue] Initiating Deep Passive Reconnaissance...")
@@ -350,39 +360,46 @@ def enumerate(domain, wordlist, passive_only, active_only, hyper, permutations, 
 
     console.print("[bold blue][*][/bold blue] Handing over to High-Speed Go Engine...")
     console.print("-" * 60)
-    
-    success = engine.run(
-        domain=domain,
-        wordlist=wordlist_arg,
-        passive_only=passive_only,
-        active_only=active_only,
-        permutations=permutations,
-        takeover=takeover,
-        recursive=recursive,
-        stealth=stealth,
-        fast=fast,
-        sc=sc,
-        ip=ip,
-        title=title,
-        server=server,
-        tech_detect=tech_detect,
-        asn=asn,
-        probe=probe,
-        filter_codes=filter_codes,
-        threads=threads,
-        output=output,
-        output_format=output_format,
-        verbose=verbose,
-        common=common,
-        all_flag=all_flag,
-        no_wildcard=no_wildcard,
-        doh=doh,
-        resolve=not no_resolve,
-    )
-    
-    # Cleanup temp file
-    if temp_wordlist_path and os.path.exists(temp_wordlist_path):
-        os.remove(temp_wordlist_path)
+
+    # Clamp worker count so absurd values cannot exhaust the Go engine.
+    threads = max(1, min(int(threads or 100), 2000))
+
+    try:
+        success = engine.run(
+            domain=domain,
+            wordlist=wordlist_arg,
+            passive_only=passive_only,
+            active_only=active_only,
+            permutations=permutations,
+            takeover=takeover,
+            recursive=recursive,
+            stealth=stealth,
+            fast=fast,
+            sc=sc,
+            ip=ip,
+            title=title,
+            server=server,
+            tech_detect=tech_detect,
+            asn=asn,
+            probe=probe,
+            filter_codes=filter_codes,
+            threads=threads,
+            output=output,
+            output_format=output_format,
+            verbose=verbose,
+            common=common,
+            all_flag=all_flag,
+            no_wildcard=no_wildcard,
+            doh=doh,
+            resolve=not no_resolve,
+        )
+    finally:
+        # Cleanup temp file even when the run is interrupted or fails.
+        if temp_wordlist_path and os.path.exists(temp_wordlist_path):
+            try:
+                os.remove(temp_wordlist_path)
+            except OSError:
+                pass
 
     console.print("-" * 60)
     

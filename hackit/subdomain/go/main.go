@@ -134,7 +134,7 @@ func main() {
 	// Luxury Professional Banner
 	startTime := time.Now()
 	fmt.Printf("\033[1;36m╔══════════════════════════════════════════════════╗\033[0m\n")
-	fmt.Printf("\033[1;36m║\033[0m  \033[1;33mHACKIT SUBDOMAIN RECON v3.5\033[0m              \033[1;36m║\033[0m\n")
+	fmt.Printf("\033[1;36m║\033[0m  \033[1;33mHACKIT SUBDOMAIN RECON V2.1\033[0m              \033[1;36m║\033[0m\n")
 	fmt.Printf("\033[1;36m╚══════════════════════════════════════════════════╝\033[0m\n")
 	fmt.Printf("\033[1;32m  TARGET:\033[0m %s\n", config.Domain)
 

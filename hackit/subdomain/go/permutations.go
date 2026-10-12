@@ -34,8 +34,14 @@ func runPermutations(foundSubs []*Result, domain string, jobs chan<- string) {
 	// Dynamic word generation (common patterns)
 	patterns := []string{"01", "02", "1", "2", "old", "new", "test1", "test2"}
 
+	// Hard cap so huge result sets cannot explode scan time.
+	const maxPermutations = 5000
 	count := 0
 	for _, res := range foundSubs {
+		if count >= maxPermutations {
+			fmt.Printf("[*] Permutation cap reached (%d), stopping.\n", maxPermutations)
+			break
+		}
 		sub := res.Subdomain
 		// Strip domain
 		prefix := strings.TrimSuffix(sub, "."+domain)
