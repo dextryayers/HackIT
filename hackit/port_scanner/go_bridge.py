@@ -227,13 +227,24 @@ class GoEngine:
                     # Silence all unknown output to keep tactical UI clean
                     pass
             
-            process.wait()
-            
+            try:
+                process.wait(timeout=kwargs.get('wait_timeout', 120))
+            except subprocess.TimeoutExpired:
+                try:
+                    process.kill()
+                except Exception:
+                    pass
+                try:
+                    process.wait(timeout=5)
+                except Exception:
+                    pass
+                return {'error': 'Go engine overall timeout', 'code': 4}
+
             if process.returncode != 0 and not final_result:
                 try:
-                    stderr = process.stderr.read()
-                    return {'error': stderr.strip()}
-                except:
+                    stderr = process.stderr.read(4096) if process.stderr else ""
+                    return {'error': (stderr or "").strip()[:500] or 'Process exited with non-zero code', 'code': process.returncode}
+                except Exception:
                     return {'error': 'Process exited with non-zero code'}
             
             # If we got a list of results (multiple targets), return the first one if only one was requested

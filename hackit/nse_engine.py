@@ -102,10 +102,10 @@ def validate_lua_script(script_path: str) -> bool:
 
 def _run_python_script(name: str, host: str, port: int, info: Dict[str, Any]) -> List[Dict]:
     findings = []
+    start = time.time()
     try:
         mod = import_module(f"{SCRIPTS_PACKAGE}.{name}")
         if hasattr(mod, 'run'):
-            start = time.time()
             out = mod.run(host, port, info) or []
             elapsed = time.time() - start
 
@@ -113,18 +113,20 @@ def _run_python_script(name: str, host: str, port: int, info: Dict[str, Any]) ->
                 for finding in out:
                     if isinstance(finding, dict):
                         finding.setdefault('script', name)
-                        finding.setdefault('severity', 'info')
+                        if finding.get('severity') not in SEVERITY_SCORES:
+                            finding['severity'] = 'info'
                         finding.setdefault('elapsed', round(elapsed, 3))
                         findings.append(finding)
             elif isinstance(out, dict):
                 out.setdefault('script', name)
-                out.setdefault('severity', 'info')
+                if out.get('severity') not in SEVERITY_SCORES:
+                    out['severity'] = 'info'
                 out.setdefault('elapsed', round(elapsed, 3))
                 findings.append(out)
     except ModuleNotFoundError:
-        findings.append({'script': name, 'error': 'module not found', 'severity': 'info'})
+        findings.append({'script': name, 'error': 'module not found', 'severity': 'info', 'elapsed': round(time.time() - start, 3)})
     except Exception as e:
-        findings.append({'script': name, 'error': str(e), 'severity': 'info'})
+        findings.append({'script': name, 'error': str(e)[:200], 'severity': 'info', 'elapsed': round(time.time() - start, 3)})
     return findings
 
 

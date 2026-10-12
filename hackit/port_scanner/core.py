@@ -39,45 +39,101 @@ class PortScanner:
                 )
         return self._http_pools[key]
 
-    def scan_port(self, host, port):
+    def scan_port(self, host, port, banner_timeout=2.0):
+        import time
+        started = time.time()
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(banner_timeout)
                 result = s.connect_ex((host, port))
+                connect_ms = int((time.time() - started) * 1000)
                 if result == 0:
                     banner = ""
+                    banner_status = "empty"
                     try:
                         if port in [80, 8080, 443] and urllib3 is not None:
                             pool = self._get_pool(host, port)
-                            r = pool.request('HEAD', '/', headers={'Host': host}, timeout=2.0)
+                            r = pool.request('HEAD', '/', headers={'Host': host}, timeout=banner_timeout)
                             banner = r.data.decode('utf-8', errors='ignore').strip()
+                            banner_status = "full" if banner else "empty"
                         else:
                             if port in (21, 22):
                                 pass
-                            s.settimeout(2.0)
-                            banner = s.recv(1024).decode('utf-8', errors='ignore').strip()
+                            raw = s.recv(4096)
+                            if raw:
+                                banner = raw.decode('utf-8', errors='ignore').strip()
+                                banner_status = "full" if len(raw) < 4096 else "truncated"
+                            else:
+                                banner_status = "empty"
                         banner = "".join(c for c in banner if c.isprintable())
+                    except socket.timeout:
+                        banner_status = "timeout"
                     except Exception:
-                        pass
+                        if banner:
+                            banner_status = "truncated"
+                        else:
+                            banner_status = "empty"
+
+                    service = self.common_services.get(port, "unknown")
+                    if service == "unknown":
+                        confidence = 0.45
+                        reason = "port-default-unknown"
+                    else:
+                        confidence = 0.60
+                        reason = "port-default-match"
+                    if banner and banner_status in ("full", "truncated"):
+                        confidence = min(0.95, confidence + 0.25)
+                        reason = "banner-observed+" + reason
 
                     return {
                         "port": port,
                         "status": "open",
-                        "service": self.common_services.get(port, "unknown"),
-                        "banner": banner[:100]
+                        "service": service,
+                        "banner": banner[:200],
+                        "banner_status": banner_status,
+                        "confidence": round(confidence, 2),
+                        "reason": reason,
+                        "elapsed_ms": int((time.time() - started) * 1000),
+                        "connect_ms": connect_ms,
                     }
-        except Exception:
-            pass
+                return {
+                    "port": port,
+                    "status": "closed",
+                    "service": self.common_services.get(port, "unknown"),
+                    "banner": "",
+                    "banner_status": "empty",
+                    "confidence": 0.80,
+                    "reason": "connect-refused-or-timeout",
+                    "elapsed_ms": int((time.time() - started) * 1000),
+                }
+        except Exception as e:
+            return {
+                "port": port,
+                "status": "error",
+                "service": self.common_services.get(port, "unknown"),
+                "banner": "",
+                "banner_status": "empty",
+                "confidence": 0.0,
+                "reason": "scan-error:" + type(e).__name__[:40],
+                "elapsed_ms": int((time.time() - started) * 1000),
+            }
         return None
 
-    def _scan_chunk(self, host, ports_chunk):
+    def _scan_chunk(self, host, ports_chunk, on_result=None, include_closed=False):
         local_results = []
         for port in ports_chunk:
             res = self.scan_port(host, port)
             if res:
-                local_results.append(res)
+                if on_result is not None:
+                    try:
+                        on_result(res)
+                    except Exception:
+                        pass
+                if res.get("status") == "open" or (include_closed and res.get("status") in ("closed", "error")):
+                    local_results.append(res)
         return local_results
 
-    def scan(self, host, ports=None, timeout=1, threads=100):
+    def scan(self, host, ports=None, timeout=1, threads=100, on_result=None, include_closed=False):
         socket.setdefaulttimeout(timeout)
 
         try:
@@ -101,7 +157,7 @@ class PortScanner:
 
         results = []
         with ThreadPoolExecutor(max_workers=threads) as executor:
-            futures = [executor.submit(self._scan_chunk, host, chunk) for chunk in chunks]
+            futures = [executor.submit(self._scan_chunk, host, chunk, on_result, include_closed) for chunk in chunks]
             for future in futures:
                 results.extend(future.result())
 

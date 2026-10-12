@@ -48,6 +48,10 @@ class JSONFormatter(logging.Formatter):
             "module": record.name,
             "msg": record.getMessage(),
         }
+        for field in ("run_id", "elapsed_ms", "target_hash", "severity", "confidence"):
+            value = getattr(record, field, None)
+            if value is not None:
+                entry[field] = value
         if record.exc_info and record.exc_info[0]:
             entry["exception"] = self.formatException(record.exc_info)
         return json.dumps(entry, ensure_ascii=False)

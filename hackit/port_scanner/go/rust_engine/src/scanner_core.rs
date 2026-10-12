@@ -38,7 +38,14 @@ impl StealthScanner {
 
     fn syn_scan(&self, host: &str, port: u16) -> bool {
         let addr = format!("{}:{}", host, port);
-        TcpStream::connect_timeout(&addr.to_socket_addrs().unwrap().next().unwrap(), self.timeout).is_ok()
+        let mut addrs = match addr.to_socket_addrs() {
+            Ok(it) => it,
+            Err(_) => return false,
+        };
+        match addrs.next() {
+            Some(sock) => TcpStream::connect_timeout(&sock, self.timeout).is_ok(),
+            None => false,
+        }
     }
 
     fn fin_scan(&self, _host: &str, _port: u16) -> bool {
