@@ -23,8 +23,36 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 
 console = Console()
 
+import time
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+_HOST_LABEL = re.compile(r'^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')
+
+
+def normalize_hostname(raw, domain):
+    """Lowercase, strip wildcard and trailing dot, punycode-encode. Returns clean name or empty string."""
+    if not raw:
+        return ""
+    try:
+        name = raw.strip().lower().lstrip("*.").rstrip(".")
+        name = name.encode("idna").decode("ascii")
+    except Exception:
+        return ""
+    if name == domain or name.endswith("." + domain):
+        return name
+    return ""
+
+
+def is_valid_hostname(name, domain):
+    """RFC 1034 shape check: labels 1-63 chars, total max 253, no empty labels."""
+    if not name or len(name) > 253:
+        return False
+    if name == domain:
+        return True
+    if not name.endswith("." + domain):
+        return False
+    return all(_HOST_LABEL.match(label) for label in name.split("."))
 
 def print_banner():
     banner = """[bold cyan]
@@ -45,23 +73,35 @@ def passive_recon(domain):
     Sources (No API Key Required): HackerTarget, crt.sh, AlienVault OTX, Anubis, ThreatMiner, RapidDNS, Wayback, CertSpotter, URLScan, ThreatCrowd, Riddler, SiteDossier.
     """
     subs = set()
+    source_stats = {}
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     lock = threading.Lock()
 
     def fetch_source(url, parser_func):
+        start = time.time()
+        accepted = 0
         try:
             # Set explicit connect and read timeouts
             resp = requests.get(url, timeout=(3, 10), headers=headers, verify=False)
             if resp.status_code == 200:
-                extracted = parser_func(resp)
-                if extracted:
-                    with lock:
-                        for s in extracted:
-                            s = s.lower().strip("*.").strip()
-                            if s.endswith("." + domain) or s == domain:
-                                subs.add(s)
+                extracted = parser_func(resp) or set()
+                with lock:
+                    for raw in extracted:
+                        clean = normalize_hostname(str(raw), domain)
+                        if clean and is_valid_hostname(clean, domain):
+                            if clean not in subs:
+                                accepted += 1
+                            subs.add(clean)
+        except requests.Timeout:
+            with lock:
+                source_stats[url] = {"status": "timeout", "elapsed_ms": int((time.time() - start) * 1000), "accepted": 0}
+            return
         except Exception:
-            pass
+            with lock:
+                source_stats[url] = {"status": "failed", "elapsed_ms": int((time.time() - start) * 1000), "accepted": 0}
+            return
+        with lock:
+            source_stats[url] = {"status": "ok", "elapsed_ms": int((time.time() - start) * 1000), "accepted": accepted}
 
     # Parsers
     def parse_crtsh(resp):
@@ -167,10 +207,15 @@ def extract_from_web(domain):
             if resp.status_code == 200:
                 pattern = re.compile(rf'([a-zA-Z0-9-]+\.)+{re.escape(domain)}')
                 for m in pattern.findall(resp.text):
-                    s = (m[0] if isinstance(m, tuple) else m).lower().strip(".")
-                    if s.endswith("." + domain) or s == domain: subs.add(s)
+                    raw = m[0] if isinstance(m, tuple) else m
+                    clean = normalize_hostname(raw, domain)
+                    if clean and is_valid_hostname(clean, domain):
+                        subs.add(clean)
                 return resp.text
-        except: pass
+        except requests.Timeout:
+            pass
+        except Exception:
+            pass
         return ""
 
     with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True, console=console) as progress:

@@ -34,46 +34,88 @@ class ParamFuzzer:
             
         return self.results
 
+    SQL_ERROR_MARKERS = (
+        "you have an error in your sql syntax",
+        "pg::syntaxerror",
+        "unclosed quotation mark",
+        "ora-01756",
+        "sqlite3::sqlexception",
+        "near \"syntax error\"",
+    )
+
+    def classify_sink(self, param, payload, text, status, location):
+        """Classify where a reflected token lands: reflected, redirect_sink, file_sink."""
+        lowered = (text or "").lower()
+        token = payload.lower()
+        if location and token in location.lower():
+            return "redirect_sink"
+        if token in lowered:
+            if "include" in lowered or ".php" in lowered or "/etc/" in lowered:
+                return "file_sink"
+            return "reflected"
+        return "none"
+
     async def check_param(self, session, param, payload, method):
         try:
             # Prepare Request
-            req_kwargs = {"timeout": self.timeout}
+            req_kwargs = {"timeout": aiohttp.ClientTimeout(total=self.timeout)}
             if method == "GET":
                 req_kwargs["params"] = {param: payload}
                 func = session.get
             else:
                 req_kwargs["data"] = {param: payload}
                 func = session.post
-            
-            async with func(self.url, **req_kwargs) as resp:
+
+            async with func(self.url, allow_redirects=False, **req_kwargs) as resp:
                 text = await resp.text()
-                
-                # Check Reflection
-                if payload in text:
+                location = resp.headers.get("Location", "")
+
+                # Check Reflection with sink classification
+                if payload in text or (location and payload in location):
                     context = self.analyze_context(text, payload)
+                    sink = self.classify_sink(param, payload, text, resp.status, location)
                     self.results.append({
                         "param": param,
                         "payload": payload,
                         "method": method,
                         "reflected": True,
                         "context": context,
+                        "sink_hint": sink,
                         "status": resp.status,
                         "length": len(text)
                     })
-                
-                # Check Errors (SQLi mostly)
-                if "syntax error" in text.lower() or "mysql" in text.lower():
+
+                # Check Errors (SQLi mostly, DB-specific markers only)
+                lowered = text.lower()
+                if any(marker in lowered for marker in self.SQL_ERROR_MARKERS):
                      self.results.append({
                         "param": param,
                         "payload": payload,
                         "method": method,
                         "reflected": False,
+                        "sink_hint": "sqli_candidate",
                         "error": "Possible SQL Error",
                         "status": resp.status
                     })
 
+        except asyncio.TimeoutError:
+            self.results.append({
+                "param": param,
+                "payload": payload,
+                "method": method,
+                "reflected": False,
+                "sink_hint": "none",
+                "error": "request timeout",
+            })
         except Exception as e:
-            pass
+            self.results.append({
+                "param": param,
+                "payload": payload,
+                "method": method,
+                "reflected": False,
+                "sink_hint": "none",
+                "error": "request failed: " + type(e).__name__[:40],
+            })
 
     def analyze_context(self, html: str, payload: str) -> str:
         """Analyze where the payload is reflected"""

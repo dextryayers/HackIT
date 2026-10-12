@@ -134,12 +134,19 @@ def process_header(event):
     key_color = GREEN if sec else WHITE
     click.echo(f"  {_colored(key, key_color)}: {val} {_colored(f'[{cat}]', DIM)}")
 
+_KNOWN_SEVERITIES = ('Low', 'Medium', 'High', 'Critical', 'Info')
+
 def process_finding(event):
     global _findings_count
     ftype = event.get('finding_type', '')
     header = event.get('header', event.get('category', ''))
     desc = event.get('description', '')
     sev = event.get('severity', 'Low')
+    if sev not in _KNOWN_SEVERITIES:
+        sev = 'Low'
+    if sev in ('High', 'Critical') and not event.get('value', '') and not desc:
+        sev = 'Medium'
+        event['needs_review'] = True
     sev_color = RED if sev in ['High', 'Critical'] else YELLOW
     rec = event.get('recommendation', '')
 

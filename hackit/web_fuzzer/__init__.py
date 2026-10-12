@@ -42,9 +42,18 @@ def spider(domain, output, list_only, verbose, mask, deep, subs):
     with ThreadPoolExecutor(max_workers=2) as executor:
         future_rust = executor.submit(rust_engine.run, domain, verbose=verbose, mask=mask)
         future_go = executor.submit(go_engine.harvest, domain)
-        
-        rust_urls = future_rust.result()
-        go_urls = future_go.result()
+
+        rust_urls, go_urls = [], []
+        try:
+            rust_urls = future_rust.result(timeout=120) or []
+        except Exception as e:
+            click.echo(_colored(f"[!] Rust harvester failed or timed out: {type(e).__name__}", YELLOW))
+            future_rust.cancel()
+        try:
+            go_urls = future_go.result(timeout=120) or []
+        except Exception as e:
+            click.echo(_colored(f"[!] Go harvester failed or timed out: {type(e).__name__}", YELLOW))
+            future_go.cancel()
     
     # Merge and Deduplicate
     all_urls = list(set(rust_urls + go_urls))

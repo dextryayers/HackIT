@@ -11,36 +11,46 @@ from hackit.ui import display_tool_banner, _colored, BLUE, GREEN, RED, YELLOW, B
 
 def _resolve_hostname(ip: str, timeout: float = 1.0) -> str:
     try:
-        socket.setdefaulttimeout(timeout)
-        return socket.getfqdn(ip)
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.settimeout(timeout)
+            return socket.getfqdn(ip)
     except Exception:
         return ""
 
 
-def _tcp_ping(ip: str, port: int = 80, timeout: float = 1.0) -> bool:
+def _tcp_ping(ip: str, port: int = 80, timeout: float = 1.0) -> float:
+    """Probe one TCP port. Returns latency in ms on success, -1.0 on failure."""
+    import time
+    start = time.time()
     try:
         with socket.create_connection((ip, port), timeout=timeout):
-            return True
+            return (time.time() - start) * 1000.0
     except Exception:
-        return False
+        return -1.0
 
 
 def _scan_host(ip_str: str, ports: List[int], timeout: float) -> Optional[Dict[str, Any]]:
+    latencies = {}
+    open_ports = []
     for port in ports:
-        if _tcp_ping(ip_str, port, timeout):
-            hostname = _resolve_hostname(ip_str, timeout)
-            open_ports = []
-            for p in ports:
-                if _tcp_ping(ip_str, p, timeout):
-                    open_ports.append(p)
-            return {
-                'ip': ip_str,
-                'hostname': hostname if hostname != ip_str else '',
-                'alive': True,
-                'open_ports': open_ports,
-                'latency_ms': 0,
-            }
-    return None
+        latency = _tcp_ping(ip_str, port, timeout)
+        if latency >= 0:
+            open_ports.append(port)
+            latencies[port] = round(latency, 2)
+    if not open_ports:
+        return None
+    hostname = _resolve_hostname(ip_str, timeout)
+    evidence = len(open_ports)
+    return {
+        'ip': ip_str,
+        'hostname': hostname if hostname != ip_str else '',
+        'alive': True,
+        'open_ports': open_ports,
+        'latency_ms': round(min(latencies.values()), 2),
+        'method_used': 'tcp-connect',
+        'confidence': 0.95 if evidence >= 2 else 0.65,
+        'verdict': 'host_up' if evidence >= 2 else 'host_likely_up',
+    }
 
 
 def _python_scan(cidr: str, ports: List[int], timeout: float, threads: int,

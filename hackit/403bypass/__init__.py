@@ -37,13 +37,17 @@ class Bypass403Pro:
             return
 
         try:
-            process = subprocess.run(
-                [self.engine_path, "-url", self.target_url],
-                capture_output=True, text=True
-            )
-            
+            try:
+                process = subprocess.run(
+                    [self.engine_path, "-url", self.target_url],
+                    capture_output=True, text=True, timeout=120
+                )
+            except subprocess.TimeoutExpired:
+                print(f"[\033[31mX\033[0m] Engine timed out after 120s")
+                return
+
             if process.returncode != 0:
-                print(f"[\033[31mX\033[0m] Engine failed:\n{process.stderr}")
+                print(f"[\033[31mX\033[0m] Engine failed:\n{(process.stderr or '')[:500]}")
                 return
 
             try:
@@ -59,7 +63,23 @@ class Bypass403Pro:
                 s = r.get("status_code", 0)
                 by_status[s] = by_status.get(s, 0) + 1
 
-            bypasses = [r for r in results if 200 <= r.get("status_code", 0) <= 299]
+            # Differential check: a 2xx with the same body length as the
+            # blocked-response mode is a custom error page, not a bypass.
+            blocked_lengths = sorted(
+                r.get("length", 0) for r in results if r.get("status_code", 0) >= 400
+            )
+            blocked_mode = blocked_lengths[len(blocked_lengths) // 2] if blocked_lengths else 0
+
+            def _is_bypass(r):
+                code = r.get("status_code", 0)
+                if not 200 <= code <= 299:
+                    return False
+                if blocked_lengths and abs(r.get("length", 0) - blocked_mode) == 0:
+                    r["bypass_note"] = "same-length-as-blocked-mode: possible custom error page"
+                    return False
+                return True
+
+            bypasses = [r for r in results if _is_bypass(r)]
             redirects = [r for r in results if 300 <= r.get("status_code", 0) <= 399]
             errors5xx = [r for r in results if 500 <= r.get("status_code", 0) <= 599]
             blocked = [r for r in results if r.get("status_code", 0) >= 400]
@@ -115,7 +135,7 @@ class Bypass403Pro:
 @click.option('--verbose', is_flag=True, default=True, help='Show all attempts (default: True)')
 @click.option('--only-success', is_flag=True, default=False, help='Show only successful bypasses (2xx)')
 def run_bypass_cli(url, verbose, only_success):
-    """High-Speed 403-XBypass Pro — 1000+ payloads, 100 concurrent workers"""
+    """High-Speed 403-XBypass Pro - 1000+ payloads, 100 concurrent workers"""
     scanner = Bypass403Pro(url, verbose, only_success)
     scanner.run()
 

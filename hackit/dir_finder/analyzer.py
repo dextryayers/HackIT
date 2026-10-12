@@ -195,7 +195,11 @@ class SmartAnalyzer:
 
     def detect_waf(self):
         """Detect WAF with 20+ signatures using probes"""
+        import time as _time
         print(f"[*] Detecting WAF...")
+        waf_start = _time.time()
+        self.waf_evidence = {}
+        self.waf_elapsed_ms = 0
         waf_payloads = [
             ("?id=' OR 1=1--", "' OR 1=1--"),
             ("?id=<script>alert(1)</script>", "<script>alert(1)</script>"),
@@ -220,18 +224,24 @@ class SmartAnalyzer:
                         for header, pattern in sigs.get("headers", {}).items():
                             if header in headers and re.search(pattern, headers[header], re.I):
                                 self.waf_detected = waf
+                                self.waf_evidence = {"via": "header", "marker": header, "status": resp.status_code, "probe": path_suffix}
+                                self.waf_elapsed_ms = int((_time.time() - waf_start) * 1000)
                                 print(f"[+] WAF Detected: {waf} (via header)")
                                 return waf
                         if sigs.get("body"):
                             for pattern in (sigs["body"] if isinstance(sigs["body"], list) else [sigs["body"]]):
                                 if re.search(pattern, body, re.I):
                                     self.waf_detected = waf
+                                    self.waf_evidence = {"via": "body", "marker": pattern[:60], "status": resp.status_code, "probe": path_suffix}
+                                    self.waf_elapsed_ms = int((_time.time() - waf_start) * 1000)
                                     print(f"[+] WAF Detected: {waf} (via body)")
                                     return waf
 
                     # Generic WAF by status
                     if not self.waf_detected:
                         self.waf_detected = f"Generic WAF (Blocked: {resp.status_code})"
+                        self.waf_evidence = {"via": "status", "marker": str(resp.status_code), "status": resp.status_code, "probe": path_suffix}
+                        self.waf_elapsed_ms = int((_time.time() - waf_start) * 1000)
                         print(f"[+] WAF Detected: {self.waf_detected}")
                         return self.waf_detected
 
@@ -239,6 +249,8 @@ class SmartAnalyzer:
                 continue
 
         self.waf_detected = "None"
+        self.waf_evidence = {}
+        self.waf_elapsed_ms = int((_time.time() - waf_start) * 1000)
         print("[+] No WAF detected")
         return "None"
 
