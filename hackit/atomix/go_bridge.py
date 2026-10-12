@@ -157,7 +157,8 @@ class AtomixGoEngine:
                 user_timeout = int(user_timeout)
             except (ValueError, TypeError):
                 user_timeout = 60
-        process_timeout = max(user_timeout * 3, 600)
+        user_timeout = max(1, user_timeout)
+        process_timeout = min(max(user_timeout * 3, 60), 1800)
         try:
             result = subprocess.run(
                 args, capture_output=True, text=True, timeout=process_timeout,

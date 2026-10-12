@@ -23,6 +23,23 @@ def pick_engine(preferred: str = "go"):
     return engines["go"]
 
 
+def confidence_to_float(value) -> float:
+    """Normalize engine confidence (string label or number) to a 0.0-1.0 float."""
+    if isinstance(value, (int, float)):
+        try:
+            return max(0.0, min(1.0, float(value)))
+        except (ValueError, TypeError):
+            return 0.4
+    label = str(value or "").strip().lower()
+    if label == "high":
+        return 0.9
+    if label == "medium":
+        return 0.7
+    if label == "low":
+        return 0.4
+    return 0.4
+
+
 def correlate_results(all_results: list) -> list:
     by_url_param = {}
     for engine_name, results in all_results:
@@ -32,30 +49,23 @@ def correlate_results(all_results: list) -> list:
             key = (r.get('url', ''), r.get('parameter', ''))
             if key not in by_url_param:
                 by_url_param[key] = {'results': [], 'max_conf': 0.0}
+            r['confidence'] = confidence_to_float(r.get('confidence'))
             by_url_param[key]['results'].append(r)
-            conf_val = 0.9 if r.get('confidence') == "High" else 0.7 if r.get('confidence') == "Medium" else 0.4
-            if conf_val > by_url_param[key]['max_conf']:
-                by_url_param[key]['max_conf'] = conf_val
+            if r['confidence'] > by_url_param[key]['max_conf']:
+                by_url_param[key]['max_conf'] = r['confidence']
 
     correlated = []
     for (url_param), data in by_url_param.items():
         engine_count = len(data['results'])
-        avg_conf = sum(
-            0.9 if r.get('confidence') == "High" else 0.7 if r.get('confidence') == "Medium" else 0.4
-            for r in data['results']
-        ) / max(engine_count, 1)
+        avg_conf = sum(r['confidence'] for r in data['results']) / max(engine_count, 1)
         if engine_count >= 2:
-            avg_conf = min(1.0, avg_conf + 0.15)
-        best = max(data['results'], key=lambda r: (
-            0.9 if r.get('confidence') == "High" else 0.7 if r.get('confidence') == "Medium" else 0.4
-        ))
-        best['confidence'] = avg_conf
+            avg_conf = min(1.0, avg_conf + 0.05)
+        best = max(data['results'], key=lambda r: r['confidence'])
+        best['confidence'] = round(avg_conf, 3)
         best['correlation_count'] = engine_count
         correlated.append(best)
 
-    correlated.sort(key=lambda r: (
-        0.9 if r.get('confidence') == "High" else 0.7 if r.get('confidence') == "Medium" else 0.4
-    ), reverse=True)
+    correlated.sort(key=lambda r: r.get('confidence', 0.0), reverse=True)
     return correlated
 
 
@@ -69,8 +79,8 @@ def severity_color(sev: str) -> str:
         return B_GREEN
 
 
-def confidence_color(conf: str) -> str:
-    return B_RED if conf == "High" else B_YELLOW
+def confidence_color(conf) -> str:
+    return B_RED if confidence_to_float(conf) >= 0.9 else B_YELLOW
 
 
 @click.command(name="xss")

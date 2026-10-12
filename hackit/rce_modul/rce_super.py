@@ -275,16 +275,22 @@ class EngineLauncher:
                     args.append("--blind")
                 if oob:
                     args.extend(["--oob", oob])
-                args.append("--detect")
+                if "--detect" not in args:
+                    args.append("--detect")
 
                 try:
                     result = subprocess.run(args, capture_output=True, text=True,
                                             timeout=timeout + 15)
                     if result.stdout:
-                        data = json.loads(result.stdout)
+                        try:
+                            data = json.loads(result.stdout)
+                        except json.JSONDecodeError:
+                            continue
+                        if isinstance(data, dict):
+                            data = [data]
                         if isinstance(data, list):
                             for r in data:
-                                if r.get("vulnerable"):
+                                if isinstance(r, dict) and r.get("vulnerable"):
                                     points.append(RCEPoint(
                                         url=url, parameter=param,
                                         method=endpoint.method,
@@ -294,7 +300,9 @@ class EngineLauncher:
                                         engine=eng_name,
                                         output=r.get("output", "")
                                     ))
-                except:
+                except subprocess.TimeoutExpired:
+                    continue
+                except Exception:
                     continue
         return points
 

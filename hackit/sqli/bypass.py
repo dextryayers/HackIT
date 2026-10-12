@@ -129,37 +129,38 @@ def apply_tampers(payload: str, tamper_names: List[str]) -> str:
     return result
 
 
-def generate_variants(payload: str, count: int = 5) -> List[str]:
+def generate_variants(payload: str, count: int = 5, seed=None) -> List[str]:
+    rng = random.Random(seed)
     variants = set()
     tamper_list = list(ALL_TAMPERS.keys())
     for _ in range(count * 3):
-        k = random.randint(1, min(4, len(tamper_list)))
-        selected = random.sample(tamper_list, k)
+        k = rng.randint(1, min(4, len(tamper_list)))
+        selected = rng.sample(tamper_list, k)
         variant = apply_tampers(payload, selected)
         if variant != payload:
             variants.add(variant)
         if len(variants) >= count:
             break
-    return list(variants)[:count]
+    return sorted(variants)[:count]
 
 
 class WAFBypass:
     def __init__(self):
         self.tampers = ALL_TAMPERS
 
-    def bypass_payload(self, payload: str, target_waf: str = "") -> List[str]:
+    def bypass_payload(self, payload: str, target_waf: str = "", seed=None) -> List[str]:
         if target_waf.lower() in ('cloudflare', 'akamai'):
-            return generate_variants(payload, 10)
+            return generate_variants(payload, 10, seed=seed)
         elif target_waf.lower() in ('modsecurity', 'aws waf'):
             variants = [apply_tampers(payload, ['modsecurity', 'randomcase'])]
-            variants.extend(generate_variants(payload, 5))
+            variants.extend(generate_variants(payload, 5, seed=seed))
             return variants
         elif target_waf.lower() in ('imperva', 'incapsula'):
             variants = [apply_tampers(payload, ['comment_between_keywords', 'between'])]
-            variants.extend(generate_variants(payload, 5))
+            variants.extend(generate_variants(payload, 5, seed=seed))
             return variants
         else:
-            return generate_variants(payload, 8)
+            return generate_variants(payload, 8, seed=seed)
 
     def obfuscate(self, sql_query: str, level: int = 1) -> str:
         if level <= 1:

@@ -65,10 +65,20 @@ def scan_target(target: ScanTarget, engine: GoEngine, **scan_kwargs) -> ScanResu
         }
         raw = engine.run(**kwargs)
         result.duration = time.time() - start
-        if raw and isinstance(raw, list) and len(raw) > 0 and 'error' in raw[0]:
-            result.error = raw[0]['error']
+        if isinstance(raw, dict):
+            if 'error' in raw:
+                result.error = str(raw['error'])[:300]
+                return result
+            raw = [raw]
+        if not isinstance(raw, list):
+            result.error = 'unexpected engine output type: ' + type(raw).__name__
+            return result
+        if raw and isinstance(raw[0], dict) and 'error' in raw[0]:
+            result.error = str(raw[0]['error'])[:300]
             return result
         for r in raw:
+            if not isinstance(r, dict):
+                continue
             if r.get('parameter') == "enumeration":
                 result.enumeration.append(r)
             else:
@@ -198,8 +208,10 @@ def deep_scan_single(
         _console.print(f"[yellow]─ Risk level {risk}/5 ─[/]")
         results = engine.run(url=url, risk_level=risk, timeout=timeout,
                              fingerprint=True, list_dbs=(risk >= 3), dump_all=(risk >= 5))
-        if results and 'error' in results[0]:
-            _console.print(f"[red]  Error: {results[0]['error']}[/]")
+        if isinstance(results, dict):
+            results = [results]
+        if results and isinstance(results[0], dict) and 'error' in results[0]:
+            _console.print(f"[red]  Error: {str(results[0]['error'])[:200]}[/]")
             continue
         for r in results:
             if r.get('parameter') == "enumeration":

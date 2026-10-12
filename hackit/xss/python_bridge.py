@@ -19,7 +19,8 @@ class PythonEngine:
 
     def run(self, url: str, **kwargs) -> List[Dict[str, Any]]:
         try:
-            sys.path.insert(0, self.base_dir)
+            if self.base_dir not in sys.path:
+                sys.path.insert(0, self.base_dir)
             from python.scanner import Scanner
             timeout = kwargs.get('timeout', 10)
             threads = kwargs.get('threads', 10)
