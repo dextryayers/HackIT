@@ -1,8 +1,12 @@
 import sys
 import os
 import shlex
-import termios
-import tty
+try:
+    import termios
+    import tty
+except ImportError:
+    termios = None
+    tty = None
 import select
 try:
     import readline
@@ -184,6 +188,11 @@ class HackItConsole:
         sys.stdout.flush()
 
     def _read_colored_input(self, prompt):
+        if termios is None or tty is None or not sys.stdin.isatty():
+            try:
+                return input(prompt)
+            except EOFError:
+                raise
         fd = sys.stdin.fileno()
         old = termios.tcgetattr(fd)
         suffix = prompt[prompt.rfind('\n') + 1:] if '\n' in prompt else prompt
