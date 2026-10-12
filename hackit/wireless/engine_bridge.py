@@ -177,10 +177,10 @@ class EngineBridge:
     # ── Rust engine execution ──────────────────────────────────
 
     def _ensure_rust(self) -> str:
-        if self._rust_bin:
+        if self._rust_bin and self._rust_bin not in ("cargo_build",):
             return self._rust_bin
         if self._build_rust(None):
-            if self._rust_bin:
+            if self._rust_bin and self._rust_bin not in ("cargo_build",):
                 return self._rust_bin
         raise EngineBuildError("Rust engine not built. Run 'build' first.")
 
@@ -274,10 +274,10 @@ class EngineBridge:
     # ── Go worker execution ────────────────────────────────────
 
     def _ensure_go(self) -> str:
-        if self._go_bin:
+        if self._go_bin and self._go_bin not in ("go_build",):
             return self._go_bin
         if self._build_go(None):
-            if self._go_bin:
+            if self._go_bin and self._go_bin not in ("go_build",):
                 return self._go_bin
         raise EngineBuildError("Go workers not built. Run 'build' first.")
 

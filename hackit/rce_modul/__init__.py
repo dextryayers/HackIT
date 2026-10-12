@@ -41,6 +41,25 @@ def pick_engine(preferred: str = "go"):
         return engines[preferred]
     return engines["go"]
 
+def confidence_to_float(value) -> float:
+    """Normalize engine confidence (string label or number) to a 0.0-1.0 float."""
+    if isinstance(value, bool):
+        return 1.0 if value else 0.0
+    if isinstance(value, (int, float)):
+        try:
+            return max(0.0, min(1.0, float(value)))
+        except (ValueError, TypeError):
+            return 0.0
+    label = str(value or "").strip().lower()
+    if label in ("critical", "high"):
+        return 0.9
+    if label == "medium":
+        return 0.7
+    if label == "low":
+        return 0.4
+    return 0.0
+
+
 def correlate_results(all_results: list) -> list:
     by_url_param = {}
     for engine_name, results in all_results:
@@ -50,23 +69,23 @@ def correlate_results(all_results: list) -> list:
             key = (r.get('url', ''), r.get('parameter', ''))
             if key not in by_url_param:
                 by_url_param[key] = {'results': [], 'max_conf': 0.0}
+            r['confidence'] = confidence_to_float(r.get('confidence'))
             by_url_param[key]['results'].append(r)
-            conf = r.get('confidence', 0)
-            if conf > by_url_param[key]['max_conf']:
-                by_url_param[key]['max_conf'] = conf
+            if r['confidence'] > by_url_param[key]['max_conf']:
+                by_url_param[key]['max_conf'] = r['confidence']
 
     correlated = []
     for (url, param), data in by_url_param.items():
         engine_count = len(data['results'])
-        avg_conf = sum(r.get('confidence', 0) for r in data['results']) / max(engine_count, 1)
+        avg_conf = sum(r['confidence'] for r in data['results']) / max(engine_count, 1)
         if engine_count >= 2:
-            avg_conf = min(1.0, avg_conf + 0.15)
-        best = max(data['results'], key=lambda r: r.get('confidence', 0))
-        best['confidence'] = avg_conf
+            avg_conf = min(0.98, avg_conf + 0.05)
+        best = max(data['results'], key=lambda r: r['confidence'])
+        best['confidence'] = round(avg_conf, 3)
         best['correlation_count'] = engine_count
         correlated.append(best)
 
-    correlated.sort(key=lambda r: r.get('confidence', 0), reverse=True)
+    correlated.sort(key=lambda r: r.get('confidence', 0.0), reverse=True)
     return correlated
 
 def display_results(results: list, show_raw: bool = False):
@@ -89,7 +108,7 @@ def display_results(results: list, show_raw: bool = False):
         table.add_column("Output", style="dim", width=40)
 
         for r in vuln_results:
-            conf_str = f"{r.get('confidence', 0)*100:.0f}%"
+            conf_str = f"{confidence_to_float(r.get('confidence', 0))*100:.0f}%"
             payload = r.get('payload', r.get('technique', ''))[:48]
             output = r.get('output', '')[:38]
             table.add_row(

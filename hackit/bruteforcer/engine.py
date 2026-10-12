@@ -93,7 +93,10 @@ def run_rust_engine(target, port, protocol, users, passwords, threads=32, timeou
         if expand_words:
             cmd.append("--expand-words")
 
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+        except subprocess.TimeoutExpired:
+            return {"status": "error", "message": "Rust engine timed out after 3600s"}
 
         results = []
         for line in proc.stdout.strip().split('\n'):

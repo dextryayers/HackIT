@@ -228,14 +228,48 @@ class DDoSConfig:
         ]
         return '\n'.join(l for l in lines if l)
 
+    def target_class(self):
+        """Classify the configured target. Returns (class_name, resolved_ip)."""
+        import ipaddress
+        raw = (self.target or "").strip()
+        if not raw:
+            return "empty", ""
+        host = raw.split("://")[-1].split("/")[0].split(":")[0]
+        try:
+            ip = ipaddress.ip_address(host)
+        except ValueError:
+            try:
+                resolved = socket.gethostbyname(host)
+                ip = ipaddress.ip_address(resolved)
+            except Exception:
+                return "unresolvable", host
+            return self._classify_ip(ip, host)
+        return self._classify_ip(ip, host)
+
+    @staticmethod
+    def _classify_ip(ip, host):
+        if ip.is_loopback:
+            return "loopback", str(ip)
+        if ip.is_private:
+            return "rfc1918-private", str(ip)
+        if ip.is_link_local:
+            return "link-local", str(ip)
+        return "public", str(ip)
+
     def validate(self):
         if not self.target:
             return False, "No target set. Use: target <ip/domain>"
+        cls, resolved = self.target_class()
+        self.resolved_target = resolved
+        if cls in ("empty", "unresolvable"):
+            return False, "Target cannot be resolved: %s. Use a lab host (127.0.0.1 or RFC1918)." % self.target
+        if cls == "public":
+            return False, "Refused: %s resolves to public %s. Lab scope only (127.0.0.1 or RFC1918)." % (self.target, resolved)
         if self.threads > 4096:
             self.threads = 4096
         if self.rate > 5000000:
             self.rate = 5000000
-        return True, "ready"
+        return True, "ready (target_class=%s)" % cls
 
     def to_go_cfg(self, spoof_pool):
         ko_modes = ("all", "kill", "land", "slowloris", "amp", "mix")
