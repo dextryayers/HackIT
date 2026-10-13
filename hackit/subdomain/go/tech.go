@@ -38,6 +38,8 @@ func detectTech(headers http.Header, body string) []string {
 			techs = append(techs, "Fastly")
 		case strings.Contains(serverLower, "envoy"):
 			techs = append(techs, "Envoy")
+		case strings.Contains(serverLower, "akamai"):
+			techs = append(techs, "Akamai")
 		default:
 			techs = append(techs, server)
 		}

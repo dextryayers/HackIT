@@ -47,12 +47,23 @@ class HyperCrawler:
             
         return links
 
+    @staticmethod
+    def _valid_label(label):
+        if len(label) == 0 or len(label) > 63:
+            return False
+        if label[0] == '-' or label[-1] == '-':
+            return False
+        return all(c.isalnum() or c == '-' for c in label)
+
     def extract_subdomains(self, text):
         matches = self.sub_pattern.finditer(text)
         for match in matches:
             sub = match.group(0).lower().strip(".")
+            if len(sub) > 253:
+                continue
             if sub.endswith("." + self.domain) or sub == self.domain:
-                self.subdomains.add(sub)
+                if all(self._valid_label(part) for part in sub.split(".")):
+                    self.subdomains.add(sub)
 
     async def worker(self):
         while True:
@@ -67,10 +78,12 @@ class HyperCrawler:
                 html = await self.fetch(url)
                 if html:
                     self.extract_subdomains(html)
-                    
-                    if current_depth < self.max_depth:
+
+                    if current_depth < self.max_depth and len(self.visited) < 5000:
                         links = self.extract_links(html, url)
                         for link in links:
+                            if len(self.visited) >= 5000:
+                                break
                             link_parsed = urlparse(link)
                             if link_parsed.hostname and self.domain in link_parsed.hostname:
                                 # Clean URL (remove fragments and queries for uniqueness)

@@ -54,6 +54,7 @@ type Result struct {
 	CDN           string   `json:"cdn,omitempty"`
 	ContentLength int      `json:"content_length,omitempty"`
 	ResponseTime  string   `json:"response_time,omitempty"`
+	printed       bool     `json:"-"`
 	mu            sync.Mutex `json:"-"`
 }
 

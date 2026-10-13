@@ -88,12 +88,13 @@ func loadWordlist(path string, domain string, jobs chan<- string) int {
 	return count
 }
 
+var (
+	seenSubs   = make(map[string]struct{})
+	seenSubsMu sync.Mutex
+)
+
 func resolveWorker(jobs chan string, wg *sync.WaitGroup, verbose bool, domain string, recursive bool) {
 	defer wg.Done()
-
-	// Track seen subdomains for recursive scanning to avoid loops
-	seen := make(map[string]struct{})
-	var seenMu sync.Mutex
 
 	for sub := range jobs {
 		sub = strings.TrimSpace(sub)
@@ -101,13 +102,15 @@ func resolveWorker(jobs chan string, wg *sync.WaitGroup, verbose bool, domain st
 			continue
 		}
 
-		seenMu.Lock()
-		if _, ok := seen[sub]; ok {
-			seenMu.Unlock()
+		// Shared dedup across all workers so permutation
+		// duplicates are resolved only once.
+		seenSubsMu.Lock()
+		if _, ok := seenSubs[sub]; ok {
+			seenSubsMu.Unlock()
 			continue
 		}
-		seen[sub] = struct{}{}
-		seenMu.Unlock()
+		seenSubs[sub] = struct{}{}
+		seenSubsMu.Unlock()
 
 		var ips []string
 		var err error

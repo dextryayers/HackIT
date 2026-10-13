@@ -190,7 +190,14 @@ func resolveIPs(results []*Result, concurrency int) {
 	}
 
 	// Fallback/Validation for anything still without IPs
-	sem := make(chan bool, concurrency*5) // Increased fallback concurrency
+	fallbackConcurrency := concurrency * 5
+	if fallbackConcurrency > 1000 {
+		fallbackConcurrency = 1000
+	}
+	if fallbackConcurrency < 1 {
+		fallbackConcurrency = 1
+	}
+	sem := make(chan bool, fallbackConcurrency)
 	var wg sync.WaitGroup
 	for _, r := range results {
 		if len(r.IPs) > 0 {

@@ -10,6 +10,7 @@ import requests
 from urllib.parse import urlparse
 import threading
 import socket
+import concurrent.futures
 from concurrent.futures import ThreadPoolExecutor
 
 from hackit.ui import display_tool_banner, _colored, GREEN, RED, BLUE, YELLOW

@@ -235,10 +235,24 @@ func main() {
 		}
 	}
 
-	// 4. Print ALL final results with full enrichment detail
+	// 4. Print final results with full enrichment detail.
+	// Rows already streamed live during probing are skipped here so each
+	// finding appears exactly once, fully enriched, in real time.
 	if len(finalResults) > 0 {
 		fmt.Printf("\n\033[1;34m[>]\033[0m \033[1;32mFINAL ENRICHED RESULTS:\033[0m\n")
+		streamed, pending := 0, 0
 		for _, r := range finalResults {
+			r.mu.Lock()
+			wasPrinted := r.printed
+			if !wasPrinted {
+				r.printed = true
+			}
+			r.mu.Unlock()
+			if wasPrinted {
+				streamed++
+				continue
+			}
+			pending++
 			if needsProbe := config.ShowSC || config.ShowTitle || config.ShowServer || config.TechDetect || config.Probe; needsProbe {
 				printResultDetail(r, config)
 			} else if config.ShowASN || config.ShowIP {
@@ -247,6 +261,9 @@ func main() {
 				// Silent mode: just subdomain
 				fmt.Printf("\x1b[1;32m[+]\x1b[0m \x1b[1;36m[sub]\x1b[0m %s\n", r.Subdomain)
 			}
+		}
+		if streamed > 0 {
+			fmt.Printf("\033[1;34m[>]\033[0m %d findings already shown live above, %d listed here.\n", streamed, pending)
 		}
 	}
 

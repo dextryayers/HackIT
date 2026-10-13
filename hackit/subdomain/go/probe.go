@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	neturl "net/url"
 	"regexp"
 	"runtime"
 	"strings"
@@ -12,6 +15,26 @@ import (
 	"time"
 	"unsafe"
 )
+
+// lookupHostTimeout resolves a host with a hard deadline so a stalled
+// system resolver can never block a probe worker.
+func lookupHostTimeout(host string, timeout time.Duration) ([]string, error) {
+	type res struct {
+		ips []string
+		err error
+	}
+	done := make(chan res, 1)
+	go func() {
+		ips, err := net.LookupHost(host)
+		done <- res{ips: ips, err: err}
+	}()
+	select {
+	case r := <-done:
+		return r.ips, r.err
+	case <-time.After(timeout):
+		return nil, context.DeadlineExceeded
+	}
+}
 
 var titleRegex = regexp.MustCompile(`(?i)<title>(.*?)</title>`)
 var langRegex = regexp.MustCompile(`(?i)(?:<html[^>]*\s(?:lang)=["']([a-zA-Z-]+)["']|content="text/html;\s*charset=([^"]+)")`)
@@ -63,11 +86,15 @@ func runProbe(results []*Result, config Config) {
 				}(scheme)
 			}
 			pWg.Wait()
-			// Stream each result the moment its probes finish.
+			// Stream each result the moment its probes finish, exactly once.
 			res.mu.Lock()
 			needsDetail := res.Status > 0 || len(res.Title) > 0 || len(res.Tech) > 0
+			alreadyPrinted := res.printed
+			if needsDetail && !alreadyPrinted {
+				res.printed = true
+			}
 			res.mu.Unlock()
-			if needsDetail {
+			if needsDetail && !alreadyPrinted {
 				printMu.Lock()
 				printResultDetail(res, config)
 				printMu.Unlock()
@@ -132,6 +159,16 @@ func probeURL(client *http.Client, res *Result, scheme string, config Config) {
 		if res.Server == "" {
 			res.Server = resp.Header.Get("X-Powered-By")
 		}
+		// A completed HTTP exchange proves the name resolves even when
+		// the earlier DNS pass came back empty: backfill the IP so the
+		// finding line is complete.
+		if len(res.IPs) == 0 {
+			if u, err := neturl.Parse(url); err == nil && u.Hostname() != "" {
+				if ips, err := lookupHostTimeout(u.Hostname(), 5*time.Second); err == nil && len(ips) > 0 {
+					res.IPs = ips
+				}
+			}
+		}
 	}
 
 	// CDN Detection from headers
@@ -194,17 +231,19 @@ func probeURL(client *http.Client, res *Result, scheme string, config Config) {
 func detectCDN(headers http.Header, scheme, subdomain string) string {
 	via := headers.Get("Via")
 	server := headers.Get("Server")
+	serverLower := strings.ToLower(server)
 	cfRay := headers.Get("cf-ray")
 	cfCache := headers.Get("cf-cache-status")
 	akamai := headers.Get("X-Akamai-Transformed")
+	akamaiGhost := headers.Get("X-Akamai-Ghost")
 	azure := headers.Get("X-Azure-Ref")
 	sucuri := headers.Get("X-Sucuri-ID")
 	incapsula := headers.Get("X-CDN")
 
-	if cfRay != "" || cfCache != "" || strings.Contains(server, "cloudflare") {
+	if cfRay != "" || cfCache != "" || strings.Contains(serverLower, "cloudflare") {
 		return "Cloudflare"
 	}
-	if akamai != "" {
+	if akamai != "" || akamaiGhost != "" || strings.Contains(serverLower, "akamai") || strings.Contains(serverLower, "akamaighost") || strings.Contains(serverLower, "akamaistorage") || strings.Contains(serverLower, "akamaized") {
 		return "Akamai"
 	}
 	if azure != "" {
@@ -216,25 +255,25 @@ func detectCDN(headers http.Header, scheme, subdomain string) string {
 	if incapsula != "" {
 		return "Incapsula"
 	}
-	if strings.Contains(via, "google") || strings.Contains(server, "gfe") {
+	if strings.Contains(strings.ToLower(via), "google") || strings.Contains(serverLower, "gfe") {
 		return "Google Cloud CDN"
 	}
-	if strings.Contains(server, "amazons3") || strings.Contains(server, "AmazonS3") {
+	if strings.Contains(serverLower, "amazons3") || strings.Contains(serverLower, "amazonaws") {
 		return "AWS S3"
 	}
-	if strings.Contains(server, "cloudfront") {
+	if strings.Contains(serverLower, "cloudfront") {
 		return "AWS CloudFront"
 	}
-	if strings.Contains(server, "Fastly") {
+	if strings.Contains(serverLower, "fastly") {
 		return "Fastly"
 	}
-	if strings.Contains(server, "keycdn") {
+	if strings.Contains(serverLower, "keycdn") {
 		return "KeyCDN"
 	}
-	if strings.Contains(server, "stackpath") {
+	if strings.Contains(serverLower, "stackpath") {
 		return "StackPath"
 	}
-	if strings.Contains(server, "cdn") {
+	if strings.Contains(serverLower, "cdn") {
 		return "Generic CDN"
 	}
 	return "-"
