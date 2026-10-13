@@ -1048,4 +1048,5 @@ async def serve_frontend(path: str):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8080)
+    _port = int(os.environ.get("HACKIT_PORT", "8080") or 8080)
+    uvicorn.run(app, host="0.0.0.0", port=_port)

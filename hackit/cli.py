@@ -1146,17 +1146,46 @@ def run(dev, port, no_open):
     else:
         click.echo(_colored("  [*] Skipping frontend build (Node.js not available).", DIM))
 
-    # ── 3. Install Python dependencies ──
+    # ── 3. Install Python dependencies (blocking: backend cannot start without them) ──
     req_file = os.path.join(python_dir, 'requirements.txt')
     if os.path.exists(req_file):
         click.echo(_colored("  [*] Checking Python dependencies...", DIM))
         try:
-            subprocess.run(
+            result = subprocess.run(
                 [sys.executable, '-m', 'pip', 'install', '-q', '-r', req_file],
-                cwd=python_dir, capture_output=True, timeout=60,
+                cwd=python_dir, capture_output=True, text=True, timeout=300,
             )
-        except Exception:
-            pass
+            if result.returncode != 0 and 'externally-managed' in (result.stderr or ''):
+                click.echo(_colored("  [*] System Python is externally managed, retrying with --break-system-packages...", B_YELLOW))
+                result = subprocess.run(
+                    [sys.executable, '-m', 'pip', 'install', '-q', '--break-system-packages', '-r', req_file],
+                    cwd=python_dir, capture_output=True, text=True, timeout=300,
+                )
+            if result.returncode != 0:
+                tail = (result.stderr or result.stdout or '').strip()
+                last = tail.splitlines()[-1] if tail else 'unknown error'
+                click.echo(_colored(f"  [!] Python dependency install failed (exit {result.returncode}): {last[:200]}", RED))
+        except subprocess.TimeoutExpired:
+            click.echo(_colored("  [!] Python dependency install timed out after 300s.", RED))
+        except Exception as e:
+            click.echo(_colored(f"  [!] Python dependency install error: {e}", RED))
+
+    # ── 3b. Pre-flight: verify backend imports before launching ──
+    try:
+        check = subprocess.run(
+            [sys.executable, '-c', 'import fastapi, uvicorn, httpx, dns.resolver, pydantic'],
+            capture_output=True, text=True, timeout=30,
+        )
+        if check.returncode != 0:
+            err = (check.stderr or '').strip().splitlines()
+            click.echo(_colored("  [!] Backend requirements missing (fastapi/uvicorn not importable).", RED))
+            if err:
+                click.echo(_colored(f"      {err[-1][:200]}", RED))
+            click.echo(_colored(f"  [!] Fix manually: {sys.executable} -m pip install --break-system-packages -r {req_file}", B_YELLOW))
+            return
+    except Exception as e:
+        click.echo(_colored(f"  [!] Dependency check failed: {e}", RED))
+        return
 
     # ── 4. Start Python backend ──
     click.echo(_colored(f"\n  [+] Starting Python backend on http://localhost:{port}", B_GREEN))
@@ -1164,6 +1193,7 @@ def run(dev, port, no_open):
     click.echo()
 
     backend_env = os.environ.copy()
+    backend_env['HACKIT_PORT'] = str(port)
     if dev:
         backend_env['DEBUG_MODE'] = 'True'
     else:
@@ -1177,9 +1207,11 @@ def run(dev, port, no_open):
         )
 
         # Wait for backend to start
+        backend_crashed = False
         for i in range(10):
             time.sleep(0.5)
             if backend.poll() is not None:
+                backend_crashed = True
                 break
             try:
                 import httpx
@@ -1193,6 +1225,11 @@ def run(dev, port, no_open):
                     break
             except Exception:
                 continue
+
+        if backend_crashed:
+            click.echo(_colored(f"  [!] Backend exited before becoming ready (code {backend.returncode}). See output above.", RED))
+            click.echo(_colored(f"  [!] Run manually for full logs: cd {python_dir} && {sys.executable} main.py", B_YELLOW))
+            return
 
         click.echo(_colored("  [*] Press Ctrl+C to stop all services.", DIM))
         click.echo(_colored(f"  {'─'*54}", DIM))

@@ -40,12 +40,18 @@ class GoEngine:
         if needs_compile:
             print(_colored("[*] Compiling Go Worker...", BLUE))
             try:
-                cmd = ['go', 'build', '-o', self.binary_path, '.']
-                subprocess.check_call(cmd, cwd=self.go_dir)
+                cmd = ['go', 'build', '-buildvcs=false', '-o', self.binary_path, '.']
+                proc = subprocess.run(cmd, cwd=self.go_dir, capture_output=True, text=True)
+                if proc.returncode != 0:
+                    print(_colored(f"[!] Compilation failed (exit {proc.returncode})", RED))
+                    err = (proc.stderr or proc.stdout or '').strip()
+                    if err:
+                        print(_colored(f"    {err[-800:]}", RED))
+                    return False
                 print(_colored("[+] Go Worker compiled successfully!", GREEN))
                 return True
-            except subprocess.CalledProcessError as e:
-                print(_colored(f"[!] Compilation failed: {e}", RED))
+            except (FileNotFoundError, OSError) as e:
+                print(_colored(f"[!] Go toolchain not usable: {e}", RED))
                 return False
         return True
 

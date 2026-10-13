@@ -3,6 +3,7 @@ import hashlib
 import re
 from datetime import datetime, timezone, timedelta
 from module_common import safe_fetch, safe_fetch_json, make_finding, is_ip, resolve_ip, EMAIL_RE, classify_email, extract_emails, compute_hash, require_api_keys
+from settings_store import get_api_key
 import asyncio
 
 DATA_CLASS_SEVERITY = {
@@ -301,7 +302,7 @@ async def query_hibp_pastes(email: str, client: httpx.AsyncClient) -> list:
         resp = await safe_fetch(client, 
             f"https://haveibeenpwned.com/api/v3/pasteaccount/{email}",
             timeout=15.0,
-            headers={"User-Agent": UA, "hibp-api-key": "", "Accept": "application/json"},
+            headers={"User-Agent": UA, "hibp-api-key": get_api_key("haveibeenpwned"), "Accept": "application/json"},
         )
         if resp.status_code == 200 and isinstance(resp.json(), list):
             return resp.json()
@@ -330,7 +331,7 @@ async def crawl(target: str, client: httpx.AsyncClient):
             timeout=15.0,
             headers={
                 "User-Agent": UA,
-                "hibp-api-key": "",
+                "hibp-api-key": get_api_key("haveibeenpwned"),
                 "Accept": "application/json",
             },
         )
