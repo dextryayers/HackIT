@@ -2,7 +2,6 @@ import subprocess
 import os
 import json
 import platform
-import signal
 
 class GoEngine:
     def __init__(self):
@@ -15,22 +14,18 @@ class GoEngine:
 
     def ensure_compiled(self):
         if not os.path.exists(self.binary_path):
-            print(f"[*] Compiling Go engine...")
             try:
                 cmd = ["go", "build", "-buildvcs=false", "-tags=netcgo", "-o", self.binary_name]
-                subprocess.check_call(cmd, cwd=self.go_dir)
-                print("[+] Compilation successful")
-            except subprocess.CalledProcessError as e:
-                print(f"[!] Compilation failed: {e}")
-                return False
-            except FileNotFoundError:
-                print("[!] Go compiler not found")
+                subprocess.check_call(
+                    cmd, cwd=self.go_dir,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                )
+            except (subprocess.CalledProcessError, FileNotFoundError, OSError):
                 return False
         return True
 
     def run(self, host, port=443, timeout=15, output=None, json_only=False, full=False):
         if not self.ensure_compiled():
-            print("[!] Engine not available.")
             return None
 
         cmd = [
@@ -51,24 +46,15 @@ class GoEngine:
         env['GODEBUG'] = 'netdns=cgo'
 
         try:
-            original = signal.signal(signal.SIGALRM, lambda s, f: (_ for _ in ()).throw(TimeoutError()))
-            signal.alarm(go_timeout)
-            try:
-                result = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    timeout=go_timeout,
-                    env=env,
-                )
-            finally:
-                signal.alarm(0)
-                signal.signal(signal.SIGALRM, original)
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=go_timeout,
+                env=env,
+            )
 
             if result.returncode != 0:
-                stderr = result.stderr.strip()
-                if stderr:
-                    print(f"[!] Go engine error: {stderr}")
                 return None
 
             out = result.stdout.strip()
@@ -105,8 +91,6 @@ class GoEngine:
                 return None
 
         except (subprocess.TimeoutExpired, TimeoutError):
-            print(f"[!] Go engine timed out after {go_timeout}s")
             return None
-        except Exception as e:
-            print(f"[!] Execution error: {e}")
+        except Exception:
             return None

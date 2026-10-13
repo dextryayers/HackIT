@@ -2,13 +2,28 @@ import ssl
 import socket
 import struct
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional, Tuple
-from cryptography import x509
-from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.asymmetric import rsa, ec, ed25519
-from cryptography.x509.oid import ExtensionOID, AuthorityInformationAccessOID
+
+try:
+    from cryptography import x509
+    from cryptography.hazmat.backends import default_backend
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import rsa, ec, ed25519
+    from cryptography.x509.oid import ExtensionOID, AuthorityInformationAccessOID
+    _CRYPTO_OK = True
+except ImportError:
+    x509 = None
+    default_backend = None
+    hashes = None
+    rsa = ec = ed25519 = None
+    ExtensionOID = AuthorityInformationAccessOID = None
+    _CRYPTO_OK = False
+
+
+def crypto_available() -> bool:
+    return _CRYPTO_OK
 
 class SSLAnalyzer:
     def __init__(self, host: str, port: int = 443, timeout: int = 5):
@@ -25,12 +40,15 @@ class SSLAnalyzer:
             "port": self.port,
             "certificate": {},
             "protocols": {},
-            "ciphers": {}, 
+            "ciphers": {},
             "vulnerabilities": [],
             "grade": "F",
             "score": 0,
             "issues": []
         }
+        if not _CRYPTO_OK:
+            results["error"] = "cryptography library not available; deep certificate analysis skipped"
+            return results
         cert_info = self.get_certificate_info()
         results["certificate"] = cert_info
         if "error" in cert_info:
@@ -139,12 +157,13 @@ class SSLAnalyzer:
 
     def check_protocols(self) -> Dict[str, bool]:
         supported = {}
+        jobs = []
         for name, version_attr, version_val in [
             ("SSLv2", None, ssl.PROTOCOL_SSLv2 if hasattr(ssl, 'PROTOCOL_SSLv2') else None),
             ("SSLv3", None, ssl.PROTOCOL_SSLv3 if hasattr(ssl, 'PROTOCOL_SSLv3') else None),
         ]:
             if version_val is not None:
-                supported[name] = self._test_version_ctx(version_val)
+                jobs.append((name, "ctx", version_val))
             else:
                 supported[name] = False
         for name, tls_version in [
@@ -154,9 +173,25 @@ class SSLAnalyzer:
             ("TLSv1.3", ssl.TLSVersion.TLSv1_3 if hasattr(ssl.TLSVersion, 'TLSv1_3') else None),
         ]:
             if tls_version is not None:
-                supported[name] = self._test_tls_version(tls_version)
+                jobs.append((name, "tls", tls_version))
             else:
                 supported[name] = False
+        if not jobs:
+            return supported
+        with ThreadPoolExecutor(max_workers=min(6, len(jobs))) as executor:
+            future_map = {}
+            for name, kind, value in jobs:
+                if kind == "ctx":
+                    future_map[executor.submit(self._test_version_ctx, value)] = name
+                else:
+                    future_map[executor.submit(self._test_tls_version, value)] = name
+            for future in as_completed(future_map, timeout=self.timeout * len(jobs) + 10):
+                try:
+                    supported[future_map[future]] = bool(future.result(timeout=self.timeout))
+                except Exception:
+                    supported[future_map[future]] = False
+        for name, _, _ in jobs:
+            supported.setdefault(name, False)
         return supported
 
     def _test_version_ctx(self, protocol_version) -> bool:
@@ -198,10 +233,19 @@ class SSLAnalyzer:
             ("EXP", "insecure", "Export Grade (FREAK/Logjam)"),
             ("MD5", "weak", "MD5 Hashing"),
         ]
-        for cipher_str, category, desc in cipher_tests:
-            if self._test_cipher_suite(cipher_str):
-                results["supported"].append(desc)
-                results[category].append(desc)
+        with ThreadPoolExecutor(max_workers=min(6, len(cipher_tests))) as executor:
+            future_map = {
+                executor.submit(self._test_cipher_suite, cipher_str): (category, desc)
+                for cipher_str, category, desc in cipher_tests
+            }
+            for future in as_completed(future_map, timeout=self.timeout * len(cipher_tests) + 10):
+                category, desc = future_map[future]
+                try:
+                    if future.result(timeout=self.timeout):
+                        results["supported"].append(desc)
+                        results[category].append(desc)
+                except Exception:
+                    pass
         try:
             ctx = ssl.create_default_context()
             ctx.check_hostname = False
@@ -211,21 +255,47 @@ class SSLAnalyzer:
                     cipher_name = ssock.cipher()
                     if cipher_name:
                         results["best_cipher"] = f"{cipher_name[0]} ({cipher_name[1]})"
+                        try:
+                            negotiated_version = ssock.version() or ""
+                        except Exception:
+                            negotiated_version = ""
                         if "ECDHE" in cipher_name[0] or "DHE" in cipher_name[0]:
+                            results["pfs"] = True
+                        elif negotiated_version == "TLSv1.3":
+                            # Every TLS 1.3 suite uses ephemeral key exchange.
                             results["pfs"] = True
         except Exception:
             pass
         return results
+
+    CIPHER_PROOF_TOKENS = {
+        "NULL": ("NULL", "NONE"),
+        "ADH:AECDH": ("ADH", "AECDH", "anon", "ANON"),
+        "RC4": ("RC4",),
+        "3DES": ("3DES", "DES-CBC3"),
+        "EXP": ("EXP", "EXPORT"),
+        "MD5": ("MD5",),
+    }
 
     def _test_cipher_suite(self, cipher_string: str) -> bool:
         try:
             ctx = ssl.create_default_context()
             ctx.check_hostname = False
             ctx.verify_mode = ssl.CERT_NONE
+            # Pin to TLS <= 1.2 so TLS 1.3 suites (always on) cannot
+            # mask the result by negotiating above the tested family.
+            if hasattr(ssl.TLSVersion, "TLSv1_2"):
+                ctx.maximum_version = ssl.TLSVersion.TLSv1_2
             ctx.set_ciphers(cipher_string)
             with socket.create_connection((self.host, self.port), timeout=self.timeout) as sock:
-                with ctx.wrap_socket(sock, server_hostname=self.host):
-                    return True
+                with ctx.wrap_socket(sock, server_hostname=self.host) as ssock:
+                    negotiated = (ssock.cipher() or ("", "", 0))[0].upper()
+                    tokens = self.CIPHER_PROOF_TOKENS.get(cipher_string, ())
+                    if cipher_string == "EXP":
+                        bits = (ssock.cipher() or ("", "", 0))[2] or 0
+                        if isinstance(bits, int) and bits <= 64:
+                            return True
+                    return any(t.upper() in negotiated for t in tokens)
         except Exception:
             return False
 
@@ -251,10 +321,36 @@ class SSLAnalyzer:
             pass
         return features
 
+    @staticmethod
+    def _name_matches_host(pattern: str, host: str) -> bool:
+        pattern = (pattern or "").strip().lower().rstrip(".")
+        host = (host or "").strip().lower().rstrip(".")
+        if not pattern or not host:
+            return False
+        if pattern.startswith("*."):
+            suffix = pattern[2:]
+            return host != suffix and host.endswith("." + suffix) and "." not in host[:-(len(suffix) + 1)]
+        return pattern == host
+
     def check_known_vulns(self, results: Dict[str, Any]):
         self.vulnerabilities = []
         protos = results.get("protocols", {})
         ciphers = results.get("ciphers", {})
+        cert = results.get("certificate", {})
+        if isinstance(cert, dict) and not cert.get("error"):
+            names = []
+            subject = cert.get("subject", {})
+            if isinstance(subject, dict):
+                cn = subject.get("commonName", "")
+                if cn:
+                    names.append(cn)
+            for entry in cert.get("san", []) or []:
+                names.append(str(entry))
+            if names and not any(self._name_matches_host(n, self.host) for n in names):
+                self.vulnerabilities.append({
+                    "name": "HostnameMismatch", "severity": "MEDIUM",
+                    "desc": "Certificate does not cover %s (CN/SAN mismatch)" % self.host,
+                })
         if protos.get("SSLv3"):
             self.vulnerabilities.append({
                 "name": "POODLE", "severity": "HIGH",

@@ -989,45 +989,52 @@ def scan_ssl(ctx):
         # Priority: 1. Rust (fastest, most secure) → 2. Go (legacy) → 3. Python (fallback)
         # ──────────────────────────────────────────────────────────────────
 
-        # 1. Rust Engine (primary)
+        # Unified smart scan: engines run silently in priority order,
+        # only the final verdict is shown.
         try:
             from hackit.ssl_tool.rust_bridge import RustEngine
             rengine = RustEngine()
-            with _Spinner(f"Rust engine scanning {host}:{port}..."):
+            with _Spinner(f"Scanning {host}:{port}..."):
                 result = rengine.run(host=host, port=port, timeout=15)
             if result:
                 engine_name = "Rust"
         except ImportError:
-            click.echo(f"\r  {_colored('[*] Rust engine not available', DIM)}")
-        except Exception as e:
-            click.echo(f"\r  {_colored(f'[*] Rust engine: {e}', DIM)}")
+            pass
+        except Exception:
+            pass
 
-        # 2. Go Engine (fallback if Rust failed)
+        # Fallback scan if the primary pass produced nothing.
         if result is None:
             try:
                 from hackit.ssl_tool.go_bridge import GoEngine
                 gengine = GoEngine()
-                with _Spinner(f"Go engine scanning {host}:{port}..."):
+                with _Spinner(f"Scanning {host}:{port}..."):
                     go_result = gengine.run(host=host, port=port, timeout=15)
                 if go_result:
                     result = go_result
                     engine_name = "Go"
             except ImportError:
-                click.echo(f"\r  {_colored('[*] Go engine not available', DIM)}")
-            except Exception as e:
-                click.echo(f"\r  {_colored(f'[*] Go engine: {e}', DIM)}")
+                pass
+            except Exception:
+                pass
 
-        # 3. Python Engine (last resort)
+        # Last-resort deep analysis.
         if result is None:
-            click.echo(_colored("  [*] Running Python deep SSL analysis...", DIM))
-            py_result = _python_deep_analyze(host, port, 15)
-            if py_result:
+            with _Spinner(f"Scanning {host}:{port}..."):
+                try:
+                    py_result = _python_deep_analyze(host, port, 15)
+                except Exception:
+                    py_result = None
+            if py_result and "error" not in py_result:
                 result = py_result
                 engine_name = "Python"
 
         click.echo()
-        engine_tag = _colored(f"[{engine_name}]", B_CYAN) if engine_name else ""
+        engine_tag = _colored("[SSL]", B_CYAN)
         click.echo(f"  {engine_tag} {_colored('=' * 55, DIM)}")
+
+        if not result and go_result is None and (not py_result or "error" in py_result):
+            click.echo(f"  {_colored('[!] Scan produced no result for {host}:{port}. Check connectivity and retry.', YELLOW)}")
 
         if engine_name == "Rust":
             _display_rust_result(host, port, result)
