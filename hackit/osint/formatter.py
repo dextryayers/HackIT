@@ -42,7 +42,7 @@ def print_live_finding(finding) -> None:
     click.echo(f"{prefix}{meta} {url_part}{title_part}")
 
 
-def print_results(data: Dict[str, object], show_misses: bool = False) -> None:
+def print_results(data: Dict[str, object], show_misses: bool = True) -> None:
     summary = data.get("summary", {})
     analysis = data.get("analysis", {})
 

@@ -4,7 +4,16 @@ import os
 from typing import Optional
 
 ENGINE_DIR = os.path.dirname(os.path.abspath(__file__))
-GO_ENGINE = os.path.join(ENGINE_DIR, "go", "osint")
+
+
+def _resolve_engine_binary():
+    base = os.path.join(ENGINE_DIR, "go", "osint")
+    if os.name == "nt" and not os.path.exists(base) and os.path.exists(base + ".exe"):
+        return base + ".exe"
+    return base
+
+
+GO_ENGINE = _resolve_engine_binary()
 
 
 def check_username(

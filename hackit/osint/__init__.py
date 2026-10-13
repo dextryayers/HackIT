@@ -29,7 +29,6 @@ def start_osint_console() -> None:
     click.echo(_colored("\n  [*] Crawling public intelligence matrix...", B_YELLOW, bold=True))
     click.echo(f"  [*] Canonical handle : {_colored(handles[0] if handles else 'N/A', B_CYAN)}")
     click.echo(f"  [*] Source count     : {_colored(str(len(sources)), B_CYAN)} (500+ platforms)")
-    click.echo(_colored("  [*] Engine            : Rust (native) | Python fallback", B_GREEN))
     click.echo(_colored("  [*] Live profile probe stream enabled.\n", DIM))
 
     try:
@@ -85,7 +84,6 @@ def osint(target: str | None = None, proxy: str = "", retry: int = 1, timeout: i
     click.echo(_colored("\n  [*] Crawling public intelligence matrix...", B_YELLOW, bold=True))
     click.echo(f"  [*] Source templates : {_colored(str(len(sources)), B_CYAN)} (500+ platforms)")
     click.echo(f"  [*] Handles          : {_colored(', '.join(handles) or 'N/A', B_CYAN)}")
-    click.echo(f"  [*] Engine            : {_colored('Rust' if not no_rust else 'Python', B_GREEN)}")
 
     try:
         data = run_full_scan(target, on_result=print_live_finding,

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import re
 import socket
+import concurrent.futures
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, asdict
 from typing import Callable, List, Dict, Optional
@@ -52,6 +53,8 @@ def _extract_metadata(html: str) -> Dict[str, str]:
 
 
 def normalize_handles(query: str) -> List[str]:
+    if not query or not str(query).strip():
+        return []
     target = build_identity_target(query)
     handles = [target.canonical_handle] if target.canonical_handle else []
     handles.extend(target.aliases)
@@ -148,8 +151,16 @@ def scan_usernames(
                 executor.submit(_request_profile, session, source, handle, timeout)
                 for handle in handles for source in sources
             ]
-            for future in as_completed(futures):
-                finding = future.result()
+            # Overall deadline so one stalled connection cannot hang the scan.
+            deadline = timeout * 4 + 60
+            done, pending = concurrent.futures.wait(futures, timeout=deadline)
+            for f in pending:
+                f.cancel()
+            for future in done:
+                try:
+                    finding = future.result(timeout=5)
+                except Exception:
+                    continue
                 findings.append(finding)
                 if on_result:
                     on_result(finding)
@@ -283,6 +294,7 @@ def run_full_scan(
     check_phone: bool = False, check_domain: bool = False,
     generate_html: bool = False, html_output: str = "",
 ) -> Dict[str, object]:
+    query = (query or "").strip()
     profiles = scan_usernames(query, timeout=timeout, workers=workers, on_result=on_result,
                               use_rust=use_rust, proxy=proxy, retry=retry)
 
