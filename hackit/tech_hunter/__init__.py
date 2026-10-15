@@ -60,10 +60,17 @@ def banner_command():
 # --- CORE RECONNAISSANCE LOGIC (RAW FUNCTION) ---
 def run_tactical_engine(target):
     """Pure logic to trigger the Go/Rust/C++ engines."""
-    
+    import time as _time
+    target = (target or "").strip()
+    if not target:
+        click.secho("[!] No target provided.", fg='red', bold=True)
+        return
+
     # Trigger Bridge to Go/Rust/C++ Engine (Safely)
+    _t0 = _time.time()
     result = run_go_engine(target)
-    
+    elapsed = _time.time() - _t0
+
     if isinstance(result, dict) and "error" in result:
         click.secho(f"[!] Engine Error: {result['error']}", fg='red', bold=True)
         return
@@ -79,6 +86,7 @@ def run_tactical_engine(target):
             print(highlight(formatted_json, JsonLexer(), TerminalFormatter()))
         else:
             print(formatted_json)
+    click.secho(f"\n[+] Recon finished in {elapsed:.1f}s", fg='cyan')
 
 # --- FRAMEWORK INTEGRATION CALLBACK ---
 @click.option('-t', '--target', required=False, help=_colored('Primary target (domain or IP)', BLUE))
