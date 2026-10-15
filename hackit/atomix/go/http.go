@@ -100,7 +100,7 @@ func RandomUserAgent() string {
 	return userAgents[rand.Intn(len(userAgents))]
 }
 
-const maxBodyBytes = 5 << 20 // 5 MiB cap, nuclei-style bounded read
+const maxBodyBytes = 5 << 20 // 5 MiB cap on response bodies
 
 func ResolveURL(baseURL string, pathTmpl string, payload string) string {
 	result := strings.ReplaceAll(pathTmpl, "{{BaseURL}}", strings.TrimRight(baseURL, "/"))

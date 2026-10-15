@@ -19,7 +19,7 @@ func getRegex(pattern string) (*regexp.Regexp, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Bound cache to avoid unbounded growth (nuclei-style precompile).
+	// Bound cache to avoid unbounded growth on large template libraries.
 	if atomic.LoadInt32(&regexCacheCount) < 2000 {
 		regexCache.Store(pattern, re)
 		atomic.AddInt32(&regexCacheCount, 1)
@@ -111,7 +111,12 @@ func MatchTemplate(resp *ResponseInfo, t *Template, reqIdx int) *MatchResult {
 			if name == "" {
 				name = t.ID
 			}
-			firstHit = &MatchResult{Matched: true, Extracted: extracted, MatcherName: name}
+			firstHit = &MatchResult{
+				Matched:     true,
+				Extracted:   extracted,
+				MatcherName: name,
+				Confidence:  scoreMatcherConfidence(m, data, andMode),
+			}
 			if !andMode {
 				return firstHit
 			}
@@ -126,7 +131,7 @@ func MatchTemplate(resp *ResponseInfo, t *Template, reqIdx int) *MatchResult {
 	return &MatchResult{Matched: false}
 }
 
-// extractAll runs the legacy single extractor plus the Nuclei plural form.
+// extractAll runs the legacy single extractor plus the plural form.
 func extractAll(data string, t *Template) string {
 	parts := []string{}
 	if t.Extractor != nil {
@@ -200,8 +205,7 @@ func matchSize(size int, sizes []int) bool {
 	if len(sizes) == 0 {
 		return false
 	}
-	// Single value with negative sentinel encoding a range is not used;
-	// exact match preserves nuclei `size` semantics.
+	// Single value matches exactly; use DSL for range comparisons.
 	for _, s := range sizes {
 		if size == s {
 			return true

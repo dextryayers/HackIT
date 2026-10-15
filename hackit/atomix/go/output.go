@@ -29,10 +29,10 @@ func FormatResultsJSONL(results []Result) string {
 func FormatResultsCSV(results []Result) string {
 	var b strings.Builder
 	writer := csv.NewWriter(&b)
-	writer.Write([]string{"TemplateID", "TemplateName", "Severity", "URL", "MatcherName", "Extracted", "Tags", "Timestamp"})
+	writer.Write([]string{"TemplateID", "TemplateName", "Severity", "Confidence", "URL", "MatcherName", "Extracted", "Tags", "Timestamp"})
 	for _, r := range results {
 		writer.Write([]string{
-			r.TemplateID, r.TemplateName, r.Severity, r.URL,
+			r.TemplateID, r.TemplateName, r.Severity, r.Confidence, r.URL,
 			r.MatcherName, r.Extracted, r.Tags, r.Timestamp,
 		})
 	}
@@ -162,7 +162,7 @@ func FormatTemplatesJSON(templates []*Template) string {
 	for _, t := range templates {
 		out = append(out, tplOut{
 			ID: t.ID, Name: t.Info.Name,
-			Severity: t.Info.Severity, Author: t.Info.Author, Tags: t.Info.Tags,
+			Severity: t.Info.Severity, Author: t.Info.Author, Tags: t.Info.Tags.String(),
 		})
 	}
 	j, _ := json.MarshalIndent(out, "", "  ")
@@ -246,11 +246,15 @@ func PrintFindingsTable(results []Result) {
 	if len(results) == 0 { return }
 	fmt.Println()
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
-	fmt.Fprintln(w, "SEVERITY\tTEMPLATE\tURL\tMATCHER\tTAGS")
-	fmt.Fprintln(w, "--------\t--------\t---\t-------\t----")
+	fmt.Fprintln(w, "SEVERITY\tCONF\tTEMPLATE\tURL\tMATCHER\tTAGS")
+	fmt.Fprintln(w, "--------\t----\t--------\t---\t-------\t----")
 	for _, r := range results {
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
-			strings.ToUpper(r.Severity), r.TemplateID, r.URL, r.MatcherName, r.Tags)
+		conf := strings.ToUpper(r.Confidence)
+		if conf == "" {
+			conf = "LOW"
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
+			strings.ToUpper(r.Severity), conf, r.TemplateID, r.URL, r.MatcherName, r.Tags)
 	}
 	w.Flush()
 	fmt.Println()

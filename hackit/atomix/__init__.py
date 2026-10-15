@@ -53,7 +53,7 @@ SECTIONS = {
         "adaptive_rate", "keep_alive", "http2", "http2_downgrade",
     ],
     "ADVANCED": [
-        "custom_dir", "load", "from_git", "smart", "chain", "multi",
+        "custom_dir", "load", "from_git", "smart", "passive", "min_confidence", "chain", "multi",
         "fuzz", "fuzz_thread", "fuzz_recursive", "path", "payloads",
         "detect_tech", "waf_skip", "waf_bypass", "api_discovery",
         "auth", "auth_token", "api_key", "custom_agent", "rand_agent",
@@ -103,7 +103,7 @@ class _GroupedHelpCommand(click.Command):
         fmtr = formatter or HelpFormatter(width=getattr(ctx, "max_content_width", 100))
         self.format_usage(ctx, fmtr)
         fmtr.write_paragraph()
-        fmtr.write_text("Atomix - Nuclei-Style Vulnerability Scanner\n"
+        fmtr.write_text("Atomix - High-Precision Template Scanner\n"
                         "Multi-engine toolkit with 310+ YAML templates, "
                         "headless browser, protocol scanning, target discovery, "
                         "and template signing.")
@@ -200,6 +200,8 @@ class _GroupedHelpCommand(click.Command):
 @click.option("--load", default="", help="Load template file, dir, or URL (comma-sep)")
 @click.option("--from-git", default="", help="Load templates from git repo URL")
 @click.option("--smart", is_flag=True, help="Smart template selection")
+@click.option("--passive", is_flag=True, help="Passive-only audit (no templates)")
+@click.option("--min-confidence", default="", help="Minimum confidence: low,medium,high")
 @click.option("-w", "--chain", default="", help="Workflow file")
 @click.option("--multi", is_flag=True, help="Multi-target coordinated scan")
 @click.option("--fuzz", default="", help="Fuzz mode: param,path,header")
@@ -270,7 +272,7 @@ class _GroupedHelpCommand(click.Command):
 
 # ── UTILITY ──
 @click.option("--health", is_flag=True, help="Run health check")
-@click.option("--update", is_flag=True, help="Update templates from Nuclei hub")
+@click.option("--update", is_flag=True, help="Refresh and validate local template library")
 @click.option("--probe", is_flag=True, help="Probe target: tech + WAF")
 @click.option("--validate", is_flag=True, help="Validate all templates")
 @click.option("--validate-deep", is_flag=True, help="Deep schema validation")
@@ -289,7 +291,7 @@ class _GroupedHelpCommand(click.Command):
 @click.option("--resume", default="", help="Resume from resume file")
 @click.option("--trace", default="", help="Trace log file path")
 def atomix_command(**kwargs):
-    """Atomix - Nuclei-Style Vulnerability Scanner"""
+    """Atomix - High-Precision Template Scanner"""
     engine = AtomixGoEngine()
 
     passthrough = {
@@ -317,7 +319,7 @@ def atomix_command(**kwargs):
         "url", "target_file", "list_flag", "list_sources", "custom_guide",
         "validate", "validate_deep", "health", "update",
         "probe", "version", "examples", "license", "completion",
-        "sign", "verify", "headless", "protocol", "uncover",
+        "sign", "verify", "headless", "protocol", "uncover", "passive",
         "tags", "severity", "id", "load", "chain", "monitor",
         "diff", "replay", "multi", "fuzz", "config", "project",
     ))
@@ -398,7 +400,8 @@ def atomix_command(**kwargs):
             continue
         sev = r.get("severity", "info").upper()
         color = {"CRITICAL": B_RED, "HIGH": RED, "MEDIUM": YELLOW, "LOW": BLUE, "INFO": GREEN}.get(sev, DIM)
-        click.echo(f"  [{_colored(sev, color)}] {r.get('url', '?')}")
+        conf = (r.get("confidence") or "low").upper()
+        click.echo(f"  [{_colored(sev, color)}] [{conf}] {r.get('url', '?')}")
         click.echo(f"     Template: {r.get('template_name', '?')} ({r.get('template_id', '?')})")
         click.echo(f"     Matched:  {r.get('matcher_name', '?')}")
         if r.get("tags"):

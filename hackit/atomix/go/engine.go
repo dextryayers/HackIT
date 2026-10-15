@@ -57,7 +57,7 @@ func (s *Scanner) InitScanner(cfg *ScanConfig) {
 	}
 	s.Config = cfg
 	s.Client = NewConfiguredClient(cfg)
-	// RateLimit is requests-per-second (nuclei semantics).
+	// RateLimit is requests-per-second.
 	s.throttler = NewThrottlerFromRPS(cfg.RateLimit)
 	if cfg.Threads > 0 {
 		s.Threads = cfg.Threads
@@ -177,8 +177,9 @@ func (s *Scanner) TestTemplate(baseURL string, t *Template, reqIdx int, req Requ
 					URL:          targetURL,
 					Matched:      match.Extracted,
 					Extracted:    match.Extracted,
+					Confidence:   match.Confidence,
 					Description:  t.Info.Description,
-					Tags:         t.Info.Tags,
+					Tags:         t.Info.Tags.String(),
 					Timestamp:    time.Now().UTC().Format(time.RFC3339),
 					Request:      req.Method + " " + targetURL,
 					ResponseLen:  resp.BodyLen,

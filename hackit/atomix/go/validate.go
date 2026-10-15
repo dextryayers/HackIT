@@ -18,9 +18,6 @@ func ValidateTemplate(t *Template) []string {
 		errs = append(errs, "no requests defined")
 	}
 	for ri, req := range t.Requests {
-		if req.Method == "" {
-			errs = append(errs, fmt.Sprintf("request[%d]: missing method", ri))
-		}
 		if len(req.Path) == 0 {
 			errs = append(errs, fmt.Sprintf("request[%d]: no paths defined", ri))
 		}

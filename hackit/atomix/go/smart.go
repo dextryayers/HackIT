@@ -12,7 +12,7 @@ func SmartSelectTemplates(templates []*Template, target string) []*Template {
 
 	var selected []*Template
 	for _, t := range templates {
-		tags := strings.Split(t.Info.Tags, ",")
+		tags := strings.Split(t.Info.Tags.String(), ",")
 		tagSet := make(map[string]bool)
 		for _, tag := range tags {
 			tagSet[strings.TrimSpace(strings.ToLower(tag))] = true
@@ -39,6 +39,24 @@ func SmartSelectTemplates(templates []*Template, target string) []*Template {
 				selected = append(selected, t)
 				continue
 			}
+			if tagSet["js"] && ext == ".js" {
+				selected = append(selected, t)
+				continue
+			}
+			if (tagSet["xml"] || tagSet["xxe"]) && ext == ".xml" {
+				selected = append(selected, t)
+				continue
+			}
+			if tagSet["json"] && ext == ".json" {
+				selected = append(selected, t)
+				continue
+			}
+		}
+
+		// API-looking targets also get API-tagged templates.
+		if strings.Contains(target, "/api") && tagSet["api"] {
+			selected = append(selected, t)
+			continue
 		}
 
 		// Include tech detection and info templates always

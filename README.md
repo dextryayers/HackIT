@@ -359,7 +359,7 @@ HackIT/
 │   ├── osint/               # Username, email, phone, domain intel (600+ platforms)
 │   ├── sqli/                # SQLi scanner (14 subcommands) + GUI + Go engine
 │   ├── xss/                 # XSS scanner (Go + Python engines)
-│   ├── vuln extras/         # redirect, rce_modul, atomix (Nuclei style), cve
+│   ├── vuln extras/         # redirect, rce_modul, atomix (template scanner), cve
 │   ├── web pack/            # header_audit, tech_hunter, web_fuzzer, js, params, dir_finder
 │   ├── net pack/            # port_scanner, network_scanner, subdomain, ssl_tool
 │   ├── bruteforcer/         # Multi protocol login brute force (Rust engine)

@@ -36,10 +36,10 @@ type TemplateInfo struct {
 	Author      string `yaml:"author"`
 	Severity    string `yaml:"severity"`
 	Description string `yaml:"description"`
-	Tags        string `yaml:"tags"`
+	Tags        TagsField `yaml:"tags"`
 	Type        string `yaml:"type,omitempty"`
 	Reference   StringSlice `yaml:"reference,omitempty"`
-	Classification *NucleiClassification `yaml:"classification,omitempty"`
+	Classification *TemplateClassification `yaml:"classification,omitempty"`
 }
 
 type Request struct {
@@ -80,8 +80,8 @@ type Template struct {
 	Requests  []Request           `yaml:"requests"`
 	Matchers  []MatcherCondition  `yaml:"matchers,omitempty"`
 	Extractor *Extractor          `yaml:"extractor,omitempty"`
-	// Nuclei-compat: native `http:` blocks are normalized into Requests.
-	HTTP      []NucleiHTTPRequest  `yaml:"http,omitempty"`
+	// Portable `http:` blocks are normalized into Requests on load.
+	HTTP      []HTTPRequestBlock  `yaml:"http,omitempty"`
 	Variables map[string]string    `yaml:"variables,omitempty"`
 	MatchersCondition string       `yaml:"matchers-condition,omitempty"`
 	StopAtFirstMatch  bool         `yaml:"stop-at-first-match,omitempty"`
@@ -107,6 +107,7 @@ type Result struct {
 	URL          string `json:"url"`
 	Matched      string `json:"matched"`
 	Extracted    string `json:"extracted,omitempty"`
+	Confidence   string `json:"confidence,omitempty"`
 	Description  string `json:"description"`
 	Tags         string `json:"tags"`
 	Timestamp    string `json:"timestamp"`
@@ -125,6 +126,7 @@ type MatchResult struct {
 	Matched     bool
 	Extracted   string
 	MatcherName string
+	Confidence  string
 }
 
 type FilterOptions struct {
@@ -277,10 +279,12 @@ type ScanConfig struct {
 	// Section 10: Chaining & Misc
 	Chain        string
 	ChainVars    string
-	NucleiCompat bool
+	CompatMode   bool
 	SmartScan    bool
 	MultiTarget  bool
 	APIDiscovery bool
+	Passive      bool
+	MinConfidence string
 	Replay       string
 	Diff         string
 	Monitor      string

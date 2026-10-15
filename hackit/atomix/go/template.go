@@ -27,17 +27,37 @@ func LoadTemplate(path string) (*Template, error) {
 	return &t, nil
 }
 
+func splitYAMLDocs(data []byte) [][]byte {
+	var docs [][]byte
+	var cur bytes.Buffer
+	for _, line := range bytes.Split(data, []byte("\n")) {
+		if bytes.Equal(bytes.TrimSpace(line), []byte("---")) {
+			docs = append(docs, append([]byte{}, cur.Bytes()...))
+			cur.Reset()
+			continue
+		}
+		cur.Write(line)
+		cur.WriteByte('\n')
+	}
+	docs = append(docs, cur.Bytes())
+	return docs
+}
+
 func LoadAllTemplatesFromFile(path string) ([]*Template, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
 	var templates []*Template
-	decoder := yaml.NewDecoder(bytes.NewReader(data))
-	for {
+	var docErrs []string
+	for i, doc := range splitYAMLDocs(data) {
+		if len(bytes.TrimSpace(doc)) == 0 {
+			continue
+		}
 		var t Template
-		if err := decoder.Decode(&t); err != nil {
-			break
+		if err := yaml.Unmarshal(doc, &t); err != nil {
+			docErrs = append(docErrs, fmt.Sprintf("doc %d: %v", i+1, oneLine(err.Error())))
+			continue
 		}
 		if t.ID == "" {
 			continue
@@ -47,9 +67,28 @@ func LoadAllTemplatesFromFile(path string) ([]*Template, error) {
 		templates = append(templates, &t)
 	}
 	if len(templates) == 0 {
-		return nil, fmt.Errorf("no valid templates found in %s", path)
+		detail := ""
+		if len(docErrs) > 0 {
+			detail = ": " + strings.Join(docErrs, "; ")
+		}
+		return nil, fmt.Errorf("no valid templates found in %s%s", path, detail)
+	}
+	if len(docErrs) > 0 {
+		shown := docErrs
+		if len(shown) > 3 {
+			shown = shown[:3]
+		}
+		fmt.Fprintf(os.Stderr, "[!] %s: loaded %d, skipped %d invalid document(s): %s\n",
+			path, len(templates), len(docErrs), strings.Join(shown, "; "))
 	}
 	return templates, nil
+}
+
+func oneLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return strings.TrimSpace(s[:i])
+	}
+	return strings.TrimSpace(s)
 }
 
 func LoadTemplates(dir string) ([]*Template, error) {
@@ -144,10 +183,10 @@ func FilterTemplates(templates []*Template, opts FilterOptions) []*Template {
 		if opts.ExcludeSeverity != "" && matchSeverityList(t.Info.Severity, opts.ExcludeSeverity) {
 			continue
 		}
-		if !matchAnyTag(t.Info.Tags, opts.Tags) {
+		if !matchAnyTag(t.Info.Tags.String(), opts.Tags) {
 			continue
 		}
-		if matchExcluded(t.Info.Tags, opts.ExcludeTags) {
+		if matchExcluded(t.Info.Tags.String(), opts.ExcludeTags) {
 			continue
 		}
 		if opts.Author != "" && !strings.Contains(strings.ToLower(t.Info.Author), strings.ToLower(opts.Author)) {

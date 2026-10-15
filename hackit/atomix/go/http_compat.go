@@ -1,8 +1,8 @@
 package main
 
-// Nuclei-compat layer: translates native Nuclei template constructs into
-// the engine's internal Request/Matcher model. Existing custom-schema
-// templates keep working unchanged.
+// HTTP-block compatibility layer: translates the portable `http:` template
+// block style into the engine's internal Request/Matcher model. Templates
+// written in the engine's native `requests:` style keep working unchanged.
 
 import (
 	"fmt"
@@ -12,8 +12,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// StringSlice accepts a YAML scalar or sequence (Nuclei uses both for
-// tags, reference, cve-id, ...).
+// StringSlice accepts a YAML scalar or sequence (both forms are used for
+// tags, reference, cve-id, ... in community templates).
 type StringSlice []string
 
 func (s *StringSlice) UnmarshalYAML(value *yaml.Node) error {
@@ -47,14 +47,40 @@ func (s StringSlice) Join() string {
 	return strings.Join([]string(s), ",")
 }
 
-type NucleiClassification struct {
+// TagsField accepts `tags: "a, b"` or `tags: [a, b]` so community and
+// hand-written templates both load without edits.
+type TagsField string
+
+func (t *TagsField) UnmarshalYAML(value *yaml.Node) error {
+	var single string
+	if err := value.Decode(&single); err == nil {
+		*t = TagsField(strings.TrimSpace(single))
+		return nil
+	}
+	var multi []string
+	if err := value.Decode(&multi); err == nil {
+		clean := make([]string, 0, len(multi))
+		for _, m := range multi {
+			if m = strings.TrimSpace(m); m != "" {
+				clean = append(clean, m)
+			}
+		}
+		*t = TagsField(strings.Join(clean, ","))
+		return nil
+	}
+	return fmt.Errorf("tags must be a string or a list of strings")
+}
+
+func (t TagsField) String() string { return string(t) }
+
+type TemplateClassification struct {
 	CVEID       StringSlice `yaml:"cve-id,omitempty"`
 	CWEID       StringSlice `yaml:"cwe-id,omitempty"`
 	CVSSMetrics string      `yaml:"cvss-metrics,omitempty"`
 	CVSSScore   float64     `yaml:"cvss-score,omitempty"`
 }
 
-type NucleiHTTPRequest struct {
+type HTTPRequestBlock struct {
 	Method            string              `yaml:"method"`
 	Path              []string            `yaml:"path"`
 	Headers           map[string]string   `yaml:"headers,omitempty"`
@@ -74,7 +100,7 @@ var attackMarkerRe = regexp.MustCompile(`§([^§]+)§`)
 // expandAttack generates concrete (path, headers, body) triples from an
 // attack definition. Supports batteringram (zip), pitchfork (parallel
 // index) and clusterbomb (cartesian). Markers look like §param§.
-func expandAttack(nr NucleiHTTPRequest) []Request {
+func expandAttack(nr HTTPRequestBlock) []Request {
 	if len(nr.Payloads) == 0 || nr.Attack == "" {
 		return []Request{{
 			Method: nr.Method, Path: nr.Path, Headers: nr.Headers,
@@ -176,12 +202,11 @@ func cartesian(lists [][]string) [][]string {
 	return out
 }
 
-// NormalizeTemplate converts Nuclei-native constructs into the engine
-// model. Safe to call on custom-schema templates (no-op for them).
+// NormalizeTemplate converts portable `http:` blocks into the engine
+// model. Safe to call on native-style templates (no-op for them).
 func NormalizeTemplate(t *Template) {
-	if len(t.HTTP) > 0 {
-		for _, nr := range t.HTTP {
-		 expanded := expandAttack(nr)
+	if len(t.HTTP) > 0 {		for _, nr := range t.HTTP {
+			expanded := expandAttack(nr)
 			for i := range expanded {
 				if expanded[i].MatchersCondition == "" {
 					expanded[i].MatchersCondition = t.MatchersCondition
@@ -195,12 +220,39 @@ func NormalizeTemplate(t *Template) {
 		}
 		t.HTTP = nil
 	}
+	// Normalize severity casing so custom templates match filters.
+	t.Info.Severity = normalizeSeverity(t.Info.Severity)
+	// Default empty methods to GET (engine behavior) so hand-written
+	// templates without an explicit method still run.
+	for i := range t.Requests {
+		if strings.TrimSpace(t.Requests[i].Method) == "" {
+			t.Requests[i].Method = "GET"
+		} else {
+			t.Requests[i].Method = strings.ToUpper(strings.TrimSpace(t.Requests[i].Method))
+		}
+	}
 	// Fold classification into result-facing fields.
 	if c := t.Info.Classification; c != nil {
 		if len(c.CVEID) > 0 {
 			t.Info.Description += fmt.Sprintf(" [CVE: %s]", strings.Join([]string(c.CVEID), ","))
 		}
 	}
+}
+
+// normalizeSeverity trims, lowercases, and maps common aliases.
+func normalizeSeverity(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	switch s {
+	case "crit", "critical-high":
+		return "critical"
+	case "med", "moderate":
+		return "medium"
+	case "warn", "warning":
+		return "low"
+	case "information", "informational":
+		return "info"
+	}
+	return s
 }
 
 // ResolveRequestPart substitutes template variables then engine vars.

@@ -12,14 +12,46 @@ import (
 	"time"
 )
 
-const TemplateHubURL = "https://github.com/projectdiscovery/nuclei-templates/archive/refs/heads/main.tar.gz"
+// TemplateHubURL is optional: set ATOMIX_TEMPLATE_HUB to a .tar.gz URL with
+// the same layout as the local template directory to enable remote refresh.
+// When empty, --update performs a local library refresh (reload + validate).
+var TemplateHubURL = os.Getenv("ATOMIX_TEMPLATE_HUB")
 
 func UpdateTemplates(targetDir string, force bool) error {
-	fmt.Fprintf(os.Stderr, "%s Downloading templates from Nuclei template hub...\n",
+	if strings.TrimSpace(TemplateHubURL) != "" {
+		return updateFromHub(targetDir, TemplateHubURL, force)
+	}
+	return refreshLocalLibrary(targetDir)
+}
+
+// refreshLocalLibrary reloads every template and reports health.
+// It is the default --update behavior and works fully offline.
+func refreshLocalLibrary(targetDir string) error {
+	fmt.Fprintf(os.Stderr, "%s Refreshing local template library in %s...\n",
+		SColor(ColorBCyan, "►"), targetDir)
+	templates, err := LoadTemplates(targetDir)
+	if err != nil {
+		return fmt.Errorf("load failed: %w", err)
+	}
+	valid, invalid := 0, 0
+	for _, t := range templates {
+		if len(ValidateTemplate(t)) == 0 {
+			valid++
+		} else {
+			invalid++
+		}
+	}
+	fmt.Fprintf(os.Stderr, "%s Library: %d templates (%d valid, %d need attention)\n",
+		SColor(ColorGreen, "[+]"), len(templates), valid, invalid)
+	return nil
+}
+
+func updateFromHub(targetDir, hubURL string, force bool) error {
+	fmt.Fprintf(os.Stderr, "%s Downloading templates from configured hub...\n",
 		SColor(ColorBCyan, "►"))
 
 	client := &http.Client{Timeout: 120 * time.Second}
-	resp, err := client.Get(TemplateHubURL)
+	resp, err := client.Get(hubURL)
 	if err != nil {
 		return fmt.Errorf("download failed: %w", err)
 	}
@@ -39,18 +71,28 @@ func UpdateTemplates(targetDir string, force bool) error {
 	count := 0
 	for {
 		header, err := tr.Next()
-		if err == io.EOF { break }
-		if err != nil { return fmt.Errorf("tar error: %w", err) }
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("tar error: %w", err)
+		}
 
 		if !strings.HasSuffix(header.Name, ".yaml") && !strings.HasSuffix(header.Name, ".yml") {
 			continue
 		}
-		if strings.Contains(header.Name, "/.github/") { continue }
-		if strings.Contains(header.Name, "/contrib/") { continue }
+		if strings.Contains(header.Name, "/.github/") {
+			continue
+		}
+		if strings.Contains(header.Name, "/contrib/") {
+			continue
+		}
 
 		// Strip top-level dir
 		parts := strings.SplitN(header.Name, "/", 2)
-		if len(parts) < 2 { continue }
+		if len(parts) < 2 {
+			continue
+		}
 		relPath := parts[1]
 
 		targetPath := filepath.Join(targetDir, relPath)
@@ -58,7 +100,9 @@ func UpdateTemplates(targetDir string, force bool) error {
 
 		// Skip if exists and not forced
 		if !force {
-			if _, err := os.Stat(targetPath); err == nil { continue }
+			if _, err := os.Stat(targetPath); err == nil {
+				continue
+			}
 		}
 
 		if err := os.MkdirAll(targetDirPath, 0755); err != nil {
@@ -66,7 +110,9 @@ func UpdateTemplates(targetDir string, force bool) error {
 		}
 
 		outFile, err := os.Create(targetPath)
-		if err != nil { return fmt.Errorf("create error: %w", err) }
+		if err != nil {
+			return fmt.Errorf("create error: %w", err)
+		}
 
 		if _, err := io.Copy(outFile, tr); err != nil {
 			outFile.Close()
@@ -83,7 +129,7 @@ func UpdateTemplates(targetDir string, force bool) error {
 
 func ListTemplateSources() []string {
 	sources := []string{
-		"nuclei-templates (official)",
+		"atomix-library (built-in)",
 		"custom (local)",
 	}
 	return sources
@@ -92,7 +138,10 @@ func ListTemplateSources() []string {
 func ValidateTemplatePaths(paths []string) (valid, invalid int) {
 	for _, p := range paths {
 		t, err := LoadTemplate(p)
-		if err != nil || t == nil { invalid++; continue }
+		if err != nil || t == nil {
+			invalid++
+			continue
+		}
 		valid++
 	}
 	return

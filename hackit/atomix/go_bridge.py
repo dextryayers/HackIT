@@ -32,6 +32,7 @@ FLAG_MAP = {
     "oob_token": "-oob-token", "oob_type": "-oob-type",
     "chain": "-w", "smart": "-smart", "multi": "-multi",
     "replay": "-replay", "diff": "-diff", "monitor": "-monitor",
+    "passive": "-passive", "min_confidence": "-min-confidence",
     "dashboard": "-dashboard", "dashboard_port": "-dashboard-port",
     "dashboard_path": "-dashboard-path", "dashboard_auth": "-dashboard-auth",
     "push": "-push", "slack": "-slack", "telegram": "-telegram",

@@ -42,7 +42,7 @@ func main() {
 	flag.Bool("l", false, "List all available templates")
 	flag.Bool("list", false, "List all available templates (alias)")
 	flag.Bool("validate", false, "Validate all templates")
-	flag.BoolVar(&cfg.UpdateTemplates, "update", false, "Update templates from Nuclei template hub")
+	flag.BoolVar(&cfg.UpdateTemplates, "update", false, "Refresh and validate the local template library")
 	flag.Bool("validate-deep", false, "Deep validation with schema checking")
 	flag.StringVar(&cfg.ConfigFile, "config", "", "Atomix config file path")
 	flag.StringVar(&cfg.CustomTemplateDir, "custom-templates", "", "Custom template directory path")
@@ -147,6 +147,8 @@ func main() {
 	flag.BoolVar(&cfg.DetectTech, "tech-detect", false, "Detect technologies used by target")
 	flag.StringVar(&cfg.TechDB, "tech-db", "", "Custom technology signatures database")
 	flag.BoolVar(&cfg.APIDiscovery, "api-discovery", false, "Discover API endpoints from responses")
+	flag.BoolVar(&cfg.Passive, "passive", false, "Passive-only audit (no templates, direct observations)")
+	flag.StringVar(&cfg.MinConfidence, "min-confidence", "", "Minimum finding confidence: low,medium,high")
 	flag.BoolVar(&cfg.Interactsh, "interactsh", false, "Enable Interactsh OOB support")
 	flag.StringVar(&cfg.InteractshServer, "oob-server", "", "Custom Interactsh server URL")
 	flag.StringVar(&cfg.InteractshToken, "oob-token", "", "Interactsh authentication token")
@@ -235,7 +237,7 @@ func main() {
 
 	// Handle --version
 	if hasFlag("version") {
-		fmt.Printf("Atomix v2.1.0 - Nuclei-Style YAML Template Scanner\n")
+		fmt.Printf("Atomix v2.2.0 - High-Precision Template Scanner\n")
 		fmt.Printf("Part of HackIT V2.1 - By: AniipID\n")
 		return
 	}
@@ -317,8 +319,32 @@ func main() {
 		return
 	}
 
-	// Validate templates
+	// Validate templates (library or explicit --load paths)
 	if validateFlag {
+		if cfg.LoadFiles != "" {
+			paths := strings.Split(cfg.LoadFiles, ",")
+			for i := range paths {
+				paths[i] = strings.TrimSpace(paths[i])
+			}
+			loaded, err := LoadTemplateFiles(paths)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "%s Error loading files: %v\n", SColor(ColorRed, "[!]"), err)
+			}
+			if len(loaded) == 0 {
+				fmt.Fprintf(os.Stderr, "%s No valid templates in --load paths\n", SColor(ColorYellow, "[!]"))
+				os.Exit(1)
+			}
+			valid, invalid := ValidateTemplates(loaded)
+			fmt.Fprintf(os.Stderr, "%s Valid: %d, Invalid: %d\n",
+				SColor(ColorGreen, "[+]"), valid, invalid)
+			if validateDeep {
+				ValidateTmux(loaded)
+			}
+			if invalid > 0 {
+				os.Exit(1)
+			}
+			return
+		}
 		ValidateAll(cfg.TemplateDir)
 		return
 	}
@@ -413,6 +439,35 @@ func main() {
 				SColor(ColorGreen, "[+]"), len(discoveredTargets))
 		}
 		// Continue to normal scan with discovered targets
+	}
+
+	// Resolve targets (needed by passive mode and normal scans)
+	allTargetsEarly, errEarly := LoadTargets(cfg)
+	if errEarly != nil {
+		fmt.Fprintf(os.Stderr, "%s Error loading targets: %v\n", SColor(ColorRed, "[!]"), errEarly)
+		os.Exit(1)
+	}
+
+	// Passive-only audit: built-in checks, no templates required.
+	if cfg.Passive {
+		if !cfg.JSON && !cfg.Silent && !noBanner {
+			PrintBanner()
+		}
+		var passiveResults []Result
+		for _, target := range allTargetsEarly {
+			passiveResults = append(passiveResults, RunPassiveAudit(target, cfg)...)
+		}
+		passiveResults = FilterByConfidence(passiveResults, cfg.MinConfidence)
+		SortResults(passiveResults)
+		scanner := NewScanner(cfg.Timeout, 1)
+		scanner.InitScanner(cfg)
+		scanner.Stats = &ScanStats{
+			TemplatesTotal: 0,
+			StartedAt:      time.Now().UTC().Format(time.RFC3339),
+		}
+		scanner.Stats.TargetsScanned = int32(len(allTargetsEarly))
+		handleResults(passiveResults, cfg, scanner)
+		return
 	}
 
 	// Load templates (with custom dir support)
@@ -514,8 +569,23 @@ func main() {
 	filtered := FilterTemplates(templates, filterOpts)
 
 	if len(filtered) == 0 {
-		fmt.Fprintf(os.Stderr, "%s No templates match filters\n", SColor(ColorYellow, "[!]"))
-		os.Exit(1)
+		fmt.Fprintf(os.Stderr, "%s No templates match filters — running passive audit instead\n",
+			SColor(ColorYellow, "[!]"))
+		var passiveResults []Result
+		for _, target := range allTargets {
+			passiveResults = append(passiveResults, RunPassiveAudit(target, cfg)...)
+		}
+		passiveResults = FilterByConfidence(passiveResults, cfg.MinConfidence)
+		SortResults(passiveResults)
+		tmpScanner := NewScanner(cfg.Timeout, 1)
+		tmpScanner.InitScanner(cfg)
+		tmpScanner.Stats = &ScanStats{
+			TemplatesTotal: int32(len(templates)),
+			StartedAt:      time.Now().UTC().Format(time.RFC3339),
+		}
+		tmpScanner.Stats.TargetsScanned = int32(len(allTargets))
+		handleResults(passiveResults, cfg, tmpScanner)
+		return
 	}
 
 	// Smart scan reduces template set
@@ -674,6 +744,10 @@ afterScan:
 	duration := time.Since(scanner.StartTime).Round(time.Second)
 	scanner.Stats.Duration = duration.String()
 	scanner.Stats.TargetsScanned = int32(len(allTargets))
+
+	// Rank and trim findings before any output or follow-up stage.
+	allResults = FilterByConfidence(allResults, cfg.MinConfidence)
+	SortResults(allResults)
 
 	// API Discovery from response bodies
 	if cfg.APIDiscovery && cfg.URL != "" {
