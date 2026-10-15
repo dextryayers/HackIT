@@ -28,6 +28,7 @@ type Crawler struct {
 	queuedCount  int64
 	fetchedCount int64
 	depthSkipped int64
+	bruteHits    int64
 	limitShown   int32
 	lastFetch    string
 
@@ -243,26 +244,28 @@ func (c *Crawler) Start() {
 		c.performPassiveChecks()
 	}()
 
-	if c.Opts.Archive || c.Opts.Brute {
-		if c.Opts.Archive {
-			bgWg.Add(1)
-			go func() {
-				defer bgWg.Done()
-				c.queryWayback(c.BaseURL)
-				c.queryCommonCrawl(c.BaseURL)
-			}()
-		}
-		if c.Opts.Brute {
-			bgWg.Add(1)
-			go func() {
-				defer bgWg.Done()
-				c.performActiveBrute()
-			}()
-		}
+	if c.Opts.Archive {
+		bgWg.Add(1)
+		go func() {
+			defer bgWg.Done()
+			c.queryWayback(c.BaseURL)
+			c.queryCommonCrawl(c.BaseURL)
+		}()
 	}
+	// PHASE 1 — main domain real crawl until the queue is exhausted.
 	c.queueWg.Wait()
 	bgWg.Wait()
 	c.queueWg.Wait()
+	writeOutput(`{"type":"phase","phase":"main-done","fetched":%d,"elapsed":"%s"}`+"\n",
+		atomic.LoadInt64(&c.fetchedCount), time.Since(c.startTime).Round(time.Second))
+
+	// PHASE 2 — brute list AFTER the real crawl (combined, never mixed).
+	if c.Opts.Brute {
+		writeOutput(`{"type":"phase","phase":"brute-start"}` + "\n")
+		c.performActiveBrute()
+		c.queueWg.Wait()
+		writeOutput(`{"type":"phase","phase":"brute-done","brute_hits":%d}`+"\n", atomic.LoadInt64(&c.bruteHits))
+	}
 
 	if c.Opts.Subdomains {
 		c.discoverAllSubdomains()
@@ -279,8 +282,11 @@ func (c *Crawler) Start() {
 		// Asset hosts first: static/cdn/assets/media carry the JS & CSS,
 		// so their files land early instead of after corporate pages.
 		subList = sortSubsAssetFirst(subList)
-		for _, s := range subList {
+		writeOutput(`{"type":"phase","phase":"subs-start","count":%d}`+"\n", len(subList))
+		// PHASE 3 — one subdomain at a time, each to completion.
+		for i, s := range subList {
 			c.activeHost = s.host
+			writeOutput(`{"type":"phase","phase":"sub-start","i":%d,"n":%d,"sub":%q}`+"\n", i+1, len(subList), s.name)
 			writeOutput(`{"type":"subdomain","url":%q,"subdomain":%q,"method":"crawl"}`+"\n", s.url, s.name)
 			c.passiveSubdomainSweep(s.url)
 			if !c.Filters.HasSeen(s.url) {
@@ -295,7 +301,9 @@ func (c *Crawler) Start() {
 				}
 			}
 			c.queueWg.Wait()
+			writeOutput(`{"type":"phase","phase":"sub-done","sub":%q,"fetched":%d}`+"\n", s.name, atomic.LoadInt64(&c.fetchedCount))
 		}
+		writeOutput(`{"type":"phase","phase":"subs-done","count":%d}`+"\n", len(subList))
 	}
 
 	c.activeHost = ""

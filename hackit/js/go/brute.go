@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"sync/atomic"
 )
 
 var sensitiveFilePatterns = []*regexp.Regexp{
@@ -256,6 +257,7 @@ func (c *Crawler) performActiveBrute() {
 			isJS := strings.HasSuffix(p, ".js") || strings.HasSuffix(p, ".ts") || strings.HasSuffix(p, ".mjs") || strings.HasSuffix(p, ".cjs") || strings.HasSuffix(p, ".jsx") || strings.HasSuffix(p, ".tsx") || strings.HasSuffix(p, ".json") || strings.HasSuffix(p, ".map")
 			isCodeFile := isJS || strings.HasSuffix(p, ".env") || strings.HasSuffix(p, ".yml") || strings.HasSuffix(p, ".yaml") || strings.HasSuffix(p, ".conf") || strings.HasSuffix(p, ".config") || strings.HasSuffix(p, ".php") || strings.HasSuffix(p, ".py")
 			if resp.StatusCode == 200 {
+				atomic.AddInt64(&c.bruteHits, 1)
 				bodyStr := ""
 				if isJS {
 					bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))

@@ -5,7 +5,7 @@ Usage:  hackit web js <url>
 """
 import click
 import json
-from hackit.ui import display_tool_banner, _colored, GREEN, RED, BLUE, B_CYAN, YELLOW, CYAN, MAGENTA, BOLD, DIM, TablePrinter
+from hackit.ui import display_tool_banner, _colored, GREEN, RED, BLUE, B_CYAN, B_GREEN, YELLOW, CYAN, MAGENTA, BOLD, DIM, TablePrinter
 from .go_bridge import GoEngine
 
 
@@ -69,7 +69,7 @@ def analyze_js(ctx, target_url):
                                  proxy='', crawl=True,
                                  js_analysis=True, secrets=True,
                                  subdomains=True, archive=True,
-                                 brute=False, sourcemap=True,
+                                 brute=True, sourcemap=True,
                                  tech=True, endpoints=True,
                                  network=True, json_out=True,
                                  rate_limit=0, include='', exclude=''):
@@ -99,6 +99,24 @@ def analyze_js(ctx, target_url):
                 click.echo(f"  {_colored('… crawl heartbeat:', DIM)} fetched {result.get('fetched', 0)} / queued {result.get('queued', 0)} in {result.get('elapsed', '')} {_colored(f'· {last}', DIM)}")
             elif rtype == 'limit':
                 click.echo(f"  {_colored('[LIMIT]', YELLOW)} {result.get('reason', '')} (capped for safety)")
+            elif rtype == 'phase':
+                ph = result.get('phase', '')
+                if ph == 'main-done':
+                    click.echo(f"\n  {_colored('══ MAIN DOMAIN COMPLETE ══', B_GREEN)} fetched {result.get('fetched', 0)} in {result.get('elapsed', '')}")
+                elif ph == 'brute-start':
+                    click.echo(f"  {_colored('── brute list phase (combined with real results) ──', YELLOW)}")
+                elif ph == 'brute-done':
+                    click.echo(f"  {_colored('══ BRUTE DONE ══', YELLOW)} {result.get('brute_hits', 0)} hits")
+                elif ph == 'subs-start':
+                    n_subs = result.get('count', 0)
+                    click.echo(f"\n  {_colored(f'══ SUBDOMAIN PHASE: {n_subs} targets ══', B_CYAN)}")
+                elif ph == 'sub-start':
+                    si, sn, ss = result.get('i', '?'), result.get('n', '?'), result.get('sub', '')
+                    click.echo(f"\n  {_colored(f'── [{si}/{sn}] {ss} ──', B_CYAN)}")
+                elif ph == 'sub-done':
+                    click.echo(f"  {_colored('   ✓ done', GREEN)} {result.get('sub', '')} (total fetched: {result.get('fetched', 0)})")
+                elif ph == 'subs-done':
+                    click.echo(f"\n  {_colored('══ ALL SUBDOMAINS DONE ══', B_CYAN)}")
             elif rtype == 'tech':
                 name = result.get('name', '')
                 tech_type = result.get('tech_type', '')

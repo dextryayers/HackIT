@@ -32,7 +32,7 @@ func cleanSubName(raw string) string {
 
 func (c *Crawler) discoverAllSubdomains() {
 	var wg sync.WaitGroup
-	wg.Add(8)
+	wg.Add(11)
 	go func() { defer wg.Done(); c.discoverCTLogs() }()
 	go func() { defer wg.Done(); c.discoverAlienVault() }()
 	go func() { defer wg.Done(); c.discoverGoogleCT() }()
@@ -41,7 +41,117 @@ func (c *Crawler) discoverAllSubdomains() {
 	go func() { defer wg.Done(); c.discoverVirusTotal() }()
 	go func() { defer wg.Done(); c.discoverCensys() }()
 	go func() { defer wg.Done(); c.discoverShodan() }()
+	go func() { defer wg.Done(); c.discoverHackerTarget() }()
+	go func() { defer wg.Done(); c.discoverBufferOver() }()
+	go func() { defer wg.Done(); c.discoverURLScan() }()
 	wg.Wait()
+}
+
+// discoverHackerTarget uses the keyless HackerTarget hostsearch API.
+func (c *Crawler) discoverHackerTarget() {
+	apiURL := fmt.Sprintf("https://api.hackertarget.com/hostsearch/?q=%s", c.BaseDomain)
+	req, _ := http.NewRequest("GET", apiURL, nil)
+	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; HackIT/2.1)")
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024))
+	for _, line := range strings.Split(string(body), "\n") {
+		parts := strings.Split(line, ",")
+		if len(parts) < 1 {
+			continue
+		}
+		name := cleanSubName(parts[0])
+		if name == "" || !strings.HasSuffix(name, "."+c.BaseDomain) || name == c.BaseHost {
+			continue
+		}
+		if c.addSubdomain(name, "https://"+name) {
+			writeOutput(`{"type":"subdomain_found","url":%q,"subdomain":%q,"method":"hackertarget"}`+"\n", "https://"+name, name)
+		}
+	}
+}
+
+// discoverBufferOver uses the keyless BufferOver DNS API.
+func (c *Crawler) discoverBufferOver() {
+	apiURL := fmt.Sprintf("https://dns.bufferover.run/dns?q=.%s", c.BaseDomain)
+	req, _ := http.NewRequest("GET", apiURL, nil)
+	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; HackIT/2.1)")
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024))
+	var result struct {
+		FDNS []string `json:"FDNS_A"`
+		RDNS []string `json:"RDNS"`
+	}
+	if json.Unmarshal(body, &result) != nil {
+		return
+	}
+	seen := map[string]bool{}
+	ingest := func(raw string) {
+		name := cleanSubName(strings.Split(raw, ",")[0])
+		if name == "" || seen[name] || !strings.HasSuffix(name, "."+c.BaseDomain) || name == c.BaseHost {
+			return
+		}
+		seen[name] = true
+		if c.addSubdomain(name, "https://"+name) {
+			writeOutput(`{"type":"subdomain_found","url":%q,"subdomain":%q,"method":"bufferover"}`+"\n", "https://"+name, name)
+		}
+	}
+	for _, r := range result.FDNS {
+		ingest(r)
+	}
+	for _, r := range result.RDNS {
+		ingest(r)
+	}
+}
+
+// discoverURLScan uses the keyless urlscan.io search API.
+func (c *Crawler) discoverURLScan() {
+	apiURL := fmt.Sprintf("https://urlscan.io/api/v1/search/?q=domain%%3A%s&size=100", c.BaseDomain)
+	req, _ := http.NewRequest("GET", apiURL, nil)
+	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; HackIT/2.1)")
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024))
+	var result struct {
+		Results []struct {
+			Page struct {
+				Domain string `json:"domain"`
+			} `json:"page"`
+		} `json:"results"`
+	}
+	if json.Unmarshal(body, &result) != nil {
+		return
+	}
+	for _, entry := range result.Results {
+		name := cleanSubName(entry.Page.Domain)
+		if name == "" || !strings.HasSuffix(name, "."+c.BaseDomain) || name == c.BaseHost {
+			continue
+		}
+		if c.addSubdomain(name, "https://"+name) {
+			writeOutput(`{"type":"subdomain_found","url":%q,"subdomain":%q,"method":"urlscan"}`+"\n", "https://"+name, name)
+		}
+	}
 }
 
 func (c *Crawler) extractSubdomainFromURL(rawURL string) {
