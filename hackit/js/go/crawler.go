@@ -7,21 +7,28 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
 type Crawler struct {
-	Opts       *Options
-	BaseURL    string
-	BaseHost   string
-	BaseDomain string
-	Client     *http.Client
-	Scope      *Scope
-	Filters    *Filters
-	WG         sync.WaitGroup
-	queueWg    sync.WaitGroup
-	mu         sync.Mutex
-	queuedURLs chan urlQueue
+	Opts         *Options
+	BaseURL      string
+	BaseHost     string
+	BaseHostPort string
+	BaseDomain   string
+	Client       *http.Client
+	Scope        *Scope
+	Filters      *Filters
+	WG           sync.WaitGroup
+	queueWg      sync.WaitGroup
+	mu           sync.Mutex
+	queuedURLs   chan urlQueue
+
+	queuedCount  int64
+	fetchedCount int64
+	depthSkipped int64
+	limitShown   int32
 
 	activeHost string
 
@@ -81,6 +88,7 @@ func NewCrawler(opts *Options) *Crawler {
 		Opts:          opts,
 		BaseURL:       opts.Target,
 		BaseHost:      host,
+		BaseHostPort:  u.Host,
 		BaseDomain:    baseDomain,
 		activeHost:    host,
 		Client:        client,
@@ -116,7 +124,7 @@ func (c *Crawler) addQueueItem(item urlQueue) {
 	u, err := url.Parse(item.url)
 	if err == nil && u.Host != "" {
 		itemHost := hostWithoutPort(u.Host)
-		if itemHost != c.activeHost {
+		if itemHost != c.activeHost && !isHostTwin(itemHost, c.activeHost) {
 			if strings.HasSuffix(itemHost, c.BaseDomain) && itemHost != c.BaseHost {
 				c.addSubdomain(itemHost, item.url)
 			}
@@ -124,7 +132,22 @@ func (c *Crawler) addQueueItem(item urlQueue) {
 		}
 	}
 	c.queueWg.Add(1)
+	atomic.AddInt64(&c.queuedCount, 1)
 	c.queuedURLs <- item
+}
+
+// isHostTwin treats apex <-> www as the same site for crawl purposes.
+func isHostTwin(a, b string) bool {
+	if a == b {
+		return true
+	}
+	if strings.HasPrefix(a, "www.") && strings.TrimPrefix(a, "www.") == b {
+		return true
+	}
+	if strings.HasPrefix(b, "www.") && strings.TrimPrefix(b, "www.") == a {
+		return true
+	}
+	return false
 }
 
 func (c *Crawler) getDelay() time.Duration {
@@ -173,11 +196,36 @@ func (c *Crawler) setHeaders(req *http.Request) {
 func (c *Crawler) Start() {
 	go c.crawlQueue()
 
+	// Live progress heartbeat: proves the crawl is advancing until exhausted.
+	stopProgress := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(3 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				writeOutput(`{"type":"progress","fetched":%d,"queued":%d,"elapsed":"%s"}`+"\n",
+					atomic.LoadInt64(&c.fetchedCount), atomic.LoadInt64(&c.queuedCount),
+					time.Since(c.startTime).Round(time.Second))
+			case <-stopProgress:
+				return
+			}
+		}
+	}()
+
 	if !c.Filters.HasSeen(c.BaseURL) {
 		c.addQueueItem(urlQueue{url: c.BaseURL, source: "", depth: 0})
 	}
 	if !strings.HasSuffix(c.BaseURL, "/") && !c.Filters.HasSeen(c.BaseURL+"/") {
 		c.addQueueItem(urlQueue{url: c.BaseURL + "/", source: "", depth: 0})
+	}
+	// Apex -> www fallback seed: if the apex is walled, the www twin
+	// often answers (or vice versa). One extra request, big coverage win.
+	if !strings.HasPrefix(c.BaseHost, "www.") {
+		wwwURL := strings.Replace(c.BaseURL, "://"+c.BaseHost, "://www."+c.BaseHost, 1)
+		if wwwURL != c.BaseURL && !c.Filters.HasSeen(wwwURL) {
+			c.addQueueItem(urlQueue{url: wwwURL, source: "", depth: 0})
+		}
 	}
 
 	var bgWg sync.WaitGroup
@@ -212,16 +260,27 @@ func (c *Crawler) Start() {
 	if c.Opts.Subdomains {
 		c.discoverAllSubdomains()
 		subList := c.getSubdomainList()
+		// Crawl every discovered subdomain until exhausted (safety-capped).
+		maxSubs := c.Opts.MaxSubs
+		if maxSubs <= 0 {
+			maxSubs = 200
+		}
+		if len(subList) > maxSubs {
+			writeOutput(`{"type":"limit","reason":"max-subs","found":%d,"max":%d}`+"\n", len(subList), maxSubs)
+			subList = subList[:maxSubs]
+		}
 		for _, s := range subList {
 			c.activeHost = s.host
 			writeOutput(`{"type":"subdomain","url":%q,"subdomain":%q,"method":"crawl"}`+"\n", s.url, s.name)
 			if !c.Filters.HasSeen(s.url) {
 				c.addQueueItem(urlQueue{url: s.url, source: c.BaseURL, depth: 1})
 			}
-			for _, p := range getBrutePaths() {
-				full := s.url + p
-				if !c.Filters.HasSeen(full) {
-					c.addQueueItem(urlQueue{url: full, source: s.url, depth: 2})
+			if c.Opts.Brute {
+				for _, p := range getBrutePaths() {
+					full := s.url + p
+					if !c.Filters.HasSeen(full) {
+						c.addQueueItem(urlQueue{url: full, source: s.url, depth: 2})
+					}
 				}
 			}
 			c.queueWg.Wait()
@@ -230,6 +289,7 @@ func (c *Crawler) Start() {
 
 	c.activeHost = ""
 	close(c.queuedURLs)
+	close(stopProgress)
 	c.printSummary()
 }
 
@@ -285,8 +345,8 @@ func (c *Crawler) printSummary() {
 	elapsed := time.Since(c.startTime).Round(time.Millisecond)
 	c.mu.Unlock()
 
-	writeOutput(`{"type":"summary","total":%d,"js_files":%d,"files_200":%d,"subdomains":%d,"elapsed":"%s"}`,
-		total, jsCount, okCount, subCount, elapsed)
+	writeOutput(`{"type":"summary","total":%d,"js_files":%d,"files_200":%d,"subdomains":%d,"skipped_depth":%d,"elapsed":"%s"}`,
+		total, jsCount, okCount, subCount, atomic.LoadInt64(&c.depthSkipped), elapsed)
 	writeOutput("\n")
 }
 

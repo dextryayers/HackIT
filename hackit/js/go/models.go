@@ -23,6 +23,8 @@ type Options struct {
 	RateLimit   int
 	Include     string
 	Exclude     string
+	MaxPages    int
+	MaxSubs     int
 }
 
 type urlQueue struct {

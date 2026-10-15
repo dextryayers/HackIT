@@ -21,6 +21,16 @@ var (
 	fetchHost     = regexp.MustCompile(`(?:url|host|hostname|domain|server|apiUrl|baseUrl|endpoint|proxy|target)\s*[:=]\s*"(https?://([^"/\s]+))"`)
 )
 
+
+// cleanSubName normalizes a candidate subdomain: trims spaces, drops
+// wildcard prefixes ("*.cdn.example.com" -> "cdn.example.com"), lowercases.
+func cleanSubName(raw string) string {
+	n := strings.TrimSpace(strings.ToLower(raw))
+	n = strings.TrimPrefix(n, "*.")
+	n = strings.Trim(n, ".")
+	return n
+}
+
 func (c *Crawler) discoverAllSubdomains() {
 	var wg sync.WaitGroup
 	wg.Add(8)
@@ -40,7 +50,7 @@ func (c *Crawler) extractSubdomainFromURL(rawURL string) {
 	if err != nil {
 		return
 	}
-	host := hostWithoutPort(u.Host)
+	host := cleanSubName(hostWithoutPort(u.Host))
 	if host == "" || !strings.HasSuffix(host, "."+c.BaseDomain) && host != c.BaseDomain {
 		return
 	}
@@ -80,7 +90,7 @@ func (c *Crawler) extractSubdomainsFromBody(body string, sourceURL string) {
 	}
 	for _, m := range jsVarHostname.FindAllStringSubmatch(body, -1) {
 		if len(m) >= 2 {
-			h := m[1]
+			h := cleanSubName(m[1])
 			if strings.HasSuffix(h, "."+c.BaseDomain) && h != c.BaseHost && !c.Subdomains[h] {
 				c.extractSubdomainFromURL("https://" + h)
 			}
@@ -105,7 +115,7 @@ func (c *Crawler) discoverCTLogs() {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 5*1024*1024))
 	processCTName := func(name string) {
 		for _, n := range strings.Split(name, "\n") {
-			n = strings.TrimSpace(n)
+			n = cleanSubName(n)
 			if n == "" || !strings.HasSuffix(n, "."+c.BaseDomain) && n != c.BaseDomain || n == c.BaseHost {
 				continue
 			}
@@ -183,7 +193,7 @@ func (c *Crawler) discoverAlienVault() {
 		return
 	}
 	for _, entry := range result.PassiveDNS {
-		name := strings.TrimSpace(entry.Hostname)
+		name := cleanSubName(entry.Hostname)
 		if name == "" || !strings.HasSuffix(name, "."+c.BaseDomain) && name != c.BaseDomain || name == c.BaseHost {
 			continue
 		}
@@ -209,7 +219,7 @@ func (c *Crawler) discoverGoogleCT() {
 			if json.Unmarshal(body, &entries) == nil {
 				for _, entry := range entries {
 					for _, name := range entry.DNSNames {
-						name = strings.TrimSpace(name)
+						name = cleanSubName(name)
 						if name == "" || !strings.HasSuffix(name, "."+c.BaseDomain) || name == c.BaseHost {
 							continue
 						}
@@ -271,7 +281,7 @@ func (c *Crawler) discoverVirusTotal() {
 		return
 	}
 	for _, entry := range result.Data {
-		name := strings.TrimSpace(entry.ID)
+		name := cleanSubName(entry.ID)
 		if name == "" || !strings.HasSuffix(name, "."+c.BaseDomain) || name == c.BaseHost {
 			continue
 		}
@@ -309,7 +319,7 @@ func (c *Crawler) discoverCensys() {
 	}
 	for _, hit := range result.Result.Hits {
 		for _, name := range hit.Parsed.Names {
-			name = strings.TrimSpace(name)
+			name = cleanSubName(name)
 			if name == "" || !strings.HasSuffix(name, "."+c.BaseDomain) || name == c.BaseHost {
 				continue
 			}

@@ -10,33 +10,11 @@ from .go_bridge import GoEngine
 
 
 @click.command()
-@click.option('-o', '--output', default=None, help='Save results to JSON')
-@click.option('--code', is_flag=True, default=False, help='Show full JS source code in output')
-@click.option('-d', '--depth', default=3, type=int, help='Crawl depth (default 3)')
-@click.option('-c', '--concurrency', default=50, type=int, help='Concurrent requests (default 50)')
-@click.option('--timeout', default=30, type=int, help='Request timeout in seconds (default 30)')
-@click.option('--delay', default=0, type=int, help='Delay between requests in ms (default 0)')
-@click.option('--proxy', default=None, help='Proxy URL (e.g. http://127.0.0.1:8080)')
-@click.option('--rate-limit', default=0, type=int, help='Max requests per second (default 0 = unlimited)')
-@click.option('--no-crawl', is_flag=True, default=False, help='Disable page crawling')
-@click.option('--no-js', is_flag=True, default=False, help='Disable JS analysis')
-@click.option('--no-secrets', is_flag=True, default=False, help='Disable secret scanning')
-@click.option('--no-subdomains', is_flag=True, default=False, help='Disable subdomain discovery')
-@click.option('--no-archive', is_flag=True, default=False, help='Disable archive crawling')
-@click.option('--no-brute', 'no_brute_legacy', is_flag=True, default=False, hidden=True, help='Deprecated alias (brute is off by default)')
-@click.option('--brute', is_flag=True, default=False, help='Enable brute-force path guessing (default OFF — pure target crawl)')
-@click.option('--no-sourcemap', is_flag=True, default=False, help='Disable source map analysis')
-@click.option('--no-tech', is_flag=True, default=False, help='Disable tech detection')
-@click.option('--no-endpoints', is_flag=True, default=False, help='Disable endpoint extraction')
-@click.option('--no-network', is_flag=True, default=False, help='Disable network call analysis')
-@click.option('--include', default='', help='Only crawl URLs matching regex (comma-separated, katana -fr style)')
-@click.option('--exclude', default='', help='Skip URLs matching regex (comma-separated)')
-@click.option('--pure', is_flag=True, default=False, help='Pure target-only crawl: disables brute, archive & subdomain discovery (no guessing, katana-style)')
 @click.argument('target_url', default=None, required=False)
 @click.pass_context
-def analyze_js(ctx, target_url, output, code, depth, concurrency, timeout, delay, proxy,
-               rate_limit, no_crawl, no_js, no_secrets, no_subdomains, no_archive,
-               no_brute_legacy, brute, no_sourcemap, no_tech, no_endpoints, no_network, include, exclude, pure):
+def analyze_js(ctx, target_url):
+    # Pure hunter: just enter a URL. Full real target-only crawl with
+    # performance defaults (no flags, no guessing, no archive).
     display_tool_banner("JS HUNTER", force=True)
 
     if target_url:
@@ -60,14 +38,6 @@ def analyze_js(ctx, target_url, output, code, depth, concurrency, timeout, delay
     click.echo(f"{wrn} Use with caution. You are responsible for your actions.")
     click.echo(f"{wrn} Developers assume no liability and are not responsible for any misuse or damage.\n")
 
-    if pure:
-        no_archive = True
-        no_subdomains = True
-        click.echo(_colored("  [*] Pure mode: target-only crawl (archive/subdomains off, no guessing)", CYAN))
-    use_brute = bool(brute)
-    if use_brute:
-        click.echo(_colored("  [*] Brute mode ON: guessing common paths (may produce non-target URLs)", YELLOW))
-
     engine = GoEngine()
     if not engine.available:
         click.echo(_colored("[!] Go is not installed.", RED))
@@ -76,6 +46,10 @@ def analyze_js(ctx, target_url, output, code, depth, concurrency, timeout, delay
     if not engine.ensure_compiled():
         click.echo(_colored("[!] Failed to compile Go engine.", RED))
         return
+
+    # Fixed pure-hunter profile: everything ON except guessing modules.
+    # Target-only real crawl: pages, JS, CSS, sourcemaps, secrets, tech,
+    # endpoints, network — zero brute list, zero archive, zero subdomains.
 
     all_results = []
     discovered = []
@@ -88,15 +62,15 @@ def analyze_js(ctx, target_url, output, code, depth, concurrency, timeout, delay
     found_any = False
 
     try:
-        for result in engine.run(final_url, show_code=code, depth=depth,
-                                 concurrency=concurrency, timeout=timeout, delay=delay,
-                                 proxy=proxy or '', crawl=not no_crawl,
-                                 js_analysis=not no_js, secrets=not no_secrets,
-                                 subdomains=not no_subdomains, archive=not no_archive,
-                                 brute=use_brute, sourcemap=not no_sourcemap,
-                                 tech=not no_tech, endpoints=not no_endpoints,
-                                 network=not no_network, json_out=True,
-                                 rate_limit=rate_limit, include=include, exclude=exclude):
+        for result in engine.run(final_url, show_code=False, depth=10,
+                                 concurrency=100, timeout=15, delay=0,
+                                 proxy='', crawl=True,
+                                 js_analysis=True, secrets=True,
+                                 subdomains=True, archive=True,
+                                 brute=False, sourcemap=True,
+                                 tech=True, endpoints=True,
+                                 network=True, json_out=True,
+                                 rate_limit=0, include='', exclude=''):
             if not isinstance(result, dict):
                 continue
             if 'error' in result:
@@ -118,6 +92,10 @@ def analyze_js(ctx, target_url, output, code, depth, concurrency, timeout, delay
                 length = result.get('length', 0)
                 filemap_200.append(result)
                 click.echo(f"  {_colored('[200]', GREEN)} {_colored(f'{kind:10s}', CYAN)} {url_val} {_colored(f'({length}b)', DIM)}")
+            elif rtype == 'progress':
+                click.echo(f"  {_colored('… crawl heartbeat:', DIM)} fetched {result.get('fetched', 0)} / queued {result.get('queued', 0)} in {result.get('elapsed', '')}")
+            elif rtype == 'limit':
+                click.echo(f"  {_colored('[LIMIT]', YELLOW)} {result.get('reason', '')} (capped for safety)")
             elif rtype == 'tech':
                 name = result.get('name', '')
                 tech_type = result.get('tech_type', '')
@@ -143,6 +121,11 @@ def analyze_js(ctx, target_url, output, code, depth, concurrency, timeout, delay
                 comments.append(result)
                 cmt = result.get('comment', '')
                 click.echo(f"  {_colored('[COMMENT]', MAGENTA)} {cmt}")
+            elif rtype == 'comment_url':
+                click.echo(f"  {_colored('[CMT-URL]', MAGENTA)} {url_val}")
+            elif rtype == 'lazy_ref':
+                lazy_ctx = result.get('ctx', '')
+                click.echo(f"  {_colored('[LAZY]', YELLOW)} {url_val} {_colored(f'({lazy_ctx})', DIM)}")
             elif rtype == 'js_source':
                 js_sources.append(result)
                 body = result.get('body', '')
@@ -158,7 +141,8 @@ def analyze_js(ctx, target_url, output, code, depth, concurrency, timeout, delay
             elif rtype == 'subdomain':
                 click.echo(f"  {_colored('[SUB]', B_CYAN)} {url_val}")
             elif rtype == 'subdomain_found':
-                pass
+                method = result.get('method', '')
+                click.echo(f"  {_colored('[SUB]', B_CYAN)} {url_val} {_colored(f'({method})', DIM)}")
             elif rtype == 'subdomain_hint':
                 click.echo(f"         {_colored('  └─ hint:', DIM)} {result.get('host', '')}")
             elif rtype == 'wayback':
@@ -175,7 +159,7 @@ def analyze_js(ctx, target_url, output, code, depth, concurrency, timeout, delay
                 s_color = GREEN if status == 200 else (YELLOW if status < 400 else RED)
                 click.echo(f"  {_colored(f'[{status}]', s_color)} {url_val} {_colored(f'({ct})', DIM)} {_colored(f'{length}b', DIM)}")
                 body = result.get('body', '')
-                if body and code and 'javascript' in ct:
+                if body and 'javascript' in ct:
                     rows = body.split('\n')
                     for i, row in enumerate(rows[:20]):
                         click.echo(f"    {_colored(f'{i+1:>4}', DIM)} {row}")
@@ -251,11 +235,14 @@ def analyze_js(ctx, target_url, output, code, depth, concurrency, timeout, delay
             elif rtype == 'summary':
                 all_results.append(result)
                 n_files = result.get('files_200', len(filemap_200))
+                skipped = result.get('skipped_depth', 0)
                 click.echo(f"\n  {_colored('═' * 56, DIM)}")
                 click.echo(f"  {_colored('[DONE]', GREEN)} Crawled: {result.get('total', 0)} pages, "
                           f"{result.get('js_files', 0)} JS files, "
                           f"{n_files} verified-200 files, "
                           f"{result.get('subdomains', 0)} subdomains in {result.get('elapsed', '0s')}")
+                if skipped:
+                    click.echo(f"  {_colored(f'[...] {skipped} URLs beyond depth budget (raise depth to include)', DIM)}")
             else:
                 click.echo(f"  {_colored('[?]', DIM)} {url_val}")
 
@@ -297,10 +284,37 @@ def analyze_js(ctx, target_url, output, code, depth, concurrency, timeout, delay
             click.echo(f"  {_colored('Notable Comments:', MAGENTA)} {len(comments)}")
             for c in comments[:5]:
                 click.echo(f"    {_colored('•', MAGENTA)} {c.get('comment', '')[:80]}")
+        # ── File/folder map per host: accurate directory inventory ──
+        if filemap_200:
+            from urllib.parse import urlparse as _up2
+            from collections import Counter as _Counter
+            hosts = _Counter()
+            trees = {}
+            for f in filemap_200:
+                try:
+                    u = _up2(f.get('url', ''))
+                    hosts[u.hostname or '?'] += 1
+                    d = (u.path or '/').rsplit('/', 1)[0] or '/'
+                    trees.setdefault(u.hostname or '?', _Counter())[d] += 1
+                except Exception:
+                    continue
+            click.echo(f"  {_colored('Files By Host:', CYAN)}")
+            for h, n in hosts.most_common(15):
+                click.echo(f"    {_colored('•', GREEN)} {h} {_colored(f'({n} files)', DIM)}")
+                for d, dn in sorted(trees.get(h, {}).items(), key=lambda kv: -kv[1])[:8]:
+                    click.echo(f"      {_colored('├─', DIM)} {d or '/'} {_colored(f'×{dn}', DIM)}")
+            if len(hosts) > 15:
+                click.echo(f"    {_colored(f'… +{len(hosts) - 15} more hosts', DIM)}")
         click.echo(f"  {_colored('─' * 56, DIM)}")
 
-    # Save to JSON
-    if output and all_results:
+    # Auto-save every pure hunt next to CWD (no flags needed).
+    if all_results:
+        from datetime import datetime as _dt
+        from urllib.parse import urlparse as _up
+        from collections import Counter as _Counter2
+        host = _up(final_url).hostname or "target"
+        by_host = dict(_Counter2((_up(f.get('url', '')).hostname or '?') for f in filemap_200))
+        output = f"js_{host}_{_dt.now().strftime('%Y%m%d_%H%M%S')}.json"
         with open(output, 'w') as f:
             json.dump({
                 "target": final_url,
@@ -308,6 +322,7 @@ def analyze_js(ctx, target_url, output, code, depth, concurrency, timeout, delay
                 "stats": {
                     "discovered": len(discovered),
                     "verified_200": len(filemap_200),
+                    "by_host": by_host,
                     "sensitive": len(sensitives),
                     "comments": len(comments),
                     "sourcemaps": len(sourcemaps),

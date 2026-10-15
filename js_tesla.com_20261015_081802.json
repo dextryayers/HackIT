@@ -1,0 +1,63 @@
+{
+  "target": "https://tesla.com",
+  "results": [
+    {
+      "type": "discovered",
+      "url": "https://tesla.com/robots.txt",
+      "source": "https://tesla.com",
+      "method": "passive",
+      "status": 200
+    },
+    {
+      "type": "discovered",
+      "url": "https://tesla.com/sitemap.xml",
+      "source": "https://tesla.com",
+      "method": "passive",
+      "status": 200
+    },
+    {
+      "type": "discovered",
+      "url": "https://tesla.com/.well-known/security.txt",
+      "source": "https://tesla.com",
+      "method": "passive",
+      "status": 200
+    },
+    {
+      "type": "discovered",
+      "url": "https://tesla.com/.well-known/apple-app-site-association",
+      "source": "https://tesla.com",
+      "method": "passive",
+      "status": 200
+    },
+    {
+      "type": "discovered",
+      "url": "https://tesla.com/.well-known/assetlinks.json",
+      "source": "https://tesla.com",
+      "method": "passive",
+      "status": 200
+    },
+    {
+      "type": "summary",
+      "total": 0,
+      "js_files": 0,
+      "files_200": 0,
+      "subdomains": 0,
+      "elapsed": "38.856s"
+    },
+    {
+      "type": "summary",
+      "total": 0,
+      "js_files": 0,
+      "files_200": 0,
+      "subdomains": 0,
+      "elapsed": "38.856s"
+    }
+  ],
+  "stats": {
+    "discovered": 5,
+    "verified_200": 0,
+    "sensitive": 0,
+    "comments": 0,
+    "sourcemaps": 0
+  }
+}

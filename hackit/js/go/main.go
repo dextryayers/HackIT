@@ -30,6 +30,8 @@ func main() {
 	rateLimitFlag := flag.Int("rate-limit", 0, "Max requests per second")
 	includeFlag := flag.String("include", "", "Comma-separated regex: only crawl matching URLs (katana -fr)")
 	excludeFlag := flag.String("exclude", "", "Comma-separated regex: skip matching URLs")
+	maxPagesFlag := flag.Int("max-pages", 20000, "Safety cap on total fetched pages")
+	maxSubsFlag := flag.Int("max-subs", 200, "Safety cap on crawled subdomains")
 	flag.Parse()
 
 	target := *targetFlag
@@ -75,6 +77,8 @@ func main() {
 		RateLimit:   *rateLimitFlag,
 		Include:     *includeFlag,
 		Exclude:     *excludeFlag,
+		MaxPages:    *maxPagesFlag,
+		MaxSubs:     *maxSubsFlag,
 	}
 
 	crawler := NewCrawler(opts)

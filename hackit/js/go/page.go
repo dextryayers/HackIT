@@ -4,18 +4,25 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
+	"sync/atomic"
 )
 
 var (
-	attrPattern     = regexp.MustCompile(`(?i)(href|src|data|action|formaction|content|poster|srcset|code|archive)\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)`)
-	htmlTagPattern  = regexp.MustCompile(`(?i)<(a|script|link|img|iframe|form|video|audio|source|track|embed|object|area|frame|applet|input|button|meta)\b([^>]*)>`)
-	metaRefreshPat  = regexp.MustCompile(`(?i)url\s*=\s*["']?([^"';]+)["']?`)
-	tagRelPattern   = regexp.MustCompile(`(?i)rel\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)`)
-	fetchPatternPre = regexp.MustCompile(`(?:fetch|axios|xhr|XMLHttpRequest)\s*\(?\s*["'` + "`" + `]([^"'` + "`" + `]+)["'` + "`" + `]`)
-	ajaxPatternPre  = regexp.MustCompile(`\$.+(?:get|post|ajax|load)\s*\(?\s*["'` + "`" + `]([^"'` + "`" + `]+)["'` + "`" + `]`)
-	inlineJSVarPre  = regexp.MustCompile(`(?:var|let|const|window\.)\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*["'` + "`" + `](https?://[^"'` + "`" + `]+)["'` + "`" + `]`)
+	attrPattern        = regexp.MustCompile(`(?i)(href|src|data|action|formaction|content|poster|srcset|code|archive)\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)`)
+	htmlTagPattern     = regexp.MustCompile(`(?i)<(a|script|link|img|iframe|form|video|audio|source|track|embed|object|area|frame|applet|input|button|meta)\b([^>]*)>`)
+	metaRefreshPat     = regexp.MustCompile(`(?i)url\s*=\s*["']?([^"';]+)["']?`)
+	tagRelPattern      = regexp.MustCompile(`(?i)rel\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)`)
+	fetchPatternPre    = regexp.MustCompile(`(?:fetch|axios|xhr|XMLHttpRequest)\s*\(?\s*["'` + "`" + `]([^"'` + "`" + `]+)["'` + "`" + `]`)
+	ajaxPatternPre     = regexp.MustCompile(`\$.+(?:get|post|ajax|load)\s*\(?\s*["'` + "`" + `]([^"'` + "`" + `]+)["'` + "`" + `]`)
+	inlineJSVarPre     = regexp.MustCompile(`(?:var|let|const|window\.)\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*["'` + "`" + `](https?://[^"'` + "`" + `]+)["'` + "`" + `]`)
+	dataURLAttrPattern = regexp.MustCompile(`(?i)data-(?:src|href|url|background|image|video|link|uri|path)\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)`)
+	htmlCommentPattern = regexp.MustCompile(`(?s)<!--(.*?)-->`)
+	commentURLPattern  = regexp.MustCompile(`(?:https?://[^\s"'<>]+|/(?:[\w\-.~!$&'()*+,;=:@]|%[0-9A-Fa-f]{2})+(?:/(?:[\w\-.~!$&'()*+,;=:@]|%[0-9A-Fa-f]{2})*)*)`)
+	linkHeaderPattern  = regexp.MustCompile(`<([^<>]+)>\s*(?:;\s*rel\s*=\s*"?([^";,]+)"?)?`)
+	nextBuildIDPattern = regexp.MustCompile(`"buildId"\s*:\s*"([^"]+)"`)
 )
 
 var tagAttrs = map[string][]string{
@@ -46,11 +53,19 @@ func strSliceContains(list []string, v string) bool {
 
 func (c *Crawler) crawlPage(pageURL string, sourceURL string, depth int) {
 	if depth > c.Scope.MaxDepth {
+		atomic.AddInt64(&c.depthSkipped, 1)
 		return
 	}
 	if c.Filters.Seen(pageURL) {
 		return
 	}
+	if c.Opts.MaxPages > 0 && atomic.LoadInt64(&c.fetchedCount) >= int64(c.Opts.MaxPages) {
+		if atomic.CompareAndSwapInt32(&c.limitShown, 0, 1) {
+			writeOutput(`{"type":"limit","reason":"max-pages","max":%d}`+"\n", c.Opts.MaxPages)
+		}
+		return
+	}
+	atomic.AddInt64(&c.fetchedCount, 1)
 
 	req, err := http.NewRequest("GET", pageURL, nil)
 	if err != nil {
@@ -142,9 +157,13 @@ func (c *Crawler) crawlPage(pageURL string, sourceURL string, depth int) {
 	if resp.StatusCode == 200 && strings.Contains(ct, "html") {
 		// Always extract (queueing itself stays depth-aware): even the
 		// deepest fetched page must reveal every link it contains.
+		base := extractBaseHref(body, pageURL)
 		c.captureHTMLResources(body, pageURL, depth)
 		c.extractInlineJS(body, pageURL, depth)
 		c.extractFromHTML(body, pageURL, depth)
+		c.extractCommentURLs(body, pageURL, base, depth)
+		c.extractLinkHeader(resp, pageURL, depth)
+		c.enqueueNextDataVariants(body, pageURL, depth)
 		configURLs := extractInlineJSONConfigs(body, pageURL)
 		for _, cu := range configURLs {
 			absURL := resolveURL(cu, pageURL)
@@ -215,7 +234,9 @@ func (c *Crawler) extractFromHTML(body string, pageURL string, depth int) {
 			if rel != "" && rel != "stylesheet" && !strings.Contains(rel, "preload") &&
 				!strings.Contains(rel, "modulepreload") && !strings.Contains(rel, "prefetch") &&
 				!strings.Contains(rel, "icon") && !strings.Contains(rel, "manifest") &&
-				!strings.Contains(rel, "alternate") {
+				!strings.Contains(rel, "alternate") && !strings.Contains(rel, "canonical") &&
+				!strings.Contains(rel, "shortlink") && !strings.Contains(rel, "amphtml") &&
+				!strings.Contains(rel, "dns-prefetch") && !strings.Contains(rel, "preconnect") {
 				continue
 			}
 		}
@@ -250,6 +271,48 @@ func (c *Crawler) extractFromHTML(body string, pageURL string, depth int) {
 			}
 			c.queueHTMLRef(val, tag, base, pageURL, depth)
 		}
+		// data-* lazy-load attributes (data-src, data-href, data-url, ...).
+		for _, dm := range dataURLAttrPattern.FindAllStringSubmatch(attrs, -1) {
+			if len(dm) >= 2 {
+				val := strings.Trim(dm[1], "\"'")
+				if abs := resolveURL(val, base); abs != "" {
+					writeOutput(`{"type":"lazy_ref","url":%q,"source":%q,"ctx":%q}`+"\n", abs, pageURL, tag+"[data]")
+				}
+				c.queueHTMLRef(val, tag+"[data]", base, pageURL, depth)
+			}
+		}
+	}
+}
+
+// HTML comments often hide retired paths, internal URLs and TODO endpoints.
+func (c *Crawler) extractCommentURLs(body, pageURL, base string, depth int) {
+	emitComment := func(val string) {
+		val = strings.TrimSpace(strings.Trim(val, "\"'"))
+		if val == "" {
+			return
+		}
+		absURL := resolveURL(val, base)
+		if absURL == "" {
+			return
+		}
+		writeOutput(`{"type":"comment_url","url":%q,"source":%q}`+"\n", absURL, pageURL)
+		c.queueHTMLRef(val, "comment", base, pageURL, depth)
+	}
+	for _, m := range htmlCommentPattern.FindAllStringSubmatch(body, -1) {
+		if len(m) < 2 {
+			continue
+		}
+		comment := m[1]
+		for _, am := range attrPattern.FindAllStringSubmatch(comment, -1) {
+			if len(am) >= 3 {
+				emitComment(am[2])
+			}
+		}
+		for _, um := range commentURLPattern.FindAllStringSubmatch(comment, -1) {
+			if len(um) >= 1 {
+				emitComment(um[0])
+			}
+		}
 	}
 }
 
@@ -271,6 +334,68 @@ func (c *Crawler) extractInlineJS(body string, pageURL string, depth int) {
 			if absURL != "" && c.Scope.IsInScope(absURL, depth+1) {
 				c.addQueueItem(urlQueue{url: absURL, source: pageURL, depth: depth + 1})
 			}
+		}
+	}
+}
+
+// extractLinkHeader follows RFC 8288 Link headers (preload, pagination,
+// API relations) that browsers use but tag scrapers miss.
+func (c *Crawler) extractLinkHeader(resp *http.Response, pageURL string, depth int) {
+	for _, h := range resp.Header["Link"] {
+		for _, m := range linkHeaderPattern.FindAllStringSubmatch(h, -1) {
+			if len(m) >= 2 {
+				c.queueHTMLRef(strings.TrimSpace(m[1]), "link-header", pageURL, pageURL, depth)
+			}
+		}
+	}
+}
+
+// enqueueNextDataVariants builds /_next/data/<buildId><route>.json URLs.
+// These are first-class real files on every Next.js site.
+func (c *Crawler) enqueueNextDataVariants(body, pageURL string, depth int) {
+	m := nextBuildIDPattern.FindStringSubmatch(body)
+	if len(m) < 2 || m[1] == "" {
+		return
+	}
+	buildID := m[1]
+	key := "nextdata:" + buildID
+	c.mu.Lock()
+	if c.seenStrings[key] {
+		c.mu.Unlock()
+		return
+	}
+	c.seenStrings[key] = true
+	var routes []string
+	seen := map[string]bool{}
+	for _, r := range c.allCrawled {
+		if r.Type != "HTML" || r.StatusCode != 200 {
+			continue
+		}
+		u, err := url.Parse(r.URL)
+		if err != nil || hostWithoutPort(u.Host) != c.BaseHost {
+			continue
+		}
+		if !seen[u.Path] {
+			seen[u.Path] = true
+			routes = append(routes, u.Path)
+		}
+		if len(routes) >= 300 {
+			break
+		}
+	}
+	c.mu.Unlock()
+	scheme := "https"
+	if bu, err := url.Parse(c.BaseURL); err == nil && bu.Scheme != "" {
+		scheme = bu.Scheme
+	}
+	for _, rt := range routes {
+		dataURL := scheme + "://" + c.BaseHostPort + "/_next/data/" + buildID + rt
+		if !strings.HasSuffix(dataURL, ".json") {
+			dataURL += ".json"
+		}
+		if c.Scope.IsInScope(dataURL, depth+1) && !c.Filters.HasSeen(dataURL) {
+			writeOutput(`{"type":"deep_extract","url":%q,"source":%q,"ctx":"next_data"}`+"\n", dataURL, pageURL)
+			c.addQueueItem(urlQueue{url: dataURL, source: pageURL, depth: depth + 1})
 		}
 	}
 }

@@ -25,6 +25,7 @@ var (
 	jqueryGetJSON   = regexp.MustCompile(`\$\.getJSON\s*\(\s*["'\` + "`" + `]([^"'\` + "`" + `]+)["'\` + "`" + `]`)
 	navigatorBeacon = regexp.MustCompile(`navigator\.sendBeacon\s*\(\s*["'\` + "`" + `]([^"'\` + "`" + `]+)["'\` + "`" + `]`)
 	newRequestPat   = regexp.MustCompile(`new\s+Request\s*\(\s*["'\` + "`" + `]([^"'\` + "`" + `]+)["'\` + "`" + `]`)
+	newURLPat       = regexp.MustCompile(`new\s+URL\s*\(\s*["'` + "`" + `]([^"'` + "`" + `]+)["'` + "`" + `]`)
 	xhrOpenPat      = regexp.MustCompile(`\.open\s*\(\s*["'\` + "`" + `](?:GET|POST|PUT|DELETE)[` + "`" + `"']\s*,\s*["'\` + "`" + `]([^"'\` + "`" + `]+)["'\` + "`" + `]`)
 	postMessagePat  = regexp.MustCompile(`postMessage\s*\([^,]*,\s*["'\` + "`" + `]([^"'\` + "`" + `]+)["'\` + "`" + `]`)
 )
@@ -51,6 +52,7 @@ func (c *Crawler) captureJSNetwork(body string, sourceURL string, depth int) {
 		{jqueryGetJSON, 1, "jquery_getjson"},
 		{navigatorBeacon, 1, "send_beacon"},
 		{newRequestPat, 1, "new_request"},
+		{newURLPat, 1, "new_url"},
 		{xhrOpenPat, 1, "xhr_open"},
 		{postMessagePat, 1, "post_message"},
 	}
