@@ -24,6 +24,7 @@ from hackit.cve import check_cve
 from hackit.osint import osint as osint_console
 from hackit.agent import agent
 from hackit.ddos import ddos as ddos_attack
+from hackit.sysfetch import sysfetch as host_fetch
 from hackit.ui import display_banner, _colored, YELLOW, GREEN, B_GREEN, B_CYAN, B_WHITE, DIM, RED, MAGENTA, BLUE, CYAN, B_MAGENTA, B_RED, B_BLUE, B_YELLOW, WHITE, BG_BLUE, BG_CYAN, BG_MAGENTA
 from hackit.config import load_config, save_config, set_theme, DEFAULT_CONFIG, VALID_THEMES, VALID_ACCENTS, VALID_BORDERS, VALID_PROMPTS, VALID_MASKING_LEVELS, MASKING_PROFILES, CONFIG_PATH, SCHEMA, apply_masking_level, get_masking_info
 
@@ -700,6 +701,9 @@ ssl.add_command(analyze_ssl, name='check')
 
 # DDoS Tools
 cli.add_command(ddos_attack, name='ddos')
+
+# Host profiler (neofetch-style)
+cli.add_command(host_fetch, name='fetch')
 
 # BruteForce Tools
 from hackit.bruteforcer import bruter as bruter_cmd
