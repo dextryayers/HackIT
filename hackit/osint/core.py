@@ -13,11 +13,43 @@ import requests
 
 from .analyzer import analyze_scan
 from .identity import build_identity_target
-from .mutations import build_email_candidates, split_identity
+from .mutations import build_email_candidates, split_identity, build_username_variants
 from .sources import SEARCH_LEADS, get_social_sources
+from .progress import StepLogger, make_step_callback
 
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+# Mirrors the Rust engine verdict tables (osint_checker.rs).
+NOT_FOUND_MARKERS = [
+    "not found", "page not found", "user not found", "doesn't exist",
+    "does not exist", "couldn't find", "couldn't be found", "isn't available",
+    "no user found", "profile not found", "account not found",
+    "this page doesn't exist", "cannot find", "we couldn't find",
+    "no results", "sorry, this page", "this account doesn't exist",
+    "couldn't find this account", "content is not available",
+    "this profile may have been removed", "the link you followed may be broken",
+    "no user with this username",
+]
+
+BLOCKED_WALL_MARKERS = [
+    "checking your browser before accessing", "please verify you are a human",
+    "verify you are human", "complete the security check",
+    "are you a robot", "captcha", "recaptcha", "just a moment",
+    "client challenge", "making sure you're not a bot",
+    "verifying your browser", "perimeterx", "datadome", "arkose",
+    "human verification",
+]
+
+GENERIC_LANDING_MARKERS = [
+    "log in", "sign in", "sign up", "join conversation", "join group chat",
+    "share on whatsapp", "contact on signal", "dashboard", "official site",
+    "search results", "search result", "results for",
+]
+
+
+def _norm(s: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", (s or "").lower())
 
 
 @dataclass
@@ -52,19 +84,21 @@ def _extract_metadata(html: str) -> Dict[str, str]:
     }
 
 
-def normalize_handles(query: str) -> List[str]:
+def normalize_handles(query: str, deep: bool = False) -> List[str]:
     if not query or not str(query).strip():
         return []
     target = build_identity_target(query)
     handles = [target.canonical_handle] if target.canonical_handle else []
     handles.extend(target.aliases)
+    if deep and target.canonical_handle:
+        handles.extend(build_username_variants(target.canonical_handle, deep=True))
     seen = set()
     unique = []
     for h in handles:
         if h and h not in seen:
             seen.add(h)
             unique.append(h)
-    return unique
+    return unique[:16]
 
 
 def _request_profile(session: requests.Session, source: Dict[str, str], handle: str, timeout: int) -> ProfileFinding:
@@ -78,20 +112,34 @@ def _request_profile(session: requests.Session, source: Dict[str, str], handle: 
     try:
         response = session.get(url, headers=headers, timeout=timeout, allow_redirects=True)
         code = response.status_code
-        text = response.text[:5000].lower()
+        text = response.text[:8000].lower()
+        metadata = _extract_metadata(response.text[:20000])
+        title = metadata["title"]
+        norm_title = _norm(title)
+        norm_handle = _norm(handle)
+
+        if any(marker in text for marker in NOT_FOUND_MARKERS):
+            return ProfileFinding(source["name"], source["category"], handle, url, "miss", "low", code, "not-found marker", title, metadata["description"])
+
+        if any(marker in text for marker in BLOCKED_WALL_MARKERS):
+            return ProfileFinding(source["name"], source["category"], handle, url, "unknown", "low", code, "blocked/WAF wall", title, metadata["description"])
 
         if code == 200:
-            not_found_markers = [
-                "not found", "page not found", "user not found", "doesn't exist",
-                "does not exist", "couldn't find", "isn't available",
-                "no user found", "profile not found", "this page doesn't exist",
-                "cannot find", "we couldn't find", "no results",
-                "sorry, this page", "this account doesn't exist",
-            ]
-            metadata = _extract_metadata(response.text[:20000])
-            if any(marker in text for marker in not_found_markers):
-                return ProfileFinding(source["name"], source["category"], handle, url, "miss", "low", code, "not-found marker", metadata["title"], metadata["description"])
-            return ProfileFinding(source["name"], source["category"], handle, response.url, "hit", "medium", code, "", metadata["title"], metadata["description"])
+            # Smart verdict: search/landing pages mention the handle but
+            # are not profiles — demote before the handle check.
+            if title and any(marker in title.lower() for marker in GENERIC_LANDING_MARKERS):
+                return ProfileFinding(source["name"], source["category"], handle, response.url, "possible", "low", code, "landing/search page", title, metadata["description"])
+            # The title must mention the handle, else only a candidate.
+            if norm_handle and norm_title and norm_handle in norm_title:
+                return ProfileFinding(source["name"], source["category"], handle, response.url, "hit", "high", code, "title matched (handle)", title, metadata["description"])
+            # Canonical-slug check: redirected to a different slug = miss.
+            slug = _norm(response.url.rstrip("/").split("/")[-1].split("?")[0].split("#")[0])
+            if norm_handle and slug and len(slug) >= 3 and norm_handle not in slug and slug not in norm_handle:
+                if any(marker in text for marker in ("login", "sign in", "sign up", "join")):
+                    return ProfileFinding(source["name"], source["category"], handle, response.url, "miss", "low", code, "redirected to login wall", title, metadata["description"])
+            if title:
+                return ProfileFinding(source["name"], source["category"], handle, response.url, "possible", "low", code, "title found (handle absent)", title, metadata["description"])
+            return ProfileFinding(source["name"], source["category"], handle, response.url, "possible", "low", code, "200 OK, no title", title, metadata["description"])
 
         if code in (301, 302, 303, 307, 308):
             return ProfileFinding(source["name"], source["category"], handle, response.url, "possible", "low", code, "redirect")
@@ -107,10 +155,16 @@ def _request_profile(session: requests.Session, source: Dict[str, str], handle: 
 def scan_usernames_rust(
     query: str, proxy: Optional[str] = None, retry: int = 1, timeout: int = 15,
     workers: int = 50, on_result: Callable[[ProfileFinding], None] | None = None,
+    on_step: Callable[[str, str], None] | None = None,
 ) -> List[ProfileFinding]:
     from .go_bridge import check_username
     data = check_username(query, proxy=proxy, retry=retry, timeout=timeout, workers=workers)
-    results = data.get("results", [])
+    results = data.get("results") or []
+    if data.get("error") or not results:
+        # Smart fallback: broken native sweep -> built-in sweep.
+        if on_step:
+            on_step("warn", "Sweep engine unavailable, using built-in sweep")
+        raise RuntimeError(f"sweep engine unavailable: {data.get('error') or 'empty results'}")
     findings = []
     for r in results:
         finding = ProfileFinding(
@@ -123,6 +177,8 @@ def scan_usernames_rust(
         findings.append(finding)
         if on_result:
             on_result(finding)
+        if on_step:
+            on_step("tick", f"{finding.platform} [{finding.status}]")
     order = {"hit": 0, "possible": 1, "unknown": 2, "miss": 3}
     return sorted(findings, key=lambda f: (order.get(f.status, 9), f.platform, f.handle))
 
@@ -131,16 +187,41 @@ def scan_usernames(
     query: str, timeout: int = 8, workers: int = 24,
     on_result: Callable[[ProfileFinding], None] | None = None,
     use_rust: bool = True, proxy: Optional[str] = None, retry: int = 1,
+    deep: bool = False, on_step: Callable[[str, str], None] | None = None,
 ) -> List[ProfileFinding]:
     if use_rust:
+        # Sweep the canonical handle (no spaces) so the engine starts
+        # immediately; deep mode adds the top alias variants.
+        handles = normalize_handles(query, deep=deep)
+        if not handles:
+            handles = [re.sub(r"\s+", "", (query or "").strip().lower())]
+        sweep_handles = handles[:4] if deep else handles[:1]
         try:
-            return scan_usernames_rust(query, proxy=proxy, retry=retry, timeout=max(timeout, 10), workers=workers, on_result=on_result)
+            merged: List[ProfileFinding] = []
+            for h in sweep_handles:
+                if on_step and len(sweep_handles) > 1:
+                    on_step("note", f"Sweeping variant: {h}")
+                merged.extend(scan_usernames_rust(h, proxy=proxy, retry=retry, timeout=max(timeout, 10), workers=workers, on_result=on_result, on_step=on_step))
+            seen_urls, deduped = set(), []
+            for f in merged:
+                if f.url not in seen_urls:
+                    seen_urls.add(f.url)
+                    deduped.append(f)
+            order = {"hit": 0, "possible": 1, "unknown": 2, "miss": 3}
+            return sorted(deduped, key=lambda f: (order.get(f.status, 9), f.platform, f.handle))
         except Exception:
             pass
 
-    handles = normalize_handles(query)
+    handles = normalize_handles(query, deep=deep)
+    if not handles:
+        handles = [re.sub(r"\s+", "", (query or "").strip().lower())]
+    # Cap the built-in sweep so deep mode stays interactive.
+    handles = handles[:6]
     sources = get_social_sources()
     findings: List[ProfileFinding] = []
+    total = len(handles) * len(sources)
+    if on_step:
+        on_step("note", f"Built-in sweep: {len(handles)} handle(s) x {len(sources)} sources = {total} probes")
 
     with requests.Session() as session:
         adapter = requests.adapters.HTTPAdapter(pool_connections=50, pool_maxsize=100)
@@ -156,14 +237,18 @@ def scan_usernames(
             done, pending = concurrent.futures.wait(futures, timeout=deadline)
             for f in pending:
                 f.cancel()
+            checked = 0
             for future in done:
                 try:
                     finding = future.result(timeout=5)
                 except Exception:
                     continue
                 findings.append(finding)
+                checked += 1
                 if on_result:
                     on_result(finding)
+                if on_step and (checked == 1 or checked % 25 == 0 or checked >= len(done)):
+                    on_step("tick", f"{finding.platform} [{finding.status}]|{checked}|{len(done)}")
 
     order = {"hit": 0, "possible": 1, "unknown": 2, "miss": 3}
     return sorted(findings, key=lambda f: (order.get(f.status, 9), f.platform, f.handle))
@@ -287,30 +372,73 @@ def build_trace_leads(query: str) -> List[Dict[str, str]]:
     return leads
 
 
+def correlate_profiles(profiles: List[Dict[str, object]]) -> Dict[str, object]:
+    """Cross-signal correlation: same title/persona across platforms.
+
+    Hits sharing an identical normalized title are almost certainly the
+    same person — this is the strongest signal and boosts confidence.
+    """
+    from collections import Counter
+    hits = [p for p in profiles if p.get("status") == "hit"]
+    title_groups: Dict[str, List[str]] = {}
+    for p in hits:
+        t = _norm(str(p.get("title", ""))[:80])
+        if len(t) >= 4:
+            title_groups.setdefault(t, []).append(str(p.get("platform", "?")))
+    shared = {t: plats for t, plats in title_groups.items() if len(plats) >= 2}
+    personae = sorted(shared.items(), key=lambda kv: -len(kv[1]))[:5]
+    cats = Counter(p.get("category", "Unknown") for p in hits)
+    return {
+        "shared_title_clusters": [
+            {"title_key": t, "count": len(plats), "platforms": plats[:8]}
+            for t, plats in personae
+        ],
+        "cross_platform_personae": len(shared),
+        "strongest_persona": (
+            {"title_key": personae[0][0], "platforms": personae[0][1][:8]}
+            if personae else None
+        ),
+        "category_breadth": len(cats),
+    }
+
+
 def run_full_scan(
     query: str, timeout: int = 8, workers: int = 24,
     on_result: Callable[[ProfileFinding], None] | None = None,
     use_rust: bool = True, proxy: Optional[str] = None, retry: int = 1,
     check_phone: bool = False, check_domain: bool = False,
     generate_html: bool = False, html_output: str = "",
+    verbose: bool = True, deep: bool = False,
+    on_step: Callable[[str, str], None] | None = None,
 ) -> Dict[str, object]:
     query = (query or "").strip()
-    profiles = scan_usernames(query, timeout=timeout, workers=workers, on_result=on_result,
-                              use_rust=use_rust, proxy=proxy, retry=retry)
-
+    log = StepLogger(verbose=verbose)
+    if on_step is None:
+        on_step = make_step_callback(log)
     target = build_identity_target(query)
     sources = get_social_sources()
+    handles = normalize_handles(query, deep=deep)
+
+    log.phase(1, 8, "Identity parsing",
+              f"canonical={handles[0] if handles else 'N/A'} (+{len(handles) - 1} variants)" if handles else "no handle")
+    sweep_n = min(len(handles), 4) if deep else min(len(handles), 1)
+    log.phase(2, 8, "Username sweep", f"{sweep_n} handle(s) x {len(sources)} sources")
+    profiles = scan_usernames(query, timeout=timeout, workers=workers, on_result=on_result,
+                              use_rust=use_rust, proxy=proxy, retry=retry,
+                              deep=deep, on_step=on_step)
+    n_hit = sum(1 for p in profiles if p.status == "hit")
+    log.done(f"{n_hit} hits / {len(profiles)} checked")
 
     data = {
-        "query": query, "handles": normalize_handles(query),
+        "query": query, "handles": handles,
         "display_name": target.display_name, "first_name": target.first_name,
         "last_name": target.last_name, "middle_name": target.middle_name,
         "name_parts": target.name_parts, "initials": target.initials,
         "reversed_name": target.reversed_name, "aliases": target.aliases,
         "title": target.title, "suffix": target.suffix, "name_format": target.name_format,
         "profiles": [asdict(item) for item in profiles],
-        "email": inspect_email(query, timeout=timeout),
-        "trace_leads": build_trace_leads(query),
+        "email": {},
+        "trace_leads": [],
         "source_count": len(sources),
         "summary": {
             "hits": sum(1 for item in profiles if item.status == "hit"),
@@ -320,27 +448,51 @@ def run_full_scan(
         },
     }
 
+    log.phase(3, 8, "Email intelligence", "MX + Gravatar + breach + PGP")
+    data["email"] = inspect_email(query, timeout=timeout)
+    _email = data["email"]
+    log.done(f"breaches={len(_email.get('breaches', []) or [])} gravatar={(_email.get('gravatar') or {}).get('exists')}")
+
+    log.phase(4, 8, "Trace leads", "search-engine dork matrix")
+    data["trace_leads"] = build_trace_leads(query)
+    log.done(f"{len(data['trace_leads'])} leads")
+
     if check_phone and any(c.isdigit() for c in query):
+        log.phase(5, 8, "Phone intelligence", "carrier + social + web mentions")
         try:
             from .phone import analyze_phone
             data["phone"] = analyze_phone(query)
-        except:
-            pass
+            log.done(f"{data['phone'].get('country', '?')} / {data['phone'].get('carrier', '?')}")
+        except Exception as exc:
+            log.done(f"skipped ({exc})")
+    else:
+        log.phase(5, 8, "Phone intelligence", "skipped — no digits in query")
 
     if check_domain and "." in query and not query.startswith("@"):
+        log.phase(6, 8, "Domain intelligence", "WHOIS + DNS + robtex")
         try:
             from .domain_intel import analyze_domain
             data["domain"] = analyze_domain(query.split("@")[-1])
-        except:
-            pass
+            log.done(f"registrar={data['domain'].get('registrar', '?')}")
+        except Exception as exc:
+            log.done(f"skipped ({exc})")
+    else:
+        log.phase(6, 8, "Domain intelligence", "skipped — use --domain for FQDN targets")
 
+    log.phase(7, 8, "Metadata & history", "wayback + cache + pastebin + github")
     try:
         from .metadata import extract_all
         data["metadata"] = extract_all(query)
-    except:
-        pass
+        wb = (data["metadata"].get("wayback") or {}).get("total_archived", 0)
+        log.done(f"wayback={wb} snapshots")
+    except Exception as exc:
+        log.done(f"skipped ({exc})")
 
+    log.phase(8, 8, "Correlation & scoring", "cross-platform personae + confidence")
+    data["correlation"] = correlate_profiles(data["profiles"])
     data["analysis"] = analyze_scan(data)
+    log.done(f"confidence={data['analysis'].get('confidence')} ({data['analysis'].get('confidence_score')}/100)")
+    log.report()
 
     if generate_html or html_output:
         try:

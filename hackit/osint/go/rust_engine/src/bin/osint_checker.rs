@@ -413,7 +413,7 @@ struct Detection {
     confidence: u8,
 }
 
-fn detect(site: &Site, http_status: u16, body: &str, headers: &HeaderMap) -> Detection {
+fn detect(site: &Site, http_status: u16, body: &str, headers: &HeaderMap, username: &str) -> Detection {
     let body_lower = body.to_lowercase();
     let missing = &site.miss_body;
 
@@ -425,6 +425,10 @@ fn detect(site: &Site, http_status: u16, body: &str, headers: &HeaderMap) -> Det
         if body_lower.contains(&m.to_lowercase()) {
             return Detection { status: "miss".into(), title: String::new(), description: format!("Not found (body: {})", m), confidence: 90 };
         }
+    }
+
+    if is_blocked_wall(&body_lower) {
+        return Detection { status: "unknown".into(), title: extract_title(body), description: "Blocked/WAF wall".into(), confidence: 50 };
     }
 
     if http_status >= 300 && http_status < 400 {
@@ -447,13 +451,15 @@ fn detect(site: &Site, http_status: u16, body: &str, headers: &HeaderMap) -> Det
 
     match site.method.as_str() {
         "status_code" => {
+            // Smart verdict: a bare 200 is not proof — the title must
+            // mention the handle, else it is only a candidate.
+            if http_status == 200 {
+                return verdict_by_title(&extract_title(body), username);
+            }
             if let Some(c) = site.hit_code {
                 if http_status == c {
-                    return Detection { status: "hit".into(), title: extract_title(body), description: "Profile found".into(), confidence: 95 };
+                    return verdict_by_title(&extract_title(body), username);
                 }
-            }
-            if http_status == 200 {
-                return Detection { status: "hit".into(), title: extract_title(body), description: "Profile found".into(), confidence: 80 };
             }
         }
         "body_text" => {
@@ -469,29 +475,88 @@ fn detect(site: &Site, http_status: u16, body: &str, headers: &HeaderMap) -> Det
         "title" => {
             let title = extract_title(body);
             if let Some(check) = &site.title_check {
-                if title.to_lowercase().contains(&check.to_lowercase()) {
-                    return Detection { status: "hit".into(), title, description: "Title matched".into(), confidence: 90 };
+                // Support dynamic "{username}" placeholder: title must mention the handle.
+                let needle = check.replace("{username}", username);
+                if !needle.is_empty() && title.to_lowercase().contains(&needle.to_lowercase()) {
+                    return Detection { status: "hit".into(), title, description: "Title matched (handle)".into(), confidence: 90 };
                 }
             }
             if !title.is_empty() && http_status == 200 {
-                return Detection { status: "possible".into(), title, description: "Title found".into(), confidence: 40 };
+                return Detection { status: "possible".into(), title, description: "Title found (handle absent)".into(), confidence: 45 };
             }
         }
         _ => {}
     }
 
     if http_status == 200 {
-        let title = extract_title(body);
-        if !title.is_empty() {
-            Detection { status: "hit".into(), title, description: "Profile found".into(), confidence: 75 }
-        } else {
-            Detection { status: "possible".into(), title: String::new(), description: "200 OK, no title".into(), confidence: 40 }
-        }
+        return verdict_by_title(&extract_title(body), username);
     } else if http_status == 0 {
         Detection { status: "unknown".into(), title: String::new(), description: "Connection failed".into(), confidence: 0 }
     } else {
         Detection { status: "unknown".into(), title: String::new(), description: format!("Status: {}", http_status), confidence: 10 }
     }
+}
+
+fn normalize_handle(s: &str) -> String {
+    s.to_lowercase().chars().filter(|c| c.is_ascii_alphanumeric()).collect()
+}
+
+fn is_blocked_wall(body_lower: &str) -> bool {
+    const WALLS: &[&str] = &[
+        "checking your browser before accessing",
+        "please verify you are a human",
+        "verify you are human",
+        "complete the security check",
+        "attention required! | cloudflare",
+        "are you a robot",
+        "are you not a robot",
+        "captcha",
+        "recaptcha",
+        "just a moment",
+        "client challenge",
+        "making sure you're not a bot",
+        "making sure you&#39;re not a bot",
+        "verifying your browser",
+        "verify your browser",
+        "perimeterx",
+        "datadome",
+        "arkose",
+        "human verification",
+        "bot verification",
+        "verify to continue",
+    ];
+    WALLS.iter().any(|w| body_lower.contains(w))
+}
+
+fn is_generic_landing(title_lower: &str) -> bool {
+    const GENERIC: &[&str] = &[
+        "log in", "login", "sign in", "signin", "sign up", "signup",
+        "join conversation", "join group chat", "share on whatsapp",
+        "contact on signal", "add line friend", "dashboard",
+        "official site", "download the ea app", "create account",
+        "search |", "| search", "search engine", "web search",
+        "search results", "search result", "results for",
+    ];
+    GENERIC.iter().any(|g| title_lower.contains(g))
+}
+
+fn verdict_by_title(title: &str, username: &str) -> Detection {
+    // Search-result pages mention the handle but are not profiles.
+    if is_generic_landing(&title.to_lowercase()) {
+        return Detection { status: "possible".into(), title: title.to_string(), description: "Search/landing page".into(), confidence: 40 };
+    }
+    let norm_title = normalize_handle(title);
+    let norm_user = normalize_handle(username);
+    if !norm_user.is_empty() && !norm_title.is_empty() && norm_title.contains(&norm_user.as_str()) {
+        return Detection { status: "hit".into(), title: title.to_string(), description: "Title matched (handle)".into(), confidence: 95 };
+    }
+    if title.is_empty() {
+        return Detection { status: "possible".into(), title: String::new(), description: "200 OK, no title".into(), confidence: 40 };
+    }
+    if is_generic_landing(&title.to_lowercase()) {
+        return Detection { status: "possible".into(), title: title.to_string(), description: "Landing/login wall page".into(), confidence: 40 };
+    }
+    Detection { status: "possible".into(), title: title.to_string(), description: "Title found (handle absent)".into(), confidence: 55 }
 }
 
 fn extract_title(body: &str) -> String {
@@ -554,7 +619,7 @@ fn check_site(site: &Site, username: &str, client: &Client, retries: u8) -> Chec
                 let elapsed = start.elapsed().as_secs_f64();
                 let headers = resp.headers().clone();
                 let body = resp.text().unwrap_or_default();
-                let det = detect(site, http_status, &body, &headers);
+                let det = detect(site, http_status, &body, &headers, username);
 
                 result.status = det.status.clone();
                 result.http_status = http_status;

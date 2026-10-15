@@ -10,6 +10,19 @@ from .history import append_history, load_history, save_auto_report
 from .sources import get_social_sources, SOCIAL_SOURCES
 
 
+def _announce_matrix(target: str, deep: bool, verbose: bool) -> None:
+    handles = normalize_handles(target, deep=deep)
+    sources = get_social_sources()
+    mode = "DEEP (variants+years)" if deep else "standard"
+    click.echo(_colored("\n  [*] Crawling public intelligence matrix...", B_YELLOW, bold=True))
+    click.echo(f"  [*] Canonical handle : {_colored(handles[0] if handles else 'N/A', B_CYAN)}")
+    if len(handles) > 1:
+        click.echo(f"  [*] Handle variants  : {_colored(', '.join(handles[1:8]), DIM)}{_colored(f' (+{len(handles) - 8} more)' if len(handles) > 8 else '', DIM)}")
+    click.echo(f"  [*] Source count     : {_colored(str(len(sources)), B_CYAN)} platforms")
+    click.echo(f"  [*] Mode             : {_colored(mode, B_CYAN)}  ·  verbose steps {_colored('ON' if verbose else 'OFF', B_GREEN if verbose else YELLOW)}")
+    click.echo(_colored("  [*] Live profile probe stream enabled.\n", DIM))
+
+
 def start_osint_console() -> None:
     display_osint_banner()
     recent = load_history(limit=3)
@@ -24,16 +37,13 @@ def start_osint_console() -> None:
         click.echo(_colored("\n  [*] Returning to main console.", DIM))
         return
 
-    handles = normalize_handles(target)
-    sources = get_social_sources()
-    click.echo(_colored("\n  [*] Crawling public intelligence matrix...", B_YELLOW, bold=True))
-    click.echo(f"  [*] Canonical handle : {_colored(handles[0] if handles else 'N/A', B_CYAN)}")
-    click.echo(f"  [*] Source count     : {_colored(str(len(sources)), B_CYAN)} (500+ platforms)")
-    click.echo(_colored("  [*] Live profile probe stream enabled.\n", DIM))
+    deep = click.confirm(_colored("  Deep variant expansion?", B_CYAN), default=False)
+    _announce_matrix(target, deep=deep, verbose=True)
 
     try:
         data = run_full_scan(target, on_result=print_live_finding, use_rust=True,
-                             check_phone=True, check_domain=True, generate_html=True)
+                             check_phone=True, check_domain=True, generate_html=True,
+                             verbose=True, deep=deep)
     except KeyboardInterrupt:
         click.echo(_colored("\n  [!] OSINT scan interrupted.", YELLOW))
         return
@@ -61,17 +71,20 @@ def start_osint_console() -> None:
 @click.option("--retry", "-r", default=1, type=int, help="Retry count")
 @click.option("--timeout", "-t", default=15, type=int, help="HTTP timeout")
 @click.option("--workers", "-w", default=50, type=int, help="Concurrent workers")
-@click.option("--no-rust", is_flag=True, help="Use Python fallback")
+@click.option("--no-rust", is_flag=True, help="Use built-in sweep instead of native engine")
 @click.option("--phone", is_flag=True, help="Phone intelligence")
 @click.option("--domain", is_flag=True, help="Domain WHOIS/DNS")
 @click.option("--html", is_flag=True, help="Generate HTML report")
 @click.option("--output", "-o", default="", help="Output file")
 @click.option("--json", "json_out", is_flag=True, help="JSON output")
 @click.option("--all", "all_flag", is_flag=True, help="Enable all checks")
+@click.option("--deep", is_flag=True, help="Expand handle variants (separators, years, affixes)")
+@click.option("--quiet", "-q", is_flag=True, help="Quiet mode: findings + summary only")
 def osint(target: str | None = None, proxy: str = "", retry: int = 1, timeout: int = 15,
           workers: int = 50, no_rust: bool = False, phone: bool = False, domain: bool = False,
-          html: bool = False, output: str = "", json_out: bool = False, all_flag: bool = False) -> None:
-    """Launch OSINT profile discovery across 500+ platforms."""
+          html: bool = False, output: str = "", json_out: bool = False, all_flag: bool = False,
+          deep: bool = False, quiet: bool = False) -> None:
+    """Launch OSINT profile discovery across 800+ platforms."""
     if not target and not all_flag:
         start_osint_console()
         return
@@ -79,18 +92,16 @@ def osint(target: str | None = None, proxy: str = "", retry: int = 1, timeout: i
     if all_flag:
         phone = True; domain = True; html = True
 
-    handles = normalize_handles(target)
-    sources = get_social_sources()
-    click.echo(_colored("\n  [*] Crawling public intelligence matrix...", B_YELLOW, bold=True))
-    click.echo(f"  [*] Source templates : {_colored(str(len(sources)), B_CYAN)} (500+ platforms)")
-    click.echo(f"  [*] Handles          : {_colored(', '.join(handles) or 'N/A', B_CYAN)}")
+    verbose = not quiet
+    _announce_matrix(target, deep=deep, verbose=verbose)
 
     try:
         data = run_full_scan(target, on_result=print_live_finding,
             use_rust=not no_rust, proxy=proxy or None,
             retry=retry, timeout=timeout, workers=workers,
             check_phone=phone, check_domain=domain,
-            generate_html=html, html_output=output)
+            generate_html=html, html_output=output,
+            verbose=verbose, deep=deep)
     except KeyboardInterrupt:
         return
     except Exception as exc:

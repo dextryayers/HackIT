@@ -209,6 +209,17 @@ def print_results(data: Dict[str, object], show_misses: bool = True) -> None:
                 click.echo(f"  │   • {item.get('platform')}{title_part}")
         click.echo(_colored("  └────────────────────────────────────────────────┘", B_WHITE))
 
+    corr = data.get("correlation", {}) if isinstance(data.get("correlation"), dict) else {}
+    personae = corr.get("shared_title_clusters", []) or []
+    if personae:
+        click.echo()
+        click.echo(_colored("  ┌── CROSS-PLATFORM PERSONAE ─────────────────┐", B_GREEN))
+        click.echo(f"  │ Same identity seen on multiple platforms:")
+        for p in personae[:5]:
+            plats = ", ".join(p.get("platforms", [])[:6])
+            click.echo(f"  │   ◆ {p.get('count')}x  {plats}")
+        click.echo(_colored("  └────────────────────────────────────────────────┘", B_GREEN))
+
     click.echo()
     click.echo(_colored("  ┌── TRACE LEADS ──────────────────────────────┐", B_YELLOW))
     for lead in data.get("trace_leads", [])[:20]:

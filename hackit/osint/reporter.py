@@ -22,6 +22,12 @@ def generate_html_report(data: dict, output_path: str = "") -> str:
     miss_p = [p for p in profiles if p.get("status") == "miss"]
     unk_p = [p for p in profiles if p.get("status") == "unknown"]
 
+    corr = data.get("correlation", {}) if isinstance(data.get("correlation"), dict) else {}
+    persona_html = ""
+    for cluster in (corr.get("shared_title_clusters", []) or [])[:6]:
+        plats = ", ".join(cluster.get("platforms", [])[:8])
+        persona_html += f'<p style="margin:6px 0">◆ <strong>{cluster.get("count", 0)}x</strong> <span style="color:#888">{plats}</span></p>'
+
     def pct(n): return round(n / checked * 100, 1) if checked else 0
 
     rows = ""
@@ -262,6 +268,8 @@ td {{ border-bottom:1px solid rgba(255,255,255,.03);vertical-align:middle; }}
 {meta_html}
 
 <div class="section fade-in"><h2>📊 Category Distribution</h2>{cat_bars or '<p style="color:#888">No categories to display</p>'}</div>
+
+<div class="section fade-in"><h2>🧬 Cross-Platform Personae</h2>{persona_html or '<p style="color:#888">No shared-identity clusters detected</p>'}</div>
 
 <div class="section fade-in">
     <h2>📋 Profile Results ({hits} hits · {possible} possible · {len(miss_p)} miss)</h2>

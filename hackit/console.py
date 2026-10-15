@@ -450,8 +450,20 @@ class HackItConsole:
                             self.cli_group.main(args=ctx_args, standalone_mode=False)
                         except: pass
                     else:
-                        from hackit.ui import RED
-                        print(_colored(f"  [!] Usage error: {e}", RED))
+                        # Grup diketik tanpa subcommand (recon/ports/...) -> tampilkan help normal putih, bukan error merah
+                        node = self.cli_group
+                        _ok = True
+                        for p in final_args:
+                            nxt = node.commands.get(p) if hasattr(node, 'commands') else None
+                            if nxt is None:
+                                _ok = False
+                                break
+                            node = nxt
+                        if _ok and hasattr(node, 'commands'):
+                            with click.Context(node) as _ctx:
+                                click.echo(node.get_help(_ctx))
+                        else:
+                            print(_colored(f"  {e}", WHITE))
                 except click.exceptions.Exit:
                     pass
                 except Exception as e:

@@ -78,3 +78,49 @@ def build_email_candidates(query: str) -> List[str]:
         emails.add(f"{full_name}@{domain}")
 
     return sorted(emails, key=lambda e: (len(e), e))[:50]
+
+
+YEAR_SUFFIXES = ["", "01", "123", "1234", "007", "88", "99", "00", "1", "01",
+                 "2020", "2021", "2022", "2023", "2024", "2025", "2026",
+                 "20", "21", "22", "23", "24", "25", "26"]
+
+SEPARATORS = ["", ".", "_", "-", ""]
+
+
+def build_username_variants(handle: str, deep: bool = False) -> List[str]:
+    """Smart handle mutations: separators, year/number suffixes, affixes.
+
+    Default (deep=False): light separator swaps only (~6 variants).
+    Deep mode adds year/number suffixes (~30 variants) for thorough hunts.
+    """
+    base = re.sub(r"[^a-zA-Z0-9._-]+", "", (handle or "").strip().lower())
+    if not base:
+        return []
+    core = re.sub(r"[._-]+", "", base)
+    variants: List[str] = []
+
+    def _add(v: str) -> None:
+        v = v.strip("._- ").lower()
+        if v and 2 <= len(v) <= 40 and v not in variants:
+            variants.append(v)
+
+    _add(base)
+    _add(core)
+    for sep in (".", "_", "-"):
+        nosep = re.sub(r"[._-]+", sep, base).strip(sep)
+        _add(nosep)
+    _add(f"the{core}")
+    _add(f"real{core}")
+    _add(f"{core}official")
+    _add(f"{core}real")
+
+    if deep:
+        for suf in YEAR_SUFFIXES:
+            if not suf:
+                continue
+            _add(f"{core}{suf}")
+            _add(f"{core}_{suf}")
+        for prefix in ("x", "xx", "im", "its"):
+            _add(f"{prefix}{core}")
+
+    return variants[:40]

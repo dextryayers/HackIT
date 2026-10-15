@@ -8,6 +8,12 @@ HIGH_VALUE_CATEGORIES = {
     "Developer", "Security", "Professional", "Identity", "Forum", "Creator",
 }
 
+# Extra weight for media/diverse footprints (v3: broader coverage).
+MEDIA_CATEGORIES = {
+    "Media", "Music", "Social", "Messaging", "Video", "Streaming",
+    "Podcast", "Photo", "Design",
+}
+
 
 def analyze_scan(data: Dict[str, object]) -> Dict[str, object]:
     profiles: List[Dict[str, object]] = data.get("profiles", [])
@@ -38,6 +44,18 @@ def analyze_scan(data: Dict[str, object]) -> Dict[str, object]:
     score += min(len(high_value_hits) * 3, 20)
     score += min(len(category_counter) * 2, 10)
     score = min(score, 100)
+
+    media_hits = [item for item in hits if item.get("category") in MEDIA_CATEGORIES]
+    score += min(len(media_hits), 8)
+
+    corr = data.get("correlation", {}) if isinstance(data.get("correlation"), dict) else {}
+    personae = corr.get("cross_platform_personae", 0)
+    if personae >= 3:
+        score += 10
+    elif personae >= 1:
+        score += 5
+    if corr.get("category_breadth", 0) >= 6:
+        score += 4
 
     source_count = data.get("source_count", 0)
     if source_count >= 500:
@@ -85,6 +103,8 @@ def analyze_scan(data: Dict[str, object]) -> Dict[str, object]:
         "possible_count": len(possible),
         "unknown_count": len(unknown),
         "high_value_hits": len(high_value_hits),
+        "media_hits": len([item for item in hits if item.get("category") in MEDIA_CATEGORIES]),
+        "cross_platform_personae": corr.get("cross_platform_personae", 0) if isinstance(data.get("correlation"), dict) else 0,
         "top_handles": top_handles,
         "top_categories": top_categories,
         "clusters": dict(clusters),

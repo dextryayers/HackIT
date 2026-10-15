@@ -884,11 +884,22 @@ SEARCH_LEADS = [
     {"name": "🐦 Alt-social traces", "url": "https://www.google.com/search?q=%22{query}%22+%28mastodon+OR+bluesky+OR+threads%29"},
 ]
 
+try:
+    from .extra_sources import EXTRA_SEARCH_LEADS as _EXTRA_LEADS
+    SEARCH_LEADS = SEARCH_LEADS + list(_EXTRA_LEADS)
+except Exception:
+    pass
+
+
 def get_social_sources():
     from .validators import normalize_source
+    try:
+        from .extra_sources import EXTRA_SOURCES
+    except Exception:
+        EXTRA_SOURCES = []
     clean = []
     seen = set()
-    for source in SOCIAL_SOURCES:
+    for source in list(SOCIAL_SOURCES) + list(EXTRA_SOURCES):
         source = normalize_source(source)
         if not source:
             continue
