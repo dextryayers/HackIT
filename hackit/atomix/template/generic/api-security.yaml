@@ -79,7 +79,7 @@ requests:
         condition: or
         name: "api-data-access"
 ---
-id: api-mass-assignment
+id: api-mass-assignment-generic
 info:
   name: API Mass Assignment
   author: AniipID
@@ -103,7 +103,7 @@ requests:
         condition: or
         name: "mass-assignment"
 ---
-id: api-idor
+id: api-idor-generic
 info:
   name: API Insecure Direct Object Reference
   author: AniipID

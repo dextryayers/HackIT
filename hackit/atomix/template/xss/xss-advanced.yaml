@@ -33,10 +33,10 @@ info:
 requests:
   - method: GET
     path:
-      - "{{BaseURL}}/<script>alert(1)</script>"
-      - "{{BaseURL}}/"><script>alert(1)</script>"
-      - "{{BaseURL}}/test\"><script>alert(1)</script>"
-      - "{{BaseURL}}/';alert(String.fromCharCode(88,83,83));//"
+      - '{{BaseURL}}/<script>alert(1)</script>'
+      - '{{BaseURL}}/''><script>alert(1)</script>'
+      - "{{BaseURL}}/test\\\"><script>alert(1)</script>"
+      - '{{BaseURL}}/'';alert(String.fromCharCode(88,83,83));//'
     matchers:
       - type: word
         words:
@@ -68,10 +68,10 @@ requests:
 ---
 id: xss-clickjacking
 info:
-  name: Clickjacking via XSS
+  name: Clickjacking Protection Missing
   author: AniipID
   severity: medium
-  description: Tests for clickjacking vulnerabilities with XSS payload
+  description: Reports when clickjacking protections (X-Frame-Options / frame-ancestors) are absent
   tags: xss,clickjacking,ui-redress
 requests:
   - method: GET
@@ -80,34 +80,29 @@ requests:
     matchers:
       - type: word
         words:
-          - "X-Frame-Options: DENY"
-          - "X-Frame-Options: SAMEORIGIN"
+          - "X-Frame-Options"
           - "frame-ancestors"
         condition: or
         part: header
-        name: "frame-options-detected"
+        negative: true
+        name: "missing-frame-protection"
 ---
 id: xss-csp-eval
 info:
-  name: CSP Evaluation for XSS Risk
+  name: CSP Missing or Unsafe for XSS
   author: AniipID
   severity: medium
-  description: Evaluates Content-Security-Policy for XSS protection weaknesses
+  description: Reports when Content-Security-Policy is missing or allows unsafe-inline/unsafe-eval
   tags: xss,csp,policy
 requests:
   - method: GET
     path:
       - "{{BaseURL}}"
     matchers:
-      - type: word
-        words:
-          - "Content-Security-Policy"
-          - "script-src"
-          - "unsafe-inline"
-          - "unsafe-eval"
-        condition: or
-        part: header
-        name: "csp-evaluated"
+      - type: dsl
+        dsl:
+          - "!contains(header, 'Content-Security-Policy') || contains(header, 'unsafe-inline') || contains(header, 'unsafe-eval')"
+        name: "csp-weak-or-missing"
 ---
 id: xss-form-action
 info:

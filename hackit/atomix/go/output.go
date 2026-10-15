@@ -10,6 +10,9 @@ import (
 )
 
 func FormatResultsJSON(results []Result) string {
+	if results == nil {
+		return "[]"
+	}
 	j, _ := json.MarshalIndent(results, "", "  ")
 	return string(j)
 }
@@ -145,6 +148,25 @@ func FormatResultsSarif(results []Result) string {
 func PrintResults(results []Result) {
 	if len(results) == 0 { return }
 	PrintFindingsTable(results)
+}
+
+func FormatTemplatesJSON(templates []*Template) string {
+	type tplOut struct {
+		ID       string `json:"id"`
+		Name     string `json:"name"`
+		Severity string `json:"severity"`
+		Author   string `json:"author,omitempty"`
+		Tags     string `json:"tags,omitempty"`
+	}
+	out := make([]tplOut, 0, len(templates))
+	for _, t := range templates {
+		out = append(out, tplOut{
+			ID: t.ID, Name: t.Info.Name,
+			Severity: t.Info.Severity, Author: t.Info.Author, Tags: t.Info.Tags,
+		})
+	}
+	j, _ := json.MarshalIndent(out, "", "  ")
+	return string(j)
 }
 
 func PrintTemplateList(templates []*Template) {

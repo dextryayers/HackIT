@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -26,8 +27,8 @@ func main() {
 	flag.StringVar(&cfg.ScopeFile, "scope-file", "", "File containing allowed scope patterns")
 	flag.StringVar(&cfg.ExcludePat, "ep", "", "Exclude URLs matching regex patterns")
 	flag.StringVar(&cfg.ExcludeTags, "etag", "", "Exclude templates with given tags")
-	flag.StringVar(&cfg.ExcludeTags, "es", "", "Exclude templates with given severity (alias)")
-	flag.StringVar(&cfg.ExcludeTags, "esev", "", "Exclude templates with given severity")
+	flag.StringVar(&cfg.ExcludeSeverity, "es", "", "Exclude templates with given severity")
+	flag.StringVar(&cfg.ExcludeSeverity, "exclude-severity", "", "Exclude templates with given severity (alias)")
 
 	// Section 2: Template Management
 	flag.StringVar(&cfg.TemplateDir, "t", "../template", "Template directory path")
@@ -213,6 +214,14 @@ func main() {
 
 	flag.Parse()
 
+	// Resolve default template dir relative to executable so the binary
+	// works from any cwd (python bridge, system PATH, etc).
+	if _, err := os.Stat(cfg.TemplateDir); err != nil {
+		if resolved := resolveDefaultTemplateDir(); resolved != "" {
+			cfg.TemplateDir = resolved
+		}
+	}
+
 	// Handle --no-color early
 	if hasFlag("nc") || hasFlag("no-color") {
 		SetNoColor(true)
@@ -320,6 +329,10 @@ func main() {
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "%s Error loading templates: %v\n", SColor(ColorRed, "[!]"), err)
 			os.Exit(1)
+		}
+		if cfg.JSON || cfg.JSONL || hasFlag("json") || hasFlag("jsonl") {
+			fmt.Println(FormatTemplatesJSON(templates))
+			return
 		}
 		PrintTemplateList(templates)
 		return
@@ -464,7 +477,7 @@ func main() {
 
 	// Probe mode: detect tech only
 	if probeFlag {
-		client := NewHTTPClient(cfg.Timeout)
+		client := NewConfiguredClient(cfg)
 		PrintBanner()
 		fmt.Fprintf(os.Stderr, "%s Probing: %s\n", SColor(ColorBCyan, "►"), cfg.URL)
 		techs := DetectTechnologies(cfg.URL, client, cfg.TechDB)
@@ -488,12 +501,15 @@ func main() {
 	// Filter templates
 	parsedTags := parseTags(cfg.Tags)
 	excludeTags := parseTags(cfg.ExcludeTags)
+	parsedTypes := parseTags(cfg.Type)
 	filterOpts := FilterOptions{
-		ID:          cfg.ID,
-		Severity:    cfg.Severity,
-		Tags:        parsedTags,
-		ExcludeTags: excludeTags,
-		Author:      cfg.Author,
+		ID:              cfg.ID,
+		Severity:        cfg.Severity,
+		ExcludeSeverity: cfg.ExcludeSeverity,
+		Tags:            parsedTags,
+		ExcludeTags:     excludeTags,
+		Author:          cfg.Author,
+		Types:           parsedTypes,
 	}
 	filtered := FilterTemplates(templates, filterOpts)
 
@@ -520,7 +536,7 @@ func main() {
 
 	// WAF detection
 	if !cfg.WafSkip {
-		client := NewHTTPClient(cfg.Timeout)
+		client := NewConfiguredClient(cfg)
 		waf := DetectWAF(cfg.URL, client)
 		if waf != nil && waf.Detected && !cfg.Silent {
 			blockStr := ""
@@ -532,7 +548,7 @@ func main() {
 
 	// Tech detection
 	if cfg.DetectTech && !cfg.Silent {
-		client := NewHTTPClient(cfg.Timeout)
+		client := NewConfiguredClient(cfg)
 		techs := DetectTechnologies(cfg.URL, client, cfg.TechDB)
 		PrintTechDetections(techs)
 	}
@@ -548,9 +564,13 @@ func main() {
 	}
 
 	// Setup scanner
-	scanner := NewScanner(cfg.Timeout, cfg.Threads)
+	threads := cfg.Threads
+	if threads <= 0 {
+		threads = 20
+	}
+	scanner := NewScanner(cfg.Timeout, threads)
+	scanner.InitScanner(cfg)
 	scanner.Templates = filtered
-	scanner.Config = cfg
 	scanner.Verbose = cfg.Verbose || cfg.Debug
 	scanner.Deduplicator = NewDeduplicator()
 	scanner.Stats = &ScanStats{
@@ -642,7 +662,7 @@ func main() {
 		// Fuzzing mode
 		if cfg.Fuzz != "" {
 			fuzzMode := FuzzMode(cfg.Fuzz)
-			client := NewHTTPClient(cfg.Timeout)
+			client := NewConfiguredClient(cfg)
 			fuzzResults := FuzzTarget(target, fuzzMode, cfg.FuzzThread, cfg.FuzzRecurse, client)
 			if !cfg.Silent {
 				PrintFuzzResults(fuzzResults)
@@ -657,7 +677,7 @@ afterScan:
 
 	// API Discovery from response bodies
 	if cfg.APIDiscovery && cfg.URL != "" {
-		client := NewHTTPClient(cfg.Timeout)
+		client := NewConfiguredClient(cfg)
 		resp, err := SendRequest(client, cfg.URL, "GET", "", nil)
 		if err == nil && resp != nil {
 			discovered := DiscoverAPIs(resp.Body, cfg.URL)
@@ -820,6 +840,9 @@ func hasFlag(name string) bool {
 		if arg == "-"+name || arg == "--"+name {
 			return true
 		}
+		if strings.HasPrefix(arg, "-"+name+"=") || strings.HasPrefix(arg, "--"+name+"=") {
+			return true
+		}
 	}
 	return false
 }
@@ -836,4 +859,24 @@ func parseTags(raw string) []string {
 		}
 	}
 	return tags
+}
+
+func resolveDefaultTemplateDir() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	exeDir := filepath.Dir(exe)
+	candidates := []string{
+		filepath.Join(exeDir, "..", "template"),
+		filepath.Join(exeDir, "..", "..", "template"),
+		filepath.Join(exeDir, "template"),
+	}
+	for _, c := range candidates {
+		cleaned := filepath.Clean(c)
+		if st, err := os.Stat(cleaned); err == nil && st.IsDir() {
+			return cleaned
+		}
+	}
+	return ""
 }

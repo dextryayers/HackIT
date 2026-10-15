@@ -100,6 +100,8 @@ func RandomUserAgent() string {
 	return userAgents[rand.Intn(len(userAgents))]
 }
 
+const maxBodyBytes = 5 << 20 // 5 MiB cap, nuclei-style bounded read
+
 func ResolveURL(baseURL string, pathTmpl string, payload string) string {
 	result := strings.ReplaceAll(pathTmpl, "{{BaseURL}}", strings.TrimRight(baseURL, "/"))
 	result = strings.ReplaceAll(result, "{{URL}}", baseURL)
@@ -121,10 +123,23 @@ func SendRequest(client *http.Client, reqURL, method, body string, headers map[s
 		return nil, err
 	}
 
-	req.Header.Set("User-Agent", RandomUserAgent())
+	// Default UA only when caller did not supply one (custom-agent /
+	// rand-agent handled by engine via headers map).
+	hasUA := false
+	for k := range headers {
+		if strings.EqualFold(k, "User-Agent") {
+			hasUA = true
+			break
+		}
+	}
+	if !hasUA {
+		req.Header.Set("User-Agent", RandomUserAgent())
+	}
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
 	req.Header.Set("Accept-Language", "en-US,en;q=0.5")
-	req.Header.Set("Accept-Encoding", "gzip, deflate")
+	// Do NOT set Accept-Encoding manually: Go auto-decompresses gzip
+	// only when the header is absent. Setting it manually previously
+	// delivered gzip bytes to matchers.
 	req.Header.Set("Connection", "keep-alive")
 	req.Header.Set("Upgrade-Insecure-Requests", "1")
 
@@ -141,7 +156,7 @@ func SendRequest(client *http.Client, reqURL, method, body string, headers map[s
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
 	var headerStr strings.Builder
 	for k, vals := range resp.Header {
 		for _, v := range vals {
@@ -162,10 +177,17 @@ func SendRequest(client *http.Client, reqURL, method, body string, headers map[s
 }
 
 func SendRequestWithRetry(client *http.Client, reqURL, method, body string, headers map[string]string, maxRetries int) (*ResponseInfo, error) {
+	if maxRetries < 0 {
+		maxRetries = 0
+	}
+	if maxRetries > 5 {
+		maxRetries = 5
+	}
 	var lastErr error
 	for i := 0; i <= maxRetries; i++ {
 		if i > 0 {
-			time.Sleep(time.Duration(i*i) * time.Second)
+			backoff := time.Duration(i*300) * time.Millisecond
+			time.Sleep(backoff)
 		}
 		resp, err := SendRequest(client, reqURL, method, body, headers)
 		if err == nil {

@@ -14,7 +14,13 @@ type ConfigFile struct {
 	Concurrency      int      `yaml:"concurrency,omitempty"`
 	Timeout          int      `yaml:"timeout,omitempty"`
 	Severity         string   `yaml:"severity,omitempty"`
+	ExcludeSeverity  string   `yaml:"exclude-severity,omitempty"`
 	Tags             string   `yaml:"tags,omitempty"`
+	ExcludeTags      string   `yaml:"exclude-tags,omitempty"`
+	Author           string   `yaml:"author,omitempty"`
+	Type             string   `yaml:"type,omitempty"`
+	ID               string   `yaml:"id,omitempty"`
+	Retries          int      `yaml:"retries,omitempty"`
 	Proxy            string   `yaml:"proxy,omitempty"`
 	OutputFile       string   `yaml:"output,omitempty"`
 	JSON             bool     `yaml:"json,omitempty"`
@@ -88,7 +94,13 @@ func MergeConfig(cfg *ScanConfig, fileCfg *ConfigFile) {
 	if cfg.Concurrency == 0 && fileCfg.Concurrency != 0 { cfg.Concurrency = fileCfg.Concurrency }
 	if cfg.Timeout == 0 && fileCfg.Timeout != 0 { cfg.Timeout = fileCfg.Timeout }
 	if cfg.Severity == "" && fileCfg.Severity != "" { cfg.Severity = fileCfg.Severity }
+	if cfg.ExcludeSeverity == "" && fileCfg.ExcludeSeverity != "" { cfg.ExcludeSeverity = fileCfg.ExcludeSeverity }
 	if cfg.Tags == "" && fileCfg.Tags != "" { cfg.Tags = fileCfg.Tags }
+	if cfg.ExcludeTags == "" && fileCfg.ExcludeTags != "" { cfg.ExcludeTags = fileCfg.ExcludeTags }
+	if cfg.Author == "" && fileCfg.Author != "" { cfg.Author = fileCfg.Author }
+	if cfg.Type == "" && fileCfg.Type != "" { cfg.Type = fileCfg.Type }
+	if cfg.ID == "" && fileCfg.ID != "" { cfg.ID = fileCfg.ID }
+	if cfg.Retries == 0 && fileCfg.Retries != 0 { cfg.Retries = fileCfg.Retries }
 	if cfg.Proxy == "" && fileCfg.Proxy != "" { cfg.Proxy = fileCfg.Proxy }
 	if cfg.OutputFile == "" && fileCfg.OutputFile != "" { cfg.OutputFile = fileCfg.OutputFile }
 	if !cfg.JSON && fileCfg.JSON { cfg.JSON = true }

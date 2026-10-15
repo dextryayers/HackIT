@@ -1,6 +1,6 @@
-import os, sys, json, subprocess, tempfile
+import os, sys, json, subprocess
 from pathlib import Path
-from typing import Optional, Any
+from typing import Any
 
 BINARY_PATH = Path(__file__).parent / "go" / "bin" / "atomix"
 
@@ -8,7 +8,7 @@ FLAG_MAP = {
     "url": "-u", "target_file": "-target-file", "exclude_file": "-exclude-file",
     "scope_file": "-scope-file", "resume": "-resume", "exclude_pat": "-ep",
     "severity": "-severity", "tags": "-tags", "exclude_tags": "-etag",
-    "exclude_severity": "-es", "id": "-id", "author": "-author", "type": "-type",
+    "exclude_severity": "-exclude-severity", "id": "-id", "author": "-author", "type": "-type",
     "custom_dir": "-custom-dir", "load": "-load", "from_git": "-from-git",
     "no_cache": "-no-cache", "priority": "-priority", "adaptive_rate": "-adaptive-rate",
     "threads": "-c", "concurrency": "-threads", "timeout": "-timeout",
@@ -58,14 +58,20 @@ FLAG_MAP = {
     "verify_key": "-verify-key",
 }
 
-BOOL_FLAGS = {
-    "json", "json_output", "list_flag", "silent", "verbose", "debug", "no_color", "jsonl", "csv", "html",
-    "sarif", "stats", "metrics", "analytics", "follow_redirects", "rand_agent",
-    "http2", "http2_downgrade", "keep_alive", "waf_skip", "waf_bypass",
-    "detect_tech", "api_discovery", "interactsh", "smart", "dashboard", "multi",
-    "scan_all_ips", "no_cache", "priority", "adaptive_rate", "fuzz_recursive",
-    "headless", "no_sandbox", "show_browser", "system_chrome",
-    "tls_impersonate", "uncover", "allow_local_access",
+# Options that must never be forwarded with empty/zero values.
+_SKIP_IF_EMPTY = set(FLAG_MAP.keys()) - {
+    "threads", "timeout", "concurrency", "fuzz_thread",
+    "max_redirects", "dashboard_port", "uncover_limit",
+    "headless_page_timeout", "headless_action_timeout",
+}
+
+# Go defaults; skip forwarding when value equals default to avoid
+# overriding Go-side defaults unintentionally.
+_GO_DEFAULTS = {
+    "threads": 25, "timeout": 60, "concurrency": 25,
+    "max_redirects": 10, "dashboard_port": 8484,
+    "uncover_limit": 100, "fuzz_thread": 10,
+    "headless_page_timeout": 10000, "headless_action_timeout": 5000,
 }
 
 DIRECT_ACTIONS = [
@@ -101,28 +107,55 @@ class AtomixGoEngine:
         kwargs.pop("url", None)
         for action in DIRECT_ACTIONS:
             key = action.replace("-", "_")
+            # click uses list_flag for --list
+            if action == "list":
+                key = "list_flag"
             if kwargs.get(key):
                 args.append(f"--{action}")
                 return args
         if kwargs.get("completion"):
-            args.extend(["--completion", kwargs["completion"]])
+            args.extend(["--completion", str(kwargs["completion"])])
             return args
+        targets = []
         if url:
+            targets.append(url)
+        if kwargs.get("target_file"):
+            # target-file handled via FLAG_MAP below; no -u needed
+            pass
+        elif url:
             args.extend(["-u", url])
         for click_key, go_flag in FLAG_MAP.items():
             if click_key not in kwargs:
+                continue
+            if click_key == "url":
                 continue
             val = kwargs[click_key]
             if val is None or val is False:
                 continue
             if isinstance(val, bool):
-                args.append(go_flag)
-            else:
-                args.append(f"{go_flag}={val}")
+                if val is True:
+                    args.append(go_flag)
+                continue
+            if isinstance(val, str) and val == "" and click_key in _SKIP_IF_EMPTY:
+                continue
+            if isinstance(val, (int, float)) and val == 0 and click_key in _SKIP_IF_EMPTY:
+                continue
+            if click_key in _GO_DEFAULTS and val == _GO_DEFAULTS[click_key]:
+                # Still forward threads/timeout since Go defaults differ
+                # (-c 20 vs click 25). Only skip purely optional ones.
+                if click_key in ("max_redirects", "dashboard_port", "uncover_limit",
+                                 "fuzz_thread", "headless_page_timeout",
+                                 "headless_action_timeout", "concurrency"):
+                    continue
+            args.append(f"{go_flag}={val}")
         return args
 
-    def run_direct(self, flag: str) -> tuple:
-        args = [self.binary, flag]
+    def run_direct(self, *flags: str) -> tuple:
+        args = [self.binary, *flags]
+        if not os.path.isfile(self.binary):
+            msg = f"Go binary not found: {self.binary}"
+            print(f"  [!] {msg}", file=sys.stderr)
+            return "", msg, 1
         try:
             result = subprocess.run(
                 args, capture_output=True, text=True, timeout=60,
@@ -134,23 +167,39 @@ class AtomixGoEngine:
             msg = "Engine timed out"
             print(f"  [!] {msg}", file=sys.stderr)
             return "", msg, 1
+        except FileNotFoundError as e:
+            msg = f"Go binary not found: {e}"
+            print(f"  [!] {msg}", file=sys.stderr)
+            return "", msg, 1
 
     def list_templates(self) -> list:
+        if not os.path.isfile(self.binary):
+            return []
         try:
             result = subprocess.run(
-                [self.binary, "-l", "--json"],
+                [self.binary, "-l", "-json"],
                 capture_output=True, text=True, timeout=30,
             )
             if result.returncode == 0 and result.stdout.strip():
-                return json.loads(result.stdout)
+                data = json.loads(result.stdout)
+                if isinstance(data, list):
+                    return data
         except Exception:
             pass
         return []
 
     def run(self, url: str = "", **kwargs) -> Any:
         args = self.build_args(url, **kwargs)
-        if "--json" not in args and "--list" not in args:
-            args.append("--json")
+        # Only force JSON when no structured format was requested.
+        # Forcing --json breaks --csv/--html/--jsonl/--sarif/--md handling
+        # in Go handleResults (JSON branch returns first).
+        wants_structured = any(
+            kwargs.get(k) for k in (
+                "json_output", "jsonl", "csv", "html", "sarif", "markdown",
+            )
+        )
+        if not wants_structured and "-json" not in args and "--json" not in args:
+            args.append("-json")
         user_timeout = kwargs.get("timeout", 60)
         if not isinstance(user_timeout, int):
             try:
@@ -165,11 +214,21 @@ class AtomixGoEngine:
             )
         except subprocess.TimeoutExpired:
             return [{"error": f"Engine timed out after {process_timeout}s. Use --timeout to increase."}]
+        except FileNotFoundError:
+            return [{"error": f"Go binary not found: {self.binary}. Build with: cd hackit/atomix/go && go build -o bin/atomix ."}]
         if result.returncode not in (0, 1):
             return [{"error": result.stderr.strip() or f"Exit code {result.returncode}"}]
         if result.stdout.strip():
             try:
-                return json.loads(result.stdout)
+                data = json.loads(result.stdout)
+                if isinstance(data, list):
+                    return data
+                return data
             except json.JSONDecodeError:
                 pass
+        # Non-JSON modes (csv/html/table) write to stdout; not an error.
+        if result.stdout.strip() == "" and result.stderr.strip() == "":
+            return []
+        if wants_structured:
+            return [{"error": "Engine returned non-JSON output", "raw": result.stdout[:2000]}]
         return []

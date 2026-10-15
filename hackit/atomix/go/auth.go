@@ -4,7 +4,28 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net/http"
+	"strings"
 )
+
+func trimSpace(s string) string { return strings.TrimSpace(s) }
+
+func indexColon(s string) int { return strings.Index(s, ":") }
+
+func splitHeaderRaw(raw string) []string {
+	// Support both newline-separated and comma-separated repeat usage.
+	lines := strings.Split(raw, "\n")
+	var out []string
+	for _, l := range lines {
+		for _, p := range strings.Split(l, ",") {
+			if strings.Contains(p, ":") {
+				out = append(out, p)
+			} else if strings.TrimSpace(p) != "" {
+				out = append(out, p)
+			}
+		}
+	}
+	return out
+}
 
 type AuthProvider struct {
 	Type    string
@@ -61,6 +82,53 @@ func (ap *AuthProvider) Apply(req *http.Request) {
 func ParseCookieString(s string) []string {
 	if s == "" { return nil }
 	return []string{s}
+}
+
+type CustomHeader struct {
+	Name  string
+	Value string
+}
+
+// ParseCustomHeaders parses -H "Name: Value" (comma or newline separated).
+func ParseCustomHeaders(cfg *ScanConfig) []CustomHeader {
+	if cfg == nil {
+		return nil
+	}
+	raw := cfg.HeaderStr
+	if raw == "" && cfg.HeadersFile != "" {
+		return nil
+	}
+	if raw == "" {
+		return nil
+	}
+	var out []CustomHeader
+	parts := splitHeaderRaw(raw)
+	for _, p := range parts {
+		idx := indexColon(p)
+		if idx <= 0 {
+			continue
+		}
+		name := trimSpace(p[:idx])
+		val := trimSpace(p[idx+1:])
+		if name != "" {
+			out = append(out, CustomHeader{Name: name, Value: val})
+		}
+	}
+	return out
+}
+
+// ApplyAuthHeaders merges Basic/Bearer/API-Key auth into the header map
+// without overwriting an explicit Authorization header.
+func ApplyAuthHeaders(headers map[string]string, cfg *ScanConfig) {
+	if cfg == nil || headers == nil {
+		return
+	}
+	ap := NewAuthProvider(cfg)
+	for k, v := range ap.Headers {
+		if _, exists := headers[k]; !exists {
+			headers[k] = v
+		}
+	}
 }
 
 func LoadCookieJar(path string) (map[string][]string, error) {

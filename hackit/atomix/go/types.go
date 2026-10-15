@@ -37,6 +37,9 @@ type TemplateInfo struct {
 	Severity    string `yaml:"severity"`
 	Description string `yaml:"description"`
 	Tags        string `yaml:"tags"`
+	Type        string `yaml:"type,omitempty"`
+	Reference   StringSlice `yaml:"reference,omitempty"`
+	Classification *NucleiClassification `yaml:"classification,omitempty"`
 }
 
 type Request struct {
@@ -46,6 +49,10 @@ type Request struct {
 	Body     string              `yaml:"body,omitempty"`
 	Matchers []MatcherCondition  `yaml:"matchers,omitempty"`
 	Payloads []string            `yaml:"payloads,omitempty"`
+	MatchersCondition string     `yaml:"matchers-condition,omitempty"`
+	StopAtFirstMatch  bool       `yaml:"stop-at-first-match,omitempty"`
+	Redirects         bool       `yaml:"redirects,omitempty"`
+	MaxRedirects       int       `yaml:"max-redirects,omitempty"`
 }
 
 type MatcherCondition struct {
@@ -57,6 +64,8 @@ type MatcherCondition struct {
 	Condition string   `yaml:"condition,omitempty"`
 	Part      string   `yaml:"part,omitempty"`
 	Name      string   `yaml:"name,omitempty"`
+	Negative  bool     `yaml:"negative,omitempty"`
+	DSL       []string `yaml:"dsl,omitempty"`
 }
 
 type Extractor struct {
@@ -71,6 +80,12 @@ type Template struct {
 	Requests  []Request           `yaml:"requests"`
 	Matchers  []MatcherCondition  `yaml:"matchers,omitempty"`
 	Extractor *Extractor          `yaml:"extractor,omitempty"`
+	// Nuclei-compat: native `http:` blocks are normalized into Requests.
+	HTTP      []NucleiHTTPRequest  `yaml:"http,omitempty"`
+	Variables map[string]string    `yaml:"variables,omitempty"`
+	MatchersCondition string       `yaml:"matchers-condition,omitempty"`
+	StopAtFirstMatch  bool         `yaml:"stop-at-first-match,omitempty"`
+	Extractors []*Extractor        `yaml:"extractors,omitempty"`
 	FilePath  string              `yaml:"-"`
 }
 
@@ -113,12 +128,13 @@ type MatchResult struct {
 }
 
 type FilterOptions struct {
-	ID          string
-	Severity    string
-	Tags        []string
-	ExcludeTags []string
-	Author      string
-	Types       []string
+	ID              string
+	Severity        string
+	ExcludeSeverity string
+	Tags            []string
+	ExcludeTags     []string
+	Author          string
+	Types           []string
 }
 
 type ScanStats struct {
@@ -155,6 +171,7 @@ type ScanConfig struct {
 	TemplateDir     string
 	Tags            string
 	ExcludeTags     string
+	ExcludeSeverity string
 	Severity        string
 	Author          string
 	ID              string

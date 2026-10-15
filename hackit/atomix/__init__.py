@@ -37,14 +37,14 @@ SECTION_ORDER = [
 SECTIONS = {
     "BASIC SCAN": [
         "url", "target_file", "timeout", "threads", "severity", "tags",
-        "id", "method", "proxy", "resolver", "no_banner", "silent", "verbose",
+        "method", "proxy", "resolver", "no_banner", "silent", "verbose",
     ],
     "RESULT & OUTPUT": [
         "output", "json_output", "jsonl", "csv", "html", "markdown", "sarif",
-        "stats", "metrics", "analytics", "no_color", "debug",
+        "stats", "metrics", "analytics", "no_color", "debug", "trace",
     ],
     "TEMPLATE FILTER": [
-        "author", "type", "exclude_tags", "exclude_severity", "exclude_pat",
+        "id", "author", "type", "exclude_tags", "exclude_severity", "exclude_pat",
         "scope_file", "exclude_file",
     ],
     "PERFORMANCE": [
@@ -57,9 +57,9 @@ SECTIONS = {
         "fuzz", "fuzz_thread", "fuzz_recursive", "path", "payloads",
         "detect_tech", "waf_skip", "waf_bypass", "api_discovery",
         "auth", "auth_token", "api_key", "custom_agent", "rand_agent",
-        "cookie", "cookie_jar", "header", "dns_resolver", "scan_all_ips",
+        "cookie", "cookie_jar", "header", "scan_all_ips",
         "exclude_ports", "interactsh", "oob_server", "oob_token", "oob_type",
-        "monitor", "diff", "replay",
+        "monitor", "diff", "replay", "resume",
     ],
     "HEADLESS BROWSER": [
         "headless", "no_sandbox", "show_browser", "system_chrome",
@@ -67,7 +67,7 @@ SECTIONS = {
         "headless_action_timeout",
     ],
     "PROTOCOL SCAN": [
-        "protocol", "tls_impersonate", "scan_all_ips",
+        "protocol", "tls_impersonate", "dns_resolver",
     ],
     "TARGET DISCOVERY": [
         "uncover", "uncover_engine", "uncover_query",
@@ -300,7 +300,11 @@ def atomix_command(**kwargs):
     }
     for key, flag in passthrough.items():
         if kwargs.get(key):
-            engine.run_direct(flag)
+            # --list honors --json for machine output
+            if key == "list_flag" and kwargs.get("json_output"):
+                engine.run_direct(flag, "-json")
+            else:
+                engine.run_direct(flag)
             return
     if kwargs.get("validate"):
         engine.run_direct("--validate")
@@ -310,33 +314,57 @@ def atomix_command(**kwargs):
         return
 
     has_any = any(kwargs.get(k) for k in (
-        "url", "list_flag", "list_sources", "custom_guide",
+        "url", "target_file", "list_flag", "list_sources", "custom_guide",
         "validate", "validate_deep", "health", "update",
         "probe", "version", "examples", "license", "completion",
         "sign", "verify", "headless", "protocol", "uncover",
+        "tags", "severity", "id", "load", "chain", "monitor",
+        "diff", "replay", "multi", "fuzz", "config", "project",
     ))
     if not has_any:
         click.echo(atomix_command.get_help(click.Context(atomix_command)))
         return
 
-    if not kwargs.get("no_banner"):
+    silent = bool(kwargs.get("silent"))
+    if not kwargs.get("no_banner") and not silent and not kwargs.get("json_output"):
         display_banner()
 
     if kwargs.get("sign"):
-        engine.run_direct(f"--sign={kwargs['sign']}")
+        flags = [f"--sign={kwargs['sign']}"]
+        if kwargs.get("sign_key"):
+            flags.append(f"--sign-key={kwargs['sign_key']}")
+        if kwargs.get("sign_pass"):
+            flags.append(f"--sign-pass={kwargs['sign_pass']}")
+        engine.run_direct(*flags)
         return
     if kwargs.get("verify"):
-        engine.run_direct(f"--verify={kwargs['verify']}")
+        flags = [f"--verify={kwargs['verify']}"]
+        if kwargs.get("verify_key"):
+            flags.append(f"--verify-key={kwargs['verify_key']}")
+        engine.run_direct(*flags)
         return
 
-    if not kwargs.get("url"):
-        click.echo(_colored("  [!] --url/-u required", RED))
+    if not kwargs.get("url") and not kwargs.get("target_file") and not kwargs.get("uncover"):
+        click.echo(_colored("  [!] --url/-u or --target-file required", RED))
         return
     if not engine.available:
         click.echo(_colored("  [!] Go binary not found", RED))
         return
 
-    click.echo(_colored(f"  [*] Scanning {kwargs['url']} ...", B_CYAN))
+    # Non-JSON structured outputs stream directly from Go engine.
+    if kwargs.get("jsonl") or kwargs.get("csv") or kwargs.get("html") or kwargs.get("sarif") or kwargs.get("markdown"):
+        args = engine.build_args(kwargs.get("url", ""), **kwargs)
+        import subprocess as _sp
+        try:
+            p = _sp.run([engine.binary] + args[1:], capture_output=False, timeout=1800)
+            return
+        except Exception as e:
+            click.echo(_colored(f"  [!] {e}", RED))
+            return
+
+    target_label = kwargs.get("url") or kwargs.get("target_file") or "discovered targets"
+    if not silent and not kwargs.get("json_output"):
+        click.echo(_colored(f"  [*] Scanning {target_label} ...", B_CYAN))
     parts = []
     if kwargs.get("severity"): parts.append(f"sev={kwargs['severity']}")
     if kwargs.get("tags"): parts.append(f"tags={kwargs['tags']}")
@@ -345,17 +373,20 @@ def atomix_command(**kwargs):
     if kwargs.get("headless"): parts.append("headless")
     if kwargs.get("protocol"): parts.append(f"proto={kwargs['protocol']}")
     if kwargs.get("uncover"): parts.append("uncover")
-    if parts:
+    if parts and not silent and not kwargs.get("json_output"):
         click.echo(_colored(f"  [*] {' | '.join(parts)}", DIM))
 
     scan_kwargs = {k: v for k, v in kwargs.items() if k != "url"}
-    results = engine.run(kwargs["url"], **scan_kwargs)
+    results = engine.run(kwargs.get("url", ""), **scan_kwargs)
 
-    if not results:
-        click.echo(_colored("\n  [+] No vulnerabilities found.", B_GREEN))
-        return
-    if isinstance(results, list) and results and "error" in results[0]:
+    if isinstance(results, list) and results and isinstance(results[0], dict) and "error" in results[0]:
         click.echo(_colored(f"  [!] {results[0]['error']}", RED))
+        return
+    if not results:
+        if not silent and not kwargs.get("json_output"):
+            click.echo(_colored("\n  [+] No vulnerabilities found.", B_GREEN))
+        elif kwargs.get("json_output"):
+            click.echo("[]")
         return
     if kwargs.get("json_output"):
         click.echo(json.dumps(results, indent=2))

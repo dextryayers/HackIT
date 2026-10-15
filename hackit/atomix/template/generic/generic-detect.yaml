@@ -79,12 +79,12 @@ requests:
           - "Content-Security-Policy"
           - "X-Content-Type-Options"
           - "X-Frame-Options"
-          - "X-XSS-Protection"
           - "Referrer-Policy"
           - "Permissions-Policy"
         condition: or
         part: header
-        name: "security-headers-present"
+        negative: true
+        name: "security-headers-missing"
 ---
 id: generic-admin-panels
 info:

@@ -45,7 +45,7 @@ requests:
         condition: or
         name: "xxe-oob-triggered"
 ---
-id: xxe-parameter-entity
+id: xxe-parameter-entity-config
 info:
   name: XXE Parameter Entity
   author: AniipID
@@ -68,7 +68,7 @@ requests:
         condition: or
         name: "xxe-param-exfil"
 ---
-id: xxe-svg-upload
+id: xxe-svg-upload-config
 info:
   name: XXE via SVG Upload
   author: AniipID
