@@ -27,13 +27,13 @@ var (
 	exportFromPat     = regexp.MustCompile(`export\s+(?:\{[^}]*\}|\*\s+as\s+\w+|\w+)?\s*from\s+["'\` + "`" + `]([^"'\` + "`" + `]+)["'\` + "`" + `]`)
 	webpackDynamicImp = regexp.MustCompile(`import\s*\(\s*/\*[\s\S]*?\*/\s*["'\` + "`" + `]([^"'\` + "`" + `]+)["'\` + "`" + `]\s*\)`)
 
-	workerPat       = regexp.MustCompile(`new\s+(?:Worker|SharedWorker)\s*\(\s*["'\` + "`" + `]([^"'\` + "`" + `]+)["'\` + "`" + `]`)
-	swRegisterPat   = regexp.MustCompile(`(?:navigator\.serviceWorker\.register|self\s*\.\s*registration)\s*\(\s*["'\` + "`" + `]([^"'\` + "`" + `]+)["'\` + "`" + `]`)
-	wasmPat         = regexp.MustCompile(`(?:WebAssembly|Wasm)\s*\.\s*(?:instantiateStreaming|compileStreaming|instantiate|compile)\s*\(\s*["'\` + "`" + `]([^"'\` + "`" + `]+)["'\` + "`" + `]`)
-	jsPostMessagePat  = regexp.MustCompile(`(?:postMessage|sendMessage)\s*\(\s*[^,]+,\s*["'\` + "`" + `]([^"'\` + "`" + `]+)["'\` + "`" + `]`)
-	windowOpenPat   = regexp.MustCompile(`window\.open\s*\(\s*["'\` + "`" + `]([^"'\` + "`" + `]+)["'\` + "`" + `]`)
-	locationAssign  = regexp.MustCompile(`location\s*\.\s*(?:assign|replace|href)\s*(?:=\s*["'\` + "`" + `]|\s*\(\s*["'\` + "`" + `])\s*([^"'\` + "`" + `\)]+)["'\` + "`" + `]`)
-	routerPushPat   = regexp.MustCompile(`router\s*\.\s*(?:push|replace)\s*\(\s*["'\` + "`" + `]([^"'\` + "`" + `\)]+)["'\` + "`" + `]`)
+	workerPat        = regexp.MustCompile(`new\s+(?:Worker|SharedWorker)\s*\(\s*["'\` + "`" + `]([^"'\` + "`" + `]+)["'\` + "`" + `]`)
+	swRegisterPat    = regexp.MustCompile(`(?:navigator\.serviceWorker\.register|self\s*\.\s*registration)\s*\(\s*["'\` + "`" + `]([^"'\` + "`" + `]+)["'\` + "`" + `]`)
+	wasmPat          = regexp.MustCompile(`(?:WebAssembly|Wasm)\s*\.\s*(?:instantiateStreaming|compileStreaming|instantiate|compile)\s*\(\s*["'\` + "`" + `]([^"'\` + "`" + `]+)["'\` + "`" + `]`)
+	jsPostMessagePat = regexp.MustCompile(`(?:postMessage|sendMessage)\s*\(\s*[^,]+,\s*["'\` + "`" + `]([^"'\` + "`" + `]+)["'\` + "`" + `]`)
+	windowOpenPat    = regexp.MustCompile(`window\.open\s*\(\s*["'\` + "`" + `]([^"'\` + "`" + `]+)["'\` + "`" + `]`)
+	locationAssign   = regexp.MustCompile(`location\s*\.\s*(?:assign|replace|href)\s*(?:=\s*["'\` + "`" + `]|\s*\(\s*["'\` + "`" + `])\s*([^"'\` + "`" + `\)]+)["'\` + "`" + `]`)
+	routerPushPat    = regexp.MustCompile(`router\s*\.\s*(?:push|replace)\s*\(\s*["'\` + "`" + `]([^"'\` + "`" + `\)]+)["'\` + "`" + `]`)
 
 	svelteKitLoadPat = regexp.MustCompile(`export\s+(?:const|function|async\s+function)\s+load\s*[=\(]`)
 
@@ -67,36 +67,44 @@ func stripJSComments(code string) string {
 			i++
 			for i < len(code) {
 				if code[i] == '\\' {
-					out.WriteByte(code[i]); i++
+					out.WriteByte(code[i])
+					i++
 					if i < len(code) {
-						out.WriteByte(code[i]); i++
+						out.WriteByte(code[i])
+						i++
 					}
 					continue
 				}
 				if code[i] == quote {
-					out.WriteByte(quote); i++
+					out.WriteByte(quote)
+					i++
 					break
 				}
 				if code[i] == '\n' {
 					break
 				}
-				out.WriteByte(code[i]); i++
+				out.WriteByte(code[i])
+				i++
 			}
 			continue
 		}
 		if code[i] == '`' {
-			out.WriteByte('`'); i++
+			out.WriteByte('`')
+			i++
 			depth := 0
 			for i < len(code) {
 				if code[i] == '\\' {
-					out.WriteByte(code[i]); i++
+					out.WriteByte(code[i])
+					i++
 					if i < len(code) {
-						out.WriteByte(code[i]); i++
+						out.WriteByte(code[i])
+						i++
 					}
 					continue
 				}
 				if code[i] == '`' && depth == 0 {
-					out.WriteByte('`'); i++
+					out.WriteByte('`')
+					i++
 					break
 				}
 				if code[i] == '$' && i+1 < len(code) && code[i+1] == '{' {
@@ -105,7 +113,8 @@ func stripJSComments(code string) string {
 				if code[i] == '}' && depth > 0 {
 					depth--
 				}
-				out.WriteByte(code[i]); i++
+				out.WriteByte(code[i])
+				i++
 			}
 			continue
 		}
@@ -118,7 +127,7 @@ func stripJSComments(code string) string {
 func (c *Crawler) parseJSSource(body string, sourceURL string, depth int) {
 	analysis := analyzeJS(body, sourceURL)
 	emitAndQueue := func(val, ndjsonType, ctx string) {
-		absURL := resolveURL(val, c.BaseURL)
+		absURL := resolveURL(val, sourceURL)
 		if absURL == "" {
 			return
 		}
@@ -164,7 +173,7 @@ func (c *Crawler) parseJSSource(body string, sourceURL string, depth int) {
 
 	if c.Opts.Endpoints {
 		for _, ep := range analysis.Endpoints {
-			absURL := resolveURL(ep.URL, c.BaseURL)
+			absURL := resolveURL(ep.URL, sourceURL)
 			if absURL != "" {
 				writeOutput(`{"type":"endpoint","url":%q,"source":%q,"endpoint_type":%q}`+"\n", absURL, sourceURL, ep.Type)
 				if c.Scope.IsInScope(absURL, depth+1) && !c.Filters.HasSeen(absURL) {
@@ -216,6 +225,14 @@ func (c *Crawler) parseJSSource(body string, sourceURL string, depth int) {
 func isLikelyURL(s string) bool {
 	if strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://") || strings.HasPrefix(s, "ws://") || strings.HasPrefix(s, "wss://") || strings.HasPrefix(s, "//") {
 		return !strings.ContainsAny(s, " \t\n\r<>") && len(s) > 10
+	}
+	// Bare filenames with code extensions (webpack chunks, lazy modules).
+	if low := strings.ToLower(s); !strings.ContainsAny(s, " \t\n\r<>") && len(s) >= 4 {
+		for _, e := range []string{".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx", ".css", ".scss", ".less", ".map", ".json", ".wasm"} {
+			if strings.HasSuffix(low, e) {
+				return true
+			}
+		}
 	}
 	if strings.HasPrefix(s, "/") {
 		if strings.ContainsAny(s, " \t\n\r<>") {

@@ -60,7 +60,8 @@ var mimeExts = map[string]bool{
 	".conf": true, ".env": true, ".txt": true, ".php": true,
 	".asp": true, ".aspx": true, ".jsp": true, ".py": true,
 	".go": true, ".rb": true, ".java": true, ".vue": true,
-	".svelte": true, ".map": true, ".wasm": true,
+	".svelte": true, ".map": true, ".wasm": true, ".css": true,
+	".scss": true, ".less": true, ".md": true, ".csv": true,
 }
 
 func isCrawable(rawURL string) bool {

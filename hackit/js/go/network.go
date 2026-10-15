@@ -75,7 +75,7 @@ func (c *Crawler) captureJSNetwork(body string, sourceURL string, depth int) {
 				continue
 			}
 			writeOutput(`{"type":"network_entry","url":%q,"source_url":%q,"resource_type":%q}`+"\n", absURL, sourceURL, p.rtype)
-			if !c.Filters.HasSeen(absURL) && (strings.HasSuffix(absURL, ".js") || strings.HasSuffix(absURL, ".mjs") || strings.HasSuffix(absURL, ".cjs")) {
+			if !c.Filters.HasSeen(absURL) && (c.Scope.IsJS(absURL) || c.Scope.IsCode(absURL)) {
 				c.addQueueItem(urlQueue{url: absURL, source: sourceURL, depth: depth + 1})
 			}
 		}
@@ -104,6 +104,7 @@ func (c *Crawler) captureHTMLResources(body string, pageURL string, depth int) {
 	}
 
 	seen := make(map[string]bool)
+	base := extractBaseHref(body, pageURL)
 	for _, p := range resourcePatterns {
 		matches := p.re.FindAllStringSubmatch(body, -1)
 		for _, m := range matches {
@@ -115,14 +116,21 @@ func (c *Crawler) captureHTMLResources(body string, pageURL string, depth int) {
 				continue
 			}
 			seen[rawURL] = true
-			absURL := resolveURL(rawURL, pageURL)
+			absURL := resolveURL(rawURL, base)
 			if absURL == "" || !c.Scope.IsInScope(absURL, depth+1) || c.Filters.HasSeen(absURL) {
 				continue
 			}
 			writeOutput(`{"type":"network_entry","url":%q,"source_url":%q,"resource_type":%q}`+"\n", absURL, pageURL, p.rtype)
-			if p.rtype == "script" || strings.HasSuffix(absURL, ".js") || strings.HasSuffix(absURL, ".mjs") || strings.HasSuffix(absURL, ".cjs") {
+			if p.rtype == "script" || c.Scope.IsJS(absURL) || c.Scope.IsCode(absURL) {
 				if depth < c.Scope.MaxDepth {
 					c.addQueueItem(urlQueue{url: absURL, source: pageURL, depth: depth + 1})
+				}
+			} else if p.rtype == "css_url" || p.rtype == "css_import" {
+				for _, part := range parseSrcset(rawURL) {
+					cssAbs := resolveURL(part, base)
+					if cssAbs != "" && c.Scope.IsInScope(cssAbs, depth+1) && !c.Filters.HasSeen(cssAbs) {
+						c.addQueueItem(urlQueue{url: cssAbs, source: pageURL, depth: depth + 1})
+					}
 				}
 			} else if isCrawable(absURL) && depth < c.Scope.MaxDepth {
 				c.addQueueItem(urlQueue{url: absURL, source: pageURL, depth: depth})

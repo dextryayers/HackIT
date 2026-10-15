@@ -65,6 +65,29 @@ func (c *Crawler) queryWayback(targetURL string) {
 	}
 }
 
+func latestCommonCrawlIndex() string {
+	type collInfo struct {
+		ID string `json:"id"`
+	}
+	client := &http.Client{Timeout: 10 * time.Second}
+	req, _ := http.NewRequest("GET", "https://index.commoncrawl.org/collinfo.json", nil)
+	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; HackIT/2.1)")
+	resp, err := client.Do(req)
+	if err != nil {
+		return "CC-MAIN-2025-30"
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return "CC-MAIN-2025-30"
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
+	var colls []collInfo
+	if json.Unmarshal(body, &colls) != nil || len(colls) == 0 || colls[0].ID == "" {
+		return "CC-MAIN-2025-30"
+	}
+	return colls[0].ID
+}
+
 func (c *Crawler) queryCommonCrawl(targetURL string) {
 	u, err := url.Parse(targetURL)
 	if err != nil {
@@ -72,10 +95,10 @@ func (c *Crawler) queryCommonCrawl(targetURL string) {
 	}
 	domain := u.Host
 
-	// CommonCrawl index API
+	// CommonCrawl index API (latest crawl, auto-resolved)
 	apiURL := fmt.Sprintf(
-		"https://index.commoncrawl.org/CC-MAIN-2024-22-index?url=%s/*&output=json&limit=500",
-		domain,
+		"https://index.commoncrawl.org/%s-index?url=%s/*&output=json&limit=500",
+		latestCommonCrawlIndex(), domain,
 	)
 	req, _ := http.NewRequest("GET", apiURL, nil)
 	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; HackIT/2.1)")

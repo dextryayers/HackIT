@@ -29,7 +29,7 @@ type Crawler struct {
 	subdomainURLs map[string]string
 	subMu         sync.Mutex
 
-	hintsShown map[string]bool
+	hintsShown  map[string]bool
 	seenStrings map[string]bool
 
 	allCrawled []CrawlResult
@@ -176,11 +176,17 @@ func (c *Crawler) Start() {
 	if !c.Filters.HasSeen(c.BaseURL) {
 		c.addQueueItem(urlQueue{url: c.BaseURL, source: "", depth: 0})
 	}
-	if c.BaseURL+"/" != c.BaseURL && !c.Filters.HasSeen(c.BaseURL+"/") {
+	if !strings.HasSuffix(c.BaseURL, "/") && !c.Filters.HasSeen(c.BaseURL+"/") {
 		c.addQueueItem(urlQueue{url: c.BaseURL + "/", source: "", depth: 0})
 	}
 
 	var bgWg sync.WaitGroup
+
+	bgWg.Add(1)
+	go func() {
+		defer bgWg.Done()
+		c.performPassiveChecks()
+	}()
 
 	if c.Opts.Archive || c.Opts.Brute {
 		if c.Opts.Archive {
@@ -266,17 +272,21 @@ func (c *Crawler) printSummary() {
 	c.mu.Lock()
 	total := len(c.allCrawled)
 	jsCount := 0
+	okCount := 0
 	for _, r := range c.allCrawled {
 		if r.Extension == "js" || r.Type == "JavaScript" {
 			jsCount++
+		}
+		if r.StatusCode == 200 {
+			okCount++
 		}
 	}
 	subCount := len(c.Subdomains)
 	elapsed := time.Since(c.startTime).Round(time.Millisecond)
 	c.mu.Unlock()
 
-	writeOutput(`{"type":"summary","total":%d,"js_files":%d,"subdomains":%d,"elapsed":"%s"}`,
-		total, jsCount, subCount, elapsed)
+	writeOutput(`{"type":"summary","total":%d,"js_files":%d,"files_200":%d,"subdomains":%d,"elapsed":"%s"}`,
+		total, jsCount, okCount, subCount, elapsed)
 	writeOutput("\n")
 }
 

@@ -9,16 +9,40 @@ import (
 )
 
 var (
-	linkPattern    = regexp.MustCompile(`<a[^>]+href=["'\` + "`" + `]([^"'\` + "`" + `]+)["'\` + "`" + `]`)
-	scriptPattern  = regexp.MustCompile(`<script[^>]+src=["'\` + "`" + `]([^"'\` + "`" + `]+)["'\` + "`" + `]`)
-	linkTagPattern = regexp.MustCompile(`<link[^>]+href=["'\` + "`" + `]([^"'\` + "`" + `]+)["'\` + "`" + `]`)
-	iframePattern  = regexp.MustCompile(`<iframe[^>]+src=["'\` + "`" + `]([^"'\` + "`" + `]+)["'\` + "`" + `]`)
-	formPattern    = regexp.MustCompile(`<form[^>]+action=["'\` + "`" + `]([^"'\` + "`" + `]+)["'\` + "`" + `]`)
-	imgPattern     = regexp.MustCompile(`<img[^>]+src=["'\` + "`" + `]([^"'\` + "`" + `]+)["'\` + "`" + `]`)
-	sourcePattern  = regexp.MustCompile(`<source[^>]+src=["'\` + "`" + `]([^"'\` + "`" + `]+)["'\` + "`" + `]`)
-	objectPattern  = regexp.MustCompile(`<object[^>]+data=["'\` + "`" + `]([^"'\` + "`" + `]+)["'\` + "`" + `]`)
-	embedPattern   = regexp.MustCompile(`<embed[^>]+src=["'\` + "`" + `]([^"'\` + "`" + `]+)["'\` + "`" + `]`)
+	attrPattern     = regexp.MustCompile(`(?i)(href|src|data|action|formaction|content|poster|srcset|code|archive)\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)`)
+	htmlTagPattern  = regexp.MustCompile(`(?i)<(a|script|link|img|iframe|form|video|audio|source|track|embed|object|area|frame|applet|input|button|meta)\b([^>]*)>`)
+	metaRefreshPat  = regexp.MustCompile(`(?i)url\s*=\s*["']?([^"';]+)["']?`)
+	tagRelPattern   = regexp.MustCompile(`(?i)rel\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)`)
+	fetchPatternPre = regexp.MustCompile(`(?:fetch|axios|xhr|XMLHttpRequest)\s*\(?\s*["'` + "`" + `]([^"'` + "`" + `]+)["'` + "`" + `]`)
+	ajaxPatternPre  = regexp.MustCompile(`\$.+(?:get|post|ajax|load)\s*\(?\s*["'` + "`" + `]([^"'` + "`" + `]+)["'` + "`" + `]`)
+	inlineJSVarPre  = regexp.MustCompile(`(?:var|let|const|window\.)\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*["'` + "`" + `](https?://[^"'` + "`" + `]+)["'` + "`" + `]`)
 )
+
+var tagAttrs = map[string][]string{
+	"a": {"href"}, "script": {"src"}, "link": {"href"},
+	"img": {"src", "srcset"}, "iframe": {"src"}, "form": {"action"},
+	"video": {"src", "poster"}, "audio": {"src"}, "source": {"src", "srcset"},
+	"track": {"src"}, "embed": {"src"}, "object": {"data"},
+	"area": {"href"}, "frame": {"src"}, "applet": {"code", "archive"},
+	"input": {"src"}, "button": {"formaction"}, "meta": {"content"},
+}
+
+func tagRel(attrs string) string {
+	m := tagRelPattern.FindStringSubmatch(attrs)
+	if len(m) >= 2 {
+		return strings.ToLower(strings.Trim(m[1], "\"'"))
+	}
+	return ""
+}
+
+func strSliceContains(list []string, v string) bool {
+	for _, s := range list {
+		if s == v {
+			return true
+		}
+	}
+	return false
+}
 
 func (c *Crawler) crawlPage(pageURL string, sourceURL string, depth int) {
 	if depth > c.Scope.MaxDepth {
@@ -55,6 +79,14 @@ func (c *Crawler) crawlPage(pageURL string, sourceURL string, depth int) {
 		if c.Opts.JS {
 			c.parseJSSource(body, pageURL, depth)
 		}
+		if resp.StatusCode == 200 {
+			c.checkExternalSourceMap(body, pageURL)
+		}
+	} else if strings.Contains(ct, "css") || ext == "css" || ext == "scss" || ext == "less" {
+		crawlType = "CSS"
+		if resp.StatusCode == 200 {
+			c.parseCSSResources(body, pageURL, depth)
+		}
 	} else if strings.Contains(ct, "json") {
 		crawlType = "JSON"
 	}
@@ -75,6 +107,13 @@ func (c *Crawler) crawlPage(pageURL string, sourceURL string, depth int) {
 			writeOutput(`{"type":"js_source","url":%q,"status":200,"length":%d,"body":"[skipped: %d bytes]"}`+"\n",
 				pageURL, len(body), len(body))
 		}
+	}
+
+	// Accurate verified file inventory: only real 200 OK responses land here,
+	// so every filemap entry is directly openable.
+	if resp.StatusCode == 200 {
+		writeOutput(`{"type":"filemap","url":%q,"source":%q,"kind":%q,"ext":%q,"content_type":%q,"length":%d,"depth":%d}`+"\n",
+			pageURL, sourceURL, crawlType, ext, ct, len(bodyBytes), depth)
 	}
 
 	writeOutput(`{"type":"discovered","url":%q,"source":%q,"content_type":%q,"status":%d,"depth":%d}`+"\n",
@@ -135,41 +174,85 @@ func (c *Crawler) processDeepExtraction(deep DeepExtractResult, pageURL string, 
 	}
 }
 
-func (c *Crawler) extractFromHTML(body string, pageURL string, depth int) {
-	patterns := []struct {
-		re    *regexp.Regexp
-		rtype string
-	}{
-		{linkPattern, "Link"}, {scriptPattern, "Script"}, {linkTagPattern, "Link Tag"},
-		{iframePattern, "Iframe"}, {formPattern, "Form"}, {imgPattern, "Image"},
-		{sourcePattern, "Source"}, {objectPattern, "Object"}, {embedPattern, "Embed"},
+func (c *Crawler) queueHTMLRef(raw, tag, base, pageURL string, depth int) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || strings.HasPrefix(raw, "#") {
+		return
 	}
+	low := strings.ToLower(raw)
+	for _, p := range []string{"javascript:", "data:", "mailto:", "tel:", "blob:", "about:"} {
+		if strings.HasPrefix(low, p) {
+			return
+		}
+	}
+	absURL := resolveURL(raw, base)
+	if absURL == "" || !c.Scope.IsInScope(absURL, depth+1) || c.Filters.HasSeen(absURL) {
+		return
+	}
+	if tag == "script" || c.Scope.IsJS(absURL) || c.Scope.IsCode(absURL) {
+		c.addQueueItem(urlQueue{url: absURL, source: pageURL, depth: depth + 1})
+	} else if isCrawable(absURL) && depth < c.Scope.MaxDepth {
+		c.addQueueItem(urlQueue{url: absURL, source: pageURL, depth: depth})
+	}
+}
 
-	for _, p := range patterns {
-		matches := p.re.FindAllStringSubmatch(body, -1)
-		for _, m := range matches {
-			if len(m) < 2 {
+func (c *Crawler) extractFromHTML(body string, pageURL string, depth int) {
+	base := extractBaseHref(body, pageURL)
+	for _, tm := range htmlTagPattern.FindAllStringSubmatch(body, -1) {
+		if len(tm) < 3 {
+			continue
+		}
+		tag := strings.ToLower(tm[1])
+		attrs := tm[2]
+		want, ok := tagAttrs[tag]
+		if !ok {
+			continue
+		}
+		if tag == "link" {
+			rel := tagRel(attrs)
+			if rel != "" && rel != "stylesheet" && !strings.Contains(rel, "preload") &&
+				!strings.Contains(rel, "modulepreload") && !strings.Contains(rel, "prefetch") &&
+				!strings.Contains(rel, "icon") && !strings.Contains(rel, "manifest") &&
+				!strings.Contains(rel, "alternate") {
 				continue
 			}
-			absURL := resolveURL(m[1], pageURL)
-			if absURL == "" || !c.Scope.IsInScope(absURL, depth+1) || c.Filters.HasSeen(absURL) {
+		}
+		for _, am := range attrPattern.FindAllStringSubmatch(attrs, -1) {
+			if len(am) < 3 {
 				continue
 			}
-			if p.rtype == "Script" || c.Scope.IsJS(absURL) {
-				c.addQueueItem(urlQueue{url: absURL, source: pageURL, depth: depth + 1})
-			} else if isCrawable(absURL) && depth < c.Scope.MaxDepth {
-				c.addQueueItem(urlQueue{url: absURL, source: pageURL, depth: depth})
+			name := strings.ToLower(am[1])
+			if !strSliceContains(want, name) {
+				continue
 			}
+			val := strings.Trim(am[2], "\"'")
+			if tag == "meta" {
+				lower := strings.ToLower(attrs)
+				if strings.Contains(lower, "refresh") {
+					if m := metaRefreshPat.FindStringSubmatch(val); len(m) >= 2 {
+						c.queueHTMLRef(strings.TrimSpace(m[1]), tag, base, pageURL, depth)
+					}
+					continue
+				}
+				if strings.Contains(lower, "og:image") || strings.Contains(lower, "twitter:image") ||
+					strings.Contains(lower, "og:video") || strings.Contains(lower, "og:audio") {
+					c.queueHTMLRef(val, tag, base, pageURL, depth)
+				}
+				continue
+			}
+			if name == "srcset" {
+				for _, part := range parseSrcset(val) {
+					c.queueHTMLRef(part, tag, base, pageURL, depth)
+				}
+				continue
+			}
+			c.queueHTMLRef(val, tag, base, pageURL, depth)
 		}
 	}
 }
 
 func (c *Crawler) extractInlineJS(body string, pageURL string, depth int) {
-	fetchPattern := regexp.MustCompile(`(?:fetch|axios|xhr|XMLHttpRequest)\s*\(?\s*["'\` + "`" + `]([^"'\` + "`" + `]+)["'\` + "`" + `]`)
-	ajaxPattern := regexp.MustCompile(`\$.+(?:get|post|ajax|load)\s*\(?\s*["'\` + "`" + `]([^"'\` + "`" + `]+)["'\` + "`" + `]`)
-	inlineJSVar := regexp.MustCompile(`(?:var|let|const|window\.)\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*["'\` + "`" + `](https?://[^"'\` + "`" + `]+)["'\` + "`" + `]`)
-
-	for _, re := range []*regexp.Regexp{fetchPattern, ajaxPattern} {
+	for _, re := range []*regexp.Regexp{fetchPatternPre, ajaxPatternPre} {
 		for _, m := range re.FindAllStringSubmatch(body, -1) {
 			if len(m) >= 2 {
 				absURL := resolveURL(m[1], pageURL)
@@ -180,7 +263,7 @@ func (c *Crawler) extractInlineJS(body string, pageURL string, depth int) {
 		}
 	}
 
-	for _, m := range inlineJSVar.FindAllStringSubmatch(body, -1) {
+	for _, m := range inlineJSVarPre.FindAllStringSubmatch(body, -1) {
 		if len(m) >= 3 {
 			absURL := resolveURL(m[2], pageURL)
 			if absURL != "" && c.Scope.IsInScope(absURL, depth+1) {

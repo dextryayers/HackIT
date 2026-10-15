@@ -28,6 +28,8 @@ func main() {
 	networkFlag := flag.Bool("network", true, "Extract network calls")
 	jsonOutFlag := flag.Bool("json", false, "Output raw JSON to stdout")
 	rateLimitFlag := flag.Int("rate-limit", 0, "Max requests per second")
+	includeFlag := flag.String("include", "", "Comma-separated regex: only crawl matching URLs (katana -fr)")
+	excludeFlag := flag.String("exclude", "", "Comma-separated regex: skip matching URLs")
 	flag.Parse()
 
 	target := *targetFlag
@@ -71,7 +73,11 @@ func main() {
 		Network:     *networkFlag,
 		JSON:        *jsonOutFlag,
 		RateLimit:   *rateLimitFlag,
+		Include:     *includeFlag,
+		Exclude:     *excludeFlag,
 	}
 
-	NewCrawler(opts).Start()
+	crawler := NewCrawler(opts)
+	crawler.Scope.IncludeRe, crawler.Scope.ExcludeRe = CompileScopeRegexes(opts.Include, opts.Exclude)
+	crawler.Start()
 }

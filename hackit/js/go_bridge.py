@@ -43,7 +43,7 @@ class GoEngine:
             secrets: bool = True, subdomains: bool = True, archive: bool = True,
             brute: bool = True, sourcemap: bool = True, tech: bool = True,
             endpoints: bool = True, network: bool = True, json_out: bool = False,
-            rate_limit: int = 0) -> Generator[Dict, None, None]:
+            rate_limit: int = 0, include: str = '', exclude: str = '') -> Generator[Dict, None, None]:
         if not self.ensure_compiled():
             yield {"error": "Failed to compile Go engine"}
             return
@@ -83,6 +83,10 @@ class GoEngine:
                 args.append('-json')
             if rate_limit > 0:
                 args.extend(['-rate-limit', str(rate_limit)])
+            if include:
+                args.extend(['-include', include])
+            if exclude:
+                args.extend(['-exclude', exclude])
 
             process = subprocess.Popen(
                 args,

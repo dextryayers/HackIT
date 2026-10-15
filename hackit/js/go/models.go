@@ -21,6 +21,8 @@ type Options struct {
 	Network     bool
 	JSON        bool
 	RateLimit   int
+	Include     string
+	Exclude     string
 }
 
 type urlQueue struct {

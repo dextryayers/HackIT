@@ -35,6 +35,33 @@ func (c *Crawler) checkSourceMap(jsURL string) {
 	}
 }
 
+// checkExternalSourceMap honors an explicit sourceMappingURL comment
+// pointing at a non-default .map location.
+func (c *Crawler) checkExternalSourceMap(jsBody, jsURL string) {
+	m := externalSourceMap.FindStringSubmatch(jsBody)
+	if len(m) < 2 {
+		return
+	}
+	mapURL := resolveURL(strings.TrimSpace(m[1]), jsURL)
+	if mapURL == "" || mapURL == jsURL+".map" || c.Filters.Seen(mapURL) {
+		return
+	}
+	req, _ := http.NewRequest("GET", mapURL, nil)
+	c.setHeaders(req)
+	req.Header.Set("Referer", jsURL)
+	req.Header.Set("Accept", "*/*")
+	resp, err := c.Client.Do(req)
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == 200 {
+		writeOutput(`{"type":"sourcemap","url":%q,"source":%q,"status":200,"method":"external-ref"}`+"\n", mapURL, jsURL)
+		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 5*1024*1024))
+		c.parseSourceMap(string(bodyBytes), mapURL, jsURL)
+	}
+}
+
 func (c *Crawler) extractInlineSourceMap(jsBody string, jsURL string) {
 	matches := inlineSourceMapRe.FindStringSubmatch(jsBody)
 	if len(matches) < 2 {

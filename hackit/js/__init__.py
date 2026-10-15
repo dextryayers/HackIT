@@ -28,11 +28,13 @@ from .go_bridge import GoEngine
 @click.option('--no-tech', is_flag=True, default=False, help='Disable tech detection')
 @click.option('--no-endpoints', is_flag=True, default=False, help='Disable endpoint extraction')
 @click.option('--no-network', is_flag=True, default=False, help='Disable network call analysis')
+@click.option('--include', default='', help='Only crawl URLs matching regex (comma-separated, katana -fr style)')
+@click.option('--exclude', default='', help='Skip URLs matching regex (comma-separated)')
 @click.argument('target_url', default=None, required=False)
 @click.pass_context
 def analyze_js(ctx, target_url, output, code, depth, concurrency, timeout, delay, proxy,
                rate_limit, no_crawl, no_js, no_secrets, no_subdomains, no_archive,
-               no_brute, no_sourcemap, no_tech, no_endpoints, no_network):
+               no_brute, no_sourcemap, no_tech, no_endpoints, no_network, include, exclude):
     display_tool_banner("JS HUNTER", force=True)
 
     if target_url:
@@ -67,6 +69,8 @@ def analyze_js(ctx, target_url, output, code, depth, concurrency, timeout, delay
 
     all_results = []
     discovered = []
+    filemap = []
+    filemap_200 = []
     sensitives = []
     comments = []
     sourcemaps = []
@@ -82,7 +86,7 @@ def analyze_js(ctx, target_url, output, code, depth, concurrency, timeout, delay
                                  brute=not no_brute, sourcemap=not no_sourcemap,
                                  tech=not no_tech, endpoints=not no_endpoints,
                                  network=not no_network, json_out=True,
-                                 rate_limit=rate_limit):
+                                 rate_limit=rate_limit, include=include, exclude=exclude):
             if not isinstance(result, dict):
                 continue
             if 'error' in result:
@@ -95,7 +99,15 @@ def analyze_js(ctx, target_url, output, code, depth, concurrency, timeout, delay
 
             if rtype == 'discovered':
                 discovered.append(result)
-                click.echo(f"  {_colored('[+]', GREEN)} {url_val}")
+                st = result.get('status', 0)
+                s_color = GREEN if st == 200 else (YELLOW if isinstance(st, int) and st < 400 else RED)
+                click.echo(f"  {_colored('[+]', GREEN)} {url_val} {_colored(f'[{st}]', s_color)}")
+            elif rtype == 'filemap':
+                filemap.append(result)
+                kind = result.get('kind', '')
+                length = result.get('length', 0)
+                filemap_200.append(result)
+                click.echo(f"  {_colored('[200]', GREEN)} {_colored(f'{kind:10s}', CYAN)} {url_val} {_colored(f'({length}b)', DIM)}")
             elif rtype == 'tech':
                 name = result.get('name', '')
                 tech_type = result.get('tech_type', '')
@@ -228,9 +240,11 @@ def analyze_js(ctx, target_url, output, code, depth, concurrency, timeout, delay
                 click.echo(f"         {_colored('  └─', DIM)} {url_val} ({result.get('field', '')})")
             elif rtype == 'summary':
                 all_results.append(result)
+                n_files = result.get('files_200', len(filemap_200))
                 click.echo(f"\n  {_colored('═' * 56, DIM)}")
                 click.echo(f"  {_colored('[DONE]', GREEN)} Crawled: {result.get('total', 0)} pages, "
                           f"{result.get('js_files', 0)} JS files, "
+                          f"{n_files} verified-200 files, "
                           f"{result.get('subdomains', 0)} subdomains in {result.get('elapsed', '0s')}")
             else:
                 click.echo(f"  {_colored('[?]', DIM)} {url_val}")
@@ -244,15 +258,25 @@ def analyze_js(ctx, target_url, output, code, depth, concurrency, timeout, delay
         click.echo(_colored(f"[*] No artifacts discovered on {final_url}", YELLOW))
 
     # Print summary table
-    if discovered or sensitives or sourcemaps:
+    if discovered or sensitives or sourcemaps or filemap_200:
         click.echo(f"\n  {_colored('═' * 56, DIM)}")
         click.echo(f"  {_colored('SUMMARY', BOLD)}")
         click.echo(f"  {_colored('─' * 56, DIM)}")
+        ok200 = len(filemap_200)
+        click.echo(f"  {_colored('Fetched (any status):', CYAN)} {len(discovered)}")
+        click.echo(f"  {_colored('Verified 200 OK files:', GREEN)} {len(filemap_200)}")
         if discovered:
-            click.echo(f"  {_colored('URLs Discovered:', CYAN)} {len(discovered)}")
-        js_count = sum(1 for d in discovered if d.get('url', '').endswith('.js'))
-        if js_count:
-            click.echo(f"  {_colored('JavaScript Files:', CYAN)} {js_count}")
+            js_count = sum(1 for d in discovered if d.get('url', '').endswith('.js'))
+            if js_count:
+                click.echo(f"  {_colored('JavaScript Files:', CYAN)} {js_count}")
+            css_count = sum(1 for d in discovered if d.get('url', '').split('?')[0].endswith('.css'))
+            if css_count:
+                click.echo(f"  {_colored('Stylesheets:', CYAN)} {css_count}")
+            bad = [(d.get('status'), d.get('url', '')) for d in discovered if d.get('status') not in (200, None)]
+            if bad:
+                click.echo(f"  {_colored('Non-200 responses:', YELLOW)} {len(bad)}")
+                for st, u in bad[:10]:
+                    click.echo(f"    {_colored(f'[{st}]', YELLOW)} {u[:80]}")
         if sourcemaps:
             click.echo(f"  {_colored('Source Maps:', CYAN)} {len(sourcemaps)}")
         if sensitives:
@@ -273,6 +297,7 @@ def analyze_js(ctx, target_url, output, code, depth, concurrency, timeout, delay
                 "results": all_results,
                 "stats": {
                     "discovered": len(discovered),
+                    "verified_200": len(filemap_200),
                     "sensitive": len(sensitives),
                     "comments": len(comments),
                     "sourcemaps": len(sourcemaps),

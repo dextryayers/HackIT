@@ -4,8 +4,32 @@ import (
 	"fmt"
 	"net/url"
 	"path"
+	"regexp"
 	"strings"
 )
+
+var baseHrefPattern = regexp.MustCompile(`(?i)<base[^>]+href=["']?([^"'\s>]+)["']?`)
+
+func extractBaseHref(body, pageURL string) string {
+	m := baseHrefPattern.FindStringSubmatch(body)
+	if len(m) >= 2 {
+		if abs := resolveURL(strings.TrimSpace(m[1]), pageURL); abs != "" {
+			return abs
+		}
+	}
+	return pageURL
+}
+
+func parseSrcset(srcset string) []string {
+	var out []string
+	for _, part := range strings.Split(srcset, ",") {
+		fields := strings.Fields(strings.TrimSpace(part))
+		if len(fields) > 0 && fields[0] != "" {
+			out = append(out, fields[0])
+		}
+	}
+	return out
+}
 
 func resolveURL(ref, base string) string {
 	u, err := url.Parse(ref)
@@ -18,6 +42,10 @@ func resolveURL(ref, base string) string {
 	}
 	resolved := baseU.ResolveReference(u)
 	resolved.Fragment = ""
+	// Collapse accidental double slashes in path (keep scheme:// intact).
+	for strings.Contains(resolved.Path, "//") {
+		resolved.Path = strings.ReplaceAll(resolved.Path, "//", "/")
+	}
 	return resolved.String()
 }
 
