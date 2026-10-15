@@ -57,8 +57,16 @@ func (s *Scanner) InitScanner(cfg *ScanConfig) {
 	}
 	s.Config = cfg
 	s.Client = NewConfiguredClient(cfg)
-	// RateLimit is requests-per-second.
-	s.throttler = NewThrottlerFromRPS(cfg.RateLimit)
+	// RateLimit is requests-per-second with exact global pacing.
+	// Adaptive mode starts fast and backs off on error storms.
+	switch {
+	case cfg.AdaptiveRate:
+		s.throttler = NewAdaptiveThrottler(cfg.RateLimit)
+	case cfg.RateLimit > 0:
+		s.throttler = NewThrottlerFromRPS(cfg.RateLimit)
+	default:
+		s.throttler = NewThrottlerFromRPS(0)
+	}
 	if cfg.Threads > 0 {
 		s.Threads = cfg.Threads
 	} else if cfg.Concurrency > 0 {
@@ -120,8 +128,21 @@ func effectiveRetries(cfg *ScanConfig) int {
 	return cfg.Retries
 }
 
+func (s *Scanner) perTemplateParallelism() int {
+	n := 10
+	if s.Config != nil && s.Config.Concurrency > 0 {
+		n = s.Config.Concurrency
+	}
+	if n < 1 {
+		n = 1
+	}
+	if n > 32 {
+		n = 32
+	}
+	return n
+}
+
 func (s *Scanner) TestTemplate(baseURL string, t *Template, reqIdx int, req Request) bool {
-	matched := false
 	payloads := req.Payloads
 	if len(payloads) == 0 {
 		payloads = []string{""}
@@ -131,40 +152,58 @@ func (s *Scanner) TestTemplate(baseURL string, t *Template, reqIdx int, req Requ
 	body := t.ResolveRequestPart(req.Body, s.vars)
 	method := effectiveMethod(req.Method, s.Config)
 	retries := effectiveRetries(s.Config)
+	adaptive := s.Config != nil && s.Config.AdaptiveRate
+
+	// Fan out independent path x payload probes; requests within one
+	// Request block stay exact (stop-at-first-match is handled by the
+	// caller across Request blocks, which remain sequential).
+	var matched atomic.Int32 // 0/1
+	sem := make(chan struct{}, s.perTemplateParallelism())
+	var wg sync.WaitGroup
 
 	for _, pathTmpl := range req.Path {
 		for _, pay := range payloads {
 			resolvedPath := ResolvePayload(t.ResolveRequestPart(pathTmpl, s.vars), pay, s.vars)
 			targetURL := s.vars.Resolve(resolvedPath)
-			if s.Stats != nil {
-				atomic.AddInt32(&s.Stats.RequestsSent, 1)
-			}
-			atomic.AddInt32(&s.Progress.Requests, 1)
-			if s.throttler != nil {
-				s.throttler.Wait()
-			}
-
-			startTime := time.Now()
-			resp, err := SendRequestWithRetry(s.Client, targetURL, method, body, headers, retries)
-			duration := time.Since(startTime)
-
-			if err != nil {
+			wg.Add(1)
+			sem <- struct{}{}
+			go func(targetURL string) {
+				defer wg.Done()
+				defer func() { <-sem }()
 				if s.Stats != nil {
-					s.Stats.IncErrors()
+					atomic.AddInt32(&s.Stats.RequestsSent, 1)
 				}
-				atomic.AddInt32(&s.Progress.Errors, 1)
-				if s.Verbose {
-					PrintError(targetURL, err)
+				atomic.AddInt32(&s.Progress.Requests, 1)
+				if s.throttler != nil {
+					s.throttler.Wait()
 				}
-				continue
-			}
 
-			resp.Duration = duration
+				startTime := time.Now()
+				resp, err := SendRequestWithRetry(s.Client, targetURL, method, body, headers, retries)
+				duration := time.Since(startTime)
 
-			match := MatchTemplate(resp, t, reqIdx)
-			if match != nil && match.Matched {
+				if s.throttler != nil && adaptive {
+					s.throttler.Adapt(err == nil)
+				}
+				if err != nil {
+					if s.Stats != nil {
+						s.Stats.IncErrors()
+					}
+					atomic.AddInt32(&s.Progress.Errors, 1)
+					if s.Verbose {
+						PrintError(targetURL, err)
+					}
+					return
+				}
+
+				resp.Duration = duration
+
+				match := MatchTemplate(resp, t, reqIdx)
+				if match == nil || !match.Matched {
+					return
+				}
 				if s.Deduplicator.IsDuplicate(t.ID, targetURL, match.MatcherName) {
-					continue
+					return
 				}
 				s.Deduplicator.MarkSeen(t.ID, targetURL, match.MatcherName)
 
@@ -181,7 +220,7 @@ func (s *Scanner) TestTemplate(baseURL string, t *Template, reqIdx int, req Requ
 					Description:  t.Info.Description,
 					Tags:         t.Info.Tags.String(),
 					Timestamp:    time.Now().UTC().Format(time.RFC3339),
-					Request:      req.Method + " " + targetURL,
+					Request:      method + " " + targetURL,
 					ResponseLen:  resp.BodyLen,
 					ResponseTime: duration.Round(time.Millisecond).String(),
 				}
@@ -192,7 +231,7 @@ func (s *Scanner) TestTemplate(baseURL string, t *Template, reqIdx int, req Requ
 						r.Remediation = strings.Join([]string(t.Info.Reference), ",")
 					}
 				}
-				matched = true
+				matched.Store(1)
 
 				s.mu.Lock()
 				s.Results = append(s.Results, r)
@@ -202,10 +241,11 @@ func (s *Scanner) TestTemplate(baseURL string, t *Template, reqIdx int, req Requ
 				atomic.AddInt32(&s.Progress.Findings, 1)
 
 				PrintResultRealTime(r)
-			}
+			}(targetURL)
 		}
 	}
-	return matched
+	wg.Wait()
+	return matched.Load() == 1
 }
 
 func (s *Scanner) ProcessTemplate(baseURL string, t *Template) {

@@ -113,6 +113,7 @@ func LoadTemplates(dir string) ([]*Template, error) {
 				continue
 			}
 			seen[t.ID] = true
+			templateSources[t.ID] = filepath.Dir(path)
 			templates = append(templates, t)
 		}
 		return nil

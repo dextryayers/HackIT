@@ -69,7 +69,7 @@ _SKIP_IF_EMPTY = set(FLAG_MAP.keys()) - {
 # Go defaults; skip forwarding when value equals default to avoid
 # overriding Go-side defaults unintentionally.
 _GO_DEFAULTS = {
-    "threads": 25, "timeout": 60, "concurrency": 25,
+    "threads": 25, "timeout": 60, "concurrency": 10,
     "max_redirects": 10, "dashboard_port": 8484,
     "uncover_limit": 100, "fuzz_thread": 10,
     "headless_page_timeout": 10000, "headless_action_timeout": 5000,
@@ -113,6 +113,26 @@ class AtomixGoEngine:
                 key = "list_flag"
             if kwargs.get(key):
                 args.append(f"--{action}")
+                if action == "list":
+                    # Forward folder + filter flags so listing reflects
+                    # the same layered library a scan would use.
+                    for ck in (
+                        "custom_dir", "tags", "severity", "exclude_tags",
+                        "exclude_severity", "author", "type", "id",
+                        "json_output", "verbose", "no_color",
+                    ):
+                        if ck not in FLAG_MAP:
+                            continue
+                        val = kwargs.get(ck)
+                        if val is None or val is False:
+                            continue
+                        if isinstance(val, bool):
+                            if val is True:
+                                args.append(FLAG_MAP[ck])
+                            continue
+                        if isinstance(val, str) and val == "":
+                            continue
+                        args.append(f"{FLAG_MAP[ck]}={val}")
                 return args
         if kwargs.get("completion"):
             args.extend(["--completion", str(kwargs["completion"])])
@@ -150,6 +170,27 @@ class AtomixGoEngine:
                     continue
             args.append(f"{go_flag}={val}")
         return args
+
+    def run_argv(self, argv: list) -> tuple:
+        """Run the engine with a prebuilt argv list (without binary)."""
+        args = [self.binary, *argv]
+        if not os.path.isfile(self.binary):
+            msg = f"Go binary not found: {self.binary}"
+            print(f"  [!] {msg}", file=sys.stderr)
+            return "", msg, 1
+        try:
+            result = subprocess.run(
+                args, capture_output=False, timeout=300,
+            )
+            return "", "", result.returncode
+        except subprocess.TimeoutExpired:
+            msg = "Engine timed out"
+            print(f"  [!] {msg}", file=sys.stderr)
+            return "", msg, 1
+        except FileNotFoundError as e:
+            msg = f"Go binary not found: {e}"
+            print(f"  [!] {msg}", file=sys.stderr)
+            return "", msg, 1
 
     def run_direct(self, *flags: str) -> tuple:
         args = [self.binary, *flags]

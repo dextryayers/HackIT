@@ -58,7 +58,7 @@ func main() {
 	// Section 3: Performance
 	flag.IntVar(&cfg.Threads, "c", 20, "Concurrency (number of parallel templates)")
 	flag.IntVar(&cfg.Threads, "concurrency", 20, "Concurrency (alias)")
-	flag.IntVar(&cfg.Concurrency, "threads", 25, "Threads per template")
+	flag.IntVar(&cfg.Concurrency, "threads", 10, "Max parallel requests per template")
 	flag.IntVar(&cfg.Timeout, "timeout", 60, "Request timeout in seconds")
 	flag.IntVar(&cfg.Retries, "retries", 0, "Max retries per request")
 	flag.IntVar(&cfg.MaxHostError, "max-host-error", 30, "Max errors per host before skip")
@@ -124,7 +124,7 @@ func main() {
 	flag.StringVar(&cfg.CustomAgent, "custom-agent", "", "Custom User-Agent header value")
 	flag.BoolVar(&cfg.HTTP2, "http2", false, "Enable HTTP/2 support")
 	flag.BoolVar(&cfg.DisableHTTP2, "http2-downgrade", false, "Disable HTTP/2")
-	flag.BoolVar(&cfg.KeepAlive, "keep-alive", false, "Enable HTTP keep-alive")
+	flag.BoolVar(&cfg.KeepAlive, "keep-alive", true, "Enable HTTP keep-alive (connection reuse)")
 	flag.StringVar(&cfg.HeaderStr, "H", "", "Custom header (Name: Value) - can be repeated")
 	flag.StringVar(&cfg.HeaderStr, "header", "", "Custom header (alias)")
 	flag.StringVar(&cfg.Cookie, "cookie", "", "Set Cookie header")
@@ -349,13 +349,22 @@ func main() {
 		return
 	}
 
-	// List templates
+	// List templates (same layered library as scans)
 	if listFlag {
-		templates, err := LoadTemplates(cfg.TemplateDir)
+		layered, err := LoadTemplatesFromDirs(ResolveTemplateDirs(cfg))
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "%s Error loading templates: %v\n", SColor(ColorRed, "[!]"), err)
 			os.Exit(1)
 		}
+		templates := FilterTemplates(layered, FilterOptions{
+			ID:              cfg.ID,
+			Severity:        cfg.Severity,
+			ExcludeSeverity: cfg.ExcludeSeverity,
+			Tags:            parseTags(cfg.Tags),
+			ExcludeTags:     parseTags(cfg.ExcludeTags),
+			Author:          cfg.Author,
+			Types:           parseTags(cfg.Type),
+		})
 		if cfg.JSON || cfg.JSONL || hasFlag("json") || hasFlag("jsonl") {
 			fmt.Println(FormatTemplatesJSON(templates))
 			return
@@ -505,6 +514,9 @@ func main() {
 	if err == nil && len(stdinTemplates) > 0 {
 		templates = append(templates, stdinTemplates...)
 	}
+
+	// Last-wins: --load / --from-git / stdin override the library.
+	templates = ResolveOverrides(templates)
 
 	if len(templates) == 0 {
 		fmt.Fprintf(os.Stderr, "%s No templates found in %s\n", SColor(ColorYellow, "[!]"), cfg.TemplateDir)

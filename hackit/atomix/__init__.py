@@ -182,7 +182,7 @@ class _GroupedHelpCommand(click.Command):
 @click.option("--exclude-file", default="", help="File with URLs to exclude")
 
 # ── PERFORMANCE ──
-@click.option("--concurrency", default=25, type=int, help="Threads per template")
+@click.option("--concurrency", default=10, type=int, help="Max parallel requests per template")
 @click.option("--retries", default=0, type=int, help="Max retries per request")
 @click.option("--rate-limit", default=0, type=int, help="Rate limit (req/sec)")
 @click.option("--bulk-size", default=0, type=int, help="Batch processing size")
@@ -302,9 +302,11 @@ def atomix_command(**kwargs):
     }
     for key, flag in passthrough.items():
         if kwargs.get(key):
-            # --list honors --json for machine output
-            if key == "list_flag" and kwargs.get("json_output"):
-                engine.run_direct(flag, "-json")
+            # --list forwards folder/filter flags so it reflects scans
+            if key == "list_flag":
+                list_kwargs = {k: v for k, v in kwargs.items() if k != "url"}
+                argv = engine.build_args(**list_kwargs)[1:]
+                engine.run_argv(argv)
             else:
                 engine.run_direct(flag)
             return

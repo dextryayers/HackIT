@@ -170,10 +170,15 @@ func FormatTemplatesJSON(templates []*Template) string {
 }
 
 func PrintTemplateList(templates []*Template) {
+	verbose := hasFlag("v") || hasFlag("verbose")
 	if noColor {
 		fmt.Printf("[+] Loaded %d templates:\n", len(templates))
 		for _, t := range templates {
-			fmt.Printf("  %-30s | %-8s | %s\n", t.ID, t.Info.Severity, t.Info.Name)
+			if verbose {
+				fmt.Printf("  %-30s | %-8s | %s\n      %s\n", t.ID, t.Info.Severity, t.Info.Name, TemplateSource(t.ID))
+			} else {
+				fmt.Printf("  %-30s | %-8s | %s\n", t.ID, t.Info.Severity, t.Info.Name)
+			}
 		}
 		return
 	}
@@ -184,7 +189,11 @@ func PrintTemplateList(templates []*Template) {
 		id := SColor(ColorCyan, t.ID)
 		sev := SColor(SeverityColor(t.Info.Severity), fmt.Sprintf("%-8s", t.Info.Severity))
 		name := SColor(ColorBWhite, t.Info.Name)
-		fmt.Printf("  %s | %s | %s\n", id, sev, name)
+		if verbose {
+			fmt.Printf("  %s | %s | %s\n      %s\n", id, sev, name, SColor(ColorDim, TemplateSource(t.ID)))
+		} else {
+			fmt.Printf("  %s | %s | %s\n", id, sev, name)
+		}
 	}
 	fmt.Println()
 }

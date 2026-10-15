@@ -32,67 +32,72 @@ func RegisterCustomTemplateDir(name, dir string, priority int, overrides bool) {
 }
 
 func ResolveTemplateDirs(config *ScanConfig) []string {
-	dirs := []string{config.TemplateDir}
-
-	// User-specified custom directory via --custom-dir or --custom-templates
-	if config.CustomTemplateDir != "" {
-		dirs = append(dirs, config.CustomTemplateDir)
+	var dirs []string
+	seen := make(map[string]bool)
+	add := func(d string) {
+		d = strings.TrimSpace(expandPath(d))
+		if d == "" {
+			return
+		}
+		abs, err := filepath.Abs(d)
+		key := d
+		if err == nil {
+			key = abs
+		}
+		if !seen[key] {
+			seen[key] = true
+			dirs = append(dirs, d)
+		}
 	}
 
-	// Clear any old built-in registrations (to avoid duplicate loading)
-	currentDirs := make(map[string]bool)
-	for _, d := range dirs {
-		currentDirs[d] = true
+	// Built-in library first; later (custom) sources override it on ID clash.
+	add(config.TemplateDir)
+
+	// User-specified custom directories (comma-separated).
+	for _, d := range strings.Split(config.CustomTemplateDir, ",") {
+		add(d)
 	}
 
-	// Environment variable
+	// Environment variable (OS path-list separated).
 	if envDir := os.Getenv("ATOMIX_CUSTOM_TEMPLATES"); envDir != "" {
-		if !currentDirs[envDir] {
-			dirs = append(dirs, envDir)
-			currentDirs[envDir] = true
+		for _, d := range strings.Split(envDir, string(os.PathListSeparator)) {
+			add(d)
 		}
 	}
 
 	// Project-local custom directory (next to the binary/config)
 	pwd, _ := os.Getwd()
-	localDirs := []string{
+	for _, ld := range []string{
 		filepath.Join(pwd, "custom-templates"),
 		filepath.Join(pwd, "custom_templates"),
 		filepath.Join(pwd, ".atomix"),
-	}
-	for _, ld := range localDirs {
-		if !currentDirs[ld] && dirExists(ld) {
-			dirs = append(dirs, ld)
-			currentDirs[ld] = true
+	} {
+		if dirExists(ld) {
+			add(ld)
 		}
 	}
 
 	// Check common user custom template paths
 	home, _ := os.UserHomeDir()
-	userPaths := []string{
+	for _, p := range []string{
 		filepath.Join(home, ".atomix", "custom"),
 		filepath.Join(home, ".atomix", "custom-templates"),
 		filepath.Join(home, ".atomix", "templates"),
 		filepath.Join(home, ".config", "atomix", "templates"),
 		filepath.Join(home, ".atomix", "community"),
 		filepath.Join(home, "atomix-custom"),
-	}
-	for _, p := range userPaths {
-		p = expandPath(p)
-		abs, _ := filepath.Abs(p)
-		if !currentDirs[abs] && dirExists(p) {
-			dirs = append(dirs, p)
-			currentDirs[abs] = true
+	} {
+		if dirExists(p) {
+			add(p)
 		}
 	}
 
 	// Global system path
-	systemDir := "/etc/atomix/templates"
-	if !currentDirs[systemDir] && dirExists(systemDir) {
-		dirs = append(dirs, systemDir)
+	if dirExists("/etc/atomix/templates") {
+		add("/etc/atomix/templates")
 	}
 
-	return deduplicatePaths(dirs)
+	return dirs
 }
 
 func dirExists(path string) bool {
@@ -100,22 +105,38 @@ func dirExists(path string) bool {
 	return err == nil && info.IsDir()
 }
 
-func deduplicatePaths(paths []string) []string {
-	seen := make(map[string]bool)
-	var result []string
-	for _, p := range paths {
-		abs, _ := filepath.Abs(p)
-		if !seen[abs] {
-			seen[abs] = true
-			result = append(result, p)
+// templateSources records which directory each template ID was loaded
+// from (after override resolution). Used by --list -v.
+var templateSources = make(map[string]string)
+
+// ResolveOverrides applies last-wins deduplication by template ID so
+// --load / --from-git / stdin templates override the library.
+func ResolveOverrides(templates []*Template) []*Template {
+	index := make(map[string]int)
+	var out []*Template
+	for _, t := range templates {
+		if pos, exists := index[t.ID]; exists {
+			out[pos] = t
+			continue
+		}
+		index[t.ID] = len(out)
+		out = append(out, t)
+	}
+	for _, t := range out {
+		if t.FilePath != "" {
+			templateSources[t.ID] = t.FilePath
 		}
 	}
-	return result
+	return out
 }
+
+// TemplateSource returns the directory a template ID was loaded from.
+func TemplateSource(id string) string { return templateSources[id] }
 
 func LoadTemplatesFromDirs(dirs []string) ([]*Template, error) {
 	var all []*Template
-	seen := make(map[string]string)
+	index := make(map[string]int) // template ID -> position in all
+	overridden := 0
 
 	for _, dir := range dirs {
 		templates, err := LoadTemplates(dir)
@@ -125,16 +146,25 @@ func LoadTemplatesFromDirs(dirs []string) ([]*Template, error) {
 			continue
 		}
 		for _, t := range templates {
-			if _, exists := seen[t.ID]; exists {
-				continue
+			// Later directories override earlier ones, so custom
+			// folders always win over the built-in library.
+			if pos, exists := index[t.ID]; exists {
+				all[pos] = t
+				overridden++
+			} else {
+				index[t.ID] = len(all)
+				all = append(all, t)
 			}
-			all = append(all, t)
-			seen[t.ID] = dir
+			templateSources[t.ID] = dir
 		}
 	}
 
-	fmt.Fprintf(os.Stderr, "%s Loaded %d unique templates from %d directories\n",
+	fmt.Fprintf(os.Stderr, "%s Loaded %d unique templates from %d directories",
 		SColor(ColorGreen, "[+]"), len(all), len(dirs))
+	if overridden > 0 {
+		fmt.Fprintf(os.Stderr, " (%d overridden by custom sources)", overridden)
+	}
+	fmt.Fprintf(os.Stderr, "\n")
 	return all, nil
 }
 
@@ -446,6 +476,14 @@ func PrintCustomTemplateGuide() {
 	fmt.Println("Scan with only your templates:")
 	fmt.Println("  atomix -u https://target.example --load ./my-check.yaml")
 	fmt.Println("  --load also accepts directories, URLs, and comma-separated lists.")
+	fmt.Println()
+	fmt.Println("Multiple folders (all .yaml and .yml, recursive):")
+	fmt.Println("  atomix -u https://target.example --custom-dir ./team-a,./team-b")
+	fmt.Println("  Folders are layered: later folders override earlier ones on")
+	fmt.Println("  duplicate template IDs, so custom folders always win over the")
+	fmt.Println("  built-in library. Auto-detected folders: ./custom-templates,")
+	fmt.Println("  ~/.atomix/custom, and ATOMIX_CUSTOM_TEMPLATES (path-separated).")
+	fmt.Println("  atomix -l -v shows which folder each template came from.")
 }
 
 func yamlUnmarshal(data []byte, v interface{}) error {

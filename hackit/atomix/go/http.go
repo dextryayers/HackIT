@@ -27,9 +27,9 @@ func NewHTTPClient(timeout int) *http.Client {
 	return &http.Client{
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS10},
-			MaxIdleConns:    200,
-			MaxConnsPerHost: 100,
-			MaxIdleConnsPerHost: 50,
+			MaxIdleConns:    500,
+			MaxConnsPerHost: 200,
+			MaxIdleConnsPerHost: 100,
 			IdleConnTimeout:     90 * time.Second,
 			DisableCompression:  false,
 		},
@@ -48,12 +48,12 @@ func NewConfiguredClient(config *ScanConfig) *http.Client {
 	if timeout <= 0 { timeout = 60 }
 
 	transport := &http.Transport{
-		TLSClientConfig:    &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS10},
-		MaxIdleConns:       200,
-		MaxConnsPerHost:    100,
-		MaxIdleConnsPerHost: 50,
-		IdleConnTimeout:    90 * time.Second,
-		DisableCompression: false,
+		TLSClientConfig:     &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS10},
+		MaxIdleConns:        500,
+		MaxConnsPerHost:     200,
+		MaxIdleConnsPerHost: 100,
+		IdleConnTimeout:     90 * time.Second,
+		DisableCompression:  false,
 	}
 
 	if config.HTTP2 {
