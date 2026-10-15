@@ -1,0 +1,1331 @@
+{
+  "target": "https://nike.com",
+  "results": [
+    {
+      "type": "discovered",
+      "url": "https://nike.com/robots.txt",
+      "source": "https://nike.com",
+      "method": "passive",
+      "status": 200
+    },
+    {
+      "type": "filemap",
+      "url": "https://nike.com/robots.txt",
+      "source": "https://nike.com",
+      "kind": "Meta",
+      "ext": "txt",
+      "content_type": "text/plain",
+      "length": 629,
+      "depth": 0
+    },
+    {
+      "type": "filemap",
+      "url": "https://www.nike.com",
+      "source": "",
+      "kind": "HTML",
+      "ext": "",
+      "content_type": "text/html; charset=UTF-8",
+      "length": 132329,
+      "depth": 0
+    },
+    {
+      "type": "discovered",
+      "url": "https://www.nike.com",
+      "source": "",
+      "content_type": "HTML",
+      "status": 200,
+      "depth": 0
+    },
+    {
+      "type": "filemap",
+      "url": "https://nike.com",
+      "source": "",
+      "kind": "HTML",
+      "ext": "",
+      "content_type": "text/html; charset=UTF-8",
+      "length": 132323,
+      "depth": 0
+    },
+    {
+      "type": "discovered",
+      "url": "https://nike.com",
+      "source": "",
+      "content_type": "HTML",
+      "status": 200,
+      "depth": 0
+    },
+    {
+      "type": "progress",
+      "fetched": 2,
+      "queued": 3,
+      "elapsed": "3s"
+    },
+    {
+      "type": "discovered",
+      "url": "https://nike.com/.well-known/apple-app-site-association",
+      "source": "https://nike.com",
+      "method": "passive",
+      "status": 200
+    },
+    {
+      "type": "filemap",
+      "url": "https://nike.com/.well-known/apple-app-site-association",
+      "source": "https://nike.com",
+      "kind": "Meta",
+      "ext": "",
+      "content_type": "application/json",
+      "length": 2611,
+      "depth": 0
+    },
+    {
+      "type": "discovered",
+      "url": "https://nike.com/.well-known/assetlinks.json",
+      "source": "https://nike.com",
+      "method": "passive",
+      "status": 200
+    },
+    {
+      "type": "filemap",
+      "url": "https://nike.com/.well-known/assetlinks.json",
+      "source": "https://nike.com",
+      "kind": "Meta",
+      "ext": "json",
+      "content_type": "application/json",
+      "length": 379,
+      "depth": 0
+    },
+    {
+      "type": "progress",
+      "fetched": 2,
+      "queued": 3,
+      "elapsed": "6s"
+    },
+    {
+      "type": "progress",
+      "fetched": 2,
+      "queued": 3,
+      "elapsed": "9s"
+    },
+    {
+      "type": "progress",
+      "fetched": 2,
+      "queued": 3,
+      "elapsed": "12s"
+    },
+    {
+      "type": "discovered",
+      "url": "https://nike.com/.well-known/gpc.json",
+      "source": "https://nike.com",
+      "method": "passive",
+      "status": 200
+    },
+    {
+      "type": "filemap",
+      "url": "https://nike.com/.well-known/gpc.json",
+      "source": "https://nike.com",
+      "kind": "Meta",
+      "ext": "json",
+      "content_type": "application/json",
+      "length": 62,
+      "depth": 0
+    },
+    {
+      "type": "progress",
+      "fetched": 2,
+      "queued": 3,
+      "elapsed": "15s"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://www.nike.com",
+      "subdomain": "www.nike.com",
+      "method": "dns_brute",
+      "ips": "64:ff9b::17c9:9871,23.201.152.113"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://ftp.nike.com",
+      "subdomain": "ftp.nike.com",
+      "method": "dns_brute",
+      "ips": "64:ff9b::92c5:1b11,146.197.27.17"
+    },
+    {
+      "type": "progress",
+      "fetched": 2,
+      "queued": 3,
+      "elapsed": "18s"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://api.nike.com",
+      "subdomain": "api.nike.com",
+      "method": "dns_brute",
+      "ips": "64:ff9b::8cd5:3e33,64:ff9b::8cd5:3e40,140.213.62.51,140.213.62.64"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://test.nike.com",
+      "subdomain": "test.nike.com",
+      "method": "dns_brute",
+      "ips": "64:ff9b::d176:b953,209.118.185.83"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://web.nike.com",
+      "subdomain": "web.nike.com",
+      "method": "dns_brute",
+      "ips": "64:ff9b::17c9:9868,23.201.152.104"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://static.nike.com",
+      "subdomain": "static.nike.com",
+      "method": "dns_brute",
+      "ips": "2400:9800:b010:1185::4123,2400:9800:b010:1187::4123,23.201.154.168"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://help.nike.com",
+      "subdomain": "help.nike.com",
+      "method": "dns_brute",
+      "ips": "64:ff9b::12f4:3355,64:ff9b::12f4:3345,64:ff9b::12f4:3354,64:ff9b::12f4:3376,18.244.51.69,18.244.51.118,18.244.51.84,18.244.51.85"
+    },
+    {
+      "type": "progress",
+      "fetched": 2,
+      "queued": 3,
+      "elapsed": "21s"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://jenkins.nike.com",
+      "subdomain": "jenkins.nike.com",
+      "method": "dns_brute",
+      "ips": "64:ff9b::92c5:baec,146.197.186.236"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://applesetup.nike.com",
+      "subdomain": "applesetup.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://unsub.comms.nike.com",
+      "subdomain": "unsub.comms.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://origin-api.rfid-ew1.nodemgmt0x54c52c.non.thecommons.nike.com",
+      "subdomain": "origin-api.rfid-ew1.nodemgmt0x54c52c.non.thecommons.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://api.rfid.nodemgmt0x54c52c.non.thecommons.nike.com",
+      "subdomain": "api.rfid.nodemgmt0x54c52c.non.thecommons.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://origin-api.rfid-as1.nodemgmt0x54c52c.non.thecommons.nike.com",
+      "subdomain": "origin-api.rfid-as1.nodemgmt0x54c52c.non.thecommons.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://test-em.nike.com",
+      "subdomain": "test-em.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://url9861.click.notifications.test-em.nike.com",
+      "subdomain": "url9861.click.notifications.test-em.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://assets.nmp.nike.com",
+      "subdomain": "assets.nmp.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://stage.assets.nmp.nike.com",
+      "subdomain": "stage.assets.nmp.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://stage.assets-mm.nmp.nike.com",
+      "subdomain": "stage.assets-mm.nmp.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://stage.a.nmp.nike.com",
+      "subdomain": "stage.a.nmp.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://assets-mm.nmp.nike.com",
+      "subdomain": "assets-mm.nmp.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://prod-mm.a.nmp.nike.com",
+      "subdomain": "prod-mm.a.nmp.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://prod.a.nmp.nike.com",
+      "subdomain": "prod.a.nmp.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://pcx-dla-coststandards-ui.pcx-test.nike.com",
+      "subdomain": "pcx-dla-coststandards-ui.pcx-test.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://pcx-dla-coststandards.pcx-test.nike.com",
+      "subdomain": "pcx-dla-coststandards.pcx-test.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://pes-preprod.nike.com",
+      "subdomain": "pes-preprod.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://appps-devsc.pes-preprod.nike.com",
+      "subdomain": "appps-devsc.pes-preprod.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://unsub.test-em.nike.com",
+      "subdomain": "unsub.test-em.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://api-pegasus.th.gblcgw0xb7f3e4.non.thecommons.nike.com",
+      "subdomain": "api-pegasus.th.gblcgw0xb7f3e4.non.thecommons.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://origin-api.rfid-uw2.nodemgmt0x54c52c.non.thecommons.nike.com",
+      "subdomain": "origin-api.rfid-uw2.nodemgmt0x54c52c.non.thecommons.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://origin-api.rfid-an1.nodemgmt0x54c52c.non.thecommons.nike.com",
+      "subdomain": "origin-api.rfid-an1.nodemgmt0x54c52c.non.thecommons.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://pcx-securityapp-stg-api.pes-preprod.nike.com",
+      "subdomain": "pcx-securityapp-stg-api.pes-preprod.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://pcx-securityapp-stg-ws.pes-preprod.nike.com",
+      "subdomain": "pcx-securityapp-stg-ws.pes-preprod.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://pcx-securityapp-stg.pes-preprod.nike.com",
+      "subdomain": "pcx-securityapp-stg.pes-preprod.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://origin-api.rfid-uw2.nodemgmt0x54c52c.prd.thecommons.nike.com",
+      "subdomain": "origin-api.rfid-uw2.nodemgmt0x54c52c.prd.thecommons.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://api.rfid.nodemgmt0x54c52c.prd.thecommons.nike.com",
+      "subdomain": "api.rfid.nodemgmt0x54c52c.prd.thecommons.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://origin-api.rfid-ew1.nodemgmt0x54c52c.prd.thecommons.nike.com",
+      "subdomain": "origin-api.rfid-ew1.nodemgmt0x54c52c.prd.thecommons.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://origin-api.rfid-an1.nodemgmt0x54c52c.prd.thecommons.nike.com",
+      "subdomain": "origin-api.rfid-an1.nodemgmt0x54c52c.prd.thecommons.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://origin-api.rfid-as1.nodemgmt0x54c52c.prd.thecommons.nike.com",
+      "subdomain": "origin-api.rfid-as1.nodemgmt0x54c52c.prd.thecommons.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://status.usw2.nonprod.bre.nike.com",
+      "subdomain": "status.usw2.nonprod.bre.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://staging.about.nike.com",
+      "subdomain": "staging.about.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://staging.media-library.nike.com",
+      "subdomain": "staging.media-library.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://pcx-securityapp-dev-api.pes-preprod.nike.com",
+      "subdomain": "pcx-securityapp-dev-api.pes-preprod.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://pcx-securityapp-dev-ws.pes-preprod.nike.com",
+      "subdomain": "pcx-securityapp-dev-ws.pes-preprod.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://pcx-securityapp-dev.pes-preprod.nike.com",
+      "subdomain": "pcx-securityapp-dev.pes-preprod.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://test.lams.svs.nike.com",
+      "subdomain": "test.lams.svs.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://about.nike.com",
+      "subdomain": "about.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://media-library.nike.com",
+      "subdomain": "media-library.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://status.use1.nonprod.bre.nike.com",
+      "subdomain": "status.use1.nonprod.bre.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://gql-prod.dbt.svs.nike.com",
+      "subdomain": "gql-prod.dbt.svs.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://status.usw2.prod.bre.nike.com",
+      "subdomain": "status.usw2.prod.bre.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://status.use1.prod.bre.nike.com",
+      "subdomain": "status.use1.prod.bre.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://config.dbt.svs.nike.com",
+      "subdomain": "config.dbt.svs.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://appps-stg.pes-preprod.nike.com",
+      "subdomain": "appps-stg.pes-preprod.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://maxims.nike.com",
+      "subdomain": "maxims.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://purpose-archive.nike.com",
+      "subdomain": "purpose-archive.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://serenawilliamsbuilding.nike.com",
+      "subdomain": "serenawilliamsbuilding.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://news-archive.nike.com",
+      "subdomain": "news-archive.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://ure.cnnw1.prod.dynamicanalytics.platforms.nike.com",
+      "subdomain": "ure.cnnw1.prod.dynamicanalytics.platforms.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://nikeplm-test.nike.com",
+      "subdomain": "nikeplm-test.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://nikeplm.nike.com",
+      "subdomain": "nikeplm.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://bx-cn-northwest-1.gc.berlioux.platforms.nike.com",
+      "subdomain": "bx-cn-northwest-1.gc.berlioux.platforms.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://berlioux.bx-cn-northwest-1.gc.berlioux.platforms.nike.com",
+      "subdomain": "berlioux.bx-cn-northwest-1.gc.berlioux.platforms.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://ccs.bx-cn-northwest-1.gc.berlioux.platforms.nike.com",
+      "subdomain": "ccs.bx-cn-northwest-1.gc.berlioux.platforms.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://cerebro.bx-cn-northwest-1.gc.berlioux.platforms.nike.com",
+      "subdomain": "cerebro.bx-cn-northwest-1.gc.berlioux.platforms.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://elasticapmint.bx-cn-northwest-1.gc.berlioux.platforms.nike.com",
+      "subdomain": "elasticapmint.bx-cn-northwest-1.gc.berlioux.platforms.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://elasticsearch.bx-cn-northwest-1.gc.berlioux.platforms.nike.com",
+      "subdomain": "elasticsearch.bx-cn-northwest-1.gc.berlioux.platforms.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://es-readonly.bx-cn-northwest-1.gc.berlioux.platforms.nike.com",
+      "subdomain": "es-readonly.bx-cn-northwest-1.gc.berlioux.platforms.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://grafana.bx-cn-northwest-1.gc.berlioux.platforms.nike.com",
+      "subdomain": "grafana.bx-cn-northwest-1.gc.berlioux.platforms.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://influxdb.bx-cn-northwest-1.gc.berlioux.platforms.nike.com",
+      "subdomain": "influxdb.bx-cn-northwest-1.gc.berlioux.platforms.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://influxdbint.bx-cn-northwest-1.gc.berlioux.platforms.nike.com",
+      "subdomain": "influxdbint.bx-cn-northwest-1.gc.berlioux.platforms.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://internal-lb.bx-cn-northwest-1.gc.berlioux.platforms.nike.com",
+      "subdomain": "internal-lb.bx-cn-northwest-1.gc.berlioux.platforms.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://jaeger.bx-cn-northwest-1.gc.berlioux.platforms.nike.com",
+      "subdomain": "jaeger.bx-cn-northwest-1.gc.berlioux.platforms.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://jaegerint.bx-cn-northwest-1.gc.berlioux.platforms.nike.com",
+      "subdomain": "jaegerint.bx-cn-northwest-1.gc.berlioux.platforms.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://kibana.bx-cn-northwest-1.gc.berlioux.platforms.nike.com",
+      "subdomain": "kibana.bx-cn-northwest-1.gc.berlioux.platforms.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://logstash3int.bx-cn-northwest-1.gc.berlioux.platforms.nike.com",
+      "subdomain": "logstash3int.bx-cn-northwest-1.gc.berlioux.platforms.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://logstashcwl.bx-cn-northwest-1.gc.berlioux.platforms.nike.com",
+      "subdomain": "logstashcwl.bx-cn-northwest-1.gc.berlioux.platforms.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://privatelink-lb.bx-cn-northwest-1.gc.berlioux.platforms.nike.com",
+      "subdomain": "privatelink-lb.bx-cn-northwest-1.gc.berlioux.platforms.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://prometheus.bx-cn-northwest-1.gc.berlioux.platforms.nike.com",
+      "subdomain": "prometheus.bx-cn-northwest-1.gc.berlioux.platforms.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://prometheusint.bx-cn-northwest-1.gc.berlioux.platforms.nike.com",
+      "subdomain": "prometheusint.bx-cn-northwest-1.gc.berlioux.platforms.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://ar.nike.com",
+      "subdomain": "ar.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://unsub.em.nike.com",
+      "subdomain": "unsub.em.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://origin-api-tpl.ship.prd.thecommons.nike.com",
+      "subdomain": "origin-api-tpl.ship.prd.thecommons.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://media-assets.nike.com",
+      "subdomain": "media-assets.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://pcx-dla-bombol-ui.pcx-test.nike.com",
+      "subdomain": "pcx-dla-bombol-ui.pcx-test.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://pcx-dla-bombol.pcx-test.nike.com",
+      "subdomain": "pcx-dla-bombol.pcx-test.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://dev.new.media-library.nike.com",
+      "subdomain": "dev.new.media-library.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://pcx-dla-tfob-ui.pcx-test.nike.com",
+      "subdomain": "pcx-dla-tfob-ui.pcx-test.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://pcx-dla-tfob.pcx-test.nike.com",
+      "subdomain": "pcx-dla-tfob.pcx-test.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://techplan.elc-pr.nike.com",
+      "subdomain": "techplan.elc-pr.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://news.nike.com",
+      "subdomain": "news.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://staging-about.nike.com",
+      "subdomain": "staging-about.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://staging-news.nike.com",
+      "subdomain": "staging-news.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://mftextqa-adm.mftaws.nike.com",
+      "subdomain": "mftextqa-adm.mftaws.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://mftextqa-as2.mftaws.nike.com",
+      "subdomain": "mftextqa-as2.mftaws.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://mftextqa-web.mftaws.nike.com",
+      "subdomain": "mftextqa-web.mftaws.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://mftextqa-wl.mftaws.nike.com",
+      "subdomain": "mftextqa-wl.mftaws.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://mftextqa.mftaws.nike.com",
+      "subdomain": "mftextqa.mftaws.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://mftintqa-adm.mftaws.nike.com",
+      "subdomain": "mftintqa-adm.mftaws.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://mftintqa.mftaws.nike.com",
+      "subdomain": "mftintqa.mftaws.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://mftextdrp-as2.mftaws.nike.com",
+      "subdomain": "mftextdrp-as2.mftaws.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://mftextdrp-wl.mftaws.nike.com",
+      "subdomain": "mftextdrp-wl.mftaws.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://mftextprd-adm.mftaws.nike.com",
+      "subdomain": "mftextprd-adm.mftaws.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://mftextprd-as2.mftaws.nike.com",
+      "subdomain": "mftextprd-as2.mftaws.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://mftextprd-web.mftaws.nike.com",
+      "subdomain": "mftextprd-web.mftaws.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://mftextprd-wl.mftaws.nike.com",
+      "subdomain": "mftextprd-wl.mftaws.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://mftextprd.mftaws.nike.com",
+      "subdomain": "mftextprd.mftaws.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://mftintdrp-adm.mftaws.nike.com",
+      "subdomain": "mftintdrp-adm.mftaws.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://mftintprd-adm.mftaws.nike.com",
+      "subdomain": "mftintprd-adm.mftaws.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://mftintprd.mftaws.nike.com",
+      "subdomain": "mftintprd.mftaws.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://dev.zerov3.zero.nike.com",
+      "subdomain": "dev.zerov3.zero.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://staging.zerov3.zero.nike.com",
+      "subdomain": "staging.zerov3.zero.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://pcx-itemspec-sync-ui-dev.pes-preprod.nike.com",
+      "subdomain": "pcx-itemspec-sync-ui-dev.pes-preprod.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://api-jordan.factory.ship.prd.thecommons.nike.com",
+      "subdomain": "api-jordan.factory.ship.prd.thecommons.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://appps-dev.pes-preprod.nike.com",
+      "subdomain": "appps-dev.pes-preprod.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://prod-parc-colorway-status-ui.pes-prod.nike.com",
+      "subdomain": "prod-parc-colorway-status-ui.pes-prod.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://prod-parc-cbd-ui.pes-prod.nike.com",
+      "subdomain": "prod-parc-cbd-ui.pes-prod.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://prod-parc-library-sharing-ui.pes-prod.nike.com",
+      "subdomain": "prod-parc-library-sharing-ui.pes-prod.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://prod-parc-material-lab-form-ui.pes-prod.nike.com",
+      "subdomain": "prod-parc-material-lab-form-ui.pes-prod.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://prod-parc-app-dashboard.pes-prod.nike.com",
+      "subdomain": "prod-parc-app-dashboard.pes-prod.nike.com",
+      "method": "certspotter"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://jira.nike.com",
+      "subdomain": "jira.nike.com",
+      "method": "dns_brute",
+      "ips": "64:ff9b::3694:e2c4,64:ff9b::23a3:e90f,35.163.233.15,54.148.226.196"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://community.nike.com",
+      "subdomain": "community.nike.com",
+      "method": "dns_resolve",
+      "ips": "13.35.1.118,13.35.1.17,13.35.1.30,13.35.1.51"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://confluence.nike.com",
+      "subdomain": "confluence.nike.com",
+      "method": "dns_brute",
+      "ips": "64:ff9b::20bc:f7e,64:ff9b::20ba:ca2,32.188.15.126,32.186.12.162"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://store.nike.com",
+      "subdomain": "store.nike.com",
+      "method": "dns_resolve",
+      "ips": "54.192.164.71,54.192.164.82,54.192.164.83,54.192.164.55"
+    },
+    {
+      "type": "progress",
+      "fetched": 2,
+      "queued": 3,
+      "elapsed": "24s"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://stage.nike.com",
+      "subdomain": "stage.nike.com",
+      "method": "dns_brute",
+      "ips": "64:ff9b::cf57:481,207.87.4.129"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://live.nike.com",
+      "subdomain": "live.nike.com",
+      "method": "dns_brute",
+      "ips": "64:ff9b::17c9:9868,23.201.152.104"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://webmail.nike.com",
+      "subdomain": "webmail.nike.com",
+      "method": "dns_brute",
+      "ips": "64:ff9b::17c9:9868,23.201.152.104"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://video.nike.com",
+      "subdomain": "video.nike.com",
+      "method": "dns_resolve",
+      "ips": "146.197.246.28"
+    },
+    {
+      "type": "progress",
+      "fetched": 2,
+      "queued": 3,
+      "elapsed": "27s"
+    },
+    {
+      "type": "progress",
+      "fetched": 2,
+      "queued": 3,
+      "elapsed": "30s"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://manager.nike.com",
+      "subdomain": "manager.nike.com",
+      "method": "dns_brute",
+      "ips": "64:ff9b::d23:111,64:ff9b::d23:176,64:ff9b::d23:11e,64:ff9b::d23:133,13.35.1.118,13.35.1.51,13.35.1.30,13.35.1.17"
+    },
+    {
+      "type": "progress",
+      "fetched": 2,
+      "queued": 3,
+      "elapsed": "33s"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://analytics.nike.com",
+      "subdomain": "analytics.nike.com",
+      "method": "dns_brute",
+      "ips": "64:ff9b::17c9:9868,23.201.152.104"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://metrics.nike.com",
+      "subdomain": "metrics.nike.com",
+      "method": "dns_brute",
+      "ips": "64:ff9b::17c9:9868,23.201.152.104"
+    },
+    {
+      "type": "progress",
+      "fetched": 2,
+      "queued": 3,
+      "elapsed": "36s"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://tv.nike.com",
+      "subdomain": "tv.nike.com",
+      "method": "dns_brute",
+      "ips": "2600:9000:2792:ce00:1:f493:9640:93a1,2600:9000:2792:3c00:1:f493:9640:93a1,2600:9000:2792:1a00:1:f493:9640:93a1,2600:9000:2792:f400:1:f493:9640:93a1,2600:9000:2792:5e00:1:f493:9640:93a1,2600:9000:2792:ee00:1:f493:9640:93a1,2600:9000:2792:a400:1:f493:9640:93a1,2600:9000:2792:a00:1:f493:9640:93a1,3.164.182.23,3.164.182.26,3.164.182.84,3.164.182.121"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://payment.nike.com",
+      "subdomain": "payment.nike.com",
+      "method": "dns_brute",
+      "ips": "64:ff9b::17c9:9868,23.201.152.104"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://secure.nike.com",
+      "subdomain": "secure.nike.com",
+      "method": "dns_brute",
+      "ips": "64:ff9b::92c5:14bd,146.197.20.189"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://info.nike.com",
+      "subdomain": "info.nike.com",
+      "method": "dns_brute",
+      "ips": "64:ff9b::4236:382e,66.54.56.46"
+    },
+    {
+      "type": "subdomain_found",
+      "url": "https://m.nike.com",
+      "subdomain": "m.nike.com",
+      "method": "dns_brute",
+      "ips": "64:ff9b::36c0:a437,64:ff9b::36c0:a453,64:ff9b::36c0:a452,64:ff9b::36c0:a447,54.192.164.82,54.192.164.83,54.192.164.71,54.192.164.55"
+    },
+    {
+      "type": "progress",
+      "fetched": 2,
+      "queued": 3,
+      "elapsed": "39s"
+    },
+    {
+      "type": "progress",
+      "fetched": 2,
+      "queued": 3,
+      "elapsed": "42s"
+    },
+    {
+      "type": "progress",
+      "fetched": 2,
+      "queued": 3,
+      "elapsed": "45s"
+    },
+    {
+      "type": "progress",
+      "fetched": 2,
+      "queued": 3,
+      "elapsed": "48s"
+    },
+    {
+      "type": "progress",
+      "fetched": 2,
+      "queued": 3,
+      "elapsed": "51s"
+    },
+    {
+      "type": "progress",
+      "fetched": 2,
+      "queued": 3,
+      "elapsed": "54s"
+    },
+    {
+      "type": "progress",
+      "fetched": 2,
+      "queued": 3,
+      "elapsed": "57s"
+    },
+    {
+      "type": "progress",
+      "fetched": 2,
+      "queued": 3,
+      "elapsed": "1m0s"
+    },
+    {
+      "type": "subdomain",
+      "url": "https://www.nike.com",
+      "subdomain": "www.nike.com",
+      "method": "crawl"
+    },
+    {
+      "type": "subdomain",
+      "url": "https://stage.assets-mm.nmp.nike.com",
+      "subdomain": "stage.assets-mm.nmp.nike.com",
+      "method": "crawl"
+    },
+    {
+      "type": "progress",
+      "fetched": 3,
+      "queued": 4,
+      "elapsed": "1m3s"
+    },
+    {
+      "type": "filemap",
+      "url": "https://stage.assets-mm.nmp.nike.com",
+      "source": "https://nike.com",
+      "kind": "HTML",
+      "ext": "",
+      "content_type": "text/html;charset=utf-8",
+      "length": 13732,
+      "depth": 1
+    },
+    {
+      "type": "discovered",
+      "url": "https://stage.assets-mm.nmp.nike.com",
+      "source": "https://nike.com",
+      "content_type": "HTML",
+      "status": 200,
+      "depth": 1
+    },
+    {
+      "type": "subdomain",
+      "url": "https://assets-mm.nmp.nike.com",
+      "subdomain": "assets-mm.nmp.nike.com",
+      "method": "crawl"
+    },
+    {
+      "type": "progress",
+      "fetched": 4,
+      "queued": 5,
+      "elapsed": "1m6s"
+    },
+    {
+      "type": "filemap",
+      "url": "https://assets-mm.nmp.nike.com",
+      "source": "https://nike.com",
+      "kind": "HTML",
+      "ext": "",
+      "content_type": "text/html;charset=utf-8",
+      "length": 13677,
+      "depth": 1
+    },
+    {
+      "type": "discovered",
+      "url": "https://assets-mm.nmp.nike.com",
+      "source": "https://nike.com",
+      "content_type": "HTML",
+      "status": 200,
+      "depth": 1
+    },
+    {
+      "type": "subdomain",
+      "url": "https://live.nike.com",
+      "subdomain": "live.nike.com",
+      "method": "crawl"
+    },
+    {
+      "type": "discovered",
+      "url": "https://live.nike.com",
+      "source": "https://nike.com",
+      "content_type": "HTML",
+      "status": 503,
+      "depth": 1
+    },
+    {
+      "type": "subdomain",
+      "url": "https://assets.nmp.nike.com",
+      "subdomain": "assets.nmp.nike.com",
+      "method": "crawl"
+    },
+    {
+      "type": "progress",
+      "fetched": 6,
+      "queued": 7,
+      "elapsed": "1m9s"
+    },
+    {
+      "type": "subdomain",
+      "url": "https://pcx-securityapp-stg-api.pes-preprod.nike.com",
+      "subdomain": "pcx-securityapp-stg-api.pes-preprod.nike.com",
+      "method": "crawl"
+    },
+    {
+      "type": "discovered",
+      "url": "https://pcx-securityapp-stg-api.pes-preprod.nike.com",
+      "source": "https://nike.com",
+      "content_type": "JSON",
+      "status": 403,
+      "depth": 1
+    },
+    {
+      "type": "subdomain",
+      "url": "https://es-readonly.bx-cn-northwest-1.gc.berlioux.platforms.nike.com",
+      "subdomain": "es-readonly.bx-cn-northwest-1.gc.berlioux.platforms.nike.com",
+      "method": "crawl"
+    },
+    {
+      "type": "progress",
+      "fetched": 8,
+      "queued": 9,
+      "elapsed": "1m12s"
+    },
+    {
+      "type": "progress",
+      "fetched": 8,
+      "queued": 9,
+      "elapsed": "1m15s"
+    },
+    {
+      "type": "progress",
+      "fetched": 8,
+      "queued": 9,
+      "elapsed": "1m18s"
+    },
+    {
+      "type": "progress",
+      "fetched": 8,
+      "queued": 9,
+      "elapsed": "1m21s"
+    },
+    {
+      "type": "progress",
+      "fetched": 8,
+      "queued": 9,
+      "elapsed": "1m24s"
+    },
+    {
+      "type": "subdomain",
+      "url": "https://logstashcwl.bx-cn-northwest-1.gc.berlioux.platforms.nike.com",
+      "subdomain": "logstashcwl.bx-cn-northwest-1.gc.berlioux.platforms.nike.com",
+      "method": "crawl"
+    },
+    {
+      "type": "subdomain",
+      "url": "https://payment.nike.com",
+      "subdomain": "payment.nike.com",
+      "method": "crawl"
+    },
+    {
+      "type": "discovered",
+      "url": "https://payment.nike.com",
+      "source": "https://nike.com",
+      "content_type": "HTML",
+      "status": 503,
+      "depth": 1
+    },
+    {
+      "type": "subdomain",
+      "url": "https://prod.a.nmp.nike.com",
+      "subdomain": "prod.a.nmp.nike.com",
+      "method": "crawl"
+    },
+    {
+      "type": "discovered",
+      "url": "https://prod.a.nmp.nike.com",
+      "source": "https://nike.com",
+      "content_type": "HTML",
+      "status": 400,
+      "depth": 1
+    },
+    {
+      "type": "subdomain",
+      "url": "https://nikeplm.nike.com",
+      "subdomain": "nikeplm.nike.com",
+      "method": "crawl"
+    },
+    {
+      "type": "subdomain",
+      "url": "https://ar.nike.com",
+      "subdomain": "ar.nike.com",
+      "method": "crawl"
+    },
+    {
+      "type": "progress",
+      "fetched": 13,
+      "queued": 14,
+      "elapsed": "1m27s"
+    },
+    {
+      "type": "subdomain",
+      "url": "https://media-assets.nike.com",
+      "subdomain": "media-assets.nike.com",
+      "method": "crawl"
+    },
+    {
+      "type": "filemap",
+      "url": "https://media-assets.nike.com",
+      "source": "https://nike.com",
+      "kind": "HTML",
+      "ext": "",
+      "content_type": "text/html; charset=utf-8",
+      "length": 3143,
+      "depth": 1
+    },
+    {
+      "type": "discovered",
+      "url": "https://media-assets.nike.com",
+      "source": "https://nike.com",
+      "content_type": "HTML",
+      "status": 200,
+      "depth": 1
+    },
+    {
+      "type": "subdomain",
+      "url": "https://manager.nike.com",
+      "subdomain": "manager.nike.com",
+      "method": "crawl"
+    },
+    {
+      "type": "subdomain",
+      "url": "https://purpose-archive.nike.com",
+      "subdomain": "purpose-archive.nike.com",
+      "method": "crawl"
+    },
+    {
+      "type": "subdomain",
+      "url": "https://mftextdrp-as2.mftaws.nike.com",
+      "subdomain": "mftextdrp-as2.mftaws.nike.com",
+      "method": "crawl"
+    },
+    {
+      "type": "progress",
+      "fetched": 17,
+      "queued": 18,
+      "elapsed": "1m30s"
+    },
+    {
+      "type": "progress",
+      "fetched": 17,
+      "queued": 18,
+      "elapsed": "1m33s"
+    },
+    {
+      "type": "progress",
+      "fetched": 17,
+      "queued": 18,
+      "elapsed": "1m36s"
+    }
+  ],
+  "stats": {
+    "discovered": 13,
+    "verified_200": 9,
+    "by_host": {
+      "nike.com": 5,
+      "www.nike.com": 1,
+      "stage.assets-mm.nmp.nike.com": 1,
+      "assets-mm.nmp.nike.com": 1,
+      "media-assets.nike.com": 1
+    },
+    "sensitive": 0,
+    "comments": 0,
+    "sourcemaps": 0
+  }
+}

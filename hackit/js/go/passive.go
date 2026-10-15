@@ -60,6 +60,56 @@ func (c *Crawler) performPassiveChecks() {
 	wg.Wait()
 }
 
+// passiveSubdomainSweep runs the two highest-yield passive files
+// (robots.txt, sitemap.xml) against every crawled subdomain so hidden
+// files on sub-estates are mapped too.
+func (c *Crawler) passiveSubdomainSweep(subURL string) {
+	base := strings.TrimSuffix(subURL, "/")
+	for _, p := range []string{"/robots.txt", "/sitemap.xml"} {
+		fullURL := base + p
+		if c.Filters.Seen(fullURL) {
+			continue
+		}
+		req, _ := http.NewRequest("GET", fullURL, nil)
+		c.setHeaders(req)
+		req.Header.Set("Accept", "*/*")
+		resp, err := c.Client.Do(req)
+		if err != nil {
+			continue
+		}
+		func() {
+			defer resp.Body.Close()
+			if resp.StatusCode != 200 {
+				return
+			}
+			ct := resp.Header.Get("Content-Type")
+			bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
+			body := string(bodyBytes)
+			writeOutput(`{"type":"discovered","url":%q,"source":%q,"method":"passive-sub","status":200}`+"\n", fullURL, subURL)
+			c.recordFetchedFile(fullURL, subURL, "Meta", getExtension(fullURL), ct, len(bodyBytes))
+			if strings.HasSuffix(p, "robots.txt") {
+				for _, line := range strings.Split(body, "\n") {
+					line = strings.TrimSpace(line)
+					if strings.HasPrefix(line, "Disallow:") || strings.HasPrefix(line, "Allow:") || strings.HasPrefix(line, "Sitemap:") {
+						part := strings.TrimSpace(strings.SplitN(line, ":", 2)[1])
+						if part == "" {
+							continue
+						}
+						absURL := resolveURL(part, base)
+						if absURL == "" || !c.Scope.IsInScope(absURL, 2) || c.Filters.HasSeen(absURL) {
+							continue
+						}
+						writeOutput(`{"type":"robots_entry","url":%q,"source":%q,"rule":%q}`+"\n", absURL, fullURL, line)
+						c.addQueueItem(urlQueue{url: absURL, source: fullURL, depth: 2})
+					}
+				}
+			} else {
+				c.parseSitemapBody(body, fullURL, 0)
+			}
+		}()
+	}
+}
+
 func (c *Crawler) recordFetchedFile(pageURL, sourceURL, kind, ext, ct string, length int) {
 	writeOutput(`{"type":"filemap","url":%q,"source":%q,"kind":%q,"ext":%q,"content_type":%q,"length":%d,"depth":0}`+"\n",
 		pageURL, sourceURL, kind, ext, ct, length)
@@ -99,7 +149,9 @@ func (c *Crawler) passiveCheckOne(path string) {
 						absURL := resolveURL(part, c.BaseURL)
 						if absURL != "" && c.Scope.IsInScope(absURL, 1) {
 							writeOutput(`{"type":"robots_entry","url":%q,"source":%q,"rule":%q}`+"\n", absURL, fullURL, line)
-							if strings.HasSuffix(absURL, ".js") || strings.HasSuffix(absURL, ".json") || isSensitiveFile(absURL) {
+							// Robots-listed paths are explicit, not guesses:
+							// queue everything in scope for verification.
+							if !c.Filters.HasSeen(absURL) {
 								c.addQueueItem(urlQueue{url: absURL, source: fullURL, depth: 1})
 							}
 						}

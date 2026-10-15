@@ -59,6 +59,8 @@ def analyze_js(ctx, target_url):
     comments = []
     sourcemaps = []
     js_sources = []
+    wayback_urls = []
+    subdomains_found = []
     found_any = False
 
     try:
@@ -93,7 +95,8 @@ def analyze_js(ctx, target_url):
                 filemap_200.append(result)
                 click.echo(f"  {_colored('[200]', GREEN)} {_colored(f'{kind:10s}', CYAN)} {url_val} {_colored(f'({length}b)', DIM)}")
             elif rtype == 'progress':
-                click.echo(f"  {_colored('… crawl heartbeat:', DIM)} fetched {result.get('fetched', 0)} / queued {result.get('queued', 0)} in {result.get('elapsed', '')}")
+                last = (result.get('last', '') or '')[:80]
+                click.echo(f"  {_colored('… crawl heartbeat:', DIM)} fetched {result.get('fetched', 0)} / queued {result.get('queued', 0)} in {result.get('elapsed', '')} {_colored(f'· {last}', DIM)}")
             elif rtype == 'limit':
                 click.echo(f"  {_colored('[LIMIT]', YELLOW)} {result.get('reason', '')} (capped for safety)")
             elif rtype == 'tech':
@@ -101,6 +104,7 @@ def analyze_js(ctx, target_url):
                 tech_type = result.get('tech_type', '')
                 click.echo(f"  {_colored('[TECH]', CYAN)} {name} ({tech_type})")
             elif rtype == 'commoncrawl':
+                wayback_urls.append(result)
                 click.echo(f"  {_colored('[CC]', YELLOW)} {url_val}")
             elif rtype == 'sourcemap':
                 sourcemaps.append(result)
@@ -141,11 +145,13 @@ def analyze_js(ctx, target_url):
             elif rtype == 'subdomain':
                 click.echo(f"  {_colored('[SUB]', B_CYAN)} {url_val}")
             elif rtype == 'subdomain_found':
+                subdomains_found.append(result)
                 method = result.get('method', '')
                 click.echo(f"  {_colored('[SUB]', B_CYAN)} {url_val} {_colored(f'({method})', DIM)}")
             elif rtype == 'subdomain_hint':
                 click.echo(f"         {_colored('  └─ hint:', DIM)} {result.get('host', '')}")
             elif rtype == 'wayback':
+                wayback_urls.append(result)
                 click.echo(f"  {_colored('[ARCHIVE]', YELLOW)} {url_val} ({result.get('timestamp', '')})")
             elif rtype == 'dependency':
                 click.echo(f"  {_colored('[DEP]', BLUE)} {result.get('resolved', url_val)}")
@@ -298,6 +304,7 @@ def analyze_js(ctx, target_url):
                     trees.setdefault(u.hostname or '?', _Counter())[d] += 1
                 except Exception:
                     continue
+            click.echo(f"  {_colored('Subdomains found:', CYAN)} {len(subdomains_found)}  {_colored('· archive URLs:', CYAN)} {len(wayback_urls)}")
             click.echo(f"  {_colored('Files By Host:', CYAN)}")
             for h, n in hosts.most_common(15):
                 click.echo(f"    {_colored('•', GREEN)} {h} {_colored(f'({n} files)', DIM)}")
@@ -323,6 +330,8 @@ def analyze_js(ctx, target_url):
                     "discovered": len(discovered),
                     "verified_200": len(filemap_200),
                     "by_host": by_host,
+                    "subdomains_found": len(subdomains_found),
+                    "archive_urls": len(wayback_urls),
                     "sensitive": len(sensitives),
                     "comments": len(comments),
                     "sourcemaps": len(sourcemaps),

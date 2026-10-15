@@ -21,7 +21,6 @@ var (
 	fetchHost     = regexp.MustCompile(`(?:url|host|hostname|domain|server|apiUrl|baseUrl|endpoint|proxy|target)\s*[:=]\s*"(https?://([^"/\s]+))"`)
 )
 
-
 // cleanSubName normalizes a candidate subdomain: trims spaces, drops
 // wildcard prefixes ("*.cdn.example.com" -> "cdn.example.com"), lowercases.
 func cleanSubName(raw string) string {
@@ -236,25 +235,7 @@ func (c *Crawler) discoverGoogleCT() {
 func (c *Crawler) discoverSecurityTrails() {
 	nameservers := []string{"8.8.8.8", "1.1.1.1", "8.8.4.4"}
 	common := []string{"www", "mail", "api", "admin", "blog", "cdn", "dev", "app", "web", "static", "assets", "docs", "help", "support", "status", "wiki", "forum", "community", "shop", "store", "portal", "dashboard", "console", "auth", "login", "sso", "saml", "oauth", "ws", "wss", "socket", "stream", "video", "media", "upload", "download", "files", "backup", "old", "new", "beta", "alpha", "demo", "stage", "prod", "live", "test", "staging", "sandbox", "ns1", "ns2", "ns3", "mx", "mail2", "smtp", "pop", "imap", "cpanel", "whm", "webmail", "webdisk", "dns", "server", "vpn", "remote", "ssh", "proxy", "gateway", "firewall", "router", "switch", "mon", "nagios", "zabbix", "grafana", "prometheus", "kibana", "elastic", "k8s", "kubernetes", "docker", "registry", "nexus", "artifactory", "chat", "slack", "discord", "teams", "calendar", "drive", "cloud", "storage", "sync", "s3", "bucket", "analytics", "tracking", "metrics", "stats", "redis", "memcached", "mq", "queue", "rabbit", "solr", "lucene", "search", "rest", "soap", "graphql", "gql", "hasura", "prisma", "ws", "wss", "websocket", "socket", "secure", "ssl", "tls", "cert", "news", "press", "info", "about", "contact", "mobile", "m", "touch", "amp", "reseller", "partner", "affiliate", "wholesale", "git", "svn", "jenkins", "ci", "teamcity", "jira", "confluence", "phpmyadmin", "pma", "mysql", "db", "database", "backup", "backups"}
-	for _, name := range common {
-		fqdn := name + "." + c.BaseDomain
-		if c.Subdomains[fqdn] {
-			continue
-		}
-		for _, ns := range nameservers {
-			resolver := net.Resolver{PreferGo: true, Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
-				d := net.Dialer{Timeout: 3 * time.Second}
-				return d.DialContext(ctx, "tcp", ns+":53")
-			}}
-			addrs, err := resolver.LookupHost(context.Background(), fqdn)
-			if err == nil && len(addrs) > 0 {
-				if c.addSubdomain(fqdn, "https://"+fqdn) {
-					writeOutput(`{"type":"subdomain_found","url":%q,"subdomain":%q,"method":"dns_resolve","ips":%q}`+"\n", "https://"+fqdn, fqdn, strings.Join(addrs, ","))
-				}
-				break
-			}
-		}
-	}
+	c.resolveNamesParallel(common, nameservers, "dns_resolve")
 }
 
 func (c *Crawler) discoverVirusTotal() {
@@ -344,19 +325,61 @@ func (c *Crawler) discoverShodan() {
 
 func (c *Crawler) discoverDNSBrute() {
 	common := []string{"www", "mail", "ftp", "admin", "blog", "cdn", "api", "dev", "test", "staging", "app", "web", "static", "assets", "img", "media", "upload", "download", "files", "docs", "help", "support", "status", "monitor", "git", "svn", "jenkins", "ci", "teamcity", "jira", "confluence", "wiki", "phpmyadmin", "pma", "mysql", "db", "database", "backup", "backups", "old", "new", "beta", "alpha", "demo", "stage", "prod", "production", "live", "preprod", "sandbox", "ns1", "ns2", "ns3", "mx", "mail2", "smtp", "pop", "imap", "cpanel", "whm", "webmail", "webdisk", "dns", "server", "vpn", "remote", "ssh", "proxy", "gateway", "firewall", "router", "switch", "mon", "nagios", "zabbix", "grafana", "prometheus", "kibana", "elastic", "logstash", "k8s", "kubernetes", "docker", "registry", "nexus", "artifactory", "maven", "npm", "pypi", "rubygems", "chat", "slack", "discord", "teams", "rocket", "calendar", "drive", "cloud", "storage", "sync", "portal", "dashboard", "console", "manager", "auth", "login", "sso", "saml", "oauth", "oidc", "s3", "bucket", "analytics", "tracking", "metrics", "stats", "redis", "memcached", "mq", "queue", "rabbit", "solr", "lucene", "search", "rest", "soap", "graphql", "gql", "hasura", "prisma", "ws", "wss", "websocket", "socket", "stream", "video", "tv", "radio", "shop", "store", "cart", "checkout", "payment", "secure", "ssl", "tls", "cert", "news", "press", "info", "about", "contact", "forum", "community", "users", "members", "mobile", "m", "touch", "tablet", "amp", "accelerator", "reseller", "partner", "affiliate", "wholesale"}
-	for _, sub := range common {
-		name := sub + "." + c.BaseDomain
-		if c.Subdomains[name] {
-			continue
-		}
-		addrs, err := net.LookupHost(name)
-		if err != nil || len(addrs) == 0 {
-			continue
-		}
-		if c.addSubdomain(name, "https://"+name) {
-			writeOutput(`{"type":"subdomain_found","url":%q,"subdomain":%q,"method":"dns_brute","ips":%q}`+"\n", "https://"+name, name, strings.Join(addrs, ","))
-		}
+	c.resolveNamesParallel(common, nil, "dns_brute")
+}
+
+// resolveNamesParallel resolves candidate subdomains with a bounded worker
+// pool and short timeouts. nameservers nil = system resolver with timeout.
+func (c *Crawler) resolveNamesParallel(common, nameservers []string, method string) {
+	if len(nameservers) == 0 {
+		nameservers = []string{""}
 	}
+	jobs := make(chan string, len(common))
+	var wg sync.WaitGroup
+	for w := 0; w < 20; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for name := range jobs {
+				fqdn := name + "." + c.BaseDomain
+				c.subMu.Lock()
+				known := c.Subdomains[fqdn]
+				c.subMu.Unlock()
+				if known {
+					continue
+				}
+				for _, ns := range nameservers {
+					var addrs []string
+					var err error
+					if ns == "" {
+						ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+						r := net.Resolver{PreferGo: true}
+						addrs, err = r.LookupHost(ctx, fqdn)
+						cancel()
+					} else {
+						resolver := net.Resolver{PreferGo: true, Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+							d := net.Dialer{Timeout: 3 * time.Second}
+							return d.DialContext(ctx, "tcp", ns+":53")
+						}}
+						ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+						addrs, err = resolver.LookupHost(ctx, fqdn)
+						cancel()
+					}
+					if err == nil && len(addrs) > 0 {
+						if c.addSubdomain(fqdn, "https://"+fqdn) {
+							writeOutput(`{"type":"subdomain_found","url":%q,"subdomain":%q,"method":%q,"ips":%q}`+"\n", "https://"+fqdn, fqdn, method, strings.Join(addrs, ","))
+						}
+						break
+					}
+				}
+			}
+		}()
+	}
+	for _, name := range common {
+		jobs <- name
+	}
+	close(jobs)
+	wg.Wait()
 }
 
 func getBrutePaths() []string {

@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"sync/atomic"
+	"time"
 )
 
 var (
@@ -75,9 +76,29 @@ func (c *Crawler) crawlPage(pageURL string, sourceURL string, depth int) {
 
 	resp, err := c.Client.Do(req)
 	if err != nil {
+		// Shallow https -> http fallback (once): some estates serve
+		// plain HTTP on secondary hosts.
+		if depth <= 1 && strings.HasPrefix(pageURL, "https://") {
+			plain := "http://" + strings.TrimPrefix(pageURL, "https://")
+			if !c.Filters.HasSeen(plain) {
+				c.addQueueItem(urlQueue{url: plain, source: sourceURL, depth: depth})
+			}
+		}
 		return
 	}
 	defer resp.Body.Close()
+
+	// One polite retry on rate-limit/overload for real assets.
+	if (resp.StatusCode == 429 || resp.StatusCode == 503) && depth <= 3 {
+		resp.Body.Close()
+		time.Sleep(2 * time.Second)
+		resp2, err2 := c.Client.Do(req)
+		if err2 != nil {
+			return
+		}
+		resp = resp2
+		defer resp.Body.Close()
+	}
 
 	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, 5*1024*1024))
 	if err != nil {

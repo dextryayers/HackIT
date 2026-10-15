@@ -29,6 +29,7 @@ type Crawler struct {
 	fetchedCount int64
 	depthSkipped int64
 	limitShown   int32
+	lastFetch    string
 
 	activeHost string
 
@@ -204,9 +205,15 @@ func (c *Crawler) Start() {
 		for {
 			select {
 			case <-ticker.C:
-				writeOutput(`{"type":"progress","fetched":%d,"queued":%d,"elapsed":"%s"}`+"\n",
+				c.mu.Lock()
+				last := c.lastFetch
+				c.mu.Unlock()
+				if len(last) > 90 {
+					last = last[:90] + ".."
+				}
+				writeOutput(`{"type":"progress","fetched":%d,"queued":%d,"elapsed":"%s","last":%q}`+"\n",
 					atomic.LoadInt64(&c.fetchedCount), atomic.LoadInt64(&c.queuedCount),
-					time.Since(c.startTime).Round(time.Second))
+					time.Since(c.startTime).Round(time.Second), last)
 			case <-stopProgress:
 				return
 			}
@@ -269,9 +276,13 @@ func (c *Crawler) Start() {
 			writeOutput(`{"type":"limit","reason":"max-subs","found":%d,"max":%d}`+"\n", len(subList), maxSubs)
 			subList = subList[:maxSubs]
 		}
+		// Asset hosts first: static/cdn/assets/media carry the JS & CSS,
+		// so their files land early instead of after corporate pages.
+		subList = sortSubsAssetFirst(subList)
 		for _, s := range subList {
 			c.activeHost = s.host
 			writeOutput(`{"type":"subdomain","url":%q,"subdomain":%q,"method":"crawl"}`+"\n", s.url, s.name)
+			c.passiveSubdomainSweep(s.url)
 			if !c.Filters.HasSeen(s.url) {
 				c.addQueueItem(urlQueue{url: s.url, source: c.BaseURL, depth: 1})
 			}
@@ -313,6 +324,29 @@ func (c *Crawler) getSubdomainList() []subEntry {
 	return list
 }
 
+// sortSubsAssetFirst orders asset-carrying hosts (static/cdn/assets/media…)
+// before corporate pages so JS/CSS files land in the first minutes.
+func sortSubsAssetFirst(list []subEntry) []subEntry {
+	assetWords := []string{"static", "cdn", "assets", "media", "img", "images",
+		"files", "content", "cache", "s", "a", "static2", "st", "cdn2",
+		"scripts", "js", "css", "fonts", "font", "video", "videos"}
+	score := func(name string) int {
+		n := strings.ToLower(name)
+		for i, w := range assetWords {
+			if strings.HasPrefix(n, w+".") || strings.HasPrefix(n, w+"-") || strings.HasPrefix(n, w+"_") {
+				return i
+			}
+		}
+		return len(assetWords) + 1
+	}
+	for i := 1; i < len(list); i++ {
+		for j := i; j > 0 && score(list[j].name) < score(list[j-1].name); j-- {
+			list[j], list[j-1] = list[j-1], list[j]
+		}
+	}
+	return list
+}
+
 func (c *Crawler) crawlQueue() {
 	workerLimit := make(chan struct{}, c.Opts.Concurrency)
 	for q := range c.queuedURLs {
@@ -323,6 +357,9 @@ func (c *Crawler) crawlQueue() {
 				time.Sleep(delay)
 			}
 			c.applyRateLimit()
+			c.mu.Lock()
+			c.lastFetch = q.url
+			c.mu.Unlock()
 			c.crawlPage(q.url, q.source, q.depth)
 		}(q)
 	}

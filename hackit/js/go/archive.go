@@ -55,7 +55,7 @@ func (c *Crawler) queryWayback(targetURL string) {
 			continue
 		}
 		writeOutput(`{"type":"wayback","url":%q,"timestamp":%q,"source":%q}`+"\n", row[0], row[1], domain)
-		if strings.HasSuffix(row[0], ".js") || strings.HasSuffix(row[0], ".json") || strings.HasSuffix(row[0], ".map") {
+		if isArchiveAsset(row[0]) {
 			c.addQueueItem(urlQueue{url: row[0], source: "archive.org", depth: 1})
 		}
 		count++
@@ -131,7 +131,7 @@ func (c *Crawler) queryCommonCrawl(targetURL string) {
 			continue
 		}
 		writeOutput(`{"type":"commoncrawl","url":%q,"source":%q}`+"\n", entry.URL, domain)
-		if strings.HasSuffix(entry.URL, ".js") || strings.HasSuffix(entry.URL, ".json") || strings.HasSuffix(entry.URL, ".map") {
+		if isArchiveAsset(entry.URL) {
 			c.addQueueItem(urlQueue{url: entry.URL, source: "commoncrawl.org", depth: 1})
 		}
 		count++
@@ -139,6 +139,16 @@ func (c *Crawler) queryCommonCrawl(targetURL string) {
 			break
 		}
 	}
+}
+
+func isArchiveAsset(rawURL string) bool {
+	low := strings.ToLower(rawURL)
+	for _, ext := range []string{".js", ".mjs", ".cjs", ".json", ".map", ".css", ".scss", ".less", ".ts", ".tsx", ".xml", ".txt", ".env", ".yaml", ".yml", ".php", ".asp", ".aspx", ".jsp"} {
+		if strings.HasSuffix(low, ext) {
+			return true
+		}
+	}
+	return false
 }
 
 func isRelevantURL(rawURL string) bool {
