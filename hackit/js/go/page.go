@@ -139,7 +139,9 @@ func (c *Crawler) crawlPage(pageURL string, sourceURL string, depth int) {
 		c.detectTechnologies(body, pageURL, ct)
 	}
 
-	if resp.StatusCode == 200 && strings.Contains(ct, "html") && depth < c.Scope.MaxDepth {
+	if resp.StatusCode == 200 && strings.Contains(ct, "html") {
+		// Always extract (queueing itself stays depth-aware): even the
+		// deepest fetched page must reveal every link it contains.
 		c.captureHTMLResources(body, pageURL, depth)
 		c.extractInlineJS(body, pageURL, depth)
 		c.extractFromHTML(body, pageURL, depth)

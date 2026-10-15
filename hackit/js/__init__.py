@@ -23,18 +23,20 @@ from .go_bridge import GoEngine
 @click.option('--no-secrets', is_flag=True, default=False, help='Disable secret scanning')
 @click.option('--no-subdomains', is_flag=True, default=False, help='Disable subdomain discovery')
 @click.option('--no-archive', is_flag=True, default=False, help='Disable archive crawling')
-@click.option('--no-brute', is_flag=True, default=False, help='Disable brute force path discovery')
+@click.option('--no-brute', 'no_brute_legacy', is_flag=True, default=False, hidden=True, help='Deprecated alias (brute is off by default)')
+@click.option('--brute', is_flag=True, default=False, help='Enable brute-force path guessing (default OFF — pure target crawl)')
 @click.option('--no-sourcemap', is_flag=True, default=False, help='Disable source map analysis')
 @click.option('--no-tech', is_flag=True, default=False, help='Disable tech detection')
 @click.option('--no-endpoints', is_flag=True, default=False, help='Disable endpoint extraction')
 @click.option('--no-network', is_flag=True, default=False, help='Disable network call analysis')
 @click.option('--include', default='', help='Only crawl URLs matching regex (comma-separated, katana -fr style)')
 @click.option('--exclude', default='', help='Skip URLs matching regex (comma-separated)')
+@click.option('--pure', is_flag=True, default=False, help='Pure target-only crawl: disables brute, archive & subdomain discovery (no guessing, katana-style)')
 @click.argument('target_url', default=None, required=False)
 @click.pass_context
 def analyze_js(ctx, target_url, output, code, depth, concurrency, timeout, delay, proxy,
                rate_limit, no_crawl, no_js, no_secrets, no_subdomains, no_archive,
-               no_brute, no_sourcemap, no_tech, no_endpoints, no_network, include, exclude):
+               no_brute_legacy, brute, no_sourcemap, no_tech, no_endpoints, no_network, include, exclude, pure):
     display_tool_banner("JS HUNTER", force=True)
 
     if target_url:
@@ -57,6 +59,14 @@ def analyze_js(ctx, target_url, output, code, depth, concurrency, timeout, delay
     wrn = _colored("[WRN]", YELLOW)
     click.echo(f"{wrn} Use with caution. You are responsible for your actions.")
     click.echo(f"{wrn} Developers assume no liability and are not responsible for any misuse or damage.\n")
+
+    if pure:
+        no_archive = True
+        no_subdomains = True
+        click.echo(_colored("  [*] Pure mode: target-only crawl (archive/subdomains off, no guessing)", CYAN))
+    use_brute = bool(brute)
+    if use_brute:
+        click.echo(_colored("  [*] Brute mode ON: guessing common paths (may produce non-target URLs)", YELLOW))
 
     engine = GoEngine()
     if not engine.available:
@@ -83,7 +93,7 @@ def analyze_js(ctx, target_url, output, code, depth, concurrency, timeout, delay
                                  proxy=proxy or '', crawl=not no_crawl,
                                  js_analysis=not no_js, secrets=not no_secrets,
                                  subdomains=not no_subdomains, archive=not no_archive,
-                                 brute=not no_brute, sourcemap=not no_sourcemap,
+                                 brute=use_brute, sourcemap=not no_sourcemap,
                                  tech=not no_tech, endpoints=not no_endpoints,
                                  network=not no_network, json_out=True,
                                  rate_limit=rate_limit, include=include, exclude=exclude):

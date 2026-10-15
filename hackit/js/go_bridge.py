@@ -41,7 +41,7 @@ class GoEngine:
             concurrency: int = 50, timeout: int = 30, delay: int = 0,
             proxy: str = '', crawl: bool = True, js_analysis: bool = True,
             secrets: bool = True, subdomains: bool = True, archive: bool = True,
-            brute: bool = True, sourcemap: bool = True, tech: bool = True,
+            brute: bool = False, sourcemap: bool = True, tech: bool = True,
             endpoints: bool = True, network: bool = True, json_out: bool = False,
             rate_limit: int = 0, include: str = '', exclude: str = '') -> Generator[Dict, None, None]:
         if not self.ensure_compiled():
