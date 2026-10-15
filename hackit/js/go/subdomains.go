@@ -505,5 +505,12 @@ func getBrutePaths() []string {
 		"/static/js/main.js", "/static/js/bundle.js",
 		"/dist/main.js", "/dist/bundle.js",
 		"/js/app.js", "/js/main.js", "/js/bundle.js",
+		"/mix-manifest.json", "/asset-manifest.json",
+		"/manifest.json", "/sw.js", "/service-worker.js",
+		"/wp-json", "/wp-json/wp/v2", "/actuator/health",
+		"/api/health", "/api/version", "/openapi.json",
+		"/graphql/schema.json", "/_next/static/BUILD_ID",
+		"/_payload.json", "/payload.js",
+		"/phpinfo.php", "/.DS_Store", "/.git/HEAD",
 	}
 }

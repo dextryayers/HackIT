@@ -170,6 +170,25 @@ func (c *Crawler) parseJSSource(body string, sourceURL string, depth int) {
 	for _, s := range analysis.SvelteKitURLs {
 		emitAndQueue(s.Value, "sveltekit_url", s.Context)
 	}
+	for _, imp := range extractJSImports(body) {
+		absURL := resolveURL(imp, sourceURL)
+		if absURL == "" {
+			continue
+		}
+		key := "module_url:" + absURL
+		c.mu.Lock()
+		if c.seenStrings[key] {
+			c.mu.Unlock()
+			continue
+		}
+		c.seenStrings[key] = true
+		c.mu.Unlock()
+		writeOutput(`{"type":"module_url","url":%q,"source":%q,"ctx":"static_import"}`+"\n", absURL, sourceURL)
+		if c.Scope.IsInScope(absURL, depth+1) && !c.Filters.HasSeen(absURL) {
+			c.addQueueItem(urlQueue{url: absURL, source: sourceURL, depth: depth + 1})
+		}
+		c.extractSubdomainFromURL(imp)
+	}
 
 	if c.Opts.Endpoints {
 		for _, ep := range analysis.Endpoints {

@@ -47,6 +47,9 @@ var (
 	sveltekitSSR      = regexp.MustCompile(`__SVELTEKIT_DATA__\s*=\s*(\{[\s\S]{10,}?\});`)
 	qwikSSR           = regexp.MustCompile(`window\.__QWIK__\s*=\s*(\{[\s\S]{10,}?\});`)
 	solidSSR          = regexp.MustCompile(`window\.__SOLID_START__\s*=\s*(\{[\s\S]{10,}?\});`)
+	windowAssignJSON  = regexp.MustCompile(`window\.__[A-Z0-9_]+\s*=\s*(\{[\s\S]{10,}?\});`)
+	nextFlightPush    = regexp.MustCompile(`self\.__next_f\.push\(\[1,"((?:[^"\\]|\\.)*)"\]\)`)
+	flightURLPath     = regexp.MustCompile(`(/[a-zA-Z0-9\-_.~!$&'()*+,;=:@%]{5,}(?:/[a-zA-Z0-9\-_.~!$&'()*+,;=:@%]+)*)`)
 )
 
 func performDeepExtraction(body string, sourceURL string) DeepExtractResult {
@@ -184,6 +187,27 @@ func performDeepExtraction(body string, sourceURL string) DeepExtractResult {
 				var data interface{}
 				if err := json.Unmarshal([]byte(m[1]), &data); err == nil {
 					extractURLFromJSON(data, &result.BootstrapConfigs, seen)
+				}
+			}
+		}
+	}
+	// Generic window.__X__ JSON blobs + Next.js flight payloads.
+	for _, m := range windowAssignJSON.FindAllStringSubmatch(body, -1) {
+		if len(m) >= 2 {
+			var data interface{}
+			if err := json.Unmarshal([]byte(m[1]), &data); err == nil {
+				extractURLFromJSON(data, &result.BootstrapConfigs, seen)
+			}
+		}
+	}
+	for _, m := range nextFlightPush.FindAllStringSubmatch(body, -1) {
+		if len(m) >= 2 {
+			chunk := strings.ReplaceAll(m[1], `\"`, `"`)
+			chunk = strings.ReplaceAll(chunk, `\/`, `/`)
+			for _, um := range flightURLPath.FindAllString(chunk, -1) {
+				if !seen[um] && len(um) >= 4 {
+					seen[um] = true
+					result.BootstrapConfigs = append(result.BootstrapConfigs, addURL(um, "next_flight", false, strings.HasPrefix(um, "/")))
 				}
 			}
 		}

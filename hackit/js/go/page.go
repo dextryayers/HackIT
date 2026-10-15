@@ -12,8 +12,8 @@ import (
 )
 
 var (
-	attrPattern        = regexp.MustCompile(`(?i)(href|src|data|action|formaction|content|poster|srcset|code|archive)\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)`)
-	htmlTagPattern     = regexp.MustCompile(`(?i)<(a|script|link|img|iframe|form|video|audio|source|track|embed|object|area|frame|applet|input|button|meta)\b([^>]*)>`)
+	attrPattern        = regexp.MustCompile(`(?i)(?:xlink:)?(href|src|data|action|formaction|content|poster|srcset|code|archive|ping|manifest)\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)`)
+	htmlTagPattern     = regexp.MustCompile(`(?i)<(a|script|link|img|iframe|form|video|audio|source|track|embed|object|area|frame|applet|input|button|meta|portal|svg|use|image|html)\b([^>]*)>`)
 	metaRefreshPat     = regexp.MustCompile(`(?i)url\s*=\s*["']?([^"';]+)["']?`)
 	tagRelPattern      = regexp.MustCompile(`(?i)rel\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)`)
 	fetchPatternPre    = regexp.MustCompile(`(?:fetch|axios|xhr|XMLHttpRequest)\s*\(?\s*["'` + "`" + `]([^"'` + "`" + `]+)["'` + "`" + `]`)
@@ -27,12 +27,14 @@ var (
 )
 
 var tagAttrs = map[string][]string{
-	"a": {"href"}, "script": {"src"}, "link": {"href"},
+	"a": {"href", "ping"}, "script": {"src"}, "link": {"href"},
 	"img": {"src", "srcset"}, "iframe": {"src"}, "form": {"action"},
 	"video": {"src", "poster"}, "audio": {"src"}, "source": {"src", "srcset"},
 	"track": {"src"}, "embed": {"src"}, "object": {"data"},
 	"area": {"href"}, "frame": {"src"}, "applet": {"code", "archive"},
-	"input": {"src"}, "button": {"formaction"}, "meta": {"content"},
+	"input": {"src", "formaction"}, "button": {"formaction"}, "meta": {"content"},
+	"portal": {"src"}, "svg": {"href"}, "use": {"href"}, "image": {"href"},
+	"html": {"manifest"},
 }
 
 func tagRel(attrs string) string {
@@ -228,7 +230,20 @@ func (c *Crawler) queueHTMLRef(raw, tag, base, pageURL string, depth int) {
 		}
 	}
 	absURL := resolveURL(raw, base)
-	if absURL == "" || !c.Scope.IsInScope(absURL, depth+1) || c.Filters.HasSeen(absURL) {
+	if absURL == "" || c.Filters.HasSeen(absURL) {
+		return
+	}
+	if !c.Scope.IsInScope(absURL, depth+1) {
+		// Out-of-scope/media assets still get reported, never fetched.
+		key := "skip:" + absURL
+		c.mu.Lock()
+		if c.seenStrings[key] {
+			c.mu.Unlock()
+			return
+		}
+		c.seenStrings[key] = true
+		c.mu.Unlock()
+		writeOutput(`{"type":"network_entry","url":%q,"source_url":%q,"resource_type":"%s_skip"}`+"\n", absURL, pageURL, tag)
 		return
 	}
 	if tag == "script" || c.Scope.IsJS(absURL) || c.Scope.IsCode(absURL) {
