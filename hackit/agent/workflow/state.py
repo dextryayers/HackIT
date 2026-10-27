@@ -1,12 +1,28 @@
 import json
 import os
+import re
 import time
+import uuid
 from dataclasses import dataclass, field
 from typing import TypedDict, List, Optional, Dict, Any
 from enum import Enum
 
 
 PERSIST_DIR = os.path.join(os.path.expanduser("~"), ".hackit", "workflow_state")
+
+
+def target_slug(target: str) -> str:
+    """Build a filesystem-safe identifier from a target URL or host.
+
+    The previous implementation used the raw target, so ``http://host``
+    produced a nested ``http_/`` directory that did not exist and every
+    persistence call failed.
+    """
+    value = str(target or "unknown").strip()
+    value = re.sub(r"^[A-Za-z][A-Za-z0-9+.-]*://", "", value)
+    value = re.sub(r"[^A-Za-z0-9_.-]+", "_", value)
+    value = value.strip("._")
+    return value[:90] or "unknown"
 
 
 class Phase(str, Enum):
@@ -87,43 +103,50 @@ def make_initial_state(target: str, scope: str = "active_stealth") -> PentestSta
 
 def persist_state(state: PentestState, suffix: str = "") -> str:
     os.makedirs(PERSIST_DIR, exist_ok=True)
-    target_slug = state.get("target", "unknown").replace(".", "_").replace(":", "_")
+    slug = target_slug(state.get("target", "unknown"))
     ts = time.strftime("%Y%m%d_%H%M%S")
-    filename = f"{target_slug}_{state.get('phase', 'init')}_{ts}{suffix}.json"
+    # A short random suffix prevents concurrent nodes from overwriting a file
+    # written in the same second.
+    unique = uuid.uuid4().hex[:6]
+    phase = state.get("phase", "init")
+    filename = f"{slug}_{phase}_{ts}_{unique}{suffix}.json"
     path = os.path.join(PERSIST_DIR, filename)
     with open(path, "w") as f:
         json.dump(state, f, indent=2, default=str)
     return path
 
 
-def load_latest_state(target: str = "") -> Optional[PentestState]:
+def _state_files(target: str = "") -> List[str]:
     if not os.path.exists(PERSIST_DIR):
-        return None
-    files = os.listdir(PERSIST_DIR)
+        return []
+    names = [name for name in os.listdir(PERSIST_DIR) if name.endswith(".json")]
     if target:
-        slug = target.replace(".", "_").replace(":", "_")
-        files = [f for f in files if f.startswith(slug)]
+        slug = target_slug(target)
+        names = [name for name in names if name.startswith(slug + "_")]
+    return [os.path.join(PERSIST_DIR, name) for name in names]
+
+
+def load_latest_state(target: str = "") -> Optional[PentestState]:
+    files = _state_files(target)
     if not files:
         return None
-    files.sort(reverse=True)
-    latest = os.path.join(PERSIST_DIR, files[0])
+    files.sort(key=lambda path: os.path.getmtime(path), reverse=True)
     try:
-        with open(latest, "r") as f:
+        with open(files[0], "r") as f:
             return json.load(f)
     except (json.JSONDecodeError, IOError):
         return None
 
 
 def get_persisted_phases(target: str = "") -> List[str]:
-    if not os.path.exists(PERSIST_DIR):
-        return []
-    files = os.listdir(PERSIST_DIR)
-    if target:
-        slug = target.replace(".", "_").replace(":", "_")
-        files = [f for f in files if f.startswith(slug)]
     phases = set()
-    for f in files:
-        parts = f.split("_")
-        if len(parts) >= 2:
-            phases.add(parts[-3])  # phase is second-to-last before timestamp
-    return list(phases)
+    for path in _state_files(target):
+        try:
+            with open(path, "r") as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, IOError):
+            continue
+        phase = data.get("phase")
+        if phase:
+            phases.add(str(phase))
+    return sorted(phases)

@@ -8,6 +8,7 @@ run can be audited or resumed.
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import time
@@ -129,6 +130,32 @@ def _target_parts(state: PentestState) -> Tuple[str, str, int, str]:
     return host, scheme, port, base
 
 
+def _is_private_host(host: str) -> bool:
+    """Return True for loopback, RFC1918, link-local and local-only names.
+
+    OSINT providers enumerate public usernames/domains.  Running them against
+    ``127.0.0.1`` or ``*.local`` wastes minutes on doomed lookups and can leak
+    internal names to third parties.
+    """
+    host = (host or "").strip().strip("[]").lower()
+    if not host:
+        return True
+    if host in ("localhost", "localhost.localdomain") or host.endswith((".local", ".internal", ".lan", ".home")):
+        return True
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return (
+        address.is_private
+        or address.is_loopback
+        or address.is_link_local
+        or address.is_reserved
+        or address.is_multicast
+        or address.is_unspecified
+    )
+
+
 def _target_has_web(state: PentestState) -> bool:
     scan_data = state.get("scan_data") or {}
     if "has_web" in scan_data:
@@ -227,16 +254,26 @@ def recon_router(state: PentestState) -> str:
 
 def osint_node(state: PentestState) -> Dict[str, Any]:
     target = state["target"]
+    host, _scheme, _port, _base = _target_parts(state)
     updates: Dict[str, Any] = {"phase": Phase.OSINT.value}
     scan_data = dict(state.get("scan_data", {}))
     findings = list(state.get("findings", []))
     osint: Dict[str, Any] = {}
 
+    if _is_private_host(host):
+        osint = {"skipped": "private or loopback target"}
+        scan_data["osint"] = osint
+        updates["scan_data"] = scan_data
+        updates["osint_data"] = osint
+        updates["findings"] = findings
+        persist_state(dict(state, **updates), suffix="_osint")
+        return updates
+
     try:
         from hackit.osint.core import run_full_scan
 
         raw = run_full_scan(
-            target,
+            host,
             timeout=6,
             workers=16,
             verbose=False,

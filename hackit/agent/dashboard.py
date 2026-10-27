@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """ Real-time HackIT Swarm Dashboard using rich TUI """
 
+import datetime
 import json
 import os
 import subprocess
@@ -18,6 +19,7 @@ try:
     from rich.progress import Progress, BarColumn, TextColumn, SpinnerColumn
     from rich.columns import Columns
     from rich.console import Console, Group
+    from rich.markup import escape
     from rich import box
 except ImportError:
     print("[!] rich library required. Install: pip install rich")
@@ -47,10 +49,17 @@ class SwarmDashboard:
         self.last_state_mtime = 0
 
     def find_latest_state(self):
-        dash_dir = Path(__file__).parent / "go" / "reports" / "dashboard"
-        if not dash_dir.exists():
-            return None
-        jsons = list(dash_dir.glob("*.json"))
+        # The swarm writes relative to its working directory, which may be the
+        # repository root, the agent/go directory, or a user's shell cwd.
+        candidates = [
+            Path.cwd() / "reports" / "dashboard",
+            Path(__file__).resolve().parent / "go" / "reports" / "dashboard",
+            Path.home() / ".hackit" / "reports" / "dashboard",
+        ]
+        jsons = []
+        for dash_dir in candidates:
+            if dash_dir.exists():
+                jsons.extend(dash_dir.glob("*.json"))
         if not jsons:
             return None
         return max(jsons, key=lambda p: p.stat().st_mtime)
@@ -67,7 +76,11 @@ class SwarmDashboard:
             with open(state_file) as f:
                 data = json.load(f)
                 self.state = data
-                self.agent_idx = len(self.state.get("logs", []))
+                logs = self.state.get("logs") or []
+                agents = {str(log.get("agent", "")) for log in logs if isinstance(log, dict)}
+                self.agent_idx = len([agent for agent in agents if agent])
+                if logs:
+                    self.current_agent = str(logs[-1].get("agent") or self.current_agent)
         except (json.JSONDecodeError, OSError):
             pass
 
@@ -94,16 +107,33 @@ class SwarmDashboard:
         )
         return layout
 
+    def _start_timestamp(self):
+        value = self.state.get("start_time")
+        if isinstance(value, str):
+            try:
+                return datetime.datetime.fromisoformat(
+                    value.replace("Z", "+00:00")
+                ).timestamp()
+            except ValueError:
+                return time.time()
+        if isinstance(value, (int, float)):
+            return float(value)
+        return time.time()
+
     def render_header(self):
-        elapsed = time.time() - self.state.get("start_time", time.time())
+        elapsed = max(0.0, time.time() - self._start_timestamp())
         elapsed_str = time.strftime("%H:%M:%S", time.gmtime(elapsed))
-        session = self.state.get("session_id", "N/A")
-        target = self.state.get("target", {}).get("primary_domain", self.target)
+        session = escape(str(self.state.get("session_id", "N/A")))
+        target_data = self.state.get("target", {})
+        if isinstance(target_data, dict):
+            target = target_data.get("primary_domain", self.target)
+        else:
+            target = target_data or self.target
         return Panel(
             Text.from_markup(
                 f"[bold cyan]HACKIT SWARM DASHBOARD[/]  "
                 f"[dim]Session:[/] [yellow]{session}[/]  "
-                f"[dim]Target:[/] [bold]{target}[/] [dim]({self.scope})[/]  "
+                f"[dim]Target:[/] [bold]{escape(str(target))}[/] [dim]({escape(str(self.scope))})[/]  "
                 f"[dim]Elapsed:[/] [green]{elapsed_str}[/]"
             ),
             style="bold white on black",
@@ -114,9 +144,11 @@ class SwarmDashboard:
         recent = logs[-15:] if logs else []
         lines = []
         for log in recent:
-            agent = log.get("agent", "")[:35]
-            action = log.get("action", "")
-            msg = log.get("message", "")[:60]
+            if not isinstance(log, dict):
+                continue
+            agent = escape(str(log.get("agent", ""))[:35])
+            action = escape(str(log.get("action", "")))
+            msg = escape(str(log.get("message", ""))[:60])
             level = log.get("level", "info")
             style = {"ok": "green", "warn": "yellow", "error": "red", "info": "dim"}.get(level, "dim")
             lines.append(f"[{style}]{agent}[/] [{action}] {msg}")
@@ -154,12 +186,14 @@ class SwarmDashboard:
         table.add_column("CVSS", width=5)
 
         for v in vulns[-6:]:
-            sev = v.get("severity", "?")
+            if not isinstance(v, dict):
+                continue
+            sev = str(v.get("severity", "?"))
             sev_style = {"Critical": "red", "High": "yellow", "Medium": "blue", "Low": "dim"}.get(sev, "dim")
             table.add_row(
-                f"[{sev_style}]{sev}[/]",
-                v.get("name", "")[:34],
-                str(v.get("cvss", 0)),
+                f"[{sev_style}]{escape(sev)}[/]",
+                escape(str(v.get("name", ""))[:34]),
+                escape(str(v.get("cvss", 0))),
             )
         return Panel(table, title=f"[bold]Vulns ({len(vulns)})[/]", border_style="red")
 
@@ -190,13 +224,17 @@ class SwarmDashboard:
             border_style="cyan",
         )
 
-    def run(self):
+    def run(self, process=None):
         layout = self.make_layout()
         poll_thread = threading.Thread(target=self.poll_state, daemon=True)
         poll_thread.start()
 
         with Live(layout, refresh_per_second=4, screen=True) as live:
             while self.running:
+                if process is not None and process.poll() is not None:
+                    # Render one final frame before the engine exits.
+                    self.read_state()
+                    break
                 layout["header"].update(self.render_header())
                 layout["logs"].update(self.render_logs())
                 layout["counts"].update(self.render_counts())
@@ -221,20 +259,26 @@ def main():
         sys.exit(1)
 
     dashboard = SwarmDashboard(target, scope)
+    engine_proc = None
 
     try:
         engine_proc = subprocess.Popen(
             [engine_path, "--swarm", target, "--swarm-scope", scope],
+            cwd=os.path.join(base_dir, "go"),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        dashboard.run()
+        dashboard.run(process=engine_proc)
     except KeyboardInterrupt:
         pass
     finally:
         dashboard.running = False
-        engine_proc.terminate()
-        engine_proc.wait(timeout=5)
+        if engine_proc is not None and engine_proc.poll() is None:
+            engine_proc.terminate()
+            try:
+                engine_proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                engine_proc.kill()
 
 
 if __name__ == "__main__":

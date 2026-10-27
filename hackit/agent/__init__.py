@@ -1190,7 +1190,7 @@ def swarm(target, scope, dashboard):
 
     try:
         cmd = [engine_path, '--swarm', target, '--swarm-scope', scope]
-        subprocess.run(cmd)
+        subprocess.run(cmd, cwd=os.path.join(base_dir, 'go'))
     except KeyboardInterrupt:
         click.echo(_colored("\n  [!] Swarm terminated by user.", RED))
     except Exception as e:
