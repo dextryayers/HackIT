@@ -28,7 +28,7 @@ LOGO_FILE = Path(__file__).resolve().parent.parent / "logo.txt"
 def _accent_color(name):
     from hackit.ui import (
         _colored, GREEN, RED, CYAN, MAGENTA, YELLOW, B_WHITE, B_GREEN,
-        B_RED, B_CYAN, B_MAGENTA, B_YELLOW,
+        B_RED, B_CYAN, B_MAGENTA, B_YELLOW, DIM, RESET,
     )
     table = {
         "green": (GREEN, B_GREEN),
@@ -39,7 +39,7 @@ def _accent_color(name):
         "white": (B_WHITE, B_WHITE),
     }
     base, bright = table.get(name, table["green"])
-    return base, bright, _colored
+    return base, bright, DIM + base, RESET, _colored
 
 
 def _run(cmd, timeout=2):
@@ -134,6 +134,27 @@ def _gpu():
     if gpus:
         return " | ".join(dict.fromkeys(gpus))[:120]
     return UNKNOWN
+
+
+def _battery_level():
+    """Return (percent:int|None, state:str)."""
+    for bat in sorted(Path("/sys/class/power_supply").glob("BAT*")):
+        try:
+            cap = (bat / "capacity").read_text().strip() if (bat / "capacity").exists() else ""
+            status = (bat / "status").read_text().strip() if (bat / "status").exists() else ""
+        except Exception:
+            continue
+        if cap.isdigit():
+            return int(cap), status or UNKNOWN
+    if _psutil is not None:
+        try:
+            b = _psutil.sensors_battery()
+            if b is not None:
+                state = "Charging" if b.power_plugged else "Discharging"
+                return int(b.percent), state
+        except Exception:
+            pass
+    return None, UNKNOWN
 
 
 def _battery():
@@ -243,14 +264,6 @@ def collect():
     host = platform.node() or UNKNOWN
 
     used_mem, total_mem = _mem()
-    try:
-        disk = shutil.disk_usage("/")
-        disk_str = _fmt_pair(
-            (disk.total - disk.free) // 1024 // 1024 // 1024,
-            disk.total // 1024 // 1024 // 1024, "GiB",
-        )
-    except Exception:
-        disk_str = UNKNOWN
 
     try:
         tz = time.tzname[time.daylight] if time.daylight else time.tzname[0]
@@ -263,6 +276,20 @@ def collect():
 
     iface = _default_iface()
     cores = os.cpu_count() or 0
+    used_disk, total_disk = None, None
+    try:
+        disk = shutil.disk_usage("/")
+        used_disk = (disk.total - disk.free) // 1024 // 1024 // 1024
+        total_disk = disk.total // 1024 // 1024 // 1024
+        disk_str = _fmt_pair(used_disk, total_disk, "GiB")
+    except Exception:
+        disk_str = UNKNOWN
+    batt_pct, batt_state = _battery_level()
+
+    def _pct(used, total):
+        if used is None or total is None or total <= 0:
+            return None
+        return round(used / total * 100)
 
     return {
         "user": user,
@@ -279,8 +306,16 @@ def collect():
         "cpu_freq": _cpu_freq(),
         "gpu": _gpu(),
         "memory": _fmt_pair(used_mem, total_mem, "MiB"),
+        "memory_used": used_mem,
+        "memory_total": total_mem,
+        "memory_pct": _pct(used_mem, total_mem),
         "disk": disk_str,
+        "disk_used": used_disk,
+        "disk_total": total_disk,
+        "disk_pct": _pct(used_disk, total_disk),
         "battery": _battery(),
+        "battery_pct": batt_pct,
+        "battery_state": batt_state,
         "network_interface": iface or UNKNOWN,
         "local_ip": _local_ip(),
         "mac": _mac(iface),
@@ -292,28 +327,140 @@ def collect():
     }
 
 
-def _rows(info):
-    return [
-        ("OS", info["os"]),
-        ("Kernel", info["kernel"]),
-        ("Uptime", info["uptime"]),
-        ("Shell", info["shell"]),
-        ("Terminal", info["terminal"]),
-        ("Desktop", info["desktop"]),
-        ("Session", info["session"]),
-        ("CPU", f"{info['cpu']} ({info['cpu_cores']}) @ {info['cpu_freq']}"),
-        ("GPU", info["gpu"]),
-        ("Memory", info["memory"]),
-        ("Disk (/)", info["disk"]),
-        ("Battery", info["battery"]),
-        ("Net IF", f"{info['network_interface']} ({info['local_ip']})"),
-        ("MAC", info["mac"]),
-        ("Packages", info["packages"]),
-        ("Processes", info["processes"]),
-        ("Load Avg", info["load"]),
-        ("Locale", info["locale"]),
-        ("Timezone", info["timezone"]),
-    ]
+def _level_color(P, pct, mode):
+    """Threshold color for a percent. usage: high is bad. charge: high is good."""
+    if pct is None:
+        return ""
+    if mode == "charge":
+        return P.good if pct >= 60 else (P.warn if pct >= 25 else P.bad)
+    return P.good if pct < 60 else (P.warn if pct < 85 else P.bad)
+
+
+def _meter(P, pct, mode="usage", width=10):
+    if pct is None:
+        return UNKNOWN
+    filled = max(0, min(width, int(round(pct / 100 * width))))
+    bar = "\u2588" * filled + "\u2591" * (width - filled)
+    pct_s = f"{pct:.0f}%"
+    if P.use_color:
+        c = _level_color(P, pct, mode)
+        if c:
+            bar = f"{c}{bar}{P.reset}"
+            pct_s = f"{c}{pct_s}{P.reset}"
+    return f"{bar} {pct_s}"
+
+
+_DENSE = set("@#")
+_MID = set("%*+=")
+_FAINT = set(":-")
+
+
+def _logo_line(P, line):
+    """Shade logo by character density for depth. Plain chars stay plain."""
+    if not P.use_color:
+        return line
+
+    def kind(ch):
+        if ch in _DENSE:
+            return 0
+        if ch in _MID:
+            return 1
+        if ch in _FAINT:
+            return 2
+        return 3
+
+    runs, cur, cls = [], [], None
+    for ch in line:
+        k = kind(ch)
+        if k != cls:
+            if cur:
+                runs.append((cls, "".join(cur)))
+            cur, cls = [ch], k
+        else:
+            cur.append(ch)
+    if cur:
+        runs.append((cls, "".join(cur)))
+    cols = (P.bright, P.base, None, None)
+    out = []
+    for k, s in runs:
+        if k == 3:
+            out.append(s)
+        elif k == 2:
+            out.append(f"{P.dim}{s}{P.reset}")
+        else:
+            out.append(P.colored(s, cols[k]))
+    return "".join(out)
+
+
+def _kv(P, key, val, width=10):
+    label = key.ljust(width)
+    if P.use_color:
+        label = P.colored(label, P.bright)
+    return f"{label} {val}"
+
+
+def _info_lines(info, P):
+    """Spec panel grouped in sections. Lines come back fully styled."""
+    title = f"{info['user']}@{info['host']}"
+    lines = []
+    if P.use_color:
+        lines.append(P.colored(title, P.bright))
+        lines.append(f"{P.dim}{'─' * len(title)}{P.reset}")
+    else:
+        lines.append(title)
+        lines.append("-" * len(title))
+
+    def section(name):
+        lines.append(P.colored(f"▸ {name}", P.bright) if P.use_color else f"> {name}")
+
+    def mem_line():
+        if info.get("memory_used") is None or info.get("memory_total") is None:
+            return UNKNOWN
+        return f"{info['memory_used']:,} / {info['memory_total']:,} MiB  " + \
+            _meter(P, info.get("memory_pct"))
+
+    def disk_line():
+        if info.get("disk_used") is None or info.get("disk_total") is None:
+            return UNKNOWN
+        return f"{info['disk_used']:,} / {info['disk_total']:,} GiB  " + \
+            _meter(P, info.get("disk_pct"))
+
+    def batt_line():
+        pct = info.get("battery_pct")
+        if pct is None:
+            return "No battery"
+        state = info.get("battery_state") or UNKNOWN
+        return f"{pct}% ({state})  " + _meter(P, pct, mode="charge")
+
+    section("SYSTEM")
+    lines.append(_kv(P, "OS", info["os"]))
+    lines.append(_kv(P, "Kernel", info["kernel"]))
+    lines.append(_kv(P, "Uptime", info["uptime"]))
+    lines.append(_kv(P, "Shell", info["shell"]))
+    lines.append(_kv(P, "Terminal", info["terminal"]))
+    lines.append(_kv(P, "Desktop", info["desktop"]))
+    lines.append(_kv(P, "Session", info["session"]))
+
+    section("HARDWARE")
+    lines.append(_kv(P, "CPU", f"{info['cpu']} ({info['cpu_cores']}) @ {info['cpu_freq']}"))
+    lines.append(_kv(P, "GPU", info["gpu"]))
+    lines.append(_kv(P, "Memory", mem_line()))
+    lines.append(_kv(P, "Disk (/)", disk_line()))
+    lines.append(_kv(P, "Battery", batt_line()))
+
+    section("RUNTIME")
+    lines.append(_kv(P, "Packages", info["packages"]))
+    lines.append(_kv(P, "Processes", info["processes"]))
+    lines.append(_kv(P, "Load Avg", info["load"]))
+
+    section("NETWORK")
+    lines.append(_kv(P, "Net IF", f"{info['network_interface']} ({info['local_ip']})"))
+    lines.append(_kv(P, "MAC", info["mac"]))
+
+    section("LOCALE")
+    lines.append(_kv(P, "Locale", info["locale"]))
+    lines.append(_kv(P, "Timezone", info["timezone"]))
+    return lines
 
 
 def _load_logo(path):
@@ -329,43 +476,40 @@ def _load_logo(path):
         return ["[logo missing]"]
 
 
-def _info_lines(info, paint_key):
-    """Format the spec block. paint_key(key) styles the label."""
-    title = f"{info['user']}@{info['host']}"
-    lines = [paint_key(None, title), paint_key(None, "-" * len(title))]
-    for key, val in _rows(info):
-        lines.append(f"{paint_key(key, key + ':')} {val}")
-    return lines
+class _Palette:
+    pass
 
 
 def render(info, logo_lines, accent, use_color):
-    """Render fixed logo + info side by side, neofetch style."""
-    base, bright, colored = _accent_color(accent)
+    """Render fixed logo + sectioned spec panel, neofetch style."""
+    from hackit.ui import GREEN, YELLOW, RED
+    base, bright, dim, reset, colored = _accent_color(accent)
+    P = _Palette()
+    P.base, P.bright, P.dim, P.reset = base, bright, dim, reset
+    P.colored, P.good, P.warn, P.bad = colored, GREEN, YELLOW, RED
+    P.use_color = use_color
 
-    def paint(text, color):
-        return colored(text, color) if use_color else text
-
-    def paint_key(key, text):
-        return paint(text, bright)
-
+    body = _info_lines(info, P)
     width = max((len(ln) for ln in logo_lines), default=0)
     try:
         term_w = shutil.get_terminal_size().columns
     except Exception:
         term_w = 80
-    # Narrow terminals: stack logo above specs instead of squeezing.
-    if logo_lines and width + 45 > term_w:
+    if not logo_lines:
+        return "\n".join(body)
+    # Narrow terminals: centered logo stacked above specs.
+    if width + 45 > term_w:
+        pad = max(0, (term_w - width) // 2)
         return "\n".join(
-            [paint(ln, base) for ln in logo_lines]
+            [(" " * pad) + _logo_line(P, ln) for ln in logo_lines]
             + [""]
-            + _info_lines(info, paint_key)
+            + body
         )
-    body = _info_lines(info, paint_key)
     total = max(len(logo_lines), len(body))
     out = []
     for i in range(total):
-        left = logo_lines[i] if i < len(logo_lines) else ""
-        left = paint(left.ljust(width), base)
+        raw = logo_lines[i] if i < len(logo_lines) else ""
+        left = _logo_line(P, raw.ljust(width))
         if i < len(body):
             out.append(f"{left}   {body[i]}")
         else:
