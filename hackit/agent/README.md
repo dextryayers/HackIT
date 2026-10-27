@@ -67,6 +67,17 @@ models and selects a sensible default. Override the endpoint with
 `OLLAMA_HOST` or `HACKIT_OLLAMA_HOST`. Both `http://host:port` and `host:port`
 forms are accepted.
 
+Local models can be slower than cloud APIs. The agent automatically applies a
+300-second floor for Ollama and a 120-second default for hosted providers.
+Override either with:
+
+```bash
+export HACKIT_AI_TIMEOUT=600
+```
+
+Payload generation asks Ollama for JSON-formatted output and disables thinking
+traces, which keeps responses parseable and much faster.
+
 ---
 
 ## Supported providers

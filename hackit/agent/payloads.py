@@ -17,7 +17,7 @@ import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import requests
 
@@ -165,7 +165,14 @@ ERROR_SIGNATURES: Dict[str, List[str]] = {
     "cmdi": ["uid=", "gid=", "root:", "volume serial number"],
     "ssti": ["49", "7777777"],
     "xxe": ["root:x:0:0", "for 16-bit app support"],
-    "nosqli": ["mongoerror", "e11000", "bson", "cast to objectid"],
+    "nosqli": [
+        "mongoerror", "mongoservererror", "e11000", "bson",
+        "cast to objectid", "unknown operator: $", "cannot apply $",
+    ],
+    "ssrf": [
+        "ami-id", "instance-id", "iam/security-credentials", "root:x:0:0",
+        "redis_version", "ssh-2.0-", "metadata.google.internal",
+    ],
     "ldap": ["ldaperror", "invalid dn syntax", "protocol error"],
 }
 
@@ -581,6 +588,30 @@ def _url_host(value: str) -> str:
         return ""
 
 
+def _replace_parameter(target: str, parameter: str, payload: str) -> str:
+    """Return ``target`` with ``parameter`` set to ``payload``.
+
+    Appending a second copy of the parameter (the previous behaviour) meant
+    many servers simply read the first, original value and the probe never
+    reached the injection point.
+    """
+    parts = urlparse(target)
+    query = [
+        (key, value)
+        for key, value in parse_qsl(parts.query, keep_blank_values=True)
+        if key != parameter
+    ]
+    query.append((parameter, payload))
+    return urlunparse((
+        parts.scheme,
+        parts.netloc,
+        parts.path,
+        parts.params,
+        urlencode(query, doseq=True),
+        parts.fragment,
+    ))
+
+
 def probe(target: str, vuln_type: str, payload: str, parameter: str = "",
           method: str = "GET", timeout: float = 10.0,
           headers: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
@@ -598,8 +629,7 @@ def probe(target: str, vuln_type: str, payload: str, parameter: str = "",
     try:
         if parameter:
             if method.upper() == "GET":
-                separator = "&" if "?" in target else "?"
-                url = f"{target}{separator}{parameter}={requests.utils.quote(payload, safe='')}"
+                url = _replace_parameter(target, parameter, payload)
             else:
                 data = {parameter: payload}
         started = time.time()
