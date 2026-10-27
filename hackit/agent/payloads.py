@@ -21,6 +21,8 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import requests
 
+from .textutils import strip_control
+
 # ---------------------------------------------------------------------------
 # Curated offline catalogue (always available, even without an AI provider)
 # ---------------------------------------------------------------------------
@@ -196,7 +198,8 @@ _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 
 def _clean_ai_text(text: str) -> str:
     """Remove colours and reasoning wrappers from an engine response."""
-    cleaned = _ANSI_RE.sub("", text or "")
+    cleaned = strip_control(text or "")
+    cleaned = _ANSI_RE.sub("", cleaned)
     cleaned = re.sub(r"<(?:think|thinking|reasoning)>.*?</(?:think|thinking|reasoning)>",
                      "", cleaned, flags=re.IGNORECASE | re.DOTALL)
     return cleaned.strip()
@@ -244,7 +247,7 @@ def _regex_payloads(text: str) -> List[Dict[str, str]]:
             payload = json.loads(f'"{raw}"')
         except (ValueError, TypeError):
             payload = raw
-        payload = str(payload).strip()
+        payload = strip_control(str(payload)).strip()
         if not payload or len(payload) > 4096:
             continue
         if any(item["payload"] == payload for item in results):
@@ -265,7 +268,9 @@ def _coerce_ai_payloads(text: str) -> List[Dict[str, str]]:
     result: List[Dict[str, str]] = []
     for item in items:
         if isinstance(item, str):
-            result.append({"payload": item, "technique": "ai", "notes": "", "type": ""})
+            payload = strip_control(item).strip()
+            if payload:
+                result.append({"payload": payload, "technique": "ai", "notes": "", "type": ""})
             continue
         if not isinstance(item, dict):
             continue
@@ -273,10 +278,10 @@ def _coerce_ai_payloads(text: str) -> List[Dict[str, str]]:
         if not payload:
             continue
         result.append({
-            "payload": str(payload).strip(),
-            "technique": str(item.get("technique", "ai")).strip() or "ai",
-            "notes": str(item.get("notes", "")).strip(),
-            "type": normalize_type(str(item.get("type", "")).strip()),
+            "payload": strip_control(str(payload)).strip(),
+            "technique": strip_control(str(item.get("technique", "ai"))).strip() or "ai",
+            "notes": strip_control(str(item.get("notes", ""))).strip(),
+            "type": normalize_type(strip_control(str(item.get("type", ""))).strip()),
         })
     if not result:
         return _regex_payloads(text)

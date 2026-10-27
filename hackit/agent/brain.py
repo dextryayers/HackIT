@@ -24,6 +24,7 @@ from hackit.ui import RED, YELLOW, _colored
 
 from .commands import COMMAND_MODES, get_command_prompt
 from .memory import AgentMemory, memory_session_name
+from .textutils import strip_control
 from . import payloads as payload_forge
 from . import providers as provider_registry
 
@@ -245,7 +246,11 @@ class AIHyperBrain:
     def _engine_command(self, prompt: str, system_prompt: str, mode: str = "",
                         analyze: bool = False, tool_name: str = "", clear_hist: bool = False,
                         use_go_history: bool = False, timeout: int = 120) -> List[str]:
-        key = self.keys.get(self.provider, "")
+        prompt = strip_control(prompt)
+        system_prompt = strip_control(system_prompt)
+        key = strip_control(self.keys.get(self.provider, ""))
+        model = strip_control(self.model or "")
+        tool_name = strip_control(tool_name)
         cmd = [
             self.binary_path,
             "-provider", self.provider,
@@ -253,8 +258,8 @@ class AIHyperBrain:
             "-prompt", prompt,
             "-system", system_prompt,
         ]
-        if self.model:
-            cmd.extend(["-model", self.model])
+        if model:
+            cmd.extend(["-model", model])
         if mode:
             if self.engine == "chat":
                 cmd.extend(["-cmd", mode])
@@ -365,10 +370,10 @@ class AIHyperBrain:
 
             data = self._parse_stdout(stdout)
             if data is None:
-                return _colored(f"[!] Bridge error: raw output: {stdout[:240]}", RED)
+                return _colored(f"[!] Bridge error: raw output: {strip_control(stdout[:240])}", RED)
             if data.get("error"):
-                return _colored(f"[!] AI Error: {data['error']}", RED)
-            text = data.get("text", "")
+                return _colored(f"[!] AI Error: {strip_control(data['error'])}", RED)
+            text = strip_control(data.get("text", ""))
             if not text:
                 return _colored("[!] No response text received", RED)
             return text
@@ -394,6 +399,7 @@ class AIHyperBrain:
     # ------------------------------------------------------------------
 
     def chat(self, prompt: str) -> str:
+        prompt = strip_control(prompt)
         command, body = self._split_command(prompt)
         system = self._build_system_prompt(command=command, include_memory=True)
         last_error = ""
@@ -433,6 +439,7 @@ class AIHyperBrain:
         return True
 
     def _postprocess(self, response: str) -> str:
+        response = strip_control(response)
         if self.engine == "native":
             for pattern in (r"\*{3,}", r"\*{2,}", r"\*", r"#{1,6}\s*", r"`{1,3}"):
                 response = re.sub(pattern, "", response)
@@ -447,6 +454,7 @@ class AIHyperBrain:
         self.memory.save()
 
     def stream_chat(self, prompt: str, on_token: Optional[Callable[[Dict[str, Any]], None]] = None) -> str:
+        prompt = strip_control(prompt)
         command, body = self._split_command(prompt)
         system = self._build_system_prompt(command=command, include_memory=True)
         full = ""
@@ -528,15 +536,16 @@ class AIHyperBrain:
                 except ValueError:
                     continue
                 if "token" in event:
-                    full_response.append(event["token"])
+                    token = strip_control(str(event.get("token", "")))
+                    full_response.append(token)
                     if on_token:
-                        on_token({"token": event["token"], "done": False})
+                        on_token({"token": token, "done": False})
                 elif event.get("done"):
                     if on_token:
                         on_token({"token": "", "done": True})
                     break
                 elif event.get("error"):
-                    message = f"[!] AI Error: {event['error']}"
+                    message = f"[!] AI Error: {strip_control(str(event['error']))}"
                     full_response.append(message)
                     if on_token:
                         on_token({"token": message, "done": True})
@@ -544,7 +553,7 @@ class AIHyperBrain:
             process.wait(timeout=120)
             return "".join(full_response)
         except Exception as exc:  # noqa: BLE001
-            message = f"[!] Stream error: {exc}"
+            message = f"[!] Stream error: {strip_control(str(exc))}"
             if on_token:
                 on_token({"token": message, "done": True})
             return "".join(full_response)
@@ -609,6 +618,7 @@ class AIHyperBrain:
         )
 
     def run_hative(self, target: str, modules: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+        target = strip_control(target)
         hative_path = os.path.join(self.base_dir, "go", "hative", "hative")
         if not os.path.exists(hative_path):
             return [{"error": f"hative binary not found at {hative_path}"}]
@@ -638,6 +648,7 @@ class AIHyperBrain:
 
     def stream_hative(self, target: str, on_progress: Optional[Callable[[Dict[str, Any]], None]] = None,
                       modules: Optional[List[str]] = None, timeout: int = 600) -> List[Dict[str, Any]]:
+        target = strip_control(target)
         hative_path = os.path.join(self.base_dir, "go", "hative", "hative")
         if not os.path.exists(hative_path):
             if on_progress:

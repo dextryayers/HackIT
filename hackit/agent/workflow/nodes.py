@@ -21,6 +21,7 @@ from urllib.parse import parse_qs, urlparse
 
 from .state import Finding, PentestState, Phase, persist_state, target_slug
 from .tools import GoBridge
+from ..textutils import strip_control
 
 WEB_PORTS = (80, 443, 8000, 8080, 8443, 8888, 3000, 5000)
 
@@ -66,10 +67,10 @@ def _finding(findings: List[Dict[str, Any]], ftype: str, target: str,
         id=f"{ftype.upper()}-{uuid.uuid4().hex[:8]}",
         type=ftype,
         severity=severity or sev,
-        target=target,
-        description=description,
-        evidence=evidence[:4000],
-        remediation=remediation or rem,
+        target=strip_control(str(target)),
+        description=strip_control(str(description)),
+        evidence=strip_control(str(evidence))[:4000],
+        remediation=strip_control(str(remediation)) or rem,
         cvss=cvss if cvss is not None else score,
     ).to_dict())
 
@@ -859,7 +860,7 @@ def _sanitize_ai_narrative(text: str, has_evidence: bool) -> str:
     fact, so unsupported confirmation language is rewritten deterministically.
     Negative statements ("no vulnerability was confirmed") are preserved.
     """
-    cleaned = (text or "").strip()
+    cleaned = strip_control(text or "").strip()
     if not cleaned or has_evidence:
         return cleaned
 

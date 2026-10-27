@@ -8,6 +8,8 @@ import subprocess
 import time
 from typing import Any, Dict, List, Optional
 
+from ..textutils import strip_control
+
 
 class GoBridge:
     def __init__(self, base_dir: Optional[str] = None):
@@ -72,7 +74,7 @@ class GoBridge:
         args: List[str] = []
         for flag, value in kwargs.items():
             if value:
-                args.extend([f"--{flag}", str(value)])
+                args.extend([f"--{flag}", strip_control(str(value))])
 
         if not args:
             return [{"module": "worker", "success": False, "error": "no module specified"}]
@@ -110,7 +112,8 @@ class GoBridge:
             }]
 
         args: List[str] = []
-        modules = [m for m in (modules or []) if m]
+        target = strip_control(target)
+        modules = [strip_control(m) for m in (modules or []) if m]
         if not modules:
             args.extend(["--all", target])
         else:
@@ -154,9 +157,9 @@ class GoBridge:
         except Exception as exc:  # noqa: BLE001
             return {"error": f"bridge error: {exc}"}
 
-        stdout = (proc.stdout or "").strip()
+        stdout = strip_control(proc.stdout or "").strip()
         if not stdout:
-            stderr = (proc.stderr or "").strip()
+            stderr = strip_control(proc.stderr or "").strip()
             return {"error": stderr[:500] or "AI engine returned empty output"}
 
         candidates = [stdout]
@@ -232,6 +235,11 @@ class GoBridge:
                        '{"answer":"<your complete response as plain text>"}. '
                        'Do not use markdown fences.')
 
+        prompt = strip_control(prompt)
+        system = strip_control(system)
+        api_key = strip_control(api_key)
+        model = strip_control(model)
+
         cmd = [self.ai_engine, "-provider", provider, "-key", api_key or "",
                "-prompt", prompt, "-system", system, "-no-history",
                "-timeout", str(timeout)]
@@ -255,14 +263,14 @@ class GoBridge:
             time.sleep(2)
             data = self._run_engine(cmd, timeout=timeout + 15)
         if data.get("error"):
-            return f"[!] AI Error: {data['error']}"
-        text = data.get("text", "[!] No response text")
+            return f"[!] AI Error: {strip_control(data['error'])}"
+        text = strip_control(data.get("text", "[!] No response text"))
         return self._json_answer(text) if json_answer else text
 
     @staticmethod
     def _json_answer(text: str) -> str:
         """Extract a plain answer from a JSON-wrapped model response."""
-        cleaned = (text or "").strip()
+        cleaned = strip_control(text).strip()
         if not cleaned:
             return cleaned
         candidates = [cleaned]
@@ -280,24 +288,24 @@ class GoBridge:
             except (ValueError, TypeError):
                 continue
             if isinstance(data, str):
-                return data.strip()
+                return strip_control(data).strip()
             if not isinstance(data, dict):
                 continue
             for key in ("answer", "analysis", "plan", "correlation",
                         "report", "response", "text", "result"):
                 value = data.get(key)
                 if isinstance(value, str) and value.strip():
-                    return value.strip()
+                    return strip_control(value).strip()
             for value in data.values():
                 if isinstance(value, str) and value.strip():
-                    return value.strip()
+                    return strip_control(value).strip()
         # Remove a truncated or completed reasoning block.
         import re
         stripped = re.sub(r"<(?:think|thinking|reasoning)>.*?</(?:think|thinking|reasoning)>",
                           "", cleaned, flags=re.IGNORECASE | re.DOTALL)
         stripped = re.sub(r"^.*?</(?:think|thinking|reasoning)>", "", stripped,
                           flags=re.IGNORECASE | re.DOTALL)
-        return stripped.strip() or cleaned
+        return strip_control(stripped).strip() or cleaned
 
     def analyze_scan(self, tool_name: str, scan_data: str) -> str:
         if not self.ai_engine:
@@ -308,13 +316,14 @@ class GoBridge:
             return "[!] No API key configured"
 
         timeout = self._ai_timeout(provider, cfg)
-        cmd = [self.ai_engine, "-provider", provider, "-key", api_key or "",
-               "-prompt", scan_data, "-tool", tool_name, "-analyze", "-no-history",
+        scan_data = strip_control(scan_data)
+        cmd = [self.ai_engine, "-provider", provider, "-key", strip_control(api_key or ""),
+               "-prompt", scan_data, "-tool", strip_control(tool_name), "-analyze", "-no-history",
                "-timeout", str(timeout)]
         if model:
-            cmd.extend(["-model", model])
+            cmd.extend(["-model", strip_control(model)])
 
         data = self._run_engine(cmd, timeout=timeout + 15)
         if data.get("error"):
-            return f"[!] AI Error: {data['error']}"
-        return data.get("text", "[!] No response text")
+            return f"[!] AI Error: {strip_control(data['error'])}"
+        return strip_control(data.get("text", "[!] No response text"))

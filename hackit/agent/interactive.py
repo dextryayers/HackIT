@@ -45,6 +45,7 @@ except ImportError:  # pragma: no cover
     _HAS_PT = False
 
 from hackit.ui import GREEN, RED, YELLOW, DIM, B_CYAN, MAGENTA, RESET, BOLD, _colored
+from .textutils import strip_control
 
 _ANSI_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
 REPORTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "go", "reports")
@@ -378,6 +379,7 @@ class AgentUI:
         thinking = [False]
 
         def emit(text: str) -> None:
+            text = strip_control(text)
             if not text:
                 return
             token_count += len(text)
