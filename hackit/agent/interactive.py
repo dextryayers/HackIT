@@ -157,6 +157,68 @@ def _timestamp() -> str:
     return datetime.datetime.now().strftime("%H:%M:%S")
 
 
+class _ThinkFilter:
+    """Strip streaming reasoning blocks from local thinking models.
+
+    Ollama models with a baked-in reasoning template sometimes emit
+    ``<think>...</think>`` as ordinary content even when ``think:false`` is
+    requested.  The filter works across chunk boundaries so users only see the
+    final answer while the model is still thinking.
+    """
+
+    _OPEN = re.compile(r"<(think|thinking|reasoning)>", re.IGNORECASE)
+    _CLOSE = re.compile(r"</(think|thinking|reasoning)>", re.IGNORECASE)
+    _TAGS = ("<think>", "<thinking>", "<reasoning>")
+
+    def __init__(self) -> None:
+        self.buffer = ""
+        self.in_think = False
+
+    def feed(self, text: str) -> str:
+        self.buffer += text or ""
+        output: List[str] = []
+        while self.buffer:
+            if self.in_think:
+                match = self._CLOSE.search(self.buffer)
+                if not match:
+                    # Keep only a possible partial closing tag.
+                    if len(self.buffer) > 24:
+                        self.buffer = self.buffer[-24:]
+                    break
+                self.buffer = self.buffer[match.end():]
+                self.in_think = False
+                continue
+
+            match = self._OPEN.search(self.buffer)
+            if match:
+                output.append(self.buffer[:match.start()])
+                self.buffer = self.buffer[match.end():]
+                self.in_think = True
+                continue
+
+            hold = 0
+            for tag in self._TAGS:
+                for index in range(1, len(tag)):
+                    if self.buffer.endswith(tag[:index]):
+                        hold = max(hold, index)
+            if hold:
+                prefix = self.buffer[:-hold]
+                if prefix:
+                    output.append(prefix)
+                self.buffer = self.buffer[-hold:]
+                break
+            output.append(self.buffer)
+            self.buffer = ""
+        return "".join(output)
+
+    def flush(self) -> str:
+        if self.in_think:
+            self.buffer = ""
+            return ""
+        tail, self.buffer = self.buffer, ""
+        return tail
+
+
 def _console() -> "Console":
     if _HAS_RICH:
         return Console(highlight=False, soft_wrap=True)
@@ -304,22 +366,31 @@ class AgentUI:
         started = time.time()
         token_count = 0
         rendered: List[str] = []
+        think_filter = _ThinkFilter()
+        thinking = [False]
+
+        def emit(text: str) -> None:
+            if not text:
+                return
+            token_count += len(text)
+            rendered.append(text)
+            sys.stdout.write(text)
+            sys.stdout.flush()
 
         def on_token(event: Dict[str, Any]) -> None:
-            nonlocal token_count
             token = event.get("token", "")
             if not token:
                 return
-            token_count += len(token)
-            rendered.append(token)
-            sys.stdout.write(token)
-            sys.stdout.flush()
+            visible = think_filter.feed(token)
+            if not visible and think_filter.in_think and not thinking[0]:
+                thinking[0] = True
+                self.console.print("[dim]… thinking[/dim]", end="")
+            elif visible and thinking[0]:
+                thinking[0] = False
+            emit(visible)
 
         try:
-            if system_extra:
-                result = self.brain.stream_chat(prompt, on_token=on_token)
-            else:
-                result = self.brain.stream_chat(prompt, on_token=on_token)
+            result = self.brain.stream_chat(prompt, on_token=on_token)
         except KeyboardInterrupt:
             self.console.print("\n[yellow]Cancelled.[/yellow]")
             return ""
@@ -327,8 +398,9 @@ class AgentUI:
             self.console.print(f"\n[red]UI error: {exc}[/red]")
             return ""
 
-        if not rendered:
-            sys.stdout.write(result)
+        emit(think_filter.flush())
+        if not rendered and result:
+            emit(result)
         sys.stdout.write("\n")
         sys.stdout.flush()
 

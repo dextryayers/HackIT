@@ -206,6 +206,15 @@ class GoBridge:
                 system += "\n" + extension
 
         timeout = self._ai_timeout(provider, cfg)
+        json_answer = provider == "ollama" and mode in (
+            "analyze", "attack", "correlate", "report")
+        if json_answer:
+            # Ollama's JSON grammar prevents the model from emitting a hidden
+            # reasoning trace, which on CPU can consume the whole timeout.
+            system += ('\nReturn ONLY a JSON object with one key: '
+                       '{"answer":"<your complete response as plain text>"}. '
+                       'Do not use markdown fences.')
+
         cmd = [self.ai_engine, "-provider", provider, "-key", api_key or "",
                "-prompt", prompt, "-system", system, "-no-history",
                "-timeout", str(timeout)]
@@ -215,13 +224,56 @@ class GoBridge:
         # keeps local models responsive and still allows detailed output.
         if mode in ("analyze", "attack", "correlate", "report"):
             cmd.extend(["-max-tokens", "1200"])
+        if json_answer:
+            cmd.append("-json")
         if model:
             cmd.extend(["-model", model])
 
         data = self._run_engine(cmd, timeout=timeout + 15)
         if data.get("error"):
             return f"[!] AI Error: {data['error']}"
-        return data.get("text", "[!] No response text")
+        text = data.get("text", "[!] No response text")
+        return self._json_answer(text) if json_answer else text
+
+    @staticmethod
+    def _json_answer(text: str) -> str:
+        """Extract a plain answer from a JSON-wrapped model response."""
+        cleaned = (text or "").strip()
+        if not cleaned:
+            return cleaned
+        candidates = [cleaned]
+        start, end = cleaned.find("{"), cleaned.rfind("}")
+        if start >= 0 and end > start:
+            candidates.append(cleaned[start:end + 1])
+        for candidate in candidates:
+            candidate = candidate.strip()
+            if candidate.startswith("```"):
+                candidate = candidate.strip("`")
+                if candidate.lower().startswith("json"):
+                    candidate = candidate[4:].strip()
+            try:
+                data = json.loads(candidate)
+            except (ValueError, TypeError):
+                continue
+            if isinstance(data, str):
+                return data.strip()
+            if not isinstance(data, dict):
+                continue
+            for key in ("answer", "analysis", "plan", "correlation",
+                        "report", "response", "text", "result"):
+                value = data.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+            for value in data.values():
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+        # Remove a truncated or completed reasoning block.
+        import re
+        stripped = re.sub(r"<(?:think|thinking|reasoning)>.*?</(?:think|thinking|reasoning)>",
+                          "", cleaned, flags=re.IGNORECASE | re.DOTALL)
+        stripped = re.sub(r"^.*?</(?:think|thinking|reasoning)>", "", stripped,
+                          flags=re.IGNORECASE | re.DOTALL)
+        return stripped.strip() or cleaned
 
     def analyze_scan(self, tool_name: str, scan_data: str) -> str:
         if not self.ai_engine:

@@ -436,9 +436,9 @@ def generate_multi(types: Iterable[str], context: str = "", count: int = 8,
             provider = provider or ai_provider
             model = model or ai_model
             # Local models are fast at a few short JSON items but time out on
-            # a six-class catalogue.  Generate AI payloads for the two most
-            # relevant classes and keep proven curated payloads for the rest.
-            ai_types = normalized[:2] if provider == "ollama" else normalized
+            # a six-class catalogue.  Generate AI payloads for the single most
+            # relevant class and keep proven curated payloads for the rest.
+            ai_types = normalized[:1] if provider == "ollama" else normalized
             per_type = 2
             context_cap = 2500 if provider == "ollama" else 4000
             compact_context = (context or "generic web application")[:context_cap]
