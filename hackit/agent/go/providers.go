@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 )
 
@@ -12,6 +13,16 @@ import (
 // models fast and to force syntactically valid JSON.
 var maxTokensSetting = 0
 var jsonModeSetting = false
+
+// ollamaThinkOption disables private reasoning traces by default.  Thinking
+// models otherwise spend minutes generating hidden tokens before the answer,
+// which makes local analysis and payload generation unusably slow.  Set
+// HACKIT_OLLAMA_THINK=1 to restore the model's default thinking behaviour.
+func ollamaThinkOption() *bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv("HACKIT_OLLAMA_THINK")))
+	enabled := value == "1" || value == "true" || value == "yes" || value == "on"
+	return &enabled
+}
 
 func requestMaxTokens(fallback int) int {
 	if maxTokensSetting > 0 {
@@ -274,13 +285,10 @@ func handleOllama(client *http.Client, key, prompt, system, model string, hist [
 	reqBody := OllamaRequest{
 		Model: model, Stream: false,
 		Options: options,
+		Think:   ollamaThinkOption(),
 	}
 	if jsonModeSetting {
 		reqBody.Format = "json"
-		// Thinking models otherwise spend their whole budget on a private
-		// reasoning trace before emitting the JSON answer.
-		noThink := false
-		reqBody.Think = &noThink
 	}
 	if system != "" {
 		reqBody.Messages = append(reqBody.Messages, Message{Role: "system", Content: system})

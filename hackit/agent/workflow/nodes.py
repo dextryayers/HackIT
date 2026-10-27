@@ -227,19 +227,25 @@ def recon_node(state: PentestState) -> Dict[str, Any]:
     scan_data["has_web"] = has_web
 
     findings = list(state.get("findings", []))
-    # Sensitive paths disclosed by the fuzzer are real observations.
+    # Only verified fuzzer hits become findings.  A bare HTTP 200 is not
+    # evidence on catch-all servers and SPA fallbacks, so the Go fuzzer
+    # compares every path with a random baseline and a file signature.
     for entry in _as_list(scan_data.get("fuzz")):
         if not isinstance(entry, dict):
             continue
+        verified = entry.get("Verified", entry.get("verified", False))
         status = entry.get("StatusCode", entry.get("status_code", 0))
         path = entry.get("Path", entry.get("path", ""))
-        if status == 200 and path:
-            _finding(
-                findings, "misconfig", f"{base_url.rstrip('/')}/{str(path).lstrip('/')}",
-                f"Sensitive path accessible: {path}", f"HTTP {status} for {path}",
-                severity="medium", cvss=5.3,
-                remediation="Remove the exposed resource or restrict access",
-            )
+        evidence = str(entry.get("Evidence", entry.get("evidence", "")) or "")
+        if not verified or not path or not evidence:
+            continue
+        _finding(
+            findings, "misconfig", f"{base_url.rstrip('/')}/{str(path).lstrip('/')}",
+            f"Sensitive path accessible: {path}",
+            f"HTTP {status} for {path} — {evidence}",
+            severity="medium", cvss=5.3,
+            remediation="Remove the exposed resource or restrict access",
+        )
 
     updates["scan_data"] = scan_data
     updates["findings"] = findings
@@ -498,11 +504,15 @@ Identify the attack surface, likely vulnerability classes, entry points and
 the three most valuable tests to run next. Be explicit about confidence.
 """
     analysis = bridge.ai_chat(prompt, mode="analyze")
+    analysis_error = ""
     if not analysis or analysis.startswith("[!]"):
+        analysis_error = analysis or "empty AI response"
         analysis = _offline_analysis(state)
 
     result = {
+        "phase": Phase.ANALYZE.value,
         "analysis": analysis,
+        "analysis_error": analysis_error,
         "messages": state.get("messages", []) + [{"role": "analyze", "content": analysis}],
     }
     persist_state(dict(state, **result), suffix="_analyze")
@@ -535,11 +545,15 @@ Return an ordered plan that covers:
 Sort by criticality and state the exact endpoint/parameter to test when known.
 """
     plan = bridge.ai_chat(prompt, mode="attack")
+    plan_error = ""
     if not plan or plan.startswith("[!]"):
+        plan_error = plan or "empty AI response"
         plan = _offline_analysis(state)
 
     result = {
+        "phase": Phase.PLAN.value,
         "attack_plan": plan,
+        "plan_error": plan_error,
         "messages": state.get("messages", []) + [{"role": "plan", "content": plan}],
     }
     persist_state(dict(state, **result), suffix="_plan")
@@ -772,7 +786,9 @@ Probe results: {json.dumps(state.get('probe_results', []), indent=2, default=str
 4. Separate confirmed findings from hypotheses.
 """
     correlation = bridge.ai_chat(prompt, mode="correlate")
+    correlation_error = ""
     if not correlation or correlation.startswith("[!]"):
+        correlation_error = correlation or "empty AI response"
         correlation = f"{len(findings)} finding(s) correlated offline."
 
     risk_score = 0.0
@@ -785,7 +801,9 @@ Probe results: {json.dumps(state.get('probe_results', []), indent=2, default=str
         risk_score = 5.0
 
     result = {
+        "phase": Phase.CORRELATE.value,
         "risk_score": risk_score,
+        "correlation_error": correlation_error,
         "messages": state.get("messages", []) + [{"role": "correlate", "content": correlation}],
         "analysis": (state.get("analysis", "") + "\n\n[Correlation]\n" + correlation).strip(),
     }

@@ -336,6 +336,7 @@ func streamOllama(client *http.Client, key, prompt, system, model string,
 	reqBody := OllamaRequest{
 		Model: model, Stream: true,
 		Options: map[string]interface{}{"temperature": 0.7},
+		Think:   ollamaThinkOption(),
 	}
 	if system != "" {
 		reqBody.Messages = append(reqBody.Messages, Message{Role: "system", Content: system})

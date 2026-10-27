@@ -362,7 +362,7 @@ def generate(vuln_type: str, context: str = "", count: int = 12,
             caller, ai_provider, ai_model = _resolve_ai(ai_call)
             provider = provider or ai_provider
             model = model or ai_model
-            local_cap = 6 if provider == "ollama" else 12
+            local_cap = 4 if provider == "ollama" else 12
             request_count = max(3, min(count, local_cap))
             prompt = (
                 f"Vulnerability class: {vuln_type}\n"
@@ -435,14 +435,16 @@ def generate_multi(types: Iterable[str], context: str = "", count: int = 8,
             caller, ai_provider, ai_model = _resolve_ai(ai_call)
             provider = provider or ai_provider
             model = model or ai_model
-            # Keep the request small enough for local models: a handful of
-            # classes with two payloads each is more useful than a response
-            # that gets truncated before the JSON closes.
-            per_type = 3 if len(normalized) <= 3 else 2
-            compact_context = (context or "generic web application")[:4000]
+            # Local models are fast at a few short JSON items but time out on
+            # a six-class catalogue.  Generate AI payloads for the two most
+            # relevant classes and keep proven curated payloads for the rest.
+            ai_types = normalized[:2] if provider == "ollama" else normalized
+            per_type = 2
+            context_cap = 2500 if provider == "ollama" else 4000
+            compact_context = (context or "generic web application")[:context_cap]
             prompt = (
                 "Generate authorised proof-of-concept payloads for these vulnerability classes:\n"
-                + ", ".join(normalized)
+                + ", ".join(ai_types)
                 + f"\nTarget/context: {compact_context}\n"
                 + f"Return exactly {per_type} payloads per class. "
                 + "Every item MUST include a `type` field exactly matching one of the classes above. "
@@ -451,11 +453,11 @@ def generate_multi(types: Iterable[str], context: str = "", count: int = 8,
             text = caller(prompt, AI_SYSTEM_PROMPT) or ""
             ai_items = _coerce_ai_payloads(text)
             if ai_items:
-                grouped: Dict[str, List[Dict[str, str]]] = {vuln_type: [] for vuln_type in normalized}
+                grouped: Dict[str, List[Dict[str, str]]] = {vuln_type: [] for vuln_type in ai_types}
                 for item in ai_items:
-                    item_type = item.pop("type", "") or normalized[0]
+                    item_type = item.pop("type", "") or ai_types[0]
                     if item_type not in grouped:
-                        item_type = normalized[0]
+                        item_type = ai_types[0]
                     grouped[item_type].append(item)
                 for vuln_type, extra in grouped.items():
                     if not extra:

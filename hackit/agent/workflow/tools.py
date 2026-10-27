@@ -209,10 +209,14 @@ class GoBridge:
         cmd = [self.ai_engine, "-provider", provider, "-key", api_key or "",
                "-prompt", prompt, "-system", system, "-no-history",
                "-timeout", str(timeout)]
-        if model:
-            cmd.extend(["-model", model])
         if mode:
             cmd.extend(["-mode", mode])
+        # Long-form analysis answers do not need thousands of tokens.  A cap
+        # keeps local models responsive and still allows detailed output.
+        if mode in ("analyze", "attack", "correlate", "report"):
+            cmd.extend(["-max-tokens", "1200"])
+        if model:
+            cmd.extend(["-model", model])
 
         data = self._run_engine(cmd, timeout=timeout + 15)
         if data.get("error"):

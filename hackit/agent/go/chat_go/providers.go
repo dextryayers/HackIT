@@ -5,11 +5,20 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 )
 
 var maxTokensSetting = 0
 var jsonModeSetting = false
+
+// ollamaThinkOption disables hidden reasoning tokens unless the operator
+// explicitly opts in.  See HACKIT_OLLAMA_THINK in the README.
+func ollamaThinkOption() *bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv("HACKIT_OLLAMA_THINK")))
+	enabled := value == "1" || value == "true" || value == "yes" || value == "on"
+	return &enabled
+}
 
 func requestMaxTokens(fallback int) int {
 	if maxTokensSetting > 0 {
@@ -430,11 +439,10 @@ func callOllama(client *http.Client, key, prompt, system, model string, hist []M
 	reqBody := OllamaRequest{
 		Model: model, Stream: false,
 		Options: options,
+		Think:   ollamaThinkOption(),
 	}
 	if jsonModeSetting {
 		reqBody.Format = "json"
-		noThink := false
-		reqBody.Think = &noThink
 	}
 	if system != "" {
 		reqBody.Messages = append(reqBody.Messages, Message{Role: "system", Content: system})
