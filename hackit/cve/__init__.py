@@ -19,13 +19,14 @@ def _show_cve_banner():
     click.echo(banner)
 
 @click.command(name='cve')
-@click.option('--output', help='Simpan hasil pencarian ke file JSON')
-@click.option('--api-key', help='NVD API key (untuk rate limit lebih tinggi)')
-@click.option('--max-results', type=int, default=20, help='Max CVEs per teknologi/scan')
+@click.option('--output', help='Save search results to a JSON file')
+@click.option('--api-key', help='NVD API key for higher rate limits')
+@click.option('--max-results', type=int, default=20, help='Maximum CVEs per technology scan')
 def check_cve(output, api_key, max_results):
-    """
-    Pemindai Kerentanan Defensif (Multi-Source Intelligence).
-    Mendeteksi teknologi dan memetakan skor CVE, CWE, OSV, CISA, OWASP, dan Exploit-DB.
+    """Defensive vulnerability intelligence scanner.
+
+    Detects technologies and maps CVE, CWE, OSV, CISA, OWASP and Exploit-DB
+    intelligence.
     """
     _show_cve_banner()
     

@@ -25,7 +25,7 @@ from hackit.osint import osint as osint_console
 from hackit.agent import agent
 from hackit.ddos import ddos as ddos_attack
 from hackit.sysfetch import sysfetch as host_fetch
-from hackit.ui import display_banner, _colored, YELLOW, GREEN, B_GREEN, B_CYAN, B_WHITE, DIM, RED, MAGENTA, BLUE, CYAN, B_MAGENTA, B_RED, B_BLUE, B_YELLOW, WHITE, BG_BLUE, BG_CYAN, BG_MAGENTA
+from hackit.ui import display_banner, _colored, YELLOW, GREEN, B_GREEN, B_CYAN, B_WHITE, DIM, RED, MAGENTA, BLUE, CYAN, B_MAGENTA, B_RED, B_BLUE, B_YELLOW, WHITE, BG_BLUE, BG_CYAN, BG_MAGENTA, install_modern_help, render_unknown_topic
 from hackit.config import load_config, save_config, set_theme, DEFAULT_CONFIG, VALID_THEMES, VALID_ACCENTS, VALID_BORDERS, VALID_PROMPTS, VALID_MASKING_LEVELS, MASKING_PROFILES, CONFIG_PATH, SCHEMA, apply_masking_level, get_masking_info
 
 import re as _re
@@ -35,6 +35,8 @@ import time
 import textwrap
 from datetime import datetime
 from typing import Dict, Any, Optional
+
+HACKIT_VERSION = '2.1.0'
 
 _strip_ansi = _re.compile(r'\x1b\[[0-9;]*[a-zA-Z]')
 
@@ -586,24 +588,20 @@ def _interactive_config_shell():
 
 
 @click.group(invoke_without_command=True)
-@click.version_option(version='2.1.0', prog_name='HackIt')
-@click.option('--proxy', default=None, help='[HACKIT] Proxy URL for tools (e.g., http://127.0.0.1:8080)')
-@click.option('--no-verify', is_flag=True, help='[HACKIT] Disable SSL certificate verification globally')
-@click.option('--no-banner', is_flag=True, help='[HACKIT] Disable startup banner')
-@click.option('--verbose', is_flag=True, help='[HACKIT] Enable verbose logging (DEBUG)')
+@click.version_option(version=HACKIT_VERSION, prog_name='HackIt')
+@click.option('--proxy', default=None, help='Proxy URL for tools (e.g., http://127.0.0.1:8080)')
+@click.option('--no-verify', is_flag=True, help='Disable SSL certificate verification globally')
+@click.option('--no-banner', is_flag=True, help='Disable startup banner')
+@click.option('--verbose', is_flag=True, help='Enable verbose logging (DEBUG)')
 @click.pass_context
 def cli(ctx, proxy, no_verify, no_banner, verbose):
-    """
-    🚀 HackIt - Hexa-Engine Penetration Testing Framework 🚀
+    """Hexa-Engine Penetration Testing Framework.
 
+    A professional-grade security suite for research and vulnerability
+    assessment. Combines Go, Rust, C, Python, Ruby and Lua for speed and
+    precision.
 
-    
-    A professional-grade security suite for research and vulnerability assessment.
-    Combines Go, Rust, C, Python, Ruby, and Lua for unmatched speed and precision.
-
-    ⚠️ AUTHORIZED USE ONLY.
-
-    Usage: hackit [options]
+    Authorized testing only.
     """
     # Export chosen global settings to environment so modules can read them.
     if proxy:
@@ -852,6 +850,7 @@ def help_tools():
     """Show detailed tool information"""
     tools_text = """
     QUICK REFERENCE:
+    • help          - Show a clean help screen for any command
     • run           - Launch web UI dashboard (Astro + Python)
     • ports scan    - Async TCP port scanner
     • dirfinder     - Expert directory finder
@@ -875,9 +874,43 @@ def help_tools():
     click.echo(tools_text)
 
 
+@cli.command(name='help')
+@click.argument('topics', nargs=-1)
+@click.pass_context
+def help_command(ctx, topics):
+    """Show help for any command or module.
+
+    Examples:
+
+      hackit help
+
+      hackit help web
+
+      hackit help web headers
+    """
+    if not topics:
+        root_ctx = ctx.find_root()
+        click.echo(root_ctx.command.get_help(root_ctx))
+        return
+
+    node = cli
+    parent_ctx = click.Context(cli, info_name='hackit')
+    for topic in topics:
+        if not isinstance(node, click.Group) or topic not in node.commands:
+            candidates = list(node.commands.keys()) if isinstance(node, click.Group) else []
+            click.echo(render_unknown_topic(topic, candidates))
+            ctx.exit(1)
+        child = node.commands[topic]
+        parent_ctx = click.Context(child, info_name=topic, parent=parent_ctx)
+        node = child
+
+    click.echo(node.get_help(parent_ctx))
+
+
 GUIDE_SECTIONS = [
     ("START HERE (new users read this first)", [
         ("guide", "Show this full command guide. Use 'guide <topic>' to focus on one group, for example 'guide web'."),
+        ("help", "Show help for any command or group, for example 'hackit help vuln sqli'."),
         ("run", "Launch the Web UI dashboard in your browser. Easiest way to use HackIt."),
         ("console", "Enter the interactive framework console (Metasploit style shell)."),
         ("examples", "Show copy paste usage examples for every tool."),
@@ -990,7 +1023,7 @@ def guide(topic):
     click.echo(_colored("  New here? Start with 'run' for the visual dashboard,", DIM))
     click.echo(_colored("  or 'console' for the interactive shell.", DIM))
     click.echo(_colored("  Pattern: hackit <group> <command> [options]", DIM))
-    click.echo(_colored("  Tip: add --help to any command for its options.", DIM))
+    click.echo(_colored("  Tip: use 'hackit help <command>' for flags and examples.", DIM))
 
     shown = 0
     for title, items in GUIDE_SECTIONS:
@@ -1010,8 +1043,8 @@ def guide(topic):
         click.echo(_colored(f"  [*] Try one of: {', '.join(groups)}", DIM))
         return
 
-    click.echo(_colored(f"\n  [*] {shown} commands listed. Next step: pick one and run it with --help.", DIM))
-    click.echo(_colored("  [*] Example: hackit ports scan --help\n", DIM))
+    click.echo(_colored(f"\n  [*] {shown} commands listed. Next step: run 'hackit help <command>'.", DIM))
+    click.echo(_colored("  [*] Example: hackit help ports scan\n", DIM))
 
 
 @cli.command()
@@ -1258,6 +1291,10 @@ def run(dev, port, no_open):
                 backend.kill()
         click.echo(_colored("  [+] All services stopped. Goodbye!", B_GREEN))
 
+
+
+# Install the themed help dashboard for the root command and every subcommand.
+install_modern_help(cli, version=HACKIT_VERSION)
 
 
 if __name__ == '__main__':

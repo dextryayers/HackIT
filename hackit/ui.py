@@ -11,7 +11,12 @@ import socket
 import json
 import textwrap
 import urllib.request
+import re
+import shutil
 from datetime import datetime
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+
+import click
 
 # Force UTF-8 output on Windows to support box-drawing chars
 if sys.stdout.encoding and sys.stdout.encoding.lower() not in ('utf-8', 'utf8'):
@@ -715,6 +720,599 @@ class TablePrinter:
 
     def print_footer(self):
         self._print_border("└", "┴", "┘", "─")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Modern CLI help renderer
+# ─────────────────────────────────────────────────────────────────────────────
+# Click's default help always prints an "Options" block and a flat command
+# list.  HackIt is a large framework, so help is rendered as a themed
+# dashboard: header, usage, grouped commands, readable flags and a short
+# "what next" footer.  The global options block is intentionally hidden on
+# the main help screen.
+
+_HELP_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+_HELP_ROOT: Optional[click.Command] = None
+_HELP_VERSION = "2.1.0"
+_HELP_INSTALLED = False
+
+
+# Compact, action-oriented copy for the help dashboard.  Docstrings stay
+# available for detailed command pages; these descriptions keep the list tidy.
+_HELP_DESCRIPTIONS: Dict[Tuple[str, ...], str] = {
+    # Platform commands
+    ("agent",): "AI-assisted security operations with autonomous hunting and swarm execution",
+    ("banner",): "Render the HackIt startup banner",
+    ("bruter",): "Authentication brute-force framework for multiple protocols",
+    ("config",): "Configure themes, identity, colors and terminal prompt",
+    ("console",): "Launch the interactive HackIt framework console",
+    ("ddos",): "Authorized network stress-testing and resilience console",
+    ("dirfinder",): "Discover hidden directories and files with a high-speed engine",
+    ("examples",): "Show copy-ready usage examples for every tool",
+    ("fetch",): "Inspect host hardware, operating system and network details",
+    ("guide",): "Open the complete beginner command guide",
+    ("help",): "Display help for any command or module",
+    ("help-tools",): "Show a concise reference for the most-used tools",
+    ("osint",): "Discover public footprints across 800+ platforms",
+    ("ports",): "High-speed TCP port discovery and service analysis",
+    ("recon",): "Subdomain, IP range, technology and OSINT reconnaissance",
+    ("run",): "Launch the unified web dashboard (Astro + Python)",
+    ("ssl",): "Analyze TLS certificates, ciphers and protocol configuration",
+    ("util",): "Defensive utilities and vulnerability intelligence",
+    ("vuln",): "Detect and validate web application vulnerabilities",
+    ("web",): "Audit, fuzz and analyze web applications and APIs",
+    ("whoami",): "Show the current user, device and platform identity",
+    ("wireless",): "Wireless audit, monitoring and handshake capture console",
+
+    # Web module
+    ("web", "headers"): "Audit HTTP security headers and browser protection policies",
+    ("web", "tech"): "Fingerprint servers, CMS platforms, frameworks and libraries",
+    ("web", "fuzz"): "High-performance fuzzing suite for paths, parameters and discovery",
+    ("web", "403bypass"): "Bypass HTTP 403 restrictions with a large payload and technique set",
+    ("web", "js"): "Extract endpoints, secrets and API keys from JavaScript assets",
+    ("web", "params"): "Discover hidden parameters and test them for reflection",
+    ("web", "fuzz", "fast"): "Run high-speed path and parameter fuzzing",
+    ("web", "fuzz", "spider"): "Harvest endpoints and parameters with a hybrid crawler",
+
+    # Vulnerability module
+    ("vuln", "xss"): "Detect reflected and stored cross-site scripting vulnerabilities",
+    ("vuln", "sqli"): "SQL injection testing and database enumeration framework",
+    ("vuln", "sqli", "scan"): "Run a full SQL injection assessment with DBMS fingerprinting",
+    ("vuln", "sqli", "crawl"): "Crawl the target and enumerate database structure",
+    ("vuln", "sqli", "tables"): "List tables from the current database",
+    ("vuln", "sqli", "columns"): "List columns for a selected database table",
+    ("vuln", "sqli", "dump"): "Extract rows and credentials from a database table",
+    ("vuln", "sqli", "extract"): "Extract data using blind, time-based or inference techniques",
+    ("vuln", "sqli", "bypass"): "Test authentication bypass payloads against a login form",
+    ("vuln", "sqli", "priv"): "Assess database privileges and privilege-escalation paths",
+    ("vuln", "sqli", "readfile"): "Read files from the database server through SQL injection",
+    ("vuln", "sqli", "exec"): "Execute operating-system commands through SQL injection",
+    ("vuln", "sqli", "network"): "Pivot through the database server to reach internal hosts",
+    ("vuln", "sqli", "oob"): "Exfiltrate data through out-of-band DNS or HTTP callbacks",
+    ("vuln", "sqli", "report"): "Generate a structured report from SQL injection findings",
+    ("vuln", "sqli", "gui"): "Launch the graphical SQL injection testing interface",
+    ("vuln", "rce"): "Detect and validate remote command execution vulnerabilities",
+    ("vuln", "redirect"): "Identify open redirect vulnerabilities in URL parameters",
+    ("vuln", "atomix"): "Run Nuclei-compatible YAML templates for modern vulnerability scanning",
+
+    # Reconnaissance module
+    ("recon", "subdomains"): "Enumerate subdomains with passive and active discovery",
+    ("recon", "ips"): "Discover live hosts and open services across IP ranges",
+    ("recon", "tech-hunter"): "Fingerprint web technologies, servers and frameworks",
+    ("recon", "osint"): "Scan public footprints across social and developer platforms",
+
+    # SSL, utilities and port scanning
+    ("ssl", "check"): "Audit TLS certificates, ciphers and protocol configuration",
+    ("util", "cve"): "Look up CVEs and vulnerability intelligence by software version",
+    ("ports", "scan"): "Execute high-speed TCP scans with multiple strategies and profiles",
+
+    # Brute-force module
+    ("bruter", "scan"): "Brute-force logins across FTP, SSH, HTTP and other protocols",
+    ("bruter", "list-protocols"): "List supported brute-force protocols and default ports",
+
+    # AI agent
+    ("agent", "chat"): "Start an interactive session with the HackIt AI assistant",
+    ("agent", "autopilot"): "Run the autonomous AI bug-hunting workflow",
+    ("agent", "swarm"): "Launch the 28-node autonomous reconnaissance swarm",
+    ("agent", "dashboard"): "Open the real-time swarm monitoring dashboard",
+    ("agent", "setting"): "Configure the AI provider, API key and model",
+    ("agent", "status"): "Check AI provider configuration and connectivity",
+    ("agent", "guide"): "Show the AI agent usage guide",
+    ("agent", "help"): "Show AI agent commands and slash-command reference",
+    ("agent", "clear"): "Clear the AI conversation history",
+    ("agent", "reset"): "Reset AI configuration, keys, models or history",
+}
+
+_HELP_ROOT_CATEGORIES: List[Tuple[str, List[str]]] = [
+    ("RECON & DISCOVERY", ["recon", "ports", "dirfinder", "osint"]),
+    ("WEB & APPLICATION SECURITY", ["web", "vuln", "ssl", "util"]),
+    ("OFFENSIVE OPERATIONS", ["bruter", "ddos", "wireless", "agent"]),
+    ("WORKSPACE", ["run", "console", "config", "fetch", "whoami"]),
+    ("HELP & INFORMATION", ["guide", "examples", "help-tools", "banner", "help"]),
+]
+
+_HELP_GROUP_ORDER: Dict[Tuple[str, ...], List[str]] = {
+    ("web",): ["headers", "tech", "fuzz", "403bypass", "js", "params"],
+    ("vuln",): ["xss", "sqli", "rce", "redirect", "atomix"],
+    ("recon",): ["subdomains", "ips", "tech-hunter", "osint"],
+    ("ssl",): ["check"],
+    ("util",): ["cve"],
+    ("ports",): ["scan"],
+    ("bruter",): ["scan", "list-protocols"],
+    ("agent",): [
+        "chat", "autopilot", "swarm", "dashboard",
+        "setting", "status", "guide", "help", "clear", "reset",
+    ],
+    ("web", "fuzz"): ["fast", "spider"],
+    ("vuln", "sqli"): [
+        "scan", "crawl", "tables", "columns", "dump", "extract",
+        "bypass", "priv", "readfile", "exec", "network", "oob",
+        "report", "gui",
+    ],
+}
+
+
+def _help_vlen(text: str) -> int:
+    """Visible length of a string, ignoring ANSI escape sequences."""
+    return len(_HELP_ANSI_RE.sub("", str(text)))
+
+
+def _help_truncate(text: str, limit: int) -> str:
+    if limit <= 0:
+        return ""
+    if _help_vlen(text) <= limit:
+        return text
+    plain = _HELP_ANSI_RE.sub("", text)
+    if limit <= 1:
+        return "…"[:limit]
+    return plain[: limit - 1].rstrip() + "…"
+
+
+def _help_pad(text: str, width: int) -> str:
+    return text + " " * max(0, width - _help_vlen(text))
+
+
+class _HelpPalette:
+    def __init__(self) -> None:
+        try:
+            theme = get_theme_colors()
+        except Exception:
+            theme = {}
+        self.main = theme.get("main", B_CYAN)
+        self.accent = theme.get("accent", B_GREEN)
+        self.status = theme.get("status", B_GREEN)
+        self.text = B_WHITE
+        self.muted = DIM
+        self.warn = B_YELLOW
+        self.danger = B_RED
+
+
+def _help_style(text: str, colour: Optional[str] = None, bold: bool = False) -> str:
+    if not colour:
+        return text
+    if bold:
+        return f"{colour}{BOLD}{text}{RESET}"
+    return f"{colour}{text}{RESET}"
+
+
+class _HelpScreen:
+    """Line-oriented renderer with ANSI-aware alignment."""
+
+    def __init__(self) -> None:
+        try:
+            columns = shutil.get_terminal_size((96, 24)).columns
+        except Exception:
+            columns = 96
+        self.width = max(42, min(max(columns - 2, 42), 96))
+        self.palette = _HelpPalette()
+        self.lines: List[str] = []
+
+    def add(self, line: str = "") -> None:
+        self.lines.append(line)
+
+    def rule(self, title: str) -> None:
+        prefix = _help_style("◆ ", self.palette.accent) + _help_style(
+            title.upper(), self.palette.main, bold=True
+        )
+        remaining = max(2, self.width - 2 - _help_vlen(prefix) - 1)
+        if self.lines and self.lines[-1].strip():
+            self.add("")
+        self.add("  " + prefix + " " + _help_style("─" * remaining, self.palette.muted))
+
+    def box(self, rows: Sequence[Tuple[str, Optional[str], bool]]) -> None:
+        box_width = self.width - 4
+        content_width = box_width - 2
+        self.add("  " + _help_style("╭" + "─" * box_width + "╮", self.palette.main))
+        for text, colour, bold in rows:
+            chunks = textwrap.wrap(str(text), content_width) or [""]
+            for chunk in chunks:
+                content = _help_style(chunk, colour, bold)
+                self.add(
+                    "  "
+                    + _help_style("│", self.palette.main)
+                    + " "
+                    + content
+                    + " " * max(0, content_width - _help_vlen(chunk))
+                    + " "
+                    + _help_style("│", self.palette.main)
+                )
+        self.add("  " + _help_style("╰" + "─" * box_width + "╯", self.palette.main))
+
+    def tool_header(self, path: Sequence[str], description: str) -> None:
+        """Compact header used by module and command help pages."""
+        bar = _help_style("▌", self.palette.accent)
+        title = (
+            _help_style("HACKIT", self.palette.muted)
+            + _help_style("  /  ", self.palette.muted)
+            + _help_style("  /  ".join(part.upper() for part in path), self.palette.main, bold=True)
+        )
+        self.add(bar + " " + _help_truncate(title, self.width - 4))
+        width = max(20, self.width - 4)
+        for line in textwrap.wrap(description or "Command reference", width=width):
+            self.add(bar + " " + _help_style(line, self.palette.text))
+        self.add("")
+
+    def label(self, text: str) -> None:
+        """Small section label for the compact tool help layout."""
+        if self.lines and self.lines[-1].strip():
+            self.add("")
+        self.add(
+            "  "
+            + _help_style("▸ ", self.palette.accent)
+            + _help_style(text, self.palette.main, bold=True)
+        )
+
+    def command_list(
+        self,
+        commands: Dict[str, click.Command],
+        path: Tuple[str, ...],
+        order: Optional[Sequence[str]] = None,
+    ) -> None:
+        names = [name for name in (order or []) if name in commands]
+        names.extend(sorted(name for name in commands if name not in names))
+        entries = [
+            (name, commands[name])
+            for name in names
+            if not getattr(commands[name], "hidden", False)
+        ]
+        if not entries:
+            return
+
+        name_width = min(max(_help_vlen(name) for name, _ in entries) + 2, 19)
+        for name, command in entries:
+            description = _help_describe(path + (name,), command)
+            shown_name = _help_truncate(name, name_width - 2)
+            prefix = "    " + _help_style(
+                _help_pad(shown_name, name_width), self.palette.accent, bold=True
+            )
+            if not description:
+                self.add(prefix)
+                continue
+
+            available = max(20, self.width - 4 - name_width)
+            chunks = textwrap.wrap(description, width=available) or [""]
+            self.add(prefix + _help_style(chunks[0], self.palette.muted))
+            for extra in chunks[1:]:
+                self.add(" " * (4 + name_width) + _help_style(extra, self.palette.muted))
+
+    def flags(self, records: Sequence[Tuple[str, str, bool]]) -> None:
+        if not records:
+            return
+        decl_width = min(max(_help_vlen(record[0]) for record in records), 32)
+        for decl, help_text, required in records:
+            marker = _help_style(" *", self.palette.danger, bold=True) if required else ""
+            pretty_decl = _help_style(decl, self.palette.accent) + marker
+            help_text = (help_text or "").strip()
+
+            if not help_text:
+                self.add("    " + pretty_decl)
+                continue
+
+            help_width = self.width - 4 - decl_width - 2
+            if decl_width <= 30 and help_width >= 26:
+                chunks = textwrap.wrap(help_text, width=help_width) or [""]
+                self.add(
+                    "    "
+                    + _help_pad(pretty_decl, decl_width + _help_vlen(marker))
+                    + "  "
+                    + _help_style(chunks[0], self.palette.muted)
+                )
+                indent = " " * (4 + decl_width + 2 + _help_vlen(marker))
+                for extra in chunks[1:]:
+                    self.add(indent + _help_style(extra, self.palette.muted))
+            else:
+                self.add("    " + pretty_decl)
+                for line in textwrap.wrap(help_text, width=max(20, self.width - 8)):
+                    self.add("        " + _help_style(line, self.palette.muted))
+
+    def footer(self, tips: Sequence[str], warning: str = "") -> None:
+        self.add("")
+        tip_width = max(20, self.width - 6)
+        for tip in tips:
+            chunks = textwrap.wrap(tip, width=tip_width) or [""]
+            for index, line in enumerate(chunks):
+                prefix = (
+                    _help_style("[i] ", self.palette.accent) if index == 0 else "    "
+                )
+                self.add("  " + prefix + _help_style(line, self.palette.muted))
+        if warning:
+            self.add("")
+            width = max(20, self.width - 6)
+            for index, line in enumerate(textwrap.wrap(warning, width=width)):
+                prefix = _help_style("[!] ", self.palette.warn) if index == 0 else "    "
+                self.add("  " + prefix + _help_style(line, self.palette.warn))
+
+    def render(self) -> str:
+        while self.lines and not self.lines[0].strip():
+            self.lines.pop(0)
+        while self.lines and not self.lines[-1].strip():
+            self.lines.pop()
+        return "\n".join(self.lines)
+
+
+def _help_find_path(
+    node: Optional[click.Command],
+    target: click.Command,
+    prefix: Tuple[str, ...] = (),
+) -> Optional[Tuple[str, ...]]:
+    if node is None:
+        return None
+    for name, child in getattr(node, "commands", {}).items():
+        if child is target:
+            return prefix + (name,)
+        if isinstance(child, click.Group):
+            found = _help_find_path(child, target, prefix + (name,))
+            if found:
+                return found
+    return None
+
+
+def _help_command_path(command: click.Command, ctx: click.Context) -> List[str]:
+    """Return a display path such as ``["web", "headers"]``.
+
+    Contexts created by the interactive console do not always have a complete
+    parent chain, so fall back to a recursive search of the root command.
+    """
+    parts: List[str] = []
+    node: Optional[click.Context] = ctx
+    while node is not None:
+        if node.info_name:
+            parts.append(node.info_name)
+        node = node.parent
+    parts.reverse()
+
+    if parts:
+        first = parts[0]
+        if first in ("main.py", "__main__.py", "cli"):
+            parts = parts[1:]
+        elif first != "hackit" and (
+            _HELP_ROOT is None or first not in getattr(_HELP_ROOT, "commands", {})
+        ):
+            parts = parts[1:]
+
+    if command is _HELP_ROOT:
+        return []
+
+    root_commands = getattr(_HELP_ROOT, "commands", {}) if _HELP_ROOT is not None else {}
+    if parts and parts[0] in root_commands:
+        return parts
+
+    found = _help_find_path(_HELP_ROOT, command) if _HELP_ROOT is not None else None
+    return list(found or [])
+
+
+def _help_describe(path: Tuple[str, ...], command: click.Command) -> str:
+    override = _HELP_DESCRIPTIONS.get(tuple(path))
+    if override:
+        return override
+    text = command.get_short_help_str(limit=120) or ""
+    text = " ".join(text.split())
+    return text.rstrip(".")
+
+
+def _help_usage_line(
+    command: click.Command,
+    ctx: click.Context,
+    path: Sequence[str],
+    is_root: bool,
+    is_group: bool,
+) -> str:
+    if is_root:
+        return "hackit <command> [arguments]"
+    prefix = "hackit " + " ".join(path)
+    if is_group:
+        return prefix + " <command> [arguments]"
+    try:
+        pieces = command.collect_usage_pieces(ctx)
+    except Exception:
+        pieces = []
+    if not pieces:
+        return prefix
+    return prefix + " " + " ".join(pieces)
+
+
+def _help_option_records(
+    command: click.Command, ctx: click.Context
+) -> List[Tuple[str, str, bool]]:
+    records: List[Tuple[str, str, bool]] = []
+    for param in getattr(command, "params", []):
+        if not isinstance(param, click.Option) or getattr(param, "hidden", False):
+            continue
+        # Help/version are already implied by the help screen.
+        if param.name in ("help", "version"):
+            continue
+        try:
+            record = param.get_help_record(ctx)
+        except Exception:
+            record = None
+        if not record:
+            continue
+        decl, help_text = record
+        help_text = re.sub(r"\s*\[required\]\s*$", "", help_text or "", flags=re.I)
+        records.append((decl, help_text.strip(), bool(getattr(param, "required", False))))
+    return records
+
+
+def _help_quick_start(screen: _HelpScreen) -> None:
+    screen.rule("QUICK START")
+    entries = [
+        ("hackit run", "Open the web dashboard"),
+        ("hackit console", "Start the interactive shell"),
+        ("hackit guide", "Read the beginner guide"),
+        ("hackit help web", "Explore a command group"),
+    ]
+    width = max(_help_vlen(cmd) for cmd, _ in entries) + 3
+    for cmd, desc in entries:
+        screen.add(
+            "    "
+            + _help_style(_help_pad(cmd, width), screen.palette.accent, bold=True)
+            + _help_style(desc, screen.palette.muted)
+        )
+
+
+def render_modern_help(command: click.Command, ctx: click.Context) -> str:
+    """Render a complete, themed help screen for any Click command."""
+    screen = _HelpScreen()
+    palette = screen.palette
+    is_root = command is _HELP_ROOT
+    is_group = isinstance(command, click.Group)
+    path = _help_command_path(command, ctx)
+
+    if is_root:
+        screen.box(
+            [
+                ("◆ HACKIT  ·  v" + _HELP_VERSION, palette.main, True),
+                ("Hexa-Engine Penetration Testing Framework", palette.text, True),
+                ("Recon  ·  Web  ·  Exploit  ·  Automate  ·  Report", palette.muted, False),
+            ]
+        )
+        screen.rule("USAGE")
+    else:
+        # Module and command pages use their own compact layout: a vertical
+        # accent bar, short labels and no dashboard box.
+        screen.tool_header(path, _help_describe(tuple(path), command) or "Command reference")
+        screen.label("Usage")
+
+    usage = _help_usage_line(command, ctx, path, is_root, is_group)
+    screen.add("    " + _help_style(usage, palette.text, bold=True))
+
+    if is_root:
+        commands = getattr(command, "commands", {})
+        known: set = set()
+        for title, names in _HELP_ROOT_CATEGORIES:
+            selected = {name: commands[name] for name in names if name in commands}
+            if not selected:
+                continue
+            known.update(selected)
+            screen.rule(title)
+            screen.command_list(selected, (), [name for name in names if name in selected])
+        leftovers = {name: cmd for name, cmd in commands.items() if name not in known}
+        if leftovers:
+            screen.rule("OTHER COMMANDS")
+            screen.command_list(leftovers, ())
+
+        _help_quick_start(screen)
+
+        group_count = sum(
+            1 for cmd in commands.values() if isinstance(cmd, click.Group)
+        )
+        screen.rule("STATUS")
+        screen.add(
+            "    "
+            + _help_style(f"v{_HELP_VERSION}", palette.status, bold=True)
+            + _help_style(f"  ·  {len(commands)} commands", palette.muted)
+            + _help_style(f"  ·  {group_count} groups", palette.muted)
+            + _help_style("  ·  system ready", palette.status, bold=True)
+        )
+        screen.footer(
+            ["hackit help <command>   ·   hackit guide   ·   hackit examples"],
+            "Use HackIt only on systems you own or have explicit written permission to test.",
+        )
+    elif is_group:
+        screen.label("Commands")
+        screen.command_list(
+            getattr(command, "commands", {}),
+            tuple(path),
+            _HELP_GROUP_ORDER.get(tuple(path)),
+        )
+        back = "hackit help " + " ".join(path)
+        screen.footer(
+            [f"hackit help {(' '.join(path) + ' <command>').strip()}   ·   {back}"],
+        )
+    else:
+        records = _help_option_records(command, ctx)
+        if records:
+            screen.label("Flags")
+            screen.flags(records)
+            if any(required for _, _, required in records):
+                screen.add("")
+                screen.add("    " + _help_style("* required", palette.muted))
+
+        if path:
+            parent = "hackit help " + " ".join(path[:-1]) if len(path) > 1 else "hackit help"
+            screen.footer(
+                [f"{parent}   ·   hackit guide   ·   hackit examples"],
+            )
+        else:
+            screen.footer(["hackit guide   ·   hackit examples"])
+
+    return screen.render()
+
+
+def render_unknown_topic(topic: str, candidates: Iterable[str]) -> str:
+    """Small, friendly error block used by the ``help`` command."""
+    palette = _HelpPalette()
+    names = sorted(candidates)
+    import difflib
+
+    matches = difflib.get_close_matches(topic, names, n=4, cutoff=0.45)
+    lines = [
+        "",
+        "  "
+        + _help_style("[!] ", palette.warn)
+        + _help_style(f"Unknown help topic: {topic}", palette.warn),
+    ]
+    if matches:
+        lines.append(
+            "  "
+            + _help_style("[i] ", palette.accent)
+            + _help_style("Did you mean: " + ", ".join(matches), palette.muted)
+        )
+    if names:
+        lines.append(
+            "  "
+            + _help_style("[i] ", palette.accent)
+            + _help_style("Available: " + ", ".join(names), palette.muted)
+        )
+    lines.append(
+        "  "
+        + _help_style("[i] ", palette.accent)
+        + _help_style("Run 'hackit help' to see the full command dashboard.", palette.muted)
+    )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def install_modern_help(root: click.Command, version: str = "2.1.0") -> None:
+    """Install the HackIt help renderer for every Click command in this process."""
+    global _HELP_ROOT, _HELP_VERSION, _HELP_INSTALLED
+
+    _HELP_ROOT = root
+    _HELP_VERSION = version
+    if _HELP_INSTALLED:
+        return
+
+    original_get_help = click.Command.get_help
+
+    def _modern_get_help(self: click.Command, ctx: click.Context) -> str:
+        try:
+            return render_modern_help(self, ctx)
+        except Exception:
+            # Never break a command just because the cosmetic layer failed.
+            return original_get_help(self, ctx)
+
+    click.Command.get_help = _modern_get_help  # type: ignore[assignment]
+    _HELP_INSTALLED = True
 
 
 if __name__ == '__main__':
