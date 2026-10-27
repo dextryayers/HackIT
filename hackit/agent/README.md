@@ -261,6 +261,12 @@ baseline and require database-specific errors, reproducible delays, confirmed
 boolean differentials or internal-service content. A generic HTTP 200 or 500 is
 never reported as a vulnerability.
 
+**The AI report mentions a vulnerability that was not found**
+Only the findings table and verified probe hits count as evidence. AI narrative
+sections are labelled `narrative, not evidence`, and unsupported confirmation
+language is rewritten deterministically. Re-run the relevant probe with
+`HACKIT_AUTHORIZED=1` to turn a hypothesis into evidence.
+
 **Go binary not found**
 Run `bash hackit/agent/go/build.sh` from the repository root. The bridge falls
 back from `worker` to `hative` where possible, but the AI engines must exist.

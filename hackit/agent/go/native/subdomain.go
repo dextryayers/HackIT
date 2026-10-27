@@ -4,12 +4,62 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 )
+
+var hostnamePattern = regexp.MustCompile(
+	`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$`,
+)
+
+// normalizeSubdomain coerces a source value (which may be a URL, a wildcard or
+// an error message containing the target) into a valid subdomain of domain.
+func normalizeSubdomain(name, domain string) string {
+	name = strings.TrimSpace(strings.ToLower(name))
+	name = strings.TrimPrefix(name, "*.")
+	name = strings.TrimSuffix(name, ".")
+	if name == "" {
+		return ""
+	}
+	if strings.Contains(name, "://") {
+		if parsed, err := url.Parse(name); err == nil && parsed.Hostname() != "" {
+			name = parsed.Hostname()
+		}
+	} else if strings.ContainsAny(name, "/?#") {
+		if parsed, err := url.Parse("//" + name); err == nil && parsed.Hostname() != "" {
+			name = parsed.Hostname()
+		}
+	}
+	name = strings.TrimSuffix(strings.ToLower(name), ".")
+	if name == "" || name == domain || net.ParseIP(name) != nil {
+		return ""
+	}
+	if !hostnamePattern.MatchString(name) {
+		return ""
+	}
+	if !strings.HasSuffix(name, "."+domain) {
+		return ""
+	}
+	return name
+}
+
+func normalizeDomain(domain string) string {
+	domain = strings.TrimSpace(strings.ToLower(domain))
+	domain = strings.TrimPrefix(domain, "*.")
+	domain = strings.TrimSuffix(domain, ".")
+	if strings.Contains(domain, "://") {
+		if parsed, err := url.Parse(domain); err == nil && parsed.Hostname() != "" {
+			domain = parsed.Hostname()
+		}
+	}
+	return strings.TrimSuffix(domain, ".")
+}
 
 // SubdomainResult stores the enumerated subdomains
 type SubdomainResult struct {
@@ -23,6 +73,16 @@ type CrtShResult struct {
 
 // EnumerateSubdomains performs passive OSINT to find subdomains
 func EnumerateSubdomains(domain string) ([]string, error) {
+	domain = normalizeDomain(domain)
+	if domain == "" {
+		return []string{}, nil
+	}
+	if net.ParseIP(domain) != nil || !hostnamePattern.MatchString(domain) {
+		// IP addresses and single-label hosts cannot have public subdomains;
+		// querying OSINT sources for them only produces noise.
+		return []string{}, nil
+	}
+
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	subdomainMap := make(map[string]bool)
@@ -41,10 +101,17 @@ func EnumerateSubdomains(domain string) ([]string, error) {
 
 	wg.Wait()
 
+	seen := make(map[string]bool)
 	var results []string
 	for sub := range subdomainMap {
-		results = append(results, sub)
+		normalized := normalizeSubdomain(sub, domain)
+		if normalized == "" || seen[normalized] {
+			continue
+		}
+		seen[normalized] = true
+		results = append(results, normalized)
 	}
+	sort.Strings(results)
 
 	return results, nil
 }

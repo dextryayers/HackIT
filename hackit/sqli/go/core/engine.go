@@ -24,6 +24,9 @@ type Options struct {
 	FollowRedirect bool     `json:"follow_redirect,omitempty"`
 
 	Mode       string   `json:"mode,omitempty"`
+	Technique  string   `json:"technique,omitempty"`
+	DBMS       string   `json:"dbms,omitempty"`
+	Level      int      `json:"level,omitempty"`
 	RiskLevel  int      `json:"risk_level,omitempty"`
 	Depth      int      `json:"depth,omitempty"`
 	Threads    int      `json:"threads,omitempty"`
@@ -33,6 +36,33 @@ type Options struct {
 	Encode     string   `json:"encode,omitempty"`
 	BypassWAF  bool     `json:"bypass_waf,omitempty"`
 	Stealth    bool     `json:"stealth,omitempty"`
+
+	// Injection point selection and boundaries.
+	Param     string `json:"param,omitempty"`
+	SkipParam string `json:"skip_param,omitempty"`
+	Prefix    string `json:"prefix,omitempty"`
+	Suffix    string `json:"suffix,omitempty"`
+
+	// Query and extraction controls.
+	SQLQuery   string `json:"sql_query,omitempty"`
+	Rows       int    `json:"rows,omitempty"`
+	Limit      int    `json:"limit,omitempty"`
+	Offset     int    `json:"offset,omitempty"`
+	Where      string `json:"where,omitempty"`
+	ColumnsCSV string `json:"columns_csv,omitempty"`
+	MaxLength  int    `json:"max_length,omitempty"`
+	TimeSecs   int    `json:"time_secs,omitempty"`
+
+	// Metadata shortcuts.
+	CurrentDB   bool `json:"current_db,omitempty"`
+	CurrentUser bool `json:"current_user,omitempty"`
+	Hostname    bool `json:"hostname,omitempty"`
+	Banner      bool `json:"banner,omitempty"`
+	Privileges  bool `json:"privileges,omitempty"`
+	IsDBA       bool `json:"is_dba,omitempty"`
+	Users       bool `json:"users,omitempty"`
+	Passwords   bool `json:"passwords,omitempty"`
+	Roles       bool `json:"roles,omitempty"`
 
 	Fingerprint bool `json:"fingerprint,omitempty"`
 	BannerGrab  bool `json:"banner_grab,omitempty"`
@@ -111,8 +141,16 @@ type Engine struct {
 	LastResponseHeaders  http.Header
 	LastResponseBody     string
 	LastResponseTime     time.Duration
+	LastStatusCode       int
 
-	rateLimiter      *RateLimiter
+	Points       []InjectionPoint
+	Session      *Session
+	BaselineBody string
+	BaselineLen  int
+	BaselineTime time.Duration
+
+	lastCookieValue string
+	rateLimiter     *RateLimiter
 }
 
 type RateLimiter struct {

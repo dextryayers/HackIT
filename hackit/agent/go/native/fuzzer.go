@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -73,8 +74,29 @@ func fuzzKind(path string) string {
 	}
 }
 
+// normalizeFuzzBase removes query strings and fragments from a target URL and
+// guarantees a trailing slash.  Without this, a target such as
+// http://host/?id=1 would produce http://host/?id=1/.git/config instead of
+// http://host/.git/config, silently testing the wrong path.
+func normalizeFuzzBase(baseURL string) string {
+	parsed, err := url.Parse(baseURL)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return baseURL
+	}
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	if parsed.Path == "" {
+		parsed.Path = "/"
+	}
+	if !strings.HasSuffix(parsed.Path, "/") {
+		parsed.Path += "/"
+	}
+	return parsed.String()
+}
+
 // FuzzDirectories concurrently checks for sensitive files/directories.
 func FuzzDirectories(baseURL string, concurrency int) []FuzzResult {
+	baseURL = normalizeFuzzBase(baseURL)
 	if !strings.HasSuffix(baseURL, "/") {
 		baseURL += "/"
 	}

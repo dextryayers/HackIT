@@ -11,21 +11,54 @@ import (
 )
 
 var userAgents = []string{
-	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
-	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36",
-	"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
-	"Mozilla/5.0 (iPhone; CPU iPhone OS 17_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Mobile/15E148 Safari/604.1",
-	"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/119.0",
+	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+	"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+	"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
+	"Mozilla/5.0 (Macintosh; Intel Mac OS X 14.4; rv:125.0) Gecko/20100101 Firefox/125.0",
 }
 
+// Request keeps the historical signature used by the older modules. It
+// resolves the parameter to a discovered injection point and delegates to
+// RequestAt.
 func (e *Engine) Request(payload string, param string) (string, int, http.Header, error) {
-	// Adaptive rate limiting
+	point := e.resolvePoint(param)
+	return e.RequestAt(point, payload)
+}
+
+func (e *Engine) resolvePoint(param string) InjectionPoint {
+	if param != "" {
+		for _, p := range e.Points {
+			if strings.EqualFold(p.Name, param) {
+				return p
+			}
+		}
+		return InjectionPoint{
+			Location: LocationQuery,
+			Name:     param,
+			Original: "",
+			Method:   strings.ToUpper(e.Opts.Method),
+		}
+	}
+	if len(e.Points) > 0 {
+		return e.Points[0]
+	}
+	return InjectionPoint{
+		Location: LocationQuery,
+		Name:     "",
+		Method:   strings.ToUpper(e.Opts.Method),
+	}
+}
+
+// RequestAt sends one request with the payload placed at the given injection
+// point. The original value is preserved and the payload is appended, which is
+// the same contract used by classic SQL injection scanners.
+func (e *Engine) RequestAt(point InjectionPoint, payload string) (string, int, http.Header, error) {
 	adaptiveDelay := e.rateLimiter.GetDelay()
 	if adaptiveDelay > 0 {
 		time.Sleep(adaptiveDelay)
 	}
 
-	// Stealth mode: Random jitter on top of adaptive delay
 	if e.Opts.Stealth {
 		jitter := rand.Intn(1000)
 		time.Sleep(time.Duration(e.Opts.Delay+jitter) * time.Millisecond)
@@ -33,104 +66,129 @@ func (e *Engine) Request(payload string, param string) (string, int, http.Header
 		time.Sleep(time.Duration(e.Opts.Delay) * time.Millisecond)
 	}
 
-	// Retry loop
 	maxRetries := e.Opts.Retry
 	if maxRetries <= 0 {
-		maxRetries = 3
+		maxRetries = 2
 	}
 
 	var lastErr error
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if attempt > 0 {
-			backoff := time.Duration(attempt*500) * time.Millisecond
-			time.Sleep(backoff)
+			time.Sleep(time.Duration(attempt*400) * time.Millisecond)
 		}
-
-		bodyStr, blen, headers, err := e.doRequest(payload, param)
+		body, length, headers, err := e.doRequestAt(point, payload)
 		if err == nil {
-			return bodyStr, blen, headers, nil
+			return body, length, headers, nil
 		}
 		lastErr = err
-
-		// Don't retry on certain errors
 		if isFatalError(err) {
 			break
 		}
 	}
-
 	return "", 0, nil, lastErr
 }
 
 func isFatalError(err error) bool {
+	if err == nil {
+		return false
+	}
 	msg := err.Error()
 	return strings.Contains(msg, "invalid URL") ||
-		strings.Contains(msg, "unsupported protocol")
+		strings.Contains(msg, "unsupported protocol") ||
+		strings.Contains(msg, "no Host")
 }
 
-func (e *Engine) doRequest(payload string, param string) (string, int, http.Header, error) {
-	var body io.Reader
+func (e *Engine) doRequestAt(point InjectionPoint, payload string) (string, int, http.Header, error) {
 	u, err := url.Parse(e.Opts.URL)
 	if err != nil {
 		return "", 0, nil, err
 	}
 
-	// Multi-parameter injection support
-	if e.Opts.Method == "GET" || e.Opts.Method == "" {
-		q := u.Query()
-		if param != "" {
-			existing := q.Get(param)
-			q.Set(param, existing+payload)
-		} else {
-			// Try all params
-			for p := range q {
-				existing := q.Get(p)
-				q.Set(p, existing+payload)
-				break
-			}
-		}
-		u.RawQuery = q.Encode()
-	} else {
-		if e.Opts.Data != "" && param != "" {
-			vals, _ := url.ParseQuery(e.Opts.Data)
-			existing := vals.Get(param)
-			vals.Set(param, existing+payload)
-			body = strings.NewReader(vals.Encode())
-		} else if e.Opts.Data != "" {
-			body = strings.NewReader(e.Opts.Data)
-		}
+	method := strings.ToUpper(strings.TrimSpace(point.Method))
+	if method == "" {
+		method = strings.ToUpper(strings.TrimSpace(e.Opts.Method))
+	}
+	if method == "" {
+		method = http.MethodGet
 	}
 
-	targetURL := u.String()
-	req, err := http.NewRequest(e.Opts.Method, targetURL, body)
+	var body io.Reader
+	contentType := ""
+
+	switch point.Location {
+	case LocationQuery:
+		q := u.Query()
+		q.Set(point.Name, point.Original+payload)
+		u.RawQuery = q.Encode()
+	case LocationBody:
+		form, err := url.ParseQuery(e.Opts.Data)
+		if err != nil {
+			return "", 0, nil, err
+		}
+		form.Set(point.Name, point.Original+payload)
+		body = strings.NewReader(form.Encode())
+		contentType = "application/x-www-form-urlencoded"
+		method = http.MethodPost
+	case LocationJSON:
+		updated, err := setJSONPath(e.Opts.Data, point.Path, point.Original+payload)
+		if err != nil {
+			return "", 0, nil, err
+		}
+		body = strings.NewReader(updated)
+		contentType = "application/json"
+		method = http.MethodPost
+	case LocationCookie:
+		cookie := replaceCookieValue(e.Opts.Cookie, point.Name, point.Original+payload)
+		e.setCookieHeader(cookie)
+	case LocationHeader:
+		// Applied after the base headers below.
+	}
+
+	req, err := http.NewRequest(method, u.String(), body)
 	if err != nil {
 		return "", 0, nil, err
 	}
 
-	// Set Headers
-	for _, h := range e.Opts.Header {
-		parts := strings.SplitN(h, ":", 2)
-		if len(parts) == 2 {
-			req.Header.Set(strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]))
+	for _, raw := range e.Opts.Header {
+		pair := strings.SplitN(raw, ":", 2)
+		if len(pair) != 2 {
+			continue
 		}
+		name := strings.TrimSpace(pair[0])
+		value := strings.TrimSpace(pair[1])
+		if point.Location == LocationHeader && strings.EqualFold(name, point.Name) {
+			value = point.Original + payload
+		}
+		req.Header.Set(name, value)
+	}
+
+	if point.Location == LocationHeader {
+		req.Header.Set(point.Name, point.Original+payload)
+	}
+
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	} else if e.Opts.Data != "" && (method == http.MethodPost || method == http.MethodPut || method == http.MethodPatch) {
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}
 
 	if e.Opts.Agent != "" {
 		req.Header.Set("User-Agent", e.Opts.Agent)
 	} else if e.Opts.Stealth {
 		req.Header.Set("User-Agent", userAgents[rand.Intn(len(userAgents))])
-		req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
+		req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
 		req.Header.Set("Accept-Language", "en-US,en;q=0.9")
-		req.Header.Set("Sec-Ch-Ua", "\"Google Chrome\";v=\"119\", \"Chromium\";v=\"119\", \"Not?A_Brand\";v=\"24\"")
-		req.Header.Set("Sec-Ch-Ua-Mobile", "?0")
-		req.Header.Set("Sec-Ch-Ua-Platform", "\"Windows\"")
 		req.Header.Set("Sec-Fetch-Dest", "document")
 		req.Header.Set("Sec-Fetch-Mode", "navigate")
 		req.Header.Set("Sec-Fetch-Site", "none")
-		req.Header.Set("Sec-Fetch-User", "?1")
 		req.Header.Set("Upgrade-Insecure-Requests", "1")
 	}
-	if e.Opts.Cookie != "" {
+
+	if point.Location != LocationCookie && e.Opts.Cookie != "" {
 		req.Header.Set("Cookie", e.Opts.Cookie)
+	}
+	if point.Location == LocationCookie {
+		req.Header.Set("Cookie", e.currentCookie())
 	}
 	if e.Opts.Referer != "" {
 		req.Header.Set("Referer", e.Opts.Referer)
@@ -150,13 +208,44 @@ func (e *Engine) doRequest(payload string, param string) (string, int, http.Head
 		return "", 0, nil, err
 	}
 
-	// Store last response metadata
 	e.LastResponseHeaders = resp.Header
 	e.LastResponseBody = string(respBody)
 	e.LastResponseTime = elapsed
-
-	// Feed response time to rate limiter
+	e.LastStatusCode = resp.StatusCode
 	e.rateLimiter.RecordResponseTime(elapsed)
 
 	return string(respBody), len(respBody), resp.Header, nil
+}
+
+func replaceCookieValue(raw, name, value string) string {
+	parts := strings.Split(raw, ";")
+	found := false
+	for i, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		pair := strings.SplitN(trimmed, "=", 2)
+		if len(pair) != 2 {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(pair[0]), name) {
+			parts[i] = fmt.Sprintf(" %s=%s", strings.TrimSpace(pair[0]), value)
+			found = true
+		}
+	}
+	if !found {
+		parts = append(parts, fmt.Sprintf(" %s=%s", name, value))
+	}
+	return strings.TrimSpace(strings.Join(parts, ";"))
+}
+
+// Cookie injection needs a per-request cookie value without mutating the
+// shared options. This small field keeps the value for the current request.
+func (e *Engine) setCookieHeader(value string) {
+	e.lastCookieValue = value
+}
+
+func (e *Engine) currentCookie() string {
+	if e.lastCookieValue != "" {
+		return e.lastCookieValue
+	}
+	return e.Opts.Cookie
 }

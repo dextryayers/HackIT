@@ -157,6 +157,23 @@ def _is_private_host(host: str) -> bool:
     )
 
 
+def _is_ip(host: str) -> bool:
+    try:
+        ipaddress.ip_address((host or "").strip().strip("[]"))
+        return True
+    except ValueError:
+        return False
+
+
+def _scan_base_url(base_url: str) -> str:
+    """Base URL for path-based scanners: strip query and fragment.
+
+    The probe phase needs the query string to discover parameters, but path
+    scanners must not append ``/.git/config`` after ``?id=1``.
+    """
+    return (base_url or "").split("#", 1)[0].split("?", 1)[0]
+
+
 def _target_has_web(state: PentestState) -> bool:
     scan_data = state.get("scan_data") or {}
     if "has_web" in scan_data:
@@ -185,6 +202,7 @@ def _target_has_web(state: PentestState) -> bool:
 def recon_node(state: PentestState) -> Dict[str, Any]:
     target = state["target"]
     host, scheme, port, base_url = _target_parts(state)
+    scan_base = _scan_base_url(base_url)
     bridge = GoBridge()
     updates: Dict[str, Any] = {"phase": Phase.RECON.value}
 
@@ -193,6 +211,10 @@ def recon_node(state: PentestState) -> Dict[str, Any]:
         return ("ports", data if isinstance(data, list) else [])
 
     def do_subdomain():
+        # Public OSINT cannot enumerate subdomains of an IP address or a
+        # single-label host; querying it only returns the target itself.
+        if _is_ip(host) or "." not in (host or ""):
+            return ("subdomains", [])
         data = _module_payload(bridge.run_worker(subdomain=host or target))
         return ("subdomains", data if isinstance(data, list) else [])
 
@@ -209,7 +231,7 @@ def recon_node(state: PentestState) -> Dict[str, Any]:
         return ("headers", data if isinstance(data, list) else [])
 
     def do_fuzz():
-        data = _module_payload(bridge.run_worker(fuzz=base_url))
+        data = _module_payload(bridge.run_worker(fuzz=scan_base))
         return ("fuzz", data if isinstance(data, list) else [])
 
     scan_data: Dict[str, Any] = {}
@@ -241,7 +263,7 @@ def recon_node(state: PentestState) -> Dict[str, Any]:
         if not verified or not path or not evidence:
             continue
         _finding(
-            findings, "misconfig", f"{base_url.rstrip('/')}/{str(path).lstrip('/')}",
+            findings, "misconfig", f"{scan_base.rstrip('/')}/{str(path).lstrip('/')}",
             f"Sensitive path accessible: {path}",
             f"HTTP {status} for {path} — {evidence}",
             severity="medium", cvss=5.3,
@@ -560,6 +582,7 @@ Be concise: answer in at most 120 words.
             or plan.lstrip().startswith("{")):
         plan_error = plan or "empty AI response"
         plan = _offline_analysis(state)
+    plan = _sanitize_ai_narrative(plan, False)
 
     result = {
         "phase": Phase.PLAN.value,
@@ -804,6 +827,7 @@ def _rewrite_confirmation_chunk(match: "re.Match[str]") -> str:
     lowered = chunk.lower()
     if "confirmed" not in lowered or _NEGATION_RE.search(chunk):
         return chunk
+    starts_upper = chunk.lstrip()[:1].isupper()
     chunk = re.sub(
         r"\b(?:is|are|was|were|has been|have been)\s+confirmed\b",
         "remains unverified",
@@ -818,7 +842,13 @@ def _rewrite_confirmation_chunk(match: "re.Match[str]") -> str:
         replacement = "possible"
         return replacement.capitalize() if original[:1].isupper() else replacement
 
-    return re.sub(r"\bconfirmed\b", possible, chunk, flags=re.IGNORECASE)
+    chunk = re.sub(r"\bconfirmed\b", possible, chunk, flags=re.IGNORECASE)
+    if starts_upper:
+        for index, char in enumerate(chunk):
+            if not char.isspace():
+                chunk = chunk[:index] + char.upper() + chunk[index + 1:]
+                break
+    return chunk
 
 
 def _sanitize_ai_narrative(text: str, has_evidence: bool) -> str:
@@ -835,9 +865,14 @@ def _sanitize_ai_narrative(text: str, has_evidence: bool) -> str:
 
     cleaned = re.sub(r"[^.!?\n]+[.!?]?", _rewrite_confirmation_chunk, cleaned)
     # A narrative must not compete with the deterministic risk score.
+    def risk_unverified(match: "re.Match[str]") -> str:
+        original = match.group(0)
+        replacement = "risk score remains unverified"
+        return replacement.capitalize() if original[:1].isupper() else replacement
+
     cleaned = re.sub(
-        r"\brisk\s*(?:score)?\s*[:=]?\s*([1-9]\d*(?:\.\d+)?)\s*/\s*10\b",
-        "risk score remains unverified",
+        r"\brisk\s*(?:score)?\s*(?:(?:of|is)\s*)?[:=]?\s*([1-9]\d*(?:\.\d+)?)\s*/\s*10\b",
+        risk_unverified,
         cleaned,
         flags=re.IGNORECASE,
     )
@@ -997,14 +1032,9 @@ def _offline_report(state: PentestState) -> str:
         lines.append("")
 
     lines.extend(["## AI Analysis (narrative, not evidence)", ""])
-    if not has_evidence:
-        lines.extend(["> " + UNVERIFIED_EVIDENCE_NOTE, ""])
     lines.extend([analysis[:4000] or "No AI analysis was available.", ""])
     if attack_plan:
-        lines.extend(["## AI Attack Plan (narrative, not evidence)", ""])
-        if not has_evidence:
-            lines.extend(["> " + UNVERIFIED_EVIDENCE_NOTE, ""])
-        lines.extend([attack_plan[:3000], ""])
+        lines.extend(["## AI Attack Plan (narrative, not evidence)", "", attack_plan[:3000], ""])
     lines.extend([
         "## Conclusion",
         "",
