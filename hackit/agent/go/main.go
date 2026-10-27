@@ -49,7 +49,12 @@ func main() {
 	stream := flag.Bool("stream", false, "Stream tokens as NDJSON")
 	noHistory := flag.Bool("no-history", false, "Do not load or save engine history")
 	timeoutSec := flag.Int("timeout", 300, "Request timeout in seconds")
+	jsonMode := flag.Bool("json", false, "Request JSON-formatted output (Ollama format=json)")
+	maxTokens := flag.Int("max-tokens", 0, "Maximum response tokens (0 = provider default)")
 	flag.Parse()
+
+	maxTokensSetting = *maxTokens
+	jsonModeSetting = *jsonMode
 
 	history := NewHistoryManager()
 	if *clearHist {

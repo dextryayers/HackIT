@@ -8,6 +8,16 @@ import (
 	"strings"
 )
 
+var maxTokensSetting = 0
+var jsonModeSetting = false
+
+func requestMaxTokens(fallback int) int {
+	if maxTokensSetting > 0 {
+		return maxTokensSetting
+	}
+	return fallback
+}
+
 func openAIURL(provider string) (string, error) {
 	switch provider {
 	case "groq":
@@ -163,7 +173,7 @@ func callGemini(client *http.Client, key, prompt, system, model string, hist []M
 			reqData := GeminiRequest{
 				Contents: contents,
 				GenerationConfig: &GeminiGenerationConfig{
-					Temperature: 0.7, MaxOutputTokens: 8192,
+					Temperature: 0.7, MaxOutputTokens: requestMaxTokens(8192),
 				},
 			}
 			if system != "" {
@@ -254,7 +264,7 @@ func callOpenAI(client *http.Client, provider, key, prompt, system, model string
 		}
 		for attempt := 0; attempt < 2; attempt++ {
 			reqBody := OpenAIRequest{
-				Model: activeModel, MaxTokens: 8192, Temperature: 0.7,
+				Model: activeModel, MaxTokens: requestMaxTokens(8192), Temperature: 0.7,
 				Messages: openAIMessages(system, prompt, hist),
 			}
 			jsonData, _ := json.Marshal(reqBody)
@@ -350,7 +360,7 @@ func callClaude(client *http.Client, key, prompt, system, model string, hist []M
 
 	for _, candidate := range candidates {
 		reqBody := ClaudeRequest{
-			Model: candidate, System: system, MaxTokens: 8192,
+			Model: candidate, System: system, MaxTokens: requestMaxTokens(8192),
 			Messages: sanitizeClaudeMessages(hist, prompt),
 		}
 		jsonData, _ := json.Marshal(reqBody)
@@ -413,9 +423,18 @@ func callOllama(client *http.Client, key, prompt, system, model string, hist []M
 		model = "llama3"
 	}
 
+	options := map[string]interface{}{"temperature": 0.7}
+	if maxTokensSetting > 0 {
+		options["num_predict"] = maxTokensSetting
+	}
 	reqBody := OllamaRequest{
 		Model: model, Stream: false,
-		Options: map[string]interface{}{"temperature": 0.7},
+		Options: options,
+	}
+	if jsonModeSetting {
+		reqBody.Format = "json"
+		noThink := false
+		reqBody.Think = &noThink
 	}
 	if system != "" {
 		reqBody.Messages = append(reqBody.Messages, Message{Role: "system", Content: system})

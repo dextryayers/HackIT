@@ -269,6 +269,17 @@ class AIHyperBrain:
         if not use_go_history:
             cmd.append("-no-history")
         cmd.extend(["-timeout", str(max(10, int(timeout)))])
+        if mode == "payload":
+            # Payload answers are small JSON documents.  Capping tokens and
+            # requesting JSON keeps local models fast and parseable.
+            cmd.extend(["-json", "-max-tokens", "1536"])
+        elif self.engine == "native":
+            try:
+                configured_tokens = int(self.config.get("ai_max_tokens") or 0)
+            except (TypeError, ValueError):
+                configured_tokens = 0
+            if configured_tokens > 0:
+                cmd.extend(["-max-tokens", str(configured_tokens)])
         return cmd
 
     @staticmethod
