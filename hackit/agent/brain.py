@@ -70,7 +70,7 @@ class AIHyperBrain:
     """Unified agent brain with memory, fallback routing and payload forging."""
 
     def __init__(self, engine: str = "native", session: str = "", target: str = "",
-                 enable_memory: bool = True):
+                 enable_memory: bool = True, announce: bool = True):
         self.config = load_config()
         self.engine = engine if engine in ("native", "chat") else "native"
         self.base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -94,7 +94,7 @@ class AIHyperBrain:
             session_name = session or memory_session_name(self.engine, target)
             self.memory = AgentMemory(session=session_name)
 
-        if self.provider == "ollama":
+        if self.provider == "ollama" and announce:
             self._announce_ollama()
 
     # ------------------------------------------------------------------

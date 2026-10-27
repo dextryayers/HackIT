@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import time
 from typing import Any, Dict, List, Optional
 
 
@@ -188,6 +189,22 @@ class GoBridge:
             value = max(value, 300)
         return max(10, value)
 
+    @staticmethod
+    def _is_transient(error: str) -> bool:
+        """Return True for errors worth one quick retry.
+
+        Local Ollama can drop an in-flight request with EOF or a connection
+        reset while reloading a model.  A single retry succeeds once the model
+        is resident again; timeouts and auth errors are never retried because
+        they only double the waiting time.
+        """
+        lowered = (error or "").lower()
+        markers = (
+            "eof", "connection reset", "broken pipe", "server closed",
+            "unexpected eof",
+        )
+        return any(marker in lowered for marker in markers)
+
     def ai_chat(self, prompt: str, mode: str = "", provider: str = "",
                 api_key: str = "", model: str = "") -> str:
         if not self.ai_engine:
@@ -223,13 +240,20 @@ class GoBridge:
         # Long-form analysis answers do not need thousands of tokens.  A cap
         # keeps local models responsive and still allows detailed output.
         if mode in ("analyze", "attack", "correlate", "report"):
-            cmd.extend(["-max-tokens", "1200"])
+            local_caps = {
+                "analyze": 320, "attack": 320, "correlate": 180, "report": 420,
+            }
+            cap = local_caps.get(mode, 800) if provider == "ollama" else 1200
+            cmd.extend(["-max-tokens", str(cap)])
         if json_answer:
             cmd.append("-json")
         if model:
             cmd.extend(["-model", model])
 
         data = self._run_engine(cmd, timeout=timeout + 15)
+        if data.get("error") and self._is_transient(str(data["error"])):
+            time.sleep(2)
+            data = self._run_engine(cmd, timeout=timeout + 15)
         if data.get("error"):
             return f"[!] AI Error: {data['error']}"
         text = data.get("text", "[!] No response text")

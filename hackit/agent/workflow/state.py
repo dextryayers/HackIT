@@ -79,6 +79,10 @@ class PentestState(TypedDict):
     risk_score: float
     report_path: Optional[str]
     error: Optional[str]
+    analysis_error: str
+    plan_error: str
+    correlation_error: str
+    report_error: str
     messages: List[Dict[str, str]]
 
 
@@ -97,6 +101,10 @@ def make_initial_state(target: str, scope: str = "active_stealth") -> PentestSta
         "risk_score": 0.0,
         "report_path": None,
         "error": None,
+        "analysis_error": "",
+        "plan_error": "",
+        "correlation_error": "",
+        "report_error": "",
         "messages": [],
     }
 

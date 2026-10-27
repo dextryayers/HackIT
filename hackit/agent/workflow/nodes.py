@@ -18,7 +18,7 @@ from datetime import datetime
 from typing import Any, Callable, Dict, List, Tuple
 from urllib.parse import parse_qs, urlparse
 
-from .state import Finding, PentestState, Phase, persist_state
+from .state import Finding, PentestState, Phase, persist_state, target_slug
 from .tools import GoBridge
 
 WEB_PORTS = (80, 443, 8000, 8080, 8443, 8888, 3000, 5000)
@@ -471,6 +471,7 @@ def _offline_analysis(state: PentestState) -> str:
     findings = state.get("findings", [])
     lines = [
         f"Target: {state.get('target')}",
+        f"Web endpoint: {scan_data.get('web_url') or state.get('target')}",
         f"Open ports: {len(_as_list(scan_data.get('ports')))}",
         f"Subdomains: {len(_as_list(scan_data.get('subdomains')))}",
         f"Findings so far: {len(findings)}",
@@ -489,6 +490,7 @@ def analyze_node(state: PentestState) -> Dict[str, Any]:
 
     prompt = f"""Analyze this target for an authorised penetration test.
 Target: {target}
+Web endpoint: {scan_data.get('web_url') or target}
 Ports: {json.dumps(scan_data.get('ports', []), indent=2, default=str)[:4000]}
 Technologies: {json.dumps(scan_data.get('tech', {}), indent=2, default=str)[:3000]}
 WAF: {json.dumps(scan_data.get('waf', {}), indent=2, default=str)[:2000]}
@@ -502,10 +504,12 @@ Generated payload classes: {list((state.get('payloads') or {}).get('results', {}
 
 Identify the attack surface, likely vulnerability classes, entry points and
 the three most valuable tests to run next. Be explicit about confidence.
+Be concise: answer in at most 120 words.
 """
     analysis = bridge.ai_chat(prompt, mode="analyze")
     analysis_error = ""
-    if not analysis or analysis.startswith("[!]"):
+    if (not analysis or analysis.startswith("[!]") or len(analysis.strip()) < 80
+            or analysis.lstrip().startswith("{")):
         analysis_error = analysis or "empty AI response"
         analysis = _offline_analysis(state)
 
@@ -529,6 +533,7 @@ def plan_node(state: PentestState) -> Dict[str, Any]:
     prompt = f"""Create a prioritised exploitation plan for an authorised test.
 
 Target: {target}
+Web endpoint: {scan_data.get('web_url') or target}
 Analysis: {analysis[:4000]}
 Ports: {json.dumps(scan_data.get('ports', []), indent=2, default=str)[:2000]}
 Technologies: {json.dumps(scan_data.get('tech', {}), indent=2, default=str)[:2000]}
@@ -543,10 +548,12 @@ Return an ordered plan that covers:
 6. Open redirect, 403 bypass and missing security headers
 7. SSL/TLS and subdomain takeover issues
 Sort by criticality and state the exact endpoint/parameter to test when known.
+Be concise: answer in at most 120 words.
 """
     plan = bridge.ai_chat(prompt, mode="attack")
     plan_error = ""
-    if not plan or plan.startswith("[!]"):
+    if (not plan or plan.startswith("[!]") or len(plan.strip()) < 80
+            or plan.lstrip().startswith("{")):
         plan_error = plan or "empty AI response"
         plan = _offline_analysis(state)
 
@@ -774,6 +781,7 @@ def correlate_node(state: PentestState) -> Dict[str, Any]:
 
     prompt = f"""Correlate these authorised pentest findings into attack chains.
 Target: {target}
+Web endpoint: {scan_data.get('web_url') or target}
 Ports: {json.dumps(scan_data.get('ports', []), indent=2, default=str)[:2000]}
 Technologies: {json.dumps(scan_data.get('tech', {}), indent=2, default=str)[:2000]}
 OSINT: {json.dumps(scan_data.get('osint', {}), indent=2, default=str)[:2500]}
@@ -784,10 +792,12 @@ Probe results: {json.dumps(state.get('probe_results', []), indent=2, default=str
 2. Calculate an overall risk score from 0 to 10.
 3. Identify the critical path and the next best action.
 4. Separate confirmed findings from hypotheses.
+Be concise: answer in at most 80 words.
 """
     correlation = bridge.ai_chat(prompt, mode="correlate")
     correlation_error = ""
-    if not correlation or correlation.startswith("[!]"):
+    if (not correlation or correlation.startswith("[!]") or len(correlation.strip()) < 40
+            or correlation.lstrip().startswith("{")):
         correlation_error = correlation or "empty AI response"
         correlation = f"{len(findings)} finding(s) correlated offline."
 
@@ -811,6 +821,109 @@ Probe results: {json.dumps(state.get('probe_results', []), indent=2, default=str
     return result
 
 
+def _offline_report(state: PentestState) -> str:
+    """Build a professional report from evidence when the AI is unavailable."""
+    target = state.get("target", "")
+    findings = state.get("findings", []) or []
+    scan_data = state.get("scan_data", {}) or {}
+    risk_score = state.get("risk_score", 0.0)
+    analysis = state.get("analysis", "")
+    attack_plan = state.get("attack_plan", "")
+
+    severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+    ranked = sorted(
+        findings,
+        key=lambda item: severity_order.get(str(item.get("severity", "info")).lower(), 5),
+    )
+    counts: Dict[str, int] = {}
+    for item in ranked:
+        severity = str(item.get("severity", "info")).lower()
+        counts[severity] = counts.get(severity, 0) + 1
+
+    lines = [
+        "## Executive Summary",
+        "",
+        f"Automated assessment of **{target}** completed with a risk score of "
+        f"**{risk_score}/10** and **{len(findings)}** evidence-backed finding(s).",
+        "",
+    ]
+    if counts:
+        lines.append("| Severity | Count |")
+        lines.append("| --- | --- |")
+        for severity in ("critical", "high", "medium", "low", "info"):
+            if counts.get(severity):
+                lines.append(f"| {severity.title()} | {counts[severity]} |")
+        lines.append("")
+    if not findings:
+        lines.extend([
+            "No exploitable issue with a reproducible signal was confirmed in this "
+            "run. Absence of findings is not proof of security; manual review and "
+            "authenticated testing remain recommended.",
+            "",
+        ])
+
+    lines.extend([
+        "## Methodology and Scope",
+        "",
+        "Phases executed: passive recon, OSINT, JavaScript analysis, parameter "
+        "discovery, payload generation, AI-assisted analysis, active verification, "
+        "correlation and reporting. Active payload verification was only performed "
+        "when explicitly authorised.",
+        "",
+    ])
+    ports = _as_list(scan_data.get("ports"))
+    tech = scan_data.get("tech") or {}
+    subdomains = _as_list(scan_data.get("subdomains"))
+    web_url = scan_data.get("web_url") or target
+    lines.append(f"- Web endpoint tested: {web_url}")
+    lines.append(f"- Open ports observed: {len(ports)}")
+    lines.append(f"- Subdomains observed: {len(subdomains)}")
+    if isinstance(tech, dict) and tech:
+        lines.append(f"- Technology hints: {json.dumps(tech, default=str)[:500]}")
+    lines.append("")
+
+    if ranked:
+        lines.extend([
+            "## Key Findings",
+            "",
+            "| Severity | CVSS | Finding | Target | Evidence |",
+            "| --- | --- | --- | --- | --- |",
+        ])
+        for item in ranked:
+            evidence = str(item.get("evidence", ""))[:180].replace("|", "\\|")
+            title = str(item.get("title", item.get("type", "finding")))[:120].replace("|", "\\|")
+            target_value = str(item.get("target", target))[:120].replace("|", "\\|")
+            lines.append(
+                f"| {str(item.get('severity', 'info')).title()} | "
+                f"{item.get('cvss', '—')} | {title} | {target_value} | {evidence} |"
+            )
+        lines.append("")
+
+        lines.extend(["## Remediation Recommendations", ""])
+        remediation_seen = set()
+        for item in ranked:
+            suggestion = str(item.get("remediation", "")).strip()
+            if suggestion and suggestion not in remediation_seen:
+                remediation_seen.add(suggestion)
+                lines.append(f"- {suggestion}")
+        if not remediation_seen:
+            lines.append("- Review each finding and apply the vendor/OWASP guidance.")
+        lines.append("")
+
+    lines.extend(["## Analysis", "", analysis[:4000] or "No AI analysis was available.", ""])
+    if attack_plan:
+        lines.extend(["## Attack Plan", "", attack_plan[:3000], ""])
+    lines.extend([
+        "## Conclusion",
+        "",
+        "This report reflects only the evidence collected during the run. "
+        "Hypotheses are explicitly separated from confirmed findings, and no "
+        "destructive actions were performed.",
+        "",
+    ])
+    return "\n".join(lines)
+
+
 def report_node(state: PentestState) -> Dict[str, Any]:
     target = state["target"]
     findings = state.get("findings", [])
@@ -821,33 +934,41 @@ def report_node(state: PentestState) -> Dict[str, Any]:
     payloads_state = state.get("payloads") or {}
     bridge = GoBridge()
 
-    prompt = f"""Generate a professional pentest report.
+    prompt = f"""Write a concise executive summary for an authorised pentest report.
 
 Target: {target}
+Web endpoint: {scan_data.get('web_url') or target}
 Risk Score: {risk_score}/10
-Analysis: {analysis[:3000]}
-Attack Plan: {attack_plan[:3000]}
-Findings: {json.dumps(findings, indent=2, default=str)[:8000]}
-OSINT: {json.dumps(scan_data.get('osint', {}), indent=2, default=str)[:3000]}
+Analysis: {analysis[:2500]}
+Attack Plan: {attack_plan[:2000]}
+Findings: {json.dumps(findings, indent=2, default=str)[:5000]}
+OSINT: {json.dumps(scan_data.get('osint', {}), indent=2, default=str)[:2000]}
 Payload classes: {list((payloads_state.get('results') or {}).keys())}
-Probe results: {json.dumps(state.get('probe_results', []), indent=2, default=str)[:3000]}
-Ports: {json.dumps(scan_data.get('ports', []), indent=2, default=str)[:2000]}
-Technologies: {json.dumps(scan_data.get('tech', {}), indent=2, default=str)[:2000]}
+Probe results: {json.dumps(state.get('probe_results', []), indent=2, default=str)[:2000]}
+Ports: {json.dumps(scan_data.get('ports', []), indent=2, default=str)[:1500]}
+Technologies: {json.dumps(scan_data.get('tech', {}), indent=2, default=str)[:1500]}
 
-Format with:
-1. Executive Summary
-2. Methodology and scope
-3. Key findings, sorted by severity, with evidence
-4. Attack chains
-5. Risk assessment and business impact
-6. Remediation recommendations
-7. Conclusion
-
+Cover the most important evidence, business impact and the next action.
 Only claim what the evidence supports. Mark hypotheses as hypotheses.
+Be concise: answer in at most 150 words.
 """
     report = bridge.ai_chat(prompt, mode="report")
-    if not report or report.startswith("[!]"):
-        report = _offline_analysis(state)
+    report_error = ""
+    if (not report or report.startswith("[!]") or len(report.strip()) < 120
+            or report.lstrip().startswith("{")):
+        report_error = report or "empty AI response"
+        report = ""
+
+    structured = _offline_report(state)
+    if report:
+        report = (
+            "## AI Analyst Summary\n\n"
+            + report.strip()
+            + "\n\n---\n\n"
+            + structured
+        )
+    else:
+        report = structured
 
     reports_dir = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -856,7 +977,7 @@ Only claim what the evidence supports. Mark hypotheses as hypotheses.
     os.makedirs(reports_dir, exist_ok=True)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    safe_target = target.replace(".", "_").replace(":", "_").replace("/", "_")
+    safe_target = target_slug(target)
     report_path = os.path.join(reports_dir, f"{safe_target}_{timestamp}.md")
     with open(report_path, "w", encoding="utf-8") as handle:
         handle.write(f"# Pentest Report: {target}\n\n")
@@ -869,6 +990,7 @@ Only claim what the evidence supports. Mark hypotheses as hypotheses.
 
     result = {
         "report_path": report_path,
+        "report_error": report_error,
         "phase": Phase.DONE.value,
         "messages": state.get("messages", []) + [{"role": "report", "content": report}],
     }

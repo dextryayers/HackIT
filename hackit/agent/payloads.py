@@ -300,7 +300,7 @@ def _dedupe(items: Iterable[Dict[str, str]]) -> List[Dict[str, str]]:
 def _default_ai_call(timeout: int = 300) -> Callable[[str, str], str]:
     from .brain import AIHyperBrain  # local import to avoid cycles
 
-    brain = AIHyperBrain(engine="native", enable_memory=False)
+    brain = AIHyperBrain(engine="native", enable_memory=False, announce=False)
 
     def caller(prompt: str, system: str) -> str:
         return brain.raw_query(prompt, system_prompt=system, mode="payload", timeout=timeout)
@@ -320,7 +320,7 @@ def _resolve_ai(ai_call: Optional[Callable[[str, str], str]]) -> Tuple[
         return ai_call, "", ""
     from .brain import AIHyperBrain  # local import to avoid cycles
 
-    brain = AIHyperBrain(engine="native", enable_memory=False)
+    brain = AIHyperBrain(engine="native", enable_memory=False, announce=False)
 
     def caller(prompt: str, system: str) -> str:
         return brain.raw_query(prompt, system_prompt=system, mode="payload", timeout=300)
