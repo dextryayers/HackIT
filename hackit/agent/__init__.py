@@ -585,10 +585,14 @@ def _dropdown_select(provider, models, fetched_ids=None):
     """Interactive dropdown model selector with ↑↓ navigation.
     Returns model ID string, or empty string if cancelled.
     """
-    import termios, tty, os, fcntl
+    import os
 
-    fd = sys.stdin.fileno()
-    old = termios.tcgetattr(fd)
+    try:
+        import fcntl
+        import termios
+        import tty
+    except ImportError:  # pragma: no cover - Windows
+        fcntl = termios = tty = None  # type: ignore[assignment]
 
     fet = set(f.lower() for f in (fetched_ids or []))
     items = [(m, tier, desc,
@@ -598,6 +602,28 @@ def _dropdown_select(provider, models, fetched_ids=None):
 
     if not items:
         return ""
+
+    if not (termios and tty and fcntl and sys.stdin.isatty()):
+        # Portable fallback: numbered list, no raw terminal handling.
+        click.echo(f"\n  {B_CYAN}{BOLD}MODEL SELECTION{RESET} "
+                   f"{DIM}({PROVIDER_LABELS.get(provider, provider.upper())}){RESET}\n")
+        for index, (m, tier, desc, dot, badge) in enumerate(items, 1):
+            suffix = f" {DIM}[{tier}]{RESET}" if tier else ""
+            click.echo(f"  {index:>2}. {dot} {m} {DIM}{desc}{RESET}{suffix}")
+        try:
+            choice = click.prompt(
+                f"\n  {YELLOW}Select model{RESET}",
+                type=click.IntRange(1, len(items)),
+                default=1,
+            )
+        except (click.Abort, KeyboardInterrupt, EOFError):
+            return ""
+        selected = items[choice - 1][0]
+        click.echo(f"  {GREEN}✓{RESET}  {B_CYAN}{selected}{RESET}")
+        return selected
+
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
 
     n = len(items)
     cur = 0
@@ -1234,7 +1260,15 @@ def clear():
 @agent.command()
 def reset():
     """Reset AI configuration — API keys, provider, models, history, or all"""
-    import termios, tty, os, fcntl, shutil
+    import os
+    import shutil
+
+    try:
+        import fcntl
+        import termios
+        import tty
+    except ImportError:  # pragma: no cover - Windows
+        fcntl = termios = tty = None  # type: ignore[assignment]
 
     RESET_OPTIONS = [
         ("api_keys",    "API Keys",       "Clear ALL provider API keys from config"),
@@ -1245,78 +1279,96 @@ def reset():
         ("all",         "EVERYTHING",     "⚠  Keys + Provider + Models + History"),
     ]
 
-    fd = sys.stdin.fileno()
-    old = termios.tcgetattr(fd)
-    n = len(RESET_OPTIONS)
-    cur = 0
     result = ""
-    confirmed = False
+    use_raw = bool(termios and tty and fcntl and sys.stdin.isatty())
 
-    def _read_key():
-        ch = os.read(fd, 1)
-        if not ch: return 'ESC'
-        ch = chr(ch[0])
-        if ch == '\x1b':
-            fl = fcntl.fcntl(fd, fcntl.F_GETFL)
-            fcntl.fcntl(fd, fcntl.F_SETFL, fl | os.O_NONBLOCK)
-            try:
-                seq = os.read(fd, 2)
-                seq = seq.decode('utf-8', errors='replace') if seq else ''
-            except: seq = ''
-            fcntl.fcntl(fd, fcntl.F_SETFL, fl)
-            if seq == '[A': return 'UP'
-            if seq == '[B': return 'DOWN'
-            return 'ESC'
-        if ch in ('\r', '\n'): return 'ENTER'
-        if ch == '\x03': return 'CTRLC'
-        if ch == 'y': return 'y'
-        if ch == 'n': return 'n'
-        return ch
+    if not use_raw:
+        # Portable fallback for Windows, pipes and dumb terminals.
+        click.echo(f"\n  {BOLD}\u26a0  RESET AI CONFIGURATION{RESET}")
+        click.echo(f"  {DIM}Select what to erase permanently{RESET}\n")
+        for index, (_key, label, desc) in enumerate(RESET_OPTIONS, 1):
+            click.echo(f"  {index}. {label:<16} {DIM}{desc}{RESET}")
+        try:
+            choice = click.prompt(
+                f"\n  {YELLOW}Select option{RESET}",
+                type=click.IntRange(1, len(RESET_OPTIONS)),
+                default=len(RESET_OPTIONS),
+            )
+            result = RESET_OPTIONS[choice - 1][0]
+        except (click.Abort, KeyboardInterrupt, EOFError):
+            result = ""
+    else:
+        fd = sys.stdin.fileno()
+        old = termios.tcgetattr(fd)
+        n = len(RESET_OPTIONS)
+        cur = 0
 
-    def draw():
-        nonlocal cur
-        term_cols = shutil.get_terminal_size().columns
-        box_w = min(term_cols - 6, 56)
-        pad1 = box_w - 31 if box_w > 31 else 0
-        pad2 = box_w - 38 if box_w > 38 else 0
-        sep = '─' * box_w
-        out = ["\033[2J\033[H"]
-        out.append(f"  {BOLD}{B_RED}\u250c{sep}\u2510{RESET}\r\n")
-        out.append(f"  {BOLD}{B_RED}\u2502{RESET}  {BOLD}\u26a0  RESET AI CONFIGURATION{' ' * pad1}{BOLD}{B_RED}\u2502{RESET}\r\n")
-        out.append(f"  {BOLD}{B_RED}\u2502{RESET}  {DIM}Select what to erase permanently{' ' * pad2}{BOLD}{B_RED}\u2502{RESET}\r\n")
-        out.append(f"  {BOLD}{B_RED}\u2514{sep}\u2518{RESET}\r\n")
-        out.append(f"\r\n")
-        for i, (key, label, desc) in enumerate(RESET_OPTIONS):
-            if i == cur:
-                out.append(f"  \033[48;5;196m\033[38;5;15m \u25b8 {label:<16} {desc}\033[0m\033[K\r\n")
-            else:
-                out.append(f"    \033[2m{label:<16} {desc}\033[0m\033[K\r\n")
-        out.append(f"  \033[2m\u2191\u2193 navigate  |  Enter select  |  ESC cancel\033[0m\033[K\r\n")
-        sys.stdout.write(''.join(out))
-        sys.stdout.flush()
+        def _read_key():
+            ch = os.read(fd, 1)
+            if not ch: return 'ESC'
+            ch = chr(ch[0])
+            if ch == '\x1b':
+                fl = fcntl.fcntl(fd, fcntl.F_GETFL)
+                fcntl.fcntl(fd, fcntl.F_SETFL, fl | os.O_NONBLOCK)
+                try:
+                    seq = os.read(fd, 2)
+                    seq = seq.decode('utf-8', errors='replace') if seq else ''
+                except Exception:
+                    seq = ''
+                fcntl.fcntl(fd, fcntl.F_SETFL, fl)
+                if seq == '[A': return 'UP'
+                if seq == '[B': return 'DOWN'
+                return 'ESC'
+            if ch in ('\r', '\n'): return 'ENTER'
+            if ch == '\x03': return 'CTRLC'
+            if ch == 'y': return 'y'
+            if ch == 'n': return 'n'
+            return ch
 
-    try:
-        tty.setraw(fd)
-        draw()
-        while True:
-            k = _read_key()
-            if k == 'UP' and cur > 0:
-                cur -= 1
-                draw()
-            elif k == 'DOWN' and cur < n - 1:
-                cur += 1
-                draw()
-            elif k == 'ENTER':
-                result = RESET_OPTIONS[cur][0]
-                break
-            elif k in ('ESC', 'CTRLC'):
-                break
-    except (KeyboardInterrupt, EOFError):
-        pass
-    finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old)
-        sys.stdout.write("\033[2J\033[H")
-        sys.stdout.flush()
+        def draw():
+            nonlocal cur
+            term_cols = shutil.get_terminal_size().columns
+            box_w = min(term_cols - 6, 56)
+            pad1 = box_w - 31 if box_w > 31 else 0
+            pad2 = box_w - 38 if box_w > 38 else 0
+            sep = '─' * box_w
+            out = ["\033[2J\033[H"]
+            out.append(f"  {BOLD}{B_RED}\u250c{sep}\u2510{RESET}\r\n")
+            out.append(f"  {BOLD}{B_RED}\u2502{RESET}  {BOLD}\u26a0  RESET AI CONFIGURATION{' ' * pad1}{BOLD}{B_RED}\u2502{RESET}\r\n")
+            out.append(f"  {BOLD}{B_RED}\u2502{RESET}  {DIM}Select what to erase permanently{' ' * pad2}{BOLD}{B_RED}\u2502{RESET}\r\n")
+            out.append(f"  {BOLD}{B_RED}\u2514{sep}\u2518{RESET}\r\n")
+            out.append(f"\r\n")
+            for i, (key, label, desc) in enumerate(RESET_OPTIONS):
+                if i == cur:
+                    out.append(f"  \033[48;5;196m\033[38;5;15m \u25b8 {label:<16} {desc}\033[0m\033[K\r\n")
+                else:
+                    out.append(f"    \033[2m{label:<16} {desc}\033[0m\033[K\r\n")
+            out.append(f"  \033[2m\u2191\u2193 navigate  |  Enter select  |  ESC cancel\033[0m\033[K\r\n")
+            sys.stdout.write(''.join(out))
+            sys.stdout.flush()
+
+        try:
+            tty.setraw(fd)
+            draw()
+            while True:
+                k = _read_key()
+                if k == 'UP' and cur > 0:
+                    cur -= 1
+                    draw()
+                elif k == 'DOWN' and cur < n - 1:
+                    cur += 1
+                    draw()
+                elif k == 'ENTER':
+                    result = RESET_OPTIONS[cur][0]
+                    break
+                elif k in ('ESC', 'CTRLC'):
+                    break
+        except (KeyboardInterrupt, EOFError):
+            pass
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+            sys.stdout.write("\033[2J\033[H")
+            sys.stdout.flush()
 
     if not result:
         click.echo(f"  {DIM}Reset cancelled.{RESET}")

@@ -93,6 +93,8 @@ def _wrap_node(name: str, node: Callable[[PentestState], Dict[str, Any]],
         started = time.time()
         try:
             update = node(state) or {}
+            # A recovered phase must not inherit a previous phase's error.
+            update.setdefault("error", "")
         except Exception as exc:  # noqa: BLE001
             update = {
                 "error": f"{name}: {exc}",

@@ -200,6 +200,13 @@ class SwarmDashboard:
     def render_progress(self):
         total = self.total_agents
         current = self.agent_idx
+        if not current:
+            agents = {
+                str(log.get("agent", ""))
+                for log in (self.state.get("logs") or [])
+                if isinstance(log, dict) and log.get("agent")
+            }
+            current = len(agents)
         if current > total:
             current = total
         pct = (current / total) * 100 if total > 0 else 0
@@ -217,9 +224,9 @@ class SwarmDashboard:
         )
         progress.update(task, completed=current)
 
-        agent_name = self.current_agent[:50]
+        agent_name = escape(self.current_agent[:50])
         return Panel(
-            Group(progress, Text(f"[bold cyan]>>[/] {agent_name}")),
+            Group(progress, Text.from_markup(f"[bold cyan]>>[/] {agent_name}")),
             title="[bold]Progress[/]",
             border_style="cyan",
         )

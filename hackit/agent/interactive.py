@@ -574,12 +574,23 @@ class AgentUI:
             self.console.print(f"[red]Load failed: {exc}[/red]")
 
     def _cmd_scan(self, argument: str) -> None:
+        tokens = [item for item in argument.split() if item]
+        known_modules = {
+            "all", "portscan", "subdomain", "ssl", "headers", "tech", "waf",
+            "fuzz", "js", "param", "cors", "csrf", "xxe", "sqli", "xss",
+            "ssrf", "redirect", "lfi", "ssti", "cmd", "nosqli", "ldap",
+            "graphql", "bypass403", "takeover", "jwt",
+        }
+        if tokens and tokens[0].lower() not in known_modules:
+            # `/scan https://host/path sqli` and `/scan example.com` both work.
+            self.target = tokens[0]
+            tokens = tokens[1:]
         if not self.target:
             self.console.print("[yellow]Set a target first: /target <host> or /set-target <host>[/yellow]")
             return
         if not self.brain:
             return
-        modules = [item for item in argument.split() if item]
+        modules = tokens
         self.console.print(f"[dim]Scanning {self.target} with hative…[/dim]")
 
         def on_progress(event: Dict[str, Any]) -> None:

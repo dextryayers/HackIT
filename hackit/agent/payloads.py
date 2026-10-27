@@ -183,16 +183,31 @@ def local_payloads(vuln_type: str, limit: int = 24) -> List[Dict[str, str]]:
     return [dict(item) for item in CATALOG.get(vuln_type, [])[:limit]]
 
 
+_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+
+
+def _clean_ai_text(text: str) -> str:
+    """Remove colours and reasoning wrappers from an engine response."""
+    cleaned = _ANSI_RE.sub("", text or "")
+    cleaned = re.sub(r"<(?:think|thinking|reasoning)>.*?</(?:think|thinking|reasoning)>",
+                     "", cleaned, flags=re.IGNORECASE | re.DOTALL)
+    return cleaned.strip()
+
+
 def _extract_json(text: str) -> Optional[Dict[str, Any]]:
     if not text:
         return None
-    cleaned = text.strip()
+    cleaned = _clean_ai_text(text)
     cleaned = re.sub(r"^```(?:json)?", "", cleaned, flags=re.IGNORECASE).strip()
     cleaned = re.sub(r"```$", "", cleaned).strip()
     candidates = [cleaned]
     start, end = cleaned.find("{"), cleaned.rfind("}")
     if start >= 0 and end > start:
         candidates.append(cleaned[start:end + 1])
+    # Some models return a bare array, optionally surrounded by prose.
+    list_start, list_end = cleaned.find("["), cleaned.rfind("]")
+    if list_start >= 0 and list_end > list_start:
+        candidates.append(cleaned[list_start:list_end + 1])
     for candidate in candidates:
         try:
             data = json.loads(candidate)
@@ -247,11 +262,48 @@ def _dedupe(items: Iterable[Dict[str, str]]) -> List[Dict[str, str]]:
     return result
 
 
-def _default_ai_call() -> Callable[[str, str], str]:
+def _default_ai_call(timeout: int = 300) -> Callable[[str, str], str]:
     from .brain import AIHyperBrain  # local import to avoid cycles
 
     brain = AIHyperBrain(engine="native", enable_memory=False)
-    return lambda prompt, system: brain.raw_query(prompt, system_prompt=system, mode="payload")
+
+    def caller(prompt: str, system: str) -> str:
+        return brain.raw_query(prompt, system_prompt=system, mode="payload", timeout=timeout)
+
+    return caller
+
+
+def _resolve_ai(ai_call: Optional[Callable[[str, str], str]]) -> Tuple[
+        Callable[[str, str], str], str, str]:
+    """Return ``(caller, provider, model)`` for payload generation.
+
+    The provider/model are surfaced in the result so callers can show which
+    model actually produced the payloads.  When a custom ``ai_call`` is passed
+    (tests, alternate backends) the metadata stays blank.
+    """
+    if ai_call is not None:
+        return ai_call, "", ""
+    from .brain import AIHyperBrain  # local import to avoid cycles
+
+    brain = AIHyperBrain(engine="native", enable_memory=False)
+
+    def caller(prompt: str, system: str) -> str:
+        return brain.raw_query(prompt, system_prompt=system, mode="payload", timeout=300)
+
+    return caller, brain.provider, brain.model
+
+
+def _ai_error_message(text: str, parsing_failed: bool) -> str:
+    """Turn an engine reply into a short, user-actionable error string."""
+    cleaned = _clean_ai_text(text)
+    if not cleaned:
+        return "AI provider returned an empty response"
+    if cleaned.startswith("[!]"):
+        return cleaned[:240]
+    if parsing_failed:
+        excerpt = " ".join(cleaned.split())[:200]
+        return f"AI response was not valid payload JSON: {excerpt}"
+    return ""
 
 
 def generate(vuln_type: str, context: str = "", count: int = 12,
@@ -272,13 +324,15 @@ def generate(vuln_type: str, context: str = "", count: int = 12,
 
     if use_ai:
         try:
-            caller = ai_call or _default_ai_call()
+            caller, ai_provider, ai_model = _resolve_ai(ai_call)
+            provider = provider or ai_provider
+            model = model or ai_model
             request_count = max(3, min(count, 12))
             prompt = (
                 f"Vulnerability class: {vuln_type}\n"
                 f"Target/context: {context or 'generic web application'}\n"
                 f"Generate {request_count} concrete proof-of-concept payloads for this class.\n"
-                f"Respond with the JSON schema described in the system prompt."
+                f"Respond with ONLY the JSON object described in the system prompt."
             )
             text = caller(prompt, AI_SYSTEM_PROMPT) or ""
             ai_items = _coerce_ai_payloads(text)
@@ -287,8 +341,8 @@ def generate(vuln_type: str, context: str = "", count: int = 12,
                     item.pop("type", None)
                 items = _dedupe(ai_items + curated)
                 source = "ai+curated" if curated else "ai"
-            elif text.strip().startswith("[!]"):
-                ai_error = text.strip()[:240]
+            else:
+                ai_error = _ai_error_message(text, parsing_failed=True)
         except Exception as exc:  # noqa: BLE001 - generation must not crash
             ai_error = str(exc)[:240]
 
@@ -309,7 +363,7 @@ def generate(vuln_type: str, context: str = "", count: int = 12,
 
 def generate_multi(types: Iterable[str], context: str = "", count: int = 8,
                    ai_call: Optional[Callable[[str, str], str]] = None,
-                   use_ai: bool = True) -> Dict[str, Any]:
+                   use_ai: bool = True, provider: str = "", model: str = "") -> Dict[str, Any]:
     """Generate payloads for several classes using one AI request.
 
     A single request keeps the autonomous pipeline fast while still letting the
@@ -328,6 +382,8 @@ def generate_multi(types: Iterable[str], context: str = "", count: int = 8,
         results[vuln_type] = {
             "type": vuln_type,
             "context": context,
+            "provider": provider,
+            "model": model,
             "source": "curated",
             "payloads": curated,
             "ai_error": "",
@@ -337,14 +393,17 @@ def generate_multi(types: Iterable[str], context: str = "", count: int = 8,
     ai_error = ""
     if use_ai and normalized:
         try:
-            caller = ai_call or _default_ai_call()
+            caller, ai_provider, ai_model = _resolve_ai(ai_call)
+            provider = provider or ai_provider
+            model = model or ai_model
             per_type = max(2, min(count // 2 + 2, 8))
             prompt = (
                 "Generate authorised proof-of-concept payloads for these vulnerability classes:\n"
                 + ", ".join(normalized)
                 + f"\nTarget/context: {context or 'generic web application'}\n"
                 + f"Return up to {per_type} payloads per class. "
-                + "Every item MUST include a `type` field exactly matching one of the classes above."
+                + "Every item MUST include a `type` field exactly matching one of the classes above. "
+                + "Respond with ONLY the JSON object described in the system prompt."
             )
             text = caller(prompt, AI_SYSTEM_PROMPT) or ""
             ai_items = _coerce_ai_payloads(text)
@@ -361,12 +420,14 @@ def generate_multi(types: Iterable[str], context: str = "", count: int = 8,
                     curated = results[vuln_type]["payloads"]
                     results[vuln_type]["payloads"] = _dedupe(extra + curated)[:count]
                     results[vuln_type]["source"] = "ai+curated" if curated else "ai"
-            elif text.strip().startswith("[!]"):
-                ai_error = text.strip()[:240]
+            else:
+                ai_error = _ai_error_message(text, parsing_failed=True)
         except Exception as exc:  # noqa: BLE001
             ai_error = str(exc)[:240]
 
     for result in results.values():
+        result["provider"] = provider
+        result["model"] = model
         if ai_error:
             result["ai_error"] = ai_error
 
@@ -374,6 +435,8 @@ def generate_multi(types: Iterable[str], context: str = "", count: int = 8,
         "results": results,
         "types": normalized,
         "context": context,
+        "provider": provider,
+        "model": model,
         "source": "ai+curated" if any(r["source"].startswith("ai") for r in results.values()) else "curated",
         "ai_error": ai_error,
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),

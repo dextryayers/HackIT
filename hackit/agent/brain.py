@@ -268,6 +268,7 @@ class AIHyperBrain:
             cmd.append("-clear")
         if not use_go_history:
             cmd.append("-no-history")
+        cmd.extend(["-timeout", str(max(10, int(timeout)))])
         return cmd
 
     @staticmethod
@@ -295,6 +296,30 @@ class AIHyperBrain:
                    "[!] Bridge error:", "[!] Engine timeout", "[!] No response text")
         return any(marker in text for marker in markers)
 
+    def _effective_timeout(self, timeout: Optional[int] = None) -> int:
+        """Resolve the request timeout for the active provider.
+
+        ``HACKIT_AI_TIMEOUT`` always wins so operators can tune slow hardware
+        or long analyses without editing the config.  Local Ollama models keep
+        a generous floor because a 9B model often needs more than the default
+        60 seconds to emit a complete JSON payload set.
+        """
+        env_value = (os.environ.get("HACKIT_AI_TIMEOUT") or "").strip()
+        if env_value:
+            try:
+                return max(10, int(env_value))
+            except ValueError:
+                pass
+        if timeout:
+            return max(10, int(timeout))
+        try:
+            value = int(self.config.get("ai_timeout", 120) or 120)
+        except (TypeError, ValueError):
+            value = 120
+        if self.provider == "ollama":
+            value = max(value, 300)
+        return max(10, value)
+
     def _invoke_engine(self, prompt: str, analyze: bool = False, tool_name: str = "",
                        clear_hist: bool = False, system_prompt: Optional[str] = None,
                        mode: str = "", use_memory: bool = False,
@@ -309,14 +334,17 @@ class AIHyperBrain:
         if not key and self.provider != "ollama":
             return _colored(f"[!] API Key for {self.provider.upper()} not configured", YELLOW)
 
-        timeout = int(timeout or self.config.get("ai_timeout", 120) or 120)
+        timeout = self._effective_timeout(timeout)
         cmd = self._engine_command(
             prompt, system_prompt, mode=mode, analyze=analyze, tool_name=tool_name,
             clear_hist=clear_hist, use_go_history=use_go_history, timeout=timeout,
         )
 
         try:
-            process = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=timeout)
+            # The Go engine receives the same timeout and enforces it on the
+            # HTTP request; give it a grace period to return a clean error.
+            process = subprocess.run(cmd, capture_output=True, text=True,
+                                     check=False, timeout=timeout + 15)
             stdout = (process.stdout or "").strip()
             if not stdout:
                 stderr = (process.stderr or "").strip()
@@ -338,7 +366,8 @@ class AIHyperBrain:
         except Exception as exc:  # noqa: BLE001
             return _colored(f"[!] Bridge error: {exc}", RED)
 
-    def raw_query(self, prompt: str, system_prompt: Optional[str] = None, mode: str = "") -> str:
+    def raw_query(self, prompt: str, system_prompt: Optional[str] = None, mode: str = "",
+                  timeout: Optional[int] = None) -> str:
         """One-shot query without touching conversation memory."""
         return self._invoke_engine(
             prompt,
@@ -346,6 +375,7 @@ class AIHyperBrain:
             mode=mode,
             use_memory=False,
             use_go_history=False,
+            timeout=timeout,
         )
 
     # ------------------------------------------------------------------
@@ -463,7 +493,9 @@ class AIHyperBrain:
                 on_token({"token": message, "done": True})
             return message
 
-        cmd = self._engine_command(prompt, system_prompt, mode=mode, use_go_history=use_go_history)
+        cmd = self._engine_command(prompt, system_prompt, mode=mode,
+                                   use_go_history=use_go_history,
+                                   timeout=self._effective_timeout())
         if "-stream" not in cmd:
             cmd.append("-stream")
 
@@ -540,11 +572,14 @@ class AIHyperBrain:
 
     def generate_payloads(self, vuln_type: str, context: str = "", count: int = 12,
                           use_ai: bool = True) -> Dict[str, Any]:
+        def ai_call(prompt: str, system: str) -> str:
+            return self.raw_query(prompt, system_prompt=system, mode="payload", timeout=300)
+
         result = payload_forge.generate(
             vuln_type,
             context=context,
             count=count,
-            ai_call=None if use_ai else (lambda prompt, system: ""),
+            ai_call=ai_call if use_ai else None,
             use_ai=use_ai,
             provider=self.provider,
             model=self.model,
