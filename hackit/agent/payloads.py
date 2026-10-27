@@ -667,7 +667,7 @@ def probe(target: str, vuln_type: str, payload: str, parameter: str = "",
     )
     reflection_signal = (
         reflected
-        and vuln_type in ("xss", "ssti", "crlf")
+        and vuln_type == "xss"
         and ("html" in content_type or not content_type)
     )
 

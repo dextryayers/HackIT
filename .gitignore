@@ -93,3 +93,8 @@ scan_output/
 scan_reports/
 temp/
 results/
+
+# Agent-generated pentest artifacts (may contain target data)
+hackit/agent/go/reports/pentest/*.md
+hackit/agent/go/reports/payloads/*.json
+hackit/agent/go/reports/osint/*.json

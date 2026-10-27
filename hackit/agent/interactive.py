@@ -9,6 +9,7 @@ and Ollama get the same streaming, memory and payload-forging behaviour.
 from __future__ import annotations
 
 import datetime
+import html
 import json
 import os
 import re
@@ -25,10 +26,14 @@ try:
     from rich.panel import Panel
     from rich.table import Table
     from rich.text import Text
+    from rich.markup import escape
     from rich import box
     _HAS_RICH = True
 except ImportError:  # pragma: no cover
     _HAS_RICH = False
+
+    def escape(value: Any) -> str:  # type: ignore[misc]
+        return str(value)
 
 try:
     from prompt_toolkit import PromptSession
@@ -307,7 +312,7 @@ class AgentUI:
         table.add_column(style="dim", no_wrap=True)
         table.add_column(style="bold")
         for name, value in rows:
-            table.add_row(name, str(value))
+            table.add_row(name, Text(str(value)))
         self.console.print(Panel(table, title="[bold cyan]SESSION[/bold cyan]", border_style="cyan", box=box.ROUNDED))
 
     def _toolbar(self) -> str:
@@ -319,7 +324,10 @@ class AgentUI:
 
     def _bottom_toolbar(self):
         if _HAS_PT:
-            return HTML(f"<style bg='#1f2937' fg='#9ca3af'> {self._toolbar()} </style>")
+            return HTML(
+                f"<style bg='#1f2937' fg='#9ca3af'> "
+                f"{html.escape(self._toolbar(), quote=False)} </style>"
+            )
         return self._toolbar()
 
     # ------------------------------------------------------------------
@@ -359,7 +367,7 @@ class AgentUI:
         assert self.brain is not None
         self.last_prompt = prompt
         self.console.print(
-            f"[dim]{_timestamp()}[/dim] [bold cyan]you[/bold cyan] {prompt}"
+            f"[dim]{_timestamp()}[/dim] [bold cyan]you[/bold cyan] {escape(prompt)}"
         )
         self.console.print("[bold green]hackit[/bold green] ", end="")
 
@@ -387,6 +395,8 @@ class AgentUI:
                 self.console.print("[dim]… thinking[/dim]", end="")
             elif visible and thinking[0]:
                 thinking[0] = False
+                sys.stdout.write("\n")
+                sys.stdout.flush()
             emit(visible)
 
         try:
@@ -395,18 +405,25 @@ class AgentUI:
             self.console.print("\n[yellow]Cancelled.[/yellow]")
             return ""
         except Exception as exc:  # noqa: BLE001
-            self.console.print(f"\n[red]UI error: {exc}[/red]")
+            self.console.print(f"\n[red]UI error: {escape(str(exc))}[/red]")
             return ""
 
         emit(think_filter.flush())
         if not rendered and result:
-            emit(result)
+            # Non-streaming fallback (or a completely hidden reasoning trace)
+            # must pass through the same filter; otherwise raw <think> blocks
+            # would leak into the terminal.
+            fallback = _ThinkFilter()
+            emit(fallback.feed(result))
+            emit(fallback.flush())
         sys.stdout.write("\n")
         sys.stdout.flush()
 
         elapsed = time.time() - started
         if result and result.strip().startswith("[!]"):
-            self.console.print(f"[red]{_strip_ansi(result.strip())}[/red]")
+            message = _strip_ansi(result.strip())
+            if message not in "".join(rendered):
+                self.console.print(f"[red]{escape(message)}[/red]")
         else:
             self.console.print(
                 f"[dim]{_timestamp()} · {elapsed:.1f}s · ~{max(1, token_count // 4)} tok[/dim]"
@@ -449,7 +466,7 @@ class AgentUI:
                 f"[{color}]{status.state}[/{color}]",
                 f"{status.latency_ms} ms" if status.latency_ms else "—",
                 str(len(status.models)) if status.models else "—",
-                status.error or status.detail or "—",
+                Text(str(status.error or status.detail or "—")),
             )
         self.console.print(table)
 
@@ -462,10 +479,10 @@ class AgentUI:
         provider = providers.normalize_provider(argument)
         if self.brain and self.brain.set_provider(provider):
             self._persist_provider(provider)
-            self.console.print(f"[green]Provider switched to {provider}.[/green]")
-            self.console.print(f"[dim]Model: {self.brain.model or 'auto'}[/dim]")
+            self.console.print(f"[green]Provider switched to {escape(str(provider))}.[/green]")
+            self.console.print(f"[dim]Model: {escape(str(self.brain.model or 'auto'))}[/dim]")
         else:
-            self.console.print(f"[red]Provider {provider} has no usable key.[/red]")
+            self.console.print(f"[red]Provider {escape(str(provider))} has no usable key.[/red]")
 
     def _persist_provider(self, provider: str) -> None:
         try:
@@ -490,9 +507,9 @@ class AgentUI:
                 save_config(cfg)
             except Exception:
                 pass
-            self.console.print(f"[green]Model set to {self.brain.model}.[/green]")
+            self.console.print(f"[green]Model set to {escape(str(self.brain.model))}.[/green]")
             return
-        self.console.print(f"[dim]Current model: {self.brain.model or 'auto'}[/dim]")
+        self.console.print(f"[dim]Current model: {escape(str(self.brain.model or 'auto'))}[/dim]")
         self.console.print("[dim]Usage: /model <model-id>[/dim]")
 
     def _cmd_models(self) -> None:
@@ -505,7 +522,9 @@ class AgentUI:
         table.add_column("Tier")
         table.add_column("Description", style="dim")
         for index, (model, tier, description) in enumerate(items, 1):
-            table.add_row(str(index), model, tier, description)
+            table.add_row(
+                str(index), Text(str(model)), Text(str(tier)), Text(str(description)),
+            )
         self.console.print(table)
 
     def _cmd_payload(self, argument: str) -> None:
@@ -555,17 +574,22 @@ class AgentUI:
         table.add_column("Technique")
         table.add_column("Notes", style="dim")
         for index, item in enumerate(result.get("payloads", []), 1):
-            table.add_row(str(index), item.get("payload", ""), item.get("technique", ""), item.get("notes", ""))
+            table.add_row(
+                str(index),
+                Text(str(item.get("payload", ""))),
+                Text(str(item.get("technique", ""))),
+                Text(str(item.get("notes", ""))),
+            )
         self.console.print(table)
         if result.get("ai_error"):
-            self.console.print(f"[yellow]AI note: {result['ai_error']}[/yellow]")
+            self.console.print(f"[yellow]AI note: {escape(str(result['ai_error']))}[/yellow]")
 
         os.makedirs(os.path.join(REPORTS_DIR, "payloads"), exist_ok=True)
         stamp = time.strftime("%Y%m%d_%H%M%S")
         path = os.path.join(REPORTS_DIR, "payloads", f"{result.get('type')}_{stamp}.json")
         try:
             payloads.save({"results": {result.get("type", vuln_type): result}}, path)
-            self.console.print(f"[dim]Saved: {path}[/dim]")
+            self.console.print(f"[dim]Saved: {escape(str(path))}[/dim]")
         except Exception:
             pass
 
@@ -586,21 +610,25 @@ class AgentUI:
             )
             return
 
-        self.console.print(f"[dim]Probing {len(payload_list)} payload(s) against {target_url}…[/dim]")
+        self.console.print(f"[dim]Probing {len(payload_list)} payload(s) against {escape(str(target_url))}…[/dim]")
         results: List[Dict[str, Any]] = []
 
         def on_result(item: Dict[str, Any]) -> None:
             results.append(item)
             if item.get("vulnerable"):
-                self.console.print(f"[red]![/red] {item['payload']} -> {item['evidence']}")
+                self.console.print(
+                    f"[red]![/red] {escape(str(item['payload']))} -> {escape(str(item['evidence']))}"
+                )
             else:
-                self.console.print(f"[dim]· {item['payload']} -> {item['evidence']}[/dim]")
+                self.console.print(
+                    f"[dim]· {escape(str(item['payload']))} -> {escape(str(item['evidence']))}[/dim]"
+                )
 
         payloads.probe_many(
             target_url, vuln_type, payload_list, parameter=parameter,
             method=method, on_result=on_result,
         )
-        self.console.print(f"[bold]{payloads.summarize_probe(results)}[/bold]")
+        self.console.print(f"[bold]{escape(payloads.summarize_probe(results))}[/bold]")
 
     def _cmd_memory(self) -> None:
         if not self.brain or not self.brain.memory:
@@ -611,7 +639,7 @@ class AgentUI:
         table.add_column(style="dim")
         table.add_column(style="bold")
         for key, value in stats.items():
-            table.add_row(key, str(value))
+            table.add_row(str(key), Text(str(value)))
         self.console.print(Panel(table, title="MEMORY", border_style="magenta", box=box.ROUNDED))
 
     def _cmd_facts(self) -> None:
@@ -622,7 +650,7 @@ class AgentUI:
             self.console.print("[dim]No long-term facts yet.[/dim]")
             return
         for fact in facts:
-            self.console.print(f"[cyan]·[/cyan] {fact}")
+            self.console.print(f"[cyan]·[/cyan] {escape(str(fact))}")
 
     def _cmd_save(self, path: str) -> None:
         if not self.brain or not self.brain.memory:
@@ -632,18 +660,18 @@ class AgentUI:
             path = f"hackit_memory_{stamp}.json"
         try:
             self.brain.memory.export(path)
-            self.console.print(f"[green]Memory saved to {path}[/green]")
+            self.console.print(f"[green]Memory saved to {escape(str(path))}[/green]")
         except Exception as exc:  # noqa: BLE001
-            self.console.print(f"[red]Save failed: {exc}[/red]")
+            self.console.print(f"[red]Save failed: {escape(str(exc))}[/red]")
 
     def _cmd_load(self, path: str) -> None:
         if not self.brain or not self.brain.memory:
             return
         try:
             count = self.brain.memory.import_file(path)
-            self.console.print(f"[green]Imported {count} messages from {path}[/green]")
+            self.console.print(f"[green]Imported {count} messages from {escape(str(path))}[/green]")
         except Exception as exc:  # noqa: BLE001
-            self.console.print(f"[red]Load failed: {exc}[/red]")
+            self.console.print(f"[red]Load failed: {escape(str(exc))}[/red]")
 
     def _cmd_scan(self, argument: str) -> None:
         tokens = [item for item in argument.split() if item]
@@ -663,11 +691,11 @@ class AgentUI:
         if not self.brain:
             return
         modules = tokens
-        self.console.print(f"[dim]Scanning {self.target} with hative…[/dim]")
+        self.console.print(f"[dim]Scanning {escape(str(self.target))} with hative…[/dim]")
 
         def on_progress(event: Dict[str, Any]) -> None:
             kind = event.get("event", "")
-            message = event.get("message", "")
+            message = escape(str(event.get("message", "")))
             if kind == "start":
                 self.console.print(f"[cyan]▶[/cyan] [dim]{message}[/dim]")
             elif kind == "done":
@@ -694,12 +722,12 @@ class AgentUI:
         if not query:
             self.console.print("[yellow]Usage: /osint <username|email|domain>[/yellow]")
             return
-        self.console.print(f"[dim]Running OSINT for {query} (this can take a minute)…[/dim]")
+        self.console.print(f"[dim]Running OSINT for {escape(str(query))} (this can take a minute)…[/dim]")
         try:
             from hackit.osint.core import run_full_scan
 
             def on_step(phase: str, message: str) -> None:
-                self.console.print(f"[cyan]{phase}[/cyan] [dim]{message}[/dim]")
+                self.console.print(f"[cyan]{escape(str(phase))}[/cyan] [dim]{escape(str(message))}[/dim]")
 
             data = run_full_scan(
                 query, timeout=8, workers=24, verbose=False,
@@ -716,9 +744,9 @@ class AgentUI:
             path = os.path.join(REPORTS_DIR, "osint", f"{query.replace('/', '_')}_{time.strftime('%Y%m%d_%H%M%S')}.json")
             with open(path, "w", encoding="utf-8") as handle:
                 json.dump(data, handle, indent=2, default=str)
-            self.console.print(f"[dim]Saved: {path}[/dim]")
+            self.console.print(f"[dim]Saved: {escape(str(path))}[/dim]")
         except Exception as exc:  # noqa: BLE001
-            self.console.print(f"[red]OSINT failed: {exc}[/red]")
+            self.console.print(f"[red]OSINT failed: {escape(str(exc))}[/red]")
 
     def _cmd_auto(self, target: str) -> None:
         target = target or self.target
@@ -726,21 +754,23 @@ class AgentUI:
             self.console.print("[yellow]Usage: /auto <target>[/yellow]")
             return
         self.target = target
-        self.console.print(f"[bold cyan]Autonomous pipeline[/bold cyan] [dim]target={target}[/dim]")
+        self.console.print(f"[bold cyan]Autonomous pipeline[/bold cyan] [dim]target={escape(str(target))}[/dim]")
         try:
             from .workflow import run_pentest
 
             def progress(phase: str, message: str) -> None:
-                self.console.print(f"[cyan]▸ {phase}[/cyan] [dim]{message}[/dim]")
+                self.console.print(
+                    f"[cyan]▸ {escape(str(phase))}[/cyan] [dim]{escape(str(message))}[/dim]"
+                )
 
             state = run_pentest(target, scope="active_stealth", progress=progress)
             findings = state.get("findings", []) if isinstance(state, dict) else []
             report_path = state.get("report_path") if isinstance(state, dict) else ""
             self.console.print(f"[green]Pipeline complete: {len(findings)} finding(s).[/green]")
             if report_path:
-                self.console.print(f"[dim]Report: {report_path}[/dim]")
+                self.console.print(f"[dim]Report: {escape(str(report_path))}[/dim]")
         except Exception as exc:  # noqa: BLE001
-            self.console.print(f"[red]Pipeline failed: {exc}[/red]")
+            self.console.print(f"[red]Pipeline failed: {escape(str(exc))}[/red]")
             if os.environ.get("HACKIT_DEBUG"):
                 self.console.print(traceback.format_exc())
 
@@ -759,9 +789,9 @@ class AgentUI:
                 lines.append(f"## {label}\n\n{entry.get('content', '')}\n")
             with open(path, "w", encoding="utf-8") as handle:
                 handle.write("\n".join(lines))
-            self.console.print(f"[green]Conversation exported to {path}[/green]")
+            self.console.print(f"[green]Conversation exported to {escape(str(path))}[/green]")
         except Exception as exc:  # noqa: BLE001
-            self.console.print(f"[red]Export failed: {exc}[/red]")
+            self.console.print(f"[red]Export failed: {escape(str(exc))}[/red]")
 
     def _cmd_import(self, path: str) -> None:
         if not self.brain or not self.brain.memory:
@@ -782,9 +812,9 @@ class AgentUI:
                         self.brain.memory.add_assistant(body)
                         count += 1
             self.brain.memory.save()
-            self.console.print(f"[green]Imported {count} message(s) from {path}[/green]")
+            self.console.print(f"[green]Imported {count} message(s) from {escape(str(path))}[/green]")
         except Exception as exc:  # noqa: BLE001
-            self.console.print(f"[red]Import failed: {exc}[/red]")
+            self.console.print(f"[red]Import failed: {escape(str(exc))}[/red]")
 
     # ------------------------------------------------------------------
     # Dispatch
@@ -861,11 +891,11 @@ class AgentUI:
             return True
         if head == "target":
             self.target = rest or self.target
-            self.console.print(f"[cyan]Target:[/cyan] {self.target or '—'}")
+            self.console.print(f"[cyan]Target:[/cyan] {escape(str(self.target or '—'))}")
             return True
         if head in ("set-target", "set_target"):
             self.target = rest
-            self.console.print(f"[cyan]Target locked:[/cyan] {self.target}")
+            self.console.print(f"[cyan]Target locked:[/cyan] {escape(str(self.target))}")
             return True
         if head == "export":
             self._cmd_export(rest)
@@ -939,7 +969,7 @@ class AgentUI:
         try:
             self.brain = AIHyperBrain(engine="chat" if self.mode_name == "CHAT" else "native", target=self.target)
         except Exception as exc:  # noqa: BLE001
-            self.console.print(f"[red]Failed to initialise agent: {exc}[/red]")
+            self.console.print(f"[red]Failed to initialise agent: {escape(str(exc))}[/red]")
             return
 
         self._status_panel()
@@ -985,12 +1015,12 @@ class AutopilotUI(AgentUI):
         try:
             self.brain = AIHyperBrain(engine="native", target=self.target)
         except Exception as exc:  # noqa: BLE001
-            self.console.print(f"[red]Failed to initialise autopilot: {exc}[/red]")
+            self.console.print(f"[red]Failed to initialise autopilot: {escape(str(exc))}[/red]")
             return
 
         self._status_panel()
         if self.target:
-            self.console.print(f"[cyan]Target:[/cyan] {self.target}")
+            self.console.print(f"[cyan]Target:[/cyan] {escape(str(self.target))}")
         else:
             self.console.print("[yellow]No target set. Use /set-target <host> or /auto <host>.[/yellow]")
         self.console.print("[dim]Type /help for commands. Ctrl+C cancels the current request.[/dim]\n")

@@ -11,6 +11,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import os
+import re
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -504,6 +505,8 @@ Generated payload classes: {list((state.get('payloads') or {}).get('results', {}
 
 Identify the attack surface, likely vulnerability classes, entry points and
 the three most valuable tests to run next. Be explicit about confidence.
+No active verification has run yet: every vulnerability is a hypothesis.
+Never describe anything as confirmed; use "candidate" or "hypothesis".
 Be concise: answer in at most 120 words.
 """
     analysis = bridge.ai_chat(prompt, mode="analyze")
@@ -512,6 +515,7 @@ Be concise: answer in at most 120 words.
             or analysis.lstrip().startswith("{")):
         analysis_error = analysis or "empty AI response"
         analysis = _offline_analysis(state)
+    analysis = _sanitize_ai_narrative(analysis, False)
 
     result = {
         "phase": Phase.ANALYZE.value,
@@ -772,6 +776,78 @@ def probe_node(state: PentestState) -> Dict[str, Any]:
 # Phase 10-11: correlation and reporting
 # ---------------------------------------------------------------------------
 
+UNVERIFIED_EVIDENCE_NOTE = (
+    "**Evidence status:** no evidence-backed finding or verified probe hit was "
+    "recorded in this run. The narrative below is AI-generated context and may "
+    "contain hypotheses; it is not evidence."
+)
+
+_NEGATION_RE = re.compile(
+    r"\b(?:no|not|none|never|without|cannot|can't|couldn't|isn't|aren't|"
+    r"wasn't|weren't|unconfirmed|unverified)\b",
+    re.IGNORECASE,
+)
+
+
+def _has_verified_evidence(state: PentestState) -> bool:
+    """True when the deterministic layers produced real, reproducible evidence."""
+    if any(isinstance(item, dict) for item in (state.get("findings") or [])):
+        return True
+    return any(
+        isinstance(item, dict) and item.get("vulnerable")
+        for item in (state.get("probe_results") or [])
+    )
+
+
+def _rewrite_confirmation_chunk(match: "re.Match[str]") -> str:
+    chunk = match.group(0)
+    lowered = chunk.lower()
+    if "confirmed" not in lowered or _NEGATION_RE.search(chunk):
+        return chunk
+    chunk = re.sub(
+        r"\b(?:is|are|was|were|has been|have been)\s+confirmed\b",
+        "remains unverified",
+        chunk,
+        flags=re.IGNORECASE,
+    )
+    chunk = re.sub(r"\bwe\s+confirmed\b", "we hypothesised", chunk, flags=re.IGNORECASE)
+    chunk = re.sub(r"\bconfirmed\s*:", "Unverified hypothesis:", chunk, flags=re.IGNORECASE)
+
+    def possible(word: "re.Match[str]") -> str:
+        original = word.group(0)
+        replacement = "possible"
+        return replacement.capitalize() if original[:1].isupper() else replacement
+
+    return re.sub(r"\bconfirmed\b", possible, chunk, flags=re.IGNORECASE)
+
+
+def _sanitize_ai_narrative(text: str, has_evidence: bool) -> str:
+    """Neutralise confirmation claims that no deterministic evidence supports.
+
+    Local models sometimes describe hypotheses as "confirmed" even when the
+    findings and probe lists are empty.  A report must never repeat that as
+    fact, so unsupported confirmation language is rewritten deterministically.
+    Negative statements ("no vulnerability was confirmed") are preserved.
+    """
+    cleaned = (text or "").strip()
+    if not cleaned or has_evidence:
+        return cleaned
+
+    cleaned = re.sub(r"[^.!?\n]+[.!?]?", _rewrite_confirmation_chunk, cleaned)
+    # A narrative must not compete with the deterministic risk score.
+    cleaned = re.sub(
+        r"\brisk\s*(?:score)?\s*[:=]?\s*([1-9]\d*(?:\.\d+)?)\s*/\s*10\b",
+        "risk score remains unverified",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    cleaned = re.sub(
+        r"\(\s*[1-9]\d*(?:\.\d+)?\s*/\s*10\s*\)",
+        "(risk not independently verified)",
+        cleaned,
+    )
+    return cleaned
+
 
 def correlate_node(state: PentestState) -> Dict[str, Any]:
     target = state["target"]
@@ -787,11 +863,15 @@ Technologies: {json.dumps(scan_data.get('tech', {}), indent=2, default=str)[:200
 OSINT: {json.dumps(scan_data.get('osint', {}), indent=2, default=str)[:2500]}
 Findings: {json.dumps(findings, indent=2, default=str)[:6000]}
 Probe results: {json.dumps(state.get('probe_results', []), indent=2, default=str)[:4000]}
+Verified findings: {len(findings)}
+Verified probe hits: {sum(1 for item in (state.get('probe_results') or []) if isinstance(item, dict) and item.get('vulnerable'))}
 
 1. Build realistic attack chains (only from observed evidence).
 2. Calculate an overall risk score from 0 to 10.
 3. Identify the critical path and the next best action.
 4. Separate confirmed findings from hypotheses.
+5. If both verified counts are zero, state that no vulnerability was confirmed
+   and use a 0/10 risk score. Never describe a hypothesis as confirmed.
 Be concise: answer in at most 80 words.
 """
     correlation = bridge.ai_chat(prompt, mode="correlate")
@@ -800,6 +880,9 @@ Be concise: answer in at most 80 words.
             or correlation.lstrip().startswith("{")):
         correlation_error = correlation or "empty AI response"
         correlation = f"{len(findings)} finding(s) correlated offline."
+    correlation = _sanitize_ai_narrative(
+        correlation, _has_verified_evidence(state),
+    )
 
     risk_score = 0.0
     for item in findings:
@@ -829,6 +912,9 @@ def _offline_report(state: PentestState) -> str:
     risk_score = state.get("risk_score", 0.0)
     analysis = state.get("analysis", "")
     attack_plan = state.get("attack_plan", "")
+    has_evidence = _has_verified_evidence(state)
+    analysis = _sanitize_ai_narrative(analysis, has_evidence)
+    attack_plan = _sanitize_ai_narrative(attack_plan, has_evidence)
 
     severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
     ranked = sorted(
@@ -910,9 +996,15 @@ def _offline_report(state: PentestState) -> str:
             lines.append("- Review each finding and apply the vendor/OWASP guidance.")
         lines.append("")
 
-    lines.extend(["## Analysis", "", analysis[:4000] or "No AI analysis was available.", ""])
+    lines.extend(["## AI Analysis (narrative, not evidence)", ""])
+    if not has_evidence:
+        lines.extend(["> " + UNVERIFIED_EVIDENCE_NOTE, ""])
+    lines.extend([analysis[:4000] or "No AI analysis was available.", ""])
     if attack_plan:
-        lines.extend(["## Attack Plan", "", attack_plan[:3000], ""])
+        lines.extend(["## AI Attack Plan (narrative, not evidence)", ""])
+        if not has_evidence:
+            lines.extend(["> " + UNVERIFIED_EVIDENCE_NOTE, ""])
+        lines.extend([attack_plan[:3000], ""])
     lines.extend([
         "## Conclusion",
         "",
@@ -932,6 +1024,11 @@ def report_node(state: PentestState) -> Dict[str, Any]:
     analysis = state.get("analysis", "")
     attack_plan = state.get("attack_plan", "")
     payloads_state = state.get("payloads") or {}
+    probe_results = state.get("probe_results", [])
+    verified_probe_hits = sum(
+        1 for item in probe_results
+        if isinstance(item, dict) and item.get("vulnerable")
+    )
     bridge = GoBridge()
 
     prompt = f"""Write a concise executive summary for an authorised pentest report.
@@ -942,14 +1039,19 @@ Risk Score: {risk_score}/10
 Analysis: {analysis[:2500]}
 Attack Plan: {attack_plan[:2000]}
 Findings: {json.dumps(findings, indent=2, default=str)[:5000]}
+Verified findings: {len(findings)}
+Verified probe hits: {verified_probe_hits}
 OSINT: {json.dumps(scan_data.get('osint', {}), indent=2, default=str)[:2000]}
 Payload classes: {list((payloads_state.get('results') or {}).keys())}
-Probe results: {json.dumps(state.get('probe_results', []), indent=2, default=str)[:2000]}
+Probe results: {json.dumps(probe_results, indent=2, default=str)[:2000]}
 Ports: {json.dumps(scan_data.get('ports', []), indent=2, default=str)[:1500]}
 Technologies: {json.dumps(scan_data.get('tech', {}), indent=2, default=str)[:1500]}
 
 Cover the most important evidence, business impact and the next action.
-Only claim what the evidence supports. Mark hypotheses as hypotheses.
+The Findings list and verified probe hits are the ONLY evidence.
+If both verified counts are zero, state that no vulnerability was confirmed,
+do not assign a nonzero risk score, and never call a hypothesis confirmed.
+Otherwise only claim what the evidence supports; mark hypotheses as hypotheses.
 Be concise: answer in at most 150 words.
 """
     report = bridge.ai_chat(prompt, mode="report")
@@ -959,11 +1061,15 @@ Be concise: answer in at most 150 words.
         report_error = report or "empty AI response"
         report = ""
 
+    has_evidence = _has_verified_evidence(state)
     structured = _offline_report(state)
     if report:
+        report = _sanitize_ai_narrative(report.strip(), has_evidence)
+        note = "" if has_evidence else "> " + UNVERIFIED_EVIDENCE_NOTE + "\n\n"
         report = (
-            "## AI Analyst Summary\n\n"
-            + report.strip()
+            "## AI Analyst Summary (narrative, not evidence)\n\n"
+            + note
+            + report
             + "\n\n---\n\n"
             + structured
         )
