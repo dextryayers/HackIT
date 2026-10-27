@@ -2,8 +2,6 @@ package native
 
 import (
 	"fmt"
-	"net/http"
-	"strings"
 	"time"
 )
 
@@ -15,8 +13,12 @@ type NoSQLiResult struct {
 	Evidence   string `json:"evidence"`
 }
 
+// TestNoSQLi looks for database-specific error signatures and confirmed
+// boolean differentials.  The previous implementation reported every HTTP 200
+// response as a NoSQL bypass, which produced a "vulnerability" on virtually
+// every website.
 func TestNoSQLi(baseURL string, params map[string]string) []NoSQLiResult {
-	payloads := []string{
+	errorPayloads := []string{
 		`' || '1'=='1`,
 		`' || 1==1 //`,
 		`" || "1"=="1`,
@@ -34,65 +36,89 @@ func TestNoSQLi(baseURL string, params map[string]string) []NoSQLiResult {
 		`{"$regex": ".*"}`,
 	}
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	var results []NoSQLiResult
+	booleanPairs := []struct {
+		truePayload  string
+		falsePayload string
+	}{
+		{`' || '1'=='1`, `' || '1'=='2`},
+		{`' || 1==1 //`, `' || 1==2 //`},
+	}
 
-	for param := range params {
-		for _, payload := range payloads {
-			req, _ := http.NewRequest("GET", baseURL, nil)
-			q := req.URL.Query()
-			for k, v := range params {
-				if k == param {
-					q.Set(k, v+payload)
-				} else {
-					q.Set(k, v)
-				}
-			}
-			req.URL.RawQuery = q.Encode()
+	client := scanClient(15 * time.Second)
+	results := make([]NoSQLiResult, 0)
+	seen := make(map[string]bool)
 
-			resp, err := client.Do(req)
+	add := func(param, payload, evidence string) {
+		key := param + "\x00" + payload
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		results = append(results, NoSQLiResult{
+			Endpoint:   baseURL,
+			Parameter:  param,
+			Payload:    payload,
+			Vulnerable: true,
+			Evidence:   evidence,
+		})
+	}
+
+	for param, original := range params {
+		baselineStatus, baselineBody, _, err := paramRequest(client, baseURL, params, param, original)
+		if err != nil {
+			continue
+		}
+
+		for _, payload := range errorPayloads {
+			status, body, err := newParamRequest(client, baseURL, params, param, original+payload)
 			if err != nil {
 				continue
 			}
-
-			body := ""
-			if resp.StatusCode == 200 {
-				buf := make([]byte, 2048)
-				n, _ := resp.Body.Read(buf)
-				body = string(buf[:n])
+			if signature := newSignature(body, baselineBody, nosqlErrorSignatures); signature != "" {
+				add(param, payload, fmt.Sprintf(
+					"NoSQL database error signature %q (HTTP %d -> %d)",
+					signature, baselineStatus, status))
 			}
-			resp.Body.Close()
+		}
 
-			// Check for MongoDB error messages
-			if strings.Contains(body, "MongoError") || strings.Contains(body, "MongoDB") ||
-				strings.Contains(body, "SyntaxError") || strings.Contains(body, "unexpected token") {
-				results = append(results, NoSQLiResult{
-					Endpoint:   baseURL,
-					Parameter:  param,
-					Payload:    payload,
-					Vulnerable: true,
-					Evidence:   fmt.Sprintf("NoSQL error pattern in response with param %s", param),
-				})
+		for _, pair := range booleanPairs {
+			trueStatus, trueBody, err := newParamRequest(client, baseURL, params, param, original+pair.truePayload)
+			if err != nil {
 				continue
 			}
-
-			// Check for successful bypass (different response from baseline)
-			if resp.StatusCode == 200 && body != "" {
-				results = append(results, NoSQLiResult{
-					Endpoint:   baseURL,
-					Parameter:  param,
-					Payload:    payload,
-					Vulnerable: true,
-					Evidence:   fmt.Sprintf("HTTP 200 with payload on param %s (possible NoSQL bypass)", param),
-				})
+			falseStatus, falseBody, err := newParamRequest(client, baseURL, params, param, original+pair.falsePayload)
+			if err != nil {
+				continue
 			}
+			if trueStatus != falseStatus || trueStatus >= 500 || falseStatus >= 500 {
+				continue
+			}
+			if absInt(len(trueBody)-len(falseBody)) < 40 || responseDiffRatio(trueBody, falseBody) < 0.05 {
+				continue
+			}
+			// Re-test to filter pages whose length changes on every request.
+			_, trueBody2, err := newParamRequest(client, baseURL, params, param, original+pair.truePayload)
+			if err != nil {
+				continue
+			}
+			_, falseBody2, err := newParamRequest(client, baseURL, params, param, original+pair.falsePayload)
+			if err != nil {
+				continue
+			}
+			if absInt(len(trueBody2)-len(falseBody2)) < 40 || responseDiffRatio(trueBody2, falseBody2) < 0.05 {
+				continue
+			}
+			add(param, pair.truePayload+" / "+pair.falsePayload, fmt.Sprintf(
+				"NoSQL boolean differential confirmed: true=%d bytes, false=%d bytes",
+				len(trueBody2), len(falseBody2)))
 		}
 	}
 
 	if len(results) == 0 {
 		results = append(results, NoSQLiResult{
-			Endpoint: baseURL,
-			Evidence: fmt.Sprintf("No NoSQL injection detected across %d payloads", len(payloads)),
+			Endpoint:   baseURL,
+			Vulnerable: false,
+			Evidence:   fmt.Sprintf("No NoSQL injection detected after baseline comparison (%d payloads)", len(errorPayloads)),
 		})
 	}
 

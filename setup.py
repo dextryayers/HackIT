@@ -10,7 +10,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setup(
     name="hackit",
-    version="2.1.0",
+    version="2.2.0",
     author="Security Researcher",
     description="Comprehensive security testing and penetration testing CLI toolkit",
     long_description=long_description,
@@ -53,8 +53,16 @@ setup(
         "tabulate>=0.9.0",
         "psutil>=5.9.0",
         "python-dotenv>=1.0.0",
+        "prompt-toolkit>=3.0.43",
     ],
     extras_require={
+        "agent": [
+            "langchain>=0.2.0",
+            "langchain-core>=0.2.0",
+        ],
+        "graph": [
+            "langgraph>=0.1.0",
+        ],
         "web": [
             "fastapi>=0.100.0",
             "uvicorn>=0.22.0",

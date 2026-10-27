@@ -1,383 +1,677 @@
-import click
-import subprocess
+"""AIHyperBrain – bridge between the Python CLI and the Go AI engines.
+
+Responsibilities
+----------------
+* resolve providers, API keys and models through :mod:`hackit.agent.providers`
+* inject LangChain-compatible conversation memory
+* invoke ``ai_engine`` (security) or ``chat_engine`` (general chat)
+* stream tokens, retry across providers and surface actionable errors
+* expose payload-forging and health-check helpers to the UI/CLI
+"""
+
+from __future__ import annotations
+
 import json
 import os
 import re
+import subprocess
+import threading
 import time
-import httpx
-from hackit.ui import _colored, RED, YELLOW, DIM, MAGENTA, GREEN
+from typing import Any, Callable, Dict, List, Optional, Tuple
+
 from hackit.config import load_config
-from hackit.agent.commands import COMMAND_MODES, get_command_prompt
+from hackit.ui import RED, YELLOW, _colored
+
+from .commands import COMMAND_MODES, get_command_prompt
+from .memory import AgentMemory, memory_session_name
+from . import payloads as payload_forge
+from . import providers as provider_registry
 
 CHAT_SYSTEM_PROMPT = """\
-You are HackIt Chat - a versatile, knowledgeable AI assistant built for the terminal.
+You are HackIt Chat, a versatile AI assistant built for the terminal.
 
-CORE IDENTITY:
-- Expert generalist with deep knowledge across programming, science, engineering, math, and creative writing
-- When asked about your creator: say "I was created by Hanif Abdrrohim, an Indonesian programmer and cybersecurity enthusiast"
+CORE IDENTITY
+- Expert generalist: programming, science, engineering, mathematics, security,
+  writing and analysis.
+- When asked about your creator: "I was created by Hanif Abdrrohim, an
+  Indonesian programmer and cybersecurity enthusiast".
 
-FORMATTING RULES (strict):
-- Use ```language blocks for ALL code snippets
-- Use ## headings for responses longer than 3 paragraphs
-- Use - bullet points for lists, 1. for numbered steps
-- Bold `key terms` with backticks inline
-- Output plain text — no emoji, no decorative ASCII art
-- Code must be syntactically correct, complete, and runnable
-
-RESPONSE STYLE:
-- Be concise by default; go deep only when asked with /detail
-- If the user's language is Indonesian, reply in Indonesian
-- For /quick: answer directly with no preamble, no "Sure!"
-- For /explain: use analogies the user can relate to
-- End code blocks with a blank line after the closing ```"""
+FORMATTING
+- Use fenced code blocks with language tags for all code.
+- Use short headings for long answers, bullets for lists and numbered steps.
+- Be concise by default; go deeper only when asked (/detail).
+- Reply in the user's language (Indonesian in -> Indonesian out).
+- No emoji, no decorative ASCII art, no filler preambles.
+"""
 
 NATIVE_SYSTEM_PROMPT = """\
-You are HackIt AI v2.1 - elite Bug Hunter, Senior Pentester, and Software Architect.
+You are HackIt AI v2.2 — elite Bug Hunter, Senior Pentester and Software Architect.
 
-CORE EXPERTISE:
-- Bug hunting & vulnerability research (web, mobile, API, thick client)
-- Network pentesting, cloud security audits (AWS, GCP, Azure)
-- Reverse engineering, exploit development, red team operations
-- Source code review, supply chain risk analysis
-- Bug bounty strategy (recon → fuzzing → exploitation → report)
+EXPERTISE
+- Bug bounty and vulnerability research (web, API, mobile, thick client)
+- Network pentesting, cloud security (AWS/GCP/Azure), OSINT
+- Reverse engineering, exploit development, red-team operations
+- Source-code review and supply-chain risk
 
-FORMATTING RULES (strict terminal output):
-- Use - bullet points and 1. numbered lists only
-- NO markdown formatting, NO emoji, NO decorative borders
-- For code: indent 2 spaces, use $ prefix for shell commands
-- Separate logical sections with a blank line
-- Keep lines under 80 chars where possible
+OPERATING RULES
+- Think in phases: recon -> enumeration -> vulnerability analysis -> exploit
+  path -> impact -> remediation.
+- Prioritise critical/high findings. State clearly when data is insufficient.
+- Never invent evidence. Distinguish confirmed findings from hypotheses.
+- Provide safe, minimal PoCs and concrete remediation steps.
+- Terminal-friendly output: short lines, bullets, no markdown tables unless
+  explicitly requested.
+"""
 
-ANALYSIS FRAMEWORK (follow this order):
-1. Recon data → identify attack surface
-2. Enumerate → list all services, versions, endpoints
-3. Vulnerability assessment → map CVEs, misconfigurations
-4. Exploitation → provide working PoC or detailed attack path
-5. Impact → calculate business risk (CVSS, likelihood)
-6. Remediation → specific fix steps with config/code examples
-
-TONE:
-- Technical, tactical, direct — no fluff
-- For /quick: single paragraph with bottom-line risk
-- For /report: full professional format with exec summary
-- Always prioritize critical/high findings first
-- If you lack data for a conclusion, say what data you need"""
+MAX_FALLBACK_PROVIDERS = 5
 
 
 class AIHyperBrain:
-    def __init__(self, engine="native"):
+    """Unified agent brain with memory, fallback routing and payload forging."""
+
+    def __init__(self, engine: str = "native", session: str = "", target: str = "",
+                 enable_memory: bool = True):
         self.config = load_config()
-        self.keys = self.config.get("ai_keys", {})
-        self.provider = self.config.get("ai_provider", "gemini")
-        self.model = self.config.get("ai_models", {}).get(self.provider, "")
-        self.engine = engine
+        self.engine = engine if engine in ("native", "chat") else "native"
         self.base_dir = os.path.dirname(os.path.abspath(__file__))
-
-        if engine == "chat":
-            exe_name = "chat_engine.exe" if os.name == 'nt' else "chat_engine"
-            self.binary_path = os.path.join(self.base_dir, "go", "chat_go", exe_name)
-            self.system_prompt = CHAT_SYSTEM_PROMPT
-        else:
-            exe_name = "ai_engine.exe" if os.name == 'nt' else "ai_engine"
-            self.binary_path = os.path.join(self.base_dir, "go", exe_name)
-            self.system_prompt = NATIVE_SYSTEM_PROMPT
-
-        self._resolve_binary()
+        self.provider = provider_registry.get_active_provider(self.config)
+        if not self.provider:
+            self.provider = provider_registry.normalize_provider(
+                self.config.get("ai_provider") or "gemini"
+            )
+        self.keys = self._load_keys()
+        self.model = provider_registry.effective_model(self.provider, self.config)
 
         if self.provider == "ollama":
-            self._check_ollama_status()
+            self._refresh_ollama_model()
 
-    def _resolve_binary(self):
+        self.binary_path = self._binary_path()
+        self._resolve_binary()
+        self.system_prompt = CHAT_SYSTEM_PROMPT if self.engine == "chat" else NATIVE_SYSTEM_PROMPT
+
+        self.memory: Optional[AgentMemory] = None
+        if enable_memory:
+            session_name = session or memory_session_name(self.engine, target)
+            self.memory = AgentMemory(session=session_name)
+
+        if self.provider == "ollama":
+            self._announce_ollama()
+
+    # ------------------------------------------------------------------
+    # Setup helpers
+    # ------------------------------------------------------------------
+
+    def _load_keys(self) -> Dict[str, str]:
+        keys = dict(self.config.get("ai_keys") or {})
+        for provider in provider_registry.PROVIDERS:
+            resolved = provider_registry.resolve_api_key(provider, self.config)
+            if resolved:
+                keys[provider] = resolved
+        return keys
+
+    def _binary_path(self) -> str:
+        if self.engine == "chat":
+            name = "chat_engine.exe" if os.name == "nt" else "chat_engine"
+            return os.path.join(self.base_dir, "go", "chat_go", name)
+        name = "ai_engine.exe" if os.name == "nt" else "ai_engine"
+        return os.path.join(self.base_dir, "go", name)
+
+    def _resolve_binary(self) -> None:
         if os.path.exists(self.binary_path):
             return
-        alt = self.binary_path.replace('.exe', '') if '.exe' in self.binary_path else self.binary_path + '.exe'
-        if os.path.exists(alt):
-            self.binary_path = alt
-            return
+        alternatives: List[str] = []
+        if self.binary_path.endswith(".exe"):
+            alternatives.append(self.binary_path[:-4])
+        else:
+            alternatives.append(self.binary_path + ".exe")
         if self.engine == "chat":
-            alt2 = os.path.join(self.base_dir, "go", "chat_go", "chat_engine")
-            if os.path.exists(alt2):
-                self.binary_path = alt2
+            alternatives.append(os.path.join(self.base_dir, "go", "chat_go", "chat_engine"))
+            alternatives.append(os.path.join(self.base_dir, "go", "chat_go", "chat_engine.exe"))
+        for candidate in alternatives:
+            if os.path.exists(candidate):
+                self.binary_path = candidate
+                return
 
-    def _check_ollama_status(self):
-        try:
-            resp = httpx.get("http://localhost:11434/api/tags", timeout=2.0)
-            if resp.status_code == 200:
-                data = resp.json()
-                models = [m.get("name") for m in data.get("models", [])]
-                if models:
-                    click.echo(_colored(f"  [+] Local Ollama Detected! ({len(models)} models)", GREEN))
-                    for m in models[:3]:
-                        click.echo(_colored(f"    - {m}", DIM))
-                    if len(models) > 3:
-                        click.echo(_colored(f"    - ... and {len(models)-3} more", DIM))
-                else:
-                    click.echo(_colored("  [!] Ollama running but no models installed", YELLOW))
-            else:
-                click.echo(_colored(f"  [!] Ollama status {resp.status_code}", YELLOW))
-        except Exception:
-            pass
+    def _refresh_ollama_model(self) -> None:
+        info = provider_registry.detect_ollama()
+        if info.online and info.models:
+            configured = (self.config.get("ai_models") or {}).get("ollama", "")
+            self.model = provider_registry.pick_ollama_model(info.models, configured or self.model)
 
-    def chat(self, prompt):
-        command = ""
-        if prompt.startswith('/'):
-            parts = prompt[1:].split(' ', 1)
-            command = parts[0].lower()
-            prompt = parts[1].strip() if len(parts) > 1 else ""
+    def _announce_ollama(self) -> None:
+        info = provider_registry.detect_ollama()
+        if info.online and info.models:
+            from click import echo
+            from hackit.ui import GREEN, DIM
 
+            echo(_colored(f"  [+] Ollama online — {len(info.models)} model(s) detected", GREEN))
+            for model in info.models[:3]:
+                echo(_colored(f"    - {model}", DIM))
+        elif info.online:
+            from click import echo
+            from hackit.ui import YELLOW
+
+            echo(_colored("  [!] Ollama is running but has no models installed", YELLOW))
+
+    # ------------------------------------------------------------------
+    # Provider state
+    # ------------------------------------------------------------------
+
+    def set_provider(self, provider: str, model: str = "") -> bool:
+        provider = provider_registry.normalize_provider(provider)
+        if provider not in provider_registry.PROVIDERS:
+            return False
+        key = provider_registry.resolve_api_key(provider, self.config)
+        if not key and provider != "ollama":
+            return False
+        self.provider = provider
+        self.keys = self._load_keys()
+        if model:
+            self.model = model
+        else:
+            self.model = provider_registry.effective_model(provider, load_config())
+        if provider == "ollama":
+            self._refresh_ollama_model()
+        return True
+
+    def provider_chain(self, include_failures: bool = True) -> List[str]:
+        chain = [self.provider]
+        for provider in provider_registry.PROVIDERS:
+            if provider == self.provider:
+                continue
+            if provider in self.keys or provider == "ollama":
+                chain.append(provider)
+            if len(chain) >= MAX_FALLBACK_PROVIDERS:
+                break
+        return chain if include_failures else chain[:1]
+
+    def health(self, timeout: float = 4.0) -> List[provider_registry.ProviderStatus]:
+        return provider_registry.doctor(self.config, timeout=timeout)
+
+    def list_models(self, provider: str = "", include_remote: bool = True) -> List[Tuple[str, str, str]]:
+        provider = provider_registry.normalize_provider(provider or self.provider)
+        return provider_registry.model_options(provider, include_remote=include_remote)
+
+    # ------------------------------------------------------------------
+    # Prompt construction
+    # ------------------------------------------------------------------
+
+    def _memory_context(self, max_chars: int = 6000) -> str:
+        if not self.memory:
+            return ""
+        block = self.memory.context(max_chars=max_chars)
+        if not block:
+            return ""
+        return (
+            "\n\n[MEMORY]\n"
+            "Use the following long-term facts and recent conversation to stay "
+            "consistent. Do not repeat it verbatim unless relevant.\n"
+            f"{block}\n[/MEMORY]"
+        )
+
+    def _build_system_prompt(self, command: str = "", include_memory: bool = True) -> str:
         system = self.system_prompt
         if command:
-            system += "\n" + get_command_prompt(command)
+            extension = get_command_prompt(command)
+            if extension:
+                system += "\n" + extension
+        if include_memory:
+            system += self._memory_context()
+        return system
 
-        response = self._invoke_engine(prompt, system_prompt=system, mode=command)
+    @staticmethod
+    def _split_command(prompt: str) -> Tuple[str, str]:
+        """Split ``/mode payload`` without hijacking natural questions.
 
-        if self.engine == "native":
-            for pat in [r'\*{3,}', r'\*{2,}', r'\*', r'#{1,6}\s*', r'`{1,3}']:
-                response = re.sub(pat, '', response)
-            response = re.sub(r'\n{3,}', '\n\n', response)
+        Only modes registered in :data:`hackit.agent.commands.COMMAND_MODES`
+        are treated as directives.  ``/how do I fix this`` therefore stays a
+        normal question instead of becoming a mode called ``how``.
+        """
+        if not prompt.startswith("/"):
+            return "", prompt
+        parts = prompt[1:].split(" ", 1)
+        command = parts[0].lower().strip()
+        body = parts[1].strip() if len(parts) > 1 else ""
+        if command not in COMMAND_MODES:
+            return "", prompt
+        if not body:
+            body = f"Apply the /{command} directive to the current task and context."
+        return command, body
 
-        if any(tag in response for tag in ["[!] AI Error:", "[!] Engine Error:"]):
-            fallbacks = [p for p, k in self.keys.items() if k and p != self.provider]
-            for fb in fallbacks:
-                old_p = self.provider
-                self.provider = fb
-                self.model = self.config.get("ai_models", {}).get(fb, "")
-                response = self._invoke_engine(prompt, mode=command)
-                if "[!] AI Error:" not in response and "[!] Engine Error:" not in response:
-                    return response
-                self.provider = old_p
+    # ------------------------------------------------------------------
+    # Engine invocation
+    # ------------------------------------------------------------------
 
-        return response
+    def _engine_command(self, prompt: str, system_prompt: str, mode: str = "",
+                        analyze: bool = False, tool_name: str = "", clear_hist: bool = False,
+                        use_go_history: bool = False, timeout: int = 120) -> List[str]:
+        key = self.keys.get(self.provider, "")
+        cmd = [
+            self.binary_path,
+            "-provider", self.provider,
+            "-key", key or "",
+            "-prompt", prompt,
+            "-system", system_prompt,
+        ]
+        if self.model:
+            cmd.extend(["-model", self.model])
+        if mode:
+            if self.engine == "chat":
+                cmd.extend(["-cmd", mode])
+            else:
+                cmd.extend(["-mode", mode])
+        if analyze:
+            cmd.append("-analyze")
+            if tool_name:
+                cmd.extend(["-tool", tool_name])
+        if clear_hist:
+            cmd.append("-clear")
+        if not use_go_history:
+            cmd.append("-no-history")
+        return cmd
 
-    def analyze_scan(self, tool_name, scan_results):
-        return self._invoke_engine(scan_results, analyze=True, tool_name=tool_name)
+    @staticmethod
+    def _parse_stdout(stdout: str) -> Optional[Dict[str, Any]]:
+        stdout = (stdout or "").strip()
+        if not stdout:
+            return None
+        candidates = [stdout]
+        clean = "".join(ch for ch in stdout if ch.isprintable() or ch in "\n\r\t")
+        start, end = clean.find("{"), clean.rfind("}")
+        if start >= 0 and end > start:
+            candidates.append(clean[start:end + 1])
+        for candidate in candidates:
+            try:
+                data = json.loads(candidate)
+                if isinstance(data, dict):
+                    return data
+            except (ValueError, TypeError):
+                continue
+        return None
 
-    def clear_history(self):
-        return self._invoke_engine("", clear_hist=True)
+    @staticmethod
+    def _is_error(text: str) -> bool:
+        markers = ("[!] AI Error:", "[!] Engine Error:", "[!] Engine returned empty",
+                   "[!] Bridge error:", "[!] Engine timeout", "[!] No response text")
+        return any(marker in text for marker in markers)
 
-    def _invoke_engine(self, prompt, analyze=False, tool_name="", clear_hist=False, system_prompt=None, mode=""):
+    def _invoke_engine(self, prompt: str, analyze: bool = False, tool_name: str = "",
+                       clear_hist: bool = False, system_prompt: Optional[str] = None,
+                       mode: str = "", use_memory: bool = False,
+                       use_go_history: bool = False, timeout: Optional[int] = None) -> str:
         if not os.path.exists(self.binary_path):
             return _colored(f"[!] Engine not found: {self.binary_path}", RED)
 
         if system_prompt is None:
-            system_prompt = self.system_prompt
+            system_prompt = self._build_system_prompt(include_memory=use_memory)
 
-        key = self.keys.get(self.provider)
+        key = self.keys.get(self.provider, "")
         if not key and self.provider != "ollama":
             return _colored(f"[!] API Key for {self.provider.upper()} not configured", YELLOW)
 
+        timeout = int(timeout or self.config.get("ai_timeout", 120) or 120)
+        cmd = self._engine_command(
+            prompt, system_prompt, mode=mode, analyze=analyze, tool_name=tool_name,
+            clear_hist=clear_hist, use_go_history=use_go_history, timeout=timeout,
+        )
+
         try:
-            cmd = [self.binary_path, "-provider", self.provider, "-key", key or "",
-                   "-prompt", prompt, "-system", system_prompt]
-
-            if self.model:
-                cmd.extend(["-model", self.model])
-
-            if self.engine == "chat" and mode:
-                cmd.extend(["-cmd", mode])
-            elif mode:
-                cmd.extend(["-mode", mode])
-
-            if analyze:
-                cmd.append("-analyze")
-                if tool_name:
-                    cmd.extend(["-tool", tool_name])
-
-            if clear_hist:
-                cmd.append("-clear")
-
-            start = time.time()
-            process = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=120
-            )
-            elapsed = time.time() - start
-            _ = elapsed
-
-            stdout = process.stdout.strip()
+            process = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=timeout)
+            stdout = (process.stdout or "").strip()
             if not stdout:
-                stderr = process.stderr.strip() if process.stderr else ""
+                stderr = (process.stderr or "").strip()
                 if stderr:
-                    return _colored(f"[!] Engine Error: {stderr[:300]}", RED)
+                    return _colored(f"[!] Engine Error: {stderr[:400]}", RED)
                 return _colored("[!] Engine returned empty response", RED)
 
-            data = None
-            for attempt in range(2):
-                try:
-                    clean = stdout
-                    if attempt == 1:
-                        clean = ''.join(ch for ch in stdout if ch.isprintable() or ch in '\n\r\t')
-                        start_idx = clean.find('{')
-                        end_idx = clean.rfind('}')
-                        if start_idx >= 0 and end_idx > start_idx:
-                            clean = clean[start_idx:end_idx + 1]
-                    data = json.loads(clean)
-                    break
-                except (json.JSONDecodeError, ValueError):
-                    continue
-
+            data = self._parse_stdout(stdout)
             if data is None:
-                return _colored(f"[!] Bridge error: raw output: {stdout[:200]}", RED)
-
+                return _colored(f"[!] Bridge error: raw output: {stdout[:240]}", RED)
             if data.get("error"):
                 return _colored(f"[!] AI Error: {data['error']}", RED)
-
             text = data.get("text", "")
             if not text:
                 return _colored("[!] No response text received", RED)
             return text
-
         except subprocess.TimeoutExpired:
-            return _colored("[!] Engine timeout (120s)", RED)
-        except Exception as e:
-            return _colored(f"[!] Bridge error: {e}", RED)
+            return _colored(f"[!] Engine timeout ({timeout}s)", RED)
+        except Exception as exc:  # noqa: BLE001
+            return _colored(f"[!] Bridge error: {exc}", RED)
 
-    def stream_ai(self, prompt, on_token=None, system_prompt=None, mode=""):
+    def raw_query(self, prompt: str, system_prompt: Optional[str] = None, mode: str = "") -> str:
+        """One-shot query without touching conversation memory."""
+        return self._invoke_engine(
+            prompt,
+            system_prompt=system_prompt or self.system_prompt,
+            mode=mode,
+            use_memory=False,
+            use_go_history=False,
+        )
+
+    # ------------------------------------------------------------------
+    # Public chat API
+    # ------------------------------------------------------------------
+
+    def chat(self, prompt: str) -> str:
+        command, body = self._split_command(prompt)
+        system = self._build_system_prompt(command=command, include_memory=True)
+        last_error = ""
+
+        for provider in self.provider_chain():
+            if not self._prepare_provider(provider):
+                continue
+            response = self._invoke_engine(
+                body or prompt,
+                system_prompt=system,
+                mode=command,
+                use_memory=True,
+                use_go_history=False,
+            )
+            if not self._is_error(response):
+                response = self._postprocess(response)
+                self._remember_turn(prompt, response)
+                return response
+            last_error = response
+
+        if last_error:
+            return last_error
+        return _colored("[!] No AI provider is configured. Run `agent setting`.", YELLOW)
+
+    def _prepare_provider(self, provider: str) -> bool:
+        provider = provider_registry.normalize_provider(provider)
+        if provider not in provider_registry.PROVIDERS:
+            return False
+        key = self.keys.get(provider) or provider_registry.resolve_api_key(provider, self.config)
+        if not key and provider != "ollama":
+            return False
+        self.provider = provider
+        if provider == "ollama":
+            self._refresh_ollama_model()
+        else:
+            self.model = provider_registry.effective_model(provider, self.config)
+        return True
+
+    def _postprocess(self, response: str) -> str:
+        if self.engine == "native":
+            for pattern in (r"\*{3,}", r"\*{2,}", r"\*", r"#{1,6}\s*", r"`{1,3}"):
+                response = re.sub(pattern, "", response)
+            response = re.sub(r"\n{3,}", "\n\n", response)
+        return response.strip()
+
+    def _remember_turn(self, prompt: str, response: str) -> None:
+        if not self.memory:
+            return
+        self.memory.add_user(prompt)
+        self.memory.add_assistant(response)
+        self.memory.save()
+
+    def stream_chat(self, prompt: str, on_token: Optional[Callable[[Dict[str, Any]], None]] = None) -> str:
+        command, body = self._split_command(prompt)
+        system = self._build_system_prompt(command=command, include_memory=True)
+        full = ""
+        last_error = ""
+
+        for provider in self.provider_chain():
+            if not self._prepare_provider(provider):
+                continue
+            full = ""
+            failed = [False]
+
+            def _forward(event: Dict[str, Any]) -> None:
+                nonlocal full
+                token = event.get("token", "")
+                if token:
+                    full += token
+                    if self._is_error(token):
+                        failed[0] = True
+                if on_token:
+                    on_token(event)
+
+            collected = self.stream_ai(
+                body or prompt,
+                on_token=_forward,
+                system_prompt=system,
+                mode=command,
+                use_go_history=False,
+            )
+            if collected:
+                full = collected
+            if not failed[0] and full.strip() and not self._is_error(full):
+                result = self._postprocess(full)
+                self._remember_turn(prompt, result)
+                return result
+            last_error = full
+
+        if last_error:
+            return last_error
+        return _colored("[!] No AI provider is configured. Run `agent setting`.", YELLOW)
+
+    def stream_ai(self, prompt: str, on_token: Optional[Callable[[Dict[str, Any]], None]] = None,
+                  system_prompt: Optional[str] = None, mode: str = "",
+                  use_go_history: bool = False) -> str:
         if not os.path.exists(self.binary_path):
             if on_token:
                 on_token({"token": f"[!] Engine not found: {self.binary_path}", "done": True})
-            return
+            return ""
 
         if system_prompt is None:
             system_prompt = self.system_prompt
-
-        key = self.keys.get(self.provider)
+        key = self.keys.get(self.provider, "")
         if not key and self.provider != "ollama":
+            message = f"[!] API Key for {self.provider.upper()} not configured"
             if on_token:
-                on_token({"token": f"[!] API Key for {self.provider.upper()} not configured", "done": True})
-            return
+                on_token({"token": message, "done": True})
+            return message
 
-        cmd = [self.binary_path, "-provider", self.provider, "-key", key or "",
-               "-prompt", prompt, "-system", system_prompt, "-stream"]
+        cmd = self._engine_command(prompt, system_prompt, mode=mode, use_go_history=use_go_history)
+        if "-stream" not in cmd:
+            cmd.append("-stream")
 
-        if self.model:
-            cmd.extend(["-model", self.model])
-        if self.engine == "chat" and mode:
-            cmd.extend(["-cmd", mode])
-        elif mode:
-            cmd.extend(["-mode", mode])
-
-        full_response = []
+        full_response: List[str] = []
         try:
+            # Provider errors are emitted as JSON on stdout; stderr is only for
+            # diagnostics.  Discarding it prevents a full pipe from blocking.
             process = subprocess.Popen(
-                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                text=True, bufsize=1
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                text=True, bufsize=1,
             )
+            assert process.stdout is not None
             for line in process.stdout:
                 line = line.strip()
                 if not line:
                     continue
                 try:
                     event = json.loads(line)
-                    if "token" in event:
-                        full_response.append(event["token"])
-                        if on_token:
-                            on_token({"token": event["token"], "done": False})
-                    elif event.get("done"):
-                        if on_token:
-                            on_token({"token": "", "done": True})
-                        break
-                except json.JSONDecodeError:
-                    pass
-
+                except ValueError:
+                    continue
+                if "token" in event:
+                    full_response.append(event["token"])
+                    if on_token:
+                        on_token({"token": event["token"], "done": False})
+                elif event.get("done"):
+                    if on_token:
+                        on_token({"token": "", "done": True})
+                    break
+                elif event.get("error"):
+                    message = f"[!] AI Error: {event['error']}"
+                    full_response.append(message)
+                    if on_token:
+                        on_token({"token": message, "done": True})
+                    break
             process.wait(timeout=120)
             return "".join(full_response)
-        except Exception as e:
+        except Exception as exc:  # noqa: BLE001
+            message = f"[!] Stream error: {exc}"
             if on_token:
-                on_token({"token": f"[!] Stream error: {e}", "done": True})
+                on_token({"token": message, "done": True})
             return "".join(full_response)
 
-    def run_hative(self, target, modules=None):
+    # ------------------------------------------------------------------
+    # Analysis / payload / utility helpers
+    # ------------------------------------------------------------------
+
+    def analyze_scan(self, tool_name: str, scan_results: str) -> str:
+        return self._invoke_engine(scan_results, analyze=True, tool_name=tool_name)
+
+    def clear_history(self) -> str:
+        cleared = []
+        key = self.keys.get(self.provider, "")
+        for engine in ("native", "chat"):
+            previous = self.engine
+            self.engine = engine
+            self.binary_path = self._binary_path()
+            self._resolve_binary()
+            if os.path.exists(self.binary_path):
+                try:
+                    subprocess.run(
+                        [self.binary_path, "-provider", self.provider, "-key", key or "", "-clear"],
+                        capture_output=True, text=True, timeout=20, check=False,
+                    )
+                    cleared.append(engine)
+                except Exception:
+                    pass
+            self.engine = previous
+        self.binary_path = self._binary_path()
+        self._resolve_binary()
+        if self.memory:
+            self.memory.clear()
+        detail = f" ({', '.join(cleared)} engine)" if cleared else ""
+        return f"Conversation history cleared{detail} and long-term memory reset."
+
+    def generate_payloads(self, vuln_type: str, context: str = "", count: int = 12,
+                          use_ai: bool = True) -> Dict[str, Any]:
+        result = payload_forge.generate(
+            vuln_type,
+            context=context,
+            count=count,
+            ai_call=None if use_ai else (lambda prompt, system: ""),
+            use_ai=use_ai,
+            provider=self.provider,
+            model=self.model,
+        )
+        if self.memory:
+            self.memory.remember(f"payloads:{vuln_type}:{len(result.get('payloads', []))}")
+            self.memory.save()
+        return result
+
+    def probe_payloads(self, target: str, vuln_type: str, payloads: List[str],
+                       parameter: str = "", method: str = "GET", timeout: float = 10.0,
+                       on_result: Optional[Callable[[Dict[str, Any]], None]] = None) -> List[Dict[str, Any]]:
+        return payload_forge.probe_many(
+            target, vuln_type, payloads, parameter=parameter, method=method,
+            timeout=timeout, on_result=on_result,
+        )
+
+    def run_hative(self, target: str, modules: Optional[List[str]] = None) -> List[Dict[str, Any]]:
         hative_path = os.path.join(self.base_dir, "go", "hative", "hative")
         if not os.path.exists(hative_path):
             return [{"error": f"hative binary not found at {hative_path}"}]
 
-        args = []
+        args: List[str] = []
         if modules:
-            for mod in modules:
-                args.extend([f"--{mod}", target])
+            for module in modules:
+                args.extend([f"--{module}", target])
         else:
             args = ["--all", target, "--concurrent"]
 
         try:
             result = subprocess.run(
-                [hative_path] + args,
-                capture_output=True,
-                text=True,
-                timeout=300,
+                [hative_path] + args, capture_output=True, text=True, timeout=600
             )
-            stdout = result.stdout.strip()
+            stdout = (result.stdout or "").strip()
             if not stdout:
                 return [{"error": "No output from hative"}]
             try:
                 return json.loads(stdout)
-            except json.JSONDecodeError:
-                return [{"error": f"Invalid JSON: {stdout[:200]}"}]
+            except ValueError:
+                return [{"error": f"Invalid JSON: {stdout[:240]}"}]
         except subprocess.TimeoutExpired:
-            return [{"error": "hative timeout (300s)"}]
-        except Exception as e:
-            return [{"error": f"hative error: {e}"}]
+            return [{"error": "hative timeout (600s)"}]
+        except Exception as exc:  # noqa: BLE001
+            return [{"error": f"hative error: {exc}"}]
 
-    def stream_hative(self, target, on_progress=None, modules=None):
+    def stream_hative(self, target: str, on_progress: Optional[Callable[[Dict[str, Any]], None]] = None,
+                      modules: Optional[List[str]] = None, timeout: int = 600) -> List[Dict[str, Any]]:
         hative_path = os.path.join(self.base_dir, "go", "hative", "hative")
         if not os.path.exists(hative_path):
             if on_progress:
                 on_progress({"event": "error", "message": "hative binary not found"})
             return []
 
-        args = []
-        if modules:
-            for mod in modules:
-                args.extend([f"--{mod}", target])
+        args: List[str] = []
+        selected = [module for module in (modules or []) if module]
+        if selected:
+            for module in selected:
+                args.extend([f"--{module}", target])
+            if len(selected) > 1:
+                args.append("--concurrent")
         else:
             args = ["--all", target, "--concurrent", "--report"]
 
         total_modules = 0
         completed_modules = 0
         start_time = time.time()
+        process: Optional[subprocess.Popen] = None
 
-        try:
-            process = subprocess.Popen(
-                [hative_path] + args,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-
+        def drain_stderr() -> None:
+            nonlocal total_modules, completed_modules
+            assert process is not None and process.stderr is not None
             for line in process.stderr:
                 line = line.strip()
                 if not line:
                     continue
                 try:
                     event = json.loads(line)
-                    if event.get("event") == "start":
-                        total_modules += 1
-                    elif event.get("event") in ("done", "error"):
-                        completed_modules += 1
-                        if total_modules > 0 and completed_modules > 0:
-                            elapsed = time.time() - start_time
-                            pct = int(completed_modules / total_modules * 100)
-                            if completed_modules < total_modules:
-                                eta = elapsed / completed_modules * (total_modules - completed_modules)
-                                event["pct"] = pct
-                                event["eta_seconds"] = int(eta)
-                    if on_progress:
-                        on_progress(event)
-                except json.JSONDecodeError:
-                    pass
+                except ValueError:
+                    if on_progress and line.startswith(("{", "[")):
+                        on_progress({"event": "log", "message": line[:400]})
+                    continue
+                if event.get("event") == "start":
+                    total_modules += 1
+                elif event.get("event") in ("done", "error"):
+                    completed_modules += 1
+                    if total_modules > 0:
+                        elapsed = time.time() - start_time
+                        event["pct"] = min(100, int(completed_modules / total_modules * 100))
+                        if completed_modules < total_modules:
+                            event["eta_seconds"] = int(
+                                elapsed / completed_modules * (total_modules - completed_modules)
+                            )
+                if on_progress:
+                    on_progress(event)
 
-            stdout, _ = process.communicate(timeout=300)
+        try:
+            process = subprocess.Popen(
+                [hative_path] + args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, bufsize=1,
+            )
+            reader = threading.Thread(target=drain_stderr, daemon=True)
+            reader.start()
+            assert process.stdout is not None
+            stdout = process.stdout.read()
+            process.wait(timeout=timeout)
+            reader.join(timeout=2)
             if stdout.strip():
                 try:
                     return json.loads(stdout.strip())
-                except json.JSONDecodeError:
-                    return [{"error": f"Invalid JSON"}] if stdout.strip() else []
+                except ValueError:
+                    start, end = stdout.find("["), stdout.rfind("]")
+                    if start >= 0 and end > start:
+                        try:
+                            return json.loads(stdout[start:end + 1])
+                        except ValueError:
+                            pass
+                    return [{"error": "Invalid JSON from hative"}]
             return []
         except subprocess.TimeoutExpired:
-            process.kill()
-            return [{"error": "hative timeout (300s)"}]
-        except Exception as e:
-            return [{"error": f"hative error: {e}"}]
+            if process is not None:
+                process.kill()
+            return [{"error": f"hative timeout ({timeout}s)"}]
+        except Exception as exc:  # noqa: BLE001
+            if process is not None and process.poll() is None:
+                process.kill()
+            return [{"error": f"hative error: {exc}"}]
+
+    # Backwards-compatible alias used by older UI code.
+    def _invoke(self, prompt: str) -> str:
+        return self.chat(prompt)

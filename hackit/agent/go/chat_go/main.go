@@ -10,6 +10,27 @@ import (
 	"time"
 )
 
+func emitJSON(value interface{}) {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return
+	}
+	fmt.Println(string(data))
+}
+
+func emitToken(token string) error {
+	if token == "" {
+		return nil
+	}
+	emitJSON(TokenEvent{Token: token})
+	return nil
+}
+
+func fail(message string) {
+	emitJSON(TokenEvent{Error: message})
+	os.Exit(1)
+}
+
 func main() {
 	provider := flag.String("provider", "", "AI Provider")
 	apiKey := flag.String("key", "", "API Key")
@@ -18,67 +39,128 @@ func main() {
 	model := flag.String("model", "", "Model Name")
 	cmd := flag.String("cmd", "", "Slash command mode")
 	clearHist := flag.Bool("clear", false, "Clear conversation history")
+	stream := flag.Bool("stream", false, "Stream tokens as NDJSON")
+	noHistory := flag.Bool("no-history", false, "Do not load or save engine history")
+	timeoutSec := flag.Int("timeout", 300, "Request timeout in seconds")
 	flag.Parse()
 
 	history := NewHistoryManager()
 	if *clearHist {
 		history.Clear()
-		fmt.Println(`{"text":"History cleared"}`)
+		emitJSON(AIResponse{Text: "History cleared"})
 		return
 	}
 
-	if *provider == "" || (*apiKey == "" && *provider != "ollama") || *prompt == "" {
-		fmt.Println(`{"error":"Missing required flags"}`)
-		os.Exit(1)
+	if *provider == "" || *prompt == "" {
+		fail("Missing required flags: -provider and -prompt are required")
+	}
+	if *apiKey == "" && *provider != "ollama" {
+		fail(fmt.Sprintf("API key for %s is not configured", *provider))
 	}
 
-	finalSystem := *system
+	finalSystem := strings.TrimSpace(*system)
 	if finalSystem == "" {
 		finalSystem = ChatSystemPrompt
 	}
 	if *cmd != "" {
-		cmdSystem := GetCommandSystemPrompt(*cmd)
-		if cmdSystem != "" {
-			finalSystem = cmdSystem
+		// Append the command directive instead of replacing the caller's
+		// Python system prompt (the previous behaviour discarded memory and
+		// security context).
+		if instruction := GetCommandInstruction(*cmd); instruction != "" {
+			finalSystem += instruction
 		}
 	}
 
-	client := &http.Client{Timeout: 120 * time.Second}
-	orch := NewIntelligenceOrchestrator(map[string]string{*provider: *apiKey})
-	if *model == "" {
-		*model = orch.GetOptimalModel(*provider)
+	keys := collectKeys(*provider, *apiKey)
+	chain := providerChain(*provider, keys)
+	if len(chain) == 0 {
+		fail("No AI provider is configured")
 	}
 
-	histData := history.Load()
+	historyData := []Message{}
+	if !*noHistory {
+		historyData = history.Load()
+	}
+
+	if *timeoutSec <= 0 {
+		*timeoutSec = 300
+	}
+	client := &http.Client{Timeout: time.Duration(*timeoutSec) * time.Second}
+
+	effectiveModel := strings.TrimSpace(*model)
+	if effectiveModel == "" && *provider != "ollama" {
+		effectiveModel = optimalModel(*provider)
+	}
 
 	var response string
-	var err error
+	var lastErr error
+	usedProvider := ""
 
-	switch *provider {
-	case "gemini":
-		response, err = callGemini(client, *apiKey, *prompt, finalSystem, *model, histData)
-	case "groq", "openai", "openrouter", "deepseek", "mistral", "togetherai":
-		response, err = callOpenAI(client, *provider, *apiKey, *prompt, finalSystem, *model, histData)
-	case "claude":
-		response, err = callClaude(client, *apiKey, *prompt, finalSystem, *model, histData)
-	case "ollama":
-		response, err = callOllama(client, *apiKey, *prompt, finalSystem, *model, histData)
-	default:
-		err = fmt.Errorf("unsupported provider: %s", *provider)
+	for _, candidate := range chain {
+		key := keys[candidate]
+		candidateModel := effectiveModel
+		if candidate != *provider {
+			// A model configured for one provider is usually invalid for
+			// another; let the fallback provider choose its own default.
+			candidateModel = ""
+		}
+
+		if *stream {
+			emitted := 0
+			var builder strings.Builder
+			response, lastErr = streamProvider(
+				client, candidate, key, *prompt, finalSystem, candidateModel,
+				historyData,
+				func(token string) error {
+					emitted++
+					builder.WriteString(token)
+					return emitToken(token)
+				},
+			)
+			if response == "" && builder.Len() > 0 {
+				response = builder.String()
+			}
+			if lastErr == nil {
+				usedProvider = candidate
+				break
+			}
+			if emitted > 0 {
+				// Partial output has already been streamed; switching
+				// providers now would duplicate or corrupt the answer.
+				fail(lastErr.Error())
+			}
+			continue
+		}
+
+		response, lastErr = callProvider(
+			client, candidate, key, *prompt, finalSystem, candidateModel, historyData,
+		)
+		if lastErr == nil {
+			usedProvider = candidate
+			break
+		}
 	}
 
-	if err != nil {
-		errResp := map[string]string{"error": err.Error()}
-		jsonErr, _ := json.Marshal(errResp)
-		fmt.Println(string(jsonErr))
-		os.Exit(1)
+	if lastErr != nil {
+		fail(lastErr.Error())
 	}
 
-	histData = append(histData, Message{Role: "user", Content: *prompt})
-	histData = append(histData, Message{Role: "assistant", Content: response})
-	history.Save(histData)
+	response = strings.TrimSpace(response)
+	if response == "" {
+		fail("The AI provider returned an empty response")
+	}
 
-	out := AIResponse{Text: strings.TrimSpace(response)}
-	jsonOut, _ := json.Marshal(out)
-	fmt.Println(string(jsonOut))
+	if !*noHistory {
+		historyData = append(historyData, Message{Role: "user", Content: *prompt})
+		historyData = append(historyData, Message{Role: "assistant", Content: response})
+		history.Save(historyData)
+	}
+
+	if *stream {
+		emitJSON(TokenEvent{Done: true})
+		return
+	}
+
+	_ = usedProvider // kept for future telemetry
+	emitJSON(AIResponse{Text: response})
 }

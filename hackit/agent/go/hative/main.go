@@ -187,15 +187,20 @@ func main() {
 			addModule("graphql", baseURL, doGraphQL)
 			addModule("nosqli", baseURL, doNoSQLi)
 			addModule("ldap", baseURL, doLDAP)
-			if strings.Contains(baseURL, "?") {
-				addModule("sqli", baseURL, doSQLi)
-				addModule("xss", baseURL, doXSS)
-				addModule("ssrf", baseURL, doSSRF)
-				addModule("redirect", baseURL, doRedirect)
-				addModule("lfi", baseURL, doLFI)
-				addModule("ssti", baseURL, doSSTI)
-				addModule("cmd", baseURL, doCmdInjection)
+			addModule("bypass403", baseURL, doBypass403)
+			if looksLikeJWT(target) {
+				addModule("jwt", target, doJWT)
 			}
+			// Injection modules run even when the URL has no query string:
+			// parseParamsFromURL supplies a safe default parameter so the
+			// scanner can still exercise common endpoints.
+			addModule("sqli", baseURL, doSQLi)
+			addModule("xss", baseURL, doXSS)
+			addModule("ssrf", baseURL, doSSRF)
+			addModule("redirect", baseURL, doRedirect)
+			addModule("lfi", baseURL, doLFI)
+			addModule("ssti", baseURL, doSSTI)
+			addModule("cmd", baseURL, doCmdInjection)
 			go func() {
 				wg.Wait()
 				close(ch)
@@ -222,16 +227,17 @@ func main() {
 			allResults = append(allResults, runModule("graphql", baseURL, doGraphQL))
 			allResults = append(allResults, runModule("nosqli", baseURL, doNoSQLi))
 			allResults = append(allResults, runModule("ldap", baseURL, doLDAP))
-			if strings.Contains(baseURL, "?") {
-				allResults = append(allResults, runModule("sqli", baseURL, doSQLi))
-				allResults = append(allResults, runModule("xss", baseURL, doXSS))
-				allResults = append(allResults, runModule("ssrf", baseURL, doSSRF))
-				allResults = append(allResults, runModule("redirect", baseURL, doRedirect))
-				allResults = append(allResults, runModule("lfi", baseURL, doLFI))
-				allResults = append(allResults, runModule("ssti", baseURL, doSSTI))
-				allResults = append(allResults, runModule("cmd", baseURL, doCmdInjection))
-			}
+			allResults = append(allResults, runModule("sqli", baseURL, doSQLi))
+			allResults = append(allResults, runModule("xss", baseURL, doXSS))
+			allResults = append(allResults, runModule("ssrf", baseURL, doSSRF))
+			allResults = append(allResults, runModule("redirect", baseURL, doRedirect))
+			allResults = append(allResults, runModule("lfi", baseURL, doLFI))
+			allResults = append(allResults, runModule("ssti", baseURL, doSSTI))
+			allResults = append(allResults, runModule("cmd", baseURL, doCmdInjection))
 			allResults = append(allResults, runModule("bypass403", baseURL, doBypass403))
+			if looksLikeJWT(target) {
+				allResults = append(allResults, runModule("jwt", target, doJWT))
+			}
 			allResults = append(allResults, runModule("takeover", domain, doTakeover))
 		}
 
@@ -361,9 +367,36 @@ func parseParamsFromURL(rawURL string) map[string]string {
 		}
 	}
 	if len(params) == 0 {
-		params["url"] = rawURL
+		// Provide a safe default so injection modules can still exercise the
+		// endpoint when the URL carries no query string.
+		params["url"] = "1"
 	}
 	return params
+}
+
+// looksLikeJWT reports whether the target itself is a JWT rather than a URL.
+func looksLikeJWT(value string) bool {
+	value = strings.TrimSpace(value)
+	if strings.Contains(value, "://") || len(value) < 40 {
+		return false
+	}
+	parts := strings.Split(value, ".")
+	if len(parts) != 3 {
+		return false
+	}
+	for _, part := range parts {
+		if part == "" {
+			return false
+		}
+		for _, ch := range part {
+			if (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+				(ch >= '0' && ch <= '9') || ch == '-' || ch == '_' || ch == '=' {
+				continue
+			}
+			return false
+		}
+	}
+	return true
 }
 
 func doCORS(target string) ModuleResult {

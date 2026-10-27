@@ -2,11 +2,14 @@ import click
 import requests
 import json
 import os
+import shlex
 import sys
-from hackit.ui import _colored, GREEN, RED, BLUE, YELLOW, DIM, B_CYAN, B_RED, MAGENTA, RESET, BOLD
+from hackit.ui import _colored, GREEN, RED, BLUE, YELLOW, DIM, B_CYAN, B_RED, MAGENTA, RESET, BOLD, CYAN
 from hackit.config import load_config
 
 from hackit.agent.brain import AIHyperBrain
+from hackit.agent import providers as provider_registry
+from hackit.agent import payloads as payload_registry
 
 @click.group(invoke_without_command=True)
 @click.pass_context
@@ -75,10 +78,12 @@ def enter_agent_shell():
 
     # ── 4. Compact command grid (precise alignment) ──
     cmds = [
-        ("swarm",     "28-agent full scan",      "autopilot",  "AI bug hunter"),
-        ("reset",     "reset AI config",          "setting",    "configure AI keys"),
-        ("status",    "check AI connectivity",    "chat",       "talk to AI"),
-        ("guide",     "command reference",        "clear",      "clear screen"),
+        ("swarm",     "28-agent full scan",      "autopilot",  "autonomous AI hunter"),
+        ("auto",      "full pentest pipeline",   "chat",       "AI chat + tools"),
+        ("payload",   "AI payload forge",        "osint",      "OSINT footprint"),
+        ("doctor",    "provider diagnostics",    "setting",    "configure AI keys"),
+        ("status",    "connectivity status",     "reset",      "reset AI config"),
+        ("guide",     "command reference",       "clear",      "clear screen"),
     ]
     click.echo(f"  {'─' * 60}")
     col_right = 46
@@ -145,10 +150,14 @@ def enter_agent_shell():
                 helps = [
                     ("swarm",     "28-agent autonomous scan"),
                     ("autopilot", "AI-powered bug hunting"),
+                    ("auto",      "Full recon→OSINT→scan→attack→report"),
+                    ("payload",   "AI payload forge"),
+                    ("osint",     "OSINT footprint discovery"),
                     ("dashboard", "Real-time TUI dashboard"),
                     ("reset",     "Reset AI keys/provider/models"),
                     ("setting",   "Configure AI providers & keys"),
                     ("status",    "Check AI connectivity"),
+                    ("doctor",    "Deep provider diagnostics"),
                     ("chat",      "AI conversation mode"),
                     ("guide",     "Full command reference"),
                     ("clear",     "Clear terminal screen"),
@@ -189,8 +198,8 @@ def enter_agent_shell():
             # ── global: chat / autopilot → launch interactive TUI ──
             if base_cmd == 'chat':
                 cfg = load_config()
-                if not any(cfg.get("ai_keys", {}).values()):
-                    click.echo(f"  {RED}✦{RESET}  {DIM}No AI keys configured. Run{RESET}  {GREEN}setting{RESET}  {DIM}first.{RESET}")
+                if not provider_registry.configured_providers(cfg) and not provider_registry.detect_ollama().online:
+                    click.echo(f"  {RED}✦{RESET}  {DIM}No AI provider configured. Run{RESET}  {GREEN}setting{RESET}  {DIM}first.{RESET}")
                     continue
                 try:
                     from hackit.agent.interactive import ChatUI
@@ -256,14 +265,19 @@ def enter_agent_shell():
                     click.echo(f"  {YELLOW}✦{RESET}  {DIM}Use{RESET}  {GREEN}swarm {t}{RESET}  {DIM}for full 28-agent scan.{RESET}")
                     continue
 
+                if base_cmd in ('auto', 'payload', 'probe', 'osint', 'doctor', 'models', 'memory'):
+                    handle_ai_command("/" + user_input)
+                    continue
+
                 click.echo(f"  {YELLOW}✦{RESET}  {DIM}Unknown command. Type{RESET}  {GREEN}help{RESET}  {DIM}or{RESET}  {GREEN}back{RESET}  {DIM}to chat.{RESET}")
                 continue
 
-            # ── CHAT MODE: natural language / AI ──
+            # ── CHAT MODE: explicit slash command or natural language ──
             if user_input.startswith('/'):
-                handle_ai_command(user_input)
-            else:
-                handle_ai_command("/" + user_input)
+                if handle_ai_command(user_input):
+                    continue
+            _ask_brain(user_input)
+            continue
 
         except (KeyboardInterrupt, EOFError):
             click.echo(f"\n  {GREEN}✦{RESET}  {DIM}Shell terminated.{RESET}  {DIM}See you later.{RESET}\n")
@@ -337,9 +351,9 @@ def status_cmd():
 
 def chat_cmd():
     cfg = load_config()
-    has_keys = any(cfg.get("ai_keys", {}).values())
-    if not has_keys:
-        click.echo(_colored("\n  [!] No AI keys configured. Run 'setting' first.", YELLOW))
+    has_keys = bool(provider_registry.configured_providers(cfg))
+    if not has_keys and not provider_registry.detect_ollama().online:
+        click.echo(_colored("\n  [!] No AI provider configured. Run 'setting' first.", YELLOW))
         return
     click.echo(_colored("\n  [*] Entering AI chat mode...", DIM))
     click.echo(_colored("  [*] Type 'exit' to return to agent shell.", DIM))
@@ -693,44 +707,17 @@ _display_models = _dropdown_select  # alias for compatibility
 
 
 def _fetch_models_for(provider, key):
-    """Fetch real-time models from provider API, return list of model IDs."""
-    if provider not in PROVIDER_MODEL_URLS:
-        return []
-    url, needs_auth, variant = PROVIDER_MODEL_URLS[provider]
+    """Fetch real-time models from a provider API (best effort)."""
+    provider = provider_registry.normalize_provider(provider)
     try:
-        if variant == "gemini":
-            r = requests.get(f"{url}?key={key}", timeout=3.0)
-            if r.status_code != 200:
-                return []
-            models = r.json().get("models", [])
-            ids = [m.get("name", "").replace("models/", "", 1) for m in models if m.get("name")]
-            return ids
-        h = {"Authorization": f"Bearer {key}"} if needs_auth and key else {}
-        r = requests.get(url, headers=h, timeout=3.0)
-        if r.status_code != 200:
-            return []
-        data = r.json().get("data", [])
-        ids = [m.get("id") for m in data if m.get("id")]
-        if provider == "openrouter":
-            ids = ids[:30]
-        return ids
+        return provider_registry.list_remote_models(provider, key=key, timeout=5.0)
     except Exception:
         return []
 
 
-PROVIDERS = ['gemini', 'groq', 'openai', 'claude', 'deepseek', 'openrouter', 'mistral', 'togetherai', 'ollama']
+PROVIDERS = list(provider_registry.PROVIDERS)
 
-PROVIDER_LABELS = {
-    'gemini': 'Gemini (Google)',
-    'groq': 'Groq',
-    'openai': 'OpenAI',
-    'claude': 'Claude (Anthropic)',
-    'deepseek': 'DeepSeek',
-    'openrouter': 'OpenRouter',
-    'mistral': 'Mistral AI',
-    'togetherai': 'Together AI',
-    'ollama': 'Ollama (Local)',
-}
+PROVIDER_LABELS = dict(provider_registry.PROVIDER_LABELS)
 
 PROVIDER_MODEL_URLS = {
     "gemini": ("https://generativelanguage.googleapis.com/v1beta/models", True, "gemini"),
@@ -744,77 +731,74 @@ PROVIDER_MODEL_URLS = {
 
 
 def _check_ollama():
-    try:
-        return requests.get("http://localhost:11434/", timeout=0.8).status_code == 200
-    except Exception:
-        return False
+    return provider_registry.detect_ollama().online
 
 
 def _check_provider_reachable(provider, key):
     if provider == "ollama":
         return _check_ollama()
-    if provider == "gemini":
-        try:
-            r = requests.get(
-                "https://generativelanguage.googleapis.com/v1beta/models",
-                headers={"X-Goog-Api-Key": key},
-                timeout=3.0
-            )
-            return r.status_code == 200
-        except Exception:
-            return False
-    if provider not in PROVIDER_MODEL_URLS:
-        return None
-    url, needs_auth, _ = PROVIDER_MODEL_URLS[provider]
     try:
-        h = {"Authorization": f"Bearer {key}"} if needs_auth and key else {}
-        r = requests.get(url, headers=h, timeout=2.0)
-        return r.status_code == 200
+        status = provider_registry.check_provider(provider, key=key, timeout=4.0)
+        return status.reachable
     except Exception:
         return False
 
 
 def _print_status(cfg):
+    from hackit.config import CONFIG_PATH
+
     click.echo(_colored("\n  [ AI AGENT STATUS ]", B_CYAN))
-    click.echo(f"  • Config File     : {DIM}{os.path.join(os.path.expanduser('~'), '.hackit_config.json')}{RESET}")
+    click.echo(f"  • Config File     : {DIM}{CONFIG_PATH}{RESET}")
 
-    active = cfg.get('ai_provider', '')
-    click.echo(f"  • Active Provider : {YELLOW}{(active or 'NONE').upper()}{RESET}")
-    if active:
-        am = cfg.get("ai_models", {}).get(active, "")
-        if am:
-            click.echo(f"  • Active Model    : {YELLOW}{am}{RESET}")
-
-    ollama_ok = _check_ollama()
-    keys = cfg.get("ai_keys", {})
+    active = provider_registry.get_active_provider(cfg)
+    configured = provider_registry.configured_providers(cfg)
     models = cfg.get("ai_models", {})
 
-    for p in PROVIDERS:
-        k = keys.get(p, "")
-        m = models.get(p, "")
-        configured = bool(k)
-        reachable = _check_provider_reachable(p, k) if configured else None
+    click.echo(f"  • Active Provider : {YELLOW}{(active or 'NONE').upper()}{RESET}")
+    if active:
+        model = provider_registry.effective_model(active, cfg)
+        click.echo(f"  • Active Model    : {YELLOW}{model or '(auto)'}{RESET}")
+    click.echo(f"  • Configured      : {DIM}{', '.join(configured) if configured else 'none'}{RESET}")
 
-        if p == "ollama":
-            if configured and ollama_ok:
-                tag = f"{GREEN}READY{RESET}"
-            elif configured and not ollama_ok:
-                tag = f"{RED}OFFLINE (NOT RUNNING){RESET}"
-            else:
-                tag = f"{DIM}NOT CONFIGURED{RESET}"
+    click.echo(_colored("  • Probing providers…", DIM))
+    statuses = {item.provider: item for item in provider_registry.doctor(cfg, timeout=4.0)}
+
+    for provider in PROVIDERS:
+        status = statuses.get(provider)
+        if status is None:
+            tag = f"{DIM}NOT CONFIGURED{RESET}"
+            latency = ""
+            model = models.get(provider, "")
+            if model:
+                tag += f"  {DIM}({model}){RESET}"
+            click.echo(f"  {GREEN}▶{RESET} {B_CYAN}{provider:<12}{RESET}{tag}")
+            continue
+
+        if status.state == "ready":
+            tag = f"{GREEN}READY{RESET}"
+            latency = f"  {DIM}{status.latency_ms} ms{RESET}" if status.latency_ms else ""
+        elif status.state == "offline":
+            tag = f"{RED}OFFLINE (NOT RUNNING){RESET}"
+            latency = ""
+        elif status.state == "unreachable":
+            tag = f"{YELLOW}UNREACHABLE{RESET}"
+            latency = ""
+        elif status.state == "configured":
+            tag = f"{GREEN}CONFIGURED{RESET}"
+            latency = ""
         else:
-            if configured and reachable:
-                tag = f"{GREEN}READY{RESET}"
-            elif configured and reachable is False:
-                tag = f"{YELLOW}UNREACHABLE{RESET}"
-            elif configured and reachable is None:
-                tag = f"{GREEN}CONFIGURED{RESET}"
-            else:
-                tag = f"{DIM}NOT CONFIGURED{RESET}"
+            tag = f"{DIM}NOT CONFIGURED{RESET}"
+            latency = ""
 
-        if m:
-            tag += f"  {DIM}({m}){RESET}"
-        click.echo(f"  {GREEN}▶{RESET} {B_CYAN}{p:<12}{RESET}{tag}")
+        model = models.get(provider, "") or provider_registry.effective_model(provider, cfg)
+        detail = ""
+        if status.models:
+            detail += f"  {DIM}{len(status.models)} model(s){RESET}"
+        if status.error:
+            detail += f"  {RED}{status.error[:120]}{RESET}"
+        click.echo(f"  {GREEN}▶{RESET} {B_CYAN}{provider:<12}{RESET}{tag}{latency}{detail}")
+        if model:
+            click.echo(f"    {DIM}model: {model}{RESET}")
 
 
 @agent.command()
@@ -845,10 +829,23 @@ def setting(provider, key, model):
 
     if not key:
         if provider == "ollama":
-            key = "AUTO_DETECT" 
-            click.echo(_colored("\n  [*] Ollama Selected: Checking Local Auto-Detection Mode...", DIM))
+            key = "AUTO_DETECT"
+            info = provider_registry.detect_ollama()
+            if info.online:
+                click.echo(_colored(
+                    f"\n  [*] Ollama online at {info.host} — {len(info.models)} model(s) detected",
+                    GREEN,
+                ))
+            else:
+                click.echo(_colored(
+                    f"\n  [!] Ollama not reachable at {info.host}. Start it with: ollama serve",
+                    YELLOW,
+                ))
         else:
-            key = click.prompt(_colored(f"  [?] Paste your {provider.upper()} API Key", YELLOW), hide_input=False)
+            key = click.prompt(
+                _colored(f"  [?] Paste your {provider.upper()} API Key", YELLOW),
+                hide_input=True,
+            )
     
     if provider and key:
         if "ai_keys" not in cfg:
@@ -879,28 +876,37 @@ def setting(provider, key, model):
                 model = ""
         elif model is None and provider == "ollama":
             _spin("Scanning local Ollama models ...", 0.5)
-            try:
-                r = requests.get("http://localhost:11434/api/tags", timeout=2.0)
-                if r.status_code == 200:
-                    ollama_models = [m.get("name") for m in r.json().get("models", [])]
-                    if ollama_models:
-                        click.echo(f"  {GREEN}◉{RESET}  {DIM}Local models: {', '.join(ollama_models[:5])}{RESET}")
-                        ollama_items = [(m, "free", "Local Ollama model") for m in ollama_models]
-                        model = _dropdown_select(provider, ollama_items, ollama_models)
-            except Exception:
-                pass
+            info = provider_registry.detect_ollama()
+            if info.online and info.models:
+                click.echo(f"  {GREEN}◉{RESET}  {DIM}Local models: {', '.join(info.models[:5])}{RESET}")
+                ollama_items = [(m, "free", "Local Ollama model") for m in info.models]
+                model = _dropdown_select(provider, ollama_items, info.models)
+            elif info.online:
+                click.echo(_colored("  [!] Ollama is running but has no models. Run: ollama pull llama3", YELLOW))
+            else:
+                click.echo(_colored(f"  [!] Ollama offline at {info.host}: {info.error}", YELLOW))
             
         cfg["ai_models"][provider] = model.strip() if isinstance(model, str) else ""
         
-        if provider != "ollama":
-            _spin(f"Verifying {PROVIDER_LABELS.get(provider, provider)} connection ...", 0.5)
-            reachable = _check_provider_reachable(provider, key)
-            if reachable:
-                click.echo(f"  {GREEN}✓{RESET}  {DIM}Connection verified!{RESET}")
-            elif reachable is False:
-                click.echo(f"  {YELLOW}⚠{RESET}  {DIM}API did not respond — key may be invalid.{RESET}")
-            else:
-                click.echo(f"  {DIM}Connection check skipped.{RESET}")
+        _spin(f"Verifying {PROVIDER_LABELS.get(provider, provider)} connection ...", 0.5)
+        status = provider_registry.check_provider(provider, key=key, cfg=cfg, timeout=5.0)
+        if status.reachable:
+            detail = f" · {len(status.models)} model(s)" if status.models else ""
+            latency = f" · {status.latency_ms} ms" if status.latency_ms else ""
+            click.echo(f"  {GREEN}✓{RESET}  {DIM}Connection verified{detail}{latency}{RESET}")
+        elif provider == "ollama":
+            click.echo(_colored(
+                f"  [!] Ollama offline at {provider_registry.ollama_host()}: {status.error}",
+                YELLOW,
+            ))
+            click.echo(_colored("      Start it with: ollama serve", DIM))
+        elif status.reachable is False:
+            click.echo(_colored(
+                f"  [!] API did not respond: {status.error or 'check the key and network'}",
+                YELLOW,
+            ))
+        else:
+            click.echo(f"  {DIM}Connection check skipped.{RESET}")
         
         if save_config(cfg):
             click.echo(f"  {GREEN}✓{RESET}  {DIM}Configuration saved.{RESET}")
@@ -915,6 +921,246 @@ def status():
     """Check AI Agent connectivity — smart detect all providers & Ollama"""
     from hackit.config import load_config
     _print_status(load_config())
+
+
+@agent.command()
+def doctor():
+    """Deep provider diagnostics: keys, latency, model discovery and Ollama."""
+    from hackit.config import load_config
+
+    cfg = load_config()
+    _print_status(cfg)
+    click.echo(_colored("\n  [ DIAGNOSTICS ]", B_CYAN))
+    click.echo(f"  • Config dir      : {DIM}{os.path.join(os.path.expanduser('~'), '.hackit')}{RESET}")
+    click.echo(f"  • Ollama host     : {DIM}{provider_registry.ollama_host()}{RESET}")
+    click.echo(f"  • Workflow engine : {DIM}{_workflow_engine()}{RESET}")
+    click.echo(f"  • Memory backend  : {DIM}{_memory_backend()}{RESET}")
+    click.echo(f"  • Authorization   : {DIM}HACKIT_AUTHORIZED={os.environ.get('HACKIT_AUTHORIZED', '0')}{RESET}")
+    if os.environ.get("HACKIT_AUTHORIZED", "").lower() not in ("1", "true", "yes", "y"):
+        click.echo(_colored("  [!] Active payload verification is disabled until HACKIT_AUTHORIZED=1", YELLOW))
+    click.echo()
+
+
+def _workflow_engine():
+    try:
+        from hackit.agent.workflow import workflow_engine
+        return workflow_engine()
+    except Exception as exc:  # noqa: BLE001
+        return f"unavailable ({exc})"
+
+
+def _memory_backend():
+    try:
+        from hackit.agent.memory import langchain_available
+        return "langchain" if langchain_available() else "builtin"
+    except Exception:
+        return "builtin"
+
+
+@agent.command()
+@click.argument('provider', required=False)
+@click.option('--curated/--remote', default=False, help='Only show curated models')
+def models(provider, curated):
+    """List available models for a provider (including live discovery)."""
+    from hackit.config import load_config
+
+    cfg = load_config()
+    provider = provider_registry.normalize_provider(
+        provider or provider_registry.get_active_provider(cfg) or "gemini"
+    )
+    key = provider_registry.resolve_api_key(provider, cfg)
+    click.echo(_colored(f"\n  [ MODELS · {provider} ]", B_CYAN))
+    items = provider_registry.model_options(provider, key=key, include_remote=not curated)
+    if not items:
+        click.echo(_colored("  [!] No models found. Check the key or start Ollama.", YELLOW))
+        return
+    for index, (model, tier, description) in enumerate(items, 1):
+        click.echo(
+            f"  {GREEN}{index:>2}.{RESET} {B_CYAN}{model:<48}{RESET} "
+            f"{DIM}{tier:<8} {description}{RESET}"
+        )
+    click.echo(_colored("\n  Set one with: agent setting --provider ... --model ...", DIM))
+
+
+@agent.command()
+@click.argument('vuln_type')
+@click.option('--context', default='', help='Target/context for the payloads')
+@click.option('--count', default=12, type=int, help='Number of payloads')
+@click.option('--no-ai', is_flag=True, help='Use the offline catalogue only')
+@click.option('--out', default='', help='Save results to .json or .md')
+def payload(vuln_type, context, count, no_ai, out):
+    """Forge payloads for a vulnerability class using the active AI provider."""
+    click.echo(_colored(f"\n  [ PAYLOAD FORGE · {vuln_type.upper()} ]", B_CYAN))
+    brain = AIHyperBrain(engine="native", enable_memory=False)
+    result = brain.generate_payloads(vuln_type, context=context, count=count, use_ai=not no_ai)
+    items = result.get("payloads", [])
+    if not items:
+        click.echo(_colored("  [!] No payloads generated.", RED))
+        return
+    for index, item in enumerate(items, 1):
+        click.echo(f"  {GREEN}{index:>2}.{RESET} {item.get('payload', '')}")
+        notes = item.get("notes", "")
+        technique = item.get("technique", "")
+        if technique or notes:
+            click.echo(f"      {DIM}{technique}{(' · ' + notes) if notes else ''}{RESET}")
+    click.echo(_colored(
+        f"\n  Source: {result.get('source')} · provider={result.get('provider') or 'auto'} · "
+        f"model={result.get('model') or 'auto'}",
+        DIM,
+    ))
+    if result.get("ai_error"):
+        click.echo(_colored(f"  [!] AI note: {result['ai_error']}", YELLOW))
+    if out:
+        payload_registry.save({"results": {result.get("type", vuln_type): result}}, out)
+        click.echo(_colored(f"  [+] Saved to {out}", GREEN))
+
+
+@agent.command()
+@click.argument('vuln_type')
+@click.argument('target')
+@click.option('--param', default='', help='Parameter to inject into')
+@click.option('--method', default='GET', type=click.Choice(['GET', 'POST']))
+@click.option('--count', default=6, type=int, help='Payloads to send')
+@click.option('--use-ai/--no-ai', default=True, help='Include AI-generated payloads')
+def probe(vuln_type, target, param, method, count, use_ai):
+    """Send generated payloads to an authorised target and analyse responses."""
+    if os.environ.get("HACKIT_AUTHORIZED", "").lower() not in ("1", "true", "yes", "y"):
+        click.echo(_colored(
+            "\n  [!] Refusing active probing. Set HACKIT_AUTHORIZED=1 only when you "
+            "have written permission to test this target.",
+            RED,
+        ))
+        return
+    brain = AIHyperBrain(engine="native", enable_memory=False)
+    result = brain.generate_payloads(vuln_type, context=target, count=count, use_ai=use_ai)
+    payload_list = [item.get("payload", "") for item in result.get("payloads", []) if item.get("payload")]
+    if not payload_list:
+        click.echo(_colored("  [!] No payloads to send.", RED))
+        return
+    if not target.startswith(("http://", "https://")):
+        target = "https://" + target
+    click.echo(_colored(f"\n  [ PROBE · {vuln_type.upper()} ] {target}", B_CYAN))
+    if param:
+        click.echo(_colored(f"  Parameter: {param} · method: {method}", DIM))
+    else:
+        click.echo(_colored("  No parameter supplied — payloads are appended as ?url=…", DIM))
+
+    def on_result(item):
+        marker = _colored("VULN", RED) if item.get("vulnerable") else _colored("·", DIM)
+        click.echo(f"  {marker} {item.get('payload', '')[:90]}  {DIM}{item.get('evidence', '')[:120]}{RESET}")
+
+    results = brain.probe_payloads(
+        target, vuln_type, payload_list, parameter=param, method=method,
+        timeout=10.0, on_result=on_result,
+    )
+    click.echo(_colored("\n  " + payload_registry.summarize_probe(results).replace("\n", "\n  "), BOLD))
+
+
+@agent.command()
+@click.argument('target')
+@click.option('--scope', default='active_stealth',
+              type=click.Choice(['passive', 'active_stealth', 'aggressive']))
+@click.option('--resume', is_flag=True, help='Resume the latest saved state')
+def auto(target, scope, resume):
+    """Run the autonomous recon → OSINT → scan → payload → attack → report pipeline."""
+    from hackit.agent.workflow import run_pentest
+
+    click.echo(_colored(f"\n  [ AUTONOMOUS PENTEST ] target={target} scope={scope}", B_CYAN, bold=True))
+    click.echo(_colored(f"  Engine: {_workflow_engine()}", DIM))
+    if os.environ.get("HACKIT_AUTHORIZED", "").lower() not in ("1", "true", "yes", "y"):
+        click.echo(_colored(
+            "  [!] Active payload verification is disabled. Set HACKIT_AUTHORIZED=1 "
+            "only for targets you own or have permission to test.",
+            YELLOW,
+        ))
+
+    def progress(phase, message):
+        click.echo(f"  {CYAN}▸{RESET} {B_CYAN}{phase:<10}{RESET} {DIM}{message}{RESET}")
+
+    try:
+        state = run_pentest(target, scope=scope, resume=resume, progress=progress)
+    except KeyboardInterrupt:
+        click.echo(_colored("\n  [!] Pipeline interrupted.", YELLOW))
+        return
+    except Exception as exc:  # noqa: BLE001
+        click.echo(_colored(f"\n  [!] Pipeline failed: {exc}", RED))
+        if os.environ.get("HACKIT_DEBUG"):
+            import traceback
+            click.echo(traceback.format_exc())
+        return
+
+    findings = state.get("findings", []) if isinstance(state, dict) else []
+    click.echo(_colored(
+        f"\n  [+] Pipeline complete · {len(findings)} finding(s) · "
+        f"risk {state.get('risk_score', 0)}/10",
+        GREEN, bold=True,
+    ))
+    if state.get("report_path"):
+        click.echo(_colored(f"  [+] Report: {state['report_path']}", GREEN))
+    click.echo(_colored(f"  [+] State: {os.path.join(os.path.expanduser('~'), '.hackit', 'workflow_state')}", DIM))
+
+
+@agent.command(name='osint')
+@click.argument('query')
+@click.option('--deep', is_flag=True, help='Deep handle variants and wider coverage')
+@click.option('--json-out', default='', help='Write the raw result to a JSON file')
+def osint_cmd(query, deep, json_out):
+    """Run OSINT footprint discovery for a username, email or domain."""
+    from hackit.osint.core import run_full_scan
+
+    click.echo(_colored(f"\n  [ OSINT ] {query}", B_CYAN, bold=True))
+    try:
+        data = run_full_scan(
+            query, timeout=7, workers=24, verbose=True, deep=deep,
+            check_domain=True, check_phone=False,
+        )
+    except Exception as exc:  # noqa: BLE001
+        click.echo(_colored(f"  [!] OSINT failed: {exc}", RED))
+        return
+    summary = data.get("summary", {})
+    analysis = data.get("analysis", {})
+    click.echo(_colored(
+        f"\n  [+] Checked {summary.get('checked', 0)} source(s) · "
+        f"{summary.get('hits', 0)} hit(s) · {summary.get('possible', 0)} possible · "
+        f"confidence {analysis.get('confidence_score', 0)}/100",
+        GREEN,
+    ))
+    if json_out:
+        with open(json_out, "w", encoding="utf-8") as handle:
+            json.dump(data, handle, indent=2, default=str)
+        click.echo(_colored(f"  [+] Saved: {json_out}", DIM))
+
+
+@agent.command()
+@click.option('--session', default='chat_default', help='Memory session name')
+@click.option('--show/--stats', default=False, help='Show remembered facts')
+@click.option('--clear', 'clear_memory', is_flag=True, help='Clear this memory session')
+@click.option('--export', default='', help='Export memory to a JSON file')
+def memory(session, show, clear_memory, export):
+    """Inspect or manage the agent's long-term conversation memory."""
+    from hackit.agent.memory import AgentMemory
+
+    store = AgentMemory(session=session)
+    if clear_memory:
+        store.clear()
+        click.echo(_colored(f"  [+] Memory session '{session}' cleared.", GREEN))
+        return
+    if export:
+        store.export(export)
+        click.echo(_colored(f"  [+] Memory exported to {export}", GREEN))
+        return
+    stats = store.stats()
+    click.echo(_colored(f"\n  [ MEMORY · {session} ]", B_CYAN))
+    for key, value in stats.items():
+        click.echo(f"  • {key:<18}: {DIM}{value}{RESET}")
+    if show:
+        facts = store._facts  # noqa: SLF001 - read-only display
+        if not facts:
+            click.echo(_colored("  No long-term facts recorded yet.", DIM))
+        else:
+            click.echo(_colored("\n  Long-term facts:", B_CYAN))
+            for fact in facts:
+                click.echo(f"  {GREEN}·{RESET} {fact}")
 
 @agent.command()
 @click.argument('target')
@@ -1253,56 +1499,146 @@ def guide():
     click.echo(_colored("  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", DIM))
     click.echo()
 
-def handle_ai_command(cmd: str):
-    """Handles universal /AI commands with Multi-Intelligence Selection"""
-    if not cmd.startswith('/'):
+# Slash aliases that map to full Click subcommands.  Everything else that
+# starts with ``/`` is treated as an AI mode (see commands.COMMAND_MODES).
+_AGENT_ACTIONS = {
+    "payload": "payload",
+    "probe": "probe",
+    "auto": "auto",
+    "osint": "osint",
+    "models": "models",
+    "doctor": "doctor",
+    "memory": "memory",
+    "setting": "setting",
+    "status": "status",
+    "swarm": "swarm",
+    "scan": "swarm",
+    "dashboard": "dashboard",
+    "autopilot": "autopilot",
+    "clear": "clear",
+    "reset": "reset",
+    "guide": "guide",
+    "help": "help",
+    "chat": "chat",
+}
+
+
+def _click_registry():
+    return {
+        "payload": payload,
+        "probe": probe,
+        "auto": auto,
+        "osint": osint_cmd,
+        "models": models,
+        "doctor": doctor,
+        "memory": memory,
+        "setting": setting,
+        "status": status,
+        "swarm": swarm,
+        "dashboard": dashboard,
+        "autopilot": autopilot,
+        "clear": clear,
+        "reset": reset,
+        "guide": guide,
+        "help": help,
+        "chat": chat,
+    }
+
+
+def _dispatch_agent_action(name: str, rest: str) -> bool:
+    """Run a Click subcommand from a slash command such as ``/payload sqli``."""
+    command_name = _AGENT_ACTIONS.get(name)
+    command = _click_registry().get(command_name or "")
+    if command is None:
         return False
-    
-    prompt = cmd[1:].strip()
-    if not prompt:
-        return True
-    
-    cfg = load_config()
-    
-    available_providers = []
-    # Check Ollama
     try:
-        import requests
-        if requests.get("http://localhost:11434/", timeout=0.5).status_code == 200:
-            if cfg.get("ai_keys", {}).get("ollama"):
-                available_providers.append("ollama")
-    except Exception:
-        pass
-        
-    for p, k in cfg.get("ai_keys", {}).items():
-        if k and p != "ollama":
-            available_providers.append(p)
-
-    selected_provider = cfg.get("ai_provider", "gemini")
-    
-    if selected_provider not in available_providers and available_providers:
-        from hackit.config import save_config
-        selected_provider = available_providers[0]
-        click.echo(_colored(f"  [*] Previous AI offline/missing. Auto-switching to {selected_provider.upper()}...", YELLOW))
-        cfg["ai_provider"] = selected_provider
-        save_config(cfg)
-    elif not available_providers:
-        click.echo(_colored(f"  [!] No AI providers are configured or online. Run 'agent setting'.", RED))
+        args = shlex.split(rest)
+    except ValueError as exc:
+        click.echo(_colored(f"  [!] Invalid arguments: {exc}", RED))
         return True
+    try:
+        command.main(
+            args=args,
+            prog_name=f"agent {command_name}",
+            standalone_mode=False,
+        )
+    except (click.exceptions.Exit, SystemExit):
+        pass
+    except click.ClickException as exc:
+        exc.show()
+    except KeyboardInterrupt:
+        click.echo(_colored("\n  [!] Cancelled.", YELLOW))
+    except Exception as exc:  # noqa: BLE001 - a command must not kill the shell
+        click.echo(_colored(f"  [!] {command_name} failed: {exc}", RED))
+        if os.environ.get("HACKIT_DEBUG"):
+            import traceback
+            click.echo(traceback.format_exc())
+    return True
 
-    click.echo(_colored(f"\n[*] Consulting HackIt AI ({selected_provider.upper()})...", DIM))
+
+def _ask_brain(prompt: str, show_banner: bool = True) -> str:
+    """Send natural language to the unified brain (provider fallback + memory)."""
+    cfg = load_config()
+    if not provider_registry.configured_providers(cfg) and not provider_registry.detect_ollama().online:
+        click.echo(_colored("  [!] No AI provider configured. Run `agent setting`.", RED))
+        return ""
+
     brain = AIHyperBrain(engine="chat")
-    brain.provider = selected_provider 
-    
-    # Send the configured model to the brain
-    configured_model = cfg.get("ai_models", {}).get(selected_provider, "")
-    if configured_model:
-        brain.model = configured_model
-    
-    response = brain.chat(prompt)
-    
-    click.echo(_colored(f"\n[ HACKIT AI ]", MAGENTA, bold=True))
+    if show_banner:
+        click.echo(_colored(f"\n[*] Consulting HackIt AI ({brain.provider.upper()})...", DIM))
+    try:
+        response = brain.chat(prompt)
+    except KeyboardInterrupt:
+        click.echo(_colored("\n  [!] Cancelled.", YELLOW))
+        return ""
+    except Exception as exc:  # noqa: BLE001
+        click.echo(_colored(f"  [!] Agent error: {exc}", RED))
+        if os.environ.get("HACKIT_DEBUG"):
+            import traceback
+            click.echo(traceback.format_exc())
+        return ""
+
+    if show_banner:
+        click.echo(_colored("\n[ HACKIT AI ]", MAGENTA, bold=True))
     click.echo(response)
     click.echo(_colored("─" * 40, DIM))
     click.echo()
+    return response
+
+
+def handle_ai_command(cmd: str):
+    """Handle a universal slash command.
+
+    * ``/payload``, ``/probe``, ``/auto``, ``/osint``, ``/swarm`` ... dispatch
+      to the corresponding Click command.
+    * ``/risk``, ``/attack``, ``/report`` ... are AI modes and reach the engine
+      with the leading slash intact (the previous implementation stripped it,
+      which made every mode dead).
+    * An unknown ``/word`` followed by text is treated as a natural question.
+    """
+    if not isinstance(cmd, str):
+        return False
+    raw = cmd.strip()
+    if not raw.startswith("/"):
+        return False
+
+    body = raw[1:].strip()
+    if not body:
+        return True
+
+    head, _, rest = body.partition(" ")
+    head = head.lower().strip()
+    rest = rest.strip()
+
+    from hackit.agent.commands import COMMAND_MODES
+
+    if head in _AGENT_ACTIONS:
+        return _dispatch_agent_action(head, rest)
+
+    if head in COMMAND_MODES:
+        _ask_brain(raw)
+        return True
+
+    # Unknown mode: the user asked a question, not a directive.
+    _ask_brain(body)
     return True

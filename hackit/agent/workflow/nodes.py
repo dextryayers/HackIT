@@ -1,12 +1,47 @@
+"""Autonomous pentest pipeline nodes.
+
+Every node returns a partial ``PentestState`` update.  Nodes are deliberately
+defensive: a missing binary, offline provider or unreachable target must never
+abort the whole pipeline.  All observations are persisted between phases so a
+run can be audited or resumed.
+"""
+
+from __future__ import annotations
+
 import json
 import os
 import time
-from datetime import datetime
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Dict, Any, List, Callable
+from datetime import datetime
+from typing import Any, Callable, Dict, List, Tuple
+from urllib.parse import parse_qs, urlparse
 
-from .state import PentestState, Finding, Phase, persist_state
+from .state import Finding, PentestState, Phase, persist_state
 from .tools import GoBridge
+
+WEB_PORTS = (80, 443, 8000, 8080, 8443, 8888, 3000, 5000)
+
+PAYLOAD_TYPES = ["sqli", "xss", "ssrf", "lfi", "ssti", "cmdi", "open_redirect"]
+
+SEVERITY_BY_TYPE = {
+    "sqli": ("critical", 9.1, "Use parameterised queries and least-privilege DB accounts"),
+    "cmd_injection": ("critical", 9.5, "Never pass user input to a shell"),
+    "cmdi": ("critical", 9.5, "Never pass user input to a shell"),
+    "ssti": ("critical", 9.0, "Use sandboxed templates and never render user input as code"),
+    "lfi": ("high", 7.5, "Validate file paths against an allowlist"),
+    "xxe": ("high", 7.3, "Disable external entity processing"),
+    "ssrf": ("high", 8.2, "Validate outbound URLs and block link-local ranges"),
+    "xss": ("high", 6.1, "Apply context-aware output encoding and a strict CSP"),
+    "js_secret": ("high", 7.0, "Rotate exposed secrets and remove them from bundles"),
+    "credential_exposure": ("high", 7.4, "Force password resets and enable MFA"),
+    "open_redirect": ("medium", 4.3, "Use an allowlist for redirect destinations"),
+    "cors": ("medium", 6.5, "Validate Origin and never combine wildcard with credentials"),
+    "csrf": ("medium", 5.0, "Add anti-CSRF tokens to state-changing requests"),
+    "ssl": ("medium", 5.8, "Update TLS configuration and certificate hygiene"),
+    "osint_exposure": ("info", 2.0, "Review public exposure and remove stale accounts"),
+    "probe": ("high", 7.0, "Reproduce manually and apply input validation"),
+}
 
 
 def _run_parallel(workers: List[Callable], max_workers: int = 5) -> List[Any]:
@@ -16,103 +51,288 @@ def _run_parallel(workers: List[Callable], max_workers: int = 5) -> List[Any]:
         for future in as_completed(futures):
             try:
                 results.append(future.result())
-            except Exception as e:
-                results.append({"error": str(e)})
+            except Exception as exc:  # noqa: BLE001
+                results.append({"error": str(exc)})
     return results
+
+
+def _finding(findings: List[Dict[str, Any]], ftype: str, target: str,
+             description: str, evidence: str, severity: str = "",
+             cvss: float | None = None, remediation: str = "") -> None:
+    sev, score, rem = SEVERITY_BY_TYPE.get(ftype, ("info", 0.0, "Review manually"))
+    findings.append(Finding(
+        id=f"{ftype.upper()}-{uuid.uuid4().hex[:8]}",
+        type=ftype,
+        severity=severity or sev,
+        target=target,
+        description=description,
+        evidence=evidence[:4000],
+        remediation=remediation or rem,
+        cvss=cvss if cvss is not None else score,
+    ).to_dict())
+
+
+def _as_list(value: Any) -> List[Any]:
+    if isinstance(value, list):
+        return value
+    if isinstance(value, dict):
+        return [value]
+    return []
+
+
+def _module_payload(result: List[Dict[str, Any]]) -> Any:
+    if not result:
+        return None
+    first = result[0] if isinstance(result[0], dict) else {}
+    if first.get("success") is False:
+        return None
+    return first.get("data")
+
+
+def _target_parts(state: PentestState) -> Tuple[str, str, int, str]:
+    """Normalise a target into ``(host, scheme, port, base_url)``.
+
+    Users may pass ``example.com``, ``https://example.com/app`` or
+    ``http://127.0.0.1:8080``.  Every node needs the host for port/tech scans
+    and the full base URL for HTTP modules; the previous code built
+    ``https://http://...`` for URL-shaped targets.
+    """
+    raw = (state.get("target") or "").strip()
+    if not raw:
+        return "", "https", 443, ""
+
+    has_scheme = "://" in raw
+    parsed = urlparse(raw if has_scheme else "//" + raw)
+    host = parsed.hostname or raw.split("/")[0].split(":")[0]
+    explicit_port = parsed.port
+
+    if has_scheme:
+        scheme = (parsed.scheme or "https").lower()
+        port = explicit_port or (443 if scheme == "https" else 80)
+    elif explicit_port:
+        port = explicit_port
+        scheme = "https" if port in (443, 8443) else "http"
+    else:
+        scheme = "https"
+        port = 443
+
+    host_part = f"[{host}]" if ":" in host and not host.startswith("[") else host
+    base = f"{scheme}://{host_part}"
+    if explicit_port:
+        base += f":{explicit_port}"
+    if has_scheme:
+        path = parsed.path or ""
+        if path and path != "/":
+            base += path
+        if parsed.query:
+            base += "?" + parsed.query
+    return host, scheme, port, base
+
+
+def _target_has_web(state: PentestState) -> bool:
+    scan_data = state.get("scan_data") or {}
+    if "has_web" in scan_data:
+        return bool(scan_data.get("has_web"))
+    for port in _as_list(scan_data.get("ports")):
+        if not isinstance(port, dict):
+            continue
+        number = port.get("port", port.get("Port", 0))
+        try:
+            if int(number) in WEB_PORTS:
+                return True
+        except (TypeError, ValueError):
+            continue
+    host, _scheme, _port, _base = _target_parts(state)
+    raw = (state.get("target") or "").strip()
+    if "://" in raw:
+        return bool(host)
+    return "." in raw or ":" in raw or host in ("localhost", "127.0.0.1", "::1")
+
+
+# ---------------------------------------------------------------------------
+# Phase 1-2: reconnaissance and OSINT
+# ---------------------------------------------------------------------------
 
 
 def recon_node(state: PentestState) -> Dict[str, Any]:
     target = state["target"]
+    host, scheme, port, base_url = _target_parts(state)
     bridge = GoBridge()
-
-    updates = {"phase": Phase.RECON.value}
+    updates: Dict[str, Any] = {"phase": Phase.RECON.value}
 
     def do_portscan():
-        r = bridge.run_worker(portscan=target)
-        return ("ports", r[0].get("data", []) if r and r[0].get("success") else [])
+        data = _module_payload(bridge.run_worker(portscan=host or target))
+        return ("ports", data if isinstance(data, list) else [])
 
     def do_subdomain():
-        r = bridge.run_worker(subdomain=target)
-        return ("subdomains", r[0].get("data", []) if r and r[0].get("success") else [])
+        data = _module_payload(bridge.run_worker(subdomain=host or target))
+        return ("subdomains", data if isinstance(data, list) else [])
 
     def do_tech():
-        r = bridge.run_worker(tech=f"{target}:443")
-        return ("tech", r[0].get("data", {}) if r and r[0].get("success") else {})
+        data = _module_payload(bridge.run_worker(tech=f"{host}:{port}"))
+        return ("tech", data if isinstance(data, dict) else {})
 
     def do_waf():
-        r = bridge.run_worker(waf=f"{target}:443")
-        return ("waf", r[0].get("data", {}) if r and r[0].get("success") else {})
+        data = _module_payload(bridge.run_worker(waf=f"{host}:{port}"))
+        return ("waf", data if isinstance(data, dict) else {})
 
     def do_headers():
-        r = bridge.run_worker(headers=f"https://{target}")
-        return ("headers", r[0].get("data", []) if r and r[0].get("success") else [])
+        data = _module_payload(bridge.run_worker(headers=base_url))
+        return ("headers", data if isinstance(data, list) else [])
 
     def do_fuzz():
-        r = bridge.run_worker(fuzz=f"https://{target}")
-        return ("fuzz", r[0].get("data", []) if r and r[0].get("success") else [])
+        data = _module_payload(bridge.run_worker(fuzz=base_url))
+        return ("fuzz", data if isinstance(data, list) else [])
 
-    scan_data = {}
-    for key, data in _run_parallel([do_portscan, do_subdomain, do_tech, do_waf, do_headers, do_fuzz], max_workers=6):
-        if isinstance(key, str) and isinstance(data, (dict, list)):
-            scan_data[key] = data
+    scan_data: Dict[str, Any] = {}
+    for item in _run_parallel(
+        [do_portscan, do_subdomain, do_tech, do_waf, do_headers, do_fuzz],
+        max_workers=6,
+    ):
+        if isinstance(item, tuple) and len(item) == 2:
+            scan_data[item[0]] = item[1]
 
-    findings = []
-    has_web = False
-    ports = scan_data.get("ports", [])
-    if isinstance(ports, list):
-        for p in ports:
-            if isinstance(p, dict):
-                port_num = p.get("Port", 0)
-                if port_num in (80, 443, 8080, 8443):
-                    has_web = True
+    has_web = _target_has_web({**state, "scan_data": scan_data})
+    scan_data["web_url"] = base_url
+    scan_data["host"] = host
+    scan_data["scheme"] = scheme
+    scan_data["port"] = port
+    scan_data["has_web"] = has_web
+
+    findings = list(state.get("findings", []))
+    # Sensitive paths disclosed by the fuzzer are real observations.
+    for entry in _as_list(scan_data.get("fuzz")):
+        if not isinstance(entry, dict):
+            continue
+        status = entry.get("StatusCode", entry.get("status_code", 0))
+        path = entry.get("Path", entry.get("path", ""))
+        if status == 200 and path:
+            _finding(
+                findings, "misconfig", f"{base_url.rstrip('/')}/{str(path).lstrip('/')}",
+                f"Sensitive path accessible: {path}", f"HTTP {status} for {path}",
+                severity="medium", cvss=5.3,
+                remediation="Remove the exposed resource or restrict access",
+            )
 
     updates["scan_data"] = scan_data
     updates["findings"] = findings
-
     persist_state(dict(state, **updates))
     return updates
 
 
 def recon_router(state: PentestState) -> str:
-    scan_data = state.get("scan_data", {})
-    ports = scan_data.get("ports", [])
+    """Recon always feeds passive OSINT before active web enumeration."""
+    return "osint"
 
-    has_web = False
-    if isinstance(ports, list):
-        for p in ports:
-            if isinstance(p, dict) and p.get("Port") in (80, 443, 8080, 8443):
-                has_web = True
 
-    if has_web:
-        return "js"   # js comes before analyze
-    elif len(ports) > 0:
-        return "correlate"
-    else:
-        return "report"
+def osint_node(state: PentestState) -> Dict[str, Any]:
+    target = state["target"]
+    updates: Dict[str, Any] = {"phase": Phase.OSINT.value}
+    scan_data = dict(state.get("scan_data", {}))
+    findings = list(state.get("findings", []))
+    osint: Dict[str, Any] = {}
+
+    try:
+        from hackit.osint.core import run_full_scan
+
+        raw = run_full_scan(
+            target,
+            timeout=6,
+            workers=16,
+            verbose=False,
+            check_domain=True,
+            check_phone=False,
+            deep=False,
+        )
+        profiles = _as_list(raw.get("profiles"))
+        hits = [p for p in profiles if isinstance(p, dict) and p.get("status") == "hit"]
+        email = raw.get("email") or {}
+        domain = raw.get("domain") or {}
+        analysis = raw.get("analysis") or {}
+        correlation = raw.get("correlation") or {}
+
+        osint = {
+            "summary": raw.get("summary", {}),
+            "analysis": analysis,
+            "correlation": correlation,
+            "email": email,
+            "domain": domain,
+            "profiles_hit": hits[:100],
+            "trace_leads": _as_list(raw.get("trace_leads"))[:30],
+        }
+
+        if hits:
+            platforms = ", ".join(str(p.get("platform", "?")) for p in hits[:12])
+            _finding(
+                findings, "osint_exposure", target,
+                f"{len(hits)} public profile(s) linked to the target",
+                f"Platforms: {platforms}",
+                severity="info", cvss=2.0,
+                remediation="Review the public footprint and remove stale accounts",
+            )
+        if email.get("breaches"):
+            breaches = email.get("breaches") or []
+            _finding(
+                findings, "credential_exposure", target,
+                f"{len(breaches)} breach record(s) reference the target",
+                json.dumps(breaches[:10], default=str),
+                severity="high" if len(breaches) >= 3 else "medium",
+            )
+        if domain.get("registrar"):
+            osint["domain_registrar"] = domain.get("registrar")
+    except Exception as exc:  # noqa: BLE001 - OSINT must never abort the pipeline
+        osint = {"error": str(exc)[:500]}
+
+    scan_data["osint"] = osint
+    updates["scan_data"] = scan_data
+    updates["osint_data"] = osint
+    updates["findings"] = findings
+    persist_state(dict(state, **updates), suffix="_osint")
+    return updates
+
+
+def osint_router(state: PentestState) -> str:
+    return "js" if _target_has_web(state) else "payload"
+
+
+# ---------------------------------------------------------------------------
+# Phase 3-4: JavaScript and parameter discovery
+# ---------------------------------------------------------------------------
 
 
 def js_node(state: PentestState) -> Dict[str, Any]:
     target = state["target"]
     bridge = GoBridge()
-    updates = {"phase": Phase.JS.value}
+    updates: Dict[str, Any] = {"phase": Phase.JS.value}
+    scan_data = dict(state.get("scan_data", {}))
+    findings = list(state.get("findings", []))
 
-    js_result = bridge.run_worker(js=f"https://{target}")
-    if js_result and js_result[0].get("success"):
-        js_data = js_result[0].get("data", {})
-        updates["scan_data"] = {**state.get("scan_data", {}), "js_analysis": js_data}
+    if not _target_has_web(state):
+        scan_data["js_analysis"] = {"skipped": "no web service detected"}
+        updates["scan_data"] = scan_data
+        persist_state(dict(state, **updates), suffix="_js")
+        return updates
 
-        if isinstance(js_data, dict):
-            secrets = js_data.get("secrets", [])
-            existing = list(state.get("findings", []))
-            for s in secrets:
-                existing.append(Finding(
-                    id=f"JS-SECRET-{len(existing)}", type="js_secret",
-                    severity=s.get("severity", "high"),
-                    target=target, description=f"Secret exposure: {s.get('type', 'unknown')}",
-                    evidence=s.get("value", ""), remediation="Rotate exposed secrets"
-                ).to_dict())
-            updates["findings"] = existing
+    _host, _scheme, _port, base_url = _target_parts(state)
+    result = bridge.run_hative(base_url, ["js"], timeout=180)
+    payload = _module_payload(result)
+    if payload is None and result and isinstance(result[0], dict):
+        payload = result[0].get("data")
+    scan_data["js_analysis"] = payload or {}
 
+    if isinstance(payload, dict):
+        for secret in _as_list(payload.get("secrets")):
+            if not isinstance(secret, dict):
+                continue
+            _finding(
+                findings, "js_secret", target,
+                f"Secret exposure: {secret.get('type', 'unknown')}",
+                str(secret.get("value", ""))[:1000],
+                severity=secret.get("severity", "high"),
+            )
+
+    updates["scan_data"] = scan_data
+    updates["findings"] = findings
     persist_state(dict(state, **updates), suffix="_js")
     return updates
 
@@ -120,17 +340,103 @@ def js_node(state: PentestState) -> Dict[str, Any]:
 def param_node(state: PentestState) -> Dict[str, Any]:
     target = state["target"]
     bridge = GoBridge()
-    updates = {"phase": Phase.PARAM.value}
+    updates: Dict[str, Any] = {"phase": Phase.PARAM.value}
+    scan_data = dict(state.get("scan_data", {}))
 
-    param_result = bridge.run_worker(param=f"https://{target}")
-    if param_result and param_result[0].get("success"):
-        param_data = param_result[0].get("data", {})
-        scan_data = dict(state.get("scan_data", {}))
-        scan_data["params"] = param_data
-        updates["scan_data"] = scan_data
+    if not _target_has_web(state):
+        scan_data["params"] = {"skipped": "no web service detected"}
+    else:
+        _host, _scheme, _port, base_url = _target_parts(state)
+        result = bridge.run_hative(base_url, ["param"], timeout=120)
+        scan_data["params"] = _module_payload(result) or (result[0].get("data") if result else {})
 
+    updates["scan_data"] = scan_data
     persist_state(dict(state, **updates), suffix="_param")
     return updates
+
+
+# ---------------------------------------------------------------------------
+# Phase 5: AI payload forging
+# ---------------------------------------------------------------------------
+
+
+def _context_blob(state: PentestState) -> str:
+    scan_data = state.get("scan_data", {})
+    return json.dumps({
+        "target": state.get("target"),
+        "tech": scan_data.get("tech"),
+        "waf": scan_data.get("waf"),
+        "ports": scan_data.get("ports"),
+        "subdomains": scan_data.get("subdomains"),
+        "params": scan_data.get("params"),
+        "fuzz": scan_data.get("fuzz"),
+        "js": scan_data.get("js_analysis"),
+        "osint": scan_data.get("osint", {}).get("analysis") if isinstance(scan_data.get("osint"), dict) else {},
+    }, default=str)[:12000]
+
+
+def _select_payload_types(state: PentestState) -> List[str]:
+    blob = _context_blob(state).lower()
+    selected: List[str] = []
+    keywords = {
+        "sqli": ["sql", "mysql", "postgres", "oracle", "mssql", "database"],
+        "xss": ["xss", "script", "html", "template", "dom"],
+        "ssrf": ["ssrf", "url=", "fetch", "proxy", "redirect"],
+        "lfi": ["file", "path", "include", "download", "attachment"],
+        "ssti": ["template", "jinja", "twig", "handlebars", "freemarker"],
+        "cmdi": ["cmd", "exec", "shell", "system", "ping"],
+        "open_redirect": ["redirect", "return", "next", "callback", "continue"],
+    }
+    for vuln_type, needles in keywords.items():
+        if any(needle in blob for needle in needles):
+            selected.append(vuln_type)
+    for vuln_type in PAYLOAD_TYPES:
+        if vuln_type not in selected:
+            selected.append(vuln_type)
+    return selected[:6]
+
+
+def payload_node(state: PentestState) -> Dict[str, Any]:
+    target = state["target"]
+    updates: Dict[str, Any] = {"phase": Phase.PAYLOAD.value}
+    types = _select_payload_types(state)
+
+    try:
+        from hackit.agent import payloads as forge
+
+        result = forge.generate_multi(
+            types,
+            context=_context_blob(state),
+            count=10,
+            use_ai=True,
+        )
+    except Exception as exc:  # noqa: BLE001
+        result = {"error": str(exc)[:500], "results": {}}
+
+    updates["payloads"] = result
+    persist_state(dict(state, **updates), suffix="_payload")
+    return updates
+
+
+# ---------------------------------------------------------------------------
+# Phase 6-7: AI analysis and attack plan
+# ---------------------------------------------------------------------------
+
+
+def _offline_analysis(state: PentestState) -> str:
+    scan_data = state.get("scan_data", {})
+    findings = state.get("findings", [])
+    lines = [
+        f"Target: {state.get('target')}",
+        f"Open ports: {len(_as_list(scan_data.get('ports')))}",
+        f"Subdomains: {len(_as_list(scan_data.get('subdomains')))}",
+        f"Findings so far: {len(findings)}",
+    ]
+    tech = scan_data.get("tech")
+    if tech:
+        lines.append(f"Technology: {json.dumps(tech, default=str)[:500]}")
+    lines.append("Candidate tests: " + ", ".join(_select_payload_types(state)))
+    return "\n".join(lines)
 
 
 def analyze_node(state: PentestState) -> Dict[str, Any]:
@@ -138,20 +444,25 @@ def analyze_node(state: PentestState) -> Dict[str, Any]:
     scan_data = state.get("scan_data", {})
     bridge = GoBridge()
 
-    prompt = f"""Analyze this target for pentest:
+    prompt = f"""Analyze this target for an authorised penetration test.
 Target: {target}
-Ports: {json.dumps(scan_data.get('ports', []), indent=2)}
-Technologies: {json.dumps(scan_data.get('tech', {}), indent=2)}
-WAF: {json.dumps(scan_data.get('waf', {}), indent=2)}
-Subdomains: {json.dumps(scan_data.get('subdomains', []), indent=2)}
-Headers: {json.dumps(scan_data.get('headers', []), indent=2)}
-Discovered paths: {json.dumps(scan_data.get('fuzz', []), indent=2)}
-JS Analysis: {json.dumps(scan_data.get('js_analysis', {}), indent=2)}
-Parameters: {json.dumps(scan_data.get('params', {}), indent=2)}
+Ports: {json.dumps(scan_data.get('ports', []), indent=2, default=str)[:4000]}
+Technologies: {json.dumps(scan_data.get('tech', {}), indent=2, default=str)[:3000]}
+WAF: {json.dumps(scan_data.get('waf', {}), indent=2, default=str)[:2000]}
+Subdomains: {json.dumps(scan_data.get('subdomains', []), indent=2, default=str)[:3000]}
+Headers: {json.dumps(scan_data.get('headers', []), indent=2, default=str)[:2500]}
+Discovered paths: {json.dumps(scan_data.get('fuzz', []), indent=2, default=str)[:3000]}
+JS analysis: {json.dumps(scan_data.get('js_analysis', {}), indent=2, default=str)[:3000]}
+Parameters: {json.dumps(scan_data.get('params', {}), indent=2, default=str)[:3000]}
+OSINT: {json.dumps(scan_data.get('osint', {}), indent=2, default=str)[:4000]}
+Generated payload classes: {list((state.get('payloads') or {}).get('results', {}).keys())}
 
-Identify attack surface, potential vulnerabilities, and entry points. List specific vulnerability types to test."""
-
+Identify the attack surface, likely vulnerability classes, entry points and
+the three most valuable tests to run next. Be explicit about confidence.
+"""
     analysis = bridge.ai_chat(prompt, mode="analyze")
+    if not analysis or analysis.startswith("[!]"):
+        analysis = _offline_analysis(state)
 
     result = {
         "analysis": analysis,
@@ -165,27 +476,30 @@ def plan_node(state: PentestState) -> Dict[str, Any]:
     target = state["target"]
     analysis = state.get("analysis", "")
     scan_data = state.get("scan_data", {})
+    payloads = (state.get("payloads") or {}).get("results", {})
     bridge = GoBridge()
 
-    prompt = f"""Based on this analysis, create an exploitation plan:
+    prompt = f"""Create a prioritised exploitation plan for an authorised test.
 
 Target: {target}
-Analysis: {analysis}
+Analysis: {analysis[:4000]}
+Ports: {json.dumps(scan_data.get('ports', []), indent=2, default=str)[:2000]}
+Technologies: {json.dumps(scan_data.get('tech', {}), indent=2, default=str)[:2000]}
+Generated payload classes: {list(payloads.keys())}
 
-Ports: {json.dumps(scan_data.get('ports', []), indent=2)}
-Technologies: {json.dumps(scan_data.get('tech', {}), indent=2)}
-
-Create a prioritized attack plan with:
-1. SQL Injection testing points
-2. XSS testing points
-3. SSRF entry points
-4. Open redirect parameters
-5. 403 bypass targets
-6. Subdomain takeover candidates
-7. SSL/TLS issues
-Sort by criticality (Critical → High → Medium → Low)."""
-
+Return an ordered plan that covers:
+1. SQL injection and authentication bypass points
+2. XSS and client-side injection points
+3. SSRF, URL fetching and cloud metadata paths
+4. LFI/path traversal and file upload paths
+5. SSTI and command injection candidates
+6. Open redirect, 403 bypass and missing security headers
+7. SSL/TLS and subdomain takeover issues
+Sort by criticality and state the exact endpoint/parameter to test when known.
+"""
     plan = bridge.ai_chat(prompt, mode="attack")
+    if not plan or plan.startswith("[!]"):
+        plan = _offline_analysis(state)
 
     result = {
         "attack_plan": plan,
@@ -195,70 +509,210 @@ Sort by criticality (Critical → High → Medium → Low)."""
     return result
 
 
-def _process_module_results(findings, find_count, bridge, target, base_url, module, _type, severity, cvss, remediation):
+# ---------------------------------------------------------------------------
+# Phase 8: active verification with the Go worker
+# ---------------------------------------------------------------------------
+
+
+def _is_module_finding(module: str, item: Dict[str, Any]) -> bool:
+    if item.get("vulnerable") or item.get("Vulnerable"):
+        return True
+    if module == "xss" and item.get("reflected"):
+        return True
+    if module in ("ssrf", "redirect", "bypass403") and item.get("success"):
+        return True
+    if module == "graphql" and item.get("vuln_type"):
+        return True
+    return False
+
+
+def _process_module_results(findings, find_count, bridge, target, base_url, module,
+                            ftype, severity, cvss, remediation):
     result = bridge.run_worker(**{module: base_url})
-    if result and result[0].get("success"):
-        data = result[0].get("data", [])
-        if isinstance(data, list):
-            for item in data:
-                if isinstance(item, dict) and item.get("vulnerable", item.get("Vulnerable", False)):
-                    findings.append(Finding(
-                        id=f"{_type.upper()}-{find_count[0]}", type=_type, severity=severity,
-                        target=base_url,
-                        description=str(item.get("evidence", item.get("Evidence", ""))),
-                        evidence=str(item), remediation=remediation, cvss=cvss
-                    ).to_dict())
-                    find_count[0] += 1
+    data = _module_payload(result)
+    for item in _as_list(data):
+        if not isinstance(item, dict) or not _is_module_finding(module, item):
+            continue
+        evidence = str(item.get("evidence") or item.get("Evidence") or item)
+        _finding(
+            findings, ftype, str(item.get("endpoint", base_url)),
+            evidence[:500], evidence,
+            severity=severity, cvss=cvss, remediation=remediation,
+        )
+        find_count[0] += 1
     return findings
 
 
 def execute_node(state: PentestState) -> Dict[str, Any]:
     target = state["target"]
-    existing_findings = state.get("findings", [])
+    findings = list(state.get("findings", []))
+    scan_data = dict(state.get("scan_data", {}))
     bridge = GoBridge()
+    updates: Dict[str, Any] = {"phase": Phase.EXECUTE.value}
 
-    findings = list(existing_findings)
-    base_url = f"https://{target}"
+    host, scheme, port, default_base = _target_parts(state)
+    base_url = scan_data.get("web_url") or default_base
     find_count = [len(findings)]
 
+    if not _target_has_web(state):
+        updates["findings"] = findings
+        persist_state(dict(state, **updates), suffix="_execute")
+        return updates
+
     module_configs = [
-        ("sqli", "sqli", "critical", 9.1, "Use parameterized queries"),
-        ("xss", "xss", "high", 6.1, "Implement CSP and output encoding"),
-        ("ssrf", "ssrf", "high", 8.2, "Validate and sanitize URLs"),
-        ("redirect", "open_redirect", "medium", 4.3, "Use allowlist for redirect URLs"),
-        ("bypass403", "bypass403", "medium", 5.0, "Review access control rules"),
-        ("cors", "cors", "medium", 6.5, "Implement proper CORS origin validation"),
-        ("csrf", "csrf", "medium", 5.0, "Add anti-CSRF tokens to all forms"),
-        ("lfi", "lfi", "high", 7.5, "Validate and sanitize file paths"),
-        ("ssti", "ssti", "critical", 9.0, "Use safe template rendering"),
-        ("xxe", "xxe", "high", 7.3, "Disable external entity processing"),
-        ("cmd", "cmd_injection", "critical", 9.5, "Never pass user input to shell commands"),
+        ("sqli", "sqli", "critical", 9.1, "Use parameterised queries"),
+        ("xss", "xss", "high", 6.1, "Apply output encoding and CSP"),
+        ("ssrf", "ssrf", "high", 8.2, "Validate and sanitise outbound URLs"),
+        ("redirect", "open_redirect", "medium", 4.3, "Use an allowlist for redirects"),
+        ("bypass403", "bypass403", "medium", 5.0, "Review access-control rules"),
+        ("cors", "cors", "medium", 6.5, "Validate CORS origins"),
+        ("csrf", "csrf", "medium", 5.0, "Add anti-CSRF tokens"),
+        ("lfi", "lfi", "high", 7.5, "Validate file paths"),
+        ("ssti", "ssti", "critical", 9.0, "Use sandboxed template rendering"),
+        ("xxe", "xxe", "high", 7.3, "Disable external entities"),
+        ("cmd", "cmd_injection", "critical", 9.5, "Never pass input to a shell"),
+        ("nosqli", "nosqli", "high", 8.0, "Validate query operators"),
+        ("ldap", "ldap", "high", 8.0, "Escape LDAP filter input"),
+        ("graphql", "graphql", "medium", 5.5, "Disable production introspection"),
     ]
 
-    def make_worker(mod, _type, sev, cvss, rem):
+    def make_worker(mod, ftype, sev, cvss, rem):
         def worker():
-            nonlocal findings, find_count
-            return _process_module_results(findings, find_count, bridge, target, base_url, mod, _type, sev, cvss, rem)
+            return _process_module_results(
+                findings, find_count, bridge, target, base_url, mod, ftype, sev, cvss, rem
+            )
         return worker
 
-    workers = [make_worker(m, t, s, c, r) for m, t, s, c, r in module_configs]
-    _run_parallel(workers, max_workers=6)
+    _run_parallel(
+        [make_worker(*config) for config in module_configs],
+        max_workers=6,
+    )
 
-    ssl_result = bridge.run_worker(ssl=f"{target}:443")
-    if ssl_result and ssl_result[0].get("success"):
-        ssl_data = ssl_result[0].get("data", {})
-        if isinstance(ssl_data, dict) and ssl_data.get("Issues"):
-            findings.append(Finding(
-                id=f"SSL-{find_count[0]}", type="ssl", severity="medium",
-                target=f"{target}:443", description=str(ssl_data.get("Issues", "")),
-                evidence=str(ssl_data), remediation="Update SSL/TLS configuration",
-                cvss=5.8
-            ).to_dict())
-            find_count[0] += 1
+    if scheme == "https" or port in (443, 8443):
+        ssl_target = f"{host}:{port}"
+        ssl_result = bridge.run_worker(ssl=ssl_target)
+        ssl_data = _module_payload(ssl_result)
+        if isinstance(ssl_data, dict):
+            issues = ssl_data.get("Vulnerabilities") or ssl_data.get("vulnerabilities") \
+                or ssl_data.get("Issues") or ssl_data.get("issues")
+            if issues and issues not in ("", [], {}):
+                _finding(
+                    findings, "ssl", ssl_target, str(issues)[:1000],
+                    json.dumps(ssl_data, default=str)[:3000],
+                    severity="medium", cvss=5.8,
+                )
 
-    result = {"findings": findings, "phase": Phase.EXECUTE.value}
-    persist_state(dict(state, **result), suffix="_execute")
-    return result
+    # De-duplicate findings by type + target + evidence prefix.
+    deduped = []
+    seen = set()
+    for item in findings:
+        key = (item.get("type"), item.get("target"), str(item.get("evidence", ""))[:200])
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+
+    updates["findings"] = deduped
+    updates["scan_data"] = scan_data
+    persist_state(dict(state, **updates), suffix="_execute")
+    return updates
+
+
+# ---------------------------------------------------------------------------
+# Phase 9: AI payload verification
+# ---------------------------------------------------------------------------
+
+
+def _param_names(state: PentestState) -> List[str]:
+    params = (state.get("scan_data") or {}).get("params") or {}
+    names: List[str] = []
+
+    def collect(value: Any) -> None:
+        if isinstance(value, list):
+            for item in value:
+                if isinstance(item, dict):
+                    name = item.get("name") or item.get("Name")
+                    if name and name not in names:
+                        names.append(str(name))
+                elif isinstance(item, str) and item not in names:
+                    names.append(item)
+        elif isinstance(value, dict):
+            for key in ("url_params", "extracted_from_js", "params", "parameters"):
+                if key in value:
+                    collect(value[key])
+
+    collect(params)
+    target = state.get("target", "")
+    if "?" in target:
+        for key in parse_qs(urlparse(target).query):
+            if key not in names:
+                names.append(key)
+    return names[:8]
+
+
+def probe_node(state: PentestState) -> Dict[str, Any]:
+    updates: Dict[str, Any] = {"phase": Phase.PROBE.value}
+    findings = list(state.get("findings", []))
+    scan_data = dict(state.get("scan_data", {}))
+    payloads_state = state.get("payloads") or {}
+    results = payloads_state.get("results", {}) if isinstance(payloads_state, dict) else {}
+
+    if os.environ.get("HACKIT_AUTHORIZED", "").lower() not in ("1", "true", "yes", "y"):
+        scan_data["payload_probe"] = {
+            "skipped": "set HACKIT_AUTHORIZED=1 to enable active payload verification"
+        }
+        updates["probe_results"] = []
+        updates["scan_data"] = scan_data
+        updates["findings"] = findings
+        persist_state(dict(state, **updates), suffix="_probe")
+        return updates
+
+    base_url = scan_data.get("web_url") or _target_parts(state)[3]
+    params = _param_names(state) or ["url"]
+    probe_results: List[Dict[str, Any]] = []
+
+    try:
+        from hackit.agent import payloads as forge
+
+        for vuln_type, data in list(results.items())[:5]:
+            items = data.get("payloads", []) if isinstance(data, dict) else []
+            selected = [item.get("payload") for item in items[:2] if item.get("payload")]
+            if not selected:
+                continue
+            parameter = params[0] if params else "url"
+            batch = forge.probe_many(
+                base_url, vuln_type, selected, parameter=parameter,
+                timeout=8.0, delay=0.15,
+            )
+            probe_results.extend(batch)
+            for item in batch:
+                if not item.get("vulnerable"):
+                    continue
+                _finding(
+                    findings, "probe", item.get("target", base_url),
+                    f"AI payload for {vuln_type} produced a differential signal",
+                    f"parameter={parameter} payload={item.get('payload')} evidence={item.get('evidence')}",
+                    severity=SEVERITY_BY_TYPE.get(vuln_type, ("high", 7.0, ""))[0],
+                    cvss=SEVERITY_BY_TYPE.get(vuln_type, ("high", 7.0, ""))[1],
+                )
+    except Exception as exc:  # noqa: BLE001
+        scan_data["payload_probe_error"] = str(exc)[:500]
+
+    scan_data["payload_probe"] = {
+        "attempted": len(probe_results),
+        "signals": sum(1 for item in probe_results if item.get("vulnerable")),
+        "parameters": params,
+    }
+    updates["probe_results"] = probe_results
+    updates["scan_data"] = scan_data
+    updates["findings"] = findings
+    persist_state(dict(state, **updates), suffix="_probe")
+    return updates
+
+
+# ---------------------------------------------------------------------------
+# Phase 10-11: correlation and reporting
+# ---------------------------------------------------------------------------
 
 
 def correlate_node(state: PentestState) -> Dict[str, Any]:
@@ -267,32 +721,36 @@ def correlate_node(state: PentestState) -> Dict[str, Any]:
     scan_data = state.get("scan_data", {})
     bridge = GoBridge()
 
-    prompt = f"""Correlate these pentest findings into attack chains:
-
+    prompt = f"""Correlate these authorised pentest findings into attack chains.
 Target: {target}
-Ports: {json.dumps(scan_data.get('ports', []), indent=2)}
-Technologies: {json.dumps(scan_data.get('tech', {}), indent=2)}
+Ports: {json.dumps(scan_data.get('ports', []), indent=2, default=str)[:2000]}
+Technologies: {json.dumps(scan_data.get('tech', {}), indent=2, default=str)[:2000]}
+OSINT: {json.dumps(scan_data.get('osint', {}), indent=2, default=str)[:2500]}
+Findings: {json.dumps(findings, indent=2, default=str)[:6000]}
+Probe results: {json.dumps(state.get('probe_results', []), indent=2, default=str)[:4000]}
 
-Findings: {json.dumps(findings, indent=2)}
-
-1. Build attack chains combining multiple vulnerabilities
-2. Calculate overall risk score (0-10)
-3. Identify critical path exploitation
-4. Prioritize findings by exploitability and impact"""
-
+1. Build realistic attack chains (only from observed evidence).
+2. Calculate an overall risk score from 0 to 10.
+3. Identify the critical path and the next best action.
+4. Separate confirmed findings from hypotheses.
+"""
     correlation = bridge.ai_chat(prompt, mode="correlate")
+    if not correlation or correlation.startswith("[!]"):
+        correlation = f"{len(findings)} finding(s) correlated offline."
 
     risk_score = 0.0
-    for f in findings:
-        cvss = f.get("cvss", 0)
-        if cvss:
-            risk_score = max(risk_score, cvss)
+    for item in findings:
+        try:
+            risk_score = max(risk_score, float(item.get("cvss") or 0))
+        except (TypeError, ValueError):
+            continue
     if risk_score == 0.0 and findings:
         risk_score = 5.0
 
     result = {
         "risk_score": risk_score,
         "messages": state.get("messages", []) + [{"role": "correlate", "content": correlation}],
+        "analysis": (state.get("analysis", "") + "\n\n[Correlation]\n" + correlation).strip(),
     }
     persist_state(dict(state, **result), suffix="_correlate")
     return result
@@ -305,43 +763,54 @@ def report_node(state: PentestState) -> Dict[str, Any]:
     scan_data = state.get("scan_data", {})
     analysis = state.get("analysis", "")
     attack_plan = state.get("attack_plan", "")
+    payloads_state = state.get("payloads") or {}
     bridge = GoBridge()
 
-    prompt = f"""Generate a professional pentest report:
+    prompt = f"""Generate a professional pentest report.
 
 Target: {target}
 Risk Score: {risk_score}/10
-Analysis: {analysis[:2000]}
-Attack Plan: {attack_plan[:2000]}
-Findings: {json.dumps(findings, indent=2)}
-Ports: {json.dumps(scan_data.get('ports', []), indent=2)}
-Technologies: {json.dumps(scan_data.get('tech', {}), indent=2)}
+Analysis: {analysis[:3000]}
+Attack Plan: {attack_plan[:3000]}
+Findings: {json.dumps(findings, indent=2, default=str)[:8000]}
+OSINT: {json.dumps(scan_data.get('osint', {}), indent=2, default=str)[:3000]}
+Payload classes: {list((payloads_state.get('results') or {}).keys())}
+Probe results: {json.dumps(state.get('probe_results', []), indent=2, default=str)[:3000]}
+Ports: {json.dumps(scan_data.get('ports', []), indent=2, default=str)[:2000]}
+Technologies: {json.dumps(scan_data.get('tech', {}), indent=2, default=str)[:2000]}
 
 Format with:
 1. Executive Summary
-2. Methodology
-3. Key Findings (sorted by severity)
-4. Attack Chains
-5. Risk Assessment
-6. Remediation Recommendations
-7. Conclusion"""
+2. Methodology and scope
+3. Key findings, sorted by severity, with evidence
+4. Attack chains
+5. Risk assessment and business impact
+6. Remediation recommendations
+7. Conclusion
 
+Only claim what the evidence supports. Mark hypotheses as hypotheses.
+"""
     report = bridge.ai_chat(prompt, mode="report")
+    if not report or report.startswith("[!]"):
+        report = _offline_analysis(state)
 
-    reports_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                               "go", "reports", "pentest")
+    reports_dir = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "go", "reports", "pentest",
+    )
     os.makedirs(reports_dir, exist_ok=True)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    safe_target = target.replace(".", "_").replace(":", "_")
+    safe_target = target.replace(".", "_").replace(":", "_").replace("/", "_")
     report_path = os.path.join(reports_dir, f"{safe_target}_{timestamp}.md")
-    with open(report_path, "w") as f:
-        f.write(f"# Pentest Report: {target}\n\n")
-        f.write(f"**Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-        f.write(f"**Risk Score:** {risk_score}/10\n")
-        f.write(f"**Findings:** {len(findings)}\n\n")
-        f.write("---\n\n")
-        f.write(report)
+    with open(report_path, "w", encoding="utf-8") as handle:
+        handle.write(f"# Pentest Report: {target}\n\n")
+        handle.write(f"**Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        handle.write(f"**Risk Score:** {risk_score}/10\n")
+        handle.write(f"**Findings:** {len(findings)}\n")
+        handle.write(f"**Payload classes:** {', '.join((payloads_state.get('results') or {}).keys()) or 'none'}\n\n")
+        handle.write("---\n\n")
+        handle.write(report)
 
     result = {
         "report_path": report_path,

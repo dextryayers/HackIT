@@ -16,18 +16,21 @@ type CORSResult struct {
 	Vulnerable        bool   `json:"vulnerable"`
 }
 
+// TestCORS reports exploitable CORS misconfigurations only.  A wildcard
+// Access-Control-Allow-Origin without credentials is not a vulnerability, and
+// reflecting an origin without credentials does not expose authenticated data.
+// Both were previously reported as high-risk findings.
 func TestCORS(baseURL string) []CORSResult {
 	testOrigins := []string{
 		"https://evil.com",
 		"null",
 		"https://evil.com.evildomain.com",
 		"http://evil.com",
-		"https://evil.com%2F@good.com",
 		"https://good.com.evil.com",
 	}
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	var results []CORSResult
+	client := scanClient(10 * time.Second)
+	results := make([]CORSResult, 0)
 
 	for _, origin := range testOrigins {
 		req, err := http.NewRequest("GET", baseURL, nil)
@@ -43,9 +46,8 @@ func TestCORS(baseURL string) []CORSResult {
 		}
 		resp.Body.Close()
 
-		allowOrigin := resp.Header.Get("Access-Control-Allow-Origin")
+		allowOrigin := strings.TrimSpace(resp.Header.Get("Access-Control-Allow-Origin"))
 		allowCredentials := resp.Header.Get("Access-Control-Allow-Credentials")
-
 		if allowOrigin == "" {
 			continue
 		}
@@ -54,45 +56,38 @@ func TestCORS(baseURL string) []CORSResult {
 		vulnType := ""
 		evidence := ""
 
-		if allowOrigin == "*" && hasCredentials {
+		switch {
+		case allowOrigin == "*" && hasCredentials:
+			// Browsers reject this combination, but it reveals that the app
+			// intends to share credentials with every origin.
 			vulnType = "Wildcard+Credentials"
-			evidence = fmt.Sprintf("Access-Control-Allow-Origin: * with Access-Control-Allow-Credentials: true")
-		} else if allowOrigin == "*" {
-			vulnType = "Wildcard"
-			evidence = fmt.Sprintf("Access-Control-Allow-Origin: * (any origin allowed)")
-		} else if allowOrigin == origin {
-			if hasCredentials {
-				vulnType = "Reflected+Credentials"
-				evidence = fmt.Sprintf("Origin reflected with credentials enabled")
-			} else {
-				vulnType = "Reflected"
-				evidence = fmt.Sprintf("Origin '%s' is reflected verbatim", origin)
-			}
-		} else if allowOrigin == "null" {
-			vulnType = "Null Origin"
-			evidence = "Access-Control-Allow-Origin: null (sandboxed iframes can access)"
-		} else if strings.Contains(allowOrigin, "evil") {
-			vulnType = "Insecure Prefix Match"
-			evidence = fmt.Sprintf("Origin '%s' matched to '%s'", origin, allowOrigin)
+			evidence = "Access-Control-Allow-Origin: * combined with Access-Control-Allow-Credentials: true"
+		case hasCredentials && strings.EqualFold(allowOrigin, "null"):
+			vulnType = "Null Origin + Credentials"
+			evidence = "Null origin is allowed with credentials (sandboxed iframe attack)"
+		case hasCredentials && isExternalAttackerHost(allowOrigin):
+			vulnType = "Reflected Attacker Origin + Credentials"
+			evidence = fmt.Sprintf("Attacker origin %q is allowed with credentials", allowOrigin)
 		}
 
-		if vulnType != "" {
-			results = append(results, CORSResult{
-				Endpoint:          baseURL,
-				Origin:            origin,
-				AllowsCredentials: hasCredentials,
-				VulnerabilityType: vulnType,
-				Evidence:          evidence,
-				Vulnerable:        true,
-			})
+		if vulnType == "" {
+			continue
 		}
+		results = append(results, CORSResult{
+			Endpoint:          baseURL,
+			Origin:            origin,
+			AllowsCredentials: hasCredentials,
+			VulnerabilityType: vulnType,
+			Evidence:          evidence,
+			Vulnerable:        true,
+		})
 	}
 
 	if len(results) == 0 {
 		results = append(results, CORSResult{
 			Endpoint:   baseURL,
 			Vulnerable: false,
-			Evidence:   "No CORS misconfigurations detected",
+			Evidence:   "No exploitable CORS misconfiguration detected",
 		})
 	}
 

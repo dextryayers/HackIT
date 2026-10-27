@@ -12,11 +12,14 @@ PERSIST_DIR = os.path.join(os.path.expanduser("~"), ".hackit", "workflow_state")
 class Phase(str, Enum):
     INIT = "init"
     RECON = "recon"
+    OSINT = "osint"
     JS = "js"
     PARAM = "param"
+    PAYLOAD = "payload"
     ANALYZE = "analyze"
     PLAN = "plan"
     EXECUTE = "execute"
+    PROBE = "probe"
     CORRELATE = "correlate"
     REPORT = "report"
     DONE = "done"
@@ -52,6 +55,9 @@ class PentestState(TypedDict):
     phase: str
     findings: List[Dict[str, Any]]
     scan_data: Dict[str, Any]
+    osint_data: Dict[str, Any]
+    payloads: Dict[str, Any]
+    probe_results: List[Dict[str, Any]]
     analysis: str
     attack_plan: str
     risk_score: float
@@ -67,6 +73,9 @@ def make_initial_state(target: str, scope: str = "active_stealth") -> PentestSta
         "phase": Phase.INIT.value,
         "findings": [],
         "scan_data": {},
+        "osint_data": {},
+        "payloads": {},
+        "probe_results": [],
         "analysis": "",
         "attack_plan": "",
         "risk_score": 0.0,

@@ -1,95 +1,131 @@
-import sys
-import os
-import time
-import shutil
-import termios
-import tty
-import fcntl
-import select
-import subprocess as _sp
-import re
-import textwrap
-import json
+"""Modern terminal UI for HackIt Agent.
+
+The interface is built on Rich (rendering) and prompt_toolkit (input,
+completion, persistent history) with a plain ``input()`` fallback for dumb
+terminals.  Both Chat and Autopilot share the same engine so every AI provider
+and Ollama get the same streaming, memory and payload-forging behaviour.
+"""
+
+from __future__ import annotations
+
 import datetime
-from hackit.ui import GREEN, RED, YELLOW, DIM, B_CYAN, MAGENTA, RESET, BOLD, CYAN, WHITE, B_GREEN, B_YELLOW, B_BLUE, B_MAGENTA, _colored
+import json
+import os
+import re
+import shutil
+import sys
+import time
+import traceback
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Tuple
+
+try:
+    from rich.console import Console
+    from rich.markdown import Markdown
+    from rich.panel import Panel
+    from rich.table import Table
+    from rich.text import Text
+    from rich import box
+    _HAS_RICH = True
+except ImportError:  # pragma: no cover
+    _HAS_RICH = False
 
 try:
     from prompt_toolkit import PromptSession
-    from prompt_toolkit.history import FileHistory
-    from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
-    from prompt_toolkit.formatted_text import ANSI
     from prompt_toolkit.completion import Completer, Completion
+    from prompt_toolkit.formatted_text import HTML
+    from prompt_toolkit.history import FileHistory
     _HAS_PT = True
-except ImportError:
+except ImportError:  # pragma: no cover
     _HAS_PT = False
 
-try:
-    from pygments import highlight as _pyg_highlight
-    from pygments.lexers import get_lexer_by_name, guess_lexer
-    from pygments.formatters import TerminalFormatter
-    _HAS_PYGMENTS = True
-except ImportError:
-    _HAS_PYGMENTS = False
+from hackit.ui import GREEN, RED, YELLOW, DIM, B_CYAN, MAGENTA, RESET, BOLD, _colored
 
-_ANSI_RE = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
-_HACKIT_WATERMARK = f"\n{DIM}────────────────────{RESET}\n{DIM}  HackIT AI v2.1{RESET}\n"
+_ANSI_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+REPORTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "go", "reports")
 
 AUTOPILOT_COMMANDS = {
-    "set-target":    "Lock target domain/IP",
-    "target":        "Show current target",
-    "all":           "Full comprehensive scan",
-    "portscan":      "Run port scan on target",
+    "set-target": "Lock target domain/IP",
+    "target": "Show current target",
+    "all": "Full comprehensive scan",
+    "scan": "Run hative modules",
+    "portscan": "Run port scan on target",
     "subdomainenum": "Enumerate subdomains",
-    "dirfuzz":       "Directory/file fuzzing",
-    "techdetect":    "Detect web technologies",
-    "sqli":          "SQL injection test",
-    "xss":           "XSS vulnerability test",
-    "ssrf":          "SSRF test",
-    "rce":           "Remote code execution test",
-    "bypass403":     "403 bypass techniques",
-    "cve":           "CVE lookup/search",
-    "js":            "JavaScript analysis",
-    "header":        "HTTP header audit",
-    "ssl":           "SSL/TLS analysis",
-    "redirect":      "Open redirect finder",
-    "params":        "Parameter discovery",
-    "waf":           "WAF detection",
-    "takeover":      "Subdomain takeover check",
-    "deep":          "Deep vulnerability analysis",
-    "report":        "Generate pentest report",
-    "export":        "Export conversation [filename]",
-    "import":        "Import conversation [filename]",
-    "help":          "Show all commands",
-    "clear":         "Clear screen",
-    "exit":          "Exit autopilot",
-    "quit":          "Exit autopilot",
+    "dirfuzz": "Directory/file fuzzing",
+    "techdetect": "Detect web technologies",
+    "sqli": "SQL injection test",
+    "xss": "XSS vulnerability test",
+    "ssrf": "SSRF test",
+    "rce": "Remote code execution test",
+    "bypass403": "403 bypass techniques",
+    "cve": "CVE lookup/search",
+    "js": "JavaScript analysis",
+    "header": "HTTP header audit",
+    "ssl": "SSL/TLS analysis",
+    "redirect": "Open redirect finder",
+    "params": "Parameter discovery",
+    "waf": "WAF detection",
+    "takeover": "Subdomain takeover check",
+    "deep": "Deep vulnerability analysis",
+    "report": "Generate pentest report",
+    "payload": "Forge payloads for a vulnerability class",
+    "probe": "Send generated payloads to a target",
+    "auto": "Run the full autonomous pipeline",
+    "osint": "Run OSINT profile discovery",
+    "status": "Provider / model connectivity",
+    "model": "Switch model",
+    "provider": "Switch provider",
+    "memory": "Show memory statistics",
+    "forget": "Clear conversation memory",
+    "export": "Export conversation [filename]",
+    "import": "Import conversation [filename]",
+    "help": "Show all commands",
+    "clear": "Clear screen",
+    "exit": "Exit autopilot",
+    "quit": "Exit autopilot",
 }
 
 CHAT_COMMANDS = {
-    "code":       "Generate code with explanation",
-    "debug":      "Debug code or errors",
-    "explain":    "Explain complex topics simply",
-    "translate":  "Translate text between languages",
-    "write":      "Write creative content",
-    "summarize":  "Summarize long text concisely",
-    "math":       "Solve math problems step by step",
-    "research":   "Deep research on any topic",
-    "review":     "Review code for bugs",
-    "refactor":   "Refactor code with best practices",
-    "test":       "Generate unit tests for code",
-    "diagram":    "Create Mermaid diagrams",
-    "learn":      "Teach me step by step",
-    "quick":      "Quick concise answer",
-    "detail":     "Detailed comprehensive answer",
-    "plan":       "Create a step-by-step plan",
-    "compare":    "Compare and contrast items",
-    "analyze":    "Deep analysis of data/input",
-    "export":     "Export conversation [filename]",
-    "import":     "Import conversation [filename]",
-    "clear":      "Clear conversation",
-    "help":       "Show all commands",
-    "exit":       "Exit chat mode",
-    "quit":       "Exit chat mode",
+    "code": "Generate code with explanation",
+    "debug": "Debug code or errors",
+    "explain": "Explain complex topics simply",
+    "translate": "Translate text between languages",
+    "write": "Write creative content",
+    "summarize": "Summarize long text concisely",
+    "math": "Solve math problems step by step",
+    "research": "Deep research on any topic",
+    "review": "Review code for bugs",
+    "refactor": "Refactor code with best practices",
+    "test": "Generate unit tests for code",
+    "diagram": "Create Mermaid diagrams",
+    "learn": "Teach me step by step",
+    "quick": "Quick concise answer",
+    "detail": "Detailed comprehensive answer",
+    "plan": "Create a step-by-step plan",
+    "compare": "Compare and contrast items",
+    "analyze": "Deep analysis of data/input",
+    "payload": "Forge payloads for a vulnerability class",
+    "probe": "Send generated payloads to a target",
+    "auto": "Run the autonomous pentest pipeline",
+    "osint": "Run OSINT profile discovery",
+    "scan": "Run full hative security scan",
+    "status": "Provider / model connectivity",
+    "model": "Switch model",
+    "provider": "Switch provider",
+    "models": "List available models",
+    "memory": "Show memory statistics",
+    "facts": "Show remembered facts",
+    "forget": "Clear conversation memory",
+    "save": "Save memory to a file",
+    "load": "Load memory from a file",
+    "retry": "Retry the previous prompt",
+    "target": "Set/show the active target",
+    "export": "Export conversation [filename]",
+    "import": "Import conversation [filename]",
+    "clear": "Clear screen and conversation",
+    "help": "Show all commands",
+    "exit": "Exit chat",
+    "quit": "Exit chat",
 }
 
 AUTOPILOT_BANNER = r"""
@@ -103,785 +139,796 @@ AUTOPILOT_BANNER = r"""
 """
 
 CHAT_BANNER = r"""
-   ██████╗██╗  ██╗ █████╗ ████████╗
-  ██╔════╝██║  ██║██╔══██╗╚══██╔══╝
-  ██║     ███████║███████║   ██║
-  ██║     ██╔══██║██╔══██║   ██║
-  ╚██████╗██║  ██║██║  ██║   ██║
-   ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝
+    ██████╗██╗  ██╗ █████╗ ████████╗
+   ██╔════╝██║  ██║██╔══██╗╚══██╔══╝
+   ██║     ███████║███████║   ██║
+   ██║     ██╔══██║██╔══██║   ██║
+   ╚██████╗██║  ██║██║  ██║   ██║
+    ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝
                     GENERAL AI CHAT ENGINE
 """
 
 
-def _clear_screen():
-    _sp.run(['clear' if os.name == 'posix' else 'cls'], shell=True)
+def _strip_ansi(value: str) -> str:
+    return _ANSI_RE.sub("", value or "")
 
 
-def _get_term_size():
-    return shutil.get_terminal_size()
+def _timestamp() -> str:
+    return datetime.datetime.now().strftime("%H:%M:%S")
 
 
-def _vis_len(s):
-    return len(_ANSI_RE.sub('', s))
+def _console() -> "Console":
+    if _HAS_RICH:
+        return Console(highlight=False, soft_wrap=True)
+    raise RuntimeError("rich is required for this UI")
 
 
-def _wrap_text(text, width):
-    if not text:
-        return ['']
-    return textwrap.wrap(text, width=width, replace_whitespace=False)
+class _SlashCompleter(Completer if _HAS_PT else object):  # type: ignore[misc]
+    def __init__(self, commands: Dict[str, str], payload_types: Optional[List[str]] = None):
+        self.commands = commands
+        self.payload_types = payload_types or []
+
+    def get_completions(self, document, complete_event):  # noqa: ANN001
+        text = document.text
+        if not text.startswith("/"):
+            return
+        body = text[1:]
+        if " " in body:
+            head, _, tail = body.partition(" ")
+            if head in ("payload", "probe"):
+                for item in self.payload_types:
+                    if item.startswith(tail.split()[0] if tail else ""):
+                        yield Completion(item, start_position=-len(tail))
+            return
+        for command, description in sorted(self.commands.items()):
+            if command.startswith(body):
+                yield Completion(
+                    f"/{command} ",
+                    start_position=-len(text),
+                    display=f"/{command}",
+                    meta=description,
+                )
 
 
-def _loading_animation(mode_name, theme_color):
-    steps = [
-        ("SYS", "Initializing terminal interface", 5),
-        ("CORE", "Loading engine kernel", 6),
-        ("MEM", "Allocating buffer zones", 4),
-        ("NET", "Establishing secure channel", 5),
-        ("READY", "System is ready", 3),
-    ]
-    chars = ['\u25e2', '\u25e3', '\u25e4', '\u25e5']
-    for tag, msg, dur in steps:
-        for _ in range(dur):
-            c = chars[int(time.time() * 4) % 4]
-            sys.stdout.write(f"\r  {theme_color}{c}{RESET} {DIM}[{theme_color}{tag}{DIM}]{RESET} {msg}  ")
-            sys.stdout.flush()
-            time.sleep(0.07)
-    sys.stdout.write(f"\r  {GREEN}\u2713{RESET}  {DIM}{mode_name} initialized{RESET}{' ' * 28}\n")
-    sys.stdout.flush()
-    time.sleep(0.2)
+class AgentUI:
+    """Shared base for ChatUI and AutopilotUI."""
 
+    mode_name = "CHAT"
+    banner = CHAT_BANNER
+    commands: Dict[str, str] = CHAT_COMMANDS
 
-def _transition_to(mode_name, theme_color, banner_art):
-    _clear_screen()
-    cols = _get_term_size().columns
-    bar_len = min(cols - 20, 36)
-    for pct in range(0, 101, 5):
-        filled = int(bar_len * pct / 100)
-        bar = f"{theme_color}{chr(9608) * filled}{DIM}{chr(9617) * (bar_len - filled)}{RESET}"
-        sys.stdout.write(f"\r  {DIM}\u25b6{RESET} {theme_color}{mode_name}{RESET} {bar} {theme_color}{pct}%{RESET} ")
-        sys.stdout.flush()
-        time.sleep(0.012)
-    sys.stdout.write(f"\r{' ' * cols}\r")
-    sys.stdout.flush()
-    time.sleep(0.1)
-    _clear_screen()
-    lines = banner_art.strip('\n').split('\n')
-    for l in lines:
-        sys.stdout.write(f"  {theme_color}{l}{RESET}\n")
-    sys.stdout.flush()
-    print()
-    print(f"  {DIM}{chr(9556)}{chr(9552) * 50}{chr(9559)}{RESET}")
-    print(f"  {DIM}{chr(9553)}{RESET}  {theme_color}Type /help{RESET} for commands  |  {BOLD}Tab{RESET} autocomplete  |  {BOLD}\u2191\u2193{RESET} history  {DIM}{chr(9553)}{RESET}")
-    print(f"  {DIM}{chr(9562)}{chr(9552) * 50}{chr(9565)}{RESET}")
-    print()
-    time.sleep(0.2)
-
-
-class TermUI:
-    def __init__(self, mode_name, theme_color, banner_art):
-        self.mode_name = mode_name
-        self.theme = theme_color
-        self.banner_art = banner_art
-        self.messages = []
-        self.target = ""
+    def __init__(self, target: str = ""):
+        self.console = _console()
+        self.target = target
         self.running = True
-        self.suggestions = []
-        self.sel_idx = 0
-        self.history = []
-        self.hist_idx = -1
-        self.scroll_offset = 0
-        self.fd = sys.stdin.fileno()
-        self.old = termios.tcgetattr(self.fd)
-        sz = _get_term_size()
-        self.cols = sz.columns
-        self.rows = sz.lines
-        self._setup_sigwinch()
+        self.last_prompt = ""
+        self.brain = None
+        self._print_banner()
 
-    def _setup_sigwinch(self):
-        import signal as _sig
-        def _resize(signum, frame):
-            sz = _get_term_size()
-            self.cols = sz.columns
-            self.rows = sz.lines
-        _sig.signal(_sig.SIGWINCH, _resize)
+    # ------------------------------------------------------------------
+    # Presentation
+    # ------------------------------------------------------------------
 
-    def transition_in(self):
-        _transition_to(self.mode_name, self.theme, self.banner_art)
-        self.messages = []
-        for line in self.banner_art.strip('\n').split('\n'):
-            self.messages.append(("banner", line, self.theme))
+    def _print_banner(self) -> None:
+        self.console.clear()
+        banner = Text(self.banner.strip("\n"), style="bold cyan")
+        self.console.print(banner)
+        self.console.print(
+            Panel(
+                Text.from_markup(
+                    "[bold]HackIt Agent[/bold]  [dim]v2.2[/dim]\n"
+                    "[dim]AI chat · autonomous pentest · payload forge · OSINT[/dim]\n\n"
+                    f"[green]/help[/green] commands   [green]Tab[/green] autocomplete   "
+                    "[green]↑↓[/green] history   [green]Ctrl+C[/green] cancel"
+                ),
+                border_style="cyan",
+                box=box.ROUNDED,
+                padding=(0, 2),
+            )
+        )
 
-    def _read_key(self):
-        ch = os.read(self.fd, 1)
-        if not ch:
-            return 'ESC'
-        ch = chr(ch[0])
-
-        if ch == '\x1b':
-            fl = fcntl.fcntl(self.fd, fcntl.F_GETFL)
-            fcntl.fcntl(self.fd, fcntl.F_SETFL, fl | os.O_NONBLOCK)
-            seq = ''
-            try:
-                more = os.read(self.fd, 4)
-                seq = more.decode('utf-8', errors='replace') if more else ''
-            except (BlockingIOError, OSError):
-                seq = ''
-            fcntl.fcntl(self.fd, fcntl.F_SETFL, fl)
-
-            if seq == '[A': return 'UP'
-            if seq == '[B': return 'DOWN'
-            if seq == '[C': return 'RIGHT'
-            if seq == '[D': return 'LEFT'
-            if seq == '[5~': return 'PGUP'
-            if seq == '[6~': return 'PGDN'
-            if seq == '[H': return 'HOME'
-            if seq == '[F': return 'END'
-            if seq == '[Z': return 'SHIFT_TAB'
-            return 'ESC'
-
-        if ch in ('\r', '\n'): return 'ENTER'
-        if ch in ('\x7f', '\x08'): return 'BACKSPACE'
-        if ch == '\x03': return 'CTRLC'
-        if ch == '\t': return 'TAB'
-        return ch
-
-    def _highlight_code(self, code, lang=""):
-        if not _HAS_PYGMENTS or not code.strip():
-            return code
-        try:
-            if lang:
-                lexer = get_lexer_by_name(lang, stripall=True)
-            else:
-                lexer = guess_lexer(code)
-            return _pyg_highlight(code, lexer, TerminalFormatter()).rstrip('\n')
-        except Exception:
-            return code
-
-    def _render_msg(self, role, content, color, width):
-        lines = []
-        if role == "banner":
-            lines.append(f"  {color}{content}{RESET}")
-            return lines
-        prefix_v = "\u25bc" if role != "assistant" else "\u25c9"
-        role_clean = role.upper() if role in ("user", "system") else role.title()
-        ts = datetime.datetime.now().strftime("%H:%M:%S")
-        lines.append(f" {DIM}[{ts}]{RESET} {color}{prefix_v}{RESET} {BOLD}{color}{role_clean}{RESET}")
-        if content:
-            in_code = False
-            code_lang = ""
-            code_buf = []
-            for line in content.splitlines():
-                stripped = line.strip()
-                if stripped.startswith('```'):
-                    if in_code:
-                        code_text = '\n'.join(code_buf)
-                        highlighted = self._highlight_code(code_text, code_lang)
-                        for hl_line in highlighted.split('\n'):
-                            for wl in _wrap_text(hl_line, width - 4):
-                                lines.append(f"   {wl}")
-                        code_buf = []
-                        code_lang = ""
-                    else:
-                        code_lang = stripped[3:].strip().split()[0] if len(stripped) > 3 else ""
-                    in_code = not in_code
-                    continue
-                if in_code:
-                    code_buf.append(line)
-                else:
-                    for wl in _wrap_text(line, width - 2):
-                        lines.append(f"  {wl}")
-            if code_buf:
-                code_text = '\n'.join(code_buf)
-                highlighted = self._highlight_code(code_text, code_lang)
-                for hl_line in highlighted.split('\n'):
-                    for wl in _wrap_text(hl_line, width - 4):
-                        lines.append(f"   {wl}")
-        lines.append("")
-        return lines
-
-    def _all_rendered_lines(self, width):
-        all_lines = []
-        for role, content, color in self.messages:
-            ml = self._render_msg(role, content, color, width)
-            all_lines.extend(ml)
-        return all_lines
-
-    def _redraw_messages(self):
-        width = self.cols - 2
-        if width < 20:
-            width = 20
-        msg_area = self.rows - 4
-
-        all_lines = self._all_rendered_lines(width)
-        max_display = msg_area
-        total = len(all_lines)
-
-        if total > max_display:
-            self.scroll_offset = min(self.scroll_offset, total - max_display)
-            start = total - max_display - self.scroll_offset
-            end = total - self.scroll_offset
-            if start < 0:
-                start = 0
-                self.scroll_offset = max(0, total - max_display)
-                end = total
-            display_lines = all_lines[start:end]
-            if len(display_lines) > max_display:
-                display_lines = display_lines[:max_display]
-        else:
-            self.scroll_offset = 0
-            display_lines = all_lines
-
-        out_parts = [f"\033[1;0H"]
-        for i, line in enumerate(display_lines):
-            y = 1 + i
-            if y > msg_area:
-                break
-            vis = line[:self.cols - 1] if _vis_len(line) > self.cols - 1 else line
-            out_parts.append(f"\033[{y};0H\033[K{vis}")
-        for y in range(1 + len(display_lines), msg_area + 1):
-            out_parts.append(f"\033[{y};0H\033[K")
-        sys.stdout.write(''.join(out_parts))
-        sys.stdout.flush()
-
-    def _add_message(self, role, content, color):
-        self.messages.append((role, content, color))
-        self._redraw_messages()
-
-    def _thinking(self, active=True):
-        if active:
-            import threading
-            self._thinking_active = True
-            self._thinking_msg = f"{DIM}\u23f3 HackIT AI is thinking{RESET}"
-            self.messages.append(("", self._thinking_msg, DIM))
-            self._redraw_messages()
-            self._draw_input_bar("", 0)
-
-            def _animate():
-                chars = ["\u25e2", "\u25e3", "\u25e4", "\u25e5"]
-                dots = 0
-                while getattr(self, '_thinking_active', False):
-                    c = chars[int(time.time() * 4) % 4]
-                    dots = (dots % 3) + 1
-                    msg = f"{DIM}{c} HackIT AI is thinking{'.' * dots}{RESET}"
-                    for i in range(len(self.messages) - 1, -1, -1):
-                        if "\u23f3 HackIT AI is thinking" in str(self.messages[i]) or \
-                           "\u25e2 HackIT AI is thinking" in str(self.messages[i]) or \
-                           "\u25e3 HackIT AI is thinking" in str(self.messages[i]) or \
-                           "\u25e4 HackIT AI is thinking" in str(self.messages[i]) or \
-                           "\u25e5 HackIT AI is thinking" in str(self.messages[i]):
-                            self.messages[i] = ("", msg, DIM)
-                            break
-                    self._redraw_messages()
-                    self._draw_input_bar("", 0)
-                    time.sleep(0.15)
-
-            t = threading.Thread(target=_animate, daemon=True)
-            t.start()
-        else:
-            self._thinking_active = False
-            time.sleep(0.05)
-            for i in range(len(self.messages) - 1, -1, -1):
-                if "HackIT AI is thinking" in str(self.messages[i]):
-                    self.messages.pop(i)
-                    break
-            self._redraw_messages()
-            self._draw_input_bar("", 0)
-
-    def _draw_input_bar(self, input_text, cursor):
-        bar_y = self.rows
-        box_w = self.cols - 2
-        if box_w < 20:
-            box_w = 20
-
-        hint = " /help" if not self.suggestions else " [Tab]"
-        prompt = "> "
-        max_w = box_w - len(prompt) - len(hint) - 4
-        if max_w < 8:
-            max_w = 8
-
-        offset = 0
-        if cursor > max_w:
-            offset = cursor - max_w
-        display = input_text[offset:offset + max_w]
-        vis_cursor = min(cursor - offset, max_w)
-
-        top = f"\033[{bar_y-2};0H\033[K  {DIM}|{'=' * (box_w - 2)}|{RESET}"
-        middle = f"\033[{bar_y-1};0H\033[K  {DIM}|{RESET} {self.theme}{prompt}{RESET}{WHITE}{display}{RESET}{DIM}{hint}{RESET}{' ' * max(1, box_w - len(prompt) - len(display) - len(hint) - 4)}{DIM}|{RESET}"
-        bottom = f"\033[{bar_y};0H\033[K  {DIM}|{'=' * (box_w - 2)}|{RESET}"
-
-        sys.stdout.write(top)
-        sys.stdout.write(middle)
-        sys.stdout.write(bottom)
-
-        abs_cursor = 4 + len(prompt) + vis_cursor
-        sys.stdout.write(f"\033[{bar_y-1};{abs_cursor}H")
-        sys.stdout.flush()
-
-    def _draw_suggestions(self, suggestions, sel_idx):
-        if not suggestions:
+    def _status_panel(self) -> None:
+        brain = self.brain
+        if not brain:
             return
-        max_show = min(len(suggestions), 8)
-        start_y = self.rows - 3 - max_show
-        out_parts = []
-        for i in range(max_show):
-            y = start_y + i
-            if y < 1:
-                continue
-            s = suggestions[i]
-            cmd = s.split('\u2014')[0].strip() if '\u2014' in s else s
-            desc = s.split('\u2014')[-1].strip() if '\u2014' in s else ''
-            if i == sel_idx:
-                out_parts.append(f"\033[{y};0H\033[K  {self.theme}\u25b8{RESET} {BOLD}{WHITE}/{cmd}{RESET}  {DIM}{desc}{RESET}")
-            else:
-                out_parts.append(f"\033[{y};0H\033[K   {DIM}/{cmd}{RESET}  {DIM}{desc}{RESET}")
-        if out_parts:
-            sys.stdout.write(''.join(out_parts))
-            sys.stdout.flush()
+        model = brain.model or "(auto)"
+        backend = brain.memory.backend if brain.memory else "off"
+        memory_count = brain.memory.stats()["messages"] if brain.memory else 0
+        rows = [
+            ("Engine", brain.engine),
+            ("Provider", brain.provider or "none"),
+            ("Model", model),
+            ("Memory", f"{backend} · {memory_count} msg"),
+            ("Target", self.target or "—"),
+        ]
+        table = Table.grid(padding=(0, 2))
+        table.add_column(style="dim", no_wrap=True)
+        table.add_column(style="bold")
+        for name, value in rows:
+            table.add_row(name, str(value))
+        self.console.print(Panel(table, title="[bold cyan]SESSION[/bold cyan]", border_style="cyan", box=box.ROUNDED))
 
-    def _clear_suggestions(self, count):
-        if count <= 0:
-            return
-        out_parts = []
-        for i in range(count):
-            y = self.rows - 3 - i - 1
-            if y >= 1:
-                out_parts.append(f"\033[{y};0H\033[K")
-        if out_parts:
-            sys.stdout.write(''.join(out_parts))
-            sys.stdout.flush()
+    def _toolbar(self) -> str:
+        if not self.brain:
+            return " provider=… model=… "
+        memory = self.brain.memory.stats()["messages"] if self.brain.memory else 0
+        target = f" · target={self.target}" if self.target else ""
+        return f" provider={self.brain.provider or 'none'} · model={self.brain.model or 'auto'} · mem={memory}{target} "
 
-    def _rich_input(self, commands_dict):
-        if not _HAS_PT:
-            return self.get_input(commands_dict)
+    def _bottom_toolbar(self):
+        if _HAS_PT:
+            return HTML(f"<style bg='#1f2937' fg='#9ca3af'> {self._toolbar()} </style>")
+        return self._toolbar()
 
-        history_path = os.path.join(os.path.expanduser("~"), ".hackit_pt_history")
+    # ------------------------------------------------------------------
+    # Input
+    # ------------------------------------------------------------------
+
+    def _make_session(self) -> Optional[Any]:
+        if not _HAS_PT or not sys.stdin.isatty():
+            return None
+        history_file = os.path.join(os.path.expanduser("~"), f".hackit_{self.mode_name.lower()}_history")
         try:
-            session = PromptSession(
-                history=FileHistory(history_path),
-                auto_suggest=AutoSuggestFromHistory(),
+            from . import payloads
+
+            completer = _SlashCompleter(self.commands, payloads.catalog_types())
+            return PromptSession(
+                history=FileHistory(history_file),
+                completer=completer,
+                complete_while_typing=True,
+                bottom_toolbar=self._bottom_toolbar,
                 enable_history_search=True,
                 multiline=False,
             )
-
-            class CmdCompleter(Completer):
-                def __init__(self, cmds):
-                    self.cmds = cmds
-                def get_completions(self, document, complete_event):
-                    text = document.text
-                    if text.startswith('/'):
-                        partial = text[1:].lower()
-                        for cmd, desc in self.cmds.items():
-                            if cmd.startswith(partial):
-                                display = f"/{cmd}  — {desc}"
-                                yield Completion(f"/{cmd} ", start_position=-len(text), display=display)
-
-            prompt_text = ANSI(f"\033[2K\r  {self.theme}\u25b8{RESET} ")
-            try:
-                result = session.prompt(
-                    prompt_text,
-                    completer=CmdCompleter(commands_dict),
-                    complete_while_typing=True,
-                    vi_mode=False,
-                )
-                result = result.strip()
-                if not result:
-                    return ""
-                if result.startswith('//'):
-                    return result[1:]
-                return result
-            except (EOFError, KeyboardInterrupt):
-                return "/exit"
         except Exception:
-            return self.get_input(commands_dict)
+            return None
 
-    def _autocomplete_best(self, input_text, commands_dict):
-        if not input_text.startswith('/') or input_text.startswith('//'):
-            return input_text, len(input_text)
-        partial = input_text[1:].lower()
-        matches = [cmd for cmd in commands_dict if cmd.startswith(partial)]
-        if not matches:
-            return input_text, len(input_text)
-        if len(matches) == 1:
-            return '/' + matches[0] + ' ', len(matches[0]) + 2
-        common = os.path.commonprefix(matches)
-        if len(common) > len(partial):
-            return '/' + common, len(common) + 1
-        return input_text, len(input_text)
+    def _read_input(self, session: Optional[Any]) -> str:
+        prompt = HTML(f"<b><style fg='#22d3ee'>{self.mode_name.lower()}</style></b> <style fg='#f59e0b'>›</style> ")
+        if session is not None:
+            return session.prompt(prompt)
+        return input(_colored(f"{self.mode_name.lower()} › ", B_CYAN))
 
-    def get_input(self, commands_dict):
-        self.suggestions = []
-        self.sel_idx = 0
-        input_text = ""
-        cursor = 0
-        need_redraw = False
+    # ------------------------------------------------------------------
+    # AI exchange
+    # ------------------------------------------------------------------
 
-        self._redraw_messages()
-        self._draw_input_bar(input_text, cursor)
+    def _ask_ai(self, prompt: str, system_extra: str = "") -> str:
+        assert self.brain is not None
+        self.last_prompt = prompt
+        self.console.print(
+            f"[dim]{_timestamp()}[/dim] [bold cyan]you[/bold cyan] {prompt}"
+        )
+        self.console.print("[bold green]hackit[/bold green] ", end="")
 
-        while self.running:
-            k = self._read_key()
+        started = time.time()
+        token_count = 0
+        rendered: List[str] = []
 
-            old_suggestions = list(self.suggestions)
-            old_sel = self.sel_idx
+        def on_token(event: Dict[str, Any]) -> None:
+            nonlocal token_count
+            token = event.get("token", "")
+            if not token:
+                return
+            token_count += len(token)
+            rendered.append(token)
+            sys.stdout.write(token)
+            sys.stdout.flush()
 
-            if k == 'ENTER':
-                if self.suggestions and self.suggestions[0]:
-                    sel = self.suggestions[self.sel_idx]
-                    cmd = sel.split('\u2014')[0].strip() if '\u2014' in sel else sel
-                    input_text = '/' + cmd + ' '
-                    cursor = len(input_text)
-                    self._clear_suggestions(len(self.suggestions))
-                    self.suggestions = []
-                    self._draw_input_bar(input_text, cursor)
-                    continue
-                break
-
-            elif k == 'BACKSPACE':
-                if cursor > 0:
-                    input_text = input_text[:cursor - 1] + input_text[cursor:]
-                    cursor -= 1
-                    need_redraw = True
-
-            elif k == 'CTRLC':
-                self._clear_suggestions(len(self.suggestions))
-                return '/exit'
-
-            elif k == 'TAB':
-                new_text, new_cursor = self._autocomplete_best(input_text, commands_dict)
-                if new_text != input_text:
-                    input_text = new_text
-                    cursor = new_cursor
-                    need_redraw = True
-                    self._clear_suggestions(len(self.suggestions))
-                    self.suggestions = []
-
-            elif k == 'SHIFT_TAB':
-                if self.suggestions:
-                    self.sel_idx = (self.sel_idx - 1) % len(self.suggestions)
-
-            elif k == 'UP':
-                if self.suggestions:
-                    self.sel_idx = (self.sel_idx - 1) % len(self.suggestions)
-                elif self.history:
-                    self.hist_idx = min(self.hist_idx + 1, len(self.history) - 1)
-                    idx = -(self.hist_idx + 1)
-                    input_text = self.history[idx] if idx < 0 else self.history[0]
-                    cursor = len(input_text)
-
-            elif k == 'DOWN':
-                if self.suggestions:
-                    self.sel_idx = (self.sel_idx + 1) % len(self.suggestions)
-                elif self.hist_idx >= 0:
-                    self.hist_idx -= 1
-                    if self.hist_idx >= 0:
-                        input_text = self.history[-(self.hist_idx + 1)]
-                    else:
-                        input_text = ""
-                    cursor = len(input_text)
-
-            elif k == 'LEFT':
-                if cursor > 0:
-                    cursor -= 1
-
-            elif k == 'RIGHT':
-                if cursor < len(input_text):
-                    cursor += 1
-
-            elif k == 'HOME':
-                cursor = 0
-
-            elif k == 'END':
-                cursor = len(input_text)
-
-            elif k == 'PGUP':
-                self.scroll_offset = min(self.scroll_offset + 5, 5000)
-                self._redraw_messages()
-                self._draw_input_bar(input_text, cursor)
-                continue
-
-            elif k == 'PGDN':
-                self.scroll_offset = max(self.scroll_offset - 5, 0)
-                self._redraw_messages()
-                self._draw_input_bar(input_text, cursor)
-                continue
-
-            elif len(k) == 1:
-                input_text = input_text[:cursor] + k + input_text[cursor:]
-                cursor += 1
-                need_redraw = True
-
+        try:
+            if system_extra:
+                result = self.brain.stream_chat(prompt, on_token=on_token)
             else:
-                continue
+                result = self.brain.stream_chat(prompt, on_token=on_token)
+        except KeyboardInterrupt:
+            self.console.print("\n[yellow]Cancelled.[/yellow]")
+            return ""
+        except Exception as exc:  # noqa: BLE001
+            self.console.print(f"\n[red]UI error: {exc}[/red]")
+            return ""
 
-            if need_redraw and input_text.startswith('/') and not input_text.startswith('//'):
-                partial = input_text[1:].lower()
-                self.suggestions = [f"{cmd} \u2014 {desc}"
-                                    for cmd, desc in commands_dict.items()
-                                    if cmd.startswith(partial)][:10]
-                self.sel_idx = 0
-            elif need_redraw:
-                self.suggestions = []
-                self.sel_idx = 0
-
-            if self.suggestions != old_suggestions or self.sel_idx != old_sel:
-                self._clear_suggestions(len(old_suggestions) if old_suggestions else 0)
-                self._draw_suggestions(self.suggestions, self.sel_idx)
-
-            self._draw_input_bar(input_text, cursor)
-            need_redraw = False
-
-        result = input_text.strip()
-        self._clear_suggestions(len(self.suggestions))
-        self.suggestions = []
-        self._draw_input_bar("", 0)
-        if result:
-            if not self.history or self.history[-1] != result:
-                self.history.append(result)
-            self.hist_idx = -1
-        return result
-
-    def run(self):
-        pass
-
-    def close(self):
-        termios.tcsetattr(self.fd, termios.TCSADRAIN, self.old)
-        sys.stdout.write(f"\033[{self.rows};0H\033[J")
+        if not rendered:
+            sys.stdout.write(result)
+        sys.stdout.write("\n")
         sys.stdout.flush()
 
+        elapsed = time.time() - started
+        if result and result.strip().startswith("[!]"):
+            self.console.print(f"[red]{_strip_ansi(result.strip())}[/red]")
+        else:
+            self.console.print(
+                f"[dim]{_timestamp()} · {elapsed:.1f}s · ~{max(1, token_count // 4)} tok[/dim]"
+            )
+        return result
 
-    def _export_conversation(self, filepath=""):
-        if not filepath:
-            ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            filepath = f"hackit_conversation_{ts}.md"
-        md_lines = [f"# HackIT AI Conversation\n", f"**Exported:** {datetime.datetime.now().isoformat()}\n", f"**Mode:** {self.mode_name}\n\n---\n"]
-        for role, content, color in self.messages:
-            if role == "banner":
+    # ------------------------------------------------------------------
+    # Built-in commands
+    # ------------------------------------------------------------------
+
+    def _print_help(self) -> None:
+        table = Table(title=f"{self.mode_name} COMMANDS", box=box.SIMPLE, show_lines=False)
+        table.add_column("Command", style="cyan", no_wrap=True)
+        table.add_column("Description", style="white")
+        for command, description in sorted(self.commands.items()):
+            table.add_row(f"/{command}", description)
+        table.add_row("/<mode> <text>", "Run an AI analysis mode (e.g. /risk target)")
+        table.add_row("<text>", "Chat naturally with the AI")
+        self.console.print(table)
+
+    def _cmd_status(self) -> None:
+        if not self.brain:
+            return
+        self.console.print("[dim]Probing providers…[/dim]")
+        statuses = self.brain.health()
+        if not statuses:
+            self.console.print("[yellow]No provider keys configured. Run `agent setting`.[/yellow]")
+            return
+        table = Table(box=box.SIMPLE_HEAVY, show_header=True)
+        table.add_column("Provider", style="cyan")
+        table.add_column("State")
+        table.add_column("Latency")
+        table.add_column("Models")
+        table.add_column("Detail")
+        for status in statuses:
+            color = {"ready": "green", "configured": "blue", "unreachable": "red",
+                     "offline": "red", "not-configured": "dim"}.get(status.state, "white")
+            table.add_row(
+                status.label,
+                f"[{color}]{status.state}[/{color}]",
+                f"{status.latency_ms} ms" if status.latency_ms else "—",
+                str(len(status.models)) if status.models else "—",
+                status.error or status.detail or "—",
+            )
+        self.console.print(table)
+
+    def _cmd_provider(self, argument: str) -> None:
+        from . import providers
+
+        if not argument:
+            self.console.print("[dim]Usage: /provider <" + "|".join(providers.PROVIDERS) + ">[/dim]")
+            return
+        provider = providers.normalize_provider(argument)
+        if self.brain and self.brain.set_provider(provider):
+            self._persist_provider(provider)
+            self.console.print(f"[green]Provider switched to {provider}.[/green]")
+            self.console.print(f"[dim]Model: {self.brain.model or 'auto'}[/dim]")
+        else:
+            self.console.print(f"[red]Provider {provider} has no usable key.[/red]")
+
+    def _persist_provider(self, provider: str) -> None:
+        try:
+            from hackit.config import load_config, save_config
+
+            cfg = load_config()
+            cfg["ai_provider"] = provider
+            save_config(cfg)
+        except Exception:
+            pass
+
+    def _cmd_model(self, argument: str) -> None:
+        if not self.brain:
+            return
+        if argument:
+            self.brain.model = argument.strip()
+            try:
+                from hackit.config import load_config, save_config
+
+                cfg = load_config()
+                cfg.setdefault("ai_models", {})[self.brain.provider] = self.brain.model
+                save_config(cfg)
+            except Exception:
+                pass
+            self.console.print(f"[green]Model set to {self.brain.model}.[/green]")
+            return
+        self.console.print(f"[dim]Current model: {self.brain.model or 'auto'}[/dim]")
+        self.console.print("[dim]Usage: /model <model-id>[/dim]")
+
+    def _cmd_models(self) -> None:
+        if not self.brain:
+            return
+        items = self.brain.list_models(include_remote=True)
+        table = Table(title=f"MODELS · {self.brain.provider}", box=box.SIMPLE)
+        table.add_column("#", style="dim", width=4)
+        table.add_column("Model", style="cyan")
+        table.add_column("Tier")
+        table.add_column("Description", style="dim")
+        for index, (model, tier, description) in enumerate(items, 1):
+            table.add_row(str(index), model, tier, description)
+        self.console.print(table)
+
+    def _cmd_payload(self, argument: str) -> None:
+        from . import payloads
+
+        if not self.brain:
+            return
+        if not argument:
+            self.console.print("[dim]Usage: /payload <type> [context] [--probe URL --param name][/dim]")
+            self.console.print(f"[dim]Types: {', '.join(payloads.catalog_types())}[/dim]")
+            return
+
+        target_url = ""
+        parameter = ""
+        method = "GET"
+        tokens = argument.split()
+        keep: List[str] = []
+        index = 0
+        while index < len(tokens):
+            token = tokens[index]
+            if token == "--probe" and index + 1 < len(tokens):
+                target_url = tokens[index + 1]
+                index += 2
                 continue
-            prefix = "**User**" if role == "user" else "**System**" if role == "system" else "**Assistant**"
-            md_lines.append(f"\n### {prefix}\n\n{content}\n")
-        md_lines.append("\n---\n*Generated by HackIT AI v2.1*\n")
+            if token == "--param" and index + 1 < len(tokens):
+                parameter = tokens[index + 1]
+                index += 2
+                continue
+            if token == "--method" and index + 1 < len(tokens):
+                method = tokens[index + 1].upper()
+                index += 2
+                continue
+            keep.append(token)
+            index += 1
+        if not keep:
+            self.console.print("[red]Missing vulnerability type.[/red]")
+            return
+        vuln_type = keep[0]
+        context = " ".join(keep[1:]) or (self.target or "")
+
+        with self.console.status(f"[cyan]Forging {vuln_type} payloads…[/cyan]"):
+            result = self.brain.generate_payloads(vuln_type, context=context, count=12)
+
+        table = Table(title=f"PAYLOAD FORGE · {result.get('type')}", box=box.SIMPLE_HEAVY)
+        table.add_column("#", width=4, style="dim")
+        table.add_column("Payload", style="cyan", overflow="fold")
+        table.add_column("Technique")
+        table.add_column("Notes", style="dim")
+        for index, item in enumerate(result.get("payloads", []), 1):
+            table.add_row(str(index), item.get("payload", ""), item.get("technique", ""), item.get("notes", ""))
+        self.console.print(table)
+        if result.get("ai_error"):
+            self.console.print(f"[yellow]AI note: {result['ai_error']}[/yellow]")
+
+        os.makedirs(os.path.join(REPORTS_DIR, "payloads"), exist_ok=True)
+        stamp = time.strftime("%Y%m%d_%H%M%S")
+        path = os.path.join(REPORTS_DIR, "payloads", f"{result.get('type')}_{stamp}.json")
         try:
-            with open(filepath, 'w') as f:
-                f.write('\n'.join(md_lines))
-            return f"Conversation exported to {filepath}"
-        except Exception as e:
-            return f"Export failed: {e}"
+            payloads.save({"results": {result.get("type", vuln_type): result}}, path)
+            self.console.print(f"[dim]Saved: {path}[/dim]")
+        except Exception:
+            pass
 
-    def _import_conversation(self, filepath):
+        if target_url:
+            self._probe(target_url, vuln_type, [item["payload"] for item in result.get("payloads", [])],
+                        parameter, method)
+
+    def _probe(self, target_url: str, vuln_type: str, payload_list: List[str],
+               parameter: str = "", method: str = "GET") -> None:
+        from . import payloads
+
+        if not target_url.startswith(("http://", "https://")):
+            target_url = "https://" + target_url
+        threshold = 1 if os.environ.get("HACKIT_AUTHORIZED", "").lower() in ("1", "true", "yes") else 0
+        if not threshold:
+            self.console.print(
+                "[yellow]Probing disabled: set HACKIT_AUTHORIZED=1 to confirm you are authorised to test this target.[/yellow]"
+            )
+            return
+
+        self.console.print(f"[dim]Probing {len(payload_list)} payload(s) against {target_url}…[/dim]")
+        results: List[Dict[str, Any]] = []
+
+        def on_result(item: Dict[str, Any]) -> None:
+            results.append(item)
+            if item.get("vulnerable"):
+                self.console.print(f"[red]![/red] {item['payload']} -> {item['evidence']}")
+            else:
+                self.console.print(f"[dim]· {item['payload']} -> {item['evidence']}[/dim]")
+
+        payloads.probe_many(
+            target_url, vuln_type, payload_list, parameter=parameter,
+            method=method, on_result=on_result,
+        )
+        self.console.print(f"[bold]{payloads.summarize_probe(results)}[/bold]")
+
+    def _cmd_memory(self) -> None:
+        if not self.brain or not self.brain.memory:
+            self.console.print("[dim]Memory disabled.[/dim]")
+            return
+        stats = self.brain.memory.stats()
+        table = Table.grid(padding=(0, 2))
+        table.add_column(style="dim")
+        table.add_column(style="bold")
+        for key, value in stats.items():
+            table.add_row(key, str(value))
+        self.console.print(Panel(table, title="MEMORY", border_style="magenta", box=box.ROUNDED))
+
+    def _cmd_facts(self) -> None:
+        if not self.brain or not self.brain.memory:
+            return
+        facts = self.brain.memory._facts  # noqa: SLF001 - intentional read-only view
+        if not facts:
+            self.console.print("[dim]No long-term facts yet.[/dim]")
+            return
+        for fact in facts:
+            self.console.print(f"[cyan]·[/cyan] {fact}")
+
+    def _cmd_save(self, path: str) -> None:
+        if not self.brain or not self.brain.memory:
+            return
+        if not path:
+            stamp = time.strftime("%Y%m%d_%H%M%S")
+            path = f"hackit_memory_{stamp}.json"
         try:
-            with open(filepath, 'r') as f:
-                content = f.read()
-            sections = content.split('### ')
-            count = 0
-            for sec in sections:
-                if sec.startswith('**User**'):
-                    text = sec.split('\n\n', 1)[-1].strip()
-                    self._add_message("user", text, self.theme)
-                    count += 1
-                elif sec.startswith('**Assistant**'):
-                    text = sec.split('\n\n', 1)[-1].strip()
-                    if text and not text.startswith('*Generated by'):
-                        self._add_message("assistant", text, GREEN if self.mode_name == "AUTOPILOT" else CYAN)
-                        count += 1
-            return f"Imported {count} messages from {filepath}"
-        except Exception as e:
-            return f"Import failed: {e}"
+            self.brain.memory.export(path)
+            self.console.print(f"[green]Memory saved to {path}[/green]")
+        except Exception as exc:  # noqa: BLE001
+            self.console.print(f"[red]Save failed: {exc}[/red]")
 
-class AutopilotUI(TermUI):
-    def __init__(self):
-        super().__init__("AUTOPILOT", B_GREEN, AUTOPILOT_BANNER)
-        self.brain = None
+    def _cmd_load(self, path: str) -> None:
+        if not self.brain or not self.brain.memory:
+            return
+        try:
+            count = self.brain.memory.import_file(path)
+            self.console.print(f"[green]Imported {count} messages from {path}[/green]")
+        except Exception as exc:  # noqa: BLE001
+            self.console.print(f"[red]Load failed: {exc}[/red]")
 
-    def _run_hative(self, modules=None):
+    def _cmd_scan(self, argument: str) -> None:
         if not self.target:
-            self._add_message("system", "Set target first with /set-target", YELLOW)
+            self.console.print("[yellow]Set a target first: /target <host> or /set-target <host>[/yellow]")
             return
-        self._add_message("system", f"Launching hative scan on {self.target}...", self.theme)
-        from hackit.agent.brain import AIHyperBrain
-        brain = AIHyperBrain(engine="native")
+        if not self.brain:
+            return
+        modules = [item for item in argument.split() if item]
+        self.console.print(f"[dim]Scanning {self.target} with hative…[/dim]")
 
-        def on_progress(evt):
-            event = evt.get("event", "")
-            mod = evt.get("module", "")
-            msg = evt.get("message", "")
-            pct = evt.get("pct", 0)
-            eta = evt.get("eta_seconds", 0)
-            if event == "start":
-                self._add_message("", f"  [{B_GREEN}\u25b6{RESET}] {msg}", DIM)
-            elif event == "done":
-                eta_str = f" (ETA: {eta}s)" if eta else ""
-                self._add_message("", f"  [{GREEN}\u2713{RESET}] {msg}{eta_str}", GREEN)
-            elif event == "error":
-                self._add_message("", f"  [{RED}\u2717{RESET}] {msg}", RED)
-            elif event == "interrupted":
-                self._add_message("", f"  [{YELLOW}\u26a0{RESET}] {msg}", YELLOW)
-            elif event == "complete":
-                self._add_message("system", f"Scan complete: {msg}", GREEN)
+        def on_progress(event: Dict[str, Any]) -> None:
+            kind = event.get("event", "")
+            message = event.get("message", "")
+            if kind == "start":
+                self.console.print(f"[cyan]▶[/cyan] [dim]{message}[/dim]")
+            elif kind == "done":
+                self.console.print(f"[green]✓[/green] {message}")
+            elif kind == "error":
+                self.console.print(f"[red]✗[/red] {message}")
+            elif kind == "complete":
+                self.console.print(f"[bold green]{message}[/bold green]")
 
-        results = brain.stream_hative(self.target, on_progress=on_progress, modules=modules)
+        results = self.brain.stream_hative(self.target, on_progress=on_progress, modules=modules or None)
         if not results:
-            self._add_message("system", "No results from hative", RED)
+            self.console.print("[yellow]No results.[/yellow]")
             return
-        if isinstance(results, list) and len(results) > 0:
-            if "error" in results[0]:
-                self._add_message("system", f"Hative error: {results[0]['error']}", RED)
-                return
+        findings = 0
+        for item in results:
+            data = item.get("data") if isinstance(item, dict) else None
+            if isinstance(data, list):
+                findings += len(data)
+        self.console.print(f"[green]Scan complete: {len(results)} module(s), {findings} finding(s).[/green]")
 
-            vuln_count = 0
-            total_count = len(results)
-            for r in results:
-                data = r.get("data")
-                if isinstance(data, list):
-                    vuln_count += len(data)
-
-            self._add_message("system",
-                f"Scan complete: {total_count} modules, {vuln_count} findings", GREEN)
-
-    def run(self):
-        self.transition_in()
-        from hackit.agent.brain import AIHyperBrain
-        self.brain = AIHyperBrain(engine="native")
-        use_pt = _HAS_PT and os.isatty(self.fd)
+    def _cmd_osint(self, query: str) -> None:
+        if not query:
+            query = self.target
+        if not query:
+            self.console.print("[yellow]Usage: /osint <username|email|domain>[/yellow]")
+            return
+        self.console.print(f"[dim]Running OSINT for {query} (this can take a minute)…[/dim]")
         try:
-            if not use_pt:
-                tty.setraw(self.fd)
-            self._add_message("system", "Autopilot ready. Set target with /set-target", DIM)
-            while self.running:
-                cmd = self._rich_input(AUTOPILOT_COMMANDS) if use_pt else self.get_input(AUTOPILOT_COMMANDS)
-                if not cmd:
-                    continue
-                if cmd in ('/exit', '/quit', 'exit', 'quit'):
-                    self._add_message("system", "Shutting down autopilot...", RED)
-                    break
-                if cmd == '/clear':
-                    self.messages = []
-                    _clear_screen()
-                    self.transition_in()
-                    continue
-                if cmd.startswith('/set-target '):
-                    self.target = cmd[12:].strip()
-                    self._add_message("system", f"Target locked: {self.target}", YELLOW)
-                    continue
-                if cmd == '/target':
-                    if self.target:
-                        self._add_message("system", f"Current target: {self.target}", YELLOW)
-                    else:
-                        self._add_message("system", "No target set. Use /set-target <domain|ip>", YELLOW)
-                    continue
-                if cmd == '/all':
-                    self._add_message("user", "Running full comprehensive scan via hative...", self.theme)
-                    self._run_hative()
-                    continue
-                if cmd == '/js':
-                    self._add_message("user", "Running JS analysis...", self.theme)
-                    self._run_hative(modules=["js"])
-                    continue
-                if cmd == '/params':
-                    self._add_message("user", "Running param discovery...", self.theme)
-                    self._run_hative(modules=["param"])
-                    continue
-                if cmd.startswith('/export '):
-                    fp = cmd[8:].strip()
-                    result = self._export_conversation(fp)
-                    self._add_message("system", result, YELLOW)
-                    continue
-                if cmd == '/export':
-                    result = self._export_conversation()
-                    self._add_message("system", result, YELLOW)
-                    continue
-                if cmd.startswith('/import '):
-                    fp = cmd[8:].strip()
-                    result = self._import_conversation(fp)
-                    self._add_message("system", result, YELLOW)
-                    continue
-                if cmd == '/help':
-                    self._add_message("system", "COMMANDS", self.theme)
-                    for c, d in AUTOPILOT_COMMANDS.items():
-                        self._add_message("", f"/{c:<15} {d}", self.theme)
-                    continue
-                if cmd.startswith('/'):
-                    self._add_message("user", cmd, self.theme)
-                    if self.target:
-                        full_cmd = f"{cmd} target={self.target}"
-                        self._thinking(True)
-                        resp = self.brain._invoke_engine(full_cmd)
-                        self._thinking(False)
-                        resp = resp.replace('[!] AI Error:', '').replace('[!] Engine Error:', '').strip()
-                        if not resp:
-                            resp = "No response from engine"
-                        self._add_message("assistant", resp + _HACKIT_WATERMARK, GREEN)
-                    else:
-                        self._add_message("assistant", "Set target first with /set-target", YELLOW)
-                    continue
-                self._add_message("user", cmd, self.theme)
-                self._thinking(True)
-                resp = self.brain._invoke_engine(cmd)
-                self._thinking(False)
-                resp = resp.replace('[!] AI Error:', '').replace('[!] Engine Error:', '').strip()
-                if not resp:
-                    resp = "No response from engine"
-                self._add_message("assistant", resp + _HACKIT_WATERMARK, GREEN)
-        except Exception as e:
-            self._add_message("system", f"Error: {e}", RED)
-        finally:
-            self.close()
+            from hackit.osint.core import run_full_scan
 
+            def on_step(phase: str, message: str) -> None:
+                self.console.print(f"[cyan]{phase}[/cyan] [dim]{message}[/dim]")
 
-class ChatUI(TermUI):
-    def __init__(self):
-        super().__init__("CHAT", B_CYAN, CHAT_BANNER)
-        self.brain = None
+            data = run_full_scan(
+                query, timeout=8, workers=24, verbose=False,
+                check_phone=True, check_domain=True,
+                on_step=on_step,
+            )
+            profiles = data.get("profiles", [])
+            hits = data.get("summary", {}).get("hits", 0)
+            confidence = data.get("analysis", {}).get("confidence_score", 0)
+            self.console.print(
+                f"[green]OSINT complete:[/green] {len(profiles)} checked · {hits} hit(s) · confidence {confidence}/100"
+            )
+            os.makedirs(os.path.join(REPORTS_DIR, "osint"), exist_ok=True)
+            path = os.path.join(REPORTS_DIR, "osint", f"{query.replace('/', '_')}_{time.strftime('%Y%m%d_%H%M%S')}.json")
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump(data, handle, indent=2, default=str)
+            self.console.print(f"[dim]Saved: {path}[/dim]")
+        except Exception as exc:  # noqa: BLE001
+            self.console.print(f"[red]OSINT failed: {exc}[/red]")
 
-    def run(self):
-        self.transition_in()
-        from hackit.agent.brain import AIHyperBrain
-        self.brain = AIHyperBrain(engine="chat")
-        use_pt = _HAS_PT and os.isatty(self.fd)
+    def _cmd_auto(self, target: str) -> None:
+        target = target or self.target
+        if not target:
+            self.console.print("[yellow]Usage: /auto <target>[/yellow]")
+            return
+        self.target = target
+        self.console.print(f"[bold cyan]Autonomous pipeline[/bold cyan] [dim]target={target}[/dim]")
         try:
-            if not use_pt:
-                tty.setraw(self.fd)
-            self._add_message("system", "Chat mode active. Ask me anything!", DIM)
-            while self.running:
-                cmd = self._rich_input(CHAT_COMMANDS) if use_pt else self.get_input(CHAT_COMMANDS)
-                if not cmd:
+            from .workflow import run_pentest
+
+            def progress(phase: str, message: str) -> None:
+                self.console.print(f"[cyan]▸ {phase}[/cyan] [dim]{message}[/dim]")
+
+            state = run_pentest(target, scope="active_stealth", progress=progress)
+            findings = state.get("findings", []) if isinstance(state, dict) else []
+            report_path = state.get("report_path") if isinstance(state, dict) else ""
+            self.console.print(f"[green]Pipeline complete: {len(findings)} finding(s).[/green]")
+            if report_path:
+                self.console.print(f"[dim]Report: {report_path}[/dim]")
+        except Exception as exc:  # noqa: BLE001
+            self.console.print(f"[red]Pipeline failed: {exc}[/red]")
+            if os.environ.get("HACKIT_DEBUG"):
+                self.console.print(traceback.format_exc())
+
+    def _cmd_export(self, path: str) -> None:
+        if not path:
+            path = f"hackit_conversation_{time.strftime('%Y%m%d_%H%M%S')}.md"
+        if not self.brain or not self.brain.memory:
+            return
+        try:
+            entries = self.brain.memory.snapshot()
+            lines = [f"# HackIt {self.mode_name} Conversation", "", f"**Exported:** {datetime.datetime.now().isoformat()}", ""]
+            for entry in entries:
+                if entry.get("role") == "banner":
                     continue
-                if cmd in ('/exit', '/quit', 'exit', 'quit'):
-                    self._add_message("system", "Exiting chat mode...", RED)
-                    break
-                if cmd == '/clear':
-                    self.messages = []
-                    _clear_screen()
-                    self.transition_in()
-                    continue
-                if cmd.startswith('/export '):
-                    fp = cmd[8:].strip()
-                    result = self._export_conversation(fp)
-                    self._add_message("system", result, YELLOW)
-                    continue
-                if cmd == '/export':
-                    result = self._export_conversation()
-                    self._add_message("system", result, YELLOW)
-                    continue
-                if cmd.startswith('/import '):
-                    fp = cmd[8:].strip()
-                    result = self._import_conversation(fp)
-                    self._add_message("system", result, YELLOW)
-                    continue
-                if cmd == '/help':
-                    self._add_message("system", "COMMANDS", self.theme)
-                    for c, d in CHAT_COMMANDS.items():
-                        self._add_message("", f"/{c:<12} {d}", self.theme)
-                    self._add_message("", "Any other text: Send to AI", DIM)
-                    continue
-                self._add_message("user", cmd, self.theme)
-                self._thinking(True)
-                resp = self.brain._invoke_engine(cmd)
-                self._thinking(False)
-                resp = resp.replace('[!] AI Error:', '').replace('[!] Engine Error:', '').strip()
-                if not resp:
-                    resp = "No response from engine"
-                self._add_message("assistant", resp + _HACKIT_WATERMARK, CYAN)
-        except Exception as e:
-            self._add_message("system", f"Error: {e}", RED)
-        finally:
-            self.close()
+                label = {"user": "User", "assistant": "Assistant", "system": "System"}.get(entry.get("role"), "Entry")
+                lines.append(f"## {label}\n\n{entry.get('content', '')}\n")
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write("\n".join(lines))
+            self.console.print(f"[green]Conversation exported to {path}[/green]")
+        except Exception as exc:  # noqa: BLE001
+            self.console.print(f"[red]Export failed: {exc}[/red]")
+
+    def _cmd_import(self, path: str) -> None:
+        if not self.brain or not self.brain.memory:
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                content = handle.read()
+            count = 0
+            for section in content.split("## "):
+                if section.startswith("User"):
+                    body = section.split("\n\n", 1)[-1].strip()
+                    if body:
+                        self.brain.memory.add_user(body)
+                        count += 1
+                elif section.startswith("Assistant"):
+                    body = section.split("\n\n", 1)[-1].strip()
+                    if body:
+                        self.brain.memory.add_assistant(body)
+                        count += 1
+            self.brain.memory.save()
+            self.console.print(f"[green]Imported {count} message(s) from {path}[/green]")
+        except Exception as exc:  # noqa: BLE001
+            self.console.print(f"[red]Import failed: {exc}[/red]")
+
+    # ------------------------------------------------------------------
+    # Dispatch
+    # ------------------------------------------------------------------
+
+    def _dispatch(self, raw: str) -> bool:
+        """Handle one input line. Returns False to exit."""
+        text = raw.strip()
+        if not text:
+            return True
+        if not text.startswith("/"):
+            self._ask_ai(text)
+            return True
+
+        head, _, rest = text[1:].partition(" ")
+        head = head.lower()
+        rest = rest.strip()
+
+        if head in ("exit", "quit", "q", "bye"):
+            return False
+        if head in ("help", "?"):
+            self._print_help()
+            return True
+        if head == "clear":
+            self.console.clear()
+            self._print_banner()
+            if self.brain and self.brain.memory:
+                self.brain.memory.clear()
+            self.console.print("[dim]Screen and conversation cleared.[/dim]")
+            return True
+        if head == "status":
+            self._cmd_status()
+            return True
+        if head == "provider":
+            self._cmd_provider(rest)
+            return True
+        if head == "model":
+            self._cmd_model(rest)
+            return True
+        if head == "models":
+            self._cmd_models()
+            return True
+        if head == "memory":
+            self._cmd_memory()
+            return True
+        if head == "facts":
+            self._cmd_facts()
+            return True
+        if head == "forget":
+            if self.brain and self.brain.memory:
+                self.brain.memory.clear()
+                self.console.print("[green]Conversation memory cleared.[/green]")
+            return True
+        if head == "save":
+            self._cmd_save(rest)
+            return True
+        if head == "load":
+            self._cmd_load(rest)
+            return True
+        if head == "payload":
+            self._cmd_payload(rest)
+            return True
+        if head == "probe":
+            self._cmd_probe_command(rest)
+            return True
+        if head == "scan":
+            self._cmd_scan(rest)
+            return True
+        if head == "osint":
+            self._cmd_osint(rest)
+            return True
+        if head == "auto":
+            self._cmd_auto(rest)
+            return True
+        if head == "target":
+            self.target = rest or self.target
+            self.console.print(f"[cyan]Target:[/cyan] {self.target or '—'}")
+            return True
+        if head in ("set-target", "set_target"):
+            self.target = rest
+            self.console.print(f"[cyan]Target locked:[/cyan] {self.target}")
+            return True
+        if head == "export":
+            self._cmd_export(rest)
+            return True
+        if head == "import":
+            self._cmd_import(rest)
+            return True
+        if head == "retry":
+            if self.last_prompt:
+                self._ask_ai(self.last_prompt)
+            else:
+                self.console.print("[dim]Nothing to retry.[/dim]")
+            return True
+
+        # Domain-specific aliases: /scan modules, /portscan, /sqli ... all
+        # forward to hative with the relevant module.
+        module_aliases = {
+            "all": "", "portscan": "portscan", "subdomainenum": "subdomain",
+            "dirfuzz": "fuzz", "techdetect": "tech", "sqli": "sqli", "xss": "xss",
+            "ssrf": "ssrf", "rce": "cmd", "bypass403": "bypass403", "js": "js",
+            "header": "headers", "ssl": "ssl", "redirect": "redirect",
+            "params": "param", "waf": "waf", "takeover": "takeover",
+        }
+        if head in module_aliases:
+            if not self.target:
+                self.console.print("[yellow]Set a target first: /target <host>[/yellow]")
+                return True
+            module = module_aliases[head]
+            self._cmd_scan(module)
+            return True
+
+        # Unknown slash command -> send to the AI as a mode command.
+        self._ask_ai(text)
+        return True
+
+    def _cmd_probe_command(self, rest: str) -> None:
+        if not rest:
+            self.console.print("[dim]Usage: /probe <type> <url> [--param name] [--method GET][/dim]")
+            return
+        parts = rest.split()
+        if len(parts) < 2:
+            self.console.print("[dim]Usage: /probe <type> <url> [--param name] [--method GET][/dim]")
+            return
+        vuln_type, target_url = parts[0], parts[1]
+        parameter = ""
+        method = "GET"
+        index = 2
+        while index < len(parts):
+            if parts[index] == "--param" and index + 1 < len(parts):
+                parameter = parts[index + 1]
+                index += 2
+                continue
+            if parts[index] == "--method" and index + 1 < len(parts):
+                method = parts[index + 1].upper()
+                index += 2
+                continue
+            index += 1
+        if not self.brain:
+            return
+        result = self.brain.generate_payloads(vuln_type, context=target_url, count=10, use_ai=False)
+        self._probe(target_url, vuln_type, [item["payload"] for item in result.get("payloads", [])], parameter, method)
+
+    # ------------------------------------------------------------------
+    # Main loop
+    # ------------------------------------------------------------------
+
+    def run(self) -> None:
+        from .brain import AIHyperBrain
+
+        session = self._make_session()
+        try:
+            self.brain = AIHyperBrain(engine="chat" if self.mode_name == "CHAT" else "native", target=self.target)
+        except Exception as exc:  # noqa: BLE001
+            self.console.print(f"[red]Failed to initialise agent: {exc}[/red]")
+            return
+
+        self._status_panel()
+        self.console.print("[dim]Type /help for commands. Ctrl+C cancels the current request.[/dim]\n")
+
+        while self.running:
+            try:
+                raw = self._read_input(session)
+            except KeyboardInterrupt:
+                self.console.print("\n[dim]Interrupted. Type /exit to quit.[/dim]")
+                continue
+            except EOFError:
+                break
+            if raw is None:
+                continue
+            if not self._dispatch(raw):
+                break
+
+        self.console.print(f"\n[green]Session closed.[/green] [dim]{self.mode_name} agent offline.[/dim]\n")
+
+
+class ChatUI(AgentUI):
+    mode_name = "CHAT"
+    banner = CHAT_BANNER
+    commands = CHAT_COMMANDS
+
+    def __init__(self, target: str = ""):
+        super().__init__(target=target)
+
+
+class AutopilotUI(AgentUI):
+    mode_name = "AUTOPILOT"
+    banner = AUTOPILOT_BANNER
+    commands = AUTOPILOT_COMMANDS
+
+    def __init__(self, target: str = ""):
+        super().__init__(target=target)
+
+    def run(self) -> None:
+        from .brain import AIHyperBrain
+
+        session = self._make_session()
+        try:
+            self.brain = AIHyperBrain(engine="native", target=self.target)
+        except Exception as exc:  # noqa: BLE001
+            self.console.print(f"[red]Failed to initialise autopilot: {exc}[/red]")
+            return
+
+        self._status_panel()
+        if self.target:
+            self.console.print(f"[cyan]Target:[/cyan] {self.target}")
+        else:
+            self.console.print("[yellow]No target set. Use /set-target <host> or /auto <host>.[/yellow]")
+        self.console.print("[dim]Type /help for commands. Ctrl+C cancels the current request.[/dim]\n")
+
+        while self.running:
+            try:
+                raw = self._read_input(session)
+            except KeyboardInterrupt:
+                self.console.print("\n[dim]Interrupted. Type /exit to quit.[/dim]")
+                continue
+            except EOFError:
+                break
+            if raw is None:
+                continue
+            if not self._dispatch(raw):
+                break
+
+        self.console.print(f"\n[green]Session closed.[/green] [dim]AUTOPILOT offline.[/dim]\n")
+
+
+# Backwards-compatible helper used by other modules.
+def _clear_screen() -> None:
+    console = Console()
+    console.clear()

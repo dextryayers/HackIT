@@ -1,6 +1,11 @@
 #!/bin/bash
-set -e
+# Build every HackIt Go binary.  Output paths are absolute so changing into a
+# module directory cannot accidentally create nested build directories.
+set -u
+
 HACKIT_GO_DIR="$(cd "$(dirname "$0")" && pwd)"
+HACKIT_ROOT="$(cd "$HACKIT_GO_DIR/../../.." && pwd)"
+
 BOLD='\033[1m'
 GREEN='\033[32m'
 CYAN='\033[36m'
@@ -11,32 +16,50 @@ NC='\033[0m'
 
 echo -e "${BOLD}${CYAN}"
 echo "  ╔══════════════════════════════════════════╗"
-echo "  ║     HACKIT AI ENGINE BUILDER v3.0       ║"
+echo "  ║     HACKIT AI ENGINE BUILDER v3.1       ║"
 echo "  ╚══════════════════════════════════════════╝"
 echo -e "${NC}"
 
 export GO111MODULE=on
 
+BUILT=0
+FAILED=0
+
 build_engine() {
     local dir="$1"
     local name="$2"
     local output="$3"
-    echo -ne "  Building ${BOLD}${name}${NC}... "
-    if cd "$dir" 2>/dev/null; then
-        go mod tidy >/dev/null 2>&1
-        go build -ldflags "-s -w" -o "$output" . 2>/dev/null && \
-            echo -e "${GREEN}OK${NC} ($(ls -lh "$output" | awk '{print $5}'))" || \
-            echo -e "${RED}FAILED${NC}"
-        cd - >/dev/null
-    else
-        echo -e "${YELLOW}SKIPPED (dir not found)${NC}"
+
+    if [ ! -d "$dir" ]; then
+        echo -e "  ${YELLOW}SKIP${NC}     ${name} ${DIM}(directory not found)${NC}"
+        return
     fi
+    if ! find "$dir" -maxdepth 1 -name '*.go' -print -quit | grep -q .; then
+        echo -e "  ${YELLOW}SKIP${NC}     ${name} ${DIM}(no Go sources)${NC}"
+        return
+    fi
+
+    echo -ne "  Building ${BOLD}${name}${NC}... "
+    local log
+    log="$(mktemp)"
+    if (cd "$dir" && go build -ldflags "-s -w" -o "$output" .) 2>"$log"; then
+        echo -e "${GREEN}OK${NC} ($(ls -lh "$output" | awk '{print $5}'))"
+        BUILT=$((BUILT + 1))
+    else
+        echo -e "${RED}FAILED${NC}"
+        sed 's/^/      /' "$log" | head -20
+        FAILED=$((FAILED + 1))
+    fi
+    rm -f "$log"
 }
 
 echo -e "\n${CYAN}─── Core Engines ───${NC}\n"
 
-build_engine "$HACKIT_GO_DIR" "AI Engine (main)" "ai_engine"
-build_engine "$HACKIT_GO_DIR/swarm" "Swarm Engine" "swarm/swarm_engine"
+build_engine "$HACKIT_GO_DIR"        "AI Engine (main)" "$HACKIT_GO_DIR/ai_engine"
+build_engine "$HACKIT_GO_DIR/chat_go" "Chat Engine"     "$HACKIT_GO_DIR/chat_go/chat_engine"
+build_engine "$HACKIT_GO_DIR/worker"  "Worker Engine"   "$HACKIT_GO_DIR/worker/worker"
+build_engine "$HACKIT_GO_DIR/hative"  "Hative Scanner"  "$HACKIT_GO_DIR/hative/hative"
+build_engine "$HACKIT_GO_DIR/swarm"   "Swarm Engine"    "$HACKIT_GO_DIR/swarm/swarm_engine"
 
 echo -e "\n${CYAN}─── Module Go Engines ───${NC}\n"
 
@@ -56,26 +79,20 @@ MODULES=(
     "hackit/dir_finder/go:dir_finder"
     "hackit/atomix/go:atomix"
     "hackit/cve/go:cve_scanner"
-    "hackit/403bypass/go:bypass_scanner"
+    "hackit/403bypass/go_engine:bypass_engine"
     "hackit/tech_hunter/go:tech_hunter"
 )
 
-HACKIT_ROOT="$HACKIT_GO_DIR/../../.."
 for entry in "${MODULES[@]}"; do
     dir="${entry%%:*}"
     out="${entry##*:}"
-    build_engine "$HACKIT_ROOT/$dir" "$out" "$out"
+    build_engine "$HACKIT_ROOT/$dir" "$out" "$HACKIT_ROOT/$dir/$out"
 done
 
 echo -e "\n${CYAN}─── Summary ───${NC}\n"
-
-TOTAL=$(find "$HACKIT_GO_DIR" -maxdepth 3 -name "ai_engine" -o -name "swarm_engine" 2>/dev/null | wc -l)
-for entry in "${MODULES[@]}"; do
-    out="${entry##*:}"
-    if [ -f "$HACKIT_ROOT/${entry%%:*}/$out" ]; then
-        TOTAL=$((TOTAL + 1))
-    fi
-done
-
-echo -e "  ${GREEN}$TOTAL binaries built successfully${NC}"
+echo -e "  ${GREEN}${BUILT} binaries built${NC}, ${FAILED} failed${NC}"
 echo -e "  ${DIM}Location: $HACKIT_GO_DIR${NC}\n"
+
+if [ "$FAILED" -gt 0 ]; then
+    exit 1
+fi

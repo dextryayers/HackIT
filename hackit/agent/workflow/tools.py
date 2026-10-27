@@ -1,124 +1,219 @@
+"""Bridges between the Python workflow and the Go engine binaries."""
+
+from __future__ import annotations
+
+import json
 import os
 import subprocess
-import json
-import time
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List, Optional
 
 
 class GoBridge:
-    def __init__(self):
-        self.base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    def __init__(self, base_dir: Optional[str] = None):
+        self.base_dir = base_dir or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         self.go_dir = os.path.join(self.base_dir, "go")
 
         ext = ".exe" if os.name == "nt" else ""
-        self.ai_engine = os.path.join(self.go_dir, f"ai_engine{ext}")
-        self.worker_bin = os.path.join(self.go_dir, "worker", f"worker{ext}")
-        self.chat_engine = os.path.join(self.go_dir, "chat_go", f"chat_engine{ext}")
+        self.ai_engine = self._resolve_binary([
+            os.path.join(self.go_dir, f"ai_engine{ext}"),
+        ])
+        self.worker_bin = self._resolve_binary([
+            os.path.join(self.go_dir, "worker", f"worker{ext}"),
+        ])
+        self.hative_bin = self._resolve_binary([
+            os.path.join(self.go_dir, "hative", f"hative{ext}"),
+        ])
+        self.chat_engine = self._resolve_binary([
+            os.path.join(self.go_dir, "chat_go", f"chat_engine{ext}"),
+        ])
 
     def _resolve_binary(self, paths: List[str]) -> Optional[str]:
-        for p in paths:
-            if os.path.exists(p):
-                return p
+        for path in paths:
+            if path and os.path.exists(path):
+                return path
         return None
 
-    # ── Native Modules ──
+    # ------------------------------------------------------------------
+    # Native modules
+    # ------------------------------------------------------------------
 
-    def run_worker(self, **kwargs) -> List[Dict[str, Any]]:
-        if not os.path.exists(self.worker_bin):
-            return [{"module": "worker", "success": False, "error": "worker binary not found"}]
+    @staticmethod
+    def _parse_payload(stdout: str) -> List[Dict[str, Any]]:
+        stdout = (stdout or "").strip()
+        if not stdout:
+            return [{"module": "worker", "success": False, "error": "empty output"}]
+        candidates = [stdout]
+        start, end = stdout.find("["), stdout.rfind("]")
+        if start >= 0 and end > start:
+            candidates.append(stdout[start:end + 1])
+        start, end = stdout.find("{"), stdout.rfind("}")
+        if start >= 0 and end > start:
+            candidates.append(stdout[start:end + 1])
+        for candidate in candidates:
+            try:
+                data = json.loads(candidate)
+            except (ValueError, TypeError):
+                continue
+            if isinstance(data, list):
+                return data
+            if isinstance(data, dict):
+                if data.get("error") and "success" not in data:
+                    return [{"module": "worker", "success": False, "error": str(data["error"])}]
+                return [data]
+        return [{"module": "worker", "success": False, "error": f"invalid JSON: {stdout[:240]}"}]
 
-        cmd = [self.worker_bin]
+    def run_worker(self, timeout: int = 90, **kwargs) -> List[Dict[str, Any]]:
+        """Run one or more native modules.
+
+        Prefers the small ``worker`` binary.  If it has not been built yet, the
+        same flags are executed through ``hative`` so the pipeline still works.
+        """
+        args: List[str] = []
         for flag, value in kwargs.items():
             if value:
-                cmd.extend([f"--{flag}", str(value)])
+                args.extend([f"--{flag}", str(value)])
+
+        if not args:
+            return [{"module": "worker", "success": False, "error": "no module specified"}]
+
+        binary = self.worker_bin
+        if not binary:
+            binary = self.hative_bin
+        if not binary:
+            return [{
+                "module": "worker",
+                "success": False,
+                "error": "worker/hative binary not found; run hackit/agent/go/build.sh",
+            }]
 
         try:
             proc = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=60
+                [binary] + args, capture_output=True, text=True, timeout=timeout,
             )
-            if proc.returncode != 0:
-                return [{"module": "worker", "success": False, "error": proc.stderr.strip() or "exit code " + str(proc.returncode)}]
             if not proc.stdout.strip():
-                return [{"module": "worker", "success": False, "error": "empty output"}]
-            return json.loads(proc.stdout)
+                detail = (proc.stderr or "").strip()[:400]
+                return [{"module": "worker", "success": False, "error": detail or "empty output"}]
+            return self._parse_payload(proc.stdout)
         except subprocess.TimeoutExpired:
-            return [{"module": "worker", "success": False, "error": "timeout (60s)"}]
-        except json.JSONDecodeError as e:
-            return [{"module": "worker", "success": False, "error": f"invalid JSON: {e}"}]
-        except Exception as e:
-            return [{"module": "worker", "success": False, "error": str(e)}]
+            return [{"module": "worker", "success": False, "error": f"timeout ({timeout}s)"}]
+        except Exception as exc:  # noqa: BLE001
+            return [{"module": "worker", "success": False, "error": str(exc)}]
 
-    # ── AI Engine ──
+    def run_hative(self, target: str, modules: Optional[List[str]] = None,
+                   timeout: int = 300, report: bool = False) -> List[Dict[str, Any]]:
+        if not self.hative_bin:
+            return [{
+                "module": "hative",
+                "success": False,
+                "error": "hative binary not found; run hackit/agent/go/build.sh",
+            }]
 
-    def ai_chat(self, prompt: str, mode: str = "", provider: str = "", api_key: str = "", model: str = "") -> str:
-        if not os.path.exists(self.ai_engine):
-            return "[!] AI engine not found"
+        args: List[str] = []
+        modules = [m for m in (modules or []) if m]
+        if not modules:
+            args.extend(["--all", target])
+        else:
+            for module in modules:
+                args.extend([f"--{module}", target])
+            if len(modules) > 1:
+                args.append("--concurrent")
+        if report:
+            args.append("--report")
 
-        if not provider or not api_key:
-            from hackit.config import load_config
-            cfg = load_config()
-            provider = provider or cfg.get("ai_provider", "gemini")
-            api_key = api_key or cfg.get("ai_keys", {}).get(provider, "")
-            model = model or cfg.get("ai_models", {}).get(provider, "")
+        try:
+            proc = subprocess.run(
+                [self.hative_bin] + args, capture_output=True, text=True, timeout=timeout,
+            )
+            return self._parse_payload(proc.stdout)
+        except subprocess.TimeoutExpired:
+            return [{"module": "hative", "success": False, "error": f"timeout ({timeout}s)"}]
+        except Exception as exc:  # noqa: BLE001
+            return [{"module": "hative", "success": False, "error": str(exc)}]
 
+    # ------------------------------------------------------------------
+    # AI engine
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _provider_state(provider: str = "", api_key: str = "", model: str = ""):
+        from hackit.config import load_config
+        from hackit.agent import providers
+
+        cfg = load_config()
+        provider = providers.normalize_provider(provider or providers.get_active_provider(cfg) or "gemini")
+        api_key = api_key or providers.resolve_api_key(provider, cfg)
+        model = model or providers.effective_model(provider, cfg)
+        return cfg, provider, api_key, model
+
+    def _run_engine(self, cmd: List[str], timeout: int = 120) -> Dict[str, Any]:
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return {"error": f"AI engine timeout ({timeout}s)"}
+        except Exception as exc:  # noqa: BLE001
+            return {"error": f"bridge error: {exc}"}
+
+        stdout = (proc.stdout or "").strip()
+        if not stdout:
+            stderr = (proc.stderr or "").strip()
+            return {"error": stderr[:500] or "AI engine returned empty output"}
+
+        candidates = [stdout]
+        start, end = stdout.find("{"), stdout.rfind("}")
+        if start >= 0 and end > start:
+            candidates.append(stdout[start:end + 1])
+        for candidate in candidates:
+            try:
+                data = json.loads(candidate)
+            except (ValueError, TypeError):
+                continue
+            if isinstance(data, dict):
+                return data
+        return {"error": f"invalid JSON: {stdout[:300]}"}
+
+    def ai_chat(self, prompt: str, mode: str = "", provider: str = "",
+                api_key: str = "", model: str = "") -> str:
+        if not self.ai_engine:
+            return "[!] AI engine not found; run hackit/agent/go/build.sh"
+
+        _cfg, provider, api_key, model = self._provider_state(provider, api_key, model)
         if not api_key and provider != "ollama":
             return "[!] No API key configured"
 
-        from hackit.agent.commands import get_command_prompt, COMMAND_MODES
+        from hackit.agent.commands import get_command_prompt
 
-        system = "You are HackIt AI v2.1 - elite Bug Hunter and Senior Pentester."
+        system = "You are HackIt AI v2.3 - elite Bug Hunter and Senior Pentester."
         if mode:
-            system += "\n" + get_command_prompt(mode)
+            extension = get_command_prompt(mode)
+            if extension:
+                system += "\n" + extension
 
-        try:
-            cmd = [self.ai_engine, "-provider", provider, "-key", api_key or "",
-                   "-prompt", prompt, "-system", system]
-            if model:
-                cmd.extend(["-model", model])
-            if mode:
-                cmd.extend(["-mode", mode])
+        cmd = [self.ai_engine, "-provider", provider, "-key", api_key or "",
+               "-prompt", prompt, "-system", system, "-no-history"]
+        if model:
+            cmd.extend(["-model", model])
+        if mode:
+            cmd.extend(["-mode", mode])
 
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-            stdout = proc.stdout.strip()
-            if not stdout:
-                return "[!] AI engine returned empty"
-            data = json.loads(stdout)
-            if data.get("error"):
-                return f"[!] AI Error: {data['error']}"
-            return data.get("text", "[!] No response text")
-        except subprocess.TimeoutExpired:
-            return "[!] AI engine timeout (120s)"
-        except json.JSONDecodeError:
-            return f"[!] Invalid JSON: {stdout[:200]}"
-        except Exception as e:
-            return f"[!] Bridge error: {e}"
+        data = self._run_engine(cmd)
+        if data.get("error"):
+            return f"[!] AI Error: {data['error']}"
+        return data.get("text", "[!] No response text")
 
     def analyze_scan(self, tool_name: str, scan_data: str) -> str:
-        if not os.path.exists(self.ai_engine):
-            return "[!] AI engine not found"
+        if not self.ai_engine:
+            return "[!] AI engine not found; run hackit/agent/go/build.sh"
 
-        from hackit.config import load_config
-        cfg = load_config()
-        provider = cfg.get("ai_provider", "gemini")
-        api_key = cfg.get("ai_keys", {}).get(provider, "")
-        model = cfg.get("ai_models", {}).get(provider, "")
-
+        _cfg, provider, api_key, model = self._provider_state()
         if not api_key and provider != "ollama":
             return "[!] No API key configured"
 
-        try:
-            cmd = [self.ai_engine, "-provider", provider, "-key", api_key or "",
-                   "-prompt", scan_data, "-tool", tool_name, "-analyze"]
-            if model:
-                cmd.extend(["-model", model])
+        cmd = [self.ai_engine, "-provider", provider, "-key", api_key or "",
+               "-prompt", scan_data, "-tool", tool_name, "-analyze", "-no-history"]
+        if model:
+            cmd.extend(["-model", model])
 
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-            stdout = proc.stdout.strip()
-            if not stdout:
-                return "[!] AI engine returned empty"
-            data = json.loads(stdout)
-            if data.get("error"):
-                return f"[!] AI Error: {data['error']}"
-            return data.get("text", "[!] No response text")
-        except Exception as e:
-            return f"[!] Analyze error: {e}"
+        data = self._run_engine(cmd)
+        if data.get("error"):
+            return f"[!] AI Error: {data['error']}"
+        return data.get("text", "[!] No response text")

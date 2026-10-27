@@ -34,6 +34,15 @@ func main() {
 	ssl := flag.String("ssl", "", "Run SSL audit on host:port")
 	headers := flag.String("headers", "", "Run header audit on URL")
 	fuzz := flag.String("fuzz", "", "Run directory fuzzing on base URL")
+	cors := flag.String("cors", "", "Run CORS misconfiguration test")
+	csrf := flag.String("csrf", "", "Run CSRF test")
+	lfi := flag.String("lfi", "", "Run LFI/path traversal test")
+	ssti := flag.String("ssti", "", "Run SSTI test")
+	xxe := flag.String("xxe", "", "Run XXE test")
+	cmd := flag.String("cmd", "", "Run command injection test")
+	nosqli := flag.String("nosqli", "", "Run NoSQL injection test")
+	ldap := flag.String("ldap", "", "Run LDAP injection test")
+	graphql := flag.String("graphql", "", "Run GraphQL introspection test")
 	all := flag.String("all", "", "Run all applicable modules on URL")
 	flag.Parse()
 
@@ -89,6 +98,42 @@ func main() {
 	}
 	if *fuzz != "" {
 		r := doFuzz(*fuzz)
+		results = append(results, r)
+	}
+	if *cors != "" {
+		r := doCORS(*cors)
+		results = append(results, r)
+	}
+	if *csrf != "" {
+		r := doCSRF(*csrf)
+		results = append(results, r)
+	}
+	if *lfi != "" {
+		r := doLFI(*lfi)
+		results = append(results, r)
+	}
+	if *ssti != "" {
+		r := doSSTI(*ssti)
+		results = append(results, r)
+	}
+	if *xxe != "" {
+		r := doXXE(*xxe)
+		results = append(results, r)
+	}
+	if *cmd != "" {
+		r := doCmdInjection(*cmd)
+		results = append(results, r)
+	}
+	if *nosqli != "" {
+		r := doNoSQLi(*nosqli)
+		results = append(results, r)
+	}
+	if *ldap != "" {
+		r := doLDAP(*ldap)
+		results = append(results, r)
+	}
+	if *graphql != "" {
+		r := doGraphQL(*graphql)
 		results = append(results, r)
 	}
 	if *all != "" {
@@ -230,12 +275,61 @@ func doFuzz(target string) WorkerResult {
 	return WorkerResult{Module: "fuzz", Target: target, Success: true, Data: data}
 }
 
+func doCORS(target string) WorkerResult {
+	return WorkerResult{Module: "cors", Target: target, Success: true, Data: native.TestCORS(target)}
+}
+
+func doCSRF(target string) WorkerResult {
+	return WorkerResult{Module: "csrf", Target: target, Success: true, Data: native.TestCSRF(target)}
+}
+
+func doLFI(target string) WorkerResult {
+	return WorkerResult{Module: "lfi", Target: target, Success: true, Data: native.TestLFI(target, parseParamsFromURL(target))}
+}
+
+func doSSTI(target string) WorkerResult {
+	return WorkerResult{Module: "ssti", Target: target, Success: true, Data: native.TestSSTI(target, parseParamsFromURL(target))}
+}
+
+func doXXE(target string) WorkerResult {
+	return WorkerResult{Module: "xxe", Target: target, Success: true, Data: native.TestXXE(target)}
+}
+
+func doCmdInjection(target string) WorkerResult {
+	return WorkerResult{Module: "cmd", Target: target, Success: true, Data: native.TestCmdInjection(target, parseParamsFromURL(target))}
+}
+
+func doNoSQLi(target string) WorkerResult {
+	return WorkerResult{Module: "nosqli", Target: target, Success: true, Data: native.TestNoSQLi(target, parseParamsFromURL(target))}
+}
+
+func doLDAP(target string) WorkerResult {
+	return WorkerResult{Module: "ldap", Target: target, Success: true, Data: native.TestLDAP(target, parseParamsFromURL(target))}
+}
+
+func doGraphQL(target string) WorkerResult {
+	return WorkerResult{Module: "graphql", Target: target, Success: true, Data: native.TestGraphQL(target)}
+}
+
 func doAll(target string) []WorkerResult {
 	results := make([]WorkerResult, 0)
 	results = append(results, doPortScan(target))
 	results = append(results, doSubdomain(extractDomain(target)))
 	results = append(results, doHeaders(target))
 	results = append(results, doFuzz(target))
+	results = append(results, doSQLi(target))
+	results = append(results, doXSS(target))
+	results = append(results, doSSRF(target))
+	results = append(results, doRedirect(target))
+	results = append(results, doCORS(target))
+	results = append(results, doCSRF(target))
+	results = append(results, doLFI(target))
+	results = append(results, doSSTI(target))
+	results = append(results, doXXE(target))
+	results = append(results, doCmdInjection(target))
+	results = append(results, doNoSQLi(target))
+	results = append(results, doLDAP(target))
+	results = append(results, doGraphQL(target))
 	return results
 }
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"html"
 	"os"
@@ -48,19 +49,120 @@ func generateReport(target string, results []ModuleResult, duration float64) {
 	writeHTMLReport(htmlPath, data)
 	writeMermaidGraph(mermaidPath, data)
 
-	fmt.Printf("\n  Reports generated:\n")
-	fmt.Printf("    Markdown : %s\n", mdPath)
-	fmt.Printf("    HTML     : %s\n", htmlPath)
-	fmt.Printf("    Mermaid  : %s\n", mermaidPath)
+	// stdout is reserved for the JSON result array; diagnostics belong on
+	// stderr so Python callers can parse it safely.
+	fmt.Fprintf(os.Stderr, "\n  Reports generated:\n")
+	fmt.Fprintf(os.Stderr, "    Markdown : %s\n", mdPath)
+	fmt.Fprintf(os.Stderr, "    HTML     : %s\n", htmlPath)
+	fmt.Fprintf(os.Stderr, "    Mermaid  : %s\n", mermaidPath)
+}
+
+// dataRecords normalises typed scanner slices ([]native.SQLiResult) and single
+// structs into generic maps.  The previous type assertion to []interface{}
+// silently produced zero findings for every concrete slice.
+func dataRecords(data interface{}) []map[string]interface{} {
+	if data == nil {
+		return nil
+	}
+	if list, ok := data.([]interface{}); ok {
+		records := make([]map[string]interface{}, 0, len(list))
+		for _, item := range list {
+			if record, ok := item.(map[string]interface{}); ok {
+				records = append(records, record)
+			}
+		}
+		return records
+	}
+	raw, err := json.Marshal(data)
+	if err != nil {
+		return nil
+	}
+	var list []map[string]interface{}
+	if err := json.Unmarshal(raw, &list); err == nil {
+		return list
+	}
+	var single map[string]interface{}
+	if err := json.Unmarshal(raw, &single); err == nil {
+		return []map[string]interface{}{single}
+	}
+	return nil
+}
+
+func boolField(record map[string]interface{}, names ...string) bool {
+	for _, name := range names {
+		if value, ok := record[name].(bool); ok && value {
+			return true
+		}
+	}
+	return false
+}
+
+// isFinding filters informational records (for example "No reflected XSS
+// detected" sentinels) out of risk scoring and reports.
+func isFinding(module string, record map[string]interface{}) bool {
+	if boolField(record, "vulnerable", "Vulnerable") {
+		return true
+	}
+	switch module {
+	case "xss":
+		return boolField(record, "reflected", "Reflected")
+	case "ssrf", "redirect", "bypass403":
+		return boolField(record, "success", "Success")
+	case "graphql":
+		if value, ok := record["vuln_type"]; ok && value != "" {
+			return true
+		}
+	case "ssl":
+		if issues, ok := record["Vulnerabilities"].([]interface{}); ok && len(issues) > 0 {
+			return true
+		}
+	case "js":
+		if issues, ok := record["secrets"].([]interface{}); ok && len(issues) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func moduleFindings(result ModuleResult) []map[string]interface{} {
+	records := dataRecords(result.Data)
+	findings := make([]map[string]interface{}, 0, len(records))
+	for _, record := range records {
+		if isFinding(result.Module, record) {
+			findings = append(findings, record)
+		}
+	}
+	return findings
+}
+
+func severityFor(module string) string {
+	switch module {
+	case "sqli", "cmd", "ssti":
+		return "critical"
+	case "xss", "lfi", "xxe", "ssrf", "nosqli", "ldap":
+		return "high"
+	case "redirect", "bypass403", "cors", "csrf":
+		return "medium"
+	default:
+		return "info"
+	}
 }
 
 func calculateRiskScore(results []ModuleResult) float64 {
 	score := 0.0
-	for _, r := range results {
-		data := r.Data
-		switch d := data.(type) {
-		case []interface{}:
-			score += float64(len(d)) * 0.5
+	for _, result := range results {
+		for _, finding := range moduleFindings(result) {
+			switch severityFor(result.Module) {
+			case "critical":
+				score += 2.5
+			case "high":
+				score += 1.5
+			case "medium":
+				score += 0.75
+			default:
+				score += 0.25
+			}
+			_ = finding
 		}
 	}
 	if score > 10 {
@@ -71,23 +173,17 @@ func calculateRiskScore(results []ModuleResult) float64 {
 
 func collectVulnerabilities(results []ModuleResult) []map[string]interface{} {
 	vulns := make([]map[string]interface{}, 0)
-	for _, r := range results {
-		mod := r.Module
-		data := r.Data
-		switch d := data.(type) {
-		case []interface{}:
-			for _, item := range d {
-				if m, ok := item.(map[string]interface{}); ok {
-					vuln := map[string]interface{}{
-						"module": mod,
-						"target": r.Target,
-					}
-					for k, v := range m {
-						vuln[k] = v
-					}
-					vulns = append(vulns, vuln)
-				}
+	for _, result := range results {
+		for _, finding := range moduleFindings(result) {
+			vuln := map[string]interface{}{
+				"module":   result.Module,
+				"target":   result.Target,
+				"severity": severityFor(result.Module),
 			}
+			for key, value := range finding {
+				vuln[key] = value
+			}
+			vulns = append(vulns, vuln)
 		}
 	}
 	return vulns

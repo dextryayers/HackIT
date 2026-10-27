@@ -1,11 +1,9 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -13,6 +11,27 @@ import (
 
 	"hackit_ai_engine/swarm/orchestrator"
 )
+
+func emitJSON(value interface{}) {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return
+	}
+	fmt.Println(string(data))
+}
+
+func emitToken(token string) error {
+	if token == "" {
+		return nil
+	}
+	emitJSON(TokenEvent{Token: token})
+	return nil
+}
+
+func fail(message string) {
+	emitJSON(TokenEvent{Error: message})
+	os.Exit(1)
+}
 
 func main() {
 	provider := flag.String("provider", "", "AI Provider")
@@ -25,15 +44,17 @@ func main() {
 	clearHist := flag.Bool("clear", false, "Clear conversation history")
 	mode := flag.String("mode", "", "Specialized Command Mode (e.g., risk, attack)")
 	autopilot := flag.String("autopilot", "", "Target for Autonomous AI Bug Hunter")
-	swarmMode := flag.String("swarm", "", "Trigger 20-Node Autonomous Swarm on Target")
+	swarmMode := flag.String("swarm", "", "Trigger 28-Node Autonomous Swarm on Target")
 	swarmScope := flag.String("swarm-scope", "passive", "Scope for Swarm (passive, active_stealth, aggressive)")
-	stream := flag.Bool("stream", false, "Enable token-by-token streaming output")
+	stream := flag.Bool("stream", false, "Stream tokens as NDJSON")
+	noHistory := flag.Bool("no-history", false, "Do not load or save engine history")
+	timeoutSec := flag.Int("timeout", 300, "Request timeout in seconds")
 	flag.Parse()
 
 	history := NewHistoryManager()
 	if *clearHist {
 		history.Clear()
-		fmt.Println(`{"text": "History cleared successfully"}`)
+		emitJSON(AIResponse{Text: "History cleared successfully"})
 		return
 	}
 
@@ -45,24 +66,24 @@ func main() {
 
 	if *swarmMode != "" {
 		masterNode := orchestrator.NewOrchestratorAgent()
-		err := masterNode.Execute(*swarmMode, *swarmScope)
-		if err != nil {
-			fmt.Printf(`{"error": "Swarm execution failed: %v"}`+"\n", err)
-			os.Exit(1)
+		if err := masterNode.Execute(*swarmMode, *swarmScope); err != nil {
+			fail(fmt.Sprintf("Swarm execution failed: %v", err))
 		}
 		return
 	}
 
-	if *provider == "" || (*apiKey == "" && *provider != "ollama") || (*prompt == "" && !*analyze) {
-		fmt.Println(`{"error": "Missing required flags"}`)
-		os.Exit(1)
+	if *provider == "" || (*apiKey == "" && *provider != "ollama") ||
+		(*prompt == "" && !*analyze) {
+		fail("Missing required flags: -provider, -prompt and -key (except Ollama)")
 	}
 
 	finalPrompt := *prompt
-	finalSystem := *system
+	finalSystem := strings.TrimSpace(*system)
 
 	if *mode != "" {
-		finalSystem += GetCommandInstruction(*mode)
+		if instruction := GetCommandInstruction(*mode); instruction != "" {
+			finalSystem += "\n" + instruction
+		}
 	}
 
 	if *analyze {
@@ -71,497 +92,121 @@ func main() {
 		finalSystem = analyzer.SystemPrompt
 	}
 
-	client := &http.Client{Timeout: 120 * time.Second}
-	var response string
-	var err error
+	keys := collectProviderKeys(*provider, *apiKey)
+	if *provider != "ollama" && keys[*provider] == "" {
+		fail(fmt.Sprintf("API key for %s is not configured", *provider))
+	}
+	keysOrchestrator := NewIntelligenceOrchestrator(keys)
 
-	keys := make(map[string]string)
-	keys[*provider] = *apiKey
-	orchestrator := NewIntelligenceOrchestrator(keys)
+	effectiveModel := strings.TrimSpace(*model)
+	if effectiveModel == "" {
+		effectiveModel = defaultModelFor(*provider)
+	}
 
-	// Response cache for non-analysis queries
+	client := &http.Client{Timeout: time.Duration(*timeoutSec) * time.Second}
+
+	// The cache key must use the effective model, otherwise entries written
+	// after auto-detection can never be found again.
 	cache := NewResponseCache()
-	if !*analyze && *autopilot == "" && *swarmMode == "" {
-		if cached, ok := cache.Get(*provider, *model, *prompt, *system); ok {
-			out := AIResponse{Text: cached}
-			jsonOut, _ := json.Marshal(out)
-			fmt.Println(string(jsonOut))
+	cacheable := !*analyze && *autopilot == "" && *swarmMode == "" && !*stream
+	cacheSystem := *system
+	if cacheable {
+		if cached, ok := cache.Get(*provider, effectiveModel, *prompt, cacheSystem); ok {
+			emitJSON(AIResponse{Text: cached})
 			return
 		}
 	}
 
-	// Probe provider latencies in background
-	go orchestrator.ProbeLatency(5 * time.Second)
-
-	histData := history.Load()
-
-	// Try requested provider first, then fallback chain
-	providersToTry := []string{*provider}
-	if *model == "" {
-		*model = orchestrator.GetOptimalModel(*provider)
+	historyData := []Message{}
+	if !*noHistory {
+		historyData = history.Load()
 	}
 
-	for _, p := range orchestrator.FallbackChain {
-		if p != *provider {
-			providersToTry = append(providersToTry, p)
-		}
-		if len(providersToTry) >= 5 {
-			break
-		}
+	// Probe provider latencies in the background only when there is more than
+	// one provider to choose from.
+	if len(keysOrchestrator.FallbackChain) > 1 {
+		go keysOrchestrator.ProbeLatency(3 * time.Second)
 	}
 
-	for _, p := range providersToTry {
-		key := orchestrator.Providers[p]
-		if p == "ollama" {
-			response, err = handleOllama(client, "", finalPrompt, finalSystem, "", histData)
-		} else if key == "" {
+	chain := buildProviderChain(*provider, keys)
+	var response string
+	var lastErr error
+	usedProvider := ""
+
+	for _, candidate := range chain {
+		key := keys[candidate]
+		if key == "" && candidate != "ollama" {
 			continue
-		} else {
-			switch p {
-			case "gemini":
-				response, err = handleGemini(client, key, finalPrompt, finalSystem, "", histData)
-			case "claude":
-				response, err = handleClaude(client, key, finalPrompt, finalSystem, "", histData)
-			default:
-				response, err = handleOpenAICompatible(client, p, key, finalPrompt, finalSystem, "", histData)
+		}
+		candidateModel := ""
+		if candidate == *provider {
+			candidateModel = effectiveModel
+		}
+
+		if *stream {
+			emitted := 0
+			var builder strings.Builder
+			response, lastErr = streamProvider(
+				client, candidate, key, finalPrompt, finalSystem, candidateModel,
+				historyData,
+				func(token string) error {
+					emitted++
+					builder.WriteString(token)
+					return emitToken(token)
+				},
+			)
+			if response == "" && builder.Len() > 0 {
+				response = builder.String()
 			}
+			if lastErr == nil {
+				usedProvider = candidate
+				break
+			}
+			if emitted > 0 {
+				fail(lastErr.Error())
+			}
+			continue
 		}
-		if err == nil {
+
+		response, lastErr = callProvider(
+			client, candidate, key, finalPrompt, finalSystem, candidateModel, historyData,
+		)
+		if lastErr == nil {
+			usedProvider = candidate
 			break
-		}
-		if p != *provider {
-			fmt.Fprintf(os.Stderr, `{"fallback":"%s failed, trying %s: %v"}`+"\n", p, providersToTry[1], err)
 		}
 	}
 
-	if err != nil {
-		ranked := orchestrator.RankByLatency()
+	if lastErr != nil {
+		ranked := keysOrchestrator.RankByLatency()
 		hint := ""
 		if len(ranked) > 0 {
-			hint = fmt.Sprintf(" Fastest available: %s", ranked[0])
+			hint = fmt.Sprintf(" Fastest available: %s.", ranked[0])
 		}
-		errResp := map[string]string{
-			"error": fmt.Sprintf("All %d providers failed. Last error: %v.%s",
-				len(providersToTry), err, hint),
-		}
-		jsonErr, _ := json.Marshal(errResp)
-		fmt.Println(string(jsonErr))
-		os.Exit(1)
+		fail(fmt.Sprintf("All %d provider(s) failed. Last error: %v.%s",
+			len(chain), lastErr, hint))
 	}
 
-	// Handle streaming output
+	response = strings.TrimSpace(response)
+	if response == "" {
+		fail("The AI provider returned an empty response")
+	}
+
+	if !*noHistory {
+		historyData = append(historyData, Message{Role: "user", Content: finalPrompt})
+		historyData = append(historyData, Message{Role: "assistant", Content: response})
+		history.Save(historyData)
+	}
+
+	if cacheable {
+		cache.Set(*provider, effectiveModel, *prompt, cacheSystem, response, 300)
+	}
+
 	if *stream {
-		words := strings.Fields(response)
-		for _, word := range words {
-			token := map[string]string{"token": word + " "}
-			tokenJSON, _ := json.Marshal(token)
-			fmt.Println(string(tokenJSON))
-			time.Sleep(15 * time.Millisecond)
-		}
-		fmt.Println(`{"done":true}`)
+		emitJSON(TokenEvent{Done: true})
 		return
 	}
 
-	// Save history
-	histData = append(histData, Message{Role: "user", Content: finalPrompt})
-	histData = append(histData, Message{Role: "assistant", Content: response})
-	history.Save(histData)
-
-	// Cache result (300s TTL for non-analysis queries)
-	if !*analyze && *autopilot == "" && *swarmMode == "" {
-		cache.Set(*provider, *model, *prompt, *system, response, 300)
-	}
-
-	out := AIResponse{Text: response}
-	jsonOut, _ := json.Marshal(out)
-	fmt.Println(string(jsonOut))
-}
-
-func handleGemini(client *http.Client, key, prompt, system, model string, hist []Message) (string, error) {
-	defaults := []string{"gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-3-flash", "gemini-2.5-flash", "gemini-2.0-flash"}
-	modelsToTry := defaults
-	if model != "" {
-		modelsToTry = []string{model}
-		modelsToTry = append(modelsToTry, defaults...)
-	}
-
-	apiVersions := []string{"v1", "v1beta"}
-	var errs []string
-
-	for _, m := range modelsToTry {
-		if m == "" {
-			continue
-		}
-		for _, apiVer := range apiVersions {
-			url := fmt.Sprintf("https://generativelanguage.googleapis.com/%s/models/%s:generateContent", apiVer, m)
-
-			contents := []map[string]interface{}{}
-			if system != "" {
-				contents = append(contents, map[string]interface{}{
-					"role": "user",
-					"parts": []map[string]string{
-						{"text": fmt.Sprintf("[System Instruction]\n%s\n\nUse the above system instruction to guide all responses.", system)},
-					},
-				})
-			}
-			for _, msg := range hist {
-				contents = append(contents, map[string]interface{}{
-					"role":  msg.Role,
-					"parts": []map[string]string{{"text": msg.Content}},
-				})
-			}
-			contents = append(contents, map[string]interface{}{
-				"role":  "user",
-				"parts": []map[string]string{{"text": prompt}},
-			})
-
-			reqData := map[string]interface{}{"contents": contents}
-			jsonData, _ := json.Marshal(reqData)
-			req, _ := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
-			req.Header.Set("Content-Type", "application/json")
-			req.Header.Set("X-Goog-Api-Key", key)
-			resp, err := client.Do(req)
-			if err != nil {
-				errs = append(errs, fmt.Sprintf("%s(%s): %v", m, apiVer, err))
-				continue
-			}
-
-			body, _ := io.ReadAll(resp.Body)
-			resp.Body.Close()
-
-			if resp.StatusCode != http.StatusOK {
-				if resp.StatusCode == 403 {
-					return "", fmt.Errorf("[GEMINI] %s: HTTP 403 — check API key/permissions", m)
-				}
-				errs = append(errs, fmt.Sprintf("%s(%s): HTTP %d", m, apiVer, resp.StatusCode))
-				continue
-			}
-
-			var res map[string]interface{}
-			json.Unmarshal(body, &res)
-
-			candidates, ok := res["candidates"].([]interface{})
-			if !ok || len(candidates) == 0 {
-				if errObj, ok := res["error"].(map[string]interface{}); ok {
-					errs = append(errs, fmt.Sprintf("%s(%s): %v", m, apiVer, errObj["message"]))
-				} else {
-					errs = append(errs, fmt.Sprintf("%s(%s): no candidates", m, apiVer))
-				}
-				continue
-			}
-
-			content, ok := candidates[0].(map[string]interface{})["content"].(map[string]interface{})
-			if !ok {
-				errs = append(errs, fmt.Sprintf("%s(%s): no content", m, apiVer))
-				continue
-			}
-			parts, ok := content["parts"].([]interface{})
-			if !ok || len(parts) == 0 {
-				errs = append(errs, fmt.Sprintf("%s(%s): no parts", m, apiVer))
-				continue
-			}
-			text, ok := parts[0].(map[string]interface{})["text"].(string)
-			if !ok {
-				errs = append(errs, fmt.Sprintf("%s(%s): not a string", m, apiVer))
-				continue
-			}
-			return text, nil
-		}
-	}
-	return "", fmt.Errorf("[GEMINI all %d attempts failed] %s", len(errs), strings.Join(errs, "; "))
-}
-
-func handleOpenAICompatible(client *http.Client, provider, key, prompt, system, model string, hist []Message) (string, error) {
-	var url string
-	switch provider {
-	case "groq":
-		url = "https://api.groq.com/openai/v1/chat/completions"
-	case "openrouter":
-		url = "https://openrouter.ai/api/v1/chat/completions"
-	case "deepseek":
-		url = "https://api.deepseek.com/v1/chat/completions"
-	case "openai":
-		url = "https://api.openai.com/v1/chat/completions"
-	case "mistral":
-		url = "https://api.mistral.ai/v1/chat/completions"
-	case "togetherai":
-		url = "https://api.together.xyz/v1/chat/completions"
-	}
-
-	if model == "" {
-		switch provider {
-		case "groq":
-			model = "llama-3.3-70b-versatile"
-		case "openrouter":
-			model = "google/gemini-2.5-flash:free"
-		case "deepseek":
-			model = "deepseek-chat"
-		case "openai":
-			model = "gpt-4o-mini"
-		case "mistral":
-			model = "mistral-small-latest"
-		case "togetherai":
-			model = "meta-llama/Llama-3.3-70B-Instruct-Turbo"
-		}
-	}
-
-	reqBody := OpenAIRequest{
-		Model:     model,
-		MaxTokens: 4096,
-	}
-	reqBody.Messages = append(reqBody.Messages, struct {
-		Role    string `json:"role"`
-		Content string `json:"content"`
-	}{Role: "system", Content: system})
-
-	for _, msg := range hist {
-		reqBody.Messages = append(reqBody.Messages, struct {
-			Role    string `json:"role"`
-			Content string `json:"content"`
-		}{Role: msg.Role, Content: msg.Content})
-	}
-
-	reqBody.Messages = append(reqBody.Messages, struct {
-		Role    string `json:"role"`
-		Content string `json:"content"`
-	}{Role: "user", Content: prompt})
-
-	jsonData, _ := json.Marshal(reqBody)
-	req, _ := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
-	req.Header.Set("Authorization", "Bearer "+key)
-	req.Header.Set("Content-Type", "application/json")
-	if provider == "openrouter" {
-		req.Header.Set("HTTP-Referer", "https://hackit.com")
-		req.Header.Set("X-Title", "HackIt AI")
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-
-	if resp.StatusCode != http.StatusOK {
-		var errRes map[string]interface{}
-		json.Unmarshal(body, &errRes)
-		if errorObj, ok := errRes["error"].(map[string]interface{}); ok {
-			errMsg, _ := errorObj["message"].(string)
-			if provider == "openrouter" && !strings.HasSuffix(model, ":free") &&
-				(strings.Contains(errMsg, "credits") || strings.Contains(errMsg, "paid") ||
-					strings.Contains(errMsg, "upgrade") || strings.Contains(errMsg, "insufficient")) {
-				model2 := model + ":free"
-				return handleOpenAICompatible(client, provider, key, prompt, system, model2, hist)
-			}
-			return "", fmt.Errorf("[%s ERROR] %s", provider, errMsg)
-		}
-		return "", fmt.Errorf("[%s ERROR] HTTP %d: %s", provider, resp.StatusCode, string(body))
-	}
-
-	var res map[string]interface{}
-	json.Unmarshal(body, &res)
-
-	choices, ok := res["choices"].([]interface{})
-	if !ok || len(choices) == 0 {
-		return "", fmt.Errorf("[%s ERROR] no choices in response: %s", provider, string(body))
-	}
-
-	message, ok := choices[0].(map[string]interface{})["message"].(map[string]interface{})
-	if !ok {
-		return "", fmt.Errorf("[%s ERROR] malformed message in choices", provider)
-	}
-
-	text, ok := message["content"].(string)
-	if !ok {
-		return "", fmt.Errorf("[%s ERROR] content field missing or not a string", provider)
-	}
-
-	return text, nil
-}
-
-func handleClaude(client *http.Client, key, prompt, system, model string, hist []Message) (string, error) {
-	url := "https://api.anthropic.com/v1/messages"
-	if model == "" {
-		model = "claude-3-5-haiku-20241022"
-	}
-
-	reqBody := ClaudeRequest{
-		Model:     model,
-		System:    system,
-		MaxTokens: 8192,
-	}
-
-	for _, msg := range hist {
-		reqBody.Messages = append(reqBody.Messages, struct {
-			Role    string `json:"role"`
-			Content string `json:"content"`
-		}{Role: msg.Role, Content: msg.Content})
-	}
-
-	reqBody.Messages = append(reqBody.Messages, struct {
-		Role    string `json:"role"`
-		Content string `json:"content"`
-	}{Role: "user", Content: prompt})
-
-	jsonData, _ := json.Marshal(reqBody)
-	req, _ := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
-	req.Header.Set("x-api-key", key)
-	req.Header.Set("anthropic-version", "2023-06-01")
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-
-	if resp.StatusCode != http.StatusOK {
-		var errRes map[string]interface{}
-		json.Unmarshal(body, &errRes)
-		if errorObj, ok := errRes["error"].(map[string]interface{}); ok {
-			return "", fmt.Errorf("[CLAUDE ERROR] %v", errorObj["message"])
-		}
-		return "", fmt.Errorf("[CLAUDE ERROR] HTTP %d: %s", resp.StatusCode, string(body))
-	}
-
-	var res map[string]interface{}
-	json.Unmarshal(body, &res)
-
-	content, ok := res["content"].([]interface{})
-	if !ok || len(content) == 0 {
-		return "", fmt.Errorf("[CLAUDE ERROR] no content in response: %s", string(body))
-	}
-
-	text, ok := content[0].(map[string]interface{})["text"].(string)
-	if !ok {
-		return "", fmt.Errorf("[CLAUDE ERROR] text field missing in content")
-	}
-
-	return text, nil
-}
-
-func getOllamaModels(client *http.Client) []string {
-	url := "http://localhost:11434/api/tags"
-	resp, err := client.Get(url)
-	if err != nil {
-		return nil
-	}
-	defer resp.Body.Close()
-
-	var res struct {
-		Models []struct {
-			Name string `json:"name"`
-		} `json:"models"`
-	}
-	body, _ := io.ReadAll(resp.Body)
-	json.Unmarshal(body, &res)
-
-	var names []string
-	for _, m := range res.Models {
-		names = append(names, m.Name)
-	}
-	return names
-}
-
-func handleOllama(client *http.Client, key, prompt, system, model string, hist []Message) (string, error) {
-	if model == "" {
-		model = key // Ollama uses model name from key field
-	}
-
-	available := getOllamaModels(client)
-
-	found := false
-	if model == "" || model == "llama3" || model == "AUTO_DETECT" {
-		if len(available) > 0 {
-			for _, m := range available {
-				if strings.HasPrefix(m, "llama3") || strings.HasPrefix(m, "mistral") || strings.HasPrefix(m, "qwen") {
-					model = m
-					found = true
-					break
-				}
-			}
-			if !found {
-				model = available[0]
-			}
-		}
-	} else {
-		for _, m := range available {
-			if m == model || strings.HasPrefix(m, model+":") {
-				model = m
-				found = true
-				break
-			}
-		}
-	}
-
-	if model == "" {
-		model = "llama3"
-	}
-
-	reqBody := struct {
-		Model    string `json:"model"`
-		Messages []struct {
-			Role    string `json:"role"`
-			Content string `json:"content"`
-		} `json:"messages"`
-		Stream bool `json:"stream"`
-	}{
-		Model:  model,
-		Stream: false,
-	}
-
-	reqBody.Messages = append(reqBody.Messages, struct {
-		Role    string `json:"role"`
-		Content string `json:"content"`
-	}{Role: "system", Content: system})
-
-	for _, msg := range hist {
-		reqBody.Messages = append(reqBody.Messages, struct {
-			Role    string `json:"role"`
-			Content string `json:"content"`
-		}{Role: msg.Role, Content: msg.Content})
-	}
-
-	reqBody.Messages = append(reqBody.Messages, struct {
-		Role    string `json:"role"`
-		Content string `json:"content"`
-	}{Role: "user", Content: prompt})
-
-	jsonData, _ := json.Marshal(reqBody)
-	req, err := http.NewRequest("POST", "http://localhost:11434/api/chat", bytes.NewBuffer(jsonData))
-	if err != nil {
-		return "", fmt.Errorf("failed to create request: %v", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("[OLLAMA] HTTP %d: %s", resp.StatusCode, string(body))
-	}
-
-	var res map[string]interface{}
-	if err := json.Unmarshal(body, &res); err != nil {
-		return "", fmt.Errorf("[OLLAMA] parse error: %v", err)
-	}
-
-	message, ok := res["message"].(map[string]interface{})
-	if !ok {
-		return "", fmt.Errorf("[OLLAMA] unexpected response format: %s", string(body))
-	}
-
-	content, ok := message["content"].(string)
-	if !ok {
-		return "", fmt.Errorf("[OLLAMA] content missing in response")
-	}
-
-	return content, nil
+	_ = usedProvider // reserved for future telemetry
+	emitJSON(AIResponse{Text: response})
 }

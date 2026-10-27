@@ -5,29 +5,31 @@ type AIResponse struct {
 	Error string `json:"error"`
 }
 
+type TokenEvent struct {
+	Token string `json:"token,omitempty"`
+	Done  bool   `json:"done,omitempty"`
+	Error string `json:"error,omitempty"`
+}
+
 type Message struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
 }
 
 type OpenAIRequest struct {
-	Model     string `json:"model"`
-	MaxTokens int    `json:"max_tokens,omitempty"`
-	Messages  []struct {
-		Role    string `json:"role"`
-		Content string `json:"content"`
-	} `json:"messages"`
-	Temperature float64 `json:"temperature,omitempty"`
+	Model       string    `json:"model"`
+	MaxTokens   int       `json:"max_tokens,omitempty"`
+	Messages    []Message `json:"messages"`
+	Temperature float64   `json:"temperature,omitempty"`
+	Stream      bool      `json:"stream,omitempty"`
 }
 
 type ClaudeRequest struct {
-	Model      string `json:"model"`
-	System     string `json:"system"`
-	Messages   []struct {
-		Role    string `json:"role"`
-		Content string `json:"content"`
-	} `json:"messages"`
-	MaxTokens int `json:"max_tokens"`
+	Model     string    `json:"model"`
+	System    string    `json:"system,omitempty"`
+	Messages  []Message `json:"messages"`
+	MaxTokens int       `json:"max_tokens"`
+	Stream    bool      `json:"stream,omitempty"`
 }
 
 type GeminiPart struct {
@@ -35,12 +37,19 @@ type GeminiPart struct {
 }
 
 type GeminiContent struct {
-	Role  string        `json:"role,omitempty"`
-	Parts []GeminiPart  `json:"parts"`
+	Role  string       `json:"role,omitempty"`
+	Parts []GeminiPart `json:"parts"`
+}
+
+type GeminiGenerationConfig struct {
+	Temperature     float64 `json:"temperature,omitempty"`
+	MaxOutputTokens int     `json:"maxOutputTokens,omitempty"`
 }
 
 type GeminiRequest struct {
-	Contents []GeminiContent `json:"contents"`
+	Contents          []GeminiContent          `json:"contents"`
+	SystemInstruction *GeminiContent           `json:"systemInstruction,omitempty"`
+	GenerationConfig  *GeminiGenerationConfig  `json:"generationConfig,omitempty"`
 }
 
 type GeminiResponse struct {
@@ -53,12 +62,14 @@ type GeminiResponse struct {
 }
 
 type OllamaRequest struct {
-	Model    string    `json:"model"`
-	Messages []Message `json:"messages"`
-	Stream   bool      `json:"stream"`
+	Model    string                 `json:"model"`
+	Messages []Message              `json:"messages"`
+	Stream   bool                   `json:"stream"`
+	Options  map[string]interface{} `json:"options,omitempty"`
 }
 
 type OllamaResponse struct {
 	Message Message `json:"message"`
+	Done    bool    `json:"done"`
 	Error   string  `json:"error,omitempty"`
 }

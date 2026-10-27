@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net"
+	"strings"
 	"time"
 )
 
@@ -37,9 +38,23 @@ func AuditSSL(ip string, port int) *SSLResult {
 
 	cert := state.PeerCertificates[0]
 
+	// Issuer.Organization may be empty (common for self-signed or private CA
+	// certificates); indexing it directly panicked the scanner.
+	issuer := strings.TrimSpace(cert.Issuer.CommonName)
+	if len(cert.Issuer.Organization) > 0 && cert.Issuer.Organization[0] != "" {
+		issuer = strings.TrimSpace(cert.Issuer.Organization[0] + " " + issuer)
+	}
+	if issuer == "" {
+		issuer = cert.Issuer.String()
+	}
+	subject := strings.TrimSpace(cert.Subject.CommonName)
+	if subject == "" {
+		subject = cert.Subject.String()
+	}
+
 	result := &SSLResult{
-		Issuer:        cert.Issuer.Organization[0] + " " + cert.Issuer.CommonName,
-		Subject:       cert.Subject.CommonName,
+		Issuer:        issuer,
+		Subject:       subject,
 		ExpiryDate:    cert.NotAfter,
 		DaysUntilExpy: int(time.Until(cert.NotAfter).Hours() / 24),
 		IsExpired:     time.Now().After(cert.NotAfter),
