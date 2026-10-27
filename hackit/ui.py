@@ -1153,23 +1153,6 @@ def _help_option_records(
     return records
 
 
-def _help_quick_start(screen: _HelpScreen) -> None:
-    screen.rule("QUICK START")
-    entries = [
-        ("hackit run", "Open the web dashboard"),
-        ("hackit console", "Start the interactive shell"),
-        ("hackit guide", "Read the beginner guide"),
-        ("hackit help web", "Explore a command group"),
-    ]
-    width = max(_help_vlen(cmd) for cmd, _ in entries) + 3
-    for cmd, desc in entries:
-        screen.add(
-            "    "
-            + _help_style(_help_pad(cmd, width), screen.palette.accent, bold=True)
-            + _help_style(desc, screen.palette.muted)
-        )
-
-
 def render_modern_help(command: click.Command, ctx: click.Context) -> str:
     """Render a complete, themed help screen for any Click command."""
     screen = _HelpScreen()
@@ -1183,7 +1166,17 @@ def render_modern_help(command: click.Command, ctx: click.Context) -> str:
             [
                 ("◆ HACKIT  ·  v" + _HELP_VERSION, palette.main, True),
                 ("Hexa-Engine Penetration Testing Framework", palette.text, True),
-                ("Recon  ·  Web  ·  Exploit  ·  Automate  ·  Report", palette.muted, False),
+                (
+                    "Reconnaissance, web security, exploitation, automation and reporting in one framework.",
+                    palette.text,
+                    False,
+                ),
+                (
+                    "Authorized testing only. Use only on systems you own or have permission to assess.",
+                    palette.warn,
+                    False,
+                ),
+                ("Reconnaissance  ·  Web Security  ·  Exploitation  ·  Automation  ·  Reporting", palette.muted, False),
             ]
         )
         screen.rule("USAGE")
@@ -1211,22 +1204,8 @@ def render_modern_help(command: click.Command, ctx: click.Context) -> str:
             screen.rule("OTHER COMMANDS")
             screen.command_list(leftovers, ())
 
-        _help_quick_start(screen)
-
-        group_count = sum(
-            1 for cmd in commands.values() if isinstance(cmd, click.Group)
-        )
-        screen.rule("STATUS")
-        screen.add(
-            "    "
-            + _help_style(f"v{_HELP_VERSION}", palette.status, bold=True)
-            + _help_style(f"  ·  {len(commands)} commands", palette.muted)
-            + _help_style(f"  ·  {group_count} groups", palette.muted)
-            + _help_style("  ·  system ready", palette.status, bold=True)
-        )
         screen.footer(
             ["hackit help <command>   ·   hackit guide   ·   hackit examples"],
-            "Use HackIt only on systems you own or have explicit written permission to test.",
         )
     elif is_group:
         screen.label("Commands")
