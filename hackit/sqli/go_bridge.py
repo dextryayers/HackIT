@@ -65,6 +65,27 @@ FLAG_MAP = {
     'file_exec': '--file-exec',
     'oob_channel': '--oob-channel',
     'oob_domain': '--oob-domain',
+    'param': '--param',
+    'skip_param': '--skip-param',
+    'prefix': '--prefix',
+    'suffix': '--suffix',
+    'level': '--level',
+    'current_db': '--current-db',
+    'current_user': '--current-user',
+    'hostname': '--hostname',
+    'privileges': '--privileges',
+    'is_dba': '--is-dba',
+    'sql_query': '--sql-query',
+    'rows': '--rows',
+    'limit': '--limit',
+    'offset': '--offset',
+    'where': '--where',
+    'columns_csv': '--columns-csv',
+    'max_length': '--max-length',
+    'time_secs': '--time-secs',
+    'users': '--users',
+    'passwords': '--passwords',
+    'roles': '--roles',
 }
 
 BOOL_FLAGS = frozenset({
@@ -75,6 +96,8 @@ BOOL_FLAGS = frozenset({
     'exfil_http', 'no_color', 'crawl_extract', 'crawl_sensitive',
     'crawl_procs', 'crawl_views', 'crawl_indexes', 'crawl_system',
     'network_scan', 'auth_bypass', 'stealth',
+    'current_db', 'current_user', 'hostname', 'privileges', 'is_dba',
+    'users', 'passwords', 'roles',
 })
 
 STRING_FLAGS = frozenset({
@@ -84,13 +107,15 @@ STRING_FLAGS = frozenset({
     'crawl_report', 'extract_technique', 'extract_charset',
     'scan_target', 'scan_ports', 'auth_user', 'auth_pass',
     'file_read', 'file_write', 'file_exec', 'oob_channel', 'oob_domain',
-    'output_format',
+    'output_format', 'param', 'skip_param', 'prefix', 'suffix', 'sql_query',
+    'where', 'columns_csv',
 })
 
 INT_FLAGS = frozenset({
     'timeout', 'risk_level', 'depth', 'threads', 'delay',
     'verbose', 'retry', 'crawl_depth', 'crawl_threads',
-    'extract_workers', 'extract_batch',
+    'extract_workers', 'extract_batch', 'rows', 'limit', 'offset',
+    'max_length', 'time_secs',
 })
 
 

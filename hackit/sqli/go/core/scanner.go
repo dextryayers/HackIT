@@ -59,6 +59,13 @@ func (e *Engine) logPayload(payload string, param string) {
 func (e *Engine) Start() []Result {
 	allResults := []Result{}
 
+	points, err := DiscoverInjectionPoints(e.Opts)
+	if err != nil {
+		e.Log.Warning(fmt.Sprintf("parameter discovery error: %v", err))
+		return []Result{{Parameter: "error", Type: "fatal", Payload: fmt.Sprintf("%v", err), DBMS: "", Confidence: 1.0, Details: "No injectable parameters found"}}
+	}
+	e.Points = points
+
 	u, err := url.Parse(e.Opts.URL)
 	if err != nil {
 		e.Log.Warning(fmt.Sprintf("could not parse target URL '%s'", e.Opts.URL))
@@ -66,10 +73,6 @@ func (e *Engine) Start() []Result {
 	}
 
 	params := u.Query()
-	if len(params) == 0 && e.Opts.Data == "" {
-		e.Log.Warning("no parameters found in URL or POST data")
-		return []Result{{Parameter: "error", Type: "fatal", Payload: "No parameters found in URL or POST data", DBMS: "", Confidence: 1.0, Details: "The target URL has no query parameters and no POST data"}}
-	}
 
 	// ── Connection Phase ──
 	e.Log.Info("testing connection to the target URL")

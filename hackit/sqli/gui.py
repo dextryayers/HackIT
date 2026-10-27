@@ -1,5 +1,5 @@
 """
-HackIT SQLi — V2.1 CYBER
+HackIT SQLi - V2.1 CYBER
 Premium · Animated · Glass-morphism · Real-time streaming
 """
 
@@ -14,7 +14,7 @@ GO_BINARY = SQ_DIR / "go" / "bin" / "worker"
 GO_DIR = SQ_DIR / "go"
 TS = lambda: datetime.now().strftime("%H:%M:%S")
 
-# ── Premium Cyberpunk Palette ──
+# -- Professional Dark Palette --
 BG_DEPTH    = "#050810"
 BG_DARK     = "#0a1020"
 BG_MID      = "#0f1a2a"
@@ -65,9 +65,9 @@ def _rgba(col, alpha):
     return f"#{r:02x}{g:02x}{b:02x}"
 
 
-# ═══════════════════════════════════════════════════════════
+# -------------------------------------------------------------------
 #  ANIMATION: MATRIX RAIN
-# ═══════════════════════════════════════════════════════════
+# -------------------------------------------------------------------
 
 class MatrixRain(tk.Canvas):
     def __init__(self, parent, **kw):
@@ -122,9 +122,9 @@ class MatrixRain(tk.Canvas):
         self._timer = self.after(60, self._tick)
 
 
-# ═══════════════════════════════════════════════════════════
+# -------------------------------------------------------------------
 #  ANIMATION: PULSING GLOW
-# ═══════════════════════════════════════════════════════════
+# -------------------------------------------------------------------
 
 class GlowRing(tk.Canvas):
     def __init__(self, parent, size=40, color=CYAN, **kw):
@@ -179,9 +179,9 @@ class GlowRing(tk.Canvas):
         self._timer = self.after(50, self._tick)
 
 
-# ═══════════════════════════════════════════════════════════
+# -------------------------------------------------------------------
 #  ANIMATED SPINNER
-# ═══════════════════════════════════════════════════════════
+# -------------------------------------------------------------------
 
 class NeonSpinner(tk.Canvas):
     CHARS = ["◜", "◝", "◞", "◟"]
@@ -227,9 +227,9 @@ class NeonSpinner(tk.Canvas):
         self._timer = self.after(100, self._tick)
 
 
-# ═══════════════════════════════════════════════════════════
+# -------------------------------------------------------------------
 #  SCAN PROGRESS BAR
-# ═══════════════════════════════════════════════════════════
+# -------------------------------------------------------------------
 
 class ScanBar(tk.Canvas):
     def __init__(self, parent, height=4, **kw):
@@ -280,9 +280,9 @@ class ScanBar(tk.Canvas):
         self._timer = self.after(50, self._tick)
 
 
-# ═══════════════════════════════════════════════════════════
+# -------------------------------------------------------------------
 #  STREAMING GO ENGINE (unchanged logic)
-# ═══════════════════════════════════════════════════════════
+# -------------------------------------------------------------------
 
 class GoEngine:
     FLAG_MAP = {
@@ -449,9 +449,9 @@ class GoEngine:
         return None
 
 
-# ═══════════════════════════════════════════════════════════
+# -------------------------------------------------------------------
 #  CUSTOM WIDGETS
-# ═══════════════════════════════════════════════════════════
+# -------------------------------------------------------------------
 
 class HoverButton(tk.Canvas):
     def __init__(self, parent, text, command, width=100, height=34,
@@ -551,9 +551,9 @@ class ScrollFrame(tk.Frame):
             w.destroy()
 
 
-# ═══════════════════════════════════════════════════════════
-#  MAIN GUI — V2.1 CYBER
-# ═══════════════════════════════════════════════════════════
+# -------------------------------------------------------------------
+#  MAIN GUI - V2.1 CYBER
+# -------------------------------------------------------------------
 
 class SQLiGUI:
     def __init__(self):
@@ -569,7 +569,7 @@ class SQLiGUI:
 
     def _init_gui(self):
         self.root = tk.Tk()
-        self.root.title("HackIT SQLi v2.1 — CYBER INJECTION CONSOLE")
+        self.root.title("HackIT SQLi v2.1 - CYBER INJECTION CONSOLE")
         self.root.configure(bg=BG_DEPTH)
         # Responsive size: fit screen, default 1200x750
         try:
@@ -582,11 +582,11 @@ class SQLiGUI:
         self.root.geometry(f"{w}x{h}")
         self.root.minsize(max(800, w//2), max(500, h//2))
 
-        # ── State (must be set before signal handlers) ──
+        # -- State (must be set before signal handlers) --
         self._window_open = True
         self._scanning = False
 
-        # ── State ──
+        # -- State --
         self.scan_thread = None
         self.results = []; self.findings = []; self.enums = []
         self.databases = []; self.tables = []; self.columns = []
@@ -661,7 +661,7 @@ class SQLiGUI:
         except tk.TclError:
             pass
 
-    # ═══════════════ UI BUILD ═══════════════
+    # --------------- UI BUILD ---------------
 
     def _build_ui(self):
         for step in ['header', 'sub_bar', 'url_bar', 'notebook', 'status_bar']:
@@ -670,7 +670,7 @@ class SQLiGUI:
             except Exception as e:
                 print(f"[GUI BUILD {step}] {e}", file=sys.stderr)
 
-    # ── HEADER ──
+    # -- HEADER --
 
     def _build_header(self, parent):
         hdr = tk.Frame(parent, bg=BG_MID, height=64)
@@ -729,7 +729,7 @@ class SQLiGUI:
 
         tk.Frame(parent, height=1, bg=BORDER).pack(fill="x")
 
-    # ── SUB BAR (stats) ──
+    # -- SUB BAR (stats) --
 
     def _build_sub_bar(self, parent):
         bar = tk.Frame(parent, bg=BG_DEPTH, height=28)
@@ -762,7 +762,7 @@ class SQLiGUI:
 
         tk.Frame(parent, height=1, bg=BORDER).pack(fill="x")
 
-    # ── URL BAR ──
+    # -- URL BAR --
 
     def _build_url_bar(self, parent):
         bar = tk.Frame(parent, bg=BG_MID, height=52,
@@ -797,7 +797,7 @@ class SQLiGUI:
                                   command=self._stop_scan, state="disabled")
         self.stop_btn.pack(side="left", padx=2)
 
-    # ── NOTEBOOK ──
+    # -- NOTEBOOK --
 
     def _build_notebook(self, parent):
         nf = tk.Frame(parent, bg=BG_DEPTH)
@@ -869,7 +869,7 @@ class SQLiGUI:
         status.pack(side="right", padx=12)
         return c, status
 
-    # ── SCAN TAB ──
+    # -- SCAN TAB --
 
     def _scan_tab(self):
         f = self._tab_frame("🔍", "LIVE SCAN")
@@ -880,18 +880,18 @@ class SQLiGUI:
 
     def _print_banner(self):
         lines = [
-            ("╔══════════════════════════════════════════════════╗\n", "dim"),
-            ("║           H A C K I T   S Q L i   v 2 . 1       ║\n", "cyan"),
-            ("║      2270 Payloads  ·  20 Engines  ·  LIVE      ║\n", "green"),
-            ("║       CYBER INJECTION CONSOLE — Premium Edition  ║\n", "purple"),
-            ("╚══════════════════════════════════════════════════╝\n\n", "dim"),
-            (f"  ⚡ [{TS()}] Engine initialized — verbose streaming ACTIVE\n", "green"),
+            ("+--------------------------------------------------+\n", "dim"),
+            ("|           H A C K I T   S Q L i   v 2 . 1       |\n", "cyan"),
+            ("|      2270 Payloads  ·  20 Engines  ·  LIVE      |\n", "green"),
+            ("|       CYBER INJECTION CONSOLE - Premium Edition  |\n", "purple"),
+            ("+--------------------------------------------------+\n\n", "dim"),
+            (f"  ⚡ [{TS()}] Engine initialized - verbose streaming ACTIVE\n", "green"),
             (f"  ⌨  [{TS()}] Ctrl+R Scan · Ctrl+S/Esc Stop · Ctrl+Q Quit · Terminal Ctrl+C Exit\n\n", "dim"),
         ]
         for line, tag in lines:
             self.scan_output.insert("end", line, tag)
 
-    # ── DATABASES TAB ──
+    # -- DATABASES TAB --
 
     def _databases_tab(self):
         f = self._tab_frame("🗄️", "DATABASES")
@@ -910,11 +910,11 @@ class SQLiGUI:
             [40, 300, 80, 150],
             ["center", "w", "center", "center"])
         self.db_tree.bind("<Double-Button-1>", self._on_db_select)
-        self.db_info = tk.Label(f, text="  🔒 — Scan a target first",
+        self.db_info = tk.Label(f, text="  🔒 - Scan a target first",
                                 font=(FONT, 8), fg="#304050", bg=BG_DEPTH, anchor="w")
         self.db_info.pack(fill="x", padx=14, pady=4)
 
-    # ── TABLES TAB ──
+    # -- TABLES TAB --
 
     def _tables_tab(self):
         f = self._tab_frame("📋", "TABLES")
@@ -924,7 +924,7 @@ class SQLiGUI:
             ("🔄 Refresh", WHITE, self._load_tables),
             ("📋 List All", CYAN, self._list_all_tables),
             ("🔍 Find Interesting", GREEN, self._find_interesting_tables))
-        self.tbl_db_label = tk.Label(h, text="—", font=(FONT, 11, "bold"),
+        self.tbl_db_label = tk.Label(h, text="-", font=(FONT, 11, "bold"),
                                       fg=CYAN, bg=BG_CARD)
         self.tbl_db_label.pack(side="left")
         b = tk.Frame(f, bg=BG_DEPTH)
@@ -934,11 +934,11 @@ class SQLiGUI:
             [40, 300, 80, 120],
             ["center", "w", "center", "center"])
         self.tbl_tree.bind("<Double-Button-1>", self._on_tbl_select)
-        self.tbl_info = tk.Label(f, text="  🔒 — Select a database first",
+        self.tbl_info = tk.Label(f, text="  🔒 - Select a database first",
                                  font=(FONT, 8), fg="#304050", bg=BG_DEPTH, anchor="w")
         self.tbl_info.pack(fill="x", padx=14, pady=4)
 
-    # ── COLUMNS TAB ──
+    # -- COLUMNS TAB --
 
     def _columns_tab(self):
         f = self._tab_frame("📊", "COLUMNS")
@@ -949,12 +949,12 @@ class SQLiGUI:
             ("🔄 Refresh", WHITE, self._load_columns),
             ("🔍 Find Sensitive", ORANGE, self._find_sensitive_cols),
             ("▶ Dump Now", GREEN, lambda: (self.nb.select(4), self._load_dump())))
-        self.col_tbl_val = tk.Label(h, text="—", font=(FONT, 11, "bold"),
+        self.col_tbl_val = tk.Label(h, text="-", font=(FONT, 11, "bold"),
                                      fg=CYAN, bg=BG_CARD)
         self.col_tbl_val.pack(side="left", padx=(0, 2))
         tk.Label(h, text="|  DB:", font=(FONT, 8, "bold"), fg=DIM, bg=BG_CARD
                  ).pack(side="left", padx=(4, 2))
-        self.col_db_val = tk.Label(h, text="—", font=(FONT, 9), fg=DIM, bg=BG_CARD)
+        self.col_db_val = tk.Label(h, text="-", font=(FONT, 9), fg=DIM, bg=BG_CARD)
         self.col_db_val.pack(side="left")
         b = tk.Frame(f, bg=BG_DEPTH)
         b.pack(fill="both", expand=True)
@@ -963,11 +963,11 @@ class SQLiGUI:
             [40, 170, 130, 70, 45, 130, 80],
             ["center", "w", "w", "center", "center", "w", "center"])
         self.col_tree.bind("<Double-Button-1>", self._on_col_select)
-        self.col_info = tk.Label(f, text="  🔒 — Select a table first",
+        self.col_info = tk.Label(f, text="  🔒 - Select a table first",
                                  font=(FONT, 8), fg="#304050", bg=BG_DEPTH, anchor="w")
         self.col_info.pack(fill="x", padx=14, pady=4)
 
-    # ── DUMP TAB ──
+    # -- DUMP TAB --
 
     def _dump_tab(self):
         f = self._tab_frame("💾", "DUMP")
@@ -975,12 +975,12 @@ class SQLiGUI:
         h, _ = self._tree_bar(f,
             [("Table:", (FONT, 8, "bold"), DIM, (10, 2)),
              ("DB:", (FONT, 8, "bold"), DIM, (10, 0))])
-        self.dump_tbl_label = tk.Label(h, text="—", font=(FONT, 11, "bold"),
+        self.dump_tbl_label = tk.Label(h, text="-", font=(FONT, 11, "bold"),
                                         fg=CYAN, bg=BG_CARD)
         self.dump_tbl_label.pack(side="left", padx=(0, 2))
         tk.Label(h, text="|  DB:", font=(FONT, 8, "bold"), fg=DIM, bg=BG_CARD
                  ).pack(side="left", padx=(4, 2))
-        self.dump_db_label = tk.Label(h, text="—", font=(FONT, 9), fg=DIM, bg=BG_CARD)
+        self.dump_db_label = tk.Label(h, text="-", font=(FONT, 9), fg=DIM, bg=BG_CARD)
         self.dump_db_label.pack(side="left")
 
         paned = tk.PanedWindow(f, bg=BG_DEPTH, sashwidth=2,
@@ -1034,11 +1034,11 @@ class SQLiGUI:
                       ("yellow", YELLOW), ("orange", ORANGE)]:
             self.dump_output.tag_configure(t, foreground=c)
         self.dump_output.tag_configure("bold", font=(FONT, 10, "bold"))
-        self.dump_info = tk.Label(f, text="  🔒 — Select a table first",
+        self.dump_info = tk.Label(f, text="  🔒 - Select a table first",
                                   font=(FONT, 8), fg="#304050", bg=BG_DEPTH, anchor="w")
         self.dump_info.pack(fill="x", padx=14, pady=2)
 
-    # ── SENSITIVE TAB ──
+    # -- SENSITIVE TAB --
 
     def _sensitive_tab(self):
         f = self._tab_frame("🔑", "SENSITIVE")
@@ -1050,11 +1050,11 @@ class SQLiGUI:
         cols = ("Risk", "DB", "Table", "Column", "Category", "Sample", "Confidence")
         self.sens_tree = self._make_tree(b, cols,
             [80, 130, 130, 130, 110, 220, 85])
-        self.sens_info = tk.Label(f, text="  🔒 — Scan a target first",
+        self.sens_info = tk.Label(f, text="  🔒 - Scan a target first",
                                   font=(FONT, 8), fg="#304050", bg=BG_DEPTH, anchor="w")
         self.sens_info.pack(fill="x", padx=14, pady=4)
 
-    # ── SCHEMA TAB ──
+    # -- SCHEMA TAB --
 
     def _schema_tab(self):
         f = self._tab_frame("📐", "SCHEMA")
@@ -1064,7 +1064,7 @@ class SQLiGUI:
         self.schema_output = self._make_text_widget(f)
         self.schema_output.pack(fill="both", expand=True)
 
-    # ── STATUS BAR ──
+    # -- STATUS BAR --
 
     def _build_status_bar(self, parent):
         bar = tk.Frame(parent, bg=BG_DEPTH, height=26)
@@ -1094,7 +1094,7 @@ class SQLiGUI:
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
 
-    # ═══════════════ TAB STATE ═══════════════
+    # --------------- TAB STATE ---------------
 
     def _set_tab_state(self, idx, enabled):
         self.tab_states[idx] = enabled
@@ -1112,7 +1112,7 @@ class SQLiGUI:
         if 0 < sel < len(self.tab_states) and not self.tab_states[sel]:
             self.nb.select(0)
 
-    # ═══════════════ LOGGING ═══════════════
+    # --------------- LOGGING ---------------
 
     def _log(self, text, color="dim"):
         tag = color if color in {"green","red","yellow","cyan","dim",
@@ -1211,7 +1211,7 @@ class SQLiGUI:
             with open(path, 'w') as f: f.write('\n'.join(lines))
             self._log(f"💾 CSV saved: {path}", "green")
 
-    # ═══════════════ SCAN FLOW ═══════════════
+    # --------------- SCAN FLOW ---------------
 
     def _clear_all(self):
         self.scan_output.delete(1.0, "end")
@@ -1306,7 +1306,7 @@ class SQLiGUI:
         self._vuln_count = len(self.findings)
 
         if not results:
-            self._log("⚠  Scan finished — no data returned.", "yellow")
+            self._log("⚠  Scan finished - no data returned.", "yellow")
             self._log("   Possible causes: target unreachable, not vulnerable, or blocked.", "dim")
             self._log("   Check the verbose output above for connection errors.", "dim")
         else:
@@ -1315,7 +1315,7 @@ class SQLiGUI:
 
         if self.findings:
             self._log("", "dim")
-            self._log("──  VULNERABILITIES  ──", "bold")
+            self._log("--  VULNERABILITIES  --", "bold")
             for f in self.findings:
                 dbms = f.get('dbms', '?')
                 ptype = f.get('type', '?')
@@ -1345,7 +1345,7 @@ class SQLiGUI:
             self._set_tab_state(5, True)
             self._set_tab_state(6, True)
             self.db_info.config(
-                text=f"  {len(self.databases)} databases — double-click to explore")
+                text=f"  {len(self.databases)} databases - double-click to explore")
         else:
             self._log("No databases enumerated", "yellow")
             self.db_info.config(text="  No databases found")
@@ -1354,7 +1354,7 @@ class SQLiGUI:
         self.count_label.config(
             text=f"{len(self.findings)} vulns | {len(self.databases)} DBs")
         self.info_label.config(
-            text=f"●  Done — {len(self.findings)} vulns, {len(self.databases)} databases")
+            text=f"●  Done - {len(self.findings)} vulns, {len(self.databases)} databases")
         self._show_schema()
 
     def _on_scan_error(self, msg):
@@ -1365,7 +1365,7 @@ class SQLiGUI:
         self.info_label.config(text=f"●  Error: {msg}")
         self._stat_status.config(text="")
 
-    # ═══════════════ DATABASES ═══════════════
+    # --------------- DATABASES ---------------
 
     def _populate_dbs(self):
         self._clear_tree(self.db_tree)
@@ -1389,7 +1389,7 @@ class SQLiGUI:
                 text=f"  Loading tables from {self.selected_db}...")
             self._load_tables()
 
-    # ═══════════════ TABLES ═══════════════
+    # --------------- TABLES ---------------
 
     def _load_tables(self):
         if not self.selected_db or not self.scan_url: return
@@ -1438,7 +1438,7 @@ class SQLiGUI:
         self.tbl_tree.tag_configure("interesting", background="#2a1018")
         self.tbl_loading.config(text="")
         self.tbl_info.config(
-            text=f"  {len(self.tables)} tables — double-click to view columns")
+            text=f"  {len(self.tables)} tables - double-click to view columns")
 
     def _on_tbl_select(self, e):
         sel = self.tbl_tree.selection()
@@ -1457,7 +1457,7 @@ class SQLiGUI:
                 text=f"  Loading columns from {self.selected_db}.{self.selected_table}...")
             self._load_columns()
 
-    # ═══════════════ COLUMNS ═══════════════
+    # --------------- COLUMNS ---------------
 
     def _load_columns(self):
         if not self.selected_db or not self.selected_table or not self.scan_url: return
@@ -1494,12 +1494,12 @@ class SQLiGUI:
         for i, col in enumerate(self.columns):
             tag = "e" if i % 2 == 0 else "o"
             self.col_tree.insert("", "end",
-                values=(i+1, col, "—", "—", "—", "—", ""), tags=(tag,))
+                values=(i+1, col, "-", "-", "-", "-", ""), tags=(tag,))
         self.col_tree.tag_configure("e", background="#080e18")
         self.col_tree.tag_configure("o", background="#0c1420")
         self.col_loading.config(text="")
         self.col_info.config(
-            text=f"  {len(self.columns)} columns — double-click to dump")
+            text=f"  {len(self.columns)} columns - double-click to dump")
         self._build_col_checkboxes()
 
     def _build_col_checkboxes(self):
@@ -1521,7 +1521,7 @@ class SQLiGUI:
         self.nb.select(4)
         self._load_dump()
 
-    # ═══════════════ DUMP ═══════════════
+    # --------------- DUMP ---------------
 
     def _load_dump(self):
         if not self.selected_db or not self.selected_table or not self.scan_url: return
@@ -1530,12 +1530,12 @@ class SQLiGUI:
         self.dump_loading.config(text="dumping...")
         self.dump_output.delete(1.0, "end")
         self.dump_output.insert("end",
-            f"┌─ DUMP REQUEST ─────────────────────────────┐\n", "cyan")
+            f"┌- DUMP REQUEST -----------------------------┐\n", "cyan")
         self.dump_output.insert("end", f"  Columns : {col_str}\n", "green")
         self.dump_output.insert("end",
             f"  Table   : {self.selected_db}.{self.selected_table}\n", "green")
         self.dump_output.insert("end",
-            f"└────────────────────────────────────────────┘\n\n", "cyan")
+            f"└--------------------------------------------┘\n\n", "cyan")
         self.dump_output.insert("end", f"[{TS()}] Dumping data...\n", "dim")
         self.dump_info.config(text=f"  Dumping {col_str}...")
 
@@ -1573,11 +1573,11 @@ class SQLiGUI:
         entries = [r for r in results if r.get('type') == 'dump-table']
         if not entries: entries = results[:100]
         self.dump_output.insert("end",
-            f"┌─ DUMP: {self.selected_db}.{self.selected_table} ─────┐\n", "cyan")
+            f"┌- DUMP: {self.selected_db}.{self.selected_table} -----┐\n", "cyan")
         self.dump_output.insert("end", f"  Columns : {col_str}\n", "green")
         self.dump_output.insert("end", f"  Rows    : {len(entries)}\n", "green")
         self.dump_output.insert("end",
-            f"└──────────────────────────────────────────────────┘\n\n", "cyan")
+            f"└--------------------------------------------------┘\n\n", "cyan")
         for entry in entries:
             payload = entry.get('payload', '')
             details = entry.get('details', '')
@@ -1599,28 +1599,28 @@ class SQLiGUI:
             if details:
                 self.dump_output.insert("end", f"    {details}\n", "dim")
         self.dump_output.insert("end",
-            f"\n[{TS()}] DUMP COMPLETE — {len(entries)} rows\n", "green")
+            f"\n[{TS()}] DUMP COMPLETE - {len(entries)} rows\n", "green")
         self.dump_info.config(
             text=f"  {len(entries)} rows from {self.selected_db}.{self.selected_table}")
 
-    # ═══════════════ SCHEMA ═══════════════
+    # --------------- SCHEMA ---------------
 
     def _show_schema(self):
         self.schema_output.delete(1.0, "end")
         self.schema_output.insert("end",
-            "╔══════════════════════════════════════╗\n", "dim")
+            "+--------------------------------------+\n", "dim")
         self.schema_output.insert("end",
-            "║     DATABASE SCHEMA OVERVIEW        ║\n", "cyan")
+            "|     DATABASE SCHEMA OVERVIEW        |\n", "cyan")
         self.schema_output.insert("end",
-            "╚══════════════════════════════════════╝\n\n", "dim")
+            "+--------------------------------------+\n\n", "dim")
         if not self.databases:
             self.schema_output.insert("end", "  No databases found\n", "yellow"); return
         for db in self.databases:
             self.schema_output.insert("end", f"  📁 {db}\n", "green")
         self.schema_output.insert("end",
-            f"\n  [{TS()}] Schema loaded — {len(self.databases)} databases\n", "dim")
+            f"\n  [{TS()}] Schema loaded - {len(self.databases)} databases\n", "dim")
 
-    # ═══════════════ EXPLORE ═══════════════
+    # --------------- EXPLORE ---------------
 
     def _load_dbs(self):
         if not self.scan_url: return
@@ -1655,7 +1655,7 @@ class SQLiGUI:
 
     def _explore_all_dbs(self):
         if not self.scan_url or not self.databases:
-            self._log("No databases to explore — scan first", "yellow"); return
+            self._log("No databases to explore - scan first", "yellow"); return
         self._log(f"🔎 Exploring ALL {len(self.databases)} databases...", "cyan")
         self._set_busy(True)
 
@@ -1676,7 +1676,7 @@ class SQLiGUI:
         def task():
             for db in self.databases.copy():
                 if self._scanning:
-                    self.root.after(0, lambda d=db: self._log(f"   📁 {d} — exploring...", "dim"))
+                    self.root.after(0, lambda d=db: self._log(f"   📁 {d} - exploring...", "dim"))
                 tbls = explore_one(db)
                 if self._scanning:
                     interesting = [t for t in tbls if any(x in t.lower()
@@ -1685,7 +1685,7 @@ class SQLiGUI:
                                    'employee','person','staff','auth','profile',
                                    'session','password','email','config'])]
                     self.root.after(0, lambda d=db, t=len(tbls), i=len(interesting):
-                        self._log(f"   📁 {d} — {t} tables ({i} interesting)", "green"))
+                        self._log(f"   📁 {d} - {t} tables ({i} interesting)", "green"))
             self.root.after(0, lambda: self._log("✅ Database exploration complete", "green"))
             self.root.after(0, self._set_busy, False)
         threading.Thread(target=task, daemon=True).start()
@@ -1738,7 +1738,7 @@ class SQLiGUI:
         else:
             self._log(f"No sensitive columns found in {self.selected_table}", "dim")
 
-    # ═══════════════ CLOSE ═══════════════
+    # --------------- CLOSE ---------------
 
     def _on_close(self):
         if not self._window_open:
@@ -1777,9 +1777,9 @@ class SQLiGUI:
                 self._safe_close()
 
 
-# ═══════════════════════════════════════════════════════════
+# -------------------------------------------------------------------
 #  SCAN THREAD (unchanged)
-# ═══════════════════════════════════════════════════════════
+# -------------------------------------------------------------------
 
 class ScanThread(threading.Thread):
     def __init__(self, url, opts, on_line=None, on_result=None,
