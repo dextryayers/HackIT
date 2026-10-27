@@ -17,6 +17,7 @@ import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from urllib.parse import urlparse
 
 import requests
 
@@ -220,15 +221,40 @@ def _extract_json(text: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+def _regex_payloads(text: str) -> List[Dict[str, str]]:
+    """Salvage payloads from truncated or slightly malformed model JSON.
+
+    Local models occasionally close a JSON array incorrectly.  The payload
+    values themselves are still readable, so recovering them is better than
+    discarding the whole response.
+    """
+    cleaned = _clean_ai_text(text)
+    results: List[Dict[str, str]] = []
+    pattern = re.compile(r'"payload"\s*:\s*"((?:[^"\\]|\\.)*)"')
+    for match in pattern.finditer(cleaned):
+        raw = match.group(1)
+        try:
+            payload = json.loads(f'"{raw}"')
+        except (ValueError, TypeError):
+            payload = raw
+        payload = str(payload).strip()
+        if not payload or len(payload) > 4096:
+            continue
+        if any(item["payload"] == payload for item in results):
+            continue
+        results.append({"payload": payload, "technique": "ai", "notes": "", "type": ""})
+    return results
+
+
 def _coerce_ai_payloads(text: str) -> List[Dict[str, str]]:
     data = _extract_json(text)
     if not data:
-        return []
+        return _regex_payloads(text)
     items = data.get("payloads") or data.get("payload") or []
     if isinstance(items, dict):
         items = [items]
     if not isinstance(items, list):
-        return []
+        items = []
     result: List[Dict[str, str]] = []
     for item in items:
         if isinstance(item, str):
@@ -245,6 +271,8 @@ def _coerce_ai_payloads(text: str) -> List[Dict[str, str]]:
             "notes": str(item.get("notes", "")).strip(),
             "type": normalize_type(str(item.get("type", "")).strip()),
         })
+    if not result:
+        return _regex_payloads(text)
     return result
 
 
@@ -327,7 +355,8 @@ def generate(vuln_type: str, context: str = "", count: int = 12,
             caller, ai_provider, ai_model = _resolve_ai(ai_call)
             provider = provider or ai_provider
             model = model or ai_model
-            request_count = max(3, min(count, 12))
+            local_cap = 6 if provider == "ollama" else 12
+            request_count = max(3, min(count, local_cap))
             prompt = (
                 f"Vulnerability class: {vuln_type}\n"
                 f"Target/context: {context or 'generic web application'}\n"
@@ -339,7 +368,10 @@ def generate(vuln_type: str, context: str = "", count: int = 12,
             if ai_items:
                 for item in ai_items:
                     item.pop("type", None)
-                items = _dedupe(ai_items + curated)
+                # Keep proven curated payloads in the result even when the
+                # model returns a full set; AI additions follow them.
+                half = max(1, count // 2)
+                items = _dedupe(curated[:half] + ai_items + curated[half:])
                 source = "ai+curated" if curated else "ai"
             else:
                 ai_error = _ai_error_message(text, parsing_failed=True)
@@ -396,12 +428,16 @@ def generate_multi(types: Iterable[str], context: str = "", count: int = 8,
             caller, ai_provider, ai_model = _resolve_ai(ai_call)
             provider = provider or ai_provider
             model = model or ai_model
-            per_type = max(2, min(count // 2 + 2, 8))
+            # Keep the request small enough for local models: a handful of
+            # classes with two payloads each is more useful than a response
+            # that gets truncated before the JSON closes.
+            per_type = 3 if len(normalized) <= 3 else 2
+            compact_context = (context or "generic web application")[:4000]
             prompt = (
                 "Generate authorised proof-of-concept payloads for these vulnerability classes:\n"
                 + ", ".join(normalized)
-                + f"\nTarget/context: {context or 'generic web application'}\n"
-                + f"Return up to {per_type} payloads per class. "
+                + f"\nTarget/context: {compact_context}\n"
+                + f"Return exactly {per_type} payloads per class. "
                 + "Every item MUST include a `type` field exactly matching one of the classes above. "
                 + "Respond with ONLY the JSON object described in the system prompt."
             )
@@ -418,7 +454,10 @@ def generate_multi(types: Iterable[str], context: str = "", count: int = 8,
                     if not extra:
                         continue
                     curated = results[vuln_type]["payloads"]
-                    results[vuln_type]["payloads"] = _dedupe(extra + curated)[:count]
+                    half = max(1, count // 2)
+                    results[vuln_type]["payloads"] = _dedupe(
+                        curated[:half] + extra + curated[half:]
+                    )[:count]
                     results[vuln_type]["source"] = "ai+curated" if curated else "ai"
             else:
                 ai_error = _ai_error_message(text, parsing_failed=True)
@@ -460,6 +499,11 @@ def render_markdown(results: Dict[str, Any]) -> str:
                 lines.append(f"**Context:** {data['context']}")
             if data.get("source"):
                 lines.append(f"**Source:** {data['source']}")
+            if data.get("provider") or data.get("model"):
+                lines.append(
+                    f"**Provider:** {data.get('provider') or 'auto'} "
+                    f" / **Model:** {data.get('model') or 'auto'}"
+                )
             if data.get("ai_error"):
                 lines.append(f"**AI note:** {data['ai_error']}")
             lines.append("")
@@ -517,12 +561,24 @@ class ProbeResult:
         }
 
 
-def _baseline(target: str, parameter: str, timeout: float) -> Tuple[int, str]:
+def _baseline(target: str, parameter: str, timeout: float) -> Dict[str, Any]:
     try:
-        response = requests.get(target, timeout=timeout)
-        return response.status_code, response.text[:200000]
+        response = requests.get(target, timeout=timeout, allow_redirects=True)
+        return {
+            "status": response.status_code,
+            "body": response.text[:200000],
+            "url": response.url,
+            "content_type": response.headers.get("Content-Type", ""),
+        }
     except Exception:
-        return 0, ""
+        return {"status": 0, "body": "", "url": target, "content_type": ""}
+
+
+def _url_host(value: str) -> str:
+    try:
+        return (urlparse(value).hostname or "").lower()
+    except ValueError:
+        return ""
 
 
 def probe(target: str, vuln_type: str, payload: str, parameter: str = "",
@@ -531,7 +587,11 @@ def probe(target: str, vuln_type: str, payload: str, parameter: str = "",
     """Send one payload and compare the response with a baseline."""
     vuln_type = normalize_type(vuln_type)
     headers = headers or {}
-    baseline_status, baseline_body = _baseline(target, parameter, timeout)
+    baseline = _baseline(target, parameter, timeout)
+    baseline_status = int(baseline.get("status", 0))
+    baseline_body = str(baseline.get("body", ""))
+    baseline_url = str(baseline.get("url", target))
+    baseline_lower = baseline_body.lower()
 
     url = target
     data = None
@@ -548,6 +608,7 @@ def probe(target: str, vuln_type: str, payload: str, parameter: str = "",
         )
         elapsed_ms = int((time.time() - started) * 1000)
         body = response.text[:200000]
+        content_type = response.headers.get("Content-Type", "").lower()
     except Exception as exc:  # noqa: BLE001
         return ProbeResult(
             target=target, parameter=parameter, payload=payload, vulnerable=False,
@@ -557,7 +618,8 @@ def probe(target: str, vuln_type: str, payload: str, parameter: str = "",
     reflected = payload in body
     signature = ""
     for marker in ERROR_SIGNATURES.get(vuln_type, []):
-        if marker.lower() in body.lower():
+        # A signature that is already present in the baseline is not evidence.
+        if marker.lower() in body.lower() and marker.lower() not in baseline_lower:
             signature = marker
             break
 
@@ -565,26 +627,38 @@ def probe(target: str, vuln_type: str, payload: str, parameter: str = "",
     delay_signal = time_based and elapsed_ms >= 4500
     status_signal = response.status_code >= 500 and baseline_status < 500
     length_delta = abs(len(body) - len(baseline_body))
-    length_signal = baseline_body and length_delta > max(512, len(baseline_body) * 0.35)
-    redirect_signal = vuln_type == "open_redirect" and response.url != target and response.url != url
+    length_signal = bool(baseline_body) and length_delta > max(512, len(baseline_body) * 0.35)
+    redirect_signal = (
+        vuln_type == "open_redirect"
+        and response.url != baseline_url
+        and _url_host(response.url) not in ("", _url_host(target))
+    )
+    reflection_signal = (
+        reflected
+        and vuln_type in ("xss", "ssti", "crlf")
+        and ("html" in content_type or not content_type)
+    )
 
     signals = []
-    if reflected:
-        signals.append("payload reflected")
+    if reflection_signal:
+        signals.append("payload reflected unescaped in HTML")
     if signature:
-        signals.append(f"error signature '{signature}'")
+        signals.append(f"new error signature '{signature}'")
     if delay_signal:
         signals.append(f"time delay {elapsed_ms}ms")
     if status_signal:
         signals.append(f"status {baseline_status}->{response.status_code}")
-    if length_signal and not reflected:
+    if length_signal and not reflection_signal:
         signals.append(f"response length delta {length_delta}")
     if redirect_signal:
-        signals.append(f"redirected to {response.url}")
+        signals.append(f"redirected off-host to {response.url}")
 
-    vulnerable = bool(signals) and (
-        reflected or signature or delay_signal or status_signal or redirect_signal
-    )
+    # Only a concrete, reproducible indicator is allowed to make a finding.
+    strong = bool(signature or delay_signal or redirect_signal or reflection_signal)
+    if vuln_type in ("sqli", "nosqli", "ldap", "xxe", "lfi", "cmdi") and status_signal:
+        # A 500 alone is ambiguous; it only supports an existing signature.
+        strong = bool(signature or delay_signal)
+    vulnerable = strong
     evidence = "; ".join(signals) if signals else "no differential signal"
     return ProbeResult(
         target=target,

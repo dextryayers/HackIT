@@ -171,12 +171,29 @@ class GoBridge:
                 return data
         return {"error": f"invalid JSON: {stdout[:300]}"}
 
+    @staticmethod
+    def _ai_timeout(provider: str, cfg: Dict[str, Any]) -> int:
+        """Provider-aware request timeout, matching ``AIHyperBrain``."""
+        env_value = (os.environ.get("HACKIT_AI_TIMEOUT") or "").strip()
+        if env_value:
+            try:
+                return max(10, int(env_value))
+            except ValueError:
+                pass
+        try:
+            value = int(cfg.get("ai_timeout", 120) or 120)
+        except (TypeError, ValueError):
+            value = 120
+        if provider == "ollama":
+            value = max(value, 300)
+        return max(10, value)
+
     def ai_chat(self, prompt: str, mode: str = "", provider: str = "",
                 api_key: str = "", model: str = "") -> str:
         if not self.ai_engine:
             return "[!] AI engine not found; run hackit/agent/go/build.sh"
 
-        _cfg, provider, api_key, model = self._provider_state(provider, api_key, model)
+        cfg, provider, api_key, model = self._provider_state(provider, api_key, model)
         if not api_key and provider != "ollama":
             return "[!] No API key configured"
 
@@ -188,14 +205,16 @@ class GoBridge:
             if extension:
                 system += "\n" + extension
 
+        timeout = self._ai_timeout(provider, cfg)
         cmd = [self.ai_engine, "-provider", provider, "-key", api_key or "",
-               "-prompt", prompt, "-system", system, "-no-history"]
+               "-prompt", prompt, "-system", system, "-no-history",
+               "-timeout", str(timeout)]
         if model:
             cmd.extend(["-model", model])
         if mode:
             cmd.extend(["-mode", mode])
 
-        data = self._run_engine(cmd)
+        data = self._run_engine(cmd, timeout=timeout + 15)
         if data.get("error"):
             return f"[!] AI Error: {data['error']}"
         return data.get("text", "[!] No response text")
@@ -204,16 +223,18 @@ class GoBridge:
         if not self.ai_engine:
             return "[!] AI engine not found; run hackit/agent/go/build.sh"
 
-        _cfg, provider, api_key, model = self._provider_state()
+        cfg, provider, api_key, model = self._provider_state()
         if not api_key and provider != "ollama":
             return "[!] No API key configured"
 
+        timeout = self._ai_timeout(provider, cfg)
         cmd = [self.ai_engine, "-provider", provider, "-key", api_key or "",
-               "-prompt", scan_data, "-tool", tool_name, "-analyze", "-no-history"]
+               "-prompt", scan_data, "-tool", tool_name, "-analyze", "-no-history",
+               "-timeout", str(timeout)]
         if model:
             cmd.extend(["-model", model])
 
-        data = self._run_engine(cmd)
+        data = self._run_engine(cmd, timeout=timeout + 15)
         if data.get("error"):
             return f"[!] AI Error: {data['error']}"
         return data.get("text", "[!] No response text")
