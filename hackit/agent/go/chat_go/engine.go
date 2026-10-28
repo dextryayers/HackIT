@@ -168,7 +168,7 @@ func callProvider(client *http.Client, provider, key, prompt, system, model stri
 }
 
 func streamProvider(client *http.Client, provider, key, prompt, system, model string,
-	hist []Message, emit func(string) error) (string, error) {
+	hist []Message, emit func(kind, text string) error) (string, error) {
 	switch provider {
 	case "gemini":
 		return streamGemini(client, key, prompt, system, model, hist, emit)

@@ -85,12 +85,19 @@ class PentestState(TypedDict):
     report_error: str
     messages: List[Dict[str, str]]
     cancelled: bool
+    authorized: bool
+    coverage: Dict[str, Any]
+    attack_log: List[Dict[str, Any]]
 
 
-def make_initial_state(target: str, scope: str = "active_stealth") -> PentestState:
+def make_initial_state(target: str, scope: str = "active_stealth",
+                       authorized: bool = False) -> PentestState:
     return {
         "target": target,
         "scope": scope,
+        "authorized": bool(authorized),
+        "coverage": {},
+        "attack_log": [],
         "phase": Phase.INIT.value,
         "findings": [],
         "scan_data": {},

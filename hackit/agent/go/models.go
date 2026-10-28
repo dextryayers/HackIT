@@ -15,12 +15,14 @@ type AIResponse struct {
 
 type TokenEvent struct {
 	Token string `json:"token,omitempty"`
+	Kind  string `json:"kind,omitempty"` // answer | thinking
 	Done  bool   `json:"done,omitempty"`
 	Error string `json:"error,omitempty"`
 }
 
 type GeminiPart struct {
-	Text string `json:"text"`
+	Text    string `json:"text"`
+	Thought bool   `json:"thought,omitempty"`
 }
 
 type GeminiContent struct {
@@ -65,12 +67,13 @@ type ClaudeRequest struct {
 }
 
 type OllamaRequest struct {
-	Model    string                 `json:"model"`
-	Messages []Message              `json:"messages"`
-	Stream   bool                   `json:"stream"`
-	Format   string                 `json:"format,omitempty"`
-	Think    *bool                  `json:"think,omitempty"`
-	Options  map[string]interface{} `json:"options,omitempty"`
+	Model     string                 `json:"model"`
+	Messages  []Message              `json:"messages"`
+	Stream    bool                   `json:"stream"`
+	Format    string                 `json:"format,omitempty"`
+	Think     *bool                  `json:"think,omitempty"`
+	KeepAlive string                 `json:"keep_alive,omitempty"`
+	Options   map[string]interface{} `json:"options,omitempty"`
 }
 
 type OllamaResponse struct {

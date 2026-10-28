@@ -178,8 +178,14 @@ def _run_sequential(initial: PentestState, progress: ProgressCallback = None) ->
 
 def run_pentest(target: str, scope: str = "active_stealth", resume: bool = False,
                 progress: ProgressCallback = None,
-                cancel_event: Optional[threading.Event] = None) -> PentestState:
-    """Run the complete recon -> OSINT -> scan -> payload -> attack -> report flow."""
+                cancel_event: Optional[threading.Event] = None,
+                authorized: bool = False) -> PentestState:
+    """Run the complete recon -> OSINT -> scan -> payload -> attack -> report flow.
+
+    ``authorized=True`` enables active module execution and payload
+    verification.  Callers must only set it for targets they own or have
+    explicit written permission to test.
+    """
     target = (target or "").strip()
     if not target:
         raise ValueError("target is required")
@@ -187,11 +193,15 @@ def run_pentest(target: str, scope: str = "active_stealth", resume: bool = False
     initial: PentestState
     if resume:
         saved = load_latest_state(target)
-        initial = saved or make_initial_state(target, scope)  # type: ignore[assignment]
+        initial = saved or make_initial_state(target, scope, authorized)  # type: ignore[assignment]
         if saved:
+            initial["authorized"] = bool(authorized or initial.get("authorized"))
             _emit(progress, "resume", f"resuming from phase {saved.get('phase', 'init')}")
     else:
-        initial = make_initial_state(target, scope)
+        initial = make_initial_state(target, scope, authorized)
+
+    if authorized:
+        _emit(progress, "workflow", "active mode enabled: authorized modules and payload probes")
 
     set_cancel_event(cancel_event)
     try:

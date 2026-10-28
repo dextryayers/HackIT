@@ -20,11 +20,14 @@ func emitJSON(value interface{}) {
 	fmt.Println(string(data))
 }
 
-func emitToken(token string) error {
+func emitToken(kind, token string) error {
 	if token == "" {
 		return nil
 	}
-	emitJSON(TokenEvent{Token: token})
+	if kind == "" {
+		kind = "answer"
+	}
+	emitJSON(TokenEvent{Token: token, Kind: kind})
 	return nil
 }
 
@@ -51,10 +54,12 @@ func main() {
 	timeoutSec := flag.Int("timeout", 300, "Request timeout in seconds")
 	jsonMode := flag.Bool("json", false, "Request JSON-formatted output (Ollama format=json)")
 	maxTokens := flag.Int("max-tokens", 0, "Maximum response tokens (0 = provider default)")
+	thinkMode := flag.String("think", "auto", "Ollama reasoning mode: auto|on|off")
 	flag.Parse()
 
 	maxTokensSetting = *maxTokens
 	jsonModeSetting = *jsonMode
+	thinkModeSetting = *thinkMode
 
 	history := NewHistoryManager()
 	if *clearHist {
@@ -154,10 +159,12 @@ func main() {
 			response, lastErr = streamProvider(
 				client, candidate, key, finalPrompt, finalSystem, candidateModel,
 				historyData,
-				func(token string) error {
-					emitted++
-					builder.WriteString(token)
-					return emitToken(token)
+				func(kind, token string) error {
+					if kind == "" || kind == "answer" {
+						emitted++
+						builder.WriteString(token)
+					}
+					return emitToken(kind, token)
 				},
 			)
 			if response == "" && builder.Len() > 0 {

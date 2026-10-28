@@ -51,8 +51,10 @@ from prompt_toolkit.layout import (
     VSplit,
     Window,
 )
+from prompt_toolkit.layout.margins import ScrollbarMargin
 from prompt_toolkit.layout.menus import CompletionsMenu
 from prompt_toolkit.layout.controls import UIContent, UIControl
+from prompt_toolkit.mouse_events import MouseEventType
 from prompt_toolkit.styles import Style
 from prompt_toolkit.widgets import Frame, TextArea
 
@@ -162,6 +164,14 @@ def _plain_markup(value: str) -> str:
     return value.strip()
 
 
+def _tail(value: str, limit: int) -> str:
+    """Keep the newest part of a long streaming preview."""
+    value = str(value or "")
+    if limit <= 0 or len(value) <= limit:
+        return value
+    return "…\n" + value[-limit:]
+
+
 class _TuiStatus:
     """Small status handle compatible with ``console.status(...)`` usage."""
 
@@ -186,19 +196,47 @@ class _TranscriptControl(UIControl):
 
     def __init__(self, ui: "TuiMixin"):
         self.ui = ui
-        self._cache_key: Optional[int] = None
+        self._frozen_value = ""
+        self._frozen_lines: List[Any] = [[]]
+        self._live_value = ""
+        self._live_lines: List[Any] = [[]]
         self._lines: List[Any] = [[]]
+
+    def _split(self, value: str) -> List[Any]:
+        if not value:
+            return []
+        fragments = ANSI(value).__pt_formatted_text__()
+        return list(split_lines(fragments))
 
     def create_content(self, width: int, height: Optional[int]) -> UIContent:
         with self.ui._render_lock:
-            revision = self.ui._transcript_revision
-            value = self.ui._frozen_ansi + self.ui._live_ansi
+            frozen = self.ui._frozen_ansi
+            live = self.ui._live_ansi
             follow = self.ui._follow_output
             manual_y = self.ui._manual_y
-        if revision != self._cache_key:
-            fragments = ANSI(value).__pt_formatted_text__()
-            self._lines = list(split_lines(fragments)) or [[]]
-            self._cache_key = revision
+
+        # Parse frozen and live output independently.  Streaming only changes
+        # the live string, so the expensive frozen transcript is parsed once
+        # per append instead of once per token.
+        if frozen != self._frozen_value:
+            self._frozen_lines = self._split(frozen)
+            self._frozen_value = frozen
+        if live != self._live_value:
+            self._live_lines = self._split(live)
+            self._live_value = live
+
+        frozen_lines = self._frozen_lines
+        live_lines = self._live_lines
+        if (
+            frozen and not frozen.endswith("\n") and frozen_lines and live_lines
+        ):
+            merged_last = list(frozen_lines[-1]) + list(live_lines[0])
+            self._lines = frozen_lines[:-1] + [merged_last] + live_lines[1:]
+        else:
+            self._lines = frozen_lines + live_lines
+        if not self._lines:
+            self._lines = [[]]
+
         total = len(self._lines)
         if follow:
             y = total - 1
@@ -217,6 +255,15 @@ class _TranscriptControl(UIControl):
             show_cursor=False,
             cursor_position=Point(x=0, y=y),
         )
+
+    def mouse_handler(self, mouse_event) -> Any:  # noqa: ANN001
+        if mouse_event.event_type == MouseEventType.SCROLL_UP:
+            self.ui._scroll_transcript(-3)
+            return None
+        if mouse_event.event_type == MouseEventType.SCROLL_DOWN:
+            self.ui._scroll_transcript(3)
+            return None
+        return NotImplemented
 
 
 # ---------------------------------------------------------------------------
@@ -307,6 +354,22 @@ def build_key_bindings(ui: Optional["TuiMixin"] = None, tui: bool = True) -> Key
         def _page_down(event) -> None:  # noqa: ANN001
             ui._scroll_transcript(8)
 
+        @kb.add("c-up", eager=True)
+        def _scroll_up(event) -> None:  # noqa: ANN001
+            ui._scroll_transcript(-3)
+
+        @kb.add("c-down", eager=True)
+        def _scroll_down(event) -> None:  # noqa: ANN001
+            ui._scroll_transcript(3)
+
+        @kb.add("c-end", eager=True)
+        def _scroll_bottom(event) -> None:  # noqa: ANN001
+            ui._scroll_to_bottom()
+
+        @kb.add("c-home", eager=True)
+        def _scroll_top(event) -> None:  # noqa: ANN001
+            ui._scroll_to_top()
+
     return kb
 
 
@@ -337,6 +400,7 @@ class TuiMixin:
         self._session_tokens = 0
         self._started_at = time.time()
         self._transcript_window: Optional[Window] = None
+        self._transcript_control: Optional[_TranscriptControl] = None
         self._input: Optional[TextArea] = None
         self._header_control: Optional[FormattedTextControl] = None
         self._sidebar_control: Optional[FormattedTextControl] = None
@@ -377,7 +441,7 @@ class TuiMixin:
             key_bindings=build_key_bindings(self, tui=True),
             style=TUI_STYLE,
             full_screen=True,
-            mouse_support=False,
+            mouse_support=True,
             refresh_interval=0.1,
         )
         self._tui_welcome()
@@ -456,11 +520,13 @@ class TuiMixin:
             dont_extend_height=True,
         )
 
+        self._transcript_control = _TranscriptControl(self)
         self._transcript_window = Window(
-            _TranscriptControl(self),
+            self._transcript_control,
             wrap_lines=True,
             style="class:transcript",
             always_hide_cursor=True,
+            right_margins=[ScrollbarMargin(display_arrows=True)],
         )
 
         self._sidebar_control = FormattedTextControl(self._sidebar_text)
@@ -695,6 +761,8 @@ class TuiMixin:
                 (f"bg:{PANEL} {SLATE}", "run / accept\n"),
                 (f"bg:{PANEL} {AMBER}", " PgUp/Dn  "),
                 (f"bg:{PANEL} {SLATE}", "scroll chat\n"),
+                (f"bg:{PANEL} {AMBER}", " wheel    "),
+                (f"bg:{PANEL} {SLATE}", "scroll transcript\n"),
                 (f"bg:{PANEL} {AMBER}", " Ctrl+C   "),
                 (f"bg:{PANEL} {SLATE}", "cancel / exit\n"),
                 (f"bg:{PANEL} {AMBER}", " Ctrl+D   "),
@@ -975,16 +1043,33 @@ class TuiMixin:
             self._transcript_revision += 1
         self._invalidate()
 
-    def _scroll_transcript(self, delta: int) -> None:
+    def _transcript_line_count(self) -> int:
+        control = self._transcript_control
+        if control is not None and control._lines:
+            return max(1, len(control._lines))
         with self._render_lock:
             value = self._frozen_ansi + self._live_ansi
-        total = value.count("\n")
+        return max(1, value.count("\n") + 1)
+
+    def _scroll_transcript(self, delta: int) -> None:
+        total = self._transcript_line_count()
         if self._follow_output:
+            # Leave the live tail and move into the frozen transcript.
             self._manual_y = max(0, total - 4)
             self._follow_output = False
-        self._manual_y = max(0, min(self._manual_y + delta, total))
-        if self._manual_y >= total:
+        self._manual_y = max(0, min(self._manual_y + delta, total - 1))
+        if self._manual_y >= total - 1:
             self._follow_output = True
+        self._invalidate()
+
+    def _scroll_to_bottom(self) -> None:
+        self._follow_output = True
+        self._manual_y = max(0, self._transcript_line_count() - 1)
+        self._invalidate()
+
+    def _scroll_to_top(self) -> None:
+        self._follow_output = False
+        self._manual_y = 0
         self._invalidate()
 
     def _invalidate(self) -> None:
@@ -1093,19 +1178,22 @@ class TuiMixin:
         )
 
         started = time.time()
-        thinking = ""
-        answer = ""
+        thinking_parts: List[str] = []
+        answer_parts: List[str] = []
         token_count = 0
         splitter = _ReasoningSplitter()
         last_render = [0.0]
+        pending: List[Tuple[str, str]] = []
+        last_flush = [0.0]
 
         def render_live(force: bool = False) -> None:
             now = time.monotonic()
-            if not force and now - last_render[0] < 0.065:
+            if not force and now - last_render[0] < 0.1:
                 return
             last_render[0] = now
             blocks: List[Any] = []
-            visible_thinking = thinking.strip("\n")
+            visible_thinking = _tail("".join(thinking_parts).strip("\n"), 6000)
+            visible_answer = _tail("".join(answer_parts), 12000)
             if visible_thinking:
                 blocks.append(
                     Panel(
@@ -1117,10 +1205,10 @@ class TuiMixin:
                         padding=(0, 1),
                     )
                 )
-            if answer:
+            if visible_answer:
                 blocks.append(
                     Panel(
-                        Text(answer, style=TEXT),
+                        Text(visible_answer, style=TEXT),
                         title=Text(" HACKIT ", style=f"bold {self.accent}"),
                         title_align="left",
                         border_style=self.accent,
@@ -1133,24 +1221,42 @@ class TuiMixin:
             self._set_live(blocks, force=force)
 
         def consume(events: List[Tuple[str, str]]) -> None:
-            nonlocal thinking, answer, token_count
+            nonlocal token_count
             for kind, text in events:
                 text = strip_control(text)
                 if not text:
                     continue
                 token_count += len(text)
                 if kind == "thinking":
-                    thinking += text
+                    thinking_parts.append(text)
                     self._status_message = "thinking"
                 else:
-                    answer += text
+                    answer_parts.append(text)
                     self._status_message = "responding"
             render_live()
 
+        def flush_pending() -> None:
+            if not pending:
+                return
+            events = list(pending)
+            pending.clear()
+            last_flush[0] = time.monotonic()
+            consume(events)
+
         def on_token(event: Dict[str, Any]) -> None:
             token = event.get("token", "")
-            if token:
-                consume(splitter.feed(token))
+            if not token:
+                return
+            kind = str(event.get("kind") or "")
+            if kind in ("thinking", "answer"):
+                pending.append((kind, token))
+            else:
+                # Older engine builds do not send a kind; recover reasoning
+                # tags from the text stream instead.
+                pending.extend(splitter.feed(token))
+            now = time.monotonic()
+            if len(pending) >= 24 or now - last_flush[0] >= 0.05:
+                flush_pending()
 
         try:
             result = self.brain.stream_chat(prompt, on_token=on_token)
@@ -1192,21 +1298,25 @@ class TuiMixin:
             self._status_message = "cancelled"
             return ""
 
+        flush_pending()
         consume(splitter.flush())
-        if not answer and result:
-            answer = strip_control(result)
-        if not thinking and not answer:
+        thinking_text = "".join(thinking_parts).strip("\n")
+        answer_text = "".join(answer_parts).strip()
+        if not answer_text and result:
+            answer_text = strip_control(result).strip()
+        if not thinking_text and not answer_text:
             self._clear_live()
             self.print(Text("Model returned no final answer.", style=AMBER))
             self._status_message = "empty"
             return result or ""
 
-        render_live(force=True)
+        # The live panel already showed the stream; clear it and render the
+        # final panels once instead of re-rendering and then duplicating them.
         self._clear_live()
-        if thinking.strip("\n"):
+        if thinking_text:
             self.print(
                 Panel(
-                    Text(thinking.strip("\n"), style=f"italic {SLATE}"),
+                    Text(thinking_text, style=f"italic {SLATE}"),
                     title=Text(" THINKING ", style=f"bold {SLATE_DIM}"),
                     title_align="left",
                     border_style=SLATE_DIM,
@@ -1214,11 +1324,11 @@ class TuiMixin:
                     padding=(0, 1),
                 )
             )
-        if answer:
-            if answer.strip().startswith("[!]"):
+        if answer_text:
+            if answer_text.startswith("[!]"):
                 self.print(
                     Panel(
-                        Text(_strip_ansi(answer), style=RED),
+                        Text(_strip_ansi(answer_text), style=RED),
                         title=Text(" ERROR ", style=f"bold {RED}"),
                         border_style=RED,
                         box=box.ROUNDED,
@@ -1228,7 +1338,7 @@ class TuiMixin:
             else:
                 self.print(
                     Panel(
-                        Markdown(answer),
+                        Markdown(answer_text),
                         title=Text(" HACKIT ", style=f"bold {self.accent}"),
                         title_align="left",
                         border_style=self.accent,
@@ -1245,7 +1355,7 @@ class TuiMixin:
             )
         )
         self._status_message = "ready"
-        return result
+        return result or answer_text
 
 
 # ---------------------------------------------------------------------------

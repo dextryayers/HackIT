@@ -522,7 +522,12 @@ class AgentUI:
 
         def on_token(event: Dict[str, Any]) -> None:
             token = event.get("token", "")
-            if token:
+            if not token:
+                return
+            kind = str(event.get("kind") or "")
+            if kind in ("thinking", "answer"):
+                process_events([(kind, token)])
+            else:
                 process_events(splitter.feed(token))
 
         try:
@@ -986,6 +991,21 @@ class AgentUI:
             self.print("[yellow]Usage: /auto <target>[/yellow]")
             return
         self.target = target
+        self.print(
+            Panel(
+                Text.from_markup(
+                    "[bold]ACTIVE MODE[/bold]\n"
+                    "Autopilot will run attack modules against discovered endpoints "
+                    "and verify generated payloads with differential probes.\n"
+                    "[yellow]Only test targets you own or have explicit written "
+                    "permission to test.[/yellow]"
+                ),
+                title=Text(" AUTHORIZED ", style="bold #020617 on #f59e0b"),
+                border_style="#f59e0b",
+                box=box.ROUNDED,
+                padding=(0, 1),
+            )
+        )
         self.begin_operation("AUTONOMOUS PENTEST", str(target))
         try:
             from .workflow import NODE_SEQUENCE, run_pentest
@@ -1017,7 +1037,7 @@ class AgentUI:
 
             state = run_pentest(
                 target, scope="active_stealth", progress=progress,
-                cancel_event=cancel_event,
+                cancel_event=cancel_event, authorized=True,
             )
             cancelled = bool(
                 (state.get("cancelled") if isinstance(state, dict) else False)
@@ -1032,6 +1052,61 @@ class AgentUI:
             findings = state.get("findings", []) if isinstance(state, dict) else []
             report_path = state.get("report_path") if isinstance(state, dict) else ""
             risk = state.get("risk_score", 0.0) if isinstance(state, dict) else 0.0
+            coverage = state.get("coverage", {}) if isinstance(state, dict) else {}
+            attack_log = state.get("attack_log", []) if isinstance(state, dict) else []
+            analysis = state.get("analysis", "") if isinstance(state, dict) else ""
+
+            if coverage:
+                coverage_table = Table(
+                    title="ACTIVE COVERAGE",
+                    box=box.SIMPLE_HEAVY,
+                    title_justify="left",
+                    pad_edge=False,
+                )
+                coverage_table.add_column("Metric", style="dim", no_wrap=True)
+                coverage_table.add_column("Value", overflow="fold")
+                modules = ", ".join(str(item) for item in coverage.get("execute_modules", [])) or "—"
+                targets = coverage.get("execute_targets", []) or []
+                probe_targets = coverage.get("probe_targets", []) or []
+                probe_types = coverage.get("probe_types", []) or []
+                parameters = coverage.get("parameters", []) or []
+                coverage_table.add_row("authorized", "yes" if state.get("authorized") else "no")
+                coverage_table.add_row(
+                    "module tasks",
+                    f"{coverage.get('execute_tasks', 0)} across {len(targets)} target(s)",
+                )
+                coverage_table.add_row("modules", modules)
+                coverage_table.add_row(
+                    "endpoints",
+                    f"{len(coverage.get('endpoints', []) or [])} discovered",
+                )
+                coverage_table.add_row(
+                    "parameters",
+                    ", ".join(str(item) for item in parameters[:12]) or "—",
+                )
+                coverage_table.add_row(
+                    "payload probes",
+                    f"{coverage.get('probe_attempted', 0)} across "
+                    f"{len(probe_targets)} target(s), {len(probe_types)} type(s)",
+                )
+                coverage_table.add_row("probe signals", str(coverage.get("probe_signals", 0)))
+                coverage_table.add_row("attack log", f"{len(attack_log)} action(s)")
+                self.print(coverage_table)
+
+            if analysis:
+                excerpt = strip_control(str(analysis)).strip()
+                if len(excerpt) > 1800:
+                    excerpt = "…\n" + excerpt[-1800:]
+                self.print(
+                    Panel(
+                        Text(excerpt, style="#e2e8f0"),
+                        title=Text(" ANALYSIS ", style="bold #22d3ee"),
+                        title_align="left",
+                        border_style="#1e293b",
+                        box=box.ROUNDED,
+                        padding=(0, 1),
+                    )
+                )
 
             table = None
             if findings:
@@ -1070,7 +1145,10 @@ class AgentUI:
                     table.caption_justify = "left"
 
             self.end_operation(
-                f"Pipeline complete · {len(findings)} finding(s) · risk {risk}/10",
+                f"Pipeline complete · {len(findings)} finding(s) · risk {risk}/10 · "
+                f"{coverage.get('execute_tasks', 0)} module task(s) · "
+                f"{coverage.get('probe_attempted', 0)} payload probe(s) · "
+                f"{coverage.get('probe_signals', 0)} probe signal(s)",
                 table,
             )
             if report_path:

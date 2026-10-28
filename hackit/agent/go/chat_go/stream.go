@@ -322,7 +322,9 @@ func streamClaude(client *http.Client, key, prompt, system, model string,
 			var event struct {
 				Type  string `json:"type"`
 				Delta struct {
-					Text string `json:"text"`
+					Type     string `json:"type"`
+					Text     string `json:"text"`
+					Thinking string `json:"thinking"`
 				} `json:"delta"`
 				Error *struct{ Message string `json:"message"` } `json:"error"`
 			}
@@ -332,11 +334,17 @@ func streamClaude(client *http.Client, key, prompt, system, model string,
 			if event.Type == "error" && event.Error != nil {
 				return fmt.Errorf("%s", event.Error.Message)
 			}
+			if event.Delta.Type == "thinking_delta" && event.Delta.Thinking != "" {
+				if err := emit("thinking", event.Delta.Thinking); err != nil {
+					return io.EOF
+				}
+				return nil
+			}
 			if event.Delta.Text == "" {
 				return nil
 			}
 			builder.WriteString(event.Delta.Text)
-			if err := emit(event.Delta.Text); err != nil {
+			if err := emit("answer", event.Delta.Text); err != nil {
 				return io.EOF
 			}
 			return nil
@@ -370,8 +378,13 @@ func streamOllama(client *http.Client, key, prompt, system, model string,
 
 	reqBody := OllamaRequest{
 		Model: model, Stream: true,
-		Options: map[string]interface{}{"temperature": 0.7},
-		Think:   ollamaThinkOption(),
+		Options:   ollamaOptions(),
+		Think:     ollamaThinkOption(model),
+		KeepAlive: ollamaKeepAlive(),
+	}
+	if maxTokensSetting == 0 {
+		// Local models can otherwise generate unbounded reasoning tokens.
+		reqBody.Options["num_predict"] = requestMaxTokens(4096)
 	}
 	if system != "" {
 		reqBody.Messages = append(reqBody.Messages, Message{Role: "system", Content: system})
@@ -408,9 +421,14 @@ func streamOllama(client *http.Client, key, prompt, system, model string,
 		if chunk.Error != "" {
 			return fmt.Errorf("%s", chunk.Error)
 		}
+		if chunk.Message.Thinking != "" {
+			if err := emit("thinking", chunk.Message.Thinking); err != nil {
+				return io.EOF
+			}
+		}
 		if chunk.Message.Content != "" {
 			builder.WriteString(chunk.Message.Content)
-			if err := emit(chunk.Message.Content); err != nil {
+			if err := emit("answer", chunk.Message.Content); err != nil {
 				return io.EOF
 			}
 		}

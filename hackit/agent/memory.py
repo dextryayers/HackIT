@@ -26,6 +26,36 @@ MEMORY_DIR = os.path.join(os.path.expanduser("~"), ".hackit", "agent_memory")
 MAX_WINDOW = 16
 MAX_CONTEXT_CHARS = 6000
 
+# Benchmark/self-test strings that polluted real chat sessions during
+# development.  They must never be loaded, persisted or replayed.
+_STALE_TEST_TOKENS = (
+    "HACKIT_UI_OK",
+    "INLINE_TEST_OK",
+    "STREAM_OK",
+    "HACKIT_CHAT_OK",
+    "HACKIT_OK",
+    "HACKIT_TEST_OK",
+    "TEST_OK",
+)
+
+
+def _is_test_artifact(content: str) -> bool:
+    """Return True for canned self-test prompts and replies."""
+    text = str(content or "").strip()
+    if not text:
+        return False
+    compact = re.sub(r"[\s`*_\"'.:;!-]+", "", text).upper()
+    for token in _STALE_TEST_TOKENS:
+        token_compact = re.sub(r"[\s`*_\"'.:;!-]+", "", token).upper()
+        if compact == token_compact:
+            return True
+        if compact.startswith(token_compact) and len(compact) <= len(token_compact) + 4:
+            return True
+    lowered = text.lower()
+    if "reply with exactly" in lowered and len(text) <= 200:
+        return True
+    return False
+
 _LANGCHAIN_AVAILABLE = False
 _LANGCHAIN_ERROR = ""
 _LANGCHAIN_IMPL = ""
@@ -178,8 +208,12 @@ class AgentMemory:
                 )
                 for item in data.get("messages", [])
                 if item.get("role") and item.get("content")
+                and not _is_test_artifact(str(item.get("content", "")))
             ][-self.window * 2:]
-            self._facts = [str(fact) for fact in data.get("facts", []) if fact][-64:]
+            self._facts = [
+                str(fact) for fact in data.get("facts", [])
+                if fact and not _is_test_artifact(str(fact))
+            ][-64:]
         except (OSError, ValueError, TypeError):
             self._entries = []
             self._facts = []
@@ -216,7 +250,7 @@ class AgentMemory:
 
     def _append(self, role: str, content: str) -> None:
         content = (content or "").strip()
-        if not content:
+        if not content or _is_test_artifact(content):
             return
         self._entries.append(MemoryEntry(role=role, content=content))
         # Keep a bounded window (user+assistant pairs).
@@ -235,7 +269,9 @@ class AgentMemory:
 
     def remember(self, fact: str) -> None:
         fact = (fact or "").strip()
-        if fact and fact not in self._facts:
+        if not fact or _is_test_artifact(fact):
+            return
+        if fact not in self._facts:
             self._facts.append(fact)
             self._facts = self._facts[-64:]
 
@@ -347,6 +383,21 @@ class AgentMemory:
             self.remember(str(fact))
         self.save()
         return count
+
+    def sanitize(self) -> int:
+        """Drop stale self-test artifacts and rewrite the session file.
+
+        ``_load`` already filters artifacts in memory; this method also
+        rewrites the on-disk file so old strings cannot come back.
+        """
+        before = len(self._entries) + len(self._facts)
+        self._entries = [
+            entry for entry in self._entries if not _is_test_artifact(entry.content)
+        ]
+        self._facts = [fact for fact in self._facts if not _is_test_artifact(fact)]
+        removed = before - len(self._entries) - len(self._facts)
+        self.save()
+        return removed
 
 
 def memory_session_name(engine: str = "chat", target: str = "") -> str:
