@@ -9,6 +9,7 @@ updates.
 from __future__ import annotations
 
 import os
+import threading
 import time
 from typing import Any, Callable, Dict, Optional
 
@@ -28,6 +29,7 @@ from .state import (
     load_latest_state,
     make_initial_state,
 )
+from .tools import set_cancel_event, workflow_cancelled
 from .nodes import (
     analyze_node,
     correlate_node,
@@ -89,6 +91,8 @@ def _emit(progress: ProgressCallback, phase: str, message: str) -> None:
 def _wrap_node(name: str, node: Callable[[PentestState], Dict[str, Any]],
                progress: ProgressCallback):
     def runner(state: PentestState) -> Dict[str, Any]:
+        if workflow_cancelled():
+            return {"error": "cancelled", "cancelled": True}
         _emit(progress, name, f"starting {name}")
         started = time.time()
         try:
@@ -101,6 +105,8 @@ def _wrap_node(name: str, node: Callable[[PentestState], Dict[str, Any]],
                 "phase": state.get("phase", Phase.INIT.value),
             }
             _emit(progress, name, f"error: {exc}")
+        if update.get("error") == "cancelled" or workflow_cancelled():
+            update["cancelled"] = True
         elapsed = time.time() - started
         findings = update.get("findings", state.get("findings", []))
         count = len(findings) if isinstance(findings, list) else 0
@@ -155,16 +161,24 @@ def build_graph(progress: ProgressCallback = None):
 def _run_sequential(initial: PentestState, progress: ProgressCallback = None) -> PentestState:
     state: PentestState = dict(initial)  # type: ignore[assignment]
     for name, node in NODE_SEQUENCE:
+        if workflow_cancelled():
+            state["cancelled"] = True
+            _emit(progress, "workflow", "cancelled")
+            break
         runner = _wrap_node(name, node, progress)
         update = runner(state)
         merged: Dict[str, Any] = dict(state)
         merged.update(update or {})
         state = merged  # type: ignore[assignment]
+        if state.get("cancelled"):
+            _emit(progress, "workflow", "cancelled")
+            break
     return state
 
 
 def run_pentest(target: str, scope: str = "active_stealth", resume: bool = False,
-                progress: ProgressCallback = None) -> PentestState:
+                progress: ProgressCallback = None,
+                cancel_event: Optional[threading.Event] = None) -> PentestState:
     """Run the complete recon -> OSINT -> scan -> payload -> attack -> report flow."""
     target = (target or "").strip()
     if not target:
@@ -179,15 +193,19 @@ def run_pentest(target: str, scope: str = "active_stealth", resume: bool = False
     else:
         initial = make_initial_state(target, scope)
 
-    if LANGGRAPH_AVAILABLE:
-        try:
-            graph = build_graph(progress=progress)
-            result = graph.invoke(initial)
-            return result  # type: ignore[return-value]
-        except Exception as exc:  # noqa: BLE001 - degrade to built-in runner
-            _emit(progress, "workflow", f"LangGraph unavailable ({exc}); using built-in runner")
+    set_cancel_event(cancel_event)
+    try:
+        if LANGGRAPH_AVAILABLE:
+            try:
+                graph = build_graph(progress=progress)
+                result = graph.invoke(initial)
+                return result  # type: ignore[return-value]
+            except Exception as exc:  # noqa: BLE001 - degrade to built-in runner
+                _emit(progress, "workflow", f"LangGraph unavailable ({exc}); using built-in runner")
 
-    return _run_sequential(initial, progress=progress)
+        return _run_sequential(initial, progress=progress)
+    finally:
+        set_cancel_event(None)
 
 
 def workflow_engine() -> str:

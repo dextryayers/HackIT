@@ -84,6 +84,7 @@ class PentestState(TypedDict):
     correlation_error: str
     report_error: str
     messages: List[Dict[str, str]]
+    cancelled: bool
 
 
 def make_initial_state(target: str, scope: str = "active_stealth") -> PentestState:
@@ -106,6 +107,7 @@ def make_initial_state(target: str, scope: str = "active_stealth") -> PentestSta
         "correlation_error": "",
         "report_error": "",
         "messages": [],
+        "cancelled": False,
     }
 
 

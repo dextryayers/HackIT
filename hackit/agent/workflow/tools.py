@@ -5,10 +5,31 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from ..textutils import strip_control
+
+_CANCEL_LOCK = threading.Lock()
+_CANCEL_EVENT: Optional[threading.Event] = None
+
+
+def set_cancel_event(event: Optional[threading.Event]) -> None:
+    """Install the event that aborts workflow subprocesses."""
+    global _CANCEL_EVENT
+    with _CANCEL_LOCK:
+        _CANCEL_EVENT = event
+
+
+def active_cancel_event() -> Optional[threading.Event]:
+    with _CANCEL_LOCK:
+        return _CANCEL_EVENT
+
+
+def workflow_cancelled() -> bool:
+    event = active_cancel_event()
+    return bool(event is not None and event.is_set())
 
 
 class GoBridge:
@@ -35,6 +56,39 @@ class GoBridge:
             if path and os.path.exists(path):
                 return path
         return None
+
+    @staticmethod
+    def _run_capture(cmd: List[str], timeout: int) -> Tuple[str, str, str]:
+        """Run a subprocess while honouring the workflow cancellation event.
+
+        Returns ``(stdout, stderr, error)``.  ``error`` is either ``""``,
+        ``"cancelled"`` or a timeout message.  ``communicate`` is polled so a
+        cancelled pipeline stops the live binary instead of waiting for it.
+        """
+        if workflow_cancelled():
+            return "", "", "cancelled"
+
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                stdout, stderr = proc.communicate(timeout=0.2)
+                return stdout or "", stderr or "", ""
+            except subprocess.TimeoutExpired:
+                if workflow_cancelled():
+                    proc.terminate()
+                    try:
+                        proc.communicate(timeout=1.5)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                        proc.communicate()
+                    return "", "", "cancelled"
+                if time.monotonic() >= deadline:
+                    proc.kill()
+                    stdout, stderr = proc.communicate()
+                    return stdout or "", stderr or "", f"timeout ({timeout}s)"
 
     # ------------------------------------------------------------------
     # Native modules
@@ -90,15 +144,13 @@ class GoBridge:
             }]
 
         try:
-            proc = subprocess.run(
-                [binary] + args, capture_output=True, text=True, timeout=timeout,
-            )
-            if not proc.stdout.strip():
-                detail = (proc.stderr or "").strip()[:400]
+            stdout, stderr, error = self._run_capture([binary] + args, timeout)
+            if error:
+                return [{"module": "worker", "success": False, "error": error}]
+            if not stdout.strip():
+                detail = (stderr or "").strip()[:400]
                 return [{"module": "worker", "success": False, "error": detail or "empty output"}]
-            return self._parse_payload(proc.stdout)
-        except subprocess.TimeoutExpired:
-            return [{"module": "worker", "success": False, "error": f"timeout ({timeout}s)"}]
+            return self._parse_payload(stdout)
         except Exception as exc:  # noqa: BLE001
             return [{"module": "worker", "success": False, "error": str(exc)}]
 
@@ -125,12 +177,12 @@ class GoBridge:
             args.append("--report")
 
         try:
-            proc = subprocess.run(
-                [self.hative_bin] + args, capture_output=True, text=True, timeout=timeout,
+            stdout, _stderr, error = self._run_capture(
+                [self.hative_bin] + args, timeout,
             )
-            return self._parse_payload(proc.stdout)
-        except subprocess.TimeoutExpired:
-            return [{"module": "hative", "success": False, "error": f"timeout ({timeout}s)"}]
+            if error:
+                return [{"module": "hative", "success": False, "error": error}]
+            return self._parse_payload(stdout)
         except Exception as exc:  # noqa: BLE001
             return [{"module": "hative", "success": False, "error": str(exc)}]
 
@@ -151,15 +203,18 @@ class GoBridge:
 
     def _run_engine(self, cmd: List[str], timeout: int = 120) -> Dict[str, Any]:
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-        except subprocess.TimeoutExpired:
-            return {"error": f"AI engine timeout ({timeout}s)"}
+            stdout, stderr, error = self._run_capture(cmd, timeout)
         except Exception as exc:  # noqa: BLE001
             return {"error": f"bridge error: {exc}"}
 
-        stdout = strip_control(proc.stdout or "").strip()
+        if error == "cancelled":
+            return {"error": "cancelled"}
+        if error:
+            return {"error": f"AI engine {error}"}
+
+        stdout = strip_control(stdout or "").strip()
         if not stdout:
-            stderr = strip_control(proc.stderr or "").strip()
+            stderr = strip_control(stderr or "").strip()
             return {"error": stderr[:500] or "AI engine returned empty output"}
 
         candidates = [stdout]

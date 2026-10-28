@@ -14,11 +14,9 @@ import html
 import json
 import os
 import re
-import shutil
 import sys
 import time
 import traceback
-from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
 try:
@@ -454,7 +452,9 @@ class AgentUI:
                 history=FileHistory(history_file),
                 completer=completer,
                 complete_while_typing=True,
-                complete_style=CompleteStyle.READLINE_LIKE,
+                # READLINE_LIKE only prints matches on Tab; COLUMN renders the
+                # palette dropdown as the user types a slash command.
+                complete_style=CompleteStyle.COLUMN,
                 bottom_toolbar=self._bottom_toolbar,
                 enable_history_search=True,
                 multiline=False,
@@ -902,7 +902,29 @@ class AgentUI:
             from hackit.osint.core import run_full_scan
 
             def on_step(phase: str, message: str) -> None:
-                self.operation_event(str(phase), str(message), status="run")
+                phase = str(phase).lower()
+                message = str(message)
+                if phase == "tick":
+                    # ``platform [status]|checked|total`` – keep one live row
+                    # instead of appending a new line for every probe.
+                    label = message
+                    pct = None
+                    parts = message.split("|")
+                    if len(parts) >= 3:
+                        label = parts[0]
+                        try:
+                            checked, total = int(parts[1]), int(parts[2])
+                            pct = int(checked / max(1, total) * 100)
+                            label = f"{label} · {checked}/{total}"
+                        except ValueError:
+                            pass
+                    self.operation_event(
+                        "sweep", label, status="run", pct=pct, module="sweep",
+                    )
+                elif phase in ("warn", "note"):
+                    self.operation_event(phase, message, status="log")
+                else:
+                    self.operation_event(phase, message, status="run")
 
             data = run_full_scan(
                 query, timeout=8, workers=24, verbose=False,
@@ -966,12 +988,47 @@ class AgentUI:
         self.target = target
         self.begin_operation("AUTONOMOUS PENTEST", str(target))
         try:
-            from .workflow import run_pentest
+            from .workflow import NODE_SEQUENCE, run_pentest
+
+            phase_order = [name for name, _node in NODE_SEQUENCE]
+            phase_total = max(1, len(phase_order))
 
             def progress(phase: str, message: str) -> None:
-                self.operation_event(str(phase), str(message), status="run")
+                phase = str(phase)
+                message = str(message)
+                status = "run"
+                pct = None
+                if phase in phase_order:
+                    index = phase_order.index(phase)
+                    starting = message.startswith("starting ")
+                    if not starting:
+                        status = "done"
+                    pct = int((index + (0 if starting else 1)) / phase_total * 100)
+                elif phase == "workflow":
+                    status = "log"
+                elif message.startswith("error:"):
+                    status = "error"
+                self.operation_event(phase, message, status=status, pct=pct)
 
-            state = run_pentest(target, scope="active_stealth", progress=progress)
+            cancel_event = None
+            if self.brain is not None:
+                self.brain.reset_cancel()
+                cancel_event = self.brain.cancel_event
+
+            state = run_pentest(
+                target, scope="active_stealth", progress=progress,
+                cancel_event=cancel_event,
+            )
+            cancelled = bool(
+                (state.get("cancelled") if isinstance(state, dict) else False)
+                or getattr(self.brain, "cancelled", False)
+            )
+            if cancelled:
+                self.end_operation(
+                    "Pipeline cancelled. Running tool processes were stopped.",
+                    status="cancelled",
+                )
+                return
             findings = state.get("findings", []) if isinstance(state, dict) else []
             report_path = state.get("report_path") if isinstance(state, dict) else ""
             risk = state.get("risk_score", 0.0) if isinstance(state, dict) else 0.0

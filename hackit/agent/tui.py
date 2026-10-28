@@ -16,7 +16,6 @@ Design rules
 from __future__ import annotations
 
 import contextlib
-import html
 import io
 import os
 import re
@@ -39,7 +38,7 @@ from prompt_toolkit import Application
 from prompt_toolkit.application import get_app
 from prompt_toolkit.data_structures import Point
 from prompt_toolkit.filters import Condition, has_completions
-from prompt_toolkit.formatted_text import ANSI, FormattedText, HTML
+from prompt_toolkit.formatted_text import ANSI, FormattedText, HTML, split_lines
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout import (
@@ -53,6 +52,7 @@ from prompt_toolkit.layout import (
     Window,
 )
 from prompt_toolkit.layout.menus import CompletionsMenu
+from prompt_toolkit.layout.controls import UIContent, UIControl
 from prompt_toolkit.styles import Style
 from prompt_toolkit.widgets import Frame, TextArea
 
@@ -175,6 +175,50 @@ class _TuiStatus:
         self.ui._invalidate()
 
 
+class _TranscriptControl(UIControl):
+    """Atomic ANSI transcript renderer.
+
+    Content and cursor are snapshotted together.  Using a separate
+    ``get_cursor_position`` callback is racy while a worker thread streams new
+    output, because the content can shrink between the two reads and
+    prompt_toolkit then indexes past the fragment list.
+    """
+
+    def __init__(self, ui: "TuiMixin"):
+        self.ui = ui
+        self._cache_key: Optional[int] = None
+        self._lines: List[Any] = [[]]
+
+    def create_content(self, width: int, height: Optional[int]) -> UIContent:
+        with self.ui._render_lock:
+            revision = self.ui._transcript_revision
+            value = self.ui._frozen_ansi + self.ui._live_ansi
+            follow = self.ui._follow_output
+            manual_y = self.ui._manual_y
+        if revision != self._cache_key:
+            fragments = ANSI(value).__pt_formatted_text__()
+            self._lines = list(split_lines(fragments)) or [[]]
+            self._cache_key = revision
+        total = len(self._lines)
+        if follow:
+            y = total - 1
+        else:
+            y = max(0, min(manual_y, total - 1))
+
+        def get_line(index: int) -> Any:
+            try:
+                return self._lines[index]
+            except IndexError:
+                return []
+
+        return UIContent(
+            get_line=get_line,
+            line_count=total,
+            show_cursor=False,
+            cursor_position=Point(x=0, y=y),
+        )
+
+
 # ---------------------------------------------------------------------------
 # Key bindings shared by the TUI and the inline prompt
 # ---------------------------------------------------------------------------
@@ -287,6 +331,7 @@ class TuiMixin:
         self._live_renderers: List[Callable[[Console], None]] = []
         self._live_ansi = ""
         self._last_live_render = 0.0
+        self._transcript_revision = 0
         self._status_message = "ready"
         self._spinner_index = 0
         self._session_tokens = 0
@@ -412,11 +457,7 @@ class TuiMixin:
         )
 
         self._transcript_window = Window(
-            FormattedTextControl(
-                self._transcript_text,
-                show_cursor=False,
-                get_cursor_position=self._transcript_cursor,
-            ),
+            _TranscriptControl(self),
             wrap_lines=True,
             style="class:transcript",
             always_hide_cursor=True,
@@ -467,13 +508,11 @@ class TuiMixin:
             dont_extend_height=True,
         )
 
-        body = VSplit(
-            [
-                self._transcript_window,
-                Window(width=1, char="│", style="class:rule"),
-                sidebar,
-            ]
+        divider = ConditionalContainer(
+            content=Window(width=1, char="│", style="class:rule"),
+            filter=Condition(self._sidebar_enabled),
         )
+        body = VSplit([self._transcript_window, divider, sidebar])
         root = HSplit(
             [
                 header,
@@ -484,11 +523,12 @@ class TuiMixin:
                 status,
             ]
         )
+        columns, _rows = shutil.get_terminal_size((100, 30))
         floats = [
             Float(
                 bottom=5,
                 left=2,
-                width=82,
+                width=max(40, min(82, columns - 6)),
                 content=ConditionalContainer(
                     content=Frame(
                         CompletionsMenu(
@@ -834,6 +874,12 @@ class TuiMixin:
     ) -> None:
         operation = self._operation or {}
         elapsed = int(time.time() - float(operation.get("started", time.time())))
+        if status == "ok":
+            # Progress callbacks do not always emit a terminal event; a
+            # successful operation means every remaining row finished.
+            for row in operation.get("rows", {}).values():
+                if row.get("status") in ("run", "retry"):
+                    row["status"] = "done"
         done, errors, running = self._operation_counts()
         color = {"ok": GREEN, "error": RED, "cancelled": AMBER}.get(status, GREEN)
         label = {"ok": " COMPLETE ", "error": " FAILED ", "cancelled": " CANCELLED "}.get(
@@ -881,7 +927,6 @@ class TuiMixin:
             color_system="truecolor",
             width=max(20, int(width)),
             highlight=False,
-            soft_wrap=True,
             legacy_windows=False,
         )
         for render in renderers:
@@ -904,6 +949,7 @@ class TuiMixin:
             width = self._ensure_width()
             self._block_renderers.append(render)
             self._frozen_ansi += self._render_to_ansi([render], width)
+            self._transcript_revision += 1
         self._invalidate()
 
     def _set_live(self, renderables: List[Any], force: bool = False) -> None:
@@ -919,25 +965,15 @@ class TuiMixin:
             self._live_ansi = (
                 self._render_to_ansi(renderers, self._content_width()) if renderers else ""
             )
+            self._transcript_revision += 1
         self._invalidate()
 
     def _clear_live(self) -> None:
         with self._render_lock:
             self._live_renderers = []
             self._live_ansi = ""
+            self._transcript_revision += 1
         self._invalidate()
-
-    def _transcript_text(self) -> ANSI:
-        with self._render_lock:
-            value = self._frozen_ansi + self._live_ansi
-        return ANSI(value)
-
-    def _transcript_cursor(self) -> Point:
-        with self._render_lock:
-            value = self._frozen_ansi + self._live_ansi
-        total = value.count("\n")
-        y = total if self._follow_output else max(0, min(self._manual_y, total))
-        return Point(x=0, y=y)
 
     def _scroll_transcript(self, delta: int) -> None:
         with self._render_lock:
@@ -983,6 +1019,7 @@ class TuiMixin:
             self._frozen_width = 0
             self._live_renderers = []
             self._live_ansi = ""
+            self._transcript_revision += 1
         self._follow_output = True
         self._manual_y = 0
         self._invalidate()
@@ -1068,10 +1105,11 @@ class TuiMixin:
                 return
             last_render[0] = now
             blocks: List[Any] = []
-            if thinking:
+            visible_thinking = thinking.strip("\n")
+            if visible_thinking:
                 blocks.append(
                     Panel(
-                        Text(thinking, style=f"italic {SLATE}"),
+                        Text(visible_thinking, style=f"italic {SLATE}"),
                         title=Text(" THINKING ", style=f"bold {SLATE_DIM}"),
                         title_align="left",
                         border_style=SLATE_DIM,
@@ -1165,10 +1203,10 @@ class TuiMixin:
 
         render_live(force=True)
         self._clear_live()
-        if thinking:
+        if thinking.strip("\n"):
             self.print(
                 Panel(
-                    Text(thinking, style=f"italic {SLATE}"),
+                    Text(thinking.strip("\n"), style=f"italic {SLATE}"),
                     title=Text(" THINKING ", style=f"bold {SLATE_DIM}"),
                     title_align="left",
                     border_style=SLATE_DIM,

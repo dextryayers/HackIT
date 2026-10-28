@@ -526,6 +526,11 @@ class AIHyperBrain:
     def cancelled(self) -> bool:
         return self._cancel_event.is_set()
 
+    @property
+    def cancel_event(self) -> threading.Event:
+        """Shared event for cooperative cancellation (workflow, tools)."""
+        return self._cancel_event
+
     def stream_chat(self, prompt: str, on_token: Optional[Callable[[Dict[str, Any]], None]] = None) -> str:
         prompt = strip_control(prompt)
         self.reset_cancel()

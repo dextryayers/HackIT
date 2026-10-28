@@ -195,18 +195,27 @@ track of the current engagement across commands and terminal restarts.
 
 ## Chat UI
 
-`hackit agent chat` uses Rich for rendering and prompt_toolkit for input,
-completion and persistent history. It provides:
+`hackit agent chat` and `hackit agent autopilot` open a full-screen terminal UI
+built with prompt_toolkit and Rich. It provides:
 
+* a live transcript with separate `THINKING` and `HACKIT` answer panels, so
+  reasoning never mixes with the final response,
+* a framed composer and navigable `/` command palette (`Up`/`Down` selects,
+  `Enter` accepts, `Tab` completes, `Esc` closes; `Ctrl+P` opens it),
+* a session sidebar with provider, model, memory, target and workflow engine,
+* structured `SCAN`, `OSINT` and `AUTONOMOUS PENTEST` panels with per-module
+  status, progress, findings tables and final summaries instead of raw logs,
 * real token streaming from the Go engines (SSE for OpenAI-compatible, Gemini
   and Claude; NDJSON for Ollama),
-* a live status panel for provider, model, target and findings,
-* tab completion for commands and targets,
-* Markdown rendering with a plain-text fallback,
-* graceful cancellation with `Ctrl+C`.
+* one accent colour per mode, Markdown rendering and a plain-text fallback,
+* `Ctrl+C` cancellation of generation and running scan/pipeline subprocesses;
+  partial streamed output is discarded.
 
-If prompt_toolkit is not installed the UI falls back to standard `input()`
-without losing any functionality.
+The full-screen renderer requires a TTY, a non-dumb `TERM`, at least 72 columns
+and 18 rows, plus prompt_toolkit and Rich. Otherwise, or when
+`HACKIT_INLINE=1` is set, the same commands run in the inline renderer. If
+prompt_toolkit itself is missing, input falls back to standard `input()` without
+losing any functionality.
 
 ---
 
@@ -219,7 +228,8 @@ hackit/agent/
 ├── providers.py       provider registry, keys, models, doctor
 ├── payloads.py        curated + AI payload forging and probing
 ├── memory.py          LangChain-optional conversation memory
-├── interactive.py     Rich/prompt_toolkit Chat and Autopilot UIs
+├── interactive.py     command controller, inline UI and UI selection
+├── tui.py             full-screen prompt_toolkit renderer and palette
 ├── dashboard.py       real-time swarm TUI
 ├── workflow/
 │   ├── __init__.py    LangGraph or built-in sequential runner
