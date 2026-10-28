@@ -13,12 +13,19 @@ import (
 )
 
 type Result struct {
-	Parameter  string  `json:"parameter"`
-	Type       string  `json:"type"`
-	Payload    string  `json:"payload"`
-	DBMS       string  `json:"dbms"`
-	Details    string  `json:"details"`
-	Confidence float64 `json:"confidence"`
+	Parameter   string     `json:"parameter"`
+	Type        string     `json:"type"`
+	Payload     string     `json:"payload"`
+	DBMS        string     `json:"dbms"`
+	Details     string     `json:"details"`
+	Confidence  float64    `json:"confidence"`
+	Location    string     `json:"location,omitempty"`
+	Technique   string     `json:"technique,omitempty"`
+	Prefix      string     `json:"prefix,omitempty"`
+	Suffix      string     `json:"suffix,omitempty"`
+	Columns     int        `json:"columns,omitempty"`
+	ColumnNames []string   `json:"column_names,omitempty"`
+	Rows        [][]string `json:"rows,omitempty"`
 }
 
 func (e *Engine) logInfo(msg string) {
