@@ -92,11 +92,11 @@ func (x *Explorer) Run() []Result {
 		out = append(out, x.search(opts.Search)...)
 	}
 
-	if opts.ListTables || opts.DumpAll || opts.DumpTable != "" || opts.Schema || opts.Table != "" {
+	if opts.ListTables || opts.DumpAll || opts.Schema {
 		out = append(out, x.listTables()...)
 	}
 
-	if opts.ListColumns || opts.DumpAll || opts.DumpTable != "" || opts.ColumnsCSV != "" {
+	if opts.ListColumns || opts.DumpAll {
 		out = append(out, x.listColumns()...)
 	}
 

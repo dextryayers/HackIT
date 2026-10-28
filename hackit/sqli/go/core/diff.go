@@ -104,7 +104,7 @@ func (e *Engine) CompareResponses(base *ResponseSignature, test *ResponseSignatu
 
 	if base.Title != test.Title {
 		r.IsDifferent = true
-		r.Reason = fmt.Sprintf("title changed: '%s' → '%s'", base.Title, test.Title)
+		r.Reason = fmt.Sprintf("title changed: '%s' -> '%s'", base.Title, test.Title)
 		return r
 	}
 

@@ -24,7 +24,7 @@ class PrivilegeEscalation:
     def __init__(self, request_func: Callable = None):
         self.request = request_func
 
-    # ── Privilege Enumeration ─────────────────────────────────────
+    # -- Privilege Enumeration -------------------------------------
 
     def enumerate_privileges(self, dbms: str) -> Dict[str, List[str]]:
         """Enumerate current user privileges"""
@@ -95,7 +95,7 @@ class PrivilegeEscalation:
                 results[key] = [f"Error: {e}"]
         return results
 
-    # ── Escalation Paths ─────────────────────────────────────────
+    # -- Escalation Paths -----------------------------------------
 
     def find_escalation_paths(self, privs: Dict[str, List[str]],
                                dbms: str) -> List[PrivEscResult]:
@@ -219,7 +219,7 @@ class PrivilegeEscalation:
 
         return paths
 
-    # ── Automated Escalation ────────────────────────────────────
+    # -- Automated Escalation ------------------------------------
 
     def automated_escalation(self, dbms: str) -> List[PrivEscResult]:
         """Automatically enumerate and attempt escalation"""
@@ -244,7 +244,7 @@ class PrivilegeEscalation:
 
         return paths
 
-    # ── Helper ────────────────────────────────────────────────────
+    # -- Helper ----------------------------------------------------
 
     def _extract_values(self, response: str) -> List[str]:
         values = []

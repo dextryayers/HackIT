@@ -180,7 +180,7 @@ func (en *Enumerator) ListDatabases(vulnParam string, dbms string) ([]string, er
 	en.Engine.GetLogger().Info(fmt.Sprintf("Enumerating databases for %s...", dbms))
 	var databases []string
 
-	// Phase 1: Try GROUP_CONCAT/aggregate (fastest — single request)
+	// Phase 1: Try GROUP_CONCAT/aggregate (fastest - single request)
 	dbs := en.tryAggregateDatabases(vulnParam, dbms)
 	for _, db := range dbs {
 		if !contains(databases, db) && db != "" {
@@ -217,7 +217,7 @@ func (en *Enumerator) ListDatabases(vulnParam string, dbms string) ([]string, er
 		}
 	}
 
-	// Phase 5: Fallback — common names if nothing found
+	// Phase 5: Fallback - common names if nothing found
 	if len(databases) == 0 {
 		en.Engine.GetLogger().Warning("No databases found through injection, trying common names...")
 		common := en.tryCommonDBNames(vulnParam, dbms)

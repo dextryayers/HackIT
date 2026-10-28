@@ -1,5 +1,5 @@
 """
-SQLi Advanced Scan Engine — Multi-target parallel scanning with correlation analysis.
+SQLi Advanced Scan Engine - Multi-target parallel scanning with correlation analysis.
 """
 import json
 import sys
@@ -199,13 +199,13 @@ def deep_scan_single(
         return {"error": "Go engine not available"}
 
     _console.print(f"\n[bold cyan]Deep Scan:[/] {url}")
-    _console.print("[dim]Progressive escalation: risk 1 → 3 → 5[/dim]\n")
+    _console.print("[dim]Progressive escalation: risk 1 -> 3 -> 5[/dim]\n")
 
     all_vulns = []
     all_enums = []
 
     for risk in ([1, 3, 5] if risk_escalate else [5]):
-        _console.print(f"[yellow]─ Risk level {risk}/5 ─[/]")
+        _console.print(f"[yellow]- Risk level {risk}/5 -[/]")
         results = engine.run(url=url, risk_level=risk, timeout=timeout,
                              fingerprint=True, list_dbs=(risk >= 3), dump_all=(risk >= 5))
         if isinstance(results, dict):

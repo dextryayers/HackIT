@@ -1,5 +1,5 @@
 """
-SQLi WAF Bypass Engine — Payload obfuscation and WAF evasion techniques.
+SQLi WAF Bypass Engine - Payload obfuscation and WAF evasion techniques.
 """
 import random
 import base64

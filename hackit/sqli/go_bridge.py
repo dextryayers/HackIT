@@ -15,7 +15,7 @@ GO_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'go')
 BINARY_NAME = f'worker{".exe" if platform.system() == "Windows" else ""}'
 BINARY_PATH = os.path.join(GO_DIR, 'bin', BINARY_NAME)
 
-# Shared flag map: Python kwarg → Go CLI flag
+# Shared flag map: Python kwarg -> Go CLI flag
 FLAG_MAP = {
     'database': '--db',
     'columns': '--column',
@@ -216,10 +216,13 @@ class GoEngine:
         except Exception:
             return False
 
-    def run(self, url: str, timeout: int = 300, **kwargs) -> List[Dict[str, Any]]:
+    def run(self, url: str, timeout: int = 300, request_timeout: int = None,
+            **kwargs) -> List[Dict[str, Any]]:
         if not self.ensure_compiled():
             return [{"error": "Failed to compile Go engine"}]
 
+        if request_timeout is not None:
+            kwargs["timeout"] = request_timeout
         args = build_args(url, verbose_lvl=0, **kwargs)
         try:
             r = subprocess.run(args, capture_output=True, text=True,
@@ -238,11 +241,14 @@ class GoEngine:
 
     def run_stream(self, url: str, on_verbose: Optional[Callable] = None,
                    stop_event: Optional[threading.Event] = None,
+                   verbose_lvl: int = 2, request_timeout: int = None,
                    **kwargs) -> Optional[List[Dict[str, Any]]]:
         if not self.ensure_compiled():
             return [{"error": "Failed to compile Go engine"}]
 
-        args = build_args(url, verbose_lvl=2, **kwargs)
+        if request_timeout is not None:
+            kwargs["timeout"] = request_timeout
+        args = build_args(url, verbose_lvl=verbose_lvl, **kwargs)
         try:
             self._proc = subprocess.Popen(
                 args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -291,7 +297,7 @@ class GoEngine:
                 pass
             self._proc = None
 
-    # ── High-level helpers ────────────────────────────────────
+    # -- High-level helpers ------------------------------------
 
     def crawl(self, url: str, mode: str = "full", **kwargs) -> List[Dict[str, Any]]:
         return self.run(url, crawl_mode=mode, **kwargs)
@@ -320,7 +326,7 @@ class GoEngine:
         params.update(kwargs)
         return self.run(url, **params)
 
-    # ── Batch Operations ──────────────────────────────────────
+    # -- Batch Operations --------------------------------------
 
     def batch_scan(self, urls: List[str], **kwargs) -> Dict[str, Any]:
         return {url: self.run(url, **kwargs) for url in urls}
@@ -328,7 +334,7 @@ class GoEngine:
     def batch_crawl(self, urls: List[str], mode: str = "full") -> Dict[str, Any]:
         return {url: self.crawl(url, mode) for url in urls}
 
-    # ── Daemon Mode ───────────────────────────────────────────
+    # -- Daemon Mode -------------------------------------------
 
     def start_daemon(self, host: str = "127.0.0.1", port: int = 8765):
         import socket

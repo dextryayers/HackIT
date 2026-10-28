@@ -353,7 +353,7 @@ func (cm *CrawlMaster) scanSensitiveData(param, dbms string, progressCh chan<- C
 					cm.mu.Unlock()
 
 					cm.sendProgress(progressCh, 70+float64(processed)/float64(totalCols)*20,
-						fmt.Sprintf("Sensitive: %s.%s.%s → %s", dbName, tblInfo.Name, col.Name, findings[0].Category),
+						fmt.Sprintf("Sensitive: %s.%s.%s -> %s", dbName, tblInfo.Name, col.Name, findings[0].Category),
 						fmt.Sprintf("%s.%s.%s", dbName, tblInfo.Name, col.Name), "")
 				}
 				processed++
@@ -437,7 +437,7 @@ func findCrossRelations(dbs map[string]*DatabaseInfo) []string {
 		for _, tblInfo := range dbInfo.Tables {
 			for _, idx := range tblInfo.Indexes {
 				if idx.IsFK {
-					rel := fmt.Sprintf("%s.%s.%s → %s.%s (%s)",
+					rel := fmt.Sprintf("%s.%s.%s -> %s.%s (%s)",
 						dbName, tblInfo.Name, strings.Join(idx.Columns, ","),
 						idx.RefTable, idx.RefColumn, idx.Name)
 					rels = append(rels, rel)

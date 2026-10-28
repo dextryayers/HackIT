@@ -26,7 +26,7 @@ class FileOperations:
     def __init__(self, request_func: Callable = None):
         self.request = request_func
 
-    # ── File Read ─────────────────────────────────────────────────
+    # -- File Read -------------------------------------------------
 
     def read_file(self, path: str, dbms: str, param: str = "id",
                   encode: str = None) -> FileOpResult:
@@ -125,7 +125,7 @@ class FileOperations:
             pass
         return FileOpResult("read", path, "", False, 0, "readfile", "SQLite", 0)
 
-    # ── File Write ────────────────────────────────────────────────
+    # -- File Write ------------------------------------------------
 
     def write_file(self, path: str, content: str, dbms: str) -> FileOpResult:
         """Write file to database server"""
@@ -181,7 +181,7 @@ class FileOperations:
         except Exception as e:
             return FileOpResult("write", path, str(e), False, 0.2, "xp_cmdshell echo", "MSSQL", 0)
 
-    # ── OS Command Execution ──────────────────────────────────────
+    # -- OS Command Execution --------------------------------------
 
     def execute_command(self, command: str, dbms: str) -> FileOpResult:
         """Execute OS command via SQLi"""
@@ -226,7 +226,7 @@ class FileOperations:
         """Build MySQL-specific command execution query"""
         return f"DO SYSTEM_EXEC('{command}')"
 
-    # ── UDF Management ────────────────────────────────────────────
+    # -- UDF Management --------------------------------------------
 
     def deploy_udf(self, lib_path: str, dbms: str) -> FileOpResult:
         """Deploy UDF (User-Defined Function) for command execution"""
@@ -250,7 +250,7 @@ class FileOperations:
                 pass
         return []
 
-    # ── Helper Methods ────────────────────────────────────────────
+    # -- Helper Methods --------------------------------------------
 
     def _extract_content(self, response: str) -> str:
         """Extract meaningful content from HTML response"""

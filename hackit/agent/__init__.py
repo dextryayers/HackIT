@@ -202,8 +202,8 @@ def enter_agent_shell():
                     click.echo(f"  {RED}✦{RESET}  {DIM}No AI provider configured. Run{RESET}  {GREEN}setting{RESET}  {DIM}first.{RESET}")
                     continue
                 try:
-                    from hackit.agent.interactive import ChatUI
-                    ui = ChatUI()
+                    from hackit.agent.interactive import create_ui
+                    ui = create_ui("chat")
                     ui.run()
                 except Exception as e:
                     click.echo(f"  {RED}[!] Chat UI error: {e}{RESET}")
@@ -211,8 +211,8 @@ def enter_agent_shell():
 
             if base_cmd == 'autopilot':
                 try:
-                    from hackit.agent.interactive import AutopilotUI
-                    ui = AutopilotUI()
+                    from hackit.agent.interactive import create_ui
+                    ui = create_ui("autopilot")
                     if remaining:
                         ui.target = remaining
                     ui.run()
@@ -248,8 +248,8 @@ def enter_agent_shell():
 
                 if base_cmd == 'autopilot':
                     try:
-                        from hackit.agent.interactive import AutopilotUI
-                        ui = AutopilotUI()
+                        from hackit.agent.interactive import create_ui
+                        ui = create_ui("autopilot")
                         if remaining:
                             ui.target = remaining
                         ui.run()
@@ -395,8 +395,8 @@ def help():
 def chat():
     """Start an interactive chat session with the AI Agent"""
     try:
-        from hackit.agent.interactive import ChatUI
-        ui = ChatUI()
+        from hackit.agent.interactive import create_ui
+        ui = create_ui("chat")
         ui.run()
     except Exception as e:
         click.echo(f"\n  {RED}[!] Chat UI error: {e}{RESET}")
@@ -1241,8 +1241,8 @@ def dashboard(target, scope):
 def autopilot(target):
     """Launch the Autonomous AI Bug Hunter against a target"""
     try:
-        from hackit.agent.interactive import AutopilotUI
-        ui = AutopilotUI()
+        from hackit.agent.interactive import create_ui
+        ui = create_ui("autopilot")
         if target:
             ui.target = target
         ui.run()

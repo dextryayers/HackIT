@@ -769,12 +769,11 @@ def examples():
     • Vuln:     $ hackit vuln sqli --url "http://site.com?id=1" --dump-all
     • Vuln:     $ hackit vuln sqli -u "http://site.com?id=1" scan
     • Vuln:     $ hackit vuln sqli -u "http://site.com?id=1" crawl --mode full
-    • Vuln:     $ hackit vuln sqli -u "http://site.com?id=1" extract --technique blind
+    • Vuln:     $ hackit vuln sqli -u "http://site.com?id=1" extract --query "SELECT version()" --technique blind
     • Vuln:     $ hackit vuln sqli -u "http://site.com?id=1" dump mydb users
     • Vuln:     $ hackit vuln sqli -u "http://site.com?id=1" readfile --file /etc/passwd
     • Vuln:     $ hackit vuln sqli -u "http://site.com?id=1" exec --cmd "id"
-    • Vuln:     $ hackit vuln sqli -u "http://site.com?id=1" network --target 10.0.0.1
-    • Vuln:     $ hackit vuln sqli -u "http://site.com?id=1" bypass --user admin
+    • Vuln:     $ hackit vuln sqli -u "http://site.com?id=1" report --format html --output sqli_report
     • Vuln:     $ hackit vuln rce -u "http://site.com?cmd=ls" --detect
     • Vuln:     $ hackit vuln rce -u "http://site.com?cmd=ls" -c "whoami" --exploit
     • Vuln:     $ hackit vuln atomix -u "https://example.com"
@@ -860,7 +859,7 @@ def help_tools():
     • web fuzz      - Parameter reflection fuzzer
     • web js        - JavaScript endpoint analysis
     • vuln xss      - Reflected XSS scanner (Go + Python engines)
-    • vuln sqli     - SQLi scanner (997 payloads, 16 DBMS)
+    • vuln sqli     - SQLi scanner and data extraction engine (multi-DBMS)
     • vuln redirect - Open redirect finder
     • vuln atomix   - Nuclei-style YAML template scanner
     • recon subs    - Subdomain bruteforcer

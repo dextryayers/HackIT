@@ -150,7 +150,7 @@ func (vc *ViewCrawler) ExtractViewDependency(definition string) []string {
 	return tables
 }
 
-// BuildViewLineage builds a dependency graph of views → tables
+// BuildViewLineage builds a dependency graph of views -> tables
 func (vc *ViewCrawler) BuildViewLineage(views []ViewInfo) map[string][]string {
 	lineage := make(map[string][]string)
 	for _, v := range views {

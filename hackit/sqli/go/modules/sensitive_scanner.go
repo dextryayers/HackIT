@@ -121,7 +121,7 @@ func (ss *SensitiveScanner) ScanResultsToCore(results []ScanResult) []Result {
 			Type:       "sensitive-" + r.Risk,
 			Payload:    fmt.Sprintf("%s/%s/%s", r.Database, r.Table, r.Column),
 			DBMS:       r.Pattern,
-			Details:    fmt.Sprintf("[%s] %d matches — sample: %s", r.Risk, r.Count, r.Sample),
+			Details:    fmt.Sprintf("[%s] %d matches - sample: %s", r.Risk, r.Count, r.Sample),
 			Confidence: float64(r.Count) / 100.0,
 		})
 	}

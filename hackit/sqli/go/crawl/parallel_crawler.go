@@ -270,9 +270,9 @@ func (pc *ParallelCrawler) AutoScale() {
 			ideal := pc.AdaptiveWorkerCount()
 			current := int(atomic.LoadInt32(&pc.stats.ActiveWorkers))
 			if ideal > current {
-				pc.log.Debug(fmt.Sprintf("Scaling up: %d → %d workers", current, ideal))
+				pc.log.Debug(fmt.Sprintf("Scaling up: %d -> %d workers", current, ideal))
 			} else if ideal < current {
-				pc.log.Debug(fmt.Sprintf("Scaling down: %d → %d workers", current, ideal))
+				pc.log.Debug(fmt.Sprintf("Scaling down: %d -> %d workers", current, ideal))
 			}
 		}
 	}()

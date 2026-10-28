@@ -370,12 +370,12 @@ func (cr *CrawlReport) buildTextReport() string {
 	var sb strings.Builder
 	summary := cr.results.Summary
 
-	sb.WriteString("╔══════════════════════════════════════╗\n")
-	sb.WriteString("║     DATABASE CRAWL REPORT            ║\n")
-	sb.WriteString("╚══════════════════════════════════════╝\n\n")
+	sb.WriteString("+======================================+\n")
+	sb.WriteString("|     DATABASE CRAWL REPORT            |\n")
+	sb.WriteString("+======================================+\n\n")
 	sb.WriteString(fmt.Sprintf("Generated: %s\n\n", time.Now().Format(time.RFC3339)))
 
-	sb.WriteString("── Summary ──\n")
+	sb.WriteString("-- Summary --\n")
 	sb.WriteString(fmt.Sprintf("  Databases : %d\n", summary.TotalDatabases))
 	sb.WriteString(fmt.Sprintf("  Tables    : %d\n", summary.TotalTables))
 	sb.WriteString(fmt.Sprintf("  Columns   : %d\n", summary.TotalColumns))
@@ -384,7 +384,7 @@ func (cr *CrawlReport) buildTextReport() string {
 	sb.WriteString(fmt.Sprintf("  Duration  : %s\n\n", summary.Duration))
 
 	if len(cr.results.SystemInfo) > 0 {
-		sb.WriteString("── System Info ──\n")
+		sb.WriteString("-- System Info --\n")
 		keys := sortedKeys(cr.results.SystemInfo)
 		for _, k := range keys {
 			sb.WriteString(fmt.Sprintf("  %-15s: %s\n", k, cr.results.SystemInfo[k]))
@@ -393,7 +393,7 @@ func (cr *CrawlReport) buildTextReport() string {
 	}
 
 	if len(cr.results.Sensitive) > 0 {
-		sb.WriteString("── Sensitive Findings ──\n")
+		sb.WriteString("-- Sensitive Findings --\n")
 		for _, f := range cr.results.Sensitive {
 			sb.WriteString(fmt.Sprintf("  [%s] %s.%s.%s (%s) %.0f%%\n",
 				f.Risk, f.Database, f.Table, f.Column, f.Category, f.Confidence*100))
@@ -402,7 +402,7 @@ func (cr *CrawlReport) buildTextReport() string {
 	}
 
 	for dbName, dbInfo := range cr.results.Databases {
-		sb.WriteString(fmt.Sprintf("── %s ──\n", dbName))
+		sb.WriteString(fmt.Sprintf("-- %s --\n", dbName))
 		for tblName, tblInfo := range dbInfo.Tables {
 			sb.WriteString(fmt.Sprintf("  %s (%d rows)\n", tblName, tblInfo.RowCount))
 			for _, col := range tblInfo.Columns {
@@ -417,7 +417,7 @@ func (cr *CrawlReport) buildTextReport() string {
 	}
 
 	if len(cr.results.Relations) > 0 {
-		sb.WriteString("── Relations ──\n")
+		sb.WriteString("-- Relations --\n")
 		for _, r := range cr.results.Relations {
 			sb.WriteString(fmt.Sprintf("  %s\n", r))
 		}
@@ -473,17 +473,17 @@ func (cr *CrawlReport) PrintToConsole() {
 		return
 	}
 
-	fmt.Println("\n═══════════════════════════════════════")
+	fmt.Println("\n=======================================")
 	fmt.Println("  DATABASE CRAWL RESULTS")
-	fmt.Println("═══════════════════════════════════════")
-	fmt.Printf("  %-12s → %d\n", "Databases", summary.TotalDatabases)
-	fmt.Printf("  %-12s → %d\n", "Tables", summary.TotalTables)
-	fmt.Printf("  %-12s → %d\n", "Columns", summary.TotalColumns)
-	fmt.Printf("  %-12s → %d\n", "Rows Extracted", summary.TotalRows)
-	fmt.Printf("  %-12s → %d\n", "Sensitive", summary.TotalSensitive)
-	fmt.Printf("  %-12s → %d\n", "Errors", summary.TotalErrors)
-	fmt.Printf("  %-12s → %s\n", "Duration", summary.Duration)
-	fmt.Println("───────────────────────────────────────")
+	fmt.Println("=======================================")
+	fmt.Printf("  %-12s -> %d\n", "Databases", summary.TotalDatabases)
+	fmt.Printf("  %-12s -> %d\n", "Tables", summary.TotalTables)
+	fmt.Printf("  %-12s -> %d\n", "Columns", summary.TotalColumns)
+	fmt.Printf("  %-12s -> %d\n", "Rows Extracted", summary.TotalRows)
+	fmt.Printf("  %-12s -> %d\n", "Sensitive", summary.TotalSensitive)
+	fmt.Printf("  %-12s -> %d\n", "Errors", summary.TotalErrors)
+	fmt.Printf("  %-12s -> %s\n", "Duration", summary.Duration)
+	fmt.Println("---------------------------------------")
 
 	if len(cr.results.Sensitive) > 0 {
 		// Count by risk
@@ -500,20 +500,20 @@ func (cr *CrawlReport) PrintToConsole() {
 				low++
 			}
 		}
-		fmt.Println("\n  ⚠ SENSITIVE DATA BREAKDOWN:")
+		fmt.Println("\n  [!] SENSITIVE DATA BREAKDOWN:")
 		if critical > 0 {
-			fmt.Printf("    ■ CRITICAL: %d findings\n", critical)
+			fmt.Printf("    * CRITICAL: %d findings\n", critical)
 		}
 		if high > 0 {
-			fmt.Printf("    ■ HIGH:     %d findings\n", high)
+			fmt.Printf("    * HIGH:     %d findings\n", high)
 		}
 		if medium > 0 {
-			fmt.Printf("    ■ MEDIUM:   %d findings\n", medium)
+			fmt.Printf("    * MEDIUM:   %d findings\n", medium)
 		}
 		if low > 0 {
-			fmt.Printf("    ■ LOW:      %d findings\n", low)
+			fmt.Printf("    * LOW:      %d findings\n", low)
 		}
 	}
 
-	fmt.Println("═══════════════════════════════════════\n")
+	fmt.Println("=======================================\n")
 }

@@ -365,7 +365,18 @@ func (x *Executor) timeOracle(cond string) bool {
 		}
 		samples = append(samples, x.E.LastResponseTime)
 	}
-	return medianDuration(samples) > x.baseline+2*time.Second
+	return medianDuration(samples) > x.baseline+delayThreshold(delay)
+}
+
+// delayThreshold returns the minimum extra latency that counts as a delayed
+// response. It scales with the requested delay so that --time-secs 1 does not
+// require the fixed two second margin that a delay of three needs.
+func delayThreshold(delay int) time.Duration {
+	threshold := time.Duration(delay) * time.Second * 7 / 10
+	if threshold < 700*time.Millisecond {
+		threshold = 700 * time.Millisecond
+	}
+	return threshold
 }
 
 func (x *Executor) timePayload(cond string, delay int) string {

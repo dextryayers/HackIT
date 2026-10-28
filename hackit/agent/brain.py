@@ -75,6 +75,9 @@ class AIHyperBrain:
         self.config = load_config()
         self.engine = engine if engine in ("native", "chat") else "native"
         self.base_dir = os.path.dirname(os.path.abspath(__file__))
+        self._process_lock = threading.Lock()
+        self._active_process: Optional[subprocess.Popen] = None
+        self._cancel_event = threading.Event()
         self.provider = provider_registry.get_active_provider(self.config)
         if not self.provider:
             self.provider = provider_registry.normalize_provider(
@@ -477,14 +480,63 @@ class AIHyperBrain:
         self.memory.add_assistant(response)
         self.memory.save()
 
+    # ------------------------------------------------------------------
+    # Cancellation
+    # ------------------------------------------------------------------
+
+    def reset_cancel(self) -> None:
+        """Clear a previous cancellation before starting a fresh request."""
+        self._cancel_event.clear()
+
+    def _register_process(self, process: subprocess.Popen) -> None:
+        with self._process_lock:
+            self._active_process = process
+
+    def _clear_process(self, process: Optional[subprocess.Popen]) -> None:
+        with self._process_lock:
+            if self._active_process is process:
+                self._active_process = None
+
+    def cancel_stream(self) -> bool:
+        """Stop the active model/scan subprocess.
+
+        Returns True when a live process was terminated.  The streaming loops
+        also observe ``_cancel_event`` so providers are not retried after the
+        user cancels.
+        """
+        self._cancel_event.set()
+        with self._process_lock:
+            process = self._active_process
+        if process is None or process.poll() is not None:
+            return False
+        try:
+            process.terminate()
+        except Exception:
+            pass
+        try:
+            process.wait(timeout=1.5)
+        except Exception:
+            try:
+                process.kill()
+            except Exception:
+                pass
+        return True
+
+    @property
+    def cancelled(self) -> bool:
+        return self._cancel_event.is_set()
+
     def stream_chat(self, prompt: str, on_token: Optional[Callable[[Dict[str, Any]], None]] = None) -> str:
         prompt = strip_control(prompt)
+        self.reset_cancel()
         command, body = self._split_command(prompt)
         system = self._build_system_prompt(command=command, include_memory=True)
         full = ""
         last_error = ""
 
         for provider in self.provider_chain():
+            if self.cancelled:
+                break
             if not self._prepare_provider(provider):
                 continue
             full = ""
@@ -509,6 +561,8 @@ class AIHyperBrain:
             )
             if collected:
                 full = collected
+            if self.cancelled:
+                return ""
             if not failed[0] and full.strip() and not self._is_error(full):
                 result = self._postprocess(full)
                 if result:
@@ -518,9 +572,12 @@ class AIHyperBrain:
                 continue
             last_error = full
 
+        if self.cancelled:
+            return ""
         if last_error:
             return last_error
         return _colored("[!] No AI provider is configured. Run `agent setting`.", YELLOW)
+
 
     def stream_ai(self, prompt: str, on_token: Optional[Callable[[Dict[str, Any]], None]] = None,
                   system_prompt: Optional[str] = None, mode: str = "",
@@ -553,31 +610,38 @@ class AIHyperBrain:
                 cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                 text=True, bufsize=1,
             )
+            self._register_process(process)
             assert process.stdout is not None
-            for line in process.stdout:
-                line = line.strip()
-                if not line:
-                    continue
+            try:
+                for line in process.stdout:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        event = json.loads(line)
+                    except ValueError:
+                        continue
+                    if "token" in event:
+                        token = strip_control(str(event.get("token", "")))
+                        full_response.append(token)
+                        if on_token:
+                            on_token({"token": token, "done": False})
+                    elif event.get("done"):
+                        if on_token:
+                            on_token({"token": "", "done": True})
+                        break
+                    elif event.get("error"):
+                        message = f"[!] AI Error: {strip_control(str(event['error']))}"
+                        full_response.append(message)
+                        if on_token:
+                            on_token({"token": message, "done": True})
+                        break
                 try:
-                    event = json.loads(line)
-                except ValueError:
-                    continue
-                if "token" in event:
-                    token = strip_control(str(event.get("token", "")))
-                    full_response.append(token)
-                    if on_token:
-                        on_token({"token": token, "done": False})
-                elif event.get("done"):
-                    if on_token:
-                        on_token({"token": "", "done": True})
-                    break
-                elif event.get("error"):
-                    message = f"[!] AI Error: {strip_control(str(event['error']))}"
-                    full_response.append(message)
-                    if on_token:
-                        on_token({"token": message, "done": True})
-                    break
-            process.wait(timeout=120)
+                    process.wait(timeout=120)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+            finally:
+                self._clear_process(process)
             return "".join(full_response)
         except Exception as exc:  # noqa: BLE001
             message = f"[!] Stream error: {strip_control(str(exc))}"
@@ -676,6 +740,7 @@ class AIHyperBrain:
     def stream_hative(self, target: str, on_progress: Optional[Callable[[Dict[str, Any]], None]] = None,
                       modules: Optional[List[str]] = None, timeout: int = 600) -> List[Dict[str, Any]]:
         target = strip_control(target)
+        self.reset_cancel()
         hative_path = os.path.join(self.base_dir, "go", "hative", "hative")
         if not os.path.exists(hative_path):
             if on_progress:
@@ -729,12 +794,15 @@ class AIHyperBrain:
                 [hative_path] + args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 text=True, bufsize=1,
             )
+            self._register_process(process)
             reader = threading.Thread(target=drain_stderr, daemon=True)
             reader.start()
             assert process.stdout is not None
             stdout = process.stdout.read()
             process.wait(timeout=timeout)
             reader.join(timeout=2)
+            if self.cancelled:
+                return []
             if stdout.strip():
                 try:
                     return json.loads(stdout.strip())
@@ -755,6 +823,8 @@ class AIHyperBrain:
             if process is not None and process.poll() is None:
                 process.kill()
             return [{"error": f"hative error: {exc}"}]
+        finally:
+            self._clear_process(process)
 
     # Backwards-compatible alias used by older UI code.
     def _invoke(self, prompt: str) -> str:

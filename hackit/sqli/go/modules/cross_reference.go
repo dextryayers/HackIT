@@ -185,7 +185,7 @@ func (cr *CrossReferencer) FindJoinPaths(relations []Relation) [][]string {
 func (cr *CrossReferencer) RelationsToCore(relations []Relation) []Result {
 	var out []Result
 	for _, r := range relations {
-		details := fmt.Sprintf("%s.%s.%s → %s.%s.%s (%.0f%%)",
+		details := fmt.Sprintf("%s.%s.%s -> %s.%s.%s (%.0f%%)",
 			r.SourceDB, r.SourceTable, r.SourceColumn,
 			r.TargetDB, r.TargetTable, r.TargetColumn,
 			r.Confidence*100)

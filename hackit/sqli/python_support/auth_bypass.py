@@ -178,14 +178,14 @@ class AuthBypassEngine:
                     risk="CRITICAL"
                 ))
 
-            # Algorithm confusion (RS256 → HS256)
+            # Algorithm confusion (RS256 -> HS256)
             if header.get("alg") == "RS256":
                 new_header = base64.b64encode(
                     json.dumps({"alg": "HS256", "typ": "JWT"}).encode()
                 ).decode().rstrip("=")
                 # Use public key as HMAC secret (known attack)
                 results.append(BypassResult(
-                    technique="JWT Alg Confusion (RS→HS)",
+                    technique="JWT Alg Confusion (RS->HS)",
                     payload="",
                     success=False,
                     confidence=0.6,

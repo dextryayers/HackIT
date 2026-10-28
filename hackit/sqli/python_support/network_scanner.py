@@ -29,7 +29,7 @@ class NetworkScanner:
         self.dbms = dbms
         self.timeout = 5
 
-    # ── Port Scanning via SQLi ────────────────────────────────────
+    # -- Port Scanning via SQLi ------------------------------------
 
     def scan_port(self, host: str, port: int, technique: str = "connect") -> ScanResult:
         """Scan a single port via database connection functions"""
@@ -120,7 +120,7 @@ class NetworkScanner:
         }
         return services.get(port, "Unknown")
 
-    # ── Network Discovery ─────────────────────────────────────────
+    # -- Network Discovery -----------------------------------------
 
     def discover_network(self, subnet: str, ports: List[int] = None) -> List[ScanResult]:
         """Discover hosts and open ports on a subnet"""
@@ -161,7 +161,7 @@ class NetworkScanner:
                 continue
         return results
 
-    # ── Banner Grabbing ──────────────────────────────────────────
+    # -- Banner Grabbing ------------------------------------------
 
     def grab_banner(self, host: str, port: int) -> str:
         """Grab service banner via SQLi"""
@@ -180,7 +180,7 @@ class NetworkScanner:
 
         return ""
 
-    # ── Network Path Discovery ────────────────────────────────────
+    # -- Network Path Discovery ------------------------------------
 
     def traceroute(self, host: str) -> List[str]:
         """Approximate traceroute via SQLi - try to determine network path"""
@@ -203,7 +203,7 @@ class NetworkScanner:
 
         return hops
 
-    # ── DNS Resolution via SQLi ───────────────────────────────────
+    # -- DNS Resolution via SQLi -----------------------------------
 
     def resolve_dns(self, domain: str) -> List[str]:
         """DNS resolution via database functions"""
@@ -222,7 +222,7 @@ class NetworkScanner:
 
         return results
 
-    # ── Internal IP Discovery ─────────────────────────────────────
+    # -- Internal IP Discovery -------------------------------------
 
     def get_internal_ip(self) -> str:
         """Discover internal IP of the database server"""
@@ -251,7 +251,7 @@ class NetworkScanner:
 
         return ""
 
-    # ── Comprehensive Network Scan ────────────────────────────────
+    # -- Comprehensive Network Scan --------------------------------
 
     def scan_all(self, target: str, ports: List[int] = None,
                  techniques: List[str] = None) -> Dict:

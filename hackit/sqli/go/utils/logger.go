@@ -182,40 +182,24 @@ func (l *Logger) RawLog(data string) {
 }
 
 func (l *Logger) Banner() {
-	if l.NoColor {
-		fmt.Fprintf(os.Stderr, `  ▄████████  ▄█   ▄█          ▄████████ ████████▄
- ███    ███ ███  ███         ███    ███ ███   ▀███
- ███    █▀  ███▌ ███         ███    █▀  ███    ███
- ███        ███▌ ███        ▄███▄▄▄     ███    ███
-▀███████████ ███▌ ███       ▀▀███▀▀▀     ███    ███
-         ███ ███  ███         ███    █▀  ███   ▄███
-   ▄█    ███ ███  ██▌    ▄   ███    ███ ████████▀
- ▄████████▀  █▀   ███▄▄██   ██████████
-─────────────────────────────────────────────────
-  SQLi Exploit Engine v2.1 (Blind/Time/Union)
-  Developer  : AniipID
-─────────────────────────────────────────────────
-  WARNING : Use only on systems you own or
-     have explicit written permission to test!
-─────────────────────────────────────────────────
-`)
-	} else {
-		c := color.New(color.FgGreen)
-		c.Fprintf(os.Stderr, `  ▄████████  ▄█   ▄█          ▄████████ ████████▄
- ███    ███ ███  ███         ███    ███ ███   ▀███
- ███    █▀  ███▌ ███         ███    █▀  ███    ███
- ███        ███▌ ███        ▄███▄▄▄     ███    ███
-▀███████████ ███▌ ███       ▀▀███▀▀▀     ███    ███
-         ███ ███  ███         ███    █▀  ███   ▄███
-   ▄█    ███ ███  ██▌    ▄   ███    ███ ████████▀
- ▄████████▀  █▀   ███▄▄██   ██████████
-`)
-		color.New(color.FgGreen).Fprintf(os.Stderr, "─────────────────────────────────────────────────\n")
-		color.New(color.FgCyan).Fprintf(os.Stderr, "  SQLi Exploit Engine v3.0 (2270 Payloads / 20 Engines)\n")
-		color.New(color.FgYellow).Fprintf(os.Stderr, "  Developer  : AniipID\n")
-		color.New(color.FgGreen).Fprintf(os.Stderr, "─────────────────────────────────────────────────\n")
-		color.New(color.FgYellow).Fprintf(os.Stderr, "  \u26a0\ufe0f  WARNING : Use only on systems you own or\n")
-		color.New(color.FgYellow).Fprintf(os.Stderr, "     have explicit written permission to test!\n")
-		color.New(color.FgGreen).Fprintf(os.Stderr, "─────────────────────────────────────────────────\n")
+	lines := []string{
+		"HackIt SQL Injection Engine",
+		"Version 4.0",
+		"-------------------------------------------------",
+		"WARNING: Use only on systems you own or have",
+		"explicit written permission to test.",
+		"-------------------------------------------------",
 	}
+	if l.NoColor {
+		for _, line := range lines {
+			fmt.Fprintln(os.Stderr, line)
+		}
+		return
+	}
+	color.New(color.FgGreen, color.Bold).Fprintln(os.Stderr, lines[0])
+	color.New(color.FgCyan).Fprintln(os.Stderr, lines[1])
+	color.New(color.FgGreen).Fprintln(os.Stderr, lines[2])
+	color.New(color.FgYellow).Fprintln(os.Stderr, lines[3])
+	color.New(color.FgYellow).Fprintln(os.Stderr, lines[4])
+	color.New(color.FgGreen).Fprintln(os.Stderr, lines[5])
 }

@@ -275,7 +275,7 @@ func NewEngine(opts *Options) *Engine {
 	}
 
 	if opts.BypassWAF {
-		e.Log.Info("WAF bypass mode engaged — using maximum evasion techniques")
+		e.Log.Info("WAF bypass mode engaged - using maximum evasion techniques")
 	}
 
 	return e

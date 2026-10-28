@@ -82,7 +82,7 @@ func (e *Engine) Start() []Result {
 
 	params := u.Query()
 
-	// ── Connection Phase ──
+	// -- Connection Phase --
 	e.Log.Info("testing connection to the target URL")
 	var baseBody string
 	var baseLen int
@@ -127,19 +127,19 @@ func (e *Engine) Start() []Result {
 		e.Log.Info("try: verifying the target URL is reachable from your network")
 		e.Log.Info("try: using --proxy if behind a corporate firewall")
 		e.Log.Info("try: increasing --timeout for slow connections")
-		return []Result{{Parameter: "error", Type: "fatal", Payload: "Connection timed out", DBMS: "", Confidence: 1.0, Details: "Target URL is unreachable — check network, proxy, or increase timeout"}}
+		return []Result{{Parameter: "error", Type: "fatal", Payload: "Connection timed out", DBMS: "", Confidence: 1.0, Details: "Target URL is unreachable - check network, proxy, or increase timeout"}}
 	}
 
 	avgBaseTime := avgDuration(baselineSamples)
 
-	// ── WAF Detection ──
+	// -- WAF Detection --
 	e.Log.Info("checking if the target is protected by some kind of WAF/IPS")
 	waf := DetectWAF(e.LastResponseHeaders, baseBody)
 	if waf.Detected {
 		e.Log.Critical("heuristics detected that the target is protected by some kind of WAF/IPS")
 		e.Log.Warning(fmt.Sprintf("WAF/IPS identified: %s", waf.Name))
 		if e.Opts.BypassWAF {
-			e.Log.Info("WAF bypass mode engaged — using evasion techniques")
+			e.Log.Info("WAF bypass mode engaged - using evasion techniques")
 		} else {
 			e.Log.Warning("please consider usage of tamper scripts (option '--tamper')")
 		}
@@ -149,7 +149,7 @@ func (e *Engine) Start() []Result {
 
 	e.Log.Blank()
 
-	// ── Deep Backend Stack Detection ──
+	// -- Deep Backend Stack Detection --
 	backendStack := DetectBackendStack(e.LastResponseHeaders, baseBody)
 	serverVer := DetectSoftwareVersion(e.LastResponseHeaders)
 	if serverVer != "" {
@@ -162,17 +162,17 @@ func (e *Engine) Start() []Result {
 	e.Log.BackendStack(backendStack)
 	e.Log.Blank()
 
-	// ── Initial DBMS Detection ──
+	// -- Initial DBMS Detection --
 	initialDB := DetectDBMS(baseBody, e.LastResponseHeaders)
 	if initialDB != "Unknown" {
 		e.Log.Success(fmt.Sprintf("heuristic (basic) test shows that GET parameter might be injectable (possible DBMS: '%s')", initialDB))
 	} else {
-		e.Log.Info("heuristic test: DBMS not identified — testing all 16 payload groups")
+		e.Log.Info("heuristic test: DBMS not identified - testing all 16 payload groups")
 	}
 
 	e.Log.Blank()
 
-	// ── Parameter Testing ──
+	// -- Parameter Testing --
 	paramName := firstParamName(params)
 	e.Log.Info(fmt.Sprintf("testing for SQL injection on GET parameter '%s'", paramName))
 	if initialDB != "Unknown" && initialDB != "" {
@@ -237,7 +237,7 @@ func (e *Engine) scanParameter(param string, baseLen int, avgBaseTime time.Durat
 
 	e.logInfo(fmt.Sprintf("testing '%s' parameter", param))
 
-	// ── Stage 1a: Error-based ──
+	// -- Stage 1a: Error-based --
 	if e.Opts.Mode == "auto" || e.Opts.Mode == "error" {
 		dbmsFilter := initialDB
 		if dbmsFilter == "" {
@@ -288,7 +288,7 @@ func (e *Engine) scanParameter(param string, baseLen int, avgBaseTime time.Durat
 		}
 	}
 
-	// ── Stage 1b: Boolean-based ──
+	// -- Stage 1b: Boolean-based --
 	if (e.Opts.Mode == "auto" || e.Opts.Mode == "boolean") || e.Opts.RiskLevel >= 1 {
 		e.logInfo("testing 'AND boolean-based blind - WHERE or HAVING clause'")
 		found := false
@@ -358,7 +358,7 @@ func (e *Engine) scanParameter(param string, baseLen int, avgBaseTime time.Durat
 		}
 	}
 
-	// ── Stage 1c: Time-based ──
+	// -- Stage 1c: Time-based --
 	if (e.Opts.Mode == "auto" || e.Opts.Mode == "time") || e.Opts.RiskLevel >= 1 {
 		e.logInfo("testing 'AND time-based blind - WHERE or HAVING clause'")
 		found := false
@@ -423,7 +423,7 @@ func (e *Engine) scanParameter(param string, baseLen int, avgBaseTime time.Durat
 		}
 	}
 
-	// ── Stage 1d: Union-based ──
+	// -- Stage 1d: Union-based --
 	if (e.Opts.Mode == "auto" || e.Opts.Mode == "union") || e.Opts.RiskLevel >= 1 {
 		e.logInfo("testing 'UNION query - ORDER BY column count'")
 		colCount := 0
@@ -582,7 +582,7 @@ func (e *Engine) scanParameter(param string, baseLen int, avgBaseTime time.Durat
 		}
 	}
 
-	// ── Stage 1e: Stacked Query ──
+	// -- Stage 1e: Stacked Query --
 	if (e.Opts.Mode == "auto" || e.Opts.Mode == "stacked") && (len(results) == 0 || e.Opts.RiskLevel >= 3) {
 		e.logInfo("testing 'Stacked queries (SQL statement separation)'")
 		for _, group := range payloads.AllPayloads {
@@ -637,7 +637,7 @@ func (e *Engine) scanParameter(param string, baseLen int, avgBaseTime time.Durat
 
 func (e *Engine) postScan(results []Result, params url.Values) {
 	if len(results) == 0 {
-		e.logInfo("no vulnerabilities found — skipping enumeration")
+		e.logInfo("no vulnerabilities found - skipping enumeration")
 		return
 	}
 
@@ -787,7 +787,7 @@ func (e *Engine) postScan(results []Result, params url.Values) {
 	}
 }
 
-// ── Helpers ──
+// -- Helpers --
 
 func absInt(x int) int {
 	if x < 0 {

@@ -25,7 +25,7 @@ class BlindOptimizer:
         self.request = request_func
         self.profile: Optional[BlindProfile] = None
 
-    # ── Profiling ─────────────────────────────────────────────────
+    # -- Profiling -------------------------------------------------
 
     def profile_target(self, true_payload: str, false_payload: str,
                        samples: int = 5) -> BlindProfile:
@@ -92,7 +92,7 @@ class BlindOptimizer:
         variance = sum((t - avg) ** 2 for t in times) / (len(times) - 1)
         return math.sqrt(variance) / avg
 
-    # ── Optimal Delay Detection ───────────────────────────────────
+    # -- Optimal Delay Detection -----------------------------------
 
     def find_optimal_delay(self, base_payload: str, min_delay: int = 1,
                            max_delay: int = 10) -> int:
@@ -106,7 +106,7 @@ class BlindOptimizer:
                 return delay
         return max_delay
 
-    # ── Optimized Extraction ──────────────────────────────────────
+    # -- Optimized Extraction --------------------------------------
 
     def extract_optimized(self, query_func: Callable[[str], bool],
                           length_func: Callable[[int], bool],
@@ -167,7 +167,7 @@ class BlindOptimizer:
 
         return charset[min(low, len(charset) - 1)], requests
 
-    # ── Statistical Noise Reduction ──────────────────────────────
+    # -- Statistical Noise Reduction ------------------------------
 
     def robust_compare(self, payload_true: str, payload_false: str,
                        samples: int = 3) -> bool:
@@ -189,7 +189,7 @@ class BlindOptimizer:
         test_result = len(self.request(payload_true))
         return abs(test_result - avg_true) < abs(test_result - avg_false)
 
-    # ── Multi-bit Extraction ──────────────────────────────────────
+    # -- Multi-bit Extraction --------------------------------------
 
     def extract_multi_bit(self, compare_func: Callable[[int], bool],
                           total_bits: int = 8) -> int:
@@ -200,7 +200,7 @@ class BlindOptimizer:
                 value |= (1 << bit)
         return value
 
-    # ── Adaptive Threshold ────────────────────────────────────────
+    # -- Adaptive Threshold ----------------------------------------
 
     def adaptive_threshold(self, baseline: float, stddev: float,
                            target_error_rate: float = 0.01) -> float:
@@ -210,7 +210,7 @@ class BlindOptimizer:
         z = z_scores.get(target_error_rate, 2.33)
         return baseline + z * stddev
 
-    # ── Caching Layer ─────────────────────────────────────────────
+    # -- Caching Layer ---------------------------------------------
 
     class Cache:
         def __init__(self, max_size: int = 10000):
