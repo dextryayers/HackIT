@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-type tokenEmitter func(string) error
+type tokenEmitter func(kind, text string) error
 
 func scanLines(reader io.Reader, handle func(string) error) error {
 	scanner := bufio.NewScanner(reader)
@@ -68,7 +68,7 @@ func streamOpenAI(client *http.Client, provider, key, prompt, system, model stri
 		}
 
 		reqBody := OpenAIRequest{
-			Model: activeModel, MaxTokens: 8192, Temperature: 0.7,
+			Model: activeModel, MaxTokens: requestMaxTokens(8192), Temperature: 0.6,
 			Stream: true, Messages: openAIMessages(system, prompt, hist),
 		}
 		jsonData, _ := json.Marshal(reqBody)
@@ -104,9 +104,17 @@ func streamOpenAI(client *http.Client, provider, key, prompt, system, model stri
 		streamErr := scanSSE(resp.Body, func(data string) error {
 			var chunk struct {
 				Choices []struct {
-					Delta   struct{ Content string `json:"content"` } `json:"delta"`
-					Message struct{ Content string `json:"content"` } `json:"message"`
-					Text    string                                   `json:"text"`
+					Delta struct {
+						Content          string `json:"content"`
+						ReasoningContent string `json:"reasoning_content"`
+						Reasoning        string `json:"reasoning"`
+					} `json:"delta"`
+					Message struct {
+						Content          string `json:"content"`
+						ReasoningContent string `json:"reasoning_content"`
+						Reasoning        string `json:"reasoning"`
+					} `json:"message"`
+					Text string `json:"text"`
 				} `json:"choices"`
 				Error *struct{ Message string `json:"message"` } `json:"error"`
 			}
@@ -117,6 +125,22 @@ func streamOpenAI(client *http.Client, provider, key, prompt, system, model stri
 				return fmt.Errorf("%s", chunk.Error.Message)
 			}
 			for _, choice := range chunk.Choices {
+				reasoning := choice.Delta.ReasoningContent
+				if reasoning == "" {
+					reasoning = choice.Delta.Reasoning
+				}
+				if reasoning == "" {
+					reasoning = choice.Message.ReasoningContent
+				}
+				if reasoning == "" {
+					reasoning = choice.Message.Reasoning
+				}
+				if reasoning != "" {
+					if err := emit("thinking", reasoning); err != nil {
+						return io.EOF
+					}
+				}
+
 				text := choice.Delta.Content
 				if text == "" {
 					text = choice.Message.Content
@@ -128,7 +152,7 @@ func streamOpenAI(client *http.Client, provider, key, prompt, system, model stri
 					continue
 				}
 				builder.WriteString(text)
-				if err := emit(text); err != nil {
+				if err := emit("answer", text); err != nil {
 					return io.EOF
 				}
 			}
@@ -183,7 +207,7 @@ func streamGemini(client *http.Client, key, prompt, system, model string,
 			reqData := GeminiRequest{
 				Contents: contents,
 				GenerationConfig: &GeminiGenerationConfig{
-					Temperature: 0.7, MaxOutputTokens: 8192,
+					Temperature: 0.6, MaxOutputTokens: requestMaxTokens(8192),
 				},
 			}
 			if system != "" {
@@ -226,8 +250,14 @@ func streamGemini(client *http.Client, key, prompt, system, model string,
 						if part.Text == "" {
 							continue
 						}
+						if part.Thought {
+							if err := emit("thinking", part.Text); err != nil {
+								return io.EOF
+							}
+							continue
+						}
 						builder.WriteString(part.Text)
-						if err := emit(part.Text); err != nil {
+						if err := emit("answer", part.Text); err != nil {
 							return io.EOF
 						}
 					}
@@ -260,7 +290,7 @@ func streamClaude(client *http.Client, key, prompt, system, model string,
 
 	for _, candidate := range candidates {
 		reqBody := ClaudeRequest{
-			Model: candidate, System: system, MaxTokens: 8192, Stream: true,
+			Model: candidate, System: system, MaxTokens: requestMaxTokens(8192), Stream: true,
 			Messages: sanitizeClaudeMessages(hist, prompt),
 		}
 		jsonData, _ := json.Marshal(reqBody)

@@ -6,18 +6,128 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
+	"sync"
+	"time"
 )
 
 var maxTokensSetting = 0
 var jsonModeSetting = false
+var thinkModeSetting = "auto"
 
-// ollamaThinkOption disables hidden reasoning tokens unless the operator
-// explicitly opts in.  See HACKIT_OLLAMA_THINK in the README.
-func ollamaThinkOption() *bool {
-	value := strings.ToLower(strings.TrimSpace(os.Getenv("HACKIT_OLLAMA_THINK")))
-	enabled := value == "1" || value == "true" || value == "yes" || value == "on"
+var (
+	ollamaCapMu    sync.Mutex
+	ollamaCapCache = map[string]bool{}
+)
+
+// ollamaThinkOption decides whether to request separate reasoning tokens.
+//
+// HACKIT_OLLAMA_THINK / -think explicitly win.  In auto mode the model's
+// /api/show capabilities are checked once and cached.  Thinking models must
+// use think:true: with think:false they dump their chain-of-thought into the
+// normal content stream, which is exactly the "nonsense answer" failure.
+func ollamaThinkOption(model string) *bool {
+	mode := strings.ToLower(strings.TrimSpace(thinkModeSetting))
+	if mode == "" || mode == "auto" {
+		mode = strings.ToLower(strings.TrimSpace(os.Getenv("HACKIT_OLLAMA_THINK")))
+	}
+	switch mode {
+	case "1", "true", "yes", "on", "always":
+		enabled := true
+		return &enabled
+	case "0", "false", "no", "off", "never":
+		enabled := false
+		return &enabled
+	}
+	enabled := ollamaSupportsThinking(model)
 	return &enabled
+}
+
+func ollamaSupportsThinking(model string) bool {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return false
+	}
+	ollamaCapMu.Lock()
+	if value, ok := ollamaCapCache[model]; ok {
+		ollamaCapMu.Unlock()
+		return value
+	}
+	ollamaCapMu.Unlock()
+
+	enabled := false
+	payload, _ := json.Marshal(map[string]string{"model": model})
+	client := &http.Client{Timeout: 4 * time.Second}
+	resp, err := client.Post(
+		ollamaBaseURL()+"/api/show", "application/json", bytes.NewReader(payload),
+	)
+	if err == nil {
+		defer resp.Body.Close()
+		if resp.StatusCode == http.StatusOK {
+			var info struct {
+				Capabilities []string `json:"capabilities"`
+			}
+			if json.NewDecoder(resp.Body).Decode(&info) == nil {
+				for _, capability := range info.Capabilities {
+					if strings.EqualFold(strings.TrimSpace(capability), "thinking") {
+						enabled = true
+						break
+					}
+				}
+			}
+		}
+	}
+	if !enabled {
+		// Older Ollama releases omit capabilities.  Recognise the common
+		// reasoning families so they still get the correct mode.
+		lower := strings.ToLower(model)
+		for _, needle := range []string{
+			"qwen3", "deepseek-r1", "reasoning", "thinking", "qwq",
+			"phi4-reasoning", "magistral",
+		} {
+			if strings.Contains(lower, needle) {
+				enabled = true
+				break
+			}
+		}
+	}
+
+	ollamaCapMu.Lock()
+	ollamaCapCache[model] = enabled
+	ollamaCapMu.Unlock()
+	return enabled
+}
+
+func ollamaNumCtx() int {
+	value := strings.TrimSpace(os.Getenv("HACKIT_OLLAMA_NUM_CTX"))
+	if value != "" {
+		if parsed, err := strconv.Atoi(value); err == nil && parsed >= 512 {
+			return parsed
+		}
+	}
+	return 8192
+}
+
+func ollamaKeepAlive() string {
+	value := strings.TrimSpace(os.Getenv("HACKIT_OLLAMA_KEEP_ALIVE"))
+	if value != "" {
+		return value
+	}
+	return "30m"
+}
+
+func ollamaOptions() map[string]interface{} {
+	options := map[string]interface{}{
+		"temperature":    0.6,
+		"top_p":          0.9,
+		"repeat_penalty": 1.05,
+		"num_ctx":        ollamaNumCtx(),
+	}
+	if maxTokensSetting > 0 {
+		options["num_predict"] = maxTokensSetting
+	}
+	return options
 }
 
 func requestMaxTokens(fallback int) int {
@@ -229,6 +339,9 @@ func callGemini(client *http.Client, key, prompt, system, model string, hist []M
 			}
 			var builder strings.Builder
 			for _, part := range res.Candidates[0].Content.Parts {
+				if part.Thought {
+					continue
+				}
 				builder.WriteString(part.Text)
 			}
 			if strings.TrimSpace(builder.String()) == "" {
@@ -400,6 +513,9 @@ func callClaude(client *http.Client, key, prompt, system, model string, hist []M
 			var builder strings.Builder
 			for _, block := range content {
 				if item, ok := block.(map[string]interface{}); ok {
+					if blockType, _ := item["type"].(string); blockType == "thinking" {
+						continue
+					}
 					if text, ok := item["text"].(string); ok {
 						builder.WriteString(text)
 					}
@@ -432,52 +548,66 @@ func callOllama(client *http.Client, key, prompt, system, model string, hist []M
 		model = "llama3"
 	}
 
-	options := map[string]interface{}{"temperature": 0.7}
-	if maxTokensSetting > 0 {
-		options["num_predict"] = maxTokensSetting
-	}
-	reqBody := OllamaRequest{
-		Model: model, Stream: false,
-		Options: options,
-		Think:   ollamaThinkOption(),
-	}
-	if jsonModeSetting {
-		reqBody.Format = "json"
-	}
-	if system != "" {
-		reqBody.Messages = append(reqBody.Messages, Message{Role: "system", Content: system})
-	}
-	reqBody.Messages = append(reqBody.Messages, hist...)
-	reqBody.Messages = append(reqBody.Messages, Message{Role: "user", Content: prompt})
+	think := ollamaThinkOption(model)
+	var lastErr error
+	for attempt := 0; attempt < 2; attempt++ {
+		reqBody := OllamaRequest{
+			Model: model, Stream: false,
+			Options:   ollamaOptions(),
+			Think:     think,
+			KeepAlive: ollamaKeepAlive(),
+		}
+		if jsonModeSetting {
+			reqBody.Format = "json"
+		}
+		if system != "" {
+			reqBody.Messages = append(reqBody.Messages, Message{Role: "system", Content: system})
+		}
+		reqBody.Messages = append(reqBody.Messages, hist...)
+		reqBody.Messages = append(reqBody.Messages, Message{Role: "user", Content: prompt})
 
-	jsonData, _ := json.Marshal(reqBody)
-	req, err := http.NewRequest("POST", ollamaBaseURL()+"/api/chat", bytes.NewBuffer(jsonData))
-	if err != nil {
-		return "", fmt.Errorf("[OLLAMA] request: %v", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
+		jsonData, _ := json.Marshal(reqBody)
+		req, err := http.NewRequest("POST", ollamaBaseURL()+"/api/chat", bytes.NewBuffer(jsonData))
+		if err != nil {
+			return "", fmt.Errorf("[OLLAMA] request: %v", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
 
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("[OLLAMA] connection to %s: %v", ollamaBaseURL(), err)
-	}
-	body := readBody(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("[OLLAMA] HTTP %d: %s", resp.StatusCode, providerErrorMessage(body))
-	}
+		resp, err := client.Do(req)
+		if err != nil {
+			return "", fmt.Errorf("[OLLAMA] connection to %s: %v", ollamaBaseURL(), err)
+		}
+		body := readBody(resp.Body)
+		if resp.StatusCode != http.StatusOK {
+			return "", fmt.Errorf("[OLLAMA] HTTP %d: %s", resp.StatusCode, providerErrorMessage(body))
+		}
 
-	var res OllamaResponse
-	if err := json.Unmarshal(body, &res); err != nil {
-		return "", fmt.Errorf("[OLLAMA] parse: %v", err)
+		var res OllamaResponse
+		if err := json.Unmarshal(body, &res); err != nil {
+			return "", fmt.Errorf("[OLLAMA] parse: %v", err)
+		}
+		if res.Error != "" {
+			return "", fmt.Errorf("[OLLAMA] %s", res.Error)
+		}
+		content := strings.TrimSpace(res.Message.Content)
+		if content != "" {
+			return content, nil
+		}
+		lastErr = fmt.Errorf("[OLLAMA] empty response (model %s)", model)
+		// Some builds return only hidden reasoning when think is enabled.
+		// Retry once with thinking disabled so the caller still gets a final
+		// answer instead of an empty response.
+		if attempt == 0 && strings.TrimSpace(res.Message.Thinking) != "" && think != nil && *think {
+			disabled := false
+			think = &disabled
+			continue
+		}
+		break
 	}
-	if res.Error != "" {
-		return "", fmt.Errorf("[OLLAMA] %s", res.Error)
+	if lastErr != nil {
+		return "", lastErr
 	}
-	content := strings.TrimSpace(res.Message.Content)
-	if content == "" {
-		return "", fmt.Errorf("[OLLAMA] empty response (model %s)", model)
-	}
-	return content, nil
+	return "", fmt.Errorf("[OLLAMA] empty response (model %s)", model)
 }
 
 func min(a, b int) int {
