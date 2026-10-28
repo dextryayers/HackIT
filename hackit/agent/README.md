@@ -75,8 +75,14 @@ Override either with:
 export HACKIT_AI_TIMEOUT=600
 ```
 
-Payload generation asks Ollama for JSON-formatted output and disables thinking
-traces, which keeps responses parseable and much faster.
+Reasoning models such as Qwen3 expose a separate thinking channel. HackIt
+requests it (`think:true`) and renders it in the `THINKING` panel, while the
+final answer and persisted memory receive only `message.content`. The same
+separation is applied to OpenAI-compatible `reasoning_content`, Claude
+`thinking_delta` and Gemini thought parts. Force a single-channel response with
+`HACKIT_OLLAMA_THINK=off` (or the engine flag `-think off`) if a local model is
+too slow; `-think auto` is the default and enables thinking only when the model
+reports the capability.
 
 ---
 
@@ -152,10 +158,18 @@ recon → OSINT → JavaScript → parameters → payload forge → AI analysis
   header audit and directory fuzzing.
 * **OSINT** — public profiles, breach references and domain registration data.
 * **payload** — the active provider forges payloads for the vulnerability
-  classes suggested by the collected context.
+  classes suggested by the collected context; curated payloads remain
+  available if the model is offline or slow.
 * **analysis / plan** — the provider correlates observations and proposes an
-  ordered, evidence-based plan.
-* **verification** — native scanners run against the discovered web surface.
+  ordered, evidence-based plan that names concrete endpoints and parameters.
+* **active verification** — native modules run against the base URL, every
+  same-origin endpoint found by the fuzzer/JS analysis, and URLs that exercise
+  each discovered parameter. Generated payloads are then probed across all
+  classes, targets and parameters. `HACKIT_MODULE_TASKS` (default `72`) and
+  `HACKIT_PROBE_BUDGET` (default `60`) bound the work.
+* **coverage / attack log** — every module task and payload probe is recorded
+  with its target, parameter, result and evidence. Confirmed signals become
+  findings; the report includes an Active Coverage section and an Attack Log.
 * **report** — Markdown, HTML and Mermaid reports under
   `hackit/agent/go/reports/pentest/`.
 
@@ -165,15 +179,19 @@ otherwise a dependency-free sequential runner executes the identical nodes.
 
 ### Authorization gate
 
-Active payload verification can send exploit strings to a target. It is
-therefore disabled by default:
+`hackit agent auto <target>` and `/auto <target>` run in explicit authorized
+active mode. They print an `AUTHORIZED` notice, execute attack modules against
+discovered endpoints, and verify generated payloads. **Only use them against
+systems you own or have explicit written permission to test.**
+
+The standalone `/probe` command and legacy callers remain gated:
 
 ```bash
 export HACKIT_AUTHORIZED=1
 ```
 
-Only enable this for systems you own or have written permission to test.
-Payload generation and passive/scanning modules do not require the flag.
+`run_pentest(..., authorized=False)` keeps the pipeline passive. Payload
+generation and passive scanning modules do not require the flag.
 
 ---
 
@@ -189,7 +207,11 @@ The memory layer stores a rolling conversation window and durable facts
   extra dependencies.
 
 Memory is injected into the system prompt on every turn, so the agent keeps
-track of the current engagement across commands and terminal restarts.
+track of the current engagement across commands and terminal restarts. It is
+explicitly labelled background context: the latest user request always takes
+precedence, and benchmark/self-test artifacts (`HACKIT_UI_OK`, `STREAM_OK`,
+`Reply with exactly ...`) are filtered on load, append and import. Reasoning
+tokens are never written to memory.
 
 ---
 
@@ -204,9 +226,16 @@ built with prompt_toolkit and Rich. It provides:
   `Enter` accepts, `Tab` completes, `Esc` closes; `Ctrl+P` opens it),
 * a session sidebar with provider, model, memory, target and workflow engine,
 * structured `SCAN`, `OSINT` and `AUTONOMOUS PENTEST` panels with per-module
-  status, progress, findings tables and final summaries instead of raw logs,
+  status, progress, coverage, findings tables and final summaries instead of
+  raw logs,
 * real token streaming from the Go engines (SSE for OpenAI-compatible, Gemini
   and Claude; NDJSON for Ollama),
+* a scrollable transcript with a scrollbar: mouse wheel, `PageUp`/`PageDown`,
+  `Ctrl+Up`/`Ctrl+Down` and `Ctrl+Home`/`Ctrl+End`. Output follows the tail
+  until you scroll up and resumes following when you return to the bottom,
+* a frozen/live transcript cache, capped streaming previews and batched tokens,
+  so long reasoning traces and long conversations do not re-render the whole
+  transcript for every token,
 * one accent colour per mode, Markdown rendering and a plain-text fallback,
 * `Ctrl+C` cancellation of generation and running scan/pipeline subprocesses;
   partial streamed output is discarded.

@@ -17,7 +17,7 @@ import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
-from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
 import requests
 
@@ -575,17 +575,22 @@ class ProbeResult:
         }
 
 
-def _baseline(target: str, parameter: str, timeout: float) -> Dict[str, Any]:
+def _baseline(target: str, parameter: str, timeout: float,
+              allow_redirects: bool = True) -> Dict[str, Any]:
     try:
-        response = requests.get(target, timeout=timeout, allow_redirects=True)
+        response = requests.get(target, timeout=timeout, allow_redirects=allow_redirects)
         return {
             "status": response.status_code,
             "body": response.text[:200000],
             "url": response.url,
+            "location": response.headers.get("Location", ""),
             "content_type": response.headers.get("Content-Type", ""),
         }
     except Exception:
-        return {"status": 0, "body": "", "url": target, "content_type": ""}
+        return {
+            "status": 0, "body": "", "url": target, "location": "",
+            "content_type": "",
+        }
 
 
 def _url_host(value: str) -> str:
@@ -625,10 +630,14 @@ def probe(target: str, vuln_type: str, payload: str, parameter: str = "",
     """Send one payload and compare the response with a baseline."""
     vuln_type = normalize_type(vuln_type)
     headers = headers or {}
-    baseline = _baseline(target, parameter, timeout)
+    # Open-redirect detection must inspect the Location header itself.  If we
+    # followed the redirect, requests would try to reach the attacker host and
+    # a DNS failure would hide a real finding (and make an unnecessary
+    # outbound request).
+    follow_redirects = vuln_type != "open_redirect"
+    baseline = _baseline(target, parameter, timeout, allow_redirects=follow_redirects)
     baseline_status = int(baseline.get("status", 0))
     baseline_body = str(baseline.get("body", ""))
-    baseline_url = str(baseline.get("url", target))
     baseline_lower = baseline_body.lower()
 
     url = target
@@ -641,7 +650,8 @@ def probe(target: str, vuln_type: str, payload: str, parameter: str = "",
                 data = {parameter: payload}
         started = time.time()
         response = requests.request(
-            method.upper(), url, data=data, headers=headers, timeout=timeout, allow_redirects=True
+            method.upper(), url, data=data, headers=headers, timeout=timeout,
+            allow_redirects=follow_redirects,
         )
         elapsed_ms = int((time.time() - started) * 1000)
         body = response.text[:200000]
@@ -656,19 +666,35 @@ def probe(target: str, vuln_type: str, payload: str, parameter: str = "",
     signature = ""
     for marker in ERROR_SIGNATURES.get(vuln_type, []):
         # A signature that is already present in the baseline is not evidence.
-        if marker.lower() in body.lower() and marker.lower() not in baseline_lower:
-            signature = marker
-            break
+        if marker.lower() not in body.lower() or marker.lower() in baseline_lower:
+            continue
+        # The marker may simply be part of the payload echoed back by a
+        # reflective endpoint (for example an SSRF URL containing
+        # ``metadata.google.internal``).  That is reflection, not execution.
+        if reflected and marker.lower() in payload.lower():
+            continue
+        signature = marker
+        break
 
     time_based = any(token in payload.lower() for token in ("sleep(", "pg_sleep", "waitfor delay"))
     delay_signal = time_based and elapsed_ms >= 4500
     status_signal = response.status_code >= 500 and baseline_status < 500
     length_delta = abs(len(body) - len(baseline_body))
     length_signal = bool(baseline_body) and length_delta > max(512, len(baseline_body) * 0.35)
+    target_host = _url_host(target)
+    location = str(response.headers.get("Location", "") or "").strip()
+    if location:
+        # Browsers normalise backslashes, so ``/\evil.example`` is treated
+        # like ``//evil.example`` by several clients.
+        location = location.replace("\\", "/")
+    resolved_location = urljoin(url, location) if location else ""
+    baseline_location = str(baseline.get("location", "") or "").strip().replace("\\", "/")
+    resolved_baseline = urljoin(target, baseline_location) if baseline_location else ""
+    location_host = _url_host(resolved_location)
     redirect_signal = (
         vuln_type == "open_redirect"
-        and response.url != baseline_url
-        and _url_host(response.url) not in ("", _url_host(target))
+        and location_host not in ("", target_host)
+        and location_host != _url_host(resolved_baseline)
     )
     reflection_signal = (
         reflected
@@ -688,7 +714,7 @@ def probe(target: str, vuln_type: str, payload: str, parameter: str = "",
     if length_signal and not reflection_signal:
         signals.append(f"response length delta {length_delta}")
     if redirect_signal:
-        signals.append(f"redirected off-host to {response.url}")
+        signals.append(f"redirected off-host to {resolved_location}")
 
     # Only a concrete, reproducible indicator is allowed to make a finding.
     strong = bool(signature or delay_signal or redirect_signal or reflection_signal)
@@ -708,7 +734,10 @@ def probe(target: str, vuln_type: str, payload: str, parameter: str = "",
         elapsed_ms=elapsed_ms,
         reflected=reflected,
         error_signature=signature,
-        detail={"length_delta": length_delta, "redirected_to": response.url if redirect_signal else ""},
+        detail={
+            "length_delta": length_delta,
+            "redirected_to": resolved_location if redirect_signal else "",
+        },
     ).to_dict()
 
 

@@ -622,6 +622,57 @@ def _is_module_finding(module: str, item: Dict[str, Any]) -> bool:
     return False
 
 
+# Native modules that can emit reflection false positives (for example a JSON
+# API echoing the payload).  Their reports are re-checked with the differential
+# prober before they become findings.
+MODULE_PROBE_TYPES = {
+    "xss": "xss",
+    "ssrf": "ssrf",
+    "ssti": "ssti",
+    "lfi": "lfi",
+    "sqli": "sqli",
+    "cmd": "cmdi",
+    "redirect": "open_redirect",
+    "xxe": "xxe",
+    "nosqli": "nosqli",
+    "ldap": "ldap",
+}
+
+
+def _first_query_parameter(url: str) -> str:
+    try:
+        query = parse_qs(urlparse(str(url or "")).query, keep_blank_values=True)
+    except ValueError:
+        return ""
+    return next(iter(query), "")
+
+
+def _finding_identity(item: Dict[str, Any]) -> Tuple[str, str, str, str]:
+    """Collapse duplicate evidence for the same class/path/parameter."""
+    parsed = urlparse(str(item.get("target") or ""))
+    evidence = str(item.get("evidence") or "")
+    match = re.search(r"parameter=([^,\s)]+)", evidence)
+    parameter = match.group(1) if match else ""
+    return (
+        str(item.get("type") or ""),
+        parsed.netloc.lower(),
+        parsed.path or "/",
+        parameter,
+    )
+
+
+def _dedupe_findings(findings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    deduped: List[Dict[str, Any]] = []
+    seen = set()
+    for item in findings:
+        key = _finding_identity(item)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped
+
+
 def _process_module_results(findings, find_count, bridge, target, target_url, module,
                             ftype, severity, cvss, remediation):
     result = bridge.run_worker(**{module: target_url})
@@ -630,23 +681,68 @@ def _process_module_results(findings, find_count, bridge, target, target_url, mo
     error = ""
     if result and isinstance(result[0], dict) and result[0].get("success") is False:
         error = str(result[0].get("error") or "module failed")[:300]
-    found = 0
+
+    groups: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
     for item in items:
         if not _is_module_finding(module, item):
             continue
-        evidence = str(item.get("evidence") or item.get("Evidence") or item)
+        endpoint = str(item.get("endpoint") or target_url)
+        parameter = str(item.get("parameter") or _first_query_parameter(endpoint))
+        groups.setdefault((endpoint, parameter), []).append(item)
+
+    found = 0
+    unverified = 0
+    probe_type = MODULE_PROBE_TYPES.get(module)
+    for (endpoint, parameter), group in groups.items():
+        selected = group[0]
+        probe_result: Dict[str, Any] = {}
+        if probe_type:
+            # Reflection inside JSON/plain text is not executable XSS, and a
+            # payload echoed back is not proof of SSTI/LFI/SSRF.  Re-run the
+            # candidate through the baseline-differential prober.
+            confirmed = None
+            try:
+                from hackit.agent import payloads as forge
+
+                for candidate in group[:3]:
+                    payload = str(candidate.get("payload") or "")
+                    if not payload:
+                        continue
+                    result_item = forge.probe(
+                        endpoint, probe_type, payload,
+                        parameter=parameter, timeout=8.0,
+                    )
+                    if result_item.get("vulnerable"):
+                        confirmed = (candidate, result_item)
+                        break
+            except Exception as exc:  # noqa: BLE001
+                error = error or f"verification failed: {exc}"[:300]
+            if confirmed is None:
+                unverified += 1
+                continue
+            selected, probe_result = confirmed
+            evidence = (
+                f"{probe_result.get('evidence', '')} "
+                f"(parameter={probe_result.get('parameter', '')}, "
+                f"payload={str(probe_result.get('payload', ''))[:200]})"
+            ).strip()
+        else:
+            evidence = str(selected.get("evidence") or selected.get("Evidence") or selected)
+
         _finding(
-            findings, ftype, str(item.get("endpoint", target_url)),
+            findings, ftype, endpoint,
             evidence[:500], evidence,
             severity=severity, cvss=cvss, remediation=remediation,
         )
         find_count[0] += 1
         found += 1
+
     return {
         "module": module,
         "target": target_url,
         "tested": len(items),
         "findings": found,
+        "unverified": unverified,
         "error": error,
     }
 
@@ -749,27 +845,58 @@ def execute_node(state: PentestState) -> Dict[str, Any]:
 
     endpoints = _endpoint_candidates(state, base_url, limit=6)
     parameter_names = _param_names(state)
-    parameter_targets = _parameter_targets(base_url, parameter_names, limit=6)
     injection_modules = {
-        "sqli", "xss", "ssrf", "redirect", "lfi", "ssti", "cmd", "nosqli",
+        "sqli", "xss", "ssrf", "redirect", "lfi", "ssti", "cmd",
+        "nosqli", "ldap", "xxe",
     }
     path_modules = {"lfi", "bypass403", "xss", "redirect", "cors", "csrf", "graphql"}
 
-    # The base URL gets every module.  Discovered endpoints and parameter
-    # URLs get the modules that can actually exercise their input, so the
-    # run is deeper without blindly multiplying every scanner.
-    tasks: List[Tuple[Tuple[Any, ...], str]] = [
-        (config, base_url) for config in module_configs
-    ]
+    # Exercise parameters on every discovered endpoint, not just the base
+    # URL.  The endpoint's own query names drive the module choice.
+    parameter_targets: List[str] = []
+    seen_parameter_targets = set()
+    for endpoint in endpoints:
+        for target_url in _parameter_targets(endpoint, parameter_names, limit=3):
+            if target_url in seen_parameter_targets:
+                continue
+            seen_parameter_targets.add(target_url)
+            parameter_targets.append(target_url)
+            if len(parameter_targets) >= 10:
+                break
+        if len(parameter_targets) >= 10:
+            break
+
+    # The base URL gets every module.  Parameter URLs get only the modules
+    # that can exercise their names, so the run is deeper without blindly
+    # multiplying every scanner.
+    tasks: List[Tuple[Tuple[Any, ...], str]] = []
+    seen_tasks = set()
+
+    def add_task(config: Tuple[Any, ...], target_url: str) -> None:
+        key = (config[0], target_url)
+        if key in seen_tasks:
+            return
+        seen_tasks.add(key)
+        tasks.append((config, target_url))
+
+    for config in module_configs:
+        add_task(config, base_url)
+    for target_url in parameter_targets:
+        names = list(parse_qs(urlparse(target_url).query))
+        relevant: set = set()
+        for name in names:
+            relevant.update(_modules_for_parameter(name))
+        if not relevant:
+            relevant = set(injection_modules)
+        for config in module_configs:
+            if config[0] in relevant:
+                add_task(config, target_url)
     for endpoint in endpoints[1:]:
         relevant = injection_modules if urlparse(endpoint).query else path_modules
-        tasks.extend(
-            (config, endpoint) for config in module_configs if config[0] in relevant
-        )
-    for target_url in parameter_targets:
-        tasks.extend(
-            (config, target_url) for config in module_configs if config[0] in injection_modules
-        )
+        for config in module_configs:
+            if config[0] in relevant:
+                add_task(config, endpoint)
+
     try:
         task_budget = max(14, int(os.environ.get("HACKIT_MODULE_TASKS", "72")))
     except ValueError:
@@ -800,6 +927,7 @@ def execute_node(state: PentestState) -> Dict[str, Any]:
             "target": item.get("target"),
             "tested": item.get("tested", 0),
             "findings": item.get("findings", 0),
+            "unverified": item.get("unverified", 0),
             "error": item.get("error", ""),
         })
     attack_log = attack_log[-240:]
@@ -838,6 +966,9 @@ def execute_node(state: PentestState) -> Dict[str, Any]:
     coverage["execute_signals"] = sum(
         int(item.get("findings", 0)) for item in module_results if isinstance(item, dict)
     )
+    coverage["execute_unverified"] = sum(
+        int(item.get("unverified", 0)) for item in module_results if isinstance(item, dict)
+    )
     coverage["endpoints"] = endpoints
     coverage["parameters"] = parameter_names
     execute_errors = [
@@ -849,16 +980,7 @@ def execute_node(state: PentestState) -> Dict[str, Any]:
         coverage["execute_errors"] = execute_errors[:12]
 
     # De-duplicate findings by type + target + evidence prefix.
-    deduped = []
-    seen = set()
-    for item in findings:
-        key = (item.get("type"), item.get("target"), str(item.get("evidence", ""))[:200])
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped.append(item)
-
-    updates["findings"] = deduped
+    updates["findings"] = _dedupe_findings(findings)
     updates["scan_data"] = scan_data
     updates["coverage"] = coverage
     updates["attack_log"] = attack_log
@@ -869,6 +991,120 @@ def execute_node(state: PentestState) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Phase 9: AI payload verification
 # ---------------------------------------------------------------------------
+
+
+PREFERRED_PARAMS: Dict[str, List[str]] = {
+    "sqli": ["id", "q", "query", "search", "user", "username", "email", "name"],
+    "nosqli": ["id", "q", "query", "user", "username", "filter", "search"],
+    "xss": ["q", "s", "search", "query", "name", "message", "comment", "callback"],
+    "open_redirect": [
+        "url", "redirect", "next", "return", "returnurl", "return_url",
+        "dest", "destination", "target", "continue", "callback",
+    ],
+    "ssrf": [
+        "url", "uri", "src", "source", "dest", "destination", "target",
+        "host", "site", "callback", "webhook",
+    ],
+    "lfi": ["file", "path", "page", "include", "template", "view", "download", "filename"],
+    "ssti": ["name", "template", "q", "message", "content", "page"],
+    "cmdi": ["cmd", "command", "exec", "ping", "host", "ip", "query", "q"],
+    "xxe": ["xml", "data", "body", "content"],
+    "ldap": ["user", "username", "filter", "search", "q"],
+}
+
+
+def _param_order(vuln_type: str, params: List[str]) -> List[str]:
+    """Put the most relevant parameter names for this payload class first."""
+    preferred = PREFERRED_PARAMS.get(str(vuln_type or "").lower(), [])
+    ordered = [name for name in preferred if name in params]
+    ordered.extend(name for name in params if name not in ordered)
+    return ordered or ["url"]
+
+
+PARAMETER_MODULES: Dict[str, List[str]] = {
+    "url": ["ssrf", "redirect"],
+    "uri": ["ssrf", "redirect"],
+    "src": ["ssrf"],
+    "source": ["ssrf", "lfi"],
+    "dest": ["ssrf", "redirect"],
+    "destination": ["ssrf", "redirect"],
+    "redirect": ["redirect"],
+    "next": ["redirect"],
+    "return": ["redirect"],
+    "returnurl": ["redirect"],
+    "return_url": ["redirect"],
+    "continue": ["redirect"],
+    "id": ["sqli", "nosqli", "xss"],
+    "q": ["xss", "ssti", "sqli"],
+    "s": ["xss"],
+    "search": ["xss", "sqli"],
+    "query": ["sqli", "xss"],
+    "name": ["xss", "ssti"],
+    "message": ["xss", "ssti"],
+    "comment": ["xss"],
+    "callback": ["xss", "ssrf"],
+    "file": ["lfi"],
+    "filename": ["lfi"],
+    "path": ["lfi"],
+    "page": ["lfi", "xss"],
+    "include": ["lfi"],
+    "template": ["ssti", "lfi"],
+    "view": ["lfi"],
+    "download": ["lfi"],
+    "cmd": ["cmd"],
+    "command": ["cmd"],
+    "exec": ["cmd"],
+    "ping": ["cmd"],
+    "host": ["cmd", "ssrf"],
+    "ip": ["cmd", "ssrf"],
+    "filter": ["nosqli", "ldap"],
+    "user": ["sqli", "ldap"],
+    "username": ["sqli", "ldap"],
+    "xml": ["xxe"],
+    "data": ["xxe"],
+    "body": ["xxe"],
+}
+
+DEFAULT_PARAMETER_MODULES = [
+    "sqli", "xss", "ssrf", "redirect", "lfi", "ssti", "cmd", "nosqli",
+]
+
+
+def _modules_for_parameter(name: str) -> List[str]:
+    """Pick the modules that can actually exercise a parameter name."""
+    return PARAMETER_MODULES.get(str(name or "").lower(), DEFAULT_PARAMETER_MODULES)
+
+
+def _ordered_probe_targets(vuln_type: str, targets: List[str]) -> List[str]:
+    """Put endpoints whose path/query matches the payload class first."""
+    hints = {
+        "open_redirect": ("redirect", "url", "next", "return", "continue", "dest", "target"),
+        "ssrf": ("url", "uri", "src", "dest", "target", "host", "callback"),
+        "lfi": ("file", "path", "page", "include", "download", "view"),
+        "ssti": ("template", "name", "page"),
+        "sqli": ("id", "q", "query", "search"),
+        "xss": ("q", "s", "search", "query", "name"),
+        "cmdi": ("cmd", "command", "exec", "ping", "host"),
+        "xxe": ("xml", "data", "body"),
+        "nosqli": ("id", "q", "query", "filter"),
+        "ldap": ("user", "username", "filter", "search"),
+    }.get(str(vuln_type or "").lower(), ())
+
+    if not hints:
+        return list(targets)
+
+    def score(value: str) -> int:
+        parsed = urlparse(value)
+        query_keys = {key.lower() for key in parse_qs(parsed.query)}
+        path = parsed.path.lower()
+        for hint in hints:
+            if hint in query_keys:
+                return 0
+            if len(hint) > 1 and hint in path:
+                return 0
+        return 1
+
+    return sorted(targets, key=score)
 
 
 def _param_names(state: PentestState) -> List[str]:
@@ -889,13 +1125,21 @@ def _param_names(state: PentestState) -> List[str]:
                 if key in value:
                     collect(value[key])
 
-    collect(params)
+    # Concrete parameters observed in the target and discovered URLs come
+    # first; the generic param-module wordlist follows.  This keeps a long
+    # generic list from hiding a real parameter such as ``url``.
     target = state.get("target", "")
     if "?" in target:
         for key in parse_qs(urlparse(target).query):
             if key not in names:
                 names.append(key)
-    return names[:8]
+    base_url = (state.get("scan_data") or {}).get("web_url") or _target_parts(state)[3]
+    for endpoint in _endpoint_candidates(state, base_url, limit=12):
+        for key in parse_qs(urlparse(endpoint).query):
+            if key not in names:
+                names.append(key)
+    collect(params)
+    return names[:16]
 
 
 def probe_node(state: PentestState) -> Dict[str, Any]:
@@ -920,11 +1164,12 @@ def probe_node(state: PentestState) -> Dict[str, Any]:
 
     base_url = scan_data.get("web_url") or _target_parts(state)[3]
     params = _param_names(state) or ["url"]
-    probe_targets = _endpoint_candidates(state, base_url, limit=4) or [base_url]
+    probe_targets = _endpoint_candidates(state, base_url, limit=8) or [base_url]
     probe_results: List[Dict[str, Any]] = []
     attack_log = list(state.get("attack_log") or [])
     coverage = dict(state.get("coverage") or {})
     attempted_types: List[str] = []
+    signal_keys = set()
 
     try:
         from hackit.agent import payloads as forge
@@ -934,57 +1179,79 @@ def probe_node(state: PentestState) -> Dict[str, Any]:
         except ValueError:
             budget = 60
 
+        type_payloads: List[Tuple[str, List[str]]] = []
         for vuln_type, data in results.items():
-            if budget <= 0:
-                break
             items = data.get("payloads", []) if isinstance(data, dict) else []
             selected = [item.get("payload") for item in items[:3] if item.get("payload")]
-            if not selected:
-                continue
-            attempted_types.append(vuln_type)
-            for target_url in probe_targets:
-                if budget <= 0:
+            if selected:
+                type_payloads.append((vuln_type, selected))
+
+        # Breadth first: every payload class gets a fair share of the budget,
+        # and each round reaches all discovered targets/parameters before a
+        # second payload is tried.  A small budget must not starve later
+        # classes just because the first one was listed first.
+        for index, (vuln_type, selected) in enumerate(type_payloads):
+            if budget <= 0:
+                break
+            remaining_types = len(type_payloads) - index
+            type_budget = max(1, budget // remaining_types)
+            ordered_params = _param_order(vuln_type, params)[:3]
+            type_targets = _ordered_probe_targets(vuln_type, probe_targets)
+            jobs: List[Tuple[str, str, str]] = []
+            for payload in selected:
+                for target_url in type_targets:
+                    # Prefer the parameter that the endpoint actually
+                    # exposes (``/item?id=1`` -> id, ``/redirect?url=...``
+                    # -> url) before falling back to the global order.
+                    target_params: List[str] = []
+                    for name in parse_qs(urlparse(target_url).query):
+                        if name not in target_params:
+                            target_params.append(name)
+                    for name in ordered_params:
+                        if name not in target_params:
+                            target_params.append(name)
+                    for parameter in target_params[:3]:
+                        jobs.append((target_url, parameter, payload))
+            used = 0
+            for target_url, parameter, payload in jobs:
+                if used >= type_budget or budget <= 0:
                     break
-                target_params = (params[:3] if target_url == base_url else params[:2]) or ["url"]
-                for parameter in target_params:
-                    if budget <= 0:
-                        break
-                    batch_payloads = selected[: (2 if target_url == base_url else 1)]
-                    batch_payloads = batch_payloads[:budget]
-                    if not batch_payloads:
-                        break
-                    batch = forge.probe_many(
-                        target_url, vuln_type, batch_payloads, parameter=parameter,
-                        timeout=8.0, delay=0.1,
+                batch = forge.probe_many(
+                    target_url, vuln_type, [payload], parameter=parameter,
+                    timeout=8.0, delay=0.1,
+                )
+                used += len(batch)
+                budget -= len(batch)
+                probe_results.extend(batch)
+                for item in batch:
+                    vulnerable = bool(item.get("vulnerable"))
+                    attack_log.append({
+                        "phase": Phase.PROBE.value,
+                        "action": "payload",
+                        "module": vuln_type,
+                        "target": target_url,
+                        "parameter": parameter,
+                        "payload": str(item.get("payload", ""))[:300],
+                        "vulnerable": vulnerable,
+                        "evidence": str(item.get("evidence", ""))[:500],
+                    })
+                    if not vulnerable:
+                        continue
+                    signal_keys.add((vuln_type, urlparse(target_url).path, parameter))
+                    _finding(
+                        findings, vuln_type, item.get("target", target_url),
+                        f"{vuln_type} payload produced a differential signal",
+                        f"parameter={parameter} payload={item.get('payload')} "
+                        f"evidence={item.get('evidence')}",
+                        severity=SEVERITY_BY_TYPE.get(vuln_type, ("high", 7.0, ""))[0],
+                        cvss=SEVERITY_BY_TYPE.get(vuln_type, ("high", 7.0, ""))[1],
                     )
-                    budget -= len(batch)
-                    probe_results.extend(batch)
-                    for item in batch:
-                        vulnerable = bool(item.get("vulnerable"))
-                        attack_log.append({
-                            "phase": Phase.PROBE.value,
-                            "action": "payload",
-                            "module": vuln_type,
-                            "target": target_url,
-                            "parameter": parameter,
-                            "payload": str(item.get("payload", ""))[:300],
-                            "vulnerable": vulnerable,
-                            "evidence": str(item.get("evidence", ""))[:500],
-                        })
-                        if not vulnerable:
-                            continue
-                        _finding(
-                            findings, "probe", item.get("target", target_url),
-                            f"{vuln_type} payload produced a differential signal",
-                            f"parameter={parameter} payload={item.get('payload')} "
-                            f"evidence={item.get('evidence')}",
-                            severity=SEVERITY_BY_TYPE.get(vuln_type, ("high", 7.0, ""))[0],
-                            cvss=SEVERITY_BY_TYPE.get(vuln_type, ("high", 7.0, ""))[1],
-                        )
+            if used:
+                attempted_types.append(vuln_type)
     except Exception as exc:  # noqa: BLE001
         scan_data["payload_probe_error"] = str(exc)[:500]
 
-    signals = sum(1 for item in probe_results if item.get("vulnerable"))
+    signals = len(signal_keys)
     scan_data["payload_probe"] = {
         "attempted": len(probe_results),
         "signals": signals,
@@ -999,7 +1266,7 @@ def probe_node(state: PentestState) -> Dict[str, Any]:
     coverage["probe_parameters"] = params
     updates["probe_results"] = probe_results
     updates["scan_data"] = scan_data
-    updates["findings"] = findings
+    updates["findings"] = _dedupe_findings(findings)
     updates["coverage"] = coverage
     updates["attack_log"] = attack_log[-240:]
     persist_state(dict(state, **updates), suffix="_probe")
@@ -1171,6 +1438,7 @@ def _coverage_summary(state: PentestState) -> str:
         f"Payload probes: {coverage.get('probe_attempted', 0)} across "
         f"{len(probe_targets)} target(s), {len(probe_types)} type(s)",
         f"Probe signals: {coverage.get('probe_signals', 0)}",
+        f"Module reports rejected as reflection-only: {coverage.get('execute_unverified', 0)}",
         f"Discovered endpoints: {len(_as_list(coverage.get('endpoints')))}",
         f"Parameters: {', '.join(str(item) for item in parameters[:10]) or 'none'}",
     ]
@@ -1256,11 +1524,17 @@ def _offline_report(state: PentestState) -> str:
         for entry in attack_log[-20:]:
             if not isinstance(entry, dict):
                 continue
-            result_text = (
-                f"vulnerable: {entry.get('evidence', '')}"
-                if entry.get("vulnerable")
-                else f"{entry.get('tested', 0)} tested / {entry.get('findings', 0)} finding(s)"
-            )
+            if entry.get("vulnerable"):
+                result_text = f"vulnerable: {entry.get('evidence', '')}"
+            elif entry.get("action") == "payload":
+                result_text = "no differential signal"
+            else:
+                result_text = (
+                    f"{entry.get('tested', 0)} tested / "
+                    f"{entry.get('findings', 0)} finding(s)"
+                )
+                if entry.get("unverified"):
+                    result_text += f" / {entry.get('unverified')} reflection-only rejected"
             lines.append(
                 f"| {entry.get('phase', '')} | {entry.get('action', '')} | "
                 f"{entry.get('module', '')} | {str(entry.get('target', ''))[:100]} | "

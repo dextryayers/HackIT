@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -601,8 +602,30 @@ func doJS(target string) ModuleResult {
 	pageContent := html.String()
 
 	scriptSrcs := extractScriptSrcs(pageContent)
-	endpoints := extractEndpointsFromJS(pageContent)
-	secrets := findSecrets(pageContent)
+	combined := pageContent
+	for _, src := range scriptSrcs {
+		scriptURL := resolveScriptURL(u, src)
+		if scriptURL == "" {
+			continue
+		}
+		req, err := http.NewRequest("GET", scriptURL, nil)
+		if err != nil {
+			continue
+		}
+		req.Header.Set("User-Agent", "HackIt-Agent/3.1")
+		scriptResp, err := httpClient.Do(req)
+		if err != nil {
+			continue
+		}
+		body, readErr := io.ReadAll(io.LimitReader(scriptResp.Body, 2*1024*1024))
+		scriptResp.Body.Close()
+		if readErr == nil && scriptResp.StatusCode == http.StatusOK {
+			combined += "\n" + string(body)
+		}
+	}
+
+	endpoints := extractEndpointsFromJS(combined)
+	secrets := findSecrets(combined)
 
 	type JSResult struct {
 		Scripts   []string          `json:"scripts"`
@@ -615,10 +638,50 @@ func doJS(target string) ModuleResult {
 		Scripts:   scriptSrcs,
 		Endpoints: endpoints,
 		Secrets:   secrets,
-		PageSize:  len(pageContent),
+		PageSize:  len(combined),
 	}
 
 	return ModuleResult{Module: "js", Target: target, Success: true, Data: jsResults}
+}
+
+func resolveScriptURL(base *url.URL, src string) string {
+	src = strings.TrimSpace(src)
+	if src == "" {
+		return ""
+	}
+	lower := strings.ToLower(src)
+	if strings.HasPrefix(lower, "data:") || strings.HasPrefix(lower, "javascript:") ||
+		strings.HasPrefix(lower, "mailto:") {
+		return ""
+	}
+	ref, err := url.Parse(src)
+	if err != nil {
+		return ""
+	}
+	resolved := base.ResolveReference(ref)
+	if resolved.Scheme != "http" && resolved.Scheme != "https" {
+		return ""
+	}
+	// Only fetch scripts served by the target itself.  Third-party CDN
+	// bundles are not part of the authorised scope.
+	if !strings.EqualFold(resolved.Host, base.Host) {
+		return ""
+	}
+	return resolved.String()
+}
+
+func isStaticAsset(path string) bool {
+	lower := strings.ToLower(path)
+	for _, ext := range []string{
+		".js", ".css", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico",
+		".woff", ".woff2", ".ttf", ".map", ".webp", ".mp4", ".pdf",
+		".zip", ".tar", ".gz",
+	} {
+		if strings.HasSuffix(lower, ext) {
+			return true
+		}
+	}
+	return false
 }
 
 type SecretFinding struct {
@@ -672,10 +735,52 @@ func extractScriptSrcs(html string) []string {
 	return scripts
 }
 
-func extractEndpointsFromJS(html string) []string {
+func extractEndpointsFromJS(content string) []string {
 	endpoints := make([]string, 0)
 	seen := make(map[string]bool)
 
+	add := func(endpoint string) {
+		endpoint = strings.TrimSpace(endpoint)
+		if len(endpoint) < 2 || len(endpoint) > 200 {
+			return
+		}
+		if !strings.HasPrefix(endpoint, "/") || strings.HasPrefix(endpoint, "//") {
+			return
+		}
+		if strings.ContainsAny(endpoint, " \t\r\n\\") {
+			return
+		}
+		if isStaticAsset(endpoint) {
+			return
+		}
+		if !seen[endpoint] {
+			seen[endpoint] = true
+			endpoints = append(endpoints, endpoint)
+		}
+	}
+
+	// Generic quoted-path scan: catches /search, /redirect, /login, /item
+	// and similar application routes, not just /api/ and /v1/ prefixes.
+	for i := 0; i < len(content); i++ {
+		quote := content[i]
+		if quote != '"' && quote != '\'' {
+			continue
+		}
+		start := i + 1
+		if start >= len(content) {
+			break
+		}
+		end := strings.IndexByte(content[start:], quote)
+		if end == -1 {
+			break
+		}
+		value := content[start : start+end]
+		i = start + end
+		add(value)
+	}
+
+	// Keep the explicit API patterns as a fallback for unquoted or
+	// concatenated strings (for example "/api/" + version).
 	patterns := []string{
 		`"/api/`, `'/api/`, `"/v1/`, `'/v1/`, `"/v2/`, `'/v2/`,
 		`"/v3/`, `'/v3/`, `"/graphql`, `'/graphql`,
@@ -683,28 +788,22 @@ func extractEndpointsFromJS(html string) []string {
 		`".php`, `'.php`, `".asp`, `'.asp`,
 		`"/ws/`, `'/ws/`, `"/socket`, `'/socket`,
 	}
-
 	for _, p := range patterns {
 		idx := 0
-		for idx < len(html) {
-			si := strings.Index(html[idx:], p)
+		for idx < len(content) {
+			si := strings.Index(content[idx:], p)
 			if si == -1 {
 				break
 			}
 			si += idx
-
-			quote := html[si]
+			quote := content[si]
 			start := si + 1
-			end := strings.Index(html[start:], string(quote))
+			end := strings.IndexByte(content[start:], quote)
 			if end == -1 {
 				idx = si + 1
 				continue
 			}
-			endpoint := html[start : start+end]
-			if len(endpoint) > 0 && len(endpoint) < 200 && !seen[endpoint] {
-				seen[endpoint] = true
-				endpoints = append(endpoints, endpoint)
-			}
+			add(content[start : start+end])
 			idx = start + end + 1
 		}
 	}
