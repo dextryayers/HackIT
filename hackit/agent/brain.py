@@ -416,6 +416,9 @@ class AIHyperBrain:
             )
             if not self._is_error(response):
                 response = self._postprocess(response)
+                if not response:
+                    last_error = "[!] Model returned only reasoning; no final answer."
+                    continue
                 self._remember_turn(prompt, response)
                 return response
             last_error = response
@@ -440,6 +443,27 @@ class AIHyperBrain:
 
     def _postprocess(self, response: str) -> str:
         response = strip_control(response)
+        # Reasoning traces are useful while streaming but must never be
+        # persisted in conversation memory or replayed into the next prompt.
+        cleaned = re.sub(
+            r"<(?:think|thinking|reasoning)>.*?</(?:think|thinking|reasoning)>",
+            "", response, flags=re.IGNORECASE | re.DOTALL,
+        )
+        cleaned = re.sub(
+            r"^.*?</(?:think|thinking|reasoning)>", "", cleaned,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        # A truncated reasoning block must not leak into memory either.
+        cleaned = re.sub(
+            r"<(?:think|thinking|reasoning)>.*$", "", cleaned,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if cleaned.strip():
+            response = cleaned
+        elif response.strip():
+            # The model produced only hidden reasoning. Never persist or
+            # replay it; an empty answer lets the caller fall back cleanly.
+            response = ""
         if self.engine == "native":
             for pattern in (r"\*{3,}", r"\*{2,}", r"\*", r"#{1,6}\s*", r"`{1,3}"):
                 response = re.sub(pattern, "", response)
@@ -447,7 +471,7 @@ class AIHyperBrain:
         return response.strip()
 
     def _remember_turn(self, prompt: str, response: str) -> None:
-        if not self.memory:
+        if not self.memory or not (response or "").strip():
             return
         self.memory.add_user(prompt)
         self.memory.add_assistant(response)
@@ -487,8 +511,11 @@ class AIHyperBrain:
                 full = collected
             if not failed[0] and full.strip() and not self._is_error(full):
                 result = self._postprocess(full)
-                self._remember_turn(prompt, result)
-                return result
+                if result:
+                    self._remember_turn(prompt, result)
+                    return result
+                last_error = "[!] Model returned only reasoning; no final answer."
+                continue
             last_error = full
 
         if last_error:
