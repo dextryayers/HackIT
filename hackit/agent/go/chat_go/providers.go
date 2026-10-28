@@ -124,8 +124,14 @@ func ollamaOptions() map[string]interface{} {
 		"repeat_penalty": 1.05,
 		"num_ctx":        ollamaNumCtx(),
 	}
+	// Local reasoning models need a generous token budget so the separate
+	// thinking channel can finish before the final answer is emitted.  Without
+	// this, think:true exhausts the default num_predict and the model returns
+	// only reasoning (or falls back to think:false and dumps CoT into content).
 	if maxTokensSetting > 0 {
 		options["num_predict"] = maxTokensSetting
+	} else {
+		options["num_predict"] = 4096
 	}
 	return options
 }
@@ -594,12 +600,13 @@ func callOllama(client *http.Client, key, prompt, system, model string, hist []M
 			return content, nil
 		}
 		lastErr = fmt.Errorf("[OLLAMA] empty response (model %s)", model)
-		// Some builds return only hidden reasoning when think is enabled.
-		// Retry once with thinking disabled so the caller still gets a final
-		// answer instead of an empty response.
+		// Never fall back to think:false.  Reasoning models must keep their
+		// chain-of-thought in the separate thinking channel; dumping it into
+		// content is exactly the "nonsense answer" failure.  If content is
+		// empty, increase num_predict or retry the same request instead.
 		if attempt == 0 && strings.TrimSpace(res.Message.Thinking) != "" && think != nil && *think {
-			disabled := false
-			think = &disabled
+			// Same think:true request once more; a larger budget may let the
+			// final answer appear after the reasoning block.
 			continue
 		}
 		break

@@ -36,6 +36,10 @@ _STALE_TEST_TOKENS = (
     "HACKIT_OK",
     "HACKIT_TEST_OK",
     "TEST_OK",
+    "HACKIT_BENCHMARK_OK",
+    "BENCHMARK_OK",
+    "UI_OK",
+    "INLINE_OK",
 )
 
 
