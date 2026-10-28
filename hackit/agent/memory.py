@@ -28,12 +28,29 @@ MAX_CONTEXT_CHARS = 6000
 
 _LANGCHAIN_AVAILABLE = False
 _LANGCHAIN_ERROR = ""
+_LANGCHAIN_IMPL = ""
+ConversationBufferWindowMemory = None  # type: ignore
+_HumanMessage = None  # type: ignore
+_AIMessage = None  # type: ignore
+
 try:  # pragma: no cover - optional dependency
-    from langchain.memory import ConversationBufferWindowMemory  # type: ignore
+    # langchain-core is the stable baseline and is present in every 1.x
+    # installation.  It also lets memory work when only the core package is
+    # installed.
+    from langchain_core.messages import AIMessage as _AIMessage  # type: ignore
+    from langchain_core.messages import HumanMessage as _HumanMessage  # type: ignore
 
     _LANGCHAIN_AVAILABLE = True
+    _LANGCHAIN_IMPL = "langchain_core"
+    try:
+        # LangChain <=0.3 exposes the official windowed memory class.  It was
+        # removed in 1.x, so this import is intentionally best-effort.
+        from langchain.memory import ConversationBufferWindowMemory  # type: ignore
+
+        _LANGCHAIN_IMPL = "langchain.memory"
+    except Exception:  # noqa: BLE001 - optional legacy API
+        pass
 except Exception as exc:  # noqa: BLE001 - optional
-    ConversationBufferWindowMemory = None  # type: ignore
     _LANGCHAIN_ERROR = str(exc)
 
 
@@ -43,6 +60,62 @@ def langchain_available() -> bool:
 
 def langchain_error() -> str:
     return _LANGCHAIN_ERROR
+
+
+def langchain_impl() -> str:
+    return _LANGCHAIN_IMPL
+
+
+class _CoreWindowMemory:
+    """Windowed history backed by LangChain Core message objects.
+
+    LangChain 1.x removed ``langchain.memory``.  This adapter preserves the
+    HumanMessage/AIMessage semantics and exposes the small
+    ``save_context``/``load_memory_variables`` surface used by
+    :class:`AgentMemory`, without depending on the legacy package.
+    """
+
+    def __init__(self, k: int):
+        self.k = max(1, int(k))
+        self._messages: List[Any] = []
+
+    def save_context(self, inputs: Dict[str, Any], outputs: Dict[str, Any]) -> None:
+        input_text = str((inputs or {}).get("input", "") or "").strip()
+        output_text = str((outputs or {}).get("output", "") or "").strip()
+        if input_text:
+            self._messages.append(_HumanMessage(content=input_text))
+        if output_text:
+            self._messages.append(_AIMessage(content=output_text))
+        del self._messages[: max(0, len(self._messages) - self.k * 2)]
+
+    def load_memory_variables(
+        self, _inputs: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, str]:
+        lines: List[str] = []
+        for message in self._messages:
+            role = getattr(message, "type", "")
+            label = "User" if role == "human" else "Assistant" if role == "ai" else "Note"
+            lines.append(f"{label}: {message.content}")
+        return {"history": "\n".join(lines)}
+
+    def clear(self) -> None:
+        self._messages.clear()
+
+
+def _make_langchain_memory(k: int):
+    """Return the best available LangChain windowed-memory backend."""
+    if ConversationBufferWindowMemory is not None:
+        try:
+            return ConversationBufferWindowMemory(
+                k=k,
+                memory_key="history",
+                return_messages=False,
+            )
+        except Exception:  # noqa: BLE001 - fall through to the core adapter
+            pass
+    if _HumanMessage is not None and _AIMessage is not None:
+        return _CoreWindowMemory(k=k)
+    raise RuntimeError("no LangChain memory backend is available")
 
 
 def _slug(value: str) -> str:
@@ -77,11 +150,7 @@ class AgentMemory:
 
         if use_langchain and _LANGCHAIN_AVAILABLE:
             try:
-                self._lc_memory = ConversationBufferWindowMemory(
-                    k=self.window,
-                    memory_key="history",
-                    return_messages=False,
-                )
+                self._lc_memory = _make_langchain_memory(self.window)
                 # Replay persisted messages into the LangChain window.
                 pending_user = None
                 for entry in self._entries:
@@ -230,6 +299,7 @@ class AgentMemory:
             "approx_tokens": approx_tokens,
             "path": self._path,
             "langchain_available": _LANGCHAIN_AVAILABLE,
+            "langchain_impl": _LANGCHAIN_IMPL,
         }
 
     # -- lifecycle -------------------------------------------------------

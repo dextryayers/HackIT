@@ -182,7 +182,9 @@ Payload generation and passive/scanning modules do not require the flag.
 The memory layer stores a rolling conversation window and durable facts
 (targets, domains, CVEs) in `~/.hackit/agent_memory/<session>.json`.
 
-* With LangChain installed, `ConversationBufferWindowMemory` is used.
+* With LangChain installed, the layer uses `ConversationBufferWindowMemory`
+  (0.2–0.3) or a `langchain-core` message adapter (1.x, where the legacy class
+  was removed).
 * Without LangChain, a built-in JSON window provides the same behaviour with no
   extra dependencies.
 
