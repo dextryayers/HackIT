@@ -17,6 +17,7 @@ type Result struct {
 	Type        string     `json:"type"`
 	Payload     string     `json:"payload"`
 	DBMS        string     `json:"dbms"`
+	DBMSVersion string     `json:"dbms_version,omitempty"`
 	Details     string     `json:"details"`
 	Confidence  float64    `json:"confidence"`
 	Location    string     `json:"location,omitempty"`
@@ -690,11 +691,11 @@ func (e *Engine) postScan(results []Result, params url.Values) {
 					e.Log.SectionItem(t)
 				}
 				results = append(results, Result{
-					Parameter: "enumeration",
-					Type:      "list-tables",
-					Details:   db,
-					Payload:   strings.Join(tables, ","),
-					DBMS:      dbms,
+					Parameter:  "enumeration",
+					Type:       "list-tables",
+					Details:    db,
+					Payload:    strings.Join(tables, ","),
+					DBMS:       dbms,
 					Confidence: 1.0,
 				})
 
@@ -708,11 +709,11 @@ func (e *Engine) postScan(results []Result, params url.Values) {
 								e.Log.SectionItem(c)
 							}
 							results = append(results, Result{
-								Parameter: "enumeration",
-								Type:      "list-columns",
-								Details:   fmt.Sprintf("%s.%s", db, table),
-								Payload:   strings.Join(cols, ","),
-								DBMS:      dbms,
+								Parameter:  "enumeration",
+								Type:       "list-columns",
+								Details:    fmt.Sprintf("%s.%s", db, table),
+								Payload:    strings.Join(cols, ","),
+								DBMS:       dbms,
 								Confidence: 1.0,
 							})
 							e.Log.Blank()
@@ -727,11 +728,11 @@ func (e *Engine) postScan(results []Result, params url.Values) {
 									e.Log.Success(fmt.Sprintf("Total: %d row(s) from %s.%s", len(rows), db, table))
 								}
 								results = append(results, Result{
-									Parameter: "enumeration",
-									Type:      "dump-table",
-									Details:   fmt.Sprintf("%s.%s", db, table),
-									Payload:   fmt.Sprintf("%v", dumped[table]),
-									DBMS:      dbms,
+									Parameter:  "enumeration",
+									Type:       "dump-table",
+									Details:    fmt.Sprintf("%s.%s", db, table),
+									Payload:    fmt.Sprintf("%v", dumped[table]),
+									DBMS:       dbms,
 									Confidence: 1.0,
 								})
 							} else {
@@ -852,20 +853,20 @@ func (e *Engine) CheckError(body string, dbms string) bool {
 func isErrorInjection(body string, dbms string) bool {
 	bodyLower := strings.ToLower(body)
 	patterns := map[string][]string{
-		"MySQL":      {"sql syntax", "mysql_fetch", "you have an error in your sql syntax", "warning: mysql", "mysql_error"},
-		"MariaDB":    {"sql syntax", "mysql_fetch", "mariadb", "warning: mysql"},
-		"MSSQL":      {"unclosed quotation mark", "microsoft ole db", "sql server", "driver.*sql server", "mssql_"},
-		"PostgreSQL": {"postgresql", "pg_query", "syntax error at or near", "pg_", "division by zero"},
-		"Oracle":     {"ora-", "oracle", "pls-", "oci_"},
-		"SQLite":     {"sqlite", "sqlite3", "no such table", "no such column"},
-		"ClickHouse": {"clickhouse", "db::exception", "received from clickhouse"},
-		"DuckDB":     {"duckdb", "catalog error", "binder error"},
+		"MySQL":       {"sql syntax", "mysql_fetch", "you have an error in your sql syntax", "warning: mysql", "mysql_error"},
+		"MariaDB":     {"sql syntax", "mysql_fetch", "mariadb", "warning: mysql"},
+		"MSSQL":       {"unclosed quotation mark", "microsoft ole db", "sql server", "driver.*sql server", "mssql_"},
+		"PostgreSQL":  {"postgresql", "pg_query", "syntax error at or near", "pg_", "division by zero"},
+		"Oracle":      {"ora-", "oracle", "pls-", "oci_"},
+		"SQLite":      {"sqlite", "sqlite3", "no such table", "no such column"},
+		"ClickHouse":  {"clickhouse", "db::exception", "received from clickhouse"},
+		"DuckDB":      {"duckdb", "catalog error", "binder error"},
 		"CockroachDB": {"cockroachdb", "runtime error", "crdb_"},
-		"Snowflake":  {"snowflake", "execution error in"},
-		"BigQuery":   {"bigquery", "unrecognized token"},
-		"Firebird":   {"firebird", "dynamic sql error", "isc_"},
-		"Sybase":     {"sybase", "sql anywhere"},
-		"H2":         {"h2", "general error", "unique index or primary key violation"},
+		"Snowflake":   {"snowflake", "execution error in"},
+		"BigQuery":    {"bigquery", "unrecognized token"},
+		"Firebird":    {"firebird", "dynamic sql error", "isc_"},
+		"Sybase":      {"sybase", "sql anywhere"},
+		"H2":          {"h2", "general error", "unique index or primary key violation"},
 	}
 	if pats, ok := patterns[dbms]; ok {
 		for _, pat := range pats {

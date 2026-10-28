@@ -19,17 +19,18 @@ func NewExplorer(e *Engine, s *Session) *Explorer {
 
 func (x *Explorer) result(kind, details, payload string) Result {
 	return Result{
-		Parameter:  x.S.Point.Name,
-		Type:       kind,
-		Payload:    payload,
-		DBMS:       x.S.DBMS,
-		Details:    details,
-		Confidence: 1.0,
-		Location:   string(x.S.Point.Location),
-		Technique:  x.S.Technique,
-		Prefix:     x.S.Boundary.Prefix,
-		Suffix:     x.S.Boundary.Suffix,
-		Columns:    x.S.Columns,
+		Parameter:   x.S.Point.Name,
+		Type:        kind,
+		Payload:     payload,
+		DBMS:        x.S.DBMS,
+		DBMSVersion: x.S.DBMSVersion,
+		Details:     details,
+		Confidence:  1.0,
+		Location:    string(x.S.Point.Location),
+		Technique:   x.S.Technique,
+		Prefix:      x.S.Boundary.Prefix,
+		Suffix:      x.S.Boundary.Suffix,
+		Columns:     x.S.Columns,
 	}
 }
 
@@ -41,6 +42,10 @@ func (x *Explorer) Run() []Result {
 	if opts.Fingerprint || opts.BannerGrab || opts.CurrentDB || opts.CurrentUser ||
 		opts.Hostname || opts.Privileges || opts.IsDBA || opts.Banner {
 		out = append(out, x.fingerprint()...)
+	}
+
+	if opts.Users || opts.Passwords || opts.Roles {
+		out = append(out, x.accounts()...)
 	}
 
 	if opts.SQLQuery != "" {
@@ -75,6 +80,10 @@ func (x *Explorer) Run() []Result {
 		}
 	}
 
+	if opts.FileWrite != "" {
+		x.E.logWarn("file write is not available through the current extraction path; use --sql-query with a dialect-specific statement")
+	}
+
 	if opts.ListDBs || opts.DumpAll || opts.Schema {
 		out = append(out, x.listDatabases()...)
 	}
@@ -87,8 +96,12 @@ func (x *Explorer) Run() []Result {
 		out = append(out, x.listTables()...)
 	}
 
-	if opts.ListColumns || opts.DumpAll || opts.DumpTable != "" || opts.ColumnsCSV != "" || opts.Schema {
+	if opts.ListColumns || opts.DumpAll || opts.DumpTable != "" || opts.ColumnsCSV != "" {
 		out = append(out, x.listColumns()...)
+	}
+
+	if opts.Schema {
+		out = append(out, x.schema()...)
 	}
 
 	if opts.CountRows {
@@ -220,6 +233,61 @@ func (x *Explorer) columnsFor(db, table string) []Result {
 	return []Result{x.result("list-columns", fmt.Sprintf("%s.%s", db, table), strings.Join(values, ","))}
 }
 
+func (x *Explorer) accounts() []Result {
+	var out []Result
+	items := []struct {
+		enabled bool
+		kind    string
+		expr    string
+		label   string
+	}{
+		{x.E.Opts.Users, "users", x.X.Dialect.Users(), "database users"},
+		{x.E.Opts.Passwords, "passwords", x.X.Dialect.Passwords(), "password hashes"},
+		{x.E.Opts.Roles, "roles", x.X.Dialect.Roles(), "database roles"},
+	}
+	for _, item := range items {
+		if !item.enabled {
+			continue
+		}
+		value, err := x.X.Scalar(item.expr)
+		if err != nil || value == "" {
+			x.E.logWarn(fmt.Sprintf("could not read %s: %v", item.label, err))
+			continue
+		}
+		x.E.Log.SectionHeader(fmt.Sprintf("%s (%s)", strings.ToUpper(item.label), x.S.DBMS))
+		for _, entry := range splitRowValues(value) {
+			x.E.Log.SectionData(entry)
+		}
+		x.E.Log.Blank()
+		out = append(out, x.result(item.kind, item.label, value))
+	}
+	return out
+}
+
+func (x *Explorer) schema() []Result {
+	var out []Result
+	for _, db := range x.databasesToScan() {
+		tables, err := x.X.Strings(x.X.Dialect.Tables(db))
+		if err != nil {
+			continue
+		}
+		for _, table := range tables {
+			value, err := x.X.Scalar(x.X.Dialect.TableColumns(db, table))
+			if err != nil || value == "" {
+				continue
+			}
+			columns := splitRowValues(value)
+			x.E.Log.SectionHeader(fmt.Sprintf("SCHEMA (%s.%s)", db, table))
+			for _, column := range columns {
+				x.E.Log.SectionItem(column)
+			}
+			x.E.Log.Blank()
+			out = append(out, x.result("schema", fmt.Sprintf("%s.%s", db, table), strings.Join(columns, ",")))
+		}
+	}
+	return out
+}
+
 func (x *Explorer) countRows() []Result {
 	var out []Result
 	db := x.E.Opts.Database
@@ -252,6 +320,26 @@ func (x *Explorer) dumpTable(db, table string) []Result {
 	if err != nil || len(cols) == 0 {
 		x.E.logWarn(fmt.Sprintf("could not list columns for %s.%s", db, table))
 		return nil
+	}
+	if x.E.Opts.ColumnsCSV != "" {
+		wanted := splitCSV(x.E.Opts.ColumnsCSV)
+		filtered := make([]string, 0, len(wanted))
+		for _, col := range cols {
+			for _, name := range wanted {
+				if strings.EqualFold(col, name) {
+					filtered = append(filtered, col)
+					break
+				}
+			}
+		}
+		if len(filtered) == 0 {
+			x.E.logWarn(fmt.Sprintf("none of the requested columns exist in %s.%s", db, table))
+			return nil
+		}
+		cols = filtered
+	}
+	if x.E.Opts.Where != "" {
+		x.E.logWarn("--where is not applied by the current row extractor; use --sql-query for filtered extraction")
 	}
 	limit := x.E.Opts.Rows
 	if limit <= 0 {
@@ -299,7 +387,7 @@ func (x *Explorer) dumpAll() []Result {
 			continue
 		}
 		for _, table := range tables {
-			if !isInterestingTable(table) && x.E.Opts.RiskLevel < 3 {
+			if isSystemTable(table) {
 				continue
 			}
 			out = append(out, x.dumpTable(db, table)...)
@@ -329,6 +417,16 @@ func (x *Explorer) search(keyword string) []Result {
 		x.E.Log.Blank()
 	}
 	return out
+}
+
+func isSystemTable(name string) bool {
+	lower := strings.ToLower(strings.TrimSpace(name))
+	for _, prefix := range []string{"sqlite_", "pg_", "information_schema", "performance_schema", "mysql.", "sys."} {
+		if strings.HasPrefix(lower, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func (x *Explorer) currentDatabase() string {

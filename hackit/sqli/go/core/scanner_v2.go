@@ -79,17 +79,18 @@ func (e *Engine) StartV2() []Result {
 
 		e.Session = session
 		results = append(results, Result{
-			Parameter:  point.Name,
-			Type:       technique,
-			Payload:    boundary.Prefix + boundary.Suffix,
-			DBMS:       session.DBMS,
-			Details:    fmt.Sprintf("%s parameter, %s technique", point.Location, technique),
-			Confidence: session.Confidence,
-			Location:   string(point.Location),
-			Technique:  technique,
-			Prefix:     boundary.Prefix,
-			Suffix:     boundary.Suffix,
-			Columns:    session.Columns,
+			Parameter:   point.Name,
+			Type:        technique,
+			Payload:     boundary.Prefix + boundary.Suffix,
+			DBMS:        session.DBMS,
+			DBMSVersion: session.DBMSVersion,
+			Details:     fmt.Sprintf("%s parameter, %s technique", point.Location, technique),
+			Confidence:  session.Confidence,
+			Location:    string(point.Location),
+			Technique:   technique,
+			Prefix:      boundary.Prefix,
+			Suffix:      boundary.Suffix,
+			Columns:     session.Columns,
 		})
 
 		explorer := NewExplorer(e, session)

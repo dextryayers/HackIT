@@ -254,6 +254,26 @@ func (e *Engine) IdentifyDBMS(session *Session) {
 			}
 		}
 	}
+
+	// When neither UNION nor error output is available, use the confirmed
+	// boolean oracle to test a dialect-specific expression. This is a
+	// fingerprint, not a full extraction, so it stays cheap.
+	e.identifyDBMSBlind(session)
+}
+
+func (e *Engine) identifyDBMSBlind(session *Session) bool {
+	for _, d := range Dialects() {
+		probe := *session
+		probe.DBMS = d.Name
+		probe.Technique = "boolean"
+		exec := NewExecutor(e, &probe)
+		condition := fmt.Sprintf("%s > 0", d.Length(d.Version()))
+		if exec.booleanOracle(condition) {
+			session.DBMS = d.Name
+			return true
+		}
+	}
+	return false
 }
 
 func looksLikeVersion(value string) bool {
