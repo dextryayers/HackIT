@@ -146,10 +146,20 @@ func bestErrorMatch(body string) string {
 		"ClickHouse", "DuckDB", "CockroachDB", "Snowflake", "BigQuery",
 		"Firebird", "Sybase", "H2",
 	}
+	lower := strings.ToLower(body)
+	best := ""
+	bestScore := 0
 	for _, dbms := range candidates {
-		if isErrorLike(body, dbms) {
-			return dbms
+		score := 0
+		for _, pattern := range dbmsErrorPatterns(dbms) {
+			if strings.Contains(lower, strings.ToLower(pattern)) {
+				score++
+			}
+		}
+		if score > bestScore {
+			bestScore = score
+			best = dbms
 		}
 	}
-	return ""
+	return best
 }

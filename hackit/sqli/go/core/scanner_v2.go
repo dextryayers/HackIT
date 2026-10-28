@@ -43,9 +43,29 @@ func (e *Engine) StartV2() []Result {
 	}
 
 	var results []Result
+	if e.Opts.WAFDetect {
+		name := "none"
+		details := "no WAF/IPS signature matched"
+		if waf.Detected {
+			name = waf.Name
+			details = waf.Details
+			if details == "" {
+				details = "WAF/IPS signature matched"
+			}
+		}
+		results = append(results, Result{
+			Parameter:  first.Name,
+			Type:       "waf",
+			Payload:    name,
+			DBMS:       heuristicDBMS,
+			Details:    details,
+			Confidence: 1.0,
+			Location:   string(first.Location),
+		})
+	}
 	for _, point := range points {
 		e.Log.Info(fmt.Sprintf("testing %s parameter '%s'", point.Location, point.Name))
-		boundary, technique, ok := e.DetectBoundary(point, baseBody)
+		boundary, technique, proof, ok := e.DetectBoundary(point, baseBody)
 		if !ok {
 			e.Log.Warning(fmt.Sprintf("parameter '%s' does not appear to be injectable", point.Name))
 			continue
@@ -65,7 +85,11 @@ func (e *Engine) StartV2() []Result {
 			WAF:         waf.Name,
 		}
 		if e.Opts.DBMS != "" {
-			session.DBMS = e.Opts.DBMS
+			if dialect := GetDialect(e.Opts.DBMS); dialect != nil {
+				session.DBMS = dialect.Name
+			} else {
+				session.DBMS = e.Opts.DBMS
+			}
 		}
 		e.IdentifyDBMS(session)
 
@@ -81,7 +105,7 @@ func (e *Engine) StartV2() []Result {
 		results = append(results, Result{
 			Parameter:   point.Name,
 			Type:        technique,
-			Payload:     boundary.Prefix + boundary.Suffix,
+			Payload:     proof,
 			DBMS:        session.DBMS,
 			DBMSVersion: session.DBMSVersion,
 			Details:     fmt.Sprintf("%s parameter, %s technique", point.Location, technique),

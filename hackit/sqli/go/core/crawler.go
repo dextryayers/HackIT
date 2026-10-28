@@ -7,11 +7,11 @@ import (
 )
 
 type CrawledParam struct {
-	URL     string
-	Method  string
-	Params  map[string]string
-	Depth   int
-	Forms   []FormInfo
+	URL    string
+	Method string
+	Params map[string]string
+	Depth  int
+	Forms  []FormInfo
 }
 
 type FormInfo struct {

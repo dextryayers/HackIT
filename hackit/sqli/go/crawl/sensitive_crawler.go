@@ -2,16 +2,16 @@ package crawl
 
 import (
 	"fmt"
+	"hackit/sqli/go/utils"
 	"regexp"
 	"strings"
-	"hackit/sqli/go/utils"
 )
 
 // SensitiveCrawler detects sensitive data patterns in database columns and values
 type SensitiveCrawler struct {
-	engine     EngineInterface
-	log        *utils.Logger
-	patterns   []*SensitivePattern
+	engine   EngineInterface
+	log      *utils.Logger
+	patterns []*SensitivePattern
 }
 
 // SensitivePattern defines a sensitive data pattern

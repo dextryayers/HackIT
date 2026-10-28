@@ -2,11 +2,11 @@ package crawl
 
 import (
 	"fmt"
+	"hackit/sqli/go/utils"
 	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
-	"hackit/sqli/go/utils"
 )
 
 // ParallelCrawler manages concurrent crawling with adaptive parallelism

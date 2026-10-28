@@ -85,8 +85,8 @@ type Options struct {
 	DumpTable string `json:"dump_table,omitempty"`
 	DumpAll   bool   `json:"dump_all,omitempty"`
 
-	PrivEsc  bool `json:"priv_esc,omitempty"`
-	OSAccess bool `json:"os_access,omitempty"`
+	PrivEsc   bool `json:"priv_esc,omitempty"`
+	OSAccess  bool `json:"os_access,omitempty"`
 	ExfilDNS  bool `json:"exfil_dns,omitempty"`
 	ExfilHTTP bool `json:"exfil_http,omitempty"`
 	NoColor   bool `json:"no_color,omitempty"`
@@ -134,14 +134,14 @@ type Options struct {
 }
 
 type Engine struct {
-	Opts                 *Options
-	Client               *http.Client
-	Log                  *utils.Logger
-	Perf                 *utils.PerformanceManager
-	LastResponseHeaders  http.Header
-	LastResponseBody     string
-	LastResponseTime     time.Duration
-	LastStatusCode       int
+	Opts                *Options
+	Client              *http.Client
+	Log                 *utils.Logger
+	Perf                *utils.PerformanceManager
+	LastResponseHeaders http.Header
+	LastResponseBody    string
+	LastResponseTime    time.Duration
+	LastStatusCode      int
 
 	Points       []InjectionPoint
 	Session      *Session
@@ -167,11 +167,11 @@ type RateLimiter struct {
 
 func NewRateLimiter() *RateLimiter {
 	return &RateLimiter{
-		minDelay:        0,
-		maxDelay:        5 * time.Second,
-		currentDelay:    0,
-		slowThreshold:   3 * time.Second,
-		fastThreshold:   500 * time.Millisecond,
+		minDelay:      0,
+		maxDelay:      5 * time.Second,
+		currentDelay:  0,
+		slowThreshold: 3 * time.Second,
+		fastThreshold: 500 * time.Millisecond,
 	}
 }
 

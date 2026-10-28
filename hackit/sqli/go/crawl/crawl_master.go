@@ -2,40 +2,40 @@ package crawl
 
 import (
 	"fmt"
+	"hackit/sqli/go/utils"
 	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
-	"hackit/sqli/go/utils"
 )
 
 // CrawlMaster orchestrates all crawling operations
 type CrawlMaster struct {
-	engine   EngineInterface
-	log      *utils.Logger
-	config   *CrawlConfig
-	stats    *CrawlStats
-	results  *CrawlResults
-	mu       sync.Mutex
+	engine  EngineInterface
+	log     *utils.Logger
+	config  *CrawlConfig
+	stats   *CrawlStats
+	results *CrawlResults
+	mu      sync.Mutex
 }
 
 // CrawlConfig configures the crawling behavior
 type CrawlConfig struct {
-	MaxDepth          int
-	MaxThreads        int
-	Timeout           time.Duration
-	ExtractData       bool
-	ExtractSensitive  bool
-	ExtractProcs      bool
-	ExtractViews      bool
-	ExtractIndexes    bool
-	ExtractSystem     bool
-	BatchSize         int
-	DelayBetweenReq   time.Duration
-	StopOnError       bool
-	SavePartial       bool
-	OutputDir         string
+	MaxDepth         int
+	MaxThreads       int
+	Timeout          time.Duration
+	ExtractData      bool
+	ExtractSensitive bool
+	ExtractProcs     bool
+	ExtractViews     bool
+	ExtractIndexes   bool
+	ExtractSystem    bool
+	BatchSize        int
+	DelayBetweenReq  time.Duration
+	StopOnError      bool
+	SavePartial      bool
+	OutputDir        string
 }
 
 // CrawlStats tracks crawling progress
@@ -53,61 +53,61 @@ type CrawlStats struct {
 
 // CrawlResults stores all crawled data
 type CrawlResults struct {
-	Databases   map[string]*DatabaseInfo
-	Sensitive   []SensitiveFinding
-	Relations   []string
-	SystemInfo  map[string]string
-	Summary     *CrawlSummary
+	Databases  map[string]*DatabaseInfo
+	Sensitive  []SensitiveFinding
+	Relations  []string
+	SystemInfo map[string]string
+	Summary    *CrawlSummary
 }
 
 // DatabaseInfo holds complete info about a database
 type DatabaseInfo struct {
-	Name         string
-	Size         string
-	Collation    string
-	Charset      string
-	Tables       map[string]*TableInfo
-	Procs        []StoredProcInfo
-	Views        []ViewInfo
-	Indexes      []IndexInfo
+	Name      string
+	Size      string
+	Collation string
+	Charset   string
+	Tables    map[string]*TableInfo
+	Procs     []StoredProcInfo
+	Views     []ViewInfo
+	Indexes   []IndexInfo
 }
 
 // TableInfo holds complete info about a table
 type TableInfo struct {
-	Name       string
-	Engine     string
-	Collation  string
-	RowCount   int64
-	Columns    []ColumnInfo
-	Indexes    []IndexInfo
-	Data       [][]string
-	IsSystem   bool
+	Name      string
+	Engine    string
+	Collation string
+	RowCount  int64
+	Columns   []ColumnInfo
+	Indexes   []IndexInfo
+	Data      [][]string
+	IsSystem  bool
 }
 
 // ColumnInfo holds detailed column info
 type ColumnInfo struct {
-	Name       string
-	Type       string
-	Length     string
-	Nullable   bool
-	Default    string
-	Comment    string
-	IsPK       bool
-	IsFK       bool
-	IsIdentity bool
-	IsSensitive bool
+	Name             string
+	Type             string
+	Length           string
+	Nullable         bool
+	Default          string
+	Comment          string
+	IsPK             bool
+	IsFK             bool
+	IsIdentity       bool
+	IsSensitive      bool
 	SensitivityScore float64
 }
 
 // IndexInfo holds index information
 type IndexInfo struct {
-	Name       string
-	Columns    []string
-	IsPK       bool
-	IsUnique   bool
-	IsFK       bool
-	RefTable   string
-	RefColumn  string
+	Name      string
+	Columns   []string
+	IsPK      bool
+	IsUnique  bool
+	IsFK      bool
+	RefTable  string
+	RefColumn string
 }
 
 // StoredProcInfo holds stored procedure info
@@ -121,9 +121,9 @@ type StoredProcInfo struct {
 
 // ViewInfo holds view information
 type ViewInfo struct {
-	Name       string
-	Definition string
-	Columns    []string
+	Name        string
+	Definition  string
+	Columns     []string
 	IsUpdatable bool
 }
 
@@ -155,10 +155,10 @@ type CrawlSummary struct {
 
 // CrawlProgress is sent to progress channel
 type CrawlProgress struct {
-	Percent  float64
-	Message  string
-	Current  string
-	Speed    string
+	Percent float64
+	Message string
+	Current string
+	Speed   string
 }
 
 // EngineInterface defines what we need from the core engine
@@ -191,10 +191,10 @@ func NewCrawlMaster(e EngineInterface, cfg *CrawlConfig) *CrawlMaster {
 		cfg = DefaultCrawlConfig()
 	}
 	return &CrawlMaster{
-		engine:  e,
-		log:     e.GetLogger(),
-		config:  cfg,
-		stats:   &CrawlStats{StartTime: time.Now()},
+		engine: e,
+		log:    e.GetLogger(),
+		config: cfg,
+		stats:  &CrawlStats{StartTime: time.Now()},
 		results: &CrawlResults{
 			Databases:  make(map[string]*DatabaseInfo),
 			Sensitive:  []SensitiveFinding{},

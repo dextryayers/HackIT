@@ -38,9 +38,9 @@ func BoundaryCandidates() []BoundaryCandidate {
 }
 
 // DetectBoundary finds a working prefix/suffix pair and the first technique
-// that proves the injection. It returns the boundary, the technique name and
-// whether a usable boundary was found.
-func (e *Engine) DetectBoundary(point InjectionPoint, baseBody string) (Boundary, string, bool) {
+// that proves the injection. It returns the boundary, the technique name, the
+// exact proof payload, and whether a usable boundary was found.
+func (e *Engine) DetectBoundary(point InjectionPoint, baseBody string) (Boundary, string, string, bool) {
 	candidates := BoundaryCandidates()
 	forced := e.Opts.Prefix != "" || e.Opts.Suffix != ""
 	if forced {
@@ -65,26 +65,26 @@ func (e *Engine) DetectBoundary(point InjectionPoint, baseBody string) (Boundary
 		for _, c := range candidates {
 			switch technique {
 			case "boolean":
-				if ok, _ := e.testBoundaryBoolean(point, c, baseBody); ok {
-					return Boundary{Prefix: c.Prefix, Suffix: c.Suffix}, "boolean", true
+				if ok, proof := e.testBoundaryBoolean(point, c, baseBody); ok {
+					return Boundary{Prefix: c.Prefix, Suffix: c.Suffix}, "boolean", proof, true
 				}
 			case "time":
-				if e.testBoundaryTime(point, c) {
-					return Boundary{Prefix: c.Prefix, Suffix: c.Suffix}, "time", true
+				if ok, proof := e.testBoundaryTime(point, c); ok {
+					return Boundary{Prefix: c.Prefix, Suffix: c.Suffix}, "time", proof, true
 				}
 			case "error":
-				if e.testBoundaryError(point, c) {
-					return Boundary{Prefix: c.Prefix, Suffix: c.Suffix}, "error", true
+				if ok, proof := e.testBoundaryError(point, c); ok {
+					return Boundary{Prefix: c.Prefix, Suffix: c.Suffix}, "error", proof, true
 				}
 			case "union":
-				if e.testBoundaryUnion(point, c, baseBody) {
-					return Boundary{Prefix: c.Prefix, Suffix: c.Suffix}, "union", true
+				if ok, proof := e.testBoundaryUnion(point, c, baseBody); ok {
+					return Boundary{Prefix: c.Prefix, Suffix: c.Suffix}, "union", proof, true
 				}
 			}
 		}
 	}
 
-	return Boundary{}, "", false
+	return Boundary{}, "", "", false
 }
 
 func (e *Engine) testBoundaryBoolean(point InjectionPoint, c BoundaryCandidate, baseBody string) (bool, string) {
@@ -119,10 +119,10 @@ func (e *Engine) testBoundaryBoolean(point InjectionPoint, c BoundaryCandidate, 
 	if similarity(true1, baseBody) < 0.35 && similarity(false1, baseBody) < 0.35 {
 		return false, ""
 	}
-	return true, "boolean"
+	return true, truePayload
 }
 
-func (e *Engine) testBoundaryTime(point InjectionPoint, c BoundaryCandidate) bool {
+func (e *Engine) testBoundaryTime(point InjectionPoint, c BoundaryCandidate) (bool, string) {
 	baseline := e.baselineLatency(point)
 	delay := e.Opts.TimeSecs
 	if delay <= 0 {
@@ -142,13 +142,13 @@ func (e *Engine) testBoundaryTime(point InjectionPoint, c BoundaryCandidate) boo
 			continue
 		}
 		if medianDuration(samples) > baseline+delayThreshold(delay) {
-			return true
+			return true, payload
 		}
 	}
-	return false
+	return false, ""
 }
 
-func (e *Engine) testBoundaryError(point InjectionPoint, c BoundaryCandidate) bool {
+func (e *Engine) testBoundaryError(point InjectionPoint, c BoundaryCandidate) (bool, string) {
 	for _, d := range Dialects() {
 		expr, ok := d.ErrorExpr("1")
 		if !ok {
@@ -160,13 +160,13 @@ func (e *Engine) testBoundaryError(point InjectionPoint, c BoundaryCandidate) bo
 			continue
 		}
 		if isErrorLike(body, d.Name) || strings.Contains(body, "~1~") {
-			return true
+			return true, payload
 		}
 	}
-	return false
+	return false, ""
 }
 
-func (e *Engine) testBoundaryUnion(point InjectionPoint, c BoundaryCandidate, baseBody string) bool {
+func (e *Engine) testBoundaryUnion(point InjectionPoint, c BoundaryCandidate, baseBody string) (bool, string) {
 	for cols := 1; cols <= 8; cols++ {
 		nulls := make([]string, cols)
 		for i := range nulls {
@@ -179,11 +179,11 @@ func (e *Engine) testBoundaryUnion(point InjectionPoint, c BoundaryCandidate, ba
 				continue
 			}
 			if !isErrorLike(body, "") && length > 0 && responsesDiffer(body, baseBody) {
-				return true
+				return true, payload
 			}
 		}
 	}
-	return false
+	return false, ""
 }
 
 func (e *Engine) baselineLatency(point InjectionPoint) time.Duration {
@@ -223,6 +223,11 @@ func (e *Engine) IdentifyDBMS(session *Session) {
 		return
 	}
 	if d := GetDialect(session.DBMS); d != nil && session.DBMS != "" && !strings.EqualFold(session.DBMS, "Unknown") {
+		// The DBMS was forced by the operator. Keep the canonical dialect
+		// name and still try to read the version through the confirmed
+		// technique without fingerprinting every other dialect.
+		session.DBMS = d.Name
+		e.identifyVersion(session, d)
 		return
 	}
 
@@ -271,6 +276,38 @@ func (e *Engine) IdentifyDBMS(session *Session) {
 	// A target that only answers through response timing needs a timing
 	// fingerprint instead of a boolean one.
 	e.identifyDBMSTime(session)
+}
+
+// identifyVersion reads the version string for a known dialect. It uses
+// in-band output when available and leaves the version empty when the target
+// only supports blind extraction, because blind version extraction is
+// expensive and does not change the rest of the assessment.
+func (e *Engine) identifyVersion(session *Session, d *Dialect) {
+	if session.DBMSVersion != "" {
+		return
+	}
+	probe := *session
+	probe.DBMS = d.Name
+	probe.Technique = "union"
+	exec := NewExecutor(e, &probe)
+	// unionScalar detects the column count lazily. This lets version
+	// extraction work even when the confirmed technique was boolean or
+	// time based, as long as the target also accepts UNION output.
+	if value, err := exec.unionScalar(d.Version()); err == nil && looksLikeVersion(value) {
+		session.Columns = probe.Columns
+		session.StringCol = probe.StringCol
+		session.DBMSVersion = value
+		return
+	}
+	if expr, ok := d.ErrorExpr(d.Version()); ok {
+		body, _, err := exec.Request(" AND " + expr)
+		if err == nil {
+			if value := extractMarker(body); looksLikeVersion(value) {
+				session.DBMSVersion = value
+				return
+			}
+		}
+	}
 }
 
 // identifyDBMSTime finds the dialect whose delay primitive actually works. It

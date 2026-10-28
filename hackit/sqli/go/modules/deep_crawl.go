@@ -2,10 +2,10 @@ package modules
 
 import (
 	"fmt"
+	"hackit/sqli/go/utils"
 	"strings"
 	"sync"
 	"time"
-	"hackit/sqli/go/utils"
 )
 
 // DeepCrawler performs recursive depth-first database exploration
@@ -18,11 +18,11 @@ type DeepCrawler struct {
 
 // CrawlResult holds discovered database object info
 type CrawlResult struct {
-	Type    string `json:"type"`
-	Name    string `json:"name"`
-	Parent  string `json:"parent,omitempty"`
-	Size    int    `json:"size,omitempty"`
-	Sensitive bool `json:"sensitive,omitempty"`
+	Type      string `json:"type"`
+	Name      string `json:"name"`
+	Parent    string `json:"parent,omitempty"`
+	Size      int    `json:"size,omitempty"`
+	Sensitive bool   `json:"sensitive,omitempty"`
 }
 
 func NewDeepCrawler(e EngineInterface) *DeepCrawler {

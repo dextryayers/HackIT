@@ -134,8 +134,8 @@ func main() {
 
 	// Misc options.
 	flag.BoolVar(&opts.NoColor, "no-color", false, "Disable colored output")
-	flag.IntVar(&opts.Verbose, "verbose", 1, "Verbose level")
-	flag.IntVar(&opts.Verbose, "v", 1, "Verbose shorthand")
+	flag.IntVar(&opts.Verbose, "verbose", 0, "Verbose level")
+	flag.IntVar(&opts.Verbose, "v", 0, "Verbose shorthand")
 	flag.IntVar(&opts.Retry, "retry", 2, "Retry count")
 	flag.StringVar(&outputFormat, "output-format", "json", "Output format: json or ndjson")
 

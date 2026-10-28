@@ -151,4 +151,3 @@ func chunkString(s string, size int) []string {
 	}
 	return chunks
 }
-

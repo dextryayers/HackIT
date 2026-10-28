@@ -45,7 +45,7 @@ var Polyglot = PayloadGroup{
 		{Type: "error", Content: "' or 1=1 or '\"' or 1=1 or \"'"},
 		{Type: "error", Content: "1' OR 1=1 OR 1' OR 1=1 OR '1"},
 		{Type: "error", Content: "1' OR 1=1 AND 1=\"1"},
-		{Type: "error", Content: "' OR '1'='1"}, 
+		{Type: "error", Content: "' OR '1'='1"},
 
 		// ===========================================
 		// UNIVERSAL COMMENT BYPASS

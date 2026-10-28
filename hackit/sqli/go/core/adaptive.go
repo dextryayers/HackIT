@@ -22,10 +22,10 @@ func NewPayloadHistory() *PayloadHistory {
 }
 
 type AdaptiveEngine struct {
-	engine   *Engine
-	history  *PayloadHistory
-	dbms     string
-	param    string
+	engine  *Engine
+	history *PayloadHistory
+	dbms    string
+	param   string
 }
 
 func NewAdaptiveEngine(e *Engine) *AdaptiveEngine {

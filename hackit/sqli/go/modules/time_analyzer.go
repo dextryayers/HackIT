@@ -2,10 +2,10 @@ package modules
 
 import (
 	"fmt"
+	"hackit/sqli/go/utils"
 	"math"
 	"strings"
 	"time"
-	"hackit/sqli/go/utils"
 )
 
 // TimeAnalyzer performs advanced time-based SQL injection analysis

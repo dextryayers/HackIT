@@ -8,14 +8,14 @@ import (
 )
 
 type ResponseSignature struct {
-	Length    int
-	Body      string
-	Words     []string
-	Lines     int
-	Time      time.Duration
-	Hash      uint64
-	Title     string
-	StatusOK  bool
+	Length   int
+	Body     string
+	Words    []string
+	Lines    int
+	Time     time.Duration
+	Hash     uint64
+	Title    string
+	StatusOK bool
 }
 
 func (e *Engine) CreateSignature(body string, duration time.Duration) *ResponseSignature {

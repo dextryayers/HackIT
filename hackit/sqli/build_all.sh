@@ -1,9 +1,9 @@
 #!/bin/bash
-# SQLi Engine — Full Build Script
+# SQLi Engine - Full Build Script
 # Builds Go binary + verifies Python imports
 set -e
 DIR="$(cd "$(dirname "$0")" && pwd)"
-echo "=== SQLi Engine v4.0 — Full Build ==="
+echo "=== SQLi Engine v4.0 - Full Build ==="
 echo ""
 
 # Step 1: Build Go engine
@@ -12,7 +12,7 @@ cd "$DIR/go"
 mkdir -p bin
 go build -o bin/worker .
 BIN_SIZE=$(stat --format=%s bin/worker 2>/dev/null || stat -f%z bin/worker 2>/dev/null)
-echo "  → bin/worker ($BIN_SIZE bytes)"
+echo "  -> bin/worker ($BIN_SIZE bytes)"
 ./bin/worker -h 2>/dev/null | head -1
 echo ""
 
@@ -21,9 +21,9 @@ echo "[2/3] Building Wireless Go workers..."
 WIRELESS_DIR="$DIR/../wireless/go_workers"
 if [ -d "$WIRELESS_DIR" ]; then
     cd "$WIRELESS_DIR"
-    go build -o /dev/null . 2>&1 && echo "  → OK (wireless workers compile)"
+    go build -o /dev/null . 2>&1 && echo "  -> OK (wireless workers compile)"
 else
-    echo "  → Skipped (wireless not in expected path)"
+    echo "  -> Skipped (wireless not in expected path)"
 fi
 echo ""
 
@@ -34,8 +34,8 @@ import sys, os
 sys.path.insert(0, '$DIR/../..')
 from hackit.sqli.go_bridge import GoEngine
 g = GoEngine()
-print(f'  → GoEngine: available={g.available}  binary={os.path.exists(g.binary_path)}')
-print('  ✓ All imports OK')
+print(f'  -> GoEngine: available={g.available}  binary={os.path.exists(g.binary_path)}')
+print('  All imports OK')
 "
 echo ""
 
@@ -56,5 +56,5 @@ for f in *.go; do
         printf "  %-15s %3d\n" "$dbms" "$count"
     fi
 done
-echo "  ———————————————"
+echo "  ---------------"
 echo "  TOTAL: $(grep -rh 'Type:' *.go 2>/dev/null | wc -l)"

@@ -17,7 +17,7 @@ type CharResult struct {
 type oracleType int
 
 const (
-	oracleBoolean  oracleType = iota
+	oracleBoolean oracleType = iota
 	oracleLength
 	oracleError
 	oracleTime

@@ -245,13 +245,22 @@ func (x *Explorer) accounts() []Result {
 		{x.E.Opts.Passwords, "passwords", x.X.Dialect.Passwords(), "password hashes"},
 		{x.E.Opts.Roles, "roles", x.X.Dialect.Roles(), "database roles"},
 	}
+	supported := 0
 	for _, item := range items {
 		if !item.enabled {
 			continue
 		}
+		// Some dialects expose no account views at all. The empty literal is
+		// the dialect's explicit marker for an unsupported feature.
+		if strings.TrimSpace(item.expr) == "''" {
+			continue
+		}
+		supported++
 		value, err := x.X.Scalar(item.expr)
 		if err != nil || value == "" {
-			x.E.logWarn(fmt.Sprintf("could not read %s: %v", item.label, err))
+			if err != nil {
+				x.E.logWarn(fmt.Sprintf("could not read %s: %v", item.label, err))
+			}
 			continue
 		}
 		x.E.Log.SectionHeader(fmt.Sprintf("%s (%s)", strings.ToUpper(item.label), x.S.DBMS))
@@ -260,6 +269,9 @@ func (x *Explorer) accounts() []Result {
 		}
 		x.E.Log.Blank()
 		out = append(out, x.result(item.kind, item.label, value))
+	}
+	if supported == 0 {
+		x.E.logWarn(fmt.Sprintf("account enumeration is not supported for %s", x.S.DBMS))
 	}
 	return out
 }

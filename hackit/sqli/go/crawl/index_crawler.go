@@ -2,8 +2,8 @@ package crawl
 
 import (
 	"fmt"
-	"strings"
 	"hackit/sqli/go/utils"
+	"strings"
 )
 
 // IndexCrawler extracts index, primary key, foreign key, and constraint information
@@ -124,10 +124,10 @@ func (ic *IndexCrawler) extractForeignKeys(param, dbms, database, table string) 
 
 			if _, exists := fkMap[fkName]; !exists {
 				fkMap[fkName] = &IndexInfo{
-					Name:     fkName,
-					IsFK:     true,
-					IsUnique: false,
-					RefTable: refTable,
+					Name:      fkName,
+					IsFK:      true,
+					IsUnique:  false,
+					RefTable:  refTable,
 					RefColumn: refCol,
 				}
 			}

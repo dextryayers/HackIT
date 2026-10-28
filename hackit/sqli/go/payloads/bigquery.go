@@ -90,4 +90,3 @@ var BigQuery = PayloadGroup{
 		{Type: "deep", Content: "' UNION SELECT CURRENT_TIMESTAMP()--"},
 	},
 }
-

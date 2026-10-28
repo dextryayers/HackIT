@@ -2,8 +2,8 @@ package crawl
 
 import (
 	"fmt"
-	"strings"
 	"hackit/sqli/go/utils"
+	"strings"
 )
 
 // SchemaCrawler handles deep schema discovery
@@ -83,8 +83,8 @@ func (sc *SchemaCrawler) CrawlTableDetail(param, dbms, database, table string) *
 	queries := sc.schemaQueries(dbms)
 
 	info := &TableInfo{
-		Name:      table,
-		Columns:   []ColumnInfo{},
+		Name:    table,
+		Columns: []ColumnInfo{},
 	}
 
 	// Get table metadata
@@ -101,12 +101,12 @@ func (sc *SchemaCrawler) CrawlTableDetail(param, dbms, database, table string) *
 
 	for _, row := range colResults {
 		col := ColumnInfo{
-			Name:       safeGet(row, 0),
-			Type:       safeGet(row, 1),
-			Nullable:   strings.ToUpper(safeGet(row, 2)) == "YES",
-			Default:    safeGet(row, 3),
-			Comment:    safeGet(row, 4),
-			Length:     safeGet(row, 5),
+			Name:     safeGet(row, 0),
+			Type:     safeGet(row, 1),
+			Nullable: strings.ToUpper(safeGet(row, 2)) == "YES",
+			Default:  safeGet(row, 3),
+			Comment:  safeGet(row, 4),
+			Length:   safeGet(row, 5),
 		}
 
 		// Detect PK

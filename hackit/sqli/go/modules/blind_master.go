@@ -2,11 +2,11 @@ package modules
 
 import (
 	"fmt"
+	"hackit/sqli/go/utils"
 	"math"
 	"strings"
 	"sync"
 	"time"
-	"hackit/sqli/go/utils"
 )
 
 // BlindMaster handles advanced blind SQL injection with adaptive binary search

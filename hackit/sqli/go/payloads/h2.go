@@ -103,4 +103,3 @@ var H2 = PayloadGroup{
 		{Type: "stacked", Content: "'; SELECT 1; DROP ALIAS IF EXISTS REVERSE_CMD;--"},
 	},
 }
-

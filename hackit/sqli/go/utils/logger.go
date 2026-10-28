@@ -43,7 +43,9 @@ func (l *Logger) Plus(tag, msg string) {
 }
 
 func (l *Logger) Minus(tag, msg string) {
-	if l.VerboseLevel >= 1 {
+	// Warnings are always visible. They report unsupported features, failed
+	// probes, and other conditions that affect the interpretation of results.
+	if l.VerboseLevel >= 0 {
 		l.output("[-]", tag, msg, color.New(color.FgYellow))
 	}
 }
@@ -124,6 +126,9 @@ func (l *Logger) Failure(msg string) {
 }
 
 func (l *Logger) SectionHeader(title string) {
+	if l.VerboseLevel < 1 {
+		return
+	}
 	if l.NoColor {
 		fmt.Fprintf(os.Stderr, "[>] %s\n", title)
 	} else {
@@ -132,6 +137,9 @@ func (l *Logger) SectionHeader(title string) {
 }
 
 func (l *Logger) SectionItem(name string) {
+	if l.VerboseLevel < 1 {
+		return
+	}
 	if l.NoColor {
 		fmt.Fprintf(os.Stderr, "\t[-] %s\n", name)
 	} else {
@@ -141,6 +149,9 @@ func (l *Logger) SectionItem(name string) {
 }
 
 func (l *Logger) SectionData(name string) {
+	if l.VerboseLevel < 1 {
+		return
+	}
 	if l.NoColor {
 		fmt.Fprintf(os.Stderr, "\t[+] %s\n", name)
 	} else {
@@ -162,6 +173,9 @@ func (l *Logger) ListItem(name string) {
 }
 
 func (l *Logger) Blank() {
+	if l.VerboseLevel < 1 {
+		return
+	}
 	fmt.Fprintln(os.Stderr)
 }
 

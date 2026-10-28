@@ -85,4 +85,3 @@ var MariaDB = PayloadGroup{
 		{Type: "bypass", Content: "'/**/OR/**/1=1--"},
 	},
 }
-

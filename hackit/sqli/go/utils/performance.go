@@ -77,7 +77,7 @@ type PriorityItem struct {
 	Index    int
 }
 
-func (pq PriorityQueue) Len() int { return len(pq) }
+func (pq PriorityQueue) Len() int           { return len(pq) }
 func (pq PriorityQueue) Less(i, j int) bool { return pq[i].Priority < pq[j].Priority }
 func (pq PriorityQueue) Swap(i, j int) {
 	pq[i], pq[j] = pq[j], pq[i]
@@ -102,12 +102,12 @@ func (pq *PriorityQueue) Pop() interface{} {
 
 func NewPerformanceManager(retries int, delay time.Duration) *PerformanceManager {
 	return &PerformanceManager{
-		Cache:      NewResponseCache(10000, 5*time.Minute),
-		RetryCount: retries,
-		Delay:      delay,
+		Cache:       NewResponseCache(10000, 5*time.Minute),
+		RetryCount:  retries,
+		Delay:       delay,
 		RateLimiter: NewRateLimiter(),
-		Pool:       NewConnPool(50, 5),
-		Stats:      &PerfStats{},
+		Pool:        NewConnPool(50, 5),
+		Stats:       &PerfStats{},
 	}
 }
 
@@ -121,12 +121,12 @@ func NewResponseCache(maxSize int, ttl time.Duration) *ResponseCache {
 
 func NewRateLimiter() *RateLimiter {
 	return &RateLimiter{
-		minDelay:        0,
-		maxDelay:        5 * time.Second,
-		currentDelay:    0,
-		slowThreshold:   3 * time.Second,
-		fastThreshold:   500 * time.Millisecond,
-		targetRate:      10.0, // 10 requests/second target
+		minDelay:      0,
+		maxDelay:      5 * time.Second,
+		currentDelay:  0,
+		slowThreshold: 3 * time.Second,
+		fastThreshold: 500 * time.Millisecond,
+		targetRate:    10.0, // 10 requests/second target
 	}
 }
 

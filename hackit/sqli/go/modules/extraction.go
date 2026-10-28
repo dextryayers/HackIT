@@ -547,5 +547,3 @@ func extractErrorValues(body string) []string {
 	}
 	return nil
 }
-
-

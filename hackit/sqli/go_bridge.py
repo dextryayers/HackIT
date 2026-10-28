@@ -130,13 +130,30 @@ def build_args(url, verbose_lvl=2, **kwargs) -> List[str]:
         if k in BOOL_FLAGS:
             if v:
                 args.append(flag)
-        elif k in INT_FLAGS:
+            continue
+        if isinstance(v, (tuple, list)):
+            # The Go worker parses header and tamper as comma separated
+            # strings, so join known string flags instead of repeating them.
+            # Unknown flags keep the repeated form for slice style options.
+            if k in STRING_FLAGS:
+                joined = ",".join(str(item) for item in v if str(item))
+                if joined:
+                    args.extend([flag, joined])
+            else:
+                for item in v:
+                    s = str(item)
+                    if s:
+                        args.extend([flag, s])
+            continue
+        if k in INT_FLAGS:
             args.extend([flag, str(int(v))])
-        elif k in STRING_FLAGS:
+            continue
+        if k in STRING_FLAGS:
             val = str(v)
             if val:
                 args.extend([flag, val])
-        elif isinstance(v, bool):
+            continue
+        if isinstance(v, bool):
             if v:
                 args.append(flag)
         elif isinstance(v, int):
@@ -144,11 +161,6 @@ def build_args(url, verbose_lvl=2, **kwargs) -> List[str]:
         elif isinstance(v, str):
             if v:
                 args.extend([flag, v])
-        elif isinstance(v, (tuple, list)):
-            for item in v:
-                s = str(item)
-                if s:
-                    args.extend([flag, s])
     return args
 
 
@@ -231,6 +243,14 @@ class GoEngine:
                 err = r.stderr.strip()[:300] if r.stderr.strip() else \
                       f"exit code {r.returncode}"
                 return [{"error": err}]
+            # The worker writes warnings and verbose diagnostics to stderr.
+            # Forward them so unsupported features are visible at the default
+            # verbosity without polluting the JSON on stdout.
+            if r.stdout.strip() and r.stderr.strip():
+                sys.stderr.write(r.stderr)
+                if not r.stderr.endswith("\n"):
+                    sys.stderr.write("\n")
+                sys.stderr.flush()
             result = parse_stdout(r.stdout)
             return result if result is not None else \
                    [{"error": "No JSON output from Go engine"}]
@@ -300,7 +320,15 @@ class GoEngine:
     # -- High-level helpers ------------------------------------
 
     def crawl(self, url: str, mode: str = "full", **kwargs) -> List[Dict[str, Any]]:
-        return self.run(url, crawl_mode=mode, **kwargs)
+        options: Dict[str, Any] = {
+            "schema": True,
+            "list_columns": True,
+            "count_rows": True,
+        }
+        if mode in ("full", "sensitive", "data"):
+            options["dump_all"] = True
+        options.update(kwargs)
+        return self.run(url, **options)
 
     def extract(self, url: str, technique: str = "auto", **kwargs) -> List[Dict[str, Any]]:
         return self.run(url, extract_technique=technique, **kwargs)

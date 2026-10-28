@@ -2,9 +2,9 @@ package modules
 
 import (
 	"fmt"
+	"hackit/sqli/go/utils"
 	"regexp"
 	"strings"
-	"hackit/sqli/go/utils"
 )
 
 // ErrorEngine performs extensive error-based SQL injection extraction

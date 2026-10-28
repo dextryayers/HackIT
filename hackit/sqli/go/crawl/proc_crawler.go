@@ -2,8 +2,8 @@ package crawl
 
 import (
 	"fmt"
-	"strings"
 	"hackit/sqli/go/utils"
+	"strings"
 )
 
 // ProcCrawler extracts stored procedures, functions, triggers, and events

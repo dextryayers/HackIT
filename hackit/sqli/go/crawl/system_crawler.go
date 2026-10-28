@@ -2,8 +2,8 @@ package crawl
 
 import (
 	"fmt"
-	"strings"
 	"hackit/sqli/go/utils"
+	"strings"
 )
 
 // SystemCrawler extracts system-level information, config, users, privileges
@@ -38,30 +38,30 @@ func (sc *SystemCrawler) ExtractSystemInfo(param, dbms string) map[string]string
 
 func (sc *SystemCrawler) extractMySQLSystemInfo(param string, info map[string]string) {
 	queries := map[string]string{
-		"Version":       "@@VERSION",
-		"User":          "USER()",
-		"Current User":  "CURRENT_USER()",
-		"Database":      "DATABASE()",
-		"Hostname":      "@@HOSTNAME",
-		"Port":          "@@PORT",
-		"Data Dir":      "@@DATADIR",
-		"Temp Dir":      "@@TMPDIR",
-		"Base Dir":      "@@BASEDIR",
-		"Plugin Dir":    "@@PLUGINDIR",
-		"Server ID":     "@@SERVER_ID",
-		"Charset":       "@@CHARACTER_SET_SERVER",
-		"Collation":     "@@COLLATION_SERVER",
-		"Uptime":        "VERSION()", // Use as proxy
-		"Threads":       "@@THREAD_CACHE_SIZE",
-		"Max Conn":      "@@MAX_CONNECTIONS",
-		"Timeouts":      "@@WAIT_TIMEOUT",
-		"Secure Auth":   "@@SECURE_AUTH",
-		"Have SSL":      "@@HAVE_SSL",
-		"Have Symlink":  "@@HAVE_SYMLINK",
-		"Log Bin":       "@@LOG_BIN",
-		"Read Only":     "@@READ_ONLY",
-		"Skip Grant":    "@@SKIP_GRANT_TABLES",
-		"OOM Score":     "IFNULL(@@OOM_SCORE_ADJ, 'N/A')",
+		"Version":      "@@VERSION",
+		"User":         "USER()",
+		"Current User": "CURRENT_USER()",
+		"Database":     "DATABASE()",
+		"Hostname":     "@@HOSTNAME",
+		"Port":         "@@PORT",
+		"Data Dir":     "@@DATADIR",
+		"Temp Dir":     "@@TMPDIR",
+		"Base Dir":     "@@BASEDIR",
+		"Plugin Dir":   "@@PLUGINDIR",
+		"Server ID":    "@@SERVER_ID",
+		"Charset":      "@@CHARACTER_SET_SERVER",
+		"Collation":    "@@COLLATION_SERVER",
+		"Uptime":       "VERSION()", // Use as proxy
+		"Threads":      "@@THREAD_CACHE_SIZE",
+		"Max Conn":     "@@MAX_CONNECTIONS",
+		"Timeouts":     "@@WAIT_TIMEOUT",
+		"Secure Auth":  "@@SECURE_AUTH",
+		"Have SSL":     "@@HAVE_SSL",
+		"Have Symlink": "@@HAVE_SYMLINK",
+		"Log Bin":      "@@LOG_BIN",
+		"Read Only":    "@@READ_ONLY",
+		"Skip Grant":   "@@SKIP_GRANT_TABLES",
+		"OOM Score":    "IFNULL(@@OOM_SCORE_ADJ, 'N/A')",
 	}
 
 	for name, expr := range queries {
@@ -85,13 +85,13 @@ func (sc *SystemCrawler) extractMySQLSystemInfo(param string, info map[string]st
 
 func (sc *SystemCrawler) extractPostgresSystemInfo(param string, info map[string]string) {
 	queries := map[string]string{
-		"Version":       "VERSION()",
-		"Current User":  "current_user",
-		"Current DB":    "current_database()",
-		"Host":          "inet_server_addr()",
-		"Port":          "inet_server_port()",
-		"PostGIS":       "postgis_version()",
-		"SSL":           "ssl_is_used()",
+		"Version":      "VERSION()",
+		"Current User": "current_user",
+		"Current DB":   "current_database()",
+		"Host":         "inet_server_addr()",
+		"Port":         "inet_server_port()",
+		"PostGIS":      "postgis_version()",
+		"SSL":          "ssl_is_used()",
 	}
 
 	for name, expr := range queries {
@@ -113,18 +113,18 @@ func (sc *SystemCrawler) extractPostgresSystemInfo(param string, info map[string
 
 func (sc *SystemCrawler) extractMSSQLSystemInfo(param string, info map[string]string) {
 	queries := map[string]string{
-		"Version":       "@@VERSION",
-		"User":          "SYSTEM_USER",
-		"DB Name":       "DB_NAME()",
-		"Hostname":      "HOST_NAME()",
-		"Service":       "@@SERVICENAME",
-		"Language":      "@@LANGUAGE",
-		"ServerName":    "@@SERVERNAME",
-		"IsClone":       "SERVERPROPERTY('IsCloned')",
-		"Collation":     "SERVERPROPERTY('Collation')",
-		"Edition":       "SERVERPROPERTY('Edition')",
-		"Engine Edition":"SERVERPROPERTY('EngineEdition')",
-		"ProcessID":     "@@SPID",
+		"Version":        "@@VERSION",
+		"User":           "SYSTEM_USER",
+		"DB Name":        "DB_NAME()",
+		"Hostname":       "HOST_NAME()",
+		"Service":        "@@SERVICENAME",
+		"Language":       "@@LANGUAGE",
+		"ServerName":     "@@SERVERNAME",
+		"IsClone":        "SERVERPROPERTY('IsCloned')",
+		"Collation":      "SERVERPROPERTY('Collation')",
+		"Edition":        "SERVERPROPERTY('Edition')",
+		"Engine Edition": "SERVERPROPERTY('EngineEdition')",
+		"ProcessID":      "@@SPID",
 	}
 
 	for name, expr := range queries {
@@ -146,11 +146,11 @@ func (sc *SystemCrawler) extractMSSQLSystemInfo(param string, info map[string]st
 
 func (sc *SystemCrawler) extractOracleSystemInfo(param string, info map[string]string) {
 	queries := map[string]string{
-		"Version":   "SELECT * FROM v$version",
-		"User":      "USER FROM DUAL",
-		"DB Name":   "NAME FROM v$database",
-		"Instance":  "INSTANCE_NAME FROM v$instance",
-		"Hostname":  "HOST_NAME FROM v$instance",
+		"Version":  "SELECT * FROM v$version",
+		"User":     "USER FROM DUAL",
+		"DB Name":  "NAME FROM v$database",
+		"Instance": "INSTANCE_NAME FROM v$instance",
+		"Hostname": "HOST_NAME FROM v$instance",
 	}
 
 	for name, expr := range queries {
@@ -295,9 +295,9 @@ func (sc *SystemCrawler) ExtractFilePrivileges(param, dbms string) map[string]bo
 	case strings.Contains(dbms, "MySQL"), strings.Contains(dbms, "MariaDB"):
 		// Check if FILE privilege exists
 		queries := []struct {
-			name    string
-			query   string
-			target  string
+			name   string
+			query  string
+			target string
 		}{
 			{"file_read", "SELECT IF(File_priv='Y','YES','NO') FROM mysql.user WHERE User=CURRENT_USER()", "YES"},
 			{"file_write", "SELECT IF(File_priv='Y','YES','NO') FROM mysql.user WHERE User=CURRENT_USER()", "YES"},

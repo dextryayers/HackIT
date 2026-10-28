@@ -79,4 +79,3 @@ var Firebird = PayloadGroup{
 		{Type: "deep", Content: "' UNION SELECT RDB$DESCRIPTION FROM RDB$DATABASE--"},
 	},
 }
-

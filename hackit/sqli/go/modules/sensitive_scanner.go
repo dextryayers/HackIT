@@ -2,10 +2,10 @@ package modules
 
 import (
 	"fmt"
+	"hackit/sqli/go/utils"
 	"regexp"
 	"strings"
 	"sync"
-	"hackit/sqli/go/utils"
 )
 
 // SensitiveScanner detects sensitive data patterns in database content

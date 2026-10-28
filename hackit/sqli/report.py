@@ -19,11 +19,13 @@ from rich.console import Console
 from rich.table import Table
 
 _console = Console()
+_error_console = Console(stderr=True)
 
 
 def set_no_color(enabled: bool = True) -> None:
     """Disable or enable ANSI colors for console reports."""
     _console.no_color = enabled
+    _error_console.no_color = enabled
 
 FINDING_TYPES = {"boolean", "error", "time", "union", "stacked", "auth-bypass"}
 
@@ -102,9 +104,9 @@ def split_values(value: Any) -> List[str]:
     text = str(value)
     if text == "":
         return []
-    for separator in ("\x1e", "\x1f", "\n"):
-        if separator in text:
-            return [part.strip() for part in text.split(separator) if part.strip()]
+    if any(separator in text for separator in ("\x1e", "\x1f", "\n")):
+        normalized = text.replace("\x1e", "\n").replace("\x1f", "\n")
+        return [part.strip() for part in normalized.split("\n") if part.strip()]
     if "," in text:
         return [part.strip() for part in text.split(",") if part.strip()]
     return [text.strip()]
@@ -521,7 +523,7 @@ footer {{ margin-top: 36px; border-top: 1px solid var(--line); padding-top: 14px
     _ensure_parent(output_path)
     with open(output_path, "w", encoding="utf-8") as handle:
         handle.write(document)
-    _console.print("[green]HTML report written:[/] %s" % output_path)
+    _error_console.print("[green]HTML report written:[/] %s" % output_path)
     return output_path
 
 
@@ -565,7 +567,7 @@ def generate_csv(results: List[Dict[str, Any]], output_path: str) -> str:
             record["section"] = "finding" if item.get("type") in FINDING_TYPES else "metadata"
             record["payload"] = _as_text(item.get("payload", ""))
             writer.writerow(record)
-    _console.print("[green]CSV report written:[/] %s" % output_path)
+    _error_console.print("[green]CSV report written:[/] %s" % output_path)
     return output_path
 
 
@@ -587,7 +589,7 @@ def generate_json(
     _ensure_parent(output_path)
     with open(output_path, "w", encoding="utf-8") as handle:
         json.dump(report, handle, indent=2, ensure_ascii=False, default=str)
-    _console.print("[green]JSON report written:[/] %s" % output_path)
+    _error_console.print("[green]JSON report written:[/] %s" % output_path)
     return output_path
 
 
@@ -656,7 +658,7 @@ def generate_txt(
     _ensure_parent(output_path)
     with open(output_path, "w", encoding="utf-8") as handle:
         handle.write("\n".join(lines))
-    _console.print("[green]TXT report written:[/] %s" % output_path)
+    _error_console.print("[green]TXT report written:[/] %s" % output_path)
     return output_path
 
 

@@ -3,12 +3,12 @@ package crawl
 import (
 	"encoding/json"
 	"fmt"
+	"hackit/sqli/go/utils"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
-	"hackit/sqli/go/utils"
 )
 
 // CrawlReport generates comprehensive reports of crawl results
@@ -211,9 +211,9 @@ func (cr *CrawlReport) buildJSONReport() map[string]interface{} {
 		databases := make(map[string]interface{})
 		for dbName, dbInfo := range cr.results.Databases {
 			dbData := map[string]interface{}{
-				"size":     dbInfo.Size,
+				"size":      dbInfo.Size,
 				"collation": dbInfo.Collation,
-				"charset":  dbInfo.Charset,
+				"charset":   dbInfo.Charset,
 			}
 			tables := make(map[string]interface{})
 			for tblName, tblInfo := range dbInfo.Tables {
@@ -225,12 +225,12 @@ func (cr *CrawlReport) buildJSONReport() map[string]interface{} {
 				cols := make([]map[string]interface{}, len(tblInfo.Columns))
 				for i, col := range tblInfo.Columns {
 					cols[i] = map[string]interface{}{
-						"name":     col.Name,
-						"type":     col.Type,
-						"nullable": col.Nullable,
-						"default":  col.Default,
-						"pk":       col.IsPK,
-						"fk":       col.IsFK,
+						"name":      col.Name,
+						"type":      col.Type,
+						"nullable":  col.Nullable,
+						"default":   col.Default,
+						"pk":        col.IsPK,
+						"fk":        col.IsFK,
 						"sensitive": col.IsSensitive,
 					}
 				}
@@ -515,5 +515,6 @@ func (cr *CrawlReport) PrintToConsole() {
 		}
 	}
 
-	fmt.Println("=======================================\n")
+	fmt.Println("=======================================")
+	fmt.Println()
 }

@@ -2,9 +2,9 @@ package crawl
 
 import (
 	"fmt"
+	"hackit/sqli/go/utils"
 	"strings"
 	"sync"
-	"hackit/sqli/go/utils"
 )
 
 // DataCrawler handles full data extraction from tables

@@ -2,8 +2,8 @@ package crawl
 
 import (
 	"fmt"
-	"strings"
 	"hackit/sqli/go/utils"
+	"strings"
 )
 
 // ViewCrawler extracts view definitions, dependencies, and lineage
@@ -81,8 +81,8 @@ func (vc *ViewCrawler) fetchViews(param, query string) []ViewInfo {
 		}
 		if len(parts) >= 2 {
 			view := ViewInfo{
-				Name:       strings.Trim(parts[0], "'\" "),
-				Definition: strings.Trim(parts[1], "'\" "),
+				Name:        strings.Trim(parts[0], "'\" "),
+				Definition:  strings.Trim(parts[1], "'\" "),
 				IsUpdatable: len(parts) >= 3 && strings.ToUpper(strings.Trim(parts[2], "'\" ")) == "YES",
 			}
 			if len(parts) >= 5 {

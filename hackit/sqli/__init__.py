@@ -96,9 +96,6 @@ DEFAULT_OPTIONS: Dict[str, Any] = {
     "file_write": "",
     "file_exec": "",
     "crawl": "",
-    "crawl_depth": 5,
-    "crawl_threads": 10,
-    "crawl_output": "crawl_output",
     "output_format": "text",
     "no_color": False,
     "verbose": 0,
@@ -192,9 +189,6 @@ PASSTHROUGH_KEYS = {
     "file_write",
     "file_exec",
     "crawl",
-    "crawl_depth",
-    "crawl_threads",
-    "crawl_output",
 }
 
 
@@ -253,6 +247,31 @@ def _default_scan(opts: Dict[str, Any]) -> Dict[str, Any]:
             list_dbs=True,
             list_tables=True,
         )
+    return result
+
+
+def _apply_crawl(opts: Dict[str, Any]) -> Dict[str, Any]:
+    """Translate the legacy crawl switch into supported explorer actions.
+
+    The old Go crawler only understood a handful of DBMS metadata queries and
+    could return error pages as table names. The current explorer already
+    handles schema, columns, row counts, and dumps across every dialect, so
+    the crawl command is a composition of those actions.
+    """
+    result = dict(opts)
+    mode = str(result.pop("crawl", "") or "").strip().lower()
+    if not mode:
+        return result
+    result.pop("crawl_depth", None)
+    result.pop("crawl_threads", None)
+    result.pop("crawl_output", None)
+    result["schema"] = True
+    result["list_columns"] = True
+    result["count_rows"] = True
+    if mode in ("full", "sensitive", "data"):
+        result["dump_all"] = True
+    elif mode not in ("schema", "system"):
+        _log("warn", "crawl mode '%s' is not available; using schema and row counts" % mode)
     return result
 
 
@@ -364,6 +383,7 @@ def _execute(opts: Dict[str, Any], default_scan: bool = False) -> int:
         report_mod.set_no_color(True)
     if default_scan:
         options = _default_scan(options)
+    options = _apply_crawl(options)
 
     url = str(options["url"])
     if not url.startswith(("http://", "https://")):
@@ -478,12 +498,9 @@ def _execute(opts: Dict[str, Any], default_scan: bool = False) -> int:
 @click.option(
     "--crawl",
     default="",
-    type=click.Choice(["", "full", "schema", "sensitive", "system", "procs", "views"]),
-    help="Run the database crawler.",
+    type=click.Choice(["", "full", "schema", "sensitive", "system"]),
+    help="Crawl schema, row counts, and data.",
 )
-@click.option("--crawl-depth", default=5, type=int)
-@click.option("--crawl-threads", default=10, type=int)
-@click.option("--crawl-output", default="crawl_output")
 @click.option(
     "--format",
     "output_format",
@@ -639,21 +656,15 @@ def extract(ctx: click.Context, query: str, technique: str, charset: str,
 @click.option(
     "--mode",
     default="full",
-    type=click.Choice(["full", "schema", "sensitive", "system", "procs", "views"]),
+    type=click.Choice(["full", "schema"]),
+    help="Crawl scope. full also dumps table data.",
 )
-@click.option("--depth", default=5, type=int, help="Crawl depth.")
-@click.option("--workers", default=10, type=int, help="Crawl workers.")
-@click.option("--output", default="crawl_output", help="Output directory.")
+@click.option("--output", default="crawl_report", help="Report base path.")
 @click.pass_context
-def crawl(ctx: click.Context, mode: str, depth: int, workers: int, output: str) -> None:
-    """Crawl the database for schema and sensitive data."""
+def crawl(ctx: click.Context, mode: str, output: str) -> None:
+    """Crawl the database for schema and data."""
     options = dict(ctx.obj)
-    options.update(
-        crawl=mode,
-        crawl_depth=depth,
-        crawl_threads=workers,
-        crawl_output=output,
-    )
+    options.update(crawl=mode, report=output)
     ctx.exit(_execute(options))
 
 
@@ -677,7 +688,7 @@ def exec_command(ctx: click.Context, cmd: str) -> None:
     ctx.exit(_execute(options))
 
 
-@test_sqli.command()
+@test_sqli.command(name="report")
 @click.option("--input", "input_path", default=None, help="Read results from a JSON file.")
 @click.option(
     "--format",
@@ -689,8 +700,8 @@ def exec_command(ctx: click.Context, cmd: str) -> None:
 )
 @click.option("--output", default="sqli_report", help="Output base path.")
 @click.pass_context
-def report(ctx: click.Context, input_path: Optional[str],
-           formats: Tuple[str, ...], output: str) -> None:
+def report_command(ctx: click.Context, input_path: Optional[str],
+                   formats: Tuple[str, ...], output: str) -> None:
     """Generate a report from a saved result file or a live scan."""
     if input_path:
         try:

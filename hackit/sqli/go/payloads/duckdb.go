@@ -95,4 +95,3 @@ var DuckDB = PayloadGroup{
 		{Type: "deep", Content: "' UNION SELECT current_schema()--"},
 	},
 }
-

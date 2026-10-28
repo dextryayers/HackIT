@@ -100,4 +100,3 @@ var Sybase = PayloadGroup{
 		{Type: "stacked", Content: "'; EXEC sp_who;--"},
 	},
 }
-

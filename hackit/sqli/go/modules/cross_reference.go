@@ -2,9 +2,9 @@ package modules
 
 import (
 	"fmt"
+	"hackit/sqli/go/utils"
 	"strings"
 	"sync"
-	"hackit/sqli/go/utils"
 )
 
 // CrossReferencer maps relationships between database objects
@@ -16,14 +16,14 @@ type CrossReferencer struct {
 
 // Relation describes a relationship between tables
 type Relation struct {
-	SourceDB      string `json:"source_db"`
-	SourceTable   string `json:"source_table"`
-	SourceColumn  string `json:"source_column"`
-	TargetDB      string `json:"target_db"`
-	TargetTable   string `json:"target_table"`
-	TargetColumn  string `json:"target_column"`
-	RelationType  string `json:"relation_type"`
-	Confidence    float64 `json:"confidence"`
+	SourceDB     string  `json:"source_db"`
+	SourceTable  string  `json:"source_table"`
+	SourceColumn string  `json:"source_column"`
+	TargetDB     string  `json:"target_db"`
+	TargetTable  string  `json:"target_table"`
+	TargetColumn string  `json:"target_column"`
+	RelationType string  `json:"relation_type"`
+	Confidence   float64 `json:"confidence"`
 }
 
 func NewCrossReferencer(e EngineInterface) *CrossReferencer {
