@@ -33,6 +33,17 @@ BORDER = "#1e2a36"
 
 FONT = "Monospace" if sys.platform == "linux" else "Consolas"
 
+try:  # package import
+    from .defense import (
+        RemoteSampler, sample_once, detect, generate_hardening,
+        write_hardening, Thresholds,
+    )
+except ImportError:  # direct `python gui.py`
+    from defense import (  # type: ignore
+        RemoteSampler, sample_once, detect, generate_hardening,
+        write_hardening, Thresholds,
+    )
+
 
 class AttackConfig:
     def __init__(self):
@@ -194,6 +205,11 @@ class HackITGUI:
         self.status_label = tk.Label(hdr, text="● IDLE",
                                      font=(FONT, 11, "bold"), fg=GREEN, bg=MID)
         self.status_label.pack(side="right", padx=(0, 18), pady=6)
+
+        def_btn = tk.Label(hdr, text="⛨  DEFENSE", font=(FONT, 9, "bold"),
+                           fg=CYAN, bg=MID, cursor="hand2", padx=8)
+        def_btn.pack(side="right", padx=(0, 8), pady=6)
+        def_btn.bind("<Button-1>", lambda e: self._open_defense())
 
         tk.Frame(self.root, height=1, bg=BORDER).pack(fill="x")
 
@@ -610,6 +626,336 @@ class HackITGUI:
         self.run_btn.config(state="normal", bg="#18a048")
         self.stop_btn.config(state="disabled")
         self.info_label.config(text="Done. Configure next target and press RUN")
+
+    # ── DEFENSE CONSOLE ───────────────────────────────────────────────
+
+    def _open_defense(self):
+        win = getattr(self, "_def_win", None)
+        if win is not None and win.winfo_exists():
+            win.lift()
+            win.focus_force()
+            return
+
+        win = tk.Toplevel(self.root)
+        self._def_win = win
+        win.title("HackIT Defense Console — telemetry · detection · hardening")
+        win.geometry("1020x680")
+        win.configure(bg=DARK)
+        win.protocol("WM_DELETE_WINDOW", self._def_close)
+
+        self._def_samples = []
+        self._def_queue = queue.Queue()
+        self._def_stop = threading.Event()
+        self._def_thread = None
+
+        style = ttk.Style(win)
+        try:
+            style.theme_use("default")
+        except tk.TclError:
+            pass
+        style.configure("Def.TNotebook", background=DARK, borderwidth=0)
+        style.configure("Def.TNotebook.Tab", background=CARD, foreground=WHITE,
+                        padding=(16, 6))
+        style.map("Def.TNotebook.Tab",
+                  background=[("selected", MID)],
+                  foreground=[("selected", CYAN)])
+
+        nb = ttk.Notebook(win, style="Def.TNotebook")
+        nb.pack(fill="both", expand=True, padx=8, pady=(8, 0))
+
+        mon = tk.Frame(nb, bg=CARD)
+        det = tk.Frame(nb, bg=CARD)
+        har = tk.Frame(nb, bg=CARD)
+        nb.add(mon, text="  Monitor  ")
+        nb.add(det, text="  Detect  ")
+        nb.add(har, text="  Harden  ")
+
+        self._build_def_monitor(mon)
+        self._build_def_detect(det)
+        self._build_def_harden(har)
+
+        tk.Label(win, text="telemetry dari host target — lokal atau via ssh",
+                 font=(FONT, 8), fg=DIM, bg=DARK
+                 ).pack(anchor="w", padx=12, pady=(0, 6))
+
+        win.after(400, self._def_poll)
+
+    def _def_entry(self, parent, default="", width=16):
+        e = tk.Entry(parent, bg=CARD2, fg=WHITE, insertbackground=CYAN,
+                     relief="flat", font=(FONT, 9), width=width,
+                     highlightbackground=BORDER, highlightthickness=1)
+        e.insert(0, default)
+        e.pack(side="left", padx=(0, 10))
+        return e
+
+    def _def_button(self, parent, text, cb, color=GREEN):
+        b = tk.Label(parent, text=text, font=(FONT, 9, "bold"),
+                     fg=DARK, bg=color, padx=12, pady=4, cursor="hand2")
+        b.pack(side="left", padx=(0, 8))
+        b.bind("<Button-1>", lambda e: cb())
+        return b
+
+    def _build_def_monitor(self, tab):
+        bar = tk.Frame(tab, bg=CARD)
+        bar.pack(fill="x", padx=10, pady=8)
+
+        tk.Label(bar, text="REMOTE", font=(FONT, 8), fg=DIM, bg=CARD
+                 ).pack(side="left", padx=(0, 6))
+        self.def_remote = self._def_entry(bar, "", 18)
+
+        tk.Label(bar, text="INTERVAL", font=(FONT, 8), fg=DIM, bg=CARD
+                 ).pack(side="left", padx=(0, 6))
+        self.def_interval = self._def_entry(bar, "1.0", 5)
+
+        self.def_start_btn = self._def_button(bar, "▶ START", self._def_start, GREEN)
+        self.def_stop_btn = self._def_button(bar, "■ STOP", self._def_stop_now, RED)
+        self._def_button(bar, "⤓ SAVE", self._def_save, BLUE)
+
+        stats = tk.Frame(tab, bg=MID)
+        stats.pack(fill="x", padx=10)
+        self.def_metrics = {}
+        for key, label, color in [
+            ("cpu", "CPU", CYAN), ("estab", "ESTAB", GREEN),
+            ("syn", "SYN_RECV", YELLOW), ("ct", "CONNTRACK", PURPLE),
+            ("fd", "FD", ORANGE), ("rx", "RX pps", WHITE),
+        ]:
+            f = tk.Frame(stats, bg=MID)
+            f.pack(side="left", expand=True, fill="x")
+            tk.Label(f, text=label, font=(FONT, 7), fg=DIM, bg=MID).pack()
+            lb = tk.Label(f, text="—", font=(FONT, 13, "bold"), fg=color, bg=MID)
+            lb.pack()
+            self.def_metrics[key] = lb
+
+        self.def_canvas = tk.Canvas(tab, bg="#0c1420", height=150,
+                                    highlightthickness=0, bd=0)
+        self.def_canvas.pack(fill="x", padx=10, pady=8)
+
+        self.def_log = scrolledtext.ScrolledText(
+            tab, bg="#0c1420", fg=WHITE, font=(FONT, 9), bd=0,
+            padx=10, pady=6, height=12, wrap="word")
+        self.def_log.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        self.def_log.tag_configure("red", foreground=RED)
+        self.def_log.tag_configure("green", foreground=GREEN)
+        self.def_log.tag_configure("yellow", foreground=YELLOW)
+        self.def_log.tag_configure("cyan", foreground=CYAN)
+        self.def_log.tag_configure("dim", foreground=DIM)
+
+    def _build_def_detect(self, tab):
+        bar = tk.Frame(tab, bg=CARD)
+        bar.pack(fill="x", padx=10, pady=8)
+        self._def_button(bar, "⚡ ANALYZE", self._def_analyze, YELLOW)
+        self._def_button(bar, "⛶ CLEAR", lambda: self.def_findings.delete("1.0", "end"), DIM)
+        tk.Label(bar, text="jalankan monitor dulu, minimal 10 detik",
+                 font=(FONT, 8), fg=DIM, bg=CARD).pack(side="left", padx=8)
+
+        self.def_findings = scrolledtext.ScrolledText(
+            tab, bg="#0c1420", fg=WHITE, font=(FONT, 9), bd=0,
+            padx=10, pady=6, wrap="word")
+        self.def_findings.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        for tag, color in [("critical", RED), ("high", RED), ("medium", YELLOW),
+                           ("low", CYAN), ("dim", DIM)]:
+            self.def_findings.tag_configure(tag, foreground=color)
+
+    def _build_def_harden(self, tab):
+        bar = tk.Frame(tab, bg=CARD)
+        bar.pack(fill="x", padx=10, pady=8)
+
+        tk.Label(bar, text="PROFILE", font=(FONT, 8), fg=DIM, bg=CARD
+                 ).pack(side="left", padx=(0, 6))
+        self.def_profile = ttk.Combobox(
+            bar, values=["all", "sysctl", "nftables", "nginx"],
+            width=10, state="readonly")
+        self.def_profile.set("all")
+        self.def_profile.pack(side="left", padx=(0, 10))
+
+        tk.Label(bar, text="SSH", font=(FONT, 8), fg=DIM, bg=CARD
+                 ).pack(side="left", padx=(0, 6))
+        self.def_ssh = self._def_entry(bar, "22", 4)
+        tk.Label(bar, text="HTTP", font=(FONT, 8), fg=DIM, bg=CARD
+                 ).pack(side="left", padx=(0, 6))
+        self.def_http = self._def_entry(bar, "80, 443", 10)
+
+        row2 = tk.Frame(tab, bg=CARD)
+        row2.pack(fill="x", padx=10)
+        tk.Label(row2, text="OUT DIR", font=(FONT, 8), fg=DIM, bg=CARD
+                 ).pack(side="left", padx=(0, 6))
+        self.def_out = self._def_entry(row2, "hardening", 22)
+        self._def_button(row2, "⛭ GENERATE", self._def_generate, CYAN)
+        self._def_button(row2, "⤓ WRITE FILES", self._def_write_harden, GREEN)
+
+        self.def_preview = scrolledtext.ScrolledText(
+            tab, bg="#0c1420", fg=WHITE, font=(FONT, 8), bd=0,
+            padx=10, pady=6, wrap="none")
+        self.def_preview.pack(fill="both", expand=True, padx=10, pady=10)
+
+    def _def_logline(self, text, tag=""):
+        self.def_log.insert("end", text + "\n", tag)
+        self.def_log.see("end")
+
+    def _def_start(self):
+        if self._def_thread and self._def_thread.is_alive():
+            return
+        self._def_stop.clear()
+        remote = self.def_remote.get().strip()
+        try:
+            interval = max(0.2, float(self.def_interval.get()))
+        except ValueError:
+            interval = 1.0
+        self._def_logline(f"▶ collecting from {remote or 'local'} every {interval}s",
+                          "cyan")
+        self._def_thread = threading.Thread(
+            target=self._def_worker, args=(remote, interval), daemon=True)
+        self._def_thread.start()
+
+    def _def_stop_now(self):
+        self._def_stop.set()
+        self._def_logline("■ stopped", "yellow")
+        if self._def_samples:
+            self._def_analyze()
+
+    def _def_worker(self, remote, interval):
+        try:
+            if remote:
+                rs = RemoteSampler(remote, interval)
+                rs.start()
+                try:
+                    while not self._def_stop.is_set():
+                        line = rs.readline()
+                        if not line:
+                            self._def_queue.put({"error": "ssh stream closed"})
+                            break
+                        line = line.strip()
+                        if not line.startswith("{"):
+                            continue
+                        try:
+                            self._def_queue.put(json.loads(line))
+                        except json.JSONDecodeError:
+                            continue
+                finally:
+                    rs.stop()
+            else:
+                prev = sample_once(None)
+                while not self._def_stop.is_set():
+                    cur = sample_once(prev)
+                    prev = cur
+                    s = {k: v for k, v in cur.items() if not k.startswith("_")}
+                    self._def_queue.put(s)
+                    time.sleep(interval)
+        except Exception as exc:  # noqa: BLE001 - shown in the UI log
+            self._def_queue.put({"error": str(exc)})
+
+    def _def_poll(self):
+        win = self._def_win
+        if not win or not win.winfo_exists():
+            return
+        changed = False
+        while True:
+            try:
+                s = self._def_queue.get_nowait()
+            except queue.Empty:
+                break
+            if "error" in s:
+                self._def_logline(f"✗ {s['error']}", "red")
+                continue
+            self._def_samples.append(s)
+            changed = True
+        if changed:
+            self._def_update_metrics()
+            self._def_redraw()
+        win.after(500, self._def_poll)
+
+    def _def_update_metrics(self):
+        s = self._def_samples[-1]
+        tcp = s.get("tcp", {})
+        prev = self._def_samples[-2] if len(self._def_samples) > 1 else None
+        rx = 0
+        if prev:
+            dt = max(0.001, s.get("ts", 0) - prev.get("ts", 0))
+            rx = (s.get("net", {}).get("rx_pkts", 0)
+                  - prev.get("net", {}).get("rx_pkts", 0)) / dt
+        self.def_metrics["cpu"].config(text=f"{s.get('cpu_pct', 0):.0f}%")
+        self.def_metrics["estab"].config(text=str(tcp.get("estab", 0)))
+        self.def_metrics["syn"].config(text=str(tcp.get("syn_recv", 0)))
+        self.def_metrics["ct"].config(text=str(s.get("conntrack", {}).get("count", 0)))
+        self.def_metrics["fd"].config(text=str(s.get("fd", {}).get("used", 0)))
+        self.def_metrics["rx"].config(text=f"{rx:,.0f}")
+
+    def _def_redraw(self):
+        c = self.def_canvas
+        c.delete("all")
+        w = c.winfo_width() or 900
+        h = c.winfo_height() or 150
+        c.create_line(1, h - 2, w - 1, h - 2, fill=BORDER)
+        samples = self._def_samples[-120:]
+        if len(samples) < 2:
+            return
+        max_conn = max(1, max(s.get("tcp", {}).get("estab", 0) for s in samples))
+        for key, color, scale in (("cpu", CYAN, 100.0), ("conn", GREEN, max_conn)):
+            pts = []
+            for i, s in enumerate(samples):
+                x = 2 + i * (w - 4) / (len(samples) - 1)
+                if key == "cpu":
+                    v = s.get("cpu_pct", 0)
+                else:
+                    v = s.get("tcp", {}).get("estab", 0)
+                y = h - 3 - (v / scale) * (h - 10)
+                pts.extend([x, y])
+            c.create_line(*pts, fill=color, width=2)
+        c.create_text(8, 10, anchor="w", fill=CYAN, font=(FONT, 7),
+                      text="CPU %")
+        c.create_text(68, 10, anchor="w", fill=GREEN, font=(FONT, 7),
+                      text=f"ESTAB (max {max_conn})")
+
+    def _def_analyze(self):
+        if len(self._def_samples) < 2:
+            self.def_findings.insert("end", "butuh minimal 2 sampel\n", "dim")
+            return
+        self.def_findings.delete("1.0", "end")
+        for f in detect(self._def_samples, Thresholds()):
+            tag = f.severity if f.severity in ("critical", "high", "medium", "low") else "dim"
+            self.def_findings.insert("end", f"● {f.severity.upper()}  {f.title}\n", tag)
+            self.def_findings.insert("end", f"    {f.evidence}\n", "dim")
+            self.def_findings.insert("end", f"    → {f.action}\n\n", "low")
+
+    def _def_save(self):
+        if not self._def_samples:
+            self._def_logline("belum ada sampel", "yellow")
+            return
+        path = Path("defense_samples.jsonl")
+        path.write_text("\n".join(json.dumps(s) for s in self._def_samples))
+        self._def_logline(f"⤓ {len(self._def_samples)} samples → {path.resolve()}",
+                          "green")
+
+    def _def_harden_args(self):
+        try:
+            ssh_port = int(self.def_ssh.get())
+        except ValueError:
+            ssh_port = 22
+        return (self.def_profile.get() or "all", ssh_port,
+                self.def_http.get() or "80, 443")
+
+    def _def_generate(self):
+        profile, ssh_port, http_ports = self._def_harden_args()
+        files = generate_hardening(profile, ssh_port, http_ports)
+        self.def_preview.delete("1.0", "end")
+        for name, content in files.items():
+            self.def_preview.insert("end", f"# ── {name} " + "─" * 50 + "\n")
+            self.def_preview.insert("end", content + "\n\n")
+
+    def _def_write_harden(self):
+        profile, ssh_port, http_ports = self._def_harden_args()
+        out = self.def_out.get().strip() or "hardening"
+        files = generate_hardening(profile, ssh_port, http_ports)
+        written = write_hardening(files, out)
+        self._def_logline(f"⤓ wrote {len(written)} files → {Path(out).resolve()}",
+                          "green")
+        self._def_generate()
+
+    def _def_close(self):
+        self._def_stop.set()
+        if getattr(self, "_def_win", None):
+            self._def_win.destroy()
+            self._def_win = None
 
     def _on_close(self):
         if self.attack_thread and self.attack_thread.is_alive():

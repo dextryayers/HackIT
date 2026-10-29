@@ -700,6 +700,10 @@ ssl.add_command(analyze_ssl, name='check')
 # DDoS Tools
 cli.add_command(ddos_attack, name='ddos')
 
+# Server-side defense console (telemetry, flood detection, hardening)
+from hackit.ddos.defense import defense_cli
+cli.add_command(defense_cli, name='defense')
+
 # Host profiler (neofetch-style)
 cli.add_command(host_fetch, name='fetch')
 

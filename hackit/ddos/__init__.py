@@ -327,6 +327,7 @@ _CHAIN_CMDS = [
     "profile", "adaptive", "core-pin", "switch", "interfaces",
     "h2-streams", "dpdk", "xdp", "output", "mix", "pattern", "recon",
     "run", "start", "go", "show", "help", "gui", "clear", "exit", "banner",
+    "defense",
 ]
 
 def _chain_parse(line):

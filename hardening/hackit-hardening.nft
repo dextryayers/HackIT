@@ -1,0 +1,56 @@
+#!/usr/sbin/nft -f
+# HackIT hardening — nftables ingress policy
+# Verifikasi: nft -c -f <file>   |   Pasang: nft -f <file>
+# CATATAN: sesuaikan 22 dan 80, 443 sebelum dipasang.
+
+flush ruleset
+
+table inet filter {
+    set syn_flood { type ipv4_addr; flags dynamic,timeout; timeout 60s; }
+    set udp_flood { type ipv4_addr; flags dynamic,timeout; timeout 60s; }
+
+    chain input {
+        type filter hook input priority filter; policy drop;
+
+        ct state invalid drop
+        iifname "lo" accept
+        ct state established,related accept
+
+        # ICMP: cukup untuk PMTU, sisanya dibuang
+        ip protocol icmp icmp type { echo-request, destination-unreachable, time-exceeded } \
+            limit rate 10/second burst 20 packets accept
+        ip protocol icmp drop
+
+        # SSH: brute-force throttle
+        tcp dport 22 ct state new \
+            limit rate 5/second burst 10 packets accept
+        tcp dport 22 ct state new \
+            limit rate over 5/second add @syn_flood { ip saddr } drop
+        tcp dport 22 ct state new drop
+
+        # HTTP/HTTPS: new connection per source, lalu global cap
+        tcp dport { 80, 443 } ct state new \
+            limit rate over 50/second burst 100 packets add @syn_flood { ip saddr } drop
+        tcp dport { 80, 443 } ct state new \
+            limit rate 400/second burst 800 packets accept
+        tcp dport { 80, 443 } ct state new drop
+        tcp dport { 80, 443 } accept
+
+        # DNS (kalau resolver lokal dipakai)
+        udp dport 53 limit rate 100/second burst 200 packets accept
+        udp dport 53 limit rate over 100/second add @udp_flood { ip saddr } drop
+
+        # Sisanya: rate limit UDP generik supaya tidak jadi amplifier
+        udp limit rate 2000/second burst 4000 packets accept
+        udp limit rate over 2000/second add @udp_flood { ip saddr } drop
+
+        # Jangan pernah membalas ke set yang sudah ditandai
+        ip saddr @syn_flood drop
+        ip saddr @udp_flood drop
+
+        counter drop
+    }
+
+    chain forward { type filter hook forward priority filter; policy drop; }
+    chain output { type filter hook output priority filter; policy accept; }
+}

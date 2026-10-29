@@ -901,11 +901,21 @@ def setting(provider, key, model, key_file, key_stdin, hidden):
                 return
     
     if provider and key:
+        if provider != "ollama":
+            _spin(f"Validating {provider.upper()} API key ...", 0.6)
+            status = provider_registry.check_provider(provider, key=key, timeout=6.0)
+            if not status.reachable:
+                err = status.error or f"HTTP {getattr(status, 'status_code', '?')}"
+                click.echo(_colored(f"  [!] API key validation failed: {err}", RED))
+                click.echo(_colored("  [!] Key NOT saved. Fix the key and try again.", RED))
+                return
+            click.echo(_colored("  [✓] API key validated successfully.", GREEN))
+
         if "ai_keys" not in cfg:
             cfg["ai_keys"] = {}
         if "ai_models" not in cfg:
             cfg["ai_models"] = {}
-        
+
         cfg["ai_provider"] = provider
         cfg["ai_keys"][provider] = key
         
