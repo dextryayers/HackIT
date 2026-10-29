@@ -213,7 +213,7 @@ class _TranscriptControl(UIControl):
             frozen = self.ui._frozen_ansi
             live = self.ui._live_ansi
             follow = self.ui._follow_output
-            manual_y = self.ui._manual_y
+            scroll_offset = self.ui._scroll_offset
 
         # Parse frozen and live output independently.  Streaming only changes
         # the live string, so the expensive frozen transcript is parsed once
@@ -238,10 +238,15 @@ class _TranscriptControl(UIControl):
             self._lines = [[]]
 
         total = len(self._lines)
-        if follow:
+        if total > 0 and scroll_offset >= total:
+            self.ui._scroll_offset = 0
+            self.ui._follow_output = True
+            scroll_offset = 0
+            follow = True
+        if follow or scroll_offset <= 0:
             y = total - 1
         else:
-            y = max(0, min(manual_y, total - 1))
+            y = max(0, total - 1 - scroll_offset)
 
         def get_line(index: int) -> Any:
             try:
@@ -258,10 +263,10 @@ class _TranscriptControl(UIControl):
 
     def mouse_handler(self, mouse_event) -> Any:  # noqa: ANN001
         if mouse_event.event_type == MouseEventType.SCROLL_UP:
-            self.ui._scroll_transcript(-3)
+            self.ui._scroll_transcript(-5)
             return None
         if mouse_event.event_type == MouseEventType.SCROLL_DOWN:
-            self.ui._scroll_transcript(3)
+            self.ui._scroll_transcript(5)
             return None
         return NotImplemented
 
@@ -348,11 +353,11 @@ def build_key_bindings(ui: Optional["TuiMixin"] = None, tui: bool = True) -> Key
 
         @kb.add("pageup", eager=True)
         def _page_up(event) -> None:  # noqa: ANN001
-            ui._scroll_transcript(-8)
+            ui._scroll_transcript(-12)
 
         @kb.add("pagedown", eager=True)
         def _page_down(event) -> None:  # noqa: ANN001
-            ui._scroll_transcript(8)
+            ui._scroll_transcript(12)
 
         @kb.add("c-up", eager=True)
         def _scroll_up(event) -> None:  # noqa: ANN001
@@ -406,7 +411,7 @@ class TuiMixin:
         self._sidebar_control: Optional[FormattedTextControl] = None
         self._status_control: Optional[FormattedTextControl] = None
         self._follow_output = True
-        self._manual_y = 0
+        self._scroll_offset = 0
         self._welcome_shown = False
         self._cancel_requested = False
         self._operation: Optional[Dict[str, Any]] = None
@@ -658,7 +663,14 @@ class TuiMixin:
         body.append("/", style=f"bold {AMBER}")
         body.append(" for the command palette. ", style=SLATE_DIM)
         body.append("Ctrl+P", style=f"bold {AMBER}")
-        body.append(" also opens it.", style=SLATE_DIM)
+        body.append(" also opens it.\n", style=SLATE_DIM)
+        body.append("Scroll transcript: ", style=SLATE_DIM)
+        body.append("Wheel", style=f"bold {AMBER}")
+        body.append(" / ", style=SLATE_DIM)
+        body.append("PgUp/PgDn", style=f"bold {AMBER}")
+        body.append(" / ", style=SLATE_DIM)
+        body.append("Ctrl+↑↓", style=f"bold {AMBER}")
+        body.append("   Home/End jump. Sidebar shows scroll state.", style=SLATE_DIM)
         self.print(
             Panel(
                 body,
@@ -735,6 +747,8 @@ class TuiMixin:
         row("model", model)
         row("memory", f"{backend} · {messages} msg")
         row("target", self.target or "—")
+        scroll_state = "live tail" if self._scroll_offset == 0 else f"↑ {self._scroll_offset} lines"
+        row("scroll", scroll_state)
         row("workflow", workflow)
         fragments.extend(
             [
@@ -1053,23 +1067,24 @@ class TuiMixin:
 
     def _scroll_transcript(self, delta: int) -> None:
         total = self._transcript_line_count()
+        if total <= 1:
+            return
+        # delta > 0 scrolls down (toward the live tail), < 0 scrolls up.
         if self._follow_output:
-            # Leave the live tail and move into the frozen transcript.
-            self._manual_y = max(0, total - 4)
-            self._follow_output = False
-        self._manual_y = max(0, min(self._manual_y + delta, total - 1))
-        if self._manual_y >= total - 1:
-            self._follow_output = True
+            self._scroll_offset = 0
+        self._scroll_offset = max(0, min(total - 1, self._scroll_offset - delta))
+        self._follow_output = self._scroll_offset == 0
         self._invalidate()
 
     def _scroll_to_bottom(self) -> None:
+        self._scroll_offset = 0
         self._follow_output = True
-        self._manual_y = max(0, self._transcript_line_count() - 1)
         self._invalidate()
 
     def _scroll_to_top(self) -> None:
+        total = self._transcript_line_count()
+        self._scroll_offset = max(0, total - 1)
         self._follow_output = False
-        self._manual_y = 0
         self._invalidate()
 
     def _invalidate(self) -> None:
@@ -1106,7 +1121,7 @@ class TuiMixin:
             self._live_ansi = ""
             self._transcript_revision += 1
         self._follow_output = True
-        self._manual_y = 0
+        self._scroll_offset = 0
         self._invalidate()
 
     # -- input -----------------------------------------------------------
