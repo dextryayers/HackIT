@@ -829,9 +829,12 @@ def _print_status(cfg):
 
 @agent.command()
 @click.option('--provider', type=click.Choice(PROVIDERS), help='Set AI provider')
-@click.option('--key', help='Set API key (or leave empty for interactive prompt)')
+@click.option('--key', help='Set API key directly (or use --key-file / --key-stdin)')
+@click.option('--key-file', help='Read API key from a file (first line)')
+@click.option('--key-stdin', is_flag=True, help='Read API key from stdin (paste-friendly)')
+@click.option('--hidden', is_flag=True, help='Hide key while typing (may block paste in some terminals)')
 @click.option('--model', help='Set AI model (or leave empty for optimal default)')
-def setting(provider, key, model):
+def setting(provider, key, model, key_file, key_stdin, hidden):
     """Configure AI Agent settings and API keys"""
     from hackit.config import load_config, save_config
     cfg = load_config()
@@ -867,11 +870,35 @@ def setting(provider, key, model):
                     f"\n  [!] Ollama not reachable at {info.host}. Start it with: ollama serve",
                     YELLOW,
                 ))
+        elif key_stdin:
+            click.echo(_colored("  [*] Reading API key from stdin...", DIM))
+            key = sys.stdin.read().strip()
+        elif key_file:
+            try:
+                with open(key_file, "r", encoding="utf-8") as handle:
+                    key = handle.readline().strip()
+            except OSError as exc:
+                click.echo(_colored(f"  [!] Cannot read key file: {exc}", RED))
+                return
         else:
-            key = click.prompt(
-                _colored(f"  [?] Paste your {provider.upper()} API Key", YELLOW),
-                hide_input=True,
-            )
+            if hidden:
+                key = click.prompt(
+                    _colored(f"  [?] Paste your {provider.upper()} API Key", YELLOW),
+                    hide_input=True,
+                )
+            else:
+                click.echo(_colored(
+                    "  [*] Paste-friendly mode: key will be visible while typing.",
+                    DIM,
+                ))
+                click.echo(_colored(
+                    "  [*] For secrecy use --hidden, --key-file, or --key-stdin.",
+                    DIM,
+                ))
+                key = input(_colored(f"  [?] Paste your {provider.upper()} API Key: ", YELLOW)).strip()
+            if not key:
+                click.echo(_colored("  [!] Empty key.", RED))
+                return
     
     if provider and key:
         if "ai_keys" not in cfg:
