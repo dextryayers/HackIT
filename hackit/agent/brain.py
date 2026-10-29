@@ -416,10 +416,19 @@ class AIHyperBrain:
                 cmd.extend(["-max-tokens", str(configured_tokens)])
         # Ollama reasoning models must use think:true so chain-of-thought stays
         # in the separate thinking channel and never mixes into the final
-        # answer or persisted memory.  Force it explicitly instead of relying
-        # on auto-detection (which can fail if /api/show is unreachable).
+        # answer or persisted memory.  Force it for known reasoning families;
+        # leave other models on auto so non-thinking models are not sent an
+        # unsupported think flag.
         if self.provider == "ollama":
-            cmd.extend(["-think", "on"])
+            model_name = (model or self.model or "").lower()
+            reasoning_families = (
+                "qwen3", "deepseek-r1", "qwq", "phi4-reasoning",
+                "magistral", "reasoning", "thinking",
+            )
+            think_mode = "on" if any(
+                family in model_name for family in reasoning_families
+            ) else "auto"
+            cmd.extend(["-think", think_mode])
         return cmd
 
     @staticmethod
