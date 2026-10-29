@@ -134,6 +134,63 @@ def _is_stale_test_echo(response: str, prompt: str) -> bool:
     return False
 
 
+_REASONING_LEAK_MARKERS = (
+    "okay, the user",
+    "let me think",
+    "the user's message",
+    "the user said",
+    "looking at the memory",
+    "from the memory",
+    "we should reply",
+    "the instructions say",
+    "i should respond",
+    "first, i should",
+    "the assistant's last response",
+    "we're in a terminal-like environment",
+)
+
+
+def _looks_like_reasoning_leak(text: str) -> bool:
+    """Detect plain-text chain-of-thought that a provider put in content.
+
+    Some Ollama builds ignore ``think:true`` and dump reasoning into
+    ``message.content``.  The answer must never be that trace, so we detect
+    the tell-tale meta-analysis and try to recover only the final answer.
+    """
+    lowered = (text or "").lower()
+    if len(lowered) < 60:
+        return False
+    hits = sum(1 for marker in _REASONING_LEAK_MARKERS if marker in lowered)
+    if hits >= 2:
+        return True
+    # A long trace that starts with a first-person planning phrase is also a
+    # leak, even if it only contains one of the markers.
+    head = lowered[:160]
+    return hits >= 1 and head.startswith(
+        ("okay", "alright", "let me", "we need", "the user", "first,")
+    )
+
+
+def _extract_final_answer(text: str) -> str:
+    """Recover a short final answer from the tail of a leaked trace."""
+    paragraphs = [part.strip() for part in re.split(r"\n\s*\n", text or "") if part.strip()]
+    for paragraph in reversed(paragraphs):
+        if not paragraph or len(paragraph) > 600:
+            continue
+        lowered = paragraph.lower()
+        if any(marker in lowered for marker in _REASONING_LEAK_MARKERS):
+            continue
+        # Skip lines that are obviously still planning.
+        if lowered.startswith(("therefore", "so,", "but note", "however", "looking", "from")):
+            continue
+        return paragraph
+    # Last resort: a single short line at the very end.
+    lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
+    if lines and len(lines[-1]) <= 300:
+        return lines[-1]
+    return ""
+
+
 class AIHyperBrain:
     """Unified agent brain with memory, fallback routing and payload forging."""
 
@@ -546,6 +603,11 @@ class AIHyperBrain:
             # The model answered an old benchmark prompt from memory instead
             # of the current request.  Reject it so the caller retries.
             response = ""
+        if response and _looks_like_reasoning_leak(response):
+            # Provider ignored think:true and leaked its planning trace into
+            # content.  Keep only a recoverable final answer; otherwise let
+            # the caller retry with a stricter prompt.
+            response = _extract_final_answer(response)
         if self.engine == "native":
             for pattern in (r"\*{3,}", r"\*{2,}", r"\*", r"#{1,6}\s*", r"`{1,3}"):
                 response = re.sub(pattern, "", response)

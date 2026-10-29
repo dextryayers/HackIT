@@ -43,8 +43,66 @@ _STALE_TEST_TOKENS = (
 )
 
 
+def _filter_memory_entries(entries: List["MemoryEntry"]) -> List["MemoryEntry"]:
+    """Drop user/assistant pairs when either side is contaminated.
+
+    Filtering messages independently can leave a stale user prompt behind
+    after its reply was rejected, and the model then treats that orphan as a
+    live request.  Turns are therefore filtered as a unit: if the user prompt
+    or the assistant reply is a test artifact or leaked chain-of-thought,
+    both messages are removed.
+    """
+    filtered: List["MemoryEntry"] = []
+    pending_user: Optional["MemoryEntry"] = None
+    skip_assistant = False
+
+    for entry in entries:
+        role = getattr(entry, "role", "")
+        content = getattr(entry, "content", "")
+        contaminated = _is_test_artifact(content)
+
+        if role == "user":
+            if pending_user is not None:
+                # Previous user turn never received a reply; keep it only if
+                # it was clean (already checked when it was queued).
+                filtered.append(pending_user)
+            if contaminated:
+                pending_user = None
+                skip_assistant = True
+            else:
+                pending_user = entry
+                skip_assistant = False
+            continue
+
+        if role == "assistant":
+            if skip_assistant:
+                skip_assistant = False
+                continue
+            if pending_user is not None:
+                if not contaminated:
+                    filtered.append(pending_user)
+                    filtered.append(entry)
+                # If the reply is contaminated, drop the prompt with it.
+                pending_user = None
+            elif not contaminated:
+                filtered.append(entry)
+            continue
+
+        # System/other entries are standalone; flush any orphan user first.
+        if pending_user is not None:
+            filtered.append(pending_user)
+            pending_user = None
+        skip_assistant = False
+        if not contaminated:
+            filtered.append(entry)
+
+    if pending_user is not None:
+        filtered.append(pending_user)
+    return filtered
+
+
 def _is_test_artifact(content: str) -> bool:
-    """Return True for canned self-test prompts and replies."""
+    """Return True for canned self-test prompts, replies and leaked CoT."""
     text = str(content or "").strip()
     if not text:
         return False
@@ -57,6 +115,26 @@ def _is_test_artifact(content: str) -> bool:
             return True
     lowered = text.lower()
     if "reply with exactly" in lowered and len(text) <= 200:
+        return True
+    # Plain-text chain-of-thought that leaked into a stored answer.
+    leak_markers = (
+        "hackit_ui_ok",
+        "inline_test_ok",
+        "stream_ok",
+        "we're in a terminal-like environment",
+        "from the memory, we see",
+        "looking at the memory",
+        "the assistant's last response",
+        "the user's message",
+        "the user wants",
+        "the user said",
+        "okay, the user",
+        "we need to",
+        "let me think",
+        "i should respond",
+        "first, i should",
+    )
+    if len(text) >= 60 and sum(1 for marker in leak_markers if marker in lowered) >= 2:
         return True
     return False
 
@@ -204,7 +282,7 @@ class AgentMemory:
         try:
             with open(self._path, "r", encoding="utf-8") as handle:
                 data = json.load(handle)
-            self._entries = [
+            self._entries = _filter_memory_entries([
                 MemoryEntry(
                     role=str(item.get("role", "")),
                     content=str(item.get("content", "")),
@@ -212,8 +290,7 @@ class AgentMemory:
                 )
                 for item in data.get("messages", [])
                 if item.get("role") and item.get("content")
-                and not _is_test_artifact(str(item.get("content", "")))
-            ][-self.window * 2:]
+            ])[-self.window * 2:]
             self._facts = [
                 str(fact) for fact in data.get("facts", [])
                 if fact and not _is_test_artifact(str(fact))
@@ -395,9 +472,7 @@ class AgentMemory:
         rewrites the on-disk file so old strings cannot come back.
         """
         before = len(self._entries) + len(self._facts)
-        self._entries = [
-            entry for entry in self._entries if not _is_test_artifact(entry.content)
-        ]
+        self._entries = _filter_memory_entries(self._entries)
         self._facts = [fact for fact in self._facts if not _is_test_artifact(fact)]
         removed = before - len(self._entries) - len(self._facts)
         self.save()
