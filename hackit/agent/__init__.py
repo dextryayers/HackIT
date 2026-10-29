@@ -905,10 +905,24 @@ def setting(provider, key, model, key_file, key_stdin, hidden):
             _spin(f"Validating {provider.upper()} API key ...", 0.6)
             status = provider_registry.check_provider(provider, key=key, timeout=6.0)
             if not status.reachable:
-                err = status.error or f"HTTP {getattr(status, 'status_code', '?')}"
+                err = status.error or "invalid key"
                 click.echo(_colored(f"  [!] API key validation failed: {err}", RED))
                 click.echo(_colored("  [!] Key NOT saved. Fix the key and try again.", RED))
                 return
+            # OpenRouter models endpoint is public; verify the key separately.
+            if provider == "openrouter":
+                try:
+                    resp = requests.get(
+                        "https://openrouter.ai/api/v1/auth/key",
+                        headers={"Authorization": f"Bearer {key}"},
+                        timeout=6.0,
+                    )
+                    if resp.status_code != 200:
+                        raise ValueError(f"HTTP {resp.status_code}")
+                except Exception as exc:
+                    click.echo(_colored(f"  [!] API key validation failed: {exc}", RED))
+                    click.echo(_colored("  [!] Key NOT saved. Fix the key and try again.", RED))
+                    return
             click.echo(_colored("  [✓] API key validated successfully.", GREEN))
 
         if "ai_keys" not in cfg:
