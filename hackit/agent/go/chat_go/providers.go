@@ -119,8 +119,8 @@ func ollamaKeepAlive() string {
 
 func ollamaOptions() map[string]interface{} {
 	options := map[string]interface{}{
-		"temperature":    0.6,
-		"top_p":          0.9,
+		"temperature":    0.3,
+		"top_p":          0.85,
 		"repeat_penalty": 1.05,
 		"num_ctx":        ollamaNumCtx(),
 	}
@@ -131,7 +131,7 @@ func ollamaOptions() map[string]interface{} {
 	if maxTokensSetting > 0 {
 		options["num_predict"] = maxTokensSetting
 	} else {
-		options["num_predict"] = 4096
+		options["num_predict"] = 2048
 	}
 	return options
 }

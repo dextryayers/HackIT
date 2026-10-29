@@ -378,7 +378,7 @@ func streamOllama(client *http.Client, key, prompt, system, model string,
 		KeepAlive: ollamaKeepAlive(),
 	}
 	if maxTokensSetting == 0 {
-		reqBody.Options["num_predict"] = requestMaxTokens(4096)
+		reqBody.Options["num_predict"] = requestMaxTokens(2048)
 	}
 	if system != "" {
 		reqBody.Messages = append(reqBody.Messages, Message{Role: "system", Content: system})

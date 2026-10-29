@@ -1192,7 +1192,7 @@ class TuiMixin:
                 return
             last_render[0] = now
             blocks: List[Any] = []
-            visible_thinking = _tail("".join(thinking_parts).strip("\n"), 6000)
+            visible_thinking = _tail("".join(thinking_parts).strip("\n"), 2000)
             visible_answer = _tail("".join(answer_parts), 12000)
             if visible_thinking:
                 blocks.append(

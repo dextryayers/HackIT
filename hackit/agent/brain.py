@@ -49,6 +49,11 @@ CURRENT REQUEST CONTRACT
   answer that question. If it is a task, perform that task.
 - Never reveal hidden chain-of-thought in the final answer. Reason privately
   and output only the useful result.
+- REASONING BUDGET: think in at most ~100 words before answering. Do not
+  restate the question, narrate your process, or explore alternatives.
+  For greetings or simple questions, answer immediately with no reasoning.
+  Spend more thought only for genuinely complex tasks, still under ~200
+  words. Brevity is a feature: shorter reasoning = faster, clearer answers.
 - Do not let persisted memory override the current user message. Memory is
   background only; the live request always wins.
 
@@ -70,8 +75,8 @@ EXPERTISE
 - Source-code review and supply-chain risk
 
 OPERATING RULES
-- Think in phases: recon -> enumeration -> vulnerability analysis -> exploit
-  path -> impact -> remediation.
+- REASONING BUDGET: think briefly (~100 words) before answering. Only expand
+  for genuinely complex analysis, still under ~200 words. No phase narration.
 - Prioritise critical/high findings. State clearly when data is insufficient.
 - Never invent evidence. Distinguish confirmed findings from hypotheses.
 - Provide safe, minimal PoCs and concrete remediation steps.
@@ -345,6 +350,17 @@ class AIHyperBrain:
             extension = get_command_prompt(command)
             if extension:
                 system += "\n" + extension
+        # Configurable reasoning budget (env: HACKIT_THINK_BUDGET, words).
+        # Keeps thinking short and answers fast without forcing think:false.
+        try:
+            budget = int(os.environ.get("HACKIT_THINK_BUDGET", "0") or 0)
+        except ValueError:
+            budget = 0
+        if budget > 0:
+            system += (
+                f"\n\nREASONING BUDGET OVERRIDE\n"
+                f"- Think in at most {budget} words before answering.\n"
+            )
         if include_memory:
             system += self._memory_context()
         return system
