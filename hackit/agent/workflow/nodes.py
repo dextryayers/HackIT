@@ -243,6 +243,39 @@ def recon_node(state: PentestState) -> Dict[str, Any]:
         if isinstance(item, tuple) and len(item) == 2:
             scan_data[item[0]] = item[1]
 
+    # Deep external recon: prefer real tools, fall back to pure Python, dedup.
+    try:
+        from hackit.agent import external_tools as _ext
+
+        extra = _ext.aggregate_recon(host or target, base_url)
+        # Merge subdomains (dedup)
+        existing_subs = scan_data.get("subdomains")
+        if not isinstance(existing_subs, list):
+            existing_subs = []
+        merged_subs = _ext._dedup_str(list(existing_subs) + list(extra.get("subdomains", [])))
+        scan_data["subdomains"] = merged_subs
+        # Merge ports (dedup by port number)
+        existing_ports = scan_data.get("ports")
+        if not isinstance(existing_ports, list):
+            existing_ports = []
+        port_seen = set()
+        merged_ports = []
+        for item in list(existing_ports) + list(extra.get("ports", [])):
+            if not isinstance(item, dict):
+                continue
+            port = item.get("port")
+            if port in port_seen:
+                continue
+            port_seen.add(port)
+            merged_ports.append(item)
+        if merged_ports:
+            scan_data["ports"] = merged_ports
+        scan_data["external_http"] = extra.get("http_probe", [])
+        scan_data["external_endpoints"] = extra.get("endpoints", [])
+        scan_data["external_tools"] = extra.get("tools", {})
+    except Exception as exc:  # noqa: BLE001 - recon must never abort the pipeline
+        scan_data["external_recon_error"] = str(exc)[:300]
+
     has_web = _target_has_web({**state, "scan_data": scan_data})
     scan_data["web_url"] = base_url
     scan_data["host"] = host
@@ -1545,6 +1578,25 @@ def _offline_report(state: PentestState) -> str:
             )
         lines.append("")
 
+    ext_tools = scan_data.get("external_tools") or {}
+    ext_subs = _as_list(scan_data.get("subdomains"))
+    ext_ports = _as_list(scan_data.get("ports"))
+    ext_http = _as_list(scan_data.get("external_http"))
+    ext_eps = _as_list(scan_data.get("external_endpoints"))
+    lines.extend(["## Reconnaissance Summary", ""])
+    lines.append(f"- Subdomains discovered: {len(ext_subs)}")
+    lines.append(f"- Open ports: {len(ext_ports)}")
+    lines.append(f"- HTTP endpoints probed: {len(ext_http)}")
+    lines.append(f"- Unique endpoints: {len(ext_eps)}")
+    if ext_tools:
+        lines.append(f"- External tools available: {', '.join(sorted(ext_tools))}")
+    if ext_subs:
+        lines.append(f"- Sample subdomains: {', '.join(ext_subs[:15])}")
+    if ext_ports:
+        port_list = ", ".join(str(p.get('port', p.get('Port', '?'))) for p in ext_ports[:25] if isinstance(p, dict))
+        lines.append(f"- Open ports: {port_list}")
+    lines.append("")
+
     if ranked:
         lines.extend([
             "## Key Findings",
@@ -1561,6 +1613,32 @@ def _offline_report(state: PentestState) -> str:
                 f"{item.get('cvss', '—')} | {title} | {target_value} | {evidence} |"
             )
         lines.append("")
+
+        # Bug-bounty-style proof of concept per finding.
+        lines.extend(["## Proof of Concept", ""])
+        for idx, item in enumerate(ranked, 1):
+            title = str(item.get("title", item.get("type", "finding")))
+            target_value = str(item.get("target", target))
+            evidence = str(item.get("evidence", ""))
+            lines.append(f"### PoC #{idx} — {title}")
+            lines.append("")
+            lines.append(f"- **Target:** `{target_value}`")
+            lines.append(f"- **Severity:** {str(item.get('severity', 'info')).title()} "
+                         f"(CVSS {item.get('cvss', '—')})")
+            lines.append("- **Reproduction steps:**")
+            lines.append("  1. Send the request below to the target.")
+            lines.append("  2. Observe the response/evidence noted.")
+            lines.append("  3. Confirm the behaviour is reproducible.")
+            if evidence:
+                lines.append("")
+                lines.append("  **Evidence:**")
+                lines.append("  ```")
+                lines.append("  " + evidence[:600].replace("\n", "\n  "))
+                lines.append("  ```")
+            remediation = str(item.get("remediation", "")).strip()
+            if remediation:
+                lines.append(f"- **Remediation:** {remediation}")
+            lines.append("")
 
         lines.extend(["## Remediation Recommendations", ""])
         remediation_seen = set()
@@ -1621,7 +1699,7 @@ Active attack log: {json.dumps(state.get('attack_log', []), indent=2, default=st
 Ports: {json.dumps(scan_data.get('ports', []), indent=2, default=str)[:1500]}
 Technologies: {json.dumps(scan_data.get('tech', {}), indent=2, default=str)[:1500]}
 
-Cover the most important evidence, business impact and the next action.
+Cover the most important evidence, business impact, a short reproduction/PoC for each confirmed finding, and the next action. Format like a real bug-bounty report.
 The Findings list and verified probe hits are the ONLY evidence.
 If both verified counts are zero, state that no vulnerability was confirmed,
 do not assign a nonzero risk score, and never call a hypothesis confirmed.
