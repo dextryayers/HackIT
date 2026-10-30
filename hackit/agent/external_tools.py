@@ -341,7 +341,7 @@ def aggregate_recon(host: str, base_url: str) -> Dict[str, Any]:
     # Port scan the apex host plus discovered subdomains.
     ports = nmap_scan(host)
     extra_ports: List[Dict[str, Any]] = []
-    for sub in subdomains[:12]:
+    for sub in subdomains[:5]:
         try:
             extra_ports.extend(nmap_scan(sub, COMMON_PORTS[:15]))
         except Exception:
@@ -359,7 +359,7 @@ def aggregate_recon(host: str, base_url: str) -> Dict[str, Any]:
     merged_ports.sort(key=lambda x: x.get("port", 0))
 
     probe_urls = [base_url]
-    for sub in subdomains[:60]:
+    for sub in subdomains[:20]:
         probe_urls.append(f"https://{sub}")
         probe_urls.append(f"http://{sub}")
     probe_urls = _dedup_str(probe_urls)
@@ -373,7 +373,7 @@ def aggregate_recon(host: str, base_url: str) -> Dict[str, Any]:
             endpoints.append(url)
 
     # Crawl apex + subdomains for links/JS endpoints.
-    for url in [base_url] + [f"http://{s}" for s in subdomains[:15]]:
+    for url in [base_url] + [f"http://{s}" for s in subdomains[:8]]:
         try:
             with urllib.request.urlopen(url, timeout=6) as resp:
                 body = resp.read(131072).decode("utf-8", "replace")

@@ -75,6 +75,24 @@ def _finding(findings: List[Dict[str, Any]], ftype: str, target: str,
     ).to_dict())
 
 
+_CURRENT_PROGRESS = None
+
+
+def set_progress_callback(cb) -> None:
+    global _CURRENT_PROGRESS
+    _CURRENT_PROGRESS = cb
+
+
+def _emit_progress(phase: str, message: str) -> None:
+    cb = _CURRENT_PROGRESS
+    if cb is None:
+        return
+    try:
+        cb(phase, message)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _as_list(value: Any) -> List[Any]:
     if isinstance(value, list):
         return value
@@ -207,6 +225,7 @@ def recon_node(state: PentestState) -> Dict[str, Any]:
     bridge = GoBridge()
     updates: Dict[str, Any] = {"phase": Phase.RECON.value}
     findings = list(state.get("findings", []))
+    _emit_progress("recon", "recon starting")
 
     def do_portscan():
         data = _module_payload(bridge.run_worker(portscan=host or target))
@@ -248,7 +267,9 @@ def recon_node(state: PentestState) -> Dict[str, Any]:
     try:
         from hackit.agent import external_tools as _ext
 
+        _emit_progress("recon", "external recon starting")
         extra = _ext.aggregate_recon(host or target, base_url)
+        _emit_progress("recon", f"external recon done: {len(extra.get('subdomains', []))} subs, {len(extra.get('ports', []))} ports")
         # Merge subdomains (dedup)
         existing_subs = scan_data.get("subdomains")
         if not isinstance(existing_subs, list):
@@ -279,6 +300,7 @@ def recon_node(state: PentestState) -> Dict[str, Any]:
 
     # Passive header / configuration analysis -> low-hanging findings.
     try:
+        _emit_progress("recon", "header analysis starting")
         from hackit.agent import external_tools as _ext2
 
         _security_headers = {

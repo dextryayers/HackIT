@@ -44,6 +44,7 @@ from .nodes import (
     recon_node,
     recon_router,
     report_node,
+    set_progress_callback,
 )
 
 PHASE_NODE_MAP = {
@@ -205,6 +206,7 @@ def run_pentest(target: str, scope: str = "active_stealth", resume: bool = False
 
     set_cancel_event(cancel_event)
     reset_ai_budget()
+    set_progress_callback(progress)
     try:
         if LANGGRAPH_AVAILABLE:
             try:
