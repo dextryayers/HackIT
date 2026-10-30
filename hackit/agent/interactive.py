@@ -134,6 +134,17 @@ CHAT_COMMANDS = {
     "quit": "Exit chat",
 }
 
+# Merge the 40+ specialized AI modes so they are discoverable in the
+# "/" palette and autocomplete, and routed to the AI engine.
+try:
+    from .commands import COMMAND_MODES as _AI_MODES
+except Exception:  # pragma: no cover - defensive
+    _AI_MODES = {}
+for _name, _desc in _AI_MODES.items():
+    if _name not in CHAT_COMMANDS:
+        CHAT_COMMANDS[_name] = _desc
+    if _name not in AUTOPILOT_COMMANDS:
+        AUTOPILOT_COMMANDS[_name] = _desc
 AUTOPILOT_BANNER = r"""
     █████╗ ██╗   ██╗████████╗ ██████╗ ██████╗ ██╗██╗      ██████╗ ████████╗
    ██╔══██╗██║   ██║╚══██╔══╝██╔═══██╗██╔══██╗██║██║     ██╔═══██╗╚══██╔══╝
