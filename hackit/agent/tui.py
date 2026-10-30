@@ -351,6 +351,11 @@ def build_key_bindings(ui: Optional["TuiMixin"] = None, tui: bool = True) -> Key
         def _ctrl_l(event) -> None:  # noqa: ANN001
             ui._handle_clear_shortcut()
 
+        @kb.add("c-t", eager=True)
+        def _ctrl_t(event) -> None:  # noqa: ANN001
+            ui._show_thinking = not getattr(ui, "_show_thinking", True)
+            ui._invalidate()
+
         @kb.add("pageup", eager=True)
         def _page_up(event) -> None:  # noqa: ANN001
             ui._scroll_transcript(-12)
@@ -412,6 +417,7 @@ class TuiMixin:
         self._status_control: Optional[FormattedTextControl] = None
         self._follow_output = True
         self._scroll_offset = 0
+        self._show_thinking = True
         self._welcome_shown = False
         self._cancel_requested = False
         self._operation: Optional[Dict[str, Any]] = None
@@ -671,6 +677,9 @@ class TuiMixin:
         body.append(" / ", style=SLATE_DIM)
         body.append("Ctrl+↑↓", style=f"bold {AMBER}")
         body.append("   Home/End jump. Sidebar shows scroll state.", style=SLATE_DIM)
+        body.append("\n", style=SLATE_DIM)
+        body.append("Ctrl+T", style=f"bold {AMBER}")
+        body.append(" toggles thinking visibility.", style=SLATE_DIM)
         self.print(
             Panel(
                 body,
@@ -1209,7 +1218,7 @@ class TuiMixin:
             blocks: List[Any] = []
             visible_thinking = _tail("".join(thinking_parts).strip("\n"), 2000)
             visible_answer = _tail("".join(answer_parts), 12000)
-            if visible_thinking:
+            if visible_thinking and self._show_thinking:
                 blocks.append(
                     Panel(
                         Text(visible_thinking, style=f"italic {SLATE}"),
@@ -1328,7 +1337,7 @@ class TuiMixin:
         # The live panel already showed the stream; clear it and render the
         # final panels once instead of re-rendering and then duplicating them.
         self._clear_live()
-        if thinking_text:
+        if thinking_text and self._show_thinking:
             self.print(
                 Panel(
                     Text(thinking_text, style=f"italic {SLATE}"),

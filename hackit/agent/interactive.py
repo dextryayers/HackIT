@@ -1427,6 +1427,15 @@ class AgentUI:
         session = self._make_session()
         try:
             self.brain = AIHyperBrain(engine="chat" if self.mode_name == "CHAT" else "native", target=self.target)
+            if self.mode_name == "AUTOPILOT" and self.brain is not None:
+                expert = (
+                    "You are an elite cybersecurity expert and penetration tester. "
+                    "Help the user plan and execute authorised penetration tests step by step. "
+                    "Be precise, technical and actionable. When asked to run a test, "
+                    "use the available /commands and tools. Never refuse authorised testing."
+                )
+                base = getattr(self.brain, "system_prompt", "") or ""
+                self.brain.system_prompt = (base + "\n" + expert).strip()
         except Exception as exc:  # noqa: BLE001
             self.print(f"[red]Failed to initialise agent: {escape(str(exc))}[/red]")
             return
