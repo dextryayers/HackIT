@@ -160,6 +160,7 @@ def enter_agent_shell():
                     ("osint",     "OSINT footprint discovery"),
                     ("dashboard", "Real-time TUI dashboard"),
                     ("models",    "List models for the active provider"),
+                    ("model",     "Switch model (arrow-key picker)"),
                     ("memory",    "Inspect or clear AI memory"),
                     ("reset",     "Reset AI keys/provider/models"),
                     ("setting",   "Configure AI providers & keys"),
@@ -1092,7 +1093,40 @@ def models(provider, curated):
             f"  {GREEN}{index:>2}.{RESET} {B_CYAN}{model:<48}{RESET} "
             f"{DIM}{tier:<8} {description}{RESET}"
         )
-    click.echo(_colored("\n  Set one with: agent setting --provider ... --model ...", DIM))
+    click.echo(_colored("\n  Set one with: agent model  (or agent setting --model ...)", DIM))
+
+
+@agent.command()
+@click.argument('model_id', required=False)
+def model(model_id):
+    """Show or switch the active model (arrow-key picker when omitted)."""
+    from hackit.config import save_config
+
+    cfg = load_config()
+    provider = provider_registry.normalize_provider(
+        provider_registry.get_active_provider(cfg) or "gemini"
+    )
+    key = provider_registry.resolve_api_key(provider, cfg)
+
+    if model_id:
+        cfg.setdefault("ai_models", {})[provider] = model_id.strip()
+        save_config(cfg)
+        click.echo(_colored(f"  [✓] {provider} model set to {model_id.strip()}", GREEN))
+        return
+
+    current = provider_registry.effective_model(provider, cfg)
+    click.echo(_colored(f"\n  [ MODEL · {provider} ] current: {current or '(auto)'}", B_CYAN))
+    items = provider_registry.model_options(provider, key=key, include_remote=True)
+    if not items:
+        click.echo(_colored("  [!] No models found. Check the key or start Ollama.", YELLOW))
+        return
+    chosen = _dropdown_select(provider, items, [item[0] for item in items])
+    if not chosen:
+        click.echo(_colored("  [*] Model unchanged.", DIM))
+        return
+    cfg.setdefault("ai_models", {})[provider] = chosen
+    save_config(cfg)
+    click.echo(_colored(f"  [✓] {provider} model set to {chosen}", GREEN))
 
 
 @agent.command()
@@ -1654,6 +1688,7 @@ _AGENT_ACTIONS = {
     "auto": "auto",
     "osint": "osint",
     "models": "models",
+    "model": "model",
     "doctor": "doctor",
     "memory": "memory",
     "setting": "setting",
@@ -1677,6 +1712,7 @@ def _click_registry():
         "auto": auto,
         "osint": osint_cmd,
         "models": models,
+        "model": model,
         "doctor": doctor,
         "memory": memory,
         "setting": setting,
