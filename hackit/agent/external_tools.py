@@ -1,20 +1,22 @@
 """External reconnaissance helpers for the HackIt agent pipeline.
 
 The module prefers real security tools when they are installed on the host
-(nmap, httpx, ...) and falls back to pure-Python implementations so the
-pipeline is powerful even on a clean machine.  Every result is deduplicated
-before it reaches the workflow state.
+(nmap, projectdiscovery httpx, ...) and falls back to pure-Python
+implementations so the pipeline is powerful even on a clean machine.  Every
+result is deduplicated before it reaches the workflow state.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
 import threading
 import time
+import urllib.request
 from typing import Any, Dict, List, Set
 
 
@@ -26,6 +28,27 @@ COMMON_SUBDOMAINS = [
     "confluence", "wiki", "backup", "db", "database", "mysql", "redis",
     "elastic", "search", "api-v1", "api-v2", "v1", "v2", "beta", "alpha",
     "demo", "sandbox", "qa", "uat", "prod", "internal", "intranet",
+    "m", "mobile", "web", "secure", "sso", "oauth", "id", "account",
+    "accounts", "user", "users", "member", "members", "client", "clients",
+    "partner", "partners", "vendor", "vendors", "service", "services",
+    "gateway", "proxy", "edge", "lb", "loadbalancer", "cache", "cdn2",
+    "img", "images", "video", "videos", "files", "download", "downloads",
+    "upload", "uploads", "ftp", "sftp", "ssh", "remote", "access",
+    "mgmt", "manage", "management", "control", "controller", "panel",
+    "cpanel", "whm", "plesk", "webmail", "webdisk", "autodiscover",
+    "autoconfig", "ns", "ns1", "ns2", "dns", "mx", "mx1", "mx2",
+    "pop", "pop3", "imap", "webhook", "hooks", "callback", "oauth2",
+    "openid", "saml", "ldap", "ad", "dc", "exchange", "owa", "activesync",
+    "git", "svn", "hg", "repo", "repos", "src", "source", "code",
+    "build", "ci", "cd", "deploy", "release", "releases", "version",
+    "api-gateway", "apigw", "graphql", "gql", "rest", "soap", "ws",
+    "websocket", "socket", "realtime", "live", "stream", "streaming",
+    "analytics", "tracking", "metrics", "logs", "logging", "trace",
+    "debug", "test1", "test2", "dev1", "dev2", "stage", "staging2",
+    "preprod", "production", "legacy", "old", "new", "next", "future",
+    "admin2", "portal2", "api3", "web1", "web2", "app1", "app2",
+    "cloud", "aws", "gcp", "azure", "k8s", "kubernetes", "docker",
+    "registry", "artifacts", "packages", "npm", "pypi", "maven",
 ]
 
 COMMON_PORTS = [
@@ -46,7 +69,7 @@ COMMON_PATHS = [
 def available_tools() -> Dict[str, str]:
     result: Dict[str, str] = {}
     for name in ("nmap", "httpx", "subfinder", "amass", "katana", "nuclei",
-                 "ffuf", "gospider", "dnsx", "naabu"):
+                 "ffuf", "gospider", "dnsx", "naabu", "gobuster", "dirsearch"):
         path = shutil.which(name)
         if path:
             result[name] = path
@@ -75,7 +98,6 @@ def nmap_scan(host: str, ports: List[int] | None = None) -> List[Dict[str, Any]]
         line = line.strip()
         if not line or "/" not in line:
             continue
-        # e.g. "80/tcp open  http    Apache httpd 2.4.41"
         parts = line.split()
         if len(parts) < 2 or "open" not in parts:
             continue
@@ -137,9 +159,6 @@ def _dedup_ports(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 
 def httpx_probe(urls: List[str], timeout: int = 10) -> List[Dict[str, Any]]:
-    # The host may ship python-httpx (different CLI), so prefer the reliable
-    # pure-Python probe.  A real projectdiscovery httpx binary is still used
-    # when its help advertises the expected flags.
     tool = shutil.which("httpx")
     if tool:
         help_text = _run([tool, "-h"], timeout=5)
@@ -176,7 +195,6 @@ def httpx_probe(urls: List[str], timeout: int = 10) -> List[Dict[str, Any]]:
 
 
 def _python_http_probe(urls: List[str], timeout: int) -> List[Dict[str, Any]]:
-    import urllib.request
     import urllib.error
 
     results: List[Dict[str, Any]] = []
@@ -189,7 +207,6 @@ def _python_http_probe(urls: List[str], timeout: int) -> List[Dict[str, Any]]:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 body = resp.read(4096).decode("utf-8", "replace")
                 title = ""
-                import re
                 m = re.search(r"<title[^>]*>(.*?)</title>", body, re.I | re.S)
                 if m:
                     title = m.group(1).strip()[:120]
@@ -302,26 +319,80 @@ def _is_ip(host: str) -> bool:
             return False
 
 
+def _extract_links(base_url: str, body: str) -> List[str]:
+    links: List[str] = []
+    for match in re.finditer(r'''(?:href|src|action|data-url|data-endpoint)\s*=\s*["']([^"']+)["']''', body, re.I):
+        links.append(match.group(1))
+    for match in re.finditer(r'''(?:fetch|axios\.(?:get|post)|XMLHttpRequest\.open)\s*\(\s*["']([^"']+)["']''', body, re.I):
+        links.append(match.group(1))
+    for match in re.finditer(r'''["'](https?://[^"']+|/[A-Za-z0-9_./?=&-]+)["']''', body):
+        links.append(match.group(1))
+    out: List[str] = []
+    for link in links:
+        if link.startswith(("http://", "https://", "/")):
+            out.append(link)
+    return _dedup_str(out)
+
+
 def aggregate_recon(host: str, base_url: str) -> Dict[str, Any]:
     """Run all available recon techniques and return deduped data."""
     subdomains = subdomain_enum(host)
+
+    # Port scan the apex host plus discovered subdomains.
     ports = nmap_scan(host)
+    extra_ports: List[Dict[str, Any]] = []
+    for sub in subdomains[:12]:
+        try:
+            extra_ports.extend(nmap_scan(sub, COMMON_PORTS[:15]))
+        except Exception:
+            pass
+    port_seen = set()
+    merged_ports: List[Dict[str, Any]] = []
+    for item in ports + extra_ports:
+        if not isinstance(item, dict):
+            continue
+        p = item.get("port")
+        if p in port_seen:
+            continue
+        port_seen.add(p)
+        merged_ports.append(item)
+    merged_ports.sort(key=lambda x: x.get("port", 0))
+
     probe_urls = [base_url]
-    for sub in subdomains[:20]:
+    for sub in subdomains[:60]:
         probe_urls.append(f"https://{sub}")
         probe_urls.append(f"http://{sub}")
     probe_urls = _dedup_str(probe_urls)
     http_results = httpx_probe(probe_urls)
+
     endpoints: List[str] = []
+    link_candidates: List[str] = []
     for result in http_results:
         url = result.get("url")
         if url:
             endpoints.append(url)
+
+    # Crawl apex + subdomains for links/JS endpoints.
+    for url in [base_url] + [f"http://{s}" for s in subdomains[:15]]:
+        try:
+            with urllib.request.urlopen(url, timeout=6) as resp:
+                body = resp.read(131072).decode("utf-8", "replace")
+                link_candidates.extend(_extract_links(url, body))
+        except Exception:
+            pass
+
+    for link in link_candidates:
+        if link.startswith(("http://", "https://")):
+            endpoints.append(link)
+        elif link.startswith("/"):
+            endpoints.append(link)
     endpoints = _dedup_str(endpoints)
+
     return {
         "subdomains": subdomains,
-        "ports": ports,
+        "ports": merged_ports,
         "http_probe": http_results,
         "endpoints": endpoints,
+        "link_candidates": link_candidates,
         "tools": available_tools(),
     }
