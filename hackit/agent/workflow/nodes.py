@@ -299,6 +299,41 @@ def recon_node(state: PentestState) -> Dict[str, Any]:
     except Exception as exc:  # noqa: BLE001 - recon must never abort the pipeline
         scan_data["external_recon_error"] = str(exc)[:300]
 
+    # Asset inventory -> surface every discovered subdomain/port/endpoint as
+    # informational findings so the report reflects the full attack surface.
+    try:
+        for sub in _as_list(scan_data.get("subdomains"))[:200]:
+            _finding(
+                findings, "asset_discovery", str(sub),
+                f"Subdomain discovered: {sub}",
+                f"DNS resolution succeeded for {sub}",
+                severity="info", cvss=0.0,
+                remediation="Review whether this host should be publicly exposed",
+            )
+        for port_entry in _as_list(scan_data.get("ports"))[:100]:
+            if not isinstance(port_entry, dict):
+                continue
+            port_num = port_entry.get("port", port_entry.get("Port"))
+            if port_num is None:
+                continue
+            _finding(
+                findings, "open_port", f"{host}:{port_num}",
+                f"Open port {port_num}/tcp detected",
+                f"Service: {port_entry.get('service', '')} {port_entry.get('version', '')}".strip(),
+                severity="info", cvss=0.0,
+                remediation="Close unused ports or restrict access",
+            )
+        for url in _as_list(scan_data.get("external_endpoints"))[:100]:
+            _finding(
+                findings, "endpoint_discovered", str(url),
+                f"Endpoint discovered: {str(url)[:120]}",
+                f"Reached during link/JS crawl",
+                severity="info", cvss=0.0,
+                remediation="Review endpoint exposure and access control",
+            )
+    except Exception:
+        pass
+
     # Passive header / configuration analysis -> low-hanging findings.
     try:
         _emit_progress("recon", "header analysis starting")
@@ -318,7 +353,7 @@ def recon_node(state: PentestState) -> Dict[str, Any]:
             if not url or url in seen_urls:
                 continue
             seen_urls.add(url)
-            if len(seen_urls) > 25:
+            if len(seen_urls) > 80:
                 break
             headers = {}
             try:
@@ -631,7 +666,7 @@ def _offline_analysis(state: PentestState) -> str:
     scan_data = state.get("scan_data", {})
     findings = state.get("findings", [])
     base_url = scan_data.get("web_url") or state.get("target") or ""
-    endpoints = _endpoint_candidates(state, base_url, limit=12)
+    endpoints = _endpoint_candidates(state, base_url, limit=30)
     lines = [
         f"Target: {state.get('target')}",
         f"Web endpoint: {base_url}",
