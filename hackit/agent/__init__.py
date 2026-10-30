@@ -1560,6 +1560,7 @@ def guide():
     click.echo(_colored("\n  [ 2b. MODEL SELECTION ]", YELLOW))
     click.echo("  When a provider exposes more than one model, `agent setting` opens a")
     click.echo("  live selector: " + _colored("↑ / ↓", GREEN) + " to move, " + _colored("Enter", GREEN) + " to pick, " + _colored("Esc", GREEN) + " to cancel.")
+    click.echo("  Inside chat, " + _colored("/model", GREEN) + " with no argument opens the same picker.")
     click.echo("  Non-TTY terminals fall back to a numbered list.")
     
     click.echo(_colored("\n  [ 3. SPECIALIZED INTELLIGENCE COMMANDS ]", YELLOW))
