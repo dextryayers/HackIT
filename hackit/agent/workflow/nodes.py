@@ -228,7 +228,7 @@ def recon_node(state: PentestState) -> Dict[str, Any]:
     _emit_progress("recon", "recon starting")
 
     def do_portscan():
-        data = _module_payload(bridge.run_worker(portscan=host or target))
+        data = _module_payload(bridge.run_worker(portscan=host or target, timeout=30))
         return ("ports", data if isinstance(data, list) else [])
 
     def do_subdomain():
@@ -236,26 +236,27 @@ def recon_node(state: PentestState) -> Dict[str, Any]:
         # single-label host; querying it only returns the target itself.
         if _is_ip(host) or "." not in (host or ""):
             return ("subdomains", [])
-        data = _module_payload(bridge.run_worker(subdomain=host or target))
+        data = _module_payload(bridge.run_worker(subdomain=host or target, timeout=30))
         return ("subdomains", data if isinstance(data, list) else [])
 
     def do_tech():
-        data = _module_payload(bridge.run_worker(tech=f"{host}:{port}"))
+        data = _module_payload(bridge.run_worker(tech=f"{host}:{port}", timeout=30))
         return ("tech", data if isinstance(data, dict) else {})
 
     def do_waf():
-        data = _module_payload(bridge.run_worker(waf=f"{host}:{port}"))
+        data = _module_payload(bridge.run_worker(waf=f"{host}:{port}", timeout=30))
         return ("waf", data if isinstance(data, dict) else {})
 
     def do_headers():
-        data = _module_payload(bridge.run_worker(headers=base_url))
+        data = _module_payload(bridge.run_worker(headers=base_url, timeout=30))
         return ("headers", data if isinstance(data, list) else [])
 
     def do_fuzz():
-        data = _module_payload(bridge.run_worker(fuzz=scan_base))
+        data = _module_payload(bridge.run_worker(fuzz=scan_base, timeout=30))
         return ("fuzz", data if isinstance(data, list) else [])
 
     scan_data: Dict[str, Any] = {}
+    _emit_progress("recon", "core recon modules starting")
     for item in _run_parallel(
         [do_portscan, do_subdomain, do_tech, do_waf, do_headers, do_fuzz],
         max_workers=6,
