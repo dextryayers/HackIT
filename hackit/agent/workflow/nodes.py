@@ -206,6 +206,7 @@ def recon_node(state: PentestState) -> Dict[str, Any]:
     scan_base = _scan_base_url(base_url)
     bridge = GoBridge()
     updates: Dict[str, Any] = {"phase": Phase.RECON.value}
+    findings = list(state.get("findings", []))
 
     def do_portscan():
         data = _module_payload(bridge.run_worker(portscan=host or target))
@@ -276,6 +277,84 @@ def recon_node(state: PentestState) -> Dict[str, Any]:
     except Exception as exc:  # noqa: BLE001 - recon must never abort the pipeline
         scan_data["external_recon_error"] = str(exc)[:300]
 
+    # Passive header / configuration analysis -> low-hanging findings.
+    try:
+        from hackit.agent import external_tools as _ext2
+
+        _security_headers = {
+            "strict-transport-security": "Missing HSTS header",
+            "content-security-policy": "Missing Content-Security-Policy header",
+            "x-frame-options": "Missing X-Frame-Options (clickjacking risk)",
+            "x-content-type-options": "Missing X-Content-Type-Options (MIME sniffing)",
+            "referrer-policy": "Missing Referrer-Policy header",
+            "permissions-policy": "Missing Permissions-Policy header",
+        }
+        urls_to_check = [base_url] + [r.get("url") for r in _as_list(scan_data.get("external_http")) if isinstance(r, dict) and r.get("url")]
+        seen_urls = set()
+        for url in urls_to_check:
+            if not url or url in seen_urls:
+                continue
+            seen_urls.add(url)
+            if len(seen_urls) > 25:
+                break
+            headers = {}
+            try:
+                import urllib.request
+                req = urllib.request.Request(url, method="HEAD")
+                req.add_header("User-Agent", "HackIt-Recon/1.0")
+                with urllib.request.urlopen(req, timeout=6) as resp:
+                    headers = {k.lower(): v for k, v in resp.headers.items()}
+            except Exception:
+                try:
+                    import urllib.request
+                    req = urllib.request.Request(url, method="GET")
+                    req.add_header("User-Agent", "HackIt-Recon/1.0")
+                    with urllib.request.urlopen(req, timeout=6) as resp:
+                        headers = {k.lower(): v for k, v in resp.headers.items()}
+                except Exception:
+                    continue
+            # Missing security headers
+            for hdr, msg in _security_headers.items():
+                if hdr not in headers:
+                    _finding(
+                        findings, "misconfig", url,
+                        msg, f"Response from {url} did not include {hdr}",
+                        severity="low", cvss=3.1,
+                        remediation=f"Add the {hdr} response header",
+                    )
+            # Server version disclosure
+            server = headers.get("server", "")
+            if server and any(ch.isdigit() for ch in server):
+                _finding(
+                    findings, "info_disclosure", url,
+                    "Server version disclosed",
+                    f"Server header: {server}",
+                    severity="info", cvss=2.0,
+                    remediation="Hide or genericise the Server header",
+                )
+            # CORS wildcard
+            acao = headers.get("access-control-allow-origin", "")
+            if acao == "*":
+                _finding(
+                    findings, "cors", url,
+                    "CORS allows any origin (*)",
+                    f"Access-Control-Allow-Origin: {acao}",
+                    severity="medium", cvss=5.0,
+                    remediation="Restrict CORS to trusted origins",
+                )
+            # Cache-control on sensitive
+            if "cache-control" not in headers and any(k in url.lower() for k in ("login", "admin", "api", "account")):
+                _finding(
+                    findings, "misconfig", url,
+                    "Missing Cache-Control on sensitive endpoint",
+                    f"No Cache-Control header on {url}",
+                    severity="low", cvss=3.0,
+                    remediation="Add Cache-Control: no-store on sensitive responses",
+                )
+    except Exception as exc:  # noqa: BLE001
+        scan_data["header_analysis_error"] = str(exc)[:300]
+
+
     has_web = _target_has_web({**state, "scan_data": scan_data})
     scan_data["web_url"] = base_url
     scan_data["host"] = host
@@ -283,7 +362,6 @@ def recon_node(state: PentestState) -> Dict[str, Any]:
     scan_data["port"] = port
     scan_data["has_web"] = has_web
 
-    findings = list(state.get("findings", []))
     # Only verified fuzzer hits become findings.  A bare HTTP 200 is not
     # evidence on catch-all servers and SPA fallbacks, so the Go fuzzer
     # compares every path with a random baseline and a file signature.
@@ -813,6 +891,16 @@ def _endpoint_candidates(state: PentestState, base_url: str, limit: int = 8) -> 
             seen.add(clean)
             candidates.append(clean)
 
+    def add_ext(value: Any) -> None:
+        value = str(value or "").strip()
+        if not value or not value.startswith(("http://", "https://")):
+            return
+        candidate = urlparse(value)
+        clean = candidate._replace(fragment="").geturl()
+        if clean not in seen:
+            seen.add(clean)
+            candidates.append(clean)
+
     add(base_url)
     for entry in _as_list(scan_data.get("fuzz")):
         if isinstance(entry, dict):
@@ -826,7 +914,16 @@ def _endpoint_candidates(state: PentestState, base_url: str, limit: int = 8) -> 
         for endpoint in _as_list(js_analysis.get("endpoints")):
             if isinstance(endpoint, str):
                 add(endpoint)
-    return candidates[:limit]
+    # External recon endpoints (subdomains, probed URLs)
+    for url in _as_list(scan_data.get("external_endpoints")):
+        add_ext(url)
+    for item in _as_list(scan_data.get("external_http")):
+        if isinstance(item, dict) and item.get("url"):
+            add_ext(item.get("url"))
+        elif isinstance(item, str):
+            add_ext(item)
+    # Increase default coverage
+    return candidates[: max(limit, 12)]
 
 
 def _parameter_targets(base_url: str, names: List[str], limit: int = 6) -> List[str]:
