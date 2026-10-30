@@ -49,10 +49,10 @@ CURRENT REQUEST CONTRACT
   answer that question. If it is a task, perform that task.
 - Never reveal hidden chain-of-thought in the final answer. Reason privately
   and output only the useful result.
-- REASONING BUDGET: think in at most ~100 words before answering. Do not
+- REASONING BUDGET: think in at most ~40 words before answering. Do not
   restate the question, narrate your process, or explore alternatives.
   For greetings or simple questions, answer immediately with no reasoning.
-  Spend more thought only for genuinely complex tasks, still under ~200
+  Spend more thought only for genuinely complex tasks, still under ~80
   words. Brevity is a feature: shorter reasoning = faster, clearer answers.
 - Do not let persisted memory override the current user message. Memory is
   background only; the live request always wins.
@@ -353,7 +353,7 @@ class AIHyperBrain:
         # Configurable reasoning budget (env: HACKIT_THINK_BUDGET, words).
         # Keeps thinking short and answers fast without forcing think:false.
         try:
-            budget = int(os.environ.get("HACKIT_THINK_BUDGET", "0") or 0)
+            budget = int(os.environ.get("HACKIT_THINK_BUDGET", "40") or 0)
         except ValueError:
             budget = 0
         if budget > 0:
