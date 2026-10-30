@@ -313,22 +313,29 @@ def _default_ai_call(timeout: int = 300) -> Callable[[str, str], str]:
     return caller
 
 
-def _resolve_ai(ai_call: Optional[Callable[[str, str], str]]) -> Tuple[
+def _resolve_ai(ai_call: Optional[Callable[[str, str], str]],
+                timeout: int = 0) -> Tuple[
         Callable[[str, str], str], str, str]:
     """Return ``(caller, provider, model)`` for payload generation.
 
     The provider/model are surfaced in the result so callers can show which
     model actually produced the payloads.  When a custom ``ai_call`` is passed
     (tests, alternate backends) the metadata stays blank.
+
+    ``timeout`` bounds the model call.  The autonomous pipeline passes a short
+    budget so a slow local model degrades to the curated catalogue instead of
+    parking the whole run for five minutes.
     """
     if ai_call is not None:
         return ai_call, "", ""
     from .brain import AIHyperBrain  # local import to avoid cycles
 
     brain = AIHyperBrain(engine="native", enable_memory=False, announce=False)
+    if timeout <= 0:
+        timeout = 45 if brain.provider == "ollama" else 90
 
     def caller(prompt: str, system: str) -> str:
-        return brain.raw_query(prompt, system_prompt=system, mode="payload", timeout=300)
+        return brain.raw_query(prompt, system_prompt=system, mode="payload", timeout=timeout)
 
     return caller, brain.provider, brain.model
 
@@ -348,7 +355,8 @@ def _ai_error_message(text: str, parsing_failed: bool) -> str:
 
 def generate(vuln_type: str, context: str = "", count: int = 12,
              ai_call: Optional[Callable[[str, str], str]] = None,
-             use_ai: bool = True, provider: str = "", model: str = "") -> Dict[str, Any]:
+             use_ai: bool = True, provider: str = "", model: str = "",
+             timeout: int = 0) -> Dict[str, Any]:
     """Generate payloads for one vulnerability class.
 
     AI payloads are requested whenever ``use_ai`` is true.  On any provider or
@@ -364,7 +372,7 @@ def generate(vuln_type: str, context: str = "", count: int = 12,
 
     if use_ai:
         try:
-            caller, ai_provider, ai_model = _resolve_ai(ai_call)
+            caller, ai_provider, ai_model = _resolve_ai(ai_call, timeout=timeout)
             provider = provider or ai_provider
             model = model or ai_model
             local_cap = 4 if provider == "ollama" else 12
@@ -407,7 +415,8 @@ def generate(vuln_type: str, context: str = "", count: int = 12,
 
 def generate_multi(types: Iterable[str], context: str = "", count: int = 8,
                    ai_call: Optional[Callable[[str, str], str]] = None,
-                   use_ai: bool = True, provider: str = "", model: str = "") -> Dict[str, Any]:
+                   use_ai: bool = True, provider: str = "", model: str = "",
+                   timeout: int = 0) -> Dict[str, Any]:
     """Generate payloads for several classes using one AI request.
 
     A single request keeps the autonomous pipeline fast while still letting the
@@ -437,7 +446,7 @@ def generate_multi(types: Iterable[str], context: str = "", count: int = 8,
     ai_error = ""
     if use_ai and normalized:
         try:
-            caller, ai_provider, ai_model = _resolve_ai(ai_call)
+            caller, ai_provider, ai_model = _resolve_ai(ai_call, timeout=timeout)
             provider = provider or ai_provider
             model = model or ai_model
             # Local models are fast at a few short JSON items but time out on

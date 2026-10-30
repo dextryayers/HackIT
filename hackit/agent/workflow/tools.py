@@ -14,6 +14,34 @@ from ..textutils import strip_control
 _CANCEL_LOCK = threading.Lock()
 _CANCEL_EVENT: Optional[threading.Event] = None
 
+# Per-run AI health.  A local model that cannot finish one stage inside its
+# budget will not finish the next one either; remembering the failure lets the
+# remaining pipeline nodes drop straight to their offline analysers instead of
+# paying the timeout again.
+_AI_LOCK = threading.Lock()
+_AI_STATE: Dict[str, Any] = {"degraded": False, "reason": "", "timeouts": 0}
+
+
+def reset_ai_budget() -> None:
+    """Clear the per-run AI health state at the start of a pipeline."""
+    with _AI_LOCK:
+        _AI_STATE.update({"degraded": False, "reason": "", "timeouts": 0})
+
+
+def ai_degraded() -> Tuple[bool, str]:
+    with _AI_LOCK:
+        return bool(_AI_STATE["degraded"]), str(_AI_STATE["reason"])
+
+
+def _mark_ai_timeout(reason: str) -> None:
+    # HACKIT_AI_PERSIST=1 keeps retrying every stage even after a timeout.
+    if os.environ.get("HACKIT_AI_PERSIST", "").lower() in ("1", "true", "yes", "y"):
+        return
+    with _AI_LOCK:
+        _AI_STATE["timeouts"] = int(_AI_STATE["timeouts"]) + 1
+        _AI_STATE["degraded"] = True
+        _AI_STATE["reason"] = reason
+
 
 def set_cancel_event(event: Optional[threading.Event]) -> None:
     """Install the event that aborts workflow subprocesses."""
@@ -264,7 +292,8 @@ class GoBridge:
         return any(marker in lowered for marker in markers)
 
     def ai_chat(self, prompt: str, mode: str = "", provider: str = "",
-                api_key: str = "", model: str = "") -> str:
+                api_key: str = "", model: str = "",
+                timeout: Optional[int] = None) -> str:
         if not self.ai_engine:
             return "[!] AI engine not found; run hackit/agent/go/build.sh"
 
@@ -280,7 +309,13 @@ class GoBridge:
             if extension:
                 system += "\n" + extension
 
-        timeout = self._ai_timeout(provider, cfg)
+        explicit_timeout = timeout is not None
+        timeout = max(10, int(timeout)) if explicit_timeout else self._ai_timeout(provider, cfg)
+
+        degraded, reason = ai_degraded()
+        if degraded and explicit_timeout:
+            return f"[!] AI skipped: provider degraded after {reason}"
+
         json_answer = provider == "ollama" and mode in (
             "analyze", "attack", "correlate", "report")
         if json_answer:
@@ -314,11 +349,17 @@ class GoBridge:
             cmd.extend(["-model", model])
 
         data = self._run_engine(cmd, timeout=timeout + 15)
-        if data.get("error") and self._is_transient(str(data["error"])):
+        # A pipeline node passes an explicit budget: retrying doubles the wall
+        # clock and the node already degrades to offline analysis on failure.
+        if (not explicit_timeout and data.get("error")
+                and self._is_transient(str(data["error"]))):
             time.sleep(2)
             data = self._run_engine(cmd, timeout=timeout + 15)
         if data.get("error"):
-            return f"[!] AI Error: {strip_control(data['error'])}"
+            error = strip_control(str(data["error"]))
+            if explicit_timeout and ("timeout" in error.lower() or "deadline" in error.lower()):
+                _mark_ai_timeout(error)
+            return f"[!] AI Error: {error}"
         text = strip_control(data.get("text", "[!] No response text"))
         return self._json_answer(text) if json_answer else text
 

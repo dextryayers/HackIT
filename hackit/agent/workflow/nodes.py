@@ -476,6 +476,9 @@ def payload_node(state: PentestState) -> Dict[str, Any]:
             context=_context_blob(state),
             count=10,
             use_ai=True,
+            # The pipeline must never park on a slow model: curated payloads
+            # are already loaded, so a short AI budget degrades cleanly.
+            timeout=45,
         )
     except Exception as exc:  # noqa: BLE001
         result = {"error": str(exc)[:500], "results": {}}
@@ -542,7 +545,7 @@ No active verification has run yet: every vulnerability is a hypothesis.
 Never describe anything as confirmed; use "candidate" or "hypothesis".
 Be concise: answer in at most 120 words.
 """
-    analysis = bridge.ai_chat(prompt, mode="analyze")
+    analysis = bridge.ai_chat(prompt, mode="analyze", timeout=90)
     analysis_error = ""
     if (not analysis or analysis.startswith("[!]") or len(analysis.strip()) < 80
             or analysis.lstrip().startswith("{")):
@@ -587,7 +590,7 @@ Return an ordered plan that covers:
 Sort by criticality and state the exact endpoint/parameter to test when known.
 Be concise: answer in at most 120 words.
 """
-    plan = bridge.ai_chat(prompt, mode="attack")
+    plan = bridge.ai_chat(prompt, mode="attack", timeout=90)
     plan_error = ""
     if (not plan or plan.startswith("[!]") or len(plan.strip()) < 80
             or plan.lstrip().startswith("{")):
@@ -1389,7 +1392,7 @@ Verified probe hits: {sum(1 for item in (state.get('probe_results') or []) if is
    and use a 0/10 risk score. Never describe a hypothesis as confirmed.
 Be concise: answer in at most 80 words.
 """
-    correlation = bridge.ai_chat(prompt, mode="correlate")
+    correlation = bridge.ai_chat(prompt, mode="correlate", timeout=90)
     correlation_error = ""
     if (not correlation or correlation.startswith("[!]") or len(correlation.strip()) < 40
             or correlation.lstrip().startswith("{")):
@@ -1625,7 +1628,7 @@ do not assign a nonzero risk score, and never call a hypothesis confirmed.
 Otherwise only claim what the evidence supports; mark hypotheses as hypotheses.
 Be concise: answer in at most 150 words.
 """
-    report = bridge.ai_chat(prompt, mode="report")
+    report = bridge.ai_chat(prompt, mode="report", timeout=90)
     report_error = ""
     if (not report or report.startswith("[!]") or len(report.strip()) < 120
             or report.lstrip().startswith("{")):

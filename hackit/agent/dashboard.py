@@ -9,6 +9,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from typing import Any, Dict
 
 try:
     from rich.layout import Layout
@@ -75,14 +76,38 @@ class SwarmDashboard:
             self.last_state_mtime = mtime
             with open(state_file) as f:
                 data = json.load(f)
-                self.state = data
+                if not isinstance(data, dict):
+                    return
+                self.state = self._sanitize_state(data)
                 logs = self.state.get("logs") or []
                 agents = {str(log.get("agent", "")) for log in logs if isinstance(log, dict)}
                 self.agent_idx = len([agent for agent in agents if agent])
                 if logs:
                     self.current_agent = str(logs[-1].get("agent") or self.current_agent)
-        except (json.JSONDecodeError, OSError):
+        except (json.JSONDecodeError, OSError, TypeError, ValueError):
             pass
+
+    @staticmethod
+    def _sanitize_state(data: Dict[str, Any]) -> Dict[str, Any]:
+        """Coerce null/!list fields emitted by the Go engine.
+
+        The engine writes ``discovered_services: null`` until the first agent
+        reports; every renderer assumed a list and crashed on ``len(None)``.
+        """
+        list_fields = (
+            "discovered_services", "vulnerabilities", "logs",
+            "findings", "subdomains", "ports",
+        )
+        for field in list_fields:
+            if not isinstance(data.get(field), list):
+                data[field] = []
+        dict_fields = ("recon_data", "context_data", "target")
+        for field in dict_fields:
+            if not isinstance(data.get(field), dict):
+                data[field] = {}
+        if not isinstance(data["recon_data"].get("subdomains"), list):
+            data["recon_data"]["subdomains"] = []
+        return data
 
     def poll_state(self):
         while self.running:
@@ -161,10 +186,11 @@ class SwarmDashboard:
         )
 
     def render_counts(self):
-        services = len(self.state.get("discovered_services", []))
-        subdomains = len(self.state.get("recon_data", {}).get("subdomains", []))
-        vulns = len(self.state.get("vulnerabilities", []))
-        logs = len(self.state.get("logs", []))
+        services = len(self.state.get("discovered_services") or [])
+        recon = self.state.get("recon_data") or {}
+        subdomains = len(recon.get("subdomains") or []) if isinstance(recon, dict) else 0
+        vulns = len(self.state.get("vulnerabilities") or [])
+        logs = len(self.state.get("logs") or [])
 
         table = Table.grid(padding=(0, 1))
         table.add_column()
@@ -276,6 +302,11 @@ def main():
             stderr=subprocess.DEVNULL,
         )
         dashboard.run(process=engine_proc)
+        code = engine_proc.poll()
+        if code not in (0, None):
+            console.print(f"[red][!] Swarm engine exited with code {code}[/]")
+        elif code is None:
+            console.print("[yellow][*] Swarm still running; dashboard closed.[/]")
     except KeyboardInterrupt:
         pass
     finally:

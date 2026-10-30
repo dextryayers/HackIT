@@ -273,7 +273,8 @@ def enter_agent_shell():
                     click.echo(f"  {YELLOW}✦{RESET}  {DIM}Use{RESET}  {GREEN}swarm {t}{RESET}  {DIM}for full 28-agent scan.{RESET}")
                     continue
 
-                if base_cmd in ('auto', 'payload', 'probe', 'osint', 'doctor', 'models', 'memory'):
+                if base_cmd in ('auto', 'payload', 'probe', 'osint', 'doctor',
+                                'models', 'model', 'memory'):
                     handle_ai_command("/" + user_input)
                     continue
 
@@ -336,9 +337,12 @@ def swarm_cmd(target, scope='passive'):
     click.echo(_colored(f"\n  [ SWARM ] 28 agents attacking {target} [{scope}]\n", B_CYAN, bold=True))
     try:
         dash_script = os.path.join(base_dir, 'dashboard.py')
-        if os.path.exists(dash_script):
+        # The Rich dashboard owns the whole screen, so only use it on a real
+        # terminal; piped or redirected runs get the engine's plain output.
+        if sys.stdout.isatty() and os.path.exists(dash_script):
             subprocess.run([sys.executable, dash_script, target, scope])
             return
+        click.echo(_colored("  [*] No TTY — streaming engine output directly.", DIM))
         subprocess.run([engine_path, '--swarm', target, '--swarm-scope', scope])
     except KeyboardInterrupt:
         click.echo(_colored("\n  [!] Swarm terminated.", RED))
@@ -351,6 +355,20 @@ def dashboard_cmd(target, scope='passive'):
     dash_script = os.path.join(base_dir, 'dashboard.py')
     if not os.path.exists(dash_script):
         click.echo(_colored(f"  [!] Dashboard script not found", RED))
+        return
+    if not sys.stdout.isatty():
+        click.echo(_colored(
+            "  [!] The dashboard needs a real terminal. Running the swarm engine instead.",
+            YELLOW,
+        ))
+        engine_path = os.path.join(
+            base_dir, 'go', 'ai_engine.exe' if os.name == 'nt' else 'ai_engine'
+        )
+        if os.path.exists(engine_path):
+            subprocess.run(
+                [engine_path, '--swarm', target, '--swarm-scope', scope],
+                cwd=os.path.join(base_dir, 'go'),
+            )
         return
     subprocess.run([sys.executable, dash_script, target, scope])
 
@@ -1223,6 +1241,8 @@ def auto(target, scope, resume):
 
     def progress(phase, message):
         click.echo(f"  {CYAN}▸{RESET} {B_CYAN}{phase:<10}{RESET} {DIM}{message}{RESET}")
+        # Keep piped runs live instead of dumping the whole log at the end.
+        sys.stdout.flush()
 
     try:
         state = run_pentest(target, scope=scope, resume=resume, progress=progress)
@@ -1242,6 +1262,25 @@ def auto(target, scope, resume):
         f"risk {state.get('risk_score', 0)}/10",
         GREEN, bold=True,
     ))
+    if findings:
+        order = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+        ranked = sorted(
+            findings,
+            key=lambda item: order.get(str(item.get("severity", "info")).lower(), 5),
+        )
+        for item in ranked[:8]:
+            sev = str(item.get("severity", "info")).lower()
+            color = {"critical": RED, "high": RED, "medium": YELLOW,
+                     "low": CYAN}.get(sev, DIM)
+            sev_label = _colored(f"{sev.upper():<8}", color)
+            type_label = _colored(f"{str(item.get('type', '?'))[:16]:<16}", B_CYAN)
+            click.echo(
+                f"  {sev_label} {type_label} "
+                f"{DIM}{str(item.get('target', ''))[:40]} · "
+                f"{str(item.get('description', ''))[:90]}{RESET}"
+            )
+        if len(findings) > 8:
+            click.echo(_colored(f"  … {len(findings) - 8} more in the report", DIM))
     if state.get("report_path"):
         click.echo(_colored(f"  [+] Report: {state['report_path']}", GREEN))
     click.echo(_colored(f"  [+] State: {os.path.join(os.path.expanduser('~'), '.hackit', 'workflow_state')}", DIM))
@@ -1317,27 +1356,27 @@ def swarm(target, scope, dashboard):
     """Launch the 28-node Autonomous Swarm against a target"""
     import subprocess
     click.echo(_colored(f"\n[ SWARM ] Launching 28-node autonomous swarm against {target} [{scope}]...", B_CYAN, bold=True))
-    
+
     base_dir = os.path.dirname(os.path.abspath(__file__))
     engine_path = os.path.join(base_dir, 'go', 'ai_engine.exe' if os.name == 'nt' else 'ai_engine')
-    
+
     if not os.path.exists(engine_path):
         click.echo(_colored(f"  [!] Missing AI engine at {engine_path}", RED))
         return
 
-    if dashboard:
-        try:
-            dash_script = os.path.join(base_dir, 'dashboard.py')
-            if os.path.exists(dash_script):
-                cmd = [sys.executable, dash_script, target, scope]
-                subprocess.run(cmd)
-                return
-        except Exception:
-            pass
+    dash_script = os.path.join(base_dir, 'dashboard.py')
+    if dashboard and sys.stdout.isatty() and os.path.exists(dash_script):
+        subprocess.run([sys.executable, dash_script, target, scope])
+        return
+
+    if dashboard and not sys.stdout.isatty():
+        click.echo(_colored("  [*] No TTY — streaming engine output directly.", DIM))
 
     try:
-        cmd = [engine_path, '--swarm', target, '--swarm-scope', scope]
-        subprocess.run(cmd, cwd=os.path.join(base_dir, 'go'))
+        subprocess.run(
+            [engine_path, '--swarm', target, '--swarm-scope', scope],
+            cwd=os.path.join(base_dir, 'go'),
+        )
     except KeyboardInterrupt:
         click.echo(_colored("\n  [!] Swarm terminated by user.", RED))
     except Exception as e:
@@ -1354,8 +1393,21 @@ def dashboard(target, scope):
     if not os.path.exists(dash_script):
         click.echo(_colored(f"  [!] Dashboard script not found at {dash_script}", RED))
         return
-    cmd = [sys.executable, dash_script, target, scope]
-    subprocess.run(cmd)
+    if not sys.stdout.isatty():
+        click.echo(_colored(
+            "  [!] The dashboard needs a real terminal. Running the swarm engine instead.",
+            YELLOW,
+        ))
+        engine_path = os.path.join(
+            base_dir, 'go', 'ai_engine.exe' if os.name == 'nt' else 'ai_engine'
+        )
+        if os.path.exists(engine_path):
+            subprocess.run(
+                [engine_path, '--swarm', target, '--swarm-scope', scope],
+                cwd=os.path.join(base_dir, 'go'),
+            )
+        return
+    subprocess.run([sys.executable, dash_script, target, scope])
 
 @agent.command()
 @click.argument('target', required=False, default='')

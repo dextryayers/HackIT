@@ -29,7 +29,7 @@ from .state import (
     load_latest_state,
     make_initial_state,
 )
-from .tools import set_cancel_event, workflow_cancelled
+from .tools import reset_ai_budget, set_cancel_event, workflow_cancelled
 from .nodes import (
     analyze_node,
     correlate_node,
@@ -204,6 +204,7 @@ def run_pentest(target: str, scope: str = "active_stealth", resume: bool = False
         _emit(progress, "workflow", "active mode enabled: authorized modules and payload probes")
 
     set_cancel_event(cancel_event)
+    reset_ai_budget()
     try:
         if LANGGRAPH_AVAILABLE:
             try:

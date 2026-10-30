@@ -860,8 +860,12 @@ class AIHyperBrain:
 
     def generate_payloads(self, vuln_type: str, context: str = "", count: int = 12,
                           use_ai: bool = True) -> Dict[str, Any]:
+        # A bounded budget keeps `payload` and `probe` responsive; the curated
+        # catalogue already covers the class when the model is slow.
+        budget = 45 if self.provider == "ollama" else 90
+
         def ai_call(prompt: str, system: str) -> str:
-            return self.raw_query(prompt, system_prompt=system, mode="payload", timeout=300)
+            return self.raw_query(prompt, system_prompt=system, mode="payload", timeout=budget)
 
         result = payload_forge.generate(
             vuln_type,
