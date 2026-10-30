@@ -87,6 +87,11 @@ AUTOPILOT_COMMANDS = {
     "import": "Import conversation [filename]",
     "help": "Show all commands",
     "clear": "Clear screen",
+    "doctor": "Deep provider diagnostics",
+    "setting": "Configure AI providers, keys and models",
+    "models": "List available models",
+    "guide": "Full slash-command reference",
+    "reset": "Reset AI keys / provider / models",
     "exit": "Exit autopilot",
     "quit": "Exit autopilot",
 }
@@ -130,6 +135,10 @@ CHAT_COMMANDS = {
     "import": "Import conversation [filename]",
     "clear": "Clear screen and conversation",
     "help": "Show all commands",
+    "doctor": "Deep provider diagnostics",
+    "setting": "Configure AI providers, keys and models",
+    "guide": "Full slash-command reference",
+    "reset": "Reset AI keys / provider / models",
     "exit": "Exit chat",
     "quit": "Exit chat",
 }
@@ -1222,8 +1231,14 @@ class AgentUI:
         if not text:
             return True
         if not text.startswith("/"):
-            self._ask_ai(text)
-            return True
+            # A bare word that names a real command must execute it.  Before
+            # this, `doctor` and `auto` were shipped to the model as prompts.
+            head = text.split(None, 1)[0].lower()
+            if head in self.commands:
+                text = "/" + text
+            else:
+                self._ask_ai(text)
+                return True
 
         head, _, rest = text[1:].partition(" ")
         head = head.lower()
@@ -1233,6 +1248,18 @@ class AgentUI:
             return False
         if head in ("help", "?"):
             self._print_help()
+            return True
+        if head == "doctor":
+            self._run_agent_action("doctor", rest)
+            return True
+        if head == "setting":
+            self._run_agent_action("setting", rest)
+            return True
+        if head == "guide":
+            self._run_agent_action("guide", rest)
+            return True
+        if head == "reset":
+            self._run_agent_action("reset", rest)
             return True
         if head == "clear":
             self.clear_view()
@@ -1326,6 +1353,15 @@ class AgentUI:
         # Unknown slash command -> send to the AI as a mode command.
         self._ask_ai(text)
         return True
+
+    def _run_agent_action(self, name: str, rest: str = "") -> None:
+        """Run a Click subcommand of the ``agent`` group from inside the UI."""
+        try:
+            from . import _dispatch_agent_action
+
+            _dispatch_agent_action(name, rest)
+        except Exception as exc:  # noqa: BLE001
+            self.print(f"[red]{escape(str(exc))}[/red]")
 
     def _cmd_probe_command(self, rest: str) -> None:
         if not rest:

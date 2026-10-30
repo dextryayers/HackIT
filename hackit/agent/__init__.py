@@ -4,6 +4,7 @@ import json
 import os
 import shlex
 import sys
+from typing import List
 from hackit.ui import _colored, GREEN, RED, BLUE, YELLOW, DIM, B_CYAN, B_RED, MAGENTA, RESET, BOLD, CYAN
 from hackit.config import load_config
 
@@ -81,9 +82,11 @@ def enter_agent_shell():
         ("swarm",     "28-agent full scan",      "autopilot",  "autonomous AI hunter"),
         ("auto",      "full pentest pipeline",   "chat",       "AI chat + tools"),
         ("payload",   "AI payload forge",        "osint",      "OSINT footprint"),
-        ("doctor",    "provider diagnostics",    "setting",    "configure AI keys"),
-        ("status",    "connectivity status",     "reset",      "reset AI config"),
-        ("guide",     "command reference",       "clear",      "clear screen"),
+        ("probe",     "send payloads to target", "doctor",     "provider diagnostics"),
+        ("setting",   "configure AI keys",       "status",     "connectivity status"),
+        ("models",    "list provider models",    "reset",      "reset AI config"),
+        ("memory",    "inspect AI memory",       "guide",      "command reference"),
+        ("clear",     "clear screen",            "help",       "list every command"),
     ]
     click.echo(f"  {'─' * 60}")
     col_right = 46
@@ -95,6 +98,7 @@ def enter_agent_shell():
         click.echo(f"{l}{' ' * pad}{r}")
     click.echo(f"  {'─' * 60}")
     click.echo(f"  {YELLOW}✦{RESET}  {DIM}commands  |  chat  |  back  |  exit  |  help{RESET}")
+    click.echo(f"  {YELLOW}✦{RESET}  {DIM}any{RESET} {GREEN}/mode{RESET} {DIM}reaches the AI: {RESET}{GREEN}/halo /risk /attack /report /deep ...{RESET}")
     click.echo()
 
     # ── 5. Interactive loop with dual-mode tracker ──
@@ -152,8 +156,11 @@ def enter_agent_shell():
                     ("autopilot", "AI-powered bug hunting"),
                     ("auto",      "Full recon→OSINT→scan→attack→report"),
                     ("payload",   "AI payload forge"),
+                    ("probe",     "Send forged payloads to a target"),
                     ("osint",     "OSINT footprint discovery"),
                     ("dashboard", "Real-time TUI dashboard"),
+                    ("models",    "List models for the active provider"),
+                    ("memory",    "Inspect or clear AI memory"),
                     ("reset",     "Reset AI keys/provider/models"),
                     ("setting",   "Configure AI providers & keys"),
                     ("status",    "Check AI connectivity"),
@@ -272,7 +279,28 @@ def enter_agent_shell():
                 click.echo(f"  {YELLOW}✦{RESET}  {DIM}Unknown command. Type{RESET}  {GREEN}help{RESET}  {DIM}or{RESET}  {GREEN}back{RESET}  {DIM}to chat.{RESET}")
                 continue
 
-            # ── CHAT MODE: explicit slash command or natural language ──
+            # ── CHAT MODE: bare command, slash command, or natural language ──
+            # Bare words that name a real shell command must execute.  Before
+            # this, typing `doctor` or `auto` shipped the word to the model,
+            # which looked like a hang ("Consulting HackIt AI ...").
+            bare_action = _AGENT_ACTIONS.get(base_cmd)
+            if bare_action:
+                if bare_action in ("swarm", "dashboard", "autopilot", "auto") and not remaining:
+                    try:
+                        remaining = input(
+                            f"  {GREEN}target{RESET} {DIM}(host or URL){RESET} › "
+                        ).strip()
+                    except (KeyboardInterrupt, EOFError):
+                        remaining = ""
+                    if not remaining:
+                        click.echo(
+                            f"  {RED}✦{RESET}  {DIM}Usage:{RESET} "
+                            f"{GREEN}{base_cmd} <target>{RESET}"
+                        )
+                        continue
+                _dispatch_agent_action(base_cmd, remaining)
+                continue
+
             if user_input.startswith('/'):
                 if handle_ai_command(user_input):
                     continue
@@ -783,6 +811,12 @@ def _print_status(cfg):
     click.echo(f"  • Active Provider : {YELLOW}{(active or 'NONE').upper()}{RESET}")
     if active:
         model = provider_registry.effective_model(active, cfg)
+        if active == "ollama":
+            # A configured-but-missing tag (e.g. "llama3") must not be shown as
+            # active; report the model Ollama will actually serve.
+            info = provider_registry.detect_ollama()
+            if info.online and info.models:
+                model = provider_registry.pick_ollama_model(info.models, model)
         click.echo(f"  • Active Model    : {YELLOW}{model or '(auto)'}{RESET}")
     click.echo(f"  • Configured      : {DIM}{', '.join(configured) if configured else 'none'}{RESET}")
 
@@ -817,6 +851,8 @@ def _print_status(cfg):
             latency = ""
 
         model = models.get(provider, "") or provider_registry.effective_model(provider, cfg)
+        if provider == "ollama" and status.models:
+            model = provider_registry.pick_ollama_model(status.models, model)
         detail = ""
         if status.models:
             detail += f"  {DIM}{len(status.models)} model(s){RESET}"
@@ -1518,6 +1554,13 @@ def guide():
     click.echo(_colored("\n  [ 2. UNIVERSAL AI TRIGGER (/) ]", YELLOW))
     click.echo("  You can call the AI from ANY context (any tool or console) using the '/' prefix.")
     click.echo(_colored("  Example:", DIM) + _colored(" /how do I bypass a WAF for SQLi?", GREEN))
+    click.echo(_colored("  Bare commands also work:", DIM) + _colored(" doctor, auto, payload sqli, models, memory", GREEN))
+    click.echo(_colored("  Slash-prefixed and bare forms run the same handler.", DIM))
+
+    click.echo(_colored("\n  [ 2b. MODEL SELECTION ]", YELLOW))
+    click.echo("  When a provider exposes more than one model, `agent setting` opens a")
+    click.echo("  live selector: " + _colored("↑ / ↓", GREEN) + " to move, " + _colored("Enter", GREEN) + " to pick, " + _colored("Esc", GREEN) + " to cancel.")
+    click.echo("  Non-TTY terminals fall back to a numbered list.")
     
     click.echo(_colored("\n  [ 3. SPECIALIZED INTELLIGENCE COMMANDS ]", YELLOW))
     click.echo("  The Hyper-Brain supports over 40 specialized commands for surgical analysis.")
@@ -1679,18 +1722,80 @@ def _dispatch_agent_action(name: str, rest: str) -> bool:
     return True
 
 
+def _preflight_provider(brain: "AIHyperBrain", timeout: float = 2.5) -> str:
+    """Pick the first provider that answers quickly.
+
+    Without this the shell sat on "Consulting HackIt AI (GEMINI)..." until the
+    HTTP timeout expired whenever the configured key was dead or the network
+    blocked egress.  A 2.5s probe turns that into an instant, honest failure
+    plus an automatic switch to a provider that actually works.
+    """
+    tried = []
+    for provider in brain.provider_chain():
+        if provider == "ollama":
+            if provider_registry.detect_ollama(timeout=timeout).online:
+                return provider
+            tried.append(f"{provider} (offline)")
+            continue
+        key = brain.keys.get(provider) or provider_registry.resolve_api_key(provider, brain.config)
+        if not key:
+            continue
+        status = provider_registry.check_provider(provider, key=key, timeout=timeout)
+        if status.reachable:
+            return provider
+        tried.append(f"{provider} ({status.error or 'unreachable'})")
+    if tried:
+        click.echo(_colored(f"  [!] No provider responded: {', '.join(tried)}", YELLOW))
+    return ""
+
+
 def _ask_brain(prompt: str, show_banner: bool = True) -> str:
-    """Send natural language to the unified brain (provider fallback + memory)."""
+    """Send natural language to the unified brain (provider fallback + memory).
+
+    Streams tokens so a slow model shows progress instead of a frozen prompt,
+    and probes provider reachability first so a dead key can never hang the
+    shell until the HTTP timeout.
+    """
     cfg = load_config()
     if not provider_registry.configured_providers(cfg) and not provider_registry.detect_ollama().online:
         click.echo(_colored("  [!] No AI provider configured. Run `agent setting`.", RED))
         return ""
 
     brain = AIHyperBrain(engine="chat")
+    live = _preflight_provider(brain)
+    if not live:
+        click.echo(_colored("  [!] No reachable AI provider. Run `agent doctor`.", RED))
+        return ""
+    brain.provider = live
+
     if show_banner:
-        click.echo(_colored(f"\n[*] Consulting HackIt AI ({brain.provider.upper()})...", DIM))
+        click.echo(_colored(f"\n[*] Consulting HackIt AI ({live.upper()})...", DIM))
+
+    rendered: List[str] = []
+    state = {"thinking": False, "answer": False}
+
+    def on_token(event):
+        token = str(event.get("token", "") or "")
+        if not token:
+            return
+        kind = str(event.get("kind") or "answer")
+        if kind == "thinking":
+            if not state["thinking"]:
+                state["thinking"] = True
+                sys.stdout.write(f"\n{DIM}  thinking  {RESET}\n{DIM}")
+            sys.stdout.write(token)
+        else:
+            if not state["answer"]:
+                if state["thinking"]:
+                    sys.stdout.write(f"{RESET}\n\n")
+                sys.stdout.write(f"{BOLD}{GREEN}  response{RESET}\n")
+                state["answer"] = True
+            sys.stdout.write(token)
+            rendered.append(token)
+        sys.stdout.flush()
+
     try:
-        response = brain.chat(prompt)
+        response = brain.stream_chat(prompt, on_token=on_token)
     except KeyboardInterrupt:
         click.echo(_colored("\n  [!] Cancelled.", YELLOW))
         return ""
@@ -1701,9 +1806,16 @@ def _ask_brain(prompt: str, show_banner: bool = True) -> str:
             click.echo(traceback.format_exc())
         return ""
 
-    if show_banner:
-        click.echo(_colored("\n[ HACKIT AI ]", MAGENTA, bold=True))
-    click.echo(response)
+    if state["thinking"] or state["answer"]:
+        sys.stdout.write(RESET + "\n")
+        sys.stdout.flush()
+
+    if not rendered and response:
+        if response.strip().startswith("[!]"):
+            click.echo(_colored(f"\n{response.strip()}", RED))
+        else:
+            click.echo(_colored("\n[ HACKIT AI ]", MAGENTA, bold=True))
+            click.echo(response)
     click.echo(_colored("─" * 40, DIM))
     click.echo()
     return response
