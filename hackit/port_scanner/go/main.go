@@ -50,7 +50,7 @@ func main() {
 	target := flag.String("target", "", "Target Host or CIDR")
 	ports := flag.String("ports", "", "Ports (comma separated or range)")
 	timeout := flag.Int("timeout", 1000, "Timeout in ms")
-	concurrency := flag.Int("threads", 100, "Threads")
+	concurrency := flag.Int("threads", 200, "Threads")
 	includeClosed := flag.Bool("include-closed", true, "Include closed ports")
 	stealth := flag.Bool("stealth", false, "Stealth mode")
 	scanMode := flag.String("mode", "connect", "Scan mode")

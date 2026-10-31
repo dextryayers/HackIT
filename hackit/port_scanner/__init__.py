@@ -224,12 +224,12 @@ TOP_100_PORTS = [
 # ─────────────────────────────────────────────────────────────────
 # Tempo presets: the single source of truth for wait/workers/delay.
 TEMPO_CONFIG = {
-    'shadow':  {'wait': 8000, 'workers': 2,   'delay': 2000, 'desc': 'Ultra stealth'},
-    'whisper': {'wait': 4000, 'workers': 10,  'delay': 500,  'desc': 'Silent'},
-    'gait':    {'wait': 2000, 'workers': 50,  'delay': 100,  'desc': 'Polite'},
-    'normal':  {'wait': 1000, 'workers': 150, 'delay': 0,    'desc': 'Standard'},
-    'rush':    {'wait': 500,  'workers': 350, 'delay': 0,    'desc': 'Aggressive'},
-    'blitz':   {'wait': 200,  'workers': 700, 'delay': 0,    'desc': 'Maximum'},
+    'shadow':  {'wait': 8000, 'workers': 4,   'delay': 2000, 'desc': 'Ultra stealth'},
+    'whisper': {'wait': 4000, 'workers': 20,  'delay': 500,  'desc': 'Silent'},
+    'gait':    {'wait': 2000, 'workers': 100, 'delay': 100,  'desc': 'Polite'},
+    'normal':  {'wait': 800,  'workers': 250, 'delay': 0,    'desc': 'Standard'},
+    'rush':    {'wait': 400,  'workers': 500, 'delay': 0,    'desc': 'Aggressive'},
+    'blitz':   {'wait': 200,  'workers': 1000,'delay': 0,    'desc': 'Maximum'},
 }
 
 SCAN_MODE_MAP = {
@@ -269,6 +269,8 @@ def build_scan_options(kwargs):
     mode = kwargs.get('mode') or 'tcp-connect'
     scan_mode = SCAN_MODE_MAP.get(mode, 'connect')
 
+    if kwargs.get('plugins'):
+        kwargs['script'] = kwargs.get('script') or 'all'
     ghost = bool(kwargs.get('ghost_protocol')) or mode == 'anon-self'
     chaos = bool(kwargs.get('chaos')) or mode == 'anon-self'
     if ghost:
@@ -787,6 +789,7 @@ def render_intel_grid(ip_addr, host_name, dns_enum, intel, os_info, mode, scan_m
 @click.option('--fingerprint', '--fp', type=int, default=5, help='Fingerprint intensity (0-9)')
 @click.option('--os-detect', '--os', is_flag=True, help='OS detection via TCP/IP fingerprinting')
 @click.option('--script', '--sc', help='Script modules (vuln, exploit, brute, enum, all)')
+@click.option('--plugins', is_flag=True, help='Run all Lua/Ruby NSE plugins on open ports')
 @click.option('--script-args', help='Script arguments (key=value,key2=value2)')
 
 # [ TIMING & RETRY ]
@@ -945,6 +948,31 @@ def scan_ports(**kwargs):
                 ]
                 render_port_table(display_ports, show_risk=kwargs.get('risk', False),
                                   open_only=not show_all, host=target_raw)
+
+                open_ports = [p for p in all_ports if p and p.get('status', '').lower() == 'open']
+
+                # ── NSE / Lua script findings ──────────────────────
+                if kwargs.get('script') or kwargs.get('plugins') or kwargs.get('deep'):
+                    vuln_count = 0
+                    for pr in open_ports:
+                        scripts = pr.get('scripts', []) or []
+                        if scripts:
+                            click.echo()
+                            click.echo(f"  {_colored('◆ PORT', B_CYAN)} {_colored(str(pr.get('port','')), B_WHITE)}"
+                                       f" {_colored('INTELLIGENCE', CYAN)}")
+                            for sc in scripts[:15]:
+                                click.echo(f"    {_colored('◉', CYAN)} {_colored(str(sc)[:120], DIM)}")
+                    # Show plugins if any
+                    for pr in open_ports:
+                        plugins = pr.get('plugins', {}) or {}
+                        if plugins:
+                            click.echo()
+                            click.echo(f"  {_colored('◆ PORT', B_CYAN)} {_colored(str(pr.get('port','')), B_WHITE)}"
+                                       f" {_colored('PLUGINS', CYAN)}")
+                            for name, findings in plugins.items():
+                                for f in (findings if isinstance(findings, list) else [findings]):
+                                    click.echo(f"    {_colored('◉', PURPLE)} {_colored(str(f)[:120], DIM)}")
+
                 # Show full OS fingerprint details
                 os_info = results.get('os', {})
                 if os_info and os_info.get('name', 'Unknown') not in ('Unknown', 'Detecting...', ''):
@@ -1116,6 +1144,8 @@ def scan_ports(**kwargs):
         click.echo(_colored(f"  [CHAOS] Randomization + TTL={kwargs['ttl']} + IP spoofing engaged", RED))
 
     # ── Deep scan flag cascade ───────────────────────────────────
+    if kwargs.get('plugins'):
+        kwargs['script'] = kwargs.get('script') or 'all'
     if kwargs.get('deep'):
         kwargs['os_detect'] = True
         kwargs['smart_probe'] = True

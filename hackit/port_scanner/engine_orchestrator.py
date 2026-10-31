@@ -117,12 +117,23 @@ def _merge_results(results_list):
                               'banner_evidence', 'banner_mismatch', 'confidence'):
                         if r.get(k) not in (None, '', False):
                             ex[k] = r[k]
+                    # Merge scripts: keep the union, preferring the richer set.
+                    if r.get('scripts'):
+                        ex_scripts = ex.setdefault('scripts', [])
+                        for sc in r['scripts']:
+                            if sc not in ex_scripts:
+                                ex_scripts.append(sc)
                 else:
                     for k in ('service', 'product', 'version', 'banner',
                               'banner_protocol', 'banner_confidence',
                               'banner_evidence', 'banner_mismatch', 'confidence'):
                         if r.get(k) not in (None, '', False) and not ex.get(k):
                             ex[k] = r[k]
+                    if r.get('scripts'):
+                        ex_scripts = ex.setdefault('scripts', [])
+                        for sc in r['scripts']:
+                            if sc not in ex_scripts:
+                                ex_scripts.append(sc)
 
     result = sorted(merged.values(), key=lambda x: x.get('port', 0))
 

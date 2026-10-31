@@ -7,17 +7,8 @@ local shortport = require "shortport"
 
 
 
--- nmp function cache
-local nmap_register = nmap.register_script
-local nmap_settitle = nmap.set_title
-local nmap_resolve = nmap.resolve
-local nmap_get_port_state = nmap.get_port_state
-local nmap_set_port_state = nmap.set_port_state
-local comm = nmap.comm
-local new_socket = nmap.new_socket
-local get_timeout = nmap.get_timeout
-
--- Performance optimizations
+-- Fast-path bindings for the stdlib and nmap API used by this script.
+-- Kept strict-mode safe: every name below is a declared local.
 local format = string.format
 local lower = string.lower
 local upper = string.upper
@@ -33,26 +24,51 @@ local concat = table.concat
 local insert = table.insert
 local remove = table.remove
 local sort = table.sort
-local move = table.move or function(a1, f, e, t, a2)
-    if not a2 then a2 = a1 end
-    for i = f, e do a2[t + i - f] = a1[i] end
-    return a2
-end
+local move = table.move
 local tostring = tostring
 local tonumber = tonumber
 local type = type
 local pcall = pcall
 local pairs = pairs
 local ipairs = ipairs
-local unpack = unpack or table.unpack
+local unpack = table.unpack
 local setmetatable = setmetatable
 local getmetatable = getmetatable
 local error = error
 local select = select
+
 local clock = nmap.clock
 local msleep = nmap.msleep
-local sleep = stdnse.sleep
-local strsplit = stdnse.strsplit
+
+-- stdnse.sleep / stdnse.strsplit are not present in every NSE runtime.
+local sleep = function(seconds)
+    return nmap.msleep(math.max(0, math.floor(seconds * 1000)))
+end
+
+local strsplit = function(sep, str, max)
+    local out, pos, n = {}, 1, 0
+    if str == nil then return out end
+    while true do
+        if max and n >= max - 1 then
+            out[#out + 1] = sub(str, pos)
+            return out
+        end
+        local s, e = find(str, sep, pos)
+        if not s then
+            out[#out + 1] = sub(str, pos)
+            return out
+        end
+        if e < pos then e = pos end
+        out[#out + 1] = sub(str, pos, s - 1)
+        pos = e + 1
+        n = n + 1
+        if pos > #str then
+            out[#out + 1] = ""
+            return out
+        end
+    end
+end
+
 local format_output = stdnse.format_output
 local output_table = stdnse.output_table
 
@@ -66,7 +82,8 @@ portrule = function(host, port)
         (port.service == "http" or port.service == "https")
 end
 
-local oauth_paths = {
+local function build_paths(host)
+    local items = {
     "/oauth", "/oauth/", "/oauth2", "/oauth2/",
     "/oauth/authorize", "/oauth/token", "/oauth/revoke",
     "/oauth/authorization", "/oauth/access_token",
@@ -89,7 +106,9 @@ local oauth_paths = {
     "/connect/token", "/connect/authorize",
     "/connect/userinfo", "/connect/endsession",
     "/connect/checksession",
-}
+    }
+    return items
+end
 
 local required_oauth_keys = {
     "issuer", "authorization_endpoint", "token_endpoint",
@@ -113,7 +132,7 @@ action = function(host, port)
     local result = output_table()
     local endpoints = {}
 
-    for _, path in ipairs(oauth_paths) do
+    for _, path in ipairs(build_paths(host)) do
         local ok, response = pcall(http.get, host, port, path, {
             timeout = 5000,
             header = {

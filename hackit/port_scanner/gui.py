@@ -135,7 +135,7 @@ class VirtualPortList(tk.Canvas):
 
     def add_item(self, item):
         self.items.append(item)
-        if len(self.items) - self.visible_start <= self.visible_count + 1:
+        if len(self.items) % 8 == 0 or len(self.items) - self.visible_start <= self.visible_count + 1:
             self._render()
 
     def _color_for_status(self, status):
@@ -204,11 +204,11 @@ class GUI:
         self.root.title('PortStorm — HackIT')
         self.root.configure(bg=C.BG1); self.root.minsize(1400,860)
         CFG_DIR.mkdir(parents=True,exist_ok=True)
-        self.proc=None; self.q=Queue()
+        self.proc=None; self.q=Queue(); self._stdout_q=Queue(); self._stdout_done=False
         self.running=False; self.results=[]; self.target_hist=[]
         self.start=None; self.tst_w=[]; self.custom_presets=[]
         self.sc=0; self.rc=0
-        self.nse_sel=set()
+        self.nse_sel=set()  # populated after nse_all is loaded
         self.stages=['Discovery','TCP Scan','UDP Scan',
                      'Service','OS Detect','Vuln Match','Enrich']
         self.si=0; self.ni=0; self.res_cnt=0
@@ -237,7 +237,7 @@ class GUI:
         self._disc(); self._style(); self._build()
         self._bind(); self.root.protocol('WM_DELETE_WINDOW',self._close)
         self._startup_animation()
-        self._after('master',50,self._master_timer)
+        self._after('master',33,self._master_timer)
 
     def _after(self,key,ms,func,*args):
         ids=[a for a in self._after_ids if a[0]!=key]
@@ -264,7 +264,7 @@ class GUI:
 
     def _master_timer(self):
         if self._batch_update:
-            self._after('master',50,self._master_timer)
+            self._after('master',33,self._master_timer)
             return
         batch_size = 0
         with self._ui_lock:
@@ -301,6 +301,35 @@ class GUI:
                     p,svc,sc=data
                     name,sev,text=self._parse_script_entry(sc)
                     self._add_nse(name,p,svc,text,sev)
+        # Drain the subprocess stdout queue (decoupled from Tkinter mainloop).
+        drained = 0
+        while drained < 400:
+            try:
+                raw = self._stdout_q.get_nowait()
+            except Exception:
+                break
+            if raw is None:
+                self._stdout_done = True
+                break
+            line = str(raw).strip()
+            drained += 1
+            if not line:
+                continue
+            if line.startswith('RESULT:'):
+                self._pr(line[7:])
+            elif line.startswith('FINAL:'): self._pf(line[6:])
+            elif line.startswith('NSE:'): self._pn(line[4:])
+            elif line.startswith('STATUS:'): self._ps(line[7:])
+            elif line.startswith('ERROR:'): self._logf(f'[!] {line[6:]}','err')
+            elif not line.startswith(('\x1b','\u250c','\u2502','\u251c','\u2514')): self._logf(line)
+
+        if self._stdout_done and self.running and self.q.empty():
+            try:
+                if self.proc: self.proc.wait(timeout=1)
+            except Exception:
+                pass
+            self._done()
+
         # Master timer ticks - run periodic tasks
         self._mt_tick+=1
         if self.running:
@@ -375,8 +404,9 @@ class GUI:
                 s=float(f.read().split()[0]); h,m=divmod(int(s),3600); m//=60
                 self.up=f'{h}h {m}m'
         except: self.up='0h 0m'
-        nsd=base.parent/'nse_scripts'
-        self.nse_all=sorted(f.stem for f in nsd.iterdir() if f.suffix=='.nse') if nsd.exists() else []
+        nsd=base/'lua'
+        self.nse_all=sorted(f.stem for f in nsd.iterdir() if f.suffix=='.lua') if nsd.exists() else []
+        self.nse_sel=set(self.nse_all)
 
     def _load_presets(self):
         pf=CFG_DIR/'presets.json'
@@ -515,7 +545,7 @@ class GUI:
         hm=tk.Menu(self._menubar,tearoff=0,bg=C.CARD,fg=C.TEXT,
                    activebackground=C.SEL,activeforeground='#fff',font=FONT)
         hm.add_command(label='About',command=lambda:messagebox.showinfo(
-            'About PortStorm','HackIT PortStorm v10\nMulti-Engine All-Port Scanner\n\nGo + Rust + C + C++ + Lua'))
+            'About PortStorm','PortStorm\nPort Intelligence Scanner\n\nVersion 10'))
         hm.add_command(label='Keyboard Shortcuts',command=self._show_ks,accelerator='Ctrl+H')
         self._menubar.add_cascade(label='Help',menu=hm)
         self.root.config(menu=self._menubar)
@@ -529,7 +559,7 @@ class GUI:
         left.pack(side='left', anchor='w')
         tk.Label(left, text='PORTSTORM', font=('Segoe UI', 15, 'bold'),
                  fg=C.TEXT, bg=C.BG1).pack(anchor='w')
-        tk.Label(left, text='multi-engine port intelligence',
+        tk.Label(left, text='port intelligence scanner',
                  font=('Segoe UI', 8), fg=C.TEXT2, bg=C.BG1).pack(anchor='w')
 
         right = tk.Frame(bar, bg=C.BG1)
@@ -540,7 +570,6 @@ class GUI:
             ('iface', f'iface {self.iface}'),
             ('gw', f'gw {self.gw}'),
             ('uptime', f'up {self.up}'),
-            ('engine', 'engine go'),
         ):
             chip = tk.Label(right, text=text, font=('Segoe UI', 8),
                             fg=C.TEXT2, bg=C.CARD, padx=8, pady=3)
@@ -787,7 +816,7 @@ class GUI:
             'target':self.tv.get(),'ports':self.pcl.get(),
             'port_scope':self.port_mode.get(),
             'port_start':self.ps.get(),'port_end':self.pe.get(),
-            'mode':';'.join(sorted(self.modes_sel))or'syn','profile':self.pv.get(),
+            'mode':';'.join(sorted(self.modes_sel))or'tcp-connect','profile':self.pv.get(),
             'timeout':self.tov.get(),'threads':self.twv.get(),
             'deep':self.dv.get(),'os_detect':self.ov.get(),'open_only':self.opv.get(),
             'nse_scripts':sorted(self.nse_sel),
@@ -808,8 +837,8 @@ class GUI:
             self.pe.set(cfg.get('port_end','1024'))
             self.port_mode.set(cfg.get('port_scope','universal'))
             self._set_scope(self.port_mode.get())
-            self.modes_sel=set(cfg.get('mode','syn').split(';'))
-            self.pv.set(cfg.get('profile','quick'))
+            self.modes_sel=set(cfg.get('mode','tcp-connect').split(';'))
+            self.pv.set(cfg.get('profile','default'))
             self.tov.set(cfg.get('timeout','1000'))
             self.twv.set(cfg.get('threads','100'))
             self.dv.set(cfg.get('deep',False))
@@ -825,7 +854,7 @@ class GUI:
     def _mode(self,p):
         b=self._fsec(p,'SCAN MODE')
         mf=tk.Frame(b,bg=C.CARD); mf.pack(fill='x')
-        self.modes_sel=set()
+        self.modes_sel={'connect'}
         self.mode_btns=[]
         for i,(v,l) in enumerate(MODES):
             r=tk.Checkbutton(mf,text=l,font=MONO_B,
@@ -842,7 +871,7 @@ class GUI:
         tk.Label(b,text='PROFILE',font=FONT_B,fg=C.CYAN,bg=C.CARD
                  ).pack(anchor='w',pady=(4,0))
         pf=tk.Frame(b,bg=C.CARD); pf.pack(fill='x')
-        self.pv=tk.StringVar(value='quick')
+        self.pv=tk.StringVar(value='default')
         self.pv.trace_add('write',lambda *a:(self._upd_mode_labels(),self._sync_cmd()))
         self.prof_btns=[]
         for i,p in enumerate(PROFILES):
@@ -881,7 +910,7 @@ class GUI:
     # ── Options ────────────────────────────────────────────────────
     def _opts(self,p):
         b=self._fsec(p,'OPTIONS')
-        self.tov=tk.StringVar(value='1000'); self.twv=tk.StringVar(value='100')
+        self.tov=tk.StringVar(value='1000'); self.twv=tk.StringVar(value='200')
         f=tk.Frame(b,bg=C.CARD); f.pack(fill='x')
         for lbl,v,tip in [('Timeout',self.tov,'Per-port timeout (ms)'),
                           ('Threads',self.twv,'Concurrent workers')]:
@@ -996,15 +1025,14 @@ class GUI:
         ports=self._port_spec()
         parts=[self.go or 'scanner','-target',target,'-ports',ports,
                '-timeout',self.tov.get()or'1000','-threads',self.twv.get()or'100',
-               '-mode',';'.join(sorted(self.modes_sel))or'syn',
+               '-mode',';'.join(sorted(self.modes_sel))or'tcp-connect',
                '-profile',self.pv.get()]
         if self.opv.get(): parts.append('--open-only')
         if self.dv.get(): parts.append('--deep')
         if self.ov.get(): parts.append('--os-detect')
         parts.append('--all-engines')
         parts.append('-no-banner')
-        if self.nse_sel:
-            parts.append('--script'); parts.append(';'.join(sorted(self.nse_sel)))
+        parts.append('--script'); parts.append('all' if not self.nse_sel else ';'.join(sorted(self.nse_sel)))
         self.cmdv.set(' '.join(parts))
 
     # ── Actions ────────────────────────────────────────────────────
@@ -1478,6 +1506,7 @@ class GUI:
             self.tc['values']=list(self.target_hist)
         self.results.clear()
         self._seen_ports = set()
+        self._open_only_cached = bool(self.opv.get()) if hasattr(self,'opv') else True
         self._clear_res()
         for t in(self.nt,):
             for r in t.get_children(): t.delete(r)
@@ -1490,31 +1519,29 @@ class GUI:
         self.rminv.set(''); self.rmaxv.set('')
         self.sb.children['!button'].config(state='disabled',text='\u25c9  SCANNING...')
         self.stb.children['!button'].config(state='normal')
-        self._chip('engine', 'engine go', C.TEXT2)
         self._chip('target', f'→ {target}', C.CYAN)
         self.running=1; self._mt_tick=0; self._after('master',50,self._master_timer)
         threading.Thread(target=self._run,args=(target,),daemon=1).start()
 
     def _run(self,target):
         if self.go:
-            self._chip('engine', 'engine go', C.GREEN)
             self._go(target)
         else:
-            self._chip('engine', 'engine python', C.YELLOW)
             self._fb(target)
 
     def _cmd(self,target):
         ports=self._port_spec()
         cmd=[self.go,'-target',target,'-ports',ports,
              '-timeout',self.tov.get()or'1000','-threads',self.twv.get()or'100',
-             '-mode',';'.join(sorted(self.modes_sel))or'syn',
+               '-mode',';'.join(sorted(self.modes_sel))or'tcp-connect',
              '-profile',self.pv.get()]
         if self.opv.get(): cmd.append('--open-only')
         if self.dv.get(): cmd.append('--deep')
         if self.ov.get(): cmd.append('--os-detect')
         cmd.append('--all-engines')
         cmd.append('-no-banner')
-        if self.nse_sel: cmd.extend(['--script',';'.join(sorted(self.nse_sel))])
+        cmd.append('--script')
+        cmd.append('all' if not self.nse_sel else ';'.join(sorted(self.nse_sel)))
         return cmd
 
     def _go(self,target):
@@ -1522,48 +1549,39 @@ class GUI:
         sock_path = tempfile.mktemp(prefix='pstorm-', suffix='.sock', dir='/tmp')
         cmd.extend(['--control-socket', sock_path])
         self._logf(f'$ {" ".join(cmd)}','cmd')
-        self._logf(f'\u2192 Scanning {target} with all engines + NSE...')
+        self._logf(f'\u2192 Scanning {target}...')
         try:
             self._control_sock = self._start_control_socket(sock_path)
             self.proc=subprocess.Popen(cmd,stdout=subprocess.PIPE,
                                        stderr=subprocess.PIPE,text=True,bufsize=1)
-            sel = selectors.DefaultSelector()
-            sel.register(self.proc.stdout, selectors.EVENT_READ)
-            sel.register(self.proc.stderr, selectors.EVENT_READ)
-            while self.proc.poll() is None:
-                for key, _ in sel.select(timeout=0.1):
-                    line = key.fileobj.readline()
-                    if not line:
-                        sel.unregister(key.fileobj)
-                        continue
-                    line = line.strip()
-                    if not line:
-                        continue
-                    if key.fileobj is self.proc.stdout:
-                        if line.startswith('RESULT:'): self._pr(line[7:])
-                        elif line.startswith('FINAL:'): self._pf(line[6:])
-                        elif line.startswith('NSE:'): self._pn(line[4:])
-                        elif line.startswith('STATUS:'): self._ps(line[7:])
-                        elif line.startswith('ERROR:'): self._logf(f'[!] {line[6:]}','err')
-                        elif line and not line.startswith(('\x1b','\u250c','\u2502','\u251c','\u2514')): self._logf(line)
-                    else:
-                        if line.strip(): self._logf(f'[stderr] {line.strip()[:200]}','warn')
-            remaining_stdout = self.proc.stdout.read()
-            for line in remaining_stdout.split('\n'):
-                line = line.strip()
-                if line.startswith('RESULT:'): self._pr(line[7:])
-                elif line.startswith('FINAL:'): self._pf(line[6:])
-            self.proc.wait()
+            self._stdout_done = False
+            while not self._stdout_q.empty():
+                try: self._stdout_q.get_nowait()
+                except Exception: break
+
+            def _read_stderr():
+                try:
+                    for err_line in self.proc.stderr:
+                        err_line = err_line.strip()
+                        if err_line:
+                            self._logf(f'[stderr] {err_line[:200]}','warn')
+                except Exception:
+                    pass
+            threading.Thread(target=_read_stderr, daemon=True).start()
+
+            def _read_stdout():
+                try:
+                    data = self.proc.stdout.read()
+                    for raw in data.splitlines(keepends=True):
+                        self._stdout_q.put(raw)
+                except Exception:
+                    pass
+                self._stdout_q.put(None)  # sentinel = EOF
+            threading.Thread(target=_read_stdout, daemon=True).start()
+
         except Exception as e:
             self._logf(f'[!] {e}','err')
-        finally:
-            if hasattr(self, '_control_sock') and self._control_sock:
-                try: self._control_sock.close()
-                except: pass
-            try:
-                os.unlink(sock_path)
-            except: pass
-        self._done()
+            self._stdout_q.put(None)
 
     def _start_control_socket(self, path):
         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -1586,7 +1604,7 @@ class GUI:
             pass
 
     def _fb(self,target):
-        self._logf('[!] Go binary not found \u2014 Python engine','warn')
+        self._logf('[!] Scanner unavailable \u2014 using built-in engine','warn')
         try:
             from core import scan_ports
             for r in scan_ports(target,ports=self.pcl.get()):
@@ -1628,6 +1646,11 @@ class GUI:
             key = (str(d.get('port')), str(d.get('status', d.get('state', ''))).lower())
             if key in seen:
                 return
+            if getattr(self, '_open_only_cached', True):
+                if str(d.get('status', d.get('state', ''))).lower() != 'open':
+                    seen.add(key)
+                    return
+
             seen.add(key)
             self.sc+=1; self.rc+=1
             p=d.get('port','?'); st=d.get('status',d.get('state','?')).upper()
@@ -1640,6 +1663,8 @@ class GUI:
             self.q.put(('result',(p,st,svc,ver,ban,proto,conf,mism)))
             for sc in d.get('scripts',[]):
                 self.q.put(('nse_script',(p,svc,sc)))
+        except Exception:
+            pass
         except: pass
 
     def _pn(self,raw):
@@ -1667,7 +1692,19 @@ class GUI:
         self.running=0; self._logf('[!] Stopped by user','warn'); self._done()
 
     def _done(self):
+        if not self.running:
+            return
         self.running=0
+        try:
+            self._vpl._render()
+        except Exception:
+            pass
+
+        # cleanup control socket
+        if hasattr(self, '_control_sock') and self._control_sock:
+            try: self._control_sock.close()
+            except: pass
+            self._control_sock = None
         self.sb.children['!button'].config(state='normal',text='\u25b6  START SCAN')
         self.sb.configure(highlightbackground=C.GREEN)
         self.stb.children['!button'].config(state='disabled')
