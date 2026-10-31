@@ -1,131 +1,238 @@
-local stdnse = require "stdnse"
-local tls = require "tls"
-local nmap = require "nmap"
-local shortport = require "shortport"
+local match = require('match')
+local nmap = require('nmap')
+local shortport = require('shortport')
+local sslcert = require('sslcert')
+local stdnse = require('stdnse')
+local string = require "string"
+local tableaux = require "tableaux"
+local vulns = require('vulns')
+local have_tls, tls = pcall(require,'tls')
+assert(have_tls, "This script requires the tls.lua library from https://nmap.org/nsedoc/lib/tls.html")
 
+description = [[
+Detects whether a server is vulnerable to the OpenSSL Heartbleed bug (CVE-2014-0160).
+The code is based on the Python script ssltest.py authored by Katie Stafford (katie@ktpanda.org)
+]]
 
+---
+-- @usage
+-- nmap -p 443 --script ssl-heartbleed <target>
+--
+-- @output
+-- PORT    STATE SERVICE
+-- 443/tcp open  https
+-- | ssl-heartbleed:
+-- |   VULNERABLE:
+-- |   The Heartbleed Bug is a serious vulnerability in the popular OpenSSL cryptographic software library. It allows for stealing information intended to be protected by SSL/TLS encryption.
+-- |     State: VULNERABLE
+-- |     Risk factor: High
+-- |     Description:
+-- |       OpenSSL versions 1.0.1 and 1.0.2-beta releases (including 1.0.1f and 1.0.2-beta1) of OpenSSL are affected by the Heartbleed bug. The bug allows for reading memory of systems protected by the vulnerable OpenSSL versions and could allow for disclosure of otherwise encrypted confidential information as well as the encryption keys themselves.
+-- |
+-- |     References:
+-- |       https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2014-0160
+-- |       http://www.openssl.org/news/secadv_20140407.txt
+-- |_      http://cvedetails.com/cve/2014-0160/
+--
+--
+-- @args ssl-heartbleed.protocols (default tries all) TLS 1.0, TLS 1.1, or TLS 1.2
+--
 
--- Fast-path bindings for the stdlib and nmap API used by this script.
--- Kept strict-mode safe: every name below is a declared local.
-local format = string.format
-local lower = string.lower
-local upper = string.upper
-local byte = string.byte
-local sub = string.sub
-local match = string.match
-local gmatch = string.gmatch
-local gsub = string.gsub
-local find = string.find
-local rep = string.rep
-local char = string.char
-local concat = table.concat
-local insert = table.insert
-local remove = table.remove
-local sort = table.sort
-local move = table.move
-local tostring = tostring
-local tonumber = tonumber
-local type = type
-local pcall = pcall
-local pairs = pairs
-local ipairs = ipairs
-local unpack = table.unpack
-local setmetatable = setmetatable
-local getmetatable = getmetatable
-local error = error
-local select = select
+author = "Patrik Karlsson <patrik@cqure.net>"
+license = "Same as Nmap--See https://nmap.org/book/man-legal.html"
+categories = { "vuln", "safe" }
+dependencies = {"https-redirect"}
 
-local clock = nmap.clock
-local msleep = nmap.msleep
+-- TLSv1.3 was not implemented by affected versions of OpenSSL.
+local arg_protocols = stdnse.get_script_args(SCRIPT_NAME .. ".protocols") or {'TLSv1.0', 'TLSv1.1', 'TLSv1.2'}
 
--- stdnse.sleep / stdnse.strsplit are not present in every NSE runtime.
-local sleep = function(seconds)
-    return nmap.msleep(math.max(0, math.floor(seconds * 1000)))
+portrule = function(host, port)
+  return shortport.ssl(host, port) or sslcert.getPrepareTLSWithoutReconnect(port)
 end
 
-local strsplit = function(sep, str, max)
-    local out, pos, n = {}, 1, 0
-    if str == nil then return out end
-    while true do
-        if max and n >= max - 1 then
-            out[#out + 1] = sub(str, pos)
-            return out
-        end
-        local s, e = find(str, sep, pos)
-        if not s then
-            out[#out + 1] = sub(str, pos)
-            return out
-        end
-        if e < pos then e = pos end
-        out[#out + 1] = sub(str, pos, s - 1)
-        pos = e + 1
-        n = n + 1
-        if pos > #str then
-            out[#out + 1] = ""
-            return out
-        end
-    end
+local function recvhdr(s)
+  local status, hdr = s:receive_buf(match.numbytes(5), true)
+  if not status then
+    stdnse.debug3('Unexpected EOF receiving record header - server closed connection')
+    return
+  end
+  local typ, ver, ln = string.unpack('>B I2 I2', hdr)
+  return status, typ, ver, ln
 end
 
-local format_output = stdnse.format_output
-local output_table = stdnse.output_table
+local function recvmsg(s, len)
+  local status, pay = s:receive_buf(match.numbytes(len), true)
+  if not status then
+    stdnse.debug3('Unexpected EOF receiving record payload - server closed connection')
+    return
+  end
+  return true, pay
+end
 
-description = [[Tests for the Heartbleed vulnerability (CVE-2014-0160) by sending a malformed heartbeat request and checking for a response containing leaked memory. Uses multiple probes and payload sizes for reliable detection.]]
-author = "HackIT Framework"
-license = "HackIT Framework — Internal Use Only"
-categories = {"safe", "vuln"}
+local function testversion(host, port, version)
 
-portrule = function(host, port) return port.protocol == "tcp" and port.state == "open" end
+  local hello = tls.client_hello({
+      ["protocol"] = version,
+      -- Claim to support every cipher
+      -- Doesn't work with IIS, but IIS isn't vulnerable
+      ["ciphers"] = tableaux.keys(tls.CIPHERS),
+      ["compressors"] = {"NULL"},
+      ["extensions"] = {
+        -- Claim to support common elliptic curves
+        ["elliptic_curves"] = tls.EXTENSION_HELPERS["elliptic_curves"](tls.DEFAULT_ELLIPTIC_CURVES),
+        ["heartbeat"] = "\x01", -- peer_not_allowed_to_send
+      },
+    })
 
-local function try_heartbleed(host, port, protocol, payload_len)
-    local sock = new_socket()
-    sock:set_timeout(10000)
-    local ok, result = pcall(function()
-        local status = sock:connect(host.ip, port)
-        if not status then return nil end
-        local hello = tls.client_hello(protocol)
-        sock:send(hello)
-        local _, data = sock:receive_buf(tls.server_hello_done, 8000)
-        if not data then return nil end
-        local heartbeat = tls.heartbeat_request(payload_len)
-        sock:send(heartbeat)
-        local status2, resp = sock:receive_buf(tls.heartbeat_response, 5000)
-        sock:close()
-        if status2 and resp then
-            return {len = #resp, data = resp}
-        end
-        return nil
-    end)
-    if not ok then
-        pcall(function() sock:close() end)
+  local payload = "Nmap ssl-heartbleed"
+  local hb = tls.record_write("heartbeat", version, string.pack("B>I2",
+      1, -- HeartbeatMessageType heartbeat_request
+      0x4000) -- payload length (falsified)
+      -- payload length is based on 4096 - 16 bytes padding - 8 bytes packet
+      -- header + 1 to overflow
+      .. payload -- less than payload length.
+    )
+
+  local status, s, err
+  local specialized = sslcert.getPrepareTLSWithoutReconnect(port)
+  if specialized then
+    status, s = specialized(host, port)
+    if not status then
+      stdnse.debug3("Connection to server failed: %s", s)
+      return
     end
-    return result
+  else
+    s = nmap.new_socket()
+    status, err = s:connect(host, port)
+    if not status then
+      stdnse.debug3("Connection to server failed: %s", err)
+      return
+    end
+  end
+
+  s:set_timeout(5000)
+
+  -- Send Client Hello to the target server
+  status, err = s:send(hello)
+  if not status then
+    stdnse.debug1("Couldn't send Client Hello: %s", err)
+    s:close()
+    return nil
+  end
+
+  -- Read response
+  local done = false
+  local supported = false
+  local i = 1
+  local response
+  repeat
+    status, response, err = tls.record_buffer(s, response, i)
+    if err == "TIMEOUT" then
+      -- Timed out while waiting for server_hello_done
+      -- Could be client certificate required or other message required
+      -- Let's just drop out and try sending the heartbeat anyway.
+      done = true
+      break
+    elseif not status then
+      stdnse.debug1("Couldn't receive: %s", err)
+      s:close()
+      return nil
+    end
+
+    local record
+    i, record = tls.record_read(response, i)
+    if record == nil then
+      stdnse.debug1("Unknown response from server")
+      s:close()
+      return nil
+    elseif record.protocol ~= version then
+      stdnse.debug1("Protocol version mismatch")
+      s:close()
+      return nil
+    end
+
+    if record.type == "handshake" then
+      for _, body in ipairs(record.body) do
+        if body.type == "server_hello" then
+          if body.extensions and body.extensions["heartbeat"] == "\x01" then
+            supported = true
+          end
+        elseif body.type == "server_hello_done" then
+          stdnse.debug1("we're done!")
+          done = true
+        end
+      end
+    end
+  until done
+  if not supported then
+    stdnse.debug1("Server does not support TLS Heartbeat Requests.")
+    s:close()
+    return nil
+  end
+
+  status, err = s:send(hb)
+  if not status then
+    stdnse.debug1("Couldn't send heartbeat request: %s", err)
+    s:close()
+    return nil
+  end
+  while(true) do
+    local status, typ, ver, len = recvhdr(s)
+    if not status then
+      stdnse.debug1('No heartbeat response received, server likely not vulnerable')
+      break
+    end
+    if typ == 24 then
+      local pay
+      status, pay = recvmsg(s, 0x0fe9)
+      s:close()
+      if #pay > 3 then
+        return true
+      else
+        stdnse.debug1('Server processed malformed heartbeat, but did not return any extra data.')
+        break
+      end
+    elseif typ == 21 then
+      stdnse.debug1('Server returned error, likely not vulnerable')
+      break
+    end
+  end
+
 end
 
 action = function(host, port)
-    local protocols = {"TLSv1.2", "TLSv1.1", "TLSv1.0"}
-    local function build_payloads(host)
-    local items = {0x4000, 0x1000, 0x2000
+  local vuln_table = {
+    title = "The Heartbleed Bug is a serious vulnerability in the popular OpenSSL cryptographic software library. It allows for stealing information intended to be protected by SSL/TLS encryption.",
+    state = vulns.STATE.NOT_VULN,
+    risk_factor = "High",
+    description = [[
+OpenSSL versions 1.0.1 and 1.0.2-beta releases (including 1.0.1f and 1.0.2-beta1) of OpenSSL are affected by the Heartbleed bug. The bug allows for reading memory of systems protected by the vulnerable OpenSSL versions and could allow for disclosure of otherwise encrypted confidential information as well as the encryption keys themselves.
+    ]],
+
+    references = {
+      'https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2014-0160',
+      'http://www.openssl.org/news/secadv_20140407.txt ',
+      'http://cvedetails.com/cve/2014-0160/'
     }
-    return items
-end
-    local max_leak = 0
-    for _, proto in ipairs(protocols) do
-        for _, plen in ipairs(build_payloads(host)) do
-            local resp = try_heartbleed(host, port, proto, plen)
-            if resp and resp.len > 0 then
-                max_leak = math.max(max_leak, resp.len)
-            end
-        end
+  }
+
+  local report = vulns.Report:new(SCRIPT_NAME, host, port)
+  local test_vers = arg_protocols
+
+  if type(test_vers) == 'string' then
+    test_vers = { test_vers }
+  end
+
+  for _, ver in ipairs(test_vers) do
+    if nil == tls.PROTOCOLS[ver] then
+      return "\n  Unsupported protocol version: " .. ver
     end
-    if max_leak > 100 then
-        local result = output_table()
-        result.vulnerability = "CVE-2014-0160"
-        result.name = "Heartbleed"
-        result.affected = true
-        result.bytes_leaked = max_leak
-        result.severity = "CRITICAL"
-        return result
+    local status = testversion(host, port, ver)
+    if ( status ) then
+      vuln_table.state = vulns.STATE.VULN
+      break
     end
-    return format_output(false, "Not vulnerable to Heartbleed")
+  end
+
+  return report:make_output(vuln_table)
 end

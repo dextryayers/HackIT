@@ -1,7 +1,11 @@
 import socket
 import json
+import errno
+import time
 import functools
 from concurrent.futures import ThreadPoolExecutor
+
+from .banner_engine import probe_port
 
 try:
     import urllib3
@@ -87,6 +91,31 @@ def _resolve_host(host):
     return socket.gethostbyname(host)
 
 
+def classify_connect_error(errno_value):
+    """Map a socket errno to a scan state.
+
+    ``connect_ex`` returns 0 for a completed handshake and a POSIX errno
+    otherwise. Treating every non-zero value as "closed" is what makes naive
+    scanners lie about firewalled hosts: ECONNREFUSED is a real RST, but
+    ETIMEDOUT and EHOSTUNREACH mean the probe never reached a listener.
+    """
+    if errno_value == 0:
+        return "open", "handshake-complete"
+    if errno_value in (errno.ECONNREFUSED,):
+        return "closed", "connection-refused"
+    if errno_value in (errno.ETIMEDOUT, getattr(errno, "EAGAIN", 11)):
+        return "filtered", "connect-timeout"
+    if errno_value in (getattr(errno, "EHOSTUNREACH", 113), getattr(errno, "ENETUNREACH", 101)):
+        return "unreachable", "no-route"
+    if errno_value in (errno.EACCES, errno.EPERM):
+        return "filtered", "blocked-by-policy"
+    if errno_value == errno.ECONNRESET:
+        return "closed", "connection-reset"
+    if errno_value == getattr(errno, "EHOSTDOWN", 112):
+        return "unreachable", "host-down"
+    return "error", "errno-%d" % errno_value
+
+
 class PortScanner:
     def __init__(self):
         self.common_services = {
@@ -111,41 +140,52 @@ class PortScanner:
                 )
         return self._http_pools[key]
 
-    def scan_port(self, host, port, banner_timeout=2.0):
-        import time
-        from .banner_engine import probe_port
+    def _connect_state(self, host, port, timeout, attempts=2):
+        """Probe a TCP port, retrying only the ambiguous outcomes.
 
+        A refused connection is final: retrying it cannot change the answer and
+        would only double the scan time. A timeout or a host-unreachable may be
+        a transient drop, so it gets one more chance before being reported.
+        """
+        last_state, last_reason, last_errno = "error", "no-attempt", -1
+        connect_ms = 0
+        for attempt in range(max(1, attempts)):
+            started = time.time()
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                    sock.settimeout(timeout)
+                    result = sock.connect_ex((host, port))
+            except OSError as exc:
+                result = getattr(exc, "errno", None) or errno.EIO
+            connect_ms = int((time.time() - started) * 1000)
+            state, reason = classify_connect_error(result)
+            last_state, last_reason, last_errno = state, reason, result
+            if state in ("open", "closed"):
+                break
+            if attempt + 1 < attempts and timeout > 0.25:
+                continue
+            break
+        return last_state, last_reason, last_errno, connect_ms
+
+    def scan_port(self, host, port, banner_timeout=2.0):
         started = time.time()
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.settimeout(banner_timeout)
-                result = s.connect_ex((host, port))
-                connect_ms = int((time.time() - started) * 1000)
-                if result != 0:
-                    return {
-                        "port": port,
-                        "status": "closed",
-                        "service": self.common_services.get(port, "unknown"),
-                        "banner": "",
-                        "banner_status": "empty",
-                        "banner_protocol": "",
-                        "banner_confidence": 0.0,
-                        "confidence": 0.80,
-                        "reason": "connect-refused-or-timeout",
-                        "elapsed_ms": int((time.time() - started) * 1000),
-                    }
-        except OSError as exc:
+        state, reason, err_no, connect_ms = self._connect_state(
+            host, port, banner_timeout)
+
+        if state != "open":
             return {
                 "port": port,
-                "status": "error",
+                "status": state,
                 "service": self.common_services.get(port, "unknown"),
                 "banner": "",
                 "banner_status": "empty",
                 "banner_protocol": "",
                 "banner_confidence": 0.0,
-                "confidence": 0.0,
-                "reason": "scan-error:" + type(exc).__name__[:40],
+                "confidence": 0.9 if state == "closed" else 0.5,
+                "reason": reason,
+                "errno": err_no,
                 "elapsed_ms": int((time.time() - started) * 1000),
+                "connect_ms": connect_ms,
             }
 
         probe = probe_port(host, port, timeout=banner_timeout)

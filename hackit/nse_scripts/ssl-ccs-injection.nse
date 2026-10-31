@@ -1,144 +1,328 @@
-local stdnse = require "stdnse"
-local tls = require "tls"
--- Lua 5.4 has no "bit" module; this is a 32-bit compatible replacement.
-local bit = (function()
-    local floor = math.floor
-    local function toint(x) return floor(x) & 0xFFFFFFFF end
-    local function fold(fn, a, ...)
-        local r = toint(a)
-        for i = 1, select("#", ...) do
-            r = toint(fn(r, select(i, ...)))
-        end
-        return r
-    end
-    return {
-        band = function(...) return fold(function(x, y) return x & y end, ...) end,
-        bor = function(...) return fold(function(x, y) return x | y end, ...) end,
-        bxor = function(...) return fold(function(x, y) return x ~ y end, ...) end,
-        bnot = function(x) return (~toint(x)) & 0xFFFFFFFF end,
-        lshift = function(x, n) return (toint(x) << (n & 31)) & 0xFFFFFFFF end,
-        rshift = function(x, n) return toint(x) >> (n & 31) end,
-        arshift = function(x, n) return toint(x) >> (n & 31) end,
-        tobit = function(x) return toint(x) end,
-        tohex = function(x) return format("%08x", toint(x)) end,
-    }
-end)()
-local nmap = require "nmap"
-local shortport = require "shortport"
+local nmap = require('nmap')
+local shortport = require('shortport')
+local sslcert = require('sslcert')
+local stdnse = require('stdnse')
+local vulns = require('vulns')
+local tls = require 'tls'
+local tableaux = require "tableaux"
 
+description = [[
+Detects whether a server is vulnerable to the SSL/TLS "CCS Injection"
+vulnerability (CVE-2014-0224), first discovered by Masashi Kikuchi.
+The script is based on the ccsinjection.c code authored by Ramon de C Valle
+(https://gist.github.com/rcvalle/71f4b027d61a78c42607)
 
+In order to exploit the vulnerablity, a MITM attacker would effectively
+do the following:
 
--- Fast-path bindings for the stdlib and nmap API used by this script.
--- Kept strict-mode safe: every name below is a declared local.
-local format = string.format
-local lower = string.lower
-local upper = string.upper
-local byte = string.byte
-local sub = string.sub
-local match = string.match
-local gmatch = string.gmatch
-local gsub = string.gsub
-local find = string.find
-local rep = string.rep
-local char = string.char
-local concat = table.concat
-local insert = table.insert
-local remove = table.remove
-local sort = table.sort
-local move = table.move
-local tostring = tostring
-local tonumber = tonumber
-local type = type
-local pcall = pcall
-local pairs = pairs
-local ipairs = ipairs
-local unpack = table.unpack
-local setmetatable = setmetatable
-local getmetatable = getmetatable
-local error = error
-local select = select
+    o Wait for a new TLS connection, followed by the ClientHello
+      ServerHello handshake messages.
 
-local clock = nmap.clock
-local msleep = nmap.msleep
+    o Issue a CCS packet in both the directions, which causes the OpenSSL
+      code to use a zero length pre master secret key. The packet is sent
+      to both ends of the connection. Session Keys are derived using a
+      zero length pre master secret key, and future session keys also
+      share this weakness.
 
--- stdnse.sleep / stdnse.strsplit are not present in every NSE runtime.
-local sleep = function(seconds)
-    return nmap.msleep(math.max(0, math.floor(seconds * 1000)))
+    o Renegotiate the handshake parameters.
+
+    o The attacker is now able to decrypt or even modify the packets
+      in transit.
+
+The script works by sending a 'ChangeCipherSpec' message out of order and
+checking whether the server returns an 'UNEXPECTED_MESSAGE' alert record
+or not. Since a non-patched server would simply accept this message, the
+CCS packet is sent twice, in order to force an alert from the server. If
+the alert type is different than 'UNEXPECTED_MESSAGE', we can conclude
+the server is vulnerable.
+]]
+
+---
+-- @usage
+-- nmap -p 443 --script ssl-ccs-injection <target>
+--
+-- @output
+-- PORT    STATE SERVICE
+-- 443/tcp open  https
+-- | ssl-ccs-injection:
+-- |   VULNERABLE:
+-- |   SSL/TLS MITM vulnerability (CCS Injection)
+-- |     State: VULNERABLE
+-- |     Risk factor: High
+-- |     Description:
+-- |       OpenSSL before 0.9.8za, 1.0.0 before 1.0.0m, and 1.0.1 before
+-- |       1.0.1h does not properly restrict processing of ChangeCipherSpec
+-- |       messages, which allows man-in-the-middle attackers to trigger use
+-- |       of a zero-length master key in certain OpenSSL-to-OpenSSL
+-- |       communications, and consequently hijack sessions or obtain
+-- |       sensitive information, via a crafted TLS handshake, aka the
+-- |       "CCS Injection" vulnerability.
+-- |
+-- |     References:
+-- |       https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2014-0224
+-- |       http://www.cvedetails.com/cve/2014-0224
+-- |_      http://www.openssl.org/news/secadv_20140605.txt
+
+author = "Claudiu Perta <claudiu.perta@gmail.com>"
+license = "Same as Nmap--See https://nmap.org/book/man-legal.html"
+categories = { "vuln", "safe" }
+dependencies = {"https-redirect"}
+
+portrule = function(host, port)
+ return shortport.ssl(host, port) or sslcert.getPrepareTLSWithoutReconnect(port)
 end
 
-local strsplit = function(sep, str, max)
-    local out, pos, n = {}, 1, 0
-    if str == nil then return out end
-    while true do
-        if max and n >= max - 1 then
-            out[#out + 1] = sub(str, pos)
-            return out
-        end
-        local s, e = find(str, sep, pos)
-        if not s then
-            out[#out + 1] = sub(str, pos)
-            return out
-        end
-        if e < pos then e = pos end
-        out[#out + 1] = sub(str, pos, s - 1)
-        pos = e + 1
-        n = n + 1
-        if pos > #str then
-            out[#out + 1] = ""
-            return out
-        end
+local Error = {
+  NOT_VULNERABLE    = 0,
+  CONNECT           = 1,
+  PROTOCOL_MISMATCH = 2,
+  SSL_HANDSHAKE     = 3,
+  TIMEOUT           = 4
+}
+
+---
+-- Reads an SSL/TLS record and returns true if it's any fatal
+-- alert and false otherwise.
+local function fatal_alert(s)
+  local status, buffer = tls.record_buffer(s)
+  if not status then
+    return false
+  end
+
+  local position, record = tls.record_read(buffer, 1)
+  if record == nil then
+    return false
+  end
+
+  if record.type ~= "alert" then
+    return false
+  end
+
+  for _, body in ipairs(record.body) do
+    if body.level == "fatal" then
+      return true
     end
+  end
+
+  return false
 end
 
-local format_output = stdnse.format_output
-local output_table = stdnse.output_table
+---
+-- Reads an SSL/TLS record and returns true if it's a fatal,
+-- 'unexpected_message' alert and false otherwise.
+local function alert_unexpected_message(s)
+  local status, buffer
+  status, buffer = tls.record_buffer(s, buffer, 1)
+  if not status then
+    return false
+  end
 
-description = [[Tests for the OpenSSL CCS injection vulnerability (CVE-2014-0224) by sending a premature ChangeCipherSpec message. Uses multiple TLS protocol versions and probes for reliable detection.]]
-author = "HackIT Framework"
-license = "HackIT Framework — Internal Use Only"
-categories = {"safe", "vuln"}
+  local position, record = tls.record_read(buffer, 1)
+  if record == nil then
+    return false
+  end
 
-portrule = function(host, port) return port.protocol == "tcp" and port.state == "open" end
+  if record.type ~= "alert" then
+    -- Mark this as VULNERABLE, we expect an alert record
+    return true,true
+  end
 
-local function build_ccs(version)
-    local major, minor
-    if version == "TLSv1.0" then major, minor = 0x03, 0x01
-    elseif version == "TLSv1.1" then major, minor = 0x03, 0x02
-    else major, minor = 0x03, 0x03 end
-    return char(0x14, major, minor, 0x00, 0x01, 0x01)
+  for _, body in ipairs(record.body) do
+    if body.level == "fatal" and body.description == "unexpected_message" then
+      return true,false
+    end
+  end
+
+  return true,true
+end
+
+local function test_ccs_injection(host, port, version)
+  local hello = tls.client_hello({
+      ["protocol"] = version,
+      -- Only negotiate SSLv3 on its own;
+      -- TLS implementations may refuse to answer if SSLv3 is mentioned.
+      ["record_protocol"] = (version == "SSLv3") and "SSLv3" or "TLSv1.0",
+      -- Claim to support every cipher
+      -- Doesn't work with IIS, but IIS isn't vulnerable
+      ["ciphers"] = tableaux.keys(tls.CIPHERS),
+      ["compressors"] = {"NULL"},
+      ["extensions"] = {
+        -- Claim to support common elliptic curves
+        ["elliptic_curves"] = tls.EXTENSION_HELPERS["elliptic_curves"](
+          tls.DEFAULT_ELLIPTIC_CURVES),
+      },
+    })
+
+  local status, err
+  local s
+  local specialized = sslcert.getPrepareTLSWithoutReconnect(port)
+  if specialized then
+    status, s = specialized(host, port)
+    if not status then
+      stdnse.debug3("Connection to server failed: %s", s)
+      return false, Error.CONNECT
+    end
+  else
+    s = nmap.new_socket()
+    status, err = s:connect(host, port)
+    if not status then
+      stdnse.debug3("Connection to server failed: %s", err)
+      return false, Error.CONNECT
+    end
+  end
+
+  -- Set a sufficiently large timeout
+  s:set_timeout(10000)
+
+  -- Send Client Hello to the target server
+  status, err = s:send(hello)
+  if not status then
+    stdnse.debug1("Couldn't send Client Hello: %s", err)
+    s:close()
+    return false, Error.CONNECT
+  end
+
+  -- Read response
+  local done = false
+  local i = 1
+  local response
+  repeat
+    status, response, err = tls.record_buffer(s, response, i)
+    if err == "TIMEOUT" or not status then
+      stdnse.verbose1("No response from server: %s", err)
+      s:close()
+      return false, Error.TIMEOUT
+    end
+
+    local record
+    i, record = tls.record_read(response, i)
+    if record == nil then
+      stdnse.debug1("Unknown response from server")
+      s:close()
+      return false, Error.NOT_VULNERABLE
+    elseif record.protocol ~= version then
+      stdnse.debug1("Protocol version mismatch (%s)", version)
+      s:close()
+      return false, Error.PROTOCOL_MISMATCH
+    elseif record.type == "alert" then
+      for _, body in ipairs(record.body) do
+        if body.level == "fatal" then
+          stdnse.debug1("Fatal alert: %s", body.description)
+          -- Could be something else, but this lets us retry
+          return false, Error.PROTOCOL_MISMATCH
+        end
+      end
+    end
+
+    if record.type == "handshake" then
+      for _, body in ipairs(record.body) do
+        if body.type == "server_hello_done" then
+          stdnse.debug1("Handshake completed (%s)", version)
+          done = true
+        end
+      end
+    end
+  until done
+
+  -- Send the change_cipher_spec message twice to
+  -- force an alert in the case the server is not
+  -- patched.
+
+  -- change_cipher_spec message
+  local ccs = tls.record_write(
+    "change_cipher_spec", version, "\x01")
+
+  -- Send the first ccs message
+  status, err = s:send(ccs)
+  if not status then
+    stdnse.debug1("Couldn't send first ccs message: %s", err)
+    s:close()
+    return false, Error.SSL_HANDSHAKE
+  end
+
+  -- Optimistically read the first alert message
+  -- Shorter timeout: we expect most servers will bail at this point.
+  s:set_timeout(stdnse.get_timeout(host))
+  -- If we got an alert right away, we can stop right away: it's not vulnerable.
+  if fatal_alert(s) then
+    s:close()
+    return false, Error.NOT_VULNERABLE
+  end
+  -- Restore our slow timeout
+  s:set_timeout(10000)
+
+  -- Send the second ccs message
+  status, err = s:send(ccs)
+  if not status then
+    stdnse.debug1("Couldn't send second ccs message: %s", err)
+    s:close()
+    return false, Error.SSL_HANDSHAKE
+  end
+
+  -- Read the alert message
+  local vulnerable
+  status,vulnerable = alert_unexpected_message(s)
+
+  -- Leave the target not vulnerable in case of an error. This could occur
+  -- when running against a different TLS/SSL implementations (e.g., GnuTLS)
+  if not status then
+    stdnse.debug1("Couldn't get reply from the server (probably not OpenSSL)")
+    s:close()
+    return false, Error.SSL_HANDSHAKE
+  end
+
+  if not vulnerable then
+    stdnse.debug1("Server returned UNEXPECTED_MESSAGE alert, not vulnerable")
+    s:close()
+    return false, Error.NOT_VULNERABLE
+  else
+    stdnse.debug1("Vulnerable - alert is not UNEXPECTED_MESSAGE")
+    s:close()
+    return true
+  end
 end
 
 action = function(host, port)
-    local protocols = {"TLSv1.0", "TLSv1.1", "TLSv1.2"}
-    for _, proto in ipairs(protocols) do
-        local sock = new_socket()
-        sock:set_timeout(10000)
-        local ok, result = pcall(function()
-            local status = sock:connect(host.ip, port)
-            if not status then return end
-            local hello = tls.client_hello(proto)
-            sock:send(hello)
-            local _, data = sock:receive_buf(tls.server_hello_done, 8000)
-            if not data then sock:close(); return end
-            sock:send(build_ccs(proto))
-            local status2, resp = sock:receive_buf("\n", 3000)
-            sock:close()
-            if status2 and resp and #resp > 0 then
-                return resp
-            end
-        end)
-        if not ok then
-            pcall(function() sock:close() end)
-        end
-        if result then
-            local res = output_table()
-            res.vulnerability = "CVE-2014-0224"
-            res.name = "CCS Injection"
-            res.affected = true
-            res.protocol = proto
-            res.severity = "HIGH"
-            return res
-        end
+  local vuln_table = {
+    title = "SSL/TLS MITM vulnerability (CCS Injection)",
+    state = vulns.STATE.NOT_VULN,
+    risk_factor = "High",
+    description = [[
+OpenSSL before 0.9.8za, 1.0.0 before 1.0.0m, and 1.0.1 before 1.0.1h
+does not properly restrict processing of ChangeCipherSpec messages,
+which allows man-in-the-middle attackers to trigger use of a zero
+length master key in certain OpenSSL-to-OpenSSL communications, and
+consequently hijack sessions or obtain sensitive information, via
+a crafted TLS handshake, aka the "CCS Injection" vulnerability.
+    ]],
+    references = {
+      'https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2014-0224',
+      'http://www.cvedetails.com/cve/2014-0224',
+      'http://www.openssl.org/news/secadv_20140605.txt'
+    }
+  }
+
+  local report = vulns.Report:new(SCRIPT_NAME, host, port)
+
+  -- client hello will support multiple versions of TLS. We only retry to fall
+  -- back to SSLv3, which some implementations won't allow in combination with
+  -- newer versions.
+  for _, tls_version in ipairs({"TLSv1.2", "SSLv3"}) do
+    local vulnerable, err = test_ccs_injection(host, port, tls_version)
+
+    -- Return an explicit message in case of a TIMEOUT,
+    -- to avoid considering this as not vulnerable.
+    if err == Error.TIMEOUT then
+      return "No reply from server (TIMEOUT)"
     end
-    return format_output(false, "Not vulnerable to CCS Injection")
+
+    if err ~= Error.PROTOCOL_MISMATCH then
+      if vulnerable then
+        vuln_table.state = vulns.STATE.VULN
+      end
+      break
+    end
+  end
+
+  return report:make_output(vuln_table)
 end

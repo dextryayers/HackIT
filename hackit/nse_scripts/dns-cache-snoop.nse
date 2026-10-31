@@ -1,200 +1,233 @@
+local dns = require "dns"
+local formulas = require "formulas"
 local nmap = require "nmap"
 local shortport = require "shortport"
 local stdnse = require "stdnse"
-local dns = require "dns"
-
-
-
--- Fast-path bindings for the stdlib and nmap API used by this script.
--- Kept strict-mode safe: every name below is a declared local.
-local format = string.format
-local lower = string.lower
-local upper = string.upper
-local byte = string.byte
-local sub = string.sub
-local match = string.match
-local gmatch = string.gmatch
-local gsub = string.gsub
-local find = string.find
-local rep = string.rep
-local char = string.char
-local concat = table.concat
-local insert = table.insert
-local remove = table.remove
-local sort = table.sort
-local move = table.move
-local tostring = tostring
-local tonumber = tonumber
-local type = type
-local pcall = pcall
-local pairs = pairs
-local ipairs = ipairs
-local unpack = table.unpack
-local setmetatable = setmetatable
-local getmetatable = getmetatable
-local error = error
-local select = select
-
-local clock = nmap.clock
-local msleep = nmap.msleep
-
--- stdnse.sleep / stdnse.strsplit are not present in every NSE runtime.
-local sleep = function(seconds)
-    return nmap.msleep(math.max(0, math.floor(seconds * 1000)))
-end
-
-local strsplit = function(sep, str, max)
-    local out, pos, n = {}, 1, 0
-    if str == nil then return out end
-    while true do
-        if max and n >= max - 1 then
-            out[#out + 1] = sub(str, pos)
-            return out
-        end
-        local s, e = find(str, sep, pos)
-        if not s then
-            out[#out + 1] = sub(str, pos)
-            return out
-        end
-        if e < pos then e = pos end
-        out[#out + 1] = sub(str, pos, s - 1)
-        pos = e + 1
-        n = n + 1
-        if pos > #str then
-            out[#out + 1] = ""
-            return out
-        end
-    end
-end
-
-local format_output = stdnse.format_output
-local output_table = stdnse.output_table
+local string = require "string"
+local table = require "table"
 
 description = [[
-Performs DNS cache snooping against the target recursive resolver to determine which
-domains are currently cached. The technique relies on measuring response timing: a
-cached response arrives significantly faster than a response requiring iterative
-resolution from authoritative servers. The test queries a curated list of popular
-domains across multiple categories (social media, streaming, technology, search,
-email, business) and applies statistical analysis to distinguish cached from
-non-cached responses. Uses baseline timing calibration to account for network
-latency. Reveals browsing patterns and potentially sensitive information about what
-domains resolver users have recently accessed. Useful for security assessments and
-privacy auditing.
+Performs DNS cache snooping against a DNS server.
+
+There are two modes of operation, controlled by the
+<code>dns-cache-snoop.mode</code> script argument. In
+<code>nonrecursive</code> mode (the default), queries are sent to the
+server with the RD (recursion desired) flag set to 0. The server should
+respond positively to these only if it has the domain cached. In
+<code>timed</code> mode, the mean and standard deviation response times
+for a cached domain are calculated by sampling the resolution of a name
+(www.google.com) several times. Then, each domain is resolved and the
+time taken compared to the mean. If it is less than one standard
+deviation over the mean, it is considered cached. The <code>timed</code>
+mode inserts entries in the cache and can only be used reliably once.
+
+The default list of domains to check consists of the top 50 most popular
+sites, each site being listed twice, once with "www." and once without.
+Use the <code>dns-cache-snoop.domains</code> script argument to use a
+different list.
 ]]
 
-author = "HackIT Framework"
-license = "HackIT Framework — Internal Use Only"
-categories = {"discovery", "safe"}
+---
+-- @args dns-cache-snoop.mode which of two supported snooping methods to
+-- use. <code>nonrecursive</code>, the default, checks if the server
+-- returns results for non-recursive queries. Some servers may disable
+-- this. <code>timed</code> measures the difference in time taken to
+-- resolve cached and non-cached hosts. This mode will pollute the DNS
+-- cache and can only be used once reliably.
+-- @args dns-cache-snoop.domains an array of domain to check in place of
+-- the default list.
+--
+-- @usage
+-- nmap -sU -p 53 --script dns-cache-snoop.nse --script-args 'dns-cache-snoop.mode=timed,dns-cache-snoop.domains={host1,host2,host3}' <target>
+--
+-- @output
+-- PORT   STATE SERVICE REASON
+-- 53/udp open  domain  udp-response
+-- | dns-cache-snoop: 10 of 100 tested domains are cached.
+-- | www.google.com
+-- | facebook.com
+-- | www.facebook.com
+-- | www.youtube.com
+-- | yahoo.com
+-- | twitter.com
+-- | www.twitter.com
+-- | www.google.com.hk
+-- | www.google.co.uk
+-- |_www.linkedin.com
 
-portrule = shortport.port_or_service(53, "domain")
 
-local cache_test_domains = {
-  { name = "google.com", category = "Search" },
-  { name = "youtube.com", category = "Video" },
-  { name = "facebook.com", category = "Social" },
-  { name = "instagram.com", category = "Social" },
-  { name = "amazon.com", category = "E-commerce" },
-  { name = "wikipedia.org", category = "Reference" },
-  { name = "reddit.com", category = "Social" },
-  { name = "netflix.com", category = "Streaming" },
-  { name = "microsoft.com", category = "Technology" },
-  { name = "apple.com", category = "Technology" },
-  { name = "cloudflare.com", category = "CDN" },
-  { name = "github.com", category = "Development" },
-  { name = "stackoverflow.com", category = "Development" },
-  { name = "linkedin.com", category = "Professional" },
-  { name = "twitter.com", category = "Social" },
-  { name = "whatsapp.com", category = "Messaging" },
-  { name = "zoom.us", category = "Communication" },
-  { name = "office.com", category = "Productivity" },
-  { name = "salesforce.com", category = "CRM" },
-  { name = "dropbox.com", category = "Storage" },
-  { name = "tiktok.com", category = "Social" },
-  { name = "snapchat.com", category = "Social" },
-  { name = "telegram.org", category = "Messaging" },
-  { name = "discord.com", category = "Communication" },
-  { name = "slack.com", category = "Communication" },
-  { name = "atlassian.com", category = "Development" },
-  { name = "gitlab.com", category = "Development" },
-  { name = "bitbucket.org", category = "Development" },
-  { name = "docker.com", category = "Technology" },
-  { name = "konghq.com", category = "Technology" }
+author = "Eugene V. Alexeev"
+
+license = "Same as Nmap--See https://nmap.org/book/man-legal.html"
+
+categories = {"intrusive", "discovery"}
+
+portrule = shortport.port_or_service(53, "domain", "udp")
+
+local DOMAINS = {}
+local MODE = "nonrecursive"
+-- This domain is used as a default cached entry in timed mode.
+local TIMED_DUMMY_DOMAIN = "www.google.com"
+-- How many samples to collect for the time taken to resolve the dummy domain.
+local TIMED_NUM_SAMPLES = 25
+-- In timed mode, times below mean + TIMED_MULTIPLIER * stddev are
+-- accepted as cached. Using one standard deviation gives us a roughly
+-- 84% chance that a domain with the same response time as the reference
+-- domain will be detected as cached.
+local TIMED_MULTIPLIER = 1.0
+
+-- This list is the first 50 entries of
+-- http://s3.amazonaws.com/alexa-static/top-1m.csv.zip on 2013-08-08.
+local ALEXA_DOMAINS = {
+  "google.com",
+  "facebook.com",
+  "youtube.com",
+  "yahoo.com",
+  "baidu.com",
+  "wikipedia.org",
+  "amazon.com",
+  "qq.com",
+  "live.com",
+  "linkedin.com",
+  "twitter.com",
+  "blogspot.com",
+  "taobao.com",
+  "google.co.in",
+  "bing.com",
+  "yahoo.co.jp",
+  "yandex.ru",
+  "wordpress.com",
+  "sina.com.cn",
+  "vk.com",
+  "ebay.com",
+  "google.de",
+  "tumblr.com",
+  "msn.com",
+  "google.co.uk",
+  "googleusercontent.com",
+  "ask.com",
+  "mail.ru",
+  "google.com.br",
+  "163.com",
+  "google.fr",
+  "pinterest.com",
+  "google.com.hk",
+  "hao123.com",
+  "microsoft.com",
+  "google.co.jp",
+  "xvideos.com",
+  "google.ru",
+  "weibo.com",
+  "craigslist.org",
+  "paypal.com",
+  "instagram.com",
+  "amazon.co.jp",
+  "google.it",
+  "imdb.com",
+  "blogger.com",
+  "google.es",
+  "apple.com",
+  "conduit.com",
+  "sohu.com",
 }
 
-action = function(host, port)
-  local result = output_table()
-  local cached_domains = {}
+-- Construct the default list of domains.
+for _, domain in ipairs(ALEXA_DOMAINS) do
+  DOMAINS[#DOMAINS + 1] = domain
+  if not string.match(domain, "^www%.") then
+    DOMAINS[#DOMAINS + 1] = "www." .. domain
+  end
+end
 
-  local calibration_domain = "thisshouldnotexist-hackit-test-" .. math.random(10000, 99999) .. ".com"
-  local cal_opts = {
-    host = host.ip, port = port.number, dtype = "A",
-    timeout = 5000, retries = 1
-  }
-  local cal_start = clock()
-  local cal_ok, cal_answer = pcall(dns.query, calibration_domain, cal_opts)
-  local cal_elapsed = (clock() - cal_start) * 1000
-  local baseline_rtt = math.min(cal_elapsed, 500)
+local function nonrecursive_mode(host, port, domains)
+  local cached = {}
 
-  local dynamic_threshold = math.min(baseline_rtt * 0.3, 80)
-  dynamic_threshold = math.max(dynamic_threshold, 15)
+  for _,domain in ipairs(domains) do
+    if dns.query(domain, {host = host.ip, port = port.number, tries = 0, norecurse=true}) then
+      cached[#cached + 1] = domain
+    end
+  end
 
-  local base_opts = {
-    host = host.ip, port = port.number, dtype = "A",
-    timeout = 5000, retries = 1
-  }
+  return cached
+end
 
-  for _, entry in ipairs(cache_test_domains) do
-    local start = clock()
-    local ok, answer = pcall(dns.query, entry.name, base_opts)
-    local elapsed = (clock() - start) * 1000
+-- Return the time taken (in seconds) to resolve the given domain, or nil if
+-- it could not be resolved.
+local function timed_query(host, port, domain)
+  local start, stop
 
-    if ok and answer and #answer > 0 then
-      if elapsed < dynamic_threshold then
-        insert(cached_domains, {
-          domain = entry.name,
-          category = entry.category,
-          response_time_ms = math.floor(elapsed),
-          threshold_used = math.floor(dynamic_threshold)
-        })
+  start = nmap.clock_ms()
+  if dns.query(domain, {host = host.ip, port = port.number, tries = 0, norecurse = false}) then
+    stop = nmap.clock_ms()
+    return (stop - start) / 1000
+  else
+    return nil
+  end
+end
+
+local function timed_mode(host, port, domains)
+  local cached = {}
+  local i, t
+
+  -- Insert in the cache.
+  timed_query(host, port, TIMED_DUMMY_DOMAIN)
+
+  -- Measure how long it takes to resolve on average.
+  local times = {}
+  for i = 1, TIMED_NUM_SAMPLES do
+    t = timed_query(host, port, TIMED_DUMMY_DOMAIN)
+    if t then
+      times[#times + 1] = t
+    end
+  end
+  local mean, stddev = formulas.mean_stddev(times)
+  local cutoff = mean + stddev * TIMED_MULTIPLIER
+  stdnse.debug1("reference %s: mean %g  stddev %g  cutoff %g", TIMED_DUMMY_DOMAIN, mean, stddev, cutoff)
+
+  -- Now try all domains one by one.
+  for _, domain in ipairs(domains) do
+    t = timed_query(host, port, domain)
+    if t then
+      if t < cutoff then
+        stdnse.debug1("%s: %g is cached (cutoff %g)", domain, t, cutoff)
+        cached[#cached + 1] = domain
+      else
+        stdnse.debug1("%s: %g not cached (cutoff %g)", domain, t, cutoff)
       end
     end
-
-    msleep(20)
   end
 
-  result.status = "success"
-  result.server = host.ip .. ":" .. port.number
-  result.total_tested = #cache_test_domains
-  result.baseline_rtt_ms = math.floor(baseline_rtt)
-  result.cache_threshold_ms = math.floor(dynamic_threshold)
+  return cached
+end
 
-  if #cached_domains > 0 then
-    sort(cached_domains, function(a, b) return a.response_time_ms < b.response_time_ms end)
+action = function(host, port)
+  local domains = DOMAINS
+  local mode = MODE
 
-    result.domains_cached = #cached_domains
-    result.cached_domains = cached_domains
-
-    local categories = {}
-    for _, d in ipairs(cached_domains) do
-      categories[d.category] = (categories[d.category] or 0) + 1
+  local args = nmap.registry.args
+  if args then
+    if args["dns-cache-snoop.mode"] then
+      mode = args["dns-cache-snoop.mode"]
     end
-    result.cached_by_category = categories
-
-    result.cache_ratio = format("%.1f%%", (#cached_domains / #cache_test_domains) * 100)
-
-    if #cached_domains > (#cache_test_domains * 0.5) then
-      result.assessment = "Active resolver with heavily populated cache"
-    elseif #cached_domains > (#cache_test_domains * 0.2) then
-      result.assessment = "Moderately populated cache"
-    else
-      result.assessment = "Minimal cache population"
+    if args["dns-cache-snoop.domains"] then
+      domains = args["dns-cache-snoop.domains"]
     end
+  end
+
+  local cached
+
+  mode = string.lower(mode)
+  if mode == "nonrecursive" then
+    cached = nonrecursive_mode(host, port, domains)
+  elseif mode == "timed" then
+    cached = timed_mode(host, port, domains)
   else
-    result.domains_cached = 0
-    result.reason = "No cached entries detected based on timing analysis"
-    result.assessment = "Resolver may not be recursive, cache may be empty, or timing threshold too aggressive"
+    return string.format("Error: \"%s\" is not a known mode. Use \"nonrecursive\" or \"timed\".")
   end
 
-  return result
+  if #cached > 0 then
+    nmap.set_port_state(host, port, "open")
+  end
+
+  return string.format("%d of %d tested domains are cached.\n", #cached, #domains) ..  table.concat(cached, "\n")
 end

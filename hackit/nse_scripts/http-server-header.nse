@@ -1,90 +1,106 @@
-local http = require "http"
-local stdnse = require "stdnse"
-local nmap = require "nmap"
+local comm = require "comm"
+local string = require "string"
+local table = require "table"
 local shortport = require "shortport"
+local nmap = require "nmap"
+local stdnse = require "stdnse"
+local U = require "lpeg-utility"
 
+description = [[
+Uses the HTTP Server header for missing version info. This is currently
+infeasible with version probes because of the need to match non-HTTP services
+correctly.
+]]
 
+---
+--@output
+-- PORT   STATE SERVICE VERSION
+-- 80/tcp open  http    Unidentified Server 1.0
+--
+-- PORT   STATE SERVICE VERSION
+-- 80/tcp open  http    Unidentified Server 1.0
+-- |_ http-server-header: Unidentified Server 1.0
+--
+--@xmloutput
+--<table key="Server">
+--  <elem>Unidentified Server 1.0</elem>
+--  <elem>SomeOther Server</elem>
+--</table>
 
--- Fast-path bindings for the stdlib and nmap API used by this script.
--- Kept strict-mode safe: every name below is a declared local.
-local format = string.format
-local lower = string.lower
-local upper = string.upper
-local byte = string.byte
-local sub = string.sub
-local match = string.match
-local gmatch = string.gmatch
-local gsub = string.gsub
-local find = string.find
-local rep = string.rep
-local char = string.char
-local concat = table.concat
-local insert = table.insert
-local remove = table.remove
-local sort = table.sort
-local move = table.move
-local tostring = tostring
-local tonumber = tonumber
-local type = type
-local pcall = pcall
-local pairs = pairs
-local ipairs = ipairs
-local unpack = table.unpack
-local setmetatable = setmetatable
-local getmetatable = getmetatable
-local error = error
-local select = select
+author = "Daniel Miller"
+license = "Same as Nmap--See https://nmap.org/book/man-legal.html"
+categories = {"version"}
+dependencies = {"https-redirect"}
 
-local clock = nmap.clock
-local msleep = nmap.msleep
-
--- stdnse.sleep / stdnse.strsplit are not present in every NSE runtime.
-local sleep = function(seconds)
-    return nmap.msleep(math.max(0, math.floor(seconds * 1000)))
+portrule = function(host, port)
+  return (shortport.http(host,port) and nmap.version_intensity() >= 7)
 end
-
-local strsplit = function(sep, str, max)
-    local out, pos, n = {}, 1, 0
-    if str == nil then return out end
-    while true do
-        if max and n >= max - 1 then
-            out[#out + 1] = sub(str, pos)
-            return out
-        end
-        local s, e = find(str, sep, pos)
-        if not s then
-            out[#out + 1] = sub(str, pos)
-            return out
-        end
-        if e < pos then e = pos end
-        out[#out + 1] = sub(str, pos, s - 1)
-        pos = e + 1
-        n = n + 1
-        if pos > #str then
-            out[#out + 1] = ""
-            return out
-        end
-    end
-end
-
-local format_output = stdnse.format_output
-local output_table = stdnse.output_table
-
-description = [[Extracts the Server header from the HTTP response to identify the web server software.]]
-author = "HackIT Framework"
-license = "HackIT Framework — Internal Use Only"
-categories = {"web", "safe"}
-
-portrule = function(host, port) return port.protocol == "tcp" and port.state == "open" end
 
 action = function(host, port)
-    local response = http.get(host, port, "/")
-    if not response then
-        return format_output(false, "No response from server")
+  local responses = {}
+  -- Did the service engine already do the hard work?
+  if port.version and port.version.service_fp then
+    -- Probes sent, replies received, but no match.
+    -- Loop through the probes most likely to receive HTTP responses
+    for _, p in ipairs({"GetRequest", "GenericLines", "HTTPOptions",
+      "FourOhFourRequest", "NULL", "RTSPRequest", "Help", "SIPOptions"}) do
+      responses[#responses+1] = U.get_response(port.version.service_fp, p)
     end
-    local server = response.header and response.header["server"]
-    if server then
-        return format_output(true, "Server: " .. server)
+  end
+  if #responses == 0 then
+    -- Have to send the probe ourselves.
+    local socket, result = comm.tryssl(host, port, "GET / HTTP/1.0\r\n\r\n")
+
+    if (not socket) then
+      return nil
     end
-    return format_output(false, "No Server header found")
+    socket:close()
+    responses[1] = result
+  end
+
+  -- Also send a probe with host header if we can. IIS reported to send
+  -- different Server headers depending on presence of Host header.
+  local socket, result = comm.tryssl(host, port,
+    ("GET / HTTP/1.1\r\nHost: %s\r\n\r\n"):format(stdnse.get_hostname(host)))
+  if socket then
+    socket:close()
+    responses[#responses+1] = result
+  end
+
+  port.version = port.version or {}
+
+  local headers = {}
+  for _, result in ipairs(responses) do
+    if string.match(result, "^HTTP/1.[01] %d%d%d") then
+
+      local http_server = string.match(result, "\n[Ss][Ee][Rr][Vv][Ee][Rr]:[ \t]*(.-)\r?\n")
+
+      -- Avoid setting version info if -sV scan already got a match
+      if port.version.product == nil and (port.version.name_confidence or 0) <= 3 then
+        port.version.service = "http"
+        port.version.product = http_server
+        -- Setting "softmatched" allows the service fingerprint to be printed
+        nmap.set_port_version(host, port, "softmatched")
+      elseif port.version.product == http_server then
+        -- If we already detected exactly this, no need to report it
+        http_server = nil
+      end
+
+      if http_server then
+        headers[http_server] = true
+      end
+    end
+  end
+
+  local out = {}
+  local out_s = {}
+  for s, _ in pairs(headers) do
+    out[#out+1] = s
+    out_s[#out_s+1] = s == "" and "<empty>" or s
+  end
+  if next(out) then
+    table.sort(out)
+    table.sort(out_s)
+    return out, ((#out > 1) and "\n  " or "") .. table.concat(out_s, "\n  ")
+  end
 end

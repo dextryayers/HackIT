@@ -1,146 +1,218 @@
-local stdnse = require "stdnse"
-local smb = require "smb"
-local string = require "string"
-local nmap = require "nmap"
-local shortport = require "shortport"
+local smb    = require 'smb'
+local string = require 'string'
+local stringaux = require "stringaux"
+local stdnse = require 'stdnse'
+local ls     = require 'ls'
 
+local openssl= stdnse.silent_require 'openssl'
 
+description = [[
+Attempts to retrieve useful information about files shared on SMB volumes.
+The output is intended to resemble the output of the UNIX <code>ls</code> command.
+]]
 
--- Fast-path bindings for the stdlib and nmap API used by this script.
--- Kept strict-mode safe: every name below is a declared local.
-local format = string.format
-local lower = string.lower
-local upper = string.upper
-local byte = string.byte
-local sub = string.sub
-local match = string.match
-local gmatch = string.gmatch
-local gsub = string.gsub
-local find = string.find
-local rep = string.rep
-local char = string.char
-local concat = table.concat
-local insert = table.insert
-local remove = table.remove
-local sort = table.sort
-local move = table.move
-local tostring = tostring
-local tonumber = tonumber
-local type = type
-local pcall = pcall
-local pairs = pairs
-local ipairs = ipairs
-local unpack = table.unpack
-local setmetatable = setmetatable
-local getmetatable = getmetatable
-local error = error
-local select = select
+---
+-- @usage
+-- nmap -p 445 <ip> --script smb-ls --script-args 'share=c$,path=\temp'
+-- nmap -p 445 <ip> --script smb-enum-shares,smb-ls
+--
+-- @args smb-ls.share (or smb-ls.shares) the share (or a colon-separated list
+--       of shares) to connect to (default: use shares found by smb-enum-shares)
+-- @args smb-ls.path the path, relative to the share to list the contents from
+--       (default: root of the share)
+-- @args smb-ls.pattern the search pattern to execute (default: *)
+-- @args smb-ls.checksum download each file and calculate a checksum
+--       (default: false)
+--
+-- @output
+-- Host script results:
+-- | smb-ls:
+-- |   Volume \\192.168.56.101\c$\
+-- |   SIZE   TIME                 FILENAME
+-- |   0      2007-12-02 00:20:09  AUTOEXEC.BAT
+-- |   0      2007-12-02 00:20:09  CONFIG.SYS
+-- |   <DIR>  2007-12-02 00:53:39  Documents and Settings
+-- |   <DIR>  2009-09-08 13:26:10  e5a6b742d36facb19c5192852c43
+-- |   <DIR>  2008-12-01 02:06:29  Inetpub
+-- |   94720  2007-02-18 00:31:38  msizap.exe
+-- |   <DIR>  2007-12-02 00:55:01  Program Files
+-- |   <DIR>  2008-12-01 02:05:52  temp
+-- |   <DIR>  2011-12-16 14:40:18  usr
+-- |   <DIR>  2007-12-02 00:42:40  WINDOWS
+-- |   <DIR>  2007-12-02 00:22:38  wmpub
+-- |_
+--
+-- @xmloutput
+-- <table key="volumes">
+--   <table>
+--     <table key="files">
+--       <table>
+--         <elem key="size">0</elem>
+--         <elem key="time">2007-12-02 00:20:09</elem>
+--         <elem key="filename">AUTOEXEC.BAT</elem>
+--       </table>
+--       <table>
+--         <elem key="size">0</elem>
+--         <elem key="time">2007-12-02 00:20:09</elem>
+--         <elem key="filename">CONFIG.SYS</elem>
+--       </table>
+--       <table>
+--         <elem key="size">&lt;DIR&gt;</elem>
+--         <elem key="time">2007-12-02 00:53:39</elem>
+--         <elem key="filename">Documents and Settings</elem>
+--       </table>
+--       <table>
+--         <elem key="size">&lt;DIR&gt;</elem>
+--         <elem key="time">2009-09-08 13:26:10</elem>
+--         <elem key="filename">e5a6b742d36facb19c5192852c43</elem>
+--       </table>
+--       <table>
+--         <elem key="size">&lt;DIR&gt;</elem>
+--         <elem key="time">2008-12-01 02:06:29</elem>
+--         <elem key="filename">Inetpub</elem>
+--       </table>
+--       <table>
+--         <elem key="size">94720</elem>
+--         <elem key="time">2007-02-18 00:31:38</elem>
+--         <elem key="filename">msizap.exe</elem>
+--       </table>
+--       <table>
+--         <elem key="size">&lt;DIR&gt;</elem>
+--         <elem key="time">2007-12-02 00:55:01</elem>
+--         <elem key="filename">Program Files</elem>
+--       </table>
+--       <table>
+--         <elem key="size">&lt;DIR&gt;</elem>
+--         <elem key="time">2008-12-01 02:05:52</elem>
+--         <elem key="filename">temp</elem>
+--       </table>
+--       <table>
+--         <elem key="size">&lt;DIR&gt;</elem>
+--         <elem key="time">2011-12-16 14:40:18</elem>
+--         <elem key="filename">usr</elem>
+--       </table>
+--       <table>
+--         <elem key="size">&lt;DIR&gt;</elem>
+--         <elem key="time">2007-12-02 00:42:40</elem>
+--         <elem key="filename">WINDOWS</elem>
+--       </table>
+--       <table>
+--         <elem key="size">&lt;DIR&gt;</elem>
+--         <elem key="time">2007-12-02 00:22:38</elem>
+--         <elem key="filename">wmpub</elem>
+--       </table>
+--     </table>
+--     <elem key="volume">\\192.168.1.2\Downloads</elem>
+--   </table>
+-- </table>
 
-local clock = nmap.clock
-local msleep = nmap.msleep
+author = "Patrik Karlsson"
+license = "Same as Nmap--See https://nmap.org/book/man-legal.html"
+categories = {"discovery", "safe"}
+dependencies = {"smb-enum-shares"}
 
--- stdnse.sleep / stdnse.strsplit are not present in every NSE runtime.
-local sleep = function(seconds)
-    return nmap.msleep(math.max(0, math.floor(seconds * 1000)))
+local arg_shares   = stdnse.get_script_args(SCRIPT_NAME .. '.shares')
+local arg_share    = stdnse.get_script_args(SCRIPT_NAME .. '.share')
+local arg_path     = stdnse.get_script_args(SCRIPT_NAME .. '.path') or '\\'
+local arg_pattern  = stdnse.get_script_args(SCRIPT_NAME .. '.pattern') or '*'
+
+hostrule = function(host)
+  return ( smb.get_port(host) ~= nil and
+    (arg_shares or arg_share
+    or host.registry['smb_shares'] ~= nil) )
 end
 
-local strsplit = function(sep, str, max)
-    local out, pos, n = {}, 1, 0
-    if str == nil then return out end
-    while true do
-        if max and n >= max - 1 then
-            out[#out + 1] = sub(str, pos)
-            return out
-        end
-        local s, e = find(str, sep, pos)
-        if not s then
-            out[#out + 1] = sub(str, pos)
-            return out
-        end
-        if e < pos then e = pos end
-        out[#out + 1] = sub(str, pos, s - 1)
-        pos = e + 1
-        n = n + 1
-        if pos > #str then
-            out[#out + 1] = ""
-            return out
-        end
-    end
+-- checks whether the file entry is a directory
+local function is_dir(fe)
+  return ( (fe.attrs & 16) == 16 )
 end
 
-local format_output = stdnse.format_output
-local output_table = stdnse.output_table
+local function list_files(host, share, smbstate, path, options, output, maxdepth, basedir)
+  basedir = basedir or ""
+  local continue
 
-description = [[Lists available SMB shares on the target, including share names, types, and comments. Extracts share details with disk, IPC, printer, and special share categorization.]]
-author = "HackIT Framework"
-license = "HackIT Framework — Internal Use Only"
-categories = {"safe", "discovery"}
-
-portrule = function(host, port)
-    return port.protocol == "tcp" and port.state == "open" and port.number == 445
+  for fe in smb.find_files(smbstate, path .. '\\' .. arg_pattern, options) do
+    if basedir == "" or (fe.fname ~= "." and fe.fname ~= "..") then
+      if ls.config('checksum') and not(is_dir(fe)) then
+        local status, content = smb.file_read(host, share, path .. '\\' .. fe.fname, nil, {file_create_disposition=1})
+        local sha1 = status and stdnse.tohex(openssl.sha1(content)) or ""
+        continue = ls.add_file(output, {is_dir(fe) and '<DIR>' or fe.eof,
+          fe.created, basedir .. fe.fname, sha1})
+      else
+        continue = ls.add_file(output, {is_dir(fe) and '<DIR>' or fe.eof,
+          fe.created, basedir .. fe.fname})
+      end
+      if not continue then
+        return false
+      end
+      if is_dir(fe) and not (fe.fname == "." or fe.fname == "..") then
+        continue = true
+        if maxdepth > 0 then
+          continue = list_files(host, share, smbstate,
+            path .. '\\' .. fe.fname, options,
+            output, maxdepth - 1,
+            basedir .. fe.fname .. '\\')
+        elseif maxdepth < 0 then
+          continue = list_files(host, share, smbstate,
+            path .. '\\' .. fe.fname, options,
+            output, -1,
+            basedir .. fe.fname .. '\\')
+        end
+        if not continue then
+          return false
+        end
+      end
+    end
+  end
+  return true
 end
 
-local share_type_names = {
-    [0] = "Disk", [1] = "Printer", [2] = "Device",
-    [3] = "IPC", [0x80000000] = "Special",
-}
+action = function(host)
 
-action = function(host, port)
-    local result = output_table()
+  -- give priority to specified shares if specified
+  if arg_shares ~= nil then
+    arg_shares = stringaux.strsplit(":", arg_shares)
+  elseif arg_share ~= nil then
+    arg_shares = {arg_share}
+  else
+    arg_shares = host.registry['smb_shares']
+  end
 
-    local ok, smbstate = pcall(smb.start, host, port)
-    if not ok or not smbstate then
-        return format_output(false, "Could not establish SMB session")
+  local output = ls.new_listing()
+
+  for _, share in ipairs(arg_shares) do
+    stdnse.debug1("Share name:%s", share)
+    local status, smbstate = smb.start_ex(host, true, true, share,
+      nil, nil, nil)
+    if ( not(status) ) then
+      ls.report_error(
+        output,
+        ("Failed to authenticate to server (%s) for directory of \\\\%s\\%s%s"):format(smbstate, stdnse.get_hostname(host), share, arg_path))
+    else
+
+      -- remove leading slash
+      arg_path = ( arg_path:sub(1,2) == '\\' and arg_path:sub(2) or arg_path )
+
+      local options = {maxfiles = ls.config('maxfiles')}
+      local depth, path, dirs = 0, arg_path, {}
+      local file_count, dir_count, total_bytes = 0, 0, 0
+      local continue = true
+
+      ls.new_vol(
+        output,
+        share .. path,
+        false)
+      continue = list_files(host, share, smbstate, path, options,
+        output, ls.config('maxdepth'))
+      if not continue then
+        ls.report_info(
+          output,
+          string.format("maxfiles limit reached (%d)", ls.config('maxfiles')))
+      end
+      ls.end_vol(output)
+      smb.stop(smbstate)
     end
+  end
 
-    local ok2, smbstate2 = pcall(smb.negotiate_protocol, smbstate)
-    if not ok2 then
-        smb.stop(smbstate)
-        return format_output(false, "SMB protocol negotiation failed")
-    end
-    smbstate = smbstate2
-
-    local ok3, smbstate3 = pcall(smb.session_setup, smbstate, "", "")
-    if not ok3 then
-        smb.stop(smbstate)
-        return format_output(false, "SMB session setup failed (null session may not be available)")
-    end
-    smbstate = smbstate3
-
-    local ok4, shares = pcall(smb.list_shares, smbstate)
-    smb.stop(smbstate)
-
-    if not ok4 or not shares then
-        return format_output(false, "Failed to list SMB shares")
-    end
-
-    local share_list = {}
-    local disk_count = 0
-    local ipc_count = 0
-    local printer_count = 0
-    local special_count = 0
-
-    for _, share in ipairs(shares) do
-        local share_entry = {
-            name = share.name,
-            type = share_type_names[share.type] or format("Unknown (0x%x)", share.type),
-            comment = share.comment or "",
-        }
-
-        if share.type == 0 then disk_count = disk_count + 1 end
-        if share.type == 3 then ipc_count = ipc_count + 1 end
-        if share.type == 1 then printer_count = printer_count + 1 end
-        if share.type == 0x80000000 then special_count = special_count + 1 end
-
-        insert(share_list, share_entry)
-    end
-
-    result.shares = share_list
-    result.share_count = #share_list
-    result.disk_shares = disk_count
-    result.ipc_shares = ipc_count
-    result.printer_shares = printer_count
-    result.special_shares = special_count
-
-    return format_output(true, result)
+  return ls.end_listing(output)
 end

@@ -60,6 +60,8 @@ local select = select
 
 local clock = nmap.clock
 local msleep = nmap.msleep
+local new_socket = nmap.new_socket
+local resolve = nmap.resolve
 
 -- stdnse.sleep / stdnse.strsplit are not present in every NSE runtime.
 local sleep = function(seconds)

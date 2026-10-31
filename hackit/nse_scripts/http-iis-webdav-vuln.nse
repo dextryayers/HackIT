@@ -1,182 +1,220 @@
 local http = require "http"
-local stdnse = require "stdnse"
-local table = require "table"
+local io = require "io"
 local nmap = require "nmap"
 local shortport = require "shortport"
+local stdnse = require "stdnse"
+local string = require "string"
+local table = require "table"
+
+description = [[
+Checks for a vulnerability in IIS 5.1/6.0 that allows arbitrary users to access
+secured WebDAV folders by searching for a password-protected folder and
+attempting to access it. This vulnerability was patched in Microsoft Security
+Bulletin MS09-020, https://nmap.org/r/ms09-020.
+
+A list of well known folders (almost 900) is used by default. Each one is
+checked, and if returns an authentication request (401), another attempt is
+tried with the malicious encoding. If that attempt returns a successful result
+(207), then the folder is marked as vulnerable.
+
+This script is based on the Metasploit auxiliary module
+auxiliary/scanner/http/wmap_dir_webdav_unicode_bypass
+
+For more information on this vulnerability and script, see:
+* http://blog.zoller.lu/2009/05/iis-6-webdac-auth-bypass-and-data.html
+* http://seclists.org/fulldisclosure/2009/May/att-134/IIS_Advisory_pdf.bin
+* http://www.skullsecurity.org/blog/?p=271
+* http://www.kb.cert.org/vuls/id/787932
+* http://www.microsoft.com/technet/security/advisory/971492.mspx
+]]
+
+---
+-- @usage
+-- nmap --script http-iis-webdav-vuln -p80,8080 <host>
+--
+-- @output
+-- 80/tcp open  http    syn-ack
+-- |_ http-iis-webdav-vuln: WebDAV is ENABLED. Vulnerable folders discovered: /secret, /webdav
+--
+-- @args webdavfolder Selects a single folder to use, instead of using a built-in list.
+-- @args folderdb The filename of an alternate list of folders.
+-- @args basefolder The folder to start in; eg, <code>"/web"</code> will try <code>"/web/xxx"</code>.
+-----------------------------------------------------------------------
+
+author = {"Ron Bowes", "Andrew Orr"}
+license = "Same as Nmap--See https://nmap.org/book/man-legal.html"
+categories = {"vuln", "intrusive"}
 
 
+portrule = shortport.http
 
--- Fast-path bindings for the stdlib and nmap API used by this script.
--- Kept strict-mode safe: every name below is a declared local.
-local format = string.format
-local lower = string.lower
-local upper = string.upper
-local byte = string.byte
-local sub = string.sub
-local match = string.match
-local gmatch = string.gmatch
-local gsub = string.gsub
-local find = string.find
-local rep = string.rep
-local char = string.char
-local concat = table.concat
-local insert = table.insert
-local remove = table.remove
-local sort = table.sort
-local move = table.move
-local tostring = tostring
-local tonumber = tonumber
-local type = type
-local pcall = pcall
-local pairs = pairs
-local ipairs = ipairs
-local unpack = table.unpack
-local setmetatable = setmetatable
-local getmetatable = getmetatable
-local error = error
-local select = select
+---Enumeration for results
+local enum_results =
+{
+  VULNERABLE = 1,
+  NOT_VULNERABLE = 2,
+  UNKNOWN = 3
+}
 
-local clock = nmap.clock
-local msleep = nmap.msleep
+---Sends a PROPFIND request to the given host, and for the given folder. Returns a table representing a response.
+local function get_response(host, port, folder)
+  local webdav_req = '<?xml version="1.0" encoding="utf-8"?><propfind xmlns="DAV:"><prop><getcontentlength xmlns="DAV:"/><getlastmodified xmlns="DAV:"/><executable xmlns="http://apache.org/dav/props/"/><resourcetype xmlns="DAV:"/><checked-in xmlns="DAV:"/><checked-out xmlns="DAV:"/></prop></propfind>'
 
--- stdnse.sleep / stdnse.strsplit are not present in every NSE runtime.
-local sleep = function(seconds)
-    return nmap.msleep(math.max(0, math.floor(seconds * 1000)))
+  local options = {
+    header = {
+      Connection = "close",
+      ["Content-Type"] = "application/xml",
+    },
+    content = webdav_req
+  }
+
+  return http.generic_request(host, port, "PROPFIND", folder, options)
 end
 
-local strsplit = function(sep, str, max)
-    local out, pos, n = {}, 1, 0
-    if str == nil then return out end
-    while true do
-        if max and n >= max - 1 then
-            out[#out + 1] = sub(str, pos)
-            return out
-        end
-        local s, e = find(str, sep, pos)
-        if not s then
-            out[#out + 1] = sub(str, pos)
-            return out
-        end
-        if e < pos then e = pos end
-        out[#out + 1] = sub(str, pos, s - 1)
-        pos = e + 1
-        n = n + 1
-        if pos > #str then
-            out[#out + 1] = ""
-            return out
-        end
+---Check a single folder on a single host for the vulnerability. Returns one of the enum_results codes.
+local function go_single(host, port, folder)
+  local response
+
+  response = get_response(host, port, folder)
+  if(response.status == 401) then
+    local vuln_response
+    local check_folder
+
+    stdnse.debug1("Found protected folder (401): %s", folder)
+
+    -- check for IIS 6.0 and 5.1
+    -- doesn't appear to work on 5.0
+    -- /secret/ becomes /s%c0%afecret/
+    check_folder = string.sub(folder, 1, 2) .. "%c0%af" .. string.sub(folder, 3)
+    vuln_response = get_response(host, port, check_folder)
+    if(vuln_response.status == 207) then
+      stdnse.debug1("Folder seems vulnerable: %s", folder)
+      return enum_results.VULNERABLE
+    else
+      stdnse.debug1("Folder does not seem vulnerable: %s", folder)
+      return enum_results.NOT_VULNERABLE
     end
+  else
+    if(response['status-line'] ~= nil) then
+      stdnse.debug3("Not a protected folder (%s): %s", response['status-line'], folder)
+    elseif(response['status'] ~= nil) then
+      stdnse.debug3("Not a protected folder (%s): %s", response['status'], folder)
+    else
+      stdnse.debug3("Not a protected folder: %s",folder)
+    end
+    return enum_results.UNKNOWN
+  end
 end
 
-local format_output = stdnse.format_output
-local output_table = stdnse.output_table
+---Checks a list of possible folders for the vulnerability. Returns a list of vulnerable folders.
+local function go(host, port)
+  local status, folder
+  local results = {}
+  local is_vulnerable = true
 
-description = [[Detects IIS WebDAV misconfiguration allowing write access to web folders (CVE-2009-1535, CVE-2017-7269).]]
-author = "HackIT Framework"
-license = "HackIT Framework — Internal Use Only"
-categories = {"vuln", "safe"}
+  local folder_file
+  local farg = nmap.registry.args.folderdb
+  folder_file = farg and (nmap.fetchfile(farg) or farg) or nmap.fetchfile('nselib/data/http-folders.txt')
 
-portrule = function(host, port) return port.protocol == "tcp" and port.state == "open" and port.service == "http" end
+  if(folder_file == nil) then
+    return false, "Couldn't find http-folders.txt (should be in nselib/data)"
+  end
+
+  local file = io.open(folder_file, "r")
+  if not file then
+    return false, ("Couldn't find or open %s"):format(folder_file)
+  end
+
+  while true do
+    local result
+    local line = file:read()
+    if not line then
+      break
+    end
+
+    if(nmap.registry.args.basefolder ~= nil) then
+      line = "/" .. nmap.registry.args.basefolder .. "/" .. line
+    else
+      line = "/" .. line
+    end
+
+    result = go_single(host, port, line)
+    if(result == enum_results.VULNERABLE) then
+      results[#results + 1] = line
+    elseif(result == enum_results.NOT_VULNERABLE) then
+      is_vulnerable = false
+    else
+    end
+  end
+
+  file:close()
+
+  return true, results, is_vulnerable
+end
+
+local function fail (err) return stdnse.format_output(false, err) end
 
 action = function(host, port)
-  local ok, result = pcall(function()
-    local findings = {}
-    local server_banner = ""
-
-    local banner_req = http.get(host, port, "/")
-    if banner_req and banner_req.headers and banner_req.headers["server"] then
-      local sv = banner_req.headers["server"]
-      server_banner = type(sv) == "table" and sv[1] or sv
-    end
-
-    local vectors = {
-      {method = "PROPFIND", path = "/", depth = "0"},
-      {method = "PROPFIND", path = "/webdav/", depth = "0"},
-      {method = "PROPFIND", path = "/_vti_bin/", depth = "0"},
-      {method = "PROPFIND", path = "/DavWWWRoot/", depth = "0"},
-      {method = "OPTIONS", path = "/", depth = nil},
-      {method = "MKCOL", path = "/hackit_test_dir/", depth = nil},
-      {method = "PUT", path = "/hackit_test.txt", depth = nil},
-    }
-
-    for _, vec in ipairs(vectors) do
-      local req
-      if vec.method == "PROPFIND" then
-        req = http.generic_request(host, port, "PROPFIND", vec.path, {["Depth"] = vec.depth, ["Content-Type"] = "application/xml"}, "<?xml version=\"1.0\"?><D:propfind xmlns:D=\"DAV:\"><D:prop><D:displayname/></D:prop></D:propfind>")
-      elseif vec.method == "PUT" then
-        req = http.generic_request(host, port, "PUT", vec.path, {["Content-Type"] = "text/plain"}, "HackIT test")
-      elseif vec.method == "MKCOL" then
-        req = http.generic_request(host, port, "MKCOL", vec.path, {}, "")
-      else
-        req = http.generic_request(host, port, "OPTIONS", vec.path)
-      end
-      if req and req.status then
-        local body = req.body or ""
-        if vec.method == "PROPFIND" and (req.status == 207 or (req.status < 300 and match(body, "DAV:"))) then
-          insert(findings, {vector = ("%s %s"):format(vec.method, vec.path), status = req.status, detail = "WebDAV PROPFIND succeeded"})
-        elseif vec.method == "OPTIONS" then
-          local allow = (req.headers and req.headers["allow"]) or ""
-          local all = type(allow) == "table" and concat(allow, ", ") or allow
-          if match(all, "PROPFIND") or match(all, "MKCOL") or match(all, "MOVE") then
-            insert(findings, {vector = "OPTIONS /", status = req.status, detail = ("WebDAV methods allowed: %s"):format(all)})
-          end
-        elseif vec.method == "PUT" and req.status == 201 then
-          insert(findings, {vector = "PUT /hackit_test.txt", status = req.status, detail = "Write access confirmed - file upload succeeded"})
-          http.generic_request(host, port, "DELETE", "/hackit_test.txt", {}, "")
-        elseif vec.method == "MKCOL" and req.status == 201 then
-          insert(findings, {vector = "MKCOL /hackit_test_dir/", status = req.status, detail = "Directory creation allowed"})
-          http.generic_request(host, port, "DELETE", "/hackit_test_dir/", {}, "")
-        end
-      end
-    end
-
-    if #findings > 0 then
-      local vuln_version = false
-      if server_banner then
-        local ver = match(server_banner, "Microsoft%-IIS/([%d%.]+)")
-        if ver then
-          local parts = {}
-          for v in gmatch(ver, "%d+") do insert(parts, tonumber(v)) end
-          if #parts >= 2 then
-            if (parts[1] == 6 and parts[2] < 1) or (parts[1] == 7 and parts[2] < 5) or (parts[1] == 8) then
-              vuln_version = true
-            end
-          end
-        end
-      end
-
-      local result = output_table()
-      result.cve = "CVE-2009-1535, CVE-2017-7269"
-      result.severity = "HIGH"
-      result.vulnerable = true
-      result.server = server_banner
-      result.detail = "WebDAV enabled with potential write access"
-      result.findings = findings
-      for _, f in ipairs(findings) do
-        result[f.vector] = ("HTTP %d - %s"):format(f.status, f.detail)
-      end
-      if vuln_version then
-        result.version_note = ("IIS %s is known vulnerable to WebDAV-related RCE"):format(match(server_banner, "Microsoft%-IIS/([%d%.]+)") or "unknown")
-      end
-      return result
-    end
-
-    local result = output_table()
-    result.cve = "CVE-2009-1535, CVE-2017-7269"
-    result.severity = "LOW"
-    result.vulnerable = false
-    result.server = server_banner
-    result.detail = "No WebDAV misconfiguration detected"
-    return result
-  end)
-  if not ok then
-    local result = output_table()
-    result.cve = "CVE-2009-1535, CVE-2017-7269"
-    result.severity = "MEDIUM"
-    result.vulnerable = false
-    result.detail = "Error during scan: " .. tostring(result)
-    result.error = true
-    return result
+  -- Start by checking if '/' is protected -- if it is, we can't do the tests
+  local result = go_single(host, port, "/")
+  if(result == enum_results.NOT_VULNERABLE) then
+    stdnse.debug1("Root folder is password protected, aborting.")
+    return nmap.verbosity() > 0 and "Could not determine vulnerability, since root folder is password protected" or nil
   end
-  return result
+
+  stdnse.debug1("Root folder is not password protected, continuing...")
+
+  local response = get_response(host, port, "/")
+  if(response.status == 501) then
+    -- WebDAV is disabled
+    stdnse.debug1("WebDAV is DISABLED (PROPFIND failed).")
+    return nmap.verbosity() > 0 and "WebDAV is DISABLED. Server is not currently vulnerable." or nil
+  else
+    if(response.status == 207) then
+      -- PROPFIND works, WebDAV is enabled
+      stdnse.debug1("WebDAV is ENABLED (PROPFIND was successful).")
+    else
+      -- probably not running IIS 5.0/5.1/6.0
+      if(response['status-line'] ~= nil) then
+        stdnse.debug1("PROPFIND request failed with \"%s\".", response['status-line'])
+      elseif(response['status'] ~= nil) then
+        stdnse.debug1("PROPFIND request failed with \"%s\".", response['status'])
+      else
+        stdnse.debug1("PROPFIND request failed.")
+      end
+      return fail("This web server is not supported.")
+    end
+  end
+
+
+  if(nmap.registry.args.webdavfolder ~= nil) then
+    local folder = nmap.registry.args.webdavfolder
+    local result = go_single(host, port, "/" .. folder)
+
+    if(result == enum_results.VULNERABLE) then
+      return string.format("WebDAV is ENABLED. Folder is vulnerable: %s", folder)
+    elseif(result == enum_results.NOT_VULNERABLE) then
+      return nmap.verbosity() > 0 and string.format("WebDAV is ENABLED. Folder is NOT vulnerable: %s", folder) or nil
+    else
+      return nmap.verbosity() > 0 and string.format("WebDAV is ENABLED. Could not determine vulnerability of folder: %s", folder) or nil
+    end
+
+  else
+    local status, results, is_vulnerable = go(host, port)
+
+    if(status == false) then
+      return fail(results)
+    else
+      if(#results == 0) then
+        if(is_vulnerable == false) then
+          return nmap.verbosity() > 0 and "WebDAV is ENABLED. Protected folder found but could not be exploited. Server does not appear to be vulnerable." or nil
+        else
+          return nmap.verbosity() > 0 and "WebDAV is ENABLED. No protected folder found; check not run. If you know a protected folder, add --script-args=webdavfolder=<path>" or nil
+        end
+      else
+        return "WebDAV is ENABLED. Vulnerable folders discovered: " .. table.concat(results, ", ")
+      end
+    end
+  end
 end
+

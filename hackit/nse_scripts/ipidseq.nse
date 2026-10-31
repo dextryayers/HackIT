@@ -1,194 +1,238 @@
-local nmap = require "nmap"
-local shortport = require "shortport"
-local stdnse = require "stdnse"
-local string = require "string"
+local ipOps = require "ipOps"
 local math = require "math"
-
-
-
--- Fast-path bindings for the stdlib and nmap API used by this script.
--- Kept strict-mode safe: every name below is a declared local.
-local format = string.format
-local lower = string.lower
-local upper = string.upper
-local byte = string.byte
-local sub = string.sub
-local match = string.match
-local gmatch = string.gmatch
-local gsub = string.gsub
-local find = string.find
-local rep = string.rep
-local char = string.char
-local concat = table.concat
-local insert = table.insert
-local remove = table.remove
-local sort = table.sort
-local move = table.move
-local tostring = tostring
-local tonumber = tonumber
-local type = type
-local pcall = pcall
-local pairs = pairs
-local ipairs = ipairs
-local unpack = table.unpack
-local setmetatable = setmetatable
-local getmetatable = getmetatable
-local error = error
-local select = select
-
-local clock = nmap.clock
-local msleep = nmap.msleep
-
--- stdnse.sleep / stdnse.strsplit are not present in every NSE runtime.
-local sleep = function(seconds)
-    return nmap.msleep(math.max(0, math.floor(seconds * 1000)))
-end
-
-local strsplit = function(sep, str, max)
-    local out, pos, n = {}, 1, 0
-    if str == nil then return out end
-    while true do
-        if max and n >= max - 1 then
-            out[#out + 1] = sub(str, pos)
-            return out
-        end
-        local s, e = find(str, sep, pos)
-        if not s then
-            out[#out + 1] = sub(str, pos)
-            return out
-        end
-        if e < pos then e = pos end
-        out[#out + 1] = sub(str, pos, s - 1)
-        pos = e + 1
-        n = n + 1
-        if pos > #str then
-            out[#out + 1] = ""
-            return out
-        end
-    end
-end
-
-local format_output = stdnse.format_output
-local output_table = stdnse.output_table
+local nmap = require "nmap"
+local packet = require "packet"
+local stdnse = require "stdnse"
+local table = require "table"
 
 description = [[
-Analyzes the IP ID (Identification field) sequence generation of the target host by
-sending a series of TCP SYN probes and observing the IP identification values in
-responses. Classifies the sequence as incremental, random, constant, or time-based,
-and determines suitability for idle scanning (zombie host assessment). Performs
-statistical analysis including min/max/mean increment calculations. Uses multiple
-sample sets with varying probe spacing to distinguish between per-packet and
-per-connection counter behavior. Important for OS fingerprinting and idle scan
-feasibility assessment.
+Classifies a host's IP ID sequence (test for susceptibility to idle
+scan).
+
+Sends six probes to obtain IP IDs from the target and classifies them
+similarly to Nmap's method.  This is useful for finding suitable zombies
+for Nmap's idle scan (<code>-sI</code>) as Nmap itself doesn't provide a way to scan
+for these hosts.
 ]]
 
-author = "HackIT Framework"
-license = "HackIT Framework — Internal Use Only"
-categories = {"discovery", "safe"}
+---
+-- @usage
+-- nmap --script ipidseq [--script-args probeport=port] target
+-- @args probeport Set destination port to probe
+-- @output
+-- Host script results:
+-- |_ipidseq: Incremental! [used port 80]
 
-portrule = function(host, port)
-  return port.protocol == "tcp" and port.state == "open"
+-- I also implemented this in Metasploit as auxiliary/scanner/ip/ipidseq, but
+-- this NSE script was actually written first (unfortunately it only worked
+-- with vanilla Nmap using dnet ethernet sending.. ugh)
+--
+-- Originally written 05/24/2008; revived 01/24/2010
+
+author = "Kris Katterjohn"
+
+license = "Same as Nmap--See https://nmap.org/book/man-legal.html"
+
+categories = {"safe", "discovery"}
+
+
+local NUMPROBES = 6
+
+local ipidseqport
+
+--- Updates a TCP Packet object
+-- @param tcp The TCP object
+local updatepkt = function(tcp)
+  tcp:tcp_set_sport(math.random(0x401, 0xffff))
+  tcp:tcp_set_seq(math.random(1, 0x7fffffff))
+  tcp:tcp_count_checksum(tcp.ip_len)
+  tcp:ip_count_checksum()
 end
 
-action = function(host, port)
-  local result = output_table()
-  local probes = 8
-  local intervals = {}
-  local prev_id = nil
+--- Create a TCP Packet object
+-- @param host Host object
+-- @param port Port number
+-- @return TCP Packet object
+local genericpkt = function(host, port)
+  local pkt = stdnse.fromhex(
+  "4500 002c 55d1 0000 8006 0000 0000 0000" ..
+  "0000 0000 0000 0000 0000 0000 0000 0000" ..
+  "6002 0c00 0000 0000 0204 05b4"
+  )
 
-  for i = 1, probes do
-    local sock = new_socket("tcp")
-    sock:set_timeout(3000)
-    local ok, err = sock:connect(host.ip, port.number, "tcp")
-    if ok then
-      local info = sock:get_info()
-      sock:close()
-      if info and info.ip_id then
-        local current_id = tonumber(info.ip_id)
-        if current_id then
-          if prev_id then
-            local diff = current_id - prev_id
-            if diff < 0 then diff = diff + 65536 end
-            insert(intervals, diff)
-          end
-          prev_id = current_id
-        end
-      end
-    else
-      sock:close()
+  local tcp = packet.Packet:new(pkt, pkt:len())
+
+  tcp:ip_set_bin_src(host.bin_ip_src)
+  tcp:ip_set_bin_dst(host.bin_ip)
+  tcp:tcp_set_dport(port)
+  return tcp
+end
+
+--- Classifies a series of IP ID numbers like get_ipid_sequence() in osscan2.cc
+-- @param ipids Table of IP IDs
+local ipidseqclass = function(ipids)
+  local diffs = {}
+  local allzeros = true
+  local allsame = true
+  local mul256 = true
+  local inc = true
+
+  if #ipids < 2 then
+    return "Unknown"
+  end
+
+  local i = 2
+
+  while i <= #ipids do
+    if ipids[i-1] ~= 0 or ipids[i] ~= 0 then
+      allzeros = false
     end
-    msleep(100)
+
+    if ipids[i-1] <= ipids[i] then
+      diffs[i-1] = ipids[i] - ipids[i-1]
+    else
+      diffs[i-1] = ipids[i] - ipids[i-1] + 65536
+    end
+
+    if #ipids > 2 and diffs[i-1] > 20000 then
+      return "Randomized"
+    end
+
+    i = i + 1
   end
 
-  if #intervals < 2 then
-    result.status = "error"
-    result.target = host.ip .. ":" .. port.number
-    result.reason = "Insufficient IP ID samples collected"
-    return result
+  if allzeros then
+    return "All zeros"
   end
 
-  local min_diff = math.min(table.unpack(intervals))
-  local max_diff = math.max(table.unpack(intervals))
-  local sum = 0
-  for _, d in ipairs(intervals) do
-    sum = sum + d
-  end
-  local avg_diff = sum / #intervals
+  i = 1
 
-  local variance = 0
-  for _, d in ipairs(intervals) do
-    variance = variance + (d - avg_diff) * (d - avg_diff)
-  end
-  variance = variance / #intervals
-  local std_dev = math.sqrt(variance)
+  while i <= #diffs do
+    if diffs[i] ~= 0 then
+      allsame = false
+    end
 
-  local classification
-  local score -- 0=constant, 1=predictable, 2=time-based, 3=random
+    if (diffs[i] > 1000) and ((diffs[i] % 256) ~= 0 or
+      ((diffs[i] % 256) == 0 and diffs[i] > 25600)) then
+      return "Random Positive Increments"
+    end
 
-  if max_diff == 0 then
-    classification = "Constant"
-    score = 0
-  elseif max_diff <= 5 and avg_diff >= 0.5 then
-    classification = "Incremental (predictable)"
-    score = 1
-  elseif max_diff <= 10 and avg_diff >= 0.5 then
-    classification = "Mostly Incremental (some jitter)"
-    score = 1
-  elseif max_diff > 1000 and min_diff > 0 then
-    classification = "Time-based"
-    score = 2
-  elseif max_diff > 1000 then
-    classification = "Random"
-    score = 3
-  elseif std_dev > 1000 then
-    classification = "Random (high variance)"
-    score = 3
-  elseif max_diff > 100 and std_dev > 50 then
-    classification = "Broken Incremental (irregular)"
-    score = 2
-  else
-    classification = "Mixed/Unknown"
-    score = 2
+    if diffs[i] > 5120 or (diffs[i] % 256) ~= 0 then
+      mul256 = false
+    end
+
+    if diffs[i] >= 10 then
+      inc = false
+    end
+
+    i = i + 1
   end
 
-  result.status = "success"
-  result.target = host.ip .. ":" .. port.number
-  result.samples_collected = #intervals
-  result.min_increment = min_diff
-  result.max_increment = max_diff
-  result.avg_increment = format("%.2f", avg_diff)
-  result.standard_deviation = format("%.2f", std_dev)
-  result.classification = classification
-  result.idle_scan_usable = (score <= 1)
-  result.intervals = intervals
-
-  if score <= 1 then
-    result.idle_scan_note = "Host is suitable as zombie for idle scan"
-  elseif score == 2 then
-    result.idle_scan_note = "Host may be usable with some prediction uncertainty"
-  else
-    result.idle_scan_note = "Host is NOT suitable for idle scanning"
+  if allsame then
+    return "Constant"
   end
 
-  return result
+  if mul256 then
+    return "Broken incremental!"
+  end
+
+  if inc then
+    return "Incremental!"
+  end
+
+  return "Unknown"
 end
+
+--- Determines what port to probe
+-- @param host Host object
+local getport = function(host)
+  for _, k in ipairs({"ipidseq.probeport", "probeport"}) do
+    if nmap.registry.args[k] then
+      return tonumber(nmap.registry.args[k])
+    end
+  end
+
+  --local states = { "open", "closed", "unfiltered", "open|filtered", "closed|filtered" }
+  local states = { "open", "closed" }
+  local port = nil
+
+  for _, s in ipairs(states) do
+    port = nmap.get_ports(host, nil, "tcp", s)
+    if port then
+      break
+    end
+  end
+
+  if not port then
+    return nil
+  end
+
+  return port.number
+end
+
+hostrule = function(host)
+  if not nmap.is_privileged() then
+    nmap.registry[SCRIPT_NAME] = nmap.registry[SCRIPT_NAME] or {}
+    if not nmap.registry[SCRIPT_NAME].rootfail then
+      stdnse.verbose1("not running for lack of privileges.")
+    end
+    nmap.registry[SCRIPT_NAME].rootfail = true
+    return nil
+  end
+
+  if nmap.address_family() ~= 'inet' then
+    stdnse.debug1("is IPv4 compatible only.")
+    return false
+  end
+  if not host.interface then
+    return false
+  end
+  ipidseqport = getport(host)
+  return (ipidseqport ~= nil)
+end
+
+action = function(host)
+  local ipids = {}
+  local sock = nmap.new_dnet()
+  local pcap = nmap.new_socket()
+  local saddr = ipOps.str_to_ip(host.bin_ip_src)
+  local daddr = ipOps.str_to_ip(host.bin_ip)
+  local try = nmap.new_try()
+
+  try(sock:ip_open())
+
+  try = nmap.new_try(function() sock:ip_close() end)
+
+  pcap:pcap_open(host.interface, 104, false, "tcp and dst host " .. saddr .. " and src host " .. daddr .. " and src port " .. ipidseqport)
+
+  pcap:set_timeout(host.times.timeout * 1000)
+
+  local sndpkt = genericpkt(host, ipidseqport)
+
+  for _ = 1, NUMPROBES do
+    updatepkt(sndpkt)
+    try(sock:ip_send(sndpkt.buf, host))
+    local recvpkt
+    repeat
+      recvpkt = nil
+      local status, _, _, recvdata = pcap:pcap_receive()
+      if not status then break end
+      recvpkt = packet.Packet:new(recvdata, #recvdata)
+    until recvpkt and recvpkt.tcp_dport == sndpkt.tcp_sport
+    if not recvpkt then break end
+    stdnse.debug2("Received IP ID %d (0x%x)", recvpkt.ip_id, recvpkt.ip_id)
+    table.insert(ipids, recvpkt.ip_id)
+  end
+
+  pcap:close()
+  sock:ip_close()
+
+  local output = ipidseqclass(ipids)
+
+  if nmap.debugging() > 0 then
+    output = output .. " [used port " .. ipidseqport .. "]"
+  end
+
+  return output
+end
+

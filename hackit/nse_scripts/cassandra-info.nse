@@ -1,201 +1,94 @@
-local stdnse = require "stdnse"
+local creds = require "creds"
 local nmap = require "nmap"
-local string = require "string"
 local shortport = require "shortport"
+local stdnse = require "stdnse"
 
+local cassandra = stdnse.silent_require "cassandra"
 
+description = [[
+Attempts to get basic info and server status from a Cassandra database.
 
--- Fast-path bindings for the stdlib and nmap API used by this script.
--- Kept strict-mode safe: every name below is a declared local.
-local format = string.format
-local lower = string.lower
-local upper = string.upper
-local byte = string.byte
-local sub = string.sub
-local match = string.match
-local gmatch = string.gmatch
-local gsub = string.gsub
-local find = string.find
-local rep = string.rep
-local char = string.char
-local concat = table.concat
-local insert = table.insert
-local remove = table.remove
-local sort = table.sort
-local move = table.move
-local tostring = tostring
-local tonumber = tonumber
-local type = type
-local pcall = pcall
-local pairs = pairs
-local ipairs = ipairs
-local unpack = table.unpack
-local setmetatable = setmetatable
-local getmetatable = getmetatable
-local error = error
-local select = select
+For more information about Cassandra, see:
+http://cassandra.apache.org/
+]]
 
-local clock = nmap.clock
-local msleep = nmap.msleep
+---
+-- @usage
+-- nmap -p 9160 <ip> --script=cassandra-info
+--
+-- @output
+-- PORT     STATE SERVICE   REASON
+-- 9160/tcp open  cassandra syn-ack
+-- | cassandra-info:
+-- |   Cluster name: Test Cluster
+-- |_  Version: 19.10.0
+--
+-- @xmloutput
+-- <elem key="Cluster name">Test Cluster</elem>
+-- <elem key="Version">19.10.0</elem>
 
--- stdnse.sleep / stdnse.strsplit are not present in every NSE runtime.
-local sleep = function(seconds)
-    return nmap.msleep(math.max(0, math.floor(seconds * 1000)))
-end
+-- version 0.1
+-- Created 14/09/2012 - v0.1 - created by Vlatko Kosturjak <kost@linux.hr>
 
-local strsplit = function(sep, str, max)
-    local out, pos, n = {}, 1, 0
-    if str == nil then return out end
-    while true do
-        if max and n >= max - 1 then
-            out[#out + 1] = sub(str, pos)
-            return out
-        end
-        local s, e = find(str, sep, pos)
-        if not s then
-            out[#out + 1] = sub(str, pos)
-            return out
-        end
-        if e < pos then e = pos end
-        out[#out + 1] = sub(str, pos, s - 1)
-        pos = e + 1
-        n = n + 1
-        if pos > #str then
-            out[#out + 1] = ""
-            return out
-        end
-    end
-end
+author = "Vlatko Kosturjak"
+license = "Same as Nmap--See https://nmap.org/book/man-legal.html"
+categories = {"default", "discovery", "safe"}
 
-local format_output = stdnse.format_output
-local output_table = stdnse.output_table
+dependencies = {"cassandra-brute"}
 
-description = [[Retrieves information from Apache Cassandra databases via the native transport protocol (port 9042). Attempts to identify the Cassandra version, cluster name, partitioner, schema version, and available keyspaces.]]
-author = "HackIT Framework"
-license = "HackIT Framework — Internal Use Only"
-categories = {"safe", "discovery", "database"}
+portrule = shortport.port_or_service({9160}, {"cassandra"})
 
-portrule = function(host, port)
-  return port.protocol == "tcp" and port.state == "open" and port.number == 9042
-end
+function action(host,port)
 
-local function recv_bytes(socket, timeout)
-  socket:set_timeout(timeout)
-  local ok, data = pcall(socket.receive_bytes, socket, 1)
-  return ok, data
-end
+  local socket = nmap.new_socket()
+  local cassinc = 2 -- cmd/resp starts at 2
 
-local function send_data(socket, data)
-  local ok, err = pcall(socket.send, socket, data)
-  return ok, err
-end
-
-local function parse_string(body, offset)
-  if #body < offset + 1 then return nil, offset end
-  local len = byte(body, offset) * 256 + byte(body, offset + 1)
-  if #body < offset + 2 + len then return nil, offset end
-  return sub(body, offset + 2, offset + 1 + len), offset + 2 + len
-end
-
-local function parse_string_list(body, offset)
-  if #body < offset + 1 then return nil, offset end
-  local count = byte(body, offset) * 256 + byte(body, offset + 1)
-  offset = offset + 2
-  local list = {}
-  for _ = 1, count do
-    local s, new_off = parse_string(body, offset)
-    if not s then break end
-    insert(list, s)
-    offset = new_off
-  end
-  return list, offset
-end
-
-action = function(host, port)
-  local result = output_table()
-  local socket = new_socket()
-  socket:set_timeout(5000)
-
-  local ok, err = pcall(socket.connect, socket, host.ip, port.number)
-  if not ok then
-    return format_output(false, "Failed to connect: " .. tostring(err))
-  end
-
-  local startup = char(0x04, 0x00, 0x00, 0x00, 0x00)
-  local ok2, send_err = send_data(socket, startup)
-  if not ok2 then
+  -- set a reasonable timeout value
+  socket:set_timeout(10000)
+  -- do some exception  / cleanup
+  local catch = function()
     socket:close()
-    return format_output(false, "Failed to send startup frame: " .. tostring(send_err))
   end
 
-  local ok3, response = recv_bytes(socket, 5000)
-  socket:close()
+  local try = nmap.new_try(catch)
 
-  if not ok3 or not response or #response < 9 then
-    return format_output(false, "No valid Cassandra response received")
-  end
+  try( socket:connect(host, port) )
 
-  local frame_version = byte(response, 1)
-  local frame_flags = byte(response, 2)
-  local stream_id = byte(response, 3) + byte(response, 4)
-  local opcode = byte(response, 5)
-  local body_len = byte(response, 6) * 256 * 256 * 256 + byte(response, 7) * 256 * 256 +
-                   byte(response, 8) * 256 + byte(response, 9)
+  local results = stdnse.output_table()
 
-  local opcodes = {
-    [0x00] = "ERROR", [0x02] = "STARTUP", [0x04] = "READY",
-    [0x06] = "AUTHENTICATE", [0x08] = "OPTIONS", [0x0A] = "RESULT",
-  }
-  result.opcode = opcodes[opcode] or format("0x%02x", opcode)
-
-  result.protocol_version = frame_version & 0x7F
-  result.direction = frame_version & 0x80 == 0 and "request" or "response"
-
-  local body = sub(response, 10)
-  local offset = 1
-
-  if opcode == 0x02 then
-    local options, _ = parse_string_list(body, offset)
-    if options then
-      result.server_options = options
-    end
-  elseif opcode == 0x06 then
-    local authenticator, _ = parse_string(body, offset)
-    if authenticator then
-      result.authenticator = authenticator
-    end
-  elseif opcode == 0x0A and #body >= 4 then
-    local kind = byte(body, 1) * 256 * 256 * 256 + byte(body, 2) * 256 * 256 +
-                 byte(body, 3) * 256 + byte(body, 4)
-    local kinds = { [2] = "void", [3] = "rows" }
-    result.result_kind = kinds[kind] or format("kind_%d", kind)
-    offset = 5
-
-    if kind == 3 and #body >= offset + 4 then
-      local col_count = byte(body, offset) * 256 * 256 * 256 + byte(body, offset + 1) * 256 * 256 +
-                        byte(body, offset + 2) * 256 + byte(body, offset + 3)
-      result.column_count = col_count
-      offset = offset + 4
-
-      local pkey = byte(body, offset) * 256 + byte(body, offset + 1)
-      offset = offset + 2
-      local cluster_name, new_off = parse_string(body, offset + 2)
-      if cluster_name then
-        result.cluster_name = cluster_name
-        offset = new_off
-        local schema_version
-        schema_version, offset = parse_string(body, offset)
-        if schema_version then
-          result.schema_version = schema_version
-        end
-        local partitioner
-        partitioner, offset = parse_string(body, offset)
-        if partitioner then
-          result.partitioner = partitioner
-        end
-      end
+  -- ugliness to allow creds.cassandra to work, as the port is not recognized
+  -- as cassandra even when service scan was run, taken from mongodb
+  local ps = port.service
+  port.service = 'cassandra'
+  local c = creds.Credentials:new(creds.ALL_DATA, host, port)
+  for cred in c:getCredentials(creds.State.VALID + creds.State.PARAM) do
+    local status, err = cassandra.login(socket, cred.user, cred.pass)
+    results["Using credentials"] = cred.user.."/"..cred.pass
+    if ( not(status) ) then
+      return err
     end
   end
+  port.service = ps
 
-  return format_output(true, result)
+  local status, val = cassandra.describe_cluster_name(socket,cassinc)
+  if (not(status)) then
+    return "Error getting cluster name: " .. val
+  end
+  cassinc = cassinc + 1
+  port.version.name ='cassandra'
+  port.version.product='Cassandra'
+  port.version.name_confidence = 10
+  nmap.set_port_version(host,port)
+  results["Cluster name"] = val
+
+  local status, val = cassandra.describe_version(socket,cassinc)
+  if (not(status)) then
+    return "Error getting version: " .. val
+  end
+  cassinc = cassinc + 1
+  port.version.product='Cassandra ('..val..')'
+  nmap.set_port_version(host,port)
+  results["Version"] = val
+
+  return results
 end

@@ -1,107 +1,100 @@
 local http = require "http"
-local stdnse = require "stdnse"
 local nmap = require "nmap"
 local shortport = require "shortport"
+local stringaux = require "stringaux"
+local table = require "table"
+
+description = [[
+Tests an http server for Cross-Origin Resource Sharing (CORS), a way
+for domains to explicitly opt in to having certain methods invoked by
+another domain.
+
+The script works by setting the Access-Control-Request-Method header
+field for certain enumerated methods in OPTIONS requests, and checking
+the responses.
+]]
+
+---
+-- @args http-cors.path The path to request. Defaults to
+-- <code>/</code>.
+--
+-- @args http-cors.origin The origin used with requests. Defaults to
+-- <code>example.com</code>.
+--
+-- @usage
+-- nmap -p 80 --script http-cors <target>
+--
+-- @output
+-- 80/tcp open
+-- |_cors.nse: GET POST OPTIONS
 
 
+author = "Toni Ruottu"
+license = "Same as Nmap--See https://nmap.org/book/man-legal.html"
+categories = {"default", "discovery", "safe"}
 
--- Fast-path bindings for the stdlib and nmap API used by this script.
--- Kept strict-mode safe: every name below is a declared local.
-local format = string.format
-local lower = string.lower
-local upper = string.upper
-local byte = string.byte
-local sub = string.sub
-local match = string.match
-local gmatch = string.gmatch
-local gsub = string.gsub
-local find = string.find
-local rep = string.rep
-local char = string.char
-local concat = table.concat
-local insert = table.insert
-local remove = table.remove
-local sort = table.sort
-local move = table.move
-local tostring = tostring
-local tonumber = tonumber
-local type = type
-local pcall = pcall
-local pairs = pairs
-local ipairs = ipairs
-local unpack = table.unpack
-local setmetatable = setmetatable
-local getmetatable = getmetatable
-local error = error
-local select = select
 
-local clock = nmap.clock
-local msleep = nmap.msleep
+portrule =  shortport.http
 
--- stdnse.sleep / stdnse.strsplit are not present in every NSE runtime.
-local sleep = function(seconds)
-    return nmap.msleep(math.max(0, math.floor(seconds * 1000)))
-end
+local methods = {"HEAD", "GET", "POST", "PUT", "DELETE", "TRACE", "OPTIONS", "CONNECT", "PATCH"}
 
-local strsplit = function(sep, str, max)
-    local out, pos, n = {}, 1, 0
-    if str == nil then return out end
-    while true do
-        if max and n >= max - 1 then
-            out[#out + 1] = sub(str, pos)
-            return out
-        end
-        local s, e = find(str, sep, pos)
-        if not s then
-            out[#out + 1] = sub(str, pos)
-            return out
-        end
-        if e < pos then e = pos end
-        out[#out + 1] = sub(str, pos, s - 1)
-        pos = e + 1
-        n = n + 1
-        if pos > #str then
-            out[#out + 1] = ""
-            return out
-        end
+local function origin_ok(raw, origin)
+  if not raw then
+    return false
+  end
+  if raw == "*" then
+    return true
+  end
+  if raw == "null" then
+    return false
+  end
+  local allowed = stringaux.strsplit(" ", raw)
+  for _, ao in ipairs(allowed) do
+    if origin == ao then
+      return true
     end
+  end
+  return false
 end
 
-local format_output = stdnse.format_output
-local output_table = stdnse.output_table
+local function method_ok(raw, method)
+  if not raw then
+    return false
+  end
+  local stuff = stringaux.strsplit(" ", raw)
+  local nospace = table.concat(stuff, "")
+  local allowed = stringaux.strsplit(",", nospace)
+  for _, am in ipairs(allowed) do
+    if method == am then
+      return true
+    end
+  end
+  return false
+end
 
-description = [[Tests the CORS (Cross-Origin Resource Sharing) policy by sending an Origin header and inspecting the response.]]
-author = "HackIT Framework"
-license = "HackIT Framework — Internal Use Only"
-categories = {"web", "safe"}
-
-portrule = function(host, port) return port.protocol == "tcp" and port.state == "open" end
+local function test(host, port, method, origin)
+  local header = {
+    ["Origin"] = origin,
+    ["Access-Control-Request-Method"] = method,
+  }
+  local response = http.generic_request(host, port, "OPTIONS", "/", {header = header})
+  local aorigins = response.header["access-control-allow-origin"]
+  local amethods = response.header["access-control-allow-methods"]
+  local ook = origin_ok(aorigins, response)
+  local mok = method_ok(amethods, method)
+  return ook and mok
+end
 
 action = function(host, port)
-    local options = {header = {Origin = "http://evil.com"}}
-    local response = http.get(host, port, "/", options)
-    if not response or not response.header then
-        return format_output(false, "No response from server")
+  local path = nmap.registry.args["http-cors.path"] or "/"
+  local origin =  nmap.registry.args["http-cors.origin"] or "example.com"
+  local allowed = {}
+  for _, method in ipairs(methods) do
+    if test(host, port, method, origin) then
+      table.insert(allowed, method)
     end
-    local results = {}
-    local acao = response.header["access-control-allow-origin"]
-    local acac = response.header["access-control-allow-credentials"]
-    if acao then
-        insert(results, "Access-Control-Allow-Origin: " .. acao)
-        if acao == "*" then
-            insert(results, "WARNING: Wildcard origin detected")
-        elseif find(acao, "evil%.com") then
-            insert(results, "WARNING: Origin reflection detected (misconfiguration)")
-        end
-    end
-    if acac then
-        insert(results, "Access-Control-Allow-Credentials: " .. acac)
-        if acao == "*" and acac == "true" then
-            insert(results, "WARNING: Wildcard + credentials is insecure")
-        end
-    end
-    if #results == 0 then
-        return format_output(false, "No CORS headers found")
-    end
-    return format_output(true, concat(results, "\n"))
+  end
+  if #allowed > 0 then
+    return table.concat(allowed, " ")
+  end
 end

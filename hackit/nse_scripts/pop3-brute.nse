@@ -1,128 +1,136 @@
+local brute = require "brute"
+local comm = require "comm"
+local creds = require "creds"
 local nmap = require "nmap"
-local stdnse = require "stdnse"
+local pop3 = require "pop3"
 local shortport = require "shortport"
-
-
-
--- Fast-path bindings for the stdlib and nmap API used by this script.
--- Kept strict-mode safe: every name below is a declared local.
-local format = string.format
-local lower = string.lower
-local upper = string.upper
-local byte = string.byte
-local sub = string.sub
-local match = string.match
-local gmatch = string.gmatch
-local gsub = string.gsub
-local find = string.find
-local rep = string.rep
-local char = string.char
-local concat = table.concat
-local insert = table.insert
-local remove = table.remove
-local sort = table.sort
-local move = table.move
-local tostring = tostring
-local tonumber = tonumber
-local type = type
-local pcall = pcall
-local pairs = pairs
-local ipairs = ipairs
-local unpack = table.unpack
-local setmetatable = setmetatable
-local getmetatable = getmetatable
-local error = error
-local select = select
-
-local clock = nmap.clock
-local msleep = nmap.msleep
-
--- stdnse.sleep / stdnse.strsplit are not present in every NSE runtime.
-local sleep = function(seconds)
-    return nmap.msleep(math.max(0, math.floor(seconds * 1000)))
-end
-
-local strsplit = function(sep, str, max)
-    local out, pos, n = {}, 1, 0
-    if str == nil then return out end
-    while true do
-        if max and n >= max - 1 then
-            out[#out + 1] = sub(str, pos)
-            return out
-        end
-        local s, e = find(str, sep, pos)
-        if not s then
-            out[#out + 1] = sub(str, pos)
-            return out
-        end
-        if e < pos then e = pos end
-        out[#out + 1] = sub(str, pos, s - 1)
-        pos = e + 1
-        n = n + 1
-        if pos > #str then
-            out[#out + 1] = ""
-            return out
-        end
-    end
-end
-
-local format_output = stdnse.format_output
-local output_table = stdnse.output_table
+local string = require "string"
 
 description = [[
-Performs credential brute forcing against POP3 mail servers. Attempts to
-authenticate using common username and password combinations via the POP3
-USER/PASS commands and reports successfully authenticated credentials.
+Tries to log into a POP3 account by guessing usernames and passwords.
 ]]
 
-author = "HackIT"
-license = "Same as Nmap--See https://nmap.org/book/man-legal.html"
-categories = {"auth", "intrusive"}
+---
+-- @args pop3loginmethod The login method to use: <code>"USER"</code>
+-- (default), <code>"SASL-PLAIN"</code>, <code>"SASL-LOGIN"</code>,
+-- <code>"SASL-CRAM-MD5"</code>, or <code>"APOP"</code>. Defaults to <code>"USER"</code>,
+--
+-- @output
+-- PORT    STATE SERVICE
+-- 110/tcp open  pop3
+-- | pop3-brute-ported:
+-- | Accounts:
+-- |  user:pass => Login correct
+-- | Statistics:
+-- |_ Performed 8 scans in 1 seconds, average tps: 8
 
-portrule = shortport.port_or_service(110, "pop3")
+author = {"Philip Pickering", "Piotr Olma"}
+license = "Same as Nmap--See https://nmap.org/book/man-legal.html"
+
+categories = {"intrusive", "brute"}
+
+Driver = {
+  new = function(self, host, port, login_function, is_apop)
+    local o = {}
+    setmetatable(o, self)
+    self.__index = self
+    o.port = port
+    o.host = host
+    o.login_function = login_function
+    o.is_apop = is_apop
+    return o
+  end,
+
+  -- Attempts to connect to the POP server
+  -- @return true on success
+  -- @return false, brute.Error object on failure
+  connect = function(self)
+
+    self.socket = brute.new_socket()
+    local opts = {timeout=10000, recv_before=true}
+    local best_opt, line, _
+    self.socket, _, best_opt, line = comm.tryssl(self.host, self.port, "" , opts)
+
+    if not self.socket then
+      local err = brute.Error:new("Failed to connect.")
+      err:setAbort(true)
+      return false, err
+    end --no connection
+    if not pop3.stat(line) then
+      local err = brute.Error:new("Failed to make a pop-connection.")
+      err:setAbort(true)
+      return false, err
+    end -- no pop-connection
+
+    if self.is_apop then
+      self.additional = string.match(line, "<[%p%w]+>") --apop challenge
+    end
+    return true
+  end, --connect
+
+  -- Attempts to login to the POP server
+  --
+  -- @param username string containing the login username
+  -- @param password string containing the login password
+  -- @return status, true on success, false on failure
+  -- @return brute.Error object on failure
+  --         creds.Account object on success
+  login = function(self, username, password)
+    local pstatus
+    local perror
+    pstatus, perror = self.login_function(self.socket, username, password, self.additional)
+    if pstatus then
+      return true, creds.Account:new(username, password, creds.State.VALID)
+    else
+      local err
+      if (perror == pop3.err.pwError) then
+        err = brute.Error:new("Wrong password.")
+      elseif (perror == pop3.err.userError) then
+        err = brute.Error:new("Wrong username.")
+        err:setInvalidAccount(username)
+      else
+        err = brute.Error:new("Login failed.")
+      end
+      return false, err
+    end
+  end, --login
+
+  disconnect = function(self)
+    self.socket:close()
+  end, --disconnect
+
+  check = function(self)
+    return true
+  end, --check
+}
+
+portrule = shortport.port_or_service({110, 995}, {"pop3","pop3s"})
 
 action = function(host, port)
-    local result = {}
-    local users = {"admin", "root", "user", "test", "postmaster", "info", "support"}
-    local passwords = {"admin", "password", "123456", "root", "test", "user", "pass", "mail", "welcome", "qwerty"}
-    local socket = new_socket()
-    socket:set_timeout(5000)
-    local status, err = socket:connect(host, port)
-    if not status then
-        return format_output(false, "Could not connect: " .. tostring(err))
-    end
-    local status, banner = socket:receive_lines(1)
-    if not status then
-        socket:close()
-        return format_output(false, "No banner received")
-    end
-    if match(banner, "POP") then
-        insert(result, "POP3 server: " .. (match(banner, "[^\r\n]+") or ""))
-    end
-    socket:close()
-    for _, user in ipairs(users) do
-        for _, pass in ipairs(passwords) do
-            local s = new_socket()
-            s:set_timeout(5000)
-            local ok, _ = s:connect(host, port)
-            if ok then
-                s:receive_lines(1)
-                s:send("USER " .. user .. "\r\n")
-                local status, resp = s:receive_lines(1)
-                if status and match(resp, "+OK") then
-                    s:send("PASS " .. pass .. "\r\n")
-                    status, resp = s:receive_lines(1)
-                    if status and match(resp, "+OK") then
-                        insert(result, ("Valid POP3 credentials: %s / %s"):format(user, pass))
-                    end
-                end
-                s:send("QUIT\r\n")
-                s:close()
-            end
-        end
-    end
-    if #result == 1 then
-        insert(result, "No valid credentials found")
-    end
-    return format_output(true, result)
+  local pMeth = nmap.registry.args.pop3loginmethod
+  if (not pMeth) then pMeth = nmap.registry.pop3loginmethod end
+  if (not pMeth) then pMeth = "USER" end
+
+  --determine function we will use to login to server
+  local is_apop = false
+  local login_function
+  if (pMeth == "USER") then
+    login_function = pop3.login_user
+  elseif (pMeth == "SASL-PLAIN") then
+    login_function = pop3.login_sasl_plain
+  elseif (pMeth == "SASL-LOGIN") then
+    login_function = pop3.login_sasl_login
+  elseif (pMeth == "SASL-CRAM-MD5") then
+    login_function = pop3.login_sasl_crammd5
+  elseif (pMeth == "APOP") then
+    login_function = pop3.login_apop
+    is_apop = true
+  else
+    login_function = pop3.login_user
+  end
+
+  local engine = brute.Engine:new(Driver, host, port, login_function, is_apop)
+  engine.options.script_name = SCRIPT_NAME
+  local status, accounts = engine:start()
+  return accounts
 end

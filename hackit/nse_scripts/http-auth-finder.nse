@@ -1,105 +1,119 @@
 local http = require "http"
-local stdnse = require "stdnse"
+local httpspider = require "httpspider"
 local nmap = require "nmap"
 local shortport = require "shortport"
+local stdnse = require "stdnse"
+local tab = require "tab"
+local table = require "table"
+
+description = [[
+Spiders a web site to find web pages requiring form-based or HTTP-based authentication. The results are returned in a table with each url and the
+detected method.
+]]
+
+---
+-- @usage
+-- nmap -p 80 --script http-auth-finder <ip>
+--
+-- @output
+-- PORT   STATE SERVICE
+-- 80/tcp open  http
+-- | http-auth-finder:
+-- |   url                                   method
+-- |   http://192.168.1.162/auth1/index.html  HTTP: Basic, Digest, Negotiate
+-- |_  http://192.168.1.162/auth2/index.html  FORM
+--
+-- @args http-auth-finder.maxdepth the maximum amount of directories beneath
+--       the initial url to spider. A negative value disables the limit.
+--       (default: 3)
+-- @args http-auth-finder.maxpagecount the maximum amount of pages to visit.
+--       A negative value disables the limit (default: 20)
+-- @args http-auth-finder.url the url to start spidering. This is a URL
+--       relative to the scanned host eg. /default.html (default: /)
+-- @args http-auth-finder.withinhost only spider URLs within the same host.
+--       (default: true)
+-- @args http-auth-finder.withindomain only spider URLs within the same
+--       domain. This widens the scope from <code>withinhost</code> and can
+--       not be used in combination. (default: false)
+--
+-- @see http-auth.nse
+-- @see http-brute.nse
+
+author = "Patrik Karlsson"
+license = "Same as Nmap--See https://nmap.org/book/man-legal.html"
+categories = {"discovery", "safe"}
 
 
+portrule = shortport.http
 
--- Fast-path bindings for the stdlib and nmap API used by this script.
--- Kept strict-mode safe: every name below is a declared local.
-local format = string.format
-local lower = string.lower
-local upper = string.upper
-local byte = string.byte
-local sub = string.sub
-local match = string.match
-local gmatch = string.gmatch
-local gsub = string.gsub
-local find = string.find
-local rep = string.rep
-local char = string.char
-local concat = table.concat
-local insert = table.insert
-local remove = table.remove
-local sort = table.sort
-local move = table.move
-local tostring = tostring
-local tonumber = tonumber
-local type = type
-local pcall = pcall
-local pairs = pairs
-local ipairs = ipairs
-local unpack = table.unpack
-local setmetatable = setmetatable
-local getmetatable = getmetatable
-local error = error
-local select = select
+local function parseAuthentication(resp)
+  local www_authenticate = resp.header["www-authenticate"]
+  if ( not(www_authenticate) ) then
+    return false, "Server returned no authentication headers."
+  end
 
-local clock = nmap.clock
-local msleep = nmap.msleep
-
--- stdnse.sleep / stdnse.strsplit are not present in every NSE runtime.
-local sleep = function(seconds)
-    return nmap.msleep(math.max(0, math.floor(seconds * 1000)))
+  local challenges = http.parse_www_authenticate(www_authenticate)
+  if ( not(challenges) ) then
+    return false, ("Authentication header (%s) could not be parsed."):format(www_authenticate)
+  end
+  return true, challenges
 end
 
-local strsplit = function(sep, str, max)
-    local out, pos, n = {}, 1, 0
-    if str == nil then return out end
-    while true do
-        if max and n >= max - 1 then
-            out[#out + 1] = sub(str, pos)
-            return out
-        end
-        local s, e = find(str, sep, pos)
-        if not s then
-            out[#out + 1] = sub(str, pos)
-            return out
-        end
-        if e < pos then e = pos end
-        out[#out + 1] = sub(str, pos, s - 1)
-        pos = e + 1
-        n = n + 1
-        if pos > #str then
-            out[#out + 1] = ""
-            return out
-        end
-    end
-end
-
-local format_output = stdnse.format_output
-local output_table = stdnse.output_table
-
-description = [[Scans the target for authentication forms, login endpoints, and HTTP authentication prompts.]]
-author = "HackIT Framework"
-license = "HackIT Framework — Internal Use Only"
-categories = {"web", "safe"}
-
-portrule = function(host, port) return port.protocol == "tcp" and port.state == "open" end
 
 action = function(host, port)
-    local response = http.get(host, port, "/")
-    if not response or not response.body then
-        return format_output(false, "No response body")
+
+  -- create a new crawler instance
+  local crawler = httpspider.Crawler:new( host, port, nil, { scriptname = SCRIPT_NAME } )
+
+  if ( not(crawler) ) then
+    return
+  end
+
+  -- create a table entry in the registry
+  nmap.registry.auth_urls = nmap.registry.auth_urls or {}
+  crawler:set_timeout(10000)
+
+  local auth_urls = tab.new(2)
+  tab.addrow(auth_urls, "url", "method")
+  while(true) do
+    local status, r = crawler:crawl()
+    -- if the crawler fails it can be due to a number of different reasons
+    -- most of them are "legitimate" and should not be reason to abort
+    if ( not(status) ) then
+      if ( r.err ) then
+        return stdnse.format_output(false, r.reason)
+      else
+        break
+      end
     end
-    local findings = {}
-    if response.header and response.header["www-authenticate"] then
-        insert(findings, "HTTP Basic/Digest auth: " .. response.header["www-authenticate"])
-    end
-    local login_paths = {"/login", "/admin", "/wp-admin", "/administrator", "/auth", "/user/login", "/signin", "/account/login"}
-    for _, path in ipairs(login_paths) do
-        local resp = http.get(host, port, path)
-        if resp and resp.status and resp.status < 400 then
-            if resp.match(body, "<input.-[Tt]ype=[\"']password[\"']") or resp.match(body, "<form.-[Pp]assword") then
-                insert(findings, "Login form at " .. path)
-            end
+
+    -- HTTP-based authentication
+    if ( r.response.status == 401 ) then
+      local status, auth = parseAuthentication(r.response)
+      if ( status ) then
+        local schemes = {}
+        for _, item in ipairs(auth) do
+          if ( item.scheme ) then
+            table.insert(schemes, item.scheme)
+          end
         end
+        tab.addrow(auth_urls, r.url, ("HTTP: %s"):format(table.concat(schemes, ", ")))
+      else
+        tab.addrow(auth_urls, r.url, ("HTTP: %s"):format(auth))
+      end
+      nmap.registry.auth_urls[r.url] = "HTTP"
+    -- FORM-based authentication
+    elseif r.response.body then
+      -- attempt to detect a password input form field
+      if ( r.response.body:match("<[Ii][Nn][Pp][Uu][Tt].-[Tt][Yy][Pp][Ee]%s*=\"*[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]") ) then
+        tab.addrow(auth_urls, r.url, "FORM")
+        nmap.registry.auth_urls[r.url] = "FORM"
+      end
     end
-    if response.match(body, "<input.-[Tt]ype=[\"']password[\"']") then
-        insert(findings, "Password field found on /")
-    end
-    if #findings == 0 then
-        return format_output(false, "No authentication endpoints detected")
-    end
-    return format_output(true, concat(findings, "\n"))
+  end
+  if ( #auth_urls > 1 ) then
+    local result = { tab.dump(auth_urls) }
+    result.name = crawler:getLimitations()
+    return stdnse.format_output(true, result)
+  end
 end

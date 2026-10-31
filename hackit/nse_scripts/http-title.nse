@@ -1,90 +1,82 @@
 local http = require "http"
-local stdnse = require "stdnse"
-local nmap = require "nmap"
 local shortport = require "shortport"
+local stdnse = require "stdnse"
+local string = require "string"
+
+description = [[
+Shows the title of the default page of a web server.
+
+The script will follow up to 5 HTTP redirects, using the default rules in the
+http library.
+]]
+
+---
+--@args http-title.url The url to fetch. Default: /
+--@output
+-- Nmap scan report for scanme.nmap.org (74.207.244.221)
+-- PORT   STATE SERVICE
+-- 80/tcp open  http
+-- |_http-title: Go ahead and ScanMe!
+--
+-- @xmloutput
+-- <elem key="title">Go ahead and ScanMe!</elem>
+-- @xmloutput
+-- <elem key="title">Wikipedia, the free encyclopedia</elem>
+-- <elem key="redirect_url">http://en.wikipedia.org/wiki/Main_Page</elem>
+
+author = "Diman Todorov"
+
+license = "Same as Nmap--See https://nmap.org/book/man-legal.html"
+
+categories = {"default", "discovery", "safe"}
 
 
-
--- Fast-path bindings for the stdlib and nmap API used by this script.
--- Kept strict-mode safe: every name below is a declared local.
-local format = string.format
-local lower = string.lower
-local upper = string.upper
-local byte = string.byte
-local sub = string.sub
-local match = string.match
-local gmatch = string.gmatch
-local gsub = string.gsub
-local find = string.find
-local rep = string.rep
-local char = string.char
-local concat = table.concat
-local insert = table.insert
-local remove = table.remove
-local sort = table.sort
-local move = table.move
-local tostring = tostring
-local tonumber = tonumber
-local type = type
-local pcall = pcall
-local pairs = pairs
-local ipairs = ipairs
-local unpack = table.unpack
-local setmetatable = setmetatable
-local getmetatable = getmetatable
-local error = error
-local select = select
-
-local clock = nmap.clock
-local msleep = nmap.msleep
-
--- stdnse.sleep / stdnse.strsplit are not present in every NSE runtime.
-local sleep = function(seconds)
-    return nmap.msleep(math.max(0, math.floor(seconds * 1000)))
-end
-
-local strsplit = function(sep, str, max)
-    local out, pos, n = {}, 1, 0
-    if str == nil then return out end
-    while true do
-        if max and n >= max - 1 then
-            out[#out + 1] = sub(str, pos)
-            return out
-        end
-        local s, e = find(str, sep, pos)
-        if not s then
-            out[#out + 1] = sub(str, pos)
-            return out
-        end
-        if e < pos then e = pos end
-        out[#out + 1] = sub(str, pos, s - 1)
-        pos = e + 1
-        n = n + 1
-        if pos > #str then
-            out[#out + 1] = ""
-            return out
-        end
-    end
-end
-
-local format_output = stdnse.format_output
-local output_table = stdnse.output_table
-
-description = [[Fetches the HTML <title> tag from the target web page and returns its content.]]
-author = "HackIT Framework"
-license = "HackIT Framework — Internal Use Only"
-categories = {"web", "safe"}
-
-portrule = function(host, port) return port.protocol == "tcp" and port.state == "open" end
+portrule = shortport.http
 
 action = function(host, port)
-    local response = http.get(host, port, "/")
-    if not response or not response.body then
-        return format_output(false, "No response from server")
+  local resp, redirect_url, title
+
+  resp = http.get( host, port, stdnse.get_script_args(SCRIPT_NAME..".url") or "/" )
+
+  -- check for a redirect
+  if resp.location then
+    redirect_url = resp.location[#resp.location]
+    if resp.status and tostring( resp.status ):match( "30%d" ) then
+      return {redirect_url = redirect_url}, ("Did not follow redirect to %s"):format( redirect_url )
     end
-    local title = response.match(body, "<title>(.-)</title>")
-    if title then
-        return format_output(true, "Page title: " .. gsub(title, "%s+", " "):sub(1, 200))
+  end
+
+  if ( not(resp.body) ) then
+    return
+  end
+
+  -- try and match title tags
+  title = string.match(resp.body, "<[Tt][Ii][Tt][Ll][Ee][^>]*>([^<]*)</[Tt][Ii][Tt][Ll][Ee]>")
+
+  local display_title = title
+
+  if display_title and display_title ~= "" then
+    display_title = string.gsub(display_title , "[\n\r\t]", "")
+    if #display_title > 65 then
+      display_title = string.sub(display_title, 1, 62) .. "..."
     end
-    return format_output(false, "No <title> tag found")
+  else
+    display_title = "Site doesn't have a title"
+    if ( resp.header and resp.header["content-type"] ) then
+      display_title = display_title .. (" (%s)."):format( resp.header["content-type"] )
+    else
+      display_title = display_title .. "."
+    end
+  end
+
+  local output_tab = stdnse.output_table()
+  output_tab.title = title
+  output_tab.redirect_url = redirect_url
+
+  local output_str = display_title
+  if redirect_url then
+    output_str = output_str .. "\n" .. ("Requested resource was %s"):format( redirect_url )
+  end
+
+  return output_tab, output_str
 end

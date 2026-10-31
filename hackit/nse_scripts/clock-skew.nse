@@ -1,179 +1,179 @@
-local nmap = require "nmap"
-local shortport = require "shortport"
-local stdnse = require "stdnse"
+local datetime = require "datetime"
+local formulas = require "formulas"
 local math = require "math"
+local nmap = require "nmap"
+local outlib = require "outlib"
+local stdnse = require "stdnse"
+local table = require "table"
 
-
-
--- Fast-path bindings for the stdlib and nmap API used by this script.
--- Kept strict-mode safe: every name below is a declared local.
-local format = string.format
-local lower = string.lower
-local upper = string.upper
-local byte = string.byte
-local sub = string.sub
-local match = string.match
-local gmatch = string.gmatch
-local gsub = string.gsub
-local find = string.find
-local rep = string.rep
-local char = string.char
-local concat = table.concat
-local insert = table.insert
-local remove = table.remove
-local sort = table.sort
-local move = table.move
-local tostring = tostring
-local tonumber = tonumber
-local type = type
-local pcall = pcall
-local pairs = pairs
-local ipairs = ipairs
-local unpack = table.unpack
-local setmetatable = setmetatable
-local getmetatable = getmetatable
-local error = error
-local select = select
-
-local clock = nmap.clock
-local msleep = nmap.msleep
-
--- stdnse.sleep / stdnse.strsplit are not present in every NSE runtime.
-local sleep = function(seconds)
-    return nmap.msleep(math.max(0, math.floor(seconds * 1000)))
-end
-
-local strsplit = function(sep, str, max)
-    local out, pos, n = {}, 1, 0
-    if str == nil then return out end
-    while true do
-        if max and n >= max - 1 then
-            out[#out + 1] = sub(str, pos)
-            return out
-        end
-        local s, e = find(str, sep, pos)
-        if not s then
-            out[#out + 1] = sub(str, pos)
-            return out
-        end
-        if e < pos then e = pos end
-        out[#out + 1] = sub(str, pos, s - 1)
-        pos = e + 1
-        n = n + 1
-        if pos > #str then
-            out[#out + 1] = ""
-            return out
-        end
-    end
-end
-
-local format_output = stdnse.format_output
-local output_table = stdnse.output_table
+-- These scripts contribute clock skews, so we need them to run first.
+-- portrule scripts do not always run before hostrule scripts, and certainly
+-- not before the hostrule is evaluated.
+dependencies = {
+  "bitcoin-info",
+  "http-date",
+  "http-ntlm-info",
+  "imap-ntlm-info",
+  "memcached-info",
+  "ms-sql-ntlm-info",
+  "nntp-ntlm-info",
+  "ntp-info",
+  "openwebnet-discovery",
+  "pop3-ntlm-info",
+  "rfc868-time",
+  "smb-os-discovery",
+  "smb-security-mode",
+  "smb2-time",
+  "smb2-vuln-uptime",
+  "smtp-ntlm-info",
+  "ssl-date",
+  "telnet-ntlm-info",
+}
 
 description = [[
-Detects clock skew between the scanning host and the target system by comparing TCP
-timestamp options (RFC 1323) in SYN/ACK responses over time. Multiple samples are
-collected across a time window to establish a baseline and compute the average skew
-rate. Clock skew detection can be useful for identifying virtual machines (VMs often
-have different skew patterns), determining host relationships (same OS/uptime group),
-detecting honeypots (simulated clocks), and OS fingerprinting. Reports skew in both
-absolute ms and rate (s/s), with direction indication.
-]]
+Analyzes the clock skew between the scanner and various services that report timestamps.
 
-author = "HackIT Framework"
-license = "HackIT Framework — Internal Use Only"
-categories = {"discovery", "safe"}
+At the end of the scan, it will show groups of systems that have similar median
+clock skew among their services. This can be used to identify targets with
+similar configurations, such as those that share a common time server.
 
-portrule = function(host, port)
-  return port.protocol == "tcp" and port.state == "open"
+You must run at least 1 of the following scripts to collect clock data:
+* ]] .. table.concat(dependencies, "\n* ") .. "\n"
+
+---
+-- @output
+-- Host script results:
+-- |_clock-skew: mean: -13s, deviation: 12s, median: -6s
+--
+-- Post-scan script results:
+-- | clock-skew:
+-- |  -6s: Majority of systems scanned
+-- |  3s:
+-- |    192.0.2.5
+-- |_   192.0.2.7 (example.com)
+--
+-- @xmloutput
+-- <elem key="stddev">12.124355652982</elem>
+-- <elem key="mean">-13.0204495</elem>
+-- <elem key="median">-6.0204495</elem>
+
+author = "Daniel Miller"
+
+license = "Same as Nmap--See https://nmap.org/book/man-legal.html"
+
+categories = {"default", "safe"}
+
+hostrule = function(host)
+  return host.registry.datetime_skew and #host.registry.datetime_skew > 0
 end
 
-action = function(host, port)
-  local result = output_table()
-  local samples = {}
-  local sample_count = 8
+postrule = function()
+  return nmap.registry.clock_skews and #nmap.registry.clock_skews > 0
+end
 
-  for i = 1, sample_count do
-    local sock = new_socket("tcp")
-    sock:set_timeout(3000)
-    local local_before = clock()
-    local ok, err = sock:connect(host.ip, port.number, "tcp")
-    local local_after = clock()
+local function format_host (host)
+  local name = stdnse.get_hostname(host)
+  if name == host.ip then
+    return name
+  else
+    return ("%s (%s)"):format(host.ip, name)
+  end
+end
 
-    if ok then
-      local info = sock:get_info()
-      sock:close()
-      if info and info.timestamp and info.timestamp.tsval then
-        insert(samples, {
-          remote_ts = tonumber(info.timestamp.tsval) or 0,
-          local_ts = (local_before + local_after) / 2
-        })
+local function record_stats(host, mean, stddev, median)
+  local reg = nmap.registry.clock_skews or {}
+  reg[#reg+1] = {
+    ip = format_host(host),
+    mean = mean,
+    stddev = stddev,
+    median = median,
+    -- Allowable variance to regard this a match.
+    variance = host.times.rttvar * 2
+  }
+  nmap.registry.clock_skews = reg
+end
+
+hostaction = function(host)
+  local skews = host.registry.datetime_skew
+  if not skews or #skews < 1 then
+    return nil
+  end
+  local mean, stddev = formulas.mean_stddev(skews)
+  local median = formulas.median(skews)
+  -- truncate to integers; we don't care about fractional seconds)
+  mean = math.modf(mean)
+  stddev = math.modf(stddev)
+  median = math.modf(median)
+  record_stats(host, mean, stddev, median)
+  if mean ~= 0 or stddev ~= 0 or nmap.verbosity() > 1 then
+    local out = {count = #skews, mean = mean, stddev = stddev, median = median}
+    return out, (#skews == 1 and datetime.format_time(mean)
+      or ("mean: %s, deviation: %s, median: %s"):format(
+        datetime.format_time(mean),
+        datetime.format_time(stddev),
+        datetime.format_time(median)
+        )
+      )
+  end
+end
+
+local function sorted_keys(t)
+  local ret = {}
+  for k, _ in pairs(t) do
+    ret[#ret+1] = k
+  end
+  table.sort(ret)
+  return ret
+end
+
+postaction = function()
+  local skews = nmap.registry.clock_skews
+
+  local host_count = #skews
+  local groups = {}
+  for i=1, host_count do
+    local current = skews[i]
+    -- skip if we already grouped this one
+    if not current.grouped then
+      current.grouped = true
+      local group = {current.ip}
+      groups[current.mean] = group
+      for j=i+1, #skews do
+        local check = skews[j]
+        if not check.grouped then
+          -- Consider it a match if it's within a the average variance of the 2 targets.
+          -- Use the median to rule out influence of outliers, since these ought to be discrete.
+          if math.abs(check.median - current.median) < (check.variance + current.variance) / 2 then
+            check.grouped = true
+            group[#group+1] = check.ip
+          end
+        end
       end
-    else
-      sock:close()
-    end
-    msleep(500)
-  end
-
-  if #samples < 2 then
-    result.status = "error"
-    result.target = host.ip .. ":" .. port.number
-    result.reason = "Insufficient TCP timestamp samples for clock skew analysis"
-    return result
-  end
-
-  local total_skew = 0
-  local skew_samples = 0
-  for i = 2, #samples do
-    local dt_remote = samples[i].remote_ts - samples[i - 1].remote_ts
-    local dt_local = (samples[i].local_ts - samples[i - 1].local_ts) * 1000
-    if dt_remote > 0 and dt_local > 0 then
-      local skew = dt_remote - dt_local
-      total_skew = total_skew + skew
-      skew_samples = skew_samples + 1
     end
   end
 
-  if skew_samples == 0 then
-    result.status = "error"
-    result.target = host.ip .. ":" .. port.number
-    result.reason = "Could not compute clock skew (all timestamps identical)"
-    return result
+  local out = {}
+  for mean, group in pairs(groups) do
+    -- Collapse the biggest group
+    if #groups > 1 and #group > host_count // 2 then
+      out[datetime.format_time(mean)] = "Majority of systems scanned"
+    elseif #group > 1 then
+      -- Only record groups of more than one system together
+      out[datetime.format_time(mean)] = group
+    end
   end
 
-  local avg_skew_ms = total_skew / skew_samples
-  local avg_skew_sec = avg_skew_ms / 1000
-  local total_elapsed = (samples[#samples].local_ts - samples[1].local_ts) * 1000
-  local skew_rate = total_elapsed > 0 and (total_skew / total_elapsed) or 0
-
-  local direction
-  if math.abs(avg_skew_sec) < 0.5 then
-    direction = "synchronized"
-  elseif avg_skew_sec > 0 then
-    direction = "remote clock is faster"
-  else
-    direction = "remote clock is slower"
+  if next(out) then
+    return outlib.sorted_by_key(out)
   end
-
-  result.status = "success"
-  result.target = host.ip .. ":" .. port.number
-  result.samples_collected = #samples
-  result.skew_samples_used = skew_samples
-  result.average_skew_ms = format("%.2f", avg_skew_ms)
-  result.average_skew_sec = format("%.6f", avg_skew_sec)
-  result.skew_rate = format("%.6f", skew_rate)
-  result.direction = direction
-
-  if math.abs(avg_skew_sec) > 10 then
-    result.skew_magnitude = "large"
-    result.note = "Large clock skew detected - possible VM or clock drift"
-  elseif math.abs(avg_skew_sec) > 1 then
-    result.skew_magnitude = "moderate"
-    result.note = "Moderate clock skew detected"
-  else
-    result.skew_magnitude = "small"
-    result.note = "Clocks are reasonably synchronized"
-  end
-
-  return result
 end
+
+local ActionsTable = {
+  -- hostrule: Get the average clock skew and put it in the registry
+  hostrule = hostaction,
+  -- postrule: compare clock skews and report similar ones
+  postrule = postaction
+}
+
+-- execute the action function corresponding to the current rule
+action = function(...) return ActionsTable[SCRIPT_TYPE](...) end

@@ -1,135 +1,113 @@
-local stdnse = require "stdnse"
 local nmap = require "nmap"
 local shortport = require "shortport"
+local stdnse = require "stdnse"
+local string = require "string"
+local ftp = require "ftp"
 
+description=[[
+Checks to see if an FTP server allows port scanning using the FTP bounce method.
+]]
+author = "Marek Majkowski"
+license = "Same as Nmap--See https://nmap.org/book/man-legal.html"
 
+---
+-- @args ftp-bounce.username Username to log in with. Default
+-- <code>anonymous</code>.
+-- @args ftp-bounce.password Password to log in with. Default
+-- <code>IEUser@</code>.
+-- @args ftp-bounce.checkhost Host to try connecting to with the PORT command.
+--                            Default: scanme.nmap.org
+--
+-- @output
+-- PORT   STATE SERVICE
+-- 21/tcp open  ftp
+-- |_ftp-bounce: bounce working!
+--
+-- PORT   STATE SERVICE
+-- 21/tcp open  ftp
+-- |_ftp-bounce: server forbids bouncing to low ports <1025
 
--- Fast-path bindings for the stdlib and nmap API used by this script.
--- Kept strict-mode safe: every name below is a declared local.
-local format = string.format
-local lower = string.lower
-local upper = string.upper
-local byte = string.byte
-local sub = string.sub
-local match = string.match
-local gmatch = string.gmatch
-local gsub = string.gsub
-local find = string.find
-local rep = string.rep
-local char = string.char
-local concat = table.concat
-local insert = table.insert
-local remove = table.remove
-local sort = table.sort
-local move = table.move
-local tostring = tostring
-local tonumber = tonumber
-local type = type
-local pcall = pcall
-local pairs = pairs
-local ipairs = ipairs
-local unpack = table.unpack
-local setmetatable = setmetatable
-local getmetatable = getmetatable
-local error = error
-local select = select
+categories = {"default", "safe"}
 
-local clock = nmap.clock
-local msleep = nmap.msleep
+portrule = shortport.port_or_service({21, 990}, {"ftp", "ftps"})
 
--- stdnse.sleep / stdnse.strsplit are not present in every NSE runtime.
-local sleep = function(seconds)
-    return nmap.msleep(math.max(0, math.floor(seconds * 1000)))
-end
-
-local strsplit = function(sep, str, max)
-    local out, pos, n = {}, 1, 0
-    if str == nil then return out end
-    while true do
-        if max and n >= max - 1 then
-            out[#out + 1] = sub(str, pos)
-            return out
-        end
-        local s, e = find(str, sep, pos)
-        if not s then
-            out[#out + 1] = sub(str, pos)
-            return out
-        end
-        if e < pos then e = pos end
-        out[#out + 1] = sub(str, pos, s - 1)
-        pos = e + 1
-        n = n + 1
-        if pos > #str then
-            out[#out + 1] = ""
-            return out
-        end
+local function get_portfmt()
+  local arghost = stdnse.get_script_args(SCRIPT_NAME .. ".checkhost") or "scanme.nmap.org"
+  local reg = nmap.registry[SCRIPT_NAME] or {}
+  local addr = reg[arghost]
+  if not addr then
+    local status, addrs = nmap.resolve(arghost, "inet")
+    if not status or #addrs < 1 then
+      stdnse.verbose1("Couldn't resolve %s, scanning 10.0.0.1 instead.", arghost)
+      addr = "10.0.0.1"
+    else
+      addr = addrs[1]
     end
+    reg[arghost] = addr
+  end
+  nmap.registry[SCRIPT_NAME] = reg
+  return string.format("PORT %s,%%s\r\n", (string.gsub(addr, "%.", ",")))
 end
-
-local format_output = stdnse.format_output
-local output_table = stdnse.output_table
-
-description = [[Tests for the FTP bounce attack by issuing a PORT command with a third-party IP address, attempting to instruct the server to connect to an arbitrary host. Uses structured output with CVE mapping.]]
-author = "HackIT Framework"
-license = "HackIT Framework — Internal Use Only"
-categories = {"safe", "vuln"}
-
-portrule = function(host, port) return port.protocol == "tcp" and port.state == "open" and (port.number == 21 or port.service == "ftp") end
-
-local test_targets = {
-    {"10,0,0,1", "4,210"},
-    {"127,0,0,1", "7,112"},
-    {"0,0,0,0", "0,0"},
-}
 
 action = function(host, port)
-    local sock = new_socket()
-    sock:set_timeout(10000)
-    local ok, result = pcall(function()
-        local status = sock:connect(host.ip, port)
-        if not status then return end
-        local banner = sock:receive_buf("\n", 5000)
-        if not banner then sock:close(); return end
-        local vulnerable = false
-        local last_code
-        for _, target in ipairs(test_targets) do
-            local s = new_socket()
-            s:set_timeout(5000)
-            local ok2 = s:connect(host.ip, port)
-            if ok2 then
-                s:receive_buf("\n", 3000)
-                s:send("PORT " .. target[1] .. "," .. target[2] .. "\r\n")
-                local _, r = s:receive_buf("\n", 3000)
-                s:close()
-                if r then
-                    local code = match(r, "^(%d%d%d)")
-                    if code == "200" then
-                        vulnerable = true
-                        last_code = code
-                        break
-                    elseif code ~= "500" and code ~= "501" and code ~= "502" then
-                        last_code = code
-                    end
-                end
-            end
-        end
-        sock:close()
-        if vulnerable then
-            local res = output_table()
-            res.vulnerability = true
-            res.name = "FTP Bounce"
-            res.details = "PORT command accepted for arbitrary host"
-            res.severity = "MEDIUM"
-            res.recommendation = "Disable PORT command or restrict to local addresses"
-            return res
-        end
-        return nil
-    end)
-    if not ok then
-        pcall(function() sock:close() end)
-    end
-    if result then
-        return result
-    end
-    return format_output(false, "Not vulnerable to FTP bounce")
+  local user = stdnse.get_script_args(SCRIPT_NAME .. ".username") or "anonymous"
+  local pass = stdnse.get_script_args(SCRIPT_NAME .. ".password") or "IEUser@"
+
+  -- BANNER
+  local socket, code, message, buffer = ftp.connect(host, port, {request_timeout=10000})
+  if not socket then
+    return nil
+  end
+  if code < 200 or code > 299 then
+    socket:close()
+    return nil
+  end
+
+  socket:set_timeout(5000)
+  -- USER
+  local status, code, message = ftp.auth(socket, buffer, user, pass)
+  if not status then
+    stdnse.debug1("Authentication rejected: %s %s", code or "socket", message)
+    ftp.close(socket)
+    return nil
+  end
+
+  -- PORT highport
+  local portfmt = get_portfmt()
+  -- This is actually port 256*80 + 80 = 20560
+  if not socket:send(string.format(portfmt, "80,80")) then
+    stdnse.debug1("Can't send PORT")
+    return nil
+  end
+  code, message = ftp.read_reply(buffer)
+  if not code then
+    stdnse.debug1("Error after PORT: %s", message)
+    return nil
+  end
+  if code < 200 or code > 299 then
+    stdnse.verbose1("PORT response: %d %s", code, message)
+    ftp.close(socket)
+    -- return "server forbids bouncing"
+    return nil
+  end
+
+  -- PORT lowport
+  if not socket:send(string.format(portfmt, "0,80")) then
+    stdnse.debug1("Can't send PORT")
+    return nil
+  end
+  code, message = ftp.read_reply(buffer)
+  if not code then
+    stdnse.debug1("Error after PORT: %s", message)
+    return nil
+  end
+  if code < 200 or code > 299 then
+    stdnse.verbose1("PORT (low port) response: %d %s", code, message)
+    ftp.close(socket)
+    return "server forbids bouncing to low ports <1025"
+  end
+
+  ftp.close(socket)
+  return "bounce working!"
 end
+

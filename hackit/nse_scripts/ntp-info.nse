@@ -1,238 +1,172 @@
-local stdnse = require "stdnse"
-local nmap = require "nmap"
-local bin = require "bin"
-local string = require "string"
-local math = require "math"
--- Lua 5.4 has no "bit" module; this is a 32-bit compatible replacement.
-local bit = (function()
-    local floor = math.floor
-    local function toint(x) return floor(x) & 0xFFFFFFFF end
-    local function fold(fn, a, ...)
-        local r = toint(a)
-        for i = 1, select("#", ...) do
-            r = toint(fn(r, select(i, ...)))
-        end
-        return r
-    end
-    return {
-        band = function(...) return fold(function(x, y) return x & y end, ...) end,
-        bor = function(...) return fold(function(x, y) return x | y end, ...) end,
-        bxor = function(...) return fold(function(x, y) return x ~ y end, ...) end,
-        bnot = function(x) return (~toint(x)) & 0xFFFFFFFF end,
-        lshift = function(x, n) return (toint(x) << (n & 31)) & 0xFFFFFFFF end,
-        rshift = function(x, n) return toint(x) >> (n & 31) end,
-        arshift = function(x, n) return toint(x) >> (n & 31) end,
-        tobit = function(x) return toint(x) end,
-        tohex = function(x) return format("%08x", toint(x)) end,
-    }
-end)()
+local comm = require "comm"
+local datetime = require "datetime"
 local os = require "os"
+local nmap = require "nmap"
 local shortport = require "shortport"
+local stdnse = require "stdnse"
+local string = require "string"
+local table = require "table"
+local lpeg = require "lpeg"
+local U = require "lpeg-utility"
+
+description = [[
+Gets the time and configuration variables from an NTP server. We send two
+requests: a time request and a "read variables" (opcode 2) control message.
+Without verbosity, the script shows the time and the value of the
+<code>version</code>, <code>processor</code>, <code>system</code>,
+<code>refid</code>, and <code>stratum</code> variables. With verbosity, all
+variables are shown.
+
+See RFC 1035 and the Network Time Protocol Version 4 Reference and
+Implementation Guide
+(http://www.eecis.udel.edu/~mills/database/reports/ntp4/ntp4.pdf) for
+documentation of the protocol.
+]]
+
+---
+-- @usage
+-- nmap -sU -p 123 --script ntp-info <target>
+-- @output
+-- PORT    STATE SERVICE VERSION
+-- 123/udp open  ntp     NTP v4.2.4p4@1.1520-o
+-- | ntp-info:
+-- |   receive time stamp: Sat Dec 12 16:22:41 2009
+-- |   version: ntpd 4.2.4p4@1.1520-o Wed May 13 21:06:31 UTC 2009 (1)
+-- |   processor: x86_64
+-- |   system: Linux/2.6.24-24-server
+-- |   stratum: 2
+-- |_  refid: 195.145.119.188
+--
+-- @xmloutput
+-- <elem key="receive time stamp">2013-10-18T18:03:05</elem>
+-- <elem key="version">ntpd 4.2.6p3@1.2290-o Tue Jun  5 20:12:11 UTC 2012 (1)</elem>
+-- <elem key="processor">i686</elem>
+-- <elem key="system">Linux/3.9.3-24</elem>
+-- <elem key="leap">3</elem>
+-- <elem key="stratum">16</elem>
+-- <elem key="precision">-20</elem>
+-- <elem key="rootdelay">0.000</elem>
+-- <elem key="rootdisp">2502.720</elem>
+-- <elem key="refid">INIT</elem>
+-- <elem key="reftime">0x00000000.00000000</elem>
+-- <elem key="clock">0xd60bf655.4cc0ba51</elem>
+-- <elem key="peer">0</elem>
+-- <elem key="tc">3</elem>
+-- <elem key="mintc">3</elem>
+-- <elem key="offset">0.000</elem>
+-- <elem key="frequency">-46.015</elem>
+-- <elem key="jitter">0.001</elem>
+-- <elem key="wander">0.000</elem>
+
+author = "Richard Sammet"
+license = "Same as Nmap--See https://nmap.org/book/man-legal.html"
+categories = {"default", "discovery", "safe"}
 
 
 
--- Fast-path bindings for the stdlib and nmap API used by this script.
--- Kept strict-mode safe: every name below is a declared local.
-local format = string.format
-local lower = string.lower
-local upper = string.upper
-local byte = string.byte
-local sub = string.sub
-local match = string.match
-local gmatch = string.gmatch
-local gsub = string.gsub
-local find = string.find
-local rep = string.rep
-local char = string.char
-local concat = table.concat
-local insert = table.insert
-local remove = table.remove
-local sort = table.sort
-local move = table.move
-local tostring = tostring
-local tonumber = tonumber
-local type = type
-local pcall = pcall
-local pairs = pairs
-local ipairs = ipairs
-local unpack = table.unpack
-local setmetatable = setmetatable
-local getmetatable = getmetatable
-local error = error
-local select = select
+portrule = shortport.port_or_service(123, "ntp", {"udp", "tcp"})
 
-local clock = nmap.clock
-local msleep = nmap.msleep
+-- This script run against open|filtered ports, so don't wait too long if
+-- there's no response.
+local TIMEOUT = 5000
 
--- stdnse.sleep / stdnse.strsplit are not present in every NSE runtime.
-local sleep = function(seconds)
-    return nmap.msleep(math.max(0, math.floor(seconds * 1000)))
-end
+-- Only these fields from the response are displayed with default verbosity.
+local DEFAULT_FIELDS = {"version", "processor", "system", "refid", "stratum"}
 
-local strsplit = function(sep, str, max)
-    local out, pos, n = {}, 1, 0
-    if str == nil then return out end
-    while true do
-        if max and n >= max - 1 then
-            out[#out + 1] = sub(str, pos)
-            return out
-        end
-        local s, e = find(str, sep, pos)
-        if not s then
-            out[#out + 1] = sub(str, pos)
-            return out
-        end
-        if e < pos then e = pos end
-        out[#out + 1] = sub(str, pos, s - 1)
-        pos = e + 1
-        n = n + 1
-        if pos > #str then
-            out[#out + 1] = ""
-            return out
-        end
-    end
-end
-
-local format_output = stdnse.format_output
-local output_table = stdnse.output_table
-
-description = [[Retrieves NTP server information including version, stratum, timing details, reference clock, and synchronization state. Sends NTP mode 3 (client) requests to obtain full server response.]]
-author = "HackIT Framework"
-license = "HackIT Framework — Internal Use Only"
-categories = {"safe", "discovery"}
-
-portrule = function(host, port)
-  return port.protocol == "udp" and port.state == "open" and port.number == 123
-end
-
-local function build_ntp_request(version)
-  local leap = 0
-  local mode = 3
-  local first_byte = bit.lshift(leap, 6) + bit.lshift(version, 3) + mode
-  local originate_ts = bin.pack(">I", os.time()) .. "\x00\x00\x00\x00"
-
-  local packet = char(first_byte) .. "\x00\x00\x00\x00\x00\x00\x00" ..
-                 "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00" ..
-                 "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00" ..
-                 originate_ts ..
-                 "\x00\x00\x00\x00\x00\x00\x00\x00" ..
-                 "\x00\x00\x00\x00\x00\x00\x00\x00" ..
-                 "\x00\x00\x00\x00\x00\x00\x00\x00" ..
-                 "\x00\x00\x00\x00\x00\x00\x00\x00"
-  return packet
-end
-
-local function parse_ntp_response(response)
-  local info = {}
-  if #response < 48 then return info end
-
-  local first_byte = byte(response, 1)
-  info.leap_indicator_raw = bit.rshift(first_byte, 6)
-  local leap_descs = { "No warning", "Last minute has 61 seconds", "Last minute has 59 seconds", "Alarm (not synchronized)" }
-  info.leap_indicator = leap_descs[info.leap_indicator_raw + 1] or "Unknown"
-
-  info.version = bit.rshift(bit.band(first_byte, 0x38), 3)
-  info.mode = bit.band(first_byte, 0x07)
-  info.mode_name = info.mode == 4 and "server" or format("mode_%d", info.mode)
-
-  info.stratum = byte(response, 2)
-  if info.stratum == 0 then
-    info.stratum_desc = "unspecified or invalid"
-  elseif info.stratum == 1 then
-    info.stratum_desc = "primary reference (stratum 1)"
-  elseif info.stratum <= 15 then
-    info.stratum_desc = format("secondary reference (stratum %d)", info.stratum)
-  else
-    info.stratum_desc = "unsynchronized"
-  end
-
-  info.poll_interval = byte(response, 3)
-  info.poll_seconds = 2 ^ info.poll_interval
-  info.precision = byte(response, 4)
-  info.root_delay_raw = byte(response, 5) * 256 + byte(response, 6)
-  info.root_delay_seconds = info.root_delay_raw / 65536
-  info.root_dispersion_raw = byte(response, 7) * 256 + byte(response, 8)
-  info.root_dispersion_seconds = info.root_dispersion_raw / 65536
-
-  local ref_id_bytes = { byte(response, 13), byte(response, 14), byte(response, 15), byte(response, 16) }
-  if info.stratum == 0 or info.stratum == 1 then
-    local ref_chars = char(ref_id_bytes[1], ref_id_bytes[2], ref_id_bytes[3], ref_id_bytes[4])
-    local ref_ids = {
-      ["LOCL"] = "Local clock", ["GPS"] = "GPS", ["ACTS"] = "ACTS",
-      ["NIST"] = "NIST", ["USNO"] = "USNO", ["PTB"] = "PTB",
-      ["TDF"] = "TDF", ["DCF"] = "DCF", ["CHU"] = "CHU",
-      ["WWV"] = "WWV", ["WWVH"] = "WWVH", ["GOES"] = "GOES",
-      ["PPS"] = "Pulse Per Second", ["IRIG"] = "IRIG",
-    }
-    info.reference_id = ref_ids[ref_chars] or ref_chars
-  else
-    info.reference_id = format("%d.%d.%d.%d", ref_id_bytes[1], ref_id_bytes[2], ref_id_bytes[3], ref_id_bytes[4])
-  end
-
-  info.reference_id_raw = format("%02x%02x%02x%02x", ref_id_bytes[1], ref_id_bytes[2], ref_id_bytes[3], ref_id_bytes[4])
-
-  local function ts_to_seconds(offset)
-    if #response >= offset + 7 then
-      local int_part = byte(response, offset) * 256 * 256 * 256 +
-                       byte(response, offset + 1) * 256 * 256 +
-                       byte(response, offset + 2) * 256 +
-                       byte(response, offset + 3)
-      return int_part
-    end
-    return nil
-  end
-
-  info.reference_timestamp = ts_to_seconds(17)
-  info.originate_timestamp = ts_to_seconds(25)
-  info.receive_timestamp = ts_to_seconds(33)
-  info.transmit_timestamp = ts_to_seconds(41)
-
-  return info
-end
+-- comma-space-separated key=value pairs with optional quotes
+local kvmatch = U.localize( {
+    lpeg.V "space"^0 * lpeg.V "kv" * lpeg.P ","^-1,
+    kv = lpeg.V "key" * lpeg.P "="^-1 * lpeg.V "value",
+    key = lpeg.C( (lpeg.V "alnum" + lpeg.S "_-.")^1 ),
+    value = U.escaped_quote() + lpeg.C((lpeg.P(1) - ",")^0),
+  } )
 
 action = function(host, port)
-  local result = output_table()
+  local status
+  local buftres, bufrlres
+  local output = stdnse.output_table()
 
-  for _, ver in ipairs({ 4, 3, 2, 1 }) do
-    local socket = new_socket("udp")
-    socket:set_timeout(8000)
+  -- This is a ntp v2 mode3 (client) date/time request.
+  local treq = string.char(0xd3, 0x00, 0x04, 0xfa, 0x00, 0x01, 0x00, 0x00,
+                           0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                           0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                           0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                           0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                           0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00)
 
-    local ok, err = pcall(socket.connect, socket, host.ip, port.number)
-    if not ok then
-      pcall(socket.close, socket)
-      if _ == 1 then
-        return format_output(false, "Could not connect: " .. tostring(err))
-      end
-      break
-    end
+  -- This is a ntp v2 mode6 (control) rl (readlist/READVAR(2)) request. See
+  -- appendix B of RFC 1305.
+  local rlreq = string.char(0x16, 0x02, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
+                            0x00, 0x00, 0x00, 0x00)
 
-    local request = build_ntp_request(ver)
-    local ok2 = pcall(socket.send, socket, request)
-    if not ok2 then
-      pcall(socket.close, socket)
-      break
-    end
+  status, buftres = comm.exchange(host, port, treq, {timeout=TIMEOUT})
+  if status then
+    local recvtime = os.time()
 
-    local ok3, response = pcall(socket.receive_from, 10)
-    pcall(socket.close, socket)
+    local sec, frac = string.unpack(">I4I4", buftres, 33)
+    -- The NTP epoch is 1900-01-01, so subtract 70 years to bring the date into
+    -- the range Lua expects. The number of seconds at 1970-01-01 is taken from
+    -- the NTP4 reference above.
+    local tstamp = sec - 2208988800 + frac / 0x10000000
 
-    if ok3 and response and #response >= 48 then
-      local info = parse_ntp_response(response)
-      result.ntp_detected = true
-      result.version = info.version
-      result.mode = info.mode_name
-      result.leap_indicator = info.leap_indicator
-      result.stratum = info.stratum
-      result.stratum_desc = info.stratum_desc
-      result.poll_interval_seconds = info.poll_seconds
-      result.precision = format("2^%d", info.precision)
-      result.root_delay_seconds = info.root_delay_seconds
-      result.root_dispersion_seconds = info.root_dispersion_seconds
-      result.reference_id = info.reference_id
+    datetime.record_skew(host, tstamp, recvtime)
 
-      return format_output(true, result)
-    end
+    output["receive time stamp"] = datetime.format_timestamp(tstamp)
   end
 
-  return format_output(false, "No NTP response received")
+  status, bufrlres = comm.exchange(host, port, rlreq, {timeout=TIMEOUT})
+
+  if status then
+    -- This only looks at the first fragment of what can possibly be several
+    -- fragments in the response.
+
+    -- Skip the first 10 bytes of the header, then get the data which is
+    -- preceded by a 2-byte length.
+    local data = string.unpack(">s2", bufrlres, 11)
+
+    -- loop over capture pairs which represent (key, value)
+    local function accumulate_output (...)
+      local k, v = ...
+      if k == nil then return end
+      output[k] = v
+      return accumulate_output(select(3, ...))
+    end
+
+    -- do the match and accumulate the captures
+    local list = kvmatch^0 / accumulate_output
+    list:match(data)
+  end
+
+  if(#output > 0) then
+    stdnse.debug1("Test len: %d", #output)
+    nmap.set_port_state(host, port, "open")
+    if output['version'] then
+      -- Look for the version string from the official ntpd and format it
+      -- in a manner similar to the output of the standard Nmap version detection
+      local version_num = string.match(output['version'],"^ntpd ([^ ]+)")
+      if version_num then
+        port.version.version = "v" .. version_num
+        nmap.set_port_version(host, port, "hardmatched")
+      end
+    end
+    if output['system'] then
+      port.version.ostype = output['system']
+      nmap.set_port_version(host, port, "hardmatched")
+    end
+    if nmap.verbosity() < 1 then
+      local mt = getmetatable(output)
+      mt["__tostring"] = function(t)
+        local out = {}
+        for _,k in ipairs(DEFAULT_FIELDS) do
+          if output[k] ~= nil then
+            table.insert(out, ("%s: %s"):format(k, output[k]))
+          end
+        end
+        return "\n  " .. table.concat(out, "\n  ")
+      end
+    end
+    return output
+  else
+    return nil
+  end
 end

@@ -1,104 +1,173 @@
 local http = require "http"
-local stdnse = require "stdnse"
-local nmap = require "nmap"
 local shortport = require "shortport"
+local stdnse = require "stdnse"
+local string = require "string"
 
+description = [[
+Examines cookies set by HTTP services.  Reports any session cookies set
+without the httponly flag.  Reports any session cookies set over SSL without
+the secure flag.  If http-enum.nse is also run, any interesting paths found
+by it will be checked in addition to the root.
+]]
 
+---
+-- @usage
+-- nmap -p 443 --script http-cookie-flags <target>
+--
+-- @output
+-- 443/tcp open  https
+-- | http-cookie-flags:
+-- |   /:
+-- |     PHPSESSID:
+-- |       secure flag not set and HTTPS in use
+-- |   /admin/:
+-- |     session_id:
+-- |       secure flag not set and HTTPS in use
+-- |       httponly flag not set
+-- |   /mail/:
+-- |     ASPSESSIONIDASDF:
+-- |       httponly flag not set
+-- |     ASP.NET_SessionId:
+-- |_      secure flag not set and HTTPS in use
+--
+-- @args path Specific URL path to check for session cookie flags. Default: / and those found by http-enum.
+-- @args cookie Specific cookie name to check flags on. Default: A variety of commonly used session cookie names and patterns.
+--
+-- @xmloutput
+-- <table key="/">
+-- <table key="PHPSESSID">
+-- <elem>secure flag not set and HTTPS in use</elem>
+-- </table>
+-- </table>
+-- <table key="/admin/">
+-- <table key="session_id">
+-- <elem>secure flag not set and HTTPS in use</elem>
+-- <elem>httponly flag not set</elem>
+-- </table>
+-- </table>
+-- <table key="/mail/">
+-- <table key="ASPSESSIONIDASDF">
+-- <elem>httponly flag not set</elem>
+-- </table>
+-- <table key="ASP.NET_SessionId">
+-- <elem>secure flag not set and HTTPS in use</elem>
+-- </table>
+-- </table>
+--
+-- @see http-enum.nse
+-- @see http-security-headers.nse
 
--- Fast-path bindings for the stdlib and nmap API used by this script.
--- Kept strict-mode safe: every name below is a declared local.
-local format = string.format
-local lower = string.lower
-local upper = string.upper
-local byte = string.byte
-local sub = string.sub
-local match = string.match
-local gmatch = string.gmatch
-local gsub = string.gsub
-local find = string.find
-local rep = string.rep
-local char = string.char
-local concat = table.concat
-local insert = table.insert
-local remove = table.remove
-local sort = table.sort
-local move = table.move
-local tostring = tostring
-local tonumber = tonumber
-local type = type
-local pcall = pcall
-local pairs = pairs
-local ipairs = ipairs
-local unpack = table.unpack
-local setmetatable = setmetatable
-local getmetatable = getmetatable
-local error = error
-local select = select
+categories = { "default", "safe", "vuln" }
+author = "Steve Benson"
+license = "Same as Nmap--See https://nmap.org/book/man-legal.html"
+dependencies = {"http-enum"}
 
-local clock = nmap.clock
-local msleep = nmap.msleep
+portrule = shortport.http
 
--- stdnse.sleep / stdnse.strsplit are not present in every NSE runtime.
-local sleep = function(seconds)
-    return nmap.msleep(math.max(0, math.floor(seconds * 1000)))
-end
+-- a list of patterns indicating cookies which are likely session cookies
+local session_cookie_patterns = {
+  '^PHPSESSID$',
+  '^CFID$',
+  '^CFTOKEN$',
+  '^VOXSQSESS$',
+  '^CAKEPHP$',
+  '^FedAuth$',
+  '^ASPXAUTH$',
+  '^session$',
+  '[Ss][Ee][Ss][Ss][Ii][Oo][Nn][^%a]*[Ii][Dd]'
+}
 
-local strsplit = function(sep, str, max)
-    local out, pos, n = {}, 1, 0
-    if str == nil then return out end
-    while true do
-        if max and n >= max - 1 then
-            out[#out + 1] = sub(str, pos)
-            return out
-        end
-        local s, e = find(str, sep, pos)
-        if not s then
-            out[#out + 1] = sub(str, pos)
-            return out
-        end
-        if e < pos then e = pos end
-        out[#out + 1] = sub(str, pos, s - 1)
-        pos = e + 1
-        n = n + 1
-        if pos > #str then
-            out[#out + 1] = ""
-            return out
-        end
+-- check cookies set on a particular URL path. returns a table with problem
+-- cookie names mapped to a table listing each problem found.
+local check_path = function(is_session_cookie, host, port, path)
+  stdnse.debug1("start check of %s", path)
+  local path_issues = stdnse.output_table()
+  local resp = http.get(host, port, path)
+  if not resp.status then
+    stdnse.debug1("Error retrieving %s: %s", path, resp["status-line"])
+    return nil
+  end
+
+  if not resp.cookies then
+    stdnse.debug2("No cookies on %s", path)
+    return nil
+  end
+
+  for _,cookie in ipairs(resp.cookies) do
+    stdnse.debug2('  cookie: %s', cookie.name)
+    local issues = stdnse.output_table()
+    if is_session_cookie(cookie.name) then
+      stdnse.debug2('    IS a session cookie')
+      if port.service=='https' and not cookie.secure then
+        stdnse.debug2('    * no secure flag and https')
+        issues[#issues+1] = 'secure flag not set and HTTPS in use'
+      end
+      if not cookie.httponly then
+        stdnse.debug2('    * no httponly')
+        issues[#issues+1] = 'httponly flag not set'
+      end
     end
+
+    if #issues>0 then
+      path_issues[cookie.name] = issues
+    end
+
+  end
+
+  stdnse.debug1("end check of %s : %d issues found", path, #path_issues)
+  if #path_issues>0 then
+    return path_issues
+  else
+    return nil
+  end
 end
-
-local format_output = stdnse.format_output
-local output_table = stdnse.output_table
-
-description = [[Checks Set-Cookie headers for security flags: HttpOnly, Secure, SameSite, and Path attributes.]]
-author = "HackIT Framework"
-license = "HackIT Framework — Internal Use Only"
-categories = {"web", "safe"}
-
-portrule = function(host, port) return port.protocol == "tcp" and port.state == "open" end
 
 action = function(host, port)
-    local response = http.get(host, port, "/")
-    if not response or not response.header then
-        return format_output(false, "No response from server")
+  local all_issues = stdnse.output_table()
+  local specified_path = stdnse.get_script_args(SCRIPT_NAME..".path")
+  local specified_cookie = stdnse.get_script_args(SCRIPT_NAME..".cookie")
+
+  -- create a function, is_session_cookie, which accepts a cookie name and
+  -- returns true if it is likely a session cookie, based on script-args
+  local is_session_cookie
+  if specified_cookie == nil then
+    is_session_cookie = function(cookie_name)
+      for _, pattern in ipairs(session_cookie_patterns) do
+        if string.find(cookie_name, pattern) then
+          return true
+        end
+      end
+      return false
     end
-    local cookies = response.header["set-cookie"]
-    if not cookies then
-        return format_output(false, "No cookies set")
+  else
+    is_session_cookie = function(cookie_name)
+      return cookie_name==specified_cookie
     end
-    if type(cookies) == "string" then
-        cookies = {cookies}
+  end
+
+  -- build a list of URL paths to check cookies for based on script-args and
+  -- http-enum results.
+  local paths_to_check = {}
+  if specified_path == nil then
+    stdnse.debug2('path script-arg is nil; checking / and anything from http-enum')
+    paths_to_check[#paths_to_check+1] = '/'
+    for _,path in ipairs( stdnse.registry_get({host.ip, 'www', port.number, 'all_pages'}) or {}) do
+      paths_to_check[#paths_to_check+1] = path
     end
-    local results = {}
-    for _, cookie in ipairs(cookies) do
-        local name = match(cookie, "^([^=]+)")
-        local flags = {}
-        if find(cookie, "HttpOnly") then insert(flags, "HttpOnly") end
-        if find(cookie, "Secure") then insert(flags, "Secure") end
-        if find(cookie, "SameSite") then insert(flags, "SameSite") end
-        if not find(cookie, "HttpOnly") then insert(flags, "MISSING HttpOnly") end
-        if not find(cookie, "Secure") then insert(flags, "MISSING Secure") end
-        insert(results, name .. " [" .. concat(flags, ", ") .. "]")
-    end
-    return format_output(true, concat(results, "\n"))
+  else
+    stdnse.verbose1('path script-arg is %s; checking only that path', specified_path)
+    paths_to_check[#paths_to_check+1] = specified_path
+  end
+
+  -- check desired cookies on all desired paths
+  for _,path in ipairs(paths_to_check) do
+    all_issues[path] = check_path(is_session_cookie, host, port, path)
+  end
+
+  if #all_issues>0 then
+    return all_issues
+  else
+    return nil
+  end
+
 end

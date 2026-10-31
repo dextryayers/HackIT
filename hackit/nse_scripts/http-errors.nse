@@ -1,125 +1,130 @@
-local http = require "http"
-local stdnse = require "stdnse"
-local nmap = require "nmap"
+description = [[
+This script crawls through the website and returns any error pages.
+
+The script will return all pages (sorted by error code) that respond with an
+http code equal or above 400. To change this behaviour, please use the
+<code>errcodes</code> option.
+
+The script, by default, spiders and searches within forty pages. For large web
+applications make sure to increase httpspider's <code>maxpagecount</code> value.
+Please, note that the script will become more intrusive though.
+]]
+
+---
+-- @usage nmap -p80 --script http-errors.nse <target>
+--
+-- @args http-errors.errcodes The error codes we are interested in.
+--       Default: nil (all codes >= 400)
+--
+-- @output
+-- PORT   STATE SERVICE REASON
+-- 80/tcp open  http    syn-ack
+-- | http-errors:
+-- | Spidering limited to: maxpagecount=40; withinhost=some-random-page.com
+-- |   Found the following error pages:
+-- |
+-- |   Error Code: 404
+-- |       http://some-random-page.com/admin/
+-- |
+-- |   Error Code: 404
+-- |       http://some-random-page.com/foo.html
+-- |
+-- |   Error Code: 500
+-- |_      http://some-random-page.com/p.php
+---
+
+categories = {"discovery", "intrusive"}
+author = "George Chatzisofroniou"
+license = "Same as Nmap--See https://nmap.org/book/man-legal.html"
+
 local shortport = require "shortport"
+local stdnse = require "stdnse"
+local table = require "table"
+local httpspider = require "httpspider"
 
+portrule = shortport.port_or_service( {80, 443}, {"http", "https"}, "tcp", "open")
 
-
--- Fast-path bindings for the stdlib and nmap API used by this script.
--- Kept strict-mode safe: every name below is a declared local.
-local format = string.format
-local lower = string.lower
-local upper = string.upper
-local byte = string.byte
-local sub = string.sub
-local match = string.match
-local gmatch = string.gmatch
-local gsub = string.gsub
-local find = string.find
-local rep = string.rep
-local char = string.char
-local concat = table.concat
-local insert = table.insert
-local remove = table.remove
-local sort = table.sort
-local move = table.move
-local tostring = tostring
-local tonumber = tonumber
-local type = type
-local pcall = pcall
-local pairs = pairs
-local ipairs = ipairs
-local unpack = table.unpack
-local setmetatable = setmetatable
-local getmetatable = getmetatable
-local error = error
-local select = select
-
-local clock = nmap.clock
-local msleep = nmap.msleep
-
--- stdnse.sleep / stdnse.strsplit are not present in every NSE runtime.
-local sleep = function(seconds)
-    return nmap.msleep(math.max(0, math.floor(seconds * 1000)))
+local function compare(a, b)
+  return a[1] < b[1]
 end
 
-local strsplit = function(sep, str, max)
-    local out, pos, n = {}, 1, 0
-    if str == nil then return out end
-    while true do
-        if max and n >= max - 1 then
-            out[#out + 1] = sub(str, pos)
-            return out
-        end
-        local s, e = find(str, sep, pos)
-        if not s then
-            out[#out + 1] = sub(str, pos)
-            return out
-        end
-        if e < pos then e = pos end
-        out[#out + 1] = sub(str, pos, s - 1)
-        pos = e + 1
-        n = n + 1
-        if pos > #str then
-            out[#out + 1] = ""
-            return out
-        end
+local function inTable(tbl, item)
+
+  item = tostring(item)
+  for key, value in pairs(tbl) do
+    if value == tostring(item) then
+      return true
     end
+  end
+  return nil
+
 end
-
-local format_output = stdnse.format_output
-local output_table = stdnse.output_table
-
-description = [[Analyzes error pages for information disclosure by requesting non-existent paths and capturing error details.]]
-author = "HackIT Framework"
-license = "HackIT Framework — Internal Use Only"
-categories = {"web", "safe"}
-
-portrule = function(host, port) return port.protocol == "tcp" and port.state == "open" end
 
 action = function(host, port)
-    local test_paths = {
-        "/nonexistent12345.html",
-        "/test.asp",
-        "/test.aspx",
-        "/test.php",
-        "/test.jsp",
-        "/test.cfm",
-    }
-    local results = {}
-    for _, path in ipairs(test_paths) do
-        local resp = http.get(host, port, path)
-        if resp and resp.body and resp.body ~= "" then
-            local info = {}
-            if resp.find(body, "stack trace", 1, true) or resp.find(body, "Stack Trace", 1, true) then
-                insert(info, "Stack trace")
-            end
-            if resp.find(body, "Warning:", 1, true) or resp.find(body, "Fatal error", 1, true) then
-                insert(info, "PHP error")
-            end
-            if resp.find(body, "Exception", 1, true) then
-                insert(info, "Exception details")
-            end
-            if resp.find(body, "Server Error", 1, true) then
-                insert(info, "ASP.NET error")
-            end
-            if resp.find(body, "root:", 1, true) or resp.find(body, "jetty", 1, true) then
-                insert(info, "Java stack trace")
-            end
-            if resp.find(body, "File not found", 1, true) or resp.find(body, "No such file", 1, true) then
-                insert(info, "Path disclosure")
-            end
-            local path_info = resp.match(body, "in (%S+%.php)")
-            if path_info then
-                insert(info, "Path disclosed: " .. path_info)
-            end
-            if #info > 0 then
-                insert(results, "Error at " .. path .. " [" .. concat(info, ", ") .. "]")
-            end
-        end
+
+  local errcodes = stdnse.get_script_args("http-errors.errcodes") or nil
+
+  local crawler = httpspider.Crawler:new(host, port, '/', { scriptname = SCRIPT_NAME,
+    maxpagecount = 40,
+    maxdepth = -1,
+    withinhost = 1
+  })
+
+  crawler.options.doscraping = function(url)
+    if crawler:iswithinhost(url)
+      and not crawler:isresource(url, "js")
+      and not crawler:isresource(url, "css") then
+      return true
     end
-    if #results == 0 then
-        return format_output(false, "No information disclosure in error pages")
+  end
+
+  crawler:set_timeout(10000)
+
+  local errors = {}
+
+  while (true) do
+
+    local response, path
+
+    local status, r = crawler:crawl()
+    -- if the crawler fails it can be due to a number of different reasons
+    -- most of them are "legitimate" and should not be reason to abort
+    if (not(status)) then
+      if (r.err) then
+        return stdnse.format_output(false, r.reason)
+      else
+        break
+      end
     end
-    return format_output(true, concat(results, "\n"))
+
+    response = r.response
+    path = tostring(r.url)
+
+    if (response.status >= 400 and not errcodes) or
+      ( errcodes and type(errcodes) == "table" and inTable(errcodes, response.status) ) then
+      table.insert(errors, { tostring(response.status), path })
+    end
+
+  end
+
+  -- If the table is empty.
+  if next(errors) == nil then
+    return "Couldn't find any error pages."
+  end
+
+  table.sort(errors, compare)
+
+  -- Create a nice output.
+  local results = {}
+  for c, _ in pairs(errors) do
+    table.insert(results, "\nError Code: " .. _[1])
+    table.insert(results, "\t" .. _[2])
+  end
+
+  table.insert(results, 1, "Found the following error pages: ")
+
+  results.name = crawler:getLimitations()
+
+  return stdnse.format_output(true, results)
+
 end

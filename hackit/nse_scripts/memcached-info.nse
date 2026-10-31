@@ -1,125 +1,184 @@
-local stdnse = require "stdnse"
+local os = require "os"
+local datetime = require "datetime"
 local nmap = require "nmap"
+local match = require "match"
+local math = require "math"
 local shortport = require "shortport"
+local stdnse = require "stdnse"
+local string = require "string"
+local table = require "table"
 
+description = [[
+Retrieves information (including system architecture, process ID, and
+server time) from distributed memory object caching system memcached.
+]]
 
+---
+-- @usage
+-- nmap -p 11211 --script memcached-info
+--
+-- @output
+-- 11211/udp open  unknown
+-- | memcached-info:
+-- |   Process ID: 18568
+-- |   Uptime: 6950 seconds
+-- |   Server time: 2018-03-02T03:35:09
+-- |   Architecture: 64 bit
+-- |   Used CPU (user): 0.172010
+-- |   Used CPU (system): 0.200012
+-- |   Current connections: 10
+-- |   Total connections: 78
+-- |   Maximum connections: 1024
+-- |   TCP Port: 11211
+-- |   UDP Port: 11211
+-- |_  Authentication: no
+--
+-- @xmloutput
+-- <elem key="Process ID">17307</elem>
+-- <elem key="Uptime">10662 seconds</elem>
+-- <elem key="Server time">2018-03-01T16:46:59</elem>
+-- <elem key="Architecture">64 bit</elem>
+-- <elem key="Used CPU (user)">0.212809</elem>
+-- <elem key="Used CPU (system)">0.157151</elem>
+-- <elem key="Current connections">5</elem>
+-- <elem key="Total connections">11</elem>
+-- <elem key="Maximum connections">1024</elem>
+-- <elem key="TCP Port">11211</elem>
+-- <elem key="UDP Port">11211</elem>
+-- <elem key="Authentication">no</elem>
 
--- Fast-path bindings for the stdlib and nmap API used by this script.
--- Kept strict-mode safe: every name below is a declared local.
-local format = string.format
-local lower = string.lower
-local upper = string.upper
-local byte = string.byte
-local sub = string.sub
-local match = string.match
-local gmatch = string.gmatch
-local gsub = string.gsub
-local find = string.find
-local rep = string.rep
-local char = string.char
-local concat = table.concat
-local insert = table.insert
-local remove = table.remove
-local sort = table.sort
-local move = table.move
-local tostring = tostring
-local tonumber = tonumber
-local type = type
-local pcall = pcall
-local pairs = pairs
-local ipairs = ipairs
-local unpack = table.unpack
-local setmetatable = setmetatable
-local getmetatable = getmetatable
-local error = error
-local select = select
+author = "Patrik Karlsson"
+license = "Same as Nmap--See https://nmap.org/book/man-legal.html"
+categories = {"discovery", "safe"}
 
-local clock = nmap.clock
-local msleep = nmap.msleep
+portrule = shortport.port_or_service(11211, "memcached", {"tcp", "udp"})
 
--- stdnse.sleep / stdnse.strsplit are not present in every NSE runtime.
-local sleep = function(seconds)
-    return nmap.msleep(math.max(0, math.floor(seconds * 1000)))
+local filter = {
+
+  ["pid"] = { name = "Process ID" },
+  ["uptime"] = { name = "Uptime", func = function(v) return ("%d seconds"):format(v) end },
+  ["time"] = { name = "Server time", func = datetime.format_timestamp },
+  ["pointer_size"] = { name = "Architecture", func = function(v) return v .. " bit" end },
+  ["rusage_user"] = { name = "Used CPU (user)" },
+  ["rusage_system"] = { name = "Used CPU (system)"},
+  ["curr_connections"] = { name = "Current connections"},
+  ["total_connections"] = { name = "Total connections"},
+  ["maxconns"] = { name = "Maximum connections" },
+  ["tcpport"] = { name = "TCP Port" },
+  ["udpport"] = { name = "UDP Port" },
+  ["auth_enabled_sasl"] = { name = "Authentication" }
+
+}
+
+local order = {
+  "pid", "uptime", "time", "pointer_size", "rusage_user", "rusage_system",
+  "curr_connections", "total_connections", "maxconns", "tcpport", "udpport",
+  "auth_enabled_sasl"
+}
+
+local function fail(err) return stdnse.format_output(false, err) end
+
+local function mergetab(tab1, tab2)
+  for k, v in pairs(tab2) do
+    tab1[k] = v
+  end
+  return tab1
 end
 
-local strsplit = function(sep, str, max)
-    local out, pos, n = {}, 1, 0
-    if str == nil then return out end
-    while true do
-        if max and n >= max - 1 then
-            out[#out + 1] = sub(str, pos)
-            return out
-        end
-        local s, e = find(str, sep, pos)
-        if not s then
-            out[#out + 1] = sub(str, pos)
-            return out
-        end
-        if e < pos then e = pos end
-        out[#out + 1] = sub(str, pos, s - 1)
-        pos = e + 1
-        n = n + 1
-        if pos > #str then
-            out[#out + 1] = ""
-            return out
-        end
+local Comm = {
+  new = function(self, host, port, options)
+    local o = { host = host, port = port, options = options or {}}
+    self.protocol = port.protocol
+    self.req_id = math.random(0,0xfff)
+    setmetatable(o, self)
+    self.__index = self
+    return o
+  end,
+  connect = function(self)
+    self.socket = nmap.new_socket(self.protocol)
+    self.socket:set_timeout(self.options.timeout or stdnse.get_timeout(self.host))
+    return self.socket:connect(self.host, self.port)
+  end,
+  exchange = function(self, data)
+    local req_id = self.req_id
+    self.req_id = req_id + 1
+    if self.protocol == "udp" then
+      data = string.pack(">I2 I2 I2 I2",
+        req_id, -- request ID
+        0, -- sequence number
+        1, -- number of datagrams
+        0 -- reserved, must be 0
+        ) .. data
     end
+    local status = self.socket:send(data)
+    if not status then
+      return false, "Failed to send request to server"
+    end
+    if self.protocol == "udp" then
+      local msgs = {}
+      local dgrams = 0
+      repeat
+        local status, response = self.socket:receive_bytes(8)
+        if not status then return false, "Failed to receive entire response" end
+        local resp_id, seq, ndgrams, pos = string.unpack(">I2 I2 I2 xx", response)
+        if resp_id == req_id then
+          dgrams = ndgrams
+          msgs[seq+1] = string.sub(response, pos)
+        end
+      until #msgs >= dgrams
+      return true, table.concat(msgs)
+    end
+
+    -- pattern matches ERR or ERROR at the beginning of a string or after a newline
+    return self.socket:receive_buf(match.pattern_limit("%f[^\n\0]E[NR][DR]O?R?\r\n", 2048), true)
+  end,
+}
+
+local function parseResponse(response, expected)
+  local kvs = {}
+  for k, v in response:gmatch(("%%f[^\n\0]%s ([^%%s]*) (.-)\r\n"):format(expected)) do
+    stdnse.debug1("k=%s, v=%s", k, v)
+    kvs[k] = v
+  end
+  return kvs
 end
-
-local format_output = stdnse.format_output
-local output_table = stdnse.output_table
-
-description = [[Connects to a Memcached server and issues the "stats" command to retrieve server statistics and configuration parameters. Uses structured output with version extraction.]]
-author = "HackIT Framework"
-license = "HackIT Framework — Internal Use Only"
-categories = {"safe", "discovery"}
-
-portrule = function(host, port) return port.protocol == "tcp" and port.state == "open" and (port.number == 11211 or port.service == "memcache") end
-
-local commands = {"stats\r\n", "stats settings\r\n", "stats items\r\n", "version\r\n"}
 
 action = function(host, port)
-    local sock = new_socket()
-    sock:set_timeout(10000)
-    local ok, result = pcall(function()
-        local status = sock:connect(host.ip, port)
-        if not status then return end
-        local result = output_table()
-        for _, cmd in ipairs(commands) do
-            sock:send(cmd)
-            local _, resp = sock:receive_buf("\r\n", 5000)
-            if resp then
-                for line in gmatch(resp, "([^\r\n]+)") do
-                    if cmd == "version\r\n" then
-                        local ver = match(line, "VERSION ([^\r\n]+)")
-                        if ver then result.version = ver end
-                    else
-                        local parts = {}
-                        for part in gmatch(line, "%S+") do
-                            insert(parts, part)
-                        end
-                        if parts[1] == "STAT" and #parts >= 3 then
-                            local key = parts[2]
-                            local val = parts[3]
-                            for i = 4, #parts do
-                                val = val .. " " .. parts[i]
-                            end
-                            if not result[key] then
-                                result[key] = val
-                            end
-                        end
-                    end
-                end
-            end
-        end
-        sock:close()
-        if next(result) then return result end
-    end)
-    if not ok then
-        pcall(function() sock:close() end)
+
+  local client = Comm:new(host, port)
+  local status = client:connect()
+  if ( not(status) ) then
+    return fail("Failed to connect to server")
+  end
+
+  local request_time = os.time()
+  local status, response = client:exchange("stats\r\n")
+  if ( not(status) ) then
+    return fail(("Failed to send request to server: %s"):format(response))
+  end
+
+  local kvs = parseResponse(response, "STAT")
+  if kvs.time then
+    datetime.record_skew(host, kvs.time, request_time)
+  end
+
+  local status, response = client:exchange("stats settings\r\n")
+  if ( not(status) ) then
+    return fail(("Failed to send request to server: %s"):format(response))
+  end
+
+  local kvs2 = parseResponse(response, "STAT")
+
+  kvs = mergetab(kvs, kvs2)
+
+  local result = stdnse.output_table()
+  for _, item in ipairs(order) do
+    if ( kvs[item] ) then
+      local name = filter[item].name
+      local val = ( filter[item].func and filter[item].func(kvs[item]) or kvs[item] )
+      result[name] = val
     end
-    if not result or not next(result) then
-        return format_output(false, "Could not parse Memcached stats")
-    end
-    return result
+  end
+  return result
+
 end

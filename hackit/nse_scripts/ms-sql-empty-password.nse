@@ -1,215 +1,163 @@
-local stdnse = require "stdnse"
+local mssql = require "mssql"
 local nmap = require "nmap"
-local shortport = require "shortport"
+local stdnse = require "stdnse"
+local string = require "string"
+local table = require "table"
 
+-- -*- mode: lua -*-
+-- vim: set filetype=lua :
 
+description = [[
+Attempts to authenticate to Microsoft SQL Servers using an empty password for
+the sysadmin (sa) account.
 
--- Fast-path bindings for the stdlib and nmap API used by this script.
--- Kept strict-mode safe: every name below is a declared local.
-local format = string.format
-local lower = string.lower
-local upper = string.upper
-local byte = string.byte
-local sub = string.sub
-local match = string.match
-local gmatch = string.gmatch
-local gsub = string.gsub
-local find = string.find
-local rep = string.rep
-local char = string.char
-local concat = table.concat
-local insert = table.insert
-local remove = table.remove
-local sort = table.sort
-local move = table.move
-local tostring = tostring
-local tonumber = tonumber
-local type = type
-local pcall = pcall
-local pairs = pairs
-local ipairs = ipairs
-local unpack = table.unpack
-local setmetatable = setmetatable
-local getmetatable = getmetatable
-local error = error
-local select = select
+SQL Server credentials required: No (will not benefit from
+<code>mssql.username</code> & <code>mssql.password</code>).
+Run criteria:
+* Host script: Will run if the <code>mssql.instance-all</code>, <code>mssql.instance-name</code>
+or <code>mssql.instance-port</code> script arguments are used (see mssql.lua).
+* Port script: Will run against any services identified as SQL Servers, but only
+if the <code>mssql.instance-all</code>, <code>mssql.instance-name</code>
+and <code>mssql.instance-port</code> script arguments are NOT used.
 
-local clock = nmap.clock
-local msleep = nmap.msleep
+WARNING: SQL Server 2005 and later versions include support for account lockout
+policies (which are enforced on a per-user basis).
 
--- stdnse.sleep / stdnse.strsplit are not present in every NSE runtime.
-local sleep = function(seconds)
-    return nmap.msleep(math.max(0, math.floor(seconds * 1000)))
-end
+NOTE: Communication with instances via named pipes depends on the <code>smb</code>
+library. To communicate with (and possibly to discover) instances via named pipes,
+the host must have at least one SMB port (e.g. TCP 445) that was scanned and
+found to be open. Additionally, named pipe connections may require Windows
+authentication to connect to the Windows host (via SMB) in addition to the
+authentication required to connect to the SQL Server instances itself. See the
+documentation and arguments for the <code>smb</code> library for more information.
 
-local strsplit = function(sep, str, max)
-    local out, pos, n = {}, 1, 0
-    if str == nil then return out end
-    while true do
-        if max and n >= max - 1 then
-            out[#out + 1] = sub(str, pos)
-            return out
-        end
-        local s, e = find(str, sep, pos)
-        if not s then
-            out[#out + 1] = sub(str, pos)
-            return out
-        end
-        if e < pos then e = pos end
-        out[#out + 1] = sub(str, pos, s - 1)
-        pos = e + 1
-        n = n + 1
-        if pos > #str then
-            out[#out + 1] = ""
-            return out
-        end
+NOTE: By default, the ms-sql-* scripts may attempt to connect to and communicate
+with ports that were not included in the port list for the Nmap scan. This can
+be disabled using the <code>mssql.scanned-ports-only</code> script argument.
+]]
+
+---
+-- @see ms-sql-brute.nse
+--
+-- @usage
+-- nmap -p 445 --script ms-sql-empty-password --script-args mssql.instance-all <host>
+-- nmap -p 1433 --script ms-sql-empty-password <host>
+--
+-- @output
+-- | ms-sql-empty-password:
+-- |   [192.168.100.128\PROD]
+-- |_    sa:<empty> => Login Success
+--
+
+-- Created 01/17/2010 - v0.1 - created by Patrik Karlsson <patrik@cqure.net>
+-- Revised 02/01/2011 - v0.2 (Chris Woodbury)
+--    - Added ability to run against all instances on a host;
+--    - Added storage of credentials on a per-instance basis
+--    - Added compatibility with changes in mssql.lua
+
+author = "Patrik Karlsson"
+license = "Same as Nmap--See https://nmap.org/book/man-legal.html"
+categories = {"auth","intrusive"}
+
+dependencies = {"broadcast-ms-sql-discover"}
+
+local function test_credentials( instance, helper, username, password )
+  local database = "tempdb"
+
+  local status, result = helper:ConnectEx( instance )
+  local loginErrorCode
+  if( status ) then
+    stdnse.debug2("Attempting login to %s", instance:GetName() )
+    status, result, loginErrorCode = helper:Login( username, password, database, instance.host.ip )
+  end
+  helper:Disconnect()
+
+  local passwordIsGood, canLogin
+  if status then
+    passwordIsGood = true
+    canLogin = true
+  elseif ( loginErrorCode ) then
+    if ( loginErrorCode == mssql.LoginErrorType.PasswordExpired ) then passwordIsGood = true end
+    if ( loginErrorCode == mssql.LoginErrorType.PasswordMustChange ) then passwordIsGood = true end
+    if ( loginErrorCode == mssql.LoginErrorType.AccountLockedOut ) then
+      stdnse.debug1("Account %s locked out on %s", username, instance:GetName() )
+      table.insert( instance.ms_sql_empty, "'sa' account is locked out." )
     end
-end
-
-local format_output = stdnse.format_output
-local output_table = stdnse.output_table
-
-description = [[Tests MSSQL accounts using user-provided credentials. No hardcoded credentials.]]
-author = "HackIT Framework"
-license = "HackIT Framework — Internal Use Only"
-categories = {"safe", "vuln"}
-
-local function load_list(arg_names)
-  local val = stdnse.get_script_args(arg_names)
-  if not val or val == "" then return {} end
-  if byte(val) == 47 then
-    local f, err = io.open(val, "r")
-    if f then
-      local lines = {}
-      for line in f:lines() do
-        line = gsub(line, "^%s+", ""):gsub("%s+$", "")
-        if line ~= "" and byte(line) ~= 35 then insert(lines, line) end
-      end
-      f:close()
-      return lines
+    if ( mssql.LoginErrorMessage[ loginErrorCode ] == nil ) then
+      stdnse.debug2("Attemping login to %s: Unknown login error number: %s", instance:GetName(), loginErrorCode )
+      table.insert( instance.ms_sql_empty, string.format( "Unknown login error number: %s", loginErrorCode ) )
     end
-  elseif find(val, "\n") then
-    local lines = {}
-    for line in gmatch(val, "[^\n]+") do
-      line = gsub(line, "^%s+", ""):gsub("%s+$", "")
-      if line ~= "" and byte(line) ~= 35 then insert(lines, line) end
+  else
+    table.insert( instance.ms_sql_empty, string.format("Network error. Error: %s", result ) )
+  end
+
+  if ( passwordIsGood ) then
+    local loginResultMessage = "Login Success"
+    if loginErrorCode then
+      loginResultMessage = mssql.LoginErrorMessage[ loginErrorCode ] or "unknown error"
     end
-    return lines
+    table.insert( instance.ms_sql_empty, string.format( "%s:%s => %s", username, password:len()>0 and password or "<empty>", loginResultMessage ) )
+
+    -- Add credentials for other ms-sql scripts to use but don't
+    -- add accounts that need to change passwords
+    if ( canLogin ) then
+      instance.credentials[ username ] = password
+      -- Legacy storage method (does not distinguish between instances)
+      nmap.registry.mssqlusers = nmap.registry.mssqlusers or {}
+      nmap.registry.mssqlusers[username]=password
+    end
   end
-  local items = {}
-  for item in gmatch(val, "[^,]+") do
-    item = gsub(item, "^%s+", ""):gsub("%s+$", "")
-    if item ~= "" then insert(items, item) end
-  end
-  return items
 end
 
-local function le16(n) return char(n % 256, math.floor(n / 256) % 256) end
-local function le32(n)
-  return char(n % 256, math.floor(n / 256) % 256, math.floor(n / 65536) % 256, math.floor(n / 16777216) % 256)
-end
+--- Processes a single instance, attempting to detect an empty password for "sa"
+local function process_instance( instance )
 
-local function build_prelogin()
-  return char(
-    0x02, 0x01, 0x00, 0x2e, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00)
-end
+  -- One of this script's features is that it will report an instance's
+  -- in both the port-script results and the host-script results. In order to
+  -- avoid redundant login attempts on an instance, we will just make the
+  -- attempt once and then re-use the results. We'll use a mutex to make sure
+  -- that multiple script instances (e.g. a host-script and a port-script)
+  -- working on the same SQL Server instance can only enter this block one at
+  -- a time.
+  local mutex = nmap.mutex( instance )
+  mutex( "lock" )
 
-local function build_login7(user, pass, hostname)
-  hostname = hostname or "localhost"
-  local enc_pass = pass
-  local hdr_size = 128
-  local var_off = hdr_size
-  local host_off, host_len = var_off, #hostname * 2
-  var_off = var_off + host_len + 2
-  local user_off, user_len = var_off, #user * 2
-  var_off = var_off + user_len + 2
-  local pass_off, pass_len = var_off, #enc_pass * 2
-  var_off = var_off + pass_len + 2
+  local status, result
 
-  local total_len = var_off + 4
-  local tds_pkt_len = 8 + total_len
+  -- If this instance has already been tested (e.g. if we got to it by both the
+  -- hostrule and the portrule), don't test it again. This will reduce the risk
+  -- of locking out accounts.
+  if ( instance.tested_empty ~= true ) then
+    instance.tested_empty = true
 
-  local function add_uni(str)
-    local res = {}
-    for i = 1, #str do insert(res, char(byte(str, i), 0)) end
-    return concat(res) .. char(0, 0)
+    instance.credentials = instance.credentials or {}
+    instance.ms_sql_empty = instance.ms_sql_empty or {}
+
+    if not instance:HasNetworkProtocols() then
+      stdnse.debug1("%s has no network protocols enabled.", instance:GetName() )
+      table.insert( instance.ms_sql_empty, "No network protocols enabled." )
+    end
+
+    local helper = mssql.Helper:new()
+    test_credentials( instance, helper, "sa", "" )
   end
 
-  local hdr_parts = {
-    le32(total_len), le32(0x07040000), le32(4096),
-    le32(0), le32(0), le32(0),
-    char(0x00, 0x00, 0x00, 0x00),
-    le32(0), le32(0),
-    le16(host_off) .. le16(host_len),
-    le16(user_off) .. le16(user_len),
-    le16(pass_off) .. le16(pass_len),
-    le16(0) .. le16(0), le16(0) .. le16(0),
-    rep(char(0), 44),
-    le16(0) .. le16(0), le16(0) .. le16(0), le16(0) .. le16(0),
-    le16(0) .. le16(0), le16(0) .. le16(0), le16(0) .. le16(0),
-    le16(0) .. le16(0), le16(0) .. le16(0), le16(0) .. le16(0),
-    le16(0) .. le16(0), le16(0) .. le16(0), le16(0) .. le16(0),
-  }
+  -- The password testing has been finished. Unlock the mutex.
+  mutex( "done" )
 
-  local body = concat(hdr_parts) .. add_uni(hostname) .. add_uni(user) .. add_uni(enc_pass)
-  local tds_hdr = char(0x10, 0x01) .. le16(tds_pkt_len) .. le16(0) .. char(0x00, 0x00)
-  return tds_hdr .. body
-end
-
-portrule = function(host, port) return port.protocol == "tcp" and port.state == "open" and (port.number == 1433 or port.service == "ms-sql-s") end
-
-action = function(host, port)
-  local users = load_list({"ms-sql-empty-password.users", "users", "brute-mssql.users"})
-  local passes = load_list({"ms-sql-empty-password.passwords", "passwords", "brute-mssql.passwords"})
-  local timeout = tonumber(stdnse.get_script_args({"ms-sql-empty-password.timeout", "timeout"}) or 10)
-
-  if #users == 0 then
-    return format_output(false, "No users provided. Use ms-sql-empty-password.users script arg")
-  end
-
-  local result = output_table()
-  local found_weak = false
-
-  for _, u in ipairs(users) do
-    if found_weak then break end
-    for _, p in ipairs(passes) do
-      if found_weak then break end
-      local sock = new_socket()
-      sock:set_timeout(timeout * 1000)
-      local ok = pcall(function()
-        local status = sock:connect(host.ip, port)
-        if not status then return end
-        sock:send(build_prelogin())
-        local _, pre_resp = sock:receive_buf("", 5000)
-        if not pre_resp then sock:close(); return end
-        sock:send(build_login7(u, p, host.ip or "localhost"))
-        local _, login_resp = sock:receive_buf("", 5000)
-        sock:close()
-        if login_resp and #login_resp > 9 then
-          if byte(login_resp, 9) == 0x01 then
-            local token = byte(login_resp, 10)
-            if token == 0xAD and (byte(login_resp, 14) == 0 or byte(login_resp, 14) == 1) then
-              found_weak = true
-              result.weak_accounts = result.weak_accounts or {}
-              insert(result.weak_accounts, u .. "/" .. p)
-            end
-          end
-        end
-      end)
-      if not ok then pcall(function() sock:close() end) end
+  local instanceOutput
+  if ( instance.ms_sql_empty ) then
+    instanceOutput = {}
+    for _, message in ipairs( instance.ms_sql_empty ) do
+      table.insert( instanceOutput, message )
+    end
+    if ( nmap.verbosity() > 1 and #instance.ms_sql_empty == 0 ) then
+      table.insert( instanceOutput, "'sa' account password is not blank." )
     end
   end
 
-  if found_weak then
-    result.vulnerability = true
-    result.severity = "CRITICAL"
-    result.details = "MSSQL weak/default credentials detected"
-    return result
-  end
-  return format_output(false, "No MSSQL weak credentials found")
+  return instanceOutput
+
 end
+
+action, portrule, hostrule = mssql.Helper.InitScript(process_instance)

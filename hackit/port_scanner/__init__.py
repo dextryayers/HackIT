@@ -740,6 +740,60 @@ def render_intel_grid(ip_addr, host_name, dns_enum, intel, os_info, mode, scan_m
 # CLICK COMMAND DEFINITION
 # ─────────────────────────────────────────────────────────────────
 
+VERSION = "3.1.0"
+
+
+def _profile_port_spec(profile):
+    """Turn a profile into a port spec string the engines understand."""
+    if getattr(profile, "ports", None):
+        return ",".join(str(p) for p in profile.ports)
+    if str(getattr(profile, "name", "")).lower() == "full":
+        return "1-65535"
+    return "top100"
+
+
+def _describe_ports(spec):
+    text = str(spec or "top100").strip()
+    if text == "1-65535":
+        return "all 65535 ports"
+    if text.startswith("top"):
+        return "%s common ports" % text[3:]
+    count = _estimate_port_count(text)
+    return "%d ports (%s)" % (count, text if len(text) <= 48 else text[:45] + "...")
+
+
+def _print_script_catalogue(filter_text=None, categories=False):
+    """`--list-scripts` / `--script-categories` output."""
+    from .nse import NseEngine, CATEGORY_LABELS, available_categories
+
+    engine = NseEngine()
+    if not engine.available:
+        cli_ui.error("nmap is required for NSE scripts and was not found on PATH")
+        return
+    scripts = engine.scripts
+
+    if categories:
+        cli_ui.section("nse categories", "%d scripts" % len(scripts))
+        for name, count in available_categories(scripts).items():
+            label = CATEGORY_LABELS.get(name, "")
+            cli_ui.emit(cli_ui.GUTTER
+                        + cli_ui.paint(name.ljust(14), B_CYAN)
+                        + cli_ui.paint(str(count).rjust(4), B_WHITE)
+                        + cli_ui.paint("   " + label, DIM))
+        cli_ui.emit()
+        return
+
+    selected = engine.select([filter_text or "all"])
+    cli_ui.section("nse scripts", "%d of %d" % (len(selected), len(scripts)))
+    for script in selected:
+        cli_ui.emit(cli_ui.GUTTER
+                    + cli_ui.paint(script.name.ljust(34), B_WHITE)
+                    + cli_ui.paint(script.primary_category.ljust(12), CYAN)
+                    + cli_ui.paint(script.short_description, DIM))
+    cli_ui.emit()
+
+
+
 @click.command()
 @click.argument('target_arg', required=False)
 # [ CORE TARGETING ]
@@ -788,7 +842,11 @@ def render_intel_grid(ip_addr, host_name, dns_enum, intel, os_info, mode, scan_m
 @click.option('--smart-probe', is_flag=True, help='Smart probes: protocol-specific payloads')
 @click.option('--fingerprint', '--fp', type=int, default=5, help='Fingerprint intensity (0-9)')
 @click.option('--os-detect', '--os', is_flag=True, help='OS detection via TCP/IP fingerprinting')
-@click.option('--script', '--sc', help='Script modules (vuln, exploit, brute, enum, all)')
+@click.option('--script', '--sc', help='NSE scripts: a name, a category (vuln, brute, auth, discovery, web, safe, malware, intrusive), a prefix (http-), or "all"')
+@click.option('--list-scripts', 'list_scripts', is_flag=False, flag_value='all', default=None,
+              help='List bundled NSE scripts (optionally filtered by name or category) and exit')
+@click.option('--script-categories', is_flag=True, help='List NSE categories with script counts and exit')
+@click.option('--script-timeout', type=int, default=30, help='Per-script timeout in seconds (default 30)')
 @click.option('--plugins', is_flag=True, help='Run all Lua/Ruby NSE plugins on open ports')
 @click.option('--script-args', help='Script arguments (key=value,key2=value2)')
 
@@ -827,654 +885,302 @@ def render_intel_grid(ip_addr, host_name, dns_enum, intel, os_info, mode, scan_m
 
 def scan_ports(**kwargs):
     """
-    ⚡ HackIT PortStorm v3.0 — Ultra-Power Polyglot Port Scanner.
-
-    Engines: Go (Orchestrator) · Rust (Mass Scan) · C (Raw Socket) · C++ (Deep Fingerprint) · Lua (Script Engine)
-
-    Use 'gui' to launch the desktop GUI.
+    HackIT port scanner — accurate TCP/service discovery with real NSE scripting.
 
     Examples:
 
+      scan -t example.com
+
+      scan -t 10.0.0.0/24 -p 22,80,443
+
+      scan -t example.com -p top1000 --deep
+
+      scan -t example.com --script vuln
+
+      scan --list-scripts http-
+
       scan gui
-
-      scan example.com -p top:100 --deep --os
-
-      scan 10.0.0.0/24 -p 22,80,443,3389 --tempo blitz
-
-      scan 192.168.1.1 --profile full
     """
-    # ── No-color mode ───────────────────────────────────────────
+    from . import cli_ui
+
     if kwargs.get('no_color'):
         import hackit.ui as _hackit_ui
-        _hackit_ui._colored = lambda text, *args, **kwargs: str(text)
+        _hackit_ui._colored = lambda text, *args, **kw: str(text)
+        cli_ui._colored = lambda text, *args, **kw: str(text)
 
-    # ── Quiet mode ──────────────────────────────────────────────
-    _quiet = kwargs.get('quiet', False)
-    if _quiet:
+    quiet = bool(kwargs.get('quiet'))
+    if quiet:
         kwargs['verbose'] = 0
 
-    # ── Version display ──────────────────────────────────────────
     if kwargs.get('show_version'):
-        click.echo(f"\n  {_colored('HackIT PortStorm', B_CYAN, bold=True)} {_colored('v3.0.0', B_WHITE)}")
-        click.echo(f"  Engines: {_colored('Go+Rust+C+C+++Lua', B_GREEN)}\n")
+        click.echo("  HackIT PortStorm %s" % VERSION)
         return
 
-    # ── GUI launcher ──────────────────────────────────────────────
-    target_arg = kwargs.get('target_arg', '')
-    if target_arg and target_arg.lower() == 'gui':
+    target_arg = (kwargs.get('target_arg') or '').strip()
+    if target_arg.lower() == 'gui':
         try:
-            from .gui import GUI as PortStormGUI
-            gui = PortStormGUI()
-            gui.run()
+            from .gui import GUI
+            GUI().run()
         except SystemExit:
             raise
-        except Exception as e:
-            click.echo(_colored(f'  [!] GUI: {e}', YELLOW))
-            click.echo('  Run: python3 hackit/port_scanner/gui.py')
+        except Exception as exc:
+            cli_ui.error("GUI failed to start: %s" % exc)
         return
 
-    # ── Early target check ────────────────────────────────────────
-    target_raw = kwargs.get('target_arg') or kwargs.get('host')
-    if not target_raw and not kwargs.get('host_file') and not kwargs.get('single_engine'):
-        ctx = click.get_current_context()
-        click.echo(ctx.get_help())
+    if kwargs.get('list_scripts') is not None or kwargs.get('script_categories'):
+        _print_script_catalogue(kwargs.get('list_scripts'),
+                                bool(kwargs.get('script_categories')))
         return
 
-    # ── Print premium banner ─────────────────────────────────────
-    target_raw = target_arg or kwargs.get('host') or ''
-    if not _quiet:
-        print_portstorm_banner(target=target_raw)
+    raw_target = target_arg or kwargs.get('host')
+    if not raw_target and not kwargs.get('host_file'):
+        click.echo(click.get_current_context().get_help())
+        return
 
-    # ── Profile override ─────────────────────────────────────────
-    profile_name = kwargs.get('profile')
-    if profile_name:
-        try:
-            from .engine_profiles import get_profile
-            prof = get_profile(profile_name)
-            if not kwargs.get('ports'):
-                kwargs['ports'] = prof.port_spec
-            if not kwargs.get('workers'):
-                kwargs['workers'] = prof.workers
-            if not kwargs.get('mode'):
-                kwargs['mode'] = prof.mode
-            click.echo(_colored(f"  [PROFILE] {prof.name}: {prof.description}", B_CYAN))
-        except ImportError:
-            click.echo(_colored("  [!] engine_profiles module not available", YELLOW))
-
-    # ── Multi-engine mode (ALL engines in parallel — DEFAULT) ────
-    if not kwargs.get('single_engine'):
-        try:
-            from .engine_orchestrator import PortOrchestrator
-            from .engine_discovery import discover_engines
-            engines = discover_engines()
-            orchestrator = PortOrchestrator()
-            ports_str = kwargs.get('ports') or 'top100'
-            _STAGE_ALIASES = {
-                'tcp': 'tcp_scan', 'service': 'service_detect',
-                'os': 'os_detect', 'vuln': 'vuln_scan',
-                'discovery': 'discovery', 'enrich': 'enrich',
-            }
-            raw_stages = kwargs.get('pipeline', '').split(',') if kwargs.get('pipeline') else None
-            stages = [_STAGE_ALIASES.get(s.strip(), s.strip()) for s in raw_stages] if raw_stages else None
-            # Add OS detection stage if --os flag is set
-            if kwargs.get('os_detect'):
-                if stages is None:
-                    stages = ['tcp_scan', 'service_detect', 'os_detect']
-                elif 'os_detect' not in stages:
-                    stages = stages + ['os_detect']
-
-            if kwargs.get('dashboard'):
-                from .live_dashboard import Dashboard
-                dash = Dashboard()
-                dash.start(target_raw, total_ports=_estimate_port_count(ports_str))
-                try:
-                    results = orchestrator.run_scan(target_raw, ports_str, profile_name or 'quick',
-                                                     engines=None, stages=stages,
-                                                     callback=dash.update,
-                                                     options=build_scan_options(kwargs))
-                finally:
-                    dash.stop()
-            else:
-                results = orchestrator.run_scan(target_raw, ports_str, profile_name or 'quick',
-                                                 engines=None, stages=stages,
-                                                 options=build_scan_options(kwargs))
-            if results:
-                all_ports = results.get('results', [])
-                # Default view is open services only; --all-ports brings back
-                # the closed/filtered rows for auditing.
-                show_all = bool(kwargs.get('all_ports'))
-                display_ports = all_ports if show_all else [
-                    p for p in all_ports if p.get('status', '').lower() == 'open'
-                ]
-                render_port_table(display_ports, show_risk=kwargs.get('risk', False),
-                                  open_only=not show_all, host=target_raw)
-
-                open_ports = [p for p in all_ports if p and p.get('status', '').lower() == 'open']
-
-                # ── NSE / Lua script findings ──────────────────────
-                if kwargs.get('script') or kwargs.get('plugins') or kwargs.get('deep'):
-                    vuln_count = 0
-                    for pr in open_ports:
-                        scripts = pr.get('scripts', []) or []
-                        if scripts:
-                            click.echo()
-                            click.echo(f"  {_colored('◆ PORT', B_CYAN)} {_colored(str(pr.get('port','')), B_WHITE)}"
-                                       f" {_colored('INTELLIGENCE', CYAN)}")
-                            for sc in scripts[:15]:
-                                click.echo(f"    {_colored('◉', CYAN)} {_colored(str(sc)[:120], DIM)}")
-                    # Show plugins if any
-                    for pr in open_ports:
-                        plugins = pr.get('plugins', {}) or {}
-                        if plugins:
-                            click.echo()
-                            click.echo(f"  {_colored('◆ PORT', B_CYAN)} {_colored(str(pr.get('port','')), B_WHITE)}"
-                                       f" {_colored('PLUGINS', CYAN)}")
-                            for name, findings in plugins.items():
-                                for f in (findings if isinstance(findings, list) else [findings]):
-                                    click.echo(f"    {_colored('◉', PURPLE)} {_colored(str(f)[:120], DIM)}")
-
-                # Show full OS fingerprint details
-                os_info = results.get('os', {})
-                if os_info and os_info.get('name', 'Unknown') not in ('Unknown', 'Detecting...', ''):
-                    os_name = os_info.get('name', 'Unknown')
-                    conf = os_info.get('confidence', os_info.get('accuracy', 0))
-                    if isinstance(conf, float) and conf < 1.0:
-                        conf = int(conf * 100)
-                    os_ver = os_info.get('version', '')
-                    os_family = os_info.get('family', '')
-                    
-                    # Show detected distribution
-                    os_display = os_name
-                    if os_ver:
-                        os_display += f" {os_ver}"
-                    
-                    click.echo()
-                    click.echo(_colored("  ──────────────── OS FINGERPRINT ────────────────", B_CYAN))
-                    
-                    # Show distribution set if available from voting
-                    os_votes = os_info.get('os_votes', {})
-                    if os_votes and len(os_votes) > 1:
-                        top_distros = [d for d, _ in sorted(os_votes.items(), key=lambda x: -x[1])[:4]]
-                        click.echo(_colored(f"  OS          : {os_display}", B_CYAN, bold=True) +
-                                    _colored(f" (confidence: {conf}%)", DIM))
-                        click.echo(_colored(f"  Candidates  : {' | '.join(top_distros)}", DIM))
-                    else:
-                        click.echo(_colored(f"  OS          : {os_display}", B_CYAN, bold=True) +
-                                    _colored(f" (confidence: {conf}%)", DIM))
-                    
-                    # TCP/IP stack fingerprint details
-                    fp_parts = []
-                    ttl = os_info.get('ttl')
-                    if ttl:
-                        fp_parts.append(f"TTL={ttl}")
-                    window = os_info.get('window')
-                    if window:
-                        fp_parts.append(f"WIN={window}")
-                    mss = os_info.get('mss')
-                    if mss:
-                        fp_parts.append(f"MSS={mss}")
-                    wscale = os_info.get('wscale')
-                    if wscale:
-                        fp_parts.append(f"WS={wscale}")
-                    df = os_info.get('df')
-                    if df:
-                        fp_parts.append(f"DF={df}")
-                    ts = os_info.get('timestamps')
-                    if ts:
-                        fp_parts.append(f"TS={ts}")
-                    sack = os_info.get('sack')
-                    if sack:
-                        fp_parts.append(f"SACK={sack}")
-                    ipid = os_info.get('ipid')
-                    if ipid:
-                        fp_parts.append(f"IPID={ipid}")
-                    family = os_info.get('family')
-                    if family:
-                        fp_parts.append(f"Family={family}")
-                    device = os_info.get('device_type')
-                    if device:
-                        fp_parts.append(f"Type={device}")
-                    if fp_parts:
-                        click.echo(_colored(f"  TCP/IP      : {' | '.join(fp_parts)}", DIM))
-                    
-                    # Architecture and kernel
-                    arch = os_info.get('arch')
-                    if arch:
-                        click.echo(_colored(f"  Arch        : {arch}", DIM))
-                    kernel = os_info.get('kernel')
-                    if kernel:
-                        click.echo(_colored(f"  Kernel      : {kernel}", DIM))
-                    
-                    # TCP options
-                    tcp_opts = os_info.get('tcp_options')
-                    if tcp_opts:
-                        click.echo(_colored(f"  TCP Options : {tcp_opts[:70]}", DIM))
-                    
-                    # Banner evidence
-                    banner_hint = os_info.get('banner_hint')
-                    if banner_hint:
-                        click.echo(_colored(f"  Banner Hint : {banner_hint[:60]}", DIM))
-                    
-                    # Full fingerprint evidence
-                    evidence_list = os_info.get('evidence', [])
-                    if evidence_list:
-                        click.echo(_colored(f"  Evidence    : {' | '.join(evidence_list)}", DIM))
-                    else:
-                        fp_str = os_info.get('fingerprint', '')
-                        if fp_str:
-                            click.echo(_colored(f"  Evidence    : {fp_str[:100]}", DIM))
-                    
-                    sig = os_info.get('signature')
-                    if sig:
-                        click.echo(_colored(f"  Signature   : {sig[:80]}", DIM))
-                    
-                    # Engine source
-                    engine_src = os_info.get('engine')
-                    if engine_src:
-                        click.echo(_colored(f"  Engine      : {engine_src}", DIM))
-                    click.echo()
-            return
-        except ImportError as e:
-            click.echo(_colored(f"  [!] Multi-engine mode unavailable: {e}", YELLOW))
-            click.echo(_colored("  [*] Falling back to Go engine...", DIM))
-
-    # ── Engine initialization (fallback when --single-engine) ────
-    engine = get_engine()
-    engine_ok = engine.available and engine.ensure_compiled()
-
-    if not engine_ok:
-        click.echo(_colored("[!] Go engine not found — falling back to Python scanner.", YELLOW))
-
-    # ── Target resolution ────────────────────────────────────────
-    target_raw = kwargs.get('target_arg') or kwargs.get('host')
-    target_list = []
-    if target_raw:
-        target_list = parse_targets(target_raw)
-    elif kwargs.get('host_file'):
-        target_list = parse_targets(f"@{kwargs.get('host_file')}")
+    if kwargs.get('host_file') and not raw_target:
+        targets = parse_targets("@" + kwargs['host_file'])
     else:
-        ctx = click.get_current_context()
-        click.echo(ctx.get_help())
+        targets = parse_targets(raw_target)
+    if not targets:
+        cli_ui.error("no valid targets in %r" % raw_target)
         return
 
-    if not target_list:
-        click.echo(_colored("[!] No valid targets resolved.", RED))
-        return
-
-    # ── Tempo → timing config ────────────────────────────────────
-    tempo = kwargs.get('tempo', 'normal')
-    mode  = kwargs.get('mode', 'tcp-connect')
-
-    t_cfg = TEMPO_CONFIG.get(tempo, TEMPO_CONFIG['normal'])
-    timeout_sec = kwargs.get('timeout', 0)
-    if timeout_sec:
-        wait = timeout_sec * 1000
-    else:
-        wait = kwargs.get('host_timeout') or t_cfg['wait']
-    workers    = kwargs.get('workers')      or t_cfg['workers']
-    scan_delay = kwargs.get('scan_delay')   or t_cfg['delay']
-
-    # Adaptive override
-    if kwargs.get('adaptive'):
-        click.echo(_colored("  [ADAPTIVE] Auto-tuning timing based on network conditions...", DIM))
-
-    # ── Scan mode → engine mode mapping ─────────────────────────
-    scan_mode = SCAN_MODE_MAP.get(mode, 'connect')
-    stealth_val = False
-
-    # ── Stealth flag processing ──────────────────────────────────
-    if mode == 'anon-self':
-        kwargs['ghost_protocol'] = True
-        kwargs['chaos'] = True
-        stealth_val = True
-
-    if kwargs.get('ghost_protocol'):
-        stealth_val = True
-        kwargs['frag'] = True
-        kwargs['randomize_ports'] = True
-        if not kwargs.get('scan_delay'):
-            scan_delay = max(scan_delay, 500)
-        click.echo(_colored("  [GHOST] Maximum stealth engaged: SYN+frag+decoys+delays+jitter", PURPLE))
-
-    if kwargs.get('chaos'):
-        kwargs['randomize_targets'] = True
-        kwargs['randomize_ports'] = True
-        if not kwargs.get('ttl'):
-            kwargs['ttl'] = random.randint(44, 200)
-        click.echo(_colored(f"  [CHAOS] Randomization + TTL={kwargs['ttl']} + IP spoofing engaged", RED))
-
-    # ── Deep scan flag cascade ───────────────────────────────────
-    if kwargs.get('plugins'):
-        kwargs['script'] = kwargs.get('script') or 'all'
-    if kwargs.get('deep'):
-        kwargs['os_detect'] = True
-        kwargs['smart_probe'] = True
-        kwargs['fingerprint'] = 9
-        kwargs['fingerprint_intensity'] = 9
-        if not kwargs.get('script'):
-            kwargs['script'] = 'vuln'
-        click.echo(_colored("  [DEEP] Full pipeline: OS+service+vuln+fingerprint activated", CYAN))
-    if kwargs.get('fingerprint'):
-        kwargs.setdefault('fingerprint_intensity', kwargs['fingerprint'])
-
-    # ── Port selection ───────────────────────────────────────────
-    ports_str = parse_ports(
-        kwargs.get('ports'),
-        None,
-        kwargs.get('mode') == 'quick',
-        kwargs.get('ports') == 'all',
-        top_n=None
-    )
-
-    # ── Randomize targets ────────────────────────────────────────
     if kwargs.get('randomize_targets'):
-        random.shuffle(target_list)
+        random.shuffle(targets)
 
-    # ── Pre-scan summary ─────────────────────────────────────────
-    click.echo(f"\n  {_colored('TARGETS', B_WHITE)}: {_colored(str(len(target_list)), B_YELLOW)} host(s)  "
-               f"{_colored('ENGINE', B_WHITE)}: {_colored('Go+Rust+C+C+++Lua' if engine_ok else 'Python', B_GREEN)}  "
-               f"{_colored('TEMPO', B_WHITE)}: {_colored(t_cfg['desc'], CYAN)}")
-    click.echo(f"  {_colored('MODE', B_WHITE)}: {_colored(mode.upper(), PURPLE)}  "
-               f"{_colored('PORTS', B_WHITE)}: {_colored(str(ports_str)[:60] + '...' if len(str(ports_str)) > 60 else str(ports_str), YELLOW)}")
-    click.echo()
+    # ── profile ─────────────────────────────────────────────────
+    from .engine_profiles import get_profile
+    profile_name = (kwargs.get('profile') or 'quick').lower()
+    profile = get_profile(profile_name)
 
-    # ═══════════════════════════════════════════════════════════
-    # MAIN SCAN LOOP
-    # ═══════════════════════════════════════════════════════════
-    start_time = datetime.now()
-    all_results = []
-    grand_open = 0
-    grand_total = 0
+    ports_spec = parse_ports(
+        kwargs.get('ports') or _profile_port_spec(profile),
+        None,
+        False,
+        kwargs.get('ports') == 'all',
+        top_n=None,
+    )
+    total_ports = _estimate_port_count(ports_spec)
 
-    _scan_start_time = _time.time()
-    _scan_count = 0
-    _scan_timeline = []
-    def scan_callback(cb_type, data):
-        """Real-time callback for Go engine events."""
-        nonlocal _scan_count, _scan_start_time, _scan_timeline
-        if cb_type == "status":
-            msg = data.get('message', '')
-            if msg and kwargs.get('verbose', 0) >= 1 and not _quiet:
-                sys.stdout.write(_colored(f"\r  \u25c8 {msg}..." + " " * 10, DIM))
-                sys.stdout.flush()
-        elif cb_type == "result":
-            status = data.get('status', 'unknown')
-            if status == 'open':
-                port = data.get('port', 0)
-                if port > 0:
-                    service = data.get('service', 'unknown')
-                    banner  = data.get('banner', data.get('version', ''))
-                    _scan_count += 1
-                    elapsed_s = int(_time.time() - _scan_start_time)
-                    _scan_timeline.append({"time": f"+{elapsed_s}s", "msg": f"Port {port} open — {service}"})
+    options = build_scan_options(kwargs)
 
-                    if not _quiet:
-                        p_str = _colored(f"{port:<5}", B_WHITE, bold=True)
-                        s_str = _colored("OPEN", B_GREEN, bold=True)
-                        v_str = _colored(f"{service[:16]:<16}", B_CYAN)
-                        b_str = _colored(str(banner)[:35].replace('\n', ' ') if banner else "(probing...)", DIM)
-                        sys.stdout.write(f"\r  {_colored('\u25b6', B_GREEN)} {p_str} {s_str} {v_str} {b_str}\n")
-                        sys.stdout.flush()
-        elif cb_type == "progress":
-            pct = data.get('percent', 0)
-            _scan_count = data.get('scanned', _scan_count)
-            if not _quiet and pct > 0:
-                elapsed = _time.time() - _scan_start_time
-                rate = _scan_count / elapsed if elapsed > 0 else 0
-                sys.stdout.write(_colored(f"\r  Progress: {pct:.0f}%  |  {_scan_count} ports  |  {rate:.0f} p/s  |  {elapsed:.1f}s  ", DIM))
-                sys.stdout.flush()
+    # ── engine selection ────────────────────────────────────────
+    if kwargs.get('single_engine'):
+        engines = ['go']
+    elif kwargs.get('all_engines'):
+        from .engine_discovery import discover_engines
+        engines = [e['language'] if isinstance(e, dict) else str(e)
+                   for e in discover_engines()]
+        engines = [e for e in engines if e] or ['go']
+    else:
+        engines = None  # profile decides
 
-    for t in target_list:
-        # ── Target header ──────────────────────────────────────
-        if not _quiet:
-            click.echo(_colored("  ┌─────────────────────────────────────────────────────────────────────────────┐", B_CYAN))
-            click.echo(_colored("  │", B_CYAN) + pad_v(
-                f" {_colored('\u26a1 SCANNING', YELLOW)}  {_colored(t, B_WHITE, bold=True)}", 77
-            ) + _colored("│", B_CYAN))
-            click.echo(_colored("  └─────────────────────────────────────────────────────────────────────────────┘", B_CYAN))
+    # ── stages ──────────────────────────────────────────────────
+    stage_aliases = {
+        'tcp': 'tcp_scan', 'service': 'service_detect', 'os': 'os_detect',
+        'vuln': 'vuln_scan', 'discovery': 'discovery', 'enrich': 'enrich',
+    }
+    if kwargs.get('pipeline'):
+        stages = [stage_aliases.get(s.strip(), s.strip())
+                  for s in kwargs['pipeline'].split(',') if s.strip()]
+    else:
+        stages = list(profile.stages)
 
-        results_cache = []
+    if kwargs.get('os_detect') and 'os_detect' not in stages:
+        stages.append('os_detect')
+    if kwargs.get('deep') and 'vuln_scan' not in stages:
+        stages.append('vuln_scan')
 
-        # ── Engine execution ───────────────────────────────────
-        if engine_ok:
-            engine_kwargs = {}
-            # Forward all relevant kwargs to engine — exclude params passed explicitly
-            explicit_params = {'target_arg', 'host', 'host_file', 'mode', 'ports',
-                               'workers', 'tempo', 'risk', 'scan_delay', 'host_timeout',
-                               'timeout', 'verbose', 'output_format', 'fingerprint'}
-            for k, v in kwargs.items():
-                if k not in explicit_params and v is not None:
-                    engine_kwargs[k] = v
-
-            engine_res = engine.run(
-                t,
-                ports=ports_str,
-                timeout=wait,
-                threads=workers,
-                include_closed=False,
-                stealth=stealth_val,
-                mode=scan_mode,
-                callback=scan_callback,
-                scan_delay=scan_delay,
-                **engine_kwargs
-            )
-
-            all_results.append(engine_res)
-
-            # ── Extract result data ────────────────────────────
-            target_data = {}
-            if isinstance(engine_res, dict):
-                if 'results' in engine_res and isinstance(engine_res['results'], list):
-                    target_data = next(
-                        (r for r in engine_res['results'] if r.get('host') == t),
-                        engine_res['results'][0] if engine_res['results'] else {}
-                    )
-                elif 'host' in engine_res:
-                    target_data = engine_res
-            elif isinstance(engine_res, list) and len(engine_res) > 0:
-                target_data = engine_res[0]
-
-            intel    = target_data.get('intel', {})
-            os_info  = target_data.get('os', {})
-            ip_addr  = target_data.get('ip') or target_data.get('host') or t
-            host_name = target_data.get('host', t)
-            port_results = target_data.get('results') or []
-
+    # ── NSE selection ───────────────────────────────────────────
+    nse_engine = None
+    nse_scripts = []
+    want_nse = bool(kwargs.get('script') or kwargs.get('plugins') or kwargs.get('deep'))
+    if want_nse:
+        from .nse import NseEngine
+        nse_engine = NseEngine()
+        if not nse_engine.available:
+            cli_ui.warn("nmap not found — NSE scripts will be skipped")
+            nse_engine = None
         else:
-            # Pure Python fallback
-            port_range = ports_str if isinstance(ports_str, str) else "1-1024"
-            port_results = fast_port_scan(t, port_range, workers=workers, timeout=wait/1000)
-            ip_addr   = t
-            host_name = t
-            intel     = {}
-            os_info   = {}
+            selection = kwargs.get('script') or ('all' if kwargs.get('plugins') else 'vuln')
+            nse_scripts = nse_engine.select([selection])
+            if not nse_scripts:
+                cli_ui.warn("no NSE scripts match %r" % selection)
+                nse_engine = None
 
-        # ── DNS enrichment ─────────────────────────────────────
-        dns_list = list(intel.get('dns', []))
+    # ── header ──────────────────────────────────────────────────
+    nse_label = ("%d scripts" % len(nse_scripts)) if nse_engine else "off"
+    if engines:
+        engine_label = "+".join(engines)
+    else:
+        engine_label = "+".join(getattr(profile, "engines", None) or ["go"])
+    if not quiet:
+        cli_ui.header(
+            target=targets[0] + (" (+%d)" % (len(targets) - 1) if len(targets) > 1 else ""),
+            address="",
+            ports_label=_describe_ports(ports_spec),
+            engine=engine_label,
+            profile=profile.name,
+            nse_label=nse_label,
+            workers=int(options.get('workers', profile.workers)),
+            timeout_ms=int(options.get('timeout_ms', profile.timeout_ms)),
+        )
+
+    # ── scan ────────────────────────────────────────────────────
+    from .engine_orchestrator import PortOrchestrator
+
+    orchestrator = PortOrchestrator()
+    started = _time.time()
+    live_count = {"open": 0, "scanned": 0}
+    live_rows = []
+
+    def on_event(kind, data):
+        if quiet or kind != 'result' or not isinstance(data, dict):
+            return
+        if str(data.get('status', '')).lower() != 'open':
+            return
+        live_rows.append(data)
+        cli_ui.live_open(data)
+
+    all_hosts = []
+    for target in targets:
+        if len(targets) > 1 and not quiet:
+            cli_ui.title(target)
         try:
-            ptr = socket.gethostbyaddr(ip_addr)[0]
-            if ptr and ptr not in dns_list:
-                dns_list.append(ptr)
-        except Exception:
-            pass
-        dns_enum = " | ".join(dns_list) or "N/A"
+            result = orchestrator.run_scan(
+                target,
+                ports_spec,
+                profile,
+                engines=engines,
+                stages=stages,
+                callback=on_event,
+                options=options,
+            )
+        except Exception as exc:
+            cli_ui.error("%s: scan failed: %s" % (target, exc))
+            continue
+        if not result:
+            cli_ui.warn("%s: no results" % target)
+            continue
+        all_hosts.append((target, result))
 
-        # ── Intel grid display ─────────────────────────────────
-        render_intel_grid(ip_addr, host_name, dns_enum, intel, os_info, mode, scan_mode, workers, tempo)
+    elapsed = _time.time() - started
 
-        # ── Filter open ports ──────────────────────────────────
-        open_ports  = [p for p in port_results if p and p.get('status', '').lower() == 'open']
-        filt_ports  = [p for p in port_results if p and p.get('status', '').lower() in ('filtered', 'forbidden')]
-        closed_ports = [p for p in port_results if p and p.get('status', '').lower() == 'closed']
+    if not all_hosts:
+        cli_ui.error("scan produced no results")
+        return
 
-        grand_open  += len(open_ports)
-        grand_total += len(port_results)
+    # ── presentation + NSE ──────────────────────────────────────
+    grand_open = 0
+    grand_probed = 0
+    all_nse_results = []
+    json_hosts = []
 
-        # ── Port table ─────────────────────────────────────────
-        show_all = bool(kwargs.get('all_ports'))
-        display_ports = port_results if show_all else open_ports
-        render_port_table(display_ports, show_risk=kwargs.get('risk', False),
-                          timeline=_scan_timeline, open_only=not show_all)
+    for target, result in all_hosts:
+        port_results = [p for p in result.get('results', []) if isinstance(p, dict)]
+        open_ports = [p for p in port_results if str(p.get('status', '')).lower() == 'open']
+        closed_ports = [p for p in port_results if str(p.get('status', '')).lower() == 'closed']
+        filtered_ports = [p for p in port_results
+                          if str(p.get('status', '')).lower() in ('filtered', 'forbidden')]
 
-        # ── Vulnerability/script results ───────────────────────
-        vuln_count = 0
-        if kwargs.get('verbose', 0) >= 1 or kwargs.get('script'):
-            for pr in open_ports:
-                vulns = pr.get('vulnerabilities', [])
-                scripts = pr.get('scripts', [])
-                deep_a = pr.get('deep_analysis', '')
-                if vulns or scripts or deep_a:
-                    click.echo(f"\n  {_colored('◆ PORT', B_CYAN)} {_colored(str(pr.get('port','')), B_WHITE)}"
-                               f" {_colored('INTELLIGENCE', CYAN)}")
-                    for v in vulns[:8]:
-                        vuln_count += 1
-                        click.echo(f"    {_colored('⚠', RED)} {_colored(str(v)[:80], YELLOW)}")
-                    for s in scripts[:5]:
-                        click.echo(f"    {_colored('◉', CYAN)} {_colored(str(s)[:80], DIM)}")
-                    if deep_a:
-                        for line in str(deep_a).split('\n')[:5]:
-                            if line.strip():
-                                click.echo(f"    {_colored('↳', PURPLE)} {line.strip()[:80]}")
+        grand_open += len(open_ports)
+        grand_probed += len(port_results)
 
-        # ── Plugin enrichment (Lua + Ruby) ────────────────────
-        if kwargs.get('deep') or kwargs.get('script'):
-            for pr in open_ports[:5]:
-                port_num = pr.get('port', 0)
-                banner = pr.get('banner', '')
-                for lua_plugin in discover_plugins("lua"):
-                    try:
-                        lua_res = run_lua_plugin(lua_plugin, t, port_num, banner)
-                        if lua_res.get('status') == 'ok':
-                            findings = lua_res.get('findings', [])
-                            if findings:
-                                pr.setdefault('plugins', {})[f'lua:{lua_plugin}'] = findings
-                    except Exception:
-                        pass
-                for ruby_plugin in discover_plugins("ruby"):
-                    try:
-                        ruby_res = run_ruby_plugin(ruby_plugin, t, port_num, banner)
-                        if ruby_res.get('status') == 'ok':
-                            findings = ruby_res.get('findings', [])
-                            if findings:
-                                pr.setdefault('plugins', {})[f'ruby:{ruby_plugin}'] = findings
-                    except Exception:
-                        pass
+        if not quiet:
+            cli_ui.results_table(port_results, host=target,
+                                 show_all=bool(kwargs.get('all_ports')),
+                                 show_risk=bool(kwargs.get('risk')))
 
-        # ── DNS / Kernel / Web enrichment (Rust deep engines) ──
-        if kwargs.get('deep'):
-            for pr in open_ports[:3]:
-                port_num = pr.get('port', 0)
-                web_res = run_rust_engine("web_fingerprint", [t, str(port_num)])
-                if web_res.get('status') == 'ok' and web_res.get('results'):
-                    pr['web_fingerprint'] = web_res['results']
-            dns_res = run_rust_engine("dns_detect", [t])
-            if dns_res.get('status') == 'ok' and dns_res.get('results'):
-                dns_enum = " | ".join(
-                    r.get('value', '') for r in dns_res['results']
-                    if r.get('record_type') in ('A', 'MX', 'NS')
-                )
-                if dns_enum:
-                    click.echo(f"\n  {_colored('◈ DNS ENRICHMENT', B_CYAN)}: {_colored(dns_enum[:78], DIM)}")
-            kernel_res = run_rust_engine("kernel_detect", [t, ",".join(str(p.get('port', '')) for p in open_ports[:10])])
-            if kernel_res.get('status') == 'ok' and kernel_res.get('results'):
-                for kr in kernel_res['results']:
-                    os_name = kr.get('os_name', '')
-                    kernel_v = kr.get('kernel_version', '')
-                    conf = kr.get('confidence', 0)
-                    if os_name:
-                        click.echo(f"  {_colored('◈ KERNEL DETECT', B_CYAN)}: {_colored(os_name, B_WHITE)} "
-                                   f"({_colored(kernel_v, DIM)}) — {_colored(f'{conf:.0f}%', B_GREEN)}")
+        host_nse = []
+        if nse_engine and open_ports:
+            port_map = {int(p.get('port', 0)): str(p.get('service') or '')
+                        for p in open_ports if p.get('port')}
+            chosen = nse_engine.filter_for_ports(nse_scripts, list(port_map))
+            host_nse = nse_engine.run_for_ports(
+                target,
+                port_map,
+                chosen,
+                script_args=kwargs.get('script_args'),
+                script_timeout=int(kwargs.get('script_timeout') or 30),
+                max_parallel=4,
+                on_result=(None if quiet else None),
+            )
+            all_nse_results.extend(host_nse)
+            if not quiet:
+                cli_ui.nse_findings(host_nse, host=target)
 
-        # ── OS details (verbose) ───────────────────────────────
-        if kwargs.get('os_detect') and os_info and kwargs.get('verbose', 0) >= 1:
-            fp = os_info.get('fingerprint', '')
-            if fp:
-                click.echo(f"\n  {_colored('◈ OS FINGERPRINT', B_CYAN)}: {_colored(fp[:70], DIM)}")
+        os_info = result.get('os') or {}
+        if os_info and os_info.get('name') not in (None, '', 'Unknown') and not quiet:
+            confidence = os_info.get('confidence', os_info.get('accuracy', 0)) or 0
+            try:
+                confidence = int(float(confidence) * (100 if float(confidence) <= 1 else 1))
+            except (TypeError, ValueError):
+                confidence = 0
+            cli_ui.field("os", cli_ui.paint(str(os_info['name']), B_WHITE, bold=True)
+                         + cli_ui.paint("  %d%% confidence" % confidence, DIM),
+                         label_width=10)
 
-        # ── Per-host summary ───────────────────────────────────
-        elapsed = datetime.now() - start_time
-        click.echo("\n" + _colored("  ┌" + "─" * 78 + "┐", B_GREEN))
-        click.echo(_colored("  │", B_GREEN) + pad_v(
-            f" {_colored('HOST SUMMARY', B_GREEN, bold=True)}", 78
-        ) + _colored("│", B_GREEN))
-        click.echo(_colored("  ├" + "─" * 78 + "┤", B_GREEN))
-        click.echo(_colored("  │", B_GREEN) + pad_v(
-            f"  Open Ports    : {_colored(str(len(open_ports)), B_WHITE, bold=True)}", 78
-        ) + _colored("│", B_GREEN))
-        click.echo(_colored("  │", B_GREEN) + pad_v(
-            f"  Filtered      : {_colored(str(len(filt_ports)), YELLOW)}", 78
-        ) + _colored("│", B_GREEN))
-        click.echo(_colored("  │", B_GREEN) + pad_v(
-            f"  Total Probed  : {_colored(str(len(port_results)), B_WHITE)}", 78
-        ) + _colored("│", B_GREEN))
-        if kwargs.get('risk'):
-            high_risk_ports = [p for p in open_ports
-                               if get_risk(p.get('port', 0), p.get('service', ''), p.get('banner', ''))[0] >= 40]
-            if high_risk_ports:
-                risk_ports_str = ", ".join(str(p.get('port', '')) for p in high_risk_ports[:8])
-                click.echo(_colored("  │", B_GREEN) + pad_v(
-                    f"  High Risk     : {_colored(risk_ports_str, B_RED, bold=True)}", 78
-                ) + _colored("│", B_GREEN))
-        if vuln_count > 0:
-            click.echo(_colored("  │", B_GREEN) + pad_v(
-                f"  Vulnerabilities: {_colored(str(vuln_count), B_RED, bold=True)}", 78
-            ) + _colored("│", B_GREEN))
-        click.echo(_colored("  │", B_GREEN) + pad_v(
-            f"  Elapsed       : {_colored(str(elapsed).split('.')[0], B_CYAN)}", 78
-        ) + _colored("│", B_GREEN))
-
-        # Risk breakdown per port
-        if kwargs.get('risk') and open_ports:
-            click.echo(_colored("  │", B_GREEN) + pad_v(
-                f"  {'─' * 74}", 78
-            ) + _colored("│", B_GREEN))
-            for p in sorted(open_ports, key=lambda x: x.get('port', 0))[:10]:
-                port_num = p.get('port', 0)
-                service = p.get('service', '?')
-                score, level, reasons = get_risk(port_num, service, p.get('banner', ''))
-                if score > 0:
-                    reason_str = reasons[0] if reasons else ""
-                    click.echo(_colored("  │", B_GREEN) + pad_v(
-                        f"    {_colored(str(port_num), B_WHITE):>5}  {level:<12}  {_colored(reason_str[:53], DIM)}", 76
-                    ) + _colored("  │", B_GREEN))
-
-        click.echo(_colored("  └" + "─" * 78 + "┘", B_GREEN))
-
-        # ── Output file saving ─────────────────────────────────
-        if kwargs.get('output') and port_results:
+        if kwargs.get('output'):
             save_results(
                 kwargs['output'],
                 kwargs.get('output_format', 'text'),
-                t, ip_addr, port_results, open_ports, intel, os_info, elapsed
+                target,
+                result.get('ip') or target,
+                port_results,
+                open_ports,
+                result.get('intel', {}) or {},
+                os_info,
+                datetime.fromtimestamp(started),
             )
 
-    # ═══════════════════════════════════════════════════════════
-    # GRAND FINAL SUMMARY (multi-target)
-    # ═══════════════════════════════════════════════════════════
-    if len(target_list) > 1:
-        total_elapsed = datetime.now() - start_time
-        click.echo("\n" + _colored("═" * 80, B_WHITE))
-        click.echo(_colored("  ◈ GRAND SCAN SUMMARY", B_WHITE, bold=True))
-        click.echo(_colored("═" * 80, B_WHITE))
-        click.echo(f"  Hosts Scanned : {_colored(str(len(target_list)), B_CYAN)}")
-        click.echo(f"  Total Open    : {_colored(str(grand_open), B_GREEN, bold=True)}")
-        click.echo(f"  Total Probed  : {_colored(str(grand_total), B_WHITE)}")
-        click.echo(f"  Total Elapsed : {_colored(str(total_elapsed).split('.')[0], B_YELLOW)}")
-        click.echo(_colored("═" * 80, B_WHITE) + "\n")
+        json_hosts.append({
+            "host": target,
+            "ip": result.get('ip') or target,
+            "os": os_info,
+            "ports": port_results,
+            "nse": [item.to_dict() for item in host_nse],
+        })
 
-    # ── JSON output mode (machine-parseable stdout) ────────────
+    if not quiet:
+        high_risk = []
+        if kwargs.get('risk'):
+            for _target, result in all_hosts:
+                for record in result.get('results', []):
+                    if str(record.get('status', '')).lower() != 'open':
+                        continue
+                    score, _level, _reasons = get_risk(
+                        record.get('port', 0), record.get('service', ''),
+                        record.get('banner', ''))
+                    if score >= 60:
+                        high_risk.append(record.get('port'))
+        critical = sum(1 for item in all_nse_results
+                       if item.severity in ('critical', 'high'))
+        cli_ui.summary({
+            'open': grand_open,
+            'filtered': sum(1 for _t, r in all_hosts
+                            for p in r.get('results', [])
+                            if str(p.get('status', '')).lower() == 'filtered'),
+            'closed': sum(1 for _t, r in all_hosts
+                          for p in r.get('results', [])
+                          if str(p.get('status', '')).lower() == 'closed'),
+            'probed': grand_probed,
+            'elapsed': elapsed,
+            'rate': (grand_probed / elapsed) if elapsed > 0 else 0.0,
+            'scripts': len(all_nse_results),
+            'high_risk': high_risk,
+            'critical_findings': critical,
+        })
+
     if kwargs.get('json_output'):
-        json_out = {
-            "scanner": "HackIT PortStorm v3.0",
+        click.echo(json.dumps({
+            "scanner": "HackIT PortStorm %s" % VERSION,
             "scan_time": datetime.now().isoformat(),
-            "targets": target_list,
-            "total_hosts": len(target_list),
-            "total_open": grand_open,
-            "total_probed": grand_total,
-            "elapsed": str(datetime.now() - start_time),
-            "results": all_results,
-        }
-        click.echo(json.dumps(json_out, indent=2, default=str))
+            "targets": targets,
+            "elapsed_seconds": round(elapsed, 3),
+            "open_total": grand_open,
+            "probed_total": grand_probed,
+            "hosts": json_hosts,
+        }, indent=2, default=str))
 
 
 # ─────────────────────────────────────────────────────────────────

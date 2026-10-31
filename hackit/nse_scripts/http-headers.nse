@@ -1,97 +1,66 @@
 local http = require "http"
-local stdnse = require "stdnse"
-local nmap = require "nmap"
 local shortport = require "shortport"
+local stdnse = require "stdnse"
+local table = require "table"
 
+description = [[
+Performs a HEAD request for the root folder ("/") of a web server and displays the HTTP headers returned.
+]]
 
+---
+-- @output
+-- PORT   STATE SERVICE
+-- 80/tcp open  http
+-- | http-headers:
+-- |   Date: Fri, 25 Jan 2013 17:39:08 GMT
+-- |   Server: Apache/2.2.14 (Ubuntu)
+-- |   Accept-Ranges: bytes
+-- |   Vary: Accept-Encoding
+-- |   Connection: close
+-- |   Content-Type: text/html
+-- |
+-- |_  (Request type: HEAD)
+--
+--@args path The path to request, such as <code>/index.php</code>. Default <code>/</code>.
+--@args useget Set to force GET requests instead of HEAD.
+--
+--@see http-security-headers.nse
 
--- Fast-path bindings for the stdlib and nmap API used by this script.
--- Kept strict-mode safe: every name below is a declared local.
-local format = string.format
-local lower = string.lower
-local upper = string.upper
-local byte = string.byte
-local sub = string.sub
-local match = string.match
-local gmatch = string.gmatch
-local gsub = string.gsub
-local find = string.find
-local rep = string.rep
-local char = string.char
-local concat = table.concat
-local insert = table.insert
-local remove = table.remove
-local sort = table.sort
-local move = table.move
-local tostring = tostring
-local tonumber = tonumber
-local type = type
-local pcall = pcall
-local pairs = pairs
-local ipairs = ipairs
-local unpack = table.unpack
-local setmetatable = setmetatable
-local getmetatable = getmetatable
-local error = error
-local select = select
+author = "Ron Bowes"
 
-local clock = nmap.clock
-local msleep = nmap.msleep
+license = "Same as Nmap--See https://nmap.org/book/man-legal.html"
 
--- stdnse.sleep / stdnse.strsplit are not present in every NSE runtime.
-local sleep = function(seconds)
-    return nmap.msleep(math.max(0, math.floor(seconds * 1000)))
-end
+categories = {"discovery", "safe"}
 
-local strsplit = function(sep, str, max)
-    local out, pos, n = {}, 1, 0
-    if str == nil then return out end
-    while true do
-        if max and n >= max - 1 then
-            out[#out + 1] = sub(str, pos)
-            return out
-        end
-        local s, e = find(str, sep, pos)
-        if not s then
-            out[#out + 1] = sub(str, pos)
-            return out
-        end
-        if e < pos then e = pos end
-        out[#out + 1] = sub(str, pos, s - 1)
-        pos = e + 1
-        n = n + 1
-        if pos > #str then
-            out[#out + 1] = ""
-            return out
-        end
-    end
-end
+portrule = shortport.http
 
-local format_output = stdnse.format_output
-local output_table = stdnse.output_table
-
-description = [[Dumps all HTTP response headers from the target web server for manual inspection.]]
-author = "HackIT Framework"
-license = "HackIT Framework — Internal Use Only"
-categories = {"web", "safe"}
-
-portrule = function(host, port) return port.protocol == "tcp" and port.state == "open" end
+local function fail (err) return stdnse.format_output(false, err) end
 
 action = function(host, port)
-    local response = http.get(host, port, "/")
-    if not response or not response.header then
-        return format_output(false, "No headers received")
-    end
-    local results = {}
-    for k, v in pairs(response.header) do
-        if type(v) == "table" then
-            for _, vv in ipairs(v) do
-                insert(results, k .. ": " .. vv)
-            end
-        else
-            insert(results, k .. ": " .. v)
-        end
-    end
-    sort(results)
-    return format_output(true, concat(results, "\n"))
+  local path = stdnse.get_script_args(SCRIPT_NAME..".path") or "/"
+  local useget = stdnse.get_script_args(SCRIPT_NAME..".useget")
+  local request_type = "HEAD"
+  local status = false
+  local result
+
+  -- Check if the user didn't want HEAD to be used
+  if(useget == nil) then
+    -- Try using HEAD first
+    status, result = http.can_use_head(host, port, nil, path)
+  end
+
+  -- If head failed, try using GET
+  if(status == false) then
+    stdnse.debug1("HEAD request failed, falling back to GET")
+    result = http.get(host, port, path)
+    request_type = "GET"
+  end
+
+  if not (result and result.status) then
+    return fail("Header request failed")
+  end
+
+  table.insert(result.rawheader, "(Request type: " .. request_type .. ")")
+
+  return stdnse.format_output(true, result.rawheader)
 end

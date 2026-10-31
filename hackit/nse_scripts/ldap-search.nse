@@ -1,238 +1,315 @@
-local stdnse = require "stdnse"
+local comm = require "comm"
+local ldap = require "ldap"
 local nmap = require "nmap"
-local string = require "string"
-local math = require "math"
 local shortport = require "shortport"
+local stdnse = require "stdnse"
+local string = require "string"
+local table = require "table"
+
+description = [[
+Attempts to perform an LDAP search and returns all matches.
+
+If no username and password is supplied to the script the Nmap registry
+is consulted. If the <code>ldap-brute</code> script has been selected
+and it found a valid account, this account will be used. If not
+anonymous bind will be used as a last attempt.
+]]
+
+---
+-- @args ldap.username If set, the script will attempt to perform an LDAP bind
+--       using the username and password
+-- @args ldap.password If set, used together with the username to authenticate
+--       to the LDAP server
+-- @args ldap.qfilter If set, specifies a quick filter. The library does not
+--       support parsing real LDAP filters.  The following values are valid for
+--       the filter parameter: computer, users, ad_dcs, custom or all. If no
+--       value is specified it defaults to all.
+-- @args ldap.searchattrib When used with the 'custom' qfilter, this parameter
+--       works in conjunction with ldap.searchvalue to allow the user to
+--       specify a custom attribute and value as search criteria.
+-- @args ldap.searchvalue When used with the 'custom' qfilter, this parameter
+--       works in conjunction with ldap.searchattrib to allow the user to
+--       specify a custom attribute and value as search criteria.
+--       This parameter DOES PERMIT the use of the asterisk '*' as a wildcard.
+-- @args ldap.base If set, the script will use it as a base for the search. By
+--       default the defaultNamingContext is retrieved and used.  If no
+--       defaultNamingContext is available the script iterates over the
+--       available namingContexts
+-- @args ldap.attrib If set, the search will include only the attributes
+--       specified. For a single attribute a string value can be used, if
+--       multiple attributes need to be supplied a table should be used
+--       instead.
+-- @args ldap.maxobjects If set, overrides the number of objects returned by
+--       the script (default 20).  The value -1 removes the limit completely.
+-- @args ldap.savesearch If set, the script will save the output to a file
+--       beginning with the specified path and name.  The file suffix of .CSV
+--       as well as the hostname and port will automatically be added based on
+--       the output type selected.
+--
+-- @usage
+-- nmap -p 389 --script ldap-search --script-args 'ldap.username="cn=ldaptest,cn=users,dc=cqure,dc=net",ldap.password=ldaptest,
+-- ldap.qfilter=users,ldap.attrib=sAMAccountName' <host>
+--
+-- nmap -p 389 --script ldap-search --script-args 'ldap.username="cn=ldaptest,cn=users,dc=cqure,dc=net",ldap.password=ldaptest,
+-- ldap.qfilter=custom,ldap.searchattrib="operatingSystem",ldap.searchvalue="Windows *Server*",ldap.attrib={operatingSystem,whencreated,OperatingSystemServicePack}' <host>
+--
+-- @output
+-- PORT    STATE SERVICE REASON
+-- 389/tcp open  ldap    syn-ack
+-- | ldap-search:
+-- |   DC=cqure,DC=net
+-- |     dn: CN=Administrator,CN=Users,DC=cqure,DC=net
+-- |         sAMAccountName: Administrator
+-- |     dn: CN=Guest,CN=Users,DC=cqure,DC=net
+-- |         sAMAccountName: Guest
+-- |     dn: CN=SUPPORT_388945a0,CN=Users,DC=cqure,DC=net
+-- |         sAMAccountName: SUPPORT_388945a0
+-- |     dn: CN=EDUSRV011,OU=Domain Controllers,DC=cqure,DC=net
+-- |         sAMAccountName: EDUSRV011$
+-- |     dn: CN=krbtgt,CN=Users,DC=cqure,DC=net
+-- |         sAMAccountName: krbtgt
+-- |     dn: CN=Patrik Karlsson,CN=Users,DC=cqure,DC=net
+-- |         sAMAccountName: patrik
+-- |     dn: CN=VMABUSEXP008,CN=Computers,DC=cqure,DC=net
+-- |         sAMAccountName: VMABUSEXP008$
+-- |     dn: CN=ldaptest,CN=Users,DC=cqure,DC=net
+-- |_        sAMAccountName: ldaptest
+--
+--
+-- PORT    STATE SERVICE REASON
+-- 389/tcp open  ldap    syn-ack
+-- | ldap-search:
+-- |   Context: DC=cqure,DC=net; QFilter: custom; Attributes: operatingSystem,whencreated,OperatingSystemServicePack
+-- |     dn: CN=USDC01,OU=Domain Controllers,DC=cqure,DC=net
+-- |         whenCreated: 2010/08/27 17:30:16 UTC
+-- |         operatingSystem: Windows Server 2008 R2 Datacenter
+-- |         operatingSystemServicePack: Service Pack 1
+-- |     dn: CN=TESTBOX,OU=Test Servers,DC=cqure,DC=net
+-- |         whenCreated: 2010/09/04 00:33:02 UTC
+-- |         operatingSystem: Windows Server 2008 R2 Standard
+-- |_        operatingSystemServicePack: Service Pack 1
 
 
+-- Credit
+-- ------
+-- o Martin Swende who provided me with the initial code that got me started writing this.
 
--- Fast-path bindings for the stdlib and nmap API used by this script.
--- Kept strict-mode safe: every name below is a declared local.
-local format = string.format
-local lower = string.lower
-local upper = string.upper
-local byte = string.byte
-local sub = string.sub
-local match = string.match
-local gmatch = string.gmatch
-local gsub = string.gsub
-local find = string.find
-local rep = string.rep
-local char = string.char
-local concat = table.concat
-local insert = table.insert
-local remove = table.remove
-local sort = table.sort
-local move = table.move
-local tostring = tostring
-local tonumber = tonumber
-local type = type
-local pcall = pcall
-local pairs = pairs
-local ipairs = ipairs
-local unpack = table.unpack
-local setmetatable = setmetatable
-local getmetatable = getmetatable
-local error = error
-local select = select
+-- Version 0.8
+-- Created 01/12/2010 - v0.1 - created by Patrik Karlsson <patrik@cqure.net>
+-- Revised 01/20/2010 - v0.2 - added SSL support
+-- Revised 01/26/2010 - v0.3 - Changed SSL support to comm.tryssl, prefixed arguments with ldap, changes in determination of namingContexts
+-- Revised 02/17/2010 - v0.4 - Added dependency to ldap-brute and the abilitity to check for ldap accounts (credentials) stored in nmap registry
+--                             Capped output to 20 entries, use ldap.maxObjects to override
+-- Revised 07/16/2010 - v0.5 - Fixed bug with empty contexts, added objectClass person to qfilter users, add error msg for invalid credentials
+-- Revised 09/05/2011 - v0.6 - Added support for saving searches to a file via argument ldap.savesearch
+-- Revised 10/29/2011 - v0.7 - Added support for custom searches and the ability to leverage LDAP substring search functionality added to LDAP.lua
+-- Revised 10/30/2011 - v0.8 - Added support for ad_dcs (AD domain controller ) searches and the ability to leverage LDAP extensibleMatch filter added to LDAP.lua
 
-local clock = nmap.clock
-local msleep = nmap.msleep
 
--- stdnse.sleep / stdnse.strsplit are not present in every NSE runtime.
-local sleep = function(seconds)
-    return nmap.msleep(math.max(0, math.floor(seconds * 1000)))
-end
+author = "Patrik Karlsson"
+license = "Same as Nmap--See https://nmap.org/book/man-legal.html"
+categories = {"discovery", "safe"}
 
-local strsplit = function(sep, str, max)
-    local out, pos, n = {}, 1, 0
-    if str == nil then return out end
-    while true do
-        if max and n >= max - 1 then
-            out[#out + 1] = sub(str, pos)
-            return out
-        end
-        local s, e = find(str, sep, pos)
-        if not s then
-            out[#out + 1] = sub(str, pos)
-            return out
-        end
-        if e < pos then e = pos end
-        out[#out + 1] = sub(str, pos, s - 1)
-        pos = e + 1
-        n = n + 1
-        if pos > #str then
-            out[#out + 1] = ""
-            return out
-        end
+
+dependencies = {"ldap-brute"}
+
+portrule = shortport.port_or_service({389,636}, {"ldap","ldapssl"})
+
+local function fail (err) return stdnse.format_output(false, err) end
+function action(host,port)
+
+  local status
+  local socket, opt
+  local args = nmap.registry.args
+  local username = stdnse.get_script_args('ldap.username')
+  local password = stdnse.get_script_args('ldap.password')
+  local qfilter = stdnse.get_script_args('ldap.qfilter')
+  local searchAttrib = stdnse.get_script_args('ldap.searchattrib')
+  local searchValue = stdnse.get_script_args('ldap.searchvalue')
+  local base = stdnse.get_script_args('ldap.base')
+  local attribs = stdnse.get_script_args('ldap.attrib')
+  local saveFile = stdnse.get_script_args('ldap.savesearch')
+  local accounts
+  local objCount = 0
+  local maxObjects = tonumber(stdnse.get_script_args('ldap.maxobjects')) or 20
+
+  -- In order to discover what protocol to use (SSL/TCP) we need to send a few bytes to the server
+  -- An anonymous bind should do it
+  local ldap_anonymous_bind = "\x30\x0c\x02\x01\x01\x60\x07\x02\x01\x03\x04\x00\x80\x00"
+  local _
+  socket, _, opt = comm.tryssl( host, port, ldap_anonymous_bind, nil )
+
+  if not socket then
+    return
+  end
+
+  -- Check if ldap-brute stored us some credentials
+  if ( not(username) and nmap.registry.ldapaccounts~=nil ) then
+    accounts = nmap.registry.ldapaccounts
+  end
+
+  -- We close and re-open the socket so that the anonymous bind does not distract us
+  socket:close()
+  status = socket:connect(host, port, opt)
+  socket:set_timeout(10000)
+
+  local req
+  local searchResEntries
+  local contexts = {}
+  local result = {}
+  local filter
+
+  if base == nil then
+    req = { baseObject = "", scope = ldap.SCOPE.base, derefPolicy = ldap.DEREFPOLICY.default, attributes = { "defaultNamingContext", "namingContexts" } }
+    status, searchResEntries = ldap.searchRequest( socket, req )
+
+    if not status then
+      socket:close()
+      return
     end
-end
 
-local format_output = stdnse.format_output
-local output_table = stdnse.output_table
+    contexts = ldap.extractAttribute( searchResEntries, "defaultNamingContext" )
 
-description = [[Performs LDAP anonymous search against common base DNs. Attempts to enumerate users, groups, computers, OUs, and other directory objects via anonymous or null binds.]]
-author = "HackIT Framework"
-license = "HackIT Framework — Internal Use Only"
-categories = {"safe", "discovery"}
-
-portrule = function(host, port)
-    return port.protocol == "tcp" and port.state == "open" and (port.number == 389 or port.number == 3268)
-end
-
-local search_configs = {
-    { dn = "", desc = "Root DSE", filter = "(objectClass=*)" },
-    { dn = "dc=company,dc=com", desc = "company.com", filter = "(objectClass=*)" },
-    { dn = "dc=corp,dc=local", desc = "corp.local", filter = "(objectClass=*)" },
-    { dn = "dc=ad,dc=local", desc = "ad.local", filter = "(objectClass=*)" },
-    { dn = "dc=domain,dc=com", desc = "domain.com", filter = "(objectClass=*)" },
-    { dn = "dc=test,dc=local", desc = "test.local", filter = "(objectClass=*)" },
-    { dn = "o=Organization", desc = "Organization", filter = "(objectClass=*)" },
-    { dn = "cn=users,dc=company,dc=com", desc = "Users", filter = "(objectClass=user)" },
-    { dn = "cn=computers,dc=company,dc=com", desc = "Computers", filter = "(objectClass=computer)" },
-    { dn = "ou=people,dc=company,dc=com", desc = "People", filter = "(objectClass=inetOrgPerson)" },
-}
-
-local function ber_integer(val)
-    if val < 128 then
-        return char(0x02, val)
+    -- OpenLDAP does not have a defaultNamingContext
+    if not contexts then
+      contexts = ldap.extractAttribute( searchResEntries, "namingContexts" )
     end
-    local bytes = {}
-    while val > 0 do
-        insert(bytes, 1, char(val % 256))
-        val = math.floor(val / 256)
+  else
+    table.insert(contexts, base)
+  end
+
+  if ( not(contexts) or #contexts == 0 ) then
+    stdnse.debug1( "Failed to retrieve namingContexts" )
+    contexts = {""}
+  end
+
+  -- perform a bind only if we have valid credentials
+  if ( username ) then
+    local bindParam = { version=3, ['username']=username, ['password']=password}
+    local status, errmsg = ldap.bindRequest( socket, bindParam )
+
+    if not status then
+      stdnse.debug1("ldap-search failed to bind: %s", errmsg)
+      return fail("Authentication failed")
     end
-    return char(0x02, #bytes) .. concat(bytes)
-end
+  -- or if ldap-brute found us something
+  elseif ( accounts ) then
+    for username, password in pairs(accounts) do
+      local bindParam = { version=3, ['username']=username, ['password']=password}
+      local status, errmsg = ldap.bindRequest( socket, bindParam )
 
-local function ber_string(s)
-    return char(0x04, #s) .. s
-end
+      if status then
+        break
+      end
+    end
+  end
 
-local function ber_sequence(contents)
-    return char(0x30, #contents) .. contents
-end
+  if qfilter == "users" then
+    filter = { op=ldap.FILTER._or, val=
+      {
+        { op=ldap.FILTER.equalityMatch, obj='objectClass', val='user' },
+        { op=ldap.FILTER.equalityMatch, obj='objectClass', val='posixAccount' },
+        { op=ldap.FILTER.equalityMatch, obj='objectClass', val='person' }
+      }
+    }
+  elseif qfilter == "computers" or qfilter == "computer" then
+    filter = { op=ldap.FILTER.equalityMatch, obj='objectClass', val='computer' }
 
-local function build_search_request(base_dn, filter_str, scope_val)
-    local msg_id = ber_integer(1)
-    local base_obj = ber_string(base_dn)
-    local scope = char(0x0a, 0x01, scope_val or 2)
-    local deref = char(0x0a, 0x01, 0x00)
-    local size_limit = ber_integer(0)
-    local time_limit = ber_integer(0)
-    local types_only = char(0x01, 0x01, 0x00)
+  elseif qfilter == "ad_dcs" then
+    filter = { op=ldap.FILTER.extensibleMatch, obj='userAccountControl', val='1.2.840.113556.1.4.803:=8192' }
 
-    local filter
-    if filter_str == "(objectClass=*)" then
-        filter = ber_sequence(char(0x05, 0x00))
-    elseif match(filter_str, "objectClass=(%w+)") then
-        local oc = match(filter_str, "objectClass=(%w+)")
-        filter = ber_sequence(char(0x04, #oc) .. oc)
+  elseif qfilter == "custom" then
+    if searchAttrib == nil or searchValue == nil then
+      return fail("Please specify both ldap.searchAttrib and ldap.searchValue using using the custom qfilter.")
+    end
+    if string.find(searchValue, '*') == nil then
+      filter = { op=ldap.FILTER.equalityMatch, obj=searchAttrib, val=searchValue }
     else
-        filter = ber_sequence(char(0x05, 0x00))
+      filter = { op=ldap.FILTER.substrings, obj=searchAttrib, val=searchValue }
     end
 
-    local attrs = ber_sequence(
-        ber_string("objectClass") ..
-        ber_string("cn") ..
-        ber_string("sn") ..
-        ber_string("mail") ..
-        ber_string("memberOf") ..
-        ber_string("distinguishedName") ..
-        ber_string("sAMAccountName") ..
-        ber_string("userPrincipalName") ..
-        ber_string("displayName") ..
-        ber_string("description") ..
-        ber_string("whenChanged") ..
-        ber_string("whenCreated") ..
-        ber_string("uSNChanged") ..
-        ber_string("uSNCreated") ..
-        ber_string("objectSid") ..
-        ber_string("objectGUID")
-    )
+  elseif qfilter == "all" or qfilter == nil then
+    filter = nil -- { op=ldap.FILTER}
+  else
+    return fail("Unsupported Quick Filter: " .. qfilter)
+  end
 
-    local search_body = base_obj .. scope .. deref .. size_limit .. time_limit .. types_only .. filter .. attrs
-    local search_req = ber_sequence(char(0x63, #search_body) .. search_body)
-    return ber_sequence(msg_id .. search_req)
-end
+  if type(attribs) == 'string' then
+    local tmp = attribs
+    attribs = {}
+    table.insert(attribs, tmp)
+  end
 
-local function count_entries(response)
-    if not response or #response < 10 then return 0 end
-    local count = 0
-    local search_done = find(response, "SearchResultDone") or
-                        find(response, "LDAPResult") or
-                        find(response, "\x30\x0c\x02\x01\x02\x65\x07\x0a\x01\x00\x04\x00\x04\x00")
-    local pos = 1
-    while true do
-        local s, e = find(response, "\x64\x04\x02\x01", pos)
-        if not s then break end
-        count = count + 1
-        pos = e + 1
+  for _, context in ipairs(contexts) do
+
+    req = {
+      baseObject = context,
+      scope = ldap.SCOPE.sub,
+      derefPolicy = ldap.DEREFPOLICY.default,
+      filter = filter,
+      attributes = attribs,
+      ['maxObjects'] = maxObjects }
+    status, searchResEntries = ldap.searchRequest( socket, req )
+
+    if not status then
+      if ( searchResEntries:match("DSID[-]0C090627") and not(username) ) then
+        return fail("Failed to bind as the anonymous user")
+      else
+        stdnse.debug1("ldap.searchRequest returned: %s", searchResEntries)
+        return
+      end
     end
 
-    for dn in gmatch(response, "\x04..([^\x00]+)") do
-        count = count + 1
-    end
-    return count
-end
+    local result_part = ldap.searchResultToTable( searchResEntries )
 
-action = function(host, port)
-    local result = output_table()
-    local found_bases = {}
-
-    for _, cfg in ipairs(search_configs) do
-        local socket = new_socket()
-        socket:set_timeout(5000)
-
-        local ok, err = pcall(socket.connect, socket, host.ip, port.number)
-        if not ok then
-            pcall(socket.close, socket)
-            break
-        end
-
-        local req = build_search_request(cfg.dn, cfg.filter, cfg.dn == "" and 0 or 2)
-        local ok2 = pcall(socket.send, socket, req)
-        if not ok2 then
-            pcall(socket.close, socket)
-            break
-        end
-
-        local ok3, response = pcall(socket.receive_buf, socket, "\x30", 5)
-        pcall(socket.close, socket)
-
-        if ok3 and response and #response > 20 then
-            local entry_count = count_entries(response)
-            local dn_desc = cfg.desc
-            local base_entry = {
-                base_dn = cfg.dn,
-                description = dn_desc,
-                entries_found = entry_count or 1,
-                response_size = #response,
-            }
-
-            if find(response, "sAMAccountName") then
-                base_entry.has_sam_account = true
-            end
-            if find(response, "userPrincipalName") then
-                base_entry.has_upn = true
-            end
-            if find(response, "objectSid") then
-                base_entry.has_sid = true
-            end
-            if find(response, "mail@") or find(response, "MAIL@") then
-                base_entry.has_email = true
-            end
-
-            insert(found_bases, base_entry)
-        end
+    if saveFile then
+      local output_file = saveFile .. "_" .. host.ip .. "_" .. port.number .. ".csv"
+      local save_status, save_err = ldap.searchResultToFile(searchResEntries,output_file)
+      if not save_status then
+        stdnse.debug1("%s", save_err)
+      end
     end
 
-    if #found_bases == 0 then
-        return format_output(false, "No anonymous LDAP search results")
+    objCount = objCount + (result_part and #result_part or 0)
+    result_part.name = ""
+
+    if ( context ) then
+      result_part.name = ("Context: %s"):format(#context > 0 and context or "<empty>")
+    end
+    if ( qfilter ) then
+      result_part.name = result_part.name .. ("; QFilter: %s"):format(qfilter)
+    end
+    if ( attribs ) then
+      result_part.name = result_part.name .. ("; Attributes: %s"):format(table.concat(attribs, ","))
     end
 
-    result.searchable_base_dns = found_bases
-    result.searchable_count = #found_bases
+    table.insert( result, result_part )
 
-    return format_output(true, result)
+    -- catch any softerrors
+    if searchResEntries.resultCode ~= 0 then
+      local output = stdnse.format_output(true, result )
+      output = output .. string.format("\n\n\n=========== %s ===========", searchResEntries.errorMessage )
+
+      return output
+    end
+
+  end
+
+  -- perform a unbind only if we have valid credentials
+  if ( username ) then
+    status = ldap.unbindRequest( socket )
+  end
+
+  socket:close()
+
+  -- if taken a way and ldap returns a single result, it ain't shown....
+  --result.name = "LDAP Results"
+
+  local output = stdnse.format_output(true, result )
+
+  if ( maxObjects ~= -1 and objCount == maxObjects ) then
+    output = output .. ("\n\nResult limited to %d objects (see ldap.maxobjects)"):format(maxObjects)
+  end
+
+  return output
 end

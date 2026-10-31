@@ -45,9 +45,12 @@ SEVERITY_ORDER = {"critical": 5, "high": 4, "medium": 3, "low": 2, "info": 1}
 
 # Category descriptions surfaced in the CLI and GUI pickers.
 CATEGORY_LABELS = {
+    "audit": "Configuration audit checks",
     "auth": "Authentication checks",
     "broadcast": "Broadcast / LAN discovery",
     "brute": "Credential brute force",
+    "cloud": "Cloud metadata / storage",
+    "database": "Database service probes",
     "default": "Default safe set",
     "discovery": "Service and host discovery",
     "dos": "Denial-of-service probes",
@@ -55,10 +58,13 @@ CATEGORY_LABELS = {
     "external": "Third-party data sources",
     "fuzzer": "Protocol fuzzers",
     "intrusive": "Intrusive probes",
+    "iot": "IoT device probes",
     "malware": "Malware / backdoor detection",
     "safe": "Non-disruptive checks",
     "version": "Version detection helpers",
+    "voip": "VoIP service probes",
     "vuln": "Vulnerability detection",
+    "web": "Web application checks",
 }
 
 # Ordered strongest-first. First match wins.
@@ -314,7 +320,11 @@ class NseEngine:
         selected: Dict[str, ScriptInfo] = {}
 
         if names:
-            tokens = [n.strip() for n in names if n and n.strip()]
+            tokens = []
+            for entry in names:
+                if not entry:
+                    continue
+                tokens.extend(part.strip() for part in str(entry).split(",") if part.strip())
             for token in tokens:
                 lowered = token.lower()
                 if lowered in ("all", "*"):
@@ -374,9 +384,10 @@ class NseEngine:
         ports: Sequence[int],
         scripts: Optional[Sequence[ScriptInfo]] = None,
         script_args: Optional[str] = None,
-        script_timeout: int = 60,
+        script_timeout: int = 30,
         host_timeout: int = 300,
         max_parallel: int = 4,
+        batch_size: int = 20,
         on_result: Optional[Callable[[ScriptResult], None]] = None,
         on_status: Optional[Callable[[str], None]] = None,
         extra_args: Optional[Sequence[str]] = None,
@@ -385,6 +396,10 @@ class NseEngine:
 
         ``ports`` must be the ports the scanner actually found open; nmap still
         applies each script's ``portrule`` on top of that restriction.
+
+        ``host_timeout`` is advisory: it bounds the wall clock of a single
+        ``nmap`` process. Per-script limits come from ``script_timeout``, which
+        is what keeps a hostile service from stalling the whole run.
         """
         if not self.available:
             return [ScriptResult(
@@ -397,7 +412,7 @@ class NseEngine:
             return []
 
         port_list = sorted({int(p) for p in ports if 0 < int(p) <= 65535})
-        batches = self._batch(chosen, max_parallel)
+        batches = self._batch(chosen, batch_size)
         results: List[ScriptResult] = []
         started = time.time()
 
@@ -460,14 +475,19 @@ class NseEngine:
         return results
 
     # ── internals ────────────────────────────────────────────────
+    NMAP_PARALLELISM = 8
+
     @staticmethod
-    def _batch(scripts: Sequence[ScriptInfo], max_batches: int) -> List[List[ScriptInfo]]:
-        """Split scripts into balanced batches so parallel runs stay even."""
-        count = max(1, min(max_batches, len(scripts)))
-        buckets: List[List[ScriptInfo]] = [[] for _ in range(count)]
-        for index, script in enumerate(sorted(scripts, key=lambda s: s.name)):
-            buckets[index % count].append(script)
-        return [bucket for bucket in buckets if bucket]
+    def _batch(scripts: Sequence[ScriptInfo], batch_size: int) -> List[List[ScriptInfo]]:
+        """Chunk scripts into fixed-size batches.
+
+        Fixed-size chunks keep a stalled script from costing more than its own
+        ``--script-timeout``: nmap runs ``NMAP_PARALLELISM`` scripts at a time,
+        so a batch of 20 can never take longer than ~3 rounds.
+        """
+        ordered = sorted(scripts, key=lambda s: s.name)
+        size = max(1, int(batch_size))
+        return [ordered[i:i + size] for i in range(0, len(ordered), size)]
 
     def _build_command(
         self,
@@ -481,9 +501,9 @@ class NseEngine:
     ) -> List[str]:
         command = [
             self.nmap,
-            "-Pn", "-n", "-sV", "--version-light",
+            "-Pn", "-n",
             "--script-timeout", "%ds" % max(1, int(script_timeout)),
-            "--host-timeout", "%ds" % max(1, int(host_timeout)),
+            "--max-parallelism", str(self.NMAP_PARALLELISM),
             "-oX", "-",
         ]
         if ports:
@@ -511,18 +531,21 @@ class NseEngine:
             target, ports, batch, script_args, script_timeout, host_timeout, extra_args,
         )
         started = time.time()
+        rounds = max(1, -(-len(batch) // self.NMAP_PARALLELISM))
+        budget = max(60, script_timeout * rounds + 45)
+        budget = min(budget, max(60, int(host_timeout)))
         try:
             completed = subprocess.run(
                 command,
                 capture_output=True,
                 text=True,
-                timeout=host_timeout + 30,
+                timeout=budget,
             )
         except subprocess.TimeoutExpired:
             return [
                 ScriptResult(
                     script=script.name, port=0, protocol="",
-                    output=[], severity="low", error="nmap timed out",
+                    output=[], severity="low", error="timed out after %ds" % budget,
                     categories=script.categories,
                 )
                 for script in batch

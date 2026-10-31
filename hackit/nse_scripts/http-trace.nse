@@ -1,98 +1,72 @@
 local http = require "http"
-local stdnse = require "stdnse"
 local nmap = require "nmap"
 local shortport = require "shortport"
+local stdnse = require "stdnse"
+local table = require "table"
+
+description = [[
+Sends an HTTP TRACE request and shows if the method TRACE is enabled. If debug
+is enabled, it returns the header fields that were modified in the response.
+]]
+
+---
+-- @usage
+-- nmap --script http-trace -d <ip>
+--
+-- @output
+-- 80/tcp open  http    syn-ack
+-- | http-trace: TRACE is enabled
+-- | Headers:
+-- | Date: Tue, 14 Jun 2011 04:41:28 GMT
+-- | Server: Apache
+-- | Connection: close
+-- | Transfer-Encoding: chunked
+-- |_Content-Type: message/http
+--
+-- @args http-trace.path Path to URI
+
+author = "Paulino Calderon <calderon@websec.mx>"
+
+license = "Same as Nmap--See https://nmap.org/book/man-legal.html"
+
+categories = {"vuln", "discovery", "safe"}
 
 
+portrule = shortport.http
 
--- Fast-path bindings for the stdlib and nmap API used by this script.
--- Kept strict-mode safe: every name below is a declared local.
-local format = string.format
-local lower = string.lower
-local upper = string.upper
-local byte = string.byte
-local sub = string.sub
-local match = string.match
-local gmatch = string.gmatch
-local gsub = string.gsub
-local find = string.find
-local rep = string.rep
-local char = string.char
-local concat = table.concat
-local insert = table.insert
-local remove = table.remove
-local sort = table.sort
-local move = table.move
-local tostring = tostring
-local tonumber = tonumber
-local type = type
-local pcall = pcall
-local pairs = pairs
-local ipairs = ipairs
-local unpack = table.unpack
-local setmetatable = setmetatable
-local getmetatable = getmetatable
-local error = error
-local select = select
-
-local clock = nmap.clock
-local msleep = nmap.msleep
-
--- stdnse.sleep / stdnse.strsplit are not present in every NSE runtime.
-local sleep = function(seconds)
-    return nmap.msleep(math.max(0, math.floor(seconds * 1000)))
-end
-
-local strsplit = function(sep, str, max)
-    local out, pos, n = {}, 1, 0
-    if str == nil then return out end
-    while true do
-        if max and n >= max - 1 then
-            out[#out + 1] = sub(str, pos)
-            return out
-        end
-        local s, e = find(str, sep, pos)
-        if not s then
-            out[#out + 1] = sub(str, pos)
-            return out
-        end
-        if e < pos then e = pos end
-        out[#out + 1] = sub(str, pos, s - 1)
-        pos = e + 1
-        n = n + 1
-        if pos > #str then
-            out[#out + 1] = ""
-            return out
-        end
+--- Validates the HTTP response and returns header list
+--@param response The HTTP response
+--@param response_headers The HTTP response headers
+local validate = function(response, response_headers)
+  local output_lines = {}
+  if ( not(response) ) then
+    return
+  end
+  if not(response:match("HTTP/1.[01] 200") or response:match("TRACE / HTTP/1.[01]")) then
+    return
+  else
+    output_lines[ #output_lines+1 ] = "TRACE is enabled"
+  end
+  if nmap.verbosity() >= 2 then
+    output_lines[ #output_lines+1 ]= "Headers:"
+    for _, value in pairs(response_headers) do
+      output_lines [ #output_lines+1 ] = value
     end
+  end
+  if #output_lines > 0 then
+    return table.concat(output_lines, "\n")
+  end
 end
 
-local format_output = stdnse.format_output
-local output_table = stdnse.output_table
-
-description = [[Tests if the TRACE method is enabled (Cross-Site Tracing / XST vulnerability).]]
-author = "HackIT Framework"
-license = "HackIT Framework — Internal Use Only"
-categories = {"web", "safe"}
-
-portrule = function(host, port) return port.protocol == "tcp" and port.state == "open" end
-
+---
+--MAIN
+---
 action = function(host, port)
-    local options = {header = {["X-Custom-Test"] = "xst-test-value"}}
-    local resp = http.generic_request(host, port, "TRACE", "/", options)
-    if not resp or not resp.body then
-        return format_output(false, "No response to TRACE request")
-    end
-    if resp.status == 200 then
-        if resp.find(body, "X-Custom-Test") and resp.find(body, "xst%-test%-value") then
-            return format_output(true, "TRACE method is ENABLED - XST vulnerability may exist (request echoed back)")
-        end
-        return format_output(true, "TRACE method responded with 200 but did not echo headers (may be limited)")
-    elseif resp.status == 405 then
-        return format_output(false, "TRACE method not allowed (405)")
-    elseif resp.status == 501 then
-        return format_output(false, "TRACE method not implemented (501)")
-    else
-        return format_output(false, "TRACE method returned status " .. resp.status)
-    end
+  local path = stdnse.get_script_args("http-trace.path") or "/"
+
+  local req = http.generic_request(host, port, "TRACE", path)
+  if (req.status == 301 or req.status == 302) and req.header["location"] then
+    req = http.generic_request(host, port, "TRACE", req.header["location"])
+  end
+  return validate(req.body, req.rawheader)
 end

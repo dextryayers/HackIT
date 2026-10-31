@@ -1,179 +1,58 @@
+local comm = require "comm"
 local nmap = require "nmap"
 local shortport = require "shortport"
-local stdnse = require "stdnse"
-local dns = require "dns"
-
-
-
--- Fast-path bindings for the stdlib and nmap API used by this script.
--- Kept strict-mode safe: every name below is a declared local.
-local format = string.format
-local lower = string.lower
-local upper = string.upper
-local byte = string.byte
-local sub = string.sub
-local match = string.match
-local gmatch = string.gmatch
-local gsub = string.gsub
-local find = string.find
-local rep = string.rep
-local char = string.char
-local concat = table.concat
-local insert = table.insert
-local remove = table.remove
-local sort = table.sort
-local move = table.move
-local tostring = tostring
-local tonumber = tonumber
-local type = type
-local pcall = pcall
-local pairs = pairs
-local ipairs = ipairs
-local unpack = table.unpack
-local setmetatable = setmetatable
-local getmetatable = getmetatable
-local error = error
-local select = select
-
-local clock = nmap.clock
-local msleep = nmap.msleep
-
--- stdnse.sleep / stdnse.strsplit are not present in every NSE runtime.
-local sleep = function(seconds)
-    return nmap.msleep(math.max(0, math.floor(seconds * 1000)))
-end
-
-local strsplit = function(sep, str, max)
-    local out, pos, n = {}, 1, 0
-    if str == nil then return out end
-    while true do
-        if max and n >= max - 1 then
-            out[#out + 1] = sub(str, pos)
-            return out
-        end
-        local s, e = find(str, sep, pos)
-        if not s then
-            out[#out + 1] = sub(str, pos)
-            return out
-        end
-        if e < pos then e = pos end
-        out[#out + 1] = sub(str, pos, s - 1)
-        pos = e + 1
-        n = n + 1
-        if pos > #str then
-            out[#out + 1] = ""
-            return out
-        end
-    end
-end
-
-local format_output = stdnse.format_output
-local output_table = stdnse.output_table
+local string = require "string"
 
 description = [[
-Tests whether the target DNS server allows recursive queries from external (non-trusted)
-hosts. An open recursive DNS resolver can be abused in DNS amplification DDoS attacks,
-where attackers forge queries with small request sizes that generate large response
-payloads. The script sends queries for known external domains to multiple authoritative
-nameservers and analyzes responses to distinguish recursive from non-recursive behavior.
-Compares response with expected answer counts and RCODE values. Reports amplification
-factor estimates for risk assessment. Includes recommendations for securing open
-resolvers.
+Checks if a DNS server allows queries for third-party names. It is
+expected that recursion will be enabled on your own internal
+nameservers.
 ]]
 
-author = "HackIT Framework"
-license = "HackIT Framework — Internal Use Only"
-categories = {"discovery", "safe"}
+---
+-- @usage
+-- nmap -sU -p 53 --script=dns-recursion <target>
+-- @output
+-- PORT   STATE SERVICE REASON
+-- 53/udp open  domain  udp-response
+-- |_dns-recursion: Recursion appears to be enabled
 
-portrule = shortport.port_or_service(53, "domain")
+author = "Felix Groebert"
 
-local test_domains = {
-  "google.com", "example.com", "iana.org", "cloudflare.com",
-  "wikipedia.org", "github.com", "microsoft.com", "amazon.com"
-}
+license = "Same as Nmap--See https://nmap.org/book/man-legal.html"
+
+categories = {"default", "safe"}
+
+
+portrule = shortport.portnumber(53, "udp")
 
 action = function(host, port)
-  local result = output_table()
-  local base_opts = {
-    host = host.ip,
-    port = port.number,
-    dtype = "A",
-    timeout = 5000,
-    retries = 1
-  }
 
-  local recursive_results = {}
-  local domain_answers = {}
+    -- generate dns query
+    local request = "\xde\xad" -- Transaction-ID 0xdead
+    .. "\x01\x00" -- flags (recursion desired)
+    .. "\x00\x01" -- 1 question
+    .. "\x00\x00" -- 0 answers
+    .. "\x00\x00" -- 0 authority
+    .. "\x00\x00" -- 0 additional
+    .. "\x03www\x09wikipedia\x03org\x00" -- www.wikipedia.org.
+    .. "\x00\x01" -- type A
+    .. "\x00\x01" -- class IN
 
-  for _, domain in ipairs(test_domains) do
-    local ok, answer = pcall(dns.query, domain, base_opts)
-    if ok and answer and #answer > 0 then
-      insert(domain_answers, {
-        domain = domain,
-        answers = answer,
-        count = #answer
-      })
-    end
-  end
+    local status, result = comm.exchange(host, port, request, {proto="udp"})
 
-  result.status = "success"
-  result.server = host.ip .. ":" .. port.number
-  result.domains_tested = #test_domains
-  result.total_answered = #domain_answers
-
-  if #domain_answers >= 2 then
-    result.recursive_resolver = true
-    result.recursion_enabled = true
-    result.domain_results = domain_answers
-
-    local total_answers = 0
-    for _, d in ipairs(domain_answers) do
-      total_answers = total_answers + d.count
+    if not status then
+        return
     end
 
-    result.average_answers_per_query = format("%.1f", total_answers / #domain_answers)
+    nmap.set_port_state(host, port, "open")
 
-    local amp_factor = 2.0
-    for _, d in ipairs(domain_answers) do
-      local ans = d.answers
-      if #ans > 3 then
-        amp_factor = math.max(amp_factor, 4.0)
-      end
+    -- parse response for dns flags
+    if (string.byte(result,3) & 0x80) == 0x80
+        and (string.byte(result,4) & 0x85) == 0x80
+    then
+        return "Recursion appears to be enabled"
     end
-    result.estimated_amplification_factor = format("%.1fx", amp_factor)
 
-    if amp_factor >= 4.0 then
-      result.amplification_risk = "high"
-      result.recommendation = "Restrict recursion to trusted networks, enable rate limiting, implement BCP 38"
-    else
-      result.amplification_risk = "medium"
-      result.recommendation = "Restrict recursion to authorized clients only"
-    end
-  elseif #domain_answers == 0 then
-    result.recursive_resolver = false
-    result.recursion_enabled = false
-    result.reason = "No recursive responses received (host may block recursion)"
-  else
-    local count = 0
-    for _, d in ipairs(domain_answers) do
-      local ok2, nsec_check = pcall(dns.query, d.domain, {
-        host = host.ip, port = port.number, dtype = "NSEC", timeout = 3000
-      })
-      if ok2 and nsec_check and #nsec_check > 0 then
-        count = count + 1
-      end
-    end
-    if count > 0 then
-      result.recursive_resolver = true
-      result.recursion_enabled = true
-      result.domain_results = domain_answers
-      result.note = "Limited recursion (some domains have DNSSEC info, possible partial resolution)"
-    else
-      result.recursive_resolver = false
-      result.recursion_enabled = false
-      result.reason = "Partial responses received but may be from cache or referrals"
-    end
-  end
-
-  return result
+    return
 end

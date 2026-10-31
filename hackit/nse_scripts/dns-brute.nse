@@ -1,244 +1,328 @@
-local nmap = require "nmap"
-local shortport = require "shortport"
-local stdnse = require "stdnse"
+local coroutine = require "coroutine"
 local dns = require "dns"
-
-
-
--- Fast-path bindings for the stdlib and nmap API used by this script.
--- Kept strict-mode safe: every name below is a declared local.
-local format = string.format
-local lower = string.lower
-local upper = string.upper
-local byte = string.byte
-local sub = string.sub
-local match = string.match
-local gmatch = string.gmatch
-local gsub = string.gsub
-local find = string.find
-local rep = string.rep
-local char = string.char
-local concat = table.concat
-local insert = table.insert
-local remove = table.remove
-local sort = table.sort
-local move = table.move
-local tostring = tostring
-local tonumber = tonumber
-local type = type
-local pcall = pcall
-local pairs = pairs
-local ipairs = ipairs
-local unpack = table.unpack
-local setmetatable = setmetatable
-local getmetatable = getmetatable
-local error = error
-local select = select
-
-local clock = nmap.clock
-local msleep = nmap.msleep
-
--- stdnse.sleep / stdnse.strsplit are not present in every NSE runtime.
-local sleep = function(seconds)
-    return nmap.msleep(math.max(0, math.floor(seconds * 1000)))
-end
-
-local strsplit = function(sep, str, max)
-    local out, pos, n = {}, 1, 0
-    if str == nil then return out end
-    while true do
-        if max and n >= max - 1 then
-            out[#out + 1] = sub(str, pos)
-            return out
-        end
-        local s, e = find(str, sep, pos)
-        if not s then
-            out[#out + 1] = sub(str, pos)
-            return out
-        end
-        if e < pos then e = pos end
-        out[#out + 1] = sub(str, pos, s - 1)
-        pos = e + 1
-        n = n + 1
-        if pos > #str then
-            out[#out + 1] = ""
-            return out
-        end
-    end
-end
-
-local format_output = stdnse.format_output
-local output_table = stdnse.output_table
+local io = require "io"
+local math = require "math"
+local nmap = require "nmap"
+local stdnse = require "stdnse"
+local string = require "string"
+local stringaux = require "stringaux"
+local table = require "table"
+local target = require "target"
+local rand = require "rand"
 
 description = [[
-Performs subdomain brute force enumeration against the target domain using a
-comprehensive built-in wordlist of common subdomain names. Each subdomain is resolved
-via the target DNS server to discover hidden or non-obvious hosts and services within
-the domain. The wordlist contains over 2000 entries covering common network services,
-web applications, cloud infrastructure, development tools, and internal naming
-conventions. Results are deduplicated by IP address and categorized by record type
-(A, AAAA, CNAME). Uses rate limiting and parallel probing for efficient enumeration.
-Useful for penetration testing asset discovery and domain footprinting.
+Attempts to enumerate DNS hostnames by brute force guessing of common
+subdomains. With the <code>dns-brute.srv</code> argument, dns-brute will also
+try to enumerate common DNS SRV records.
+
+Wildcard records are listed as "*A" and "*AAAA" for IPv4 and IPv6 respectively.
 ]]
+-- 2011-01-26
 
-author = "HackIT Framework"
-license = "HackIT Framework — Internal Use Only"
-categories = {"discovery", "safe"}
+---
+-- @usage
+-- nmap --script dns-brute --script-args dns-brute.domain=foo.com,dns-brute.threads=6,dns-brute.hostlist=./hostfile.txt,newtargets -sS -p 80
+-- nmap --script dns-brute www.foo.com
+-- @args dns-brute.hostlist The filename of a list of host strings to try.
+--                          Defaults to "nselib/data/vhosts-default.lst"
+-- @args dns-brute.threads  Thread to use (default 5).
+-- @args dns-brute.srv      Perform lookup for SRV records
+-- @args dns-brute.srvlist  The filename of a list of SRV records to try.
+--                          Defaults to "nselib/data/dns-srv-names"
+-- @args dns-brute.domain   Domain name to brute force if no host is specified
+--
+-- @see dns-nsec3-enum.nse
+-- @see dns-ip6-arpa-scan.nse
+-- @see dns-nsec-enum.nse
+-- @see dns-zone-transfer.nse
+--
+-- @output
+-- Pre-scan script results:
+-- | dns-brute:
+-- |   DNS Brute-force hostnames
+-- |     www.foo.com - 127.0.0.1
+-- |     mail.foo.com - 127.0.0.2
+-- |     blog.foo.com - 127.0.1.3
+-- |     ns1.foo.com - 127.0.0.4
+-- |     admin.foo.com - 127.0.0.5
+-- |_    *A: 127.0.0.123
+--
+-- @xmloutput
+-- <table key="DNS Brute-force hostnames">
+--   <table>
+--     <elem key="address">127.0.0.1</elem>
+--     <elem key="hostname">www.foo.com</elem>
+--   </table>
+--   <table>
+--     <elem key="address">127.0.0.2</elem>
+--     <elem key="hostname">mail.foo.com</elem>
+--   </table>
+--   <table>
+--     <elem key="address">127.0.1.3</elem>
+--     <elem key="hostname">blog.foo.com</elem>
+--   </table>
+--   <table>
+--     <elem key="address">127.0.0.4</elem>
+--     <elem key="hostname">ns1.foo.com</elem>
+--   </table>
+--   <table>
+--     <elem key="address">127.0.0.5</elem>
+--     <elem key="hostname">admin.foo.com</elem>
+--   </table>
+--   <elem key="*A">127.0.0.123</elem>
+-- </table>
+-- <table key="SRV results"></table>
 
-portrule = shortport.port_or_service(53, "domain")
+author = "Cirrus"
 
-local wordlist = {
-  "www", "mail", "remote", "blog", "webmail", "server", "ns1", "ns2",
-  "smtp", "pop", "imap", "admin", "cpanel", "whm", "ftp", "ssh",
-  "vpn", "api", "dev", "test", "stage", "prod", "backup", "db",
-  "mysql", "web", "app", "git", "jenkins", "jira", "confluence",
-  "wiki", "help", "support", "ticket", "status", "monitor", "cloud",
-  "exchange", "owa", "autodiscover", "lync", "skype", "teams",
-  "sharepoint", "portal", "intranet", "hr", "payroll", "erp",
-  "crm", "sales", "marketing", "analytics", "logs", "metrics",
-  "docker", "k8s", "kubernetes", "swarm", "traefik", "nginx",
-  "proxy", "cdn", "static", "assets", "images", "media",
-  "video", "audio", "download", "upload", "files", "storage",
-  "s3", "nas", "san", "archive", "search", "calendar", "contacts",
-  "newsletter", "forum", "community", "chat", "voice", "phone",
-  "gateway", "firewall", "router", "switch", "wifi", "radius",
-  "ldap", "directory", "sso", "auth", "login", "register",
-  "signup", "password", "reset", "verify", "idp", "saml",
-  "owa2", "mail2", "web2", "server2", "beta", "alpha", "demo",
-  "training", "learn", "docs", "documentation", "knowledgebase",
-  "kb", "faq", "forum", "community", "blog", "news", "events",
-  "partner", "partners", "vendor", "vendors", "client", "clients",
-  "dashboard", "panel", "control", "manager", "management",
-  "monitoring", "alert", "alerts", "notification", "notifications",
-  "webhook", "webhooks", "callback", "callbackurl",
-  "cdn01", "cdn02", "img", "static1", "static2", "static3",
-  "assets1", "assets2", "css", "js", "font", "fonts",
-  "api1", "api2", "api3", "api-v1", "api-v2", "api-internal",
-  "graphql", "rest", "soap", "xmlrpc", "json",
-  "mobile", "m", "mob", "iphone", "android", "ios",
-  "app1", "app2", "app3", "webapp", "myapp",
-  "dev1", "dev2", "dev3", "dev-api", "dev-web",
-  "staging", "stg", "stage1", "stage2",
-  "qa", "qa1", "qa2", "quality", "uat",
-  "ci", "cd", "build", "deploy", "release",
-  "jenkins", "teamcity", "bamboo", "circleci", "gitlab-ci",
-  "nexus", "artifactory", "jfrog", "docker-registry",
-  "kibana", "grafana", "prometheus", "alertmanager",
-  "elk", "logstash", "elastic", "elasticsearch",
-  "kafka", "zookeeper", "rabbitmq", "redis",
-  "memcached", "mongo", "mongodb", "couchdb",
-  "cassandra", "mariadb", "postgres", "postgresql",
-  "vault", "consul", "nomad", "etcd",
-  "rancher", "portainer", "kube", "k8s-master", "k8s-node",
-  "master", "node1", "node2", "worker1", "worker2",
-  "hadoop", "spark", "hive", "hbase", "zoo",
-  "airflow", "superset", "metabase", "redash",
-  "jupyter", "jupyterhub", "notebook", "lab",
-  "data", "datascience", "ml", "ai", "model",
-  "terraform", "puppet", "chef", "ansible", "salt",
-  "nagios", "zabbix", "icinga", "sensu", "datadog",
-  "pagerduty", "opsgenie", "victorops",
-  "splunk", "sumologic", "loggly", "papertrail",
-  "sonarqube", "sonar", "coverity", "codacy",
-  "bugzilla", "redmine", "trac", "mantis",
-  "wordpress", "wp-admin", "wp-content", "wp-includes",
-  "joomla", "drupal", "magento", "shopify",
-  "phpmyadmin", "phpPgAdmin", "adminer",
-  "mailgun", "sendgrid", "sparkpost", "postmark",
-  "elasticemail", "ses", "amazonses",
-  "ipmi", "idrac", "ilo", "bmc", "omc",
-  "vmware", "vsphere", "esxi", "vcenter", "nsx",
-  "xen", "xenserver", "proxmox", "ovirt",
-  "hyperv", "scvmm", "azrue", "azure",
-  "gcp", "compute", "us-central1", "europe-west1",
-  "rds", "elb", "alb", "nlb", "ec2",
-  "s3-website", "s3-bucket", "cloudfront",
-  "swagger", "swagger-ui", "api-docs", "api-documentation",
-  "openapi", "redoc", "docs-api"
+license = "Same as Nmap--See https://nmap.org/book/man-legal.html"
+
+categories = {"intrusive", "discovery"}
+
+prerule = function()
+  if not stdnse.get_script_args("dns-brute.domain") then
+    stdnse.debug1("Skipping '%s' %s, 'dns-brute.domain' argument is missing.", SCRIPT_NAME, SCRIPT_TYPE)
+    return false
+  end
+  return true
+end
+
+hostrule = function(host)
+  return true
+end
+
+local function guess_domain(host)
+  local name
+
+  name = stdnse.get_hostname(host)
+  if name and name ~= host.ip then
+    return string.match(name, "%.([^.]+%..+)%.?$") or string.match(name, "^([^.]+%.[^.]+)%.?$")
+  else
+    return nil
+  end
+end
+
+-- Single DNS lookup, returning all results. dtype should be e.g. "A", "AAAA".
+local function resolve(host, dtype)
+  local status, result = dns.query(host, {dtype=dtype,retAll=true})
+  return status and result or false
+end
+
+local function array_iter(array, i, j)
+  return coroutine.wrap(function ()
+    while i <= j do
+      coroutine.yield(array[i])
+      i = i + 1
+    end
+  end)
+end
+
+local record_mt = {
+  __tostring = function(t)
+    return ("%s - %s"):format(t.hostname, t.address)
+  end
 }
 
-action = function(host, port)
-  local result = output_table()
-  local domain = host.targetname
+local function make_record(hostn, addr)
+  local record = { hostname=hostn, address=addr }
+  setmetatable(record, record_mt)
+  return record
+end
 
-  if not domain or #domain == 0 then
-    result.status = "error"
-    result.reason = "No target domain name available. Specify with hostname target."
-    return result
-  end
-
-  local found = {}
-  local total = #wordlist
-  local base_opts = {
-    host = host.ip,
-    port = port.number,
-    dtype = "A",
-    timeout = 3000,
-    retries = 0
-  }
-
-  for i, sub in ipairs(wordlist) do
-    local fqdn = sub .. "." .. domain
-    local ok, answer = pcall(dns.query, fqdn, base_opts)
-    if ok and answer and #answer > 0 then
-      local ips = {}
-      for _, v in ipairs(answer) do
-        insert(ips, tostring(v))
-      end
-      insert(found, {
-        subdomain = fqdn,
-        ip_addresses = ips,
-        type = "A"
-      })
-    end
-
-    local aaaa_opts = {}
-    for k, v in pairs(base_opts) do aaaa_opts[k] = v end
-    aaaa_opts.dtype = "AAAA"
-    local ok4, aaaa_answer = pcall(dns.query, fqdn, aaaa_opts)
-    if ok4 and aaaa_answer and #aaaa_answer > 0 then
-      local ips6 = {}
-      for _, v in ipairs(aaaa_answer) do
-        insert(ips6, tostring(v))
-      end
-      insert(found, {
-        subdomain = fqdn,
-        ip_addresses = ips6,
-        type = "AAAA"
-      })
-    end
-
-    if i % 30 == 0 then
-      msleep(5)
-    end
-  end
-
-  result.status = "success"
-  result.domain = domain
-  result.server = host.ip
-  result.wordlist_entries = total
-  result.subdomains_tested = total
-
-  if #found > 0 then
-    local seen_ips = {}
-    local unique_count = 0
-    for _, entry in ipairs(found) do
-      for _, ip in ipairs(entry.ip_addresses) do
-        if not seen_ips[ip] then
-          seen_ips[ip] = true
-          unique_count = unique_count + 1
+local function thread_main(domainname, results, name_iter)
+  local condvar = nmap.condvar( results )
+  for name in name_iter do
+    for _, dtype in ipairs({"A", "AAAA"}) do
+      local res = resolve(name..'.'..domainname, dtype)
+      if(res) then
+        table.sort(res)
+        if results["*" .. dtype] ~= res[1] then
+          for _,addr in ipairs(res) do
+            local hostn = name..'.'..domainname
+            if target.ALLOW_NEW_TARGETS then
+              stdnse.debug1("Added target: "..hostn)
+              local status,err = target.add(hostn)
+            end
+            stdnse.debug2("Hostname: "..hostn.." IP: "..addr)
+            results[#results+1] = make_record(hostn, addr)
+          end
         end
       end
     end
+  end
+  condvar("signal")
+end
 
-    result.subdomains_found = #found
-    result.unique_ips_found = unique_count
-    result.subdomains = found
-    result.success_rate = format("%.1f%%", (#found / total) * 100)
-  else
-    result.subdomains_found = 0
-    result.reason = "No subdomains found in wordlist (" .. total .. " names tested)"
+local function srv_main(domainname, srvresults, srv_iter)
+  local condvar = nmap.condvar( srvresults )
+  for name in srv_iter do
+    local res = resolve(name..'.'..domainname, "SRV")
+    if(res) then
+      for _,addr in ipairs(res) do
+        local hostn = name..'.'..domainname
+        addr = stringaux.strsplit(":",addr)
+        for _, dtype in ipairs({"A", "AAAA"}) do
+          local srvres = resolve(addr[4], dtype)
+          if(srvres) then
+            for srvhost,srvip in ipairs(srvres) do
+              if target.ALLOW_NEW_TARGETS then
+                stdnse.debug1("Added target: "..srvip)
+                local status,err = target.add(srvip)
+              end
+              stdnse.debug1("Hostname: "..hostn.." IP: "..srvip)
+              srvresults[#srvresults+1] = make_record(hostn, srvip)
+            end
+          end
+        end
+      end
+    end
+  end
+  condvar("signal")
+end
+
+local function detect_wildcard(domainname, record)
+  local rand_host1 = rand.random_alpha(24).."."..domainname
+  local rand_host2 = rand.random_alpha(24).."."..domainname
+  local res1 = resolve(rand_host1, record)
+
+  stdnse.debug1("Detecting wildcard for \"%s\" records using random hostname \"%s\".", record, rand_host1)
+  if res1 then
+    stdnse.debug1("Random hostname resolved. Comparing to second random hostname \"%s\".", rand_host2)
+    local res2 = resolve(rand_host2, record)
+    table.sort(res1)
+    table.sort(res2)
+
+    if (res1[1] == res2[1]) then
+      stdnse.debug1("Both random hostnames resolved to the same IP. Wildcard detected.")
+      return res1[1]
+    end
   end
 
-  return result
+  return nil
 end
+
+action = function(host)
+  local domainname = stdnse.get_script_args('dns-brute.domain')
+  if not domainname then
+    domainname = guess_domain(host)
+  end
+
+  if not domainname then
+    return string.format("Can't guess domain of \"%s\"; use %s.domain script argument.", stdnse.get_hostname(host), SCRIPT_NAME)
+  end
+
+  if not nmap.registry.bruteddomains then
+    nmap.registry.bruteddomains = {}
+  end
+
+  if nmap.registry.bruteddomains[domainname] then
+    stdnse.debug1("Skipping already-bruted domain %s", domainname)
+    return nil
+  end
+
+  nmap.registry.bruteddomains[domainname] = true
+  stdnse.debug1("Starting dns-brute at: "..domainname)
+  local max_threads = tonumber( stdnse.get_script_args('dns-brute.threads') ) or 5
+  local dosrv = stdnse.get_script_args("dns-brute.srv") or false
+  stdnse.debug1("THREADS: "..max_threads)
+  -- First look for dns-brute.hostlist
+  local fileName = stdnse.get_script_args('dns-brute.hostlist')
+  -- Check fetchfile locations, then relative paths
+  local commFile = (fileName and nmap.fetchfile(fileName)) or fileName
+  -- Finally, fall back to vhosts-default.lst
+  commFile = commFile or nmap.fetchfile("nselib/data/vhosts-default.lst")
+  local hostlist = {}
+  if commFile then
+    for l in io.lines(commFile) do
+      if not l:match("#!comment:") then
+        table.insert(hostlist, l)
+      end
+    end
+  else
+    stdnse.debug1("Cannot find hostlist file, quitting")
+    return
+  end
+
+  local threads, results, srvresults = {}, {}, {}
+  for _, dtype in ipairs({"A", "AAAA"}) do
+    results["*" .. dtype] = detect_wildcard(domainname, dtype)
+  end
+
+  local condvar = nmap.condvar( results )
+  local i = 1
+  local howmany = math.floor(#hostlist/max_threads)+1
+  stdnse.debug1("Hosts per thread: "..howmany)
+  repeat
+    local j = math.min(i+howmany, #hostlist)
+    local name_iter = array_iter(hostlist, i, j)
+    threads[stdnse.new_thread(thread_main, domainname, results, name_iter)] = true
+    i = j+1
+  until i > #hostlist
+  local done
+  -- wait for all threads to finish
+  while( not(done) ) do
+    done = true
+    for thread in pairs(threads) do
+      if (coroutine.status(thread) ~= "dead") then done = false end
+    end
+    if ( not(done) ) then
+      condvar("wait")
+    end
+  end
+
+  if(dosrv) then
+    -- First look for dns-brute.srvlist
+    fileName = stdnse.get_script_args('dns-brute.srvlist')
+    -- Check fetchfile locations, then relative paths
+    commFile = (fileName and nmap.fetchfile(fileName)) or fileName
+    -- Finally, fall back to dns-srv-names
+    commFile = commFile or nmap.fetchfile("nselib/data/dns-srv-names")
+    local srvlist = {}
+    if commFile then
+      for l in io.lines(commFile) do
+        if not l:match("#!comment:") then
+          table.insert(srvlist, l)
+        end
+      end
+
+      i = 1
+      threads = {}
+      howmany = math.floor(#srvlist/max_threads)+1
+      condvar = nmap.condvar( srvresults )
+      stdnse.debug1("SRV's per thread: "..howmany)
+      repeat
+        local j = math.min(i+howmany, #srvlist)
+        local name_iter = array_iter(srvlist, i, j)
+        threads[stdnse.new_thread(srv_main, domainname, srvresults, name_iter)] = true
+        i = j+1
+      until i > #srvlist
+      local done
+      -- wait for all threads to finish
+      while( not(done) ) do
+        done = true
+        for thread in pairs(threads) do
+          if (coroutine.status(thread) ~= "dead") then done = false end
+        end
+        if ( not(done) ) then
+          condvar("wait")
+        end
+      end
+    else
+      stdnse.debug1("Cannot find srvlist file, skipping")
+    end
+  end
+
+  local response = stdnse.output_table()
+  if(#results==0) then
+    setmetatable(results, { __tostring = function(t) return "No results." end })
+  end
+  response["DNS Brute-force hostnames"] = results
+  if(dosrv) then
+    if(#srvresults==0) then
+      setmetatable(srvresults, { __tostring = function(t) return "No results." end })
+    end
+    response["SRV results"] = srvresults
+  end
+  return response
+end
+

