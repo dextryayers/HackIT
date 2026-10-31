@@ -99,7 +99,7 @@ local function fetch_metadata(base_url, port, path, use_imdsv2, token)
   end
   local ok, response = pcall(http.get, base_url, port, "/latest/meta-data/" .. path, { timeout = 3000, header = headers })
   if ok and response and response.status == 200 and response.body and #response.body > 0 then
-    return response.gsub(body, "%s+$", "")
+    return gsub(response.body or "", "%s+$", "")
   end
   return nil
 end
@@ -120,7 +120,7 @@ action = function(host, port)
     header = { ["X-aws-ec2-metadata-token-ttl-seconds"] = "60" },
   })
   if ok and token_resp and token_resp.status == 200 and token_resp.body then
-    imdsv2_token = token_resp.gsub(body, "%s+$", "")
+    imdsv2_token = gsub(token_resp.body or "", "%s+$", "")
     use_imdsv2 = true
     result.imdsv2_supported = true
   end
@@ -146,7 +146,7 @@ action = function(host, port)
   })
   if ok and iam_resp and iam_resp.status == 200 and iam_resp.body and #iam_resp.body > 0 then
     result.iam_roles = iam_resp.body
-    local role_name = iam_resp.match(body, "(%w+)")
+    local role_name = match(iam_resp.body or "", "(%w+)")
     if role_name then
       local ok2, cred_resp = pcall(http.get, base_url, 80, "/latest/meta-data/iam/security-credentials/" .. role_name, {
         timeout = 3000,

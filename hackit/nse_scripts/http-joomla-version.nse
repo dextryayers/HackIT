@@ -108,7 +108,7 @@ action = function(host, port)
     for _, vp in ipairs(version_paths) do
         local resp2 = http.get(host, port, vp[1])
         if resp2 and resp2.status == 200 and resp2.body then
-            local ver = resp2.match(body, 'version%s*=%s*"([%d.]+)') or resp2.match(body, 'version="([%d.]+)"')
+            local ver = match(resp2.body or "", 'version%s*=%s*"([%d.]+)') or match(resp2.body or "", 'version="([%d.]+)"')
             if ver then
                 insert(result, ("Version (%s): %s"):format(vp[2], ver))
             end

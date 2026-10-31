@@ -88,7 +88,7 @@ local function check_gcs_bucket(host, port, name)
     local response = http.get(host, port, "/" .. name)
     if not response then return nil end
     if response.status == 200 then
-        local listing = response.match(body, "Contents") and true or false
+        local listing = match(response.body or "", "Contents") and true or false
         return {accessible = true, listing = listing, status = response.status}
     elseif response.status == 403 then
         return {accessible = true, listing = false, status = response.status}

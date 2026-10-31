@@ -216,6 +216,9 @@ func main() {
 	if *format == "json" && *quietJSON {
 		reporter = &Reporter{SuppressHuman: true}
 	}
+	reporter.ScanMode = *scanMode
+	reporter.Profile = *profile
+	reporter.PortsRequested = len(portList)
 	allResults := make([]ScanResult, 0)
 	startTime := time.Now()
 

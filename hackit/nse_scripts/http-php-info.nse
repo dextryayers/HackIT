@@ -85,9 +85,9 @@ action = function(host, port)
     for _, path in ipairs(phpinfo_paths) do
         local resp = http.get(host, port, path)
         if resp and resp.body then
-            if resp.find(body, "PHP Version") and resp.find(body, "phpinfo()") then
+            if find(resp.body or "", "PHP Version") and find(resp.body or "", "phpinfo()") then
                 insert(results, "phpinfo() exposed at " .. path)
-                local php_version = resp.match(body, "PHP Version ([^\n<]+)")
+                local php_version = match(resp.body or "", "PHP Version ([^\n<]+)")
                 if php_version then
                     insert(results, "PHP Version: " .. php_version)
                 end

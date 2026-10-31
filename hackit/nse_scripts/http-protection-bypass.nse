@@ -149,7 +149,7 @@ action = function(host, port)
             end
 
             if response.body and #response.body > 0 then
-                local body_lower = response.lower(body)
+                local body_lower = lower(response.body or "")
                 for _, sp in ipairs(success_patterns) do
                     if find(body_lower, sp.pattern) then
                         finding.bypass_successful = true

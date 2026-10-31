@@ -117,7 +117,7 @@ local function check_host_header(host, port, payload)
     end
 
     local indicators = {}
-    local body_lower = response.body and response.lower(body) or ""
+    local body_lower = response.body and lower(response.body or "") or ""
 
     local injection_patterns = {
         { pattern = "evil%.com", desc = "Host value reflected in body" },

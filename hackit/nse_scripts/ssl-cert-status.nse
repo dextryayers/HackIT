@@ -97,7 +97,8 @@ end
 
 action = function(host, port)
     local cert = sslcert.getCertificate(host, port)
-    if not cert then
+    -- sslcert returns a non-table sentinel on some nmap builds; index only tables.
+    if type(cert) ~= "table" then
         return format_output(false, "Could not fetch SSL certificate")
     end
     local result = output_table()

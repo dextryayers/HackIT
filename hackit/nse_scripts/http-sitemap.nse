@@ -88,7 +88,7 @@ action = function(host, port)
         return format_output(false, "sitemap.xml not found (404)")
     end
     local urls = {}
-    for loc in response.gmatch(body, "<loc>(.-)</loc>") do
+    for loc in gmatch(response.body or "", "<loc>(.-)</loc>") do
         insert(urls, loc)
     end
     if #urls == 0 then

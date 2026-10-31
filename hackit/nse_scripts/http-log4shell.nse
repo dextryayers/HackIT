@@ -148,7 +148,7 @@ action = function(host, port)
         data = pp.data
       })
       if req and req.body then
-        local body = req.lower(body)
+        local body = lower(req.body or "")
         if match(body, "jndi") then
           insert(findings, {vector = ("POST %s"):format(pp.path), path = pp.path, status = req.status})
         end

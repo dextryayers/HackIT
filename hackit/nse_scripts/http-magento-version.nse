@@ -112,8 +112,8 @@ action = function(host, port)
     for _, path in ipairs(ver_paths) do
         local resp2 = http.get(host, port, path)
         if resp2 and resp2.status == 200 and resp2.body then
-            local ver = resp2.match(body, "Magento[^%d]*([%d.]+)")
-                or resp2.match(body, "([%d]%.[%d]%.[%d])")
+            local ver = match(resp2.body or "", "Magento[^%d]*([%d.]+)")
+                or match(resp2.body or "", "([%d]%.[%d]%.[%d])")
             if ver then
                 insert(result, ("Version: %s (from %s)"):format(ver, path))
             end

@@ -79,7 +79,7 @@ local function check_injection_response(response)
 
   if errorstrings then
     for _,e in ipairs(errorstrings) do
-      if string.find(body, e) then
+      if find(body, e) then
         stdnse.debug2("error string matched: %s", e)
         return true
       end

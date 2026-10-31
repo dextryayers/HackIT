@@ -317,9 +317,10 @@ def summary(stats: Dict) -> None:
 
     timing = stats.get("elapsed", 0.0)
     rate = stats.get("rate", 0.0)
+    rate_text = ("%.0f" % rate) if rate >= 10 else ("%.1f" % rate)
     line = (paint("elapsed ", DIM) + paint("%.2fs" % timing, B_WHITE)
             + paint("   ·   ", DIM)
-            + paint("throughput ", DIM) + paint("%.0f ports/s" % rate, B_WHITE))
+            + paint("throughput ", DIM) + paint(rate_text + " ports/s", B_WHITE))
     if stats.get("scripts"):
         line += (paint("   ·   ", DIM) + paint("scripts ", DIM)
                  + paint(str(stats["scripts"]), B_WHITE))

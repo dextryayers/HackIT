@@ -174,7 +174,7 @@ action = function(host, port)
     if not jboss_version then
       local jmx_req = http.get(host, port, "/jmx-console/")
       if jmx_req and jmx_req.body then
-        jboss_version = jmx_req.match(body, "JBoss/([%d%.]+)")
+        jboss_version = match(jmx_req.body or "", "JBoss/([%d%.]+)")
       end
     end
 

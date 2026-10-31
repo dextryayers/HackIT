@@ -157,7 +157,7 @@ action = function(host, port)
                         params_tested = params_tested + 1
 
                         for _, sig in ipairs(ssrf_signatures) do
-                            if response.find(body, sig.pattern) then
+                            if find(response.body or "", sig.pattern) then
                                 local finding = {
                                     param = param,
                                     payload = payload.name,

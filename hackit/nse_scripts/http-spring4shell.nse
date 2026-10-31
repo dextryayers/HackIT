@@ -139,7 +139,7 @@ action = function(host, port)
     local cookie_probe = http.get(host, port, "/", {
       header = {["Cookie"] = "class.module.classLoader.DefaultContext=true"}
     })
-    if cookie_probe and cookie_probe.body and cookie_probe.match(body, "class%.module") then
+    if cookie_probe and cookie_probe.body and match(cookie_probe.body or "", "class%.module") then
       insert(findings, {path = "/ (via Cookie)", method = "GET", status = cookie_probe.status, detail = "Cookie-based injection reflected"})
     end
 

@@ -134,14 +134,14 @@ action = function(host, port)
           result.publicly_listable = true
           if resp.body then
             local file_count = 0
-            for _ in resp.gmatch(body, "<Key>([^<]+)</Key>") do
+            for _ in gmatch(resp.body or "", "<Key>([^<]+)</Key>") do
               file_count = file_count + 1
             end
             if file_count > 0 then
               result.objects_count = file_count
             end
             local prefixes = {}
-            for prefix in resp.gmatch(body, "<CommonPrefixes><Prefix>([^<]+)</Prefix></CommonPrefixes>") do
+            for prefix in gmatch(resp.body or "", "<CommonPrefixes><Prefix>([^<]+)</Prefix></CommonPrefixes>") do
               insert(prefixes, prefix)
             end
             if #prefixes > 0 then
@@ -150,7 +150,7 @@ action = function(host, port)
           end
         elseif q == "?acl" and resp.body then
           local grants = {}
-          for grant in resp.gmatch(body, "<Grant>.-</Grant>") do
+          for grant in gmatch(resp.body or "", "<Grant>.-</Grant>") do
             if match(grant, "AllUsers") or match(grant, "AuthenticatedUsers") then
               insert(grants, "public")
             end

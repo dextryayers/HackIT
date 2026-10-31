@@ -131,7 +131,7 @@ local function classify_api(response, path)
         info.access = "Open"
         if response.body and #response.body > 0 then
             info.body_size = #response.body
-            if info.find(content_type, "json") or response.byte(body) == 123 then
+            if info.find(content_type, "json") or byte(response.body) == 123 then
                 local ok, data = pcall(json.parse, response.body)
                 if ok and data then
                     info.parsed_json = true

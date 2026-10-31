@@ -121,7 +121,7 @@ action = function(host, port)
       end
 
       if response.body then
-        local lbody = response.lower(body)
+        local lbody = lower(response.body or "")
         for _, pattern in ipairs(beanstalk_body_patterns) do
           if find(lbody, pattern:lower()) then
             found = true

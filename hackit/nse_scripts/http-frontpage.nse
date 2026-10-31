@@ -92,7 +92,7 @@ action = function(host, port)
     for _, path in ipairs(fpse_paths) do
         local resp = http.get(host, port, path)
         if resp and resp.status and resp.status < 400 then
-            if resp.body and resp.find(body, "FrontPage") or resp.find(body, "VERSION") then
+            if resp.body and find(resp.body or "", "FrontPage") or find(resp.body or "", "VERSION") then
                 insert(results, "FPSE detected at " .. path)
             elseif resp.status ~= 404 then
                 insert(results, "Possible FPSE at " .. path .. " (status " .. resp.status .. ")")

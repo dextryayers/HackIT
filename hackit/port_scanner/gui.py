@@ -12,28 +12,28 @@ import tkinter.scrolledtext as scrolledtext
 import selectors, tempfile
 
 class C:
-    BG1='#0d1117'; BG2='#0d1117'; CARD='#161b22'; BORD='#30363d'
-    TEXT='#f0f6fc'; TEXT2='#8b949e'
-    CYAN='#58a6ff'; GREEN='#3fb950'; RED='#f85149'; ORANGE='#d29922'
-    YELLOW='#d29922'; PURPLE='#bc8cff'; PINK='#f778ba'
-    BTN='#21262d'; HV='#30363d'; SEL='#1f6feb'; DIM='#484f58'
-    SEV={'vuln':'#f85149','high':'#d29922','warn':'#d29922','info':'#58a6ff','ok':'#3fb950'}
+    BG1='#0a0e14'; BG2='#0e141b'; CARD='#121a24'; BORD='#1f2a37'
+    TEXT='#e8eef5'; TEXT2='#93a1b1'
+    CYAN='#5aa9ff'; GREEN='#46c46a'; RED='#f0665e'; ORANGE='#e3b341'
+    YELLOW='#e3b341'; PURPLE='#b083f0'; PINK='#f27fb2'
+    BTN='#16202c'; HV='#1f2b39'; SEL='#2563eb'; DIM='#5f6b7a'
+    SEV={'vuln':'#f0665e','high':'#e3b341','warn':'#e3b341','info':'#5aa9ff','ok':'#46c46a'}
     _PALETTES = {
         'dark': {
-            'BG1':'#080b10','BG2':'#0b1017','CARD':'#101823','BORD':'#243040',
-            'TEXT':'#e6edf3','TEXT2':'#9aa7b4',
-            'CYAN':'#4f9cf9','GREEN':'#3fb950','RED':'#f85149','ORANGE':'#d29922',
-            'YELLOW':'#d29922','PURPLE':'#a371f7','PINK':'#f778ba',
-            'BTN':'#161e29','HV':'#1e2733','SEL':'#1f6feb','DIM':'#5b6673',
-            'SEV':{'vuln':'#f85149','high':'#d29922','warn':'#d29922','info':'#4f9cf9','ok':'#3fb950'},
+            'BG1':'#0a0e14','BG2':'#0e141b','CARD':'#121a24','BORD':'#1f2a37',
+            'TEXT':'#e8eef5','TEXT2':'#93a1b1',
+            'CYAN':'#5aa9ff','GREEN':'#46c46a','RED':'#f0665e','ORANGE':'#e3b341',
+            'YELLOW':'#e3b341','PURPLE':'#b083f0','PINK':'#f27fb2',
+            'BTN':'#16202c','HV':'#1f2b39','SEL':'#2563eb','DIM':'#5f6b7a',
+            'SEV':{'vuln':'#f0665e','high':'#e3b341','warn':'#e3b341','info':'#5aa9ff','ok':'#46c46a'},
         },
         'light': {
-            'BG1':'#f7f9fc','BG2':'#ffffff','CARD':'#eef2f7','BORD':'#dbe2ea',
-            'TEXT':'#0f1720','TEXT2':'#5b6673',
-            'CYAN':'#0b62c4','GREEN':'#1a7f37','RED':'#cf222e','ORANGE':'#9a6700',
-            'YELLOW':'#9a6700','PURPLE':'#6f42c1','PINK':'#bf3989',
-            'BTN':'#e4e9f0','HV':'#d8dfe8','SEL':'#0b62c4','DIM':'#8896a6',
-            'SEV':{'vuln':'#cf222e','high':'#9a6700','warn':'#9a6700','info':'#0b62c4','ok':'#1a7f37'},
+            'BG1':'#f6f8fb','BG2':'#ffffff','CARD':'#eef2f7','BORD':'#d9e1ea',
+            'TEXT':'#0e1720','TEXT2':'#556372',
+            'CYAN':'#0b62c4','GREEN':'#177f38','RED':'#c92a2a','ORANGE':'#8f6400',
+            'YELLOW':'#8f6400','PURPLE':'#6639ba','PINK':'#b83280',
+            'BTN':'#e3e9f1','HV':'#d5dee8','SEL':'#0b62c4','DIM':'#7b8896',
+            'SEV':{'vuln':'#c92a2a','high':'#8f6400','warn':'#8f6400','info':'#0b62c4','ok':'#177f38'},
         },
     }
     @classmethod
@@ -80,7 +80,7 @@ class VirtualPortList(tk.Canvas):
         self.items = []
         self.visible_start = 0
         self.visible_count = 0
-        self.row_height = 26
+        self.row_height = 30
         self._font = MONO
         self._bold_font = MONO_B
         self._sort_reverse = False
@@ -90,7 +90,7 @@ class VirtualPortList(tk.Canvas):
         self.bind('<MouseWheel>', self._on_scroll, '+')
         self.bind('<Button-4>', lambda e: self._scroll(-3), '+')
         self.bind('<Button-5>', lambda e: self._scroll(3), '+')
-        self._header_h = 28
+        self._header_h = 32
         self._draw_header()
         self._redraw_after = None
 
@@ -200,6 +200,7 @@ class VirtualPortList(tk.Canvas):
 class GUI:
     def __init__(self):
         self._theme='dark'
+        C.apply(self._theme)
         self.root=tk.Tk()
         self.root.title('PortStorm — HackIT')
         self.root.configure(bg=C.BG1); self.root.minsize(1400,860)
@@ -301,6 +302,19 @@ class GUI:
                     p,svc,sc=data
                     name,sev,text=self._parse_script_entry(sc)
                     self._add_nse(name,p,svc,text,sev)
+                elif typ=='nse_result':
+                    res=data
+                    sev=str(getattr(res,'severity','info') or 'info').lower()
+                    tag=self._NSE_SEVERITY_TAG.get(sev,'info')
+                    port=getattr(res,'port',0) or 'host'
+                    svc=''
+                    try:
+                        svc=self._open_ports.get(port,'')
+                    except Exception:
+                        pass
+                    body=getattr(res,'text','') or getattr(res,'summary','')
+                    body=' | '.join(line.strip() for line in str(body).splitlines() if line.strip())
+                    self._add_nse(getattr(res,'script','?'), port, svc, body or '(no output)', tag)
         # Drain the subprocess stdout queue (decoupled from Tkinter mainloop).
         drained = 0
         while drained < 400:
@@ -404,9 +418,36 @@ class GUI:
                 s=float(f.read().split()[0]); h,m=divmod(int(s),3600); m//=60
                 self.up=f'{h}h {m}m'
         except: self.up='0h 0m'
-        nsd=base/'lua'
-        self.nse_all=sorted(f.stem for f in nsd.iterdir() if f.suffix=='.lua') if nsd.exists() else []
-        self.nse_sel=set(self.nse_all)
+        # NSE catalogue: the bundled corpus is the nmap-backed script tree.
+        # Fall back to the legacy Lua stems if that tree is missing.
+        self.nse_engine = None
+        self.nse_info = {}
+        self.nse_all = []
+        try:
+            from .nse import NseEngine
+            self.nse_engine = NseEngine()
+            self.nse_info = {s.name: s for s in self.nse_engine.scripts}
+            self.nse_all = sorted(self.nse_info)
+        except Exception:
+            try:
+                from nse import NseEngine  # direct-script launch
+                self.nse_engine = NseEngine()
+                self.nse_info = {s.name: s for s in self.nse_engine.scripts}
+                self.nse_all = sorted(self.nse_info)
+            except Exception:
+                self.nse_engine = None
+        if not self.nse_all:
+            nsd = base / 'lua'
+            self.nse_all = sorted(f.stem for f in nsd.iterdir() if f.suffix == '.lua') if nsd.exists() else []
+        self.nse_sel = set(self.nse_all)
+        # Default to nmap's own `default` category (18 scripts): the corpus's
+        # 298 scripts against every open port is minutes of work for a first
+        # look. "All" and the category chips are one click away.
+        curated = {s.name for s in self.nse_info.values()
+                   if 'default' in (s.categories or ())}
+        if curated:
+            self.nse_sel = curated
+        self._open_ports = {}
 
     def _load_presets(self):
         pf=CFG_DIR/'presets.json'
@@ -936,12 +977,26 @@ class GUI:
         h=tk.Frame(b,bg=C.CARD); h.pack(fill='x')
         self._btn(h,'All',lambda:self._nse_set(1)).pack(side='left')
         self._btn(h,'None',lambda:self._nse_set(0)).pack(side='left',padx=(4,0))
-        self.nc=tk.StringVar(value=f'0/{len(self.nse_all)}')
+        self.nc=tk.StringVar(value=f'{len(self.nse_sel)}/{len(self.nse_all)}')
         tk.Label(h,textvariable=self.nc,font=TINY,fg=C.TEXT2,bg=C.CARD).pack(side='right')
         self.nsv=tk.StringVar()
         self.nsv.trace_add('write',lambda *a:self._nse_filt())
         e=self._ent(b,self.nsv); e.pack(fill='x',ipady=2,pady=(3,0))
         Tip(e,'Filter \u2014 click to toggle \u2014 Ctrl+A toggle all visible')
+        crow=tk.Frame(b,bg=C.CARD); crow.pack(fill='x',pady=(3,0))
+        for i,cat in enumerate(('vuln','web','auth','brute','discovery','safe','malware')):
+            if i and i%4==0:
+                crow=tk.Frame(b,bg=C.CARD); crow.pack(fill='x',pady=(2,0))
+            self._btn(crow,cat,lambda c=cat:self._nse_cat(c)).pack(side='left',padx=(0,3))
+        meta=tk.Frame(b,bg=C.CARD); meta.pack(fill='x',pady=(3,0))
+        tk.Label(meta,text='timeout',font=TINY,fg=C.TEXT2,bg=C.CARD).pack(side='left')
+        self.nse_timeout=tk.StringVar(value='30')
+        te=self._ent(meta,self.nse_timeout,width=4)
+        te.pack(side='left',padx=(4,8),ipady=1)
+        Tip(te,'Per-script timeout in seconds')
+        backend='nmap' if getattr(self,'nse_engine',None) and self.nse_engine.available else 'unavailable'
+        tk.Label(meta,text=f'{len(self.nse_all)} scripts  \u00b7  {backend}',
+                 font=TINY,fg=C.TEXT2,bg=C.CARD).pack(side='right')
         fr=tk.Frame(b,bg=C.CARD,highlightbackground=C.BORD,highlightthickness=1)
         fr.pack(fill='x',pady=(2,0))
         self.nl=tk.Listbox(fr,font=MONO,bg=C.BG2,fg=C.TEXT,selectbackground=C.SEL,
@@ -952,7 +1007,7 @@ class GUI:
         self.nl.pack(side='left',fill='both',expand=1); sb.pack(side='right',fill='y')
         self.nl.bind('<<ListboxSelect>>',self._nse_click)
         self.nl.bind('<Control-a>',lambda e:self._nse_sel_all())
-        for s in self.nse_all: self.nl.insert('end',s)
+        self._nse_filt()
         tk.Label(b,text='Selected:',font=TINY,fg=C.TEXT2,bg=C.CARD
                  ).pack(anchor='w',pady=(1,0))
         self.ntf=tk.Frame(b,bg=C.CARD); self.ntf.pack(fill='x')
@@ -961,7 +1016,7 @@ class GUI:
         sel=self.nl.curselection()
         if not sel: return
         idx=sel[0]
-        s=self.nl.get(idx)
+        s=self.nl.get(idx)[2:]
         self.nse_sel.discard(s) if s in self.nse_sel else self.nse_sel.add(s)
         self.nl.selection_clear(0,'end')
         self._nsetags(); self._nse_filt()
@@ -982,6 +1037,18 @@ class GUI:
         self.nse_sel=set(self.nse_all)if v else set()
         self._nsetags(); self._nse_filt(); self._sync_cmd()
 
+    def _nse_cat(self,cat):
+        """Toggle every script in one category (vuln, web, auth, ...)."""
+        names={s.name for s in self.nse_info.values()
+               if cat in (s.categories or ())}
+        if not names:
+            return
+        if names <= self.nse_sel:
+            self.nse_sel -= names
+        else:
+            self.nse_sel |= names
+        self._nsetags(); self._nse_filt(); self._sync_cmd()
+
     def _nse_sel_all(self):
         vis=[self.nl.get(i)[2:]for i in range(self.nl.size())]
         av=all(s in self.nse_sel for s in vis)
@@ -991,12 +1058,21 @@ class GUI:
 
     def _nsetags(self):
         for w in self.ntf.winfo_children(): w.destroy()
-        if not self.nse_sel:
+        selected = sorted(self.nse_sel)
+        if not selected:
             tk.Label(self.ntf,text='(none)',font=TINY,fg=C.DIM,bg=C.CARD).pack(anchor='w')
             return
+        head=tk.Frame(self.ntf,bg=C.CARD); head.pack(fill='x')
+        tk.Label(head,text=f'{len(selected)} selected',font=TINY,fg=C.TEXT2,
+                 bg=C.CARD).pack(side='left')
+        if len(selected)>12:
+            tk.Label(head,text='\u00b7 showing first 12',font=TINY,fg=C.DIM,
+                     bg=C.CARD).pack(side='left',padx=(6,0))
+        # Chip strip is capped: rendering 298 chips costs more than it informs.
+        shown=selected[:12]
         row=tk.Frame(self.ntf,bg=C.CARD); row.pack(fill='x')
-        for i,s in enumerate(sorted(self.nse_sel)):
-            if i and i%6==0:
+        for i,s in enumerate(shown):
+            if i and i%4==0:
                 row=tk.Frame(self.ntf,bg=C.CARD); row.pack(fill='x')
             chip=tk.Frame(row,bg=C.BTN,highlightbackground=C.CYAN,highlightthickness=1)
             chip.pack(side='left',padx=1,pady=1)
@@ -1032,8 +1108,8 @@ class GUI:
         if self.ov.get(): parts.append('--os-detect')
         parts.append('--all-engines')
         parts.append('-no-banner')
-        parts.append('--script'); parts.append('all' if not self.nse_sel else ';'.join(sorted(self.nse_sel)))
-        self.cmdv.set(' '.join(parts))
+        nse_count = len(self.nse_sel) if hasattr(self, 'nse_sel') else 0
+        self.cmdv.set(' '.join(parts) + f'   \u2192  NSE: {nse_count} script(s)')
 
     # ── Actions ────────────────────────────────────────────────────
     def _acts(self,p):
@@ -1458,12 +1534,66 @@ class GUI:
         self._theme_btn.pack(side='left', padx=(0, 4))
         self._btn(actions, 'Keys', self._show_ks, fg=C.CYAN).pack(side='left')
 
+    # Widget options that carry a palette colour.
+    _COLOR_OPTS = ('background', 'foreground', 'activebackground', 'activeforeground',
+                   'selectbackground', 'selectforeground', 'highlightbackground',
+                   'highlightcolor', 'insertbackground', 'troughcolor', 'fieldbackground')
+
+    def _recolor(self, mapping):
+        """Repaint every widget whose colour matches the previous palette."""
+        def walk(widget):
+            for opt in self._COLOR_OPTS:
+                try:
+                    current = str(widget.cget(opt)).lower()
+                except Exception:
+                    continue
+                if not current.startswith('#'):
+                    continue
+                replacement = mapping.get(current)
+                if replacement and replacement.lower() != current:
+                    try:
+                        widget.configure(**{opt: replacement})
+                    except Exception:
+                        pass
+            for child in widget.winfo_children():
+                walk(child)
+        walk(self.root)
+
     def _toggle_theme(self):
-        self._theme='light' if self._theme=='dark' else 'dark'
+        old_name = self._theme
+        self._theme = 'light' if old_name == 'dark' else 'dark'
+        old = C._PALETTES[old_name]
+        new = C._PALETTES[self._theme]
+        mapping = {}
+        for key, value in old.items():
+            if key == 'SEV':
+                for sev_key, sev_value in value.items():
+                    mapping[str(sev_value).lower()] = new['SEV'][sev_key]
+            else:
+                mapping[str(value).lower()] = new[key]
+
         C.apply(self._theme)
-        self._theme_btn.config(text='Dark' if self._theme=='light' else 'Light')
+        self._recolor(mapping)
         self._style()
-        self._toast(f'{self._theme.title()} theme',C.CYAN)
+        self._theme_btn.config(text='Dark' if self._theme == 'light' else 'Light')
+
+        # Canvas art and text tags paint with literal colours: repaint them.
+        try:
+            self._vpl._draw_header()
+            self._vpl._render()
+            self._draw_rate_chart()
+        except Exception:
+            pass
+        if hasattr(self, 'log'):
+            for tag, color in [('ts', C.TEXT2), ('cmd', C.CYAN), ('err', C.RED),
+                               ('ok', C.GREEN), ('warn', C.ORANGE), ('nse', C.PURPLE)]:
+                self.log.tag_config(tag, foreground=color)
+        if hasattr(self, 'nse_log'):
+            for tag, color in [('ts', C.TEXT2), ('vuln', C.RED), ('high', C.ORANGE),
+                               ('warn', C.YELLOW), ('info', C.CYAN), ('ok', C.GREEN),
+                               ('script', C.PURPLE), ('port', C.TEXT2), ('nse_text', C.TEXT)]:
+                self.nse_log.tag_config(tag, foreground=color)
+        self._toast(f'{self._theme.title()} theme', C.CYAN)
 
     # ── Keyboard ──────────────────────────────────────────────────
     def _bind(self):
@@ -1506,6 +1636,7 @@ class GUI:
             self.tc['values']=list(self.target_hist)
         self.results.clear()
         self._seen_ports = set()
+        self._open_ports = {}
         self._open_only_cached = bool(self.opv.get()) if hasattr(self,'opv') else True
         self._clear_res()
         for t in(self.nt,):
@@ -1540,8 +1671,6 @@ class GUI:
         if self.ov.get(): cmd.append('--os-detect')
         cmd.append('--all-engines')
         cmd.append('-no-banner')
-        cmd.append('--script')
-        cmd.append('all' if not self.nse_sel else ';'.join(sorted(self.nse_sel)))
         return cmd
 
     def _go(self,target):
@@ -1570,12 +1699,24 @@ class GUI:
             threading.Thread(target=_read_stderr, daemon=True).start()
 
             def _read_stdout():
+                # Parse port records here as they stream in. The UI queue is
+                # drained on the Tk thread, so waiting for it before NSE would
+                # race: the reader would fire against an empty port map.
                 try:
                     data = self.proc.stdout.read()
                     for raw in data.splitlines(keepends=True):
+                        line = raw.strip()
+                        if line.startswith('RESULT:'):
+                            self._note_open_port(line[7:])
                         self._stdout_q.put(raw)
                 except Exception:
                     pass
+                # Ports are known now: run the selected NSE corpus against
+                # what the scanner actually found open.
+                try:
+                    self._run_nse(target)
+                except Exception as exc:
+                    self._logf(f'[!] NSE: {exc}', 'err')
                 self._stdout_q.put(None)  # sentinel = EOF
             threading.Thread(target=_read_stdout, daemon=True).start()
 
@@ -1604,12 +1745,32 @@ class GUI:
             pass
 
     def _fb(self,target):
-        self._logf('[!] Scanner unavailable \u2014 using built-in engine','warn')
+        self._logf('[!] Go scanner unavailable \u2014 using built-in Python engine','warn')
         try:
-            from core import scan_ports
-            for r in scan_ports(target,ports=self.pcl.get()):
-                self._pr(json.dumps(r))
-        except Exception as e: self._logf(f'[!] {e}','err')
+            from .core import PortScanner, expand_ports
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            port_list = expand_ports(self._port_spec())
+            scanner = PortScanner()
+            timeout_s = max(0.2, min(int(self.tov.get() or 1000) / 1000.0, 5.0))
+            workers = max(1, min(int(self.twv.get() or 100), 256))
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futures = {
+                    pool.submit(scanner.scan_port, target, port, timeout_s): port
+                    for port in port_list
+                }
+                for fut in as_completed(futures):
+                    try:
+                        item = fut.result()
+                    except Exception:
+                        continue
+                    if isinstance(item, dict):
+                        self._pr(json.dumps(item))
+        except Exception as e:
+            self._logf(f'[!] {e}','err')
+        try:
+            self._run_nse(target)
+        except Exception as exc:
+            self._logf(f'[!] NSE: {exc}','err')
         self._done()
 
     def _parse_script_entry(self,s):
@@ -1634,6 +1795,26 @@ class GUI:
         for host_block in doc.get('results') or []:
             for row in host_block.get('results') or []:
                 self._pr(json.dumps(row))
+
+    def _note_open_port(self,raw):
+        """Record an open port from the reader thread (pre-UI-drain).
+
+        The Tk timer drains ``_stdout_q`` on the main loop; NSE needs the port
+        map the moment the engine finishes, so the reader thread keeps its own
+        running copy. Dict writes are atomic under the GIL, and ``_pr`` writes
+        the same values later, so the two never disagree.
+        """
+        try:
+            d=json.loads(raw)
+        except Exception:
+            return
+        if str(d.get('status', d.get('state', ''))).lower() != 'open':
+            return
+        try:
+            port=int(d.get('port'))
+        except (TypeError, ValueError):
+            return
+        self._open_ports.setdefault(port, d.get('service', '') or '')
 
     def _pr(self,raw):
         try:
@@ -1660,6 +1841,11 @@ class GUI:
             conf=d.get('banner_confidence', d.get('confidence', 0)) or 0
             mism=bool(d.get('banner_mismatch'))
             if st=='OPEN': self._logf(f'  {p}/{st}  {svc} {ver}')
+            try:
+                if st == 'OPEN' and str(p).isdigit():
+                    self._open_ports[int(p)] = svc or ''
+            except Exception:
+                pass
             self.q.put(('result',(p,st,svc,ver,ban,proto,conf,mism)))
             for sc in d.get('scripts',[]):
                 self.q.put(('nse_script',(p,svc,sc)))
@@ -1685,6 +1871,55 @@ class GUI:
             self._prog(d.get('progress',0))
             if d.get('message'): self._st(d['message'])
         except: pass
+
+    def _run_nse(self, target):
+        """Execute the selected NSE corpus against the ports found open.
+
+        Runs on the scanner reader thread so the UI never blocks; findings are
+        queued as ``nse_result`` and rendered by the master timer.
+        """
+        if not getattr(self, 'nse_sel', None):
+            return
+        if not getattr(self, '_open_ports', None):
+            self._logf('[nse] no open ports \u2014 nothing to probe', 'nse')
+            return
+        engine = getattr(self, 'nse_engine', None)
+        if engine is None or not engine.available:
+            self._logf('[nse] nmap backend unavailable \u2014 skipped', 'warn')
+            return
+
+        names = sorted(self.nse_sel)
+        scripts = engine.select(names)
+        scripts = engine.filter_for_ports(scripts, sorted(self._open_ports))
+        if not scripts:
+            self._logf('[nse] no script matches the open ports', 'nse')
+            return
+
+        port_map = dict(self._open_ports)
+        self._logf(f'[nse] {len(scripts)} script(s) across {len(port_map)} open port(s)', 'nse')
+
+        def on_status(message):
+            self._logf(f'[nse] {message}', 'nse')
+
+        def on_result(result):
+            self.q.put(('nse_result', result))
+
+        try:
+            engine.run_for_ports(
+                target,
+                port_map,
+                scripts,
+                script_timeout=int(self.nse_timeout.get()) if hasattr(self, 'nse_timeout') else 30,
+                on_result=on_result,
+                on_status=on_status,
+            )
+        except Exception as exc:
+            self._logf(f'[nse] {exc}', 'err')
+
+    _NSE_SEVERITY_TAG = {
+        'critical': 'vuln', 'high': 'high', 'medium': 'warn',
+        'low': 'info', 'info': 'info', 'ok': 'ok',
+    }
 
     def _stop(self):
         self._send_control('stop')

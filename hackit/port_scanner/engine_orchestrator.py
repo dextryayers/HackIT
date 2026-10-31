@@ -79,8 +79,46 @@ def _run_binary(bin_path, args, timeout=120):
 
 _ENGINE_PRIORITY = {'go': 0, 'rust': 1, 'c': 2, 'cpp': 3}
 
+# Engines spell the same state differently; anything unrecognised abstains
+# from the vote instead of being counted as "filtered".
+_STATUS_ALIASES = {
+    'open': 'open',
+    'opened': 'open',
+    'unfiltered': 'open',
+    'closed': 'closed',
+    'close': 'closed',
+    'reset': 'closed',
+    'filtered': 'filtered',
+    'filtered-out': 'filtered',
+    'dropped': 'filtered',
+    'timeout': 'filtered',
+}
+
+
+def _normalise_status(value):
+    if value is None:
+        return None
+    return _STATUS_ALIASES.get(str(value).strip().lower())
+
+
+def _union_field(target, key, values):
+    """Merge list fields without duplicates, preserving first-seen order."""
+    if not values:
+        return
+    bucket = target.setdefault(key, [])
+    for value in values:
+        if value not in bucket:
+            bucket.append(value)
+
+
 def _merge_results(results_list):
-    """Merge multi-engine results with consensus voting for port status."""
+    """Merge multi-engine results with consensus voting for port status.
+
+    A port is only promoted to ``open`` when at least one engine actually
+    reported an open state and the open votes are not outnumbered by the
+    combined non-open votes. Unknown states abstain rather than counting as
+    filtered.
+    """
     merged = {}
     for rlist in results_list:
         if not isinstance(rlist, list):
@@ -89,80 +127,92 @@ def _merge_results(results_list):
             if not isinstance(r, dict):
                 continue
             port = r.get('port', 0)
-            if port == 0:
+            if not isinstance(port, int) or port <= 0:
                 continue
             eng = r.get('engine', 'unknown')
+            status = _normalise_status(r.get('status', r.get('state')))
+
             if port not in merged:
-                r.setdefault('engines', [eng])
-                r.setdefault('status_votes', {'open': 0, 'closed': 0, 'filtered': 0})
-                r['status_votes'][r.get('status', 'filtered')] += 1
-                merged[port] = r
-            else:
-                ex = merged[port]
-                if 'status_votes' not in ex:
-                    ex['status_votes'] = {'open': 0, 'closed': 0, 'filtered': 0}
-                ex['status_votes'][r.get('status', 'filtered')] += 1
-
-                eng_list = ex.setdefault('engines', [])
-                if eng not in eng_list:
-                    eng_list.append(eng)
-
-                # The most confident decode wins the banner block. Raw text from
-                # a weaker engine must never overwrite a decoded protocol.
-                ex_conf = float(ex.get('banner_confidence') or 0)
-                r_conf = float(r.get('banner_confidence') or 0)
-                if r_conf > ex_conf + 1e-9:
-                    for k in ('service', 'product', 'version', 'banner',
-                              'banner_protocol', 'banner_confidence',
-                              'banner_evidence', 'banner_mismatch', 'confidence'):
-                        if r.get(k) not in (None, '', False):
-                            ex[k] = r[k]
-                    # Merge scripts: keep the union, preferring the richer set.
-                    if r.get('scripts'):
-                        ex_scripts = ex.setdefault('scripts', [])
-                        for sc in r['scripts']:
-                            if sc not in ex_scripts:
-                                ex_scripts.append(sc)
+                record = dict(r)
+                record['engines'] = [eng]
+                record['status_votes'] = {'open': 0, 'closed': 0, 'filtered': 0}
+                record['_abstain'] = 0
+                if status:
+                    record['status_votes'][status] += 1
                 else:
-                    for k in ('service', 'product', 'version', 'banner',
-                              'banner_protocol', 'banner_confidence',
-                              'banner_evidence', 'banner_mismatch', 'confidence'):
-                        if r.get(k) not in (None, '', False) and not ex.get(k):
-                            ex[k] = r[k]
-                    if r.get('scripts'):
-                        ex_scripts = ex.setdefault('scripts', [])
-                        for sc in r['scripts']:
-                            if sc not in ex_scripts:
-                                ex_scripts.append(sc)
+                    record['_abstain'] += 1
+                record['status'] = status or 'unknown'
+                merged[port] = record
+                continue
+
+            ex = merged[port]
+            votes = ex.setdefault('status_votes', {'open': 0, 'closed': 0, 'filtered': 0})
+            if status:
+                votes[status] += 1
+            else:
+                ex['_abstain'] = ex.get('_abstain', 0) + 1
+
+            if eng not in ex['engines']:
+                ex['engines'].append(eng)
+
+            # The most confident decode wins the banner block. Raw text from
+            # a weaker engine must never overwrite a decoded protocol.
+            ex_conf = float(ex.get('banner_confidence') or ex.get('confidence') or 0)
+            r_conf = float(r.get('banner_confidence') or r.get('confidence') or 0)
+            banner_fields = ('service', 'product', 'version', 'banner',
+                             'banner_protocol', 'banner_confidence',
+                             'banner_evidence', 'banner_mismatch', 'confidence')
+            if r_conf > ex_conf + 1e-9:
+                for k in banner_fields:
+                    if r.get(k) not in (None, '', False):
+                        ex[k] = r[k]
+            else:
+                for k in banner_fields:
+                    if r.get(k) not in (None, '', False) and not ex.get(k):
+                        ex[k] = r[k]
+
+            # Evidence fields accumulate regardless of banner confidence.
+            _union_field(ex, 'scripts', r.get('scripts'))
+            _union_field(ex, 'vulnerabilities', r.get('vulnerabilities'))
+            _union_field(ex, 'cpe', r.get('cpe'))
+
+            if r.get('deep_analysis') and not ex.get('deep_analysis'):
+                ex['deep_analysis'] = r['deep_analysis']
+            if r.get('reason') and not ex.get('reason'):
+                ex['reason'] = r['reason']
+            if isinstance(r.get('risk_score'), (int, float)):
+                ex['risk_score'] = max(float(ex.get('risk_score') or 0), float(r['risk_score']))
+            if isinstance(r.get('ttl'), int) and r['ttl'] > 0 and not ex.get('ttl'):
+                ex['ttl'] = r['ttl']
 
     result = sorted(merged.values(), key=lambda x: x.get('port', 0))
 
     # ── Consensus voting: determine final status per port ──
     for r in result:
         votes = r.pop('status_votes', {'open': 0, 'closed': 0, 'filtered': 0})
-        total = sum(votes.values())
-        if total == 0:
-            continue
+        abstain = r.pop('_abstain', 0)
 
         open_votes = votes.get('open', 0)
         closed_votes = votes.get('closed', 0)
         filtered_votes = votes.get('filtered', 0)
+        decided = open_votes + closed_votes + filtered_votes
 
-        # Consensus: at least 2 engines agree, or majority
-        if open_votes > closed_votes and open_votes > filtered_votes:
+        if decided == 0:
+            # Nothing voted: keep whatever the sole reporter said, but never
+            # invent an open state.
+            if _normalise_status(r.get('status')) != 'open':
+                r['status'] = 'unknown'
+        elif open_votes > 0 and open_votes * 2 >= decided:
+            # At least half the voting engines saw a live connect.
             r['status'] = 'open'
-        elif closed_votes > open_votes and closed_votes > filtered_votes:
+        elif closed_votes >= filtered_votes and closed_votes > 0:
             r['status'] = 'closed'
-        elif filtered_votes > open_votes and filtered_votes > closed_votes:
+        elif filtered_votes > 0:
             r['status'] = 'filtered'
         else:
-            # Tie-breaker: prefer open > closed > filtered
-            if open_votes > 0:
-                r['status'] = 'open'
-            elif closed_votes > 0:
-                r['status'] = 'closed'
-            else:
-                r['status'] = 'filtered'
+            r['status'] = 'unknown'
+
+        r['status_confidence'] = round(decided / max(decided + abstain, 1), 2)
 
         r.pop('_engine_priority', None)
 

@@ -102,16 +102,16 @@ action = function(host, port)
         insert(sigs, "Via: " .. h["via"])
     end
     if resp.body then
-        if resp.find(body, "wp%-content") or resp.find(body, "wp%-includes") then
+        if find(resp.body or "", "wp%-content") or find(resp.body or "", "wp%-includes") then
             insert(sigs, "CMS: WordPress")
         end
-        if resp.find(body, "Joomla") then
+        if find(resp.body or "", "Joomla") then
             insert(sigs, "CMS: Joomla")
         end
-        if resp.find(body, "Drupal") then
+        if find(resp.body or "", "Drupal") then
             insert(sigs, "CMS: Drupal")
         end
-        if resp.find(body, "nginx") then
+        if find(resp.body or "", "nginx") then
             insert(sigs, "Server: nginx (body hint)")
         end
     end

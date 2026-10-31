@@ -144,8 +144,8 @@ action = function(host, port)
       header = {["Content-Type"] = "application/json"},
       data = drupalgeddon3_payload.format(data, "RCE3")
     })
-    if req3 and req3.body and (req3.match(body, "HackIT_RCE3_Test") or req3.match(body, "Cancel")) then
-      insert(findings, {label = "CVE-2018-7602 via JSON API", excerpt = req3.sub(body, 1, 80), status = req3.status, severity = "CRITICAL"})
+    if req3 and req3.body and (match(req3.body or "", "HackIT_RCE3_Test") or match(req3.body or "", "Cancel")) then
+      insert(findings, {label = "CVE-2018-7602 via JSON API", excerpt = sub(req3.body or "", 1, 80), status = req3.status, severity = "CRITICAL"})
     end
 
     if not is_drupal then

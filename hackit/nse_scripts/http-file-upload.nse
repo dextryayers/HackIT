@@ -86,7 +86,7 @@ action = function(host, port)
         local resp = http.get(host, port, path)
         if resp and resp.status and resp.status < 400 then
             if resp.body then
-                if resp.find(body, 'type%s*=%s*["\']file["\']') or resp.find(body, 'enctype%s*=%s*["\']multipart/form%-data["\']') then
+                if find(resp.body or "", 'type%s*=%s*["\']file["\']') or find(resp.body or "", 'enctype%s*=%s*["\']multipart/form%-data["\']') then
                     insert(results, "Upload form at " .. path)
                 end
             end
@@ -97,7 +97,7 @@ action = function(host, port)
     end
     local home_resp = http.get(host, port, "/")
     if home_resp and home_resp.body then
-        for form in home_resp.gmatch(body, "<form.-</form>") do
+        for form in gmatch(home_resp.body or "", "<form.-</form>") do
             if find(form, 'type%s*=%s*["\']file["\']') then
                 local action = match(form, 'action%s*=%s*["\'](.-)["\']') or "?"
                 insert(results, "File upload form found on / (action: " .. action .. ")")

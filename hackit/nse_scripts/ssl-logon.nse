@@ -88,7 +88,7 @@ action = function(host, port)
             return http.get(host, port, path)
         end)
         if ok and response and response.body then
-            local body = response.lower(body)
+            local body = lower(response.body or "")
             local indicators = {
                 {"password field", find(body, 'type="password"')},
                 {"login form", find(body, 'action="[^"]*login') or find(body, "action='[^']*login")},

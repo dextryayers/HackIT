@@ -148,7 +148,7 @@ function parseIcon( body )
   -- Loop through link elements.
   i = 0
   while i do
-    _, i = string.find(body, "<%s*[Ll][Ii][Nn][Kk]%s", i + 1)
+    _, i = find(body, "<%s*[Ll][Ii][Nn][Kk]%s", i + 1)
     if not i then
       return nil
     end
@@ -156,7 +156,7 @@ function parseIcon( body )
     j = i
     while true do
       local name, quote, value
-      _, j, name, quote, value = string.find(body, "^%s*(%w+)%s*=%s*([\"'])(.-)%2", j + 1)
+      _, j, name, quote, value = find(body, "^%s*(%w+)%s*=%s*([\"'])(.-)%2", j + 1)
       if not j then
         break
       end

@@ -115,7 +115,7 @@ local function is_json_response(response)
     end
 
     if response.body and #response.body > 0 then
-        local trimmed = response.match(body, "^%s*(.-)%s*$") or response.body
+        local trimmed = match(response.body or "", "^%s*(.-)%s*$") or response.body
         if byte(trimmed) == 123 or byte(trimmed) == 91 then
             local ok, parsed = pcall(json.parse, trimmed)
             if ok then

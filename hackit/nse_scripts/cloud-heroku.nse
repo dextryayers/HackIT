@@ -134,7 +134,7 @@ action = function(host, port)
 
       if response.body then
         for _, pattern in ipairs(heroku_indicators.body_patterns) do
-          if response.find(body, pattern) then
+          if find(response.body or "", pattern) then
             found = true
             insert(indicators, "body:" .. pattern)
           end

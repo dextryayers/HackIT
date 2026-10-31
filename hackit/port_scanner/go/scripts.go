@@ -1,11 +1,17 @@
 package main
 
 import (
+	"bufio"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"time"
 )
 
 // ScriptResult represents the result of a script execution
@@ -43,23 +49,29 @@ type Script struct {
 	Ports       []int          `json:"ports,omitempty"`
 }
 
-// ScriptEngine manages NSE-style script execution
+// ScriptEngine manages the built-in Go probes.
+//
+// Every built-in here talks to the target. Vulnerability coverage lives in the
+// NSE layer (hackit/port_scanner/nse.py), which runs nmap's own script engine;
+// this file deliberately does not guess at vulnerabilities, because a guess
+// dressed as a finding is worse than no finding.
 type ScriptEngine struct {
 	scripts        map[string]Script
 	scriptDir      string
 	defaultScripts []string
+	httpTimeout    time.Duration
 }
 
 // NewScriptEngine creates a new script engine
 func NewScriptEngine() *ScriptEngine {
 	engine := &ScriptEngine{
-		scripts:   make(map[string]Script),
-		scriptDir: "nse_scripts",
+		scripts:     make(map[string]Script),
+		scriptDir:   "nse_scripts",
+		httpTimeout: 6 * time.Second,
 		defaultScripts: []string{
 			"http-server-header",
 			"http-title",
-			"ssh-auth-methods",
-			"ssh-hostkey",
+			"ssh-banner",
 			"ssl-cert",
 			"ssl-enum-ciphers",
 			"banner",
@@ -71,74 +83,54 @@ func NewScriptEngine() *ScriptEngine {
 	return engine
 }
 
-// loadScripts loads available scripts from the scripts directory
+// loadScripts registers the built-in probes.
 func (se *ScriptEngine) loadScripts() {
-	// Define built-in scripts
 	builtInScripts := []Script{
 		{
 			Name:        "http-server-header",
 			Category:    ScriptDiscovery,
-			Description: "Retrieves HTTP server header",
+			Description: "Reads the Server header from a real HTTP response",
 			Path:        "builtin",
+			Ports:       []int{80, 443, 8000, 8008, 8080, 8081, 8443, 8888, 9000, 9443},
 		},
 		{
 			Name:        "http-title",
 			Category:    ScriptDiscovery,
-			Description: "Retrieves HTTP page title",
+			Description: "Extracts the <title> element from a real HTTP response",
 			Path:        "builtin",
+			Ports:       []int{80, 443, 8000, 8008, 8080, 8081, 8443, 8888, 9000, 9443},
 		},
 		{
-			Name:        "ssh-auth-methods",
-			Category:    ScriptAuth,
-			Description: "Enumerates SSH authentication methods",
-			Path:        "builtin",
-		},
-		{
-			Name:        "ssh-hostkey",
+			Name:        "ssh-banner",
 			Category:    ScriptDiscovery,
-			Description: "Retrieves SSH host key",
+			Description: "Reads the SSH identification string",
 			Path:        "builtin",
+			Ports:       []int{22, 2222},
 		},
 		{
 			Name:        "ssl-cert",
 			Category:    ScriptDiscovery,
-			Description: "Retrieves SSL certificate",
+			Description: "Performs a TLS handshake and reports the peer certificate",
 			Path:        "builtin",
+			Ports:       []int{443, 465, 636, 853, 993, 995, 8443, 9443},
 		},
 		{
 			Name:        "ssl-enum-ciphers",
 			Category:    ScriptDiscovery,
-			Description: "Enumerates SSL ciphers",
+			Description: "Tests which TLS cipher suites the endpoint completes a handshake with",
 			Path:        "builtin",
+			Ports:       []int{443, 465, 636, 853, 993, 995, 8443, 9443},
 		},
 		{
 			Name:        "banner",
 			Category:    ScriptDiscovery,
-			Description: "Retrieves service banner",
+			Description: "Returns the banner already captured by the scanner",
 			Path:        "builtin",
 		},
 		{
 			Name:        "version",
 			Category:    ScriptVersion,
-			Description: "Detects service version",
-			Path:        "builtin",
-		},
-		{
-			Name:        "http-vuln-cve2021-44228",
-			Category:    ScriptVuln,
-			Description: "Checks for Log4j vulnerability",
-			Path:        "builtin",
-		},
-		{
-			Name:        "http-vuln-cve2021-34527",
-			Category:    ScriptVuln,
-			Description: "Checks for SAML vulnerability",
-			Path:        "builtin",
-		},
-		{
-			Name:        "smb-vuln-ms17-010",
-			Category:    ScriptVuln,
-			Description: "Checks for EternalBlue vulnerability",
+			Description: "Derives a version string from the captured banner",
 			Path:        "builtin",
 		},
 	}
@@ -174,14 +166,15 @@ func (se *ScriptEngine) ListScriptsByCategory(category ScriptCategory) []Script 
 	return scripts
 }
 
-// RunScript executes a single script
+// RunScript executes a single script against the target.
 func (se *ScriptEngine) RunScript(scriptName string, host string, port int, service string, banner string) ScriptResult {
-	_, ok := se.GetScript(scriptName)
-	if !ok {
+	if _, ok := se.GetScript(scriptName); !ok {
 		return ScriptResult{
 			ScriptName: scriptName,
+			Port:       port,
+			Host:       host,
 			Status:     "error",
-			Error:      "Script not found",
+			Error:      "script not registered",
 		}
 	}
 
@@ -192,53 +185,53 @@ func (se *ScriptEngine) RunScript(scriptName string, host string, port int, serv
 		Status:     "success",
 	}
 
-	// Execute built-in scripts
+	var output []string
+	var err error
+
 	switch scriptName {
 	case "http-server-header":
-		result.Output = se.runHTTPServerHeader(host, port)
+		output, err = se.httpServerHeader(host, port)
 	case "http-title":
-		result.Output = se.runHTTPTitle(host, port)
-	case "ssh-auth-methods":
-		result.Output = se.runSSHAuthMethods(host, port)
-	case "ssh-hostkey":
-		result.Output = se.runSSHHostkey(host, port)
+		output, err = se.httpTitle(host, port)
+	case "ssh-banner":
+		output, err = se.sshBanner(host, port)
 	case "ssl-cert":
-		result.Output = se.runSSLCert(host, port)
+		output, err = se.tlsCertificate(host, port)
 	case "ssl-enum-ciphers":
-		result.Output = se.runSSLEnumCiphers(host, port)
+		output, err = se.tlsCipherSuites(host, port)
 	case "banner":
-		result.Output = []string{banner}
-		result.Status = "success"
+		if strings.TrimSpace(banner) == "" {
+			err = fmt.Errorf("no banner captured")
+		} else {
+			output = []string{strings.TrimSpace(banner)}
+		}
 	case "version":
-		result.Output = se.runVersionDetection(service, banner)
-	case "http-vuln-cve2021-44228":
-		result.Output = se.runLog4jCheck(host, port)
-	case "http-vuln-cve2021-34527":
-		result.Output = se.runSAMLCheck(host, port)
-	case "smb-vuln-ms17-010":
-		result.Output = se.runEternalBlueCheck(host, port)
+		output, err = deriveVersion(service, banner)
 	default:
-		result.Status = "error"
-		result.Error = "Script execution not implemented"
+		err = fmt.Errorf("script %q has no implementation", scriptName)
 	}
 
+	if err != nil {
+		result.Status = "error"
+		result.Error = err.Error()
+		return result
+	}
+	result.Output = output
 	return result
 }
 
-// RunScripts executes multiple scripts
+// RunScripts executes the default probes that fit the detected service.
 func (se *ScriptEngine) RunScripts(host string, port int, service string, banner string) []string {
 	results := make([]string, 0)
 
-	// Determine which scripts to run based on service
-	scriptsToRun := se.getScriptsForService(service, port)
-
-	for _, scriptName := range scriptsToRun {
+	for _, scriptName := range se.getScriptsForService(service, port) {
 		result := se.RunScript(scriptName, host, port, service, banner)
-		if result.Status == "success" && len(result.Output) > 0 {
-			for _, output := range result.Output {
-				if output != "" {
-					results = append(results, fmt.Sprintf("[%s] %s", scriptName, output))
-				}
+		if result.Status != "success" {
+			continue
+		}
+		for _, line := range result.Output {
+			if strings.TrimSpace(line) != "" {
+				results = append(results, fmt.Sprintf("[%s] %s", scriptName, line))
 			}
 		}
 	}
@@ -246,89 +239,231 @@ func (se *ScriptEngine) RunScripts(host string, port int, service string, banner
 	return results
 }
 
-// getScriptsForService returns appropriate scripts for a given service
+// getScriptsForService returns the probes worth running for a service.
 func (se *ScriptEngine) getScriptsForService(service string, port int) []string {
 	scripts := make([]string, 0)
 
-	// Always run banner and version
-	scripts = append(scripts, "banner", "version")
-
-	// Service-specific scripts
 	switch strings.ToLower(service) {
-	case "http", "https":
+	case "http", "https", "http-proxy", "http-alt":
 		scripts = append(scripts, "http-server-header", "http-title")
-		scripts = append(scripts, "http-vuln-cve2021-44228", "http-vuln-cve2021-34527")
 	case "ssh":
-		scripts = append(scripts, "ssh-auth-methods", "ssh-hostkey")
-	case "smtp":
-		scripts = append(scripts, "smtp-commands", "smtp-enum-users")
-	case "ftp":
-		scripts = append(scripts, "ftp-anon", "ftp-brute")
-	case "microsoft-ds", "smb":
-		scripts = append(scripts, "smb-vuln-ms17-010", "smb-enum-shares")
+		scripts = append(scripts, "ssh-banner")
 	}
 
-	// SSL/TLS scripts for common SSL ports
-	if port == 443 || port == 8443 || port == 993 || port == 995 || port == 465 || port == 587 {
-		scripts = append(scripts, "ssl-cert", "ssl-enum-ciphers")
+	if port == 443 || port == 8443 || port == 993 || port == 995 || port == 465 || port == 636 {
+		scripts = append(scripts, "ssl-cert")
 	}
 
 	return scripts
 }
 
-// Built-in script implementations
+// ── real probes ─────────────────────────────────────────────────
 
-func (se *ScriptEngine) runHTTPServerHeader(host string, port int) []string {
-	// Implementation would make HTTP request and extract Server header
-	return []string{"Server: nginx/1.18.0"}
+func (se *ScriptEngine) httpClient(host string, port int) *http.Client {
+	transport := &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		DialContext: (&net.Dialer{
+			Timeout: se.httpTimeout,
+		}).DialContext,
+	}
+	return &http.Client{
+		Timeout:   se.httpTimeout,
+		Transport: transport,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 3 {
+				return http.ErrUseLastResponse
+			}
+			return nil
+		},
+	}
 }
 
-func (se *ScriptEngine) runHTTPTitle(host string, port int) []string {
-	// Implementation would make HTTP request and extract title
-	return []string{"Title: Welcome to nginx!"}
+func (se *ScriptEngine) fetch(host string, port int) (*http.Response, string, error) {
+	scheme := "http"
+	if port == 443 || port == 8443 || port == 9443 {
+		scheme = "https"
+	}
+	url := fmt.Sprintf("%s://%s/", scheme, net.JoinHostPort(host, fmt.Sprintf("%d", port)))
+	resp, err := se.httpClient(host, port).Get(url)
+	if err != nil {
+		return nil, url, err
+	}
+	return resp, url, nil
 }
 
-func (se *ScriptEngine) runSSHAuthMethods(host string, port int) []string {
-	// Implementation would connect to SSH and enumerate auth methods
-	return []string{"auth_methods: publickey, password"}
+func (se *ScriptEngine) httpServerHeader(host string, port int) ([]string, error) {
+	resp, url, err := se.fetch(host, port)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	lines := []string{fmt.Sprintf("status: %s", resp.Status)}
+	if server := resp.Header.Get("Server"); server != "" {
+		lines = append(lines, "server: "+server)
+	} else {
+		lines = append(lines, "server: (not advertised)")
+	}
+	if powered := resp.Header.Get("X-Powered-By"); powered != "" {
+		lines = append(lines, "x-powered-by: "+powered)
+	}
+	lines = append(lines, "url: "+url)
+	return lines, nil
 }
 
-func (se *ScriptEngine) runSSHHostkey(host string, port int) []string {
-	// Implementation would retrieve SSH host key
-	return []string{"hostkey: ssh-rsa 2048"}
+var titlePattern = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
+
+func (se *ScriptEngine) httpTitle(host string, port int) ([]string, error) {
+	resp, _, err := se.fetch(host, port)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	buffer := make([]byte, 256*1024)
+	read, _ := resp.Body.Read(buffer)
+	body := string(buffer[:read])
+
+	match := titlePattern.FindStringSubmatch(body)
+	if match == nil {
+		return []string{"title: (none)"}, nil
+	}
+	title := strings.Join(strings.Fields(match[1]), " ")
+	if len(title) > 200 {
+		title = title[:200]
+	}
+	return []string{"title: " + title}, nil
 }
 
-func (se *ScriptEngine) runSSLCert(host string, port int) []string {
-	// Implementation would retrieve SSL certificate
-	return []string{"cert: CN=example.com, O=Example Org"}
+func (se *ScriptEngine) sshBanner(host string, port int) ([]string, error) {
+	address := net.JoinHostPort(host, fmt.Sprintf("%d", port))
+	conn, err := net.DialTimeout("tcp", address, se.httpTimeout)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+
+	_ = conn.SetReadDeadline(time.Now().Add(se.httpTimeout))
+	reader := bufio.NewReader(conn)
+	line, err := reader.ReadString('\n')
+	if err != nil && line == "" {
+		return nil, err
+	}
+	line = strings.TrimRight(line, "\r\n")
+	if !strings.HasPrefix(line, "SSH-") {
+		return nil, fmt.Errorf("peer did not send an SSH identification string")
+	}
+	parts := strings.SplitN(line, "-", 3)
+	output := []string{"banner: " + line}
+	if len(parts) == 3 {
+		output = append(output, "protocol: "+parts[1])
+		output = append(output, "software: "+parts[2])
+	}
+	return output, nil
 }
 
-func (se *ScriptEngine) runSSLEnumCiphers(host string, port int) []string {
-	// Implementation would enumerate SSL ciphers
-	return []string{"ciphers: TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256"}
+func (se *ScriptEngine) tlsCertificate(host string, port int) ([]string, error) {
+	address := net.JoinHostPort(host, fmt.Sprintf("%d", port))
+	dialer := &net.Dialer{Timeout: se.httpTimeout}
+	conn, err := tls.DialWithDialer(dialer, "tcp", address,
+		&tls.Config{InsecureSkipVerify: true, ServerName: host})
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+
+	state := conn.ConnectionState()
+	if len(state.PeerCertificates) == 0 {
+		return nil, fmt.Errorf("handshake completed without a peer certificate")
+	}
+	cert := state.PeerCertificates[0]
+
+	output := []string{
+		"subject: " + cert.Subject.String(),
+		"issuer: " + cert.Issuer.String(),
+		"serial: " + cert.SerialNumber.String(),
+		"not_before: " + cert.NotBefore.UTC().Format(time.RFC3339),
+		"not_after: " + cert.NotAfter.UTC().Format(time.RFC3339),
+		"tls_version: " + tlsVersionName(state.Version),
+		"cipher: " + tls.CipherSuiteName(state.CipherSuite),
+	}
+	if len(cert.DNSNames) > 0 {
+		output = append(output, "san_dns: "+strings.Join(cert.DNSNames, ", "))
+	}
+	return output, nil
 }
 
-func (se *ScriptEngine) runVersionDetection(service string, banner string) []string {
-	// Implementation would analyze banner for version info
-	return []string{fmt.Sprintf("version: %s", banner)}
+func (se *ScriptEngine) tlsCipherSuites(host string, port int) ([]string, error) {
+	address := net.JoinHostPort(host, fmt.Sprintf("%d", port))
+	candidates := []uint16{
+		tls.TLS_AES_128_GCM_SHA256,
+		tls.TLS_AES_256_GCM_SHA384,
+		tls.TLS_CHACHA20_POLY1305_SHA256,
+		tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+		tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+		tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+		tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+		tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
+	}
+
+	supported := make([]string, 0, len(candidates))
+	for _, suite := range candidates {
+		dialer := &net.Dialer{Timeout: 3 * time.Second}
+		conn, err := tls.DialWithDialer(dialer, "tcp", address, &tls.Config{
+			InsecureSkipVerify: true,
+			ServerName:         host,
+			MinVersion:         tls.VersionTLS12,
+			CipherSuites:       []uint16{suite},
+		})
+		if err != nil {
+			continue
+		}
+		negotiated := conn.ConnectionState().CipherSuite
+		conn.Close()
+		supported = append(supported, tls.CipherSuiteName(negotiated))
+	}
+
+	if len(supported) == 0 {
+		return nil, fmt.Errorf("no TLS handshake completed")
+	}
+	return []string{"supported: " + strings.Join(supported, ", ")}, nil
 }
 
-func (se *ScriptEngine) runLog4jCheck(host string, port int) []string {
-	// Implementation would check for Log4j vulnerability
-	return []string{"VULNERABLE: CVE-2021-44228 detected"}
+func tlsVersionName(version uint16) string {
+	switch version {
+	case tls.VersionTLS10:
+		return "TLS1.0"
+	case tls.VersionTLS11:
+		return "TLS1.1"
+	case tls.VersionTLS12:
+		return "TLS1.2"
+	case tls.VersionTLS13:
+		return "TLS1.3"
+	default:
+		return fmt.Sprintf("0x%04x", version)
+	}
 }
 
-func (se *ScriptEngine) runSAMLCheck(host string, port int) []string {
-	// Implementation would check for SAML vulnerability
-	return []string{"VULNERABLE: CVE-2021-34527 detected"}
+var versionPattern = regexp.MustCompile(`(?i)([a-z][a-z0-9_.+-]*)[/\s]v?(\d+(?:\.\d+){1,3})`)
+
+// deriveVersion reads a product/version pair out of a captured banner.
+func deriveVersion(service string, banner string) ([]string, error) {
+	trimmed := strings.TrimSpace(banner)
+	if trimmed == "" {
+		return nil, fmt.Errorf("no banner to parse")
+	}
+	match := versionPattern.FindStringSubmatch(trimmed)
+	if match == nil {
+		return []string{"service: " + service, "version: (not advertised)"}, nil
+	}
+	return []string{
+		"service: " + service,
+		"product: " + match[1],
+		"version: " + match[2],
+	}, nil
 }
 
-func (se *ScriptEngine) runEternalBlueCheck(host string, port int) []string {
-	// Implementation would check for EternalBlue vulnerability
-	return []string{"VULNERABLE: MS17-010 detected"}
-}
-
-// LoadExternalScripts loads external script files from directory
+// LoadExternalScripts indexes .nse files for the Python/NSE layer.
 func (se *ScriptEngine) LoadExternalScripts(dir string) error {
 	files, err := os.ReadDir(dir)
 	if err != nil {
@@ -343,36 +478,42 @@ func (se *ScriptEngine) LoadExternalScripts(dir string) error {
 		scriptPath := filepath.Join(dir, file.Name())
 		scriptName := strings.TrimSuffix(file.Name(), ".nse")
 
-		script := Script{
+		se.scripts[scriptName] = Script{
 			Name:        scriptName,
 			Category:    ScriptDiscovery,
-			Description: fmt.Sprintf("External script: %s", scriptName),
+			Description: "External NSE script (executed by the nmap NSE layer)",
 			Path:        scriptPath,
 		}
-
-		se.scripts[scriptName] = script
 	}
 
 	return nil
 }
 
-// ExecuteScriptArgs executes a script with custom arguments
+// ExecuteScriptArgs runs a registered script with the given arguments.
+// The built-in probes take no arguments; unknown keys are reported back rather
+// than silently ignored.
 func (se *ScriptEngine) ExecuteScriptArgs(scriptName string, args map[string]string) ScriptResult {
-	_, ok := se.GetScript(scriptName)
-	if !ok {
+	if _, ok := se.GetScript(scriptName); !ok {
 		return ScriptResult{
 			ScriptName: scriptName,
 			Status:     "error",
-			Error:      "Script not found",
+			Error:      "script not registered",
 		}
 	}
 
-	// For now, return a placeholder result
-	return ScriptResult{
-		ScriptName: scriptName,
-		Status:     "success",
-		Output:     []string{fmt.Sprintf("Executed with args: %v", args)},
+	result := ScriptResult{ScriptName: scriptName, Status: "error"}
+	if len(args) > 0 {
+		keys := make([]string, 0, len(args))
+		for key := range args {
+			keys = append(keys, key)
+		}
+		result.Error = fmt.Sprintf("built-in probe takes no arguments (got %s); use --script with an NSE script",
+			strings.Join(keys, ", "))
+		return result
 	}
+	result.Status = "error"
+	result.Error = "ExecuteScriptArgs needs host and port; call RunScript instead"
+	return result
 }
 
 // GetScriptOutput returns formatted script output
@@ -380,11 +521,12 @@ func (se *ScriptEngine) GetScriptOutput(results []ScriptResult) string {
 	var output strings.Builder
 
 	for _, result := range results {
-		if result.Status == "success" {
-			output.WriteString(fmt.Sprintf("|  %s\n", result.ScriptName))
-			for _, line := range result.Output {
-				output.WriteString(fmt.Sprintf("|    %s\n", line))
-			}
+		if result.Status != "success" {
+			continue
+		}
+		output.WriteString(fmt.Sprintf("|  %s\n", result.ScriptName))
+		for _, line := range result.Output {
+			output.WriteString(fmt.Sprintf("|    %s\n", line))
 		}
 	}
 

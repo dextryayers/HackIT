@@ -70,15 +70,33 @@ CATEGORY_LABELS = {
 # Ordered strongest-first. First match wins.
 _SEVERITY_RULES: Tuple[Tuple[str, str], ...] = (
     (r"\bCRITICAL\b", "critical"),
-    (r"\bVULNERABLE\b", "high"),
-    (r"\bCVE-\d{4}-\d{4,7}\b", "high"),
+    (r"(?<!not )\bVULNERABLE\b", "high"),
     (r"\bdefault (?:credential|password|login)s?\b", "high"),
     (r"\banonymous (?:login|bind|access)\b.*\b(?:allowed|enabled|success)", "high"),
     (r"\b(?:no|missing|weak) (?:auth|authentication|encryption)\b", "medium"),
     (r"\b(?:outdated|end[- ]of[- ]life|deprecated)\b", "medium"),
     (r"\b(?:exposed|discloses?|leak(?:s|ed)?|enumeration)\b", "medium"),
-    (r"\b(?:error|failed|timeout|refused)\b", "low"),
 )
+
+# A script that checked for something and did not find it is not a finding.
+# These read first: "No Struts2 devMode detected" must never score high just
+# because the output also names the CVE it was testing for.
+_NEGATIVE_RE = re.compile(
+    r"(?:"
+    r"\bnot (?:vulnerable|affected|exposed|present|detected|supported|enabled)\b"
+    r"|\bno\s+[\w./ -]{0,48}?(?:detected|found|vulnerabilit\w*|exposure|issues?)\b"
+    r"|\bdoes not (?:appear|support|allow|seem)\b"
+    r"|\bdoesn't (?:appear|support|allow|seem)\b"
+    r"|\b(?:couldn't|could not) (?:find|detect|connect|retrieve)\b"
+    r"|\bno evidence\b"
+    r"|\bnot running\b"
+    r"|\bvulnerable\s*[:=]\s*false\b"
+    r"|\bseverity\s*[:=]\s*(?:none|info|low)\b"
+    r")",
+    re.I,
+)
+_NEGATIVE_OVERRIDE_RE = re.compile(
+    r"\b(?:CRITICAL|VULNERABLE)\b(?!\s*[:=]\s*(?:false|no)\b)", re.I)
 
 _TAG_RE = re.compile(r"<[^>]+>")
 
@@ -167,8 +185,9 @@ class ScriptResult:
 _LONG_BRACKET = re.compile(r"\[(=*)\[(.*?)\]\1\]", re.S)
 _AUTHOR = re.compile(r'^\s*author\s*=\s*"([^"]*)"', re.M)
 _CATEGORIES = re.compile(r"^\s*categories\s*=\s*\{([^}]*)\}", re.M)
-_HAS_HOSTRULE = re.compile(r"^\s*hostrule\s*=", re.M)
-_HAS_PORTRULE = re.compile(r"^\s*portrule\s*=", re.M)
+_HAS_HOSTRULE = re.compile(r"\bhostrule\s*[,=]", re.M)
+_HAS_PORTRULE = re.compile(r"\bportrule\s*[,=]", re.M)
+_HAS_PRERULE = re.compile(r"\bprerule\s*[,=]", re.M)
 _PORT_LIST = re.compile(r"port(?:_or_service|number)?\s*\(\s*\{([0-9,\s\-]+)\}")
 _PORT_EQ = re.compile(r"port\.number\s*==\s*(\d{1,5})")
 
@@ -179,7 +198,8 @@ def _parse_metadata(path: Path) -> Optional[ScriptInfo]:
     except OSError:
         return None
 
-    if not (_HAS_HOSTRULE.search(source) or _HAS_PORTRULE.search(source)):
+    if not (_HAS_HOSTRULE.search(source) or _HAS_PORTRULE.search(source)
+            or _HAS_PRERULE.search(source)):
         return None
 
     description = ""
@@ -260,14 +280,24 @@ def classify_severity(output: str, script_name: str = "") -> str:
 
     The corpus does not emit machine-readable severities, so this reads the
     conventional NSE phrasings (``VULNERABLE``, ``anonymous login allowed``,
-    ``CVE-...``) and falls back to ``info``.
+    ``CVE-...``) and falls back to ``info``. Negative results are classified
+    first: a script that tested for a CVE and found nothing is not a finding,
+    even though its output names the CVE.
     """
     if not output:
         return "info"
     haystack = _TAG_RE.sub(" ", output)
+    negative = bool(_NEGATIVE_RE.search(haystack))
+    if negative and not _NEGATIVE_OVERRIDE_RE.search(haystack):
+        return "info"
     for pattern, severity in _SEVERITY_RULES:
         if re.search(pattern, haystack, re.I):
             return severity
+    # A bare CVE id is only a finding when the script says it matched something.
+    if re.search(r"\bCVE-\d{4}-\d{4,7}\b", haystack, re.I) and not negative:
+        if re.search(r"\b(?:detected|affected|vulnerable|exploitable|confirmed|exposed)\b",
+                     haystack, re.I):
+            return "high"
     lowered = script_name.lower()
     if any(token in lowered for token in ("injection", "overflow", "rce", "shellshock")):
         return "medium"

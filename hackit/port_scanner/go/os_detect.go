@@ -745,7 +745,7 @@ func AnalyzeOSFromResults(host string, results []PortResult) OSInfo {
 				name = strings.TrimSpace(strings.Split(line, ":")[1])
 			}
 		}
-		
+
 		return OSInfo{
 			Name:        name,
 			Version:     version,
@@ -1033,9 +1033,9 @@ func PolyglotOSDetect(host string, openPorts []int) OSInfo {
 		return OSInfo{Name: "Unknown", Confidence: 0}
 	}
 
-	// Cap overall confidence at 1.0 (100%)
-	if bestScore > 1.0 {
-		bestScore = 1.0
+	// Cap overall confidence below certainty: this is a heuristic vote, not proof.
+	if bestScore > 0.95 {
+		bestScore = 0.95
 	}
 
 	// Build combined fingerprint string

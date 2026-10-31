@@ -82,7 +82,8 @@ portrule = function(host, port) return port.protocol == "tcp" and port.state == 
 
 action = function(host, port)
     local cert = sslcert.getCertificate(host, port)
-    if not cert then
+    -- sslcert returns a non-table sentinel on some nmap builds; index only tables.
+    if type(cert) ~= "table" then
         local sock = new_socket()
         sock:set_timeout(10000)
         local ok = sock:connect(host.ip, port)

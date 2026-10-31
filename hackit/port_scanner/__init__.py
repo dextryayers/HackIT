@@ -968,10 +968,13 @@ def scan_ports(**kwargs):
     if kwargs.get('single_engine'):
         engines = ['go']
     elif kwargs.get('all_engines'):
-        from .engine_discovery import discover_engines
-        engines = [e['language'] if isinstance(e, dict) else str(e)
-                   for e in discover_engines()]
-        engines = [e for e in engines if e] or ['go']
+        # The orchestrator runs engine *families*, one process per language:
+        # go, rust, c, cpp. Individual helper binaries under bin/ are not scan
+        # engines — passing their names silently yields no results.
+        from .engine_orchestrator import _cached_available_engines
+        available = _cached_available_engines()
+        engines = [lang for lang in ('go', 'rust', 'c', 'cpp')
+                   if available.get(lang)] or ['go']
     else:
         engines = None  # profile decides
 
