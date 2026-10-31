@@ -20,7 +20,7 @@ class C:
     SEV={'vuln':'#f85149','high':'#d29922','warn':'#d29922','info':'#58a6ff','ok':'#3fb950'}
     _PALETTES = {
         'dark': {
-            'BG1':'#0b0f14','BG2':'#0b0f14','CARD':'#111823','BORD':'#1e2733',
+            'BG1':'#080b10','BG2':'#0b1017','CARD':'#101823','BORD':'#243040',
             'TEXT':'#e6edf3','TEXT2':'#9aa7b4',
             'CYAN':'#4f9cf9','GREEN':'#3fb950','RED':'#f85149','ORANGE':'#d29922',
             'YELLOW':'#d29922','PURPLE':'#a371f7','PINK':'#f778ba',
@@ -107,8 +107,8 @@ class VirtualPortList(tk.Canvas):
                 w = max(120, self.winfo_width() - x - 8)
             self._col_x.append(x)
             self._col_w.append(w)
-            self.create_text(x, 8, anchor='nw', text=name, font=TINY,
-                             fill=C.TEXT2, tags='header')
+            self.create_text(x, self._header_h // 2, anchor='w', text=name,
+                             font=TINY, fill=C.TEXT2, tags='header')
             x += w + 10
             total = x
         self.create_line(8, self._header_h - 1, max(total, self.winfo_width() - 8),
@@ -163,17 +163,18 @@ class VirtualPortList(tk.Canvas):
             self.create_rectangle(0, y, w, y + self.row_height, fill=bg, outline='', tags='row')
 
             pc = self._color_for_status(st)
-            self.create_text(self._col_x[0], y + 5, anchor='nw', text=f'{p}/tcp',
+            ty = y + self.row_height // 2
+            self.create_text(self._col_x[0], ty, anchor='w', text=f'{p}/tcp',
                              font=self._bold_font, fill=pc, tags='row')
-            self.create_text(self._col_x[1], y + 5, anchor='nw',
+            self.create_text(self._col_x[1], ty, anchor='w',
                              text=(st or '').lower(), font=self._font, fill=pc, tags='row')
 
             label = ' '.join(x for x in (str(svc or ''), str(ver or '')) if x)
-            self.create_text(self._col_x[2], y + 5, anchor='nw',
+            self.create_text(self._col_x[2], ty, anchor='w',
                              text=label[:24], font=self._font, fill=C.TEXT, tags='row')
 
             proto_txt = ('~' + proto) if mism else (proto or '—')
-            self.create_text(self._col_x[3], y + 5, anchor='nw',
+            self.create_text(self._col_x[3], ty, anchor='w',
                              text=proto_txt[:12], font=self._font,
                              fill=C.PURPLE if proto else C.DIM, tags='row')
 
@@ -182,12 +183,12 @@ class VirtualPortList(tk.Canvas):
             except (TypeError, ValueError):
                 conf_pct = 0
             conf_col = C.GREEN if conf_pct >= 90 else (C.YELLOW if conf_pct >= 70 else C.RED)
-            self.create_text(self._col_x[4] + self._col_w[4], y + 5, anchor='ne',
+            self.create_text(self._col_x[4] + self._col_w[4], ty, anchor='e',
                              text=f'{conf_pct}%' if conf_pct else '—',
                              font=self._font, fill=conf_col, tags='row')
 
             ban_str = ' '.join(str(ban or '').split())[:80]
-            self.create_text(self._col_x[5], y + 5, anchor='nw', text=ban_str,
+            self.create_text(self._col_x[5], ty, anchor='w', text=ban_str,
                              font=self._font, fill=C.TEXT2, tags='row')
             y += self.row_height
         total = len(self.items)
@@ -200,7 +201,7 @@ class GUI:
     def __init__(self):
         self._theme='dark'
         self.root=tk.Tk()
-        self.root.title('HackIT PortStorm — Multi-Engine All-Port Scanner')
+        self.root.title('PortStorm — HackIT')
         self.root.configure(bg=C.BG1); self.root.minsize(1400,860)
         CFG_DIR.mkdir(parents=True,exist_ok=True)
         self.proc=None; self.q=Queue()
@@ -247,8 +248,12 @@ class GUI:
 
     def _after_exec(self,key,func,*args):
         self._after_ids=[a for a in self._after_ids if a[0]!=key]
-        try: func(*args)
-        except: pass
+        try:
+            func(*args)
+        except Exception as exc:
+            # Never swallow silently — a dead timer looks like a hung scan.
+            import traceback
+            traceback.print_exc()
 
     def _cancel_after(self,key):
         for k,i in self._after_ids:
@@ -271,10 +276,10 @@ class GUI:
                     self.log.insert('end',txt+'\n',tag or())
                     self.log.see('end')
                 elif typ=='result':
-                    p,st,svc,ver,ban=data
+                    p=data[0]
                     self._vpl.add_item(data)
                     c=self._vpl.items.__len__()
-                    self.cnv.set(f'{c} ports'); self.rcv.set(f'{c} ports')
+                    self.cnv.set(str(c)); self.rcv.set(f'{c} ports')
                     self.res_cnt=c
                     if str(p).isdigit() and c == 1:
                         self.rminv.set(f'\u2193{p}'); self.rmaxv.set(f'\u2191{p}')
@@ -286,11 +291,11 @@ class GUI:
                             if pi < cur_min: self.rminv.set(f'\u2193{pi}')
                             if pi > cur_max: self.rmaxv.set(f'\u2191{pi}')
                         except: pass
-                elif typ=='st': self.sv.set(f'\u25cf {data}')
+                elif typ=='st': self.sv.set(str(data).lower())
                 elif typ=='prog':
                     self.prog['value']=data
                     self.pctv.set(f'{int(data)}%')
-                elif typ=='cnt': self.cnv.set(f'{data} ports')
+                elif typ=='cnt': self.cnv.set(str(data))
                 elif typ=='toast': self._show_toast(*data)
                 elif typ=='nse_script':
                     p,svc,sc=data
@@ -302,11 +307,11 @@ class GUI:
             if self._mt_tick%4==0:
                 chars=['\u25cf ','\u25cb ','\u25d8 ','\u25d9 ']
                 self._spin_idx=(self._spin_idx+1)%len(chars)
-                self._scan_indicator.config(text=chars[self._spin_idx],fg=C.GREEN)
+                self._scan_indicator.config(text='\u25cf', fg=C.GREEN)
             if self._mt_tick%20==0:
                 self._rate_history.append(self.rc)
                 self._rate_history = self._rate_history[-120:]
-                self.spv.set(f'{self.rc}/s')
+                self.spv.set(str(self.rc))
                 self._draw_rate_chart()
                 self.rc=0
                 if self.start:
@@ -405,16 +410,18 @@ class GUI:
                     troughcolor='#0a1525',borderwidth=0,thickness=10)
         s.configure('TCombobox',background=C.BG2,foreground=C.TEXT,
                     fieldbackground=C.BG2,selectbackground=C.SEL,arrowcolor=C.CYAN,
-                    padding=(6,2))
+                    bordercolor=C.BORD,lightcolor=C.BORD,darkcolor=C.BORD,
+                    padding=(8,6),relief='flat',borderwidth=0)
         s.map('TCombobox',fieldbackground=[('readonly',C.BG2)])
         s.configure('Vertical.TScrollbar',background=C.BTN,troughcolor=C.BG1,
                     bordercolor=C.BG1,arrowcolor=C.TEXT2,width=14)
         s.map('Vertical.TScrollbar',background=[('active',C.HV),('pressed',C.SEL)])
-        s.configure('TNotebook',background=C.BG1,borderwidth=0)
-        s.configure('TNotebook.Tab',background=C.BTN,foreground=C.TEXT2,
-                    padding=(12,4),font=FONT_B)
-        s.map('TNotebook.Tab',background=[('selected',C.BG2),('active',C.HV)],
-              foreground=[('selected',C.CYAN)])
+        s.configure('TNotebook',background=C.BG1,borderwidth=0,tabmargins=(0,0,0,0))
+        s.configure('TNotebook.Tab',background=C.BG1,foreground=C.TEXT2,
+                    padding=(18,7),font=TINY,borderwidth=0)
+        s.map('TNotebook.Tab',background=[('selected',C.BG1),('active',C.BG1)],
+              foreground=[('selected',C.CYAN),('active',C.TEXT)],
+              expand=[('selected',(0,0,0,0))])
         for k in('Text','Entry','Listbox'):
             self.root.option_add(f'*{k}.background',C.BG2)
             self.root.option_add(f'*{k}.foreground',C.TEXT)
@@ -428,14 +435,15 @@ class GUI:
 
     def _fcard(self,p):
         f=tk.Frame(p,bg=C.CARD,highlightbackground=C.BORD,highlightthickness=1,
-                    relief='solid',bd=1)
+                    relief='flat',bd=0)
         return f
     def _fsec(self,p,t,ico=''):
-        f=self._fcard(p); f.pack(fill='x',padx=6,pady=2)
-        h=tk.Frame(f,bg=C.CARD); h.pack(fill='x',padx=12,pady=(5,0))
-        tk.Label(h,text=f'{ico} {t}',font=FONT_B,fg=C.CYAN,bg=C.CARD).pack(anchor='w')
-        tk.Frame(f,bg=C.BORD,height=1).pack(fill='x',padx=12,pady=(3,0))
-        b=tk.Frame(f,bg=C.CARD); b.pack(fill='x',padx=12,pady=(5,10))
+        """Card with a small caps title and a hairline rule."""
+        f=self._fcard(p); f.pack(fill='x',padx=2,pady=4)
+        h=tk.Frame(f,bg=C.CARD); h.pack(fill='x',padx=14,pady=(10,0))
+        tk.Label(h,text=t,font=TINY,fg=C.TEXT2,bg=C.CARD).pack(side='left')
+        tk.Frame(f,bg=C.BORD,height=1).pack(fill='x',padx=14,pady=(7,0))
+        b=tk.Frame(f,bg=C.CARD); b.pack(fill='x',padx=14,pady=(9,12))
         return b
     def _pill(self,p,t,cmd,c=C.CYAN):
         f=tk.Frame(p,bg=C.BTN,highlightbackground=c,highlightthickness=2)
@@ -453,8 +461,10 @@ class GUI:
         b.bind('<Leave>',lambda e:b.configure(bg=C.BTN),'+')
         return b
     def _ent(self,p,v,pw=None,**kw):
-        return tk.Entry(p,textvariable=v,font=FONT,bg=C.BG2,fg=C.TEXT,
-                        insertbackground=C.CYAN,relief='flat',bd=4,show=pw,**kw)
+        return tk.Entry(p,textvariable=v,font=MONO,bg=C.BG2,fg=C.TEXT,
+                        insertbackground=C.CYAN,relief='flat',bd=0,
+                        highlightthickness=1,highlightbackground=C.BORD,
+                        highlightcolor=C.CYAN,show=pw,**kw)
 
     def _build(self):
         self._build_menu()
@@ -526,6 +536,7 @@ class GUI:
         right.pack(side='right', anchor='e')
         self._hdr_chips = {}
         for key, text in (
+            ('target', 'no target'),
             ('iface', f'iface {self.iface}'),
             ('gw', f'gw {self.gw}'),
             ('uptime', f'up {self.up}'),
@@ -538,6 +549,15 @@ class GUI:
 
         sep = tk.Frame(self.root, bg=C.BORD, height=1)
         sep.pack(fill='x', padx=16, pady=(8, 0))
+
+    def _chip(self, key, text, color=None):
+        """Update one header chip in place."""
+        chip = getattr(self, '_hdr_chips', {}).get(key)
+        if chip is None:
+            return
+        chip.config(text=text)
+        if color:
+            chip.config(fg=color)
 
     def _draw_gradient(self):
         """Kept for compatibility: the header no longer paints a gradient."""
@@ -579,9 +599,9 @@ class GUI:
 
     # ── Target ─────────────────────────────────────────────────────
     def _target(self,p):
-        b=self._fsec(p,'TARGET','\U0001f3af')
+        b=self._fsec(p,'TARGET')
         self.tv=tk.StringVar()
-        self.tc=ttk.Combobox(b,textvariable=self.tv,font=FONT,state='normal')
+        self.tc=ttk.Combobox(b,textvariable=self.tv,font=MONO,state='normal')
         self.tc.pack(fill='x',ipady=4)
         self.tc.configure(postcommand=lambda: self.tc.configure(values=list(self.target_hist) or ['']))
         Tip(self.tc,'Hostname, IP, CIDR, or range. Tab to autocomplete from history.')
@@ -604,7 +624,7 @@ class GUI:
     )
 
     def _ports(self, p):
-        b = self._fsec(p, 'PORT SCOPE', '\U0001f50c')
+        b = self._fsec(p, 'PORT SCOPE')
         self.port_mode = tk.StringVar(value='universal')
         self.port_mode.trace_add('write', lambda *a: (self._pupd(), self._sync_cmd()))
 
@@ -613,14 +633,15 @@ class GUI:
         for i, (key, label, _spec) in enumerate(self.PORT_SCOPES):
             rb = tk.Radiobutton(
                 grid, text=label, variable=self.port_mode, value=key,
-                font=SMALL, fg=C.TEXT2, bg=C.BTN, selectcolor=C.BTN,
+                font=SMALL, fg=C.TEXT2, bg=C.BG2, selectcolor=C.BG2,
                 activebackground=C.HV, activeforeground=C.TEXT,
                 indicatoron=0, bd=0, relief='flat', cursor='hand2',
                 highlightbackground=C.BORD, highlightthickness=1,
-                command=lambda k=key: self._set_scope(k))
+                padx=2, pady=5, command=lambda k=key: self._set_scope(k))
             rb.grid(row=i // 2, column=i % 2, sticky='ew', padx=1, pady=1)
             grid.grid_columnconfigure(i % 2, weight=1)
-        self._scope_btns = [w for w in grid.winfo_children()]
+        self._scope_btns = [(key, w) for (key, _l, _s), w in
+                            zip(self.PORT_SCOPES, grid.winfo_children())]
 
         # Custom range row (only meaningful for the custom scope).
         self._custom_row = tk.Frame(b, bg=C.CARD)
@@ -647,7 +668,7 @@ class GUI:
         e = self._ent(b, self.pcl)
         e.pack(fill='x', ipady=2)
         Tip(e, 'Overrides the scope. e.g. 22,80,443,8080-8090')
-        self._pupd()
+        self._set_scope('universal')
 
     def _set_scope(self, key):
         if key == 'custom':
@@ -655,6 +676,11 @@ class GUI:
         else:
             self._custom_row.pack_forget()
             self.pcl.set('')
+        for k, btn in getattr(self, '_scope_btns', []):
+            sel = k == key
+            btn.config(fg=C.CYAN if sel else C.TEXT2,
+                       bg='#12253d' if sel else C.BG2,
+                       highlightbackground=C.CYAN if sel else C.BORD)
         self._pupd()
         self._sync_cmd()
 
@@ -695,7 +721,7 @@ class GUI:
 
     # ── Custom Presets ─────────────────────────────────────────────
     def _presets(self,p):
-        b=self._fsec(p,'QUICK PRESETS','\u26a1')
+        b=self._fsec(p,'QUICK PRESETS')
         pf=tk.Frame(b,bg=C.CARD); pf.pack(fill='x')
         self.preset_frame=pf
         self._rebuild_presets()
@@ -711,18 +737,18 @@ class GUI:
     def _rebuild_presets(self):
         for w in self.preset_frame.winfo_children(): w.destroy()
         for pr in self.custom_presets[:6]:
-            c=tk.Frame(self.preset_frame,bg=C.CARD,highlightbackground=C.CYAN,highlightthickness=1,
-                       padx=6,pady=4)
+            c=tk.Frame(self.preset_frame,bg=C.BG2,highlightbackground=C.BORD,highlightthickness=1,
+                       padx=8,pady=6,cursor='hand2')
             c.pack(side='left',fill='x',expand=1,padx=1)
-            tk.Label(c,text=pr['name'],font=FONT_B,fg=C.CYAN,bg=C.CARD,cursor='hand2').pack(anchor='w')
-            tk.Label(c,text=pr.get('target',''),font=TINY,fg=C.TEXT2,bg=C.CARD,cursor='hand2').pack(anchor='w')
-            tk.Label(c,text=f"\u2192 {pr.get('ports','22,80,443')}",font=('Segoe UI',6,'bold'),
-                     fg=C.DIM,bg=C.CARD,cursor='hand2').pack(anchor='w')
+            tk.Label(c,text=pr['name'],font=FONT_B,fg=C.TEXT,bg=C.BG2,cursor='hand2').pack(anchor='w')
+            tk.Label(c,text=pr.get('target',''),font=TINY,fg=C.TEXT2,bg=C.BG2,cursor='hand2').pack(anchor='w')
+            tk.Label(c,text=pr.get('ports','22,80,443'),font=TINY,
+                     fg=C.CYAN,bg=C.BG2,cursor='hand2').pack(anchor='w')
             for w in c.winfo_children():
                 w.bind('<Button-1>',
                        lambda e,t=pr['target'],pt=pr.get('ports','22,80,443'):self._quick(t,pt),'+')
-            c.bind('<Enter>',lambda e,c=c:c.configure(bg=C.BTN,borderwidth=2),'+')
-            c.bind('<Leave>',lambda e,c=c:c.configure(bg=C.CARD,borderwidth=1),'+')
+            c.bind('<Enter>',lambda e,c=c:c.configure(bg=C.CARD,highlightbackground=C.CYAN),'+')
+            c.bind('<Leave>',lambda e,c=c:c.configure(bg=C.BG2,highlightbackground=C.BORD),'+')
 
     def _add_preset(self):
         name=simpledialog.askstring('Add Preset','Preset name:',parent=self.root,initialvalue='MyScan')
@@ -797,16 +823,17 @@ class GUI:
 
     # ── Mode ───────────────────────────────────────────────────────
     def _mode(self,p):
-        b=self._fsec(p,'SCAN MODE','\u2699\ufe0f')
+        b=self._fsec(p,'SCAN MODE')
         mf=tk.Frame(b,bg=C.CARD); mf.pack(fill='x')
         self.modes_sel=set()
         self.mode_btns=[]
         for i,(v,l) in enumerate(MODES):
-            r=tk.Checkbutton(mf,text=l,font=('Consolas',8,'bold'),
-                             fg=C.TEXT,bg=C.CARD,selectcolor=C.CARD,
-                             activebackground=C.CARD,activeforeground=C.CYAN,
-                             indicatoron=0,bd=1,relief='flat',
-                             highlightbackground=C.BORD,highlightthickness=1,width=6)
+            r=tk.Checkbutton(mf,text=l,font=MONO_B,
+                             fg=C.TEXT2,bg=C.BG2,selectcolor=C.BG2,
+                             activebackground=C.HV,activeforeground=C.TEXT,
+                             indicatoron=0,bd=0,relief='flat',cursor='hand2',
+                             highlightbackground=C.BORD,highlightthickness=1,width=6,
+                             padx=2,pady=4)
             r.configure(command=lambda vv=v:self._mode_toggle(vv))
             r.grid(row=i//4,column=i%4,padx=1,pady=1,sticky='ew')
             mf.grid_columnconfigure(i%4,weight=1)
@@ -820,10 +847,11 @@ class GUI:
         self.prof_btns=[]
         for i,p in enumerate(PROFILES):
             r=tk.Radiobutton(pf,text=p,variable=self.pv,value=p,font=SMALL,
-                             fg=C.TEXT,bg=C.CARD,selectcolor=C.CARD,
-                             activebackground=C.CARD,activeforeground=C.CYAN,
-                             indicatoron=0,bd=1,relief='flat',
-                             highlightbackground=C.BORD,highlightthickness=1)
+                             fg=C.TEXT2,bg=C.BG2,selectcolor=C.BG2,
+                             activebackground=C.HV,activeforeground=C.TEXT,
+                             indicatoron=0,bd=0,relief='flat',cursor='hand2',
+                             highlightbackground=C.BORD,highlightthickness=1,
+                             padx=2,pady=4)
             r.grid(row=i//3,column=i%3,padx=1,pady=1,sticky='ew')
             pf.grid_columnconfigure(i%3,weight=1)
             self.prof_btns.append(r)
@@ -835,23 +863,24 @@ class GUI:
         self._upd_mode_labels(); self._sync_cmd()
 
     def _upd_mode_labels(self):
-        for r,(v,l) in zip(self.mode_btns,MODES):
-            sel=v in self.modes_sel
-            r.config(text=('\u2713'+l[1:]if sel else' '+l[1:]),
-                     fg=C.BG1 if sel else C.TEXT,
-                     bg=C.CYAN if sel else C.CARD,
+        active_bg = '#12253d'
+        for r, (v, l) in zip(self.mode_btns, MODES):
+            sel = v in self.modes_sel
+            r.config(text=l,
+                     fg=C.CYAN if sel else C.TEXT2,
+                     bg=active_bg if sel else C.BG2,
                      highlightbackground=C.CYAN if sel else C.BORD)
-        pv=self.pv.get()
-        for r,p in zip(self.prof_btns,PROFILES):
-            sel=(p==pv)
-            r.config(text=('\u2713 '+p if sel else'  '+p),
-                     fg=C.BG1 if sel else C.TEXT,
-                     bg=C.CYAN if sel else C.CARD,
+        pv = self.pv.get()
+        for r, p in zip(self.prof_btns, PROFILES):
+            sel = (p == pv)
+            r.config(text=p,
+                     fg=C.CYAN if sel else C.TEXT2,
+                     bg=active_bg if sel else C.BG2,
                      highlightbackground=C.CYAN if sel else C.BORD)
 
     # ── Options ────────────────────────────────────────────────────
     def _opts(self,p):
-        b=self._fsec(p,'OPTIONS','\U0001f527')
+        b=self._fsec(p,'OPTIONS')
         self.tov=tk.StringVar(value='1000'); self.twv=tk.StringVar(value='100')
         f=tk.Frame(b,bg=C.CARD); f.pack(fill='x')
         for lbl,v,tip in [('Timeout',self.tov,'Per-port timeout (ms)'),
@@ -865,15 +894,16 @@ class GUI:
         for v,t,tip in[(self.dv,'Deep','OS+service+vuln fingerprinting'),
                         (self.ov,'OS','TCP/IP stack OS detection'),
                         (self.opv,'Open','Open ports only')]:
-            cb=tk.Checkbutton(f2,text=t,variable=v,font=TINY,fg=C.TEXT,
+            cb=tk.Checkbutton(f2,text=t,variable=v,font=TINY,fg=C.TEXT2,
                               bg=C.CARD,selectcolor=C.CARD,activebackground=C.CARD,
-                              activeforeground=C.CYAN)
+                              activeforeground=C.CYAN,bd=0,relief='flat',
+                              highlightthickness=0,cursor='hand2')
             cb.pack(side='left',padx=(0,8)); Tip(cb,tip)
             v.trace_add('write',lambda *a:self._sync_cmd())
 
     # ── NSE ────────────────────────────────────────────────────────
     def _nse(self,p):
-        b=self._fsec(p,'NSE SCRIPTS','\U0001f4dc')
+        b=self._fsec(p,'NSE SCRIPTS')
         h=tk.Frame(b,bg=C.CARD); h.pack(fill='x')
         self._btn(h,'All',lambda:self._nse_set(1)).pack(side='left')
         self._btn(h,'None',lambda:self._nse_set(0)).pack(side='left',padx=(4,0))
@@ -951,11 +981,13 @@ class GUI:
 
     # ── Command Preview ────────────────────────────────────────────
     def _cmd_preview(self,p):
-        b=self._fsec(p,'COMMAND','\U0001f4bb')
+        b=self._fsec(p,'COMMAND')
         self.cmdv=tk.StringVar(value='Ready')
-        e=tk.Entry(b,textvariable=self.cmdv,font=('Consolas',7),fg=C.GREEN,
-                   bg=C.BG2,bd=0,relief='flat',state='readonly')
-        e.pack(fill='x',ipady=2)
+        box=tk.Frame(b,bg=C.BG2,highlightbackground=C.BORD,highlightthickness=1)
+        box.pack(fill='x')
+        e=tk.Label(box,textvariable=self.cmdv,font=('TkFixedFont',7),fg=C.GREEN,
+                   bg=C.BG2,justify='left',anchor='w',wraplength=360,padx=8,pady=6)
+        e.pack(fill='x')
 
     def _sync_cmd(self):
         for attr in('tv','pcl','ps','pe','port_mode','tov','twv','pv','opv','dv','ov','cmdv','modes_sel'):
@@ -970,6 +1002,7 @@ class GUI:
         if self.dv.get(): parts.append('--deep')
         if self.ov.get(): parts.append('--os-detect')
         parts.append('--all-engines')
+        parts.append('-no-banner')
         if self.nse_sel:
             parts.append('--script'); parts.append(';'.join(sorted(self.nse_sel)))
         self.cmdv.set(' '.join(parts))
@@ -1024,24 +1057,72 @@ class GUI:
                      ).pack(side='left',padx=(8,0))
 
     # ── Tabs ───────────────────────────────────────────────────────
-    def _tabs(self,p):
-        f=tk.Frame(p,bg=C.BG1)
-        nb=ttk.Notebook(f); nb.pack(fill='both',expand=1)
-        lt=tk.Frame(nb,bg=C.BG1); nb.add(lt,text='  \U0001f4cb Event Log  ')
-        self._log(lt)
-        rt=tk.Frame(nb,bg=C.BG1); nb.add(rt,text='  \U0001f310 Port Results  ')
-        self._res(rt)
-        nt=tk.Frame(nb,bg=C.BG1); nb.add(nt,text='  \U0001f4ca NSE Results  ')
-        self._nse_tab(nt)
-        nlt=tk.Frame(nb,bg=C.BG1); nb.add(nlt,text='  \U0001f4dd NSE Log  ')
-        self._nse_log_tab(nlt)
+    def _tabs(self, p):
+        """Custom tab bar: flat labels, accent underline, no chrome."""
+        f = tk.Frame(p, bg=C.BG1)
+
+        bar = tk.Frame(f, bg=C.BG1)
+        bar.pack(fill='x')
+        self._tab_bar = bar
+        self._tab_btns = {}
+        self._tab_underlines = {}
+        self._tab_frames = {}
+        self._active_tab = None
+
+        body = tk.Frame(f, bg=C.BG1)
+        body.pack(fill='both', expand=1, pady=(2, 0))
+
+        def add(key, label, builder):
+            holder = tk.Frame(bar, bg=C.BG1)
+            holder.pack(side='left')
+            btn = tk.Label(holder, text=label, font=TINY, fg=C.TEXT2,
+                           bg=C.BG1, padx=16, pady=9, cursor='hand2')
+            btn.pack()
+            btn.bind('<Button-1>', lambda e, k=key: self._select_tab(k))
+            btn.bind('<Enter>', lambda e, k=key: self._hover_tab(k, True))
+            btn.bind('<Leave>', lambda e, k=key: self._hover_tab(k, False))
+            line = tk.Frame(holder, bg=C.BG1, height=2)
+            line.pack(fill='x')
+            self._tab_btns[key] = btn
+            self._tab_underlines[key] = line
+
+            frame = tk.Frame(body, bg=C.BG1)
+            builder(frame)
+            self._tab_frames[key] = frame
+
+        add('log', 'EVENT LOG', self._log)
+        add('ports', 'PORT RESULTS', self._res)
+        add('scripts', 'SCRIPTS', self._nse_tab)
+        add('scriptlog', 'SCRIPT LOG', self._nse_log_tab)
+
+        tk.Frame(bar, bg=C.BORD, height=1).pack(fill='x', side='bottom')
+        self._select_tab('ports')
         return f
+
+    def _select_tab(self, key):
+        if key not in self._tab_frames:
+            return
+        for k, frame in self._tab_frames.items():
+            if k == key:
+                frame.pack(fill='both', expand=1)
+            else:
+                frame.pack_forget()
+        for k, btn in self._tab_btns.items():
+            active = k == key
+            btn.config(fg=C.CYAN if active else C.TEXT2)
+            self._tab_underlines[k].config(bg=C.CYAN if active else C.BG1)
+        self._active_tab = key
+
+    def _hover_tab(self, key, entering):
+        if key == self._active_tab:
+            return
+        self._tab_btns[key].config(fg=C.TEXT if entering else C.TEXT2)
 
     # ── Log ────────────────────────────────────────────────────────
     def _log(self,p):
-        h=tk.Frame(p,bg=C.BG1); h.pack(fill='x')
-        tk.Label(h,text='Scan Log',font=FONT_B,fg=C.CYAN,bg=C.BG1).pack(side='left')
-        self._btn(h,'\u00d7 Clear',lambda:self.log.delete('1.0','end')).pack(side='right')
+        h=tk.Frame(p,bg=C.BG1); h.pack(fill='x',pady=(2,0))
+        tk.Label(h,text='stdout / stderr',font=TINY,fg=C.TEXT2,bg=C.BG1).pack(side='left')
+        self._btn(h,'Clear',lambda:self.log.delete('1.0','end')).pack(side='right')
         self.log=tk.Text(p,font=MONO,wrap='word',bg=C.BG2,fg=C.GREEN,
                           insertbackground=C.CYAN,bd=0,relief='flat')
         sb=ttk.Scrollbar(p,orient='vertical',command=self.log.yview,style='Vertical.TScrollbar')
@@ -1054,18 +1135,17 @@ class GUI:
 
     # ── Results ────────────────────────────────────────────────────
     def _res(self,p):
-        h=tk.Frame(p,bg=C.BG1); h.pack(fill='x')
-        tk.Label(h,text='Port Scan Results',font=FONT_B,fg=C.CYAN,bg=C.BG1).pack(side='left')
+        h=tk.Frame(p,bg=C.BG1); h.pack(fill='x',pady=(2,0))
         self.rcv=tk.StringVar(value='0 ports')
-        tk.Label(h,textvariable=self.rcv,font=SMALL,fg=C.TEXT2,bg=C.BG1
-                 ).pack(side='left',padx=(8,0))
+        tk.Label(h,textvariable=self.rcv,font=TINY,fg=C.TEXT2,bg=C.BG1
+                 ).pack(side='left')
         self.rminv=tk.StringVar(); self.rmaxv=tk.StringVar()
-        tk.Label(h,textvariable=self.rminv,font=TINY,fg=C.DIM,bg=C.BG1
-                 ).pack(side='left',padx=(4,0))
-        tk.Label(h,textvariable=self.rmaxv,font=TINY,fg=C.DIM,bg=C.BG1
-                 ).pack(side='left',padx=(4,0))
-        self._btn(h,'Export',self._exp).pack(side='right',padx=(0,2))
-        self._btn(h,'\u00d7 Clear',self._clear_res).pack(side='right')
+        tk.Label(h,textvariable=self.rminv,font=TINY,fg=C.GREEN,bg=C.BG1
+                 ).pack(side='left',padx=(10,0))
+        tk.Label(h,textvariable=self.rmaxv,font=TINY,fg=C.GREEN,bg=C.BG1
+                 ).pack(side='left',padx=(6,0))
+        self._btn(h,'Export',self._exp).pack(side='right',padx=(0,4))
+        self._btn(h,'Clear',self._clear_res).pack(side='right')
         # Virtual canvas-based port list (handles 65k+ ports smoothly)
         vp = tk.Frame(p, bg=C.BG2)
         vp.pack(fill='both', expand=1, pady=(4,0))
@@ -1180,7 +1260,7 @@ class GUI:
         tag=f'nse_{su}'
         self._nse_all_items.append((vals,tag))
         self._nse_filter_sev()
-        self.nsv2.set(f'NSE:{self.ni}')
+        self.nsv2.set(str(self.ni))
         self.log.insert('end',f'[{ts}] \u25c8 NSE [{script}] port {port}: {text[:120]}\n','nse')
         self.log.see('end')
         # Also add to NSE live log tab
@@ -1281,70 +1361,79 @@ class GUI:
     # ── Status bar ─────────────────────────────────────────────────
     def _sep(self,p): tk.Frame(p,width=1,bg=C.BORD).pack(side='left',fill='y',padx=4,pady=4)
     def _status(self):
-        bot=tk.Frame(self.root,bg=C.CARD,highlightbackground=C.BORD,highlightthickness=1)
-        bot.pack(fill='x',padx=14,pady=(0,6))
-        # Status indicator
-        self.sv=tk.StringVar(value='\u25cf Ready')
-        tk.Label(bot,textvariable=self.sv,font=MONO_B,fg=C.GREEN,bg=C.CARD
-                 ).pack(side='left',padx=(12,4),pady=5)
-        self._sep(bot)
-        # Target info
-        self.iv=tk.StringVar()
-        tk.Label(bot,textvariable=self.iv,font=SMALL,fg=C.TEXT2,bg=C.CARD
-                 ).pack(side='left',padx=6,pady=5)
-        self._sep(bot)
-        # Stage
-        self.stv=tk.StringVar()
-        tk.Label(bot,textvariable=self.stv,font=SMALL,fg=C.PURPLE,bg=C.CARD
-                 ).pack(side='left',padx=6,pady=5)
-        self._sep(bot)
-        # Scan speed (ports/sec)
-        self.spv=tk.StringVar(value='0 p/s')
-        tk.Label(bot,textvariable=self.spv,font=MONO_B,fg=C.ORANGE,bg=C.CARD
-                 ).pack(side='left',padx=6,pady=5)
-        self._sep(bot)
-        # Elapsed time
-        tl=tk.Frame(bot,bg=C.CARD); tl.pack(side='left',padx=6,pady=5)
-        tk.Label(tl,text='\u23f1',font=SMALL,fg=C.TEXT2,bg=C.CARD).pack(side='left')
-        self.elv=tk.StringVar(value='0:00')
-        tk.Label(tl,textvariable=self.elv,font=MONO_B,fg=C.CYAN,bg=C.CARD
-                 ).pack(side='left',padx=(2,0))
-        # Status count
-        self._sep(bot)
-        cl=tk.Frame(bot,bg=C.CARD); cl.pack(side='left',padx=6,pady=5)
-        tk.Label(cl,text='\U0001f310',font=SMALL,bg=C.CARD).pack(side='left')
-        self.cnv=tk.StringVar(value='0 ports')
-        tk.Label(cl,textvariable=self.cnv,font=SMALL,fg=C.GREEN,bg=C.CARD
-                 ).pack(side='left',padx=(2,0))
-        # NSE count
-        self._sep(bot)
-        nl=tk.Frame(bot,bg=C.CARD); nl.pack(side='left',padx=6,pady=5)
-        tk.Label(nl,text='\U0001f4dc',font=SMALL,bg=C.CARD).pack(side='left')
-        self.nsv2=tk.StringVar(value='0')
-        tk.Label(nl,textvariable=self.nsv2,font=SMALL,fg=C.PURPLE,bg=C.CARD
-                 ).pack(side='left',padx=(2,0))
-        # Animated scanning indicator
-        self._scan_indicator=tk.Label(bot,text='  ',font=MONO_B,fg=C.GREEN,bg=C.CARD)
-        self._scan_indicator.pack(side='left',padx=2,pady=5)
-        # Spacer
-        tk.Frame(bot,bg=C.CARD).pack(side='left',fill='x',expand=1)
-        # Progress bar + percentage
-        self.pctv=tk.StringVar(value='0%')
-        tk.Label(bot,textvariable=self.pctv,font=MONO_B,fg=C.CYAN,bg=C.CARD
-                 ).pack(side='right',padx=(0,4),pady=5)
-        self.prog=ttk.Progressbar(bot,mode='determinate',length=100,
-                                  style='green.Horizontal.TProgressbar')
-        self.prog.pack(side='right',padx=(0,6),pady=5)
-        # Dark/light theme toggle
-        self._theme_btn=self._btn(bot,'\u2600 Theme',self._toggle_theme,fg=C.YELLOW)
-        self._theme_btn.pack(side='right',padx=(0,6),pady=5)
-        # Keyboard shortcuts button
-        self._btn(bot,'\u2318 Keys',self._show_ks,fg=C.CYAN).pack(side='right',padx=(0,4),pady=5)
+        bot = tk.Frame(self.root, bg=C.CARD, highlightbackground=C.BORD,
+                       highlightthickness=1)
+        bot.pack(fill='x', padx=16, pady=(8, 10))
+
+        # ── left: state + target + stage ──────────────────────────
+        left = tk.Frame(bot, bg=C.CARD)
+        left.pack(side='left', padx=(14, 0), pady=6)
+
+        dot_row = tk.Frame(left, bg=C.CARD)
+        dot_row.pack(anchor='w')
+        self._scan_indicator = tk.Label(dot_row, text='\u25cf', font=SMALL,
+                                        fg=C.GREEN, bg=C.CARD)
+        self._scan_indicator.pack(side='left')
+        self.sv = tk.StringVar(value='ready')
+        tk.Label(dot_row, textvariable=self.sv, font=FONT_B, fg=C.TEXT,
+                 bg=C.CARD).pack(side='left', padx=(6, 0))
+
+        meta_row = tk.Frame(left, bg=C.CARD)
+        meta_row.pack(anchor='w')
+        self.iv = tk.StringVar(value='no target')
+        tk.Label(meta_row, textvariable=self.iv, font=TINY, fg=C.TEXT2,
+                 bg=C.CARD).pack(side='left')
+        self.stv = tk.StringVar(value='')
+        tk.Label(meta_row, textvariable=self.stv, font=TINY, fg=C.PURPLE,
+                 bg=C.CARD).pack(side='left', padx=(10, 0))
+
+        # ── right: metrics as label/value stacks ──────────────────
+        right = tk.Frame(bot, bg=C.CARD)
+        right.pack(side='right', padx=(0, 12), pady=6)
+
+        def metric(label, var, color):
+            cell = tk.Frame(right, bg=C.CARD)
+            cell.pack(side='left', padx=(14, 0))
+            tk.Label(cell, text=label, font=TINY, fg=C.DIM,
+                     bg=C.CARD).pack(anchor='e')
+            tk.Label(cell, textvariable=var, font=MONO_B, fg=color,
+                     bg=C.CARD).pack(anchor='e')
+            return cell
+
+        self.spv = tk.StringVar(value='0')
+        self.elv = tk.StringVar(value='0:00')
+        self.cnv = tk.StringVar(value='0')
+        self.nsv2 = tk.StringVar(value='0')
+        self.pctv = tk.StringVar(value='0%')
+
+        metric('RATE /S', self.spv, C.ORANGE)
+        metric('ELAPSED', self.elv, C.CYAN)
+        metric('PORTS', self.cnv, C.TEXT)
+        metric('SCRIPTS', self.nsv2, C.PURPLE)
+
+        prog_cell = tk.Frame(right, bg=C.CARD)
+        prog_cell.pack(side='left', padx=(16, 0))
+        tk.Label(prog_cell, text='PROGRESS', font=TINY, fg=C.DIM,
+                 bg=C.CARD).pack(anchor='e')
+        bar_row = tk.Frame(prog_cell, bg=C.CARD)
+        bar_row.pack(anchor='e')
+        self.prog = ttk.Progressbar(bar_row, mode='determinate', length=110,
+                                    style='green.Horizontal.TProgressbar')
+        self.prog.pack(side='left', pady=2)
+        tk.Label(bar_row, textvariable=self.pctv, font=MONO_B, fg=C.CYAN,
+                 bg=C.CARD, width=5, anchor='e').pack(side='left', padx=(6, 0))
+
+        actions = tk.Frame(right, bg=C.CARD)
+        actions.pack(side='left', padx=(16, 0))
+        self._theme_btn = self._btn(actions, 'Theme', self._toggle_theme,
+                                    fg=C.YELLOW)
+        self._theme_btn.pack(side='left', padx=(0, 4))
+        self._btn(actions, 'Keys', self._show_ks, fg=C.CYAN).pack(side='left')
 
     def _toggle_theme(self):
         self._theme='light' if self._theme=='dark' else 'dark'
         C.apply(self._theme)
-        self._theme_btn.config(text='\u263e Dark' if self._theme=='light' else '\u2600 Theme')
+        self._theme_btn.config(text='Dark' if self._theme=='light' else 'Light')
         self._style()
         self._toast(f'{self._theme.title()} theme',C.CYAN)
 
@@ -1376,7 +1465,7 @@ class GUI:
         self.root.after(3000,f.destroy)
 
     def _adv(self,n=None):
-        if n: self.stv.set(f'\u25b6 {n}')
+        if n: self.stv.set(str(n).lower())
         else: self.si=(self.si+1)%len(self.stages); self.stv.set(self.stages[self.si])
 
     # ── Scan ───────────────────────────────────────────────────────
@@ -1388,6 +1477,7 @@ class GUI:
             if len(self.target_hist)>50: self.target_hist.pop(0)
             self.tc['values']=list(self.target_hist)
         self.results.clear()
+        self._seen_ports = set()
         self._clear_res()
         for t in(self.nt,):
             for r in t.get_children(): t.delete(r)
@@ -1396,16 +1486,22 @@ class GUI:
         self.start=time.time(); self.sc=0; self.rc=0; self.si=0; self.ni=0; self.res_cnt=0
         self._adv('Discovery'); self._st('Scanning...')
         self._prog(0); self._cnt(0)
-        self.spv.set(''); self.elv.set('0:00'); self.nsv2.set('NSE:0'); self.ncl.set('0 results')
+        self.spv.set(''); self.elv.set('0:00'); self.nsv2.set('0'); self.ncl.set('0 results')
         self.rminv.set(''); self.rmaxv.set('')
         self.sb.children['!button'].config(state='disabled',text='\u25c9  SCANNING...')
         self.stb.children['!button'].config(state='normal')
+        self._chip('engine', 'engine go', C.TEXT2)
+        self._chip('target', f'→ {target}', C.CYAN)
         self.running=1; self._mt_tick=0; self._after('master',50,self._master_timer)
         threading.Thread(target=self._run,args=(target,),daemon=1).start()
 
     def _run(self,target):
-        if self.go: self._go(target)
-        else: self._fb(target)
+        if self.go:
+            self._chip('engine', 'engine go', C.GREEN)
+            self._go(target)
+        else:
+            self._chip('engine', 'engine python', C.YELLOW)
+            self._fb(target)
 
     def _cmd(self,target):
         ports=self._port_spec()
@@ -1417,6 +1513,7 @@ class GUI:
         if self.dv.get(): cmd.append('--deep')
         if self.ov.get(): cmd.append('--os-detect')
         cmd.append('--all-engines')
+        cmd.append('-no-banner')
         if self.nse_sel: cmd.extend(['--script',';'.join(sorted(self.nse_sel))])
         return cmd
 
@@ -1444,6 +1541,7 @@ class GUI:
                         continue
                     if key.fileobj is self.proc.stdout:
                         if line.startswith('RESULT:'): self._pr(line[7:])
+                        elif line.startswith('FINAL:'): self._pf(line[6:])
                         elif line.startswith('NSE:'): self._pn(line[4:])
                         elif line.startswith('STATUS:'): self._ps(line[7:])
                         elif line.startswith('ERROR:'): self._logf(f'[!] {line[6:]}','err')
@@ -1454,6 +1552,7 @@ class GUI:
             for line in remaining_stdout.split('\n'):
                 line = line.strip()
                 if line.startswith('RESULT:'): self._pr(line[7:])
+                elif line.startswith('FINAL:'): self._pf(line[6:])
             self.proc.wait()
         except Exception as e:
             self._logf(f'[!] {e}','err')
@@ -1508,10 +1607,29 @@ class GUI:
             return m.group(1).strip(),'info',(m.group(2).strip()or s)
         return 'script','info',s
 
+    def _pf(self, raw):
+        """Consolidated multi-engine payload: one document, every host."""
+        try:
+            doc = json.loads(raw)
+        except Exception:
+            return
+        for host_block in doc.get('results') or []:
+            for row in host_block.get('results') or []:
+                self._pr(json.dumps(row))
+
     def _pr(self,raw):
-        self.sc+=1; self.rc+=1
         try:
             d=json.loads(raw)
+            # RESULT: lines stream during the scan, FINAL: repeats them at the
+            # end — keep one row per port.
+            seen = getattr(self, '_seen_ports', None)
+            if seen is None:
+                seen = self._seen_ports = set()
+            key = (str(d.get('port')), str(d.get('status', d.get('state', ''))).lower())
+            if key in seen:
+                return
+            seen.add(key)
+            self.sc+=1; self.rc+=1
             p=d.get('port','?'); st=d.get('status',d.get('state','?')).upper()
             svc=d.get('service',''); ver=d.get('version','')
             ban=(d.get('banner','')or'')[:120]
@@ -1559,11 +1677,11 @@ class GUI:
         el=time.time()-(self.start or time.time())
         rate=int(self.sc/el)if el>0 else 0
         self._st(f'Done \u2014 {c} ports, {nc} NSE')
-        self.iv.set(f'{tgt}  |  {el:.1f}s  |  {rate} p/s')
-        self.stv.set('\u2713 Complete'); self.spv.set(f'{rate} p/s')
+        self.iv.set(f'{tgt}   {el:.1f}s')
+        self.stv.set('complete'); self.spv.set(str(rate))
         mins,secs=divmod(int(el),60)
         self.elv.set(f'{mins}:{secs:02d}')
-        self._scan_indicator.config(text='\u2713 ')
+        self._scan_indicator.config(text='\u25cf')
         self._logf(f'[+] Done \u2014 {c} ports, {nc} NSE in {el:.1f}s ({rate} p/s)','ok')
         if c==0 and nc==0: self._toast('Nothing found',C.ORANGE)
         else:

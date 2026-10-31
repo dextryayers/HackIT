@@ -27,6 +27,25 @@ func init() {
 	os.Setenv("GODEBUG", "netdns=cgo")
 }
 
+// portEvidence scores a result so duplicate ports keep the richest record.
+func portEvidence(pr PortResult) int {
+	score := 0
+	if strings.EqualFold(pr.State, "open") {
+		score += 1000
+	}
+	score += int(pr.BannerConfidence * 100)
+	if pr.Banner != "" {
+		score += 50
+	}
+	if pr.Version != "" {
+		score += 20
+	}
+	if pr.Service != "" && pr.Service != "unknown" {
+		score += 10
+	}
+	return score
+}
+
 func main() {
 	target := flag.String("target", "", "Target Host or CIDR")
 	ports := flag.String("ports", "", "Ports (comma separated or range)")
@@ -41,6 +60,7 @@ func main() {
 	outputFile := flag.String("output", "", "Output filename")
 	openOnly := flag.Bool("open-only", false, "Show only open ports")
 	quietJSON := flag.Bool("quiet-json", false, "Suppress human output")
+	noBanner := flag.Bool("no-banner", false, "Suppress the ASCII banner")
 	// Stealth & Evasion flags
 	ghostProtocol := flag.Bool("ghost-protocol", false, "Enable Ghost Protocol")
 	chaos := flag.Bool("chaos", false, "Enable Chaos Mode")
@@ -200,7 +220,7 @@ func main() {
 	startTime := time.Now()
 
 	// Print ASCII banner
-	if !(reporter.SuppressHuman) {
+	if !reporter.SuppressHuman && !*noBanner {
 		if len(targets) > 0 {
 			PrintBanner(targets[0])
 		} else {
@@ -343,11 +363,40 @@ func main() {
 
 	// Collect engine metadata
 	engineMeta := map[string]interface{}{
-		"go":      true,
-		"rust":    true,
-		"c":       true,
-		"cpp":     true,
-		"python":  *enrich,
+		"go":     true,
+		"rust":   true,
+		"c":      true,
+		"cpp":    true,
+		"python": *enrich,
+	}
+
+	// One row per port: multi-engine correlation can surface the same port
+	// twice, so keep the record with the strongest evidence.
+	finalResults := make([]ScanResult, 0, len(allResults))
+	for _, hostResult := range allResults {
+		byPort := make(map[int]PortResult, len(hostResult.Results))
+		order := make([]int, 0, len(hostResult.Results))
+		for _, pr := range hostResult.Results {
+			prev, seen := byPort[pr.Port]
+			if !seen {
+				order = append(order, pr.Port)
+				byPort[pr.Port] = pr
+				continue
+			}
+			if portEvidence(pr) > portEvidence(prev) {
+				byPort[pr.Port] = pr
+			}
+		}
+		merged := make([]PortResult, 0, len(order))
+		for _, port := range order {
+			pr := byPort[port]
+			if *openOnly && !strings.EqualFold(pr.State, "open") {
+				continue
+			}
+			merged = append(merged, pr)
+		}
+		hostResult.Results = merged
+		finalResults = append(finalResults, hostResult)
 	}
 
 	// Machine-readable final payload for Python bridge
@@ -360,7 +409,7 @@ func main() {
 		"started_at":        startTime.Format(time.RFC3339),
 		"elapsed_ms":        int(time.Since(startTime).Milliseconds()),
 		"notes":             "os.fingerprint may contain evidence details when available",
-		"results":           allResults,
+		"results":           finalResults,
 		"profile":           *profile,
 		"pipeline":          *pipeline,
 		"all_engines":       *allEngines,
