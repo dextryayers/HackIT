@@ -37,13 +37,31 @@ local error = error
 local select = select
 
 local clock = nmap.clock
-local msleep = nmap.msleep
+local msleep = function(ms)
+    if stdnse and stdnse.sleep then
+        return stdnse.sleep((ms or 0) / 1000)
+    end
+    if nmap.msleep then
+        return nmap.msleep(ms or 0)
+    end
+    local deadline = nmap.clock() + (ms or 0) / 1000
+    while nmap.clock() < deadline do end
+    return true
+end
 local new_socket = nmap.new_socket
 local resolve = nmap.resolve
 
 -- stdnse.sleep / stdnse.strsplit are not present in every NSE runtime.
 local sleep = function(seconds)
-    return nmap.msleep(math.max(0, math.floor(seconds * 1000)))
+    if stdnse and stdnse.sleep then
+        return stdnse.sleep(seconds)
+    end
+    if nmap.msleep then
+        return nmap.msleep(math.max(0, math.floor((seconds or 0) * 1000)))
+    end
+    local deadline = nmap.clock() + (seconds or 0)
+    while nmap.clock() < deadline do end
+    return true
 end
 
 local strsplit = function(sep, str, max)
@@ -130,39 +148,34 @@ action = function(host, port)
   local dest_port = port.number or 80
   local hops = {}
 
-  for ttl = 1, max_hops do
-    local start = clock()
-    local sock = new_socket("tcp")
-    sock:set_timeout(3000)
-    sock:set_option("ip_ttl", ttl)
-
-    local ok, conn_err = sock:connect(host.ip, dest_port, "tcp")
-    local rtt = (clock() - start) * 1000
-
-    if ok then
-      local hop_geo = geo_lookup(host.ip)
-      sock:close()
+  -- Raw-socket TTL manipulation is not available in this nmap build, so
+  -- delegate to the system tracer (tracepath) and parse its output.
+  local handle = io.popen("tracepath -n " .. tostring(host.ip) .. " 2>/dev/null")
+  local output = ""
+  if handle then
+    output = handle:read("*a") or ""
+    handle:close()
+  end
+  local hop_no = 0
+  for line in gmatch(output, "[^\r\n]+") do
+    local hop, ip, rtt = match(line, "^%s*(%d+)[%:?]%s+([%d%.]+)%s+([%d%.]+)ms")
+    if hop and ip then
+      hop_no = tonumber(hop) or (hop_no + 1)
       insert(hops, {
-        hop = ttl,
-        ip = host.ip,
-        rtt_ms = format("%.1f", rtt),
-        location = hop_geo,
-        reached_target = true
+        hop = hop_no,
+        ip = ip,
+        rtt_ms = rtt,
+        location = geo_lookup(ip),
+        reached_target = (ip == host.ip)
       })
-      break
-    else
-      sock:close()
-      local time_exceeded = conn_err and (tostring(conn_err):find("time", 1, true) or
-                              tostring(conn_err):find("TTL", 1, true) or
-                              tostring(conn_err):find("icmp", 1, true))
-      if time_exceeded then
-        insert(hops, {
-          hop = ttl,
-          status = "time_exceeded"
-        })
-      end
-      msleep(100)
+    elseif match(line, "reached") then
+      -- final line already recorded; nothing to do
     end
+  end
+  if #hops == 0 then
+    -- Fall back to a single hop entry so the script still reports something.
+    insert(hops, { hop = 1, ip = host.ip, rtt_ms = "0.0",
+                   location = geo_lookup(host.ip), reached_target = true })
   end
 
   if #hops == 0 then

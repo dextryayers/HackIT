@@ -60,13 +60,31 @@ local error = error
 local select = select
 
 local clock = nmap.clock
-local msleep = nmap.msleep
+local msleep = function(ms)
+    if stdnse and stdnse.sleep then
+        return stdnse.sleep((ms or 0) / 1000)
+    end
+    if nmap.msleep then
+        return nmap.msleep(ms or 0)
+    end
+    local deadline = nmap.clock() + (ms or 0) / 1000
+    while nmap.clock() < deadline do end
+    return true
+end
 local new_socket = nmap.new_socket
 local resolve = nmap.resolve
 
 -- stdnse.sleep / stdnse.strsplit are not present in every NSE runtime.
 local sleep = function(seconds)
-    return nmap.msleep(math.max(0, math.floor(seconds * 1000)))
+    if stdnse and stdnse.sleep then
+        return stdnse.sleep(seconds)
+    end
+    if nmap.msleep then
+        return nmap.msleep(math.max(0, math.floor((seconds or 0) * 1000)))
+    end
+    local deadline = nmap.clock() + (seconds or 0)
+    while nmap.clock() < deadline do end
+    return true
 end
 
 local strsplit = function(sep, str, max)

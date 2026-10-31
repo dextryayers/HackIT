@@ -975,7 +975,7 @@ class GUI:
     def _nse(self,p):
         b=self._fsec(p,'NSE SCRIPTS')
         h=tk.Frame(b,bg=C.CARD); h.pack(fill='x')
-        self._btn(h,'All',lambda:self._nse_set(1)).pack(side='left')
+        self._btn(h,'All (298)',lambda:self._nse_set(1)).pack(side='left')
         self._btn(h,'None',lambda:self._nse_set(0)).pack(side='left',padx=(4,0))
         self.nc=tk.StringVar(value=f'{len(self.nse_sel)}/{len(self.nse_all)}')
         tk.Label(h,textvariable=self.nc,font=TINY,fg=C.TEXT2,bg=C.CARD).pack(side='right')
