@@ -1,0 +1,33 @@
+[
+  {
+    "id": "kafka-apiversions",
+    "protocol": "tcp",
+    "ports": [
+      9092,
+      9093,
+      9094
+    ],
+    "payload_text": "\u0000\u0000\u0000\u000e\u0000\u0012\u0000\u0000\u0000\u0000\u0000\u0001\u0000\u0006hackit",
+    "read_limit": 8192,
+    "timeout_ms": 3500,
+    "matchers": [
+      {
+        "kind": "regex",
+        "pattern": "^[\\x00-\\xff]{4}\\x00\\x00\\x00\\x01",
+        "weight": 8.0,
+        "metadata": {
+          "label": "kafka-broker",
+          "service": "Kafka"
+        }
+      },
+      {
+        "kind": "contains",
+        "pattern": "ApiVersions",
+        "weight": 5.0,
+        "metadata": {
+          "label": "kafka-api"
+        }
+      }
+    ]
+  }
+]

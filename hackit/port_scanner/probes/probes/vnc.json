@@ -1,0 +1,44 @@
+[
+  {
+    "id": "vnc-rfb",
+    "protocol": "tcp",
+    "ports": [
+      5900,
+      5901,
+      5902,
+      5903
+    ],
+    "payload_text": "RFB 003.008\n",
+    "read_limit": 512,
+    "timeout_ms": 2500,
+    "matchers": [
+      {
+        "kind": "regex",
+        "pattern": "^RFB (\\d{3}\\.\\d{3})",
+        "weight": 10.0,
+        "metadata": {
+          "label": "vnc-rfb",
+          "service": "VNC",
+          "product": "VNC"
+        }
+      },
+      {
+        "kind": "regex",
+        "pattern": "^RFB 003\\.889",
+        "weight": 9.0,
+        "metadata": {
+          "label": "vnc-apple",
+          "product": "Apple Remote Desktop"
+        }
+      },
+      {
+        "kind": "regex",
+        "pattern": "^RFB 004\\.",
+        "weight": 9.0,
+        "metadata": {
+          "label": "vnc-veNCrypt"
+        }
+      }
+    ]
+  }
+]

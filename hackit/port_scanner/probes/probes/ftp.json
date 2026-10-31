@@ -1,40 +1,69 @@
 [
   {
-    "id": "ftp-banner",
+    "id": "ftp-greeting",
     "protocol": "tcp",
-    "ports": [21],
-    "read_limit": 1024,
-    "timeout_ms": 5000,
+    "ports": [
+      21,
+      2121
+    ],
+    "payload_text": "FEAT\r\n",
+    "read_limit": 4096,
+    "timeout_ms": 4000,
     "matchers": [
       {
         "kind": "regex",
-        "pattern": "220[- ].+",
+        "pattern": "^220[ -].+",
         "weight": 10.0,
-        "metadata": {"label": "ftp", "service": "FTP"}
+        "metadata": {
+          "label": "ftp-greeting",
+          "service": "FTP"
+        }
+      },
+      {
+        "kind": "regex",
+        "pattern": "(?i)vsftpd\\s*([\\d.]+)",
+        "weight": 9.0,
+        "metadata": {
+          "label": "vsftpd",
+          "product": "vsftpd",
+          "confidence": "high"
+        }
+      },
+      {
+        "kind": "regex",
+        "pattern": "(?i)proftpd\\s*([\\d.]+)",
+        "weight": 9.0,
+        "metadata": {
+          "label": "proftpd",
+          "product": "ProFTPD",
+          "confidence": "high"
+        }
+      },
+      {
+        "kind": "regex",
+        "pattern": "(?i)pure-ftpd",
+        "weight": 9.0,
+        "metadata": {
+          "label": "pure-ftpd",
+          "product": "Pure-FTPd",
+          "confidence": "high"
+        }
       },
       {
         "kind": "contains",
-        "pattern": "vsftpd",
-        "weight": 8.0,
-        "metadata": {"label": "vsftpd", "vendor": "vsftpd"}
+        "pattern": "211-Features",
+        "weight": 6.0,
+        "metadata": {
+          "label": "feat-supported"
+        }
       },
       {
         "kind": "contains",
-        "pattern": "ProFTPD",
-        "weight": 8.0,
-        "metadata": {"label": "proftpd", "vendor": "ProFTPD"}
-      },
-      {
-        "kind": "contains",
-        "pattern": "FileZilla",
-        "weight": 8.0,
-        "metadata": {"label": "filezilla", "vendor": "FileZilla"}
-      },
-      {
-        "kind": "contains",
-        "pattern": "Microsoft FTP",
-        "weight": 7.0,
-        "metadata": {"label": "ms-ftp", "vendor": "Microsoft"}
+        "pattern": "AUTH TLS",
+        "weight": 5.0,
+        "metadata": {
+          "label": "explicit-tls"
+        }
       }
     ]
   }

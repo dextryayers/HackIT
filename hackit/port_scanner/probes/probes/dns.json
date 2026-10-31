@@ -1,0 +1,39 @@
+[
+  {
+    "id": "dns-version-bind",
+    "protocol": "udp",
+    "ports": [
+      53
+    ],
+    "payload_text": "\u0000\u0000\u0010\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000",
+    "read_limit": 1024,
+    "timeout_ms": 2500,
+    "matchers": [
+      {
+        "kind": "regex",
+        "pattern": "(?i)bind",
+        "weight": 6.0,
+        "metadata": {
+          "label": "bind-dns",
+          "service": "DNS"
+        }
+      },
+      {
+        "kind": "regex",
+        "pattern": "(?i)unbound",
+        "weight": 6.0,
+        "metadata": {
+          "label": "unbound"
+        }
+      },
+      {
+        "kind": "regex",
+        "pattern": "(?i)powerdns",
+        "weight": 6.0,
+        "metadata": {
+          "label": "powerdns"
+        }
+      }
+    ]
+  }
+]

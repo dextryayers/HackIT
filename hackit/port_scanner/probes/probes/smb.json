@@ -1,0 +1,40 @@
+[
+  {
+    "id": "smb-negotiate",
+    "protocol": "tcp",
+    "ports": [
+      445
+    ],
+    "payload_text": "\u0000\u0000\u0000\u0000\u00feSMB@\u0000\u0004\u0000\u0001\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0002\u0002\u0010\u0002\u0000\u0003\u0002\u0003\u0011\u0003",
+    "read_limit": 4096,
+    "timeout_ms": 3500,
+    "matchers": [
+      {
+        "kind": "contains",
+        "pattern": "\u00feSMB",
+        "weight": 10.0,
+        "metadata": {
+          "label": "smb2",
+          "service": "SMB",
+          "product": "Microsoft SMB"
+        }
+      },
+      {
+        "kind": "contains",
+        "pattern": "\u00ffSMB",
+        "weight": 8.0,
+        "metadata": {
+          "label": "smb1"
+        }
+      },
+      {
+        "kind": "regex",
+        "pattern": "\\xfeSMB.{20}([\\x00-\\xff]{2})",
+        "weight": 5.0,
+        "metadata": {
+          "label": "smb-dialect"
+        }
+      }
+    ]
+  }
+]

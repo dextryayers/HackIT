@@ -1,0 +1,32 @@
+[
+  {
+    "id": "ldap-bind",
+    "protocol": "tcp",
+    "ports": [
+      389,
+      3268
+    ],
+    "payload_text": "0\f\u0002\u0001\u0001`\u0007\u0002\u0001\u0003\u0004\u0000\u0080\u0000",
+    "read_limit": 4096,
+    "timeout_ms": 3000,
+    "matchers": [
+      {
+        "kind": "regex",
+        "pattern": "^\\x30.{2}\\x02\\x01\\x01\\x61",
+        "weight": 10.0,
+        "metadata": {
+          "label": "ldap-bind-response",
+          "service": "LDAP"
+        }
+      },
+      {
+        "kind": "regex",
+        "pattern": "(?s)objectClass",
+        "weight": 7.0,
+        "metadata": {
+          "label": "ldap-schema"
+        }
+      }
+    ]
+  }
+]

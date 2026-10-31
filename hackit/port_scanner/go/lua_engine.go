@@ -51,6 +51,7 @@ func NewLuaEngine() *LuaEngine {
 
 // NSE scripts to run (in order) for each open port
 var nseScripts = []string{
+	"banner_probe.lua",
 	"banner_grab.lua",
 	"dns_enum.lua",
 	"exploit_check.lua",

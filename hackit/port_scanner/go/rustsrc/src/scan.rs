@@ -125,6 +125,16 @@ pub struct PortResult {
     pub version: String,
     pub banner: String,
     pub reason: String,
+    #[serde(skip_serializing_if = "String::is_empty", default)]
+    pub banner_protocol: String,
+    #[serde(skip_serializing_if = "is_zero", default)]
+    pub banner_confidence: f64,
+    #[serde(skip_serializing_if = "std::ops::Not::not", default)]
+    pub banner_mismatch: bool,
+}
+
+fn is_zero(v: &f64) -> bool {
+    *v == 0.0
 }
 
 fn detect_service(banner: &str, port: u16) -> (String, String, String) {
@@ -166,6 +176,7 @@ async fn scan_port(host: &str, port: u16, timeout_ms: u64) -> PortResult {
             port, state: "error".into(), service: String::new(),
             product: String::new(), version: String::new(),
             banner: String::new(), reason: "dns resolution failed".into(),
+            banner_protocol: String::new(), banner_confidence: 0.0, banner_mismatch: false,
         },
     };
 
@@ -178,44 +189,36 @@ async fn scan_port(host: &str, port: u16, timeout_ms: u64) -> PortResult {
     ).await;
 
     match stream {
-        Ok(Ok(mut sock)) => {
-            let mut banner = Vec::new();
-            let probe = PROBES.get(&port);
-            if let Some(data) = probe {
-                if !data.is_empty() {
-                    let _ = timeout(Duration::from_millis(timeout_ms), sock.write_all(data)).await;
-                }
-            }
-            let mut buf = [0u8; MAX_BANNER];
-            match timeout(Duration::from_millis(timeout_ms), sock.read(&mut buf)).await {
-                Ok(Ok(n)) if n > 0 => {
-                    banner.extend_from_slice(&buf[..n.min(MAX_BANNER)]);
-                }
-                _ => {}
-            }
-            let banner_str = String::from_utf8_lossy(&banner).to_string();
-            let (service, product, version) = detect_service(&banner_str, port);
+        Ok(Ok(sock)) => {
+            drop(sock);
+            let info = crate::banner::probe_port(&ip, port, timeout_ms).await;
+            let (service, product, version) = detect_service(&info.banner, port);
             let elapsed = start.elapsed();
 
             PortResult {
                 port,
                 state: "open".into(),
-                service,
-                product,
-                version,
-                banner: banner_str,
+                service: if info.product.is_empty() { service } else { info.product.clone() },
+                product: if info.product.is_empty() { product } else { info.product },
+                version: if info.version.is_empty() { version } else { info.version },
+                banner: info.banner,
                 reason: format!("tcp-response in {:?}", elapsed),
+                banner_protocol: info.protocol,
+                banner_confidence: info.confidence,
+                banner_mismatch: info.mismatch,
             }
         }
         Ok(Err(e)) => PortResult {
             port, state: "closed".into(), service: String::new(),
             product: String::new(), version: String::new(),
             banner: String::new(), reason: format!("{}", e),
+            banner_protocol: String::new(), banner_confidence: 0.0, banner_mismatch: false,
         },
         Err(_) => PortResult {
             port, state: "filtered".into(), service: String::new(),
             product: String::new(), version: String::new(),
             banner: String::new(), reason: "timeout".into(),
+            banner_protocol: String::new(), banner_confidence: 0.0, banner_mismatch: false,
         },
     }
 }

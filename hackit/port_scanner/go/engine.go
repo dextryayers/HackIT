@@ -24,31 +24,35 @@ var resultChanPool = sync.Pool{
 }
 
 type PortResult struct {
-	Port            int      `json:"port"`
-	State           string   `json:"status"`
-	Service         string   `json:"service"`
-	Banner          string   `json:"banner"`
-	Version         string   `json:"version"`
-	TTL             int      `json:"ttl,omitempty"`
-	Protocol        string   `json:"protocol,omitempty"`
-	Scripts         []string `json:"scripts,omitempty"`
-	Vulnerabilities []string `json:"vulnerabilities,omitempty"`
-	DeepAnalysis    string   `json:"deep_analysis,omitempty"`
-	RiskScore       float64  `json:"risk_score,omitempty"`
-	CPEList         []string `json:"cpe,omitempty"`
-	Reason          string   `json:"reason,omitempty"`
+	Port             int      `json:"port"`
+	State            string   `json:"status"`
+	Service          string   `json:"service"`
+	Banner           string   `json:"banner"`
+	Version          string   `json:"version"`
+	TTL              int      `json:"ttl,omitempty"`
+	Protocol         string   `json:"protocol,omitempty"`
+	Scripts          []string `json:"scripts,omitempty"`
+	Vulnerabilities  []string `json:"vulnerabilities,omitempty"`
+	DeepAnalysis     string   `json:"deep_analysis,omitempty"`
+	RiskScore        float64  `json:"risk_score,omitempty"`
+	CPEList          []string `json:"cpe,omitempty"`
+	Reason           string   `json:"reason,omitempty"`
+	BannerProtocol   string   `json:"banner_protocol,omitempty"`
+	BannerConfidence float64  `json:"banner_confidence,omitempty"`
+	BannerEvidence   string   `json:"banner_evidence,omitempty"`
+	BannerMismatch   bool     `json:"banner_mismatch,omitempty"`
 }
 
 type ScanEngine struct {
-	Host     string
-	Hostname string
-	Ports    []int
-	Threads  int
+	Host      string
+	Hostname  string
+	Ports     []int
+	Threads   int
 	TimeoutMs int
-	Stealth  bool
-	ScanMode string
-	Reporter *Reporter
-	Lua      *LuaEngine
+	Stealth   bool
+	ScanMode  string
+	Reporter  *Reporter
+	Lua       *LuaEngine
 
 	// Core Config
 	IncludeClosed bool
@@ -78,14 +82,14 @@ type ScanEngine struct {
 	ScriptArgs           string
 
 	// Timing & Performance
-	Adaptive         bool
-	Quantum          bool
-	MinRate          int
-	MaxRate          int
-	MaxRetries       int
-	HostTimeout      int
-	ScanDelay        int
-	AdaptiveEngine   *AdaptiveTiming
+	Adaptive       bool
+	Quantum        bool
+	MinRate        int
+	MaxRate        int
+	MaxRetries     int
+	HostTimeout    int
+	ScanDelay      int
+	AdaptiveEngine *AdaptiveTiming
 
 	// Discovery & Resolution
 	RandomizeTargets bool
@@ -193,8 +197,12 @@ func (e *ScanEngine) Run() []PortResult {
 			}
 		} else if e.Threads < 500 || e.Threads < len(ports)/10 {
 			maxThreads := 2000
-			if len(ports) > 10000 { maxThreads = 4000 }
-			if len(ports) > 30000 { maxThreads = 8000 }
+			if len(ports) > 10000 {
+				maxThreads = 4000
+			}
+			if len(ports) > 30000 {
+				maxThreads = 8000
+			}
 			e.Threads = min2(maxThreads, len(ports))
 		}
 
@@ -267,50 +275,90 @@ func (e *ScanEngine) Run() []PortResult {
 		for i := 0; i < workerCount; i++ {
 			start := i * chunkSize
 			end := start + chunkSize
-			if end > len(ports) { end = len(ports) }
-			if start >= end { break }
+			if end > len(ports) {
+				end = len(ports)
+			}
+			if start >= end {
+				break
+			}
 			chunk := ports[start:end]
 
 			wg.Add(1)
 			go func(batch []int) {
 				defer wg.Done()
 				for _, port := range batch {
-					if port <= 0 || port > 65535 { continue }
-					if e.MinRate > 0 { time.Sleep(time.Second / time.Duration(e.MinRate)) }
-					if e.Stealth || e.GhostProtocol { jitterSleep(5, 80) }
-					if e.AdaptiveEngine != nil { time.Sleep(e.AdaptiveEngine.GetRecommendedDelay()) }
-					if e.ScanDelay > 0 { time.Sleep(time.Duration(e.ScanDelay) * time.Millisecond) }
+					if port <= 0 || port > 65535 {
+						continue
+					}
+					if e.MinRate > 0 {
+						time.Sleep(time.Second / time.Duration(e.MinRate))
+					}
+					if e.Stealth || e.GhostProtocol {
+						jitterSleep(5, 80)
+					}
+					if e.AdaptiveEngine != nil {
+						time.Sleep(e.AdaptiveEngine.GetRecommendedDelay())
+					}
+					if e.ScanDelay > 0 {
+						time.Sleep(time.Duration(e.ScanDelay) * time.Millisecond)
+					}
 
 					var res PortResult
 					var isOpen bool
 					switch e.ScanMode {
-					case "udp": res, isOpen = ScanUDP(e.Host, port, e.TimeoutMs)
+					case "udp":
+						res, isOpen = ScanUDP(e.Host, port, e.TimeoutMs)
 					case "syn":
 						res = e.MultiEngineOrchestrator(port)
-						if res.State == "error" { res, isOpen = ScanPort(e.Host, port, e.TimeoutMs) } else { isOpen = res.State == "open" }
-					case "ack": res, isOpen = ScanACK(e.Host, port, e.TimeoutMs)
-					case "fin": res, isOpen = ScanFIN(e.Host, port, e.TimeoutMs)
-					case "xmas": res, isOpen = ScanXMAS(e.Host, port, e.TimeoutMs)
-					case "null": res, isOpen = ScanNULL(e.Host, port, e.TimeoutMs)
-					case "window": res, isOpen = ScanWindow(e.Host, port, e.TimeoutMs)
-					case "maimon": res, isOpen = ScanMaimon(e.Host, port, e.TimeoutMs)
+						if res.State == "error" {
+							res, isOpen = ScanPort(e.Host, port, e.TimeoutMs)
+						} else {
+							isOpen = res.State == "open"
+						}
+					case "ack":
+						res, isOpen = ScanACK(e.Host, port, e.TimeoutMs)
+					case "fin":
+						res, isOpen = ScanFIN(e.Host, port, e.TimeoutMs)
+					case "xmas":
+						res, isOpen = ScanXMAS(e.Host, port, e.TimeoutMs)
+					case "null":
+						res, isOpen = ScanNULL(e.Host, port, e.TimeoutMs)
+					case "window":
+						res, isOpen = ScanWindow(e.Host, port, e.TimeoutMs)
+					case "maimon":
+						res, isOpen = ScanMaimon(e.Host, port, e.TimeoutMs)
 					case "idle":
-						if e.Zombie != "" { res, isOpen = ScanIdle(e.Host, port, e.Zombie, e.TimeoutMs) } else { res, isOpen = ScanPort(e.Host, port, e.TimeoutMs) }
-					case "protocol": res, isOpen = ScanProtocol(e.Host, port, e.TimeoutMs)
+						if e.Zombie != "" {
+							res, isOpen = ScanIdle(e.Host, port, e.Zombie, e.TimeoutMs)
+						} else {
+							res, isOpen = ScanPort(e.Host, port, e.TimeoutMs)
+						}
+					case "protocol":
+						res, isOpen = ScanProtocol(e.Host, port, e.TimeoutMs)
 					case "c-turbo":
-						res = e.CrossCheckOrchestrator(port); isOpen = res.State == "open"
-						if isOpen { cOS := CExpertDetectOs(e.Host, fmt.Sprintf("%d", port), 64, 29200); res.DeepAnalysis = cOS }
+						res = e.CrossCheckOrchestrator(port)
+						isOpen = res.State == "open"
+						if isOpen {
+							cOS := CExpertDetectOs(e.Host, fmt.Sprintf("%d", port), 64, 29200)
+							res.DeepAnalysis = cOS
+						}
 					case "anon-self":
 						res, isOpen = ScanPort(e.Host, port, e.TimeoutMs)
-						if isOpen && e.GhostProtocol { res.State = "self-listening" }
+						if isOpen && e.GhostProtocol {
+							res.State = "self-listening"
+						}
 					default:
 						res, isOpen = ScanPort(e.Host, port, e.TimeoutMs)
 					}
 
-					if e.AdaptiveEngine != nil { e.AdaptiveEngine.AdjustTiming(isOpen, time.Duration(e.TimeoutMs)*time.Millisecond) }
+					if e.AdaptiveEngine != nil {
+						e.AdaptiveEngine.AdjustTiming(isOpen, time.Duration(e.TimeoutMs)*time.Millisecond)
+					}
 
 					n := atomic.AddInt64(&e.totalScanned, 1)
-					if isOpen { atomic.AddInt64(&e.totalOpen, 1) }
+					if isOpen {
+						atomic.AddInt64(&e.totalOpen, 1)
+					}
 					if e.Reporter != nil && n%100 == 0 {
 						e.Reporter.ReportStatus(fmt.Sprintf("Probing %d/%d | Open: %d", n, len(ports), atomic.LoadInt64(&e.totalOpen)), float64(n)/float64(len(ports))*100)
 					}
@@ -319,7 +367,9 @@ func (e *ScanEngine) Run() []PortResult {
 					mutex.Lock()
 					results = append(results, res)
 					mutex.Unlock()
-					if e.Reporter != nil { e.Reporter.ReportResult(res) }
+					if e.Reporter != nil {
+						e.Reporter.ReportResult(res)
+					}
 				}
 			}(chunk)
 		}
@@ -331,42 +381,78 @@ func (e *ScanEngine) Run() []PortResult {
 			go func() {
 				defer wg.Done()
 				for port := range portsChan {
-					if port <= 0 || port > 65535 { continue }
-					if e.MinRate > 0 { time.Sleep(time.Second / time.Duration(e.MinRate)) }
-					if e.Stealth || e.GhostProtocol { jitterSleep(5, 80) }
-					if e.AdaptiveEngine != nil { time.Sleep(e.AdaptiveEngine.GetRecommendedDelay()) }
-					if e.ScanDelay > 0 { time.Sleep(time.Duration(e.ScanDelay) * time.Millisecond) }
+					if port <= 0 || port > 65535 {
+						continue
+					}
+					if e.MinRate > 0 {
+						time.Sleep(time.Second / time.Duration(e.MinRate))
+					}
+					if e.Stealth || e.GhostProtocol {
+						jitterSleep(5, 80)
+					}
+					if e.AdaptiveEngine != nil {
+						time.Sleep(e.AdaptiveEngine.GetRecommendedDelay())
+					}
+					if e.ScanDelay > 0 {
+						time.Sleep(time.Duration(e.ScanDelay) * time.Millisecond)
+					}
 
 					var res PortResult
 					var isOpen bool
 					switch e.ScanMode {
-					case "udp": res, isOpen = ScanUDP(e.Host, port, e.TimeoutMs)
+					case "udp":
+						res, isOpen = ScanUDP(e.Host, port, e.TimeoutMs)
 					case "syn":
 						res = e.MultiEngineOrchestrator(port)
-						if res.State == "error" { res, isOpen = ScanPort(e.Host, port, e.TimeoutMs) } else { isOpen = res.State == "open" }
-					case "ack": res, isOpen = ScanACK(e.Host, port, e.TimeoutMs)
-					case "fin": res, isOpen = ScanFIN(e.Host, port, e.TimeoutMs)
-					case "xmas": res, isOpen = ScanXMAS(e.Host, port, e.TimeoutMs)
-					case "null": res, isOpen = ScanNULL(e.Host, port, e.TimeoutMs)
-					case "window": res, isOpen = ScanWindow(e.Host, port, e.TimeoutMs)
-					case "maimon": res, isOpen = ScanMaimon(e.Host, port, e.TimeoutMs)
+						if res.State == "error" {
+							res, isOpen = ScanPort(e.Host, port, e.TimeoutMs)
+						} else {
+							isOpen = res.State == "open"
+						}
+					case "ack":
+						res, isOpen = ScanACK(e.Host, port, e.TimeoutMs)
+					case "fin":
+						res, isOpen = ScanFIN(e.Host, port, e.TimeoutMs)
+					case "xmas":
+						res, isOpen = ScanXMAS(e.Host, port, e.TimeoutMs)
+					case "null":
+						res, isOpen = ScanNULL(e.Host, port, e.TimeoutMs)
+					case "window":
+						res, isOpen = ScanWindow(e.Host, port, e.TimeoutMs)
+					case "maimon":
+						res, isOpen = ScanMaimon(e.Host, port, e.TimeoutMs)
 					case "idle":
-						if e.Zombie != "" { res, isOpen = ScanIdle(e.Host, port, e.Zombie, e.TimeoutMs) } else { res, isOpen = ScanPort(e.Host, port, e.TimeoutMs) }
-					case "protocol": res, isOpen = ScanProtocol(e.Host, port, e.TimeoutMs)
+						if e.Zombie != "" {
+							res, isOpen = ScanIdle(e.Host, port, e.Zombie, e.TimeoutMs)
+						} else {
+							res, isOpen = ScanPort(e.Host, port, e.TimeoutMs)
+						}
+					case "protocol":
+						res, isOpen = ScanProtocol(e.Host, port, e.TimeoutMs)
 					case "c-turbo":
-						res = e.CrossCheckOrchestrator(port); isOpen = res.State == "open"
-						if isOpen { cOS := CExpertDetectOs(e.Host, fmt.Sprintf("%d", port), 64, 29200); res.DeepAnalysis = cOS }
+						res = e.CrossCheckOrchestrator(port)
+						isOpen = res.State == "open"
+						if isOpen {
+							cOS := CExpertDetectOs(e.Host, fmt.Sprintf("%d", port), 64, 29200)
+							res.DeepAnalysis = cOS
+						}
 					case "anon-self":
 						res, isOpen = ScanPort(e.Host, port, e.TimeoutMs)
-						if isOpen && e.GhostProtocol { res.State = "self-listening" }
+						if isOpen && e.GhostProtocol {
+							res.State = "self-listening"
+						}
 					default:
 						res, isOpen = ScanPort(e.Host, port, e.TimeoutMs)
 					}
 
-					if e.AdaptiveEngine != nil { e.AdaptiveEngine.AdjustTiming(isOpen, time.Duration(e.TimeoutMs)*time.Millisecond) }
+					if e.AdaptiveEngine != nil {
+						e.AdaptiveEngine.AdjustTiming(isOpen, time.Duration(e.TimeoutMs)*time.Millisecond)
+					}
 
 					n := atomic.AddInt64(&e.totalScanned, 1)
-					if isOpen { atomic.AddInt64(&e.totalOpen, 1) }
+					if isOpen {
+						atomic.AddInt64(&e.totalOpen, 1)
+					}
 					if e.Reporter != nil && n%100 == 0 {
 						e.Reporter.ReportStatus(fmt.Sprintf("Probing %d/%d | Open: %d", n, len(ports), atomic.LoadInt64(&e.totalOpen)), float64(n)/float64(len(ports))*100)
 					}
@@ -375,7 +461,9 @@ func (e *ScanEngine) Run() []PortResult {
 					mutex.Lock()
 					results = append(results, res)
 					mutex.Unlock()
-					if e.Reporter != nil { e.Reporter.ReportResult(res) }
+					if e.Reporter != nil {
+						e.Reporter.ReportResult(res)
+					}
 				}
 			}()
 		}
@@ -383,7 +471,9 @@ func (e *ScanEngine) Run() []PortResult {
 		// Feed ports to workers
 		go func() {
 			for _, p := range ports {
-				if rateLimiter != nil { <-rateLimiter.C }
+				if rateLimiter != nil {
+					<-rateLimiter.C
+				}
 				portsChan <- p
 			}
 			close(portsChan)
@@ -591,35 +681,35 @@ func (e *ScanEngine) AnalyzeVulnerabilities(res PortResult) []string {
 
 	// Known CVEs via banner matching
 	cveMap := map[string][]string{
-		"openssh 8.7":      {"CVE-2024-6387 (regreSSHion) — unauthenticated RCE"},
-		"openssh 8.5":      {"CVE-2023-38408 — SSH Agent remote code exec"},
-		"openssh 7.4":      {"CVE-2018-15473 — Username enumeration"},
-		"openssh 7.2":      {"CVE-2016-10012 — Privilege separation bypass"},
-		"vsftpd 2.3.4":     {"CVE-2011-2523 — Backdoor (smiley face :))", "CRITICAL: backdoor present"},
-		"proftpd 1.3.3":    {"CVE-2010-4221 — Remote code execution"},
-		"apache/2.2":       {"CVE-2017-7679 — mod_mime buffer overflow", "EOLSUPPORT: Apache 2.2 end-of-life"},
-		"apache/2.4.49":    {"CVE-2021-41773 — Path traversal + RCE"},
-		"apache/2.4.50":    {"CVE-2021-42013 — Path traversal bypass"},
-		"nginx/1.0":        {"EOLSUPPORT: nginx 1.0 end-of-life"},
-		"iis/6.0":          {"CVE-2017-7269 — Buffer overflow RCE (EternalBlue-linked)"},
-		"iis/7.5":          {"CVE-2010-1256 — Information disclosure"},
-		"php/5.":           {"EOLSUPPORT: PHP 5.x end-of-life (critical)", "Multiple known CVEs"},
-		"php/7.0":          {"EOLSUPPORT: PHP 7.0 end-of-life"},
-		"php/7.1":          {"EOLSUPPORT: PHP 7.1 end-of-life"},
-		"openssl/1.0":      {"CVE-2014-0160 — Heartbleed", "EOLSUPPORT: OpenSSL 1.0.x EOL"},
-		"openssl/1.1.0":    {"EOLSUPPORT: OpenSSL 1.1.0 EOL"},
-		"redis_version:2":  {"CRITICAL: Redis 2.x unauthenticated — data exposure"},
-		"redis_version:3":  {"WARN: Redis 3.x — no auth by default"},
-		"redis_version:4":  {"INFO: Redis 4.x — verify ACL config"},
-		"mongodb":          {"INFO: Check auth required — MongoDB defaults open"},
-		"elastic":          {"CVE-2021-22145 — Elasticsearch info disclosure"},
-		"jenkins":          {"CVE-2024-23897 — Arbitrary file read (Jenkins 2.441)"},
-		"tomcat/7":         {"EOLSUPPORT: Tomcat 7 EOL", "CVE-2020-1938 — Ghostcat AJP"},
-		"tomcat/8.0":       {"EOLSUPPORT: Tomcat 8.0 EOL"},
-		"drupal":           {"CVE-2018-7600 — Drupalgeddon2 RCE"},
-		"wordpress":        {"INFO: Check WP-Scan for plugin vulns"},
-		"jboss":            {"CVE-2015-7501 — Java deserialization RCE"},
-		"weblogic":         {"CVE-2023-21839 — Deserialization RCE"},
+		"openssh 8.7":     {"CVE-2024-6387 (regreSSHion) — unauthenticated RCE"},
+		"openssh 8.5":     {"CVE-2023-38408 — SSH Agent remote code exec"},
+		"openssh 7.4":     {"CVE-2018-15473 — Username enumeration"},
+		"openssh 7.2":     {"CVE-2016-10012 — Privilege separation bypass"},
+		"vsftpd 2.3.4":    {"CVE-2011-2523 — Backdoor (smiley face :))", "CRITICAL: backdoor present"},
+		"proftpd 1.3.3":   {"CVE-2010-4221 — Remote code execution"},
+		"apache/2.2":      {"CVE-2017-7679 — mod_mime buffer overflow", "EOLSUPPORT: Apache 2.2 end-of-life"},
+		"apache/2.4.49":   {"CVE-2021-41773 — Path traversal + RCE"},
+		"apache/2.4.50":   {"CVE-2021-42013 — Path traversal bypass"},
+		"nginx/1.0":       {"EOLSUPPORT: nginx 1.0 end-of-life"},
+		"iis/6.0":         {"CVE-2017-7269 — Buffer overflow RCE (EternalBlue-linked)"},
+		"iis/7.5":         {"CVE-2010-1256 — Information disclosure"},
+		"php/5.":          {"EOLSUPPORT: PHP 5.x end-of-life (critical)", "Multiple known CVEs"},
+		"php/7.0":         {"EOLSUPPORT: PHP 7.0 end-of-life"},
+		"php/7.1":         {"EOLSUPPORT: PHP 7.1 end-of-life"},
+		"openssl/1.0":     {"CVE-2014-0160 — Heartbleed", "EOLSUPPORT: OpenSSL 1.0.x EOL"},
+		"openssl/1.1.0":   {"EOLSUPPORT: OpenSSL 1.1.0 EOL"},
+		"redis_version:2": {"CRITICAL: Redis 2.x unauthenticated — data exposure"},
+		"redis_version:3": {"WARN: Redis 3.x — no auth by default"},
+		"redis_version:4": {"INFO: Redis 4.x — verify ACL config"},
+		"mongodb":         {"INFO: Check auth required — MongoDB defaults open"},
+		"elastic":         {"CVE-2021-22145 — Elasticsearch info disclosure"},
+		"jenkins":         {"CVE-2024-23897 — Arbitrary file read (Jenkins 2.441)"},
+		"tomcat/7":        {"EOLSUPPORT: Tomcat 7 EOL", "CVE-2020-1938 — Ghostcat AJP"},
+		"tomcat/8.0":      {"EOLSUPPORT: Tomcat 8.0 EOL"},
+		"drupal":          {"CVE-2018-7600 — Drupalgeddon2 RCE"},
+		"wordpress":       {"INFO: Check WP-Scan for plugin vulns"},
+		"jboss":           {"CVE-2015-7501 — Java deserialization RCE"},
+		"weblogic":        {"CVE-2023-21839 — Deserialization RCE"},
 	}
 
 	for pattern, cves := range cveMap {
@@ -935,7 +1025,7 @@ func (e *ScanEngine) CrossCheckOrchestrator(port int) PortResult {
 
 func (e *ScanEngine) enrichRustResults(openPortsStr string, allPorts []int) []PortResult {
 	var results []PortResult
-	
+
 	if openPortsStr == "" {
 		return results
 	}
@@ -964,10 +1054,11 @@ func (e *ScanEngine) enrichRustResults(openPortsStr string, allPorts []int) []Po
 
 // massScanAll — Multi-strategy mass scan for 1-65535 ports
 // Three-phase architecture:
-//   Phase 1: MassTcpScanner (epoll-based, ultra-fast, open ports only)
-//   Phase 2: C scanner (thread pool, all states + banners for remaining)
-//   Phase 3: Go goroutines (QuickScanPort) for any ports still missing
-//   Phase 4: Enrich open ports missing banners (uses existing banners when available)
+//
+//	Phase 1: MassTcpScanner (epoll-based, ultra-fast, open ports only)
+//	Phase 2: C scanner (thread pool, all states + banners for remaining)
+//	Phase 3: Go goroutines (QuickScanPort) for any ports still missing
+//	Phase 4: Enrich open ports missing banners (uses existing banners when available)
 func (e *ScanEngine) massScanAll(allPorts []int) []PortResult {
 	total := len(allPorts)
 	allSet := make(map[int]bool)
@@ -1077,11 +1168,11 @@ func (e *ScanEngine) massScanAll(allPorts []int) []PortResult {
 					existing, hasExisting := resultsMap[port]
 					if !hasExisting {
 						resultsMap[port] = &PortResult{
-							Port:    port,
-							State:   res.State,
-							Banner:  res.Banner,
-							Service: res.Service,
-							Version: res.Version,
+							Port:     port,
+							State:    res.State,
+							Banner:   res.Banner,
+							Service:  res.Service,
+							Version:  res.Version,
 							Protocol: "tcp",
 						}
 					} else if existing.State != "open" && res.State == "open" {
@@ -1116,8 +1207,8 @@ func (e *ScanEngine) massScanAll(allPorts []int) []PortResult {
 
 	// ── Phase 4: Enrich open ports that lack banners ──
 	// Also run local DetectService on ports that have banners but no service
-	openNeedsEnrich := make([]int, 0)       // no banner → needs full reconnect
-	localDetect := make([]int, 0)           // has banner but no service → local only
+	openNeedsEnrich := make([]int, 0) // no banner → needs full reconnect
+	localDetect := make([]int, 0)     // has banner but no service → local only
 	openWithBanner := make(map[int]bool)
 	for _, r := range results {
 		if r.State == "open" {
@@ -1253,12 +1344,12 @@ func generateCPE(service, version string) string {
 		"ftp": "a:vsftpd:vsftpd", "mysql": "a:mysql:mysql",
 		"redis": "a:redis:redis", "mongodb": "a:mongodb:mongodb",
 		"postgresql": "a:postgresql:postgresql",
-		"mssql": "a:microsoft:sql_server",
+		"mssql":      "a:microsoft:sql_server",
 	}
 	for k, v := range cpeMap {
 		if contains(svc, k) {
 			if version != "" {
-				return "cpe:/"+v+":"+version
+				return "cpe:/" + v + ":" + version
 			}
 			return "cpe:/" + v
 		}
@@ -1268,7 +1359,7 @@ func generateCPE(service, version string) string {
 
 func calculateRiskScore(port int, service, banner string, vulns []string) float64 {
 	score := 0.0
-	
+
 	highRisk := map[int]bool{
 		21: true, 23: true, 445: true, 3389: true, 5900: true,
 		2375: true, 6379: true, 27017: true, 9200: true, 11211: true,
@@ -1336,7 +1427,9 @@ func splitCSV(s string) []string {
 }
 
 func min2(a, b int) int {
-	if a < b { return a }
+	if a < b {
+		return a
+	}
 	return b
 }
 
@@ -1347,13 +1440,13 @@ func jitterSleep(minMs, maxMs int) {
 
 func NewScanEngine(host string, ports []int, threads int, timeoutMs int, stealth bool, mode string, reporter *Reporter) *ScanEngine {
 	return &ScanEngine{
-		Host:        host,
-		Ports:       ports,
-		Threads:     threads,
-		TimeoutMs:   timeoutMs,
-		Stealth:     stealth,
-		ScanMode:    mode,
-		Reporter:    reporter,
-		MaxRetries:  3,
+		Host:       host,
+		Ports:      ports,
+		Threads:    threads,
+		TimeoutMs:  timeoutMs,
+		Stealth:    stealth,
+		ScanMode:   mode,
+		Reporter:   reporter,
+		MaxRetries: 3,
 	}
 }

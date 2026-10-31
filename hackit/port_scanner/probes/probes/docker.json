@@ -1,0 +1,42 @@
+[
+  {
+    "id": "docker-version",
+    "protocol": "tcp",
+    "ports": [
+      2375,
+      2376,
+      4243
+    ],
+    "payload_text": "GET /version HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    "read_limit": 4096,
+    "timeout_ms": 4000,
+    "matchers": [
+      {
+        "kind": "regex",
+        "pattern": "\"ApiVersion\"\\s*:\\s*\"([\\d.]+)\"",
+        "weight": 10.0,
+        "metadata": {
+          "label": "docker-api",
+          "service": "Docker",
+          "product": "Docker Engine"
+        }
+      },
+      {
+        "kind": "regex",
+        "pattern": "\"Version\"\\s*:\\s*\"([\\d.]+)\"",
+        "weight": 8.0,
+        "metadata": {
+          "label": "docker-version"
+        }
+      },
+      {
+        "kind": "contains",
+        "pattern": "Docker",
+        "weight": 6.0,
+        "metadata": {
+          "label": "docker"
+        }
+      }
+    ]
+  }
+]

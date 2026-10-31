@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 use std::time::Instant;
 
+mod banner;
 mod scan;
 mod syn;
 mod os;

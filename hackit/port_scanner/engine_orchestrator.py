@@ -146,7 +146,7 @@ def _run_stage_discovery(target, ports, profile):
         return [{'host': target, 'alive': True, 'stage': 'discovery'}]
 
 
-def _run_stage_tcp_scan(target, ports, profile, engine_name='go'):
+def _run_stage_tcp_scan(target, ports, profile, engine_name='go', callback=None):
     if engine_name == 'go':
         go_engine = get_engine()
         if go_engine.ensure_compiled():
@@ -158,6 +158,7 @@ def _run_stage_tcp_scan(target, ports, profile, engine_name='go'):
                 include_closed=True,
                 stealth=profile.stealth,
                 mode=profile.scan_mode,
+                callback=callback,
             )
             if isinstance(r, dict):
                 flat = []
@@ -669,7 +670,7 @@ class PortOrchestrator:
                 all_port_results = []
                 with ThreadPoolExecutor(max_workers=len(engines)) as executor:
                     fut_to_eng = {
-                        executor.submit(stage_fn, target, ports, profile, eng): eng
+                        executor.submit(stage_fn, target, ports, profile, eng, callback): eng
                         for eng in engines
                     }
                     for fut in as_completed(fut_to_eng):

@@ -1,0 +1,40 @@
+[
+  {
+    "id": "telnet-negotiate",
+    "protocol": "tcp",
+    "ports": [
+      23,
+      2323
+    ],
+    "payload_text": "\u00ff\u00fd\u0001\u00ff\u00fd\u001f\u00ff\u00fd!",
+    "read_limit": 2048,
+    "timeout_ms": 3000,
+    "matchers": [
+      {
+        "kind": "regex",
+        "pattern": "^[\\xff\\xfd\\xfb]",
+        "weight": 8.0,
+        "metadata": {
+          "label": "telnet-iac",
+          "service": "Telnet"
+        }
+      },
+      {
+        "kind": "contains",
+        "pattern": "login:",
+        "weight": 7.0,
+        "metadata": {
+          "label": "login-prompt"
+        }
+      },
+      {
+        "kind": "contains",
+        "pattern": "Password:",
+        "weight": 7.0,
+        "metadata": {
+          "label": "password-prompt"
+        }
+      }
+    ]
+  }
+]

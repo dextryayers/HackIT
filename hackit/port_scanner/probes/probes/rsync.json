@@ -1,0 +1,24 @@
+[
+  {
+    "id": "rsync-banner",
+    "protocol": "tcp",
+    "ports": [
+      873
+    ],
+    "payload_text": "@RSYNCD: 31.0\n",
+    "read_limit": 1024,
+    "timeout_ms": 2500,
+    "matchers": [
+      {
+        "kind": "regex",
+        "pattern": "@RSYNCD:\\s*([\\d.]+)",
+        "weight": 10.0,
+        "metadata": {
+          "label": "rsync",
+          "service": "rsync",
+          "product": "rsync"
+        }
+      }
+    ]
+  }
+]

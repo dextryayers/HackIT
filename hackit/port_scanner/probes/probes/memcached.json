@@ -1,0 +1,51 @@
+[
+  {
+    "id": "memcached-stats",
+    "protocol": "tcp",
+    "ports": [
+      11211,
+      11212,
+      11213,
+      11214
+    ],
+    "payload_text": "stats\r\n",
+    "read_limit": 8192,
+    "timeout_ms": 3000,
+    "matchers": [
+      {
+        "kind": "contains",
+        "pattern": "STAT version",
+        "weight": 10.0,
+        "metadata": {
+          "label": "memcached",
+          "service": "Memcached"
+        }
+      },
+      {
+        "kind": "regex",
+        "pattern": "STAT version ([\\d.]+)",
+        "weight": 9.0,
+        "metadata": {
+          "label": "memcached-version",
+          "product": "memcached"
+        }
+      },
+      {
+        "kind": "contains",
+        "pattern": "STAT curr_items",
+        "weight": 6.0,
+        "metadata": {
+          "label": "memcached-stats"
+        }
+      },
+      {
+        "kind": "contains",
+        "pattern": "ERROR",
+        "weight": 3.0,
+        "metadata": {
+          "label": "memcached-error"
+        }
+      }
+    ]
+  }
+]

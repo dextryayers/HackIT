@@ -545,73 +545,56 @@ def get_risk(port, service, banner):
 # SCAN RESULT OUTPUT ENGINE
 # ─────────────────────────────────────────────────────────────────
 
-def render_port_table(port_results, show_risk=False, timeline=None, open_only=False):
-    """Render port results in clean port/service : STATUS : BANNER format."""
-    if not port_results:
-        return
+def _estimate_port_count(ports_spec):
+    """Best-effort count of ports a spec expands to, for the live progress bar.
 
-    sorted_ports = sorted(port_results, key=lambda x: x.get('port', 0))
-
-    click.echo()
-    click.echo(_colored("  PORT                   STATUS               BANNER & VERSION", B_WHITE, bold=True))
-    click.echo(_colored("  " + "─" * 78, DIM))
-    for p in sorted_ports:
-        port_num = p.get('port', 0)
-        if port_num == 0:
+    Returns 0 when the count is unknown ("default", engine-side presets) so the
+    dashboard shows "?" instead of a wrong denominator.
+    """
+    if not ports_spec:
+        return 0
+    spec = str(ports_spec).strip().lower()
+    if not spec or spec == 'default':
+        return 0
+    if spec in ('all', 'full'):
+        return 65535
+    if spec.startswith('top') and spec[3:].isdigit():
+        return int(spec[3:])
+    total = 0
+    for token in spec.replace(' ', '').split(','):
+        if not token:
             continue
-
-        st = p.get('status', 'unknown').lower()
-        if open_only and st != 'open':
-            continue
-
-        service = p.get('service', p.get('service_probe', ''))
-        if not service or service in ('unknown', 'UNKNOWN'):
-            service = str(port_num)
-        service = service.split('|')[0].strip().lower().replace(' ', '-')
-
-        left_raw = f"{port_num}/{service}"
-        left_display = left_raw.ljust(28)
-
-        if st == 'open':
-            port_color = B_GREEN
-            state_display = "OPEN"
-        elif st in ('filtered', 'forbidden'):
-            port_color = YELLOW
-            state_display = "FILTERED"
-        elif st == 'closed':
-            port_color = RED
-            state_display = "CLOSED"
+        if '-' in token:
+            lo, _, hi = token.partition('-')
+            if lo.isdigit() and hi.isdigit():
+                a, b = int(lo), int(hi)
+                if a > b:
+                    a, b = b, a
+                total += b - a + 1
+            else:
+                total += 1
+        elif token.isdigit():
+            total += 1
         else:
-            port_color = DIM
-            state_display = st.upper()
+            return 0
+    return total
 
-        port_service = _colored(left_display, port_color, bold=(st == 'open'))
-        state_colored = _colored(f"{state_display:<8}", port_color, bold=(st == 'open'))
 
-        banner = p.get('banner', '')
-        version = p.get('version', '')
-        info_parts = []
-        if version:
-            info_parts.append(str(version))
-        if banner:
-            banner_str = str(banner).replace('\n', ' ').replace('\r', '').strip()
-            if banner_str:
-                info_parts.append(banner_str)
-        info_display = _colored(" | ".join(info_parts), DIM) if info_parts else ""
+def render_port_table(port_results, show_risk=False, timeline=None, open_only=False, host=""):
+    """Render port results through the shared renderer.
 
-        sep = "  " if info_display else ""
-        line = f"  {port_service} : {state_colored}{sep}{info_display}"
-        click.echo(line)
+    Columns are port / state / service / protocol / confidence / banner so the
+    banner always sits beside the port that produced it.
+    """
+    from .render import render_port_table as _render
 
-    click.echo()
-
-    if timeline:
-        click.echo(_colored("\n  ╔═══ SCAN TIMELINE ═══════════════════════════════════════════════════════╗", B_CYAN))
-        for entry in timeline[-10:]:
-            ts = entry.get('time', '')
-            msg = entry.get('msg', '')
-            click.echo(_colored(f"  ║ {ts:<10} {msg:<58} ║", DIM))
-        click.echo(_colored("  ╚══════════════════════════════════════════════════════════════════════════╝", B_CYAN))
+    _render(
+        port_results,
+        show_risk=show_risk,
+        timeline=timeline,
+        open_only=open_only,
+        host=host,
+    )
 
 
 def render_intel_grid(ip_addr, host_name, dns_enum, intel, os_info, mode, scan_mode, workers, tempo):
@@ -844,7 +827,7 @@ def scan_ports(**kwargs):
             if kwargs.get('dashboard'):
                 from .live_dashboard import Dashboard
                 dash = Dashboard()
-                dash.start()
+                dash.start(target_raw, total_ports=_estimate_port_count(ports_str))
                 try:
                     results = orchestrator.run_scan(target_raw, ports_str, profile_name or 'quick',
                                                      engines=None, stages=stages,
@@ -866,7 +849,7 @@ def scan_ports(**kwargs):
                 click.echo(_colored(f"  Target: {target_raw}", B_WHITE) + _colored(f" ({resolved_ip})", DIM))
                 open_only_flag = kwargs.get('open_only', False)
                 display_ports = [p for p in all_ports if p.get('status','').lower() == 'open'] if open_only_flag else all_ports
-                render_port_table(display_ports, show_risk=kwargs.get('risk', False), open_only=open_only_flag)
+                render_port_table(display_ports, show_risk=kwargs.get('risk', False), open_only=open_only_flag, host=target_raw)
                 # Show full OS fingerprint details
                 os_info = results.get('os', {})
                 if os_info and os_info.get('name', 'Unknown') not in ('Unknown', 'Detecting...', ''):

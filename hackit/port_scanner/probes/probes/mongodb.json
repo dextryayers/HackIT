@@ -1,0 +1,42 @@
+[
+  {
+    "id": "mongo-ismaster",
+    "protocol": "tcp",
+    "ports": [
+      27017,
+      27018,
+      27019
+    ],
+    "payload_text": ":\u0000\u0000\u0000\u0001\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u00d4\u0007\u0000\u0000\u0000\u0000\u0000\u0000admin.$cmd\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u00ff\u00ff\u00ff\u00ff\u0013\u0000\u0000\u0000\u0010ismaster\u0000\u0001\u0000\u0000\u0000\u0000",
+    "read_limit": 8192,
+    "timeout_ms": 3500,
+    "matchers": [
+      {
+        "kind": "regex",
+        "pattern": "(?s)ismaster",
+        "weight": 9.0,
+        "metadata": {
+          "label": "mongodb",
+          "service": "MongoDB",
+          "product": "MongoDB"
+        }
+      },
+      {
+        "kind": "regex",
+        "pattern": "version\\x00.{4}([\\d.]+)",
+        "weight": 8.0,
+        "metadata": {
+          "label": "mongo-version"
+        }
+      },
+      {
+        "kind": "contains",
+        "pattern": "maxWireVersion",
+        "weight": 6.0,
+        "metadata": {
+          "label": "mongo-wire"
+        }
+      }
+    ]
+  }
+]

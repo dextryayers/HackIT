@@ -1,0 +1,32 @@
+[
+  {
+    "id": "mqtt-connect",
+    "protocol": "tcp",
+    "ports": [
+      1883,
+      1884
+    ],
+    "payload_text": "\u0010\u000e\u0000\u0004MQTT\u0004\u0000\u0000\u0000\u0000\u0000\u0000",
+    "read_limit": 512,
+    "timeout_ms": 2500,
+    "matchers": [
+      {
+        "kind": "regex",
+        "pattern": "^\\x20\\x02[\\x00\\x01-\\x05]",
+        "weight": 10.0,
+        "metadata": {
+          "label": "mqtt-connack",
+          "service": "MQTT"
+        }
+      },
+      {
+        "kind": "contains",
+        "pattern": "MQTT",
+        "weight": 6.0,
+        "metadata": {
+          "label": "mqtt"
+        }
+      }
+    ]
+  }
+]

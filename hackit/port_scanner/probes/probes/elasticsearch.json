@@ -1,0 +1,50 @@
+[
+  {
+    "id": "es-root",
+    "protocol": "tcp",
+    "ports": [
+      9200,
+      9201,
+      9202
+    ],
+    "payload_text": "GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    "read_limit": 4096,
+    "timeout_ms": 4000,
+    "matchers": [
+      {
+        "kind": "contains",
+        "pattern": "you know, for search",
+        "weight": 10.0,
+        "metadata": {
+          "label": "elasticsearch",
+          "service": "Elasticsearch",
+          "product": "Elasticsearch"
+        }
+      },
+      {
+        "kind": "regex",
+        "pattern": "\"number\"\\s*:\\s*\"([\\d.]+)\"",
+        "weight": 9.0,
+        "metadata": {
+          "label": "es-version"
+        }
+      },
+      {
+        "kind": "regex",
+        "pattern": "\"cluster_name\"\\s*:\\s*\"([^\"]+)\"",
+        "weight": 6.0,
+        "metadata": {
+          "label": "es-cluster"
+        }
+      },
+      {
+        "kind": "regex",
+        "pattern": "\"lucene_version\"\\s*:\\s*\"([^\"]+)\"",
+        "weight": 5.0,
+        "metadata": {
+          "label": "lucene"
+        }
+      }
+    ]
+  }
+]
