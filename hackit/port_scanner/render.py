@@ -1,9 +1,10 @@
 """Terminal renderer for port scan results.
 
-Two goals: every column stays aligned regardless of ANSI codes or wide
-characters, and the banner column always belongs to the port beside it —
-protocol, version and confidence come from the same probe that produced the
-banner string.
+Design rules:
+  * one row per port, aligned on visible width (ANSI and wide glyphs counted)
+  * service and version share one column so the eye reads "MySQL 11.8.6"
+  * the banner column always belongs to the port beside it
+  * no heavy box — a header rule and a footer rule, nothing else
 """
 
 from __future__ import annotations
@@ -26,10 +27,7 @@ except Exception:  # pragma: no cover - ui module optional in isolation
 
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
-BOX = {
-    "tl": "╭", "tr": "╮", "bl": "╰", "br": "╯",
-    "h": "─", "v": "│", "lt": "├", "rt": "┤", "tt": "┬", "bt": "┴", "x": "┼",
-}
+RULE = "─"
 
 
 def _width(text: str) -> int:
@@ -78,62 +76,54 @@ def _terminal_width(default: int = 110) -> int:
 
 
 STATE_STYLE = {
-    "open": (B_GREEN, "OPEN"),
-    "filtered": (B_YELLOW, "FILTERED"),
-    "closed": (RED, "CLOSED"),
-    "error": (B_RED, "ERROR"),
-    "unfiltered": (CYAN, "UNFILTERED"),
+    "open": (B_GREEN, "open"),
+    "filtered": (B_YELLOW, "filtered"),
+    "closed": (DIM, "closed"),
+    "error": (B_RED, "error"),
+    "unfiltered": (CYAN, "unfiltered"),
 }
 
 
-def _confidence_badge(value: float) -> str:
+def _confidence(value: float) -> str:
     if value <= 0:
-        return _color("  --", DIM)
+        return _color("  —", DIM)
     pct = int(round(value * 100))
-    if pct >= 90:
-        color = B_GREEN
-    elif pct >= 70:
-        color = GREEN
-    elif pct >= 50:
-        color = YELLOW
-    else:
-        color = RED
+    color = B_GREEN if pct >= 90 else GREEN if pct >= 70 else YELLOW if pct >= 50 else RED
     return _color(f"{pct:>3}%", color)
 
 
-def _service_label(record: Dict) -> str:
-    service = record.get("service") or record.get("service_probe") or ""
-    service = str(service).split("|")[0].strip()
-    if not service or service.lower() in ("unknown", "none"):
-        service = ""
-    return service
-
-
-def _banner_label(record: Dict, width: int) -> str:
-    parts: List[str] = []
+def _service_version(record: Dict, width: int) -> str:
+    service = str(record.get("service") or record.get("service_probe") or "").split("|")[0].strip()
     version = str(record.get("version") or "").strip()
+    if service.lower() in ("unknown", "none"):
+        service = ""
+    if version and version in service:
+        version = ""
+    label = " ".join(x for x in (service, version) if x)
+    if not label:
+        return _color("—", DIM)
+    return _clip(label, width)
+
+
+def _banner_text(record: Dict, width: int) -> str:
     banner = str(record.get("banner") or "")
     banner = " ".join(banner.replace("\r", " ").replace("\n", " ").split())
+    version = str(record.get("version") or "").strip()
 
-    # Show the version once: prefix it only when the banner does not carry it.
-    if version and (not banner or version not in banner):
-        parts.append(version)
-    if banner:
-        parts.append(banner)
+    # Keep the banner verbatim — it is the evidence. The version only gets
+    # prefixed when the banner does not already carry it.
+    if version and banner and version not in banner:
+        banner = f"{version}  {banner}"
 
-    if not parts:
-        evidence = record.get("banner_evidence") or ""
-        protocol = record.get("banner_protocol") or ""
+    if not banner:
+        protocol = str(record.get("banner_protocol") or "").strip()
         if protocol:
-            return _color(f"<{protocol} probe, no text>", DIM)
-        if evidence:
-            return _color(f"<{evidence}: no banner>", DIM)
+            return _color(f"<{protocol} decoded, no text>", DIM)
         return _color("—", DIM)
 
-    text = " | ".join(parts)
     if record.get("banner_mismatch"):
-        text = "⚠ " + text
-    return _clip(text, width)
+        banner = "⚠ " + banner
+    return _clip(banner, width)
 
 
 def render_port_table(
@@ -146,60 +136,49 @@ def render_port_table(
 ) -> None:
     """Print the results table. Falls back to plain ASCII when not a TTY."""
     rows = [r for r in (port_results or []) if isinstance(r, dict) and r.get("port")]
+    if open_only:
+        rows = [r for r in rows if str(r.get("status", "")).lower() == "open"]
     if not rows:
         print(_color("  no results", DIM))
         return
     rows.sort(key=lambda r: (0 if str(r.get("status", "")).lower() == "open" else 1, r.get("port", 0)))
-    if open_only:
-        rows = [r for r in rows if str(r.get("status", "")).lower() == "open"]
 
     term = _terminal_width()
-    widths = {"port": 10, "state": 8, "service": 14, "protocol": 10, "conf": 5}
-    fixed = sum(widths.values()) + 3 * 5 + 4  # 5 gaps of 3 cells + frame padding
-    banner_width = max(24, term - fixed)
+    # STATE is noise when every row is open — drop it and give the space to
+    # the banner. --all-ports brings it back.
+    show_state = any(str(r.get("status", "")).lower() != "open" for r in rows)
+    widths = {"port": 10, "state": 9, "service": 24, "protocol": 10, "conf": 5}
+    gaps = 2
+    active = ["port", "service", "protocol", "conf"]
+    if show_state:
+        active.insert(1, "state")
+    fixed = sum(widths[k] for k in active) + gaps * (len(active) - 1)
+    banner_width = max(24, term - fixed - 2)
 
-    header = [
-        ("PORT", widths["port"], "left"),
-        ("STATE", widths["state"], "left"),
-        ("SERVICE", widths["service"], "left"),
-        ("PROTOCOL", widths["protocol"], "left"),
-        ("CONF", widths["conf"], "right"),
-        ("BANNER / VERSION", banner_width, "left"),
-    ]
+    labels = {
+        "port": "PORT", "state": "STATE", "service": "SERVICE",
+        "protocol": "PROTOCOL", "conf": "CONF",
+    }
+    columns = [
+        (labels[k], widths[k], "right" if k == "conf" else "left")
+        for k in active
+    ] + [("BANNER", banner_width, "left")]
+    total_width = sum(w for _, w, _ in columns) + gaps * (len(columns) - 1)
 
-    total_width = sum(w for _, w, _ in header) + 3 * len(header) + 2
-    top = BOX["tl"] + BOX["h"] * (total_width - 2) + BOX["tr"]
-    bottom = BOX["bl"] + BOX["h"] * (total_width - 2) + BOX["br"]
-    sep = BOX["lt"] + BOX["h"] * (total_width - 2) + BOX["rt"]
-
-    label = title if not host else f"{title} — {host}"
-    print()
-    print(_color(top, B_CYAN))
-    print(_color(BOX["v"], B_CYAN) + " " + _pad(_color(label, B_WHITE, bold=True), total_width - 3) + _color(BOX["v"], B_CYAN))
-    print(_color(sep, B_CYAN))
-    print(
-        _color(BOX["v"], B_CYAN)
-        + " "
-        + "   ".join(_color(_pad(name, w, align), B_WHITE, bold=True) for name, w, align in header)
-        + " "
-        + _color(BOX["v"], B_CYAN)
+    header = (" " * gaps).join(
+        _color(_pad(name, w, align), DIM, bold=True) for name, w, align in columns
     )
-    print(_color(sep, B_CYAN))
+
+    print()
+    if title:
+        label = title if not host else f"{title} · {host}"
+        print("  " + _color(label, B_WHITE, bold=True))
+    print("  " + header)
+    print("  " + _color(RULE * total_width, DIM))
 
     for record in rows:
         state = str(record.get("status", "unknown")).lower()
-        state_color, state_text = STATE_STYLE.get(state, (DIM, state.upper()[:10]))
-
-        port_text = _color(_pad(f"{record.get('port')}/tcp", widths["port"]), B_WHITE, bold=state == "open")
-        state_cell = _color(_pad(state_text, widths["state"]), state_color, bold=state == "open")
-
-        service = _service_label(record) or "—"
-        service_cell = _color(_pad(_clip(service, widths["service"]), widths["service"]), CYAN)
-
-        protocol = str(record.get("banner_protocol") or "").strip() or "—"
-        if record.get("banner_mismatch"):
-            protocol = "⚠ " + protocol
-        protocol_cell = _color(_pad(_clip(protocol, widths["protocol"]), widths["protocol"]), MAGENTA if protocol != "—" else DIM)
+        state_color, state_text = STATE_STYLE.get(state, (DIM, state[:9]))
 
         conf = record.get("banner_confidence")
         if conf is None:
@@ -208,67 +187,67 @@ def render_port_table(
             conf = float(conf)
         except (TypeError, ValueError):
             conf = 0.0
-        conf_cell = _pad(_confidence_badge(conf), widths["conf"], "right")
 
-        banner_cell = _pad(_banner_label(record, banner_width), banner_width)
+        protocol = str(record.get("banner_protocol") or "").strip() or "—"
+        if record.get("banner_mismatch"):
+            protocol = "~" + protocol
+        protocol_color = MAGENTA if record.get("banner_protocol") else DIM
 
-        print(
-            _color(BOX["v"], B_CYAN)
-            + " "
-            + port_text
-            + "   "
-            + state_cell
-            + "   "
-            + service_cell
-            + "   "
-            + protocol_cell
-            + "   "
-            + conf_cell
-            + "   "
-            + banner_cell
-            + " "
-            + _color(BOX["v"], B_CYAN)
-        )
+        cells = [
+            _color(_pad(f"{record.get('port')}/tcp", widths["port"]), B_WHITE, bold=state == "open"),
+            _color(_pad(_service_version(record, widths["service"]), widths["service"]), CYAN),
+            _color(_pad(_clip(protocol, widths["protocol"]), widths["protocol"]), protocol_color),
+            _pad(_confidence(conf), widths["conf"], "right"),
+            _pad(_banner_text(record, banner_width), banner_width),
+        ]
+        if show_state:
+            cells.insert(1, _color(_pad(state_text, widths["state"]), state_color))
+        print("  " + (" " * gaps).join(cells))
 
-    print(_color(bottom, B_CYAN))
+    print("  " + _color(RULE * total_width, DIM))
 
     opened = [r for r in rows if str(r.get("status", "")).lower() == "open"]
     protos = sorted({str(r.get("banner_protocol")) for r in opened if r.get("banner_protocol")})
     mismatches = [r for r in opened if r.get("banner_mismatch")]
-    summary = f"  {len(opened)} open / {len(rows)} tested"
+
+    summary = f"{len(opened)} open"
+    if len(rows) != len(opened):
+        summary += f" / {len(rows)} tested"
     if protos:
-        summary += "  ·  " + ", ".join(protos[:8])
+        summary += "   " + _color("·".join(protos[:8]), CYAN)
     if mismatches:
-        summary += f"  ·  {len(mismatches)} protocol/port mismatch"
-    print(_color(summary, DIM))
+        summary += f"   {len(mismatches)} on non-standard port" if len(mismatches) > 1 else "   1 on non-standard port"
+    print("  " + _color(summary, DIM))
+    print()
 
     if timeline:
         entries = list(timeline)[-10:]
         if entries:
-            print()
             print(_color("  TIMELINE", B_WHITE, bold=True))
             for entry in entries:
                 ts = str(entry.get("time", ""))
                 msg = str(entry.get("msg", ""))
                 print(_color(f"  {ts:<10} {msg}", DIM))
-    print()
+            print()
 
 
 def render_engine_matrix(engine_stats: Dict[str, Dict]) -> None:
-    """One row per engine: progress, ports, open, speed."""
+    """One compact row per engine: name, progress, scanned, open, speed."""
     if not engine_stats:
         return
-    print(_color("  ENGINES", B_WHITE, bold=True))
+    print("  " + _color("ENGINES", DIM, bold=True))
     for name, info in sorted(engine_stats.items()):
         status = str(info.get("status", "pending"))
         color = {"running": B_GREEN, "done": CYAN, "error": B_RED}.get(status, YELLOW)
         progress = float(info.get("progress", 0) or 0)
-        filled = int(24 * min(progress, 100) / 100)
-        bar = "█" * filled + "░" * (24 - filled)
+        filled = int(20 * min(progress, 100) / 100)
+        bar = "█" * filled + "░" * (20 - filled)
+        speed = info.get("rate")
+        speed_txt = f"{float(speed):5.0f}/s" if speed else "     "
         line = (
-            f"  {_color(name.ljust(10), B_WHITE)} {_color(bar, color)} "
-            f"{progress:5.1f}%  scanned={info.get('ports_scanned', 0):<6} "
-            f"open={_color(str(info.get('open_found', 0)), B_GREEN)}"
+            f"  {_color(_pad(name, 10), B_WHITE)} {_color(bar, color)} "
+            f"{progress:5.1f}%   {info.get('ports_scanned', 0):>6} ports   "
+            f"{_color(str(info.get('open_found', 0)), B_GREEN):>4} open   {speed_txt}"
         )
         print(line)
     print()

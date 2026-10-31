@@ -80,4 +80,5 @@ def parse_ports(ports=None, port_range=None, popular=False, full_range=False, to
         return str(ports).strip()
     if port_range:
         return str(port_range).strip()
-    return "default" # Let the engine handle common ports
+    # Bare `scan -t host` scans the universal service ports, never 1-65535.
+    return "top100"

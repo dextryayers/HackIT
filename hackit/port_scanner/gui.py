@@ -20,20 +20,20 @@ class C:
     SEV={'vuln':'#f85149','high':'#d29922','warn':'#d29922','info':'#58a6ff','ok':'#3fb950'}
     _PALETTES = {
         'dark': {
-            'BG1':'#0d1117','BG2':'#0d1117','CARD':'#161b22','BORD':'#30363d',
-            'TEXT':'#f0f6fc','TEXT2':'#8b949e',
-            'CYAN':'#58a6ff','GREEN':'#3fb950','RED':'#f85149','ORANGE':'#d29922',
-            'YELLOW':'#d29922','PURPLE':'#bc8cff','PINK':'#f778ba',
-            'BTN':'#21262d','HV':'#30363d','SEL':'#1f6feb','DIM':'#484f58',
-            'SEV':{'vuln':'#f85149','high':'#d29922','warn':'#d29922','info':'#58a6ff','ok':'#3fb950'},
+            'BG1':'#0b0f14','BG2':'#0b0f14','CARD':'#111823','BORD':'#1e2733',
+            'TEXT':'#e6edf3','TEXT2':'#9aa7b4',
+            'CYAN':'#4f9cf9','GREEN':'#3fb950','RED':'#f85149','ORANGE':'#d29922',
+            'YELLOW':'#d29922','PURPLE':'#a371f7','PINK':'#f778ba',
+            'BTN':'#161e29','HV':'#1e2733','SEL':'#1f6feb','DIM':'#5b6673',
+            'SEV':{'vuln':'#f85149','high':'#d29922','warn':'#d29922','info':'#4f9cf9','ok':'#3fb950'},
         },
         'light': {
-            'BG1':'#f6f8fa','BG2':'#ffffff','CARD':'#f0f2f5','BORD':'#d0d7de',
-            'TEXT':'#1f2328','TEXT2':'#656d76',
-            'CYAN':'#0550ae','GREEN':'#116329','RED':'#cf222e','ORANGE':'#953800',
-            'YELLOW':'#953800','PURPLE':'#8250df','PINK':'#c62878',
-            'BTN':'#d1d9e0','HV':'#c8d1da','SEL':'#0969da','DIM':'#8c959f',
-            'SEV':{'vuln':'#cf222e','high':'#953800','warn':'#953800','info':'#0550ae','ok':'#116329'},
+            'BG1':'#f7f9fc','BG2':'#ffffff','CARD':'#eef2f7','BORD':'#dbe2ea',
+            'TEXT':'#0f1720','TEXT2':'#5b6673',
+            'CYAN':'#0b62c4','GREEN':'#1a7f37','RED':'#cf222e','ORANGE':'#9a6700',
+            'YELLOW':'#9a6700','PURPLE':'#6f42c1','PINK':'#bf3989',
+            'BTN':'#e4e9f0','HV':'#d8dfe8','SEL':'#0b62c4','DIM':'#8896a6',
+            'SEV':{'vuln':'#cf222e','high':'#9a6700','warn':'#9a6700','info':'#0b62c4','ok':'#1a7f37'},
         },
     }
     @classmethod
@@ -96,18 +96,23 @@ class VirtualPortList(tk.Canvas):
 
     def _draw_header(self):
         self.delete('header')
-        cols = [('PORT', 70), ('STATUS', 80), ('SERVICE', 100), ('VERSION', 130), ('BANNER', 200)]
-        x = 4
+        cols = [('PORT', 74), ('STATE', 66), ('SERVICE', 150),
+                ('PROTOCOL', 84), ('CONF', 46), ('BANNER', 0)]
+        x = 8
         self._col_x = []
         self._col_w = []
+        total = 0
         for name, w in cols:
+            if w == 0:
+                w = max(120, self.winfo_width() - x - 8)
             self._col_x.append(x)
             self._col_w.append(w)
-            self.create_text(x + 4, 2, anchor='nw', text=name, font=self._bold_font,
-                             fill=C.CYAN, tags='header')
-            self.create_line(x + w + 4, 2, x + w + 4, self._header_h - 2, fill=C.BORD, tags='header')
-            x += w + 8
-        self.create_line(4, self._header_h - 1, x + 4, self._header_h - 1, fill=C.BORD, tags='header')
+            self.create_text(x, 8, anchor='nw', text=name, font=TINY,
+                             fill=C.TEXT2, tags='header')
+            x += w + 10
+            total = x
+        self.create_line(8, self._header_h - 1, max(total, self.winfo_width() - 8),
+                         self._header_h - 1, fill=C.BORD, tags='header')
 
     def _on_resize(self, e):
         self.visible_count = (e.height - self._header_h) // self.row_height + 1
@@ -147,30 +152,43 @@ class VirtualPortList(tk.Canvas):
         end = min(self.visible_start + self.visible_count, len(self.items))
         for i in range(self.visible_start, end):
             item = self.items[i]
-            bg = C.BG2 if i % 2 == 0 else '#111'
-            if len(item) >= 5:
-                p, st, svc, ver, ban = item[:5]
-            else:
+            if len(item) < 5:
                 continue
-            # Background
+            p, st, svc, ver, ban = item[:5]
+            proto = item[5] if len(item) > 5 else ''
+            conf = item[6] if len(item) > 6 else 0
+            mism = item[7] if len(item) > 7 else False
+
+            bg = C.CARD if i % 2 == 0 else C.BG2
             self.create_rectangle(0, y, w, y + self.row_height, fill=bg, outline='', tags='row')
-            # Port
+
             pc = self._color_for_status(st)
-            self.create_text(self._col_x[0] + 4, y + 2, anchor='nw', text=str(p),
+            self.create_text(self._col_x[0], y + 5, anchor='nw', text=f'{p}/tcp',
                              font=self._bold_font, fill=pc, tags='row')
-            # Status
-            self.create_text(self._col_x[1] + 4, y + 2, anchor='nw', text=st.upper() if st else '',
-                             font=self._font, fill=pc, tags='row')
-            # Service
-            self.create_text(self._col_x[2] + 4, y + 2, anchor='nw', text=str(svc)[:18] if svc else '',
-                             font=self._font, fill=C.TEXT, tags='row')
-            # Version
-            self.create_text(self._col_x[3] + 4, y + 2, anchor='nw', text=str(ver)[:22] if ver else '',
+            self.create_text(self._col_x[1], y + 5, anchor='nw',
+                             text=(st or '').lower(), font=self._font, fill=pc, tags='row')
+
+            label = ' '.join(x for x in (str(svc or ''), str(ver or '')) if x)
+            self.create_text(self._col_x[2], y + 5, anchor='nw',
+                             text=label[:24], font=self._font, fill=C.TEXT, tags='row')
+
+            proto_txt = ('~' + proto) if mism else (proto or '—')
+            self.create_text(self._col_x[3], y + 5, anchor='nw',
+                             text=proto_txt[:12], font=self._font,
+                             fill=C.PURPLE if proto else C.DIM, tags='row')
+
+            try:
+                conf_pct = int(round(float(conf) * 100))
+            except (TypeError, ValueError):
+                conf_pct = 0
+            conf_col = C.GREEN if conf_pct >= 90 else (C.YELLOW if conf_pct >= 70 else C.RED)
+            self.create_text(self._col_x[4] + self._col_w[4], y + 5, anchor='ne',
+                             text=f'{conf_pct}%' if conf_pct else '—',
+                             font=self._font, fill=conf_col, tags='row')
+
+            ban_str = ' '.join(str(ban or '').split())[:80]
+            self.create_text(self._col_x[5], y + 5, anchor='nw', text=ban_str,
                              font=self._font, fill=C.TEXT2, tags='row')
-            # Banner
-            ban_str = str(ban).replace('\n', ' ').replace('\r', '')[:35] if ban else ''
-            self.create_text(self._col_x[4] + 4, y + 2, anchor='nw', text=ban_str,
-                             font=self._font, fill=C.DIM, tags='row')
             y += self.row_height
         total = len(self.items)
         self.delete('footer')
@@ -493,23 +511,37 @@ class GUI:
         self.root.config(menu=self._menubar)
 
     def _build_banner(self):
-        self._banner_canvas=tk.Canvas(self.root,height=110,highlightthickness=0,bg=C.BG1)
-        self._banner_canvas.pack(fill='x',padx=14,pady=(10,0))
-        self._draw_gradient()
-        b=BANNER%(self.iface,self.gw,'Active',self.up)
-        self._banner_text=self._banner_canvas.create_text(10,4,anchor='nw',text=b,
-            font=self._fonts['COURIER'],fill=C.CYAN,justify='left')
+        """Modern header: product name, live context chips, no ASCII art."""
+        bar = tk.Frame(self.root, bg=C.BG1)
+        bar.pack(fill='x', padx=16, pady=(12, 4))
+
+        left = tk.Frame(bar, bg=C.BG1)
+        left.pack(side='left', anchor='w')
+        tk.Label(left, text='PORTSTORM', font=('Segoe UI', 15, 'bold'),
+                 fg=C.TEXT, bg=C.BG1).pack(anchor='w')
+        tk.Label(left, text='multi-engine port intelligence',
+                 font=('Segoe UI', 8), fg=C.TEXT2, bg=C.BG1).pack(anchor='w')
+
+        right = tk.Frame(bar, bg=C.BG1)
+        right.pack(side='right', anchor='e')
+        self._hdr_chips = {}
+        for key, text in (
+            ('iface', f'iface {self.iface}'),
+            ('gw', f'gw {self.gw}'),
+            ('uptime', f'up {self.up}'),
+            ('engine', 'engine go'),
+        ):
+            chip = tk.Label(right, text=text, font=('Segoe UI', 8),
+                            fg=C.TEXT2, bg=C.CARD, padx=8, pady=3)
+            chip.pack(side='left', padx=(6, 0))
+            self._hdr_chips[key] = chip
+
+        sep = tk.Frame(self.root, bg=C.BORD, height=1)
+        sep.pack(fill='x', padx=16, pady=(8, 0))
 
     def _draw_gradient(self):
-        w=self._banner_canvas.winfo_width() or 1200
-        h=110
-        self._banner_canvas.delete('grad')
-        for i in range(w):
-            r=int(8+4*(1-i/w)); g=int(12+4*(1-i/w)); b=int(20+10*(1-i/w))
-            col=f'#{r:02x}{g:02x}{b:02x}'
-            self._banner_canvas.create_line(i,0,i,h,fill=col,tags='grad')
-        self._banner_canvas.tag_lower('grad')
-        self._after('grad',100,self._draw_gradient)
+        """Kept for compatibility: the header no longer paints a gradient."""
+        return
 
     def _side(self,p):
         c=tk.Frame(p,bg=C.BG1)
@@ -564,39 +596,102 @@ class GUI:
             if h.startswith(tv) and h!=tv: self.tv.set(h); break
 
     # ── Ports ──────────────────────────────────────────────────────
-    def _ports(self,p):
-        b=self._fsec(p,'PORTS','\U0001f50c')
-        f=tk.Frame(b,bg=C.CARD); f.pack(fill='x')
-        self.ps=tk.StringVar(value='1'); self.pe=tk.StringVar(value='1024')
-        self.ps.trace_add('write',lambda *a:self._pupd())
-        self.pe.trace_add('write',lambda *a:self._pupd())
-        for lbl,v,tip in [('From',self.ps,'Start port'),('To',self.pe,'End port')]:
-            c=tk.Frame(f,bg=C.CARD); c.pack(side='left',fill='x',expand=1,padx=(0,6))
-            tk.Label(c,text=lbl,font=TINY,fg=C.TEXT2,bg=C.CARD).pack(anchor='w')
-            self._ent(c,v,width=6).pack(fill='x',ipady=2)
-            Tip(c.winfo_children()[-1],tip)
-        tk.Label(f,text='\u2192',font=('Segoe UI',16),fg=C.CYAN,bg=C.CARD
-                 ).pack(side='left',padx=2,pady=(10,0))
-        self.pst=tk.Label(b,text='1,024 ports',font=TINY,fg=C.CYAN,bg=C.CARD)
-        self.pst.pack(anchor='w',pady=(1,0))
-        tk.Label(b,text='Comma list (overrides)',font=TINY,fg=C.TEXT2,bg=C.CARD
-                 ).pack(anchor='w',pady=(3,0))
-        self.pcl=tk.StringVar()
-        self.pcl.trace_add('write',lambda *a:self._pupd())
-        e=self._ent(b,self.pcl); e.pack(fill='x',ipady=2)
-        Tip(e,'e.g. 22,80,443,8080-8090')
+    PORT_SCOPES = (
+        ('universal', 'Universal', 'top100'),
+        ('top1000', 'Top 1000', '1-1000'),
+        ('full', 'Full', '1-65535'),
+        ('custom', 'Custom', ''),
+    )
+
+    def _ports(self, p):
+        b = self._fsec(p, 'PORT SCOPE', '\U0001f50c')
+        self.port_mode = tk.StringVar(value='universal')
+        self.port_mode.trace_add('write', lambda *a: (self._pupd(), self._sync_cmd()))
+
+        grid = tk.Frame(b, bg=C.CARD)
+        grid.pack(fill='x')
+        for i, (key, label, _spec) in enumerate(self.PORT_SCOPES):
+            rb = tk.Radiobutton(
+                grid, text=label, variable=self.port_mode, value=key,
+                font=SMALL, fg=C.TEXT2, bg=C.BTN, selectcolor=C.BTN,
+                activebackground=C.HV, activeforeground=C.TEXT,
+                indicatoron=0, bd=0, relief='flat', cursor='hand2',
+                highlightbackground=C.BORD, highlightthickness=1,
+                command=lambda k=key: self._set_scope(k))
+            rb.grid(row=i // 2, column=i % 2, sticky='ew', padx=1, pady=1)
+            grid.grid_columnconfigure(i % 2, weight=1)
+        self._scope_btns = [w for w in grid.winfo_children()]
+
+        # Custom range row (only meaningful for the custom scope).
+        self._custom_row = tk.Frame(b, bg=C.CARD)
+        self.ps = tk.StringVar(value='1')
+        self.pe = tk.StringVar(value='1024')
+        for var in (self.ps, self.pe):
+            var.trace_add('write', lambda *a: (self._pupd(), self._sync_cmd()))
+        for lbl, var, tip in (('from', self.ps, 'Start port'),
+                              ('to', self.pe, 'End port')):
+            c = tk.Frame(self._custom_row, bg=C.CARD)
+            c.pack(side='left', fill='x', expand=1, padx=(0, 6))
+            tk.Label(c, text=lbl, font=TINY, fg=C.TEXT2, bg=C.CARD).pack(anchor='w')
+            ent = self._ent(c, var, width=6)
+            ent.pack(fill='x', ipady=2)
+            Tip(ent, tip)
+
+        self.pst = tk.Label(b, text='', font=TINY, fg=C.CYAN, bg=C.CARD)
+        self.pst.pack(anchor='w', pady=(3, 0))
+
+        tk.Label(b, text='EXPLICIT PORTS', font=TINY, fg=C.TEXT2,
+                 bg=C.CARD).pack(anchor='w', pady=(4, 0))
+        self.pcl = tk.StringVar()
+        self.pcl.trace_add('write', lambda *a: (self._pupd(), self._sync_cmd()))
+        e = self._ent(b, self.pcl)
+        e.pack(fill='x', ipady=2)
+        Tip(e, 'Overrides the scope. e.g. 22,80,443,8080-8090')
         self._pupd()
 
+    def _set_scope(self, key):
+        if key == 'custom':
+            self._custom_row.pack(fill='x', pady=(4, 0), before=self.pst)
+        else:
+            self._custom_row.pack_forget()
+            self.pcl.set('')
+        self._pupd()
+        self._sync_cmd()
+
+    def _port_spec(self):
+        """Single source of truth for the port string handed to the engine."""
+        explicit = self.pcl.get().strip()
+        if explicit:
+            return explicit
+        mode = self.port_mode.get() if hasattr(self, 'port_mode') else 'universal'
+        if mode == 'custom':
+            return f"{self.ps.get() or '1'}-{self.pe.get() or '1024'}"
+        for key, _label, spec in self.PORT_SCOPES:
+            if key == mode:
+                return spec
+        return 'top100'
+
     def _pupd(self):
-        if self.pcl.get().strip():
-            n=sum(1 for x in self.pcl.get().split(',') if x.strip())
-            self.pst.config(text=f'{n} custom'if n else'?')
+        explicit = self.pcl.get().strip() if hasattr(self, 'pcl') else ''
+        if explicit:
+            n = sum(1 for x in explicit.split(',') if x.strip())
+            self.pst.config(text=f'{n} explicit port groups')
             return
-        try:
-            s=int(self.ps.get()or 1); e=int(self.pe.get()or 1024)
-            n=max(0,e-s+1)
-            self.pst.config(text=f'{n:,}'if n<10000 else f'{n/1000:.0f}k')
-        except: self.pst.config(text='?')
+        mode = self.port_mode.get() if hasattr(self, 'port_mode') else 'universal'
+        if mode == 'universal':
+            self.pst.config(text='100 universal service ports')
+        elif mode == 'top1000':
+            self.pst.config(text='1,000 ports')
+        elif mode == 'full':
+            self.pst.config(text='65,535 ports')
+        else:
+            try:
+                s = int(self.ps.get() or 1)
+                e = int(self.pe.get() or 1024)
+                n = max(0, e - s + 1)
+                self.pst.config(text=f'{n:,} ports')
+            except Exception:
+                self.pst.config(text='?')
 
     # ── Custom Presets ─────────────────────────────────────────────
     def _presets(self,p):
@@ -664,6 +759,7 @@ class GUI:
         name=self.cfn.get().strip() or 'default'
         cfg={
             'target':self.tv.get(),'ports':self.pcl.get(),
+            'port_scope':self.port_mode.get(),
             'port_start':self.ps.get(),'port_end':self.pe.get(),
             'mode':';'.join(sorted(self.modes_sel))or'syn','profile':self.pv.get(),
             'timeout':self.tov.get(),'threads':self.twv.get(),
@@ -684,6 +780,8 @@ class GUI:
             self.pcl.set(cfg.get('ports',''))
             self.ps.set(cfg.get('port_start','1'))
             self.pe.set(cfg.get('port_end','1024'))
+            self.port_mode.set(cfg.get('port_scope','universal'))
+            self._set_scope(self.port_mode.get())
             self.modes_sel=set(cfg.get('mode','syn').split(';'))
             self.pv.set(cfg.get('profile','quick'))
             self.tov.set(cfg.get('timeout','1000'))
@@ -860,12 +958,10 @@ class GUI:
         e.pack(fill='x',ipady=2)
 
     def _sync_cmd(self):
-        for attr in('tv','pcl','ps','pe','tov','twv','pv','opv','dv','ov','cmdv','modes_sel'):
+        for attr in('tv','pcl','ps','pe','port_mode','tov','twv','pv','opv','dv','ov','cmdv','modes_sel'):
             if not hasattr(self,attr): return
         target=self.tv.get().strip() or '<target>'
-        explicit=self.pcl.get().strip()
-        if explicit: ports=explicit
-        else: ports=f"{self.ps.get() or '1'}-{self.pe.get() or '1024'}"
+        ports=self._port_spec()
         parts=[self.go or 'scanner','-target',target,'-ports',ports,
                '-timeout',self.tov.get()or'1000','-threads',self.twv.get()or'100',
                '-mode',';'.join(sorted(self.modes_sel))or'syn',
@@ -893,8 +989,9 @@ class GUI:
         self.stb.children['!button'].config(state='disabled')
 
     def _quick(self,h,pts):
-        self.tv.set(h); self.pcl.set(pts)
-        self.ps.set(''); self.pe.set('')
+        self.tv.set(h)
+        self.pcl.set(pts)
+        self.port_mode.set('custom')
         self._sync_cmd()
         self._start()
 
@@ -1311,11 +1408,7 @@ class GUI:
         else: self._fb(target)
 
     def _cmd(self,target):
-        explicit=self.pcl.get().strip()
-        if explicit: ports=explicit
-        else:
-            s=self.ps.get().strip()or'1'; e=self.pe.get().strip()or'1024'
-            ports=f'{s}-{e}'
+        ports=self._port_spec()
         cmd=[self.go,'-target',target,'-ports',ports,
              '-timeout',self.tov.get()or'1000','-threads',self.twv.get()or'100',
              '-mode',';'.join(sorted(self.modes_sel))or'syn',
@@ -1421,9 +1514,12 @@ class GUI:
             d=json.loads(raw)
             p=d.get('port','?'); st=d.get('status',d.get('state','?')).upper()
             svc=d.get('service',''); ver=d.get('version','')
-            ban=(d.get('banner','')or'')[:80]
+            ban=(d.get('banner','')or'')[:120]
+            proto=(d.get('banner_protocol') or '')[:12]
+            conf=d.get('banner_confidence', d.get('confidence', 0)) or 0
+            mism=bool(d.get('banner_mismatch'))
             if st=='OPEN': self._logf(f'  {p}/{st}  {svc} {ver}')
-            self.q.put(('result',(p,st,svc,ver,ban)))
+            self.q.put(('result',(p,st,svc,ver,ban,proto,conf,mism)))
             for sc in d.get('scripts',[]):
                 self.q.put(('nse_script',(p,svc,sc)))
         except: pass

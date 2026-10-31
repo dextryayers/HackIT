@@ -230,102 +230,88 @@ class Dashboard:
         lines: List[str] = []
         push = lines.append
 
-        def row(content: str) -> None:
-            push(_c("│", B_CYAN) + " " + _pad(content, inner) + " " + _c("│", B_CYAN))
+        def blank() -> None:
+            push("")
 
-        def rule(left: str = "├", right: str = "┤") -> None:
-            push(_c(left + "─" * (width - 2) + right, B_CYAN))
+        # ── header ────────────────────────────────────────────────
+        title = "PORTSTORM"
+        right = f"{elapsed:5.1f}s   {rate:5.1f} pps"
+        gap = max(2, inner - len(title) - len(right))
+        push(_c(title, B_WHITE, bold=True) + " " * gap + _c(right, DIM))
+        push(_c("─" * inner, DIM))
 
-        push(_c("╭" + "─" * (width - 2) + "╮", B_CYAN))
-        title = f" PORTSTORM LIVE — {self.target or 'no target'} "
-        row(_c(_pad(title, inner, "center"), B_WHITE, bold=True))
-        rule()
-
+        # ── progress ──────────────────────────────────────────────
         pct = (self.total_scanned / self.total_ports * 100) if self.total_ports else 0.0
-        bar_width = max(16, min(40, inner - 62))
+        bar_width = max(16, min(36, inner - 52))
         filled = int(bar_width * min(pct, 100) / 100)
         bar = "█" * filled + "░" * (bar_width - filled)
-        stats = (
-            f"elapsed {elapsed:6.1f}s   rate {rate:6.1f}/s   "
-            f"scanned {self.total_scanned}/{self.total_ports or '?'}   "
-            f"open {_c(str(self.open_count), B_GREEN)}"
-        )
-        row(_c(bar, B_GREEN) + " " + _c(stats, DIM))
-        row(_c("throughput ", DIM) + _c(self._spark(), CYAN) + "  " + _c(self.status_line[: inner - 40], DIM))
-        rule()
+        stats = (f"{self.total_scanned:>5}/{self.total_ports or '?':<5} ports   "
+                 f"{_c(str(self.open_count), B_GREEN)} open")
+        push(_c(bar, B_GREEN) + "  " + stats)
 
-        row(_c(" ENGINES", B_WHITE, bold=True))
+        stage = (self.status_line or "").strip()
+        if stage:
+            push(_c(_clip(stage, inner), DIM))
+        blank()
+
+        # ── engines ───────────────────────────────────────────────
         if self.engines:
+            push(_c("ENGINES", DIM, bold=True))
             for name, info in sorted(self.engines.items()):
                 status = str(info.get("status", "pending"))
                 color = {"running": B_GREEN, "done": CYAN, "error": B_RED}.get(status, YELLOW)
                 glyph = {"running": "▶", "done": "✓", "error": "✗"}.get(status, "·")
                 progress = float(info.get("progress", 0) or 0)
-                cells = max(10, inner - 62)
+                cells = max(10, inner - 46)
                 fill = int(cells * min(progress, 100) / 100)
                 gbar = "█" * fill + "░" * (cells - fill)
-                row(
-                    "  " + _c(glyph, color) + " " + _c(name.ljust(9), B_WHITE)
-                    + " " + _c(gbar, color)
-                    + " " + _c(f"{progress:5.1f}%", B_YELLOW)
-                    + "  " + _c(f"open {info.get('open_found', 0)}", B_GREEN)
-                )
-        else:
-            row(_c("  (awaiting engine reports…)", DIM))
-        rule()
+                push("  " + _c(glyph, color) + " " + _c(_pad(name, 9), B_WHITE)
+                     + " " + _c(gbar, color)
+                     + " " + _c(f"{progress:5.1f}%", YELLOW)
+                     + "  " + _c(f"{info.get('open_found', 0)} open", B_GREEN))
+            blank()
 
-        row(_c(" SERVICES", B_WHITE, bold=True))
+        # ── services ──────────────────────────────────────────────
+        push(_c("SERVICES", DIM, bold=True))
         visible_rows = 14 if final else 12
         window = self.services[-visible_rows:]
         if window:
-            head = (
-                _c(_pad("PORT", 10), B_WHITE)
-                + _c(_pad("PROTO", 9), B_WHITE)
-                + _c(_pad("SERVICE", 15), B_WHITE)
-                + _c(_pad("VERSION", 14), B_WHITE)
-                + _c(_pad("CONF", 6, "right"), B_WHITE)
-                + "  "
-                + _c("BANNER", B_WHITE)
-            )
-            row("  " + head)
+            push("  " + _c(_pad("PORT", 10), DIM) + _c(_pad("SERVICE", 22), DIM)
+                 + _c(_pad("PROTOCOL", 10), DIM) + _c(_pad("CONF", 5, "right"), DIM)
+                 + "  " + _c("BANNER", DIM))
             for svc in window:
                 conf = float(svc.get("confidence") or 0)
                 conf_color = B_GREEN if conf >= 0.9 else (GREEN if conf >= 0.7 else (YELLOW if conf >= 0.5 else RED))
-                banner_room = max(12, inner - 60)
+                label = " ".join(x for x in (
+                    str(svc.get("service") or ""), str(svc.get("version") or "")
+                ) if x) or "—"
+                banner_room = max(12, inner - 56)
                 banner = _clip(svc.get("banner", ""), banner_room)
-                mark = _c("⚠", B_YELLOW) + " " if svc.get("mismatch") else ""
-                row(
-                    "  " + _c(_pad(f"{svc['port']}/tcp", 10), B_WHITE, bold=True)
-                    + _c(_pad(_clip(svc.get("protocol") or "—", 9), 9), MAGENTA)
-                    + _c(_pad(_clip(svc.get("service") or "—", 15), 15), CYAN)
-                    + _c(_pad(_clip(svc.get("version") or "—", 14), 14), GREEN)
-                    + _c(_pad(f"{int(conf * 100)}%", 6, "right"), conf_color)
-                    + "  " + mark + _c(banner, DIM)
-                )
+                mark = _c("~", B_YELLOW) if svc.get("mismatch") else " "
+                push("  " + _c(_pad(f"{svc['port']}/tcp", 10), B_WHITE, bold=True)
+                     + _c(_pad(_clip(label, 22), 22), CYAN)
+                     + _c(_pad(_clip(svc.get("protocol") or "—", 10), 10), MAGENTA)
+                     + _c(_pad(f"{int(conf * 100)}%", 5, "right"), conf_color)
+                     + " " + mark + " " + _c(banner, DIM))
         else:
-            row(_c("  (no services detected yet…)", DIM))
-        rule()
+            push(_c("  no services yet", DIM))
+        blank()
 
+        # ── os / vulns ────────────────────────────────────────────
         os_name = self.os_info.get("name", "Unknown")
         conf = self.os_info.get("confidence", self.os_info.get("accuracy", 0)) or 0
         if conf and conf < 1:
             conf = int(conf * 100)
-        if os_name in ("Detecting…", "Detecting...", "Unknown") or not conf:
-            # The OS stage is optional; a profile without it must not leave a
-            # permanent "Detecting…" row on the final frame.
-            if not final:
-                row(_c(" OS ", B_WHITE, bold=True) + _c(os_name, DIM))
-        else:
-            row(_c(" OS ", B_WHITE, bold=True) + _c(f"{os_name} ({int(conf)}%)", GREEN))
+        if os_name not in ("Detecting…", "Detecting...", "Unknown") and conf:
+            push(_c("OS  ", DIM) + _c(f"{os_name} ({int(conf)}%)", GREEN))
 
         if self.vulnerabilities:
-            rule()
-            row(_c(f" VULNERABILITIES ({len(self.vulnerabilities)})", B_RED, bold=True))
+            push(_c(f"VULNERABILITIES ({len(self.vulnerabilities)})", B_RED, bold=True))
             for vuln in self.vulnerabilities[-3:]:
                 text = str(vuln.get("description") or vuln.get("name") or vuln)
-                row("  " + _c("⚠", B_RED) + " " + _c(_clip(text, inner - 6), B_YELLOW))
+                push("  " + _c("!", B_RED) + " " + _c(_clip(text, inner - 4), B_YELLOW))
 
-        push(_c("╰" + "─" * (width - 2) + "╯", B_CYAN))
+        push(_c("─" * inner, DIM))
 
         frame = _ANSI_HOME + "\n".join(lines) + _ANSI_CLEAR_DOWN
         sys.stdout.write(frame)

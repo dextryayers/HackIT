@@ -102,10 +102,7 @@ def _vis_len(text):
 # ─────────────────────────────────────────────────────────────────
 
 def print_portstorm_banner(target="", iface="", gw="", uptime=""):
-    """Print the HackIT PortStorm ASCII banner."""
-    C = '\x1b[36m'
-    B = '\x1b[1m'
-    W = '\x1b[0m'
+    """Print a compact run header — context, not decoration."""
     import subprocess as _sp
 
     if not iface:
@@ -115,7 +112,7 @@ def print_portstorm_banner(target="", iface="", gw="", uptime=""):
             if len(parts) >= 5:
                 iface = parts[4]
                 gw = parts[2]
-        except:
+        except Exception:
             iface = iface or "eth0"
             gw = gw or "0.0.0.0"
     if not uptime:
@@ -125,25 +122,22 @@ def print_portstorm_banner(target="", iface="", gw="", uptime=""):
                 h, m = divmod(int(secs), 3600)
                 m //= 60
                 uptime = f"{h}h {m}m"
-        except:
+        except Exception:
             uptime = "0h 0m"
-    status = "Active"
 
-    title = f"""
-{C}┌─────────────────────────────────────────────────┐
-│ ┌───┐ ┌───┐ ┌───┐ ┌───┐ ┌───┐ ┌───┐ ┌───┐ ┌───┐ │
-│ │ P │ │ O │ │ R │ │ T │ │ S │ │ C │ │ A │ │ N │ │
-│ └───┘ └───┘ └───┘ └───┘ └───┘ └───┘ └───┘ └───┘ │
-├─────────────────────────────────────────────────┤{W}
-"""
-    info = f"│  {B}Interface :{W} {iface:<8}  {B}Gateway :{W} {gw:<12}   │\n"
-    info += f"│  {B}Status    :{W} {status:<8}  {B}Uptime  :{W} {uptime:<12}   │\n"
-    info += f"{C}└─────────────────────────────────────────────────┘{W}\n"
+    title = _colored("PORTSTORM", B_CYAN, bold=True)
+    if target:
+        title += _colored("  ·  ", DIM) + _colored(target, B_WHITE, bold=True)
+    context = "  ".join(x for x in (
+        f"iface {iface}" if iface else "",
+        f"gw {gw}" if gw else "",
+        f"up {uptime}" if uptime else "",
+    ) if x)
 
-    sys.stdout.write('\033[2J\033[H')
-    sys.stdout.write(title)
-    sys.stdout.write(info)
-    sys.stdout.flush()
+    click.echo()
+    click.echo("  " + title)
+    if context:
+        click.echo("  " + _colored(context, DIM))
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -224,6 +218,108 @@ TOP_100_PORTS = [
     50050, 50060, 50070, 50090, 60000, 60010, 60020, 60030, 2375, 2376,
     2377, 4243, 8001, 10250, 10255, 2379, 2380, 5000, 6001, 8200, 8300
 ]
+
+# ─────────────────────────────────────────────────────────────────
+# SHARED SCAN OPTIONS
+# ─────────────────────────────────────────────────────────────────
+# Tempo presets: the single source of truth for wait/workers/delay.
+TEMPO_CONFIG = {
+    'shadow':  {'wait': 8000, 'workers': 2,   'delay': 2000, 'desc': 'Ultra stealth'},
+    'whisper': {'wait': 4000, 'workers': 10,  'delay': 500,  'desc': 'Silent'},
+    'gait':    {'wait': 2000, 'workers': 50,  'delay': 100,  'desc': 'Polite'},
+    'normal':  {'wait': 1000, 'workers': 150, 'delay': 0,    'desc': 'Standard'},
+    'rush':    {'wait': 500,  'workers': 350, 'delay': 0,    'desc': 'Aggressive'},
+    'blitz':   {'wait': 200,  'workers': 700, 'delay': 0,    'desc': 'Maximum'},
+}
+
+SCAN_MODE_MAP = {
+    'syn-stealth':    'syn',
+    'tcp-connect':    'connect',
+    'udp-spray':      'udp',
+    'ack-firewalk':   'ack',
+    'fin-silent':     'fin',
+    'xmas-party':     'xmas',
+    'null-mystery':   'null',
+    'maimon-ghost':   'maimon',
+    'window-spy':     'window',
+    'idle-zombie':    'idle',
+    'protocol-sweep': 'protocol',
+    'anon-self':      'anon-self',
+    'c-turbo':        'c-turbo',
+}
+
+
+def build_scan_options(kwargs):
+    """Translate CLI flags into one option dict every engine understands.
+
+    Everything an engine needs to honour a flag lives here: timing, retries,
+    evasion, intelligence and output. Missing keys mean "engine default".
+    """
+    tempo = kwargs.get('tempo') or 'normal'
+    t_cfg = TEMPO_CONFIG.get(tempo, TEMPO_CONFIG['normal'])
+
+    timeout_sec = kwargs.get('timeout') or 0
+    if timeout_sec:
+        timeout_ms = int(timeout_sec * 1000)
+    else:
+        timeout_ms = int(kwargs.get('host_timeout') or t_cfg['wait'])
+
+    workers = int(kwargs.get('workers') or t_cfg['workers'])
+    scan_delay = int(kwargs.get('scan_delay') or t_cfg['delay'])
+    mode = kwargs.get('mode') or 'tcp-connect'
+    scan_mode = SCAN_MODE_MAP.get(mode, 'connect')
+
+    ghost = bool(kwargs.get('ghost_protocol')) or mode == 'anon-self'
+    chaos = bool(kwargs.get('chaos')) or mode == 'anon-self'
+    if ghost:
+        scan_delay = max(scan_delay, 500)
+
+    fingerprint = kwargs.get('fingerprint')
+    if kwargs.get('deep'):
+        fingerprint = max(int(fingerprint or 0), 9)
+    fingerprint_intensity = kwargs.get('fingerprint_intensity') or fingerprint
+
+    options = {
+        'timeout_ms': timeout_ms,
+        'workers': workers,
+        'scan_mode': scan_mode,
+        'stealth': bool(ghost or chaos or mode in ('syn-stealth', 'fin-silent', 'xmas-party', 'null-mystery')),
+        'include_closed': bool(kwargs.get('include_closed', True)),
+        'scan_delay': scan_delay,
+        'max_retries': int(kwargs.get('max_retries') or 0),
+        'adaptive': bool(kwargs.get('adaptive')),
+        'quantum': bool(kwargs.get('quantum')),
+        'randomize_ports': bool(kwargs.get('randomize_ports') or ghost or chaos),
+        'randomize_targets': bool(kwargs.get('randomize_targets') or chaos),
+        'no_ping': bool(kwargs.get('no_ping')),
+        'ping_method': kwargs.get('ping_method'),
+        'resolve': kwargs.get('resolve'),
+        'dns_server': kwargs.get('dns_server'),
+        'ghost_protocol': ghost,
+        'chaos': chaos,
+        'decoy': kwargs.get('decoy'),
+        'zombie': kwargs.get('zombie'),
+        'spoof_ip': kwargs.get('spoof_ip'),
+        'source_port': kwargs.get('source_port'),
+        'frag': bool(kwargs.get('frag') or ghost),
+        'frag_size': kwargs.get('frag_size'),
+        'mtu': kwargs.get('mtu'),
+        'ttl': kwargs.get('ttl'),
+        'deep': bool(kwargs.get('deep')),
+        'os_detect': bool(kwargs.get('os_detect') or kwargs.get('deep')),
+        'smart_probe': bool(kwargs.get('smart_probe') or kwargs.get('deep')),
+        'passive': bool(kwargs.get('passive')),
+        'fingerprint_intensity': int(fingerprint_intensity) if fingerprint_intensity else None,
+        'script': kwargs.get('script') or ('vuln' if kwargs.get('deep') else None),
+        'script_args': kwargs.get('script_args'),
+        'min_rate': kwargs.get('min_rate'),
+        'max_rate': kwargs.get('max_rate'),
+        'host_timeout': kwargs.get('host_timeout'),
+        'enrich': bool(kwargs.get('enrich')),
+        'pipeline': kwargs.get('pipeline'),
+    }
+    return {k: v for k, v in options.items() if v is not None}
+
 
 # ─────────────────────────────────────────────────────────────────
 # QUICK FALLBACK SCANNER (pure Python, no Go required)
@@ -670,7 +766,7 @@ def render_intel_grid(ip_addr, host_name, dns_enum, intel, os_info, mode, scan_m
 @click.option('-v', '--verbose', count=True, help='Verbosity level (-v, -vv, -vvv)')
 @click.option('-q', '--quiet', is_flag=True, help='Minimal output mode')
 @click.option('--no-color', is_flag=True, help='Disable colored output')
-@click.option('--open-only', is_flag=True, help='Show only open ports')
+@click.option('--all-ports', is_flag=True, help='Show closed and filtered ports too (default: open only)')
 @click.option('--timeout', type=int, default=0, envvar='HACKIT_TIMEOUT', help='Per-host timeout in seconds (0=disabled)')
 
 # [ STEALTH & EVASION ]
@@ -831,25 +927,24 @@ def scan_ports(**kwargs):
                 try:
                     results = orchestrator.run_scan(target_raw, ports_str, profile_name or 'quick',
                                                      engines=None, stages=stages,
-                                                     callback=dash.update)
+                                                     callback=dash.update,
+                                                     options=build_scan_options(kwargs))
                 finally:
                     dash.stop()
             else:
                 results = orchestrator.run_scan(target_raw, ports_str, profile_name or 'quick',
-                                                 engines=None, stages=stages)
+                                                 engines=None, stages=stages,
+                                                 options=build_scan_options(kwargs))
             if results:
                 all_ports = results.get('results', [])
-                # Resolve and show target IP
-                resolved_ip = target_raw
-                try:
-                    resolved_ip = socket.gethostbyname(target_raw)
-                except Exception:
-                    pass
-                click.echo()
-                click.echo(_colored(f"  Target: {target_raw}", B_WHITE) + _colored(f" ({resolved_ip})", DIM))
-                open_only_flag = kwargs.get('open_only', False)
-                display_ports = [p for p in all_ports if p.get('status','').lower() == 'open'] if open_only_flag else all_ports
-                render_port_table(display_ports, show_risk=kwargs.get('risk', False), open_only=open_only_flag, host=target_raw)
+                # Default view is open services only; --all-ports brings back
+                # the closed/filtered rows for auditing.
+                show_all = bool(kwargs.get('all_ports'))
+                display_ports = all_ports if show_all else [
+                    p for p in all_ports if p.get('status', '').lower() == 'open'
+                ]
+                render_port_table(display_ports, show_risk=kwargs.get('risk', False),
+                                  open_only=not show_all, host=target_raw)
                 # Show full OS fingerprint details
                 os_info = results.get('os', {})
                 if os_info and os_info.get('name', 'Unknown') not in ('Unknown', 'Detecting...', ''):
@@ -982,15 +1077,6 @@ def scan_ports(**kwargs):
     tempo = kwargs.get('tempo', 'normal')
     mode  = kwargs.get('mode', 'tcp-connect')
 
-    TEMPO_CONFIG = {
-        'shadow':  {'wait': 8000, 'workers': 2,   'delay': 2000, 'desc': 'Ultra Stealth (2 pps)'},
-        'whisper': {'wait': 4000, 'workers': 10,  'delay': 500,  'desc': 'Silent (10 pps)'},
-        'gait':    {'wait': 2000, 'workers': 50,  'delay': 100,  'desc': 'Polite (50 pps)'},
-        'normal':  {'wait': 1000, 'workers': 150, 'delay': 0,    'desc': 'Standard (150 pps)'},
-        'rush':    {'wait': 500,  'workers': 350, 'delay': 0,    'desc': 'Aggressive (350 pps)'},
-        'blitz':   {'wait': 200,  'workers': 700, 'delay': 0,    'desc': 'Insane (700+ pps)'},
-    }
-
     t_cfg = TEMPO_CONFIG.get(tempo, TEMPO_CONFIG['normal'])
     timeout_sec = kwargs.get('timeout', 0)
     if timeout_sec:
@@ -1005,21 +1091,6 @@ def scan_ports(**kwargs):
         click.echo(_colored("  [ADAPTIVE] Auto-tuning timing based on network conditions...", DIM))
 
     # ── Scan mode → engine mode mapping ─────────────────────────
-    SCAN_MODE_MAP = {
-        'syn-stealth':    'syn',
-        'tcp-connect':    'connect',
-        'udp-spray':      'udp',
-        'ack-firewalk':   'ack',
-        'fin-silent':     'fin',
-        'xmas-party':     'xmas',
-        'null-mystery':   'null',
-        'maimon-ghost':   'maimon',
-        'window-spy':     'window',
-        'idle-zombie':    'idle',
-        'protocol-sweep': 'protocol',
-        'anon-self':      'anon-self',
-        'c-turbo':        'c-turbo',
-    }
     scan_mode = SCAN_MODE_MAP.get(mode, 'connect')
     stealth_val = False
 
@@ -1210,9 +1281,10 @@ def scan_ports(**kwargs):
         grand_total += len(port_results)
 
         # ── Port table ─────────────────────────────────────────
-        open_only_flag = kwargs.get('open_only', False)
-        display_ports = open_ports if open_only_flag else port_results
-        render_port_table(display_ports, show_risk=kwargs.get('risk', False), timeline=_scan_timeline, open_only=open_only_flag)
+        show_all = bool(kwargs.get('all_ports'))
+        display_ports = port_results if show_all else open_ports
+        render_port_table(display_ports, show_risk=kwargs.get('risk', False),
+                          timeline=_scan_timeline, open_only=not show_all)
 
         # ── Vulnerability/script results ───────────────────────
         vuln_count = 0

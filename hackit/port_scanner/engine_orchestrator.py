@@ -180,20 +180,27 @@ def _run_stage_discovery(target, ports, profile):
         return [{'host': target, 'alive': True, 'stage': 'discovery'}]
 
 
-def _run_stage_tcp_scan(target, ports, profile, engine_name='go', callback=None):
+def _run_stage_tcp_scan(target, ports, profile, engine_name='go', callback=None, options=None):
+    options = options or {}
+
+    def opt(key, default=None):
+        value = options.get(key)
+        return default if value in (None, '') else value
+
     if engine_name == 'go':
         go_engine = get_engine()
         if go_engine.ensure_compiled():
-            r = go_engine.run(
-                target,
-                ports=ports,
-                timeout=profile.timeout_ms,
-                threads=profile.workers,
-                include_closed=True,
-                stealth=profile.stealth,
-                mode=profile.scan_mode,
-                callback=callback,
-            )
+            run_kwargs = dict(options)
+            run_kwargs.update({
+                'ports': ports,
+                'timeout': int(opt('timeout_ms', profile.timeout_ms)),
+                'threads': int(opt('workers', profile.workers)),
+                'include_closed': bool(opt('include_closed', True)),
+                'stealth': bool(opt('stealth', profile.stealth)),
+                'mode': str(opt('scan_mode', profile.scan_mode)),
+                'callback': callback,
+            })
+            r = go_engine.run(target, **run_kwargs)
             if isinstance(r, dict):
                 flat = []
                 host_entries = r.get('results', r.get('ports', []))
@@ -232,13 +239,21 @@ def _run_stage_tcp_scan(target, ports, profile, engine_name='go', callback=None)
             bin_path = _find_binary('hyper_scan') or _find_binary('portstorm-rust')
         if bin_path:
             port_str = str(ports) if ports else 'top100'
-            timeout_ms = min(profile.timeout_ms, 10000)
-            workers = min(profile.workers, 500)
+            timeout_ms = int(opt('timeout_ms', min(profile.timeout_ms, 10000)))
+            workers = int(opt('workers', min(profile.workers, 500)))
             if os.path.basename(bin_path).startswith('portstorm-rust'):
                 # clap-style CLI: subcommand, flags, --json
                 args = ['scan', target, '-p', port_str,
                         '--timeout', str(timeout_ms),
-                        '--workers', str(workers), '--json']
+                        '--workers', str(workers),
+                        '--retries', str(int(opt('max_retries', 1)))]
+                if opt('scan_delay'):
+                    args.extend(['--delay', str(int(opt('scan_delay')))])
+                if opt('randomize_ports'):
+                    args.append('--randomize')
+                if opt('banners') is False:
+                    args.append('--no-banner')
+                args.append('--json')
             else:
                 args = [target, port_str, str(timeout_ms), f'concurrency:{workers}', 'json']
             results, final, err = _run_binary(bin_path, args, timeout=profile.host_timeout)
@@ -738,7 +753,7 @@ class PortOrchestrator:
             return ['go']
         return ['go']
 
-    def run_scan(self, target, ports='top100', profile=None, engines=None, stages=None, callback=None):
+    def run_scan(self, target, ports='top100', profile=None, engines=None, stages=None, callback=None, options=None):
         if isinstance(profile, str):
             profile = get_profile(profile)
         if profile is None:
@@ -770,7 +785,7 @@ class PortOrchestrator:
                         })
                 with ThreadPoolExecutor(max_workers=len(engines)) as executor:
                     fut_to_eng = {
-                        executor.submit(stage_fn, target, ports, profile, eng, callback): eng
+                        executor.submit(stage_fn, target, ports, profile, eng, callback, options): eng
                         for eng in engines
                     }
                     for fut in as_completed(fut_to_eng):
