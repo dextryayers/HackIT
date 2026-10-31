@@ -112,15 +112,14 @@ def _service_label(record: Dict) -> str:
 def _banner_label(record: Dict, width: int) -> str:
     parts: List[str] = []
     version = str(record.get("version") or "").strip()
-    if version:
-        parts.append(version)
-
     banner = str(record.get("banner") or "")
     banner = " ".join(banner.replace("\r", " ").replace("\n", " ").split())
+
+    # Show the version once: prefix it only when the banner does not carry it.
+    if version and (not banner or version not in banner):
+        parts.append(version)
     if banner:
-        # Avoid printing the version twice when the banner already leads with it.
-        if not version or version not in banner[:40]:
-            parts.append(banner)
+        parts.append(banner)
 
     if not parts:
         evidence = record.get("banner_evidence") or ""
@@ -155,15 +154,16 @@ def render_port_table(
         rows = [r for r in rows if str(r.get("status", "")).lower() == "open"]
 
     term = _terminal_width()
-    fixed = 6 + 11 + 16 + 12 + 5  # port, state, proto/service, version, conf
-    banner_width = max(20, term - fixed - 12)
+    widths = {"port": 10, "state": 8, "service": 14, "protocol": 10, "conf": 5}
+    fixed = sum(widths.values()) + 3 * 5 + 4  # 5 gaps of 3 cells + frame padding
+    banner_width = max(24, term - fixed)
 
     header = [
-        ("PORT", 6, "left"),
-        ("STATE", 11, "left"),
-        ("SERVICE", 16, "left"),
-        ("PROTOCOL", 12, "left"),
-        ("CONF", 5, "right"),
+        ("PORT", widths["port"], "left"),
+        ("STATE", widths["state"], "left"),
+        ("SERVICE", widths["service"], "left"),
+        ("PROTOCOL", widths["protocol"], "left"),
+        ("CONF", widths["conf"], "right"),
         ("BANNER / VERSION", banner_width, "left"),
     ]
 
@@ -190,16 +190,16 @@ def render_port_table(
         state = str(record.get("status", "unknown")).lower()
         state_color, state_text = STATE_STYLE.get(state, (DIM, state.upper()[:10]))
 
-        port_text = _color(_pad(f"{record.get('port')}/tcp", 6), B_WHITE, bold=state == "open")
-        state_cell = _color(_pad(state_text, 11), state_color, bold=state == "open")
+        port_text = _color(_pad(f"{record.get('port')}/tcp", widths["port"]), B_WHITE, bold=state == "open")
+        state_cell = _color(_pad(state_text, widths["state"]), state_color, bold=state == "open")
 
         service = _service_label(record) or "—"
-        service_cell = _color(_pad(_clip(service, 16), 16), CYAN)
+        service_cell = _color(_pad(_clip(service, widths["service"]), widths["service"]), CYAN)
 
         protocol = str(record.get("banner_protocol") or "").strip() or "—"
         if record.get("banner_mismatch"):
-            protocol = "⚠" + protocol
-        protocol_cell = _color(_pad(_clip(protocol, 12), 12), MAGENTA if protocol != "—" else DIM)
+            protocol = "⚠ " + protocol
+        protocol_cell = _color(_pad(_clip(protocol, widths["protocol"]), widths["protocol"]), MAGENTA if protocol != "—" else DIM)
 
         conf = record.get("banner_confidence")
         if conf is None:
@@ -208,7 +208,7 @@ def render_port_table(
             conf = float(conf)
         except (TypeError, ValueError):
             conf = 0.0
-        conf_cell = _pad(_confidence_badge(conf), 5, "right")
+        conf_cell = _pad(_confidence_badge(conf), widths["conf"], "right")
 
         banner_cell = _pad(_banner_label(record, banner_width), banner_width)
 

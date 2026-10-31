@@ -194,13 +194,27 @@ async fn scan_port(host: &str, port: u16, timeout_ms: u64) -> PortResult {
             let info = crate::banner::probe_port(&ip, port, timeout_ms).await;
             let (service, product, version) = detect_service(&info.banner, port);
             let elapsed = start.elapsed();
+            let undecoded = info.protocol.is_empty() || info.protocol == "unknown";
 
             PortResult {
                 port,
                 state: "open".into(),
-                service: if info.product.is_empty() { service } else { info.product.clone() },
+                service: if undecoded {
+                    "unknown".into()
+                } else if info.product.is_empty() {
+                    service
+                } else {
+                    info.product.clone()
+                },
                 product: if info.product.is_empty() { product } else { info.product },
-                version: if info.version.is_empty() { version } else { info.version },
+                // No decode means no version — raw text is not evidence.
+                version: if undecoded {
+                    String::new()
+                } else if info.version.is_empty() {
+                    version
+                } else {
+                    info.version
+                },
                 banner: info.banner,
                 reason: format!("tcp-response in {:?}", elapsed),
                 banner_protocol: info.protocol,

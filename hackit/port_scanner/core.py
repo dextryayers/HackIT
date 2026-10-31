@@ -10,6 +10,78 @@ except ImportError:
     urllib3 = None
 
 
+# Ordered high-signal ports. Matches the Go engine's notion of "top100" closely
+# enough that both engines scan the same surface; keep this list ordered so the
+# first N entries are always the highest-value ports.
+TOP_PORTS = [
+    80, 23, 443, 21, 22, 25, 3389, 110, 445, 139, 143, 53, 135, 3306,
+    8080, 1723, 111, 995, 993, 5900, 1025, 587, 8888, 199, 1720, 465,
+    548, 113, 81, 6001, 10000, 514, 5060, 179, 1026, 2000, 8443, 8000,
+    32768, 1027, 1028, 1029, 1030, 8081, 2001, 8082, 6000, 9000, 6443,
+    6379, 27017, 3000, 5432, 5672, 11211, 4369, 1521, 1433, 7001, 50000,
+    9200, 4567, 7070, 7080, 7443, 8009, 8091, 8161, 8500, 9042, 9090,
+    9100, 9300, 9418, 9999, 14265, 28017, 50030, 50050, 50060, 50070,
+    50090, 60000, 60010, 60020, 60030, 2375, 2376, 2377, 4243, 8001,
+    10250, 10255, 2379, 2380, 5000, 8200, 8300, 49152, 61616, 7002,
+]
+
+
+def expand_ports(spec, default_count=100):
+    """Expand a port spec into a concrete, ordered list of port numbers.
+
+    Accepts ``topN``/``top``, ``default``, ``all``/``full``, comma lists and
+    ``lo-hi`` ranges. Unparseable tokens are dropped rather than raising, so a
+    typo degrades to a smaller scan instead of killing the whole run.
+    """
+    if spec is None:
+        return list(TOP_PORTS[:default_count])
+    if isinstance(spec, (list, tuple, set)):
+        out = []
+        for item in spec:
+            try:
+                p = int(item)
+            except (TypeError, ValueError):
+                continue
+            if 0 < p <= 65535:
+                out.append(p)
+        return sorted(set(out))
+
+    text = str(spec).strip().lower()
+    if not text or text == 'default':
+        return list(TOP_PORTS[:default_count])
+    if text in ('all', 'full'):
+        return list(range(1, 65536))
+    if text.startswith('top'):
+        tail = text[3:]
+        try:
+            n = int(tail) if tail else default_count
+        except ValueError:
+            n = default_count
+        if n <= len(TOP_PORTS):
+            return list(TOP_PORTS[:n])
+        # Beyond the curated list, extend deterministically so the count is real.
+        extra = [p for p in range(1, 65536) if p not in set(TOP_PORTS)]
+        return list(TOP_PORTS) + extra[: max(0, n - len(TOP_PORTS))]
+
+    out = []
+    for token in text.replace(' ', '').split(','):
+        if not token:
+            continue
+        if '-' in token:
+            lo, _, hi = token.partition('-')
+            if not (lo.isdigit() and hi.isdigit()):
+                continue
+            a, b = int(lo), int(hi)
+            if a > b:
+                a, b = b, a
+            out.extend(range(max(1, a), min(65535, b) + 1))
+        elif token.isdigit():
+            p = int(token)
+            if 0 < p <= 65535:
+                out.append(p)
+    return sorted(set(out))
+
+
 @functools.lru_cache(maxsize=128)
 def _resolve_host(host):
     return socket.gethostbyname(host)
@@ -85,6 +157,11 @@ class PortScanner:
         service = product or self.common_services.get(port, "unknown")
         if not product and protocol:
             service = protocol
+        if not protocol or protocol == "unknown":
+            # Nothing was decoded, so any version is a guess pulled from raw
+            # text. Keep the evidence, drop the fabricated version.
+            version = ""
+            service = "unknown" if not product else service
 
         if banner:
             banner_status = "truncated" if banner.endswith("…") else "full"
@@ -94,8 +171,6 @@ class PortScanner:
         confidence = probe.get("confidence", 0.0)
         if confidence <= 0.0:
             confidence = 0.60 if service != "unknown" else 0.45
-        if probe.get("mismatch"):
-            confidence = min(confidence, 0.5)
 
         return {
             "port": port,
@@ -136,16 +211,9 @@ class PortScanner:
         except socket.gaierror:
             pass
 
-        if ports is None:
-            ports = list(range(1, 1025))
-        elif isinstance(ports, str):
-            if '-' in ports:
-                start, end = map(int, ports.split('-'))
-                ports = list(range(start, end + 1))
-            else:
-                ports = [int(p) for p in ports.split(',')]
-        else:
-            ports = list(ports)
+        ports = expand_ports(ports, default_count=1024) if ports is None else expand_ports(ports)
+        if not ports:
+            return []
 
         chunk_size = max(1, len(ports) // (threads * 2))
         chunks = [ports[i:i + chunk_size] for i in range(0, len(ports), chunk_size)]

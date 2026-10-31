@@ -239,13 +239,15 @@ func scanPortWithContext(ctx context.Context, host string, port int, timeoutMs i
 		service, version := IdentifyService(port, banner, host)
 		if pr.Product != "" {
 			service = pr.Product
+		} else if pr.Protocol == "unknown" {
+			service = "unknown"
 		}
 		if pr.Version != "" {
 			version = pr.Version
-		} else if version == "" && banner != "" {
+		} else if version == "" && banner != "" && pr.Protocol != "" && pr.Protocol != "unknown" {
 			version = ExtractVersion(service, banner)
 		}
-		if !looksLikeServerVersion(version) {
+		if pr.Protocol == "unknown" || !looksLikeServerVersion(version) {
 			version = ""
 		}
 		return PortResult{

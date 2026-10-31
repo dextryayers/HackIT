@@ -20,6 +20,7 @@ _KNOWN_MAP = {
     'output_formatter':  ('go',   'Multi-format output formatter'),
     # Rust
     'hyper_scan':        ('rust', 'Mass TCP scanner'),
+    'portstorm-rust':    ('rust', 'PortStorm async scanner with banner engine'),
     'rust_syn_scanner':  ('rust', 'SYN scanner'),
     'rust_tcp_scanner':  ('rust', 'TCP scanner'),
     'rust_udp_scanner':  ('rust', 'UDP scanner'),
@@ -113,6 +114,7 @@ _NEEDS_ROOT = {
 _MAIN_BINS = {
     'port_scanner':      ('go',   'Main Go orchestrator'),
     'hyper_scan':        ('rust', 'Mass TCP scanner (Rust)'),
+    'portstorm-rust':    ('rust', 'PortStorm async scanner (Rust)'),
     'os_detect':         ('rust', 'OS detection (Rust)'),
     'mass_tcp_scanner':  ('c',    'Mass TCP scanner (C)'),
     'tls_scanner':       ('cpp',  'TLS scanner (C++)'),
@@ -121,6 +123,7 @@ _MAIN_BINS = {
 _BIN_LOCATIONS = {
     'port_scanner':     None,
     'hyper_scan':       None,
+    'portstorm-rust':   None,
     'os_detect':        None,
     'mass_tcp_scanner': None,
     'tls_scanner':      None,

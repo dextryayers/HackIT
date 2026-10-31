@@ -320,10 +320,14 @@ local function decode_http(text, tls)
             local server = trimmed:match("^[Ss]erver:%s*(.+)$")
             if server then
                 parts[#parts + 1] = "Server: " .. server
-                local first, second = server:match("^(%S+)%s+(%S+)")
-                product = first or server
-                if second and second:match("%d+%.%d+") then
-                    version = second:gsub(";$", "")
+                local first, ver = server:match("^([^/%s]+)/([^%s]+)")
+                if first then
+                    product = first
+                    version = ver:gsub(";$", "")
+                else
+                    local p2, v2 = server:match("^(%S+)%s+(%S+)")
+                    product = p2 or server
+                    if v2 and v2:match("%d+%.%d+") then version = v2:gsub(";$", "") end
                 end
             else
                 local low = trimmed:lower()
@@ -412,7 +416,7 @@ local function decode(port, raw)
     local text = sanitize(raw)
     if text:sub(1, 4) == "SSH-" then
         local line = first_line(text)
-        local product, version = line:match("^SSH%-%d+%.%d+%-(%w+)_?([%d%.]*)")
+        local product, version = line:match("^SSH%-%d+%.%d+%-([%w%.]+)_([%w%.]+)")
         info.protocol, info.product, info.version = "ssh", product or "SSH", version or ""
         info.banner = line
         info.confidence = 0.99

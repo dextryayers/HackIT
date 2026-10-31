@@ -25,19 +25,41 @@ func NewLuaEngine() *LuaEngine {
 	exePath, _ := os.Executable()
 	baseDir := filepath.Dir(exePath)
 
-	// Try multiple possible locations for Lua scripts
+	// Candidate dirs in priority order. A dir only wins if it actually holds
+	// Lua scripts — otherwise an empty ./scripts stub shadows the real set.
 	candidates := []string{
+		os.Getenv("HACKIT_LUA_DIR"),
 		filepath.Join(baseDir, "..", "lua"),
+		filepath.Join(baseDir, "lua"),
+		filepath.Join("hackit", "port_scanner", "lua"),
+		filepath.Join("..", "lua"),
+		"lua",
 		filepath.Join(baseDir, "scripts"),
-		filepath.Join("d:/web/hacks/hackstools/hackit/port_scanner/lua"),
+		filepath.Join(baseDir, "..", "scripts"),
 	}
 
-	luaDir := candidates[0]
+	luaDir := ""
+	firstExisting := ""
 	for _, c := range candidates {
-		if _, err := os.Stat(c); err == nil {
+		if c == "" {
+			continue
+		}
+		if _, err := os.Stat(c); err != nil {
+			continue
+		}
+		if firstExisting == "" {
+			firstExisting = c
+		}
+		if _, err := os.Stat(filepath.Join(c, "banner_probe.lua")); err == nil {
 			luaDir = c
 			break
 		}
+	}
+	if luaDir == "" {
+		luaDir = firstExisting
+	}
+	if luaDir == "" {
+		luaDir = filepath.Join(baseDir, "scripts")
 	}
 
 	scriptsDir := filepath.Join(baseDir, "scripts")
@@ -75,9 +97,15 @@ func (e *LuaEngine) RunScripts(host string, port int, service string, banner str
 	for _, script := range nseScripts {
 		scriptPath := filepath.Join(e.LuaDir, script)
 		if _, err := os.Stat(scriptPath); err != nil {
+			if os.Getenv("HACKIT_LUA_DEBUG") != "" {
+				fmt.Fprintf(os.Stderr, "[lua] missing %s\n", scriptPath)
+			}
 			continue
 		}
 		res, err := e.executeScript(scriptPath, host, port, service, banner)
+		if os.Getenv("HACKIT_LUA_DEBUG") != "" {
+			fmt.Fprintf(os.Stderr, "[lua] %s res=%q err=%v\n", script, res, err)
+		}
 		if err == nil && res != "" {
 			results = append(results, fmt.Sprintf("[%s] %s", script, res))
 		}

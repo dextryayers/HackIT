@@ -55,6 +55,19 @@ def _run_binary(bin_path, args, timeout=120):
                     final = json.loads(line[6:])
                 except:
                     pass
+        # Some engines (Rust PortStorm) stream bare RESULT lines and put the
+        # enriched records in FINAL.ports — merge so callers see the banners.
+        rich = final.get('ports') if isinstance(final, dict) else None
+        if isinstance(rich, list) and rich:
+            by_port = {r.get('port'): r for r in results if isinstance(r, dict)}
+            for item in rich:
+                if not isinstance(item, dict):
+                    continue
+                port = item.get('port')
+                if port in by_port:
+                    by_port[port].update(item)
+                else:
+                    results.append(item)
         if not final and results:
             final = {'count': len(results)}
         return results, final, r.stderr.strip()
@@ -94,11 +107,21 @@ def _merge_results(results_list):
                 if eng not in eng_list:
                     eng_list.append(eng)
 
-                for k in ('service', 'version', 'banner', 'service_probe'):
-                    if r.get(k) and not ex.get(k):
-                        ex[k] = r[k]
-                    elif r.get(k) and ex.get(k) and r[k] != ex[k]:
-                        if len(r[k]) > len(ex.get(k, '')):
+                # The most confident decode wins the banner block. Raw text from
+                # a weaker engine must never overwrite a decoded protocol.
+                ex_conf = float(ex.get('banner_confidence') or 0)
+                r_conf = float(r.get('banner_confidence') or 0)
+                if r_conf > ex_conf + 1e-9:
+                    for k in ('service', 'product', 'version', 'banner',
+                              'banner_protocol', 'banner_confidence',
+                              'banner_evidence', 'banner_mismatch', 'confidence'):
+                        if r.get(k) not in (None, '', False):
+                            ex[k] = r[k]
+                else:
+                    for k in ('service', 'product', 'version', 'banner',
+                              'banner_protocol', 'banner_confidence',
+                              'banner_evidence', 'banner_mismatch', 'confidence'):
+                        if r.get(k) not in (None, '', False) and not ex.get(k):
                             ex[k] = r[k]
 
     result = sorted(merged.values(), key=lambda x: x.get('port', 0))
@@ -131,6 +154,17 @@ def _merge_results(results_list):
                 r['status'] = 'filtered'
 
         r.pop('_engine_priority', None)
+
+        # Normalise values that engines report with different casing/precision.
+        if isinstance(r.get('banner_confidence'), (int, float)):
+            r['banner_confidence'] = round(float(r['banner_confidence']), 2)
+        if isinstance(r.get('confidence'), (int, float)):
+            r['confidence'] = round(float(r['confidence']), 2)
+        if str(r.get('service', '')).lower() in ('unknown', ''):
+            r['service'] = 'unknown'
+            r['version'] = '' if str(r.get('version', '')).lower() in ('unknown', '-') else r.get('version', '')
+        if str(r.get('version', '')).lower() in ('unknown', '-', 'none'):
+            r['version'] = ''
 
     return result
 
@@ -189,12 +223,24 @@ def _run_stage_tcp_scan(target, ports, profile, engine_name='go', callback=None)
             return []
 
     if engine_name == 'rust':
-        bin_path = _find_binary('hyper_scan')
+        # Prefer the source build: prebuilt binaries in bin/ can be older than
+        # the working tree and would silently skip the new banner engine.
+        fresh = os.path.join(RUST_DIR, 'portstorm-rust')
+        if os.path.isfile(fresh) and os.access(fresh, os.X_OK):
+            bin_path = fresh
+        else:
+            bin_path = _find_binary('hyper_scan') or _find_binary('portstorm-rust')
         if bin_path:
             port_str = str(ports) if ports else 'top100'
             timeout_ms = min(profile.timeout_ms, 10000)
             workers = min(profile.workers, 500)
-            args = [target, port_str, str(timeout_ms), f'concurrency:{workers}', 'json']
+            if os.path.basename(bin_path).startswith('portstorm-rust'):
+                # clap-style CLI: subcommand, flags, --json
+                args = ['scan', target, '-p', port_str,
+                        '--timeout', str(timeout_ms),
+                        '--workers', str(workers), '--json']
+            else:
+                args = [target, port_str, str(timeout_ms), f'concurrency:{workers}', 'json']
             results, final, err = _run_binary(bin_path, args, timeout=profile.host_timeout)
             for item in results:
                 if isinstance(item, dict):
@@ -238,6 +284,51 @@ def _run_stage_tcp_scan(target, ports, profile, engine_name='go', callback=None)
                 if isinstance(item, dict):
                     item.setdefault('engine', 'cpp')
             return results
+
+    if engine_name in ('python', 'py'):
+        # Pure-Python engine: same per-port probe plan as Go/Rust/Lua so the
+        # banner, protocol and confidence stay comparable across engines.
+        from .core import PortScanner, expand_ports
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        port_list = expand_ports(ports)
+        if not port_list:
+            return []
+        workers = max(1, min(int(getattr(profile, 'workers', 100) or 100), 512))
+        timeout_s = max(0.2, min(int(getattr(profile, 'timeout_ms', 1000) or 1000) / 1000.0, 5.0))
+        scanner = PortScanner()
+        results = []
+        scanned = 0
+
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {
+                pool.submit(scanner.scan_port, target, port, timeout_s): port
+                for port in port_list
+            }
+            for fut in as_completed(futures):
+                port = futures[fut]
+                scanned += 1
+                try:
+                    item = fut.result()
+                except Exception:
+                    continue
+                if not isinstance(item, dict):
+                    continue
+                item.setdefault('engine', 'python')
+                if str(item.get('status', '')).lower() == 'open':
+                    results.append(item)
+                    if callback:
+                        callback('result', item)
+                if callback and (scanned % 32 == 0 or scanned == len(port_list)):
+                    callback('engine_status', {
+                        'engine': 'python',
+                        'status': 'running',
+                        'ports_scanned': scanned,
+                        'open_found': len(results),
+                        'progress': round(scanned * 100.0 / len(port_list), 1),
+                    })
+        results.sort(key=lambda r: r.get('port', 0))
+        return results
 
     from . import fast_port_scan
     pr = ports or '1-1024'
@@ -633,6 +724,9 @@ class PortOrchestrator:
                     available.append('go')
                 elif self.by_lang.get(lang):
                     available.append(lang)
+            # The Python engine needs no binary; it is always available and
+            # gives a second opinion on protocol/confidence.
+            available.append('python')
             return available or ['go']
         if name == 'web':
             return ['go']
@@ -668,6 +762,12 @@ class PortOrchestrator:
 
             elif stage == 'tcp_scan':
                 all_port_results = []
+                if callback:
+                    for eng in engines:
+                        callback('engine_status', {
+                            'engine': eng, 'status': 'running',
+                            'ports_scanned': 0, 'open_found': 0, 'progress': 0.0,
+                        })
                 with ThreadPoolExecutor(max_workers=len(engines)) as executor:
                     fut_to_eng = {
                         executor.submit(stage_fn, target, ports, profile, eng, callback): eng
@@ -681,17 +781,32 @@ class PortOrchestrator:
                                 all_port_results.append(res)
                                 self._results_event.set()
                                 if callback:
+                                    opened = sum(
+                                        1 for r in res
+                                        if isinstance(r, dict) and str(r.get('status', '')).lower() == 'open'
+                                    )
                                     callback('engine_results', {
-                                        'engine': eng, 'count': len(res)
+                                        'engine': eng, 'count': len(res), 'open_found': opened,
                                     })
-                        except:
-                            pass
+                                    callback('engine_status', {
+                                        'engine': eng, 'status': 'done',
+                                        'ports_scanned': len(res), 'open_found': opened,
+                                        'progress': 100.0,
+                                    })
+                        except Exception as exc:
+                            if callback:
+                                callback('engine_status', {
+                                    'engine': eng, 'status': 'error',
+                                    'ports_scanned': 0, 'open_found': 0, 'progress': 0.0,
+                                })
                 port_results = _merge_results(all_port_results) if all_port_results else []
 
             elif stage == 'service_detect':
                 port_results = stage_fn(target, ports, port_results)
 
             elif stage == 'os_detect':
+                if callback:
+                    callback('os', {'name': 'Detecting…', 'confidence': 0})
                 os_info = stage_fn(target, port_results)
                 if callback:
                     callback('os', os_info)

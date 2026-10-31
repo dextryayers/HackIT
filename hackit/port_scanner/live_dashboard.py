@@ -149,7 +149,18 @@ class Dashboard:
                 "progress": float(data.get("progress", slot["progress"]) or 0),
             })
 
-        elif msg_type in ("result", "engine_results"):
+        elif msg_type == "engine_results":
+            name = data.get("engine", "unknown")
+            slot = self.engines.setdefault(name, {
+                "status": "done", "ports_scanned": 0, "open_found": 0, "progress": 100.0,
+            })
+            slot["status"] = "done"
+            slot["progress"] = 100.0
+            slot["ports_scanned"] = data.get("count", slot["ports_scanned"])
+            if "open_found" in data:
+                slot["open_found"] = data["open_found"]
+
+        elif msg_type == "result":
             port = data.get("port")
             status = str(data.get("status", "")).lower()
             if port:
@@ -299,7 +310,13 @@ class Dashboard:
         conf = self.os_info.get("confidence", self.os_info.get("accuracy", 0)) or 0
         if conf and conf < 1:
             conf = int(conf * 100)
-        row(_c(" OS ", B_WHITE, bold=True) + _c(f"{os_name} ({int(conf)}%)", GREEN))
+        if os_name in ("Detecting…", "Detecting...", "Unknown") or not conf:
+            # The OS stage is optional; a profile without it must not leave a
+            # permanent "Detecting…" row on the final frame.
+            if not final:
+                row(_c(" OS ", B_WHITE, bold=True) + _c(os_name, DIM))
+        else:
+            row(_c(" OS ", B_WHITE, bold=True) + _c(f"{os_name} ({int(conf)}%)", GREEN))
 
         if self.vulnerabilities:
             rule()
