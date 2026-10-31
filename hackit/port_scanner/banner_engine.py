@@ -374,7 +374,8 @@ def decode(port: int, raw: bytes) -> Dict:
 
     version = _decode_mysql(raw)
     if version:
-        info.update(protocol="mysql", product="MySQL", version=version,
+        info.update(protocol="mysql", product="MySQL",
+                    version=version.split()[0],
                     banner=f"MySQL {version}", confidence=0.98)
         return info
 
@@ -511,10 +512,7 @@ def _classify_text(port: int, text: str) -> Optional[Tuple[str, str, float]]:
     ]
     for proto, product, needles, conf in rules:
         if any(n in low for n in needles):
-            c = conf
-            if not _port_is_expected(proto, port):
-                c -= 0.10
-            return proto, product, c
+            return proto, product, conf
     return None
 
 
@@ -553,10 +551,12 @@ def _decode_mysql(raw: bytes) -> Optional[str]:
     if end <= 0 or end > 64:
         return None
     try:
-        version = rest[:end].decode("ascii")
-    except UnicodeDecodeError:
+        version = rest[:end].decode("ascii", errors="ignore")
+    except Exception:
         return None
-    return version if any(c.isdigit() for c in version) else None
+    if not version or not version[0].isdigit() or "." not in version:
+        return None
+    return version
 
 
 def _is_redis(raw: bytes) -> bool:

@@ -484,7 +484,6 @@ local function decode(port, raw)
         for _, needle in ipairs(rule.needles) do
             if low:find(needle, 1, true) then
                 local conf = rule.conf
-                if not port_is_expected(rule.proto, port) then conf = conf - 0.10 end
                 info.protocol, info.product, info.confidence = rule.proto, rule.product, conf
                 local lines = {}
                 for line in text:gmatch("[^\r\n]+") do

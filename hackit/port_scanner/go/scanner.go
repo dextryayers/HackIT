@@ -245,6 +245,9 @@ func scanPortWithContext(ctx context.Context, host string, port int, timeoutMs i
 		} else if version == "" && banner != "" {
 			version = ExtractVersion(service, banner)
 		}
+		if !looksLikeServerVersion(version) {
+			version = ""
+		}
 		return PortResult{
 			Port: port, State: "open", Protocol: "tcp",
 			Service: service, Banner: banner, Version: version,

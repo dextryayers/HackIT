@@ -397,7 +397,7 @@ fn decode(port: u16, raw: &[u8], _stage: &str) -> BannerInfo {
     if let Some(v) = decode_mysql(raw) {
         info.protocol = "mysql".into();
         info.product = "MySQL".into();
-        info.version = v.clone();
+        info.version = v.split_whitespace().next().unwrap_or(&v).to_string();
         info.banner = format!("MySQL {}", v);
         info.confidence = 0.98;
         return info;
@@ -587,11 +587,7 @@ fn classify_text(port: u16, text: &str) -> Option<(&'static str, &'static str, f
     ];
     for (proto, product, needles, conf) in rules {
         if needles.iter().any(|n| low.contains(n)) {
-            let mut c = *conf;
-            if !port_is_expected(proto, port) {
-                c -= 0.10;
-            }
-            return Some((proto, product, c));
+            return Some((proto, product, *conf));
         }
     }
     None
@@ -621,7 +617,7 @@ fn decode_mysql(raw: &[u8]) -> Option<String> {
         return None;
     }
     let v = String::from_utf8_lossy(&rest[..end]).to_string();
-    if v.chars().any(|c| c.is_ascii_digit()) {
+    if v.starts_with(|c: char| c.is_ascii_digit()) && v.contains('.') {
         Some(v)
     } else {
         None

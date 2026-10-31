@@ -692,7 +692,7 @@ func decodeBanner(port int, raw []byte, stage string) ProbeResult {
 	if v, ok := decodeMySQL(raw); ok {
 		res.Protocol = "mysql"
 		res.Product = "MySQL"
-		res.Version = v
+		res.Version = firstToken(v)
 		res.Banner = "MySQL " + v
 		res.Confidence = 0.98
 		return res
@@ -968,11 +968,7 @@ func classifyText(port int, text string) (string, string, string, float64) {
 			if strings.Contains(low, needle) {
 				// A protocol claiming a port it does not belong to is still the
 				// truth of the wire; confidence carries the doubt.
-				conf := r.conf
-				if !portIsExpected(r.proto, port) {
-					conf -= 0.10
-				}
-				return r.proto, r.product, extractVersionFromText(r.proto, text), conf
+				return r.proto, r.product, extractVersionFromText(r.proto, text), r.conf
 			}
 		}
 	}
@@ -1120,10 +1116,23 @@ func decodeMySQL(raw []byte) (string, bool) {
 		return "", false
 	}
 	version := string(raw[5 : 5+end])
-	if !looksLikeVersion(version) {
+	if !looksLikeServerVersion(version) {
 		return "", false
 	}
 	return version, true
+}
+
+// looksLikeServerVersion accepts vendor version strings that carry spaces,
+// e.g. "11.8.6-MariaDB-0+deb13u1 from Debian". It must start with a digit and
+// contain a dot; everything else is noise.
+func looksLikeServerVersion(s string) bool {
+	if s == "" || len(s) > 64 {
+		return false
+	}
+	if s[0] < '0' || s[0] > '9' {
+		return false
+	}
+	return strings.Contains(s, ".")
 }
 
 func looksLikeVersion(s string) bool {
@@ -1269,6 +1278,13 @@ func isKafkaResponse(raw []byte) bool {
 	}
 	size := binary.BigEndian.Uint32(raw[0:4])
 	return size > 0 && int(size) <= len(raw)-4
+}
+
+func firstToken(s string) string {
+	if f := strings.Fields(s); len(f) > 0 {
+		return f[0]
+	}
+	return s
 }
 
 func firstLine(raw []byte) string {
