@@ -296,6 +296,20 @@ def recon_node(state: PentestState) -> Dict[str, Any]:
         scan_data["external_http"] = extra.get("http_probe", [])
         scan_data["external_endpoints"] = extra.get("endpoints", [])
         scan_data["external_tools"] = extra.get("tools", {})
+        scan_data["os_info"] = extra.get("os_info", {})
+        # Port-scanner vulnerabilities -> findings.
+        for v in _as_list(extra.get("port_vulns")):
+            if not isinstance(v, dict):
+                v = {"name": str(v)}
+            _finding(
+                findings, "port_vuln", str(v.get("target", host)),
+                str(v.get("name", v.get("title", "Port vulnerability"))),
+                str(v.get("description", v.get("evidence", v))),
+                severity=str(v.get("severity", "medium")).lower(),
+                cvss=float(v.get("cvss", 5.0) or 5.0),
+                remediation=str(v.get("remediation", "Review the affected service")),
+            )
+
     except Exception as exc:  # noqa: BLE001 - recon must never abort the pipeline
         scan_data["external_recon_error"] = str(exc)[:300]
 

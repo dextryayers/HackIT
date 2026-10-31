@@ -338,8 +338,13 @@ def aggregate_recon(host: str, base_url: str) -> Dict[str, Any]:
     """Run all available recon techniques and return deduped data."""
     subdomains = subdomain_enum(host)
 
-    # Port scan the apex host plus discovered subdomains.
-    ports = nmap_scan(host)
+    # Deep multi-engine port/service/OS/vuln scan via PortOrchestrator.
+    ps = port_scanner_scan(host, profile="web")
+    ports = ps.get("ports") or nmap_scan(host)
+    port_vulns = ps.get("vulns") or []
+    os_info = ps.get("os") or {}
+
+    # Light port scan of a few subdomains.
     extra_ports: List[Dict[str, Any]] = []
     for sub in subdomains[:5]:
         try:
@@ -391,8 +396,59 @@ def aggregate_recon(host: str, base_url: str) -> Dict[str, Any]:
     return {
         "subdomains": subdomains,
         "ports": merged_ports,
+        "port_vulns": port_vulns,
+        "os_info": os_info,
         "http_probe": http_results,
         "endpoints": endpoints,
         "link_candidates": link_candidates,
         "tools": available_tools(),
+    }
+
+
+def port_scanner_scan(host: str, profile: str = "web") -> Dict[str, Any]:
+    """Run the multi-engine PortOrchestrator (C/C++/Rust/Go) for deep port,
+    service, OS and vulnerability scanning.  Falls back to nmap/python when the
+    port_scanner package is unavailable.
+    """
+    try:
+        from hackit.port_scanner.engine_orchestrator import PortOrchestrator
+        from hackit.port_scanner.engine_profiles import get_profile
+    except Exception:
+        return {"ports": nmap_scan(host), "os": {}, "vulns": [], "error": "port_scanner unavailable"}
+
+    try:
+        orch = PortOrchestrator()
+        prof = get_profile(profile)
+        result = orch.run_scan(host, ports="top100", profile=prof, callback=None)
+    except Exception as exc:  # noqa: BLE001
+        return {"ports": nmap_scan(host), "os": {}, "vulns": [], "error": str(exc)[:300]}
+
+    ports_out: List[Dict[str, Any]] = []
+    vulns_out: List[Dict[str, Any]] = []
+    for pr in (result.get("results") or []):
+        if not isinstance(pr, dict):
+            continue
+        entry = {
+            "port": pr.get("port"),
+            "protocol": "tcp",
+            "state": pr.get("status", "unknown"),
+            "service": pr.get("service", ""),
+            "version": pr.get("version", ""),
+            "banner": pr.get("banner", ""),
+            "engine": ",".join(pr.get("engines", [])) if isinstance(pr.get("engines"), list) else pr.get("engine", ""),
+        }
+        ports_out.append(entry)
+        for v in (pr.get("vulnerabilities") or []):
+            if isinstance(v, dict):
+                vulns_out.append(v)
+            else:
+                vulns_out.append({"name": str(v)})
+
+    return {
+        "ports": _dedup_ports([p for p in ports_out if p.get("port") and p.get("state") == "open"]),
+        "all_ports": ports_out,
+        "os": result.get("os", {}) if isinstance(result.get("os"), dict) else {},
+        "vulns": vulns_out,
+        "profile": result.get("profile", profile),
+        "open_count": result.get("open_count", 0),
     }
