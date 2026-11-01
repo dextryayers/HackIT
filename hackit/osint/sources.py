@@ -906,12 +906,35 @@ _NON_PROFILE_PATTERNS = (
     "domaintools.com", "who.is", "whois.com", "whoisxmlapi.com", "robtex.com",
     "brand24.com", "talkwalker.com", "trendsmap.com", "tweetbinder.com",
     "crt.sh", "hackertarget.com", "rapiddns.io", "subdomain.center",
+    # Threat-intel aggregators answer 200 for any input, so they can never
+    # confirm that a *profile* exists.
+    "virustotal.com", "urlscan.io", "securitytrails.com", "intelligencex.com",
+    "threatcrowd.org", "otx.alienvault.com", "any.run", "hybrid-analysis.com",
+    "joesandbox.com", "urlvoid.com", "scamadviser.com", "similarweb.com",
 )
 
 
-def _is_profile_source(url: str) -> bool:
-    low = url.lower()
+# Names that are intelligence aggregators, not social platforms. The native
+# engine ships its own site table, so the name check has to live here too.
+NON_PROFILE_NAMES = frozenset({
+    "virustotal", "urlscan.io", "urlscan", "securitytrails", "censys",
+    "shodan", "robtex", "google fonts", "google groups", "google patents",
+    "google scholar", "archive.org", "crt.sh", "domaintools", "who.is",
+    "threatcrowd", "alienvault otx", "otx", "any.run", "hybrid-analysis",
+    "joesandbox", "urlvoid", "scamadviser", "similarweb", "intelligence x",
+})
+
+
+def is_profile_source(url: str, name: str = "") -> bool:
+    """False when the source is a search/lookup service, not a profile host."""
+    if name and name.strip().lower() in NON_PROFILE_NAMES:
+        return False
+    low = (url or "").lower()
     return not any(pattern in low for pattern in _NON_PROFILE_PATTERNS)
+
+
+def _is_profile_source(url: str) -> bool:
+    return is_profile_source(url)
 
 
 def get_social_sources():

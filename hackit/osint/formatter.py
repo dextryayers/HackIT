@@ -110,22 +110,34 @@ def _header(data: Dict[str, object]) -> None:
     unknown = summary.get("unknown", 0)
     misses = summary.get("miss", max(checked - hits - possible - unknown, 0))
     _console.print()
-    _console.print(
-        f"  [{B_GREEN}]confirmed {_bar(hits, total, 20)}[/] {hits:>4}   "
-        f"[{B_CYAN}]verified {verified:>3}[/]")
-    _console.print(
-        f"  [{B_YELLOW}]possible  {_bar(possible, total, 20)}[/] {possible:>4}   "
-        f"[{DIM}]blocked  {unknown:>3}[/]")
-    _console.print(
-        f"  [{DIM}]dead ends {_bar(misses, total, 20)}[/] {misses:>4}")
+
+    if not checked:
+        # Domain / phone targets never run the username sweep, so empty signal
+        # bars would be a lie about coverage.
+        subdomains = len(live.get("subdomains") or [])
+        record_sets = len([k for k, v in (live.get("dns") or {}).items() if v])
+        _console.print(
+            f"  [{B_CYAN}]footprint mode[/] [{DIM}]· no username sweep ·[/] "
+            f"{subdomains} subdomains [{DIM}]·[/] {record_sets} DNS record sets"
+            + (f" [{DIM}]·[/] RDAP" if live.get("rdap") else ""))
+    if checked:
+        _console.print(
+            f"  [{B_GREEN}]confirmed {_bar(hits, total, 20)}[/] {hits:>4}   "
+            f"[{B_CYAN}]verified {verified:>3}[/]")
+        _console.print(
+            f"  [{B_YELLOW}]possible  {_bar(possible, total, 20)}[/] {possible:>4}   "
+            f"[{DIM}]blocked  {unknown:>3}[/]")
+        _console.print(
+            f"  [{DIM}]dead ends {_bar(misses, total, 20)}[/] {misses:>4}")
 
     confidence = analysis.get("confidence", "NONE")
     score = analysis.get("confidence_score", 0)
     color = {"HIGH": B_GREEN, "MEDIUM": B_YELLOW}.get(confidence, DIM)
-    _console.print(f"\n  confidence [{color}]{confidence}[/] "
-                   f"[{DIM}]({score}/100)[/] · "
-                   f"personae {analysis.get('cross_platform_personae', 0)} · "
-                   f"categories {len(analysis.get('top_categories') or [])}")
+    if checked:
+        _console.print(f"\n  confidence [{color}]{confidence}[/] "
+                       f"[{DIM}]({score}/100)[/] · "
+                       f"personae {analysis.get('cross_platform_personae', 0)} · "
+                       f"categories {len(analysis.get('top_categories') or [])}")
 
 
 def _identity(data: Dict[str, object]) -> None:
@@ -261,7 +273,7 @@ def _personae(data: Dict[str, object], live: Dict[str, object]) -> None:
     _console.print(table)
 
 
-def _footprint(live: Dict[str, object]) -> None:
+def _footprint(live: Dict[str, object], all_rows: bool = False) -> None:
     rdap = live.get("rdap") or {}
     dns = live.get("dns") or {}
     geo = live.get("geo") or {}
@@ -334,12 +346,12 @@ def _footprint(live: Dict[str, object]) -> None:
     if subdomains:
         from rich.columns import Columns
         _console.print(f"\n  [bold {B_WHITE}]Subdomains[/] [{DIM}]({len(subdomains)})[/]")
-        shown = subdomains[:SHOW_SUBDOMAINS]
-        cells = [f"[{B_CYAN}]{item.get('host', '')}[/]" for item in shown]
+        cap = len(subdomains) if all_rows else SHOW_SUBDOMAINS
+        cells = [f"[{B_CYAN}]{item.get('host', '')}[/]" for item in subdomains[:cap]]
         _console.print(Columns(cells, padding=(0, 3), expand=False))
-        if len(subdomains) > SHOW_SUBDOMAINS:
-            _console.print(f"  [{DIM}]… {len(subdomains) - SHOW_SUBDOMAINS} more hosts "
-                           f"(full list with --json / --output)[/]")
+        if len(subdomains) > cap:
+            _console.print(f"  [{DIM}]… {len(subdomains) - cap} more hosts — "
+                           f"use --all-rows or --json for the full list[/]")
 
     if wayback:
         _console.print(f"\n  [bold {B_WHITE}]Wayback[/]  {wayback.get('snapshots', 0)} "
@@ -481,7 +493,8 @@ def _leads(data: Dict[str, object], show: int, all_rows: bool) -> None:
                        f"use --show {len(leads)} or --all-rows[/]")
 
 
-def _dead_ends(data: Dict[str, object], show_misses: bool, show: int) -> None:
+def _dead_ends(data: Dict[str, object], show_misses: bool, show: int,
+               all_rows: bool = False) -> None:
     profiles = data.get("profiles") or []
     misses = [p for p in profiles if p.get("status") in ("miss", "unknown")]
     if not misses:
@@ -495,12 +508,13 @@ def _dead_ends(data: Dict[str, object], show_misses: bool, show: int) -> None:
     table.add_column("status", no_wrap=True, style=DIM)
     table.add_column("platform", no_wrap=True, style=DIM)
     table.add_column("reason", overflow="fold", style=DIM)
-    for item in misses[:show]:
+    cap = len(misses) if all_rows else show
+    for item in misses[:cap]:
         table.add_row(item.get("status", ""), item.get("platform", ""),
                       (item.get("note") or "")[:80])
     _console.print(table)
-    if len(misses) > show:
-        _console.print(f"[{DIM}]  … {len(misses) - show} more[/]")
+    if len(misses) > cap:
+        _console.print(f"[{DIM}]  … {len(misses) - cap} more — use --all-rows[/]")
 
 
 def _errors(live: Dict[str, object]) -> None:
@@ -520,16 +534,18 @@ def print_results(data: Dict[str, object], show_misses: bool = False,
     live = data.get("live_intel") or {}
 
     _header(data)
-    _identity(data)
+    # Domain and phone targets have no person-shaped identity block.
+    if data.get("handles"):
+        _identity(data)
     _verified_profiles(live)
     _confirmed_hits(data, show, all_rows)
     _personae(data, live)
-    _footprint(live)
+    _footprint(live, all_rows)
     _email(data, live)
     _phone(data)
     if not only_live:
         _leads(data, show, all_rows)
-    _dead_ends(data, show_misses, show)
+    _dead_ends(data, show_misses, show, all_rows)
     _errors(live)
     _console.print()
 

@@ -7,7 +7,8 @@ import click
 
 from hackit.ui import _colored, B_CYAN, B_GREEN, B_YELLOW, DIM, RED, YELLOW
 from .banner import display_osint_banner
-from .core import normalize_handles, run_full_scan
+from .core import (handle_seed, is_domain_query, is_phone_query,
+                   normalize_handles, run_full_scan)
 from .formatter import print_live_finding, print_results, save_json
 from .history import append_history, load_history, save_auto_report
 from .sources import get_social_sources
@@ -24,8 +25,11 @@ def _engine_info(use_rust: bool) -> dict:
 
 
 def _announce_matrix(target: str, deep: bool, verbose: bool, use_rust: bool = True,
-                     category: str = "") -> dict:
-    handles = normalize_handles(target, deep=deep)
+                     category: str = "", emit: bool = True) -> dict:
+    phone_target = is_phone_query(target)
+    domain_target = is_domain_query(target)
+    handles = ([] if (phone_target or domain_target)
+               else normalize_handles(handle_seed(target), deep=deep))
     sources = get_social_sources()
     if category:
         sources = [s for s in sources if s["category"].lower() == category.lower()]
@@ -39,8 +43,16 @@ def _announce_matrix(target: str, deep: bool, verbose: bool, use_rust: bool = Tr
     except Exception:
         pass
 
+    if not emit:
+        return engine
+
     click.echo(_colored("\n  [*] Crawling public intelligence matrix...", B_YELLOW, bold=True))
-    click.echo(f"  [*] Canonical handle : {_colored(handles[0] if handles else 'N/A', B_CYAN)}")
+    if phone_target or domain_target:
+        kind = "phone number" if phone_target else "domain"
+        click.echo(f"  [*] Target kind      : {_colored(kind, B_CYAN)}"
+                   f"  ·  username sweep {_colored('skipped', YELLOW)}")
+    else:
+        click.echo(f"  [*] Canonical handle : {_colored(handles[0] if handles else 'N/A', B_CYAN)}")
     if len(handles) > 1:
         click.echo(f"  [*] Handle variants  : {_colored(', '.join(handles[1:8]), DIM)}"
                    + (_colored(f" (+{len(handles) - 8} more)", DIM) if len(handles) > 8 else ""))
@@ -156,10 +168,11 @@ def osint(target: str | None = None, proxy: str = "", retry: int = 1, timeout: i
         os.environ["HACKIT_NO_BANNER"] = "1"
 
     verbose = not quiet and not json_out
-    engine = {"engine": "python", "detail": "json mode"}
+    engine = _engine_info(not no_rust)
     if not json_out:
         engine = _announce_matrix(target, deep=deep, verbose=verbose,
-                                  use_rust=not no_rust, category=category)
+                                  use_rust=not no_rust, category=category,
+                                  emit=not quiet)
 
     # Resolve the domain/email implied by the target so the collectors run even
     # when the user did not pass --domain explicitly.
@@ -205,7 +218,9 @@ def osint(target: str | None = None, proxy: str = "", retry: int = 1, timeout: i
         click.echo(payload)
         return
 
-    print_results(data, show_misses=show_misses, only_live=only_live,
+    # --quiet is "findings + summary only": the dork matrix is not a finding.
+    print_results(data, show_misses=show_misses,
+                  only_live=only_live or quiet,
                   show=show, all_rows=all_rows)
 
     # --output follows the format: HTML when --html is set, JSON otherwise.

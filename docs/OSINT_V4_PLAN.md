@@ -1,6 +1,6 @@
 # OSINT v4 — Real-Source Expansion + CLI Rebuild
 
-Status: in progress
+Status: implemented — verified end to end (see §8)
 Scope: `hackit/osint/*` — collectors, verdict engine, CLI presentation, JSON contract.
 Constraint: **no API keys, no simulation**. Every finding must come from a live public
 endpoint that answers without credentials.
@@ -254,3 +254,39 @@ Rules:
 - No `… N more` without `--show`.
 - Zero API keys required anywhere.
 - Port scanner CLI/GUI/NSE still pass their existing smoke tests.
+
+---
+
+## 8. Implementation status
+
+| Area | State | Notes |
+|------|-------|-------|
+| Handle collectors | **51** keyless | GitHub, GitLab, Codeberg, Keybase, Mastodon, Pixelfed, Bluesky, Gravatar, HN, Lobsters, Docker Hub, Gitea, npm, PyPI, HackerOne, WakaTime, CTFtime, Codeforces, Codewars, HackerRank, Chess.com, Lichess, Steam, Roblox, osu!, Trakt, AniList, SoundCloud, Spotify, Deezer, Last.fm, Dailymotion, Imgur, Telegram, VK, Snapchat, Threads, Instagram, Pinterest, YouTube, Twitch, Rumble, BitChute, Replit, About.me, Linktree, Substack, Matrix, Lemmy, Wattpad, Goodreads |
+| Domain collectors | **14** keyless | RDAP (IANA bootstrap), crt.sh, Cert Spotter, HackerTarget, RapidDNS, Subdomain Center, Wayback, urlscan, OTX, IP geo, HSTS preload, SSL Labs, Mnemonic PDNS, UserCheck |
+| Email collectors | **3** keyless | PGP keyservers, Disify, UserCheck |
+| Profile templates | **790** | Aggregators (VirusTotal, urlscan, SecurityTrails, Shodan, Censys, Robtex, Google Fonts/Groups/Patents, archive.org, crt.sh) filtered by `_is_profile_source()` |
+| Verdict engine | v2 | `_veto_finding()` runs on **both** engines; shell/aggregator/not-found pages are `miss`; `possible` never scores |
+| Target kinds | phone / email / handle | A dialable number skips the 790-template sweep and goes straight to phone intel; an email sweeps its local part |
+| Presentation | rich | header + signal bars, IDENTITY, VERIFIED, CONFIRMED, PERSONAE, DIGITAL FOOTPRINT, EMAIL, PHONE, TRACE LEADS, DEAD ENDS, bench notes |
+| JSON contract | `hackit.osint.v4` | `summary` carries `hits/possible/unknown/miss/verified/checked/sources/confidence/score` |
+| Hardening | bounded | live-intel phase capped by a wall-clock budget; Gravatar candidate probes fan out concurrently (was 30 × 8 s serial) |
+
+### Verified flag matrix
+
+| Flag | Result |
+|------|--------|
+| `--json` | pure JSON on stdout, exit 0, parses with `json.load` |
+| `--html` / `-o path` | `.html` appended when missing, report renders balanced DOM |
+| `--json -o path` | `.json` appended when missing |
+| `--no-banner` | banner suppressed |
+| `--quiet` | announce + dork matrix suppressed, findings kept |
+| `--show N` / `--all-rows` | pagination honoured in confirmed rows, leads, dead ends, subdomains |
+| `--show-misses` | dead-end table rendered |
+| `--only-live` | trace leads hidden |
+| `--deep` | 4 handle variants × category, 340 probes |
+| `--category` | source list filtered before the sweep |
+| `--retry` / `--timeout` / `--workers` | plumbed to both engines |
+| `--phone` | carrier/line/social block; auto-on for dialable targets |
+| `--domain` | RDAP + DNS + subdomains + Wayback + urlscan + OTX + InternetDB |
+| Rust engine | native binary used, same vetoed verdicts |
+| `--no-rust` | built-in sweep, identical presentation |

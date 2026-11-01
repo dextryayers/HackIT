@@ -17,7 +17,7 @@ import requests
 from .analyzer import analyze_scan
 from .identity import build_identity_target
 from .mutations import build_email_candidates, split_identity, build_username_variants
-from .sources import SEARCH_LEADS, get_social_sources
+from .sources import SEARCH_LEADS, get_social_sources, is_profile_source
 from .progress import StepLogger, make_step_callback
 
 
@@ -127,6 +127,41 @@ def _extract_metadata(html: str) -> Dict[str, str]:
             r'<meta[^>]+(?:name|property)=["\'](?:description|og:description)["\'][^>]+content=["\'](.*?)["\']',
         ),
     }
+
+
+PHONE_RE = re.compile(r"^\+?[\d][\d\s().-]{6,}$")
+
+
+def is_phone_query(query: str) -> bool:
+    """True for a bare dialable number, not a handle that happens to be digits."""
+    clean = (query or "").strip()
+    if not PHONE_RE.match(clean):
+        return False
+    digits = re.sub(r"\D", "", clean)
+    if len(digits) < 7 or len(digits) > 15:
+        return False
+    return clean.startswith("+") or len(digits) >= 9
+
+
+DOMAIN_RE = re.compile(
+    r"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,24}$", re.IGNORECASE)
+
+
+def is_domain_query(query: str) -> bool:
+    """True for a bare FQDN. ``torvalds.dev`` is a domain, not a handle."""
+    clean = (query or "").strip().rstrip("/")
+    return bool(DOMAIN_RE.match(clean))
+
+
+def handle_seed(query: str) -> str:
+    """The part of a target that actually behaves like a username.
+
+    An email's local part is the handle; the domain is the footprint.
+    """
+    clean = (query or "").strip()
+    if EMAIL_RE.match(clean):
+        return clean.split("@", 1)[0]
+    return clean
 
 
 def normalize_handles(query: str, deep: bool = False) -> List[str]:
@@ -442,6 +477,9 @@ def scan_usernames(
                 if on_step and len(sweep_handles) > 1:
                     on_step("note", f"Sweeping variant: {h}")
                 merged.extend(scan_usernames_rust(h, proxy=proxy, retry=retry, timeout=max(timeout, 10), workers=workers, on_result=on_result, on_step=on_step))
+            # The native engine carries its own site table; drop aggregators here
+            # so both engines honour the same source policy.
+            merged = [f for f in merged if is_profile_source(f.url, f.platform)]
             if category:
                 merged = [f for f in merged if f.category.lower() == category.lower()]
             seen_urls, deduped = set(), []
@@ -579,19 +617,35 @@ def inspect_email(query: str, timeout: int = 8) -> Dict[str, object]:
 
 
 def check_email_candidates(candidates: List[str], timeout: int = 8) -> List[Dict[str, object]]:
-    signals = []
-    for email in candidates:
+    """Gravatar probe for guessed addresses.
+
+    Candidates are independent, so they fan out concurrently — serially this
+    was up to len(candidates) * timeout seconds of dead air (30 x 8s = 4min).
+    """
+    if not candidates:
+        return []
+
+    per_request = max(2.0, min(float(timeout), 6.0))
+
+    def _probe(email: str) -> Dict[str, object] | None:
         digest = hashlib.md5(email.lower().encode("utf-8")).hexdigest()
         url = f"https://www.gravatar.com/avatar/{digest}?d=404"
         try:
-            response = requests.get(url, timeout=timeout, allow_redirects=False)
-            if response.status_code == 200:
-                signals.append({
-                    "email": email, "source": "Gravatar",
-                    "status": "possible", "url": f"https://www.gravatar.com/{digest}",
-                })
-        except:
-            continue
+            response = requests.get(url, timeout=per_request, allow_redirects=False)
+        except requests.RequestException:
+            return None
+        if response.status_code != 200:
+            return None
+        return {
+            "email": email, "source": "Gravatar",
+            "status": "possible", "url": f"https://www.gravatar.com/{digest}",
+        }
+
+    signals: List[Dict[str, object]] = []
+    with ThreadPoolExecutor(max_workers=min(8, len(candidates))) as pool:
+        for hit in pool.map(_probe, candidates):
+            if hit:
+                signals.append(hit)
     return signals
 
 
@@ -674,17 +728,29 @@ def run_full_scan(
     sources = get_social_sources()
     if category:
         sources = [s for s in sources if s["category"].lower() == category.lower()]
-    handles = normalize_handles(query, deep=deep)
+    phone_target = is_phone_query(query)
+    domain_target = is_domain_query(query)
+    no_sweep = phone_target or domain_target
+    seed = handle_seed(query)
+    handles = [] if no_sweep else normalize_handles(seed, deep=deep)
 
     log.phase(1, 9, "Identity parsing",
               f"canonical={handles[0] if handles else 'N/A'} (+{len(handles) - 1} variants)" if handles else "no handle")
     sweep_n = min(len(handles), 4) if deep else min(len(handles), 1)
-    log.phase(2, 9, "Username sweep", f"{sweep_n} handle(s) x {len(sources)} sources")
-    profiles = scan_usernames(query, timeout=timeout, workers=workers, on_result=on_result,
-                              use_rust=use_rust, proxy=proxy, retry=retry,
-                              deep=deep, on_step=on_step, category=category)
-    n_hit = sum(1 for p in profiles if p.status == "hit")
-    log.done(f"{n_hit} hits / {len(profiles)} checked")
+    if no_sweep:
+        # 790 username templates against a phone number or an FQDN only
+        # produce noise; those targets have their own intelligence phase.
+        reason = "phone target" if phone_target else "domain target"
+        log.phase(2, 9, "Username sweep", f"skipped — {reason}")
+        profiles = []
+        log.done(f"skipped ({reason})")
+    else:
+        log.phase(2, 9, "Username sweep", f"{sweep_n} handle(s) x {len(sources)} sources")
+        profiles = scan_usernames(seed, timeout=timeout, workers=workers, on_result=on_result,
+                                  use_rust=use_rust, proxy=proxy, retry=retry,
+                                  deep=deep, on_step=on_step, category=category)
+        n_hit = sum(1 for p in profiles if p.status == "hit")
+        log.done(f"{n_hit} hits / {len(profiles)} checked")
 
     data = {
         "schema": "hackit.osint.v4",
@@ -708,8 +774,12 @@ def run_full_scan(
         },
     }
 
-    log.phase(3, 9, "Email intelligence", "MX + Gravatar + breach + PGP")
-    data["email"] = inspect_email(query, timeout=timeout)
+    if no_sweep:
+        log.phase(3, 9, "Email intelligence", "skipped — no personal target")
+        data["email"] = {}
+    else:
+        log.phase(3, 9, "Email intelligence", "MX + Gravatar + breach + PGP")
+        data["email"] = inspect_email(query, timeout=timeout)
     _email = data["email"]
     log.done(f"breaches={len(_email.get('breaches', []) or [])} gravatar={(_email.get('gravatar') or {}).get('exists')}")
 
@@ -767,7 +837,7 @@ def run_full_scan(
     data["trace_leads"] = build_trace_leads(query)
     log.done(f"{len(data['trace_leads'])} leads")
 
-    if check_phone and any(c.isdigit() for c in query):
+    if (check_phone or phone_target) and any(c.isdigit() for c in query):
         log.phase(7, 9, "Phone intelligence", "carrier + social + web mentions")
         try:
             from .phone import analyze_phone
@@ -792,6 +862,11 @@ def run_full_scan(
     log.phase(9, 9, "Correlation & scoring", "cross-platform personae + confidence")
     data["correlation"] = correlate_profiles(data["profiles"])
     data["analysis"] = analyze_scan(data)
+    # The JSON contract keeps the headline numbers in one place.
+    summary = data.setdefault("summary", {})
+    summary["sources"] = len(sources)
+    summary["confidence"] = data["analysis"].get("confidence")
+    summary["score"] = data["analysis"].get("confidence_score")
     log.done(f"confidence={data['analysis'].get('confidence')} ({data['analysis'].get('confidence_score')}/100)")
     log.report()
 

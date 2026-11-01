@@ -126,7 +126,9 @@ def generate_html_report(data: dict, output_path: str = "") -> str:
             domain_html += f'<p style="color:#aaa;font-size:13px">MX: {", ".join(domain["mx_records"][:4])}</p>'
         domain_html += '</div>'
 
-    identity_html = f'''<div class="section fade-in"><h2>👤 Identity Profile</h2>
+    identity_html = ""
+    if data.get("handles"):
+        identity_html = f'''<div class="section fade-in"><h2>👤 Identity Profile</h2>
     <div class="grid-2">
         <div class="info-card"><span class="label">Display Name</span><span class="value">{data.get("display_name","N/A")}</span></div>
         <div class="info-card"><span class="label">Name Format</span><span class="value">{data.get("name_format","N/A")}</span></div>
@@ -135,10 +137,12 @@ def generate_html_report(data: dict, output_path: str = "") -> str:
         <div class="info-card"><span class="label">Middle Name</span><span class="value">{data.get("middle_name","N/A") if data.get("middle_name") else "—"}</span></div>
         <div class="info-card"><span class="label">Initials</span><span class="value">{data.get("initials","N/A")}</span></div>
     </div>'''
-    aliases = data.get("aliases", [])
-    if aliases:
-        identity_html += f'<h3 style="margin-top:15px;font-size:15px">🔀 Aliases ({len(aliases)})</h3>' + " ".join(f'<span class="tag">{a}</span>' for a in aliases[:20])
-    identity_html += '</div>'
+        aliases = data.get("aliases", [])
+        if aliases:
+            identity_html += (f'<h3 style="margin-top:15px;font-size:15px">🔀 Aliases '
+                              f'({len(aliases)})</h3>' + " ".join(
+                                  f'<span class="tag">{a}</span>' for a in aliases[:20]))
+        identity_html += '</div>'
 
     meta = data.get("metadata", {})
     meta_html = ""

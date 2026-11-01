@@ -508,6 +508,87 @@ def collect_ctftime(handle: str) -> dict | None:
     )
 
 
+# Codeberg's WAF rejects spoofed browser User-Agents; a plain client UA passes.
+TOOL_HEADERS = {"User-Agent": "hackit-osint/4.0", "Accept": "application/json"}
+
+
+def collect_codeberg(handle: str) -> dict | None:
+    data = _json(f"https://codeberg.org/api/v1/users/{handle}", headers=TOOL_HEADERS)
+    if not data or str(data.get("login", "")).lower() != handle.lower():
+        return None
+    return _profile(
+        "Codeberg", "code", data.get("html_url") or f"https://codeberg.org/{handle}",
+        name=data.get("full_name") or data.get("login"),
+        bio=data.get("description", ""),
+        location=data.get("location", ""),
+        created=(data.get("created") or "")[:10],
+        followers=data.get("followers_count", 0),
+        facts={"repos": data.get("public_repos", ""), "website": data.get("website", "")},
+        evidence=["api"],
+    )
+
+
+def collect_codeforces(handle: str) -> dict | None:
+    data = _json(f"https://codeforces.com/api/user.info?handles={handle}")
+    if not data or data.get("status") != "OK":
+        return None
+    rows = data.get("result") or []
+    if not rows:
+        return None
+    user = rows[0]
+    if str(user.get("handle", "")).lower() != handle.lower():
+        return None
+    name = " ".join(part for part in (user.get("firstName"), user.get("lastName")) if part)
+    created = ""
+    if user.get("registrationTimeSeconds"):
+        created = time.strftime("%Y-%m-%d", time.gmtime(user["registrationTimeSeconds"]))
+    return _profile(
+        "Codeforces", "code", f"https://codeforces.com/profile/{user['handle']}",
+        name=name or user["handle"],
+        location=", ".join(x for x in (user.get("city"), user.get("country")) if x),
+        created=created,
+        facts={"rank": user.get("rank", ""), "rating": user.get("rating", ""),
+               "max_rating": user.get("maxRating", ""),
+               "organization": user.get("organization", "")},
+        evidence=["api"],
+    )
+
+
+def collect_codewars(handle: str) -> dict | None:
+    data = _json(f"https://www.codewars.com/api/v1/users/{handle}")
+    if not data or str(data.get("username", "")).lower() != handle.lower():
+        return None
+    created = (data.get("memberSince") or "")[:10]
+    ranks = data.get("ranks") or {}
+    return _profile(
+        "Codewars", "code", f"https://www.codewars.com/users/{data['username']}",
+        name=data.get("name") or data["username"],
+        created=created,
+        facts={"honor": data.get("honor", ""),
+               "clan": data.get("clan", ""),
+               "rank": (ranks.get("overall") or {}).get("name", ""),
+               "leaderboard": data.get("leaderboardPosition", "")},
+        evidence=["api"],
+    )
+
+
+def collect_hackerrank(handle: str) -> dict | None:
+    data = _json("https://www.hackerrank.com/rest/contests/master/hackers/"
+                 f"{handle}/profile")
+    model = (data or {}).get("model") or {}
+    if not model or str(model.get("username", "")).lower() != handle.lower():
+        return None
+    return _profile(
+        "HackerRank", "code", f"https://www.hackerrank.com/profile/{model['username']}",
+        name=model.get("name") or model["username"],
+        location=model.get("country", ""),
+        created=(model.get("created_at") or "")[:10],
+        followers=model.get("followers_count", 0),
+        facts={"school": model.get("school", ""), "company": model.get("company", "")},
+        evidence=["api"],
+    )
+
+
 # ───────────────────────────── gaming ─────────────────────────────
 
 def collect_chesscom(handle: str) -> dict | None:
@@ -1428,6 +1509,10 @@ HANDLE_COLLECTORS: List[Collector] = [
     Collector("hackerone", "HackerOne", "security", 4, collect_hackerone),
     Collector("wakatime", "WakaTime", "code", 2, collect_wakatime),
     Collector("ctftime", "CTFtime", "security", 3, collect_ctftime),
+    Collector("codeberg", "Codeberg", "code", 3, collect_codeberg),
+    Collector("codeforces", "Codeforces", "code", 3, collect_codeforces),
+    Collector("codewars", "Codewars", "code", 3, collect_codewars),
+    Collector("hackerrank", "HackerRank", "code", 3, collect_hackerrank),
     Collector("chesscom", "Chess.com", "gaming", 3, collect_chesscom),
     Collector("lichess", "Lichess", "gaming", 3, collect_lichess),
     Collector("steam", "Steam", "gaming", 3, collect_steam),
@@ -1548,7 +1633,11 @@ def collect_live_intel(
     primary = [h for h in handles[:handle_limit] if h and len(h) >= 2]
     tasks: Dict[object, tuple] = {}
 
-    with ThreadPoolExecutor(max_workers=max(4, workers)) as pool:
+    # A collector that never returns must not hold the whole scan hostage.
+    budget = max(45.0, float(timeout) * 6.0)
+    deadline = time.monotonic() + budget
+    pool = ThreadPoolExecutor(max_workers=max(4, workers))
+    try:
         for handle in primary:
             for collector in HANDLE_COLLECTORS:
                 tasks[pool.submit(collector.fn, handle)] = (collector, handle)
@@ -1562,7 +1651,7 @@ def collect_live_intel(
                 tasks[pool.submit(collector.fn, email)] = (collector, email)
             out["sources_checked"] += len(EMAIL_COLLECTORS)
 
-        for future in as_completed(tasks):
+        for future in as_completed(tasks, timeout=max(deadline - time.monotonic(), 1.0)):
             collector, target = tasks[future]
             try:
                 result = future.result()
@@ -1609,6 +1698,14 @@ def collect_live_intel(
                     out["pgp"] = result
                 else:
                     out["email_checks"][collector.key] = result
+    except TimeoutError:
+        for future, (collector, _target) in tasks.items():
+            if future.done():
+                continue
+            future.cancel()
+            out["errors"].append({"source": collector.name, "error": "timeout"})
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
 
     # DNS needs the record set before the mail-posture derivation.
     if domain:
