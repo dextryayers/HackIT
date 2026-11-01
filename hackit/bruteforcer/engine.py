@@ -169,6 +169,60 @@ def default_passwords() -> List[str]:
         return []
 
 
+def _probe_smb_negotiate() -> bytes:
+    """Minimal SMB2 NEGOTIATE, enough to get a NEGOTIATE response back."""
+    dialects = b"".join(d.to_bytes(2, "little") for d in (0x0311, 0x0302, 0x0210, 0x0202))
+    body = (
+        (36).to_bytes(2, "little")
+        + (4).to_bytes(2, "little")
+        + (1).to_bytes(2, "little")
+        + b"\x00\x00"
+        + b"\x00" * 4
+        + b"\x11" * 16
+        + b"\x00" * 8
+        + b"\x00\x00"
+        + b"\x00\x00"
+        + dialects
+    )
+    header = (
+        b"\xfeSMB"
+        + (64).to_bytes(2, "little")
+        + (1).to_bytes(2, "little")
+        + b"\x00" * 4
+        + (0).to_bytes(2, "little")
+        + (1).to_bytes(2, "little")
+        + b"\x00" * 4
+        + b"\x00" * 4
+        + b"\x00" * 8
+        + b"\x00" * 4
+        + b"\x00" * 4
+        + b"\x00" * 8
+        + b"\x00" * 16
+    )
+    packet = header + body
+    return len(packet).to_bytes(4, "big") + packet
+
+
+def _probe_rdp_negotiate() -> bytes:
+    """TPKT + X.224 Connection Request asking for TLS or NLA."""
+    x224 = b"\x06\xe0\x00\x00\x00\x00\x00\x01\x00\x08\x00\x03\x00\x00\x00"
+    total = len(x224) + 4
+    return b"\x03\x00" + total.to_bytes(2, "big") + x224
+
+
+def _probe_mqtt_connect() -> bytes:
+    """MQTT 3.1.1 CONNECT with an empty client id — every broker answers."""
+    variable = b"\x00\x04MQTT\x04\x02\x00\x3c"  # proto, level 4, clean session, keepalive 60
+    payload = b"\x00\x00"  # zero-length client id
+    body = variable + payload
+    return b"\x10" + bytes([len(body)]) + body
+
+
+def _probe_postgres_ssl() -> bytes:
+    """PostgreSQL SSLRequest — the backend answers 'S' or 'N'."""
+    return b"\x00\x00\x00\x08\x04\xd2\x16\x2f"
+
+
 # ─────────────────────────── service detection ───────────────────────────
 # Banner signatures, applied to whatever the service says on connect. These are
 # the real greetings the daemons send, so detection is a read, not a guess.
@@ -187,15 +241,20 @@ _BANNER_RULES: List[Tuple[str, "re.Pattern[str]"]] = [
 
 
 def _read_banner(sock: socket.socket, limit: int = 512) -> bytes:
+    """Read whatever the peer sends, stopping after a short idle gap.
+
+    A single `recv` can return half a greeting, so keep reading until the peer
+    goes quiet. The idle window is short: a service that has nothing to say
+    should not cost the caller the whole probe timeout.
+    """
     chunks = bytearray()
     try:
+        sock.settimeout(0.35)
         while len(chunks) < limit:
-            piece = sock.recv(limit - len(chunks))
+            piece = sock.recv(min(limit - len(chunks), 4096))
             if not piece:
                 break
             chunks.extend(piece)
-            if len(piece) < 64:
-                break
     except (socket.timeout, OSError):
         pass
     return bytes(chunks)
@@ -230,26 +289,62 @@ def detect_service(target: str, port: int, timeout: float = 3.0) -> Dict[str, ob
         for proto, rule in _BANNER_RULES:
             if rule.search(banner):
                 result["protocol"] = proto
-                result["banner"] = banner[:200].decode("utf-8", "replace").strip()
+                result["banner"] = banner[:200].decode("utf-8", "replace").rstrip("\r\n")
                 return result
 
-        # Silent services — ask each one the question it answers.
-        for proto, probe, match in (
-            ("http", b"HEAD / HTTP/1.0\r\nHost: " + target.encode() + b"\r\n\r\n", re.compile(rb"^HTTP/\d\.\d")),
-            ("redis", b"PING\r\n", re.compile(rb"^[+-](PONG|NOAUTH|ERR)")),
-        ):
+        # Silent services — ask each one the question it answers. Each probe
+        # gets its own connection: an HTTP request sent to Redis makes Redis
+        # drop the socket, so sharing one would poison the next probe.
+        silent_probes = [
+            (
+                "http",
+                b"HEAD / HTTP/1.0\r\nHost: " + target.encode() + b"\r\n\r\n",
+                lambda r: bool(re.match(rb"^HTTP/\d\.\d", r)),
+            ),
+            # RESP array form: every Redis accepts it, and the inline form is
+            # disabled on some hardened builds.
+            (
+                "redis",
+                b"*1\r\n$4\r\nPING\r\n",
+                lambda r: bool(re.match(rb"^[+-](PONG|NOAUTH|ERR|WRONGPASS)", r)),
+            ),
+            (
+                "postgresql",
+                _probe_postgres_ssl(),
+                lambda r: r[:1] in (b"S", b"N"),
+            ),
+            (
+                "smb",
+                _probe_smb_negotiate(),
+                lambda r: r[4:8] == b"\xfeSMB",
+            ),
+            (
+                "rdp",
+                _probe_rdp_negotiate(),
+                lambda r: len(r) >= 6 and r[0] == 0x03 and r[5] == 0xD0,
+            ),
+            (
+                "mqtt",
+                _probe_mqtt_connect(),
+                lambda r: len(r) >= 4 and r[0] == 0x20 and r[1] == 0x02,
+            ),
+        ]
+
+        for proto, probe, matches in silent_probes:
             try:
-                sock.sendall(probe)
-                reply = _read_banner(sock, 256)
+                with socket.create_connection((target, port), timeout=timeout) as probe_sock:
+                    probe_sock.settimeout(timeout)
+                    probe_sock.sendall(probe)
+                    reply = _read_banner(probe_sock, 256)
             except OSError:
                 continue
-            if match.search(reply):
+            if matches(reply):
                 result["protocol"] = proto
-                result["banner"] = reply[:200].decode("utf-8", "replace").strip()
+                result["banner"] = reply[:200].decode("utf-8", "replace").rstrip("\r\n")
                 return result
 
         if banner:
-            result["banner"] = banner[:200].decode("utf-8", "replace").strip()
+            result["banner"] = banner[:200].decode("utf-8", "replace").rstrip("\r\n")
         result["detail"] = "no protocol signature in the service greeting"
         return result
     finally:

@@ -297,6 +297,23 @@ def build_cmd():
         sys.exit(1)
 
 
+def _printable(text: str) -> str:
+    """Collapse binary banner bytes into something a terminal can render."""
+    out = []
+    for ch in text:
+        code = ord(ch)
+        if code == 9 or code == 10 or code == 13:
+            out.append(" ")
+        elif 32 <= code < 127:
+            out.append(ch)
+        elif code >= 160:
+            out.append(ch)
+        else:
+            out.append(".")
+    collapsed = " ".join("".join(out).split())
+    return collapsed[:60]
+
+
 @bruter.command(name="detect")
 @click.option("--target", "-t", required=True, help="Target host or IP")
 @click.option("--port", "-p", type=int, multiple=True, help="Port to probe (repeatable)")
@@ -308,13 +325,13 @@ def detect_cmd(target: str, port, timeout: float):
     for p in ports:
         info = detect_service(target, p, timeout)
         proto = info.get("protocol")
-        banner = str(info.get("banner") or "")
+        banner = _printable(str(info.get("banner") or ""))
         if proto:
-            _box_line(f"{p:5d}  {get_protocol_name(str(proto)):12s} {banner[:60]}", B_GREEN)
+            _box_line(f"{p:5d}  {get_protocol_name(str(proto)):12s} {banner}", B_GREEN)
         elif banner:
-            _box_line(f"{p:5d}  {'unknown':12s} {banner[:60]}", YELLOW)
+            _box_line(f"{p:5d}  {'unknown':12s} {banner}", YELLOW)
         else:
-            _box_line(f"{p:5d}  {'closed':12s} {info.get('detail', '')}", DIM)
+            _box_line(f"{p:5d}  {'closed':12s} {_printable(str(info.get('detail', '')))}", DIM)
     _draw_box_end()
     click.echo()
 
@@ -408,6 +425,28 @@ def _scan_one(protocol: str, target: str, port: int, user, userlist, passwd, pas
     label = get_protocol_name(proto)
     effective_port = port or get_default_port(proto)
 
+    # Inline values become one-element lists; file paths are passed straight
+    # through so a million-line list is never copied into memory here. A
+    # built-in wordlist name is resolved to its lines up front.
+    users = [user] if user else None
+    passwords = [passwd] if passwd is not None else None
+
+    userlist_path = None
+    if userlist:
+        if os.path.isfile(userlist):
+            userlist_path = userlist
+        else:
+            users = load_wordlist(userlist)
+            userlist_path = None
+
+    passlist_path = None
+    if passlist:
+        if os.path.isfile(passlist):
+            passlist_path = passlist
+        else:
+            passwords = load_wordlist(passlist)
+            passlist_path = None
+
     if not quiet:
         click.echo(_colored(f"\n  [*] {label} on {target}:{effective_port}", B_CYAN))
 
@@ -418,12 +457,12 @@ def _scan_one(protocol: str, target: str, port: int, user, userlist, passwd, pas
             target,
             effective_port,
             proto,
-            users=None,
-            passwords=None,
+            users=users,
+            passwords=passwords,
             threads=threads,
             timeout=timeout,
-            userlist=userlist,
-            passlist=passlist,
+            userlist=userlist_path,
+            passlist=passlist_path,
             combo_file=combo_file,
             extra=extra,
             stop_on_first=stop_on_first,

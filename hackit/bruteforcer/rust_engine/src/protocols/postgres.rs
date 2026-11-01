@@ -256,7 +256,7 @@ pub async fn auth(
 
 /// SCRAM-SHA-256 exchange. Runs to the server-final message and verifies the
 /// server signature, so a hostile or broken server cannot fake a success.
-async fn scram(conn: &mut Reader, user: &str, pass: &str) -> Result<(), String> {
+async fn scram(conn: &mut Reader, _user: &str, pass: &str) -> Result<(), String> {
     let nonce_bytes: [u8; 18] = rand::random();
     let nonce = base64::engine::general_purpose::STANDARD.encode(nonce_bytes);
     let client_first_bare = format!("n=,r={}", nonce);

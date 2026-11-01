@@ -169,62 +169,179 @@ struct FoundCred {
 }
 
 // ───────────────────────────── combo source ─────────────────────────────
+//
+// Candidate sets are produced lazily. A cartesian set is (user, password) pairs
+// generated on the fly, and a large password file is streamed from disk instead
+// of being held in memory, so a 10-million-candidate run costs the same resident
+// memory as a 10-candidate run.
 
-enum Combos {
-    Cartesian {
-        users: Vec<String>,
-        passes: Vec<String>,
-    },
-    Explicit(Vec<(String, String)>),
+/// Lists at or below this many lines are loaded into memory (which lets them be
+/// de-duplicated and expanded); larger ones are streamed.
+const IN_MEMORY_LIST_LIMIT: usize = 250_000;
+
+/// A bounded channel keeps the producer from running ahead of the workers.
+const COMBO_BUFFER_PER_THREAD: usize = 8;
+const COMBO_BUFFER_MAX: usize = 8192;
+
+enum PassSource {
+    Memory(Vec<String>),
+    File(String),
 }
 
-impl Combos {
-    fn len(&self) -> usize {
+impl PassSource {
+    fn count(&self) -> usize {
         match self {
-            Combos::Cartesian { users, passes } => users.len() * passes.len(),
-            Combos::Explicit(v) => v.len(),
+            PassSource::Memory(v) => v.len(),
+            PassSource::File(path) => count_list_lines(path),
         }
     }
+}
 
-    fn get(&self, index: usize) -> Option<(&str, &str)> {
+enum ComboPlan {
+    Cartesian {
+        users: Vec<String>,
+        passes: PassSource,
+        extras: Vec<String>,
+    },
+    Explicit {
+        path: String,
+    },
+}
+
+impl ComboPlan {
+    fn count(&self) -> u64 {
         match self {
-            Combos::Cartesian { users, passes } => {
-                if passes.is_empty() {
-                    return None;
-                }
-                let u = users.get(index / passes.len())?;
-                let p = passes.get(index % passes.len())?;
-                Some((u.as_str(), p.as_str()))
-            }
-            Combos::Explicit(v) => v.get(index).map(|(u, p)| (u.as_str(), p.as_str())),
+            ComboPlan::Cartesian {
+                users,
+                passes,
+                extras,
+            } => (users.len() as u64) * ((passes.count() + extras.len()) as u64),
+            ComboPlan::Explicit { path } => count_combo_lines(path) as u64,
         }
     }
+}
+
+/// Count the usable lines in a candidate list without holding them.
+fn count_list_lines(path: &str) -> usize {
+    use std::io::BufRead;
+    let Ok(file) = std::fs::File::open(path) else {
+        return 0;
+    };
+    std::io::BufReader::new(file)
+        .lines()
+        .map_while(Result::ok)
+        .filter(|line| !line.trim().is_empty())
+        .count()
+}
+
+/// Count `user:pass` lines in a combo file.
+fn count_combo_lines(path: &str) -> usize {
+    use std::io::BufRead;
+    let Ok(file) = std::fs::File::open(path) else {
+        return 0;
+    };
+    std::io::BufReader::new(file)
+        .lines()
+        .map_while(Result::ok)
+        .filter(|line| {
+            let line = line.trim();
+            !line.is_empty() && !line.starts_with('#') && line.contains(':')
+        })
+        .count()
 }
 
 fn load_list(path: &str) -> Vec<String> {
-    let content = std::fs::read_to_string(path).unwrap_or_default();
+    use std::io::BufRead;
+    let Ok(file) = std::fs::File::open(path) else {
+        return Vec::new();
+    };
     let mut seen = std::collections::HashSet::new();
-    content
+    std::io::BufReader::new(file)
         .lines()
+        .map_while(Result::ok)
         .map(|l| l.trim_end_matches(['\r', '\n']).to_string())
         .filter(|l| !l.is_empty())
         .filter(|l| seen.insert(l.clone()))
         .collect()
 }
 
-fn load_combos(path: &str) -> Vec<(String, String)> {
-    std::fs::read_to_string(path)
-        .unwrap_or_default()
-        .lines()
-        .filter_map(|line| {
-            let line = line.trim_end_matches(['\r', '\n']);
-            if line.is_empty() || line.starts_with('#') {
-                return None;
+/// Feed candidates into the worker channel until the source is exhausted, the
+/// channel closes, or the run is stopped. `skip` implements resume.
+async fn produce_combos(
+    plan: ComboPlan,
+    tx: tokio::sync::mpsc::Sender<(u64, String, String)>,
+    skip: u64,
+    stop: Arc<AtomicBool>,
+    cursor: Arc<AtomicU64>,
+) {
+    use std::io::BufRead;
+    let mut index: u64 = 0;
+
+    // A candidate that lands before `skip` is counted but never sent.
+    macro_rules! offer {
+        ($user:expr, $pass:expr) => {{
+            if stop.load(Ordering::Relaxed) {
+                return;
             }
-            let (u, p) = line.split_once(':')?;
-            Some((u.to_string(), p.to_string()))
-        })
-        .collect()
+            let current = index;
+            index += 1;
+            if current < skip {
+                continue;
+            }
+            cursor.store(current, Ordering::Relaxed);
+            if tx.send((current, $user, $pass)).await.is_err() {
+                return;
+            }
+        }};
+    }
+
+    match plan {
+        ComboPlan::Explicit { path } => {
+            let Ok(file) = std::fs::File::open(&path) else {
+                return;
+            };
+            for line in std::io::BufReader::new(file).lines().map_while(Result::ok) {
+                let line = line.trim();
+                if line.is_empty() || line.starts_with('#') {
+                    continue;
+                }
+                let Some((user, pass)) = line.split_once(':') else {
+                    continue;
+                };
+                offer!(user.to_string(), pass.to_string());
+            }
+        }
+        ComboPlan::Cartesian {
+            users,
+            passes,
+            extras,
+        } => {
+            for user in users {
+                match &passes {
+                    PassSource::Memory(list) => {
+                        for pass in list {
+                            offer!(user.clone(), pass.clone());
+                        }
+                    }
+                    PassSource::File(path) => {
+                        let Ok(file) = std::fs::File::open(path) else {
+                            return;
+                        };
+                        for line in std::io::BufReader::new(file).lines().map_while(Result::ok) {
+                            let line = line.trim_end_matches(['\r', '\n']);
+                            if line.is_empty() {
+                                continue;
+                            }
+                            offer!(user.clone(), line.to_string());
+                        }
+                    }
+                }
+                for extra in &extras {
+                    offer!(user.clone(), extra.clone());
+                }
+            }
+        }
+    }
 }
 
 fn extra_candidates(users: &[String], spec: &str) -> Vec<String> {
@@ -325,24 +442,29 @@ async fn run(args: Args) -> i32 {
         Vec::new()
     };
 
+    // A large password file is never loaded up front: the plan streams it. Only
+    // small files (or files that need expansion) are materialised here.
     let mut passes: Vec<String> = if let Some(ref p) = args.pass {
         vec![p.clone()]
     } else if let Some(ref pl) = args.passlist {
-        load_list(pl)
+        if args.expand_words || count_list_lines(pl) <= IN_MEMORY_LIST_LIMIT {
+            load_list(pl)
+        } else {
+            Vec::new()
+        }
     } else {
         Vec::new()
     };
 
-    let combos = if let Some(ref cf) = args.combo_file {
-        let explicit = load_combos(cf);
-        if explicit.is_empty() {
+    let plan = if let Some(ref cf) = args.combo_file {
+        if count_combo_lines(cf) == 0 {
             emit_json(&serde_json::json!({
                 "status": "error",
                 "message": format!("no user:pass pairs in {}", cf),
             }));
             return 1;
         }
-        Combos::Explicit(explicit)
+        ComboPlan::Explicit { path: cf.clone() }
     } else {
         // A VNC or SNMP check has no username: the password or community
         // string is the whole secret. Anything else needs a real account name,
@@ -358,26 +480,44 @@ async fn run(args: Args) -> i32 {
                 return 1;
             }
         }
-        if passes.is_empty() {
+        if passes.is_empty() && args.passlist.is_none() {
             emit_json(&serde_json::json!({
                 "status": "error",
                 "message": "no passwords supplied — pass -w, -W, or -C",
             }));
             return 1;
         }
-        if args.expand_words {
-            passes = core::WordlistGenerator::expand(&passes, 99, true);
-            users = core::WordlistGenerator::expand(&users, 9, false);
-        }
-        for candidate in extra_candidates(&users, &args.extra) {
-            if !passes.contains(&candidate) {
-                passes.push(candidate);
+
+        // A large file is streamed from disk; everything else is already in
+        // memory and gets expanded and de-duplicated there.
+        let streaming_file = match args.passlist {
+            Some(ref pl) if !args.expand_words && count_list_lines(pl) > IN_MEMORY_LIST_LIMIT => {
+                Some(pl.clone())
             }
+            _ => None,
+        };
+
+        let pass_list: PassSource = match streaming_file {
+            Some(path) => PassSource::File(path),
+            None => {
+                let mut list = std::mem::take(&mut passes);
+                if args.expand_words {
+                    list = core::WordlistGenerator::expand(&list, 99, true);
+                    users = core::WordlistGenerator::expand(&users, 9, false);
+                }
+                PassSource::Memory(list)
+            }
+        };
+
+        let extras = extra_candidates(&users, &args.extra);
+        ComboPlan::Cartesian {
+            users,
+            passes: pass_list,
+            extras,
         }
-        Combos::Cartesian { users, passes }
     };
 
-    let total = combos.len() as u64;
+    let total = plan.count();
     if total == 0 {
         emit_json(&serde_json::json!({
             "status": "error",
@@ -437,7 +577,6 @@ async fn run(args: Args) -> i32 {
     let wait = args.wait;
     let json_mode = args.json;
     let verbose = args.verbose;
-    let combos = Arc::new(combos);
     let opts = Arc::new(protocols::ProtoOpts {
         http_path: args.http_path.clone(),
         http_method: args.http_method.clone(),
@@ -462,16 +601,30 @@ async fn run(args: Args) -> i32 {
         });
     }
 
+    // Candidates flow through a bounded channel: the producer reads the source
+    // lazily and the workers consume at their own pace, so memory tracks the
+    // buffer size rather than the size of the candidate set.
+    let buffer = (args.threads * COMBO_BUFFER_PER_THREAD).clamp(16, COMBO_BUFFER_MAX);
+    let (combo_tx, combo_rx) = tokio::sync::mpsc::channel::<(u64, String, String)>(buffer);
+    let combo_rx = Arc::new(tokio::sync::Mutex::new(combo_rx));
+    {
+        let stop = stop.clone();
+        let cursor = cursor.clone();
+        let skip = cursor.load(Ordering::Relaxed);
+        tokio::spawn(async move {
+            produce_combos(plan, combo_tx, skip, stop, cursor).await;
+        });
+    }
+
     let mut workers = Vec::with_capacity(args.threads);
     for _ in 0..args.threads {
-        let cursor = cursor.clone();
         let attempted = attempted.clone();
         let found_count = found_count.clone();
         let transport_errors = transport_errors.clone();
         let stop = stop.clone();
         let results = results.clone();
         let rate = rate.clone();
-        let combos = combos.clone();
+        let combos = combo_rx.clone();
         let protocol = protocol.clone();
         let target = target.clone();
         let opts = opts.clone();
@@ -481,13 +634,16 @@ async fn run(args: Args) -> i32 {
                 if stop.load(Ordering::Relaxed) {
                     break;
                 }
-                let index = cursor.fetch_add(1, Ordering::Relaxed);
-                if index >= total {
-                    break;
-                }
-                let Some((user, pass)) = combos.get(index as usize) else {
+                // The receiver is shared, so the lock is held only long enough
+                // to take one candidate; the network round trip happens outside.
+                let next = {
+                    let mut guard = combos.lock().await;
+                    guard.recv().await
+                };
+                let Some((_index, user, pass)) = next else {
                     break;
                 };
+                let (user, pass) = (user.as_str(), pass.as_str());
 
                 if let Some(ref rl) = rate {
                     let delay = rl.acquire().await;
