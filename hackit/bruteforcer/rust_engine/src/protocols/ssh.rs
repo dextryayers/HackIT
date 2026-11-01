@@ -9,6 +9,7 @@ pub async fn auth(target: &str, port: u16, user: &str, pass: &str, to: u64) -> R
     tokio::time::timeout(Duration::from_secs(to), async {
         tokio::task::spawn_blocking(move || {
             let tcp = TcpStream::connect(&addr).map_err(|e| format!("tcp:{}", e))?;
+            let _ = tcp.set_nodelay(true);
             tcp.set_read_timeout(Some(Duration::from_secs(to))).ok();
             tcp.set_write_timeout(Some(Duration::from_secs(to))).ok();
             let mut s = Session::new().map_err(|e| format!("sess:{}", e))?;

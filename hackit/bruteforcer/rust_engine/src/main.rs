@@ -700,6 +700,9 @@ async fn run(args: Args) -> i32 {
                             );
                             let _ = out.flush();
                         }
+                        if verbose {
+                            eprintln!("[+] {}:{} VALID", user, pass);
+                        }
                         results.lock().await.push(cred);
                         if stop_on_first {
                             stop.store(true, Ordering::SeqCst);
@@ -708,13 +711,13 @@ async fn run(args: Args) -> i32 {
                     }
                     AuthOutcome::Denied => {
                         if verbose {
-                            eprintln!("[-] {}:{} denied", user, pass);
+                            eprintln!("[-] {}:{} FAILED", user, pass);
                         }
                     }
                     AuthOutcome::Error(e) => {
                         transport_errors.fetch_add(1, Ordering::Relaxed);
                         if verbose {
-                            eprintln!("[!] {}:{} {}", user, pass, e);
+                            eprintln!("[!] {}:{} ERROR ({})", user, pass, e);
                         }
                     }
                 }

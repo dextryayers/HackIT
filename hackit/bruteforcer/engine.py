@@ -465,10 +465,13 @@ def build_command(
     return cmd
 
 
-def _drain(stream, sink: List[str]) -> None:
+def _drain(stream, sink: List[str], on_log: Optional[Callable[[str], None]] = None) -> None:
     try:
         for line in stream:
-            sink.append(line.rstrip("\n"))
+            text = line.rstrip("\n")
+            sink.append(text)
+            if on_log is not None and text.strip():
+                on_log(text)
     except (ValueError, OSError):
         pass
     finally:
@@ -508,7 +511,7 @@ def run_engine(
 
     stderr_lines: List[str] = []
     stderr_thread = threading.Thread(
-        target=_drain, args=(proc.stderr, stderr_lines), daemon=True
+        target=_drain, args=(proc.stderr, stderr_lines, on_log), daemon=True
     )
     stderr_thread.start()
 
@@ -556,11 +559,6 @@ def run_engine(
             pass
         returncode = proc.wait()
         stderr_thread.join(timeout=2)
-
-    if on_log is not None:
-        for line in stderr_lines:
-            if line.strip():
-                on_log(line)
 
     if fatal:
         raise EngineError(fatal)

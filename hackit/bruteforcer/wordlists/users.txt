@@ -1,9 +1,8 @@
-# Common account names, ordered by how often they appear on real systems.
-# Comment lines and blanks are ignored by the loader.
 root
 admin
 administrator
 user
+aniipid
 test
 guest
 ubuntu

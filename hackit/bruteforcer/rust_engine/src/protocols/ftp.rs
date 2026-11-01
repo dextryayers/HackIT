@@ -16,15 +16,32 @@ async fn read_reply(
     reader: &mut BufReader<tokio::io::ReadHalf<tls::BoxStream>>,
     to: u64,
 ) -> Result<String, String> {
-    let mut line = String::new();
-    tokio::time::timeout(Duration::from_secs(to), reader.read_line(&mut line))
-        .await
-        .map_err(|_| "read timeout".to_string())?
-        .map_err(|e| format!("read: {}", e))?;
-    if line.is_empty() {
-        return Err("connection closed".into());
+    // FTP replies may be multi-line: `220-foo` continues, `220 bar` ends.
+    // Collect until the terminating line (code followed by a space) arrives.
+    let mut accumulated = String::new();
+    let mut code_str = String::new();
+    loop {
+        let mut line = String::new();
+        let n = tokio::time::timeout(Duration::from_secs(to), reader.read_line(&mut line))
+            .await
+            .map_err(|_| "read timeout".to_string())?
+            .map_err(|e| format!("read: {}", e))?;
+        if n == 0 {
+            if accumulated.is_empty() {
+                return Err("connection closed".into());
+            }
+            break;
+        }
+        accumulated.push_str(&line);
+        if line.len() >= 4 && line.as_bytes()[3] == b' ' {
+            code_str = line[..3].to_string();
+            break;
+        }
+        if code_str.is_empty() && line.len() >= 3 {
+            code_str = line[..3].to_string();
+        }
     }
-    Ok(line)
+    Ok(accumulated)
 }
 
 fn code(line: &str) -> u16 {

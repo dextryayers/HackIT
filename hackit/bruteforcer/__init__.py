@@ -364,7 +364,7 @@ def detect_cmd(target: str, port, timeout: float):
 @click.option("--http-header", "http_headers", multiple=True, help="Extra HTTP header, repeatable")
 @click.option("--http-tls", is_flag=True, help="Force https")
 @click.option("--http-force-basic", is_flag=True, help="Send Basic credentials even without a 401")
-@click.option("--verbose", "-v", is_flag=True, help="Per-attempt chatter")
+@click.option("--verbose", "-v", is_flag=True, default=True, help="Per-attempt chatter (default on)")
 @click.option("--quiet", "-q", is_flag=True, help="Only print credentials and the summary")
 def scan(protocol, target, port, user, userlist, passwd, passlist, combo_file, extra,
          threads, timeout, stop_on_first, retries, rate, wait, resume, max_blocking,
@@ -418,9 +418,11 @@ def scan(protocol, target, port, user, userlist, passwd, passlist, combo_file, e
     )
 
 
-def _scan_one(protocol: str, target: str, port: int, user, userlist, passwd, passlist,
-              combo_file, extra, threads, timeout, stop_on_first, retries, rate, wait,
-              resume, max_blocking, expand_words, check, http, verbose, quiet) -> Optional[Dict]:
+def _scan_one(protocol: str, target: str, port: int, user=None, userlist=None, passwd=None,
+              passlist=None, combo_file=None, users_list=None, passwords_list=None,
+              extra="", threads=16, timeout=10, stop_on_first=False, retries=1,
+              rate=0.0, wait=0.0, resume=None, max_blocking=None, expand_words=False,
+              check=False, http=None, verbose=False, quiet=False) -> Optional[Dict]:
     proto = protocol.lower()
     label = get_protocol_name(proto)
     effective_port = port or get_default_port(proto)
@@ -428,8 +430,8 @@ def _scan_one(protocol: str, target: str, port: int, user, userlist, passwd, pas
     # Inline values become one-element lists; file paths are passed straight
     # through so a million-line list is never copied into memory here. A
     # built-in wordlist name is resolved to its lines up front.
-    users = [user] if user else None
-    passwords = [passwd] if passwd is not None else None
+    users = users_list if users_list is not None else ([user] if user else None)
+    passwords = passwords_list if passwords_list is not None else ([passwd] if passwd is not None else None)
 
     userlist_path = None
     if userlist:
@@ -449,6 +451,18 @@ def _scan_one(protocol: str, target: str, port: int, user, userlist, passwd, pas
 
     if not quiet:
         click.echo(_colored(f"\n  [*] {label} on {target}:{effective_port}", B_CYAN))
+
+    def on_log(line: str) -> None:
+        reporter.close()
+        low = line.lower()
+        if "valid" in low or "[+]" in line:
+            click.echo(_colored(f"  {line}", B_GREEN))
+        elif "failed" in low or "denied" in low or "[-]" in line:
+            click.echo(_colored(f"  {line}", RED))
+        elif "error" in low or "[!]" in line:
+            click.echo(_colored(f"  {line}", YELLOW))
+        else:
+            click.echo(_colored(f"  {line}", DIM))
 
     reporter = LiveReporter(proto, target, effective_port, quiet=quiet)
 
@@ -476,6 +490,7 @@ def _scan_one(protocol: str, target: str, port: int, user, userlist, passwd, pas
             verbose=verbose,
             http=http,
             on_event=reporter.handle,
+            on_log=on_log,
         )
     except EngineError as exc:
         reporter.close()
@@ -584,20 +599,44 @@ def _choose_candidates(kind: str, builtin: str) -> List[str]:
     print()
     click.echo(_colored(f"  [ {kind} Options ]", B_WHITE))
     click.echo(_colored(f"  1. Single {kind.lower()}", DIM))
-    click.echo(_colored(f"  2. File path", DIM))
-    click.echo(_colored(f"  3. Built-in list ({builtin})", DIM))
-    choice = _ask(f"  Choice [1-3]: ", "3")
+    click.echo(_colored(f"  2. Built-in list ({builtin})", DIM))
+    click.echo(_colored(f"  3. File path (any folder)", DIM))
+    click.echo(_colored(f"  4. Multiple files (comma separated)", DIM))
+    choice = _ask(f"  Choice [1-4]: ", "3")
 
     if choice == "1":
         value = _ask(f"  {kind}: ")
         return [value] if value else []
     if choice == "2":
+        try:
+            return load_wordlist(builtin)
+        except (FileNotFoundError, OSError) as exc:
+            click.echo(_colored(f"  [!] {exc}", RED))
+            return []
+    if choice == "3":
         path = _ask("  Path: ")
         try:
             return load_wordlist(path)
         except (FileNotFoundError, OSError) as exc:
             click.echo(_colored(f"  [!] {exc}", RED))
             return []
+    if choice == "4":
+        raw = _ask("  Paths (comma separated): ")
+        out: List[str] = []
+        seen = set()
+        for part in raw.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            try:
+                for item in load_wordlist(part):
+                    if item not in seen:
+                        seen.add(item)
+                        out.append(item)
+            except (FileNotFoundError, OSError) as exc:
+                click.echo(_colored(f"  [!] {part}: {exc}", RED))
+        return out
+    # default: built-in
     try:
         return load_wordlist(builtin)
     except (FileNotFoundError, OSError) as exc:
@@ -681,10 +720,8 @@ def _run_attack_loop(w: int) -> None:
                 protocol=proto_name,
                 target=target,
                 port=port,
-                user=None,
-                userlist=None,
-                passwd=None,
-                passlist=None,
+                users_list=users,
+                passwords_list=passwords,
                 combo_file=None,
                 extra=extra,
                 threads=threads,
@@ -698,7 +735,7 @@ def _run_attack_loop(w: int) -> None:
                 expand_words=False,
                 check=False,
                 http=None,
-                verbose=False,
+                verbose=True,
                 quiet=False,
             )
 
