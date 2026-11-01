@@ -194,7 +194,10 @@ pub async fn auth(
     let addr = format!("{}:{}", target, port);
     let community = pass.as_bytes();
     let req_id: i64 = rand::thread_rng().gen_range(1..=i32::MAX as i64);
-    let budget = Duration::from_secs(to.max(3));
+    // Two dialects are probed per candidate, so each gets half the budget —
+    // otherwise a wrong community blocks for 2x the caller's timeout and the
+    // scheduler kills the attempt before the v1 fallback can even run.
+    let budget = Duration::from_millis((to.max(2) * 1000) / 2);
 
     // SNMPv2c first; fall back to v1 for agents that only speak the old dialect.
     for version in [1u8, 0u8] {
