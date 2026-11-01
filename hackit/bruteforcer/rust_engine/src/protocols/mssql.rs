@@ -17,6 +17,7 @@ pub async fn auth(target: &str, port: u16, user: &str, pass: &str, to: u64) -> R
     .await
     .map_err(|_| "timeout".to_string())?
     .map_err(|e| format!("conn: {}", e))?;
+    let _ = tcp.set_nodelay(true);
 
     let client = tokio::time::timeout(
         Duration::from_secs(to),

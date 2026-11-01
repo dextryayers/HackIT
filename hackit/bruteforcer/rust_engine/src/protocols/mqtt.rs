@@ -19,7 +19,12 @@ pub async fn auth(target: &str, port: u16, user: &str, pass: &str, to: u64) -> R
     let connect_result = tokio::time::timeout(Duration::from_secs(to), async {
         loop {
             match eventloop.poll().await {
-                Ok(rumqttc::Event::Incoming(rumqttc::Packet::ConnAck(_))) => return Ok(true),
+                Ok(rumqttc::Event::Incoming(rumqttc::Packet::ConnAck(ack))) => {
+                    if ack.code == rumqttc::ConnectReturnCode::Success {
+                        return Ok(true);
+                    }
+                    return Ok(false);
+                }
                 Ok(_) => continue,
                 Err(e) => return Err(format!("mqtt: {}", e)),
             }

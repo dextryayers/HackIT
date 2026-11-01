@@ -454,15 +454,29 @@ def _scan_one(protocol: str, target: str, port: int, user=None, userlist=None, p
 
     def on_log(line: str) -> None:
         reporter.close()
-        low = line.lower()
-        if "valid" in low or "[+]" in line:
-            click.echo(_colored(f"  {line}", B_GREEN))
-        elif "failed" in low or "denied" in low or "[-]" in line:
-            click.echo(_colored(f"  {line}", RED))
-        elif "error" in low or "[!]" in line:
-            click.echo(_colored(f"  {line}", YELLOW))
-        else:
-            click.echo(_colored(f"  {line}", DIM))
+        body = line.strip()
+        status = "INFO"
+        color = DIM
+        if body.startswith("[+]"):
+            status = "VALID"
+            color = B_GREEN
+            body = body[3:].strip()
+        elif body.startswith("[-]"):
+            status = "FAILED"
+            color = RED
+            body = body[3:].strip()
+        elif body.startswith("[!]"):
+            status = "ERROR"
+            color = YELLOW
+            body = body[3:].strip()
+
+        # strip trailing status word so it isn't duplicated
+        for word in ("VALID", "FAILED", "ERROR"):
+            if body.endswith(word):
+                body = body[: -len(word)].strip()
+                break
+        # also drop a trailing "(...)" error detail holder
+        click.echo(f"  {_colored(f'{status:>6s}', color)}  {_colored(body, color)}")
 
     reporter = LiveReporter(proto, target, effective_port, quiet=quiet)
 
@@ -716,28 +730,59 @@ def _run_attack_loop(w: int) -> None:
                 continue
 
             print()
-            _scan_one(
-                protocol=proto_name,
-                target=target,
-                port=port,
-                users_list=users,
-                passwords_list=passwords,
-                combo_file=None,
-                extra=extra,
-                threads=threads,
-                timeout=timeout,
-                stop_on_first=stop_on_first,
-                retries=1,
-                rate=0.0,
-                wait=0.0,
-                resume=None,
-                max_blocking=None,
-                expand_words=False,
-                check=False,
-                http=None,
-                verbose=True,
-                quiet=False,
-            )
+            # stop-on-first loop: find one, ask, resume for the next
+            resume_file: Optional[str] = None
+            while True:
+                result = _scan_one(
+                    protocol=proto_name,
+                    target=target,
+                    port=port,
+                    users_list=users,
+                    passwords_list=passwords,
+                    combo_file=None,
+                    extra=extra,
+                    threads=threads,
+                    timeout=timeout,
+                    stop_on_first=stop_on_first,
+                    retries=1,
+                    rate=0.0,
+                    wait=0.0,
+                    resume=resume_file,
+                    max_blocking=None,
+                    expand_words=False,
+                    check=False,
+                    http=None,
+                    verbose=True,
+                    quiet=False,
+                )
+
+                found = (result or {}).get("found", [])
+                if not found or not stop_on_first:
+                    break
+
+                # ask to continue
+                ans = _ask("  Found a valid credential. Continue searching for more? [y/N]: ", "n").lower()
+                if ans not in ("y", "yes"):
+                    break
+
+                stopped_at = (result or {}).get("stopped_at", 0)
+                total = (result or {}).get("total_combos", 0)
+                if not stopped_at or stopped_at >= total:
+                    click.echo(_colored("  [*] no more candidates to test", DIM))
+                    break
+
+                # write cursor file for resume
+                import tempfile
+                fd, resume_file = tempfile.mkstemp(suffix=".cur")
+                os.close(fd)
+                with open(resume_file, "w") as fh:
+                    fh.write(str(stopped_at + 1))
+
+            if resume_file and os.path.exists(resume_file):
+                try:
+                    os.unlink(resume_file)
+                except OSError:
+                    pass
 
         except (EOFError, KeyboardInterrupt):
             print()

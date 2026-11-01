@@ -579,6 +579,7 @@ def run_engine(
         "speed_raw": summary.get("speed_raw", last_progress.get("speed", 0.0)),
         "transport_errors": summary.get("transport_errors", 0),
         "stopped_early": summary.get("stopped_early", False),
+        "stopped_at": summary.get("stopped_at", 0),
         "found": [
             {
                 "username": entry.get("username", ""),

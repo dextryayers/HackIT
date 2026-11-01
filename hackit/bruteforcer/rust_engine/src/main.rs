@@ -824,6 +824,7 @@ async fn run(args: Args) -> i32 {
             "found": found.len(),
             "transport_errors": transport_errors.load(Ordering::Relaxed),
             "stopped_early": stop_on_first && !found.is_empty(),
+            "stopped_at": cursor.load(Ordering::Relaxed),
             "results": found,
         }));
     } else {
