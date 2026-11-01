@@ -1,144 +1,224 @@
+//! SNMP community-string authentication.
+//!
+//! The "username" field is unused — SNMPv1/v2c authenticate with a shared
+//! community string, which the brute forcer carries in the password slot.
+//!
+//! Success is not "a packet came back". A UDP agent answers with a BER-encoded
+//! `GetResponse` whose request-id matches ours; anything else (a trap, a
+//! malformed echo, an ICMP unreachable surfacing as a read error) is noise.
+//! The previous implementation tested `buf[0] == 0x30 && last == 0x00`, which
+//! is true of almost every BER message ever sent.
+
+use rand::Rng;
 use std::time::Duration;
 use tokio::net::UdpSocket;
-use rand::Rng;
 
-pub async fn auth(target: &str, port: u16, _user: &str, pass: &str, to: u64) -> Result<bool, String> {
-    let sock = UdpSocket::bind("0.0.0.0:0")
-        .await
-        .map_err(|e| format!("bind: {}", e))?;
-    let target_addr = format!("{}:{}", target, port);
+const TAG_SEQUENCE: u8 = 0x30;
+const TAG_INTEGER: u8 = 0x02;
+const TAG_OCTET_STRING: u8 = 0x04;
+const TAG_NULL: u8 = 0x05;
+const TAG_OID: u8 = 0x06;
+const TAG_GET_REQUEST: u8 = 0xA0;
+const TAG_GET_RESPONSE: u8 = 0xA2;
 
-    let community = pass.as_bytes();
-    let req_id: u32 = rand::thread_rng().gen();
-    let pkt = build_snmp_v2c_get(community, req_id);
-
-    sock.send_to(&pkt, &target_addr)
-        .await
-        .map_err(|e| format!("send: {}", e))?;
-
-    let mut buf = [0u8; 65535];
-    let n = tokio::time::timeout(Duration::from_secs(to), sock.recv_from(&mut buf))
-        .await
-        .map_err(|_| "timeout".to_string())?
-        .map_err(|e| format!("recv: {}", e))?
-        .0;
-
-    if n < 20 {
-        return Err("short SNMP response".into());
+fn read_tlv<'a>(buf: &'a [u8], pos: &mut usize) -> Option<(u8, &'a [u8])> {
+    if *pos + 2 > buf.len() {
+        return None;
     }
-
-    if buf[0] == 0x30 && buf[n - 1] == 0x00 {
-        Err("SNMP: auth failed (no response)".into())
+    let tag = buf[*pos];
+    let first_len = buf[*pos + 1] as usize;
+    *pos += 2;
+    let len = if first_len & 0x80 == 0 {
+        first_len
     } else {
-        Ok(true)
+        let n = first_len & 0x7f;
+        if n == 0 || n > 4 || *pos + n > buf.len() {
+            return None;
+        }
+        let mut value = 0usize;
+        for _ in 0..n {
+            value = (value << 8) | buf[*pos] as usize;
+            *pos += 1;
+        }
+        value
+    };
+    if *pos + len > buf.len() {
+        return None;
+    }
+    let value = &buf[*pos..*pos + len];
+    *pos += len;
+    Some((tag, value))
+}
+
+fn encode_len(len: usize) -> Vec<u8> {
+    if len < 0x80 {
+        vec![len as u8]
+    } else {
+        let mut bytes = Vec::new();
+        let mut l = len;
+        while l > 0 {
+            bytes.push((l & 0xFF) as u8);
+            l >>= 8;
+        }
+        bytes.reverse();
+        let mut out = vec![0x80 | bytes.len() as u8];
+        out.extend(bytes);
+        out
     }
 }
 
-fn build_snmp_v2c_get(community: &[u8], req_id: u32) -> Vec<u8> {
-    let version = [0x02, 0x01, 0x01]; // SNMPv2c
-    let community_tlv = encode_octet_string(community);
-    let pdu_type = 0xA0u8; // GetRequest
-    let oid = encode_oid(&[1, 3, 6, 1, 2, 1, 1, 1, 0]); // sysDescr.0
-    let varbind = build_varbind(&oid);
-    let varbind_list = build_tlv(0x30, &varbind);
-    let _empty_val = [0x05, 0x00]; // null value
-
-    let rid = encode_integer(req_id as i64);
-    let err = [0x02, 0x01, 0x00];
-    let err_idx = [0x02, 0x01, 0x00];
-
-    let mut pdu_body = Vec::new();
-    pdu_body.extend(&rid);
-    pdu_body.extend(&err);
-    pdu_body.extend(&err_idx);
-    pdu_body.extend(&varbind_list);
-
-    let pdu = build_tlv(pdu_type, &pdu_body);
-
-    let mut inner = Vec::new();
-    inner.extend(&version);
-    inner.extend(&community_tlv);
-    inner.extend(&pdu);
-
-    let outer = build_tlv(0x30, &inner);
-    outer
-}
-
-fn build_varbind(oid: &[u8]) -> Vec<u8> {
-    let null_val = [0x05, 0x00];
-    let mut body = Vec::new();
-    body.extend(oid);
-    body.extend(&null_val);
-    build_tlv(0x30, &body)
+fn tlv(tag: u8, value: &[u8]) -> Vec<u8> {
+    let mut out = vec![tag];
+    out.extend(encode_len(value.len()));
+    out.extend_from_slice(value);
+    out
 }
 
 fn encode_oid(oid: &[u32]) -> Vec<u8> {
-    let mut out = Vec::new();
+    let mut body = Vec::new();
     if oid.len() >= 2 {
-        out.push((oid[0] * 40 + oid[1]) as u8);
+        body.push((oid[0] * 40 + oid[1]) as u8);
     }
     for &val in &oid[2..] {
         if val < 128 {
-            out.push(val as u8);
+            body.push(val as u8);
         } else {
             let mut v = val;
-            let mut bytes = Vec::new();
-            bytes.push((v & 0x7F) as u8);
+            let mut bytes = vec![(v & 0x7F) as u8];
             v >>= 7;
             while v > 0 {
                 bytes.push(((v & 0x7F) | 0x80) as u8);
                 v >>= 7;
             }
             bytes.reverse();
-            out.extend(&bytes);
+            body.extend(bytes);
         }
     }
-    encode_tlv(0x06, &out)
+    tlv(TAG_OID, &body)
 }
 
 fn encode_integer(val: i64) -> Vec<u8> {
     let mut bytes = Vec::new();
     let mut v = val;
-    let neg = v < 0;
-    bytes.push((v & 0xFF) as u8);
-    v >>= 8;
-    while v != 0 && v != -1 {
+    loop {
         bytes.push((v & 0xFF) as u8);
         v >>= 8;
-    }
-    if neg && (bytes.last().unwrap() & 0x80) == 0 {
-        bytes.push(0xFF);
-    }
-    if !neg && (bytes.last().unwrap() & 0x80) != 0 {
-        bytes.push(0x00);
+        let done = (v == 0 && bytes.last().map_or(false, |b| b & 0x80 == 0))
+            || (v == -1 && bytes.last().map_or(false, |b| b & 0x80 != 0));
+        if done {
+            break;
+        }
+        if bytes.len() > 8 {
+            break;
+        }
     }
     bytes.reverse();
-    encode_tlv(0x02, &bytes)
+    tlv(TAG_INTEGER, &bytes)
 }
 
-fn encode_octet_string(data: &[u8]) -> Vec<u8> {
-    encode_tlv(0x04, data)
+fn build_get(community: &[u8], req_id: i64, version: u8) -> Vec<u8> {
+    let varbind = {
+        let oid = encode_oid(&[1, 3, 6, 1, 2, 1, 1, 1, 0]); // sysDescr.0
+        let mut body = oid;
+        body.extend(tlv(TAG_NULL, &[]));
+        tlv(TAG_SEQUENCE, &body)
+    };
+    let varbinds = tlv(TAG_SEQUENCE, &varbind);
+
+    let mut pdu_body = encode_integer(req_id);
+    pdu_body.extend(encode_integer(0)); // error-status
+    pdu_body.extend(encode_integer(0)); // error-index
+    pdu_body.extend(varbinds);
+    let pdu = tlv(TAG_GET_REQUEST, &pdu_body);
+
+    let mut msg = tlv(TAG_INTEGER, &[version]);
+    msg.extend(tlv(TAG_OCTET_STRING, community));
+    msg.extend(pdu);
+    tlv(TAG_SEQUENCE, &msg)
 }
 
-fn encode_tlv(tag: u8, value: &[u8]) -> Vec<u8> {
-    let mut out = vec![tag];
-    if value.len() < 128 {
-        out.push(value.len() as u8);
-    } else {
-        let mut len_bytes = Vec::new();
-        let mut l = value.len();
-        while l > 0 {
-            len_bytes.push((l & 0xFF) as u8);
-            l >>= 8;
-        }
-        len_bytes.reverse();
-        out.push(0x80 | len_bytes.len() as u8);
-        out.extend(&len_bytes);
+/// True only when `buf` is a GetResponse carrying our request-id.
+fn is_valid_response(buf: &[u8], expected_id: i64, expected_version: u8) -> bool {
+    let mut pos = 0;
+    let Some((tag, msg)) = read_tlv(buf, &mut pos) else {
+        return false;
+    };
+    if tag != TAG_SEQUENCE {
+        return false;
     }
-    out.extend(value);
-    out
+
+    let mut p = 0;
+    let Some((t, ver)) = read_tlv(msg, &mut p) else {
+        return false;
+    };
+    if t != TAG_INTEGER || ver.len() != 1 || ver[0] != expected_version {
+        return false;
+    }
+    let Some((t, _community)) = read_tlv(msg, &mut p) else {
+        return false;
+    };
+    if t != TAG_OCTET_STRING {
+        return false;
+    }
+    let Some((t, pdu)) = read_tlv(msg, &mut p) else {
+        return false;
+    };    if t != TAG_GET_RESPONSE {
+        return false;
+    }
+
+    let mut q = 0;
+    let Some((t, rid)) = read_tlv(pdu, &mut q) else {
+        return false;
+    };
+    if t != TAG_INTEGER || rid.is_empty() {
+        return false;
+    }
+    // Compare the request-id as a signed big-endian integer.
+    let mut value: i64 = if rid[0] & 0x80 != 0 { -1 } else { 0 };
+    for byte in rid {
+        value = (value << 8) | *byte as i64;
+    }
+    value == expected_id
 }
 
-fn build_tlv(tag: u8, value: &[u8]) -> Vec<u8> {
-    encode_tlv(tag, value)
+pub async fn auth(
+    target: &str,
+    port: u16,
+    _user: &str,
+    pass: &str,
+    to: u64,
+) -> Result<bool, String> {
+    let socket = UdpSocket::bind("0.0.0.0:0")
+        .await
+        .map_err(|e| format!("bind: {}", e))?;
+    let addr = format!("{}:{}", target, port);
+    let community = pass.as_bytes();
+    let req_id: i64 = rand::thread_rng().gen_range(1..=i32::MAX as i64);
+    let budget = Duration::from_secs(to.max(3));
+
+    // SNMPv2c first; fall back to v1 for agents that only speak the old dialect.
+    for version in [1u8, 0u8] {
+        let packet = build_get(community, req_id, version);
+        socket
+            .send_to(&packet, &addr)
+            .await
+            .map_err(|e| format!("send: {}", e))?;
+
+        let mut buf = [0u8; 65535];
+        match tokio::time::timeout(budget, socket.recv_from(&mut buf)).await {
+            Ok(Ok((n, _peer))) => {
+                if is_valid_response(&buf[..n], req_id, version) {
+                    return Ok(true);
+                }
+                // A response we cannot parse is not a valid credential.
+            }
+            Ok(Err(e)) => return Err(format!("recv: {}", e)),
+            Err(_) => {
+                // Silent drop is what a wrong community looks like.
+                continue;
+            }
+        }
+    }
+
+    Ok(false)
 }
