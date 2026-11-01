@@ -344,28 +344,26 @@ async fn run(args: Args) -> i32 {
         }
         Combos::Explicit(explicit)
     } else {
+        // A VNC or SNMP check has no username: the password or community
+        // string is the whole secret. Anything else needs a real account name,
+        // and guessing one would produce a run that tests nothing.
         if users.is_empty() {
-            users = vec![
-                "root".into(),
-                "admin".into(),
-                "user".into(),
-                "administrator".into(),
-                "test".into(),
-            ];
+            if matches!(args.protocol.as_str(), "vnc" | "snmp") {
+                users = vec![String::new()];
+            } else {
+                emit_json(&serde_json::json!({
+                    "status": "error",
+                    "message": "no usernames supplied — pass -u, -U, or -C",
+                }));
+                return 1;
+            }
         }
         if passes.is_empty() {
-            passes = vec![
-                "".into(),
-                "root".into(),
-                "admin".into(),
-                "password".into(),
-                "123456".into(),
-                "12345".into(),
-                "1234".into(),
-                "toor".into(),
-                "qwerty".into(),
-                "letmein".into(),
-            ];
+            emit_json(&serde_json::json!({
+                "status": "error",
+                "message": "no passwords supplied — pass -w, -W, or -C",
+            }));
+            return 1;
         }
         if args.expand_words {
             passes = core::WordlistGenerator::expand(&passes, 99, true);

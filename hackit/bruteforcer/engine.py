@@ -1,257 +1,628 @@
-import os
-import sys
+"""Python front end for the KeyStrike brute-force engine.
+
+Everything real goes through the Rust binary: it speaks the actual wire
+protocol for every supported service, so a credential reported here was
+accepted by the target, not guessed at.
+
+The bridge streams: the engine emits NDJSON as it works, this module parses it
+line by line and hands each event to a callback, so the caller can render live
+progress and print credentials the instant they land. Nothing is buffered until
+the process exits.
+
+Nothing in this module fabricates a result. If the binary is missing, the run
+fails loudly. If a protocol is unsupported, the run fails loudly. There is no
+"pretend" path.
+"""
+
+from __future__ import annotations
+
 import json
+import os
+import re
+import shutil
+import socket
 import subprocess
-import shlex
-from datetime import datetime
-from typing import List, Optional
+import tempfile
+import threading
+from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
 ENGINE_DIR = os.path.dirname(os.path.abspath(__file__))
-RUST_BIN = os.path.join(ENGINE_DIR, "rust_engine", "target", "release", "keystrike")
+RUST_DIR = os.path.join(ENGINE_DIR, "rust_engine")
+RUST_BIN = os.path.join(RUST_DIR, "target", "release", "keystrike")
+WORDLIST_DIR = os.path.join(ENGINE_DIR, "wordlists")
 
-PROTOCOLS_RUST = [
-    "ftp", "ssh", "telnet", "smtp", "pop3", "imap", "http", "https",
-    "mysql", "postgresql", "postgres", "redis", "ldap",
-    "mssql", "mqtt", "vnc", "smb", "snmp",
+# ─────────────────────────── protocol table ───────────────────────────
+# Every entry is a protocol the Rust engine actually implements. The port is
+# the service default; `tls` marks the implicit-TLS variants.
+PROTOCOLS: List[Tuple[str, int]] = [
+    ("ssh", 22),
+    ("ftp", 21),
+    ("telnet", 23),
+    ("smtp", 25),
+    ("smtps", 465),
+    ("pop3", 110),
+    ("pop3s", 995),
+    ("imap", 143),
+    ("imaps", 993),
+    ("http", 80),
+    ("https", 443),
+    ("ldap", 389),
+    ("ldaps", 636),
+    ("mysql", 3306),
+    ("postgresql", 5432),
+    ("redis", 6379),
+    ("mssql", 1433),
+    ("mqtt", 1883),
+    ("mqtts", 8883),
+    ("vnc", 5900),
+    ("smb", 445),
+    ("snmp", 161),
+    ("rdp", 3389),
 ]
 
-PROTOCOLS_HYDRA = [
-    "ftp", "ssh", "telnet", "smtp", "pop3", "imap", "http", "https",
-    "mysql", "postgresql", "postgres", "redis", "ldap",
-    "mssql", "mqtt", "vnc", "smb", "snmp",
-    "rdp", "ldaps", "smtps", "imaps", "pop3s",
-    "oracle", "cisco",
-]
+PROTOCOL_PORTS: Dict[str, int] = dict(PROTOCOLS)
+PROTOCOL_PORTS["postgres"] = 5432
 
-PROTOCOL_PORTS = {
-    "ftp": 21, "ssh": 22, "telnet": 23, "smtp": 25, "http": 80, "https": 443,
-    "pop3": 110, "imap": 143, "ldap": 389, "ldaps": 636, "mysql": 3306,
-    "rdp": 3389, "postgresql": 5432, "postgres": 5432, "redis": 6379,
-    "smb": 445, "snmp": 161, "vnc": 5900, "mssql": 1433, "oracle": 1521,
-    "mqtt": 1883, "mqtts": 8883, "smtps": 465, "imaps": 993, "pop3s": 995,
+PROTOCOL_NAMES: Dict[str, str] = {
+    "ssh": "SSH", "ftp": "FTP", "telnet": "Telnet", "smtp": "SMTP",
+    "smtps": "SMTPS", "pop3": "POP3", "pop3s": "POP3S", "imap": "IMAP",
+    "imaps": "IMAPS", "http": "HTTP", "https": "HTTPS", "ldap": "LDAP",
+    "ldaps": "LDAPS", "mysql": "MySQL", "postgresql": "PostgreSQL",
+    "postgres": "PostgreSQL", "redis": "Redis", "mssql": "MSSQL",
+    "mqtt": "MQTT", "mqtts": "MQTTS", "vnc": "VNC", "smb": "SMB",
+    "snmp": "SNMP", "rdp": "RDP",
 }
 
-PROTOCOL_NAMES = {
-    "ftp": "FTP", "ssh": "SSH", "telnet": "Telnet", "smtp": "SMTP",
-    "http": "HTTP", "https": "HTTPS", "pop3": "POP3", "imap": "IMAP",
-    "ldap": "LDAP", "ldaps": "LDAPS", "mysql": "MySQL", "rdp": "RDP",
-    "postgresql": "PostgreSQL", "postgres": "PostgreSQL", "redis": "Redis",
-    "smb": "SMB", "snmp": "SNMP", "vnc": "VNC", "mssql": "MSSQL",
-    "oracle": "Oracle", "mqtt": "MQTT", "mqtts": "MQTTS",
-    "smtps": "SMTPS", "imaps": "IMAPS", "pop3s": "POP3S",
-}
+# Protocols whose credential check needs no username (a VNC password is the
+# whole secret; an SNMP community string is the whole secret).
+USERLESS = {"vnc", "snmp"}
+
+# Protocols that carry HTTP request knobs.
+HTTP_FAMILY = {"http", "https"}
 
 
-def list_protocols():
-    return PROTOCOLS_HYDRA
+def list_protocols() -> List[str]:
+    return [name for name, _ in PROTOCOLS]
 
 
-def get_protocol_name(proto):
+def get_protocol_name(proto: str) -> str:
     return PROTOCOL_NAMES.get(proto, proto.upper())
 
 
-def get_default_port(proto):
+def get_default_port(proto: str) -> int:
     return PROTOCOL_PORTS.get(proto, 0)
 
 
-def run_rust_engine(target, port, protocol, users, passwords, threads=32, timeout=10,
-                    proxy=None, expand_words=False):
-    if not os.path.exists(RUST_BIN):
-        return {"status": "error", "message": "Rust engine not built. Run: cd rust_engine && cargo build --release"}
+def is_supported(proto: str) -> bool:
+    return proto in PROTOCOL_PORTS
 
-    import tempfile
 
-    userlist_file = None
-    passlist_file = None
+def engine_available() -> bool:
+    return os.path.isfile(RUST_BIN) and os.access(RUST_BIN, os.X_OK)
+
+
+def build_engine() -> Tuple[bool, str]:
+    """Compile the Rust engine. Returns (ok, output)."""
+    cargo = shutil.which("cargo")
+    if not cargo:
+        return False, "cargo not found on PATH — install a Rust toolchain to build the engine"
+    proc = subprocess.run(
+        [cargo, "build", "--release"],
+        cwd=RUST_DIR,
+        capture_output=True,
+        text=True,
+    )
+    return proc.returncode == 0, (proc.stdout + proc.stderr).strip()
+
+
+# ─────────────────────────── wordlists ───────────────────────────
+def list_wordlists() -> Dict[str, str]:
+    """Built-in wordlist name → absolute path."""
+    out: Dict[str, str] = {}
+    if not os.path.isdir(WORDLIST_DIR):
+        return out
+    for entry in sorted(os.listdir(WORDLIST_DIR)):
+        if entry.endswith(".txt"):
+            out[entry[:-4]] = os.path.join(WORDLIST_DIR, entry)
+    return out
+
+
+def load_wordlist(spec: str) -> List[str]:
+    """Resolve a built-in wordlist name or a filesystem path into lines.
+
+    Blank lines and `#` comments are dropped, duplicates are collapsed in
+    first-seen order, and the original casing is preserved — a password list
+    that silently lowercases its entries would test the wrong passwords.
+    """
+    path = spec
+    if not os.path.isfile(path):
+        builtin = list_wordlists().get(spec)
+        if builtin is None:
+            raise FileNotFoundError(f"no wordlist named {spec!r} and no file at that path")
+        path = builtin
+
+    seen = set()
+    out: List[str] = []
+    with open(path, "r", encoding="utf-8", errors="replace") as handle:
+        for raw in handle:
+            line = raw.rstrip("\r\n")
+            if not line or line.lstrip().startswith("#"):
+                continue
+            if line in seen:
+                continue
+            seen.add(line)
+            out.append(line)
+    return out
+
+
+def default_users() -> List[str]:
+    try:
+        return load_wordlist("users")
+    except FileNotFoundError:
+        return []
+
+
+def default_passwords() -> List[str]:
+    try:
+        return load_wordlist("passwords")
+    except FileNotFoundError:
+        return []
+
+
+# ─────────────────────────── service detection ───────────────────────────
+# Banner signatures, applied to whatever the service says on connect. These are
+# the real greetings the daemons send, so detection is a read, not a guess.
+_BANNER_RULES: List[Tuple[str, "re.Pattern[str]"]] = [
+    ("ssh", re.compile(rb"^SSH-\d")),
+    ("ftp", re.compile(rb"^220[\s\S]*?(ftp|vsftpd|proftpd|filezilla|pure-ftpd)", re.I)),
+    ("smtp", re.compile(rb"^220[\s\S]*?(smtp|esmtp|postfix|exim|sendmail|exchange)", re.I)),
+    ("pop3", re.compile(rb"^\+OK")),
+    ("imap", re.compile(rb"^\* OK")),
+    ("vnc", re.compile(rb"^RFB \d{3}\.\d{3}")),
+    ("telnet", re.compile(rb"^\xff[\xfb-\xfe]")),
+    ("mysql", re.compile(rb"^[\x00-\xff]{3}\x00\x0a")),
+    ("mqtt", re.compile(rb"^[\x20\x10]")),
+    ("http", re.compile(rb"^HTTP/\d\.\d")),
+]
+
+
+def _read_banner(sock: socket.socket, limit: int = 512) -> bytes:
+    chunks = bytearray()
+    try:
+        while len(chunks) < limit:
+            piece = sock.recv(limit - len(chunks))
+            if not piece:
+                break
+            chunks.extend(piece)
+            if len(piece) < 64:
+                break
+    except (socket.timeout, OSError):
+        pass
+    return bytes(chunks)
+
+
+def detect_service(target: str, port: int, timeout: float = 3.0) -> Dict[str, object]:
+    """Identify the service on `target:port` from what it actually says.
+
+    Passive banners cover SSH/FTP/SMTP/POP3/IMAP/VNC/MySQL. Services that stay
+    silent until asked get a protocol-correct probe: an HTTP request, a Redis
+    `PING`, or an LDAP bind-less search. Anything still unidentified is reported
+    as unknown rather than guessed from the port number.
+    """
+    result: Dict[str, object] = {
+        "target": target,
+        "port": port,
+        "protocol": None,
+        "banner": "",
+        "detail": "",
+    }
 
     try:
-        if len(users) > 1:
-            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt') as f:
-                f.write('\n'.join(users))
-                userlist_file = f.name
-        if len(passwords) > 1:
-            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt') as f:
-                f.write('\n'.join(passwords))
-                passlist_file = f.name
+        sock = socket.create_connection((target, port), timeout=timeout)
+    except OSError as exc:
+        result["detail"] = f"connect failed: {exc}"
+        return result
 
-        cmd = [
-            RUST_BIN, "-t", target, "-P", protocol,
-            "--json", "-T", str(threads), "--timeout", str(timeout),
-        ]
-        if port:
-            cmd.extend(["-p", str(port)])
-        if len(users) == 1:
-            cmd.extend(["-u", users[0]])
-        elif userlist_file:
-            cmd.extend(["-U", userlist_file])
-        if len(passwords) == 1:
-            cmd.extend(["-w", passwords[0]])
-        elif passlist_file:
-            cmd.extend(["-W", passlist_file])
-        if proxy:
-            cmd.extend(["--proxy", proxy])
-        if expand_words:
-            cmd.append("--expand-words")
+    try:
+        sock.settimeout(timeout)
+        banner = _read_banner(sock)
 
+        for proto, rule in _BANNER_RULES:
+            if rule.search(banner):
+                result["protocol"] = proto
+                result["banner"] = banner[:200].decode("utf-8", "replace").strip()
+                return result
+
+        # Silent services — ask each one the question it answers.
+        for proto, probe, match in (
+            ("http", b"HEAD / HTTP/1.0\r\nHost: " + target.encode() + b"\r\n\r\n", re.compile(rb"^HTTP/\d\.\d")),
+            ("redis", b"PING\r\n", re.compile(rb"^[+-](PONG|NOAUTH|ERR)")),
+        ):
+            try:
+                sock.sendall(probe)
+                reply = _read_banner(sock, 256)
+            except OSError:
+                continue
+            if match.search(reply):
+                result["protocol"] = proto
+                result["banner"] = reply[:200].decode("utf-8", "replace").strip()
+                return result
+
+        if banner:
+            result["banner"] = banner[:200].decode("utf-8", "replace").strip()
+        result["detail"] = "no protocol signature in the service greeting"
+        return result
+    finally:
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
-        except subprocess.TimeoutExpired:
-            return {"status": "error", "message": "Rust engine timed out after 3600s"}
+            sock.close()
+        except OSError:
+            pass
 
-        results = []
-        for line in proc.stdout.strip().split('\n'):
-            line = line.strip()
+
+def probe_port(target: str, port: int, timeout: float = 3.0) -> bool:
+    """True when a TCP connection completes. Used for the reachability gate."""
+    try:
+        with socket.create_connection((target, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+# ─────────────────────────── engine invocation ───────────────────────────
+class EngineError(RuntimeError):
+    """The engine could not run, or reported a fatal error."""
+
+
+def _write_temp_lines(lines: Iterable[str], suffix: str = ".txt") -> Optional[str]:
+    lines = list(lines)
+    if not lines:
+        return None
+    handle = tempfile.NamedTemporaryFile(
+        mode="w", delete=False, suffix=suffix, encoding="utf-8"
+    )
+    try:
+        handle.write("\n".join(lines))
+        handle.write("\n")
+    finally:
+        handle.close()
+    return handle.name
+
+
+def build_command(
+    target: str,
+    port: int,
+    protocol: str,
+    *,
+    user: Optional[str] = None,
+    userlist: Optional[str] = None,
+    password: Optional[str] = None,
+    passlist: Optional[str] = None,
+    combo_file: Optional[str] = None,
+    extra: str = "",
+    threads: int = 16,
+    timeout: int = 10,
+    stop_on_first: bool = False,
+    retries: int = 1,
+    rate: float = 0.0,
+    wait: float = 0.0,
+    resume: Optional[str] = None,
+    max_blocking: Optional[int] = None,
+    expand_words: bool = False,
+    check: bool = False,
+    verbose: bool = False,
+    http: Optional[Dict[str, object]] = None,
+) -> List[str]:
+    """Assemble the engine argv. Kept separate so it is testable without a run."""
+    cmd = [RUST_BIN, "-t", target, "-P", protocol, "--json", "-T", str(threads),
+           "--timeout", str(timeout), "--retries", str(retries)]
+
+    if port:
+        cmd.extend(["-p", str(port)])
+    if stop_on_first:
+        cmd.append("-f")
+    if expand_words:
+        cmd.append("--expand-words")
+    if check:
+        cmd.append("--check")
+    if verbose:
+        cmd.append("-v")
+    if rate:
+        cmd.extend(["--rate", str(rate)])
+    if wait:
+        cmd.extend(["--wait", str(wait)])
+    if resume:
+        cmd.extend(["--resume", resume])
+    if max_blocking:
+        cmd.extend(["--max-blocking", str(max_blocking)])
+    if extra:
+        cmd.extend(["-e", extra])
+
+    if combo_file:
+        cmd.extend(["-C", combo_file])
+    else:
+        if userlist:
+            cmd.extend(["-U", userlist])
+        elif user:
+            cmd.extend(["-u", user])
+        if passlist:
+            cmd.extend(["-W", passlist])
+        elif password is not None:
+            cmd.extend(["-w", password])
+
+    if http:
+        if http.get("path"):
+            cmd.extend(["--http-path", str(http["path"])])
+        if http.get("method"):
+            cmd.extend(["--http-method", str(http["method"]).upper()])
+        if http.get("body"):
+            cmd.extend(["--http-body", str(http["body"])])
+        if http.get("fail"):
+            cmd.extend(["--http-fail", str(http["fail"])])
+        if http.get("success"):
+            cmd.extend(["--http-success", str(http["success"])])
+        for header in http.get("headers") or []:
+            cmd.extend(["--http-header", str(header)])
+        if http.get("tls"):
+            cmd.append("--http-tls")
+        if http.get("force_basic"):
+            cmd.append("--http-force-basic")
+
+    return cmd
+
+
+def _drain(stream, sink: List[str]) -> None:
+    try:
+        for line in stream:
+            sink.append(line.rstrip("\n"))
+    except (ValueError, OSError):
+        pass
+    finally:
+        try:
+            stream.close()
+        except (ValueError, OSError):
+            pass
+
+
+def run_engine(
+    cmd: List[str],
+    *,
+    on_event: Optional[Callable[[Dict[str, object]], None]] = None,
+    on_log: Optional[Callable[[str], None]] = None,
+) -> Dict[str, object]:
+    """Run the engine, streaming its NDJSON, and return the terminal summary.
+
+    `on_event` receives every parsed JSON object as it arrives — progress
+    ticks, credential hits, the final summary. `on_log` receives the engine's
+    stderr chatter (verbose per-attempt lines, transport warnings).
+    """
+    if not engine_available():
+        raise EngineError(
+            f"engine binary not found at {RUST_BIN} — build it with: "
+            f"cd {RUST_DIR} && cargo build --release"
+        )
+
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+        encoding="utf-8",
+        errors="replace",
+    )
+
+    stderr_lines: List[str] = []
+    stderr_thread = threading.Thread(
+        target=_drain, args=(proc.stderr, stderr_lines), daemon=True
+    )
+    stderr_thread.start()
+
+    found: List[Dict[str, object]] = []
+    summary: Optional[Dict[str, object]] = None
+    last_progress: Dict[str, object] = {}
+    fatal: Optional[str] = None
+
+    try:
+        assert proc.stdout is not None
+        for raw in proc.stdout:
+            line = raw.strip()
             if not line:
                 continue
             try:
-                data = json.loads(line)
-                results.append(data)
+                event = json.loads(line)
             except json.JSONDecodeError:
+                # Not NDJSON: the engine only does this for a clap usage error,
+                # which it writes to stderr, so ignore the stray line.
                 continue
 
-        return _parse_rust_results(results, protocol, target, port)
+            status = event.get("status")
+            if status == "progress":
+                last_progress = event
+            elif status == "found":
+                found.append(event)
+            elif status == "complete":
+                summary = event
+            elif status == "error":
+                fatal = str(event.get("message", "engine error"))
 
+            if on_event is not None:
+                on_event(event)
+    except KeyboardInterrupt:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        raise
     finally:
-        if userlist_file and os.path.exists(userlist_file):
-            os.unlink(userlist_file)
-        if passlist_file and os.path.exists(passlist_file):
-            os.unlink(passlist_file)
+        try:
+            proc.stdout.close()  # type: ignore[union-attr]
+        except (ValueError, OSError):
+            pass
+        returncode = proc.wait()
+        stderr_thread.join(timeout=2)
 
+    if on_log is not None:
+        for line in stderr_lines:
+            if line.strip():
+                on_log(line)
 
-def _parse_rust_results(results, protocol, target, port):
-    found = []
-    final = None
-    prog = {"attempted": 0, "total": 0, "found": 0, "speed": 0, "elapsed": 0}
+    if fatal:
+        raise EngineError(fatal)
+    if summary is None:
+        detail = "\n".join(stderr_lines[-5:]) or f"exit code {returncode}"
+        raise EngineError(f"engine exited without a summary: {detail}")
 
-    for r in results:
-        s = r.get("status")
-        if s == "progress":
-            prog.update(r)
-        elif s == "found":
-            found.append({
-                "username": r.get("username", ""),
-                "password": r.get("password", ""),
-                "protocol": protocol,
-                "target": target,
-                "port": port or get_default_port(protocol),
-            })
-        elif s == "complete":
-            final = r
-        elif s == "error":
-            return {"status": "error", "message": r.get("message", "")}
-
+    results = summary.get("results") or found
     return {
         "status": "complete",
-        "protocol": protocol,
-        "target": target,
-        "port": port or get_default_port(protocol),
-        "total_attempts": final.get("total_attempts", prog["total"]) if final else prog["total"],
-        "elapsed": final.get("elapsed", prog["elapsed"]) if final else prog["elapsed"],
-        "speed": final.get("speed", f"{prog['speed']:.0f}/s") if final else f"{prog['speed']:.0f}/s",
-        "found": found,
-        "found_count": len(found),
+        "protocol": summary.get("protocol", cmd[cmd.index("-P") + 1]),
+        "target": summary.get("target", cmd[cmd.index("-t") + 1]),
+        "port": summary.get("port", 0),
+        "total_attempts": summary.get("total_attempts", last_progress.get("attempted", 0)),
+        "total_combos": summary.get("total_combos", last_progress.get("total", 0)),
+        "elapsed": summary.get("elapsed", last_progress.get("elapsed", 0.0)),
+        "speed": summary.get("speed", ""),
+        "speed_raw": summary.get("speed_raw", last_progress.get("speed", 0.0)),
+        "transport_errors": summary.get("transport_errors", 0),
+        "stopped_early": summary.get("stopped_early", False),
+        "found": [
+            {
+                "username": entry.get("username", ""),
+                "password": entry.get("password", ""),
+                "protocol": entry.get("protocol", summary.get("protocol", "")),
+                "target": entry.get("target", summary.get("target", "")),
+                "port": entry.get("port", summary.get("port", 0)),
+            }
+            for entry in results
+        ],
+        "found_count": len(results),
+        "log": stderr_lines,
     }
 
 
-def run_hydra(target, port, protocol, users, passwords, threads=16, timeout=10):
-    hydra = "/usr/bin/hydra"
-    if not os.path.exists(hydra):
-        return {"status": "error", "message": "hydra not found"}
+def run_bruteforce(
+    target: str,
+    port: int,
+    protocol: str,
+    users: Optional[List[str]] = None,
+    passwords: Optional[List[str]] = None,
+    threads: int = 16,
+    timeout: int = 10,
+    *,
+    userlist: Optional[str] = None,
+    passlist: Optional[str] = None,
+    combo_file: Optional[str] = None,
+    extra: str = "",
+    stop_on_first: bool = False,
+    retries: int = 1,
+    rate: float = 0.0,
+    wait: float = 0.0,
+    resume: Optional[str] = None,
+    max_blocking: Optional[int] = None,
+    expand_words: bool = False,
+    check: bool = False,
+    verbose: bool = False,
+    http: Optional[Dict[str, object]] = None,
+    on_event: Optional[Callable[[Dict[str, object]], None]] = None,
+    on_log: Optional[Callable[[str], None]] = None,
+) -> Dict[str, object]:
+    """Brute-force one service and return the engine's terminal summary.
 
-    import tempfile
+    `users`/`passwords` are in-memory lists; `userlist`/`passlist` are paths to
+    existing files and are passed straight through, which matters for lists of
+    a million entries. `combo_file` replaces both with `user:pass` lines.
 
-    userlist_file = None
-    passlist_file = None
+    `on_event` is called for every engine event as it arrives, so a caller can
+    print progress and credentials live instead of waiting for the end.
+    """
+    protocol = protocol.lower().strip()
+    if protocol == "postgres":
+        protocol = "postgresql"
+    if not is_supported(protocol):
+        raise EngineError(
+            f"protocol {protocol!r} is not implemented by the engine "
+            f"(supported: {', '.join(list_protocols())})"
+        )
 
+    effective_port = port or get_default_port(protocol)
+
+    temp_paths: List[str] = []
     try:
-        if len(users) > 1:
-            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt') as f:
-                f.write('\n'.join(users))
-                userlist_file = f.name
-        if len(passwords) > 1:
-            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt') as f:
-                f.write('\n'.join(passwords))
-                passlist_file = f.name
+        user_arg = None
+        userlist_path = userlist
+        if not combo_file:
+            if userlist_path is None:
+                users = list(users or [])
+                if len(users) == 1:
+                    user_arg = users[0]
+                elif users:
+                    userlist_path = _write_temp_lines(users, ".users")
+                    if userlist_path:
+                        temp_paths.append(userlist_path)
 
-        use_list = userlist_file is not None
-        pw_list = passlist_file is not None
-
-        cmd = [hydra, "-t", str(threads), "-f"]
-        if not use_list:
-            cmd.extend(["-l", users[0]])
+            password_arg = None
+            passlist_path = passlist
+            if passlist_path is None:
+                passwords = list(passwords or [])
+                if len(passwords) == 1:
+                    password_arg = passwords[0]
+                elif passwords:
+                    passlist_path = _write_temp_lines(passwords, ".pass")
+                    if passlist_path:
+                        temp_paths.append(passlist_path)
         else:
-            cmd.extend(["-L", userlist_file])
-        if not pw_list:
-            cmd.extend(["-p", passwords[0]])
-        else:
-            cmd.extend(["-P", passlist_file])
+            user_arg = None
+            userlist_path = None
+            password_arg = None
+            passlist_path = None
 
-        if port:
-            cmd.extend(["-s", str(port)])
+        if not combo_file and user_arg is None and userlist_path is None and protocol not in USERLESS:
+            raise EngineError(
+                "no usernames supplied — pass a user, a userlist, or a combo file"
+            )
+        if not combo_file and password_arg is None and passlist_path is None:
+            raise EngineError(
+                "no passwords supplied — pass a password, a passlist, or a combo file"
+            )
 
-        cmd.extend([f"{protocol}://{target}"])
-
-        env = os.environ.copy()
-        env["HYDRA_PROXY_CONNECT_TIMEOUT"] = str(timeout)
-
-        try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=3600, env=env)
-        except subprocess.TimeoutExpired:
-            return {"status": "error", "message": "Hydra timed out"}
-
-        output = proc.stdout + proc.stderr
-        found = []
-        for line in output.split('\n'):
-            if "login:" in line.lower() and "password:" in line.lower():
-                parts = line.strip().split()
-                user_val = ""
-                pass_val = ""
-                for i, p in enumerate(parts):
-                    if p.lower() == "login:" and i + 1 < len(parts):
-                        user_val = parts[i + 1].rstrip(',')
-                    if p.lower() == "password:" and i + 1 < len(parts):
-                        pass_val = parts[i + 1].rstrip(',')
-                if user_val and pass_val:
-                    found.append({
-                        "username": user_val,
-                        "password": pass_val,
-                        "protocol": protocol,
-                        "target": target,
-                        "port": port or get_default_port(protocol),
-                    })
-
-        total_attempts = 0
-        import re
-        for line in output.split('\n'):
-            m = re.search(r'(\d+)\s+attempt', line)
-            if m:
-                total_attempts = int(m.group(1))
-
-        return {
-            "status": "complete",
-            "protocol": protocol,
-            "target": target,
-            "port": port or get_default_port(protocol),
-            "total_attempts": total_attempts,
-            "elapsed": 0,
-            "speed": "",
-            "found": found,
-            "found_count": len(found),
-            "hydra_output": output,
-        }
-
+        cmd = build_command(
+            target,
+            effective_port,
+            protocol,
+            user=user_arg,
+            userlist=userlist_path,
+            password=password_arg,
+            passlist=passlist_path,
+            combo_file=combo_file,
+            extra=extra,
+            threads=threads,
+            timeout=timeout,
+            stop_on_first=stop_on_first,
+            retries=retries,
+            rate=rate,
+            wait=wait,
+            resume=resume,
+            max_blocking=max_blocking,
+            expand_words=expand_words,
+            check=check,
+            verbose=verbose,
+            http=http,
+        )
+        return run_engine(cmd, on_event=on_event, on_log=on_log)
     finally:
-        if userlist_file and os.path.exists(userlist_file):
-            os.unlink(userlist_file)
-        if passlist_file and os.path.exists(passlist_file):
-            os.unlink(passlist_file)
+        for path in temp_paths:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
 
 
-def run_bruteforce(target, port, protocol, users, passwords, threads=32, timeout=10,
-                   prefer_rust=True, proxy=None, expand_words=False):
-    if prefer_rust and protocol in PROTOCOLS_RUST and os.path.exists(RUST_BIN):
-        return run_rust_engine(target, port, protocol, users, passwords,
-                               threads, timeout, proxy=proxy, expand_words=expand_words)
-    if protocol in PROTOCOLS_HYDRA:
-        return run_hydra(target, port, protocol, users, passwords, threads, timeout)
-    return {"status": "error", "message": f"Protocol {protocol} not supported"}
+def run_multi(
+    target: str,
+    protocol: str,
+    port: int = 0,
+    **kwargs,
+) -> Dict[str, object]:
+    """Alias kept for callers that used the old single-protocol helper."""
+    return run_bruteforce(target, port, protocol, **kwargs)
