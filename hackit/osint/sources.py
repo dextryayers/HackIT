@@ -891,6 +891,29 @@ except Exception:
     pass
 
 
+# Aggregators, search engines and lookup portals answer 200 OK for *any*
+# input, so they can never prove an account exists. They live in SEARCH_LEADS
+# instead of the profile matrix.
+_NON_PROFILE_PATTERNS = (
+    "google.com/search", "bing.com/search", "search.yahoo.com", "yandex.com/search",
+    "baidu.com/s", "sogou.com/web", "duckduckgo.com/?q", "searx.", "mojeek.com/search",
+    "startpage.com", "search.brave.com", "socialmention.com",
+    "fonts.google.com", "groups.google.com", "patents.google.com",
+    "scholar.google.com", "meet.google.com", "docs.google.com",
+    "webcache.googleusercontent.com", "cc.bingj.com",
+    "archive.org/details", "archive.org/search", "web.archive.org/web/*",
+    "mail-archive.com", "censys.io", "shodan.io", "onyphe.io", "dnslytics.com",
+    "domaintools.com", "who.is", "whois.com", "whoisxmlapi.com", "robtex.com",
+    "brand24.com", "talkwalker.com", "trendsmap.com", "tweetbinder.com",
+    "crt.sh", "hackertarget.com", "rapiddns.io", "subdomain.center",
+)
+
+
+def _is_profile_source(url: str) -> bool:
+    low = url.lower()
+    return not any(pattern in low for pattern in _NON_PROFILE_PATTERNS)
+
+
 def get_social_sources():
     from .validators import normalize_source
     try:
@@ -901,7 +924,7 @@ def get_social_sources():
     seen = set()
     for source in list(SOCIAL_SOURCES) + list(EXTRA_SOURCES):
         source = normalize_source(source)
-        if not source:
+        if not source or not _is_profile_source(source["url"]):
             continue
         key = source["url"]
         if key not in seen:

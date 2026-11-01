@@ -610,6 +610,11 @@ def cli(ctx, proxy, no_verify, no_banner, verbose):
     os.environ['HACKIT_VERIFY'] = '0' if no_verify else '1'
     if no_banner:
         os.environ['HACKIT_NO_BANNER'] = '1'
+    # Machine-readable subcommands must keep stdout pure — the banner would
+    # break `hackit osint X --json | jq`. Detect it before printing anything.
+    _argv = sys.argv[1:]
+    if '--json' in _argv or '--no-banner' in _argv:
+        os.environ['HACKIT_NO_BANNER'] = '1'
     # Set global logging verbosity
     import logging
     if verbose:

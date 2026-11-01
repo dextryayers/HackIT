@@ -48,7 +48,13 @@ NOT_FOUND_MARKERS = [
     "no results", "sorry, this page", "this account doesn't exist",
     "couldn't find this account", "content is not available",
     "this profile may have been removed", "the link you followed may be broken",
-    "no user with this username",
+    "no user with this username", "nothing here", "no such user",
+    "no profile", "user does not exist", "account suspended",
+    "this user has been suspended", "page isn't available",
+    "we can't find that page", "the page you requested could not be found",
+    "does not use", "doesn't use", "has not joined", "is not a member",
+    "no account with", "this username is available", "username is available",
+    "not registered", "unclaimed", "no longer active",
 ]
 
 BLOCKED_WALL_MARKERS = [
@@ -63,8 +69,26 @@ BLOCKED_WALL_MARKERS = [
 GENERIC_LANDING_MARKERS = [
     "log in", "sign in", "sign up", "join conversation", "join group chat",
     "share on whatsapp", "contact on signal", "dashboard", "official site",
-    "search results", "search result", "results for",
+    "search results", "search result", "results for", "browse fonts",
+    "browse the web", "create your account", "get started", "download the app",
+    "welcome to", "client challenge", "access denied",
 ]
+
+# Platform shells that render 200 OK for every handle. A probe whose title is
+# one of these carries no identity evidence and must not be reported as a hit.
+SHELL_TITLES = {
+    "", "home", "sign in", "sign up", "log in", "login", "register",
+    "search", "explore", "discover", "welcome", "loading", "error",
+    "page not found", "not found", "client challenge", "access denied",
+    "just a moment", "attention required! | cloudflare",
+}
+
+# Titles that are pure platform branding — matched against the platform name.
+BRAND_SUFFIXES = (
+    " | facebook", " - facebook", " | instagram", " • instagram",
+    " / x", " | twitter", " | linkedin", " - youtube", " | pinterest",
+    " | tiktok", " - twitch", " | soundcloud", " | spotify",
+)
 
 
 def _norm(s: str) -> str:
@@ -122,17 +146,63 @@ def normalize_handles(query: str, deep: bool = False) -> List[str]:
     return unique[:16]
 
 
+def _title_is_shell(title: str) -> bool:
+    """True when a 200-OK page is a platform shell, not a profile."""
+    clean = re.sub(r"\s+", " ", (title or "")).strip().lower()
+    if clean in SHELL_TITLES:
+        return True
+    if any(clean.endswith(suffix) for suffix in BRAND_SUFFIXES):
+        return True
+    return any(marker in clean for marker in GENERIC_LANDING_MARKERS)
+
+
+def _content_evidence(html: str, handle: str, display_name: str = "") -> list[str]:
+    """Collect identity evidence from a profile page body.
+
+    Only strong signals count: the handle in the title, og:url, canonical URL,
+    an ``@handle`` mention, or the target's real name. A page that merely
+    answers 200 OK proves nothing.
+    """
+    evidence: list[str] = []
+    head = html[:60000]
+    norm_handle = _norm(handle)
+    title = _extract_between(head, r"<title[^>]*>(.*?)</title>")
+    if norm_handle and norm_handle in _norm(title):
+        evidence.append("title")
+    for pattern, label in (
+        (r'<link[^>]+rel=["\']canonical["\'][^>]+href=["\']([^"\']+)', "canonical"),
+        (r'<meta[^>]+property=["\']og:url["\'][^>]+content=["\']([^"\']+)', "og:url"),
+    ):
+        match = re.search(pattern, head, re.IGNORECASE)
+        if match and norm_handle and norm_handle in _norm(match.group(1)):
+            evidence.append(label)
+    if re.search(r"@" + re.escape(handle) + r"\b", head, re.IGNORECASE):
+        evidence.append("handle mention")
+    if display_name:
+        norm_name = _norm(display_name)
+        if len(norm_name) >= 5:
+            og_title = _extract_between(
+                head, r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\'](.*?)["\']')
+            if norm_name in _norm(og_title) or norm_name in _norm(title):
+                evidence.append("real name")
+    return evidence
+
+
 def _verdict_by_title(title: str, handle: str) -> tuple[str, str, str]:
-    """Mirror of the Rust engine's verdict_by_title: (status, confidence, note)."""
+    """Fallback verdict when a site has no per-site rule.
+
+    Order matters: shell pages are dead ends, handle evidence is a hit,
+    and a 200 with no evidence is at best a weak ``possible``.
+    """
     title_lower = (title or "").lower()
-    if any(marker in title_lower for marker in GENERIC_LANDING_MARKERS):
-        return "possible", "low", "landing/search page"
+    if _title_is_shell(title):
+        return "miss", "medium", "platform shell page"
     norm_title, norm_handle = _norm(title), _norm(handle)
     if norm_handle and norm_title and norm_handle in norm_title:
         return "hit", "high", "title matched (handle)"
     if not title:
-        return "possible", "low", "200 OK, no title"
-    return "possible", "low", "title found (handle absent)"
+        return "miss", "low", "200 OK, no title"
+    return "possible", "low", "200 OK, no handle evidence"
 
 
 def _apply_site_rules(rule: dict, code: int, text_lower: str, title: str,
@@ -188,8 +258,10 @@ def _apply_site_rules(rule: dict, code: int, text_lower: str, title: str,
 
 
 def _request_profile(session: requests.Session, source: Dict[str, str], handle: str,
-                     timeout: int, retry: int = 0) -> ProfileFinding:
+                     timeout: int, retry: int = 0,
+                     display_name: str = "") -> ProfileFinding:
     url = source["url"].format(username=handle)
+    norm_handle = _norm(handle)
     rule = _site_rules().get(source["url"], {})
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -208,18 +280,31 @@ def _request_profile(session: requests.Session, source: Dict[str, str], handle: 
             metadata = _extract_metadata(response.text[:20000])
             title = metadata["title"]
 
+            body = response.text[:120000]
+            evidence = _content_evidence(body, handle, display_name)
             verdict = _apply_site_rules(
                 rule, code, text_lower, title, handle,
                 response.url, response.headers.get("Location", ""),
             )
             if verdict is None:
-                # Rules indecisive: generic heuristics as a last resort.
+                # Rules indecisive: content-first heuristics.
                 if any(marker in text_lower for marker in NOT_FOUND_MARKERS):
                     verdict = ("miss", "high", "not-found marker")
                 elif any(marker in text_lower for marker in BLOCKED_WALL_MARKERS):
                     verdict = ("unknown", "low", "blocked/WAF wall")
+                elif _title_is_shell(title):
+                    verdict = ("miss", "medium", "platform shell page")
+                elif evidence:
+                    verdict = ("hit", "high", "content evidence: " + ", ".join(evidence[:3]))
                 elif code == 200:
-                    verdict = _verdict_by_title(title, handle)
+                    # A real page still has to prove it belongs to the handle.
+                    norm_body = _norm(body[:4000])
+                    if norm_handle and norm_handle in norm_body:
+                        verdict = ("hit", "medium", "handle in body")
+                    elif len(body) > 4000:
+                        verdict = ("possible", "low", "200 OK, no handle evidence")
+                    else:
+                        verdict = ("miss", "medium", "empty shell page")
                 elif code in (301, 302, 303, 307, 308):
                     verdict = ("possible", "low", "redirect")
                 else:
@@ -228,11 +313,12 @@ def _request_profile(session: requests.Session, source: Dict[str, str], handle: 
             status, confidence, note = verdict
             if attempt > 0:
                 note = f"{note} (retry {attempt})"
-            return ProfileFinding(
+            finding = ProfileFinding(
                 source["name"], source["category"], handle,
                 response.url, status, confidence, code, note, title,
                 metadata["description"], round(elapsed, 3),
             )
+            return _veto_finding(finding)
         except requests.RequestException as exc:
             last_error = type(exc).__name__
             if attempt < retry:
@@ -240,6 +326,49 @@ def _request_profile(session: requests.Session, source: Dict[str, str], handle: 
                 continue
     return ProfileFinding(source["name"], source["category"], handle, url,
                           "unknown", "low", None, last_error)
+
+
+NON_PROFILE_URL_PATTERNS = (
+    "google.com/search", "bing.com/search", "search.yahoo.com", "yandex.com/search",
+    "baidu.com/s", "sogou.com/web", "duckduckgo.com/?q", "searx.", "mojeek.com/search",
+    "startpage.com", "search.brave.com", "socialmention.com",
+    "fonts.google.com", "groups.google.com", "patents.google.com",
+    "scholar.google.com", "meet.google.com", "docs.google.com",
+    "archive.org/details", "archive.org/search", "web.archive.org/web/*",
+    "mail-archive.com", "censys.io", "shodan.io", "onyphe.io", "dnslytics.com",
+    "domaintools.com", "who.is", "whois.com", "whoisxmlapi.com", "robtex.com",
+    "brand24.com", "talkwalker.com", "trendsmap.com", "tweetbinder.com",
+    "crt.sh", "hackertarget.com", "rapiddns.io", "subdomain.center",
+)
+
+
+def _veto_finding(finding: "ProfileFinding") -> "ProfileFinding":
+    """Downgrade engine hits that are really shells, aggregators or 404 pages.
+
+    Both engines can return ``hit`` for a page that merely echoed the handle in
+    a search box or a "does not use this service" notice. This is the single
+    gate every finding passes through before it reaches the report.
+    """
+    url_low = (finding.url or "").lower()
+    if any(pattern in url_low for pattern in NON_PROFILE_URL_PATTERNS):
+        finding.status = "miss"
+        finding.confidence = "high"
+        finding.note = "aggregator/search endpoint, not a profile"
+        return finding
+
+    title = (finding.title or "").lower()
+    if title:
+        if any(marker in title for marker in NOT_FOUND_MARKERS):
+            finding.status = "miss"
+            finding.confidence = "high"
+            finding.note = "not-found notice in title"
+            return finding
+        if _title_is_shell(finding.title):
+            finding.status = "miss"
+            finding.confidence = "medium"
+            finding.note = "platform shell page"
+            return finding
+    return finding
 
 
 def _confidence_label(value) -> str:
@@ -267,6 +396,7 @@ def scan_usernames_rust(
             title=item.get("title", ""), description=item.get("description", ""),
             response_time=float(item.get("response_time") or 0.0),
         )
+        finding = _veto_finding(finding)
         findings.append(finding)
         if on_result:
             on_result(finding)
@@ -281,7 +411,15 @@ def scan_usernames_rust(
             on_step("warn", "Sweep engine unavailable, using built-in sweep")
         raise RuntimeError(f"sweep engine unavailable: {data.get('error') or 'empty results'}")
     order = {"hit": 0, "possible": 1, "unknown": 2, "miss": 3}
-    return sorted(findings, key=lambda f: (order.get(f.status, 9), f.platform, f.handle))
+    ranked = sorted(findings, key=lambda f: (order.get(f.status, 9), f.platform, f.handle))
+    seen, unique = set(), []
+    for finding in ranked:
+        key = (_norm(finding.platform), _norm(finding.handle))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(finding)
+    return unique
 
 
 def scan_usernames(
@@ -325,6 +463,7 @@ def scan_usernames(
     if category:
         sources = [s for s in sources if s["category"].lower() == category.lower()]
     findings: List[ProfileFinding] = []
+    display_name = build_identity_target(query).display_name
     total = len(handles) * len(sources)
     if on_step:
         on_step("note", f"Built-in sweep: {len(handles)} handle(s) x {len(sources)} sources = {total} probes")
@@ -335,7 +474,8 @@ def scan_usernames(
         session.mount("https://", adapter)
         with ThreadPoolExecutor(max_workers=workers) as executor:
             futures = [
-                executor.submit(_request_profile, session, source, handle, timeout, retry)
+                executor.submit(_request_profile, session, source, handle, timeout,
+                                retry, display_name)
                 for handle in handles for source in sources
             ]
             # Overall deadline so one stalled connection cannot hang the scan.
@@ -357,7 +497,15 @@ def scan_usernames(
                     on_step("tick", f"{finding.platform} [{finding.status}]|{checked}|{len(done)}")
 
     order = {"hit": 0, "possible": 1, "unknown": 2, "miss": 3}
-    return sorted(findings, key=lambda f: (order.get(f.status, 9), f.platform, f.handle))
+    ranked = sorted(findings, key=lambda f: (order.get(f.status, 9), f.platform, f.handle))
+    seen, unique = set(), []
+    for finding in ranked:
+        key = (_norm(finding.platform), _norm(finding.handle))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(finding)
+    return unique
 
 
 def inspect_email(query: str, timeout: int = 8) -> Dict[str, object]:
@@ -539,6 +687,7 @@ def run_full_scan(
     log.done(f"{n_hit} hits / {len(profiles)} checked")
 
     data = {
+        "schema": "hackit.osint.v4",
         "query": query, "handles": handles,
         "display_name": target.display_name, "first_name": target.first_name,
         "last_name": target.last_name, "middle_name": target.middle_name,
@@ -553,6 +702,8 @@ def run_full_scan(
             "hits": sum(1 for item in profiles if item.status == "hit"),
             "possible": sum(1 for item in profiles if item.status == "possible"),
             "unknown": sum(1 for item in profiles if item.status == "unknown"),
+            "miss": sum(1 for item in profiles if item.status == "miss"),
+            "verified": sum(1 for item in profiles if item.verified),
             "checked": len(profiles),
         },
     }
@@ -573,23 +724,43 @@ def run_full_scan(
     except Exception as exc:
         log.done(f"skipped ({exc})")
 
-    log.phase(5, 9, "Live public intel", "GitHub + GitLab + Reddit + Keybase + Gravatar + Mastodon")
+    log.phase(5, 9, "Live public intel", "keyless profile, domain and email collectors")
     try:
         from .live_sources import collect_live_intel, verified_sources
 
         domain = ""
-        if "." in query and not EMAIL_RE.match(query) and not query.startswith("@"):
+        if EMAIL_RE.match(query):
+            domain = query.split("@", 1)[1]
+        elif "." in query and not query.startswith("@"):
             domain = query.split("/")[0].split("@")[-1]
-        live = collect_live_intel(handles, domain=domain)
+        email = query if EMAIL_RE.match(query) else ""
+
+        live = collect_live_intel(handles, domain=domain, email=email,
+                                  workers=workers, timeout=timeout,
+                                  handle_limit=2 if deep else 1)
         verified = verified_sources(live)
+        verified_norm = {_norm(v) for v in verified}
         for profile in profiles:
-            if _norm(profile.platform) in {_norm(v) for v in verified} and profile.status == "hit":
+            if _norm(profile.platform) in verified_norm and profile.status in ("hit", "possible"):
                 profile.verified = True
+                profile.status = "hit"
+                profile.confidence = "high"
         data["live_intel"] = live
+        data["profiles"] = [asdict(item) for item in profiles]
+        data["summary"] = {
+            "hits": sum(1 for item in profiles if item.status == "hit"),
+            "possible": sum(1 for item in profiles if item.status == "possible"),
+            "unknown": sum(1 for item in profiles if item.status == "unknown"),
+            "miss": sum(1 for item in profiles if item.status == "miss"),
+            "verified": sum(1 for item in profiles if item.verified),
+            "checked": len(profiles),
+        }
         log.done(f"{len(live.get('profiles', []))} verified profiles, "
-                 f"{len(live.get('subdomains', []))} subdomains")
+                 f"{len(live.get('subdomains', []))} subdomains, "
+                 f"{len(live.get('errors', []))} blocked")
     except Exception as exc:
-        data["live_intel"] = {"profiles": [], "subdomains": [], "dns": {}, "geo": {}}
+        data["live_intel"] = {"profiles": [], "subdomains": [], "dns": {}, "geo": {},
+                              "errors": [{"source": "live", "error": str(exc)}]}
         log.done(f"skipped ({exc})")
 
     log.phase(6, 9, "Trace leads", "search-engine dork matrix")

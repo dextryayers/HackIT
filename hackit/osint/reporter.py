@@ -174,30 +174,195 @@ def generate_html_report(data: dict, output_path: str = "") -> str:
 
     live = data.get("live_intel") or {}
     live_html = ""
-    if live.get("profiles") or live.get("subdomains"):
-        live_html = '<div class="section fade-in"><h2>🛰️ Live Public Intelligence (keyless APIs)</h2>'
-        for p in live.get("profiles", []):
-            facts = " · ".join(str(v) for v in (
-                p.get("bio", "")[:160], p.get("location", ""),
-                p.get("company", ""), p.get("followers") and f"{p['followers']} followers",
-            ) if v)
-            live_html += f'''<div class="info-card" style="margin:8px 0">
-                <span class="label">{p.get("source","")}</span>
-                <span class="value"><a href="{p.get("url","")}" target="_blank">{p.get("name","") or p.get("url","")}</a></span>
-                <p style="color:#888;font-size:13px;margin:6px 0 0">{facts}</p>
-            </div>'''
-        subs = live.get("subdomains") or []
-        if subs:
-            live_html += f'<h3 style="margin-top:15px;font-size:15px">🔐 Certificate Transparency ({len(subs)} hosts)</h3>'
-            live_html += " ".join(f'<span class="tag">{s.get("host","")}</span>' for s in subs[:40])
+
+    def _kv(rows, title, accent="#00e5ff"):
+        """Render a label/value grid; skips empty values."""
+        rows = [(k, v) for k, v in rows if v not in (None, "", [], {})]
+        if not rows:
+            return ""
+        body = "".join(
+            f'<div class="kv-row"><span class="kv-k">{k}</span>'
+            f'<span class="kv-v">{v}</span></div>' for k, v in rows)
+        return (f'<h3 class="sub-h" style="color:{accent}">{title}</h3>'
+                f'<div class="kv-grid">{body}</div>')
+
+    def _esc(value):
+        return (str(value).replace("&", "&amp;").replace("<", "&lt;")
+                .replace(">", "&gt;"))
+
+    profiles = live.get("profiles") or []
+    if profiles or live.get("subdomains") or live.get("rdap") or live.get("dns"):
+        live_html = ('<div class="section fade-in">'
+                     '<h2>🛰️ Live Public Intelligence <span style="font-size:13px;'
+                     'color:#888;font-weight:400">keyless APIs · no credentials</span></h2>')
+
+        if profiles:
+            by_kind = {}
+            for prof in profiles:
+                by_kind.setdefault(prof.get("kind") or "other", []).append(prof)
+            order = ["identity", "social", "code", "messaging", "media", "gaming",
+                     "security", "forum", "blog", "books", "writing", "other"]
+            live_html += (f'<h3 class="sub-h" style="color:#00e676">'
+                          f'Verified profiles ({len(profiles)})</h3>')
+            for kind in order:
+                group = by_kind.get(kind)
+                if not group:
+                    continue
+                live_html += (f'<div class="kind-label">{kind} · {len(group)}</div>')
+                for prof in group:
+                    facts = []
+                    for key, label in (("location", "location"), ("company", "org"),
+                                       ("followers", "followers"), ("created", "since"),
+                                       ("repos", "repos"), ("karma", "karma"),
+                                       ("proofs", "proofs"), ("accounts", "accounts"),
+                                       ("instance", "instance"), ("handle", "handle"),
+                                       ("top_ratings", "ratings"), ("steamid64", "steam64"),
+                                       ("statuses", "posts"), ("blog", "blog"),
+                                       ("public_email", "email")):
+                        value = (prof.get("facts") or {}).get(key)
+                        if value not in (None, "", 0):
+                            facts.append(f"{label}: {_esc(str(value)[:90])}")
+                    if not facts and prof.get("bio"):
+                        facts.append(_esc(str(prof["bio"])[:180]))
+                    live_html += f'''<div class="info-card" style="margin:8px 0">
+                        <span class="label">{_esc(prof.get("source", ""))}</span>
+                        <span class="value"><a href="{_esc(prof.get("url", ""))}" target="_blank" rel="noopener">{_esc(prof.get("name") or prof.get("url", ""))}</a></span>
+                        <p style="color:#888;font-size:12px;margin:6px 0 0">{" · ".join(facts)}</p>
+                    </div>'''
+
+        rdap = live.get("rdap") or {}
+        if rdap:
+            ns = rdap.get("nameservers") or []
+            live_html += _kv([
+                ("Registrar", _esc(rdap.get("registrar", ""))),
+                ("Created", _esc(rdap.get("created", ""))),
+                ("Updated", _esc(rdap.get("updated", ""))),
+                ("Expires", _esc(rdap.get("expires", ""))),
+                ("Status", _esc(rdap.get("status", ""))),
+                ("Nameservers", _esc(", ".join(ns[:6]))),
+            ], "📜 Registration (RDAP)")
+
         dns = live.get("dns") or {}
-        dns_bits = [f"{k}: {', '.join(v[:3])}" for k, v in dns.items() if v]
-        if dns_bits:
-            live_html += f'<p style="color:#888;font-size:13px;margin-top:12px">{" · ".join(dns_bits)}</p>'
+        if dns:
+            dns_rows = [(rtype, _esc(", ".join(str(v)[:70] for v in values[:4])))
+                        for rtype, values in dns.items() if values]
+            live_html += _kv(dns_rows, "🌐 DNS records")
+
         geo = live.get("geo") or {}
         if geo:
-            live_html += f'<p style="color:#888;font-size:13px;margin-top:6px">🌍 {geo.get("ip","")} · {geo.get("city","")}/{geo.get("country","")} · {geo.get("asn","")}</p>'
-        live_html += '</div>'
+            live_html += _kv([
+                ("IP", _esc(geo.get("ip", ""))),
+                ("Location", _esc(" / ".join(x for x in (
+                    geo.get("city"), geo.get("region"), geo.get("country")) if x))),
+                ("Network", _esc(geo.get("asn") or geo.get("isp", ""))),
+                ("Hosting", "yes" if geo.get("hosting") else ""),
+                ("Proxy/VPN", "yes" if geo.get("proxy") else ""),
+            ], "🌍 Hosting")
+
+        idb = live.get("internetdb") or {}
+        if idb.get("ports") or idb.get("cves"):
+            ports = ", ".join(str(p) for p in (idb.get("ports") or [])[:20])
+            live_html += _kv([
+                ("Exposed ports", _esc(ports)),
+                ("CVEs", f'<span style="color:#ff1744">{idb.get("cves", 0)}</span>'
+                 if idb.get("cves") else ""),
+                ("Hostnames", _esc(", ".join((idb.get("hostnames") or [])[:6]))),
+                ("Tags", _esc(", ".join((idb.get("tags") or [])[:8]))),
+            ], "🔓 InternetDB (Shodan keyless)")
+
+        mail = live.get("mail") or {}
+        if mail:
+            live_html += _kv([
+                ("MX", _esc(", ".join(str(m)[:50] for m in (mail.get("mx") or [])[:3]))),
+                ("SPF", _esc(str(mail.get("spf", ""))[:120])),
+                ("DMARC", _esc(str(mail.get("dmarc", ""))[:120])),
+                ("DKIM hint", "present" if mail.get("dkim_hint") else ""),
+            ], "📧 Mail posture")
+
+        wayback = live.get("wayback") or {}
+        if wayback:
+            live_html += _kv([
+                ("Snapshots", wayback.get("snapshots", 0)),
+                ("First", _esc(wayback.get("first", ""))),
+                ("Last", _esc(wayback.get("last", ""))),
+            ], "🕰️ Wayback Machine")
+
+        otx = live.get("otx") or {}
+        if otx.get("pulses") or otx.get("passive_dns"):
+            live_html += _kv([
+                ("Threat pulses", otx.get("pulses", 0)),
+                ("Tags", _esc(otx.get("tags", ""))),
+                ("Passive DNS", f"{len(otx.get('passive_dns') or [])} records"),
+            ], "🛡️ AlienVault OTX")
+
+        ssl = live.get("ssllabs") or {}
+        hsts = live.get("hstspreload") or {}
+        checks = live.get("domain_checks") or {}
+        if ssl or hsts or checks:
+            live_html += _kv([
+                ("TLS grade", _esc(ssl.get("grade", ""))),
+                ("HSTS", _esc(hsts.get("status", ""))),
+                ("Domain age", f"{checks['age_days']} days" if checks.get("age_days") else ""),
+                ("Disposable", "yes" if checks.get("disposable") else ""),
+            ], "🔒 Transport & reputation")
+
+        subs = live.get("subdomains") or []
+        if subs:
+            live_html += (f'<h3 class="sub-h" style="color:#00e5ff">'
+                          f'🧾 Subdomains ({len(subs)})</h3><div class="tag-wrap">')
+            live_html += "".join(
+                f'<span class="tag">{_esc(s.get("host", ""))}</span>' for s in subs[:120])
+            live_html += "</div>"
+            if len(subs) > 120:
+                live_html += (f'<p style="color:#666;font-size:12px">'
+                              f'… {len(subs) - 120} more in the JSON report</p>')
+
+        pdns = live.get("passive_dns") or []
+        if pdns:
+            live_html += (f'<h3 class="sub-h" style="color:#00e5ff">'
+                          f'📡 Passive DNS ({len(pdns)})</h3><div class="tag-wrap">')
+            live_html += "".join(
+                f'<span class="tag">{_esc(r.get("host", ""))} → {_esc(r.get("ip", ""))}</span>'
+                for r in pdns[:30])
+            live_html += "</div>"
+
+        scans = live.get("urlscan") or []
+        if scans:
+            live_html += ('<h3 class="sub-h" style="color:#00e5ff">'
+                          '🔎 Recent urlscan.io scans</h3>'
+                          '<table class="mini"><tr><th>date</th><th>ip</th>'
+                          '<th>server</th><th>url</th></tr>')
+            for row in scans[:10]:
+                live_html += (f'<tr><td>{_esc(row.get("scanned", ""))}</td>'
+                              f'<td>{_esc(row.get("ip", ""))}</td>'
+                              f'<td>{_esc(str(row.get("server", ""))[:28])}</td>'
+                              f'<td><a href="{_esc(row.get("result", ""))}" '
+                              f'target="_blank" rel="noopener">{_esc(str(row.get("url", ""))[:70])}</a></td></tr>')
+            live_html += "</table>"
+
+        email_checks = live.get("email_checks") or {}
+        pgp = live.get("pgp") or {}
+        if email_checks or pgp:
+            disify = email_checks.get("disify") or {}
+            ucheck = email_checks.get("usercheck_email") or {}
+            live_html += _kv([
+                ("PGP key", _esc(f"{pgp.get('server', '')} · {', '.join(pgp.get('uids', [])[:2])}")
+                 if pgp else ""),
+                ("Disposable", "yes" if disify.get("disposable") else "no"
+                 if disify else ""),
+                ("Role account", "yes" if disify.get("role") else "no" if disify else ""),
+                ("Free provider", "yes" if disify.get("free") else "no" if disify else ""),
+                ("MX host", _esc(str((ucheck.get("mx_records") or [{}])[0].get("hostname", "")))
+                 if ucheck.get("mx_records") else ""),
+            ], "✉️ Email exposure")
+
+        errors = live.get("errors") or []
+        if errors:
+            names = sorted({str(e.get("source", "?")) for e in errors})
+            live_html += (f'<p style="color:#666;font-size:12px;margin-top:14px">'
+                          f'⚠ {len(errors)} collector errors: {_esc(", ".join(names[:12]))}</p>')
+
+        live_html += "</div>"
 
     categories = an.get("top_categories", [])
     cat_bars = ""
@@ -266,6 +431,20 @@ td {{ border-bottom:1px solid rgba(255,255,255,.03);vertical-align:middle; }}
 .bar-fill {{ height:100%;border-radius:3px;transition:width 1s ease; }}
 .fade-in {{ animation:fadeIn .6s ease; }}
 @keyframes fadeIn {{ from{{opacity:0;transform:translateY(12px)}} to{{opacity:1;transform:translateY(0)}} }}
+.sub-h {{ font-size:14px;font-weight:700;text-transform:uppercase;letter-spacing:1px;
+    margin:22px 0 10px;padding-bottom:6px;border-bottom:1px solid rgba(255,255,255,.06); }}
+.kv-grid {{ display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:4px 18px; }}
+.kv-row {{ display:flex;gap:10px;font-size:13px;padding:4px 0;
+    border-bottom:1px solid rgba(255,255,255,.03); }}
+.kv-k {{ color:#888;min-width:110px;flex:0 0 110px; }}
+.kv-v {{ color:#ddd;word-break:break-word;flex:1; }}
+.kind-label {{ font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:#555;
+    margin:14px 0 4px; }}
+.tag-wrap {{ display:flex;flex-wrap:wrap;gap:2px;max-height:260px;overflow-y:auto; }}
+table.mini th {{ padding:8px;font-size:11px;text-transform:uppercase;letter-spacing:1px; }}
+table.mini td {{ padding:8px;color:#aaa; }}
+table.mini a {{ color:#7c4dff;text-decoration:none; }}
+table.mini a:hover {{ color:#00e676;text-decoration:underline; }}
 .footer {{ text-align:center;padding:30px;color:#555;font-size:13px; }}
 .footer strong {{ color:#888; }}
 @media(max-width:640px) {{ .header h1 {{font-size:22px}} .stat .num {{font-size:28px}} .grid-2 {{grid-template-columns:1fr}} }}
