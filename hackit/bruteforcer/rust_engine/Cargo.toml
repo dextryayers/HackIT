@@ -22,10 +22,16 @@ trust-dns-resolver = "0.23"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 suppaftp = "5"
 ssh2 = "0.9"
-sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "postgres", "mysql"] }
-redis = { version = "0.25", features = ["tokio-comp"] }
 ldap3 = { version = "0.12.1", default-features = false, features = ["sync", "tls-rustls-ring"] }
 tiberius = { version = "0.12", default-features = false, features = ["rustls", "tokio"] }
 rumqttc = "0.24"
 tokio-util = { version = "0.7", features = ["compat"] }
+tokio-rustls = "0.25"
+webpki-roots = "0.25"
 md-5 = "0.10"
+md4 = "0.10"
+hmac = "0.12"
+sha1 = "0.10"
+sha2 = "0.10"
+base64 = "0.22"
+rsa = { version = "0.9", features = ["sha2"] }

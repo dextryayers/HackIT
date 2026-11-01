@@ -1,27 +1,57 @@
+//! POP3 authentication — USER/PASS, implicit TLS on 995.
+
+use crate::core::tls;
+use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::TcpStream;
 
-pub async fn auth(target: &str, port: u16, user: &str, pass: &str, _to: u64) -> Result<bool, String> {
-    let mut s = TcpStream::connect(format!("{}:{}", target, port))
+async fn read_line(
+    reader: &mut BufReader<tokio::io::ReadHalf<tls::BoxStream>>,
+    to: u64,
+) -> Result<String, String> {
+    let mut line = String::new();
+    let n = tokio::time::timeout(Duration::from_secs(to), reader.read_line(&mut line))
         .await
-        .map_err(|e| e.to_string())?;
-    let (r, mut w) = s.split();
-    let mut br = BufReader::new(r);
-    let mut buf = String::new();
+        .map_err(|_| "read timeout".to_string())?
+        .map_err(|e| format!("read: {}", e))?;
+    if n == 0 {
+        return Err("connection closed".into());
+    }
+    Ok(line)
+}
 
-    let _ = br.read_line(&mut buf).await;
-    buf.clear();
+pub async fn auth(
+    target: &str,
+    port: u16,
+    user: &str,
+    pass: &str,
+    to: u64,
+) -> Result<bool, String> {
+    let tls_on = port == 995 || port == 8995;
+    let stream = tls::connect(target, port, tls_on, to).await?;
+    let (read_half, mut write_half) = tokio::io::split(stream);
+    let mut reader = BufReader::new(read_half);
 
-    w.write_all(format!("USER {}\r\n", user).as_bytes())
+    let banner = read_line(&mut reader, to).await?;
+    if !banner.starts_with("+OK") {
+        return Err(format!("unexpected POP3 banner: {}", banner.trim()));
+    }
+
+    write_half
+        .write_all(format!("USER {}\r\n", user).as_bytes())
         .await
-        .map_err(|e| e.to_string())?;
-    let _ = br.read_line(&mut buf).await;
-    buf.clear();
+        .map_err(|e| format!("write: {}", e))?;
+    let user_reply = read_line(&mut reader, to).await?;
+    if !user_reply.starts_with("+OK") {
+        // Some servers do not reveal whether the mailbox exists.
+        return Ok(false);
+    }
 
-    w.write_all(format!("PASS {}\r\n", pass).as_bytes())
+    write_half
+        .write_all(format!("PASS {}\r\n", pass).as_bytes())
         .await
-        .map_err(|e| e.to_string())?;
-    let _ = br.read_line(&mut buf).await;
+        .map_err(|e| format!("write: {}", e))?;
+    let pass_reply = read_line(&mut reader, to).await?;
 
-    Ok(buf.starts_with("+OK"))
+    let _ = write_half.write_all(b"QUIT\r\n").await;
+    Ok(pass_reply.starts_with("+OK"))
 }

@@ -1,153 +1,153 @@
+//! VNC authentication (RFB 3.3 / 3.7 / 3.8).
+//!
+//! VNC's challenge-response is DES-ECB over a 16-byte server nonce, keyed by
+//! the password padded to 8 bytes with NULs and **bit-reversed byte by byte**.
+//! The previous implementation's `des_feistel` was a multiply-rotate toy — it
+//! produced plausible-looking bytes and never authenticated once. This uses a
+//! real DES implementation, so the response is the response a VNC server expects.
+//!
+//! Password length is capped at 8 bytes by the protocol itself; longer input is
+//! truncated exactly as the server does.
+
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
-pub async fn auth(target: &str, port: u16, _user: &str, pass: &str, to: u64) -> Result<bool, String> {
-    let mut s = tokio::time::timeout(
-        Duration::from_secs(to),
-        TcpStream::connect(format!("{}:{}", target, port)),
-    )
-    .await
-    .map_err(|_| "timeout".to_string())?
-    .map_err(|e| format!("conn: {}", e))?;
+const SECURITY_NONE: u8 = 1;
+const SECURITY_VNC: u8 = 2;
 
-    let mut version_buf = [0u8; 12];
-    tokio::time::timeout(Duration::from_secs(to), s.read_exact(&mut version_buf))
-        .await
-        .map_err(|_| "timeout".to_string())?
-        .map_err(|e| e.to_string())?;
-
-    let version_str = String::from_utf8_lossy(&version_buf);
-    if !version_str.starts_with("RFB") {
-        return Err("not VNC".into());
-    }
-
-    if version_str.contains("003.008") || version_str.contains("003.007") {
-        s.write_all(b"RFB 003.008\n")
-            .await
-            .map_err(|e| e.to_string())?;
-    } else if version_str.contains("003.003") {
-        s.write_all(b"RFB 003.003\n")
-            .await
-            .map_err(|e| e.to_string())?;
-    } else {
-        return Err(format!("unsupported VNC version: {}", version_str.trim()));
-    }
-
-    let auth_result: Result<u8, String> = tokio::time::timeout(Duration::from_secs(to), async {
-        let (r, mut w) = s.split();
-        let mut br = tokio::io::BufReader::new(r);
-        let mut buf = [0u8; 1];
-        br.read_exact(&mut buf).await.map_err(|e| e.to_string())?;
-        let count = buf[0];
-        let mut types = vec![0u8; count as usize];
-        br.read_exact(&mut types).await.map_err(|e| e.to_string())?;
-        if types.contains(&2) {
-            w.write_all(&[2]).await.map_err(|e| e.to_string())?;
-            Ok(2u8)
-        } else if types.contains(&0) {
-            w.write_all(&[0]).await.map_err(|e| e.to_string())?;
-            Ok(0u8)
-        } else {
-            Err("no supported VNC auth type".into())
-        }
-    })
-    .await
-    .map_err(|_| "timeout".to_string())?;
-    let auth_type: u8 = auth_result?;
-
-    match auth_type {
-        0 => Err("VNC: no auth required (type 0)".into()),
-        1 => Err("VNC: auth failed (type 1)".into()),
-        2 => {
-            let mut challenge = [0u8; 16];
-            tokio::time::timeout(Duration::from_secs(to), s.read_exact(&mut challenge))
-                .await
-                .map_err(|_| "timeout".to_string())?
-                .map_err(|e| e.to_string())?;
-
-            let key = vnc_des_key(pass);
-            let encrypted = vnc_des_encrypt(&key, &challenge);
-            s.write_all(&encrypted)
-                .await
-                .map_err(|e| e.to_string())?;
-
-            let mut result = [0u8; 4];
-            s.read_exact(&mut result)
-                .await
-                .map_err(|e| e.to_string())?;
-            if result[3] == 0 {
-                Ok(true)
-            } else {
-                Err("VNC: auth rejected".into())
-            }
-        }
-        _ => Err("VNC: unknown auth scheme".into()),
-    }
+fn reverse_bits(byte: u8) -> u8 {
+    byte.reverse_bits()
 }
 
-fn vnc_des_key(pass: &str) -> [u8; 8] {
+fn vnc_key(pass: &str) -> [u8; 8] {
     let mut key = [0u8; 8];
-    for (i, b) in pass.bytes().enumerate() {
-        if i >= 8 {
-            break;
-        }
-        key[i] = b;
-    }
-    for i in 0..8 {
-        key[i] = (key[i] >> 1) | ((key[i] & 1) << 7);
-        key[i] = !key[i];
+    for (i, b) in pass.bytes().take(8).enumerate() {
+        key[i] = reverse_bits(b);
     }
     key
 }
 
-fn vnc_des_encrypt(key: &[u8; 8], data: &[u8; 16]) -> [u8; 16] {
-    let mut result = [0u8; 16];
+fn encrypt_challenge(key: &[u8; 8], challenge: &[u8; 16]) -> [u8; 16] {
+    let mut out = [0u8; 16];
     for block in 0..2 {
-        let offset = block * 8;
-        let k = *key;
-        let d: [u8; 8] = data[offset..offset + 8].try_into().unwrap();
-        let encrypted = des_encrypt_block(&k, &d);
-        result[offset..offset + 8].copy_from_slice(&encrypted);
-    }
-    result
-}
-
-fn des_encrypt_block(key: &[u8; 8], data: &[u8; 8]) -> [u8; 8] {
-    let mut state = 0u64;
-    for i in 0..8 {
-        state = (state << 8) | data[i] as u64;
-    }
-    let k = des_key_to_u64(key);
-    state = des_ff(state, k);
-    let mut out = [0u8; 8];
-    for i in 0..8 {
-        out[7 - i] = (state >> (i * 8)) as u8;
+        let mut chunk = [0u8; 8];
+        chunk.copy_from_slice(&challenge[block * 8..block * 8 + 8]);
+        out[block * 8..block * 8 + 8].copy_from_slice(&crate::core::des::encrypt_block(*key, chunk));
     }
     out
 }
 
-fn des_key_to_u64(key: &[u8; 8]) -> u64 {
-    let mut k = 0u64;
-    for i in 0..8 {
-        k = (k << 8) | key[i] as u64;
-    }
-    k
+async fn read_exact_to(
+    stream: &mut TcpStream,
+    buf: &mut [u8],
+    to: u64,
+) -> Result<(), String> {
+    tokio::time::timeout(Duration::from_secs(to), stream.read_exact(buf))
+        .await
+        .map_err(|_| "read timeout".to_string())?
+        .map(|_| ())
+        .map_err(|e| format!("read: {}", e))
 }
 
-fn des_ff(mut data: u64, key: u64) -> u64 {
-    for _round in 0..16 {
-        let left = data >> 32;
-        let right = data & 0xFFFF_FFFF;
-        let f = des_feistel(right, key);
-        data = (right << 32) | (left ^ f);
-    }
-    data
-}
+pub async fn auth(
+    target: &str,
+    port: u16,
+    _user: &str,
+    pass: &str,
+    to: u64,
+) -> Result<bool, String> {
+    let mut stream = tokio::time::timeout(
+        Duration::from_secs(to),
+        TcpStream::connect(format!("{}:{}", target, port)),
+    )
+    .await
+    .map_err(|_| "connect timeout".to_string())?
+    .map_err(|e| format!("connect: {}", e))?;
+    let _ = stream.set_nodelay(true);
 
-fn des_feistel(right: u64, _key: u64) -> u64 {
-    let r = right.wrapping_mul(0x23456789);
-    let r = r.rotate_left(7);
-    let r = r.wrapping_add(0x9ABCDEF);
-    r & 0xFFFF_FFFF
+    let mut banner = [0u8; 12];
+    read_exact_to(&mut stream, &mut banner, to).await?;
+    let version = String::from_utf8_lossy(&banner);
+    if !version.starts_with("RFB ") {
+        return Err(format!("not a VNC server (banner {:?})", version.trim()));
+    }
+
+    let major = version
+        .get(4..7)
+        .and_then(|s| s.parse::<u16>().ok())
+        .unwrap_or(0);
+    let minor = version
+        .get(8..11)
+        .and_then(|s| s.parse::<u16>().ok())
+        .unwrap_or(0);
+
+    // Negotiate 3.8 when offered; 3.3 has no security-type list.
+    let chosen = match (major, minor) {
+        (3, m) if m >= 8 => "RFB 003.008\n",
+        (3, 7) => "RFB 003.007\n",
+        _ => "RFB 003.003\n",
+    };
+    stream
+        .write_all(chosen.as_bytes())
+        .await
+        .map_err(|e| format!("version: {}", e))?;
+
+    let security_type: u8 = if chosen == "RFB 003.003\n" {
+        let mut raw = [0u8; 4];
+        read_exact_to(&mut stream, &mut raw, to).await?;
+        let t = u32::from_be_bytes(raw);
+        match t {
+            0 => return Err("VNC server refused the connection".into()),
+            1 => SECURITY_NONE,
+            2 => SECURITY_VNC,
+            other => return Err(format!("VNC unsupported security type {}", other)),
+        }
+    } else {
+        let mut count = [0u8; 1];
+        read_exact_to(&mut stream, &mut count, to).await?;
+        if count[0] == 0 {
+            // 3.8 sends a reason string after a zero count.
+            let mut len = [0u8; 4];
+            let _ = read_exact_to(&mut stream, &mut len, to).await;
+            return Err("VNC server offered no security types".into());
+        }
+        let mut types = vec![0u8; count[0] as usize];
+        read_exact_to(&mut stream, &mut types, to).await?;
+        if types.contains(&SECURITY_VNC) {
+            stream
+                .write_all(&[SECURITY_VNC])
+                .await
+                .map_err(|e| format!("security: {}", e))?;
+            SECURITY_VNC
+        } else if types.contains(&SECURITY_NONE) {
+            stream
+                .write_all(&[SECURITY_NONE])
+                .await
+                .map_err(|e| format!("security: {}", e))?;
+            SECURITY_NONE
+        } else {
+            return Err(format!("VNC offered no supported auth (types {:?})", types));
+        }
+    };
+
+    match security_type {
+        SECURITY_NONE => Err("VNC requires no password".into()),
+        SECURITY_VNC => {
+            let mut challenge = [0u8; 16];
+            read_exact_to(&mut stream, &mut challenge, to).await?;
+            let key = vnc_key(pass);
+            let response = encrypt_challenge(&key, &challenge);
+            stream
+                .write_all(&response)
+                .await
+                .map_err(|e| format!("response: {}", e))?;
+
+            let mut verdict = [0u8; 4];
+            read_exact_to(&mut stream, &mut verdict, to).await?;
+            // 0 = OK, 1 = failed, 2 = too many attempts.
+            Ok(u32::from_be_bytes(verdict) == 0)
+        }
+        _ => Err("VNC: unknown auth scheme".into()),
+    }
 }
