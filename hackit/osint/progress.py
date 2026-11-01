@@ -44,6 +44,13 @@ class StepLogger:
         if self._count == 1 or self._count % 25 == 0 or (total and self._count >= total):
             suffix = f"/{total}" if total else ""
             line = f"  │ … {self._phase}: {self._count}{suffix} checked"
+            elapsed = time.time() - self._t0 if self._t0 else 0.0
+            rate = self._count / elapsed if elapsed > 0 else 0.0
+            if rate:
+                line += f" ({rate:.0f}/s"
+                if total and total > self._count:
+                    line += f", ETA {int((total - self._count) / rate)}s"
+                line += ")"
             if msg:
                 line += f" — {msg[:60]}"
             sys.stdout.write(f"\r{line}{' ' * 10}")

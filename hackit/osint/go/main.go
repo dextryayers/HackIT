@@ -36,9 +36,26 @@ type FinalSummary struct {
 var rustBinDir string
 
 func init() {
-	if runtime.GOOS == "linux" {
-		rustBinDir = filepath.Join("rust_engine", "target", "release")
+	if runtime.GOOS != "linux" {
+		return
 	}
+	// Resolve relative to this executable, not the caller's CWD: the old
+	// CWD-relative path broke every run launched from another directory.
+	base := "."
+	if exe, err := os.Executable(); err == nil {
+		base = filepath.Dir(exe)
+	}
+	candidates := []string{
+		filepath.Join(base, "rust_engine", "target", "release"),
+		filepath.Join("rust_engine", "target", "release"),
+	}
+	for _, dir := range candidates {
+		if _, err := os.Stat(filepath.Join(dir, "osint_checker")); err == nil {
+			rustBinDir = dir
+			return
+		}
+	}
+	rustBinDir = candidates[0]
 }
 
 func getRustBinPath() string {

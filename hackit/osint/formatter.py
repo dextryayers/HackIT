@@ -6,10 +6,13 @@ from typing import Dict
 
 import click
 
-from hackit.ui import (
-    _colored, B_CYAN, B_GREEN, B_RED, B_WHITE, B_YELLOW, CYAN, DIM,
-    GREEN, RED, WHITE, YELLOW, TablePrinter,
-)
+from hackit.ui import _colored, B_CYAN, B_GREEN, B_RED, B_WHITE, B_YELLOW, CYAN, DIM, GREEN, RED, YELLOW
+
+from rich import box
+from rich.console import Console
+from rich.table import Table
+
+_console = Console()
 
 
 def _status_color(status: str) -> str:
@@ -22,10 +25,10 @@ def _status_color(status: str) -> str:
 def print_live_finding(finding) -> None:
     url = getattr(finding, "url", "")
     platform = getattr(finding, "platform", "")
-    handle = getattr(finding, "handle", "")
     code = getattr(finding, "http_status", None)
     status = getattr(finding, "status", "")
     title = getattr(finding, "title", "")
+    elapsed = getattr(finding, "response_time", 0.0)
 
     if status == "hit":
         prefix = _colored("  [+]", B_GREEN, bold=True)
@@ -37,196 +40,206 @@ def print_live_finding(finding) -> None:
         prefix = _colored("  [-] ", B_RED, bold=True)
 
     meta = _colored(f" {platform}", DIM)
-    url_part = _colored(f" {url[:90]}{'..' if len(url)>90 else ''}", B_CYAN)
+    code_part = _colored(f" {code or '-'}", DIM)
+    time_part = _colored(f"{elapsed * 1000:.0f}ms", DIM) if elapsed else ""
+    url_part = _colored(f" {url[:90]}{'..' if len(url) > 90 else ''}", B_CYAN)
     title_part = f" :: {_colored(title[:60], DIM)}" if title else ""
-    click.echo(f"{prefix}{meta} {url_part}{title_part}")
+    click.echo(f"{prefix}{meta}{code_part} {time_part}{url_part}{title_part}")
 
 
-def print_results(data: Dict[str, object], show_misses: bool = True) -> None:
+def _kv_table(title: str, rows: list[tuple[str, str]], border: str = "cyan") -> Table:
+    table = Table(title=title, box=box.ROUNDED, show_header=False, border_style=border,
+                  title_justify="left", pad_edge=False)
+    table.add_column("key", style="bold white", no_wrap=True)
+    table.add_column("value", overflow="fold")
+    for key, value in rows:
+        if value:
+            table.add_row(key, str(value))
+    return table
+
+
+def _live_intel_tables(live: Dict[str, object]) -> None:
+    profiles = live.get("profiles") or []
+    if profiles:
+        table = Table(title="VERIFIED PUBLIC PROFILES", box=box.ROUNDED,
+                      border_style="green", title_justify="left", pad_edge=False)
+        table.add_column("Source", style="bold green", no_wrap=True)
+        table.add_column("Identity", overflow="fold")
+        table.add_column("Details", overflow="fold")
+        for p in profiles:
+            facts = []
+            for key, label in (("bio", "bio"), ("location", "loc"), ("company", "company"),
+                               ("followers", "followers"), ("public_repos", "repos"),
+                               ("karma", "karma"), ("created_at", "since")):
+                value = p.get(key)
+                if value not in (None, "", 0):
+                    facts.append(f"{label}: {str(value)[:60]}")
+            proofs = p.get("proofs") or []
+            if proofs:
+                facts.append("proofs: " + ", ".join(proofs[:6]))
+            accounts = p.get("accounts") or []
+            if accounts:
+                facts.append("accounts: " + ", ".join(accounts[:6]))
+            table.add_row(p.get("source", "?"),
+                          f"{p.get('name', '')}\n{p.get('url', '')}",
+                          "\n".join(facts) or "-")
+        _console.print(table)
+
+    subdomains = live.get("subdomains") or []
+    if subdomains:
+        table = Table(title=f"CERTIFICATE TRANSPARENCY ({len(subdomains)} hosts)",
+                      box=box.ROUNDED, border_style="magenta", title_justify="left",
+                      pad_edge=False)
+        table.add_column("Host", style="bold magenta", overflow="fold")
+        table.add_column("First seen", no_wrap=True)
+        for entry in subdomains[:30]:
+            table.add_row(entry.get("host", ""), entry.get("first_seen", ""))
+        if len(subdomains) > 30:
+            table.add_row(f"... {len(subdomains) - 30} more", "")
+        _console.print(table)
+
+    dns = live.get("dns") or {}
+    geo = live.get("geo") or {}
+    if dns or geo:
+        rows = []
+        for rtype in ("A", "MX", "NS", "TXT"):
+            values = dns.get(rtype) or []
+            if values:
+                rows.append((rtype, ", ".join(values[:4])))
+        if geo:
+            rows.append(("IP", geo.get("ip", "")))
+            rows.append(("Geo", " / ".join(x for x in (geo.get("city"), geo.get("region"),
+                                                       geo.get("country")) if x)))
+            rows.append(("ASN", geo.get("asn") or geo.get("isp", "")))
+        _console.print(_kv_table("PUBLIC DNS & NETWORK", rows, border="blue"))
+
+
+def print_results(data: Dict[str, object], show_misses: bool = True,
+                  only_live: bool = False) -> None:
     summary = data.get("summary", {})
     analysis = data.get("analysis", {})
 
-    click.echo()
-    click.echo(_colored("  ╔═══════════════════════════════════════════════╗", B_CYAN))
-    click.echo(_colored("  ║            OSINT SCAN RESULTS                 ║", B_CYAN))
-    click.echo(_colored("  ╚═══════════════════════════════════════════════╝", B_CYAN))
-    click.echo()
-
-    click.echo(_colored("  ┌── TARGET IDENTITY ──────────────────────────┐", B_WHITE))
-    click.echo(f"  │ Query      : {_colored(str(data.get('query', '')), WHITE, bold=True)}")
-    display_name = data.get("display_name", "")
-    name_format = data.get("name_format", "")
-    if display_name:
-        click.echo(f"  │ Name       : {_colored(name_format or display_name, B_WHITE, bold=True)}")
-    first = data.get("first_name", "")
-    last = data.get("last_name", "")
-    if first or last:
-        click.echo(f"  │ Split      : {_colored(first, GREEN)} {_colored(last, B_GREEN) if last else ''}")
-    mid = data.get("middle_name", "")
-    if mid:
-        click.echo(f"  │ Middle     : {_colored(mid, YELLOW)}")
-    title = data.get("title", "")
-    suffix = data.get("suffix", "")
-    if title or suffix:
-        click.echo(f"  │ Title/Sfx  : {_colored(title, YELLOW)} / {_colored(suffix, YELLOW)}")
-    initials = data.get("initials", "")
-    if initials:
-        click.echo(f"  │ Initials   : {_colored(initials, YELLOW)}")
-    reversed_name = data.get("reversed_name", "")
-    if reversed_name:
-        click.echo(f"  │ Reversed   : {_colored(reversed_name, YELLOW)}")
-    aliases = data.get("aliases") or []
-    if aliases:
-        click.echo(f"  │ Aliases    : {_colored(', '.join(str(a) for a in aliases[:10]), GREEN)}")
-    click.echo(_colored("  └────────────────────────────────────────────────┘", B_WHITE))
-
-    click.echo()
-    click.echo(_colored("  ┌── SCAN OVERVIEW ───────────────────────────┐", B_WHITE))
-    click.echo(f"  │ Sources    : {_colored(str(data.get('source_count', 0)), B_CYAN)}")
-    handles = data.get("handles", [])
-    click.echo(f"  │ Handles    : {_colored(', '.join(handles[:8]) or 'N/A', YELLOW)}")
-    click.echo(f"  │ Hits       : {_colored(str(summary.get('hits', 0)), B_GREEN, bold=True)}")
-    click.echo(f"  │ Possible   : {_colored(str(summary.get('possible', 0)), B_YELLOW)}")
-    click.echo(f"  │ Probed     : {_colored(str(summary.get('checked', 0)), CYAN)}")
+    overview = [
+        ("Query", data.get("query", "")),
+        ("Engine", data.get("engine", "python")),
+        ("Sources", data.get("source_count", 0)),
+        ("Handles", ", ".join(data.get("handles", [])[:6])),
+        ("Hits", summary.get("hits", 0)),
+        ("Verified", analysis.get("verified_hits", 0)),
+        ("Possible", summary.get("possible", 0)),
+        ("Probed", summary.get("checked", 0)),
+    ]
     if analysis:
-        conf = analysis.get("confidence", "NONE")
-        score = analysis.get("confidence_score", 0)
-        click.echo(f"  │ Confidence : {_colored(f'{conf} ({score}/100)', B_GREEN if conf == 'HIGH' else B_YELLOW)}")
-    click.echo(_colored("  └────────────────────────────────────────────────┘", B_WHITE))
+        overview.append(("Confidence", f"{analysis.get('confidence', 'NONE')} "
+                                       f"({analysis.get('confidence_score', 0)}/100)"))
+    _console.print(_kv_table("OSINT SCAN RESULTS", overview, border="cyan"))
+
+    name_rows = []
+    for key, label in (("name_format", "Name"), ("first_name", "First"),
+                       ("middle_name", "Middle"), ("last_name", "Last"),
+                       ("initials", "Initials"), ("reversed_name", "Reversed")):
+        if data.get(key):
+            name_rows.append((label, data.get(key)))
+    if data.get("aliases"):
+        name_rows.append(("Aliases", ", ".join(str(a) for a in data["aliases"][:10])))
+    if name_rows:
+        _console.print(_kv_table("TARGET IDENTITY", name_rows))
 
     email = data.get("email", {})
     if email:
-        click.echo()
-        click.echo(_colored("  ┌── EMAIL INTELLIGENCE ─────────────────────┐", B_CYAN))
+        rows = []
         if email.get("is_email"):
-            click.echo(f"  │ Domain     : {_colored(email.get('domain', 'N/A'), YELLOW)}")
+            rows.append(("Email", email.get("input", "")))
+            rows.append(("Domain", email.get("domain", "")))
             mx = email.get("mx_records") or []
-            click.echo(f"  │ MX Records : {_colored(', '.join(mx[:3]) if mx else 'none', GREEN if mx else RED)}")
-            if email.get("mx_secure"):
-                click.echo(f"  │ MX Secure  : {_colored('✓ Yes', B_GREEN)}")
-            grav = email.get("gravatar", {})
-            gs = grav.get("exists")
-            click.echo(f"  │ Gravatar   : {_colored('✓ EXISTS' if gs else '✗ None', B_GREEN if gs else DIM)}")
-            pgp = email.get("pgp_key")
-            if pgp:
-                click.echo(f"  │ PGP Key    : {_colored('✓ Found', B_GREEN)}")
+            rows.append(("MX", ", ".join(mx[:3]) if mx else "none"))
+            rows.append(("MX secure", "yes" if email.get("mx_secure") else "no"))
+            grav = email.get("gravatar") or {}
+            rows.append(("Gravatar", "exists" if grav.get("exists") else "none"))
+            if email.get("pgp_key"):
+                rows.append(("PGP", "key found"))
         else:
-            click.echo(f"  │ Candidates : {_colored(str(len(email.get('candidates', []))), YELLOW)} generated")
+            rows.append(("Candidates", f"{len(email.get('candidates', []))} generated"))
             signals = email.get("candidate_signals") or []
             if signals:
-                click.echo(f"  │ Live       : {_colored(str(len(signals)), GREEN)} confirmed")
-                for s in signals[:5]:
-                    click.echo(f"  │   → {s.get('email')}")
-
+                rows.append(("Live emails", ", ".join(s.get("email", "") for s in signals[:5])))
         breaches = email.get("breaches") or []
         if breaches:
-            click.echo(f"  │ Breaches   : {_colored(str(len(breaches)), B_RED)} found")
-            for b in breaches[:8]:
+            rows.append(("Breaches", f"{len(breaches)} found"))
+            for b in breaches[:5]:
                 if isinstance(b, dict):
-                    src = b.get("source", "?")
-                    cls = b.get("data_class", "")[:60]
-                    click.echo(f"  │   ⚠ {_colored(src, YELLOW)}: {cls}")
-        click.echo(_colored("  └────────────────────────────────────────────────┘", B_CYAN))
+                    rows.append(("  " + str(b.get("source", "?")), str(b.get("data_class", ""))[:70]))
+        _console.print(_kv_table("EMAIL INTELLIGENCE", rows))
 
     phone = data.get("phone", {})
     if phone and "error" not in phone:
-        click.echo()
-        click.echo(_colored("  ┌── PHONE INTELLIGENCE ─────────────────────┐", B_CYAN))
-        click.echo(f"  │ Number    : {_colored(phone.get('number', ''), YELLOW)}")
-        click.echo(f"  │ Country   : {_colored(phone.get('country', 'N/A'), YELLOW)}")
-        click.echo(f"  │ Carrier   : {_colored(phone.get('carrier', 'N/A'), YELLOW)}")
-        click.echo(f"  │ Type      : {_colored(phone.get('line_type', 'N/A'), YELLOW)}")
-        soc = phone.get("social_found", [])
-        if soc:
-            click.echo(f"  │ Social    : {_colored(', '.join(soc), GREEN)}")
-        mentions = phone.get("google_mentions", 0)
-        if mentions:
-            click.echo(f"  │ Web       : {_colored(f'~{mentions} mentions', YELLOW)}")
-        click.echo(_colored("  └────────────────────────────────────────────────┘", B_CYAN))
+        rows = [
+            ("Number", phone.get("number", "")),
+            ("Country", phone.get("country", "")),
+            ("Carrier", phone.get("carrier", "")),
+            ("Line type", phone.get("line_type", "")),
+        ]
+        social = phone.get("social_found") or []
+        if social:
+            rows.append(("Social", ", ".join(social)))
+        _console.print(_kv_table("PHONE INTELLIGENCE", rows))
 
     domain = data.get("domain", {})
     if domain:
-        click.echo()
-        click.echo(_colored("  ┌── DOMAIN INTELLIGENCE ────────────────────┐", B_CYAN))
-        click.echo(f"  │ Domain    : {_colored(domain.get('domain', ''), YELLOW)}")
-        click.echo(f"  │ Registrar : {_colored(domain.get('registrar', 'N/A'), YELLOW)}")
-        click.echo(f"  │ Created   : {_colored(domain.get('creation_date', 'N/A'), YELLOW)}")
-        ns = domain.get("name_servers", [])
-        if ns:
-            click.echo(f"  │ NS        : {_colored(', '.join(ns[:3]), YELLOW)}")
-        click.echo(_colored("  └────────────────────────────────────────────────┘", B_CYAN))
+        rows = [
+            ("Domain", domain.get("domain", "")),
+            ("Registrar", domain.get("registrar", "")),
+            ("Created", domain.get("creation_date", "")),
+            ("Name servers", ", ".join((domain.get("name_servers") or [])[:3])),
+        ]
+        _console.print(_kv_table("DOMAIN INTELLIGENCE", rows))
 
-    metadata = data.get("metadata", {})
-    if metadata:
-        click.echo()
-        click.echo(_colored("  ┌── METADATA & HISTORY ─────────────────────┐", B_WHITE))
-        wb = metadata.get("wayback", {})
-        if wb.get("total_archived"):
-            cnt = wb.get("total_archived", 0)
-            click.echo(f"  │ Wayback   : {_colored(str(cnt) + ' snapshots', GREEN)}")
-            o = wb.get("oldest", "")[:10]; n = wb.get("newest", "")[:10]
-            click.echo(f"  │   Range   : {_colored(o + ' → ' + n, DIM)}")
-        gc = metadata.get("google_cache", {})
-        if gc.get("available"):
-            click.echo(f"  │ Cache     : {_colored('Available', GREEN)} ({gc.get('cached_date','')})")
-        pb = metadata.get("pastebin", {})
-        pastes = pb.get("pastes_found", [])
-        if pastes:
-            click.echo(f"  │ Pastebin  : {_colored(str(len(pastes)) + ' pastes', YELLOW)}")
-        gh = metadata.get("github", {})
-        if gh.get("code_results", "0") != "0":
-            cr = gh.get("code_results", "0")
-            click.echo(f"  │ GitHub    : {_colored(cr + ' code results', YELLOW)}")
-        gm = metadata.get("google_mentions", {})
-        if gm.get("total_results", "0") != "0":
-            tr = gm.get("total_results", "0")
-            click.echo(f"  │ Google    : {_colored('~' + tr + ' results', YELLOW)}")
-        click.echo(_colored("  └────────────────────────────────────────────────┘", B_WHITE))
+    live = data.get("live_intel") or {}
+    if live:
+        _live_intel_tables(live)
 
     profiles = data.get("profiles", [])
-    visible = [p for p in profiles if show_misses or p.get("status") in {"hit", "possible", "unknown"}]
+    if only_live:
+        visible = [p for p in profiles if p.get("status") in {"hit", "possible", "unknown"}]
+    else:
+        visible = [p for p in profiles if show_misses or p.get("status") in {"hit", "possible", "unknown"}]
     if visible:
-        click.echo()
-        click.echo(_colored("  ┌── PROFILE RESULTS ─────────────────────────┐", B_GREEN))
-        for item in visible[:60]:
-            s = item.get("status", "")
-            p = item.get("platform", "")
-            u = item.get("url", "")
-            label = _colored(s.upper(), _status_color(s), bold=s in {"hit", "possible"})
-            click.echo(f"  │ {label}  {_colored(p, DIM)} → {u[:80]}")
-        if len(visible) > 60:
-            click.echo(f"  │ ... and {len(visible) - 60} more")
-        click.echo(_colored("  └────────────────────────────────────────────────┘", B_GREEN))
-
-    clusters = analysis.get("clusters", {}) if isinstance(analysis, dict) else {}
-    if clusters:
-        click.echo()
-        click.echo(_colored("  ┌── CATEGORY BREAKDOWN ──────────────────────┐", B_WHITE))
-        for cat, items in list(clusters.items())[:8]:
-            click.echo(f"  │ {_colored(cat, B_WHITE)} ({len(items)} hits)")
-            for item in items[:4]:
-                title_part = f" :: {item.get('title')}"[:60] if item.get("title") else ""
-                click.echo(f"  │   • {item.get('platform')}{title_part}")
-        click.echo(_colored("  └────────────────────────────────────────────────┘", B_WHITE))
+        table = Table(title="PROFILE PROBES", box=box.ROUNDED, border_style="green",
+                      title_justify="left", pad_edge=False)
+        table.add_column("Status", no_wrap=True)
+        table.add_column("Platform", style="bold white", no_wrap=True)
+        table.add_column("Category", style="dim", no_wrap=True)
+        table.add_column("URL", overflow="fold")
+        table.add_column("Title", overflow="fold", style="dim")
+        style = {"hit": "green", "possible": "yellow", "unknown": "cyan"}
+        for item in visible[:80]:
+            status = item.get("status", "")
+            label = status.upper() + (" ✓" if item.get("verified") else "")
+            table.add_row(f"[{style.get(status, 'dim')}]{label}[/]",
+                          item.get("platform", ""), item.get("category", ""),
+                          item.get("url", ""), item.get("title", "")[:70])
+        if len(visible) > 80:
+            table.add_row("", f"... {len(visible) - 80} more", "", "", "")
+        _console.print(table)
 
     corr = data.get("correlation", {}) if isinstance(data.get("correlation"), dict) else {}
     personae = corr.get("shared_title_clusters", []) or []
     if personae:
-        click.echo()
-        click.echo(_colored("  ┌── CROSS-PLATFORM PERSONAE ─────────────────┐", B_GREEN))
-        click.echo(f"  │ Same identity seen on multiple platforms:")
-        for p in personae[:5]:
-            plats = ", ".join(p.get("platforms", [])[:6])
-            click.echo(f"  │   ◆ {p.get('count')}x  {plats}")
-        click.echo(_colored("  └────────────────────────────────────────────────┘", B_GREEN))
+        rows = [(f"{p.get('count')}x platforms", ", ".join(p.get("platforms", [])[:6]))
+                for p in personae[:5]]
+        _console.print(_kv_table("CROSS-PLATFORM PERSONAE", rows, border="green"))
 
-    click.echo()
-    click.echo(_colored("  ┌── TRACE LEADS ──────────────────────────────┐", B_YELLOW))
-    for lead in data.get("trace_leads", [])[:20]:
-        click.echo(f"  │ {_colored(lead.get('name', ''), DIM)}")
-        click.echo(f"  │   {lead.get('url', '')}")
-    click.echo(_colored("  └────────────────────────────────────────────────┘", B_YELLOW))
-    click.echo()
+    leads = data.get("trace_leads", [])
+    if leads:
+        table = Table(title="TRACE LEADS", box=box.ROUNDED, border_style="yellow",
+                      title_justify="left", pad_edge=False)
+        table.add_column("Lead", style="bold yellow", overflow="fold")
+        table.add_column("URL", overflow="fold")
+        for lead in leads[:15]:
+            table.add_row(lead.get("name", ""), lead.get("url", ""))
+        if len(leads) > 15:
+            table.add_row(f"... {len(leads) - 15} more", "")
+        _console.print(table)
 
 
 def save_json(data: Dict[str, object], output: str) -> None:

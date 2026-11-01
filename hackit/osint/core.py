@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import os
 import re
 import socket
 import concurrent.futures
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, asdict
 from typing import Callable, List, Dict, Optional
@@ -19,6 +22,22 @@ from .progress import StepLogger, make_step_callback
 
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+SITES_JSON = os.path.join(os.path.dirname(os.path.abspath(__file__)), "go", "sites.json")
+_SITE_RULES: Dict[str, dict] | None = None
+
+
+def _site_rules() -> Dict[str, dict]:
+    """Per-site verdict rules from sites.json, keyed by URL template."""
+    global _SITE_RULES
+    if _SITE_RULES is None:
+        try:
+            with open(SITES_JSON, encoding="utf-8") as fh:
+                _SITE_RULES = {item["url"]: item for item in json.load(fh)}
+        except Exception:
+            _SITE_RULES = {}
+    return _SITE_RULES
+
 
 # Mirrors the Rust engine verdict tables (osint_checker.rs).
 NOT_FOUND_MARKERS = [
@@ -64,6 +83,8 @@ class ProfileFinding:
     note: str = ""
     title: str = ""
     description: str = ""
+    response_time: float = 0.0
+    verified: bool = False
 
 
 def _extract_between(text: str, pattern: str) -> str:
@@ -101,55 +122,132 @@ def normalize_handles(query: str, deep: bool = False) -> List[str]:
     return unique[:16]
 
 
-def _request_profile(session: requests.Session, source: Dict[str, str], handle: str, timeout: int) -> ProfileFinding:
+def _verdict_by_title(title: str, handle: str) -> tuple[str, str, str]:
+    """Mirror of the Rust engine's verdict_by_title: (status, confidence, note)."""
+    title_lower = (title or "").lower()
+    if any(marker in title_lower for marker in GENERIC_LANDING_MARKERS):
+        return "possible", "low", "landing/search page"
+    norm_title, norm_handle = _norm(title), _norm(handle)
+    if norm_handle and norm_title and norm_handle in norm_title:
+        return "hit", "high", "title matched (handle)"
+    if not title:
+        return "possible", "low", "200 OK, no title"
+    return "possible", "low", "title found (handle absent)"
+
+
+def _apply_site_rules(rule: dict, code: int, text_lower: str, title: str,
+                      handle: str, final_url: str, redirect_url: str) -> tuple[str, str, str] | None:
+    """Apply the per-site rule set (sites.json) using the Rust detect() order.
+
+    Returns (status, confidence, note) or None when the rules are indecisive.
+    """
+    miss_code = rule.get("miss_code") or []
+    if code in miss_code:
+        return "miss", "high", "not found (status code)"
+
+    for marker in rule.get("miss_body") or []:
+        if marker.lower() in text_lower:
+            return "miss", "high", f"not found (body: {marker[:40]})"
+
+    if any(marker in text_lower for marker in BLOCKED_WALL_MARKERS):
+        return "unknown", "low", "blocked/WAF wall"
+
+    if 300 <= code < 400:
+        loc = (redirect_url or "").lower()
+        if any(k in loc for k in ("login", "signin", "auth")):
+            return "miss", "high", "redirected to login"
+        if any(k in loc for k in ("search", "404")):
+            return "miss", "high", "redirected to 404"
+        return "possible", "medium", f"redirect: {final_url[:60]}"
+
+    if code in (401, 403):
+        return "unknown", "low", "blocked or private profile"
+    if code == 429:
+        return "unknown", "low", "rate limited"
+
+    method = rule.get("method") or "status_code"
+    if method == "title":
+        check = (rule.get("title_check") or "").replace("{username}", handle)
+        if check and check.lower() in title.lower():
+            return "hit", "high", "title matched (handle)"
+        if title and code == 200:
+            return "possible", "low", "title found (handle absent)"
+        return None
+    if method == "body_text":
+        hit_body = rule.get("hit_body")
+        if hit_body and hit_body.lower() in text_lower:
+            return "hit", "high", "hit text found"
+        if code == 200:
+            return "possible", "medium", "200 OK"
+        return None
+
+    hit_code = rule.get("hit_code") or 200
+    if code == hit_code or code == 200:
+        return _verdict_by_title(title, handle)
+    return None
+
+
+def _request_profile(session: requests.Session, source: Dict[str, str], handle: str,
+                     timeout: int, retry: int = 0) -> ProfileFinding:
     url = source["url"].format(username=handle)
+    rule = _site_rules().get(source["url"], {})
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9",
     }
 
+    last_error = "unknown"
+    for attempt in range(max(retry, 0) + 1):
+        start = time.time()
+        try:
+            response = session.get(url, headers=headers, timeout=timeout, allow_redirects=True)
+            elapsed = time.time() - start
+            code = response.status_code
+            text_lower = response.text[:8000].lower()
+            metadata = _extract_metadata(response.text[:20000])
+            title = metadata["title"]
+
+            verdict = _apply_site_rules(
+                rule, code, text_lower, title, handle,
+                response.url, response.headers.get("Location", ""),
+            )
+            if verdict is None:
+                # Rules indecisive: generic heuristics as a last resort.
+                if any(marker in text_lower for marker in NOT_FOUND_MARKERS):
+                    verdict = ("miss", "high", "not-found marker")
+                elif any(marker in text_lower for marker in BLOCKED_WALL_MARKERS):
+                    verdict = ("unknown", "low", "blocked/WAF wall")
+                elif code == 200:
+                    verdict = _verdict_by_title(title, handle)
+                elif code in (301, 302, 303, 307, 308):
+                    verdict = ("possible", "low", "redirect")
+                else:
+                    verdict = ("miss", "low", "status code")
+
+            status, confidence, note = verdict
+            if attempt > 0:
+                note = f"{note} (retry {attempt})"
+            return ProfileFinding(
+                source["name"], source["category"], handle,
+                response.url, status, confidence, code, note, title,
+                metadata["description"], round(elapsed, 3),
+            )
+        except requests.RequestException as exc:
+            last_error = type(exc).__name__
+            if attempt < retry:
+                time.sleep(0.4 * (attempt + 1))
+                continue
+    return ProfileFinding(source["name"], source["category"], handle, url,
+                          "unknown", "low", None, last_error)
+
+
+def _confidence_label(value) -> str:
     try:
-        response = session.get(url, headers=headers, timeout=timeout, allow_redirects=True)
-        code = response.status_code
-        text = response.text[:8000].lower()
-        metadata = _extract_metadata(response.text[:20000])
-        title = metadata["title"]
-        norm_title = _norm(title)
-        norm_handle = _norm(handle)
-
-        if any(marker in text for marker in NOT_FOUND_MARKERS):
-            return ProfileFinding(source["name"], source["category"], handle, url, "miss", "low", code, "not-found marker", title, metadata["description"])
-
-        if any(marker in text for marker in BLOCKED_WALL_MARKERS):
-            return ProfileFinding(source["name"], source["category"], handle, url, "unknown", "low", code, "blocked/WAF wall", title, metadata["description"])
-
-        if code == 200:
-            # Smart verdict: search/landing pages mention the handle but
-            # are not profiles — demote before the handle check.
-            if title and any(marker in title.lower() for marker in GENERIC_LANDING_MARKERS):
-                return ProfileFinding(source["name"], source["category"], handle, response.url, "possible", "low", code, "landing/search page", title, metadata["description"])
-            # The title must mention the handle, else only a candidate.
-            if norm_handle and norm_title and norm_handle in norm_title:
-                return ProfileFinding(source["name"], source["category"], handle, response.url, "hit", "high", code, "title matched (handle)", title, metadata["description"])
-            # Canonical-slug check: redirected to a different slug = miss.
-            slug = _norm(response.url.rstrip("/").split("/")[-1].split("?")[0].split("#")[0])
-            if norm_handle and slug and len(slug) >= 3 and norm_handle not in slug and slug not in norm_handle:
-                if any(marker in text for marker in ("login", "sign in", "sign up", "join")):
-                    return ProfileFinding(source["name"], source["category"], handle, response.url, "miss", "low", code, "redirected to login wall", title, metadata["description"])
-            if title:
-                return ProfileFinding(source["name"], source["category"], handle, response.url, "possible", "low", code, "title found (handle absent)", title, metadata["description"])
-            return ProfileFinding(source["name"], source["category"], handle, response.url, "possible", "low", code, "200 OK, no title", title, metadata["description"])
-
-        if code in (301, 302, 303, 307, 308):
-            return ProfileFinding(source["name"], source["category"], handle, response.url, "possible", "low", code, "redirect")
-
-        if code in (401, 403, 429):
-            return ProfileFinding(source["name"], source["category"], handle, url, "unknown", "low", code, "blocked/rate-limited")
-
-        return ProfileFinding(source["name"], source["category"], handle, url, "miss", "low", code)
-    except requests.RequestException as exc:
-        return ProfileFinding(source["name"], source["category"], handle, url, "unknown", "low", None, type(exc).__name__)
+        score = int(value)
+    except (TypeError, ValueError):
+        return "low"
+    return "high" if score >= 85 else "medium" if score >= 50 else "low"
 
 
 def scan_usernames_rust(
@@ -158,27 +256,30 @@ def scan_usernames_rust(
     on_step: Callable[[str, str], None] | None = None,
 ) -> List[ProfileFinding]:
     from .go_bridge import check_username
-    data = check_username(query, proxy=proxy, retry=retry, timeout=timeout, workers=workers)
-    results = data.get("results") or []
-    if data.get("error") or not results:
-        # Smart fallback: broken native sweep -> built-in sweep.
-        if on_step:
-            on_step("warn", "Sweep engine unavailable, using built-in sweep")
-        raise RuntimeError(f"sweep engine unavailable: {data.get('error') or 'empty results'}")
-    findings = []
-    for r in results:
+    findings: List[ProfileFinding] = []
+
+    def _stream(item: dict) -> None:
         finding = ProfileFinding(
-            platform=r.get("platform", ""), category=r.get("category", ""),
-            handle=query, url=r.get("url", ""), status=r.get("status", "unknown"),
-            confidence=str(r.get("confidence", 0)), http_status=r.get("http_status"),
-            note=r.get("note", ""), title=r.get("title", ""),
-            description=r.get("description", ""),
+            platform=item.get("platform", ""), category=item.get("category", ""),
+            handle=query, url=item.get("url", ""), status=item.get("status", "unknown"),
+            confidence=_confidence_label(item.get("confidence")),
+            http_status=item.get("http_status"), note=item.get("note", ""),
+            title=item.get("title", ""), description=item.get("description", ""),
+            response_time=float(item.get("response_time") or 0.0),
         )
         findings.append(finding)
         if on_result:
             on_result(finding)
         if on_step:
             on_step("tick", f"{finding.platform} [{finding.status}]")
+
+    data = check_username(query, proxy=proxy, retry=retry, timeout=timeout,
+                          workers=workers, on_result=_stream)
+    if data.get("error") or not findings:
+        # Smart fallback: broken native sweep -> built-in sweep.
+        if on_step:
+            on_step("warn", "Sweep engine unavailable, using built-in sweep")
+        raise RuntimeError(f"sweep engine unavailable: {data.get('error') or 'empty results'}")
     order = {"hit": 0, "possible": 1, "unknown": 2, "miss": 3}
     return sorted(findings, key=lambda f: (order.get(f.status, 9), f.platform, f.handle))
 
@@ -188,6 +289,7 @@ def scan_usernames(
     on_result: Callable[[ProfileFinding], None] | None = None,
     use_rust: bool = True, proxy: Optional[str] = None, retry: int = 1,
     deep: bool = False, on_step: Callable[[str, str], None] | None = None,
+    category: str = "",
 ) -> List[ProfileFinding]:
     if use_rust:
         # Sweep the canonical handle (no spaces) so the engine starts
@@ -202,6 +304,8 @@ def scan_usernames(
                 if on_step and len(sweep_handles) > 1:
                     on_step("note", f"Sweeping variant: {h}")
                 merged.extend(scan_usernames_rust(h, proxy=proxy, retry=retry, timeout=max(timeout, 10), workers=workers, on_result=on_result, on_step=on_step))
+            if category:
+                merged = [f for f in merged if f.category.lower() == category.lower()]
             seen_urls, deduped = set(), []
             for f in merged:
                 if f.url not in seen_urls:
@@ -218,6 +322,8 @@ def scan_usernames(
     # Cap the built-in sweep so deep mode stays interactive.
     handles = handles[:6]
     sources = get_social_sources()
+    if category:
+        sources = [s for s in sources if s["category"].lower() == category.lower()]
     findings: List[ProfileFinding] = []
     total = len(handles) * len(sources)
     if on_step:
@@ -229,7 +335,7 @@ def scan_usernames(
         session.mount("https://", adapter)
         with ThreadPoolExecutor(max_workers=workers) as executor:
             futures = [
-                executor.submit(_request_profile, session, source, handle, timeout)
+                executor.submit(_request_profile, session, source, handle, timeout, retry)
                 for handle in handles for source in sources
             ]
             # Overall deadline so one stalled connection cannot hang the scan.
@@ -410,6 +516,7 @@ def run_full_scan(
     generate_html: bool = False, html_output: str = "",
     verbose: bool = True, deep: bool = False,
     on_step: Callable[[str, str], None] | None = None,
+    category: str = "",
 ) -> Dict[str, object]:
     query = (query or "").strip()
     log = StepLogger(verbose=verbose)
@@ -417,15 +524,17 @@ def run_full_scan(
         on_step = make_step_callback(log)
     target = build_identity_target(query)
     sources = get_social_sources()
+    if category:
+        sources = [s for s in sources if s["category"].lower() == category.lower()]
     handles = normalize_handles(query, deep=deep)
 
-    log.phase(1, 8, "Identity parsing",
+    log.phase(1, 9, "Identity parsing",
               f"canonical={handles[0] if handles else 'N/A'} (+{len(handles) - 1} variants)" if handles else "no handle")
     sweep_n = min(len(handles), 4) if deep else min(len(handles), 1)
-    log.phase(2, 8, "Username sweep", f"{sweep_n} handle(s) x {len(sources)} sources")
+    log.phase(2, 9, "Username sweep", f"{sweep_n} handle(s) x {len(sources)} sources")
     profiles = scan_usernames(query, timeout=timeout, workers=workers, on_result=on_result,
                               use_rust=use_rust, proxy=proxy, retry=retry,
-                              deep=deep, on_step=on_step)
+                              deep=deep, on_step=on_step, category=category)
     n_hit = sum(1 for p in profiles if p.status == "hit")
     log.done(f"{n_hit} hits / {len(profiles)} checked")
 
@@ -448,38 +557,14 @@ def run_full_scan(
         },
     }
 
-    log.phase(3, 8, "Email intelligence", "MX + Gravatar + breach + PGP")
+    log.phase(3, 9, "Email intelligence", "MX + Gravatar + breach + PGP")
     data["email"] = inspect_email(query, timeout=timeout)
     _email = data["email"]
     log.done(f"breaches={len(_email.get('breaches', []) or [])} gravatar={(_email.get('gravatar') or {}).get('exists')}")
 
-    log.phase(4, 8, "Trace leads", "search-engine dork matrix")
-    data["trace_leads"] = build_trace_leads(query)
-    log.done(f"{len(data['trace_leads'])} leads")
-
-    if check_phone and any(c.isdigit() for c in query):
-        log.phase(5, 8, "Phone intelligence", "carrier + social + web mentions")
-        try:
-            from .phone import analyze_phone
-            data["phone"] = analyze_phone(query)
-            log.done(f"{data['phone'].get('country', '?')} / {data['phone'].get('carrier', '?')}")
-        except Exception as exc:
-            log.done(f"skipped ({exc})")
-    else:
-        log.phase(5, 8, "Phone intelligence", "skipped — no digits in query")
-
-    if check_domain and "." in query and not query.startswith("@"):
-        log.phase(6, 8, "Domain intelligence", "WHOIS + DNS + robtex")
-        try:
-            from .domain_intel import analyze_domain
-            data["domain"] = analyze_domain(query.split("@")[-1])
-            log.done(f"registrar={data['domain'].get('registrar', '?')}")
-        except Exception as exc:
-            log.done(f"skipped ({exc})")
-    else:
-        log.phase(6, 8, "Domain intelligence", "skipped — use --domain for FQDN targets")
-
-    log.phase(7, 8, "Metadata & history", "wayback + cache + pastebin + github")
+    # Upstream metadata/wayback phase keeps its own budget; the live-intel
+    # phase above replaced the old step-4 slot, so run it before correlation.
+    log.phase(4, 9, "Metadata & history", "wayback + pastebin + github")
     try:
         from .metadata import extract_all
         data["metadata"] = extract_all(query)
@@ -488,7 +573,52 @@ def run_full_scan(
     except Exception as exc:
         log.done(f"skipped ({exc})")
 
-    log.phase(8, 8, "Correlation & scoring", "cross-platform personae + confidence")
+    log.phase(5, 9, "Live public intel", "GitHub + GitLab + Reddit + Keybase + Gravatar + Mastodon")
+    try:
+        from .live_sources import collect_live_intel, verified_sources
+
+        domain = ""
+        if "." in query and not EMAIL_RE.match(query) and not query.startswith("@"):
+            domain = query.split("/")[0].split("@")[-1]
+        live = collect_live_intel(handles, domain=domain)
+        verified = verified_sources(live)
+        for profile in profiles:
+            if _norm(profile.platform) in {_norm(v) for v in verified} and profile.status == "hit":
+                profile.verified = True
+        data["live_intel"] = live
+        log.done(f"{len(live.get('profiles', []))} verified profiles, "
+                 f"{len(live.get('subdomains', []))} subdomains")
+    except Exception as exc:
+        data["live_intel"] = {"profiles": [], "subdomains": [], "dns": {}, "geo": {}}
+        log.done(f"skipped ({exc})")
+
+    log.phase(6, 9, "Trace leads", "search-engine dork matrix")
+    data["trace_leads"] = build_trace_leads(query)
+    log.done(f"{len(data['trace_leads'])} leads")
+
+    if check_phone and any(c.isdigit() for c in query):
+        log.phase(7, 9, "Phone intelligence", "carrier + social + web mentions")
+        try:
+            from .phone import analyze_phone
+            data["phone"] = analyze_phone(query)
+            log.done(f"{data['phone'].get('country', '?')} / {data['phone'].get('carrier', '?')}")
+        except Exception as exc:
+            log.done(f"skipped ({exc})")
+    else:
+        log.phase(7, 9, "Phone intelligence", "skipped — no digits in query")
+
+    if check_domain and "." in query and not query.startswith("@"):
+        log.phase(8, 9, "Domain intelligence", "WHOIS + DNS + robtex")
+        try:
+            from .domain_intel import analyze_domain
+            data["domain"] = analyze_domain(query.split("@")[-1])
+            log.done(f"registrar={data['domain'].get('registrar', '?')}")
+        except Exception as exc:
+            log.done(f"skipped ({exc})")
+    else:
+        log.phase(8, 9, "Domain intelligence", "skipped — use --domain for FQDN targets")
+
+    log.phase(9, 9, "Correlation & scoring", "cross-platform personae + confidence")
     data["correlation"] = correlate_profiles(data["profiles"])
     data["analysis"] = analyze_scan(data)
     log.done(f"confidence={data['analysis'].get('confidence')} ({data['analysis'].get('confidence_score')}/100)")

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 import click
 
 from hackit.ui import _colored, B_CYAN, B_GREEN, B_YELLOW, DIM, RED, YELLOW
@@ -10,17 +12,38 @@ from .history import append_history, load_history, save_auto_report
 from .sources import get_social_sources, SOCIAL_SOURCES
 
 
-def _announce_matrix(target: str, deep: bool, verbose: bool) -> None:
+def _engine_info(use_rust: bool) -> dict:
+    if not use_rust:
+        return {"engine": "python", "detail": "forced (--no-rust)"}
+    try:
+        from .go_bridge import engine_status
+        return engine_status()
+    except Exception as exc:
+        return {"engine": "python", "detail": str(exc)}
+
+
+def _announce_matrix(target: str, deep: bool, verbose: bool, use_rust: bool = True,
+                     category: str = "") -> dict:
     handles = normalize_handles(target, deep=deep)
     sources = get_social_sources()
+    if category:
+        sources = [s for s in sources if s["category"].lower() == category.lower()]
+    engine = _engine_info(use_rust)
     mode = "DEEP (variants+years)" if deep else "standard"
     click.echo(_colored("\n  [*] Crawling public intelligence matrix...", B_YELLOW, bold=True))
     click.echo(f"  [*] Canonical handle : {_colored(handles[0] if handles else 'N/A', B_CYAN)}")
     if len(handles) > 1:
         click.echo(f"  [*] Handle variants  : {_colored(', '.join(handles[1:8]), DIM)}{_colored(f' (+{len(handles) - 8} more)' if len(handles) > 8 else '', DIM)}")
-    click.echo(f"  [*] Source count     : {_colored(str(len(sources)), B_CYAN)} platforms")
+    click.echo(f"  [*] Source count     : {_colored(str(len(sources)), B_CYAN)} platforms"
+               + (f" + 9 keyless live collectors" if engine["engine"] == "rust" else ""))
+    detail = engine.get("detail", "")
+    suffix = _colored(f" ({detail})", DIM) if detail else ""
+    click.echo(f"  [*] Sweep engine     : {_colored(engine['engine'].upper(), B_GREEN if engine['engine'] == 'rust' else YELLOW)}{suffix}")
     click.echo(f"  [*] Mode             : {_colored(mode, B_CYAN)}  ·  verbose steps {_colored('ON' if verbose else 'OFF', B_GREEN if verbose else YELLOW)}")
+    if category:
+        click.echo(f"  [*] Category filter  : {_colored(category, B_CYAN)}")
     click.echo(_colored("  [*] Live profile probe stream enabled.\n", DIM))
+    return engine
 
 
 def start_osint_console() -> None:
@@ -38,8 +61,9 @@ def start_osint_console() -> None:
         return
 
     deep = click.confirm(_colored("  Deep variant expansion?", B_CYAN), default=False)
-    _announce_matrix(target, deep=deep, verbose=True)
+    engine = _announce_matrix(target, deep=deep, verbose=True)
 
+    started = time.time()
     try:
         data = run_full_scan(target, on_result=print_live_finding, use_rust=True,
                              check_phone=True, check_domain=True, generate_html=True,
@@ -51,6 +75,8 @@ def start_osint_console() -> None:
         click.echo(_colored(f"\n  [!] OSINT engine error: {exc}", RED))
         return
 
+    data.setdefault("engine", engine["engine"])
+    data["elapsed"] = round(time.time() - started, 1)
     print_results(data)
     if data.get("html_report"):
         click.echo(_colored(f"\n  [*] HTML report: {data['html_report']}", B_CYAN))
@@ -79,12 +105,15 @@ def start_osint_console() -> None:
 @click.option("--json", "json_out", is_flag=True, help="JSON output")
 @click.option("--all", "all_flag", is_flag=True, help="Enable all checks")
 @click.option("--deep", is_flag=True, help="Expand handle variants (separators, years, affixes)")
+@click.option("--category", "-c", default="", help="Only probe sources in this category (e.g. Developer)")
+@click.option("--only-live", is_flag=True, help="Hide misses in the results table")
 @click.option("--quiet", "-q", is_flag=True, help="Quiet mode: findings + summary only")
 def osint(target: str | None = None, proxy: str = "", retry: int = 1, timeout: int = 15,
           workers: int = 50, no_rust: bool = False, phone: bool = False, domain: bool = False,
           html: bool = False, output: str = "", json_out: bool = False, all_flag: bool = False,
-          deep: bool = False, quiet: bool = False) -> None:
-    """Launch OSINT profile discovery across 800+ platforms."""
+          deep: bool = False, category: str = "", only_live: bool = False,
+          quiet: bool = False) -> None:
+    """Launch OSINT profile discovery across 800+ platforms plus keyless live APIs."""
     if not target and not all_flag:
         start_osint_console()
         return
@@ -93,26 +122,31 @@ def osint(target: str | None = None, proxy: str = "", retry: int = 1, timeout: i
         phone = True; domain = True; html = True
 
     verbose = not quiet
-    _announce_matrix(target, deep=deep, verbose=verbose)
+    engine = _announce_matrix(target, deep=deep, verbose=verbose,
+                              use_rust=not no_rust, category=category)
 
+    started = time.time()
     try:
         data = run_full_scan(target, on_result=print_live_finding,
             use_rust=not no_rust, proxy=proxy or None,
             retry=retry, timeout=timeout, workers=workers,
             check_phone=phone, check_domain=domain,
             generate_html=html, html_output=output,
-            verbose=verbose, deep=deep)
+            verbose=verbose, deep=deep, category=category)
     except KeyboardInterrupt:
         return
     except Exception as exc:
         click.echo(_colored(f"\n  [!] Engine error: {exc}", RED))
         return
 
+    data.setdefault("engine", engine["engine"])
+    data["elapsed"] = round(time.time() - started, 1)
+
     if json_out:
         import json as j
         click.echo(j.dumps(data, indent=2, default=str))
         return
 
-    print_results(data)
+    print_results(data, only_live=only_live)
     append_history(data)
     save_auto_report(data)

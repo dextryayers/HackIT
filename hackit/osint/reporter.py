@@ -172,6 +172,33 @@ def generate_html_report(data: dict, output_path: str = "") -> str:
                     meta_html += f'<p style="font-size:12px;color:#666;margin:2px 0">  {site}</p>'
         meta_html += '</div>'
 
+    live = data.get("live_intel") or {}
+    live_html = ""
+    if live.get("profiles") or live.get("subdomains"):
+        live_html = '<div class="section fade-in"><h2>🛰️ Live Public Intelligence (keyless APIs)</h2>'
+        for p in live.get("profiles", []):
+            facts = " · ".join(str(v) for v in (
+                p.get("bio", "")[:160], p.get("location", ""),
+                p.get("company", ""), p.get("followers") and f"{p['followers']} followers",
+            ) if v)
+            live_html += f'''<div class="info-card" style="margin:8px 0">
+                <span class="label">{p.get("source","")}</span>
+                <span class="value"><a href="{p.get("url","")}" target="_blank">{p.get("name","") or p.get("url","")}</a></span>
+                <p style="color:#888;font-size:13px;margin:6px 0 0">{facts}</p>
+            </div>'''
+        subs = live.get("subdomains") or []
+        if subs:
+            live_html += f'<h3 style="margin-top:15px;font-size:15px">🔐 Certificate Transparency ({len(subs)} hosts)</h3>'
+            live_html += " ".join(f'<span class="tag">{s.get("host","")}</span>' for s in subs[:40])
+        dns = live.get("dns") or {}
+        dns_bits = [f"{k}: {', '.join(v[:3])}" for k, v in dns.items() if v]
+        if dns_bits:
+            live_html += f'<p style="color:#888;font-size:13px;margin-top:12px">{" · ".join(dns_bits)}</p>'
+        geo = live.get("geo") or {}
+        if geo:
+            live_html += f'<p style="color:#888;font-size:13px;margin-top:6px">🌍 {geo.get("ip","")} · {geo.get("city","")}/{geo.get("country","")} · {geo.get("asn","")}</p>'
+        live_html += '</div>'
+
     categories = an.get("top_categories", [])
     cat_bars = ""
     for c in categories[:10]:
@@ -266,6 +293,8 @@ td {{ border-bottom:1px solid rgba(255,255,255,.03);vertical-align:middle; }}
 {phone_html}
 {domain_html}
 {meta_html}
+
+{live_html}
 
 <div class="section fade-in"><h2>📊 Category Distribution</h2>{cat_bars or '<p style="color:#888">No categories to display</p>'}</div>
 

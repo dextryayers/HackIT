@@ -48,6 +48,15 @@ def analyze_scan(data: Dict[str, object]) -> Dict[str, object]:
     media_hits = [item for item in hits if item.get("category") in MEDIA_CATEGORIES]
     score += min(len(media_hits), 8)
 
+    verified_profiles = [item for item in hits if item.get("verified")]
+    score += min(len(verified_profiles) * 6, 18)
+
+    live = data.get("live_intel", {}) if isinstance(data.get("live_intel"), dict) else {}
+    live_profiles = live.get("profiles") or []
+    score += min(len(live_profiles) * 4, 12)
+    if live.get("subdomains"):
+        score += 3
+
     corr = data.get("correlation", {}) if isinstance(data.get("correlation"), dict) else {}
     personae = corr.get("cross_platform_personae", 0)
     if personae >= 3:
@@ -103,6 +112,8 @@ def analyze_scan(data: Dict[str, object]) -> Dict[str, object]:
         "possible_count": len(possible),
         "unknown_count": len(unknown),
         "high_value_hits": len(high_value_hits),
+        "verified_hits": len(verified_profiles),
+        "live_intel_sources": [p.get("source") for p in live_profiles],
         "media_hits": len([item for item in hits if item.get("category") in MEDIA_CATEGORIES]),
         "cross_platform_personae": corr.get("cross_platform_personae", 0) if isinstance(data.get("correlation"), dict) else 0,
         "top_handles": top_handles,

@@ -1,5 +1,6 @@
 use std::env;
 use std::fs;
+use std::io::Read;
 
 use std::time::{Duration, Instant};
 use regex::Regex;
@@ -42,18 +43,23 @@ struct CheckResult {
 }
 
 fn load_sites() -> Vec<Site> {
-    // Try loading from embedded JSON, then fall back to built-in
-    let paths = vec![
-        "sites.json",
-        "../sites.json",
-        "/home/aniipid/HackIT/hackit/osint/sites.json",
-        "/home/aniipid/HackIT/hackit/osint/go/sites.json",
-    ];
+    // Resolve relative to this executable first: the engine is launched from
+    // arbitrary working directories by the Python/Go callers.
+    let mut paths = vec!["sites.json".to_string(), "../sites.json".to_string()];
+    if let Ok(exe) = std::env::current_exe() {
+        let dir = exe.parent().unwrap_or(std::path::Path::new("."));
+        paths.insert(0, dir.join("sites.json").to_string_lossy().to_string());
+        paths.insert(1, dir.join("../sites.json").to_string_lossy().to_string());
+        paths.insert(2, dir.join("../../sites.json").to_string_lossy().to_string());
+        paths.insert(3, dir.join("../../../sites.json").to_string_lossy().to_string());
+    }
     for p in &paths {
         if let Ok(data) = fs::read_to_string(p) {
             if let Ok(sites) = serde_json::from_str::<Vec<Site>>(&data) {
-                eprintln!("[osint] Loaded {} sites from {}", sites.len(), p);
-                return sites;
+                if !sites.is_empty() {
+                    eprintln!("[osint] Loaded {} sites from {}", sites.len(), p);
+                    return sites;
+                }
             }
         }
     }
@@ -618,7 +624,11 @@ fn check_site(site: &Site, username: &str, client: &Client, retries: u8) -> Chec
                 let http_status = resp.status().as_u16();
                 let elapsed = start.elapsed().as_secs_f64();
                 let headers = resp.headers().clone();
-                let body = resp.text().unwrap_or_default();
+                // Cap the read: some sites stream megabytes and we only need
+                // the head for title/body verdicts.
+                let mut body = String::new();
+                let mut reader = resp.take(256 * 1024);
+                let _ = std::io::Read::read_to_string(&mut reader, &mut body);
                 let det = detect(site, http_status, &body, &headers, username);
 
                 result.status = det.status.clone();
@@ -677,31 +687,48 @@ fn main() {
         Err(e) => { eprintln!("[osint] Client error: {}", e); std::process::exit(1); }
     };
 
-    let results: Vec<CheckResult> = std::thread::scope(|scope| {
-        let mut handles = Vec::new();
-        for chunk in sites.chunks(workers) {
-            for site in chunk {
-                let c = scope.spawn(|| {
-                    check_site(site, &username, &client, retries)
-                });
-                handles.push(c);
-            }
+    // Bounded worker pool: exactly `workers` threads pull sites off a shared
+    // queue. The previous version spawned one thread per site (workers was
+    // ignored) and only printed after every probe finished.
+    let workers = workers.clamp(1, 256).min(sites.len().max(1));
+    let queue = std::sync::Arc::new(std::sync::Mutex::new(
+        sites.into_iter().enumerate().collect::<std::collections::VecDeque<_>>(),
+    ));
+    let (tx, rx) = std::sync::mpsc::channel::<CheckResult>();
+
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            let queue = std::sync::Arc::clone(&queue);
+            let tx = tx.clone();
+            let client = &client;
+            let username = &username;
+            scope.spawn(move || loop {
+                let next = queue.lock().unwrap().pop_front();
+                let Some((_, site)) = next else { break };
+                let result = check_site(&site, username, client, retries);
+                if tx.send(result).is_err() {
+                    break;
+                }
+            });
         }
-        handles.into_iter().map(|h| h.join().unwrap()).collect()
+        drop(tx);
+        let mut hits = 0usize;
+        let mut possible = 0usize;
+        let mut unknown = 0usize;
+        let mut total = 0usize;
+        for result in rx {
+            total += 1;
+            match result.status.as_str() {
+                "hit" => hits += 1,
+                "possible" => possible += 1,
+                "unknown" => unknown += 1,
+                _ => {}
+            }
+            println!("RESULT:{}", serde_json::to_string(&result).unwrap());
+        }
+        println!("FINAL:{}", serde_json::json!({
+            "username": username, "total": total, "hits": hits,
+            "possible": possible, "unknown": unknown
+        }));
     });
-
-    let mut final_results = results;
-    final_results.sort_by(|a, b| {
-        let order = |s: &str| -> u8 { match s { "hit" => 0, "possible" => 1, "unknown" => 2, _ => 3 } };
-        order(&a.status).cmp(&order(&b.status))
-    });
-
-    for r in &final_results {
-        println!("RESULT:{}", serde_json::to_string(r).unwrap());
-    }
-
-    let hits = final_results.iter().filter(|r| r.status == "hit").count();
-    let poss = final_results.iter().filter(|r| r.status == "possible").count();
-    let unk = final_results.iter().filter(|r| r.status == "unknown").count();
-    println!("FINAL:{}", serde_json::json!({"username": username, "total": final_results.len(), "hits": hits, "possible": poss, "unknown": unk}));
 }
