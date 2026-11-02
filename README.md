@@ -1,6 +1,6 @@
 <div align="center">
 
-# HackIT Framwork Security Toolkit🔐
+# HackIT Security Framework Toolkit
 ### *The Apex Modern Ethical Hacking & Advanced Autonomous Intelligence Framework*
 
 ![banner](/img/banner.png)
@@ -62,6 +62,12 @@
     - [CLI Command Reference (all 64 commands)](#76-cli-command-reference)
     - [Interactive Console Guide](#77-interactive-console-guide)
     - [Web Intelligence UI (FastAPI + Astro)](#78-web-intelligence-ui)
+    - [Running HackIT: Command Reference](#79-running-hackit-command-reference)
+        - [Top level commands](#791-top-level-commands)
+        - [Console control commands](#792-console-control-commands)
+        - [Group navigation](#793-group-navigation)
+        - [Detailed command reference](#794-detailed-command-reference)
+        - [Common recipes](#795-common-recipes)
 8. [AI Threat Scoring & Decision Matrix Mechanism](#8-ai-threat-scoring--decision-matrix-mechanism)
 9. [Ethical, Legal & Rules of Engagement](#9-ethical-legal--rules-of-engagement)
 10. [Comprehensive Installation & Getting Started](#10-comprehensive-installation--getting-started)
@@ -75,11 +81,11 @@
 ## 1. Executive Summary & Introduction
 
 ### What is HackIT?
-HackIT is an enterprise-grade, autonomous offensive security framework. Built to bridge the immense gap between slow, manual penetration testing and chaotic, noisy automated scanners. HackIT mimics the exact cognitive processes of a senior penetration tester—from stealthy reconnaissance to precise payload delivery—all without human intervention.
+HackIT is an enterprise-grade, autonomous offensive security framework. Built to bridge the immense gap between slow, manual penetration testing and chaotic, noisy automated scanners. HackIT mimics the exact cognitive processes of a senior penetration tester-from stealthy reconnaissance to precise payload delivery-all without human intervention.
 
 ### The Philosophy
 **"Security through Unrelenting, Intelligent Automation."**  
-In modern cybersecurity, the attack surface is too massive for manual enumeration. Traditional frameworks rely on single-threaded execution or bloated, monolithic codebases written in a single language. HackIT shatters this limitation by adopting a **micro-engine architecture**. It leverages the exact right programming language for the specific task at hand—Go for networking speed, Python for AI parsing, C for low-level memory manipulation, and Rust for memory-safe parsers. 
+In modern cybersecurity, the attack surface is too massive for manual enumeration. Traditional frameworks rely on single-threaded execution or bloated, monolithic codebases written in a single language. HackIT shatters this limitation by adopting a **micro-engine architecture**. It leverages the exact right programming language for the specific task at hand-Go for networking speed, Python for AI parsing, C for low-level memory manipulation, and Rust for memory-safe parsers. 
 
 ---
 
@@ -165,128 +171,198 @@ The heartbeat of HackIT is the **AI Autonomous Hunter**. It follows a rigorous, 
 
 ## 5. The Apex Mermaid Architectural Flowchart
 
-Below is the complete execution pipeline from user command through every engine in the HackIT polyglot ecosystem, designed as an intuitive decision tree:
+Below is the complete execution pipeline from user command through every engine in
+the HackIT polyglot ecosystem. The left branch is the active attack path, the
+right branch is the passive OSINT path, and both meet at the report stage.
 
 ```mermaid
 flowchart TD
-    classDef startNode fill:#e74c3c,stroke:#c0392b,stroke-width:2px,color:#fff
-    classDef decLeft fill:#1e8449,stroke:#145a32,stroke-width:2px,color:#fff
-    classDef stepLeft fill:#d35400,stroke:#a04000,stroke-width:2px,color:#fff
-    classDef decRight fill:#9acd32,stroke:#6b8e23,stroke-width:2px,color:#fff
-    classDef stepRight fill:#8a2be2,stroke:#4b0082,stroke-width:2px,color:#fff
+    Start(["HackIT CLI (main.py)"]) --> Mode{"Active or passive?"}
 
-    Start(["HackIT CLI (main.py)"]):::startNode
-    Dec1{"Go: WAF Detected?"}:::decLeft
-    DecA{"Passive OSINT Scope?"}:::decRight
-    
-    Start-->|Active Attack|Dec1
-    Start-->|Passive Only|DecA
-    
-    Step1["Python: Activate Proxy Jitter"]:::stepLeft
-    Dec2{"Go: Web Ports Open?"}:::decLeft
-    
-    Dec1-->|YES|Step1
-    Dec1-->|NO|Dec2
-    Step1-->Dec2
-    
-    Dec3{"Python: CMS Detected?"}:::decLeft
-    Dec4{"Go: FTP SSH Open?"}:::decLeft
-    
-    Dec2-->|YES|Dec3
-    Dec2-->|NO|Dec4
-    
-    Step4["Go: Native Deep Fuzzer"]:::stepLeft
-    Step3["Python: Auto SQLi XSS"]:::stepLeft
-    
-    Dec3-->|YES|Step4
-    Dec3-->|NO|Step3
-    
-    Step2["Rust: Protocol Bruteforce"]:::stepLeft
-    Dec5{"C: Raw Port Scan?"}:::decLeft
-    Dec6{"C++: Deep Fingerprint?"}:::decLeft
-    Dec7{"Go: Swarm AI Agents?"}:::decLeft
-    
-    Dec4-->|YES|Step2
-    Dec4-->|NO|Dec5
-    Step2-->Dec5
-    Step4-->Dec5
-    Step3-->Dec5
-    
-    Dec5-->|YES|Step5
-    Dec5-->|NO|Dec6
-    
-    Step5["C: syn_scanner / os_fingerprint<br/>c_evasion / udp_scanner"]:::stepLeft
-    Step5-->Dec6
-    
-    Dec6-->|YES|Step6
-    Dec6-->|NO|Dec7
-    
-    Step6["C++: advanced_scanner / os_detect<br/>tls_scanner / vuln_matcher"]:::stepLeft
-    Step6-->Dec7
-    
-    Dec7-->|YES|Step7
-    Dec7-->|NO|DecZ
-    
-    Step7["Go: 28 Swarm AI Agents<br/>Planning → Recon → Discovery →<br/>Fingerprint → Enumeration →<br/>Vuln Analysis → Risk Scoring"]:::stepLeft
-    Step7-->DecZ
-    
-    StepB["C++: ARP Spoofing +<br/>Subnet Ping Sweep"]:::stepRight
-    DecB{"Go: Subdomains Found?"}:::decRight
-    DecC{"C#: Wireless Target?"}:::decRight
-    DecD{"Lua: Run NSE Probes?"}:::decRight
-    DecE{"Ruby: Metasploit RPC?"}:::decRight
-    
-    DecA-->|YES|DecB
-    DecA-->|NO|StepB
-    StepB-->DecC
-    
-    StepA["Go: Subdomain Takeover"]:::stepRight
-    DecG{"Scrape Github DB?"}:::decRight
-    
-    DecB-->|YES|StepA
-    DecB-->|NO|DecG
-    StepA-->DecG
-    
-    StepH["Extract AWS Keys"]:::stepRight
-    StepI["Log OSINT Data"]:::stepRight
-    
-    DecG-->|YES|StepH
-    DecG-->|NO|StepI
-    StepH-->DecC
-    StepI-->DecC
-    
-    DecC-->|YES|StepJ
-    DecC-->|NO|DecD
-    
-    StepJ["C#: WiFi Scanner / PacketCapture<br/>DeauthEngine / BeaconFlood<br/>PMKID Harvest / WPA3 Crack<br/>MITM Engine / SpectrumScan"]:::stepRight
-    StepJ-->DecD
-    
-    DecD-->|YES|StepK
-    DecD-->|NO|DecE
-    
-    StepK["Lua: 250 NSE Scripts<br/>Service Discovery / Brute-Force<br/>Vulnerability Probes"]:::stepRight
-    StepK-->DecE
-    
-    DecE-->|YES|StepL
-    DecE-->|NO|DecZ
-    
-    StepL["Ruby: Metasploit RPC Bridge<br/>tactical_bridge.go"]:::stepRight
-    StepL-->DecZ
-    
-    DecZ{"Generate Report?"}:::decRight
-    
-    StepM["Generate Final Report<br/>reporter.go / output.go"]:::stepRight
-    StepN["XML / CSV / Markdown Export"]:::stepRight
-    StepO["AI Mermaid Attack Flowchart"]:::stepRight
-    StepP["WebUI Astro Dashboard"]:::stepRight
-    
-    DecZ-->|YES|StepM
-    StepM-->StepN
-    StepN-->StepO
-    StepN-->StepP
+    Mode -->|Active attack| WAF{"WAF detected?"}
+    Mode -->|Passive only| OSINTScope{"Passive OSINT scope?"}
+
+    WAF -->|Yes| Proxy["Activate proxy jitter and evasion"]
+    WAF -->|No| WebPorts{"Web ports open?"}
+    Proxy --> WebPorts
+
+    WebPorts -->|Yes| CMS{"CMS detected?"}
+    WebPorts -->|No| SvcPorts{"FTP or SSH open?"}
+
+    CMS -->|Yes| Fuzzer["Go native deep fuzzer: paths, params, forms"]
+    CMS -->|No| AutoScan["Python auto SQLi and XSS probes"]
+    Fuzzer --> PortScan
+    AutoScan --> PortScan
+
+    SvcPorts -->|Yes| Brute["Rust protocol brute force: 23 protocols, real wire auth"]
+    SvcPorts -->|No| PortScan{"Run raw port scan?"}
+    Brute --> PortScan
+
+    PortScan -->|Yes| RawScan["C syn scanner, UDP scanner, OS fingerprint"]
+    PortScan -->|No| CppFp{"Run C++ fingerprint?"}
+    RawScan --> CppFp
+
+    CppFp -->|Yes| CppScan["C++ advanced scanner, TLS scanner, vuln matcher"]
+    CppFp -->|No| Swarm{"Run swarm agents?"}
+    CppScan --> Swarm
+
+    Swarm -->|Yes| Agents["Go 28 swarm agents: planning, recon, discovery, fingerprint, enumeration, vuln analysis, correlation, risk scoring, reporting"]
+    Swarm -->|No| ReportDecision
+    Agents --> ReportDecision
+
+    OSINTScope -->|Yes| Subdomains{"Subdomains found?"}
+    OSINTScope -->|No| Arp["C++ ARP spoof and subnet ping sweep"]
+    Arp --> Wireless
+
+    Subdomains -->|Yes| Takeover["Go subdomain takeover check via CNAME and dangling DNS"]
+    Subdomains -->|No| Github{"Scrape GitHub DB?"}
+    Takeover --> Github
+
+    Github -->|Yes| Keys["Extract AWS keys and secrets from commits"]
+    Github -->|No| LogOsint["Log OSINT data to JSON"]
+    Keys --> Wireless
+    LogOsint --> Wireless
+
+    Wireless{"Wireless target?"} -->|Yes| Wifi["C# WiFi scanner, deauth, PMKID harvest, WPA3 crack, MITM, spectrum scan"]
+    Wireless -->|No| Nse{"Run NSE probes?"}
+    Wifi --> Nse
+
+    Nse -->|Yes| NseRun["Lua 298 NSE scripts: service discovery, brute force, vuln probes"]
+    Nse -->|No| Msf{"Metasploit RPC?"}
+    NseRun --> Msf
+
+    Msf -->|Yes| MsfRun["Ruby Metasploit RPC bridge via tactical_bridge.go"]
+    Msf -->|No| ReportDecision
+    MsfRun --> ReportDecision
+
+    ReportDecision{"Generate report?"} -->|Yes| Report["Generate final report: reporter.go, output.go, Mermaid flowchart, WebUI dashboard"]
+    ReportDecision -->|No| End(["Done"])
+    Report --> Export["Export XML, CSV, Markdown, HTML"]
+    Export --> End
 ```
 
-### 5.1 Dedicated C# Wireless Attack Architecture Flowchart
+### 5.1 Brute Forcer Flowchart
+
+```mermaid
+flowchart TD
+    Start(["hackit bruter scan"]) --> Detect{"Protocol or all?"}
+    Detect -->|all| SvcDetect["Service detection from banner"]
+    Detect -->|named| PortCheck["Use protocol default port"]
+    SvcDetect --> PortCheck
+    PortCheck --> LoadLists["Load users and passwords (built in, file, or combo)"]
+    LoadLists --> Stream["Stream combos through bounded channel"]
+    Stream --> Worker["Fixed size worker pool"]
+    Worker --> Auth{"Try auth on target"}
+    Auth -->|Success| Found["Emit found event, show credential"]
+    Auth -->|Denied| Next["Next combo"]
+    Auth -->|Error| Retry{"Retries left?"}
+    Retry -->|Yes| Auth
+    Retry -->|No| Next
+    Found --> StopCheck{"Stop on first?"}
+    StopCheck -->|Yes| Ask["Ask to continue"]
+    StopCheck -->|No| Next
+    Next --> More{"More combos?"}
+    More -->|Yes| Worker
+    More -->|No| Summary["Print summary and credentials"]
+    Ask -->|Yes| Resume["Resume from cursor"]
+    Ask -->|No| Summary
+    Resume --> Stream
+```
+
+### 5.2 Port Scanner Flowchart
+
+```mermaid
+flowchart TD
+    Start(["hackit ports scan"]) --> Parse["Parse targets and ports"]
+    Parse --> Engine{"Engine selection"}
+    Engine -->|Go| GoScan["Go TCP connect scanner"]
+    Engine -->|Rust| RustScan["Rust async scanner"]
+    Engine -->|C/C++| NativeScan["Native raw socket scanner"]
+    GoScan --> Banner["Grab banner"]
+    RustScan --> Banner
+    NativeScan --> Banner
+    Banner --> Service["Match service signature"]
+    Service --> Scripts{"Run NSE scripts?"}
+    Scripts -->|Yes| Nse["Execute Lua scripts"]
+    Scripts -->|No| Report
+    Nse --> Report["Generate report JSON/XML/CSV"]
+    Report --> Output["Print results"]
+```
+
+### 5.3 OSINT Flowchart
+
+```mermaid
+flowchart TD
+    Start(["hackit osint"]) --> Type{"Target type?"}
+    Type -->|handle| Handle["Query 51 handle sources"]
+    Type -->|domain| Domain["Query 14 domain sources"]
+    Type -->|email| Email["Query 3 email sources"]
+    Handle --> Filter["Filter aggregator and search pages"]
+    Domain --> Filter
+    Email --> Filter
+    Filter --> Score["Score confidence"]
+    Score --> Report["Generate HTML report"]
+    Report --> Output["Print results"]
+```
+
+### 5.4 Web Fuzzer Flowchart
+
+```mermaid
+flowchart TD
+    Start(["hackit fuzz"]) --> Load["Load wordlist"]
+    Load --> Request["Send HTTP requests"]
+    Request --> Filter{"Response filter?"}
+    Filter -->|Status code| StatusCheck["Match status codes"]
+    Filter -->|Size| SizeCheck["Match response size"]
+    Filter -->|Words| WordCheck["Match word count"]
+    StatusCheck --> Collect["Collect interesting responses"]
+    SizeCheck --> Collect
+    WordCheck --> Collect
+    Collect --> More{"More paths?"}
+    More -->|Yes| Request
+    More -->|No| Report["Print results"]
+```
+
+### 5.5 SQLi Scanner Flowchart
+
+```mermaid
+flowchart TD
+    Start(["hackit vuln sqli"]) --> Detect["Detect injection point"]
+    Detect --> Tech{"Technology?"}
+    Tech -->|MySQL| MySQLPayloads["MySQL specific payloads"]
+    Tech -->|PostgreSQL| PgPayloads["PostgreSQL specific payloads"]
+    Tech -->|MSSQL| MsPayloads["MSSQL specific payloads"]
+    Tech -->|Oracle| OraPayloads["Oracle specific payloads"]
+    MySQLPayloads --> Test["Test payload"]
+    PgPayloads --> Test
+    MsPayloads --> Test
+    OraPayloads --> Test
+    Test --> Vuln{"Vulnerable?"}
+    Vuln -->|Yes| Enumerate["Enumerate databases, tables, columns"]
+    Vuln -->|No| Next["Next parameter"]
+    Enumerate --> Dump["Dump data"]
+    Dump --> Report["Generate report"]
+    Next --> More{"More params?"}
+    More -->|Yes| Detect
+    More -->|No| Report
+```
+
+### 5.6 Subdomain Enumeration Flowchart
+
+```mermaid
+flowchart TD
+    Start(["hackit recon subdomains"]) --> CT["Query Certificate Transparency logs"]
+    Start --> Passive["Query passive DNS"]
+    CT --> Merge["Merge and deduplicate"]
+    Passive --> Merge
+    Merge --> Resolve["Resolve to IPs"]
+    Resolve --> Takeover{"Dangling CNAME?"}
+    Takeover -->|Yes| Flag["Flag for takeover"]
+    Takeover -->|No| Output["Print results"]
+    Flag --> Output
+```
+
+### 5.7 Dedicated C# Wireless Attack Architecture Flowchart
 
 Below is the standalone C# wireless attack engine flowchart, detailing the full 802.11 auditing pipeline:
 
@@ -340,39 +416,31 @@ The HackIT framework is not a single script. It is an arsenal. Below is the abso
 
 ```text
 HackIT/
-├── hackit.sh                # Recommended launcher: install, update, build, run
-├── main.py                  # Master entry point (calls hackit.cli:cli)
-├── requirements.txt         # Python dependencies (click, rich, scapy, httpx, ...)
-├── setup.py                 # Pip package definition
-├── hackit/                  [CORE FRAMEWORK DIRECTORY]
-│   ├── cli.py               # Click CLI router: 19 root commands + 6 groups
-│   ├── console.py           # Interactive framework console (Metasploit style)
-│   ├── config.py            # JSON config, 15 themes, masking, API keys
-│   ├── ui.py                # Banners, colors, tables, animations
-│   ├── logger.py            # Centralized logging
-│   ├── anonymity.py         # Proxy routing and identity helpers
-│   ├── main.py              # Thin entry that invokes the click CLI
-│   ├── nse_engine.py        # Loader and runner for 298 Lua NSE scripts
-│   ├── agent/               # AI Brain: chat, autopilot, 28-node swarm, TUI dashboard
-│   │   ├── workflow/        # LangGraph pentest pipeline (8 nodes)
-│   │   └── go/              # ai_engine, worker, chat_engine, swarm, hative binaries + source
-│   ├── osint/               # Username, email, phone, domain intel (600+ platforms)
-│   ├── sqli/                # SQLi scanner (14 subcommands) + GUI + Go engine
-│   ├── xss/                 # XSS scanner (Go + Python engines)
-│   ├── vuln extras/         # redirect, rce_modul, atomix (template scanner), cve
-│   ├── web pack/            # header_audit, tech_hunter, web_fuzzer, js, params, dir_finder
-│   ├── net pack/            # port_scanner, network_scanner, subdomain, ssl_tool
-│   ├── bruteforcer/         # Multi protocol login brute force (Rust engine)
-│   ├── 403bypass/           # 403 bypass engine (Go binary + wordlists)
-│   ├── ddos/                # Stress testing terminal + masking + C/Go engines
-│   ├── wireless/            # WiFi auditing console + C# engine (csharp_core)
-│   ├── nse_scripts/         # 298 custom .nse scripts + category map + runner
-│   ├── webUI/               # FastAPI backend (port 8080) + Astro frontend
-│   └── sosialengineer/      # Social engineering module wrappers
-├── wordlists/               # Curated lists: common.txt, subdomains.txt, dicc.txt, fuzzing_payloads.txt
-├── img/                     # README banner and demo assets
-├── LICENSE                  # MIT Licensing Information
-└── README.md                # This documentation file
+├── docs
+├── hackit
+│   ├── 403bypass
+│   ├── agent
+│   ├── atomix
+│   ├── bruteforcer
+│   ├── cve
+│   ├── ddos
+│   ├── dir_finder
+│   ├── network_scanner
+│   ├── params
+│   ├── port_scanner
+│   ├── rce_modul
+│   ├── redirect
+│   ├── sosialengineer
+│   ├── sqli
+│   ├── ssl_tool
+│   ├── subdomain
+│   ├── tech_hunter
+│   ├── web_fuzzer
+│   ├── webUI
+│   └── xss
+├── hardening
+├── img
+└── wordlists
 ```
 
 > Note: C, C++, and Rust port scanner sources are shipped as prebuilt
@@ -407,9 +475,9 @@ To understand the immense scope of HackIT, we must dive into the specific tactic
 
 ### 7.5 Complete Tools & Engines Reference
 
-This section catalogs every significant source file in the HackIT framework — its language, exact location, and one-line purpose. All tools are organized by the engine that owns them.
+This section catalogs every significant source file in the HackIT framework - its language, exact location, and one-line purpose. All tools are organized by the engine that owns them.
 
-#### 7.5.1 Python — AI Brain & Master Orchestrator
+#### 7.5.1 Python - AI Brain & Master Orchestrator
 
 ```mermaid
 flowchart TD
@@ -458,9 +526,9 @@ flowchart TD
 
 | File | Location | Description |
 |------|----------|-------------|
-| `main.py` | `hackit/main.py` | Master CLI entry point — parses args, invokes the orchestrator |
+| `main.py` | `hackit/main.py` | Master CLI entry point - parses args, invokes the orchestrator |
 | `cli.py` | `hackit/cli.py` | Argparse router for all subcommands (`agent`, `scan`, `autopilot`) |
-| `console.py` | `hackit/console.py` | Interactive Hacker Console — provides the internal Shell |
+| `console.py` | `hackit/console.py` | Interactive Hacker Console - provides the internal Shell |
 | `config.py` | `hackit/config.py` | Global YAML config, timeouts, API key manager |
 | `logger.py` | `hackit/logger.py` | Centralized color-coded terminal logging |
 | `ui.py` | `hackit/ui.py` | TUI, ASCII art, loading animations |
@@ -468,16 +536,16 @@ flowchart TD
 | `nse_engine.py` | `hackit/nse_engine.py` | Python bridge to execute & parse Lua NSE scripts |
 | `go_bridge.py` | `hackit/port_scanner/go_bridge.py` | Invokes Go engine binary, parses JSON output |
 | `__init__.py` | `hackit/port_scanner/__init__.py` | Package init + CLI entry for PortStorm scanner |
-| `core.py` | `hackit/port_scanner/core.py` | PortScanner class — threaded TCP connect + service detection |
+| `core.py` | `hackit/port_scanner/core.py` | PortScanner class - threaded TCP connect + service detection |
 | `plugin_loader.py` | `hackit/port_scanner/plugin_loader.py` | External plugin loader (Lua, Ruby, scripts) via subprocess |
-| `build_all.py` | `hackit/port_scanner/build_all.py` | Build automation — compiles C/C++/Rust/Go engines |
+| `build_all.py` | `hackit/port_scanner/build_all.py` | Build automation - compiles C/C++/Rust/Go engines |
 | `intelligence.py` | `hackit/port_scanner/intelligence.py` | CVE mapping & vulnerability intelligence |
-| `targets.py` | `hackit/port_scanner/targets.py` | Target parser — hostnames, CIDR, port lists |
+| `targets.py` | `hackit/port_scanner/targets.py` | Target parser - hostnames, CIDR, port lists |
 | `python_probes.py` | `hackit/port_scanner/python_probes.py` | Probe definition validator & sample plugins |
-| `engine_banner.py` | `hackit/port_scanner/python/engine_banner.py` | Async/sync banner grabber — 300+ protocol signatures + OS fingerprint |
+| `engine_banner.py` | `hackit/port_scanner/python/engine_banner.py` | Async/sync banner grabber - 300+ protocol signatures + OS fingerprint |
 | `multi_scan.py` | `hackit/port_scanner/python/multi_scan.py` | Multiprocessing parallel port scanner |
 
-#### 7.5.2 Go (Golang) — The Muscle & Concurrency Engine
+#### 7.5.2 Go (Golang) - The Muscle & Concurrency Engine
 
 ```mermaid
 flowchart TD
@@ -594,31 +662,31 @@ flowchart TD
 
 | File | Description |
 |------|-------------|
-| `main.go` | CLI entry — flag parsing, orchestrator loop, JSON final payload |
-| `engine.go` | High-level scan orchestrator — coordinates ports, timing, workers |
-| `scanner.go` | TCP connect scanner — TLS handshake, banner grab, service detection |
+| `main.go` | CLI entry - flag parsing, orchestrator loop, JSON final payload |
+| `engine.go` | High-level scan orchestrator - coordinates ports, timing, workers |
+| `scanner.go` | TCP connect scanner - TLS handshake, banner grab, service detection |
 | `syn_scan.go` | SYN scan (raw socket, requires privileges) |
-| `ports.go` | Common ports database — maps port numbers → service names |
-| `targets.go` | Target resolution — hostnames, CIDR, ranges, exclusion lists |
-| `service.go` | Service version detection — regex banner-to-product matching |
+| `ports.go` | Common ports database - maps port numbers → service names |
+| `targets.go` | Target resolution - hostnames, CIDR, ranges, exclusion lists |
+| `service.go` | Service version detection - regex banner-to-product matching |
 | `stealth.go` | Port shuffling utility for stealth scan ordering |
-| `evasion.go` | Evasion config — decoys, fragment delays, rate limiting |
-| `raw.go` | Raw socket utilities — ICMP ping, TCP RST detection |
-| `reporter.go` | JSON/console report generator — severity + CVE cross-refs |
-| `output.go` | Output formatter — JSON, XML, CSV, Markdown |
-| `worker_pool.go` | Concurrent worker pool — rate limiting + adaptive slots |
-| `intel.go` | Threat intelligence enrichment — Shodan, AlienVault OTX |
-| `os_detect.go` | TCP/IP OS fingerprinting — TTL, window size, banner analysis |
-| `scripts.go` | NSE-style script engine — runs probe scripts against open ports |
+| `evasion.go` | Evasion config - decoys, fragment delays, rate limiting |
+| `raw.go` | Raw socket utilities - ICMP ping, TCP RST detection |
+| `reporter.go` | JSON/console report generator - severity + CVE cross-refs |
+| `output.go` | Output formatter - JSON, XML, CSV, Markdown |
+| `worker_pool.go` | Concurrent worker pool - rate limiting + adaptive slots |
+| `intel.go` | Threat intelligence enrichment - Shodan, AlienVault OTX |
+| `os_detect.go` | TCP/IP OS fingerprinting - TTL, window size, banner analysis |
+| `scripts.go` | NSE-style script engine - runs probe scripts against open ports |
 | `lua_engine.go` | Embedded Lua scripting host for custom scan probes |
-| `timing.go` | Timing templates T0–T5 — scan speed, delays, parallelism |
+| `timing.go` | Timing templates T0–T5 - scan speed, delays, parallelism |
 | `signature_db.go` | 400+ nmap-level service signature patterns |
 | `iana_services.go` | Complete IANA service-name ↔ port-number mapping (900+ entries) |
-| `bridge_linux.go` | Linux bridge — launches C/C++/Rust binaries, captures output |
+| `bridge_linux.go` | Linux bridge - launches C/C++/Rust binaries, captures output |
 | `rust_wrapper.go` | Windows cgo/FFI wrapper for Rust engine DLL |
-| `multi_bridge.go` | Windows bridge — runs external engines |
+| `multi_bridge.go` | Windows bridge - runs external engines |
 | `tactical_bridge.go` | Bridge to Ruby engine for complex protocol analysis |
-| `probe_adapter.go` | Windows cgo adapter — Go ↔ Rust shared library |
+| `probe_adapter.go` | Windows cgo adapter - Go ↔ Rust shared library |
 | `multi_bridge.go` | Windows bridge run external engines |
 | `rust_wrapper.go` | Windows-specific FFI/cgo wrapper for the Rust engine DLL |
 
@@ -626,45 +694,45 @@ flowchart TD
 
 | File | Description |
 |------|-------------|
-| `main.go` | AI Hunter CLI — MCP server, slash commands, LLM provider router |
-| `models.go` | Data models — AI request/response structures |
+| `main.go` | AI Hunter CLI - MCP server, slash commands, LLM provider router |
+| `models.go` | Data models - AI request/response structures |
 | `orchestrator.go` | Multi-provider AI routing & failover |
-| `analyzer.go` | Vulnerability analyzer — identifies gaps in scan artifacts |
-| `autonomous_hunter.go` | Autonomous bug hunter — iterative deep scans via AI context |
+| `analyzer.go` | Vulnerability analyzer - identifies gaps in scan artifacts |
+| `autonomous_hunter.go` | Autonomous bug hunter - iterative deep scans via AI context |
 | `data_ingestion.go` | Parses raw port-scan JSON into structured Go types |
 | `history.go` | Persistent conversation history for context-aware AI |
-| `commands.go` | Slash-command map — `halo`, `summary`, `report`, `exploit` |
+| `commands.go` | Slash-command map - `halo`, `summary`, `report`, `exploit` |
 | `report_engine.go` | Structured markdown/HTML pentest report generator |
-| `knowledge_base.go` | AI tactics KB — maps services/ports to hunting strategies |
-| `vuln_flowchart.go` | Attack vector model — discovery → exploitation paths |
+| `knowledge_base.go` | AI tactics KB - maps services/ports to hunting strategies |
+| `vuln_flowchart.go` | Attack vector model - discovery → exploitation paths |
 | `advanced_exploits.go` | Service banner → targeted attack vector generator |
 
 **Native Modules (`hackit/agent/go/native/`)**
 
 | File | Description |
 |------|-------------|
-| `subdomain.go` | Subdomain enumeration — DNS brute-force + passive OSINT |
-| `takeover.go` | Subdomain takeover — fingerprints unclaimed cloud services |
+| `subdomain.go` | Subdomain enumeration - DNS brute-force + passive OSINT |
+| `takeover.go` | Subdomain takeover - fingerprints unclaimed cloud services |
 | `portscan.go` | Concurrent TCP port scanner with service detection |
-| `ssl_tls.go` | SSL/TLS cert extraction — issuer, subject, expiry, SANs |
-| `tech_mapper.go` | Web tech stack — CMS, JS frameworks, CDN |
-| `fuzzer.go` | Web path/directory fuzzer — concurrent request engine |
-| `waf.go` | WAF detection — identifies firewall vendors from response signatures |
+| `ssl_tls.go` | SSL/TLS cert extraction - issuer, subject, expiry, SANs |
+| `tech_mapper.go` | Web tech stack - CMS, JS frameworks, CDN |
+| `fuzzer.go` | Web path/directory fuzzer - concurrent request engine |
+| `waf.go` | WAF detection - identifies firewall vendors from response signatures |
 
 **Swarm AI Agents (25 files in `hackit/agent/go/swarm/`)**
 
 | Agent | File | Role |
 |-------|------|------|
-| — | `main.go` | Swarm CLI — initializes 20-node DAG, runs all agents |
-| — | `core/state.go` | Shared `SwarmState` context across all agents |
+| - | `main.go` | Swarm CLI - initializes 20-node DAG, runs all agents |
+| - | `core/state.go` | Shared `SwarmState` context across all agents |
 | Planning | `planning/agent.go` | Understands scope, goals, rules of engagement |
 | Recon | `recon/agent.go` | Collects domains, subdomains, DNS, ASN, WHOIS |
-| Discovery | `discovery/agent.go` | Probes attack surface — ports, live hosts |
+| Discovery | `discovery/agent.go` | Probes attack surface - ports, live hosts |
 | Fingerprint | `fingerprint/agent.go` | Detects OS, web server, framework, CMS, DB, WAF |
 | Enumeration | `enumeration/agent.go` | Brute-forces paths, APIs, admin panels |
 | Vuln Analysis | `vuln_analysis/agent.go` | Cross-references findings against CVEs |
 | Correlation | `correlation/agent.go` | Connects isolated findings → attack chains |
-| Evidence | `evidence/agent.go` | Stores proofs — logs, HTTP req/res, screenshots |
+| Evidence | `evidence/agent.go` | Stores proofs - logs, HTTP req/res, screenshots |
 | Risk Scoring | `risk_scoring/agent.go` | CVSS 4.0 calculation + business impact prioritization |
 | Reporting | `reporting/agent.go` | Compiles final JSON + Markdown reports |
 | Memory | `memory/agent.go` | Tracks historical changes, persists knowledge (SQLite) |
@@ -686,7 +754,7 @@ flowchart TD
 | Bounty Intel | `bounty_intel/agent.go` | Prioritizes findings by real-world bug bounty impact |
 | MCP Integration | `mcp_integration/agent.go` | Bridges swarm with external security tools |
 
-#### 7.5.3 C — Low-Level Memory & Raw Packet Engine
+#### 7.5.3 C - Low-Level Memory & Raw Packet Engine
 
 ```mermaid
 flowchart TD
@@ -721,19 +789,19 @@ flowchart TD
 
 | File | Location | Description |
 |------|----------|-------------|
-| `scanner.c` | `port_scanner/c/scanner.c` | Multi-platform TCP connect scanner — DNS resolution, port ranges |
-| `syn_scanner.c` | `port_scanner/c/syn_scanner.c` | Raw SYN stealth scanner — 11 scan modes (SYN, FIN, XMAS, NULL, ACK, Window, Maimon, Protocol, Idle, Anon-Self, Connect), decoys, chaos, src_port, TTL, delay, rate limiting |
-| `advanced_scanner.c` | `port_scanner/c/advanced_scanner.c` | Ultra-high-performance raw socket scanner — ICMP ping, TTL fingerprint |
-| `mass_tcp_scanner.c` | `port_scanner/c/mass_tcp_scanner.c` | Masscan-style high-speed scanner — configurable rate, adaptive pacing |
-| `os_detect.c` | `port_scanner/c/os_detect.c` | TCP-based OS fingerprint — TTL/window-size heuristics |
-| `os_fingerprint.c` | `port_scanner/c/os_fingerprint.c` | Multi-probe OS fingerprint engine — TCP/IP stack signature matching (80+ signatures) |
-| `udp_scanner.c` | `port_scanner/c/udp_scanner.c` | UDP port scanner — protocol-specific probes + ICMP unreach detection |
-| `stealth_evasion.c` | `port_scanner/c/stealth_evasion.c` | Firewall bypass — packet fragmentation, decoy IP generation |
-| `c_evasion.c` | `port_scanner/c/c_evasion.c` | Raw-packet evasion engine — IP/TCP header manipulation, spoofed src, Ghost Protocol, Chaos, badsum |
-| `epoll_scanner.c` | `port_scanner/c/epoll_scanner.c` | Async I/O scanner — epoll/kqueue/IOCP for 100K+ port scans |
-| `network_oracle.c` | `port_scanner/c/network_oracle.c` | Deep network intelligence — WHOIS parsing, registrar analysis |
+| `scanner.c` | `port_scanner/c/scanner.c` | Multi-platform TCP connect scanner - DNS resolution, port ranges |
+| `syn_scanner.c` | `port_scanner/c/syn_scanner.c` | Raw SYN stealth scanner - 11 scan modes (SYN, FIN, XMAS, NULL, ACK, Window, Maimon, Protocol, Idle, Anon-Self, Connect), decoys, chaos, src_port, TTL, delay, rate limiting |
+| `advanced_scanner.c` | `port_scanner/c/advanced_scanner.c` | Ultra-high-performance raw socket scanner - ICMP ping, TTL fingerprint |
+| `mass_tcp_scanner.c` | `port_scanner/c/mass_tcp_scanner.c` | Masscan-style high-speed scanner - configurable rate, adaptive pacing |
+| `os_detect.c` | `port_scanner/c/os_detect.c` | TCP-based OS fingerprint - TTL/window-size heuristics |
+| `os_fingerprint.c` | `port_scanner/c/os_fingerprint.c` | Multi-probe OS fingerprint engine - TCP/IP stack signature matching (80+ signatures) |
+| `udp_scanner.c` | `port_scanner/c/udp_scanner.c` | UDP port scanner - protocol-specific probes + ICMP unreach detection |
+| `stealth_evasion.c` | `port_scanner/c/stealth_evasion.c` | Firewall bypass - packet fragmentation, decoy IP generation |
+| `c_evasion.c` | `port_scanner/c/c_evasion.c` | Raw-packet evasion engine - IP/TCP header manipulation, spoofed src, Ghost Protocol, Chaos, badsum |
+| `epoll_scanner.c` | `port_scanner/c/epoll_scanner.c` | Async I/O scanner - epoll/kqueue/IOCP for 100K+ port scans |
+| `network_oracle.c` | `port_scanner/c/network_oracle.c` | Deep network intelligence - WHOIS parsing, registrar analysis |
 
-#### 7.5.4 C++ — Deep Service & OS Fingerprinting
+#### 7.5.4 C++ - Deep Service & OS Fingerprinting
 
 ```mermaid
 flowchart TD
@@ -768,17 +836,17 @@ flowchart TD
 
 | File | Location | Description |
 |------|----------|-------------|
-| `advanced_scanner.cpp` | `port_scanner/cpp/advanced_scanner.cpp` | Deep service fingerprint — 180+ version patterns, 40+ OS sigs, ~65 CVEs, risk scoring |
-| `service_scanner.cpp` | `port_scanner/cpp/service_scanner.cpp` | Service & version discovery — banner grabbing + regex version extraction |
-| `os_detect.cpp` | `port_scanner/cpp/os_detect.cpp` | Real TCP/IP OS fingerprint — raw SYN probes, TTL/banner analysis, 72 OS signatures via `getsockopt(TCP_INFO)` |
-| `deep_auditor.cpp` | `port_scanner/cpp/deep_auditor.cpp` | Deep protocol auditor — intensive state analysis, multi-vector service mapping |
-| `surface_analyzer.cpp` | `port_scanner/cpp/surface_analyzer.cpp` | Attack surface analyzer — risk scores, severity distribution, remediation |
-| `vulnerability_scanner.cpp` | `port_scanner/cpp/vulnerability_scanner.cpp` | Vulnerability scanner — exploit signature matching, protocol state auditing |
-| `vuln_matcher.cpp` | `port_scanner/cpp/vuln_matcher.cpp` | CVE cross-referencer — matches service product/version against CVE database |
+| `advanced_scanner.cpp` | `port_scanner/cpp/advanced_scanner.cpp` | Deep service fingerprint - 180+ version patterns, 40+ OS sigs, ~65 CVEs, risk scoring |
+| `service_scanner.cpp` | `port_scanner/cpp/service_scanner.cpp` | Service & version discovery - banner grabbing + regex version extraction |
+| `os_detect.cpp` | `port_scanner/cpp/os_detect.cpp` | Real TCP/IP OS fingerprint - raw SYN probes, TTL/banner analysis, 72 OS signatures via `getsockopt(TCP_INFO)` |
+| `deep_auditor.cpp` | `port_scanner/cpp/deep_auditor.cpp` | Deep protocol auditor - intensive state analysis, multi-vector service mapping |
+| `surface_analyzer.cpp` | `port_scanner/cpp/surface_analyzer.cpp` | Attack surface analyzer - risk scores, severity distribution, remediation |
+| `vulnerability_scanner.cpp` | `port_scanner/cpp/vulnerability_scanner.cpp` | Vulnerability scanner - exploit signature matching, protocol state auditing |
+| `vuln_matcher.cpp` | `port_scanner/cpp/vuln_matcher.cpp` | CVE cross-referencer - matches service product/version against CVE database |
 | `tls_scanner.cpp` | `port_scanner/cpp/tls_scanner.cpp` | TLS/SSL cert extractor + cipher suite scanner |
-| `service_audit.cpp` | `port_scanner/cpp/service_audit.cpp` | Service auditing engine — configuration weakness detection |
+| `service_audit.cpp` | `port_scanner/cpp/service_audit.cpp` | Service auditing engine - configuration weakness detection |
 
-#### 7.5.5 Rust — Memory-Safe High-Speed Engine
+#### 7.5.5 Rust - Memory-Safe High-Speed Engine
 
 ```mermaid
 flowchart TD
@@ -836,29 +904,29 @@ flowchart TD
 
 | File | Description |
 |------|-------------|
-| `main.rs` | Async Rust port scanner — TCP connect, banner grab, OS detect |
-| `hyper_scan.rs` | Async hyper-scan — concurrent connection pooling, banner collection |
-| `syn_scanner.rs` | Raw SYN scanner — IP/TCP headers via raw sockets for stealth |
-| `os_detect.rs` | TCP/IP OS fingerprint — TTL, window, MSS analysis |
+| `main.rs` | Async Rust port scanner - TCP connect, banner grab, OS detect |
+| `hyper_scan.rs` | Async hyper-scan - concurrent connection pooling, banner collection |
+| `syn_scanner.rs` | Raw SYN scanner - IP/TCP headers via raw sockets for stealth |
+| `os_detect.rs` | TCP/IP OS fingerprint - TTL, window, MSS analysis |
 
-**Go sub-engine (`port_scanner/go/rust_engine/src/`) — FFI-exported to Go bridge**
+**Go sub-engine (`port_scanner/go/rust_engine/src/`) - FFI-exported to Go bridge**
 
 | File | Description |
 |------|-------------|
-| `lib.rs` | Library root — exposes all modules via FFI to Go (1300+ lines) |
-| `core_engine.rs` | Core engine — C-FFI mass scanning + result reporting |
-| `scanner_core.rs` | Scan type enum — SYN/FIN/XMAS/NULL/ACK/Maimon/Window |
-| `fast_scanner.rs` | Async TCP banner grabber — 100+ fingerprint patterns, FFI export |
-| `masscan.rs` | Masscan-style ultra-fast scanner — real-time streaming |
-| `deep_scan.rs` | Deep vulnerability orchestrator — multi-vector probing + exploit chaining |
-| `probe_engine.rs` | Probe definition engine — serialization of structured probes |
+| `lib.rs` | Library root - exposes all modules via FFI to Go (1300+ lines) |
+| `core_engine.rs` | Core engine - C-FFI mass scanning + result reporting |
+| `scanner_core.rs` | Scan type enum - SYN/FIN/XMAS/NULL/ACK/Maimon/Window |
+| `fast_scanner.rs` | Async TCP banner grabber - 100+ fingerprint patterns, FFI export |
+| `masscan.rs` | Masscan-style ultra-fast scanner - real-time streaming |
+| `deep_scan.rs` | Deep vulnerability orchestrator - multi-vector probing + exploit chaining |
+| `probe_engine.rs` | Probe definition engine - serialization of structured probes |
 | `probe_loader.rs` | Filesystem probe loader |
-| `probe_runner.rs` | TCP/UDP probe executor — timeout + response parsing |
-| `ffi_probe.rs` | FFI-safe probe handle — C/Go interop |
-| `evasion.rs` | Ghost Protocol evasion — fragmentation, decoys, randomized delays |
+| `probe_runner.rs` | TCP/UDP probe executor - timeout + response parsing |
+| `ffi_probe.rs` | FFI-safe probe handle - C/Go interop |
+| `evasion.rs` | Ghost Protocol evasion - fragmentation, decoys, randomized delays |
 | `os_fingerprint.rs` | FFI-exported OS fingerprinting |
-| `exploit_db.rs` | Exploit signature DB — regex CVE matching + payload management |
-| `secret_mapper.rs` | Secret intelligence mapper — leaked keys, metadata in banners |
+| `exploit_db.rs` | Exploit signature DB - regex CVE matching + payload management |
+| `secret_mapper.rs` | Secret intelligence mapper - leaked keys, metadata in banners |
 | `advanced_modules.rs` | Firewall detection + bypass method identification |
 
 **Standalone binaries (`port_scanner/go/rust_engine/src/bin/`)**
@@ -867,12 +935,12 @@ flowchart TD
 |------|-------------|
 | `hyper_scan.rs` | Async hyper-scan binary (identical to `rust/src/hyper_scan.rs`) |
 | `syn_scanner.rs` | Raw SYN scanner binary |
-| `web_fingerprint.rs` | Web tech fingerprint — CMS, frameworks, WAF via HTTP analysis |
-| `kernel_detect.rs` | Remote kernel detection — TCP/IP stack parameter matching |
-| `dns_detect.rs` | DNS record enumeration — A, AAAA, MX, TXT, NS, CNAME, SOA |
+| `web_fingerprint.rs` | Web tech fingerprint - CMS, frameworks, WAF via HTTP analysis |
+| `kernel_detect.rs` | Remote kernel detection - TCP/IP stack parameter matching |
+| `dns_detect.rs` | DNS record enumeration - A, AAAA, MX, TXT, NS, CNAME, SOA |
 | `os_detect.rs` | TCP/IP OS fingerprint binary |
 
-#### 7.5.6 Lua — NSE-Style Scripting Engine
+#### 7.5.6 Lua - NSE-Style Scripting Engine
 
 ```mermaid
 flowchart TD
@@ -894,10 +962,10 @@ flowchart TD
 
 | Location | Description |
 |----------|-------------|
-| `hackit/nse_scripts/` | 298 custom `.nse` scripts — service discovery, brute-force, vulnerability probes |
-| `hackit/nse_engine.py` | Python engine — loads, validates, and executes `.nse` scripts against open ports |
+| `hackit/nse_scripts/` | 298 custom `.nse` scripts - service discovery, brute-force, vulnerability probes |
+| `hackit/nse_engine.py` | Python engine - loads, validates, and executes `.nse` scripts against open ports |
 
-#### 7.5.7 C# — Wireless Attack & Packet Injection Engine
+#### 7.5.7 C# - Wireless Attack & Packet Injection Engine
 
 ```mermaid
 flowchart TD
@@ -957,12 +1025,12 @@ flowchart TD
 
 | File | Description |
 |------|-------------|
-| `Program.cs` | Console entry point — initializes WiFi scanner + packet capture |
-| `AttackEngine.cs` | Central attack orchestrator — coordinates deauth, beacon, MITM operations |
-| `WebBridge.cs` | Real-time web dashboard bridge — streams scan data via HTTP |
-| `PacketCapture.cs` | 802.11 frame capture — monitors channel traffic, filters management frames |
-| `WifiScanner.cs` | WiFi adapter enumeration — SSID scan, BSSID resolution, signal strength |
-| `csharp_core.csproj` | .NET project file — targets .NET 6.0+ |
+| `Program.cs` | Console entry point - initializes WiFi scanner + packet capture |
+| `AttackEngine.cs` | Central attack orchestrator - coordinates deauth, beacon, MITM operations |
+| `WebBridge.cs` | Real-time web dashboard bridge - streams scan data via HTTP |
+| `PacketCapture.cs` | 802.11 frame capture - monitors channel traffic, filters management frames |
+| `WifiScanner.cs` | WiFi adapter enumeration - SSID scan, BSSID resolution, signal strength |
+| `csharp_core.csproj` | .NET project file - targets .NET 6.0+ |
 
 **Full Attack Suite (`hackit/wireless/hackitwireless-cs/`)**
 
@@ -970,16 +1038,16 @@ flowchart TD
 |------|-------------|
 | `HackItWireless.sln` | Visual Studio solution file |
 | `HackItWireless.csproj` | .NET project file |
-| `AdvancedAdapterDetector.cs` | Deep adapter capability detection — monitor mode, packet injection support, driver version |
-| `AdvancedWirelessAttackEngine.cs` | Multi-vector attack orchestrator — coordinates channel hopping + attack scheduling |
-| `PmkidHarvester.cs` | PMKID extraction from 4-way handshakes — RSN IE parsing, key derivation |
-| `ChannelManager.cs` | Intelligent channel hopping — 2.4 GHz + 5 GHz band switching, channel utilization stats |
-| `Wpa3Cracker.cs` | WPA3 SAE handshake cracker — password derivation from captured handshake |
-| `AdvancedMitmEngine.cs` | Rogue AP relay — captures victim traffic, forwards to legitimate AP, decrypts on-the-fly |
-| `SpectrumScanner.cs` | Channel utilization analysis — noise floor, signal density, channel ranking |
-| `BeaconFlood.cs` | Mass fake AP beacon generation — 1000+ fake SSIDs for network obfuscation |
-| `DeauthEngine.cs` | Deauthentication frame flood — targeted client disassociation with configurable rate |
-| `HandshakeCapture.cs` | WPA 4-way handshake sniffer — waits for EAPOL frames, extracts nonces + MIC |
+| `AdvancedAdapterDetector.cs` | Deep adapter capability detection - monitor mode, packet injection support, driver version |
+| `AdvancedWirelessAttackEngine.cs` | Multi-vector attack orchestrator - coordinates channel hopping + attack scheduling |
+| `PmkidHarvester.cs` | PMKID extraction from 4-way handshakes - RSN IE parsing, key derivation |
+| `ChannelManager.cs` | Intelligent channel hopping - 2.4 GHz + 5 GHz band switching, channel utilization stats |
+| `Wpa3Cracker.cs` | WPA3 SAE handshake cracker - password derivation from captured handshake |
+| `AdvancedMitmEngine.cs` | Rogue AP relay - captures victim traffic, forwards to legitimate AP, decrypts on-the-fly |
+| `SpectrumScanner.cs` | Channel utilization analysis - noise floor, signal density, channel ranking |
+| `BeaconFlood.cs` | Mass fake AP beacon generation - 1000+ fake SSIDs for network obfuscation |
+| `DeauthEngine.cs` | Deauthentication frame flood - targeted client disassociation with configurable rate |
+| `HandshakeCapture.cs` | WPA 4-way handshake sniffer - waits for EAPOL frames, extracts nonces + MIC |
 
 ---
 
@@ -1082,6 +1150,216 @@ context, for example `[[ user@HackIT ]] [[ web ]] $`.
 The prompt itself is themeable: `config` offers 15 themes (kali, cyberpunk,
 minimalist, retro, gacor, powerline, modern, pill, nexus, zinc, vault,
 storm, drift, pulse, slash) plus accent, border, and prompt styles.
+
+---
+
+## 7.9 Running HackIT: Command Reference
+
+This section is the quick reference for running HackIT from the terminal and
+from the interactive console. Every command below works with all three entry
+points: `./hackit.sh <command>`, `python3 main.py <command>`, and
+`hackit <command>` (after install).
+
+### 7.9.1 Top level commands
+
+| Command | What it does |
+|---------|--------------|
+| `hackit` | Open the interactive console (no arguments) |
+| `hackit guide` | Full beginner guide, all 64 commands |
+| `hackit guide <topic>` | Focused guide, for example `hackit guide sqli` |
+| `hackit help-tools` | Short quick reference of the most used tools |
+| `hackit banner` | Reprint the startup banner |
+| `hackit whoami` | Current user, device, and platform info |
+| `hackit version` | Framework version and engine list |
+| `hackit examples` | Copy paste usage examples for every tool |
+| `hackit config` | Themes, user, host, colors, prompt (15 themes) |
+| `hackit console` | Enter the interactive framework console |
+| `hackit run` | Launch the Web UI dashboard |
+| `hackit run --dev` | Dev mode with live reload |
+| `hackit run --port 3000` | Custom port |
+
+### 7.9.2 Console control commands
+
+These work inside the interactive console (`hackit console` or `python3 main.py`).
+
+| Input | Effect |
+|-------|--------|
+| `help` | Command list for the current context |
+| `help <command>` | Details for one command, for example `help web` |
+| `guide` | Full 64 command beginner guide |
+| `guide <topic>` | Focused guide, for example `guide sqli` |
+| `clear` | Clear the screen |
+| `back` | Go up one level from a group context |
+| `exit` or `quit` | Leave the console |
+| `version` | Framework version and engine list |
+| `Tab` | Autocomplete the current input |
+
+### 7.9.3 Group navigation
+
+Type a group name to enter it, then run its commands without the prefix.
+
+| Group | Enter with | Example inside |
+|-------|------------|----------------|
+| Recon | `recon` | `subdomains -d target.com` |
+| Ports | `ports` | `scan -p 1-1000 --targets example.com` |
+| Web | `web` | `headers --url https://example.com` |
+| Vuln | `vuln` | `sqli --url "http://site.com?id=1" --dbs` |
+| SSL | `ssl` | `check -t example.com` |
+| Util | `util` | `cve --software apache --version 2.4.49` |
+| Bruter | `bruter` | `scan -P ftp -t 192.168.1.10 -u admin -w password` |
+| OSINT | `osint` | `handle johndoe` |
+| Agent | `agent` | `autopilot target.com` |
+
+Type `back` to return to `main`. The prompt always shows the active context,
+for example `[[ user@HackIT ]] [[ web ]] $`.
+
+### 7.9.4 Detailed command reference
+
+Below are the most common commands with their key options. Run `COMMAND --help` for the full option list.
+
+#### Brute forcer
+
+```bash
+hackit bruter list-protocols
+hackit bruter wordlists
+hackit bruter build
+hackit bruter detect -t HOST -p PORT
+hackit bruter scan -P PROTOCOL -t HOST [options]
+```
+
+Options for scan:
+
+- `-P, --protocol` protocol name or `all`
+- `-t, --target` target host or IP
+- `-p, --port` port, 0 means protocol default
+- `-u, --user` single username
+- `-U, --userlist` username list file or built in name
+- `-w, --pass` single password
+- `-W, --passlist` password list file or built in name
+- `-C, --combo-file` user:pass file
+- `-e, --extra` extra candidates: n null, s same as login, r reversed login
+- `-T, --threads` worker count, default 16
+- `--timeout` per attempt timeout in seconds
+- `-f, --stop-on-first` stop after the first valid credential
+- `--retries` retries on transport errors
+- `--rate` attempts per second cap, 0 means unlimited
+- `--wait` seconds to sleep before each attempt
+- `--resume` resume cursor file
+- `--expand-words` expand the password list
+- `--check` probe reachability first
+- HTTP options: `--http-path`, `--http-method`, `--http-body`, `--http-fail`, `--http-success`, `--http-header`, `--http-tls`, `--http-force-basic`
+- `-v, --verbose` per attempt output, on by default
+- `-q, --quiet` only credentials and summary
+
+Built in wordlists live in `hackit/bruteforcer/wordlists/` and contain `users.txt` and `passwords.txt`.
+
+Example:
+
+```bash
+hackit bruter scan -P ssh -t 192.168.1.10 -p 22 -U users -W passwords -T 16 -f
+hackit bruter scan -P all -t 192.168.1.10 -U /tmp/users.txt -W /tmp/passwords.txt
+```
+
+#### Port scanner
+
+```bash
+hackit ports scan -t HOST -p 1-1000 --script default
+hackit ports scan -t HOST -p 80,443,8080
+hackit ports scan -t HOST -p 1-65535 -T 500
+```
+
+#### OSINT
+
+```bash
+hackit osint handle USERNAME
+hackit osint domain example.com
+hackit osint email user@example.com
+```
+
+#### SQL injection scanner
+
+```bash
+hackit vuln sqli --url "http://site.com?id=1" --dbs
+hackit vuln sqli --url "http://site.com?id=1" --tables -D database
+hackit vuln sqli --url "http://site.com?id=1" --columns -D database -T table
+hackit vuln sqli --url "http://site.com?id=1" --dump -D database -T table
+```
+
+#### XSS scanner
+
+```bash
+hackit vuln xss -u "http://site.com?q=test"
+```
+
+#### Subdomain enumeration
+
+```bash
+hackit recon subdomains -d target.com
+```
+
+#### Directory fuzzer
+
+```bash
+hackit dir -u http://target.com -w wordlist.txt
+```
+
+#### Header audit
+
+```bash
+hackit web headers --url https://example.com
+```
+
+#### SSL audit
+
+```bash
+hackit ssl check -t example.com
+```
+
+#### Technology detection
+
+```bash
+hackit tech -u https://example.com
+```
+
+#### CVE lookup
+
+```bash
+hackit util cve --software apache --version 2.4.49
+```
+
+#### Web UI
+
+```bash
+hackit run
+hackit run --dev
+hackit run --port 3000
+```
+
+#### Agent
+
+```bash
+hackit agent
+hackit agent autopilot target.com
+hackit agent chat
+```
+
+### 7.9.5 Common recipes
+
+```bash
+hackit guide                        # full guide
+hackit ports scan -p 1-1000 --targets example.com
+hackit recon subdomains -d target.com
+hackit web headers --url https://example.com
+hackit vuln sqli --url "http://site.com?id=1" --dbs
+hackit vuln xss -u "http://site.com?q=test"
+hackit ssl check -t example.com
+hackit util cve --software apache --version 2.4.49
+hackit bruter list-protocols
+hackit agent autopilot target.com
+hackit run                           # web dashboard
+```
+
+Tip: append `--help` to any command to see its exact options.
 
 ---
 
@@ -1286,7 +1564,7 @@ Because HackIT ships engines in C, C++, Rust, Go, and Lua, each engine must be c
 ```bash
 cd hackit/port_scanner/c/
 
-# Raw SYN scanner (11 scan modes) — requires libpcap
+# Raw SYN scanner (11 scan modes) - requires libpcap
 gcc -O3 -lpcap -o ../bin/syn_scanner syn_scanner.c
 
 # Evasion engine (Ghost Protocol, Chaos, decoy, frag, badsum)
@@ -1464,7 +1742,7 @@ dotnet publish -c Release -o ../../port_scanner/bin/
 cd ../../../
 ```
 
-**Build full attack suite (`hackitwireless-cs/` — Windows only):**
+**Build full attack suite (`hackitwireless-cs/` - Windows only):**
 
 ```powershell
 # Windows PowerShell (Administrator)
