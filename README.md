@@ -1432,6 +1432,25 @@ The Python orchestrator (`autonomous_hunter.py`) utilizes a dynamic Threat Scori
 
 ### 10.0 Recommended path: one command installer
 
+Option A - curl one-liner (no git clone needed):
+
+```bash
+curl -sSL https://raw.githubusercontent.com/dextryayers/HackIT/main/install.sh | bash
+```
+
+After it finishes, open a new terminal and run:
+
+```bash
+hackit --help
+```
+
+The installer clones the repository into `~/.hackit`, creates a Python
+virtual environment, installs dependencies, builds the native engines when
+Go and Rust are available, and links `hackit` into `~/.local/bin`. No
+`python3 main.py` is needed afterwards.
+
+Option B - local launcher:
+
 ```bash
 git clone https://github.com/dextryayers/HackIT.git
 cd HackIT
