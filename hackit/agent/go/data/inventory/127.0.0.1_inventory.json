@@ -1,18 +1,11 @@
 {
-  "active_services": 14,
+  "active_services": 2,
   "asn": "RFC1918/LOCAL (intranet)",
   "assets": [
     {
       "domain": "127.0.0.1",
       "type": "subdomain",
       "value": "127.0.0.1"
-    },
-    {
-      "domain": "127.0.0.1",
-      "type": "service",
-      "value": "127.0.0.1:80",
-      "tech": "Apache/2.4.69 (Debian)",
-      "port": 80
     },
     {
       "domain": "127.0.0.1",
@@ -24,100 +17,9 @@
     {
       "domain": "127.0.0.1",
       "type": "service",
-      "value": "127.0.0.1:11434",
-      "tech": "unknown",
-      "port": 11434
-    },
-    {
-      "domain": "127.0.0.1",
-      "type": "service",
-      "value": "127.0.0.1:18080",
-      "tech": "unknown",
-      "port": 18080
-    },
-    {
-      "domain": "127.0.0.1",
-      "type": "service",
-      "value": "127.0.0.1:19090",
-      "tech": "unknown",
-      "port": 19090
-    },
-    {
-      "domain": "127.0.0.1",
-      "type": "service",
-      "value": "127.0.0.1:40741",
-      "tech": "unknown",
-      "port": 40741
-    },
-    {
-      "domain": "127.0.0.1",
-      "type": "service",
-      "value": "127.0.0.1:1716",
-      "tech": "unknown",
-      "port": 1716
-    },
-    {
-      "domain": "127.0.0.1",
-      "type": "service",
-      "value": "127.0.0.1:631",
-      "tech": "unknown",
-      "port": 631
-    },
-    {
-      "domain": "127.0.0.1",
-      "type": "service",
-      "value": "127.0.0.1:33737",
-      "tech": "unknown",
-      "port": 33737
-    },
-    {
-      "domain": "127.0.0.1",
-      "type": "service",
-      "value": "127.0.0.1:34475",
-      "tech": "unknown",
-      "port": 34475
-    },
-    {
-      "domain": "127.0.0.1",
-      "type": "service",
-      "value": "127.0.0.1:38345",
-      "tech": "unknown",
-      "port": 38345
-    },
-    {
-      "domain": "127.0.0.1",
-      "type": "service",
-      "value": "127.0.0.1:41097",
-      "tech": "unknown",
-      "port": 41097
-    },
-    {
-      "domain": "127.0.0.1",
-      "type": "service",
-      "value": "127.0.0.1:41811",
-      "tech": "unknown",
-      "port": 41811
-    },
-    {
-      "domain": "127.0.0.1",
-      "type": "service",
-      "value": "127.0.0.1:49374",
-      "tech": "unknown",
-      "port": 49374
-    },
-    {
-      "domain": "127.0.0.1",
-      "type": "vulnerability",
-      "value": "MISCONF-002",
-      "severity": "Critical",
-      "cvss": 9
-    },
-    {
-      "domain": "127.0.0.1",
-      "type": "vulnerability",
-      "value": "MISCONF-001",
-      "severity": "Critical",
-      "cvss": 9.8
+      "value": "127.0.0.1:80",
+      "tech": "Apache/2.4.69 (Debian)",
+      "port": 80
     },
     {
       "domain": "127.0.0.1",
@@ -125,60 +27,11 @@
       "value": "MISCONF-SERVER-STATUS",
       "severity": "Medium",
       "cvss": 5.3
-    },
-    {
-      "domain": "127.0.0.1",
-      "type": "vulnerability",
-      "value": "MISCONF-HEADERS",
-      "severity": "Low",
-      "cvss": 3.1
-    },
-    {
-      "domain": "127.0.0.1",
-      "type": "vulnerability",
-      "value": "INJ-SQLI",
-      "severity": "Critical",
-      "cvss": 9.8
-    },
-    {
-      "domain": "127.0.0.1",
-      "type": "vulnerability",
-      "value": "MISCONF-HEADERS",
-      "severity": "Low",
-      "cvss": 3.1
-    },
-    {
-      "domain": "127.0.0.1",
-      "type": "vulnerability",
-      "value": "INJ-SSTI",
-      "severity": "Critical",
-      "cvss": 9.1
-    },
-    {
-      "domain": "127.0.0.1",
-      "type": "vulnerability",
-      "value": "INJ-SSTI",
-      "severity": "Critical",
-      "cvss": 9.1
-    },
-    {
-      "domain": "127.0.0.1",
-      "type": "vulnerability",
-      "value": "INJ-SSTI",
-      "severity": "Critical",
-      "cvss": 9.1
-    },
-    {
-      "domain": "127.0.0.1",
-      "type": "vulnerability",
-      "value": "INJ-SSTI",
-      "severity": "Critical",
-      "cvss": 9.1
     }
   ],
   "cloud_infrastructure": "Local network",
   "corporate_domain": "127.0.0.1",
-  "generated_at": "2026-11-03T00:56:41Z",
+  "generated_at": "2026-11-03T00:59:42Z",
   "total_subdomains": 1,
-  "total_vulnerabilities": 10
+  "total_vulnerabilities": 1
 }

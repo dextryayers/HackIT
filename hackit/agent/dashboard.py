@@ -301,6 +301,15 @@ class SwarmDashboard:
 
     def run(self, process=None):
         layout = self.make_layout()
+        # Fill every panel before the first frame: an unfilled Layout renders as
+        # the placeholder "Layout(name='footer', size=3)".
+        layout["header"].update(self.render_header())
+        layout["logs"].update(self.render_logs())
+        layout["counts"].update(self.render_counts())
+        layout["vulns"].update(self.render_vulns())
+        layout["progress"].update(self.render_progress())
+        layout["footer"].update(self.render_footer())
+
         poll_thread = threading.Thread(target=self.poll_state, daemon=True)
         poll_thread.start()
 

@@ -101,10 +101,10 @@ func TestSSTI(baseURL string, params map[string]string) []SSTIResult {
 			if strings.Contains(bodyStr, st.check) &&
 				!strings.Contains(baselineBody, st.check) &&
 				!strings.Contains(st.payload, st.check) {
-				// Control expression must not yield its own result: numbers that
-				// are page furniture appear for both payloads.
+				// A real engine evaluates the control too. Requiring BOTH results
+				// proves evaluation rather than a lucky number in page furniture.
 				ctrlBody := fetch(param, st.control)
-				if strings.Contains(ctrlBody, st.ctrlRes) {
+				if !strings.Contains(ctrlBody, st.ctrlRes) {
 					continue
 				}
 				results = append(results, SSTIResult{
@@ -113,7 +113,7 @@ func TestSSTI(baseURL string, params map[string]string) []SSTIResult {
 					Payload:    st.payload,
 					Vulnerable: true,
 					Engine:     st.engine,
-					Evidence:   fmt.Sprintf("Payload %q produced %q while control %q did not produce %q", st.payload, st.check, st.control, st.ctrlRes),
+					Evidence:   fmt.Sprintf("Payload %q produced %q and control %q produced %q — expression evaluated", st.payload, st.check, st.control, st.ctrlRes),
 				})
 				continue
 			}

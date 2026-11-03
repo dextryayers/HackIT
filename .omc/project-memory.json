@@ -112,6 +112,19 @@
       ]
     }
   },
-  "hotPaths": [],
+  "hotPaths": [
+    {
+      "path": "hackit/agent/go/native/ssti.go",
+      "accessCount": 1,
+      "lastAccessed": 1793667472626,
+      "type": "file"
+    },
+    {
+      "path": "hackit/agent/dashboard.py",
+      "accessCount": 1,
+      "lastAccessed": 1793667557116,
+      "type": "file"
+    }
+  ],
   "userDirectives": []
 }
