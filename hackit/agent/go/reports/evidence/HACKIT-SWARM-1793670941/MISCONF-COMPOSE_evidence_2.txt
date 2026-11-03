@@ -1,0 +1,7 @@
+VULNERABILITY ID: MISCONF-COMPOSE
+NAME: Docker Compose Manifest Exposed
+SEVERITY: Medium
+CVSS: 5.3
+TIMESTAMP: 2026-11-03T08:56:06+07:00
+EVIDENCE:
+HTTP 200 — docker-compose manifest — body: "services:\n  web:\n    image: nginx:1.25"

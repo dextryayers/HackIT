@@ -90,108 +90,115 @@ func endpointPort(endpoint string) int {
 	return 80
 }
 
+// endpointRule maps a fuzzer path kind to the finding it produces once the
+// body carries that kind's unmistakable signature.  Sharing the signature
+// function keeps enumeration and verification from disagreeing about what
+// counts as evidence.
+type endpointRule struct {
+	id, name, severity string
+	cvss               float64
+	description        string // fmt: endpoint, status
+	remediation        string
+	category           string
+}
+
+var endpointRules = map[string]endpointRule{
+	"env":         {"MISCONF-001", "Exposed Environment File (.env)", "Critical", 9.8, "Live .env file with secrets served at %q (HTTP %d)", "Block dotfiles at the edge and rotate every secret in the file.", "misconfiguration"},
+	"wpconfig":    {"MISCONF-WPCONFIG", "WordPress Config Backup Exposed", "Critical", 9.8, "wp-config backup with DB credentials served at %q (HTTP %d)", "Delete the backup, block dotfile/bak suffixes, and rotate DB and auth keys.", "credential-exposure"},
+	"git":         {"MISCONF-002", "Exposed Git Repository", "High", 7.5, "Live .git/config served at %q (HTTP %d): full repo history downloadable", "Deny /.git at the edge and purge secrets from git history.", "misconfiguration"},
+	"phpinfo":     {"MISCONF-PHPINFO", "PHPInfo Information Disclosure", "High", 7.0, "Live phpinfo() dump at %q (HTTP %d) leaks versions, paths, env", "Delete phpinfo files from production.", "misconfiguration"},
+	"apache":      {"MISCONF-SERVER-STATUS", "Apache server-status Exposed", "Medium", 5.3, "Live mod_status at %q (HTTP %d) leaks workers, vhosts, request paths", "Require local + auth for /server-status.", "misconfiguration"},
+	"actuator":    {"MISCONF-ACTUATOR", "Spring Boot Actuator Exposed", "High", 7.5, "Live actuator endpoint at %q (HTTP %d)", "Disable actuators or gate behind management port + auth.", "misconfiguration"},
+	"swagger":     {"MISCONF-SWAGGER", "API Specification Exposed", "Medium", 5.0, "Live API spec at %q (HTTP %d) enumerates every route", "Gate API docs behind auth in production.", "misconfiguration"},
+	"graphql":     {"MISCONF-GRAPHQL", "GraphQL Endpoint Exposed", "Medium", 5.0, "GraphQL endpoint at %q answers a typed query (HTTP %d)", "Disable introspection in production; enforce query depth/cost limits.", "misconfiguration"},
+	"ssh-key":     {"MISCONF-SSH-KEY", "Private SSH Key Exposed", "Critical", 9.8, "Private key material downloadable at %q (HTTP %d)", "Remove the key from the web root and rotate it immediately.", "credential-exposure"},
+	"aws":         {"MISCONF-AWS-CREDS", "AWS Credentials File Exposed", "Critical", 9.8, "AWS access keys served at %q (HTTP %d)", "Revoke the keys, remove the file, and use instance roles.", "credential-exposure"},
+	"heapdump":    {"MISCONF-HEAPDUMP", "JVM Heap Dump Exposed", "High", 8.2, "Downloadable heap dump at %q (HTTP %d) may contain secrets", "Disable the heapdump actuator and block /actuator at the edge.", "information-disclosure"},
+	"htaccess":    {"MISCONF-HTACCESS", "Apache .htaccess Exposed", "Medium", 5.3, "Readable .htaccess at %q (HTTP %d) discloses rewrite/auth rules", "Deny dotfiles at the edge.", "information-disclosure"},
+	"webconfig":   {"MISCONF-WEBCONFIG", "IIS web.config Exposed", "Medium", 5.3, "Readable web.config at %q (HTTP %d) discloses app settings", "Deny web.config at the edge and rotate any connection strings.", "information-disclosure"},
+	"compose":     {"MISCONF-COMPOSE", "Docker Compose Manifest Exposed", "Medium", 5.3, "docker-compose manifest at %q (HTTP %d) maps the deployment", "Remove deployment manifests from the web root.", "information-disclosure"},
+	"dockerfile":  {"MISCONF-DOCKERFILE", "Dockerfile Exposed", "Medium", 5.3, "Dockerfile at %q (HTTP %d) reveals base images and build steps", "Remove build files from the web root.", "information-disclosure"},
+	"dsstore":     {"MISCONF-DSSTORE", ".DS_Store Exposed", "Low", 3.7, ".DS_Store at %q (HTTP %d) leaks directory filenames", "Block .DS_Store at the edge and stop deploying Finder metadata.", "information-disclosure"},
+	"sql":         {"MISCONF-SQL-DUMP", "SQL Dump Exposed", "High", 7.5, "Database dump at %q (HTTP %d) is downloadable", "Remove dumps from the web root and rotate the DB credentials they contain.", "information-disclosure"},
+	"zip":         {"MISCONF-BACKUP", "Backup Archive Exposed", "High", 7.5, "Backup archive at %q (HTTP %d) is downloadable", "Remove backups from the web root and rotate contained secrets.", "information-disclosure"},
+	"gzip":        {"MISCONF-BACKUP", "Backup Archive Exposed", "High", 7.5, "Backup archive at %q (HTTP %d) is downloadable", "Remove backups from the web root and rotate contained secrets.", "information-disclosure"},
+	"tar":         {"MISCONF-BACKUP", "Backup Archive Exposed", "High", 7.5, "Backup archive at %q (HTTP %d) is downloadable", "Remove backups from the web root and rotate contained secrets.", "information-disclosure"},
+	"svn-entries": {"MISCONF-SVN", "Subversion Metadata Exposed", "High", 7.5, "Subversion metadata at %q (HTTP %d) exposes source history", "Deny /.svn at the edge and migrate to git.", "misconfiguration"},
+	"svn-db":      {"MISCONF-SVN", "Subversion Metadata Exposed", "High", 7.5, "Subversion metadata at %q (HTTP %d) exposes source history", "Deny /.svn at the edge and migrate to git.", "misconfiguration"},
+}
+
+func headSnippet(body string, n int) string {
+	body = strings.TrimSpace(body)
+	if len(body) > n {
+		return body[:n] + "..."
+	}
+	return body
+}
+
 // VerifyExposedEndpoint re-probes an enumerated URL and only confirms when the
-// body carries the file's unmistakable signature. Returns nil on soft-404,
-// login wall, or generic page.
+// body carries the file's unmistakable signature — the same check the fuzzer
+// applied, run again against the live file. Returns nil on soft-404, login
+// wall, or a body that merely echoes the requested path.
 func VerifyExposedEndpoint(endpoint string) *VerifiedFinding {
-	client := verifyClient(10 * time.Second)
-	status, header, body := verifyGet(client, endpoint)
-	if status == 0 {
+	kind := fuzzKind(endpoint)
+	rule, ok := endpointRules[kind]
+	if !ok {
 		return nil
 	}
-	lower := strings.ToLower(endpoint)
-	ct := strings.ToLower(header.Get("Content-Type"))
-	lb := strings.ToLower(body)
-	port := endpointPort(endpoint)
-
-	switch {
-	case strings.HasSuffix(lower, "/.env"):
-		if status == 200 && (strings.Contains(lb, "db_password") || strings.Contains(lb, "database_url") ||
-			strings.Contains(lb, "app_key") || strings.Contains(lb, "secret")) {
-			return &VerifiedFinding{
-				ID: "MISCONF-001", Name: "Exposed Environment File (.env)",
-				Severity: "Critical", CVSS: 9.8, Port: port,
-				Description: fmt.Sprintf("Live .env file with secrets served at %s (HTTP %d)", endpoint, status),
-				Evidence:    fmt.Sprintf("HTTP %d, Content-Type %s, secrets marker: %q", status, ct, bodySnippet(body, "DB_")),
-				Remediation: "Block dotfiles at the edge and rotate every secret in the file.",
-				Category:    "misconfiguration",
-				Reproduce:   fmt.Sprintf("curl -s -D- %q | head -c 2000", endpoint),
-			}
-		}
-	case strings.HasSuffix(lower, "/.git/config"):
-		if status == 200 && strings.Contains(lb, "[core]") && strings.Contains(lb, "repositoryformatversion") {
-			return &VerifiedFinding{
-				ID: "MISCONF-002", Name: "Exposed Git Repository",
-				Severity: "High", CVSS: 7.5, Port: port,
-				Description: fmt.Sprintf("Live .git/config served at %s: full repo history downloadable", endpoint),
-				Evidence:    fmt.Sprintf("HTTP %d with [core] repositoryformatversion block: %q", status, bodySnippet(body, "[core]")),
-				Remediation: "Deny /.git at the edge and purge secrets from git history.",
-				Category:    "misconfiguration",
-				Reproduce:   fmt.Sprintf("curl -s %q", endpoint),
-			}
-		}
-	case strings.HasSuffix(lower, "/phpinfo.php") || strings.HasSuffix(lower, "/info.php"):
-		if status == 200 && strings.Contains(lb, "php version") && strings.Contains(lb, "configuration") {
-			return &VerifiedFinding{
-				ID: "MISCONF-PHPINFO", Name: "PHPInfo Information Disclosure",
-				Severity: "High", CVSS: 7.0, Port: port,
-				Description: fmt.Sprintf("Live phpinfo() dump at %s leaks versions, paths, env", endpoint),
-				Evidence:    fmt.Sprintf("HTTP %d with PHP Version table: %q", status, bodySnippet(body, "PHP Version")),
-				Remediation: "Delete phpinfo files from production.",
-				Category:    "misconfiguration",
-				Reproduce:   fmt.Sprintf("curl -s %q | grep -i -m2 'PHP Version'", endpoint),
-			}
-		}
-	case strings.HasSuffix(lower, "/server-status"):
-		if status == 200 && strings.Contains(lb, "apache status") {
-			return &VerifiedFinding{
-				ID: "MISCONF-SERVER-STATUS", Name: "Apache server-status Exposed",
-				Severity: "Medium", CVSS: 5.3, Port: port,
-				Description: fmt.Sprintf("Live mod_status at %s leaks workers, vhosts, request paths", endpoint),
-				Evidence:    fmt.Sprintf("HTTP %d Apache Status page: %q", status, bodySnippet(body, "Apache Status")),
-				Remediation: "Require local + auth for /server-status.",
-				Category:    "misconfiguration",
-				Reproduce:   fmt.Sprintf("curl -s %q | head -c 1000", endpoint),
-			}
-		}
-	case strings.Contains(lower, "actuator"):
-		if status == 200 && (strings.Contains(lb, "\"status\"") || strings.Contains(lb, "_links")) {
-			return &VerifiedFinding{
-				ID: "MISCONF-ACTUATOR", Name: "Spring Boot Actuator Exposed",
-				Severity: "High", CVSS: 7.5, Port: port,
-				Description: fmt.Sprintf("Live actuator endpoint at %s (HTTP %d)", endpoint, status),
-				Evidence:    fmt.Sprintf("HTTP %d actuator JSON: %q", status, bodySnippet(body, "status")),
-				Remediation: "Disable actuators or gate behind management port + auth.",
-				Category:    "misconfiguration",
-				Reproduce:   fmt.Sprintf("curl -s %q", endpoint),
-			}
-		}
-	case strings.Contains(lower, "swagger") || strings.Contains(lower, "api-docs") || strings.Contains(lower, "openapi"):
-		if status == 200 && (strings.Contains(lb, "\"swagger\"") || strings.Contains(lb, "\"openapi\"") || strings.Contains(lb, "\"paths\"")) {
-			return &VerifiedFinding{
-				ID: "MISCONF-SWAGGER", Name: "API Specification Exposed",
-				Severity: "Medium", CVSS: 5.0, Port: port,
-				Description: fmt.Sprintf("Live API spec at %s enumerates every route", endpoint),
-				Evidence:    fmt.Sprintf("HTTP %d OpenAPI/Swagger JSON: %q", status, bodySnippet(body, "paths")),
-				Remediation: "Gate API docs behind auth in production.",
-				Category:    "misconfiguration",
-				Reproduce:   fmt.Sprintf("curl -s %q | head -c 1000", endpoint),
-			}
-		}
-	case strings.Contains(lower, "graphql"):
-		if status < 500 && (strings.Contains(lb, "graphql") || strings.Contains(lb, "query")) {
-			return &VerifiedFinding{
-				ID: "MISCONF-GRAPHQL", Name: "GraphQL Endpoint Exposed",
-				Severity: "Medium", CVSS: 5.0, Port: port,
-				Description: fmt.Sprintf("GraphQL endpoint at %s (HTTP %d): introspection may be on", endpoint, status),
-				Evidence:    fmt.Sprintf("HTTP %d GraphQL surface: %q", status, bodySnippet(body, "graphql")),
-				Remediation: "Disable introspection in production; enforce query depth/cost limits.",
-				Category:    "misconfiguration",
-				Reproduce: fmt.Sprintf("curl -s -X POST %q -H 'Content-Type: application/json' -d '{\"query\":\"{__schema{queryType{name}}}\"}'", endpoint),
-			}
-		}
+	if kind == "graphql" {
+		return probeGraphQL(endpoint, rule)
 	}
-	return nil
+
+	client := verifyClient(10 * time.Second)
+	status, header, body := verifyGet(client, endpoint)
+	if status != 200 {
+		return nil
+	}
+	lower := strings.ToLower(body)
+	signature := fuzzSignature(kind, []byte(body), lower, strings.ToLower(header.Get("Content-Type")))
+	if signature == "" {
+		return nil
+	}
+	return &VerifiedFinding{
+		ID: rule.id, Name: rule.name, Severity: rule.severity, CVSS: rule.cvss,
+		Port:        endpointPort(endpoint),
+		Description: fmt.Sprintf(rule.description, endpoint, status),
+		Evidence:    fmt.Sprintf("HTTP %d — %s — body: %q", status, signature, headSnippet(body, 200)),
+		Remediation: rule.remediation, Category: rule.category,
+		Reproduce: fmt.Sprintf("curl -s -D- %q | head -c 2000", endpoint),
+	}
+}
+
+// probeGraphQL proves the endpoint parses GraphQL by asking it to resolve a
+// typed field.  The previous check accepted any page containing the word
+// "query", so soft-404 pages were reported as GraphQL surfaces.
+func probeGraphQL(endpoint string, rule endpointRule) *VerifiedFinding {
+	client := verifyClient(10 * time.Second)
+	query := `{"query":"{__typename}"}`
+	req, err := http.NewRequest("POST", endpoint, strings.NewReader(query))
+	if err != nil {
+		return nil
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64; rv:120.0) Gecko/20100101 Firefox/120.0")
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 32*1024))
+	lower := strings.ToLower(string(raw))
+	if !strings.Contains(lower, `"__typename"`) {
+		return nil
+	}
+	return &VerifiedFinding{
+		ID: rule.id, Name: rule.name, Severity: rule.severity, CVSS: rule.cvss,
+		Port:        endpointPort(endpoint),
+		Description: fmt.Sprintf(rule.description, endpoint, resp.StatusCode),
+		Evidence:    fmt.Sprintf("HTTP %d — query {__typename} resolved: %q", resp.StatusCode, headSnippet(string(raw), 200)),
+		Remediation: rule.remediation, Category: rule.category,
+		Reproduce: fmt.Sprintf("curl -s -X POST %q -H 'Content-Type: application/json' -d '%s'", endpoint, query),
+	}
 }
 
 // VerifyServiceBanner checks version-bearing banners against known-vulnerable

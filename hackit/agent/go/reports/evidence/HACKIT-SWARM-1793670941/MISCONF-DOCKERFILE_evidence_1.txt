@@ -1,0 +1,7 @@
+VULNERABILITY ID: MISCONF-DOCKERFILE
+NAME: Dockerfile Exposed
+SEVERITY: Medium
+CVSS: 5.3
+TIMESTAMP: 2026-11-03T08:56:06+07:00
+EVIDENCE:
+HTTP 200 — Dockerfile build recipe — body: "FROM node:20-alpine\nRUN npm ci --omit=dev\nCOPY . /app"

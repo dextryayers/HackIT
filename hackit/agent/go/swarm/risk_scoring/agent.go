@@ -15,16 +15,20 @@ type RiskScoringAgent struct {
 func NewRiskScoringAgent() *RiskScoringAgent {
 	return &RiskScoringAgent{
 		name: "Agent-9: Risk Scoring",
-		desc: "Calculates risk, CVSS vectors, and business priority for all discovered vulnerabilities.",
+		desc: "Calculates aggregate risk from the CVSS scores attached to verified findings.",
 	}
 }
 
 func (r *RiskScoringAgent) Name() string        { return r.name }
-func (r *RiskScoringAgent) Description() string  { return r.desc }
+func (r *RiskScoringAgent) Description() string { return r.desc }
 
+// Execute aggregates the CVSS scores already assigned by the verifier.  It no
+// longer force-upgrades specific IDs: the previous version pushed MISCONF-002
+// from the verifier's High 7.5 to Critical 9.0 here, so a report contradicted
+// the probe that produced the evidence.
 func (r *RiskScoringAgent) Execute(state *core.SwarmState) error {
 	state.Section("RISK SCORING PHASE")
-	state.Log(r.Name(), "START", "Starting Risk and CVSS Scoring Matrix...")
+	state.Log(r.Name(), "START", "Starting Risk Scoring Matrix...")
 
 	state.Mu.Lock()
 	vulns := state.Vulns
@@ -38,41 +42,23 @@ func (r *RiskScoringAgent) Execute(state *core.SwarmState) error {
 	start := time.Now()
 	state.StartSpinner(fmt.Sprintf("%sScoring %d vulnerabilities%s", core.Yellow, len(vulns), core.Reset))
 
-	type score struct {
-		severity  string
-		min, max  float64
-	}
-
-	scores := map[string]score{
-		"Critical": {"Critical", 9.0, 10.0},
-		"High":     {"High", 7.0, 8.9},
-		"Medium":   {"Medium", 4.0, 6.9},
-		"Low":      {"Low", 0.1, 3.9},
-		"Info":     {"Info", 0.0, 0.0},
-	}
-
-	state.Mu.Lock()
 	riskScore := 0.0
-	for i := range state.Vulns {
-		v := &state.Vulns[i]
-		s, ok := scores[v.Severity]
-		if !ok {
-			s = scores["Medium"]
-		}
+	unscored := 0
+	for _, v := range vulns {
 		if v.CVSS == 0 {
-			v.CVSS = s.min + (s.max-s.min)*0.5
-		}
-		if v.ID == "MISCONF-001" || v.ID == "MISCONF-002" {
-			if v.CVSS < 9.0 {
-				v.CVSS = 9.0
-				v.Severity = "Critical"
-			}
+			// Verified findings always carry a score; anything unscored is a
+			// lead that leaked in, so exclude it from the aggregate.
+			unscored++
+			continue
 		}
 		riskScore += v.CVSS
 	}
-	state.Mu.Unlock()
 
-	avgRisk := riskScore / float64(len(vulns))
+	scoredCount := len(vulns) - unscored
+	avgRisk := 0.0
+	if scoredCount > 0 {
+		avgRisk = riskScore / float64(scoredCount)
+	}
 	riskLevel := "Low"
 	if avgRisk >= 7.0 {
 		riskLevel = "High"
@@ -83,6 +69,6 @@ func (r *RiskScoringAgent) Execute(state *core.SwarmState) error {
 
 	elapsed := time.Since(start).Round(time.Millisecond)
 	state.LogOk(r.Name(), "RESULT", fmt.Sprintf("Scored %d vulns | Avg CVSS: %.1f | Risk: %s | Total: %.1f | Duration: %s",
-		len(vulns), avgRisk, riskLevel, riskScore, elapsed))
+		scoredCount, avgRisk, riskLevel, riskScore, elapsed))
 	return nil
 }

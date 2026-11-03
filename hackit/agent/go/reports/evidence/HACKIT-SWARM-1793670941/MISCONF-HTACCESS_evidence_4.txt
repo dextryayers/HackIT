@@ -1,0 +1,7 @@
+VULNERABILITY ID: MISCONF-HTACCESS
+NAME: Apache .htaccess Exposed
+SEVERITY: Medium
+CVSS: 5.3
+TIMESTAMP: 2026-11-03T08:56:06+07:00
+EVIDENCE:
+HTTP 200 — Apache .htaccess directives — body: "RewriteEngine On"

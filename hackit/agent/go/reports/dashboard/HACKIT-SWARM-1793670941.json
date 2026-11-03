@@ -1,0 +1,1396 @@
+{
+  "session_id": "HACKIT-SWARM-1793670941",
+  "start_time": "2026-11-03T08:55:41.473738681+07:00",
+  "target": {
+    "primary_domain": "127.0.0.1",
+    "ip_range": "127.0.0.1",
+    "scope_type": "aggressive",
+    "rules_of_engagement": [
+      "FULL_BRUTEFORCE_ALLOWED",
+      "HIGH_THREAD_CONCURRENCY",
+      "EXPLOITATION_ALLOWED",
+      "NO_DENIAL_OF_SERVICE",
+      "MAX_CONCURRENCY_1000",
+      "FULL_PORT_SCAN"
+    ],
+    "parsed_target": {
+      "raw": "http://127.0.0.1:18080",
+      "host": "127.0.0.1",
+      "kind": "local",
+      "is_private": true,
+      "is_url": true,
+      "scheme": "http",
+      "port": "18080",
+      "base_url": "http://127.0.0.1:18080",
+      "scan_seeds": [
+        "127.0.0.1"
+      ]
+    },
+    "local_target": true,
+    "target_kind": "local"
+  },
+  "recon_data": {
+    "subdomains": [
+      "127.0.0.1"
+    ],
+    "asn": "RFC1918/LOCAL (intranet)",
+    "cloud_infra": "Local network",
+    "emails": null,
+    "tech_stack": null
+  },
+  "discovered_services": [
+    {
+      "ip": "127.0.0.1",
+      "port": 3306,
+      "protocol": "tcp",
+      "banner": "h",
+      "tech": "mysql",
+      "hostname": ""
+    },
+    {
+      "ip": "127.0.0.1",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 200 OK",
+      "tech": "Apache/2.4.69 (Debian)",
+      "hostname": ""
+    },
+    {
+      "ip": "127.0.0.1",
+      "port": 11434,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 400 Bad Request",
+      "tech": "unknown",
+      "hostname": ""
+    },
+    {
+      "ip": "127.0.0.1",
+      "port": 18080,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "unknown",
+      "hostname": ""
+    },
+    {
+      "ip": "127.0.0.1",
+      "port": 40741,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 400 Bad Request",
+      "tech": "unknown",
+      "hostname": ""
+    },
+    {
+      "ip": "127.0.0.1",
+      "port": 1716,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "unknown",
+      "hostname": ""
+    },
+    {
+      "ip": "127.0.0.1",
+      "port": 631,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "unknown",
+      "hostname": ""
+    },
+    {
+      "ip": "127.0.0.1",
+      "port": 33737,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "unknown",
+      "hostname": ""
+    },
+    {
+      "ip": "127.0.0.1",
+      "port": 34475,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "unknown",
+      "hostname": ""
+    },
+    {
+      "ip": "127.0.0.1",
+      "port": 35725,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "unknown",
+      "hostname": ""
+    },
+    {
+      "ip": "127.0.0.1",
+      "port": 41097,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "unknown",
+      "hostname": ""
+    },
+    {
+      "ip": "127.0.0.1",
+      "port": 41811,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "unknown",
+      "hostname": ""
+    },
+    {
+      "ip": "127.0.0.1",
+      "port": 45679,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "unknown",
+      "hostname": ""
+    },
+    {
+      "ip": "127.0.0.1",
+      "port": 49374,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "unknown",
+      "hostname": ""
+    }
+  ],
+  "vulnerabilities": [
+    {
+      "id": "MISCONF-SERVER-STATUS",
+      "name": "Apache server-status Exposed",
+      "severity": "Medium",
+      "cvss": 5.3,
+      "port": 80,
+      "description": "Live mod_status at \"http://127.0.0.1:80/server-status\" (HTTP 200) leaks workers, vhosts, request paths",
+      "evidence": "HTTP 200 — Apache mod_status output — body: \"\u003c!DOCTYPE HTML PUBLIC \\\"-//W3C//DTD HTML 4.01//EN\\\" \\\"http://www.w3.org/TR/html4/strict.dtd\\\"\u003e\\n\u003chtml\u003e\u003chead\u003e\\n\u003ctitle\u003eApache Status\u003c/title\u003e\\n\u003c/head\u003e\u003cbody\u003e\\n\u003ch1\u003eApache Server Status for 127.0.0.1 (via 127.0.0.1...\"",
+      "remediation": "Require local + auth for /server-status.",
+      "category": "misconfiguration",
+      "reproduce": "curl -s -D- \"http://127.0.0.1:80/server-status\" | head -c 2000"
+    },
+    {
+      "id": "MISCONF-DOCKERFILE",
+      "name": "Dockerfile Exposed",
+      "severity": "Medium",
+      "cvss": 5.3,
+      "port": 18080,
+      "description": "Dockerfile at \"http://127.0.0.1:18080/Dockerfile\" (HTTP 200) reveals base images and build steps",
+      "evidence": "HTTP 200 — Dockerfile build recipe — body: \"FROM node:20-alpine\\nRUN npm ci --omit=dev\\nCOPY . /app\"",
+      "remediation": "Remove build files from the web root.",
+      "category": "information-disclosure",
+      "reproduce": "curl -s -D- \"http://127.0.0.1:18080/Dockerfile\" | head -c 2000"
+    },
+    {
+      "id": "MISCONF-COMPOSE",
+      "name": "Docker Compose Manifest Exposed",
+      "severity": "Medium",
+      "cvss": 5.3,
+      "port": 18080,
+      "description": "docker-compose manifest at \"http://127.0.0.1:18080/docker-compose.yml\" (HTTP 200) maps the deployment",
+      "evidence": "HTTP 200 — docker-compose manifest — body: \"services:\\n  web:\\n    image: nginx:1.25\"",
+      "remediation": "Remove deployment manifests from the web root.",
+      "category": "information-disclosure",
+      "reproduce": "curl -s -D- \"http://127.0.0.1:18080/docker-compose.yml\" | head -c 2000"
+    },
+    {
+      "id": "MISCONF-AWS-CREDS",
+      "name": "AWS Credentials File Exposed",
+      "severity": "Critical",
+      "cvss": 9.8,
+      "port": 18080,
+      "description": "AWS access keys served at \"http://127.0.0.1:18080/.aws/credentials\" (HTTP 200)",
+      "evidence": "HTTP 200 — AWS credentials file — body: \"[default]\\naws_access_key_id = AKIAEXAMPLE\\naws_secret_access_key = s3cr3t\"",
+      "remediation": "Revoke the keys, remove the file, and use instance roles.",
+      "category": "credential-exposure",
+      "reproduce": "curl -s -D- \"http://127.0.0.1:18080/.aws/credentials\" | head -c 2000"
+    },
+    {
+      "id": "MISCONF-HTACCESS",
+      "name": "Apache .htaccess Exposed",
+      "severity": "Medium",
+      "cvss": 5.3,
+      "port": 18080,
+      "description": "Readable .htaccess at \"http://127.0.0.1:18080/.htaccess\" (HTTP 200) discloses rewrite/auth rules",
+      "evidence": "HTTP 200 — Apache .htaccess directives — body: \"RewriteEngine On\"",
+      "remediation": "Deny dotfiles at the edge.",
+      "category": "information-disclosure",
+      "reproduce": "curl -s -D- \"http://127.0.0.1:18080/.htaccess\" | head -c 2000"
+    },
+    {
+      "id": "MISCONF-001",
+      "name": "Exposed Environment File (.env)",
+      "severity": "Critical",
+      "cvss": 9.8,
+      "port": 18080,
+      "description": "Live .env file with secrets served at \"http://127.0.0.1:18080/.env\" (HTTP 200)",
+      "evidence": "HTTP 200 — environment file with credential keys (password) — body: \"APP_ENV=production\\nDB_PASSWORD=hunter2\"",
+      "remediation": "Block dotfiles at the edge and rotate every secret in the file.",
+      "category": "misconfiguration",
+      "reproduce": "curl -s -D- \"http://127.0.0.1:18080/.env\" | head -c 2000"
+    },
+    {
+      "id": "MISCONF-SSH-KEY",
+      "name": "Private SSH Key Exposed",
+      "severity": "Critical",
+      "cvss": 9.8,
+      "port": 18080,
+      "description": "Private key material downloadable at \"http://127.0.0.1:18080/.ssh/id_rsa\" (HTTP 200)",
+      "evidence": "HTTP 200 — private SSH key material — body: \"-----BEGIN RSA PRIVATE KEY-----\\nMIIEowIBAAKCAQEA\\n-----END RSA PRIVATE KEY-----\"",
+      "remediation": "Remove the key from the web root and rotate it immediately.",
+      "category": "credential-exposure",
+      "reproduce": "curl -s -D- \"http://127.0.0.1:18080/.ssh/id_rsa\" | head -c 2000"
+    },
+    {
+      "id": "MISCONF-HEADERS",
+      "name": "Missing Security Headers",
+      "severity": "Low",
+      "cvss": 3.1,
+      "port": 18080,
+      "description": "7 security headers absent at http://127.0.0.1:18080",
+      "evidence": "Missing: Strict-Transport-Security, Content-Security-Policy, X-Content-Type-Options, X-Frame-Options, X-XSS-Protection, Referrer-Policy, Permissions-Policy",
+      "remediation": "Set HSTS, CSP, X-Content-Type-Options and frame-ancestors.",
+      "category": "misconfiguration",
+      "reproduce": "curl -s -D- \"http://127.0.0.1:18080\" | head -30"
+    },
+    {
+      "id": "MISCONF-HEADERS",
+      "name": "Missing Security Headers",
+      "severity": "Low",
+      "cvss": 3.1,
+      "port": 80,
+      "description": "7 security headers absent at http://127.0.0.1:80",
+      "evidence": "Missing: Referrer-Policy, Permissions-Policy, Strict-Transport-Security, Content-Security-Policy, X-Content-Type-Options, X-Frame-Options, X-XSS-Protection",
+      "remediation": "Set HSTS, CSP, X-Content-Type-Options and frame-ancestors.",
+      "category": "misconfiguration",
+      "reproduce": "curl -s -D- \"http://127.0.0.1:80\" | head -30"
+    }
+  ],
+  "logs": [
+    {
+      "timestamp": "2026-11-03T08:55:41.473757026+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "BOOT",
+      "message": "Swarm initialized. Beginning DAG execution pipeline.",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:55:41.473766133+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "INVOKE",
+      "message": "Waking up Agent-28: MCP and Tool Orchestration...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:55:41.473771453+07:00",
+      "agent": "Agent-28: MCP and Tool Orchestration",
+      "action": "START",
+      "message": "Spinning up external tool orchestration via MCP...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:55:41.554713364+07:00",
+      "agent": "Agent-28: MCP and Tool Orchestration",
+      "action": "MISSING",
+      "message": "Katana not in PATH",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:55:41.554801028+07:00",
+      "agent": "Agent-28: MCP and Tool Orchestration",
+      "action": "MISSING",
+      "message": "Nuclei not in PATH",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:55:41.554854017+07:00",
+      "agent": "Agent-28: MCP and Tool Orchestration",
+      "action": "MISSING",
+      "message": "Amass not in PATH",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:55:41.5549039+07:00",
+      "agent": "Agent-28: MCP and Tool Orchestration",
+      "action": "MISSING",
+      "message": "ffuf not in PATH",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:55:41.554953793+07:00",
+      "agent": "Agent-28: MCP and Tool Orchestration",
+      "action": "MISSING",
+      "message": "gospider not in PATH",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:55:41.555001071+07:00",
+      "agent": "Agent-28: MCP and Tool Orchestration",
+      "action": "FOUND",
+      "message": "Nmap at /usr/bin/nmap",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:55:58.136350088+07:00",
+      "agent": "Agent-28: MCP and Tool Orchestration",
+      "action": "Nmap",
+      "message": "Nmap fast scan complete",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:55:58.136838058+07:00",
+      "agent": "Agent-28: MCP and Tool Orchestration",
+      "action": "RESULT",
+      "message": "Found 1/6 tools, executed 1 successfully in 16.663s",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:55:58.137071684+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "DONE",
+      "message": "Agent-28: MCP and Tool Orchestration completed successfully",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:55:58.140501384+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "INVOKE",
+      "message": "Waking up Agent-20: Evasion and Stealth...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:55:58.140522112+07:00",
+      "agent": "Agent-20: Evasion and Stealth",
+      "action": "START",
+      "message": "Deploying stealth and evasion monitors...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:55:58.221507776+07:00",
+      "agent": "Agent-20: Evasion and Stealth",
+      "action": "CONFIG",
+      "message": "Stealth profile active: 0 rules, UA=Mozilla/5.0 (Windows NT 10.0; Win64; x64...",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:55:58.221517464+07:00",
+      "agent": "Agent-20: Evasion and Stealth",
+      "action": "JITTER",
+      "message": "Request jitter: 1584",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:55:58.221524808+07:00",
+      "agent": "Agent-20: Evasion and Stealth",
+      "action": "COMPLETE",
+      "message": "Evasion engine ready in 81ms. Threat footprint minimized.",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:55:58.221528394+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "DONE",
+      "message": "Agent-20: Evasion and Stealth completed successfully",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:55:58.221993793+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "INVOKE",
+      "message": "Waking up Agent-1: Planning...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:55:58.221999804+07:00",
+      "agent": "Agent-1: Planning",
+      "action": "INIT",
+      "message": "Initializing Planning Phase...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:55:58.222025342+07:00",
+      "agent": "Agent-1: Planning",
+      "action": "RESOLVED",
+      "message": "127.0.0.1 classified as local (direct IP/local, no DNS needed)",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:55:58.222029489+07:00",
+      "agent": "Agent-1: Planning",
+      "action": "SCOPE",
+      "message": "Local/intranet target: skipping public-OSINT assumptions, preferring direct techniques",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:55:58.222033216+07:00",
+      "agent": "Agent-1: Planning",
+      "action": "ANALYSIS",
+      "message": "Analyzing target '127.0.0.1' with mode 'aggressive'",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:55:58.222036302+07:00",
+      "agent": "Agent-1: Planning",
+      "action": "RULE_SET",
+      "message": "Aggressive mode. Maximum concurrency and exploitation.",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:55:58.222039107+07:00",
+      "agent": "Agent-1: Planning",
+      "action": "PLAN",
+      "message": "Attack plan ready for 127.0.0.1 [aggressive]",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:55:58.222042073+07:00",
+      "agent": "Agent-1: Planning",
+      "action": "COMPLETE",
+      "message": "Planning finalized in 16.748s. Proceeding to Agent-2: Reconnaissance.",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:55:58.222045369+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "DONE",
+      "message": "Agent-1: Planning completed successfully",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:55:58.222400422+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "INVOKE",
+      "message": "Waking up Agent-2: Reconnaissance...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:55:58.222407515+07:00",
+      "agent": "Agent-2: Reconnaissance",
+      "action": "START",
+      "message": "Commencing reconnaissance on 127.0.0.1 [local]",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:55:58.222411632+07:00",
+      "agent": "Agent-2: Reconnaissance",
+      "action": "DIRECT",
+      "message": "local target: probing host directly, no subdomain OSINT",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:55:58.22241546+07:00",
+      "agent": "Agent-2: Reconnaissance",
+      "action": "COMPLETE",
+      "message": "Reconnaissance complete: 1 direct seeds, infra=Local network",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:55:58.222418405+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "DONE",
+      "message": "Agent-2: Reconnaissance completed successfully",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:55:58.22270491+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "INVOKE",
+      "message": "Waking up Agent-3: Discovery...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:55:58.222709849+07:00",
+      "agent": "Agent-3: Discovery",
+      "action": "START",
+      "message": "Commencing active surface discovery...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:55:58.222718365+07:00",
+      "agent": "Agent-3: Discovery",
+      "action": "MODE",
+      "message": "Full port scan 1-65535, 1000 threads",
+      "level": "warn"
+    },
+    {
+      "timestamp": "2026-11-03T08:55:59.341738067+07:00",
+      "agent": "Agent-3: Discovery",
+      "action": "RESULT",
+      "message": "Mapped 14 open services across 1 targets in 1.118s",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:55:59.341745311+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "DONE",
+      "message": "Agent-3: Discovery completed successfully",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:55:59.342187807+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "INVOKE",
+      "message": "Waking up Agent-4: Fingerprint...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:55:59.342194058+07:00",
+      "agent": "Agent-4: Fingerprint",
+      "action": "START",
+      "message": "Initiating tech-stack fingerprinting...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:55:59.351486656+07:00",
+      "agent": "Agent-4: Fingerprint",
+      "action": "RESULT",
+      "message": "Fingerprinted 14 services in 9ms | 0 WAFs, 0 CMS, 0 version advisories recorded as leads",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:55:59.351492708+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "DONE",
+      "message": "Agent-4: Fingerprint completed successfully",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:55:59.351958497+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "INVOKE",
+      "message": "Waking up Agent-5: Enumeration...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:55:59.351972493+07:00",
+      "agent": "Agent-5: Enumeration",
+      "action": "START",
+      "message": "Starting Deep Directory and API Enumeration...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:00.585295876+07:00",
+      "agent": "Agent-5: Enumeration",
+      "action": "RESULT",
+      "message": "Fuzzer found 8 endpoints in 1.233s | 403: 1 | 200: 7",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:00.585301576+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "DONE",
+      "message": "Agent-5: Enumeration completed successfully",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:00.586956655+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "INVOKE",
+      "message": "Waking up Agent-6: Vulnerability Analysis...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:00.586969228+07:00",
+      "agent": "Agent-6: Vulnerability Analysis",
+      "action": "START",
+      "message": "Commencing verified vulnerability analysis (no claim without live evidence)...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:00.588393996+07:00",
+      "agent": "Agent-6: Vulnerability Analysis",
+      "action": "CONFIRMED",
+      "message": "[Medium] Apache server-status Exposed @ http://127.0.0.1:80/server-status — curl -s -D- \"http://127.0.0.1:80/server-status\" | head -c 2000",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:00.589471597+07:00",
+      "agent": "Agent-6: Vulnerability Analysis",
+      "action": "CONFIRMED",
+      "message": "[Medium] Dockerfile Exposed @ http://127.0.0.1:18080/Dockerfile — curl -s -D- \"http://127.0.0.1:18080/Dockerfile\" | head -c 2000",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:00.589744326+07:00",
+      "agent": "Agent-6: Vulnerability Analysis",
+      "action": "CONFIRMED",
+      "message": "[Medium] Docker Compose Manifest Exposed @ http://127.0.0.1:18080/docker-compose.yml — curl -s -D- \"http://127.0.0.1:18080/docker-compose.yml\" | head -c 2000",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:00.589927828+07:00",
+      "agent": "Agent-6: Vulnerability Analysis",
+      "action": "CONFIRMED",
+      "message": "[Critical] AWS Credentials File Exposed @ http://127.0.0.1:18080/.aws/credentials — curl -s -D- \"http://127.0.0.1:18080/.aws/credentials\" | head -c 2000",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:00.590088057+07:00",
+      "agent": "Agent-6: Vulnerability Analysis",
+      "action": "CONFIRMED",
+      "message": "[Medium] Apache .htaccess Exposed @ http://127.0.0.1:18080/.htaccess — curl -s -D- \"http://127.0.0.1:18080/.htaccess\" | head -c 2000",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:00.590946709+07:00",
+      "agent": "Agent-6: Vulnerability Analysis",
+      "action": "CONFIRMED",
+      "message": "[Critical] Exposed Environment File (.env) @ http://127.0.0.1:18080/.env — curl -s -D- \"http://127.0.0.1:18080/.env\" | head -c 2000",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:00.591123319+07:00",
+      "agent": "Agent-6: Vulnerability Analysis",
+      "action": "CONFIRMED",
+      "message": "[Critical] Private SSH Key Exposed @ http://127.0.0.1:18080/.ssh/id_rsa — curl -s -D- \"http://127.0.0.1:18080/.ssh/id_rsa\" | head -c 2000",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.064743897+07:00",
+      "agent": "Agent-6: Vulnerability Analysis",
+      "action": "CONFIRMED",
+      "message": "[Low] Missing Security Headers @ Missing Security Headers — curl -s -D- \"http://127.0.0.1:18080\" | head -30",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.064763133+07:00",
+      "agent": "Agent-6: Vulnerability Analysis",
+      "action": "CONFIRMED",
+      "message": "[Low] Missing Security Headers @ Missing Security Headers — curl -s -D- \"http://127.0.0.1:80\" | head -30",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.064773603+07:00",
+      "agent": "Agent-6: Vulnerability Analysis",
+      "action": "RESULT",
+      "message": "Live-verified 9 vulns (3 critical/high) in 5.478s. Total: 9 (was 0). Unverified candidates are NOT reported.",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.06477768+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "DONE",
+      "message": "Agent-6: Vulnerability Analysis completed successfully",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.07043147+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "INVOKE",
+      "message": "Waking up Agent-23: Zero-Day Heuristic Analyzer...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.070445717+07:00",
+      "agent": "Agent-23: Zero-Day Heuristic Analyzer",
+      "action": "START",
+      "message": "Collecting banner observations for manual code review...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.07046893+07:00",
+      "agent": "Agent-23: Zero-Day Heuristic Analyzer",
+      "action": "RESULT",
+      "message": "Reviewed 1 web banners, 0 review leads in 0s (no findings emitted)",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.070472687+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "DONE",
+      "message": "Agent-23: Zero-Day Heuristic Analyzer completed successfully",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.071136285+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "INVOKE",
+      "message": "Waking up Agent-24: Web App Reasoning...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.071153327+07:00",
+      "agent": "Agent-24: Web App Reasoning",
+      "action": "START",
+      "message": "Mapping RBAC and IDOR hypotheses from route names...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.071179736+07:00",
+      "agent": "Agent-24: Web App Reasoning",
+      "action": "RESULT",
+      "message": "Analyzed 1 web apps (8 endpoints): 0 admin routes, 0 object-reference routes recorded as leads in 0s (unverified)",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.071183093+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "DONE",
+      "message": "Agent-24: Web App Reasoning completed successfully",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.072637376+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "INVOKE",
+      "message": "Waking up Agent-25: Business Logic Scenario Engine...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.072652635+07:00",
+      "agent": "Agent-25: Business Logic Scenario Engine",
+      "action": "START",
+      "message": "Mapping business-logic surface (leads only, no unproven findings)...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.072674185+07:00",
+      "agent": "Agent-25: Business Logic Scenario Engine",
+      "action": "RESULT",
+      "message": "0 business-logic leads recorded in 0s (hypotheses, not verified — require authenticated multi-step testing)",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.072677732+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "DONE",
+      "message": "Agent-25: Business Logic Scenario Engine completed successfully",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.073492101+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "INVOKE",
+      "message": "Waking up Agent-21: Exploitation Validation...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.073514914+07:00",
+      "agent": "Agent-21: Exploitation Validation",
+      "action": "START",
+      "message": "Initiating live exploitation validation (safe read-only probes)...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.074693683+07:00",
+      "agent": "Agent-21: Exploitation Validation",
+      "action": "CLOSED",
+      "message": "[CVE-2021-41773] Apache path traversal RCE (live) @ http://127.0.0.1:18080 — Traversal probe closed (HTTP 404, no passwd content)",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.076803941+07:00",
+      "agent": "Agent-21: Exploitation Validation",
+      "action": "CLOSED",
+      "message": "[CVE-2021-41773] Apache path traversal RCE (live) @ http://127.0.0.1:80 — Traversal probe closed (HTTP 400, no passwd content)",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.077694753+07:00",
+      "agent": "Agent-21: Exploitation Validation",
+      "action": "RESULT",
+      "message": "Live validation: 2 probes, 0 CONFIRMED exploitable, 2 doors closed in 4ms",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.077701375+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "DONE",
+      "message": "Agent-21: Exploitation Validation completed successfully",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.07853462+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "INVOKE",
+      "message": "Waking up Agent-7: Correlation...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.078555118+07:00",
+      "agent": "Agent-7: Correlation",
+      "action": "START",
+      "message": "Starting Threat Correlation Matrix...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.078560779+07:00",
+      "agent": "Agent-7: Correlation",
+      "action": "RESULT",
+      "message": "Correlated 9 verified vulns into 0 attack chains in 0s",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.078564215+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "DONE",
+      "message": "Agent-7: Correlation completed successfully",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.079287014+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "INVOKE",
+      "message": "Waking up Agent-26: Attack Chain Builder...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.079310558+07:00",
+      "agent": "Agent-26: Attack Chain Builder",
+      "action": "START",
+      "message": "Building vulnerability attack graphs...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.160328171+07:00",
+      "agent": "Agent-26: Attack Chain Builder",
+      "action": "RESULT",
+      "message": "Built 0 attack chains from 9 vulns on 127.0.0.1 in 81ms",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.160352536+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "DONE",
+      "message": "Agent-26: Attack Chain Builder completed successfully",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.162601703+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "INVOKE",
+      "message": "Waking up Agent-8: Evidence Collection...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.162630367+07:00",
+      "agent": "Agent-8: Evidence Collection",
+      "action": "START",
+      "message": "Starting Evidence Collection...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.164912014+07:00",
+      "agent": "Agent-8: Evidence Collection",
+      "action": "RESULT",
+      "message": "Saved 9 evidence artifacts to reports/evidence/HACKIT-SWARM-1793670941 in 2ms",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.164916933+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "DONE",
+      "message": "Agent-8: Evidence Collection completed successfully",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.165714631+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "INVOKE",
+      "message": "Waking up Agent-9: Risk Scoring...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.165721474+07:00",
+      "agent": "Agent-9: Risk Scoring",
+      "action": "START",
+      "message": "Starting Risk Scoring Matrix...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.16575139+07:00",
+      "agent": "Agent-9: Risk Scoring",
+      "action": "RESULT",
+      "message": "Scored 9 vulns | Avg CVSS: 6.3 | Risk: Medium | Total: 56.8 | Duration: 0s",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.165754275+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "DONE",
+      "message": "Agent-9: Risk Scoring completed successfully",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.166471975+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "INVOKE",
+      "message": "Waking up Agent-27: Bug Bounty Intelligence...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.166488385+07:00",
+      "agent": "Agent-27: Bug Bounty Intelligence",
+      "action": "START",
+      "message": "Ranking verified findings by CVSS for bounty triage...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.166516307+07:00",
+      "agent": "Agent-27: Bug Bounty Intelligence",
+      "action": "RESULT",
+      "message": "Ranked 9 verified findings by CVSS on 127.0.0.1",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.166523411+07:00",
+      "agent": "Agent-27: Bug Bounty Intelligence",
+      "action": "PRIORITY",
+      "message": "#1: [Critical] AWS Credentials File Exposed | CVSS 9.8",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.166528991+07:00",
+      "agent": "Agent-27: Bug Bounty Intelligence",
+      "action": "PRIORITY",
+      "message": "#2: [Critical] Exposed Environment File (.env) | CVSS 9.8",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.166534361+07:00",
+      "agent": "Agent-27: Bug Bounty Intelligence",
+      "action": "PRIORITY",
+      "message": "#3: [Critical] Private SSH Key Exposed | CVSS 9.8",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.166539741+07:00",
+      "agent": "Agent-27: Bug Bounty Intelligence",
+      "action": "PRIORITY",
+      "message": "#4: [Medium] Apache server-status Exposed | CVSS 5.3",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.166545121+07:00",
+      "agent": "Agent-27: Bug Bounty Intelligence",
+      "action": "PRIORITY",
+      "message": "#5: [Medium] Dockerfile Exposed | CVSS 5.3",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.166551192+07:00",
+      "agent": "Agent-27: Bug Bounty Intelligence",
+      "action": "COMPLETE",
+      "message": "Bounty triage complete in 0s",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.166553607+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "DONE",
+      "message": "Agent-27: Bug Bounty Intelligence completed successfully",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.167338592+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "INVOKE",
+      "message": "Waking up Agent-10: Report Generation...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.167345264+07:00",
+      "agent": "Agent-10: Report Generation",
+      "action": "START",
+      "message": "Starting Final Report Compilation...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.169213881+07:00",
+      "agent": "Agent-10: Report Generation",
+      "action": "RESULT",
+      "message": "Report generated at reports/final/HACKIT-SWARM-1793670941 in 2ms",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.1692188+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "DONE",
+      "message": "Agent-10: Report Generation completed successfully",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.169982595+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "INVOKE",
+      "message": "Waking up Agent-22: AI PoC Generator...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.169991341+07:00",
+      "agent": "Agent-22: AI PoC Generator",
+      "action": "START",
+      "message": "Compiling actionable Proof of Concept scripts...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.251915175+07:00",
+      "agent": "Agent-22: AI PoC Generator",
+      "action": "RESULT",
+      "message": "Generated 9 PoC scripts in reports/pocs/HACKIT-SWARM-1793670941 in 82ms",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.251921607+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "DONE",
+      "message": "Agent-22: AI PoC Generator completed successfully",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.252836514+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "INVOKE",
+      "message": "Waking up Agent-11: Memory...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.25284489+07:00",
+      "agent": "Agent-11: Memory",
+      "action": "START",
+      "message": "Activating Long-Term Memory (LTM)...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.253219038+07:00",
+      "agent": "Agent-11: Memory",
+      "action": "WARN",
+      "message": "SQLite unavailable: sql: unknown driver \"sqlite3\" (forgotten import?). Running in mock mode.",
+      "level": "warn"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.354351223+07:00",
+      "agent": "Agent-11: Memory",
+      "action": "MOCK",
+      "message": "Domain '127.0.0.1' has 1 subdomains, 14 services, 9 vulns",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.3543815+07:00",
+      "agent": "Agent-11: Memory",
+      "action": "COMPLETE",
+      "message": "Memory mock: 1 subdomains, 14 services",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.35438711+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "DONE",
+      "message": "Agent-11: Memory completed successfully",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.355839891+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "INVOKE",
+      "message": "Waking up Agent-12: Learning...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.355852535+07:00",
+      "agent": "Agent-12: Learning",
+      "action": "START",
+      "message": "Starting Machine Learning Pattern Matcher...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.436438913+07:00",
+      "agent": "Agent-12: Learning",
+      "action": "PATTERN",
+      "message": "Target 127.0.0.1: 9 vulns, CMS misconfig pattern: 1, DB exposure pattern: 0",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.436448321+07:00",
+      "agent": "Agent-12: Learning",
+      "action": "OPTIMIZE",
+      "message": "Adjusting swarm weights: prioritizing CMS fuzzing and DB discovery on future runs",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.436457197+07:00",
+      "agent": "Agent-12: Learning",
+      "action": "COMPLETE",
+      "message": "Learning complete in 81ms. 23 patterns analyzed.",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.436460974+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "DONE",
+      "message": "Agent-12: Learning completed successfully",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.437509711+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "INVOKE",
+      "message": "Waking up Agent-13: Knowledge Graph...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.437520541+07:00",
+      "agent": "Agent-13: Knowledge Graph",
+      "action": "START",
+      "message": "Constructing the Relational Knowledge Graph...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.488397925+07:00",
+      "agent": "Agent-13: Knowledge Graph",
+      "action": "RESULT",
+      "message": "Graph written to data/graphs/HACKIT-SWARM-1793670941.dot with 38 edges in 51ms",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.488404537+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "DONE",
+      "message": "Agent-13: Knowledge Graph completed successfully",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.489375158+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "INVOKE",
+      "message": "Waking up Agent-14: Threat Modeling...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.489385247+07:00",
+      "agent": "Agent-14: Threat Modeling",
+      "action": "START",
+      "message": "Initiating Threat Modeling Protocol (MITRE ATT\u0026CK Mapping)...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.489426624+07:00",
+      "agent": "Agent-14: Threat Modeling",
+      "action": "RESULT",
+      "message": "Mapped 9 vulns to 1 MITRE ATT\u0026CK paths in 0s",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.489430311+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "DONE",
+      "message": "Agent-14: Threat Modeling completed successfully",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.490359024+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "INVOKE",
+      "message": "Waking up Agent-15: Security Advisor...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.490368983+07:00",
+      "agent": "Agent-15: Security Advisor",
+      "action": "START",
+      "message": "Starting Security Advisory and Mitigation Matrix...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.490394971+07:00",
+      "agent": "Agent-15: Security Advisor",
+      "action": "RESULT",
+      "message": "Generated mitigations for 0 vulns in 0s",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.490398367+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "DONE",
+      "message": "Agent-15: Security Advisor completed successfully",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.49206127+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "INVOKE",
+      "message": "Waking up Agent-16: Monitoring...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.492087409+07:00",
+      "agent": "Agent-16: Monitoring",
+      "action": "START",
+      "message": "Spinning up Continuous Monitoring Daemon...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.592979977+07:00",
+      "agent": "Agent-16: Monitoring",
+      "action": "SCHEDULE",
+      "message": "127.0.0.1 registered: subdomains every 12h, ports every 24h, certs every 7d",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.592995166+07:00",
+      "agent": "Agent-16: Monitoring",
+      "action": "CHECK",
+      "message": "Baseline: 1 subdomains, 14 services monitored",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.59300312+07:00",
+      "agent": "Agent-16: Monitoring",
+      "action": "COMPLETE",
+      "message": "Monitoring configured in 101ms",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.593006677+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "DONE",
+      "message": "Agent-16: Monitoring completed successfully",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.594195776+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "INVOKE",
+      "message": "Waking up Agent-17: Dashboard...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.59421928+07:00",
+      "agent": "Agent-17: Dashboard",
+      "action": "START",
+      "message": "Spinning up Dashboard Telemetry Stream...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.624432996+07:00",
+      "agent": "Agent-17: Dashboard",
+      "action": "TELEMETRY",
+      "message": "{\"session\":\"HACKIT-SWARM-1793670941\",\"target\":\"127.0.0.1\",\"status\":\"active\",\"subdomains\":1,\"services\":14,\"vulns\":9,\"critical\":3,\"high\":0,\"medium\":4,\"low\":2,\"info\":0}",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.624444448+07:00",
+      "agent": "Agent-17: Dashboard",
+      "action": "COMPLETE",
+      "message": "Telemetry pushed in 30ms",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.624448685+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "DONE",
+      "message": "Agent-17: Dashboard completed successfully",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.625346441+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "INVOKE",
+      "message": "Waking up Agent-18: AI Log Analysis...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.625367881+07:00",
+      "agent": "Agent-18: AI Log Analysis",
+      "action": "START",
+      "message": "Starting Deep Log Anomaly Parser...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.676291871+07:00",
+      "agent": "Agent-18: AI Log Analysis",
+      "action": "ANOMALY",
+      "message": "High log volume (147 entries). Target may be triggering tarpit/honeypot.",
+      "level": "warn"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.67635018+07:00",
+      "agent": "Agent-18: AI Log Analysis",
+      "action": "CORRELATE",
+      "message": "Cross-referencing 9 vulns with execution logs",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.676369806+07:00",
+      "agent": "Agent-18: AI Log Analysis",
+      "action": "COMPLETE",
+      "message": "Log analysis finished in 51ms",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.676382901+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "DONE",
+      "message": "Agent-18: AI Log Analysis completed successfully",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.677903989+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "INVOKE",
+      "message": "Waking up Agent-19: Asset Intelligence...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.677916493+07:00",
+      "agent": "Agent-19: Asset Intelligence",
+      "action": "START",
+      "message": "Compiling Living Asset Inventory...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.680128861+07:00",
+      "agent": "Agent-19: Asset Intelligence",
+      "action": "RESULT",
+      "message": "Inventory with 24 assets written to data/inventory/127.0.0.1_inventory.json in 2ms",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T08:56:06.680134641+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "DONE",
+      "message": "Agent-19: Asset Intelligence completed successfully",
+      "level": "ok"
+    }
+  ],
+  "context_data": {
+    "Nmap_raw": "Starting Nmap 7.95 ( https://nmap.org ) at 2026-11-03 08:55 WIB\nNmap scan report for localhost (127.0.0.1)\nHost is up (0.0000080s latency).\nNot shown: 97 closed tcp ports (reset)\nPORT     STATE SERVICE VERSION\n80/tcp   open  http    Apache httpd 2.4.69 ((Debian))\n631/tcp  open  ipp     CUPS 2.4\n3306/tcp open  mysql?\n1 service unrecognized despite returning data. If you know the service/version, please submit the following fingerprint at https://nmap.org/cgi-bin/submit.cgi?new-service :\nSF-Port3306-TCP:V=7.95%I=7%D=11/3%Time=6AE93F23%P=x86_64-pc-linux-gnu%r(NU\nSF:LL,6C,\"h\\0\\0\\0\\n11\\.8\\.6-MariaDB-0\\+deb13u1\\x20from\\x20Debian\\0\\.\\x02\\0\nSF:\\0#r6W1\\.1M\\0\\xfe\\xff-\\x02\\0\\xff\\x81\\x15\\0\\0\\0\\0\\0\\0=\\0\\0\\0nb\\\"\\|m0CCbH\nSF:~e\\0mysql_native_password\\0\")%r(GenericLines,A4,\"h\\0\\0\\0\\n11\\.8\\.6-Mari\nSF:aDB-0\\+deb13u1\\x20from\\x20Debian\\0\\.\\x02\\0\\0#r6W1\\.1M\\0\\xfe\\xff-\\x02\\0\\\nSF:xff\\x81\\x15\\0\\0\\0\\0\\0\\0=\\0\\0\\0nb\\\"\\|m0CCbH~e\\0mysql_native_password\\x00\nSF:4\\0\\0\\x01\\xffj\\x04#HY000Proxy\\x20header\\x20is\\x20not\\x20accepted\\x20fro\nSF:m\\x20127\\.0\\.0\\.1\")%r(LDAPBindReq,6C,\"h\\0\\0\\0\\n11\\.8\\.6-MariaDB-0\\+deb1\nSF:3u1\\x20from\\x20Debian\\0\\?\\x02\\0\\0!~{p=!\\*O\\0\\xfe\\xff-\\x02\\0\\xff\\x81\\x15\nSF:\\0\\0\\0\\0\\0\\0=\\0\\0\\x003Le9\\*gIt13Mg\\0mysql_native_password\\0\")%r(afp,6C,\nSF:\"h\\0\\0\\0\\n11\\.8\\.6-MariaDB-0\\+deb13u1\\x20from\\x20Debian\\0I\\x02\\0\\0Al\\|K\nSF:BI\u0026#\\0\\xfe\\xff-\\x02\\0\\xff\\x81\\x15\\0\\0\\0\\0\\0\\0=\\0\\0\\0y\\]D\\|fgSL_\\|p=\\0my\nSF:sql_native_password\\0\");\n\nService detection performed. Please report any incorrect results at https://nmap.org/submit/ .\nNmap done: 1 IP address (1 host up) scanned in 16.53 seconds\n",
+    "bounty_scores": [
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+      {}
+    ],
+    "enumerated_endpoints": [
+      "http://127.0.0.1:80/.htaccess",
+      "http://127.0.0.1:80/server-status",
+      "http://127.0.0.1:18080/.aws/credentials",
+      "http://127.0.0.1:18080/.ssh/id_rsa",
+      "http://127.0.0.1:18080/docker-compose.yml",
+      "http://127.0.0.1:18080/.htaccess",
+      "http://127.0.0.1:18080/.env",
+      "http://127.0.0.1:18080/Dockerfile"
+    ],
+    "evasion_jitter_ms": "1584",
+    "evasion_user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0",
+    "exploit_attempts": [
+      {
+        "payload": "GET /cgi-bin/.%2e/%2e%2e/%2e%2e/%2e%2e/etc/passwd",
+        "success": false,
+        "technique": "Apache path traversal RCE (live)",
+        "vuln_id": "CVE-2021-41773"
+      },
+      {
+        "payload": "GET /cgi-bin/.%2e/%2e%2e/%2e%2e/%2e%2e/etc/passwd",
+        "success": false,
+        "technique": "Apache path traversal RCE (live)",
+        "vuln_id": "CVE-2021-41773"
+      }
+    ],
+    "threat_models": [
+      "[TA0006 Credential Access] -\u003e [T1552.001 Unsecured Credentials]"
+    ]
+  },
+  "Mu": {}
+}

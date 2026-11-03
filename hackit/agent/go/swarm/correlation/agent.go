@@ -2,7 +2,6 @@ package correlation
 
 import (
 	"fmt"
-	"strings"
 	"time"
 
 	"hackit_ai_engine/swarm/core"
@@ -21,15 +20,18 @@ func NewCorrelationAgent() *CorrelationAgent {
 }
 
 func (c *CorrelationAgent) Name() string        { return c.name }
-func (c *CorrelationAgent) Description() string  { return c.desc }
+func (c *CorrelationAgent) Description() string { return c.desc }
 
+// Execute builds chains only from verified finding IDs.  It never mutates a
+// finding: the previous version appended "(CRITICAL: Chained with CMS
+// exposure)" to descriptions, rewriting evidence that a probe had produced.
 func (c *CorrelationAgent) Execute(state *core.SwarmState) error {
 	state.Section("CORRELATION PHASE")
 	state.Log(c.Name(), "START", "Starting Threat Correlation Matrix...")
 
-	state.Mu.Lock()
+	state.Mu.RLock()
 	vulns := state.Vulns
-	state.Mu.Unlock()
+	state.Mu.RUnlock()
 
 	if len(vulns) == 0 {
 		state.LogWarn(c.Name(), "WARN", "No vulnerabilities to correlate.")
@@ -38,42 +40,27 @@ func (c *CorrelationAgent) Execute(state *core.SwarmState) error {
 
 	start := time.Now()
 	var attackChains []string
-	severityMap := map[string]bool{}
+	envLeak, gitLeak, dbExposed := false, false, false
 
 	for _, v := range vulns {
-		if v.ID == "MISCONF-001" {
-			severityMap["env_leak"] = true
-		}
-		if v.ID == "MISCONF-002" {
-			severityMap["git_leak"] = true
-		}
-		if strings.Contains(v.ID, "CVE-2023") || strings.Contains(v.ID, "MISCONF-WP") {
-			severityMap["cms"] = true
+		switch {
+		case v.ID == "MISCONF-001":
+			envLeak = true
+		case v.ID == "MISCONF-002":
+			gitLeak = true
 		}
 		if v.Port == 3306 || v.Port == 6379 || v.Port == 27017 {
-			severityMap["db_exposed"] = true
+			dbExposed = true
 		}
 	}
 
-	if severityMap["env_leak"] && severityMap["cms"] {
-		chain := "ATTACK CHAIN: [Exposed .env] -> DB Credentials -> [CMS Compromise] -> [RCE]"
+	if envLeak && dbExposed {
+		chain := "ATTACK CHAIN: [Exposed .env] -> DB Credentials -> [Database Exposed] -> [Data Exfil]"
 		attackChains = append(attackChains, chain)
 		state.LogWarn(c.Name(), "CHAIN", chain)
-		state.Mu.Lock()
-		for i := range state.Vulns {
-			if state.Vulns[i].ID == "MISCONF-001" {
-				state.Vulns[i].Description += " (CRITICAL: Chained with CMS exposure)"
-			}
-		}
-		state.Mu.Unlock()
 	}
-	if severityMap["git_leak"] && severityMap["db_exposed"] {
+	if gitLeak && dbExposed {
 		chain := "ATTACK CHAIN: [Exposed .git] -> Source Code -> [DB Credentials] -> [Data Exfil]"
-		attackChains = append(attackChains, chain)
-		state.LogWarn(c.Name(), "CHAIN", chain)
-	}
-	if severityMap["cms"] && severityMap["db_exposed"] {
-		chain := "ATTACK CHAIN: [CMS Vuln] -> [DB Exposed] -> [Direct Data Access]"
 		attackChains = append(attackChains, chain)
 		state.LogWarn(c.Name(), "CHAIN", chain)
 	}
@@ -85,6 +72,6 @@ func (c *CorrelationAgent) Execute(state *core.SwarmState) error {
 	state.Mu.Unlock()
 
 	elapsed := time.Since(start).Round(time.Millisecond)
-	state.LogOk(c.Name(), "RESULT", fmt.Sprintf("Correlated %d vulns into %d attack chains in %s", len(vulns), len(attackChains), elapsed))
+	state.LogOk(c.Name(), "RESULT", fmt.Sprintf("Correlated %d verified vulns into %d attack chains in %s", len(vulns), len(attackChains), elapsed))
 	return nil
 }

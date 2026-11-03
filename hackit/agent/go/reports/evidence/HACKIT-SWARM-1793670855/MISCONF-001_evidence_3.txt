@@ -1,0 +1,7 @@
+VULNERABILITY ID: MISCONF-001
+NAME: Exposed Environment File (.env)
+SEVERITY: Critical
+CVSS: 9.8
+TIMESTAMP: 2026-11-03T08:54:38+07:00
+EVIDENCE:
+HTTP 200 — environment file with credential keys (password) — body: "APP_ENV=production\nDB_PASSWORD=hunter2"

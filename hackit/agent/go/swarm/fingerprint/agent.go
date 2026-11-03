@@ -22,7 +22,7 @@ func NewFingerprintAgent() *FingerprintAgent {
 }
 
 func (f *FingerprintAgent) Name() string        { return f.name }
-func (f *FingerprintAgent) Description() string  { return f.desc }
+func (f *FingerprintAgent) Description() string { return f.desc }
 
 func (f *FingerprintAgent) Execute(state *core.SwarmState) error {
 	state.Section("FINGERPRINT PHASE")
@@ -39,7 +39,8 @@ func (f *FingerprintAgent) Execute(state *core.SwarmState) error {
 
 	start := time.Now()
 	var updatedServices []core.Service
-	wafCount, vulnCount, cmsCount := 0, 0, 0
+	wafCount, cmsCount := 0, 0
+	var advisories []string
 
 	state.StartSpinner(fmt.Sprintf("%sFingerprinting %d services%s", core.Yellow, len(services), core.Reset))
 
@@ -65,20 +66,12 @@ func (f *FingerprintAgent) Execute(state *core.SwarmState) error {
 				cmsCount++
 			}
 
-			if len(techRes.Vulnerabilities) > 0 {
-				state.Mu.Lock()
-				for _, v := range techRes.Vulnerabilities {
-					state.Vulns = append(state.Vulns, core.Vulnerability{
-						ID:          "TECH-VULN",
-						Name:        "Framework Vulnerability Detected",
-						Severity:    "High",
-						CVSS:        7.0,
-						Description: fmt.Sprintf("Found %s on %s:%d", v, svc.IP, svc.Port),
-						Evidence:    "Identified via Tech Mapping Regex",
-					})
-					vulnCount++
-				}
-				state.Mu.Unlock()
+			// MapTechnologies returns advisory strings ("Check for CVE-..."),
+			// not confirmed bugs.  Keep them as review leads: the previous
+			// version turned every advisory into a TECH-VULN High 7.0 finding
+			// with fabricated evidence ("Identified via Tech Mapping Regex").
+			for _, v := range techRes.Vulnerabilities {
+				advisories = append(advisories, fmt.Sprintf("%s:%d — %s", svc.IP, svc.Port, v))
 			}
 		}
 
@@ -90,10 +83,13 @@ func (f *FingerprintAgent) Execute(state *core.SwarmState) error {
 
 	state.Mu.Lock()
 	state.Discovered = updatedServices
+	if len(advisories) > 0 {
+		state.ContextData["tech_advisories"] = advisories
+	}
 	state.Mu.Unlock()
 
 	elapsed := time.Since(start).Round(time.Millisecond)
-	state.LogOk(f.Name(), "RESULT", fmt.Sprintf("Fingerprinted %d services in %s | %d WAFs, %d CMS, %d vulns found",
-		len(services), elapsed, wafCount, cmsCount, vulnCount))
+	state.LogOk(f.Name(), "RESULT", fmt.Sprintf("Fingerprinted %d services in %s | %d WAFs, %d CMS, %d version advisories recorded as leads",
+		len(services), elapsed, wafCount, cmsCount, len(advisories)))
 	return nil
 }

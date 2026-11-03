@@ -165,9 +165,9 @@ func ActiveScanTargets(targets []ScanTarget, subdomains []string, tlsTargets []H
 				continue
 			}
 			missing++
-			if len(headerEvidence) < 3 {
-				headerEvidence = append(headerEvidence, h.Header)
-			}
+			// Quote every missing header: the description states a count, so
+			// truncating the list here made the evidence contradict it.
+			headerEvidence = append(headerEvidence, h.Header)
 		}
 		if missing > 0 {
 			// Headers are a host-level property, not per-path.

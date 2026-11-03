@@ -29,13 +29,19 @@ type FuzzResult struct {
 // Generic admin/login pages are deliberately excluded: their 200 says nothing
 // without authentication-aware testing in a later phase.
 var sensitivePaths = []string{
-	"/.git/config", "/.git/HEAD", "/.env", "/.env.backup", "/.env.dev",
-	"/.env.local", "/wp-config.php.bak", "/wp-config.php.save",
-	"/config.php.bak", "/backup.zip", "/backup.tar.gz", "/backup.sql",
-	"/dump.sql", "/database.sql", "/db.sql", "/.svn/entries", "/.svn/wc.db",
-	"/server-status", "/phpinfo.php", "/info.php", "/swagger-ui.html",
-	"/v2/api-docs", "/openapi.json", "/graphql", "/actuator/env",
-	"/actuator/health",
+	"/.git/config", "/.git/HEAD",
+	"/.env", "/.env.backup", "/.env.dev", "/.env.local",
+	"/.env.production", "/.env.staging", "/.env.bak",
+	"/.aws/credentials", "/.ssh/id_rsa", "/.ssh/id_ed25519", "/id_rsa",
+	"/.htaccess", "/.DS_Store", "/Dockerfile", "/docker-compose.yml",
+	"/web.config", "/wp-config.php.bak", "/wp-config.php.save",
+	"/config.php.bak", "/backup.zip", "/backup.tar.gz", "/backup.tar",
+	"/backup.sql", "/dump.sql", "/database.sql", "/db.sql",
+	"/.svn/entries", "/.svn/wc.db",
+	"/server-status", "/phpinfo.php", "/info.php",
+	"/swagger-ui.html", "/swagger.json", "/v2/api-docs", "/v3/api-docs",
+	"/openapi.json", "/graphql",
+	"/actuator/env", "/actuator/health", "/actuator/heapdump", "/actuator/mappings",
 }
 
 type fuzzTarget struct {
@@ -44,30 +50,51 @@ type fuzzTarget struct {
 }
 
 func fuzzKind(path string) string {
+	lower := strings.ToLower(path)
 	switch {
-	case strings.Contains(path, ".env") || strings.Contains(path, "wp-config") || strings.Contains(path, "config.php"):
+	case strings.Contains(lower, "heapdump"):
+		return "heapdump"
+	case strings.Contains(lower, "wp-config"):
+		return "wpconfig"
+	case strings.Contains(lower, ".env") || strings.Contains(lower, "config.php"):
 		return "env"
-	case strings.Contains(path, ".git"):
+	case strings.Contains(lower, ".git"):
 		return "git"
-	case strings.Contains(path, ".svn/entries"):
+	case strings.Contains(lower, ".svn/entries"):
 		return "svn-entries"
-	case strings.Contains(path, ".svn"):
+	case strings.Contains(lower, ".svn"):
 		return "svn-db"
-	case strings.HasSuffix(path, ".sql"):
+	case strings.Contains(lower, ".aws"):
+		return "aws"
+	case strings.Contains(lower, "id_rsa") || strings.Contains(lower, "id_ed25519"):
+		return "ssh-key"
+	case strings.Contains(lower, ".htaccess"):
+		return "htaccess"
+	case strings.Contains(lower, ".ds_store"):
+		return "dsstore"
+	case strings.Contains(lower, "dockerfile"):
+		return "dockerfile"
+	case strings.Contains(lower, "docker-compose"):
+		return "compose"
+	case strings.Contains(lower, "web.config"):
+		return "webconfig"
+	case strings.HasSuffix(lower, ".sql"):
 		return "sql"
-	case strings.HasSuffix(path, ".zip"):
+	case strings.HasSuffix(lower, ".zip"):
 		return "zip"
-	case strings.HasSuffix(path, ".tar.gz"):
+	case strings.HasSuffix(lower, ".tar.gz"):
 		return "gzip"
-	case strings.HasSuffix(path, "phpinfo.php") || strings.HasSuffix(path, "info.php"):
+	case strings.HasSuffix(lower, ".tar"):
+		return "tar"
+	case strings.HasSuffix(lower, "phpinfo.php") || strings.HasSuffix(lower, "info.php"):
 		return "phpinfo"
-	case strings.Contains(path, "server-status"):
+	case strings.Contains(lower, "server-status"):
 		return "apache"
-	case strings.Contains(path, "swagger") || strings.Contains(path, "api-docs") || strings.Contains(path, "openapi"):
+	case strings.Contains(lower, "swagger") || strings.Contains(lower, "api-docs") || strings.Contains(lower, "openapi"):
 		return "swagger"
-	case strings.Contains(path, "graphql"):
+	case strings.Contains(lower, "graphql"):
 		return "graphql"
-	case strings.Contains(path, "actuator"):
+	case strings.Contains(lower, "actuator"):
 		return "actuator"
 	default:
 		return "generic"
@@ -276,14 +303,25 @@ func fuzzSignature(kind string, body []byte, lower, contentType string) string {
 		if strings.Contains(lower, "<html") || strings.Contains(lower, "<!doctype") {
 			return ""
 		}
-		for _, marker := range []string{"app_key=", "app_env=", "db_password=", "db_host=", "secret_key=", "aws_access_key", "api_key=", "mysql_password"} {
-			if strings.Contains(lower, marker) {
-				return "environment file content (" + marker + ")"
+		// Only files that actually carry credentials are Critical.  An env
+		// file with just APP_ENV=production is a config leak, not a 9.8.
+		secrets := []string{"password", "secret", "token", "credential", "access_key", "private_key", "database_url", "dsn"}
+		trimmed := strings.TrimSpace(lower)
+		hasKV := len(trimmed) > 8 && !strings.Contains(trimmed, "<") && strings.Count(trimmed, "=") >= 2
+		if hasKV {
+			for _, marker := range secrets {
+				if strings.Contains(trimmed, marker) {
+					return "environment file with credential keys (" + marker + ")"
+				}
 			}
 		}
-		trimmed := strings.TrimSpace(lower)
-		if len(trimmed) > 8 && !strings.Contains(trimmed, "<") && strings.Count(trimmed, "=") >= 2 {
-			return "environment-style KEY=VALUE content"
+	case "wpconfig":
+		if strings.Contains(lower, "<html") {
+			return ""
+		}
+		if strings.Contains(lower, "define(") &&
+			(strings.Contains(lower, "db_password") || strings.Contains(lower, "db_user") || strings.Contains(lower, "auth_key")) {
+			return "WordPress config with DB credentials"
 		}
 	case "sql":
 		for _, marker := range []string{"insert into", "create table", "mysql dump", "postgresql database dump", "sqlite format 3"} {
@@ -338,8 +376,50 @@ func fuzzSignature(kind string, body []byte, lower, contentType string) string {
 		if strings.Contains(lower, "\"propertysources\"") || strings.Contains(lower, "\"activeprofiles\"") {
 			return "Spring Boot actuator environment"
 		}
-		if strings.Contains(lower, "\"status\"") && strings.Contains(lower, "\"up\"") {
+		// Compact Spring health JSON only: a generic page mentioning "up"
+		// and "status" separately used to count as evidence.
+		if strings.Contains(lower, "\"status\":\"up\"") || strings.Contains(lower, "\"status\": \"up\"") {
 			return "Spring Boot actuator health"
+		}
+	case "ssh-key":
+		if strings.Contains(lower, "-----begin ") && strings.Contains(lower, "private key-----") {
+			return "private SSH key material"
+		}
+	case "aws":
+		if strings.Contains(lower, "aws_access_key_id") && strings.Contains(lower, "aws_secret_access_key") {
+			return "AWS credentials file"
+		}
+	case "htaccess":
+		if !strings.Contains(lower, "<html") &&
+			(strings.Contains(lower, "rewriteengine") || strings.Contains(lower, "order deny") ||
+				strings.Contains(lower, "options +followsymlinks")) {
+			return "Apache .htaccess directives"
+		}
+	case "dsstore":
+		if bytes.HasPrefix(body, []byte("\x00\x00\x00\x01Bud1")) {
+			return ".DS_Store metadata"
+		}
+	case "dockerfile":
+		trimmed := strings.TrimSpace(lower)
+		if strings.HasPrefix(trimmed, "from ") &&
+			(strings.Contains(trimmed, "\nrun ") || strings.Contains(trimmed, "\ncopy ") || strings.Contains(trimmed, "\nenv ")) {
+			return "Dockerfile build recipe"
+		}
+	case "compose":
+		if !strings.Contains(lower, "<html") && strings.Contains(lower, "services:") && strings.Contains(lower, "image:") {
+			return "docker-compose manifest"
+		}
+	case "webconfig":
+		if strings.Contains(lower, "<configuration") && strings.Contains(lower, "<system.web") {
+			return "IIS web.config"
+		}
+	case "tar":
+		if len(body) > 262 && string(body[257:262]) == "ustar" {
+			return "TAR archive signature"
+		}
+	case "heapdump":
+		if bytes.HasPrefix(body, []byte("JAVA PROFILE")) {
+			return "JVM heap dump (JAVA PROFILE)"
 		}
 	}
 	return ""

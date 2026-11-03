@@ -1,0 +1,7 @@
+VULNERABILITY ID: MISCONF-AWS-CREDS
+NAME: AWS Credentials File Exposed
+SEVERITY: Critical
+CVSS: 9.8
+TIMESTAMP: 2026-11-03T08:56:06+07:00
+EVIDENCE:
+HTTP 200 — AWS credentials file — body: "[default]\naws_access_key_id = AKIAEXAMPLE\naws_secret_access_key = s3cr3t"

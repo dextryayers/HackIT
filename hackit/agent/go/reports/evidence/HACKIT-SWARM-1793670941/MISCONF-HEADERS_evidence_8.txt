@@ -1,0 +1,7 @@
+VULNERABILITY ID: MISCONF-HEADERS
+NAME: Missing Security Headers
+SEVERITY: Low
+CVSS: 3.1
+TIMESTAMP: 2026-11-03T08:56:06+07:00
+EVIDENCE:
+Missing: Referrer-Policy, Permissions-Policy, Strict-Transport-Security, Content-Security-Policy, X-Content-Type-Options, X-Frame-Options, X-XSS-Protection

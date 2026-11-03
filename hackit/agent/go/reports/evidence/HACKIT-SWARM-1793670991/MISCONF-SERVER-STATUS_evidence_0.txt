@@ -1,0 +1,7 @@
+VULNERABILITY ID: MISCONF-SERVER-STATUS
+NAME: Apache server-status Exposed
+SEVERITY: Medium
+CVSS: 5.3
+TIMESTAMP: 2026-11-03T08:56:57+07:00
+EVIDENCE:
+HTTP 200 — Apache mod_status output — body: "<!DOCTYPE HTML PUBLIC \"-//W3C//DTD HTML 4.01//EN\" \"http://www.w3.org/TR/html4/strict.dtd\">\n<html><head>\n<title>Apache Status</title>\n</head><body>\n<h1>Apache Server Status for 127.0.0.1 (via 127.0.0.1..."

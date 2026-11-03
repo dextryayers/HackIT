@@ -20,63 +20,53 @@ func NewSecurityAdvisorAgent() *SecurityAdvisorAgent {
 }
 
 func (s *SecurityAdvisorAgent) Name() string        { return s.name }
-func (s *SecurityAdvisorAgent) Description() string  { return s.desc }
+func (s *SecurityAdvisorAgent) Description() string { return s.desc }
+
+var mitigations = map[string]string{
+	"MISCONF-001":           "Restrict .env access: nginx 'location ~ /\\.env { deny all; }' or apache 'Files \".env\" { Require all denied }'. Immediately rotate all exposed credentials.",
+	"MISCONF-002":           "Remove .git from production. Add 'RedirectMatch 404 /\\.git' to web server config. Regenerate any secrets exposed in git history.",
+	"MISCONF-PHPINFO":       "Delete phpinfo.php immediately. Add 'location ~ \\.php$ { deny all; }' for unused PHP files.",
+	"MISCONF-ACTUATOR":      "Set 'management.endpoints.web.exposure.include=health' only. Add Spring Security. Block /actuator at reverse proxy.",
+	"MISCONF-SWAGGER":       "Disable Swagger UI in production. Set 'springdoc.api-docs.enabled=false' and 'springdoc.swagger-ui.enabled=false'.",
+	"MISCONF-GRAPHQL":       "Disable introspection in production and require authentication for the GraphQL endpoint.",
+	"MISCONF-SERVER-STATUS": "Disable mod_status, or restrict it to localhost: 'SetHandler server-status' inside a 'Require local' block.",
+	"MISCONF-FTP-ANON":      "Disable anonymous FTP. Use SFTP or SCP instead. If FTP is required, enforce TLS and strong passwords.",
+	"CVE-2021-41773":        "Upgrade Apache to >= 2.4.50. Add 'Require all denied' for CGI directories.",
+	"EOL-APACHE22":          "Upgrade Apache to a supported release (2.4.x current).",
+	"EOL-NGINX":             "Upgrade nginx to a supported stable release.",
+	"EOL-OPENSSH":           "Upgrade OpenSSH to a supported release and disable weak algorithms.",
+	"EOL-IIS":               "Upgrade IIS / Windows Server to a supported version and apply all security patches.",
+	"EOL-PHP":               "Upgrade PHP to a supported release; unsupported versions receive no security fixes.",
+}
 
 func (s *SecurityAdvisorAgent) Execute(state *core.SwarmState) error {
 	state.Section("SECURITY ADVISOR PHASE")
 	state.Log(s.Name(), "START", "Starting Security Advisory and Mitigation Matrix...")
 
-	state.Mu.Lock()
-	vulns := state.Vulns
-	state.Mu.Unlock()
+	state.Mu.RLock()
+	vulnCount := len(state.Vulns)
+	state.Mu.RUnlock()
 
-	if len(vulns) == 0 {
+	if vulnCount == 0 {
 		state.LogWarn(s.Name(), "WARN", "No vulnerabilities to advise on.")
 		return nil
 	}
 
 	start := time.Now()
-	state.StartSpinner(fmt.Sprintf("%sGenerating %d mitigation strategies%s", core.Yellow, len(vulns), core.Reset))
-
-	type recommendation struct {
-		id     string
-		mitigation string
-	}
-
-	recs := []recommendation{
-		{"MISCONF-001", "Restrict .env access: nginx 'location ~ /\\.env { deny all; }' or apache 'Files \".env\" { Require all denied }'. Immediately rotate all exposed credentials."},
-		{"MISCONF-002", "Remove .git from production. Add 'RedirectMatch 404 /\\.git' to web server config. Regenerate any secrets exposed in git history."},
-		{"MISCONF-WP-ADMIN", "Rename wp-admin, enforce IP whitelisting, implement 2FA, install WAF rules for login protection."},
-		{"MISCONF-PHPINFO", "Delete phpinfo.php immediately. Add 'location ~ \\.php$ { deny all; }' for unused PHP files."},
-		{"MISCONF-ACTUATOR", "Set 'management.endpoints.web.exposure.include=health' only. Add Spring Security. Block /actuator at reverse proxy."},
-		{"MISCONF-SWAGGER", "Disable Swagger UI in production. Set 'springdoc.api-docs.enabled=false' and 'springdoc.swagger-ui.enabled=false'."},
-		{"MISCONF-MYSQL", "Never expose MySQL to internet. Bind to 127.0.0.1. Use SSH tunnel or VPN for remote access."},
-		{"MISCONF-MONGO", "Enable MongoDB authentication, bind to localhost, enable TLS, audit unauthorized access."},
-		{"MISCONF-FTP", "Disable FTP. Use SFTP or SCP instead. If FTP required, enforce TLS and strong passwords."},
-		{"CVE-2023-XXXX", "Update WordPress core, themes, and plugins to latest versions. Disable XML-RPC if unused."},
-		{"CVE-2020-15778", "Upgrade OpenSSH to >= 8.3p1. Disable SCP in sshd_config: 'Subsystem sftp /usr/lib/ssh/sftp-server'."},
-		{"CVE-2021-41773", "Upgrade Apache to >= 2.4.50. Add 'Require all denied' for CGI directories."},
-		{"CVE-2021-23017", "Upgrade Nginx to >= 1.21.0. Disable resolver in server blocks unless absolutely needed."},
-		{"CVE-2021-31166", "Apply Microsoft security patch KB5003637. Disable HTTP/2 on IIS if not required."},
-		{"CVE-2022-0543", "Upgrade Redis to >= 6.2.7. Set 'rename-command FLUSHALL \"\"' and enable 'requirepass'."},
-		{"TECH-VULN", "Apply all vendor security patches. Enable automatic security updates where possible."},
-	}
-
-	recMap := map[string]string{}
-	for _, r := range recs {
-		recMap[r.id] = r.mitigation
-	}
+	state.StartSpinner(fmt.Sprintf("%sGenerating %d mitigation strategies%s", core.Yellow, vulnCount, core.Reset))
 
 	count := 0
 	state.Mu.Lock()
 	for i := range state.Vulns {
-		if m, ok := recMap[state.Vulns[i].ID]; ok {
-			state.Vulns[i].Description += "\n\nMITIGATION: " + m
-			count++
-		} else {
-			state.Vulns[i].Description += "\n\nMITIGATION: Apply vendor patches and restrict network access to the affected service."
-			count++
+		if state.Vulns[i].Remediation != "" {
+			continue
 		}
+		if m, ok := mitigations[state.Vulns[i].ID]; ok {
+			state.Vulns[i].Remediation = m
+		} else {
+			state.Vulns[i].Remediation = "Apply vendor patches and restrict network access to the affected service."
+		}
+		count++
 	}
 	state.Mu.Unlock()
 
