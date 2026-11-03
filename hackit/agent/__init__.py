@@ -1373,10 +1373,22 @@ def swarm(target, scope, dashboard):
         click.echo(_colored("  [*] No TTY — streaming engine output directly.", DIM))
 
     try:
-        subprocess.run(
+        result = subprocess.run(
             [engine_path, '--swarm', target, '--swarm-scope', scope],
             cwd=os.path.join(base_dir, 'go'),
+            capture_output=True,
+            text=True,
         )
+        if result.stdout:
+            click.echo(result.stdout, nl=False)
+        if result.stderr:
+            click.echo(result.stderr, nl=False, err=True)
+        if result.returncode != 0:
+            click.echo(_colored(
+                f"\n  [!] Swarm engine failed (exit {result.returncode}). "
+                f"See trace above for the failing agent.",
+                RED,
+            ))
     except KeyboardInterrupt:
         click.echo(_colored("\n  [!] Swarm terminated by user.", RED))
     except Exception as e:
@@ -1797,7 +1809,13 @@ def _dispatch_agent_action(name: str, rest: str) -> bool:
             prog_name=f"agent {command_name}",
             standalone_mode=False,
         )
-    except (click.exceptions.Exit, SystemExit):
+    except SystemExit as exc:
+        # Click raises SystemExit(0) on clean exit; a non-zero code means the
+        # subprocess died (e.g. the swarm engine hit exit 2). Silently
+        # swallowing it produced the bare "[!] swarm failed:" line.
+        if exc.code not in (0, None):
+            click.echo(_colored(f"  [!] {command_name} exited with code {exc.code}", RED))
+    except click.exceptions.Exit:
         pass
     except click.ClickException as exc:
         exc.show()

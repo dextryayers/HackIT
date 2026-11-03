@@ -55,10 +55,15 @@ type SwarmState struct {
 }
 
 type TargetScope struct {
-	PrimaryDomain string   `json:"primary_domain"`
-	IPRange       string   `json:"ip_range"`
-	ScopeType     string   `json:"scope_type"`
-	Rules         []string `json:"rules_of_engagement"`
+	PrimaryDomain string       `json:"primary_domain"`
+	IPRange       string       `json:"ip_range"`
+	ScopeType     string       `json:"scope_type"`
+	Rules         []string     `json:"rules_of_engagement"`
+	Parsed        ParsedTarget `json:"parsed_target"`
+	// LocalTarget marks RFC1918/loopback/intranet so agents pick
+	// intranet-safe techniques instead of public-OSINT assumptions.
+	LocalTarget bool   `json:"local_target"`
+	TargetKind  string `json:"target_kind"`
 }
 
 type ReconIntelligence struct {
@@ -161,10 +166,21 @@ func containsStr(s, substr string) bool {
 }
 
 func InitSwarm(domain string, scopeType string) *SwarmState {
+	parsed := ParseTarget(domain)
+	primary := parsed.DisplayHost()
+	if primary == "" {
+		primary = domain
+	}
 	s := &SwarmState{
-		SessionID:   fmt.Sprintf("HACKIT-SWARM-%d", time.Now().Unix()),
-		StartTime:   time.Now(),
-		Target:      TargetScope{PrimaryDomain: domain, ScopeType: scopeType},
+		SessionID: fmt.Sprintf("HACKIT-SWARM-%d", time.Now().Unix()),
+		StartTime: time.Now(),
+		Target: TargetScope{
+			PrimaryDomain: primary,
+			ScopeType:     scopeType,
+			Parsed:        parsed,
+			LocalTarget:   parsed.IsPrivate || parsed.Kind == TargetLocal,
+			TargetKind:    string(parsed.Kind),
+		},
 		ContextData: make(map[string]interface{}),
 		spinnerDone: make(chan struct{}),
 	}

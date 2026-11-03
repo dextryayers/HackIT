@@ -86,8 +86,18 @@ func (r *ReportGenerationAgent) Execute(state *core.SwarmState) error {
 
 	if chains, ok := state.ContextData["attack_chains"]; ok {
 		md += fmt.Sprintf("### Attack Chains\n\n")
-		for _, chain := range chains.([]string) {
-			md += fmt.Sprintf("- %s\n", chain)
+		// Guard: ContextData values cross agent boundaries untyped.
+		switch v := chains.(type) {
+		case []string:
+			for _, chain := range v {
+				md += fmt.Sprintf("- %s\n", chain)
+			}
+		case []any:
+			for _, item := range v {
+				if s, ok := item.(string); ok {
+					md += fmt.Sprintf("- %s\n", s)
+				}
+			}
 		}
 		md += "\n"
 	}

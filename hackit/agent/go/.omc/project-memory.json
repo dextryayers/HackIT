@@ -1,0 +1,125 @@
+{
+  "version": "1.0.0",
+  "lastScanned": 1793665314944,
+  "projectRoot": "/home/aniipid/Coding/HackIT/hackit/agent/go",
+  "techStack": {
+    "languages": [
+      {
+        "name": "Go",
+        "version": null,
+        "confidence": "high",
+        "markers": [
+          "go.mod"
+        ]
+      }
+    ],
+    "frameworks": [],
+    "packageManager": "go",
+    "runtime": null
+  },
+  "build": {
+    "buildCommand": null,
+    "testCommand": null,
+    "lintCommand": null,
+    "devCommand": null,
+    "scripts": {}
+  },
+  "conventions": {
+    "namingStyle": null,
+    "importStyle": null,
+    "testPattern": null,
+    "fileOrganization": null
+  },
+  "structure": {
+    "isMonorepo": false,
+    "workspaces": [],
+    "mainDirectories": [],
+    "gitBranches": {
+      "defaultBranch": "main",
+      "branchingStrategy": null
+    }
+  },
+  "customNotes": [],
+  "directoryMap": {
+    "chat_go": {
+      "path": "chat_go",
+      "purpose": null,
+      "fileCount": 11,
+      "lastAccessed": 1793665314940,
+      "keyFiles": [
+        "chat_engine",
+        "commands.go",
+        "engine.go",
+        "go.mod",
+        "history.go"
+      ]
+    },
+    "data": {
+      "path": "data",
+      "purpose": "Data files",
+      "fileCount": 0,
+      "lastAccessed": 1793665314940,
+      "keyFiles": []
+    },
+    "hative": {
+      "path": "hative",
+      "purpose": null,
+      "fileCount": 3,
+      "lastAccessed": 1793665314940,
+      "keyFiles": [
+        "hative",
+        "main.go",
+        "report.go"
+      ]
+    },
+    "native": {
+      "path": "native",
+      "purpose": null,
+      "fileCount": 28,
+      "lastAccessed": 1793665314942,
+      "keyFiles": [
+        "asn.go",
+        "attack.go",
+        "cmd_injection.go",
+        "cors.go",
+        "csrf.go"
+      ]
+    },
+    "reports": {
+      "path": "reports",
+      "purpose": null,
+      "fileCount": 0,
+      "lastAccessed": 1793665314942,
+      "keyFiles": []
+    },
+    "swarm": {
+      "path": "swarm",
+      "purpose": null,
+      "fileCount": 2,
+      "lastAccessed": 1793665314943,
+      "keyFiles": [
+        "main.go",
+        "swarm_engine"
+      ]
+    },
+    "worker": {
+      "path": "worker",
+      "purpose": null,
+      "fileCount": 2,
+      "lastAccessed": 1793665314943,
+      "keyFiles": [
+        "main.go",
+        "worker"
+      ]
+    }
+  },
+  "hotPaths": [
+    {
+      "path": "swarm/core/target.go",
+      "accessCount": 1.9999550427143145,
+      "lastAccessed": 1793665336307,
+      "type": "file"
+    }
+  ],
+  "userDirectives": []
+}

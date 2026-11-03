@@ -70,7 +70,12 @@ func (a *EvasionAgent) Execute(state *core.SwarmState) error {
 
 	state.StopSpinner()
 
-	state.LogOk(a.Name(), "CONFIG", fmt.Sprintf("Stealth profile active: %d rules, UA=%s...", ruleCount, selectedUA[:40]))
+	// Guard: short UAs (curl/8.4.0, Wget) panicked the whole swarm at [:40].
+	uaPreview := selectedUA
+	if len(uaPreview) > 40 {
+		uaPreview = uaPreview[:40]
+	}
+	state.LogOk(a.Name(), "CONFIG", fmt.Sprintf("Stealth profile active: %d rules, UA=%s...", ruleCount, uaPreview))
 	if selectedProxy != "" {
 		state.LogOk(a.Name(), "PROXY", fmt.Sprintf("WAF evasion proxy: %s", selectedProxy))
 	}

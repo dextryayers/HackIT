@@ -30,15 +30,34 @@ func (p *PlanningAgent) Execute(state *core.SwarmState) error {
 	state.Log(p.Name(), "INIT", "Initializing Planning Phase...")
 
 	if state.Target.PrimaryDomain == "" {
-		return errors.New("fatal: no primary domain specified in target scope")
+		return errors.New("fatal: no target specified in target scope")
 	}
 
+	// Target is already normalized by core.ParseTarget: bare host in
+	// PrimaryDomain, classification in TargetKind, seeds in Parsed.
+	parsed := state.Target.Parsed
+	host := state.Target.PrimaryDomain
 	state.StartSpinner(fmt.Sprintf("%sResolving target%s", core.Yellow, core.Reset))
-	ips, err := net.LookupHost(state.Target.PrimaryDomain)
+	switch parsed.Kind {
+	case core.TargetIPv4, core.TargetIPv6, core.TargetLocal:
+		state.Target.IPRange = host
+		state.LogOk(p.Name(), "RESOLVED", fmt.Sprintf("%s classified as %s (direct IP/local, no DNS needed)", host, parsed.Kind))
+	case core.TargetCIDR:
+		state.Target.IPRange = host
+		state.LogOk(p.Name(), "RESOLVED", fmt.Sprintf("%s is a CIDR range: %d seed hosts queued", host, len(parsed.ScanSeeds)))
+	default:
+		ips, err := net.LookupHost(host)
+		if err == nil && len(ips) > 0 {
+			state.Target.IPRange = ips[0]
+			state.LogOk(p.Name(), "RESOLVED", fmt.Sprintf("%s -> %s (%d addresses)", host, ips[0], len(ips)))
+		} else {
+			state.LogWarn(p.Name(), "DNS", fmt.Sprintf("Could not resolve %s (%v); continuing with direct probing", host, err))
+		}
+	}
 	state.StopSpinner()
-	if err == nil && len(ips) > 0 {
-		state.Target.IPRange = ips[0]
-		state.LogOk(p.Name(), "RESOLVED", fmt.Sprintf("%s -> %s (%d addresses)", state.Target.PrimaryDomain, ips[0], len(ips)))
+
+	if state.Target.LocalTarget {
+		state.Log(p.Name(), "SCOPE", "Local/intranet target: skipping public-OSINT assumptions, preferring direct techniques")
 	}
 
 	scopeMode := strings.ToLower(state.Target.ScopeType)

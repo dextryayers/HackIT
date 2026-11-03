@@ -1,0 +1,412 @@
+{
+  "session_id": "HACKIT-SWARM-1793665082",
+  "start_time": "2026-11-03T07:18:02.506006325+07:00",
+  "target": {
+    "primary_domain": "tesla.com",
+    "ip_range": "64:ff9b::212:32cf",
+    "scope_type": "passive",
+    "rules_of_engagement": [
+      "NO_ACTIVE_EXPLOITS",
+      "NO_BRUTEFORCE",
+      "OSINT_ONLY",
+      "NO_PACKET_INJECTION",
+      "SLOW_RATE_LIMITING",
+      "MAX_CONCURRENCY_10"
+    ],
+    "parsed_target": {
+      "raw": "https://tesla.com",
+      "host": "tesla.com",
+      "kind": "domain",
+      "is_private": false,
+      "is_url": true,
+      "scheme": "https",
+      "port": "",
+      "base_url": "https://tesla.com",
+      "scan_seeds": [
+        "tesla.com"
+      ]
+    },
+    "local_target": false,
+    "target_kind": "domain"
+  },
+  "recon_data": {
+    "subdomains": [
+      "accounts.tesla.com",
+      "akamai-apigateway-deliveryopsapi.tesla.com",
+      "akamai-apigateway-inventorytxnextapi.tesla.com",
+      "akamai-apigateway-logisticsratesapi.tesla.com",
+      "akamai-apigateway-materials.tesla.com",
+      "akamai-apigateway-mfs-supplier-uat.tesla.com",
+      "akamai-apigateway-stg-packaging2.tesla.com",
+      "akamai-apigateway-stg-procuretopayapi.tesla.com",
+      "akamai-apigateway-stg-shipmentplanningapi.tesla.com",
+      "akamai-apigateway-stg-warp3pl.tesla.com",
+      "akamai-apigateway-stg-warpdashboardapi.tesla.com",
+      "akamai-apigateway-stg-warpedi.tesla.com",
+      "akamai-apigateway-stg-warptqpapi.tesla.com",
+      "akamai-apigateway-uat-materials.tesla.com",
+      "akamai-apigateway-vehicleextinfogw-prdsvc-st.tesla.com",
+      "akamai-apigateway-vfx-stg.tesla.com",
+      "akamai-apigateway-warpdashboardapi.tesla.com",
+      "ams13-gpgw1.tesla.com",
+      "apac-cppm.tesla.com",
+      "apf-api.eng.vn.cloud.tesla.com",
+      "apf-api.prd.vn.cloud.tesla.com",
+      "api-firebolt-dev.tesla.com",
+      "api-firebolt-stage.tesla.com",
+      "apmv3-cdn-go.tesla.com",
+      "assets-ir.tesla.com",
+      "assets.engage.tesla.com",
+      "auth-global-stage.tesla.com",
+      "auth-stage.tesla.com",
+      "auth.eng.euw1.vn.cloud.tesla.com",
+      "auth.prd.euw1.vn.cloud.tesla.com",
+      "auth.tesla.com",
+      "autodiscover.tesla.com",
+      "bettertime-stage.tesla.com",
+      "bettertime.tesla.com",
+      "bi.tesla.com",
+      "billing.tesla.com",
+      "bolt.tesla.com",
+      "cdn-design.tesla.com",
+      "charging-transparency.tesla.com",
+      "checkout-ui-assets.tesla.com",
+      "cld-ec.tesla.com",
+      "click.emails.tesla.com",
+      "dex.ops.bn.na.vn.cloud.tesla.com",
+      "edr.tesla.com",
+      "ehs.tesla.com",
+      "einvoicing.tesla.com",
+      "emails.tesla.com",
+      "employeefeedback.tesla.com",
+      "envoy-finplat-stg.tesla.com",
+      "epc.tesla.com",
+      "epuca-prd.usw.vn.cloud.tesla.com",
+      "epuca-prd.usw2.vn.cloud.tesla.com",
+      "feedback.tesla.com",
+      "fleet-api.eng.na.vn.cloud.tesla.com",
+      "fleet-api.prd.eu.vn.cloud.tesla.com",
+      "fleet-api.prd.na.vn.cloud.tesla.com",
+      "fleet-auth.prd.vn.cloud.tesla.com",
+      "fleet-mcp.eng.na.vn.cloud.tesla.com",
+      "fleet-mcp.eng.vn.cloud.tesla.com",
+      "fleet-mcp.prd.eu.vn.cloud.tesla.com",
+      "fleet-mcp.prd.na.vn.cloud.tesla.com",
+      "fleet-mcp.prd.vn.cloud.tesla.com",
+      "gateway-public-telemetry-eng5a-fleet.eng.vn.cloud.tesla.com",
+      "gateway-public-telemetry-eng5b-fleet.eng.vn.cloud.tesla.com",
+      "gateway-public-telemetry-eng5c-fleet.eng.vn.cloud.tesla.com",
+      "gateway-public-telemetry-eng5d-fleet.eng.vn.cloud.tesla.com",
+      "gateway-public-telemetry-prd5a-fleet.prd.vn.cloud.tesla.com",
+      "hermes-ap.eng.vn.cloud.tesla.com",
+      "hermes-ap.prd.vn.cloud.tesla.com",
+      "hub.tesla.com",
+      "inside.tesla.com",
+      "inventory-assets.tesla.com",
+      "ir.tesla.com",
+      "itanswers.tesla.com",
+      "livestream.tesla.com",
+      "livestreamapi-test.tesla.com",
+      "media-server-api.eng.vn.cloud.tesla.com",
+      "media-server-dev-api.eng.vn.cloud.tesla.com",
+      "media-server-qr-dev.eng.america.vn.cloud.tesla.com",
+      "media-server-qr.eng.america.vn.cloud.tesla.com",
+      "media-server-qr.prd.america.vn.cloud.tesla.com",
+      "mfa-reset.tesla.com",
+      "mfa-stage.tesla.com",
+      "mfs-supplier.tesla.com",
+      "mobile-links.eng.vn.cloud.tesla.com",
+      "monitoring.tesla.com",
+      "mta4.emails.tesla.com",
+      "npu.prd.nav.vn.cloud.tesla.com",
+      "npuapt-prd.usw.vn.cloud.tesla.com",
+      "npuhe-eng.euw1.vn.cloud.tesla.com",
+      "npuhe-eng.usw2.vn.cloud.tesla.com",
+      "npute-eng.euw1.vn.cloud.tesla.com",
+      "npute-prd.euw1.vn.cloud.tesla.com",
+      "npute-prd.usw.vn.cloud.tesla.com",
+      "npute-prd.usw2.vn.cloud.tesla.com",
+      "npuv-ap.prd.usw2.vn.cloud.tesla.com",
+      "npuv-prd.usw.vn.cloud.tesla.com",
+      "npuv-prd.usw2.vn.cloud.tesla.com",
+      "o3.ptr1444.tesla.com",
+      "o7.ptr6980.tesla.com",
+      "origin-auth.tesla.com",
+      "origin-cicerone.tesla.com",
+      "origin-financialgateway-stg.tesla.com",
+      "origin-finplat-prd.tesla.com",
+      "origin-finplat-stg.tesla.com",
+      "origin-pay.tesla.com",
+      "origin-profileapi-stg.tesla.com",
+      "origin-ranger-api.tesla.com",
+      "origin-slingsdlc.tesla.com",
+      "origin-sspr.tesla.com",
+      "ownerapi-api.eng.euw1.vn.cloud.tesla.com",
+      "ownerapi-signoff-stage.eng.na.vn.cloud.tesla.com",
+      "ownerapi-signoff.eng.na.vn.cloud.tesla.com",
+      "partners.tesla.com",
+      "pub.email.tesla.com",
+      "s3.eng.na.vn.cloud.tesla.com",
+      "s3.prd.na.vn.cloud.tesla.com",
+      "secureguest.tesla.com",
+      "sentry-api.ops.na.vn.cloud.tesla.com",
+      "serviceapi-stg.tesla.com",
+      "signaling-robotics.eng.vn.cloud.tesla.com",
+      "sso-dev.tesla.com",
+      "sso.tesla.com",
+      "stage-traffic-flow-test.tesla.com",
+      "static-assets-teslaaccount.tesla.com",
+      "static-map.tesla.com",
+      "suppliers-stg.tesla.com",
+      "telemetry-ap.prd.vn.cloud.tesla.com",
+      "tesla-hermes-snapshot-motors-eng.s3.eng.na.vn.cloud.tesla.com",
+      "tesla-hermes-snapshot-motors.s3.prd.na.vn.cloud.tesla.com",
+      "teslatequila.tesla.com",
+      "toolbox.tesla.com",
+      "url1894.tesla.com",
+      "vehicle-files.eng.euw1.vn.cloud.tesla.com",
+      "vehicle-files.prd.euw1.vn.cloud.tesla.com",
+      "vmanage-alerts.tesla.com",
+      "xapps.tesla.com",
+      "xmail.tesla.com"
+    ],
+    "asn": "Direct IP 2.18.52.207",
+    "cloud_infra": "Akamai",
+    "emails": null,
+    "tech_stack": null
+  },
+  "discovered_services": null,
+  "vulnerabilities": null,
+  "logs": [
+    {
+      "timestamp": "2026-11-03T07:18:02.50604606+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "BOOT",
+      "message": "Swarm initialized. Beginning DAG execution pipeline.",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T07:18:02.506058403+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "INVOKE",
+      "message": "Waking up Agent-28: MCP and Tool Orchestration...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T07:18:02.506066227+07:00",
+      "agent": "Agent-28: MCP and Tool Orchestration",
+      "action": "START",
+      "message": "Spinning up external tool orchestration via MCP...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T07:18:02.58683002+07:00",
+      "agent": "Agent-28: MCP and Tool Orchestration",
+      "action": "MISSING",
+      "message": "Katana not in PATH",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T07:18:02.586934866+07:00",
+      "agent": "Agent-28: MCP and Tool Orchestration",
+      "action": "MISSING",
+      "message": "Nuclei not in PATH",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T07:18:02.586988557+07:00",
+      "agent": "Agent-28: MCP and Tool Orchestration",
+      "action": "MISSING",
+      "message": "Amass not in PATH",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T07:18:02.58703847+07:00",
+      "agent": "Agent-28: MCP and Tool Orchestration",
+      "action": "MISSING",
+      "message": "ffuf not in PATH",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T07:18:02.587089315+07:00",
+      "agent": "Agent-28: MCP and Tool Orchestration",
+      "action": "MISSING",
+      "message": "gospider not in PATH",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T07:18:02.587136804+07:00",
+      "agent": "Agent-28: MCP and Tool Orchestration",
+      "action": "FOUND",
+      "message": "Nmap at /usr/bin/nmap",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T07:18:27.112163223+07:00",
+      "agent": "Agent-28: MCP and Tool Orchestration",
+      "action": "Nmap",
+      "message": "Nmap fast scan complete",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T07:18:27.112200663+07:00",
+      "agent": "Agent-28: MCP and Tool Orchestration",
+      "action": "RESULT",
+      "message": "Found 1/6 tools, executed 1 successfully in 24.606s",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T07:18:27.112208357+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "DONE",
+      "message": "Agent-28: MCP and Tool Orchestration completed successfully",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T07:18:27.112745303+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "INVOKE",
+      "message": "Waking up Agent-20: Evasion and Stealth...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T07:18:27.112763958+07:00",
+      "agent": "Agent-20: Evasion and Stealth",
+      "action": "START",
+      "message": "Deploying stealth and evasion monitors...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T07:18:27.19393028+07:00",
+      "agent": "Agent-20: Evasion and Stealth",
+      "action": "CONFIG",
+      "message": "Stealth profile active: 0 rules, UA=Mozilla/5.0 (Macintosh; Intel Mac OS X 1...",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T07:18:27.193947412+07:00",
+      "agent": "Agent-20: Evasion and Stealth",
+      "action": "JITTER",
+      "message": "Request jitter: 1393",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T07:18:27.193963211+07:00",
+      "agent": "Agent-20: Evasion and Stealth",
+      "action": "COMPLETE",
+      "message": "Evasion engine ready in 81ms. Threat footprint minimized.",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T07:18:27.193971828+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "DONE",
+      "message": "Agent-20: Evasion and Stealth completed successfully",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T07:18:27.194446186+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "INVOKE",
+      "message": "Waking up Agent-1: Planning...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T07:18:27.194461415+07:00",
+      "agent": "Agent-1: Planning",
+      "action": "INIT",
+      "message": "Initializing Planning Phase...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T07:18:27.234556722+07:00",
+      "agent": "Agent-1: Planning",
+      "action": "RESOLVED",
+      "message": "tesla.com -\u003e 64:ff9b::212:32cf (16 addresses)",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T07:18:27.234593691+07:00",
+      "agent": "Agent-1: Planning",
+      "action": "ANALYSIS",
+      "message": "Analyzing target 'tesla.com' with mode 'passive'",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T07:18:27.23460396+07:00",
+      "agent": "Agent-1: Planning",
+      "action": "RULE_SET",
+      "message": "Passive OSINT only. No active touching of the target.",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T07:18:27.234612686+07:00",
+      "agent": "Agent-1: Planning",
+      "action": "PLAN",
+      "message": "Attack plan ready for tesla.com [passive]",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T07:18:27.234621793+07:00",
+      "agent": "Agent-1: Planning",
+      "action": "COMPLETE",
+      "message": "Planning finalized in 24.729s. Proceeding to Agent-2: Reconnaissance.",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T07:18:27.234632403+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "DONE",
+      "message": "Agent-1: Planning completed successfully",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T07:18:27.235140425+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "INVOKE",
+      "message": "Waking up Agent-2: Reconnaissance...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T07:18:27.23518066+07:00",
+      "agent": "Agent-2: Reconnaissance",
+      "action": "START",
+      "message": "Commencing reconnaissance on tesla.com [domain]",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T07:18:30.498494468+07:00",
+      "agent": "Agent-2: Reconnaissance",
+      "action": "SUBDOMAINS",
+      "message": "Found 138 subdomains",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T07:18:30.749167012+07:00",
+      "agent": "Agent-2: Reconnaissance",
+      "action": "ASN",
+      "message": "Target routed through Akamai [Direct IP 2.18.52.207]",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T07:18:30.749183903+07:00",
+      "agent": "Agent-2: Reconnaissance",
+      "action": "COMPLETE",
+      "message": "Reconnaissance complete: 138 subdomains, infra=Akamai",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T07:18:30.749194183+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "DONE",
+      "message": "Agent-2: Reconnaissance completed successfully",
+      "level": "ok"
+    }
+  ],
+  "context_data": {
+    "Nmap_raw": "Starting Nmap 7.95 ( https://nmap.org ) at 2026-11-03 07:18 WIB\nNmap scan report for tesla.com (2.18.52.207)\nHost is up (0.079s latency).\nOther addresses for tesla.com (not scanned): 64:ff9b::212:32cf 64:ff9b::212:37cf 64:ff9b::212:31cf 64:ff9b::212:35cf 64:ff9b::212:36cf 64:ff9b::1707:f4cf 64:ff9b::1728:64cf 64:ff9b::212:30cf 64:ff9b::212:33cf 64:ff9b::212:34cf 2.18.53.207 2.18.54.207 2.18.55.207 2.18.50.207 2.18.51.207 23.7.244.207 2.18.48.207 2.18.49.207 23.40.100.207\nrDNS record for 2.18.52.207: a2-18-52-207.deploy.static.akamaitechnologies.com\nNot shown: 98 filtered tcp ports (no-response)\nPORT    STATE SERVICE  VERSION\n80/tcp  open  http     AkamaiGHost (Akamai's HTTP Acceleration/Mirror service)\n443/tcp open  ssl/http AkamaiGHost (Akamai's HTTP Acceleration/Mirror service)\n\nService detection performed. Please report any incorrect results at https://nmap.org/submit/ .\nNmap done: 1 IP address (1 host up) scanned in 24.51 seconds\n",
+    "evasion_jitter_ms": "1393",
+    "evasion_user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Safari/17.2"
+  },
+  "Mu": {}
+}

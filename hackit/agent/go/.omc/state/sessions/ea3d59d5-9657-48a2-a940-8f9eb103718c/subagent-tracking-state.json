@@ -1,0 +1,19 @@
+{
+  "agents": [
+    {
+      "agent_id": "a96d5c3a3454abb3b",
+      "agent_type": "claude",
+      "started_at": "2026-11-03T00:21:54.448Z",
+      "parent_mode": "none",
+      "status": "completed",
+      "completed_at": "2026-11-03T00:21:54.448Z",
+      "synthetic": true,
+      "telemetry_status": "unmatched_stop",
+      "telemetry_note": "SubagentStop arrived without a matching SubagentStart; native Agent/Task start telemetry was not observed."
+    }
+  ],
+  "total_spawned": 0,
+  "total_completed": 1,
+  "total_failed": 0,
+  "last_updated": "2026-11-03T00:21:54.454Z"
+}

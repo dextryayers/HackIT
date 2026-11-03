@@ -29,8 +29,15 @@ func (d *DiscoveryAgent) Execute(state *core.SwarmState) error {
 
 	targets := state.ReconData.Subdomains
 	if len(targets) == 0 {
-		targets = append(targets, state.Target.PrimaryDomain)
-		state.LogWarn(d.Name(), "FALLBACK", "No subdomains in state. Falling back to primary domain.")
+		// IP / CIDR / local targets carry concrete seeds; domain targets fall
+		// back to the primary host.
+		parsed := state.Target.Parsed
+		if len(parsed.ScanSeeds) > 0 {
+			targets = append(targets, parsed.ScanSeeds...)
+		} else {
+			targets = append(targets, state.Target.PrimaryDomain)
+		}
+		state.LogWarn(d.Name(), "FALLBACK", fmt.Sprintf("No recon seeds in state. Using %d direct target(s).", len(targets)))
 	}
 
 	aggressive := false

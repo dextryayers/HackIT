@@ -263,10 +263,18 @@ class _TranscriptControl(UIControl):
 
     def mouse_handler(self, mouse_event) -> Any:  # noqa: ANN001
         if mouse_event.event_type == MouseEventType.SCROLL_UP:
-            self.ui._scroll_transcript(-5)
+            self.ui._scroll_transcript(-3)
             return None
         if mouse_event.event_type == MouseEventType.SCROLL_DOWN:
-            self.ui._scroll_transcript(5)
+            self.ui._scroll_transcript(3)
+            return None
+        if mouse_event.event_type == MouseEventType.MOUSE_DOWN:
+            # Click on the thinking panel header toggles its visibility.
+            try:
+                self.ui._show_thinking = not getattr(self.ui, "_show_thinking", True)
+                self.ui._invalidate()
+            except Exception:
+                pass
             return None
         return NotImplemented
 
@@ -1229,6 +1237,12 @@ class TuiMixin:
                         padding=(0, 1),
                     )
                 )
+            elif visible_thinking and not self._show_thinking:
+                # Animated "thinking..." indicator while reasoning is hidden.
+                dots = "." * (1 + (int(time.monotonic() * 2) % 5))
+                blocks.append(
+                    Text(f"  thinking{dots}", style=f"italic {SLATE_DIM}")
+                )
             if visible_answer:
                 blocks.append(
                     Panel(
@@ -1348,6 +1362,8 @@ class TuiMixin:
                     padding=(0, 1),
                 )
             )
+        elif thinking_text and not self._show_thinking:
+            self.print(Text("  thinking complete (press Ctrl+T to reveal)", style=f"italic {SLATE_DIM}"))
         if answer_text:
             if answer_text.startswith("[!]"):
                 self.print(

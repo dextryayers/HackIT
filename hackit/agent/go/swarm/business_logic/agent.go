@@ -39,7 +39,17 @@ func (a *BusinessLogicAgent) Execute(state *core.SwarmState) error {
 
 	var endpoints []string
 	if ok {
-		endpoints = endpointsRaw.([]string)
+		// Guard: ContextData values cross agent boundaries untyped.
+		switch v := endpointsRaw.(type) {
+		case []string:
+			endpoints = v
+		case []any:
+			for _, item := range v {
+				if s, ok := item.(string); ok {
+					endpoints = append(endpoints, s)
+				}
+			}
+		}
 	}
 
 	scenarios := []struct {

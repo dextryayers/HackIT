@@ -95,7 +95,17 @@ func (a *AttackChainAgent) Execute(state *core.SwarmState) error {
 		existing, ok := state.ContextData["attack_chains"]
 		var allChains []string
 		if ok {
-			allChains = existing.([]string)
+			// Guard: ContextData values cross agent boundaries untyped.
+			switch v := existing.(type) {
+			case []string:
+				allChains = v
+			case []any:
+				for _, item := range v {
+					if s, ok := item.(string); ok {
+						allChains = append(allChains, s)
+					}
+				}
+			}
 		}
 		allChains = append(allChains, chains...)
 		state.ContextData["attack_chains"] = allChains
