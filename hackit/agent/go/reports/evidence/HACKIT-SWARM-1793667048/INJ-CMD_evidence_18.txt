@@ -1,0 +1,7 @@
+VULNERABILITY ID: INJ-CMD
+NAME: OS Command Injection
+SEVERITY: Critical
+CVSS: 9.8
+TIMESTAMP: 2026-11-03T07:51:07+07:00
+EVIDENCE:
+Command output 'VULN_TEST_123' appeared only after payload "; echo VULN_TEST_123"

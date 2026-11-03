@@ -128,8 +128,8 @@
     },
     {
       "path": "swarm/vuln_analysis/agent.go",
-      "accessCount": 2.9994678318877472,
-      "lastAccessed": 1793665394085,
+      "accessCount": 10.92753443070002,
+      "lastAccessed": 1793667365937,
       "type": "file"
     },
     {
@@ -164,8 +164,8 @@
     },
     {
       "path": "swarm/discovery/agent.go",
-      "accessCount": 1,
-      "lastAccessed": 1793665438702,
+      "accessCount": 1.9923576809966619,
+      "lastAccessed": 1793666394967,
       "type": "file"
     },
     {
@@ -184,6 +184,48 @@
       "path": "swarm/exploitation/agent.go",
       "accessCount": 1.9999170584317425,
       "lastAccessed": 1793665649404,
+      "type": "file"
+    },
+    {
+      "path": "native/fuzzer.go",
+      "accessCount": 1,
+      "lastAccessed": 1793666675290,
+      "type": "file"
+    },
+    {
+      "path": "native/activescan.go",
+      "accessCount": 7.9764025178105165,
+      "lastAccessed": 1793667350759,
+      "type": "file"
+    },
+    {
+      "path": "native/cmd_injection.go",
+      "accessCount": 5.98926659761645,
+      "lastAccessed": 1793667263381,
+      "type": "file"
+    },
+    {
+      "path": "native/header.go",
+      "accessCount": 2.9996701338832383,
+      "lastAccessed": 1793666856256,
+      "type": "file"
+    },
+    {
+      "path": "native/ssti.go",
+      "accessCount": 9.975156678587291,
+      "lastAccessed": 1793667419136,
+      "type": "file"
+    },
+    {
+      "path": "native/lfi.go",
+      "accessCount": 1.9999498523798218,
+      "lastAccessed": 1793667105802,
+      "type": "file"
+    },
+    {
+      "path": "native/activescan_test.go",
+      "accessCount": 1,
+      "lastAccessed": 1793667432761,
       "type": "file"
     }
   ],

@@ -1,0 +1,304 @@
+{
+  "session_id": "HACKIT-SWARM-1793665948",
+  "start_time": "2026-11-03T07:32:28.443818367+07:00",
+  "target": {
+    "primary_domain": "nike.com",
+    "ip_range": "64:ff9b::d23:17e",
+    "scope_type": "passive",
+    "rules_of_engagement": [
+      "NO_ACTIVE_EXPLOITS",
+      "NO_BRUTEFORCE",
+      "LIGHT_PORT_SCAN",
+      "LIGHT_ENUMERATION",
+      "NO_PACKET_INJECTION",
+      "SLOW_RATE_LIMITING",
+      "MAX_CONCURRENCY_10"
+    ],
+    "parsed_target": {
+      "raw": "https://nike.com",
+      "host": "nike.com",
+      "kind": "domain",
+      "is_private": false,
+      "is_url": true,
+      "scheme": "https",
+      "port": "",
+      "base_url": "https://nike.com",
+      "scan_seeds": [
+        "nike.com"
+      ]
+    },
+    "local_target": false,
+    "target_kind": "domain"
+  },
+  "recon_data": {
+    "subdomains": [
+      "about.nike.com",
+      "acceptance-global.lams.svs.nike.com",
+      "acceptance-global.test.lams.svs.nike.com",
+      "api.pegasus.ship.non.thecommons.nike.com",
+      "api.pegasus.ship.prd.thecommons.nike.com",
+      "apidev01.sandbox.dbt.svs.nike.com",
+      "apiuat.sandbox.dbt.svs.nike.com",
+      "bdam-prod.gbm.nike.com",
+      "bdam-training.gbm.nike.com",
+      "bodega.nike.com",
+      "bodegaplaybook.nike.com",
+      "budgettrack.nike.com",
+      "cdp.nike.com",
+      "claims.nike.com",
+      "collector.gem-nonprod.platforms.nike.com",
+      "consumercode.nike.com",
+      "ecn28-social-api.nike.com",
+      "jobs.nike.com",
+      "lexiplaybook.nike.com",
+      "mow-secure-niketown.nike.com",
+      "n7fund.nike.com",
+      "nike1948.nike.com",
+      "nikefuelboard.nike.com",
+      "play.nike.com",
+      "secureaccess-cn.nike.com",
+      "smtp-ex2-sj.nike.com",
+      "thevan-uk.nike.com",
+      "ui.dam.nike.com",
+      "zebrazombie-internal.api-product.pes-preprod.nike.com"
+    ],
+    "asn": "Direct IP 13.35.1.120",
+    "cloud_infra": "Origin (cloudfront.net)",
+    "emails": null,
+    "tech_stack": null
+  },
+  "discovered_services": null,
+  "vulnerabilities": null,
+  "logs": [
+    {
+      "timestamp": "2026-11-03T07:32:28.443833747+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "BOOT",
+      "message": "Swarm initialized. Beginning DAG execution pipeline.",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T07:32:28.443843145+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "INVOKE",
+      "message": "Waking up Agent-28: MCP and Tool Orchestration...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T07:32:28.443848786+07:00",
+      "agent": "Agent-28: MCP and Tool Orchestration",
+      "action": "START",
+      "message": "Spinning up external tool orchestration via MCP...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T07:32:28.524271134+07:00",
+      "agent": "Agent-28: MCP and Tool Orchestration",
+      "action": "MISSING",
+      "message": "Katana not in PATH",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T07:32:28.5243312+07:00",
+      "agent": "Agent-28: MCP and Tool Orchestration",
+      "action": "MISSING",
+      "message": "Nuclei not in PATH",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T07:32:28.524384654+07:00",
+      "agent": "Agent-28: MCP and Tool Orchestration",
+      "action": "MISSING",
+      "message": "Amass not in PATH",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T07:32:28.524453958+07:00",
+      "agent": "Agent-28: MCP and Tool Orchestration",
+      "action": "MISSING",
+      "message": "ffuf not in PATH",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T07:32:28.524481151+07:00",
+      "agent": "Agent-28: MCP and Tool Orchestration",
+      "action": "MISSING",
+      "message": "gospider not in PATH",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T07:32:28.524515838+07:00",
+      "agent": "Agent-28: MCP and Tool Orchestration",
+      "action": "FOUND",
+      "message": "Nmap at /usr/bin/nmap",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T07:32:58.296502463+07:00",
+      "agent": "Agent-28: MCP and Tool Orchestration",
+      "action": "Nmap",
+      "message": "Nmap fast scan complete",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T07:32:58.296513424+07:00",
+      "agent": "Agent-28: MCP and Tool Orchestration",
+      "action": "RESULT",
+      "message": "Found 1/6 tools, executed 1 successfully in 29.853s",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T07:32:58.296515869+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "DONE",
+      "message": "Agent-28: MCP and Tool Orchestration completed successfully",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T07:32:58.296829976+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "INVOKE",
+      "message": "Waking up Agent-20: Evasion and Stealth...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T07:32:58.296835998+07:00",
+      "agent": "Agent-20: Evasion and Stealth",
+      "action": "START",
+      "message": "Deploying stealth and evasion monitors...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T07:32:58.377184053+07:00",
+      "agent": "Agent-20: Evasion and Stealth",
+      "action": "CONFIG",
+      "message": "Stealth profile active: 0 rules, UA=Mozilla/5.0 (compatible; Googlebot/2.1; ...",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T07:32:58.377191838+07:00",
+      "agent": "Agent-20: Evasion and Stealth",
+      "action": "JITTER",
+      "message": "Request jitter: 3492",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T07:32:58.377197579+07:00",
+      "agent": "Agent-20: Evasion and Stealth",
+      "action": "COMPLETE",
+      "message": "Evasion engine ready in 80ms. Threat footprint minimized.",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T07:32:58.377200645+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "DONE",
+      "message": "Agent-20: Evasion and Stealth completed successfully",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T07:32:58.377479223+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "INVOKE",
+      "message": "Waking up Agent-1: Planning...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T07:32:58.377483692+07:00",
+      "agent": "Agent-1: Planning",
+      "action": "INIT",
+      "message": "Initializing Planning Phase...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T07:32:58.455876767+07:00",
+      "agent": "Agent-1: Planning",
+      "action": "RESOLVED",
+      "message": "nike.com -\u003e 64:ff9b::d23:17e (8 addresses)",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T07:32:58.455902516+07:00",
+      "agent": "Agent-1: Planning",
+      "action": "ANALYSIS",
+      "message": "Analyzing target 'nike.com' with mode 'passive'",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T07:32:58.455913087+07:00",
+      "agent": "Agent-1: Planning",
+      "action": "RULE_SET",
+      "message": "Passive mode: OSINT + low-rate surface mapping, no exploits, no brute force.",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T07:32:58.455921333+07:00",
+      "agent": "Agent-1: Planning",
+      "action": "PLAN",
+      "message": "Attack plan ready for nike.com [passive]",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T07:32:58.455929899+07:00",
+      "agent": "Agent-1: Planning",
+      "action": "COMPLETE",
+      "message": "Planning finalized in 30.012s. Proceeding to Agent-2: Reconnaissance.",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T07:32:58.455937354+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "DONE",
+      "message": "Agent-1: Planning completed successfully",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T07:32:58.45652483+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "INVOKE",
+      "message": "Waking up Agent-2: Reconnaissance...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T07:32:58.45654082+07:00",
+      "agent": "Agent-2: Reconnaissance",
+      "action": "START",
+      "message": "Commencing reconnaissance on nike.com [domain]",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T07:32:59.771154549+07:00",
+      "agent": "Agent-2: Reconnaissance",
+      "action": "SUBDOMAINS",
+      "message": "Found 29 subdomains",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T07:32:59.900408291+07:00",
+      "agent": "Agent-2: Reconnaissance",
+      "action": "ASN",
+      "message": "Target routed through Origin (cloudfront.net) [Direct IP 13.35.1.120]",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T07:32:59.900424673+07:00",
+      "agent": "Agent-2: Reconnaissance",
+      "action": "COMPLETE",
+      "message": "Reconnaissance complete: 29 subdomains, infra=Origin (cloudfront.net)",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T07:32:59.900431656+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "DONE",
+      "message": "Agent-2: Reconnaissance completed successfully",
+      "level": "ok"
+    }
+  ],
+  "context_data": {
+    "Nmap_raw": "Starting Nmap 7.95 ( https://nmap.org ) at 2026-11-03 07:32 WIB\nNmap scan report for nike.com (13.35.1.120)\nHost is up (0.050s latency).\nOther addresses for nike.com (not scanned): 64:ff9b::d23:17e 64:ff9b::d23:10a 64:ff9b::d23:178 64:ff9b::d23:171 13.35.1.126 13.35.1.113 13.35.1.10\nrDNS record for 13.35.1.120: server-13-35-1-120.cgk60.r.cloudfront.net\nNot shown: 98 filtered tcp ports (no-response)\nPORT    STATE SERVICE  VERSION\n80/tcp  open  http     Amazon CloudFront httpd\n443/tcp open  ssl/http Amazon CloudFront httpd\n\nService detection performed. Please report any incorrect results at https://nmap.org/submit/ .\nNmap done: 1 IP address (1 host up) scanned in 29.75 seconds\n",
+    "evasion_jitter_ms": "3492",
+    "evasion_user_agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"
+  },
+  "Mu": {}
+}

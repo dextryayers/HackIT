@@ -1,0 +1,7 @@
+VULNERABILITY ID: INJ-SSTI
+NAME: Server-Side Template Injection
+SEVERITY: Critical
+CVSS: 9.1
+TIMESTAMP: 2026-11-03T07:51:07+07:00
+EVIDENCE:
+Template expression "{{7*7}}" evaluated to "49" (absent from baseline and not in payload)

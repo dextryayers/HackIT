@@ -48,6 +48,7 @@ class SwarmDashboard:
         self.latest_logs = []
         self.running = True
         self.last_state_mtime = 0
+        self.engine_alive = None
 
     def find_latest_state(self):
         # The swarm writes relative to its working directory, which may be the
@@ -80,10 +81,25 @@ class SwarmDashboard:
                     return
                 self.state = self._sanitize_state(data)
                 logs = self.state.get("logs") or []
-                agents = {str(log.get("agent", "")) for log in logs if isinstance(log, dict)}
-                self.agent_idx = len([agent for agent in agents if agent])
-                if logs:
-                    self.current_agent = str(logs[-1].get("agent") or self.current_agent)
+                # Progress must follow pipeline position, not the number of
+                # distinct agent names seen: the orchestrator logs under its own
+                # name, so counting names under-reports badly.
+                started = 0
+                current = ""
+                for log in logs:
+                    if not isinstance(log, dict):
+                        continue
+                    action = str(log.get("action", ""))
+                    agent = str(log.get("agent", ""))
+                    if action == "INVOKE" and agent:
+                        started += 1
+                        current = agent
+                    elif action == "START" and agent:
+                        current = agent
+                if started:
+                    self.agent_idx = min(started, self.total_agents)
+                if current:
+                    self.current_agent = current
         except (json.JSONDecodeError, OSError, TypeError, ValueError):
             pass
 
@@ -257,6 +273,32 @@ class SwarmDashboard:
             border_style="cyan",
         )
 
+    def render_footer(self):
+        """Footer was left as a Rich placeholder and rendered as
+        ``Layout(name='footer', size=3)`` instead of live data."""
+        parts = [
+            "[dim]Ctrl+C to stop[/]",
+            f"[dim]scope:[/] [cyan]{escape(str(self.scope))}[/]",
+            f"[dim]target:[/] [bold]{escape(str(self.target))}[/]",
+        ]
+        state_file = self.find_latest_state()
+        if state_file is not None:
+            parts.append(f"[dim]state:[/] {escape(state_file.name)}")
+            try:
+                age = time.time() - state_file.stat().st_mtime
+                # A stale state file while the engine runs means it is stuck.
+                style = "green" if age < 10 else "yellow" if age < 60 else "red"
+                parts.append(f"[{style}]updated {age:.0f}s ago[/]")
+            except OSError:
+                pass
+        if self.engine_alive is False:
+            parts.append("[red]engine exited[/]")
+        return Panel(
+            Text.from_markup("   ".join(parts)),
+            style="dim",
+            border_style="dim",
+        )
+
     def run(self, process=None):
         layout = self.make_layout()
         poll_thread = threading.Thread(target=self.poll_state, daemon=True)
@@ -264,6 +306,8 @@ class SwarmDashboard:
 
         with Live(layout, refresh_per_second=4, screen=True) as live:
             while self.running:
+                if process is not None:
+                    self.engine_alive = process.poll() is None
                 if process is not None and process.poll() is not None:
                     # Render one final frame before the engine exits.
                     self.read_state()
@@ -273,6 +317,7 @@ class SwarmDashboard:
                 layout["counts"].update(self.render_counts())
                 layout["vulns"].update(self.render_vulns())
                 layout["progress"].update(self.render_progress())
+                layout["footer"].update(self.render_footer())
                 time.sleep(0.25)
 
 

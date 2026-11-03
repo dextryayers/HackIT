@@ -1,0 +1,7 @@
+VULNERABILITY ID: MISCONF-002
+NAME: Exposed Git Repository
+SEVERITY: High
+CVSS: 7.5
+TIMESTAMP: 2026-11-03T07:51:07+07:00
+EVIDENCE:
+HTTP 200 with [core] repositoryformatversion block: "[core]\n\trepositoryformatversion = 0\n\tbare = false"

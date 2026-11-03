@@ -1,0 +1,117 @@
+{
+  "version": "1.0.0",
+  "lastScanned": 1793667411763,
+  "projectRoot": "/home/aniipid/Coding/HackIT",
+  "techStack": {
+    "languages": [
+      {
+        "name": "Python",
+        "version": null,
+        "confidence": "high",
+        "markers": [
+          "requirements.txt"
+        ]
+      },
+      {
+        "name": "Go",
+        "version": null,
+        "confidence": "high",
+        "markers": [
+          "go.mod"
+        ]
+      }
+    ],
+    "frameworks": [],
+    "packageManager": "go",
+    "runtime": null
+  },
+  "build": {
+    "buildCommand": null,
+    "testCommand": null,
+    "lintCommand": null,
+    "devCommand": null,
+    "scripts": {}
+  },
+  "conventions": {
+    "namingStyle": null,
+    "importStyle": null,
+    "testPattern": null,
+    "fileOrganization": null
+  },
+  "structure": {
+    "isMonorepo": false,
+    "workspaces": [],
+    "mainDirectories": [
+      "docs"
+    ],
+    "gitBranches": {
+      "defaultBranch": "main",
+      "branchingStrategy": null
+    }
+  },
+  "customNotes": [],
+  "directoryMap": {
+    "docs": {
+      "path": "docs",
+      "purpose": "Documentation",
+      "fileCount": 4,
+      "lastAccessed": 1793667411753,
+      "keyFiles": [
+        "BRUTEFORCER_V3_PLAN.md",
+        "OSINT_V4_PLAN.md",
+        "plan.md",
+        "requirements.lock"
+      ]
+    },
+    "hackit": {
+      "path": "hackit",
+      "purpose": null,
+      "fileCount": 14,
+      "lastAccessed": 1793667411759,
+      "keyFiles": [
+        "__init__.py",
+        "accuracy.py",
+        "anonymity.py",
+        "cli.py",
+        "config.py"
+      ]
+    },
+    "hardening": {
+      "path": "hardening",
+      "purpose": null,
+      "fileCount": 3,
+      "lastAccessed": 1793667411760,
+      "keyFiles": [
+        "99-hackit-hardening.conf",
+        "hackit-hardening.nft",
+        "hackit-nginx-limits.conf"
+      ]
+    },
+    "img": {
+      "path": "img",
+      "purpose": null,
+      "fileCount": 3,
+      "lastAccessed": 1793667411760,
+      "keyFiles": [
+        "banner.png",
+        "gif.gif",
+        "main.png"
+      ]
+    },
+    "wordlists": {
+      "path": "wordlists",
+      "purpose": null,
+      "fileCount": 5,
+      "lastAccessed": 1793667411761,
+      "keyFiles": [
+        "common.txt",
+        "dicc.txt",
+        "fuzzing_payloads.txt",
+        "subdomains.txt",
+        "xss_payloads.txt"
+      ]
+    }
+  },
+  "hotPaths": [],
+  "userDirectives": []
+}

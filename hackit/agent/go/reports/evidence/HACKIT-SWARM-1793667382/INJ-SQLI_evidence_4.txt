@@ -1,0 +1,7 @@
+VULNERABILITY ID: INJ-SQLI
+NAME: SQL Injection
+SEVERITY: Critical
+CVSS: 9.8
+TIMESTAMP: 2026-11-03T07:56:41+07:00
+EVIDENCE:
+Database error signature "you have an error in your sql syntax" appeared after injection (HTTP 200 -> 500)

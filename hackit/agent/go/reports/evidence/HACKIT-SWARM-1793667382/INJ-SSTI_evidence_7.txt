@@ -1,0 +1,7 @@
+VULNERABILITY ID: INJ-SSTI
+NAME: Server-Side Template Injection
+SEVERITY: Critical
+CVSS: 9.1
+TIMESTAMP: 2026-11-03T07:56:41+07:00
+EVIDENCE:
+Payload "#set($x=7*7)$x" produced "49" while control "#set($x=8*8)$x" did not produce "64"

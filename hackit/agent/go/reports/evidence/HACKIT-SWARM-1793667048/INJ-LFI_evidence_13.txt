@@ -1,0 +1,7 @@
+VULNERABILITY ID: INJ-LFI
+NAME: Local File Inclusion
+SEVERITY: High
+CVSS: 8.6
+TIMESTAMP: 2026-11-03T07:51:07+07:00
+EVIDENCE:
+File content indicator '127.0.0.1' found in response

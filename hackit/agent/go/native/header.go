@@ -3,7 +3,6 @@ package native
 import (
 	"fmt"
 	"net/http"
-	"strings"
 	"time"
 )
 
@@ -48,22 +47,6 @@ func AuditHeaders(targetURL string) []HeaderAuditResult {
 			Severity: "LOW",
 			Recommendation: "Add: Permissions-Policy: camera=(), microphone=(), geolocation=()",
 		},
-		"Access-Control-Allow-Origin": {
-			Severity: "MEDIUM",
-			Recommendation: "Restrict CORS to specific origins, not '*'",
-		},
-		"Set-Cookie": {
-			Severity: "MEDIUM",
-			Recommendation: "Ensure cookies have Secure, HttpOnly, and SameSite flags",
-		},
-		"Server": {
-			Severity: "LOW",
-			Recommendation: "Remove or obfuscate Server header to prevent version disclosure",
-		},
-		"X-Powered-By": {
-			Severity: "LOW",
-			Recommendation: "Remove X-Powered-By header to prevent technology disclosure",
-		},
 	}
 
 	client := &http.Client{
@@ -98,23 +81,6 @@ func AuditHeaders(targetURL string) []HeaderAuditResult {
 			Value:          value,
 			Severity:       info.Severity,
 			Recommendation: info.Recommendation,
-		}
-
-		if header == "Access-Control-Allow-Origin" && present {
-			if value == "*" {
-				audit.Severity = "HIGH"
-				audit.Recommendation = "CRITICAL: CORS allows all origins (*). Restrict to specific trusted domains."
-			}
-		}
-
-		if header == "Set-Cookie" && present {
-			if !strings.Contains(strings.ToLower(value), "secure") {
-				audit.Severity = "HIGH"
-				audit.Recommendation = "Cookie missing Secure flag: " + value
-			} else if !strings.Contains(strings.ToLower(value), "httponly") {
-				audit.Severity = "MEDIUM"
-				audit.Recommendation = "Cookie missing HttpOnly flag: " + value
-			}
 		}
 
 		results = append(results, audit)

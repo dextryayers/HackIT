@@ -40,18 +40,37 @@ func TestLFI(baseURL string, params map[string]string) []LFIResult {
 		"/.git/config",
 	}
 
+	// Only markers that can come from the target file itself. Generic tokens
+	// ("localhost", "127.0.0.1", "windows") appear in ordinary pages and made
+	// every response look like an inclusion.
 	lfiIndicators := []string{
 		"root:x:0:0:", "root:!:0:0:", "root:*:0:0:",
-		"daemon:x:1:1:", "bin:x:2:2:",
+		"daemon:x:1:1:", "bin:x:2:2:", "nobody:x:",
 		"[boot loader]", "[fonts]",
-		"localhost", "127.0.0.1",
-		"php://filter", "base64_decode",
 		"127.0.0.1\tlocalhost",
-		"profile::", "windows",
+		"for 16-bit app support",
 	}
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	var results []LFIResult
+
+	// Baseline with the caller's own values: an indicator already present
+	// before injection proves nothing.
+	baselineBody := ""
+	{
+		req, _ := http.NewRequest("GET", baseURL, nil)
+		q := req.URL.Query()
+		for k, v := range params {
+			q.Set(k, v)
+		}
+		req.URL.RawQuery = q.Encode()
+		if resp, err := client.Do(req); err == nil {
+			if raw, rerr := io.ReadAll(io.LimitReader(resp.Body, 4096)); rerr == nil {
+				baselineBody = string(raw)
+			}
+			resp.Body.Close()
+		}
+	}
 
 	for param := range params {
 		for _, payload := range payloads {
@@ -81,27 +100,18 @@ func TestLFI(baseURL string, params map[string]string) []LFIResult {
 			resp.Body.Close()
 
 			for _, indicator := range lfiIndicators {
-				if strings.Contains(bodyStr, indicator) {
+				if strings.Contains(bodyStr, indicator) && !strings.Contains(baselineBody, indicator) {
 					results = append(results, LFIResult{
 						Endpoint:   baseURL,
 						Parameter:  param,
 						Payload:    payload,
 						Vulnerable: true,
-						Evidence:   fmt.Sprintf("File content indicator '%s' found in response", indicator),
+						Evidence:   fmt.Sprintf("File content indicator %q appeared only after payload %q", indicator, payload),
 					})
 					break
 				}
 			}
 
-			if resp.StatusCode == 500 && (strings.Contains(payload, "etc/passwd") || strings.Contains(payload, "etc/shadow")) {
-				results = append(results, LFIResult{
-					Endpoint:   baseURL,
-					Parameter:  param,
-					Payload:    payload,
-					Vulnerable: true,
-					Evidence:   fmt.Sprintf("HTTP 500 response suggests file access attempt on '%s'", param),
-				})
-			}
 		}
 	}
 

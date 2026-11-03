@@ -24,12 +24,12 @@ func TestCmdInjection(baseURL string, params map[string]string) []CmdInjectionRe
 		"&& ping -c 1 127.0.0.1",
 		"`ping -c 1 127.0.0.1`",
 		"$(ping -c 1 127.0.0.1)",
-		"; echo VULN_TEST_123",
-		"| echo VULN_TEST_123",
-		"& echo VULN_TEST_123 &",
-		"&& echo VULN_TEST_123",
-		"`echo VULN_TEST_123`",
-		"$(echo VULN_TEST_123)",
+		"; echo VULN_$((61+62))",
+		"| echo VULN_$((61+62))",
+		"& echo VULN_$((61+62)) &",
+		"&& echo VULN_$((61+62))",
+		"`echo VULN_$((61+62))`",
+		"$(echo VULN_$((61+62)))",
 		"; sleep 2",
 		"| sleep 2",
 		"& sleep 2 &",
@@ -50,16 +50,17 @@ func TestCmdInjection(baseURL string, params map[string]string) []CmdInjectionRe
 		"$(whoami)",
 	}
 
+	// Only markers a command would actually print. Generic words ("ping",
+	// "bin", "daemon") match ordinary page text and produced false positives;
+	// every marker must also be absent from the baseline response.
 	cmdIndicators := []string{
-		"VULN_TEST_123",
+		// Arithmetic echo: the literal payload contains "$((61+62))", only a
+		// shell evaluates it to VULN_123. Reflection cannot produce this.
+		"VULN_123",
 		"uid=", "gid=", "groups=",
 		"root:x:0:0:", "root:!:0:0:",
-		"ping", "icmp_seq",
-		"1 received", "0% packet loss",
-		"www-data", "nobody", "apache",
-		"bin", "daemon",
-		"Microsoft", "Windows",
-		"total ", "drwxr", "-rw-r",
+		"icmp_seq", "0% packet loss",
+		"drwxr-xr-x", "-rw-r--r--",
 	}
 
 	timeSensitivePayloads := []string{
@@ -77,7 +78,11 @@ func TestCmdInjection(baseURL string, params map[string]string) []CmdInjectionRe
 	baselineStart := time.Now()
 	baselineResp, err := client.Get(baseURL)
 	baselineTime := time.Since(baselineStart)
+	baselineBody := ""
 	if err == nil {
+		if raw, rerr := io.ReadAll(io.LimitReader(baselineResp.Body, 4096)); rerr == nil {
+			baselineBody = string(raw)
+		}
 		baselineResp.Body.Close()
 	}
 
@@ -111,13 +116,17 @@ func TestCmdInjection(baseURL string, params map[string]string) []CmdInjectionRe
 			resp.Body.Close()
 
 			for _, indicator := range cmdIndicators {
-				if strings.Contains(bodyStr, indicator) {
+				// The marker must be new AND must not be part of the payload:
+				// reflected input earns the same marker as real command output.
+				if strings.Contains(bodyStr, indicator) &&
+					!strings.Contains(baselineBody, indicator) &&
+					!strings.Contains(payload, indicator) {
 					results = append(results, CmdInjectionResult{
 						Endpoint:   baseURL,
 						Parameter:  param,
 						Payload:    payload,
 						Vulnerable: true,
-						Evidence:   fmt.Sprintf("Command output '%s' reflected in response", indicator),
+						Evidence:   fmt.Sprintf("Command output %q appeared only after payload %q (not reflected input)", indicator, payload),
 					})
 					break
 				}

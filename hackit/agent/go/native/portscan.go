@@ -36,10 +36,11 @@ var portServices = map[int]string{
 
 // ScanPorts runs a highly concurrent TCP connect scan against the target
 func ScanPorts(target string, ports []int, concurrency int, timeout time.Duration) []PortResult {
-	// If target is a hostname, resolve to IP to avoid resolving per port
-	ip := resolveToIPv4(target)
+	// If target is a hostname, resolve to IP to avoid resolving per port.
+	// IPv6-only hosts must not be dropped: they are common behind CDNs.
+	ip := resolveToIP(target)
 	if ip == "" {
-		fmt.Printf("[!] Could not resolve IPv4 for %s\n", target)
+		fmt.Printf("[!] Could not resolve %s\n", target)
 		return nil
 	}
 
@@ -145,16 +146,19 @@ func cleanUTF8(s string) string {
 	}, s)
 }
 
-func resolveToIPv4(domain string) string {
+func resolveToIP(domain string) string {
+	if ip := net.ParseIP(strings.Trim(domain, "[]")); ip != nil {
+		return ip.String()
+	}
 	ips, err := net.LookupIP(domain)
-	if err != nil {
+	if err != nil || len(ips) == 0 {
 		return ""
 	}
-
+	// Prefer IPv4, fall back to IPv6 so dual-stack/IPv6-only hosts still scan.
 	for _, ip := range ips {
-		if ipv4 := ip.To4(); ipv4 != nil {
-			return ipv4.String()
+		if v4 := ip.To4(); v4 != nil {
+			return v4.String()
 		}
 	}
-	return ""
+	return ips[0].String()
 }
