@@ -6,6 +6,8 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -75,6 +77,19 @@ func bodySnippet(body, marker string) string {
 	return strings.TrimSpace(body[start:end])
 }
 
+// endpointPort reports the port a finding lives on, defaulting by scheme.
+func endpointPort(endpoint string) int {
+	if u, err := url.Parse(endpoint); err == nil && u.Port() != "" {
+		if p, err := strconv.Atoi(u.Port()); err == nil {
+			return p
+		}
+	}
+	if strings.HasPrefix(strings.ToLower(endpoint), "https://") {
+		return 443
+	}
+	return 80
+}
+
 // VerifyExposedEndpoint re-probes an enumerated URL and only confirms when the
 // body carries the file's unmistakable signature. Returns nil on soft-404,
 // login wall, or generic page.
@@ -87,6 +102,7 @@ func VerifyExposedEndpoint(endpoint string) *VerifiedFinding {
 	lower := strings.ToLower(endpoint)
 	ct := strings.ToLower(header.Get("Content-Type"))
 	lb := strings.ToLower(body)
+	port := endpointPort(endpoint)
 
 	switch {
 	case strings.HasSuffix(lower, "/.env"):
@@ -94,7 +110,7 @@ func VerifyExposedEndpoint(endpoint string) *VerifiedFinding {
 			strings.Contains(lb, "app_key") || strings.Contains(lb, "secret")) {
 			return &VerifiedFinding{
 				ID: "MISCONF-001", Name: "Exposed Environment File (.env)",
-				Severity: "Critical", CVSS: 9.8,
+				Severity: "Critical", CVSS: 9.8, Port: port,
 				Description: fmt.Sprintf("Live .env file with secrets served at %s (HTTP %d)", endpoint, status),
 				Evidence:    fmt.Sprintf("HTTP %d, Content-Type %s, secrets marker: %q", status, ct, bodySnippet(body, "DB_")),
 				Remediation: "Block dotfiles at the edge and rotate every secret in the file.",
@@ -106,7 +122,7 @@ func VerifyExposedEndpoint(endpoint string) *VerifiedFinding {
 		if status == 200 && strings.Contains(lb, "[core]") && strings.Contains(lb, "repositoryformatversion") {
 			return &VerifiedFinding{
 				ID: "MISCONF-002", Name: "Exposed Git Repository",
-				Severity: "High", CVSS: 7.5,
+				Severity: "High", CVSS: 7.5, Port: port,
 				Description: fmt.Sprintf("Live .git/config served at %s: full repo history downloadable", endpoint),
 				Evidence:    fmt.Sprintf("HTTP %d with [core] repositoryformatversion block: %q", status, bodySnippet(body, "[core]")),
 				Remediation: "Deny /.git at the edge and purge secrets from git history.",
@@ -118,7 +134,7 @@ func VerifyExposedEndpoint(endpoint string) *VerifiedFinding {
 		if status == 200 && strings.Contains(lb, "php version") && strings.Contains(lb, "configuration") {
 			return &VerifiedFinding{
 				ID: "MISCONF-PHPINFO", Name: "PHPInfo Information Disclosure",
-				Severity: "High", CVSS: 7.0,
+				Severity: "High", CVSS: 7.0, Port: port,
 				Description: fmt.Sprintf("Live phpinfo() dump at %s leaks versions, paths, env", endpoint),
 				Evidence:    fmt.Sprintf("HTTP %d with PHP Version table: %q", status, bodySnippet(body, "PHP Version")),
 				Remediation: "Delete phpinfo files from production.",
@@ -130,7 +146,7 @@ func VerifyExposedEndpoint(endpoint string) *VerifiedFinding {
 		if status == 200 && strings.Contains(lb, "apache status") {
 			return &VerifiedFinding{
 				ID: "MISCONF-SERVER-STATUS", Name: "Apache server-status Exposed",
-				Severity: "Medium", CVSS: 5.3,
+				Severity: "Medium", CVSS: 5.3, Port: port,
 				Description: fmt.Sprintf("Live mod_status at %s leaks workers, vhosts, request paths", endpoint),
 				Evidence:    fmt.Sprintf("HTTP %d Apache Status page: %q", status, bodySnippet(body, "Apache Status")),
 				Remediation: "Require local + auth for /server-status.",
@@ -142,7 +158,7 @@ func VerifyExposedEndpoint(endpoint string) *VerifiedFinding {
 		if status == 200 && (strings.Contains(lb, "\"status\"") || strings.Contains(lb, "_links")) {
 			return &VerifiedFinding{
 				ID: "MISCONF-ACTUATOR", Name: "Spring Boot Actuator Exposed",
-				Severity: "High", CVSS: 7.5,
+				Severity: "High", CVSS: 7.5, Port: port,
 				Description: fmt.Sprintf("Live actuator endpoint at %s (HTTP %d)", endpoint, status),
 				Evidence:    fmt.Sprintf("HTTP %d actuator JSON: %q", status, bodySnippet(body, "status")),
 				Remediation: "Disable actuators or gate behind management port + auth.",
@@ -154,7 +170,7 @@ func VerifyExposedEndpoint(endpoint string) *VerifiedFinding {
 		if status == 200 && (strings.Contains(lb, "\"swagger\"") || strings.Contains(lb, "\"openapi\"") || strings.Contains(lb, "\"paths\"")) {
 			return &VerifiedFinding{
 				ID: "MISCONF-SWAGGER", Name: "API Specification Exposed",
-				Severity: "Medium", CVSS: 5.0,
+				Severity: "Medium", CVSS: 5.0, Port: port,
 				Description: fmt.Sprintf("Live API spec at %s enumerates every route", endpoint),
 				Evidence:    fmt.Sprintf("HTTP %d OpenAPI/Swagger JSON: %q", status, bodySnippet(body, "paths")),
 				Remediation: "Gate API docs behind auth in production.",
@@ -166,7 +182,7 @@ func VerifyExposedEndpoint(endpoint string) *VerifiedFinding {
 		if status < 500 && (strings.Contains(lb, "graphql") || strings.Contains(lb, "query")) {
 			return &VerifiedFinding{
 				ID: "MISCONF-GRAPHQL", Name: "GraphQL Endpoint Exposed",
-				Severity: "Medium", CVSS: 5.0,
+				Severity: "Medium", CVSS: 5.0, Port: port,
 				Description: fmt.Sprintf("GraphQL endpoint at %s (HTTP %d): introspection may be on", endpoint, status),
 				Evidence:    fmt.Sprintf("HTTP %d GraphQL surface: %q", status, bodySnippet(body, "graphql")),
 				Remediation: "Disable introspection in production; enforce query depth/cost limits.",

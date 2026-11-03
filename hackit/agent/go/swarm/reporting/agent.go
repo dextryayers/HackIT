@@ -38,7 +38,6 @@ func (r *ReportGenerationAgent) Execute(state *core.SwarmState) error {
 	state.StartSpinner(fmt.Sprintf("%sGenerating Markdown report%s", core.Yellow, core.Reset))
 
 	state.Mu.RLock()
-	summary := state.Summary()
 	vulns := state.Vulns
 	domain := state.Target.PrimaryDomain
 	sessionID := state.SessionID
@@ -109,11 +108,23 @@ func (r *ReportGenerationAgent) Execute(state *core.SwarmState) error {
 		md += fmt.Sprintf("- CVSS: %.1f\n", v.CVSS)
 		md += fmt.Sprintf("- Description: %s\n", v.Description)
 		md += fmt.Sprintf("- Evidence: %s\n", v.Evidence)
+		if v.Reproduce != "" {
+			md += fmt.Sprintf("- Reproduce: `%s`\n", v.Reproduce)
+		}
+		if v.Remediation != "" {
+			md += fmt.Sprintf("- Remediation: %s\n", v.Remediation)
+		}
 		md += "\n"
 	}
 
+	// Plain-text summary: state.Summary() carries ANSI codes for the TTY.
 	md += fmt.Sprintf("## Summary\n\n")
-	md += fmt.Sprintf("%s\n", summary)
+	md += fmt.Sprintf("- Session: %s\n", sessionID)
+	md += fmt.Sprintf("- Target: %s\n", domain)
+	md += fmt.Sprintf("- Scope: %s\n", state.Target.ScopeType)
+	md += fmt.Sprintf("- Duration: %s\n", elapsed)
+	md += fmt.Sprintf("- Verified findings: %d\n", len(vulns))
+	md += fmt.Sprintf("- Log events: %d\n", len(state.Logs))
 
 	mdPath := filepath.Join(reportDir, "report.md")
 	err = os.WriteFile(mdPath, []byte(md), 0644)

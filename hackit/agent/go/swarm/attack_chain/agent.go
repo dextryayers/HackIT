@@ -2,7 +2,6 @@ package attack_chain
 
 import (
 	"fmt"
-	"strings"
 	"time"
 
 	"hackit_ai_engine/swarm/core"
@@ -55,6 +54,31 @@ func (a *AttackChainAgent) Execute(state *core.SwarmState) error {
 	nodes := map[string]node{}
 	var edges []edge
 
+	portName := map[int]string{
+		21: "FTP", 22: "SSH", 1433: "MSSQL", 3306: "MySQL",
+		5432: "PostgreSQL", 6379: "Redis", 27017: "MongoDB",
+	}
+	isAppSurface := func(v core.Vulnerability) bool {
+		return v.ID == "MISCONF-PHPINFO" || v.ID == "MISCONF-SWAGGER" || v.ID == "MISCONF-GRAPHQL" || v.ID == "EOL-PHP"
+	}
+	// Chains are hypotheses over verified findings only; each label states the
+	// concrete pivot, never a generic "could lead to compromise".
+	chainLabel := func(a, b core.Vulnerability) (string, bool) {
+		remotePort := func(v core.Vulnerability) bool { return v.Port == 21 || v.Port == 22 }
+		switch {
+		case a.ID == "MISCONF-001" && portName[b.Port] != "":
+			return fmt.Sprintf("leaked secrets -> exposed %s service", portName[b.Port]), true
+		case b.ID == "MISCONF-001" && remotePort(a):
+			return fmt.Sprintf("exposed %s + leaked secrets = direct account access", portName[a.Port]), true
+		case a.ID == "MISCONF-FTP-ANON" && b.ID == "MISCONF-001" ||
+			b.ID == "MISCONF-FTP-ANON" && a.ID == "MISCONF-001":
+			return "anonymous ftp -> app secrets downloadable", true
+		case a.ID == "MISCONF-002" && isAppSurface(b) || b.ID == "MISCONF-002" && isAppSurface(a):
+			return "source disclosure -> documented attack surface targets it directly", true
+		}
+		return "", false
+	}
+
 	for _, v := range vulns {
 		nodes[v.ID] = node{id: v.ID, name: v.Name, port: v.Port}
 	}
@@ -63,17 +87,8 @@ func (a *AttackChainAgent) Execute(state *core.SwarmState) error {
 			if i >= j {
 				continue
 			}
-			if v1.ID == "MISCONF-001" && (strings.Contains(v2.ID, "CVE-2023") || strings.Contains(v2.Name, "CMS")) {
-				edges = append(edges, edge{from: v1.ID, to: v2.ID, label: "credential access -> app compromise"})
-			}
-			if v1.ID == "MISCONF-002" && v2.Port == 3306 {
-				edges = append(edges, edge{from: v1.ID, to: v2.ID, label: "source leak -> db access"})
-			}
-			if v1.Port == 6379 && (strings.Contains(v2.ID, "CVE-2022")) {
-				edges = append(edges, edge{from: v1.ID, to: v2.ID, label: "redis exposed -> rce"})
-			}
-			if (v1.Port == 22 || v1.Port == 21) && v2.ID == "MISCONF-001" {
-				edges = append(edges, edge{from: v1.ID, to: v2.ID, label: "ssh/ftp + .env = full compromise"})
+			if label, ok := chainLabel(v1, v2); ok {
+				edges = append(edges, edge{from: v1.ID, to: v2.ID, label: label})
 			}
 		}
 	}

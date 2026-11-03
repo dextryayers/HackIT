@@ -66,10 +66,10 @@ func (p *PlanningAgent) Execute(state *core.SwarmState) error {
 	switch scopeMode {
 	case "passive":
 		state.Target.Rules = []string{
-			"NO_ACTIVE_EXPLOITS", "NO_BRUTEFORCE", "OSINT_ONLY", "NO_PACKET_INJECTION",
-			"SLOW_RATE_LIMITING", "MAX_CONCURRENCY_10",
+			"NO_ACTIVE_EXPLOITS", "NO_BRUTEFORCE", "LIGHT_PORT_SCAN", "LIGHT_ENUMERATION",
+			"NO_PACKET_INJECTION", "SLOW_RATE_LIMITING", "MAX_CONCURRENCY_10",
 		}
-		state.LogOk(p.Name(), "RULE_SET", "Passive OSINT only. No active touching of the target.")
+		state.LogOk(p.Name(), "RULE_SET", "Passive mode: OSINT + low-rate surface mapping, no exploits, no brute force.")
 	case "active_stealth":
 		state.Target.Rules = []string{
 			"SLOW_RATE_LIMITING", "USER_AGENT_RANDOMIZATION", "WAF_EVASION_MODE_ON",

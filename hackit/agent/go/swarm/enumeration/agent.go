@@ -35,8 +35,12 @@ func (e *EnumerationAgent) Execute(state *core.SwarmState) error {
 	webPorts := map[int]bool{80: true, 443: true, 8080: true, 8443: true, 3000: true, 5000: true, 8000: true, 8888: true, 9000: true}
 	var webTargets []string
 
+	parsed := state.Target.Parsed
 	for _, svc := range services {
-		if webPorts[svc.Port] || strings.Contains(strings.ToLower(svc.Tech), "http") {
+		// The operator's own URL port is a web target even when the banner
+		// probe could not fingerprint it.
+		operatorPort := parsed.Port == fmt.Sprintf("%d", svc.Port) && svc.IP == parsed.Host
+		if webPorts[svc.Port] || strings.Contains(strings.ToLower(svc.Tech), "http") || operatorPort {
 			protocol := "http://"
 			if svc.Port == 443 || svc.Port == 8443 {
 				protocol = "https://"

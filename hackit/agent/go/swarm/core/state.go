@@ -93,6 +93,7 @@ type Vulnerability struct {
 	Evidence    string  `json:"evidence"`
 	Remediation string  `json:"remediation"`
 	Category    string  `json:"category"`
+	Reproduce   string  `json:"reproduce,omitempty"` // copy-paste command proving the finding
 }
 
 type SwarmLog struct {

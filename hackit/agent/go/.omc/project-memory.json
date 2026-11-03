@@ -119,6 +119,72 @@
       "accessCount": 1.9999550427143145,
       "lastAccessed": 1793665336307,
       "type": "file"
+    },
+    {
+      "path": "swarm/reporting/agent.go",
+      "accessCount": 4.994419828158598,
+      "lastAccessed": 1793665687475,
+      "type": "file"
+    },
+    {
+      "path": "swarm/vuln_analysis/agent.go",
+      "accessCount": 2.9994678318877472,
+      "lastAccessed": 1793665394085,
+      "type": "file"
+    },
+    {
+      "path": "swarm/core/state.go",
+      "accessCount": 1.999782669029949,
+      "lastAccessed": 1793665389649,
+      "type": "file"
+    },
+    {
+      "path": "swarm/poc_generator/agent.go",
+      "accessCount": 1.9999232032041232,
+      "lastAccessed": 1793665378831,
+      "type": "file"
+    },
+    {
+      "path": "swarm/attack_chain/agent.go",
+      "accessCount": 2.999656899820091,
+      "lastAccessed": 1793665418902,
+      "type": "file"
+    },
+    {
+      "path": "swarm/planning/agent.go",
+      "accessCount": 1.9998768455989877,
+      "lastAccessed": 1793665447548,
+      "type": "file"
+    },
+    {
+      "path": "swarm/enumeration/agent.go",
+      "accessCount": 1.9987709491443637,
+      "lastAccessed": 1793665591946,
+      "type": "file"
+    },
+    {
+      "path": "swarm/discovery/agent.go",
+      "accessCount": 1,
+      "lastAccessed": 1793665438702,
+      "type": "file"
+    },
+    {
+      "path": "native/exploit.go",
+      "accessCount": 1.999934754836666,
+      "lastAccessed": 1793665547237,
+      "type": "file"
+    },
+    {
+      "path": "native/verify.go",
+      "accessCount": 7.999223096212031,
+      "lastAccessed": 1793665587225,
+      "type": "file"
+    },
+    {
+      "path": "swarm/exploitation/agent.go",
+      "accessCount": 1.9999170584317425,
+      "lastAccessed": 1793665649404,
+      "type": "file"
     }
   ],
   "userDirectives": []

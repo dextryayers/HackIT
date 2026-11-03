@@ -64,7 +64,7 @@ func (v *VulnAnalysisAgent) Execute(state *core.SwarmState) error {
 		newVulns = append(newVulns, core.Vulnerability{
 			ID: f.ID, Name: f.Name, Severity: f.Severity, CVSS: f.CVSS,
 			Port: f.Port, Description: f.Description, Evidence: f.Evidence,
-			Remediation: f.Remediation, Category: f.Category,
+			Remediation: f.Remediation, Category: f.Category, Reproduce: f.Reproduce,
 		})
 		mu.Unlock()
 		state.LogOk(v.Name(), "CONFIRMED", fmt.Sprintf("[%s] %s @ %s — %s", f.Severity, f.Name, where, f.Reproduce))
