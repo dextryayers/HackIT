@@ -1,0 +1,1929 @@
+{
+  "session_id": "HACKIT-SWARM-1793682673",
+  "start_time": "2026-11-03T12:11:13.368043903+07:00",
+  "target": {
+    "primary_domain": "oto.com",
+    "ip_range": "64:ff9b::226b:d46d",
+    "scope_type": "passive",
+    "rules_of_engagement": [
+      "NO_ACTIVE_EXPLOITS",
+      "NO_BRUTEFORCE",
+      "LIGHT_PORT_SCAN",
+      "LIGHT_ENUMERATION",
+      "NO_PACKET_INJECTION",
+      "SLOW_RATE_LIMITING",
+      "MAX_CONCURRENCY_10"
+    ],
+    "parsed_target": {
+      "raw": "https://oto.com",
+      "host": "oto.com",
+      "kind": "domain",
+      "is_private": false,
+      "is_url": true,
+      "scheme": "https",
+      "port": "",
+      "base_url": "https://oto.com",
+      "scan_seeds": [
+        "oto.com"
+      ]
+    },
+    "local_target": false,
+    "target_kind": "domain"
+  },
+  "recon_data": {
+    "subdomains": [
+      "api-id.oto.com",
+      "api.oto.com",
+      "auction-ph.oto.com",
+      "avanza.oto.com",
+      "beta-if.oto.com",
+      "beta-insurance.oto.com",
+      "beta-insurancev1.oto.com",
+      "beta-priv-api.oto.com",
+      "bira.oto.com",
+      "bmwx1.oto.com",
+      "brio.oto.com",
+      "builder.oto.com",
+      "carsell-auction.oto.com",
+      "carsell-beta.oto.com",
+      "carselladminsocketbeta.oto.com",
+      "carsellbeta-api.oto.com",
+      "carsellbeta-socket.oto.com",
+      "cashflow.oto.com",
+      "cdnimg.oto.com",
+      "chat.oto.com",
+      "cheryarjuna.oto.com",
+      "chivas.oto.com",
+      "cnafapi.oto.com",
+      "crm-beta.oto.com",
+      "crm.oto.com",
+      "crmphbeta.oto.com",
+      "dealer.oto.com",
+      "dif-auction.oto.com",
+      "dif-recon.oto.com",
+      "dw.oto.com",
+      "dwapi-beta.oto.com",
+      "dwimages-beta.oto.com",
+      "dwph-beta.oto.com",
+      "ertiga.oto.com",
+      "external-api.oto.com",
+      "externalapi.oto.com",
+      "frpm.oto.com",
+      "geely.oto.com",
+      "hondamugen.oto.com",
+      "hrmbeta.oto.com",
+      "ibox.oto.com",
+      "ifreports.oto.com",
+      "images.oto.com",
+      "imgcdn.oto.com",
+      "incentivebox-beta.oto.com",
+      "inspection.oto.com",
+      "livina.oto.com",
+      "lms-batch.oto.com",
+      "lms-gcp.oto.com",
+      "lms.oto.com",
+      "lmsbike-qa.oto.com",
+      "lmsbikes.oto.com",
+      "lmscars-qa.oto.com",
+      "lmsqa-batch.oto.com",
+      "mgfivegt.oto.com",
+      "mgfourev.oto.com",
+      "mobilaku.oto.com",
+      "my.oto.com",
+      "myadmin.oto.com",
+      "myapi.oto.com",
+      "nmax.oto.com",
+      "paymentbox.oto.com",
+      "qc-api.oto.com",
+      "qc.oto.com",
+      "qcapi.oto.com",
+      "sfacdn.oto.com",
+      "sfanew.oto.com",
+      "short.oto.com",
+      "staging.oto.com",
+      "stagingmarketplaceapi.oto.com",
+      "stagingmy.oto.com",
+      "stagingmyapi.oto.com",
+      "stagingtbladmin.oto.com",
+      "test.oto.com",
+      "test1.oto.com",
+      "test1api.oto.com",
+      "test2.oto.com",
+      "test2api.oto.com",
+      "test3.oto.com",
+      "testadmin.oto.com",
+      "testapi.oto.com",
+      "testbanapi.oto.com",
+      "testbrio.oto.com",
+      "testbriodse.oto.com",
+      "testingertiga.oto.com",
+      "testmy.oto.com",
+      "testmyadmin.oto.com",
+      "testmyapi.oto.com",
+      "testserena.oto.com",
+      "uccrm.oto.com",
+      "www.dw.oto.com",
+      "www.dwapi-beta.oto.com",
+      "www.dwimages-beta.oto.com",
+      "www.dwph-beta.oto.com",
+      "www.geely.oto.com",
+      "www.oto.com",
+      "xenia.oto.com",
+      "xpander.oto.com"
+    ],
+    "asn": "Direct IP 34.107.212.109",
+    "cloud_infra": "GCP",
+    "emails": null,
+    "tech_stack": null
+  },
+  "discovered_services": [
+    {
+      "ip": "beta-insurancev1.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "beta-insurancev1.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "api.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "api.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "avanza.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "avanza.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "beta-priv-api.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "beta-priv-api.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "beta-if.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "beta-if.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "api-id.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "api-id.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "beta-insurance.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "beta-insurance.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "auction-ph.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "auction-ph.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "carsell-auction.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "carsell-auction.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "brio.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "brio.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "builder.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "builder.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "bmwx1.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "bmwx1.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "carsell-beta.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "carsell-beta.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "carselladminsocketbeta.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "carselladminsocketbeta.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "carsellbeta-api.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "carsellbeta-api.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "carsellbeta-socket.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "carsellbeta-socket.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "cdnimg.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "cdnimg.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "cashflow.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "cashflow.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "chat.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "chat.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "cnafapi.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "cnafapi.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "cheryarjuna.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "cheryarjuna.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "crm-beta.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "crm-beta.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "crm.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "crm.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "crmphbeta.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "crmphbeta.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "dif-auction.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "dif-auction.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "dealer.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "dealer.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "dif-recon.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "dif-recon.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "dw.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "dw.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "dwapi-beta.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "dwapi-beta.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "dwimages-beta.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "dwimages-beta.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "ertiga.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "ertiga.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "dwph-beta.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "dwph-beta.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "external-api.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "external-api.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "frpm.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "frpm.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "externalapi.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "externalapi.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "geely.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "geely.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "hrmbeta.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "hrmbeta.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "hondamugen.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "hondamugen.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "ibox.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "ibox.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "ifreports.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "ifreports.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "incentivebox-beta.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "incentivebox-beta.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "inspection.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "inspection.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "lms-batch.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "lms-batch.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "lms-gcp.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "lms-gcp.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "livina.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "livina.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "lmsbike-qa.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "lmsbike-qa.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "lms.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "lms.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "imgcdn.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 403 Forbidden",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "imgcdn.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "lmsbikes.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "lmsbikes.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "lmscars-qa.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "lmscars-qa.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "lmsqa-batch.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "lmsqa-batch.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "mgfourev.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "mgfourev.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "my.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "my.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 200 OK",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "mgfivegt.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "mgfivegt.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "mobilaku.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "mobilaku.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "myadmin.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "myadmin.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 502 Bad Gateway",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "myapi.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "myapi.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 502 Bad Gateway",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "nmax.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "nmax.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "qc-api.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "qc-api.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "qcapi.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "qcapi.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "sfacdn.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "sfacdn.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "paymentbox.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "paymentbox.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "qc.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "qc.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "sfanew.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "sfanew.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "short.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "2",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "short.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "stagingmarketplaceapi.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "stagingmarketplaceapi.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "staging.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "staging.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "stagingmyapi.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "stagingmyapi.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "stagingtbladmin.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "stagingtbladmin.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "test.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "test.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "stagingmy.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "stagingmy.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "test1.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "test1.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "test1api.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "test1api.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "test2.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "test2.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "test2api.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "test2api.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "test3.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "test3.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "testadmin.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "testadmin.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "testbanapi.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "testbanapi.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "testapi.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "testapi.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "testbrio.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "testbrio.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "testbriodse.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "testbriodse.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "testingertiga.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "testingertiga.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "testmy.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "testmy.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "testmyadmin.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "testmyadmin.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "testmyapi.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "testmyapi.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "testserena.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "testserena.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "www.dw.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "www.dw.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "uccrm.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "uccrm.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "www.dwimages-beta.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "www.dwimages-beta.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "www.dwapi-beta.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "www.dwapi-beta.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "www.dwph-beta.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "www.dwph-beta.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "www.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "www.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 200 OK",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "xenia.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "xenia.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "www.geely.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    },
+    {
+      "ip": "www.geely.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "xpander.oto.com",
+      "port": 80,
+      "protocol": "tcp",
+      "banner": "HTTP/1.1 301 Moved Permanently",
+      "tech": "http",
+      "hostname": ""
+    },
+    {
+      "ip": "xpander.oto.com",
+      "port": 443,
+      "protocol": "tcp",
+      "banner": "",
+      "tech": "https",
+      "hostname": ""
+    }
+  ],
+  "vulnerabilities": null,
+  "logs": [
+    {
+      "timestamp": "2026-11-03T12:11:13.36806379+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "BOOT",
+      "message": "Swarm initialized. Beginning DAG execution pipeline.",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T12:11:13.368072507+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "INVOKE",
+      "message": "Waking up Agent-28: MCP and Tool Orchestration...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T12:11:13.368077877+07:00",
+      "agent": "Agent-28: MCP and Tool Orchestration",
+      "action": "START",
+      "message": "Spinning up external tool orchestration via MCP...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T12:11:13.448602314+07:00",
+      "agent": "Agent-28: MCP and Tool Orchestration",
+      "action": "MISSING",
+      "message": "Katana not in PATH",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T12:11:13.448672276+07:00",
+      "agent": "Agent-28: MCP and Tool Orchestration",
+      "action": "MISSING",
+      "message": "Nuclei not in PATH",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T12:11:13.448725806+07:00",
+      "agent": "Agent-28: MCP and Tool Orchestration",
+      "action": "MISSING",
+      "message": "Amass not in PATH",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T12:11:13.448777173+07:00",
+      "agent": "Agent-28: MCP and Tool Orchestration",
+      "action": "MISSING",
+      "message": "ffuf not in PATH",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T12:11:13.448827548+07:00",
+      "agent": "Agent-28: MCP and Tool Orchestration",
+      "action": "MISSING",
+      "message": "gospider not in PATH",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T12:11:13.448870007+07:00",
+      "agent": "Agent-28: MCP and Tool Orchestration",
+      "action": "FOUND",
+      "message": "Nmap at /usr/bin/nmap",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T12:11:43.186914449+07:00",
+      "agent": "Agent-28: MCP and Tool Orchestration",
+      "action": "Nmap",
+      "message": "Nmap fast scan complete",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T12:11:43.186937632+07:00",
+      "agent": "Agent-28: MCP and Tool Orchestration",
+      "action": "RESULT",
+      "message": "Found 1/6 tools, executed 1 successfully in 29.819s",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T12:11:43.186943934+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "DONE",
+      "message": "Agent-28: MCP and Tool Orchestration completed successfully",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T12:11:43.187623581+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "INVOKE",
+      "message": "Waking up Agent-20: Evasion and Stealth...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T12:11:43.187636896+07:00",
+      "agent": "Agent-20: Evasion and Stealth",
+      "action": "START",
+      "message": "Deploying stealth and evasion monitors...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T12:11:43.26779542+07:00",
+      "agent": "Agent-20: Evasion and Stealth",
+      "action": "CONFIG",
+      "message": "Stealth profile active: 0 rules, UA=curl/8.4.0...",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T12:11:43.267808425+07:00",
+      "agent": "Agent-20: Evasion and Stealth",
+      "action": "JITTER",
+      "message": "Request jitter: 2687",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T12:11:43.267819526+07:00",
+      "agent": "Agent-20: Evasion and Stealth",
+      "action": "COMPLETE",
+      "message": "Evasion engine ready in 80ms. Threat footprint minimized.",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T12:11:43.267825186+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "DONE",
+      "message": "Agent-20: Evasion and Stealth completed successfully",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T12:11:43.268281073+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "INVOKE",
+      "message": "Waking up Agent-1: Planning...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T12:11:43.268289699+07:00",
+      "agent": "Agent-1: Planning",
+      "action": "INIT",
+      "message": "Initializing Planning Phase...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T12:11:43.306665265+07:00",
+      "agent": "Agent-1: Planning",
+      "action": "RESOLVED",
+      "message": "oto.com -\u003e 64:ff9b::226b:d46d (2 addresses)",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T12:11:43.306689391+07:00",
+      "agent": "Agent-1: Planning",
+      "action": "ANALYSIS",
+      "message": "Analyzing target 'oto.com' with mode 'passive'",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T12:11:43.306698057+07:00",
+      "agent": "Agent-1: Planning",
+      "action": "RULE_SET",
+      "message": "Passive mode: OSINT + low-rate surface mapping, no exploits, no brute force.",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T12:11:43.306704279+07:00",
+      "agent": "Agent-1: Planning",
+      "action": "PLAN",
+      "message": "Attack plan ready for oto.com [passive]",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T12:11:43.306710741+07:00",
+      "agent": "Agent-1: Planning",
+      "action": "COMPLETE",
+      "message": "Planning finalized in 29.939s. Proceeding to Agent-2: Reconnaissance.",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T12:11:43.306717984+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "DONE",
+      "message": "Agent-1: Planning completed successfully",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T12:11:43.30717901+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "INVOKE",
+      "message": "Waking up Agent-2: Reconnaissance...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T12:11:43.307203997+07:00",
+      "agent": "Agent-2: Reconnaissance",
+      "action": "START",
+      "message": "Commencing reconnaissance on oto.com [domain]",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T12:11:46.312912223+07:00",
+      "agent": "Agent-2: Reconnaissance",
+      "action": "SUBDOMAINS",
+      "message": "Found 98 subdomains",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T12:11:46.738756607+07:00",
+      "agent": "Agent-2: Reconnaissance",
+      "action": "ASN",
+      "message": "Target routed through GCP [Direct IP 34.107.212.109]",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T12:11:46.738774801+07:00",
+      "agent": "Agent-2: Reconnaissance",
+      "action": "COMPLETE",
+      "message": "Reconnaissance complete: 98 subdomains, infra=GCP",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T12:11:46.738781374+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "DONE",
+      "message": "Agent-2: Reconnaissance completed successfully",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T12:11:46.739486398+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "INVOKE",
+      "message": "Waking up Agent-3: Discovery...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T12:11:46.739491969+07:00",
+      "agent": "Agent-3: Discovery",
+      "action": "START",
+      "message": "Commencing active surface discovery...",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T12:11:46.739495696+07:00",
+      "agent": "Agent-3: Discovery",
+      "action": "MODE",
+      "message": "Passive: top-100 ports, 20 threads, 1500ms timeout",
+      "level": "info"
+    },
+    {
+      "timestamp": "2026-11-03T12:12:43.095608684+07:00",
+      "agent": "Agent-3: Discovery",
+      "action": "RESULT",
+      "message": "Mapped 190 open services across 98 targets in 56.356s",
+      "level": "ok"
+    },
+    {
+      "timestamp": "2026-11-03T12:12:43.095621338+07:00",
+      "agent": "Agent-0: Autonomous Security Orchestrator",
+      "action": "DONE",
+      "message": "Agent-3: Discovery completed successfully",
+      "level": "ok"
+    }
+  ],
+  "context_data": {
+    "Nmap_raw": "Starting Nmap 7.95 ( https://nmap.org ) at 2026-11-03 12:11 WIB\nNmap scan report for oto.com (34.107.212.109)\nHost is up (0.21s latency).\nOther addresses for oto.com (not scanned): 64:ff9b::226b:d46d\nrDNS record for 34.107.212.109: 109.212.107.34.bc.googleusercontent.com\nNot shown: 98 filtered tcp ports (no-response)\nPORT    STATE SERVICE  VERSION\n80/tcp  open  http     Apache httpd\n443/tcp open  ssl/http Apache httpd\n\nService detection performed. Please report any incorrect results at https://nmap.org/submit/ .\nNmap done: 1 IP address (1 host up) scanned in 29.72 seconds\n",
+    "evasion_jitter_ms": "2687",
+    "evasion_user_agent": "curl/8.4.0"
+  },
+  "Mu": {}
+}

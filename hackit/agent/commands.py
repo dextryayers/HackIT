@@ -66,6 +66,12 @@ COMMAND_MODES = {
     "auto": "Enter autonomous analysis mode. Correlate and report everything without further input.",
     "adaptive": "Enable adaptive learning. Adjust analysis style based on previous analyst feedback.",
     "learn": "Identify and save recurring patterns for future recognition.",
+
+    # [ SWARM — 28-node autonomous deep vulnerability swarm ]
+    "swarm": "Launch 28-node autonomous swarm against target. Deep recon + payload forge + differential probe + chain analysis.",
+    "swarm-deep": "Launch swarm in maximum depth mode (all modules + extended time budget).",
+    "swarm-passive": "Launch swarm in passive/recon-only mode (no active payload delivery).",
+    "swarm-full": "Launch swarm against target with full chain reporting and exploit mapping.",
 }
 
 def get_command_prompt(command: str) -> str:
