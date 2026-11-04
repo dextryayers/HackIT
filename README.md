@@ -1,7 +1,7 @@
 <div align="center">
 
 # HackIT Security Framework Toolkit
-### *The Apex Modern Ethical Hacking & Advanced Autonomous Intelligence Framework*
+### *The Apex Modern Ethical Hacking & Advanced Autonomous Intelligence Framework V2.1*
 
 ![banner](/img/banner.png)
 
